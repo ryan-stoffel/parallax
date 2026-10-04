@@ -2,7 +2,7 @@
 //! on the account [`crate::agents::placement`] found, with the first message it was queued with.
 
 use parallax_protocol::jsonrpc::ErrorObject;
-use parallax_protocol::{AccountChoice, AgentRun, Role};
+use parallax_protocol::{AccountChoice, AgentRun, ErrorKind, Role};
 
 use super::Actor;
 use crate::agents::convert::WAITING;
@@ -12,12 +12,14 @@ use crate::agents::{RunOptions, first_prompt, prepare};
 impl Actor {
     /// Starts the waiting child on `account` with `pending`, its first message. A child that no
     /// longer waits, since a message, Resume now, or Cancel ended its wait, is left as it is. One
-    /// that can't start is `failed`, saying why.
+    /// that can't start is `failed`, saying why. One whose push or Open PR runs is refused, and
+    /// stays queued for the dispatcher's next look (PLX-458).
     pub(super) async fn place(
         &mut self,
         account: AccountChoice,
         pending: Pending,
     ) -> Result<AgentRun, ErrorObject> {
+        self.effect_busy(ErrorKind::RunNotResumable)?;
         let waits = self.row.state.status == WAITING
             && self.live.is_none()
             && self.row.state.session_id.is_none();

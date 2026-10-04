@@ -3,25 +3,27 @@
 //! local bare `origin`, with `open_pr`'s fake `gh` for Create PR.
 
 use std::fs;
-use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use parallax_protocol::methods::{
-    AgentCancel, AgentCommit, AgentGitStatus, AgentOpenPr, AgentPush, AgentStart, RepoAdd,
-    ThreadStart,
+    AgentAccept, AgentCancel, AgentCommit, AgentGitStatus, AgentOpenPr, AgentPush, AgentSend,
+    AgentStart, QueueList, RepoAdd, ThreadStart,
 };
 use parallax_protocol::{
-    AgentCancelParams, AgentCommitParams, AgentGitStatusParams, AgentPushParams, AgentStatus,
-    ErrorKind, GitStatus, ParallaxEvent, ProjectId, RepoAddParams, RepoId, RunId,
-    ThreadStartParams,
+    AcceptId, AgentAcceptParams, AgentCancelParams, AgentCommitParams, AgentGitStatusParams,
+    AgentOutputItem, AgentPushParams, AgentStatus, ErrorKind, GitStatus, ParallaxEvent, ProjectId,
+    QueueListParams, RepoAddParams, RepoId, RunId, ThreadStartParams, TurnId,
 };
 use plxd::backend::fake::Step;
 
 use crate::agents::{
-    Conn, create, git, init, project_params, real_repo, start_params, subscribe, text, until,
-    updated_to,
+    Conn, create, git, init, project_params, real_repo, send_params, start_params, subscribe, text,
+    until, updated_to,
 };
 use crate::open_pr::{Tools, add_origin, editing, open, start, thread};
-use crate::support::{kind, temp_dir};
+use crate::support::{PATIENCE, kind, temp_dir};
 
 async fn status(client: &mut Conn, run_id: RunId) -> GitStatus {
     client
@@ -235,5 +237,127 @@ async fn a_running_run_reads_its_status_but_refuses_commit_and_push() {
         .await
         .unwrap();
     until(&mut client, updated_to(AgentStatus::Cancelled)).await;
+    host.server.stop().await;
+}
+
+/// Makes `origin` slow: its `pre-receive` hook creates the first path returned, then waits until
+/// the second exists.
+fn hold_pushes(origin: &Path) -> (PathBuf, PathBuf) {
+    let (started, gate) = (origin.join("push-started"), origin.join("push-gate"));
+    let hook = origin.join("hooks/pre-receive");
+    fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\n: > '{}'\nwhile [ ! -e '{}' ]; do /bin/sleep 0.05; done\n",
+            started.display(),
+            gate.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    (started, gate)
+}
+
+#[tokio::test]
+async fn a_slow_push_runs_off_the_actor_and_a_follow_up_waits_for_it() {
+    let tools = Tools::new();
+    let dir = temp_dir();
+    let params = project_params(dir.path());
+    let repo = PathBuf::from(&params.repo_path);
+    let origin = add_origin(&repo, dir.path());
+    let (started, gate) = hold_pushes(&origin);
+    let host = start(dir, editing(), &tools);
+    let mut client = host.client().await;
+    let project = create(&mut client, params).await;
+    subscribe(&mut client, project.id, 0).await;
+    let start = start_params(project.id, "Rewrite the README");
+    let run_id = start.run_id;
+    let branch = client.call::<AgentStart>(start).await.unwrap().run.branch;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    let mut other = host.client().await;
+    let push = tokio::spawn(async move {
+        other
+            .call::<AgentPush>(AgentPushParams { run_id })
+            .await
+            .unwrap()
+    });
+    let deadline = Instant::now() + PATIENCE;
+    while !started.exists() {
+        assert!(Instant::now() < deadline, "the push never reached origin");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // The run answers while origin holds the push: a follow-up waits in its queue, and what would
+    // touch its folder or branch is refused.
+    let turn = TurnId::generate();
+    let sent = tokio::time::timeout(
+        PATIENCE,
+        client.call::<AgentSend>(send_params(run_id, turn, "Now the CHANGELOG")),
+    )
+    .await
+    .expect("the follow-up waited for the push")
+    .unwrap();
+    assert_eq!(sent.run.status, AgentStatus::Completed);
+    let queued = client
+        .call::<QueueList>(QueueListParams { run_id })
+        .await
+        .unwrap();
+    assert_eq!(queued.messages.len(), 1);
+    let refusals = [
+        (
+            client
+                .call::<AgentCommit>(commit(run_id, "More"))
+                .await
+                .unwrap_err(),
+            ErrorKind::GitRefused,
+        ),
+        (
+            client
+                .call::<AgentPush>(AgentPushParams { run_id })
+                .await
+                .unwrap_err(),
+            ErrorKind::GitRefused,
+        ),
+        (
+            client
+                .call::<AgentOpenPr>(open(run_id, "Rewrite the README", None))
+                .await
+                .unwrap_err(),
+            ErrorKind::PrRefused,
+        ),
+        (
+            client
+                .call::<AgentAccept>(AgentAcceptParams {
+                    run_id,
+                    id: AcceptId::generate(),
+                    commit: None,
+                })
+                .await
+                .unwrap_err(),
+            ErrorKind::MergeRefused,
+        ),
+    ];
+    for (error, expected) in refusals {
+        assert_eq!(kind(&error), expected);
+        assert!(error.message.contains("pushing"), "{}", error.message);
+    }
+    assert!(!push.is_finished());
+
+    // Once the push is done, the follow-up goes to the run as its next turn.
+    fs::write(&gate, "").unwrap();
+    let pushed = push.await.unwrap();
+    assert_eq!(pushed.ahead, 0);
+    assert_eq!(
+        pushed.upstream,
+        branch.map(|branch| format!("origin/{branch}"))
+    );
+    until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::AgentOutput { items, .. } if items.iter().any(|item| {
+            matches!(item, AgentOutputItem::TurnStarted { turn_id: Some(id), .. } if *id == turn)
+        }))
+    })
+    .await;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
     host.server.stop().await;
 }
