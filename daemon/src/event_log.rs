@@ -59,13 +59,16 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
+use std::time::Instant;
 
 use jiff::Timestamp;
-use parallax_protocol::{LogId, ParallaxEvent, ProjectId, RunId};
+use parallax_protocol::{LogId, ParallaxEvent, ProjectId, QueueStats, RunId};
 use parallax_store::{Store, StoreError, StoredEvent};
 use tokio::sync::{oneshot, watch};
 use tracing::{error, info, warn};
 use uuid::Uuid;
+
+use crate::store::QueueCounters;
 
 /// One entry in the log.
 #[derive(Debug)]
@@ -135,8 +138,10 @@ type WriteJob = Box<dyn FnOnce(&Store) + Send>;
 /// thread.
 struct Writer {
     /// `None` only ever briefly, while `Drop` is closing the channel before it joins the thread.
-    jobs: Option<mpsc::Sender<WriteJob>>,
+    /// Each job with when it was sent.
+    jobs: Option<mpsc::Sender<(Instant, WriteJob)>>,
     thread: Option<thread::JoinHandle<()>>,
+    counters: Arc<QueueCounters>,
 }
 
 impl Writer {
@@ -146,14 +151,18 @@ impl Writer {
     /// restart would reuse `seq`s against; `EventLog::load` now treats it the same as the
     /// database failing to open at all, so the log falls back to memory with a fresh id instead).
     fn spawn(db: Store) -> std::io::Result<Self> {
-        let (jobs, queue) = mpsc::channel::<WriteJob>();
+        let (jobs, queue) = mpsc::channel::<(Instant, WriteJob)>();
+        let counters = Arc::new(QueueCounters::default());
+        let thread_counters = Arc::clone(&counters);
         let thread = thread::Builder::new()
             .name("plxd-events".to_owned())
             .spawn(move || {
-                while let Ok(job) = queue.recv() {
+                while let Ok((sent, job)) = queue.recv() {
                     // A panicking job drops its `done` sender, which only fails that one
                     // caller's wait (see `dispatch`); the thread keeps serving the rest.
-                    if catch_unwind(AssertUnwindSafe(|| job(&db))).is_err() {
+                    let ran =
+                        thread_counters.run(sent, || catch_unwind(AssertUnwindSafe(|| job(&db))));
+                    if ran.is_err() {
                         error!("an event log write job panicked");
                     }
                 }
@@ -161,6 +170,7 @@ impl Writer {
         Ok(Self {
             jobs: Some(jobs),
             thread: Some(thread),
+            counters,
         })
     }
 
@@ -202,7 +212,10 @@ impl Writer {
         // `catch_unwind`); `wait` then resolves on its own once `done` drops, so the caller is
         // never left hanging.
         if let Some(jobs) = &self.jobs {
-            let _ = jobs.send(job);
+            self.counters.sending();
+            if jobs.send((Instant::now(), job)).is_err() {
+                self.counters.unsent();
+            }
         }
     }
 }
@@ -444,6 +457,15 @@ impl EventLog {
 
     pub fn id(&self) -> LogId {
         self.id
+    }
+
+    /// The writer thread's job queue figures for `host/health`, all zero for a log with no
+    /// database.
+    pub fn queue_stats(&self) -> QueueStats {
+        self.writer
+            .as_ref()
+            .map(|writer| writer.counters.stats())
+            .unwrap_or_default()
     }
 
     /// The newest event's `seq`, or 0 before the first.
@@ -1178,6 +1200,12 @@ mod tests {
             "the next append must not reuse the aborted append's seq"
         );
         assert_eq!(log.head(), 2);
+        let stats = log.queue_stats();
+        assert_eq!((stats.queued, stats.jobs), (0, 3));
+        assert!(
+            stats.max_wait_micros >= 50_000,
+            "the append waited: {stats:?}"
+        );
 
         let raw = rusqlite::Connection::open(&path).unwrap();
         let seqs: Vec<i64> = raw

@@ -8,7 +8,29 @@
   {
     "jsonrpc": "2.0",
     "id": 2,
-    "result": { "uptimeSeconds": 3600, "store": "ok", "runningAgents": 0 }
+    "result": {
+      "uptimeSeconds": 3600,
+      "store": "ok",
+      "runningAgents": 0,
+      "queues": {
+        "store": {
+          "queued": 2,
+          "jobs": 1840,
+          "maxWaitMicros": 41200,
+          "totalWaitMicros": 905000,
+          "maxRunMicros": 38900,
+          "totalRunMicros": 612000
+        },
+        "events": {
+          "queued": 0,
+          "jobs": 9310,
+          "maxWaitMicros": 2100,
+          "totalWaitMicros": 88000,
+          "maxRunMicros": 1900,
+          "totalRunMicros": 410000
+        }
+      }
+    }
   },
   {
     "jsonrpc": "2.0",

@@ -6,7 +6,7 @@ use std::fs;
 use parallax_protocol::framing::MAX_FRAME_BYTES;
 use parallax_protocol::jsonrpc::{ErrorObject, Request};
 use parallax_protocol::{
-    Capabilities, ClientInfo, HostHealthParams, HostHealthResult, HostSettings,
+    Capabilities, ClientInfo, HostHealthParams, HostHealthResult, HostQueues, HostSettings,
     HostSettingsGetParams, HostSettingsSetParams, HostVersionParams, HostVersionResult,
     IncompatibleProtocolDetail, InitializeParams, InitializeProtocol, InitializeResult,
     ProtocolRange,
@@ -231,6 +231,10 @@ pub(crate) fn health(context: &Context, _: HostHealthParams) -> HostHealthResult
         uptime_seconds: daemon.started.elapsed().as_secs(),
         store: daemon.store.state(),
         running_agents: daemon.agents.running(),
+        queues: Some(HostQueues {
+            store: daemon.store.queue_stats(),
+            events: daemon.log.queue_stats(),
+        }),
     }
 }
 

@@ -11,16 +11,17 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AccountChoice, AccountId, ErrorKind, ImageMediaType, KeyAccount, Project, ProjectAutonomy,
     ProjectCreateParams, ProjectIcon, ProjectId, ProjectPermission, ProjectUpdateParams,
-    PromptImage, Provider, Role, RunId, StoreState,
+    PromptImage, Provider, QueueStats, Role, RunId, StoreState,
 };
 use parallax_store::{
     AccountFields, ProjectEdit, ProjectFields, RoleDefault, Store, StoreError, StoredImage,
@@ -40,12 +41,69 @@ const CANCELLED: u8 = 2;
 type Job = Box<dyn FnOnce(&mut Store) + Send>;
 
 enum Message {
-    Job(Job),
+    /// A job and when it was sent.
+    Job(Instant, Job),
     Stop,
+}
+
+/// Counts and times the jobs of a queue that one thread works through in order, for `host/health`
+/// (PLX-445). The store and the event log's writer each keep one.
+#[derive(Default)]
+pub(crate) struct QueueCounters {
+    queued: AtomicU64,
+    jobs: AtomicU64,
+    max_wait: AtomicU64,
+    total_wait: AtomicU64,
+    max_run: AtomicU64,
+    total_run: AtomicU64,
+}
+
+impl QueueCounters {
+    /// Call before sending a job, so the thread can't start it before it is counted.
+    pub fn sending(&self) {
+        self.queued.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Call when sending a job failed, so it never runs.
+    pub fn unsent(&self) {
+        self.queued.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    /// Runs a job the thread took off the queue, sent at `sent`, and records its wait and run time.
+    pub fn run<T>(&self, sent: Instant, job: impl FnOnce() -> T) -> T {
+        let started = Instant::now();
+        let wait = micros(started - sent);
+        self.queued.fetch_sub(1, Ordering::Relaxed);
+        self.jobs.fetch_add(1, Ordering::Relaxed);
+        self.max_wait.fetch_max(wait, Ordering::Relaxed);
+        self.total_wait.fetch_add(wait, Ordering::Relaxed);
+        let result = job();
+        let run = micros(started.elapsed());
+        self.max_run.fetch_max(run, Ordering::Relaxed);
+        self.total_run.fetch_add(run, Ordering::Relaxed);
+        result
+    }
+
+    /// The figures now. Each is read on its own, so they can be a job apart.
+    pub fn stats(&self) -> QueueStats {
+        QueueStats {
+            queued: self.queued.load(Ordering::Relaxed),
+            jobs: self.jobs.load(Ordering::Relaxed),
+            max_wait_micros: self.max_wait.load(Ordering::Relaxed),
+            total_wait_micros: self.total_wait.load(Ordering::Relaxed),
+            max_run_micros: self.max_run.load(Ordering::Relaxed),
+            total_run_micros: self.total_run.load(Ordering::Relaxed),
+        }
+    }
+}
+
+fn micros(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }
 
 pub(crate) struct StoreHandle {
     state: State,
+    counters: Arc<QueueCounters>,
 }
 
 enum State {
@@ -68,9 +126,11 @@ impl StoreHandle {
             }
         };
         let (jobs, queue) = mpsc::channel();
+        let counters = Arc::new(QueueCounters::default());
+        let thread_counters = Arc::clone(&counters);
         let spawned = thread::Builder::new()
             .name("plxd-store".to_owned())
-            .spawn(move || run(store, &queue));
+            .spawn(move || run(store, &queue, &thread_counters));
         match spawned {
             Ok(thread) => {
                 info!(path = %path.display(), "opened the project store");
@@ -79,6 +139,7 @@ impl StoreHandle {
                         jobs,
                         thread: Mutex::new(Some(thread)),
                     },
+                    counters,
                 }
             }
             Err(error) => {
@@ -91,7 +152,13 @@ impl StoreHandle {
     fn unavailable() -> Self {
         Self {
             state: State::Unavailable,
+            counters: Arc::default(),
         }
+    }
+
+    /// The job queue's figures for `host/health`, all zero for a store that is unavailable.
+    pub fn queue_stats(&self) -> QueueStats {
+        self.counters.stats()
     }
 
     pub fn state(&self) -> StoreState {
@@ -138,7 +205,11 @@ impl StoreHandle {
                 let _ = reply.send(job(store));
             }
         });
-        jobs.send(Message::Job(job)).map_err(|_| unavailable())?;
+        self.counters.sending();
+        if jobs.send(Message::Job(Instant::now(), job)).is_err() {
+            self.counters.unsent();
+            return Err(unavailable());
+        }
         let finished = tokio::select! {
             biased;
             finished = &mut result => finished,
@@ -171,10 +242,11 @@ impl StoreHandle {
     }
 }
 
-fn run(mut store: Store, queue: &mpsc::Receiver<Message>) {
-    while let Ok(Message::Job(job)) = queue.recv() {
+fn run(mut store: Store, queue: &mpsc::Receiver<Message>, counters: &QueueCounters) {
+    while let Ok(Message::Job(sent, job)) = queue.recv() {
         // A panicking job drops its reply, which fails only its own request.
-        if catch_unwind(AssertUnwindSafe(|| job(&mut store))).is_err() {
+        let ran = counters.run(sent, || catch_unwind(AssertUnwindSafe(|| job(&mut store))));
+        if ran.is_err() {
             error!("a project store job panicked");
         }
     }
@@ -710,5 +782,37 @@ mod tests {
         assert_eq!(second.unwrap_err().code, REQUEST_CANCELLED);
         store.stop().await;
         assert_eq!(store.state(), StoreState::Unavailable);
+    }
+
+    #[tokio::test]
+    async fn a_job_queued_behind_a_blocked_one_raises_the_wait_figures() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = StoreHandle::open(&dir.path().join("plxd.sqlite3"));
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let cancel = CancellationToken::new();
+        let blocked = store.run(&cancel, move |_| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Ok(())
+        });
+        let behind = store.run(&cancel, |_| Ok(()));
+        let driver = async {
+            tokio::task::spawn_blocking(move || started_rx.recv().unwrap())
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert_eq!(store.queue_stats().queued, 1, "the second job is waiting");
+            release_tx.send(()).unwrap();
+        };
+        let (blocked, behind, ()) = tokio::join!(blocked, behind, driver);
+        assert_eq!((blocked, behind), (Ok(()), Ok(())));
+
+        let stats = store.queue_stats();
+        assert_eq!((stats.queued, stats.jobs), (0, 2));
+        assert!(stats.max_wait_micros >= 50_000, "{stats:?}");
+        assert!(stats.total_wait_micros >= stats.max_wait_micros);
+        assert!(stats.max_run_micros >= 50_000, "{stats:?}");
+        store.stop().await;
     }
 }
