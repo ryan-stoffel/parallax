@@ -36,10 +36,10 @@ interface Row {
 
 /**
  * A Project's home in the side panel, built as Claude's and Cursor's Projects are: the Project and
- * a line on where it stands, then each child once, grouped Waiting on you, Working, Ready, and
+ * a line on where it stands, then each child once, grouped Waiting on you, Working, Done, and
  * Resolved (folded). A child's row is its title and what it last reported, from the inbox (0043),
  * which this view stands in for: a question takes its answer in place, and opening a child marks
- * what it reported read. A child is Ready while its finish is unread, and Resolved once read.
+ * what it reported read. A child is Done while its finish is unread, and Resolved once read.
  */
 export function ProjectHome({
   project,
@@ -57,36 +57,7 @@ export function ProjectHome({
   onOpen: (runId: string) => void;
 }) {
   const [resolvedOpen, setResolvedOpen] = useState(false);
-  const rows: Row[] = agents.runs
-    .filter((r) => r.id !== project.coordinator && r.policy !== "noWrite")
-    .map((run) => {
-      const items = inbox.items.filter((i) => i.run === run.id);
-      const unread = items.filter((i) => !i.seenAt);
-      const asking = unread.find((i) => i.kind === "needsYou");
-      const question = asking && answerable ? questionOf(asking, inbox.questions) : undefined;
-      const approval = agents.waiting[run.id]?.[0];
-      const attention = runAttention(run, (asking ? 1 : 0) + (approval ? 1 : 0));
-      const failedUnread = unread.some((i) => i.kind === "failed");
-      const group: Group =
-        attention === "needsYou" || (attention === "failed" && failedUnread)
-          ? "waiting"
-          : attention === "working"
-            ? "working"
-            : unread.length > 0
-              ? "ready"
-              : "resolved";
-      return {
-        run,
-        title: titles[run.id] ?? titleOf(run),
-        group,
-        attention,
-        latest: items.at(-1),
-        unread,
-        question,
-        approval,
-      };
-    })
-    .toSorted((a, b) => b.run.updatedAt.localeCompare(a.run.updatedAt));
+  const rows = rowsOf(project, agents, inbox, answerable, titles);
   const of = (g: Group) => rows.filter((r) => r.group === g);
   const waiting = of("waiting").length;
   const working = of("working").length;
@@ -172,6 +143,53 @@ export function ProjectHome({
     </div>
   );
 }
+
+/**
+ * Each child of `project` once, newest first, with its group on the Project tab: Waiting on you
+ * (a question, an approval, or an unread failure), Working, Done (unread news), or Resolved.
+ */
+function rowsOf(
+  project: Project,
+  agents: ProjectAgentsView,
+  inbox: InboxView,
+  answerable: boolean,
+  titles: Readonly<Record<string, string>>,
+): Row[] {
+  return agents.runs
+    .filter((r) => r.id !== project.coordinator && r.policy !== "noWrite")
+    .map((run) => {
+      const items = inbox.items.filter((i) => i.run === run.id);
+      const unread = items.filter((i) => !i.seenAt);
+      const asking = unread.find((i) => i.kind === "needsYou");
+      const question = asking && answerable ? questionOf(asking, inbox.questions) : undefined;
+      const approval = agents.waiting[run.id]?.[0];
+      const attention = runAttention(run, (asking ? 1 : 0) + (approval ? 1 : 0));
+      const failedUnread = unread.some((i) => i.kind === "failed");
+      const group: Group =
+        attention === "needsYou" || (attention === "failed" && failedUnread)
+          ? "waiting"
+          : attention === "working"
+            ? "working"
+            : unread.length > 0
+              ? "ready"
+              : "resolved";
+      return {
+        run,
+        title: titles[run.id] ?? titleOf(run),
+        group,
+        attention,
+        latest: items.at(-1),
+        unread,
+        question,
+        approval,
+      };
+    })
+    .toSorted((a, b) => b.run.updatedAt.localeCompare(a.run.updatedAt));
+}
+
+/** How many children wait on the user, as the Project tab's header and its badge count them. */
+export const waitingCount = (project: Project, agents: ProjectAgentsView, inbox: InboxView) =>
+  rowsOf(project, agents, inbox, false, {}).filter((r) => r.group === "waiting").length;
 
 /** What a child last reported, without its title, which plxd's text leads with. */
 function subjectOf(row: Row): string | undefined {

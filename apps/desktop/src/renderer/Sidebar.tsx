@@ -53,7 +53,6 @@ import type {
   Project,
   ProjectAutonomy,
   ProjectIcon as ProjectIconValue,
-  ProjectPermission,
   Repo,
   Thread,
 } from "../protocol/generated/protocol";
@@ -72,7 +71,7 @@ import {
   type Attention,
 } from "./attention";
 import { AttentionBadge } from "./AttentionMark";
-import { AutonomyChoice, ProjectPermissionChoice } from "./ProjectPermission";
+import { AutonomyChoice } from "./ProjectPermission";
 import { resumeTime } from "./ResumeCard";
 import { ConnectionStatus } from "./ConnectionStatus";
 import { Avatar, useProfile } from "./profile";
@@ -492,7 +491,6 @@ export function ThreadList({
           selected={selected}
           badge={badge}
           editable={item.view.editable}
-          moded={item.view.moded}
           autonomous={item.view.autonomous}
           iconImageBytes={item.view.iconImageBytes}
           onOpen={() => openItem(item)}
@@ -1035,9 +1033,9 @@ function Footer({
  * its runs ask of the user or its age. Its tooltip counts its agents, and names its host when there
  * are several. Where its host's plxd can edit or delete Projects, hovering or focusing it swaps the
  * status for its actions, which also open by right-clicking the row: Rename, which edits the name
- * in place, Change icon, which opens the icon picker under the row's icon, Permissions…, which
- * changes its permission mode with Create Project's disclaimer (0042), Autonomy…, which sets who
- * answers its children's questions (0043), and Delete….
+ * in place, Change icon, which opens the icon picker under the row's icon, Autonomy…, which sets
+ * who answers its children's questions (0043), and Delete…. A Project's permission mode isn't
+ * offered: Create Project gives it full access (0042).
  */
 function ProjectRow({
   project,
@@ -1047,7 +1045,6 @@ function ProjectRow({
   selected,
   badge,
   editable,
-  moded,
   autonomous,
   iconImageBytes,
   onOpen,
@@ -1063,8 +1060,6 @@ function ProjectRow({
   /** Its Mod+number badge, shown in place of its status while Mod is held. */
   badge?: ReactNode;
   editable: boolean;
-  /** Whether its host's plxd keeps its permission mode (`projectPermission`). */
-  moded: boolean;
   /** Whether its host's plxd keeps its autonomy (`projectAutonomy`, 0043). */
   autonomous: boolean;
   /** Its host's cap on an icon image, where its plxd keeps them. */
@@ -1082,10 +1077,7 @@ function ProjectRow({
   const button = useRef<HTMLButtonElement>(null);
   const iconSpot = useRef<HTMLSpanElement>(null);
   const picker = useRef<HTMLDivElement>(null);
-  const permissions = useRef<HTMLDialogElement>(null);
   const autonomyDialog = useRef<HTMLDialogElement>(null);
-  // The mode picked in Permissions…, which opens on the Project's own.
-  const [mode, setMode] = useState<ProjectPermission>("auto");
   // The level picked in Autonomy…, which opens on the Project's own.
   const [autonomy, setAutonomy] = useState<ProjectAutonomy>("routine");
   // The name the field opened with, while Rename is open.
@@ -1125,7 +1117,7 @@ function ProjectRow({
   };
 
   const icon = <ProjectIcon icon={project.icon} className="size-4" />;
-  const actionable = editable || moded || autonomous || !!onDelete;
+  const actionable = editable || autonomous || !!onDelete;
   const tooltip =
     [runs.length > 0 && `${runs.length} ${runs.length === 1 ? "agent" : "agents"}`, host?.name]
       .filter(Boolean)
@@ -1238,19 +1230,6 @@ function ProjectRow({
                 </button>
               </>
             )}
-            {moded && (
-              <button
-                type="button"
-                role="menuitem"
-                className={menuItem}
-                onClick={choose(() => {
-                  setMode(project.permission ?? "auto");
-                  permissions.current?.showModal();
-                })}
-              >
-                Permissions…
-              </button>
-            )}
             {autonomous && (
               <button
                 type="button"
@@ -1286,15 +1265,6 @@ function ProjectRow({
           onPick={(next) => void onUpdate({ icon: next })}
           maxImageBytes={iconImageBytes}
         />
-      )}
-      {moded && (
-        <SettingDialog
-          ref={permissions}
-          label={`${project.name} permissions`}
-          onSave={() => void onUpdate({ permission: mode })}
-        >
-          <ProjectPermissionChoice value={mode} onChange={setMode} />
-        </SettingDialog>
       )}
       {autonomous && (
         <SettingDialog

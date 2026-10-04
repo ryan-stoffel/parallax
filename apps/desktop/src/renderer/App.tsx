@@ -28,7 +28,7 @@ import { iconImageBytes } from "./images";
 import { OpenMenu } from "./OpenMenu";
 import { AgentsPanel, useProjectAgents, withProjectThreads } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
-import { ProjectHome } from "./ProjectHome";
+import { ProjectHome, waitingCount } from "./ProjectHome";
 import { PullRequestChip, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
@@ -754,17 +754,7 @@ export function App() {
         pullRequest={showPr}
         project={
           project && {
-            // Children, as the home counts them: an unread question or failure, or an approval.
-            waiting: agents.runs.filter(
-              (r) =>
-                r.id !== project.coordinator &&
-                r.policy !== "noWrite" &&
-                ((agents.waiting[r.id]?.length ?? 0) > 0 ||
-                  inbox.items.some(
-                    (i) =>
-                      i.run === r.id && !i.seenAt && (i.kind === "needsYou" || i.kind === "failed"),
-                  )),
-            ).length,
+            waiting: waitingCount(project, agents, inbox),
             home: (
               <ProjectHome
                 project={project}
@@ -879,7 +869,6 @@ function HostLoader({
     attention: !!capabilities && "threadAttention" in capabilities,
     editable: !!capabilities && "projectEdit" in capabilities,
     deletable: !!capabilities && "projectDelete" in capabilities,
-    moded: !!capabilities && "projectPermission" in capabilities,
     autonomous: !!capabilities && "projectAutonomy" in capabilities,
     iconImageBytes: iconImageBytes(connection),
     lineage: !!capabilities && "threadLineage" in capabilities,

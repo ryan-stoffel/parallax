@@ -410,8 +410,6 @@ export interface ThreadsView {
   editable: boolean;
   /** Whether the host's plxd deletes Projects (`projectDelete`, PLX-338). */
   deletable: boolean;
-  /** Whether the host's plxd keeps a Project's permission mode (`projectPermission`, 0042). */
-  moded: boolean;
   /** Whether the host's plxd keeps a Project's autonomy (`projectAutonomy`, 0043). */
   autonomous: boolean;
   /** The cap on an icon image's base64, where the host's plxd keeps icon images (`iconImages`, 0038). */
@@ -465,7 +463,6 @@ export function useThreads(
     attention = false,
     editable = false,
     deletable = false,
-    moded = false,
     autonomous = false,
     iconImageBytes,
     lineage = false,
@@ -478,7 +475,6 @@ export function useThreads(
       | "attention"
       | "editable"
       | "deletable"
-      | "moded"
       | "autonomous"
       | "iconImageBytes"
       | "lineage"
@@ -837,7 +833,6 @@ export function useThreads(
       attention,
       editable,
       deletable,
-      moded,
       autonomous,
       iconImageBytes,
       lineage,
@@ -863,7 +858,6 @@ export function useThreads(
       attention,
       editable,
       deletable,
-      moded,
       autonomous,
       iconImageBytes,
       lineage,
@@ -915,7 +909,6 @@ export const idleThreads: ThreadsView = {
   attention: false,
   editable: false,
   deletable: false,
-  moded: false,
   autonomous: false,
   lineage: false,
   autoResume: false,

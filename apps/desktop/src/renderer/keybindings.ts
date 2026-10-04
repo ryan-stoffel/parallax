@@ -35,7 +35,7 @@ export const commands: { id: Command; name: string; defaults: string[] }[] = [
   { id: "nextThread", name: "Next sibling thread", defaults: ["Mod+Alt+ArrowRight"] },
   { id: "previousThread", name: "Previous sibling thread", defaults: ["Mod+Alt+ArrowLeft"] },
   // A Project composer's target (0042), which ProjectChat flips.
-  { id: "projectTarget", name: "Switch New task and Ask", defaults: ["Mod+Period"] },
+  { id: "projectTarget", name: "Switch New task and Coordinator", defaults: ["Mod+Period"] },
 ];
 
 const order = ["Ctrl", "Alt", "Shift", "Meta"];
