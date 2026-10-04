@@ -56,9 +56,10 @@ pub enum ErrorKind {
     /// review, and it takes no more messages.
     RunAccepted,
     /// `agent/accept` refused before changing anything: the run, or its push or Open PR
-    /// (PLX-458), is still running, or it has no commit, the repository's HEAD is detached or a merge or rebase is in progress there,
-    /// uncommitted changes in the user's checkout touch files the merge would change, or the run
-    /// has committed since the reviewed commit. The message says which.
+    /// (PLX-458), is still running, or it has no commit, the repository's HEAD is detached or a
+    /// merge or rebase is in progress there, uncommitted changes in the user's checkout touch
+    /// files the merge would change, or the run has committed since the reviewed commit. The
+    /// message says which.
     MergeRefused,
     /// `agent/accept` refused because the run's commit conflicts with the project's branch, which
     /// has moved on since the run started. The message names the conflicting files. Nothing was
@@ -102,8 +103,8 @@ pub enum ErrorKind {
     ApprovalNotFound,
     /// `agent/commit` or `agent/push` refused with nothing changed (PLX-298): the run is still
     /// running, its push or Open PR is (PLX-458), there is nothing to commit, or its folder has a
-    /// detached HEAD, with no branch to push. The message says which. `thread/delete` and
-    /// `project/delete` fail with it too while a run's push or Open PR runs.
+    /// detached HEAD, with no branch to push. The message says which. `thread/delete` fails with
+    /// it too while the thread's push or Open PR runs; `project/delete` waits for its runs' instead.
     GitRefused,
     /// `agent/commit`'s git failed, such as for a missing `user.name`. The message carries git's
     /// stderr.

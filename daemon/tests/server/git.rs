@@ -9,18 +9,20 @@ use std::time::{Duration, Instant};
 
 use parallax_protocol::methods::{
     AgentAccept, AgentCancel, AgentCommit, AgentGitStatus, AgentOpenPr, AgentPush, AgentSend,
-    AgentStart, QueueList, RepoAdd, ThreadStart,
+    AgentStart, ProjectDelete, QueueList, QueueSteer, RepoAdd, ThreadDelete, ThreadStart,
 };
 use parallax_protocol::{
     AcceptId, AgentAcceptParams, AgentCancelParams, AgentCommitParams, AgentGitStatusParams,
-    AgentOutputItem, AgentPushParams, AgentStatus, ErrorKind, GitStatus, ParallaxEvent, ProjectId,
-    QueueListParams, RepoAddParams, RepoId, RunId, ThreadStartParams, TurnId,
+    AgentOutputItem, AgentPushParams, AgentStatus, ErrorKind, GitStatus, ParallaxEvent,
+    ProjectDeleteParams, ProjectId, QueueListParams, QueueSteerParams, RepoAddParams, RepoId,
+    RunId, ThreadDeleteParams, ThreadStartParams, TurnId,
 };
 use plxd::backend::fake::Step;
+use tokio::task::JoinHandle;
 
 use crate::agents::{
-    Conn, create, git, init, project_params, real_repo, send_params, start_params, subscribe, text,
-    until, updated_to,
+    Conn, Host, create, git, init, project_params, real_repo, send_params, start_params, subscribe,
+    text, until, updated_to,
 };
 use crate::open_pr::{Tools, add_origin, editing, open, start, thread};
 use crate::support::{PATIENCE, kind, temp_dir};
@@ -248,7 +250,9 @@ fn hold_pushes(origin: &Path) -> (PathBuf, PathBuf) {
     fs::write(
         &hook,
         format!(
-            "#!/bin/sh\n: > '{}'\nwhile [ ! -e '{}' ]; do /bin/sleep 0.05; done\n",
+            // Gives up after about 30 s, so a failed test leaves no hook running.
+            "#!/bin/sh\n: > '{}'\ni=0\nwhile [ ! -e '{}' ] && [ \"$i\" -lt 600 ]; do \
+             /bin/sleep 0.05; i=$((i + 1)); done\n",
             started.display(),
             gate.display()
         ),
@@ -258,26 +262,11 @@ fn hold_pushes(origin: &Path) -> (PathBuf, PathBuf) {
     (started, gate)
 }
 
-#[tokio::test]
-async fn a_slow_push_runs_off_the_actor_and_a_follow_up_waits_for_it() {
-    let tools = Tools::new();
-    let dir = temp_dir();
-    let params = project_params(dir.path());
-    let repo = PathBuf::from(&params.repo_path);
-    let origin = add_origin(&repo, dir.path());
-    let (started, gate) = hold_pushes(&origin);
-    let host = start(dir, editing(), &tools);
+/// Starts `agent/push` for `run_id` on a client of its own, and returns once `origin` holds it.
+async fn held_push(host: &Host, run_id: RunId, started: &Path) -> JoinHandle<GitStatus> {
     let mut client = host.client().await;
-    let project = create(&mut client, params).await;
-    subscribe(&mut client, project.id, 0).await;
-    let start = start_params(project.id, "Rewrite the README");
-    let run_id = start.run_id;
-    let branch = client.call::<AgentStart>(start).await.unwrap().run.branch;
-    until(&mut client, updated_to(AgentStatus::Completed)).await;
-
-    let mut other = host.client().await;
     let push = tokio::spawn(async move {
-        other
+        client
             .call::<AgentPush>(AgentPushParams { run_id })
             .await
             .unwrap()
@@ -287,23 +276,12 @@ async fn a_slow_push_runs_off_the_actor_and_a_follow_up_waits_for_it() {
         assert!(Instant::now() < deadline, "the push never reached origin");
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    push
+}
 
-    // The run answers while origin holds the push: a follow-up waits in its queue, and what would
-    // touch its folder or branch is refused.
-    let turn = TurnId::generate();
-    let sent = tokio::time::timeout(
-        PATIENCE,
-        client.call::<AgentSend>(send_params(run_id, turn, "Now the CHANGELOG")),
-    )
-    .await
-    .expect("the follow-up waited for the push")
-    .unwrap();
-    assert_eq!(sent.run.status, AgentStatus::Completed);
-    let queued = client
-        .call::<QueueList>(QueueListParams { run_id })
-        .await
-        .unwrap();
-    assert_eq!(queued.messages.len(), 1);
+/// Checks that what would touch `run_id`'s folder or branch, or start its CLI with `queued`, its
+/// waiting message, is refused while its push runs.
+async fn refused_while_pushing(client: &mut Conn, run_id: RunId, queued: TurnId) {
     let refusals = [
         (
             client
@@ -337,11 +315,58 @@ async fn a_slow_push_runs_off_the_actor_and_a_follow_up_waits_for_it() {
                 .unwrap_err(),
             ErrorKind::MergeRefused,
         ),
+        // A steer has no turn to go into, and starts no CLI while the push runs.
+        (
+            client
+                .call::<QueueSteer>(QueueSteerParams { run_id, id: queued })
+                .await
+                .unwrap_err(),
+            ErrorKind::RunNotResumable,
+        ),
     ];
     for (error, expected) in refusals {
         assert_eq!(kind(&error), expected);
         assert!(error.message.contains("pushing"), "{}", error.message);
     }
+}
+
+#[tokio::test]
+async fn a_slow_push_runs_off_the_actor_and_a_follow_up_waits_for_it() {
+    let tools = Tools::new();
+    let dir = temp_dir();
+    let params = project_params(dir.path());
+    let repo = PathBuf::from(&params.repo_path);
+    let origin = add_origin(&repo, dir.path());
+    let (started, gate) = hold_pushes(&origin);
+    let host = start(dir, editing(), &tools);
+    let mut client = host.client().await;
+    let project = create(&mut client, params).await;
+    subscribe(&mut client, project.id, 0).await;
+    let start = start_params(project.id, "Rewrite the README");
+    let run_id = start.run_id;
+    let run = client.call::<AgentStart>(start).await.unwrap().run;
+    let (branch, worktree) = (run.branch, PathBuf::from(run.worktree_path.unwrap()));
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    let push = held_push(&host, run_id, &started).await;
+
+    // The run answers while origin holds the push: a follow-up waits in its queue, and what would
+    // touch its folder or branch is refused.
+    let turn = TurnId::generate();
+    let sent = tokio::time::timeout(
+        PATIENCE,
+        client.call::<AgentSend>(send_params(run_id, turn, "Now the CHANGELOG")),
+    )
+    .await
+    .expect("the follow-up waited for the push")
+    .unwrap();
+    assert_eq!(sent.run.status, AgentStatus::Completed);
+    let queued = client
+        .call::<QueueList>(QueueListParams { run_id })
+        .await
+        .unwrap();
+    assert_eq!(queued.messages.len(), 1);
+    refused_while_pushing(&mut client, run_id, turn).await;
     assert!(!push.is_finished());
 
     // Once the push is done, the follow-up goes to the run as its next turn.
@@ -359,5 +384,69 @@ async fn a_slow_push_runs_off_the_actor_and_a_follow_up_waits_for_it() {
     })
     .await;
     until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    // `project/delete` waits for a push rather than stopping with some of its runs deleted.
+    fs::remove_file(&started).unwrap();
+    fs::remove_file(&gate).unwrap();
+    git(&worktree, &["commit", "-q", "--allow-empty", "-m", "More"]);
+    let push = held_push(&host, run_id, &started).await;
+    let mut other = host.client().await;
+    let delete = tokio::spawn(async move {
+        other
+            .call::<ProjectDelete>(ProjectDeleteParams {
+                project: project.id,
+            })
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!delete.is_finished());
+    fs::write(&gate, "").unwrap();
+    assert_eq!(push.await.unwrap().ahead, 0);
+    delete.await.unwrap().unwrap();
+    host.server.stop().await;
+}
+
+#[tokio::test]
+async fn a_thread_s_delete_is_refused_while_its_push_runs() {
+    let tools = Tools::new();
+    let work = temp_dir();
+    let repo = real_repo(work.path());
+    let origin = add_origin(&repo, work.path());
+    let (started, gate) = hold_pushes(&origin);
+    let host = start(temp_dir(), editing(), &tools);
+    let mut client = host.client().await;
+    let entry = client
+        .call::<RepoAdd>(RepoAddParams {
+            id: RepoId::generate(),
+            path: repo.to_str().unwrap().to_owned(),
+        })
+        .await
+        .unwrap()
+        .repo;
+    subscribe(
+        &mut client,
+        ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap(),
+        0,
+    )
+    .await;
+    let start = thread(Some(entry.id));
+    let run_id = start.run_id;
+    client.call::<ThreadStart>(start).await.unwrap();
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    let push = held_push(&host, run_id, &started).await;
+    let refused = client
+        .call::<ThreadDelete>(ThreadDeleteParams { run_id })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&refused), ErrorKind::GitRefused);
+    assert!(refused.message.contains("pushing"), "{}", refused.message);
+
+    fs::write(&gate, "").unwrap();
+    push.await.unwrap();
+    client
+        .call::<ThreadDelete>(ThreadDeleteParams { run_id })
+        .await
+        .unwrap();
     host.server.stop().await;
 }

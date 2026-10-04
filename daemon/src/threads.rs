@@ -1204,16 +1204,18 @@ pub(crate) async fn delete(
             .ok_or_else(|| thread_not_found(run_id))
     })
     .await?;
-    agents::delete(daemon, run_id).await.map_err(|error| {
-        let gone = error
-            .parallax_data()
-            .is_some_and(|data| data.kind == ErrorKind::RunNotFound);
-        if gone {
-            thread_not_found(run_id)
-        } else {
-            error
-        }
-    })?;
+    agents::delete(daemon, run_id, false)
+        .await
+        .map_err(|error| {
+            let gone = error
+                .parallax_data()
+                .is_some_and(|data| data.kind == ErrorKind::RunNotFound);
+            if gone {
+                thread_not_found(run_id)
+            } else {
+                error
+            }
+        })?;
     Ok(ThreadDeleteResult {})
 }
 

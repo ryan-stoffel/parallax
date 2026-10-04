@@ -190,8 +190,9 @@ pub(super) enum Command {
         reply: oneshot::Sender<Result<GitStatus, ErrorObject>>,
     },
     /// `thread/delete` (#110) and `project/delete` (PLX-338): stops the run's CLI, waits for it to
-    /// exit, and deletes the run.
+    /// exit, and deletes the run. A push or Open PR in flight refuses it, unless `wait`.
     Delete {
+        wait: bool,
         reply: oneshot::Sender<Result<(), ErrorObject>>,
     },
     /// A child of this run finished, or a run started in this coordinator's Project, as
@@ -242,7 +243,7 @@ impl Command {
             Self::Git { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
-            Self::Delete { reply } => {
+            Self::Delete { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
             Self::Wake(..) => {}
@@ -649,8 +650,8 @@ impl Actor {
                 let _ = reply.send(self.snapshot());
             }
             Command::Git { action, reply } => self.on_git(action, reply).await,
-            Command::Delete { reply } => {
-                let answer = self.delete().await;
+            Command::Delete { wait, reply } => {
+                let answer = self.delete(wait).await;
                 if answer.is_ok() {
                     self.deleted = true;
                     self.stopping = true;
@@ -835,9 +836,14 @@ impl Actor {
     /// `thread/delete` and `project/delete`: cancels a running CLI and waits for it to exit and
     /// its changes to be committed, then deletes the run's rows, events, worktree, and a thread's
     /// scratch folders ([`crate::threads::purge`]), and drops this actor from the map. Running
-    /// here, between commands, it never races a resume or an accept. It refuses while a push or
-    /// Open PR runs (`gitRefused`), which works in the run's folder.
-    async fn delete(&mut self) -> Result<(), ErrorObject> {
+    /// here, between commands, it never races a resume or an accept. A push or Open PR, which
+    /// works in the run's folder, makes it wait for the effect to finish with `wait`, and
+    /// otherwise refuses it (`gitRefused`).
+    async fn delete(&mut self, wait: bool) -> Result<(), ErrorObject> {
+        if wait && let Some(effect) = &mut self.effect {
+            let finished = effect.await;
+            self.finish_effect(finished).await;
+        }
         self.effect_busy(ErrorKind::GitRefused)?;
         if self.live.is_some() {
             self.stop_approvals(AgentApprovalBy::Cancel).await;
