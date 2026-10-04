@@ -4,6 +4,10 @@
 //! plxd stores the status before it appends the `agent.updated`. So the wait sleeps on the log's
 //! watch, checks each batch of new events for one about its runs, and reads the runs from the
 //! store again only when it finds one.
+//!
+//! Deleting a thread drops its run's events from the log's window without a gap the wait can
+//! see, but it then appends `thread.deleted`, which wakes the wait too: its re-read finds the run
+//! gone and answers `runNotFound`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,6 +20,7 @@ use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 
 use super::{run_not_found, snapshot, store_error};
+use crate::methods::Context;
 use crate::server::Daemon;
 
 /// The most runs one `agent/wait` takes.
@@ -26,13 +31,18 @@ const MAX_RUNS: usize = 50;
 const MAX_TIMEOUT_MS: u32 = 60_000;
 
 /// Answers `agent/wait`: the runs once `until` holds, or as they stand when the timeout, capped
-/// at [`MAX_TIMEOUT_MS`], passes. Fails with `runNotFound` for a run that doesn't exist, and
-/// stops when the request is cancelled.
+/// at [`MAX_TIMEOUT_MS`], passes or the connection stops reading (the client closed its side or
+/// plxd is stopping), both reported as `timedOut`. Fails with `runNotFound` for a run that
+/// doesn't exist or is deleted meanwhile, and stops when the request is cancelled.
 pub(crate) async fn wait(
-    daemon: &Daemon,
-    cancel: &CancellationToken,
+    context: &Context,
     params: AgentWaitParams,
 ) -> Result<AgentWaitResult, ErrorObject> {
+    let Context {
+        daemon,
+        cancel,
+        stopped_reading,
+    } = context;
     let AgentWaitParams {
         run_ids,
         until,
@@ -70,13 +80,17 @@ pub(crate) async fn wait(
                 () = sleep_until(deadline) => {
                     return Ok(AgentWaitResult { runs, timed_out: true });
                 }
+                () = stopped_reading.cancelled() => {
+                    return Ok(AgentWaitResult { runs, timed_out: true });
+                }
                 // The log outlives `daemon`, so its watch never closes here.
                 _ = watch.changed() => {}
             }
             let head = daemon.log.head();
             let touched = daemon.log.any_after(seen, |event| match event {
                 ParallaxEvent::AgentUpdated { run_id, .. }
-                | ParallaxEvent::AgentFinished { run_id, .. } => run_ids.contains(run_id),
+                | ParallaxEvent::AgentFinished { run_id, .. }
+                | ParallaxEvent::ThreadDeleted { run_id, .. } => run_ids.contains(run_id),
                 _ => false,
             });
             seen = head;

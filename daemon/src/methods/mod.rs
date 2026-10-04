@@ -57,8 +57,12 @@ use crate::server::Daemon;
 /// What a request handler has to work with.
 pub(crate) struct Context {
     pub daemon: Arc<Daemon>,
-    /// Cancelled by `$/cancelRequest`, or when the connection closes.
+    /// Cancelled by `$/cancelRequest`, or when the connection closes at once. When the client
+    /// closes its side or plxd shuts down, the connection answers what it read first instead.
     pub cancel: CancellationToken,
+    /// Cancelled when the connection stops reading: the client closed its side or plxd is
+    /// shutting down. A request that waits for something else, like `agent/wait`, ends then.
+    pub stopped_reading: CancellationToken,
 }
 
 /// What the connection's writer sends for a request.
@@ -357,10 +361,7 @@ async fn agent_method(context: &Context, request: &Request) -> Option<Result<Val
             handle::<AgentAutoResume, _, _>(request, |p| agent::auto_resume(context, p)).await
         }
         AgentWait::NAME => {
-            handle::<AgentWait, _, _>(request, |p| {
-                crate::agents::wait::wait(&context.daemon, &context.cancel, p)
-            })
-            .await
+            handle::<AgentWait, _, _>(request, |p| crate::agents::wait::wait(context, p)).await
         }
         _ => return None,
     })

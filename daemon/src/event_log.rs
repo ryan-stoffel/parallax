@@ -823,6 +823,25 @@ mod tests {
         assert_eq!(log.check(4), Ok(()));
     }
 
+    /// `any_after` (PLX-451) checks only the events after `after`, and counts events dropped
+    /// from the window as a match, since it can't tell what they were.
+    #[test]
+    fn any_after_matches_new_events_and_any_that_were_dropped() {
+        let log = EventLog::new(2);
+        let run = RunId::generate();
+        log.append_blocking(jiff::Timestamp::now(), None, finished(run));
+        for _ in 0..3 {
+            append(&log, None);
+        }
+        let is_finished =
+            |event: &ParallaxEvent| matches!(event, ParallaxEvent::AgentFinished { .. });
+        assert!(log.any_after(0, is_finished), "seq 1 was dropped");
+        assert!(!log.any_after(2, is_finished));
+        log.append_blocking(jiff::Timestamp::now(), None, finished(run));
+        assert!(log.any_after(4, is_finished));
+        assert!(!log.any_after(5, is_finished));
+    }
+
     #[test]
     fn a_seq_past_the_head_is_unknown() {
         let log = EventLog::new(2);

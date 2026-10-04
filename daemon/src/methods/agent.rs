@@ -447,6 +447,7 @@ mod tests {
         let context = Context {
             daemon: Arc::clone(&daemon),
             cancel: CancellationToken::new(),
+            stopped_reading: CancellationToken::new(),
         };
         let (run_id, project) = (RunId::generate(), ProjectId::generate());
         daemon

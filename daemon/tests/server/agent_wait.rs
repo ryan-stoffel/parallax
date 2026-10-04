@@ -1,12 +1,14 @@
 //! `agent/wait` (PLX-451): waits for any or all runs to go idle, or for its timeout, on the fake
-//! CLI. One connection waits while another cancels runs.
+//! CLI. One connection waits while another cancels or deletes runs, and the wait ends when its
+//! connection stops reading.
 
 use std::time::{Duration, Instant};
 
 use parallax_protocol::jsonrpc::INVALID_PARAMS;
-use parallax_protocol::methods::{AgentCancel, AgentStart, AgentWait};
+use parallax_protocol::methods::{AgentCancel, AgentStart, AgentWait, ThreadDelete, ThreadStart};
 use parallax_protocol::{
     AgentCancelParams, AgentStatus, AgentWaitParams, AgentWaitResult, ErrorKind, RunId,
+    ThreadDeleteParams,
 };
 use plxd::backend::fake::Step;
 
@@ -15,6 +17,9 @@ use crate::agents::{
     updated_to,
 };
 use crate::support::{Client, kind, temp_dir};
+
+/// How soon a wait that has to end early must answer: far under its own 60 s timeout.
+const PROMPTLY: Duration = Duration::from_secs(3);
 
 /// A host whose runs work until cancelled, `count` runs running on it, and a client.
 async fn hanging_runs(count: usize) -> (Host, Conn, Vec<RunId>) {
@@ -134,4 +139,69 @@ async fn an_unknown_run_is_not_found() {
             .unwrap_err();
         assert_eq!(refused.code, INVALID_PARAMS, "{refused:?}");
     }
+}
+
+/// A client that closes its side gets its pending wait answered at once, as timed out, instead
+/// of the connection staying open until the wait's own timeout.
+#[tokio::test]
+async fn closing_the_client_ends_a_pending_wait() {
+    let (host, _client, runs) = hanging_runs(1).await;
+    let mut waiter = Client::ready(&host.server.socket).await;
+    waiter
+        .send::<AgentWait>(wait_params(runs, "all", 60_000))
+        .await;
+    waiter.stays_quiet(Duration::from_millis(200)).await;
+
+    let closed = Instant::now();
+    waiter.close_write().await;
+    let result = answer(&mut waiter).await;
+    assert!(closed.elapsed() < PROMPTLY, "{:?}", closed.elapsed());
+    assert!(result.timed_out);
+    assert_eq!(statuses(&result), [AgentStatus::Running]);
+    assert!(waiter.closes_within(PROMPTLY).await);
+}
+
+/// Stopping plxd doesn't wait out a pending wait, which is answered as timed out first.
+#[tokio::test]
+async fn stopping_plxd_ends_a_pending_wait() {
+    let (host, _client, runs) = hanging_runs(1).await;
+    let mut waiter = Client::ready(&host.server.socket).await;
+    waiter
+        .send::<AgentWait>(wait_params(runs, "all", 60_000))
+        .await;
+    waiter.stays_quiet(Duration::from_millis(200)).await;
+
+    let stopping = Instant::now();
+    host.server.stop().await;
+    assert!(stopping.elapsed() < PROMPTLY, "{:?}", stopping.elapsed());
+    assert!(answer(&mut waiter).await.timed_out);
+}
+
+/// Deleting a waited thread ends the wait instead of leaving it to its timeout.
+#[tokio::test]
+async fn deleting_a_thread_ends_a_wait_on_it() {
+    let (host, mut client, _) = hanging_runs(0).await;
+    let params = crate::threads::start_params(None, "Work until deleted");
+    let run_id = params.run_id;
+    client.call::<ThreadStart>(params).await.unwrap();
+    let mut waiter = Client::ready(&host.server.socket).await;
+    waiter
+        .send::<AgentWait>(wait_params(vec![run_id], "any", 60_000))
+        .await;
+    waiter.stays_quiet(Duration::from_millis(200)).await;
+
+    let deleting = Instant::now();
+    client
+        .call::<ThreadDelete>(ThreadDeleteParams { run_id })
+        .await
+        .unwrap();
+    // The wait either sees the run cancelled on its way out or finds it gone.
+    match waiter.response().await.into_result::<AgentWaitResult>() {
+        Ok(result) => {
+            assert!(!result.timed_out);
+            assert_eq!(statuses(&result), [AgentStatus::Cancelled]);
+        }
+        Err(error) => assert_eq!(kind(&error), ErrorKind::RunNotFound, "{error:?}"),
+    }
+    assert!(deleting.elapsed() < PROMPTLY, "{:?}", deleting.elapsed());
 }
