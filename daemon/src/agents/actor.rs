@@ -2453,7 +2453,8 @@ impl Actor {
     }
 
     /// Records how a CLI process ended. Unless plxd stopped it, commits a worker's changes first,
-    /// through #166's hardened commit, and reports the commit, then wakes the run's parent unless
+    /// through #166's hardened commit, and reports the commit. A Project's child then writes its
+    /// history and checks memory for stale entries (0044). Last it wakes the run's parent unless
     /// it was launched with `notify: false` (PLX-380).
     async fn finish(&mut self, outcome: &Outcome) {
         self.flush().await;
@@ -2507,10 +2508,17 @@ impl Actor {
         let Ok(run) = self.snapshot() else {
             return;
         };
-        if self.is_child().await
-            && let Some((kind, text)) = ended_item(&run, &outcome)
-        {
-            self.inbox(kind, text).await;
+        if self.is_child().await {
+            if let Some((kind, text)) = ended_item(&run, &outcome) {
+                self.inbox(kind, text).await;
+            }
+            // 0044: the child's history, then the stale entry check, which runs git, aside.
+            crate::context::history::write(&self.daemon, self.project, &run, &outcome).await;
+            let (daemon, project) = (Arc::clone(&self.daemon), self.project);
+            self.daemon
+                .agents
+                .tracker
+                .spawn(async move { crate::context::stale::check(&daemon, project).await });
         }
         if let Some(parent) = self.row.fields.parent
             && self.row.fields.notify_parent

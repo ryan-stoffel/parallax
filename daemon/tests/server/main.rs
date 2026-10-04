@@ -23,6 +23,7 @@ mod landing;
 mod lifecycle;
 mod mcp;
 mod memory;
+mod memory_upkeep;
 mod open_pr;
 mod projects;
 mod pull_requests;

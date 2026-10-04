@@ -24,7 +24,10 @@
 //! file on disk is 0005's durable source of truth, and this is only bookkeeping for idempotent
 //! retries and the `lastWriter` display field.
 
+pub(crate) mod corrections;
+pub(crate) mod history;
 pub(crate) mod memory;
+pub(crate) mod stale;
 pub(crate) mod watcher;
 
 use std::collections::HashMap;

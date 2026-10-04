@@ -78,6 +78,26 @@ impl WorktreeManager {
         Ok(())
     }
 
+    /// The path of every file on local branch `branch` of `repo_path`'s repository, from `git
+    /// ls-tree`, for the stale memory check (0044). A path with a character git quotes comes back
+    /// quoted.
+    ///
+    /// # Errors
+    ///
+    /// [`WorktreeError::NotAGitRepo`], or [`WorktreeError::GitFailed`] when there is no such
+    /// branch, [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`].
+    pub async fn branch_files(
+        &self,
+        repo_path: &Path,
+        branch: &str,
+    ) -> Result<Vec<String>, WorktreeError> {
+        let repo_root = self.repo_root(repo_path).await?;
+        let tree = format!("refs/heads/{branch}");
+        let args = ["ls-tree", "-r", "--name-only", "--full-tree", &tree];
+        let output = self.run_git_ok(&repo_root, &args).await?;
+        Ok(output.lines().map(str::to_owned).collect())
+    }
+
     /// Whether `name`, a full ref name, exists in `repo_root`.
     pub(super) async fn has_ref(
         &self,
