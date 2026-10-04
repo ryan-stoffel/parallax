@@ -199,6 +199,8 @@ mod tests {
             base_branch: None,
             integration_branch: None,
             auto_land: false,
+            allow_api_keys: None,
+            max_children: None,
         }
     }
 
@@ -312,6 +314,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::too_many_lines, reason = "one round trip per edit field")]
     fn project_edit_types_round_trip_and_omit_what_is_absent() {
         let icons = [
             ProjectIcon {
@@ -372,6 +375,8 @@ mod tests {
                     autonomy: None,
                     base_branch: None,
                     auto_land: None,
+                    allow_api_keys: None,
+                    max_children: None,
                 });
             }
         }
@@ -393,6 +398,8 @@ mod tests {
                 autonomy: None,
                 base_branch: None,
                 auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
             })
             .unwrap(),
             json!({"project": id}),
@@ -441,6 +448,8 @@ mod tests {
                 autonomy: None,
                 base_branch: None,
                 auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
             });
         }
         assert_eq!(
@@ -483,6 +492,8 @@ mod tests {
                 autonomy: Some(autonomy),
                 base_branch: None,
                 auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
             });
         }
         assert_eq!(

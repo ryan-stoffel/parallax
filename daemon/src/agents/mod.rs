@@ -30,6 +30,9 @@
 //! reads the mode again, so one `project/update` changed applies from the run's next process. A
 //! backend that doesn't map the mode is refused ([`in_mode`]), never moved to another mode.
 //!
+//! A Project's child starts on the account [`placement`]'s fixed rules pick (0046), or waits,
+//! recorded as `waiting`, until one has room.
+//!
 //! A normal thread's run is full Claude Code in every mode, with no worker sandbox, when its client
 //! answers permission requests, and its first message is the user's own (0034). A Project's
 //! children run the same way, through `agent/start`: always with `approvals`, and with a short
@@ -45,6 +48,7 @@ mod approvals;
 pub(crate) mod attached;
 pub(crate) mod convert;
 pub(crate) mod coordinator;
+mod placement;
 mod resume;
 pub(crate) mod review;
 pub(crate) mod wait;
@@ -109,6 +113,11 @@ pub(crate) struct Agents {
     approval_timeout: Duration,
     /// When a run a usage limit stopped resumes (PLX-371).
     resume_timing: ResumeTiming,
+    /// Wakes the dispatcher of children waiting to be placed (PLX-413, [`placement`]).
+    pub(crate) placement: tokio::sync::Notify,
+    /// Held from placing a Project's child until it counts as running or waiting, so two at once
+    /// never both take a Project's last free slot (0046).
+    placing: tokio::sync::Mutex<()>,
 }
 
 /// Per-run-id locks for [`Agents::starting`] (#190).
@@ -217,6 +226,8 @@ impl Agents {
             shutdown: CancellationToken::new(),
             approval_timeout: APPROVAL_TIMEOUT,
             resume_timing: ResumeTiming::default(),
+            placement: tokio::sync::Notify::new(),
+            placing: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -360,19 +371,18 @@ async fn prepare_run(
     role: Role,
     new_thread: bool,
 ) -> Result<(Prepared, String), ErrorObject> {
-    let (repo_path, context_scope, project_name, thread_run, defaults, accounts) =
+    let (repo_path, context_scope, project_row, thread_run, defaults, mut accounts) =
         store(daemon, move |db| {
             let repo_path = crate::threads::scope_path(db, project)?;
             // A run whose scope is a Project, not a repo entry, is its coordinator or one of its
             // children (0042).
-            let project_name = db
+            let project_row = db
                 .get_project(project.into())
-                .map_err(|e| store_error(&e))?
-                .map(|row| row.name);
+                .map_err(|e| store_error(&e))?;
             // The run itself is a thread: one `thread/start` made, or a Project's child, not any
             // run on a repo entry, such as one `agent/start` made there.
             let thread_run = new_thread
-                || project_name.is_some()
+                || project_row.is_some()
                 || db
                     .get_thread(run.into())
                     .map_err(|e| store_error(&e))?
@@ -387,13 +397,15 @@ async fn prepare_run(
             Ok((
                 repo_path,
                 context_scope,
-                project_name,
+                project_row,
                 thread_run,
                 defaults,
                 StoredKeyAccounts(accounts),
             ))
         })
         .await?;
+    let chosen = requested.as_ref().or(defaults.worker.as_ref());
+    placement::api_keys(role, project_row.as_ref(), chosen, &mut accounts)?;
     let defaults = Defaults {
         coordinator: defaults.coordinator,
         worker: defaults.worker,
@@ -450,7 +462,7 @@ async fn prepare_run(
     })?;
     let context = sandbox_path(&context, "the shared context folder")?;
     sandbox_path(Path::new(&repo_path), "the project's repository")?;
-    let header = match project_name {
+    let header = match project_row.map(|row| row.name) {
         Some(name) => Some(child_header(&name, &memory::start(daemon, project).await?)),
         None => None,
     };
@@ -1074,7 +1086,7 @@ pub(crate) async fn create_started(
         prompt,
         images,
         threads,
-        account,
+        mut account,
         coordinator_thread,
         notify,
         mut options,
@@ -1122,6 +1134,22 @@ pub(crate) async fn create_started(
     }
     // The attached threads are read before anything is created, so a failure leaves nothing.
     let sent = attached::prompt(&daemon, &threads, &prompt).await?;
+    // A Project's child goes where its rules say, or waits (0046).
+    let requested = account.clone();
+    let mut waiting = None;
+    let mut placing = None;
+    if let Some(mode) = mode.filter(|_| fork.is_none()) {
+        placing = Some(daemon.agents.placing.lock().await);
+        let model = options.model.as_deref();
+        match placement::place(&daemon, project, None, account.as_ref(), model, mode).await? {
+            placement::Placed::Start(placed) => account = Some(placed),
+            placement::Placed::Wait { reason, on } => {
+                waiting = Some(reason);
+                account = on.or(account);
+            }
+            placement::Placed::Picked => {}
+        }
+    }
     let (prepared, scope_path) = prepare_run(
         &daemon,
         project,
@@ -1165,9 +1193,15 @@ pub(crate) async fn create_started(
     };
 
     fields.backend = prepared.resolved.backend().name().into();
+    let status = match (&fork, &waiting) {
+        (Some(_), _) => COMPLETED,
+        (None, Some(_)) => convert::WAITING,
+        (None, None) => STARTING,
+    };
     let state = RunState {
-        status: if fork.is_some() { COMPLETED } else { STARTING }.to_owned(),
+        status: status.to_owned(),
         account_id: prepared.resolved.account_id(),
+        error: waiting.clone(),
         ..RunState::default()
     };
     let is_thread = thread.is_some();
@@ -1180,6 +1214,8 @@ pub(crate) async fn create_started(
         created.as_ref(),
     )
     .await?;
+    // It counts as starting or waiting now.
+    drop(placing);
     log_started(&daemon, project, agent_run(&row, worktree.as_ref())?).await;
     if let Some(thread) = &thread_row {
         crate::threads::log_started(&daemon, thread).await;
@@ -1187,6 +1223,17 @@ pub(crate) async fn create_started(
     info!(run = %run_id, project = %project, backend = %row.fields.backend, thread = is_thread, checkout = row.fields.checkout, "created an agent run");
     if let Some(fork) = fork {
         return fork_created(&daemon, project, run_id, fork, &row, worktree, thread_row).await;
+    }
+    if waiting.is_some() {
+        let run = agent_run(&row, worktree.as_ref())?;
+        placement::queue(&daemon, &run, sent, images, threads, requested).await?;
+        if coordinator_thread.is_none() {
+            wake::started(&daemon, &run);
+        }
+        return Ok(CreatedRun {
+            run,
+            thread: thread_row,
+        });
     }
 
     // A run just created here has no sent turns yet.
@@ -1732,6 +1779,7 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
     }
     wake::catch_up(daemon).await;
     resume::restore(daemon).await;
+    placement::start(daemon);
 }
 
 #[cfg(test)]
@@ -1856,6 +1904,7 @@ mod tests {
                     secret,
                 }],
                 models: Vec::new(),
+                reserve: None,
             };
             providers.save(instance).await.unwrap();
             let (_, backend) = registry.by_backend_name(id).unwrap();

@@ -106,7 +106,7 @@ impl CliDetector {
     }
 
     /// `cli`'s status from either cache, while it's fresh.
-    async fn cached(&self, cli: CliKind) -> Option<DetectedCli> {
+    pub async fn cached(&self, cli: CliKind) -> Option<DetectedCli> {
         if let Some((checked, probe)) = &*self.cache.lock().await
             && checked.elapsed() < CACHE_TTL
             && let Some(found) = probe.clis.iter().find(|found| found.cli == cli)

@@ -88,13 +88,18 @@ impl Actor {
         self.resume_waiting(turn).await;
     }
 
-    /// `agent/resumeNow`: resumes a waiting run now, as the user's own turn.
+    /// `agent/resumeNow`: resumes a waiting run now, as the user's own turn. A Project's child
+    /// waiting to be placed starts now on the account it was started on (0046).
     pub(super) async fn resume_now(&mut self) -> Result<AgentRun, ErrorObject> {
         if self.row.state.status != WAITING {
             return Err(ErrorObject::parallax(
                 ErrorKind::RunNotResumable,
                 format!("run {} isn't waiting for a usage limit to reset", self.id),
             ));
+        }
+        if let Some(pending) = crate::agents::placement::take(&self.daemon, self.id).await? {
+            let account = super::session_account(&self.row.state.account_id);
+            return self.place(account, pending).await;
         }
         self.resume_waiting(TurnId::generate()).await;
         self.snapshot()

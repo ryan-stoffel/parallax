@@ -299,6 +299,8 @@ async fn providers_method(
         ProvidersSave::NAME => {
             handle::<ProvidersSave, _, _>(request, |p| async move {
                 daemon.providers.save(p.instance).await?;
+                // A lower reserve, or an instance turned on, may start a waiting child (0046).
+                daemon.agents.placement.notify_one();
                 Ok(list(false).await)
             })
             .await

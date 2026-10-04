@@ -552,6 +552,8 @@ mod tests {
                 base_branch: None,
                 integration_branch: None,
                 auto_land: false,
+                allow_api_keys: None,
+                max_children: None,
             };
             daemon
                 .log
@@ -704,6 +706,8 @@ mod tests {
                     base_branch: None,
                     integration_branch: None,
                     auto_land: false,
+                    allow_api_keys: None,
+                    max_children: None,
                 },
             },
         };

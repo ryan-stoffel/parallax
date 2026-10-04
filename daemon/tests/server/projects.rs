@@ -46,6 +46,8 @@ fn update(
         autonomy: None,
         base_branch: None,
         auto_land: None,
+        allow_api_keys: None,
+        max_children: None,
     }
 }
 
