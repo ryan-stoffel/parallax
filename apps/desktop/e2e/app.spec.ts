@@ -82,7 +82,7 @@ test("starts a thread and shows the agent's output", async () => {
   await page.getByRole("button", { name: "Back to app" }).click();
 
   await page.getByRole("textbox", { name: "Message" }).fill("Tidy up the README");
-  await page.getByRole("button", { name: "Send" }).click();
+  await page.getByRole("button", { name: "Send", exact: true }).click();
 
   const transcript = page.getByRole("log", { name: "Transcript" });
   await expect(transcript.getByText("Tidy up the README")).toBeVisible();
@@ -93,7 +93,7 @@ test("starts a thread and shows the agent's output", async () => {
 test("stops the thread", async () => {
   await page.getByRole("button", { name: "Stop" }).click();
   await expect(page.getByRole("log", { name: "Transcript" }).getByText("Stopped")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
 });
 
 test("a top bar menu closes on a click outside it (PLX-363)", async () => {
@@ -186,7 +186,7 @@ test("the composer grows upward as it fills, up to 40% of the window (PLX-184)",
 
 test("a follow-up's text is still there after a reload (PLX-92)", async () => {
   await page.getByRole("textbox", { name: "Message" }).fill("Check the links too");
-  await page.getByRole("button", { name: "Send" }).click();
+  await page.getByRole("button", { name: "Send", exact: true }).click();
   // The resumed fake answers again, after plxd logged the follow-up's turnStarted.
   const said = page.getByRole("log", { name: "Transcript" }).getByText("The fake agent is on it.");
   await expect(said).toHaveCount(2);
@@ -218,7 +218,7 @@ test("a pasted image sits in the composer, goes with the message, and outlives a
 
   // The image alone: the thread was left running with its turn done, so the fake takes it as a
   // follow-up at once rather than queueing it for the turn's end (PLX-370).
-  await page.getByRole("button", { name: "Send" }).click();
+  await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(thumbnail).toHaveCount(0);
   const transcript = page.getByRole("log", { name: "Transcript" });
   const sent = transcript.getByRole("img", { name: "Image", exact: true });
@@ -306,20 +306,23 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Back to app" }).click();
 
-  // The last test left the ember project open. Ask sends to the coordinator, in place of the
-  // default New task (0042).
-  await page.getByRole("group", { name: "Send as" }).getByText("Ask", { exact: true }).click();
+  // The last test left the ember project open. A message that isn't a question starts a task, so
+  // the route chip sends this one to the coordinator instead (0042).
   const message = page.getByRole("textbox", { name: "Message" });
-  await message.fill("Plan the ember release");
-  await page.getByRole("button", { name: "Send" }).click();
+  const toCoordinator = async (text: string) => {
+    await message.fill(text);
+    await page.getByRole("button", { name: "Sends to: New task. Switch" }).click();
+    await expect(page.getByRole("button", { name: "Sends to: Coordinator. Switch" })).toBeVisible();
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+  };
+  await toCoordinator("Plan the ember release");
   const transcript = page.getByRole("log", { name: "Transcript" });
   await expect(transcript.getByText("Plan the ember release")).toBeVisible();
   await expect(transcript.getByText("The fake agent is on it.")).toBeVisible();
 
   await page.getByRole("button", { name: "Stop" }).click();
   await expect(transcript.getByText("Stopped")).toBeVisible();
-  await message.fill("Start with the changelog");
-  await page.getByRole("button", { name: "Send" }).click();
+  await toCoordinator("Start with the changelog");
   await expect(transcript.getByText("The fake agent is on it.")).toHaveCount(2);
 
   await page.reload();
@@ -339,18 +342,26 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
   await expect(transcript.getByText("Start with the changelog")).toBeVisible();
 });
 
-test("lists the project's subagents, opens their chats, and marks the coordinator's wake-up (PLX-47)", async () => {
-  // The last test left ember's coordinator open, interrupted by the restart.
-  await page.getByRole("button", { name: "Show side panel" }).click();
+test("starts the project's tasks from its composer, shows them over it and on its Project tab, opens their chats, and marks the coordinator's wake-up (PLX-47)", async () => {
+  // The last test left ember's coordinator open, interrupted by the restart, with its side panel
+  // on the Project tab.
   const panel = page.getByRole("complementary", { name: "Side panel" });
-  await panel.getByRole("button", { name: /^Agents/ }).click();
-  await expect(panel.getByText("No agents yet")).toBeVisible();
+  await expect(panel.getByRole("button", { name: /^Project/ })).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await expect(panel).toContainText("Nothing is waiting on you.");
 
-  // One started by hand, on the worker default the thread test set.
-  await panel.getByRole("textbox", { name: "New subagent's task" }).fill("Write the changelog");
-  await panel.getByRole("button", { name: "Start subagent" }).click();
-  const agents = panel.getByRole("list", { name: "Agents" });
-  await expect(agents.getByRole("button", { name: /^Write the changelog.*by you/ })).toBeVisible();
+  // A task starts a child, on the worker default the thread test set.
+  const message = page.getByRole("textbox", { name: "Message" });
+  await message.fill("Write the changelog");
+  await expect(page.getByRole("button", { name: "Sends to: New task. Switch" })).toBeVisible();
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const bar = page.getByRole("region", { name: "Agents" });
+  await expect(bar).toContainText("Write the changelog");
+  await expect(bar).toContainText("1 working");
+  const working = panel.getByRole("region", { name: "Working" });
+  await expect(working.getByRole("button", { name: /^Write the changelog/ })).toBeVisible();
 
   // One the coordinator started, as `plxd mcp`'s spawn_agent does (0019): it arrives by event.
   const listed = (await page.evaluate(`window.parallax.request("local", "project/list", {})`)) as {
@@ -368,8 +379,9 @@ test("lists the project's subagents, opens their chats, and marks the coordinato
     `window.parallax.request("local", "agent/start", ${JSON.stringify(params)})`,
   );
   expect(started).not.toHaveProperty("error");
-  const tag = agents.getByRole("button", { name: /^Tag the release.*by coordinator/ });
+  const tag = working.getByRole("button", { name: /^Tag the release/ });
   await expect(tag).toBeVisible();
+  await expect(bar).toContainText("2 working");
 
   // Its chat, with the project still open. Stopping it wakes the coordinator (0025).
   await tag.click();
@@ -379,11 +391,17 @@ test("lists the project's subagents, opens their chats, and marks the coordinato
   await expect(transcript.getByText("The fake agent is on it.")).toBeVisible();
   await page.getByRole("button", { name: "Stop" }).click();
   await expect(transcript.getByText("Stopped")).toBeVisible();
-  await expect(agents.getByRole("button", { name: /^Tag the release.*Stopped/ })).toBeVisible();
+  await expect(tag).toBeHidden();
 
-  await crumbs.getByRole("button", { name: "ember" }).click();
+  // The child's strip goes back to the coordinator.
+  await page
+    .getByRole("region", { name: "Child thread" })
+    .getByRole("button", { name: /^Coordinator/ })
+    .click();
+  await expect(crumbs).not.toContainText("Tag the release");
+  await expect(bar).toContainText("1 working");
   await expect(transcript.getByText("Plan the ember release")).toBeVisible();
-  await expect(transcript.getByText("From Parallax: subagents finished")).toBeVisible();
+  await expect(transcript.getByText("From Parallax: subagents finished").first()).toBeVisible();
 });
 
 test("renames the project and picks its icon from its row, and both outlive a reload (PLX-230)", async () => {
@@ -460,7 +478,7 @@ test("starts a thread in the repository's current checkout, on its branch, with 
   await page.keyboard.press("Escape");
 
   await page.getByRole("textbox", { name: "Message" }).fill("Tidy up the docs");
-  await page.getByRole("button", { name: "Send" }).click();
+  await page.getByRole("button", { name: "Send", exact: true }).click();
   const transcript = page.getByRole("log", { name: "Transcript" });
   await expect(transcript.getByText("The fake agent is on it.")).toBeVisible();
   await expect(page.getByText("Current checkout", { exact: true })).toBeVisible();
@@ -529,7 +547,7 @@ test("attaches another thread with @, sends it with the message, and opens it fr
   await expect(chip).toHaveText(/Tidy up the README/);
   await page.keyboard.type("that thread did here");
   await page.screenshot({ path: test.info().outputPath("thread-chip.png") });
-  await page.getByRole("button", { name: "Send" }).click();
+  await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(chip).toHaveCount(0);
 
   // The sent message keeps its chip once plxd's turnStarted lists the thread, after a reload too.
