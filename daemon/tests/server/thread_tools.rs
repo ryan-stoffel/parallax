@@ -572,6 +572,7 @@ async fn thread_fork_refuses_a_running_turn_and_more_permission() {
         .call::<ThreadStart>(ThreadStartParams {
             run_id: RunId::generate(),
             repo: None,
+            project: None,
             parent: None,
             notify: None,
             title: None,
