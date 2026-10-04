@@ -14,9 +14,12 @@ import type {
 import type {
   AgentOutputItem,
   AgentRun,
+  InboxItem,
+  InboxKind,
   LoggedEvent,
   Project,
   ProjectPermission,
+  Question,
   Repo,
   ParallaxEvent,
   Thread,
@@ -977,6 +980,7 @@ test("without projectPermission, Create Project shows no mode and sends none, an
   capabilities = { projectEdit: {} };
   await renderApp();
   expect(menuItem("ember", "Permissions…")).toBeUndefined();
+  expect(menuItem("ember", "Autonomy…")).toBeUndefined();
   await openNewProject();
   expect(modeChoice(dialog())).toEqual([]);
   expect(dialog().textContent).not.toContain("no second check");
@@ -1903,4 +1907,199 @@ test("without projectDelete there's no Delete…, and another client's project.d
   await settle();
   expect(sidebarTitles()).toEqual(["photon"]);
   expect(crumbs().at(-1)).toBe("New thread");
+});
+
+test("Autonomy… opens on the Project's level, one line on each, and Save sends the new one", async () => {
+  capabilities = { autonomy: {} };
+  answers["project/list"] = () => ({
+    result: {
+      projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), autonomy: "full" } as Project],
+      seq: 7,
+    },
+  });
+  answers["project/update"] = (p) => ({
+    result: { project: { ...project("ember", "2026-09-26T12:00:00Z"), autonomy: p["autonomy"] } },
+  });
+  await renderApp();
+  expect(menuItem("ember", "Permissions…")).toBeUndefined();
+  const settings = projectRow("ember").querySelector<HTMLDialogElement>(
+    'dialog[aria-label="ember autonomy"]',
+  )!;
+  await click(menuItem("ember", "Autonomy…"));
+  expect(settings.open).toBe(true);
+  const levels = [...settings.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
+  expect(levels.map((r) => [r.value, r.checked])).toEqual([
+    ["ask", false],
+    ["routine", false],
+    ["full", true],
+  ]);
+  expect(settings.textContent).toContain("Every question waits for you in Needs you.");
+
+  await click(levels[0]);
+  await click([...settings.querySelectorAll("button")].find((b) => b.textContent === "Save"));
+  expect(settings.open).toBe(false);
+  expect(calls("project/update")).toEqual([{ project: "p-ember", autonomy: "ask" }]);
+});
+
+const inboxItem = (id: string, kind: InboxKind, text: string, more: Partial<InboxItem> = {}) =>
+  ({ id, kind, run: login.id, text, createdAt: "2026-09-29T11:00:00Z", ...more }) as InboxItem;
+const escalated: Question = {
+  id: "q-1",
+  run: login.id,
+  question: 'Which "theme" key?',
+  assumption: "dark",
+  status: "escalated",
+  createdAt: "2026-09-29T10:00:00Z",
+};
+const decided: Question = {
+  id: "q-2",
+  run: login.id,
+  question: "Keep the old flag?",
+  assumption: "yes",
+  status: "decided",
+  answer: "no",
+  createdAt: "2026-09-29T10:30:00Z",
+};
+const inboxItems = [
+  inboxItem("i-old", "done", "Old news", { seenAt: "2026-09-29T11:30:00Z" }),
+  inboxItem("i-learned", "learned", "Memory: tests run with pnpm test"),
+  inboxItem(
+    "i-decided",
+    "decided",
+    'Fix the login bug: asked "Keep the old flag?", went with "no"',
+  ),
+  inboxItem("i-failed", "failed", "Write the docs: failed"),
+  inboxItem("i-done", "done", "Fix the login bug: done, 2 files +12 -3, landed"),
+  // plxd quotes the child's words as JSON.
+  inboxItem(
+    "i-needs",
+    "needsYou",
+    'Fix the login bug: asks "Which \\"theme\\" key?", went on assuming "dark"',
+  ),
+];
+/** Serves ember's runs, inbox, and questions, with `inbox/seen` marking what it's sent. */
+const serveInbox = () => {
+  answers["agent/list"] = (p) => ({
+    result: { runs: p["project"] === "p-ember" ? [login] : [], seq: 7 },
+  });
+  answers["agent/events"] = serveEvents(() => [login]);
+  answers["inbox/list"] = () => ({ result: { items: inboxItems, seq: 7 } });
+  answers["question/list"] = () => ({ result: { questions: [escalated, decided] } });
+  answers["inbox/seen"] = (p) => ({
+    result: {
+      items: inboxItems
+        .filter((i) => (p["items"] as string[]).includes(i.id))
+        .map((i) => ({ ...i, seenAt: "2026-09-29T12:00:00Z" })),
+    },
+  });
+};
+const inbox = () => document.querySelector<HTMLElement>('main section[aria-label="Inbox"]');
+const inboxGroupsShown = () =>
+  [...inbox()!.querySelectorAll("section")].map((s) => s.getAttribute("aria-label"));
+const inboxButton = (text: string) =>
+  [...inbox()!.querySelectorAll("button")].find((b) => b.textContent?.startsWith(text));
+
+test("a Project's unread inbox sits atop its chat in 0043's groups, and opening an item opens its child and marks it seen", async () => {
+  capabilities = { inbox: {} };
+  serveInbox();
+  await renderApp();
+  await openEmber();
+  expect(inboxGroupsShown()).toEqual([
+    "Needs you",
+    "Done",
+    "Failed or stuck",
+    "Decided for you",
+    "Learned",
+  ]);
+  expect(inbox()!.textContent).not.toContain("Old news");
+  // Without `questions`, nothing is answered here.
+  expect(inbox()!.querySelector("input")).toBeNull();
+  expect(inboxButton("Change it?")).toBeUndefined();
+
+  await click(inboxButton("Fix the login bug: done"));
+  expect(calls("inbox/seen")).toEqual([{ project: "p-ember", items: ["i-done"] }]);
+  expect(crumbs()).toEqual(["This Mac", "ember", "Fix the login bug"]);
+});
+
+test("a question in Needs you is answered in place, and a decided one can be changed", async () => {
+  capabilities = { inbox: {}, questions: {} };
+  serveInbox();
+  answers["question/answer"] = (p) => ({
+    result: {
+      question: {
+        ...(p["question"] === "q-1" ? escalated : decided),
+        status: "answered",
+        answer: p["text"],
+      },
+    },
+  });
+  await renderApp();
+  await openEmber();
+
+  const answerBox = inbox()!.querySelector<HTMLInputElement>(
+    'input[aria-label="Answer the question"]',
+  )!;
+  typeInto(answerBox, "theme.dark");
+  await act(async () => answerBox.form!.requestSubmit());
+  await settle();
+  expect(calls("question/answer")).toEqual([{ question: "q-1", text: "theme.dark" }]);
+  expect(calls("inbox/seen")).toEqual([{ project: "p-ember", items: ["i-needs"] }]);
+  expect(inboxGroupsShown()).not.toContain("Needs you");
+
+  await click(inboxButton("Change it?"));
+  const changeBox = inbox()!.querySelector<HTMLInputElement>(
+    'input[aria-label="Change the question"]',
+  )!;
+  typeInto(changeBox, "yes, keep it");
+  await act(async () => changeBox.form!.requestSubmit());
+  await settle();
+  expect(calls("question/answer")).toEqual([
+    { question: "q-1", text: "theme.dark" },
+    { question: "q-2", text: "yes, keep it" },
+  ]);
+  expect(inboxGroupsShown()).not.toContain("Decided for you");
+});
+
+test("a new Needs you item raises a system notification that opens its Project, and joins the open inbox", async () => {
+  capabilities = { inbox: {} };
+  // One scope, as the fake sends every event to every subscription.
+  answers["thread/list"] = () => ({ result: { repos: [], threads: [], seq: 7 } });
+  answers["project/list"] = () => ({
+    result: { projects: [project("ember", "2026-09-26T12:00:00Z")], seq: 7 },
+  });
+  answers["inbox/list"] = () => ({ result: { items: [], seq: 7 } });
+  const notes: { title: string; body: string; onclick: (() => void) | null }[] = [];
+  vi.stubGlobal(
+    "Notification",
+    class {
+      onclick = null;
+      constructor(title: string, { body }: { body: string }) {
+        notes.push(Object.assign(this, { title, body }));
+      }
+    },
+  );
+  onTestFinished(() => void vi.unstubAllGlobals());
+  const added = (seq: number, item: InboxItem) =>
+    act(async () =>
+      deliver({
+        type: "event",
+        event: { subscription: "s-1", seq, time: "", event: { kind: "inbox.added", item } },
+      }),
+    );
+  await renderApp();
+  await added(8, inboxItem("i-done", "done", "Fix the login bug: done"));
+  expect(notes).toEqual([]);
+
+  await added(9, inboxItem("i-needs", "needsYou", "Fix the login bug: wake-ups paused"));
+  expect(notes.map((n) => [n.title, n.body])).toEqual([
+    ["ember", "Needs you: Fix the login bug: wake-ups paused"],
+  ]);
+  await act(async () => notes[0]!.onclick?.());
+  await settle();
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
+
+  await added(10, inboxItem("i-asks", "needsYou", "Write the docs: asks which tone"));
+  await settle();
+  expect(notes).toHaveLength(2);
+  expect(inbox()!.textContent).toContain("Write the docs: asks which tone");
 });
