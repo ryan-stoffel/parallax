@@ -152,7 +152,7 @@ impl StartLocks {
 
 /// Held for as long as `run_id` is being created or its actor spawned; releases the per-run lock
 /// on drop, from whichever exit path (#190).
-pub(super) struct Starting<'a> {
+pub(crate) struct Starting<'a> {
     agents: &'a Agents,
     run_id: RunId,
     _lock: tokio::sync::OwnedMutexGuard<()>,
@@ -242,7 +242,7 @@ impl Agents {
     /// retry for this exact run id while its rows are deleted and its actor dropped: since a
     /// live actor's own fast path (`agents.actor(id)`) never reaches this lock, nothing here
     /// waits on an unrelated run's.
-    pub(super) async fn start_guard(&self, run_id: RunId) -> Starting<'_> {
+    pub(crate) async fn start_guard(&self, run_id: RunId) -> Starting<'_> {
         let lock = self.starting.get(run_id).lock_owned().await;
         Starting {
             agents: self,
@@ -999,11 +999,23 @@ async fn fork_created(
 
 /// Creates and starts a run: see the module documentation. Idempotent on the run id. A fork
 /// (`NewThread::fork`) is created with no CLI, at rest where its parent's turn ended.
+pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRun, ErrorObject> {
+    let starting = daemon.agents.start_guard(new.run_id).await;
+    create_started(Arc::clone(&daemon), new, &starting).await
+}
+
+/// Creates a run while holding its start guard, including callers' fork validation and workspace
+/// preparation. The caller keeps the guard through recording, transcript copying, and cleanup.
 #[expect(
     clippy::too_many_lines,
     reason = "one sequence of steps, each of which must happen before the next"
 )]
-pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRun, ErrorObject> {
+pub(crate) async fn create_started(
+    daemon: Arc<Daemon>,
+    new: NewRun,
+    starting: &Starting<'_>,
+) -> Result<CreatedRun, ErrorObject> {
+    debug_assert_eq!(starting.run_id, new.run_id);
     let agents = &daemon.agents;
     let NewRun {
         run_id,
@@ -1018,7 +1030,6 @@ pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRu
         mut thread,
     } = new;
     let fork = thread.as_mut().and_then(|thread| thread.fork.take());
-    let _starting = agents.start_guard(run_id).await;
     inherit(&daemon, coordinator_thread, &mut approvals).await?;
     // A run in a Project runs in its mode, whatever the request asked for (0042).
     // ponytail: a retry after `project/update` changed the mode gets idConflict; compare the

@@ -566,6 +566,10 @@ pub(crate) async fn fork(
         account,
         model,
     } = params;
+    // Share creation's per-id guard so a retry checks its fork identity after any competing
+    // creation finishes, and concurrent forks cannot prepare the same scratch repository.
+    // Check retries before generic creation compares options, which another backend may filter.
+    let starting = daemon.agents.start_guard(new_run_id).await;
     if let Some(done) = existing_fork(&daemon, new_run_id, run_id, turn_id).await? {
         return Ok(done);
     }
@@ -619,7 +623,7 @@ pub(crate) async fn fork(
             }),
         }),
     };
-    let created = match agents::create(Arc::clone(&daemon), new).await {
+    let created = match agents::create_started(Arc::clone(&daemon), new, &starting).await {
         Ok(created) => created,
         Err(error) => {
             if let Some(dir) = scratch {
