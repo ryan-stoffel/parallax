@@ -154,10 +154,10 @@ async fn answer(
         .map_err(|_| ErrorObject::internal_error("a stored question has an invalid project id"))?;
     if from.is_some() {
         let line = format!(
-            "{}: {} Went with: {}",
+            "{}: asked {}, went with {}",
             wake::task(&prompt),
-            wake::one_line(&before.question, MAX_BYTES),
-            wake::one_line(&text, MAX_BYTES)
+            wake::quoted(&before.question),
+            wake::quoted(&text)
         );
         inbox::add(&context.daemon, project, child, InboxKind::Decided, line).await;
     }
@@ -240,14 +240,15 @@ async fn tell(
 ) -> Result<(), ErrorObject> {
     let message = match &row.answer {
         None => format!(
-            "Answer to your question \"{}\": {text}\n\nYou went on assuming: {}\nChange what you \
-             did on that assumption to follow this answer.",
-            row.question, row.assumption
+            "Answer to your question {}: {text}\n\nYou went on assuming: {}\nChange what you did \
+             on that assumption to follow this answer.",
+            wake::quoted(&row.question),
+            wake::quoted(&row.assumption)
         ),
         Some(old) => format!(
-            "The user changed the answer to your question \"{}\": {text}\n\nIt was: {old}\n\
-             Change what you did on the old answer to follow this one.",
-            row.question
+            "The user changed the answer to your question {}: {text}\n\nIt was: {old}\nChange \
+             what you did on the old answer to follow this one.",
+            wake::quoted(&row.question)
         ),
     };
     let run_id = RunId::try_from(row.run_id)
@@ -295,26 +296,30 @@ async fn needs_you(
         return;
     };
     let line = format!(
-        "{}: asks {} Went on assuming: {}",
+        "{}: asks {}, went on assuming {}",
         wake::task(prompt),
-        wake::one_line(&row.question, MAX_BYTES),
-        wake::one_line(&row.assumption, MAX_BYTES)
+        wake::quoted(&row.question),
+        wake::quoted(&row.assumption)
     );
     inbox::add(daemon, project, run, InboxKind::NeedsYou, line).await;
 }
 
-/// The question `id`, and the prompt of the child that asked it.
+/// The question `id`, and the prompt of the child that asked it. Refuses a question whose child
+/// is gone, which nothing could tell.
 fn find(db: &Store, id: QuestionId) -> Result<(parallax_store::Question, String), ErrorObject> {
     let row = db
         .get_question(id.into())
         .map_err(|e| store_error(&e))?
         .ok_or_else(|| ErrorObject::invalid_params(format!("no question has id {id}")))?;
-    let prompt = db
+    let child = db
         .get_run(row.run_id)
         .map_err(|e| store_error(&e))?
-        .map(|run| run.fields.prompt)
-        .unwrap_or_default();
-    Ok((row, prompt))
+        .ok_or_else(|| {
+            ErrorObject::invalid_params(format!(
+                "the run that asked question {id} was deleted, so nothing can answer it"
+            ))
+        })?;
+    Ok((row, child.fields.prompt))
 }
 
 /// Refuses unless `from` is `row`'s Project's current coordinator and `row` is still open.

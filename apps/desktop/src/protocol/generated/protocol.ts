@@ -4499,11 +4499,11 @@ export type QuestionAskParams = {
 	 */
 	run: RunId,
 	/**
-	 * The question, at most 64 KiB.
+	 * The question, at most 4 KiB.
 	 */
 	question: string,
 	/**
-	 * What the child goes on assuming until it hears otherwise, at most 64 KiB.
+	 * What the child goes on assuming until it hears otherwise, at most 4 KiB.
 	 */
 	assumption: string,
 };
@@ -4569,7 +4569,8 @@ export type QuestionStatus = "open" | "escalated" | "decided" | "answered";
  * question, which becomes `decided`; otherwise it fails with `invalidParams`. Without `from`,
  * the user answers any question, which becomes `answered`. The child gets the answer as a
  * queued message when it differs from what it was last told: its assumption, or the decided
- * answer the user changes. Fails with `invalidParams` for an unknown question.
+ * answer the user changes. Fails with `invalidParams` for an unknown question, or one whose
+ * child is gone.
  */
 export type QuestionAnswerParams = {
 	/**
@@ -4577,7 +4578,7 @@ export type QuestionAnswerParams = {
 	 */
 	question: QuestionId,
 	/**
-	 * The answer, at most 64 KiB.
+	 * The answer, at most 4 KiB.
 	 */
 	text: string,
 	/**

@@ -148,9 +148,9 @@ mod tests {
     use crate::Store;
 
     #[test]
-    fn questions_list_per_project_take_an_answer_and_go_with_their_project() {
+    fn questions_list_per_project_take_an_answer_and_go_with_their_project_or_run() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("parallax.sqlite3")).unwrap();
+        let mut store = Store::open(dir.path().join("parallax.sqlite3")).unwrap();
         let (ours, theirs) = (Uuid::now_v7(), Uuid::now_v7());
         let question = |project| Question {
             id: Uuid::now_v7(),
@@ -181,6 +181,11 @@ mod tests {
 
         store.delete_project(ours).unwrap();
         assert!(store.questions(ours).unwrap().is_empty());
-        assert_eq!(store.questions(theirs).unwrap(), [other]);
+        assert_eq!(
+            store.questions(theirs).unwrap(),
+            std::slice::from_ref(&other)
+        );
+        store.delete_run(other.run_id).unwrap();
+        assert!(store.questions(theirs).unwrap().is_empty());
     }
 }

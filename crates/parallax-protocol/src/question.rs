@@ -65,9 +65,9 @@ pub struct Question {
 pub struct QuestionAskParams {
     /// The child asking.
     pub run: RunId,
-    /// The question, at most 64 KiB.
+    /// The question, at most 4 KiB.
     pub question: String,
-    /// What the child goes on assuming until it hears otherwise, at most 64 KiB.
+    /// What the child goes on assuming until it hears otherwise, at most 4 KiB.
     pub assumption: String,
 }
 
@@ -75,13 +75,14 @@ pub struct QuestionAskParams {
 /// question, which becomes `decided`; otherwise it fails with `invalidParams`. Without `from`,
 /// the user answers any question, which becomes `answered`. The child gets the answer as a
 /// queued message when it differs from what it was last told: its assumption, or the decided
-/// answer the user changes. Fails with `invalidParams` for an unknown question.
+/// answer the user changes. Fails with `invalidParams` for an unknown question, or one whose
+/// child is gone.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct QuestionAnswerParams {
     /// The question.
     pub question: QuestionId,
-    /// The answer, at most 64 KiB.
+    /// The answer, at most 4 KiB.
     pub text: String,
     /// The coordinator's run, when it answers. Absent for the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
