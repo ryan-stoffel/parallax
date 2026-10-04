@@ -973,6 +973,7 @@ export const RowView = memo(function RowView({
           open={open}
           openKeys={openKeys ?? new Set()}
           onToggle={onToggle}
+          copied={copied}
         />
       );
     case "user":
@@ -1211,7 +1212,8 @@ function MessageImage({
 /**
  * A run of thinking, tool calls, and checklists under one dropdown. While the agent works its
  * header says what it's doing now, with a loader for that; afterward it says how long it worked,
- * and hides the rest. Before the agent does anything, it's empty and muses.
+ * and hides the rest. Before the agent does anything, it's empty and muses. A fork's `copied`
+ * work says only "Worked", since its logged times are all the fork's creation (0050).
  */
 function WorkGroup({
   work,
@@ -1220,6 +1222,7 @@ function WorkGroup({
   open,
   openKeys,
   onToggle,
+  copied,
 }: {
   work: Work;
   active: boolean;
@@ -1227,6 +1230,7 @@ function WorkGroup({
   open: boolean;
   openKeys: ReadonlySet<string>;
   onToggle: (key: string, open: boolean) => void;
+  copied?: boolean;
 }) {
   const now = active ? activity(work.items.at(-1)) : undefined;
   return (
@@ -1250,7 +1254,9 @@ function WorkGroup({
             {now.detail && <span className="truncate text-muted-foreground">{now.detail}</span>}
           </>
         ) : (
-          <span className="text-muted-foreground">{workedFor(work.startedAt, work.endedAt)}</span>
+          <span className="text-muted-foreground">
+            {copied ? "Worked" : workedFor(work.startedAt, work.endedAt)}
+          </span>
         )}
         {work.items.length > 0 && (
           <ChevronRight

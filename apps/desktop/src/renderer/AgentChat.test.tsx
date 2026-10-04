@@ -106,6 +106,7 @@ test("in a fork, the history it copied is muted and offers no Fork, and the late
   const copiedAt = "2026-10-04T10:00:00.000Z";
   const rows: Item[] = [
     { kind: "user", key: "p", text: "Plan it", at: copiedAt },
+    { kind: "tool", key: "t1", callId: "1", name: "Bash", status: "ok", at: copiedAt },
     { kind: "assistant", key: "a1", text: "Planned", at: copiedAt },
     { kind: "user", key: "f", text: "Build it", turnId: "turn-2", at: "2026-10-04T10:05:00Z" },
     { kind: "assistant", key: "a2", text: "Built", at: "2026-10-04T10:06:00Z" },
@@ -119,7 +120,13 @@ test("in a fork, the history it copied is muted and offers no Fork, and the late
     </ForkContext>,
   );
   const copied = [...document.querySelectorAll("[data-copied]")].map((e) => e.textContent);
-  expect(copied).toEqual([expect.stringContaining("Plan it"), "Planned"]);
+  expect(copied).toEqual([expect.stringContaining("Plan it"), expect.anything(), "Planned"]);
+  // Its copied work's times are all the fork's creation, so it says neither how long nor "briefly".
+  const work = document
+    .querySelectorAll("[data-copied]")[1]!
+    .querySelector("button[aria-expanded]")!;
+  expect(work.textContent).toContain("Worked");
+  expect(work.textContent).not.toContain("Worked briefly");
   expect(document.querySelector("[data-copied]")!.className).toContain("opacity-60");
   // A copied message's logged time is the fork's, so it shows none.
   expect(document.querySelector("[data-copied] time")).toBeNull();
