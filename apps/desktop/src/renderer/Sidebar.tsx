@@ -57,6 +57,7 @@ import type {
   Repo,
   Thread,
 } from "../protocol/generated/protocol";
+import type { RpcError } from "../preload/bridge";
 import type { Selection, SettingsSection } from "./App";
 import { clock } from "./Approval";
 import { AddRepositoryDialog } from "./AddRepositoryDialog";
@@ -81,11 +82,13 @@ import { imageUrl } from "./images";
 import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { iconColors, iconLook } from "./projectIcons";
+import { ForkMenu } from "./Fork";
 import { dragThread } from "./threadDrag";
 import {
   asksOf,
   projectRuns,
   threadProjects,
+  type ForkChoice,
   type ProjectChange,
   type ThreadsView,
 } from "./threads";
@@ -520,6 +523,16 @@ export function ThreadList({
           setActionError(await view.update(t.id, { snoozedUntil: until.toISOString() }))
         }
         onDelete={() => askDelete(item)}
+        onFork={
+          view.forkable
+            ? async (choice) => {
+                const forked = await view.fork(t.id, undefined, choice);
+                if (typeof forked !== "string") return forked;
+                onSelect(item.host.id, { kind: "thread", threadId: forked });
+                return undefined;
+              }
+            : undefined
+        }
         onAutoResume={async (autoResume) => {
           const answer = await window.parallax.request(item.host.id, "agent/autoResume", {
             runId: t.id,
@@ -1393,6 +1406,7 @@ function ThreadRow({
   onArchive,
   onSnooze,
   onDelete,
+  onFork,
   onAutoResume,
   onRest,
   onLeave,
@@ -1417,6 +1431,8 @@ function ThreadRow({
   onArchive: () => void;
   onSnooze: (until: Date) => void;
   onDelete: () => void;
+  /** Forks it at its latest turn and opens the fork (0050), where its plxd forks threads. */
+  onFork?: (choice: ForkChoice) => Promise<RpcError | undefined>;
   /** Sets its run's auto-resume override, or clears it with undefined. */
   onAutoResume: (autoResume?: boolean) => void;
   onRest: (row: HTMLElement) => void;
@@ -1424,7 +1440,9 @@ function ThreadRow({
 }) {
   const menuId = useId();
   const snoozeId = useId();
+  const forkId = useId();
   const menu = useRef<HTMLDivElement>(null);
+  const forkMenu = useRef<HTMLDivElement>(null);
   const snoozeMenu = useRef<HTMLDivElement>(null);
   const actions = useRef<HTMLButtonElement>(null);
   const [custom, setCustom] = useState("");
@@ -1633,6 +1651,21 @@ function ThreadRow({
         <button type="button" role="menuitem" className={menuItem} onClick={choose(onArchive)}>
           {thread.archived ? "Unarchive" : "Archive"}
         </button>
+        {onFork && run && (
+          // Its latest turn forks once it ends; Fork's own menu opens under the actions button.
+          <button
+            type="button"
+            role="menuitem"
+            disabled={isRunning(run.status)}
+            title={isRunning(run.status) ? "Fork once this turn finishes" : undefined}
+            className={`${menuItem} disabled:opacity-50`}
+            onClick={choose(() =>
+              forkMenu.current?.showPopover({ source: actions.current ?? undefined }),
+            )}
+          >
+            Fork…
+          </button>
+        )}
         {autoResumable && run && (
           // Choosing the host's setting clears the override, so the thread follows the host again.
           <button
@@ -1655,6 +1688,16 @@ function ThreadRow({
           Delete…
         </button>
       </div>
+      {onFork && run && (
+        <ForkMenu
+          ref={forkMenu}
+          id={forkId}
+          hostId={hostId}
+          run={run}
+          onFork={onFork}
+          align="end"
+        />
+      )}
     </li>
   );
 }

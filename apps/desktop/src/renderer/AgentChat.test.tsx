@@ -16,6 +16,7 @@ import type {
 } from "../protocol/generated/protocol";
 import { activity, AgentChat, linkIcon, RowView, RunTab, TranscriptView } from "./AgentChat";
 import { Composer } from "./Composer";
+import { ForkContext } from "./Fork";
 import { GitHubLogo, LinearLogo } from "./logos";
 import { ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { dragThread } from "./threadDrag";
@@ -95,6 +96,41 @@ test("a prompt shows when it was sent and copies its text, on hover", async () =
   );
   expect(writeText).toHaveBeenCalledWith("Fix the build");
   expect(document.querySelector('button[aria-label="Copied"]')).not.toBeNull();
+});
+
+test("in a fork, the history it copied is muted and offers no Fork, and the latest turn waits for the run", async () => {
+  window.parallax = {
+    connectionState: async () => ({ status: "connecting" as const }),
+    onConnectionState: () => () => {},
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  const copiedAt = "2026-10-04T10:00:00.000Z";
+  const rows: Item[] = [
+    { kind: "user", key: "p", text: "Plan it", at: copiedAt },
+    { kind: "assistant", key: "a1", text: "Planned", at: copiedAt },
+    { kind: "user", key: "f", text: "Build it", turnId: "turn-2", at: "2026-10-04T10:05:00Z" },
+    { kind: "assistant", key: "a2", text: "Built", at: "2026-10-04T10:06:00Z" },
+    { kind: "user", key: "g", text: "Ship it", turnId: "turn-3", at: "2026-10-04T10:07:00Z" },
+  ];
+  const onFork = vi.fn(async () => undefined);
+  const run = { id: "fork", status: "running", backend: "claude" } as AgentRun;
+  render(
+    <ForkContext value={{ hostId: "local", run, onFork }}>
+      <TranscriptView rows={rows} sent={new Map()} live copiedAt={copiedAt} />
+    </ForkContext>,
+  );
+  const copied = [...document.querySelectorAll("[data-copied]")].map((e) => e.textContent);
+  expect(copied).toEqual([expect.stringContaining("Plan it"), "Planned"]);
+  expect(document.querySelector("[data-copied]")!.className).toContain("opacity-60");
+  // A copied message's logged time is the fork's, so it shows none.
+  expect(document.querySelector("[data-copied] time")).toBeNull();
+  const forks = () => [...document.querySelectorAll('button[aria-label="Fork from here"]')];
+  expect(forks()).toHaveLength(1);
+  expect(forks()[0]!.closest(".group\\/prompt")!.textContent).toContain("Build it");
+  const keep = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) =>
+    b.textContent?.startsWith("Keep"),
+  )!;
+  await act(async () => keep.click());
+  expect(onFork).toHaveBeenCalledWith("turn-2", {});
 });
 
 test("a user message shows its text, or a neutral label when the log has none", () => {
