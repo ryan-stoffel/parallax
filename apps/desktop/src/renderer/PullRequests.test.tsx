@@ -11,6 +11,7 @@ import {
   parseDiff,
   PullRequestChip,
   PullRequestList,
+  POLL_MS,
   PullRequestView,
   usePullRequests,
 } from "./PullRequests";
@@ -176,6 +177,51 @@ test("the view shows the header, the checks' state, reviewers, labels, descripti
   expect(comments[1]!.textContent).not.toContain("Show full comment");
   await click(button("Show full comment"));
   expect(comments[0]!.querySelector(".max-h-48")).toBeNull();
+});
+
+test("an open pull request is read again every POLL_MS, and a merged one isn't", async () => {
+  vi.useFakeTimers({ now, toFake: ["Date", "setInterval", "clearInterval"] });
+  read = {
+    [url(41)]: prOf(41, { state: "merged" }),
+    [url(42)]: prOf(42, { checks: [], checksState: undefined }),
+  };
+  await render([url(41), url(42)], (prs) => (
+    <PullRequestView url={url(42)} prs={prs} onCompose={vi.fn()} />
+  ));
+  expect(document.body.textContent).toContain("No checks");
+  request.mockClear();
+
+  // CI starts after the first read.
+  read[url(42)] = prOf(42);
+  await act(async () => void vi.advanceTimersByTime(POLL_MS));
+  await settle();
+  expect(request.mock.calls.map(([, , params]) => params["url"])).toEqual([url(42)]);
+  expect(document.body.textContent).toContain("1 of 2 running");
+});
+
+test("GitHub's images in the description and comments load, and others stay links", async () => {
+  read = {
+    [url(42)]: prOf(42, {
+      body: "![The toast](https://raw.githubusercontent.com/me/app/1/toast.gif) ![Badge](https://example.com/a.png)",
+      comments: [
+        {
+          author: "rev",
+          body: "![Shot](https://github.com/user-attachments/assets/1)",
+          createdAt: sample.updatedAt,
+        },
+      ],
+    }),
+  };
+  await render([url(42)], (prs) => <PullRequestView url={url(42)} prs={prs} onCompose={vi.fn()} />);
+  const images = [...document.querySelectorAll("img")].map((img) => [img.alt, img.src]);
+  expect(images).toEqual([
+    ["The toast", "https://raw.githubusercontent.com/me/app/1/toast.gif"],
+    ["Shot", "https://github.com/user-attachments/assets/1"],
+  ]);
+  const badge = [...document.querySelectorAll(".markdown a")].find(
+    (a) => a.textContent === "Badge",
+  );
+  expect(badge?.getAttribute("href")).toBe("https://example.com/a.png");
 });
 
 test("auto-merge on shows in the Merge button, which turns it off", async () => {

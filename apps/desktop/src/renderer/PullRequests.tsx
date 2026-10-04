@@ -28,6 +28,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import type { Components } from "react-markdown";
 
 import type { RpcError } from "../preload/bridge";
 import type {
@@ -67,8 +68,9 @@ export interface PullRequests {
 /**
  * Reads each of a run's linked pull requests with `pr/view`, again whenever the list changes, and
  * acts on them with `pr/act`. With `diffs`, reads one's diff with `pr/diff` on demand. Reads are kept by run and URL, so a late answer for another thread
- * lands under that thread. ponytail: every linked one is read on open; read on demand if threads
- * come to link many.
+ * lands under that thread. An open one is read again every `POLL_MS`, so its checks,
+ * comments, and state follow GitHub's. ponytail: every linked one is read on open; read on demand
+ * if threads come to link many.
  */
 export function usePullRequests(
   hostId: string,
@@ -104,6 +106,17 @@ export function usePullRequests(
   useEffect(() => {
     for (const url of key ? key.split("\n") : []) void refresh(url);
   }, [key, refresh]);
+  // A merged or closed one won't change much, so only the rest are polled.
+  const live = urls
+    .filter((url) => !["merged", "closed"].includes(read[`${runId} ${url}`]?.pr?.state ?? ""))
+    .join("\n");
+  useEffect(() => {
+    if (!live) return;
+    const timer = setInterval(() => {
+      for (const url of live.split("\n")) void refresh(url);
+    }, POLL_MS);
+    return () => clearInterval(timer);
+  }, [live, refresh]);
   return {
     urls,
     get: (url) => read[`${runId} ${url}`],
@@ -117,6 +130,9 @@ export function usePullRequests(
     diff: diffs && runId ? diff : undefined,
   };
 }
+
+/** How often an open linked pull request is read again. */
+export const POLL_MS = 60_000;
 
 /** A pull request's number, from its URL. */
 export const numberOf = (url: string) => /\/pull\/(\d+)/.exec(url)?.[1] ?? "?";
@@ -338,6 +354,27 @@ function Section({
   );
 }
 
+/** Whether `src` is on GitHub's image hosts, the only remote images the app's CSP loads. */
+const onGithub = (src: unknown): src is string =>
+  typeof src === "string" && /^https:\/\/(github\.com|[\w-]+\.githubusercontent\.com)\//.test(src);
+
+/**
+ * A pull request's description and comments are GitHub's, not the agent's, so their GitHub-hosted
+ * images load, unlike a transcript's. Any other image stays a link with its alt text. ponytail: a
+ * private repository's attachments need GitHub's sign-in and show broken; proxy them through `gh`
+ * if that matters.
+ */
+const githubMarkdown: Components = {
+  img: ({ src, alt }) =>
+    onGithub(src) ? (
+      <img src={src} alt={alt ?? ""} loading="lazy" className="max-w-full rounded-md" />
+    ) : (
+      <a href={typeof src === "string" && src ? src : undefined} target="_blank" rel="noreferrer">
+        {alt || "Image"}
+      </a>
+    ),
+};
+
 // ponytail: "long" by length, not rendered height; measure it if this cuts the wrong ones.
 const isLong = (c: PrComment) => c.body.length > 600 || c.body.split("\n").length > 12;
 
@@ -360,7 +397,7 @@ function CommentCard({
       <div
         className={`mt-2 select-text ${folded ? "max-h-48 overflow-hidden [mask-image:linear-gradient(to_bottom,black_55%,transparent)]" : ""}`}
       >
-        <MarkdownText text={c.body} />
+        <MarkdownText text={c.body} components={githubMarkdown} />
       </div>
       {folded && (
         <button
@@ -1003,7 +1040,7 @@ export function PullRequestView({
           onToggle={() => setDescription(!description)}
         >
           {pr.body.trim() ? (
-            <MarkdownText text={pr.body} />
+            <MarkdownText text={pr.body} components={githubMarkdown} />
           ) : (
             <p className="text-[13px] text-faint-foreground">No description</p>
           )}
