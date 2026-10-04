@@ -61,8 +61,9 @@ Ryan chose to build all of it now rather than wait for the numbers to demand eac
   Index `command_receipts_run (run_id, created_at)` serves the timeline. Index `command_receipts_age (created_at)` serves pruning.
 - **Claim first.** Before a listed method runs, the dispatcher claims its id in a writer job. The job inserts the row with `result` null. If the row already exists:
   - with the same method and hash and a result, it returns that result without running anything
-  - with the same method and hash and no result, it waits for the result. Each claim has an in-memory waiter, so a retry that arrives on a new connection while the first request still runs gets the same answer.
+  - with the same method and hash and no result, it waits for the result. Waiters live in memory, keyed by `command_id`. Whoever waits creates one: a retry on a new connection while the first request runs, or a repeat after a restart whose effect is still to run. Whatever fills or deletes the receipt wakes them, and a deleted claim's waiters get its error.
   - with a different method or hash, it answers `idConflict`.
+- **Run to completion.** The dispatcher runs a listed method on a task of its own, with a cancel token that the connection never cancels (`daemon/src/server/connection.rs` cancels every handler when a connection closes). A dropped connection or `$/cancelRequest` therefore can't leave a claim that nothing fills. This is `daemon/src/store.rs`'s rule that a started job runs to the end, applied to the whole command. A panic deletes the claim, as an error does.
 - **The result.** The method's last write fills `result`.
   - A method whose change is one store job fills it in that job, so the change and its result commit together.
   - A method that enqueues an effect sets `effect_id` in the transaction that enqueues it. The effect's final transaction, or its settlement at start, fills the result.
@@ -89,7 +90,7 @@ Ryan chose to build all of it now rather than wait for the numbers to demand eac
 
   Indexes `effects_run (run_id, id)`, and `effects_open (status) WHERE status IN ('pending', 'running')`.
 - A dispatcher task runs each run's effects oldest first, one at a time. Different runs run in parallel, with no host-wide cap. Starting an effect is a job that sets `running` and increments `starts`. Ending one is a single transaction. It records the result, fills the receipt, and makes the effect's own changes, such as the run accepted or a pull request linked. It stages their events and `agent.effectFinished {runId, id, kind, ok}`.
-- `agent/commit`, `agent/push`, `agent/openPr`, and `agent/accept` enqueue and await their effect, so their results on the wire don't change. A second effect on the same run waits its turn instead of failing as busy. `thread/delete` and `project/delete` fail every pending effect of the run ("run deleted") and refuse while one runs.
+- `agent/commit`, `agent/push`, `agent/openPr`, and `agent/accept` enqueue and await their effect, so their results on the wire don't change. A second effect on the same run waits its turn instead of failing as busy. `thread/delete` and `project/delete` fail every pending effect of the run ("run deleted") and refuse while one runs. The same transaction fills those effects' receipts with that error, and the delete wakes their waiters.
 - While a run has an open effect, its actor sends the CLI no turn, the first prompt included. Messages wait in 0048's queue. Commit, push, and accept already refuse a running run (0014), so an effect never races a turn.
 - An effect that fails ends `failed` at once, with its error as the result. A push that the remote refuses is one example. plxd doesn't retry it, and the user does.
 - There is no lease. `plxd.lock` admits one `serve` per data folder (`daemon/src/server/setup.rs`), so at start every `running` row belongs to a dead process. Before any actor resumes a run (0048's queue, 0049's timers, 0025's catch-up), plxd settles them:
@@ -157,10 +158,10 @@ Ryan chose to build all of it now rather than wait for the numbers to demand eac
 - Only turns whose last batch is older than the in-memory window's oldest `seq` are compacted, so a live subscriber never sees a change. A sweep runs at start and hourly, one turn per job so it never holds the writer for long.
 - **The reader rule.** A reader that meets a compacted row first drops any `agent.output` events of that run it holds with `seq` in [`from`, the row's `seq`), then takes the row. Two readers can hold raw batches of a turn that is later compacted:
   - an `agent/events` pager whose page ended inside a turn the sweep then compacted. Its next page starts with the compacted row.
-  - an `events/subscribe` cursor after a restart reloads further back.
+  - an `events/subscribe` cursor after a restart. Compaction deletes rows, so the restart's reload of the newest `retention` events reaches further back than the old window did. A cursor that would have needed a resync now replays and meets compacted rows.
   
   Either way the client ends up with the turn once, nothing skipped and nothing repeated. The app's transcript store applies the rule. An older app that doesn't shows that one turn's items twice until it reloads the run.
-- plxd's own readers that page newest first (`attached::summary`, through `run_events_before`) read inside one read transaction, so a sweep can't land between their pages.
+- plxd's own paged readers read inside one read transaction, so a sweep can't land between their pages. They are `logged_events` in `daemon/src/agents/actor.rs` (handoffs and forks, 1,000 events a page) and `attached::summary` (newest first, through `run_events_before`).
 - PLX-491 updates 0016: a run's events still stay as long as its run does, now one row per finished turn.
 
 ### Write path
