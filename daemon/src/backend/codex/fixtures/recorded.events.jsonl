@@ -1,0 +1,49 @@
+{"kind":"turnStarted","turnId":"01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01"}
+{"kind":"sessionStarted","model":"gpt-6.1-sol","sessionId":"01a1093a-9021-7701-bbd2-5f07ab399080"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfe868b887d2a293ca377480680c","text":"I"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfe868b887d2a293ca377480680c","text":"’ll"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfe868b887d2a293ca377480680c","text":" read"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfe868b887d2a293ca377480680c","text":" README"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfe868b887d2a293ca377480680c","text":".md"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfe868b887d2a293ca377480680c","text":","}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfe868b887d2a293ca377480680c","text":" then"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfe868b887d2a293ca377480680c","text":" write"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfe868b887d2a293ca377480680c","text":" `"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfe868b887d2a293ca377480680c","text":"hi"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfe868b887d2a293ca377480680c","text":"`"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfe868b887d2a293ca377480680c","text":" to"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfe868b887d2a293ca377480680c","text":" notes"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfe868b887d2a293ca377480680c","text":".txt"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfe868b887d2a293ca377480680c","text":".\n"}
+{"kind":"text","messageId":"msg_0f7366cd876f8a24016ac2dfe868b887d2a293ca377480680c","text":"I’ll read README.md, then write `hi` to notes.txt.\n"}
+{"callId":"exec-d9aa3567-55de-40f2-892a-b446f8f534f7","input":{"command":"/bin/zsh -lc 'cat README.md'","cwd":"/repo"},"kind":"toolCall","name":"command_execution"}
+{"alwaysAllow":["/bin/zsh -lc 'cat README.md'"],"approvalId":"approval","callId":"exec-d9aa3567-55de-40f2-892a-b446f8f534f7","input":{"command":"/bin/zsh -lc 'cat README.md'","cwd":"/repo"},"kind":"approvalRequested","toolName":"command_execution"}
+{"callId":"exec-d9aa3567-55de-40f2-892a-b446f8f534f7","kind":"toolResult","output":"# demo\n\nA tiny repo for a recorded session.\n","status":"ok"}
+{"cacheReadTokens":12288,"cacheWriteTokens":0,"inputTokens":9590,"kind":"usage","outputTokens":51}
+{"durationMinutes":300,"kind":"rateLimit","resetsAt":"2026-10-05T03:40:52Z","status":"allowed","usedPercent":10.0,"window":"primary"}
+{"durationMinutes":10080,"kind":"rateLimit","resetsAt":"2026-10-09T21:22:17Z","status":"allowed","usedPercent":10.0,"window":"secondary"}
+{"callId":"exec-3789c770-0aa0-455a-bc8e-da5896431e5d","input":{"command":"/bin/zsh -lc 'printf hi > notes.txt'","cwd":"/repo"},"kind":"toolCall","name":"command_execution"}
+{"alwaysAllow":["/bin/zsh -lc 'printf hi > notes.txt'"],"approvalId":"approval","callId":"exec-3789c770-0aa0-455a-bc8e-da5896431e5d","input":{"command":"/bin/zsh -lc 'printf hi > notes.txt'","cwd":"/repo"},"kind":"approvalRequested","toolName":"command_execution"}
+{"callId":"exec-3789c770-0aa0-455a-bc8e-da5896431e5d","kind":"toolResult","status":"ok"}
+{"cacheReadTokens":21760,"cacheWriteTokens":0,"inputTokens":238,"kind":"usage","outputTokens":31}
+{"durationMinutes":300,"kind":"rateLimit","resetsAt":"2026-10-05T03:40:52Z","status":"allowed","usedPercent":10.0,"window":"primary"}
+{"durationMinutes":10080,"kind":"rateLimit","resetsAt":"2026-10-09T21:22:17Z","status":"allowed","usedPercent":10.0,"window":"secondary"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfef64dc87d2ad5d3ac4b722d5fe","text":"I"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfef64dc87d2ad5d3ac4b722d5fe","text":" read"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfef64dc87d2ad5d3ac4b722d5fe","text":" README"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfef64dc87d2ad5d3ac4b722d5fe","text":".md"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfef64dc87d2ad5d3ac4b722d5fe","text":" and"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfef64dc87d2ad5d3ac4b722d5fe","text":" wrote"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfef64dc87d2ad5d3ac4b722d5fe","text":" `"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfef64dc87d2ad5d3ac4b722d5fe","text":"hi"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfef64dc87d2ad5d3ac4b722d5fe","text":"`"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfef64dc87d2ad5d3ac4b722d5fe","text":" to"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfef64dc87d2ad5d3ac4b722d5fe","text":" notes"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfef64dc87d2ad5d3ac4b722d5fe","text":".txt"}
+{"kind":"textDelta","messageId":"msg_0f7366cd876f8a24016ac2dfef64dc87d2ad5d3ac4b722d5fe","text":"."}
+{"kind":"text","messageId":"msg_0f7366cd876f8a24016ac2dfef64dc87d2ad5d3ac4b722d5fe","text":"I read README.md and wrote `hi` to notes.txt."}
+{"cacheReadTokens":21760,"cacheWriteTokens":0,"inputTokens":326,"kind":"usage","outputTokens":17}
+{"durationMinutes":300,"kind":"rateLimit","resetsAt":"2026-10-05T03:40:52Z","status":"allowed","usedPercent":10.0,"window":"primary"}
+{"durationMinutes":10080,"kind":"rateLimit","resetsAt":"2026-10-09T21:22:17Z","status":"allowed","usedPercent":10.0,"window":"secondary"}
+{"kind":"turnFinished","result":"I read README.md and wrote `hi` to notes.txt.","turnId":"01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01"}
+{"kind":"finished","outcome":{"result":"I read README.md and wrote `hi` to notes.txt.","status":"completed"},"usageTotals":[{"cacheReadTokens":55808,"cacheWriteTokens":0,"inputTokens":10154,"outputTokens":99}]}

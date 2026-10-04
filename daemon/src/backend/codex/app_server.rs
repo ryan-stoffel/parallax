@@ -204,6 +204,7 @@ pub(super) fn spec(
         spec.inject.set(CONFIG_DIR_ENV, home);
     }
     spec.stdin = StdinMode::Piped;
+    spec.record = Some("codex");
     overrides.apply(&mut spec);
     spec
 }

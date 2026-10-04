@@ -38,6 +38,7 @@ fn fixture(name: &str) -> &'static str {
         "hermes" => include_str!("fixtures/hermes.jsonl"),
         "plan-refused" => include_str!("fixtures/plan-refused.jsonl"),
         "steer" => include_str!("fixtures/steer.jsonl"),
+        "recorded" => include_str!("fixtures/recorded.jsonl"),
         other => panic!("no fixture {other}"),
     }
 }
@@ -977,4 +978,19 @@ async fn an_agent_that_outlives_a_failed_turn_is_stopped_and_the_run_fails() {
         failure.message.contains("usage limit reached"),
         "{failure:?}"
     );
+}
+
+/// A real session, recorded with `PLXD_RECORD_CLI` (PLX-493), replays to its snapshot: a read, a
+/// shell command that asks first, and the reply.
+#[tokio::test]
+async fn a_recorded_session_replays_to_its_snapshot() {
+    let fake = Fake::new("recorded");
+    crate::backend::record::assert_replays(
+        fake.backend.start(fake.request()).unwrap(),
+        std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/backend/acp/fixtures/recorded.events.jsonl"
+        )),
+    )
+    .await;
 }

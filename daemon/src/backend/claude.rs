@@ -638,6 +638,7 @@ impl ClaudeBackend {
         }
         spec.stdin = StdinMode::Piped;
         spec.limits = self.limits;
+        spec.record = Some("claude");
         Ok((spec, key_source))
     }
 }

@@ -61,6 +61,7 @@ fn fixture(name: &str) -> &'static str {
         "worker-exit-plan" => include_str!("fixtures/worker-exit-plan.jsonl"),
         "worker-tasks" => include_str!("fixtures/worker-tasks.jsonl"),
         "coordinator-tasks" => include_str!("fixtures/coordinator-tasks.jsonl"),
+        "recorded" => include_str!("fixtures/recorded.jsonl"),
         other => panic!("no fixture {other}"),
     }
 }
@@ -3291,4 +3292,28 @@ fn only_a_subagent_s_task_notification_ends_a_subagent() {
     let ended = br#"{"type":"system","subtype":"task_notification","task_id":"b1","tool_use_id":"toolu_bash","status":"completed","summary":"done"}"#;
     assert_eq!(translator.line(started), []);
     assert_eq!(translator.line(ended), []);
+}
+
+/// A real session, recorded with `PLXD_RECORD_CLI` (PLX-493), replays to its snapshot: a
+/// subagent's tool call, a Write that asks first, and the reply.
+#[tokio::test]
+async fn a_recorded_session_replays_to_its_snapshot() {
+    let fake = Fake::new("recorded");
+    let request = RunRequest {
+        policy: ToolPolicy::WorkspaceWrite,
+        sandbox: Some(worker_sandbox(&fake.root())),
+        permission: Some(AgentPermission::Manual),
+        model: Some("claude-haiku-4-5".into()),
+        approvals: true,
+        thread: true,
+        ..request(&fake.root())
+    };
+    crate::backend::record::assert_replays(
+        fake.backend.start(request).unwrap(),
+        Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/backend/claude/fixtures/recorded.events.jsonl"
+        )),
+    )
+    .await;
 }

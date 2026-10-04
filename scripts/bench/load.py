@@ -2,7 +2,7 @@
 """Streams N fake-backend threads at once through plxd and measures what delivering them costs.
 
     cargo build --profile bench -p plxd --features fake-backend
-    scripts/bench/load.py target/release/plxd [--threads 30] [--out load.json]
+    scripts/bench/load.py target/release/plxd [--threads 30] [--out load.json] [--replay EVENTS]
     uv run --with matplotlib scripts/bench/load.py --compare before.json after.json --png out.png
 
 Runs `plxd serve` in a temporary data folder with every worker on the fake backend, playing a
@@ -13,6 +13,8 @@ the same moment, and waits for every turn to end. It writes JSON with delivery l
 time minus the event's `time`, which plxd sets at flush), bytes and events per connection and per
 subscription, `host/health.queues` samples when plxd reports them, plxd's CPU and peak RSS, and
 whether plxd made a subscriber resync. `--compare` charts any number of those files side by side.
+`--replay` plays a recorded session's events instead, from a backend's replay snapshot such as
+`daemon/src/backend/claude/fixtures/recorded.events.jsonl` (PLX-493), as fast as plxd takes them.
 """
 
 import argparse
@@ -49,6 +51,23 @@ def script() -> list:
             {"sleepMs": SLEEP_MS},
         ]
     return steps + [{"endTurn": {"result": "done"}}]
+
+
+def replay(path: str) -> list:
+    """The fake CLI's script for a replay snapshot: its session, its events, and its turn's end.
+    The fake backend reports the turn's start and the run's end itself, and a load run answers no
+    permission requests."""
+    steps: list = []
+    for line in Path(path).read_text().splitlines():
+        event = json.loads(line)
+        kind = event["kind"]
+        if kind == "sessionStarted":
+            steps.append({"init": {"sessionId": "replay", "model": event.get("model")}})
+        elif kind == "turnFinished":
+            steps.append({"endTurn": {"result": event.get("result")}})
+        elif kind not in ("turnStarted", "finished", "approvalRequested", "approvalWithdrawn"):
+            steps.append({"emit": event})
+    return steps
 
 
 class LoadClient(Client):
@@ -90,14 +109,14 @@ def stats(values: list[float]) -> dict:
             "p99": pct(values, 99), "max": max(values)}
 
 
-async def run(plxd: str, count: int) -> dict:
+async def run(plxd: str, count: int, steps: list) -> dict:
     data = tempfile.mkdtemp(prefix="plxl-", dir="/tmp")
     repo = data + "-repo"
     subprocess.run(["git", "init", "-q", repo], check=True)
     subprocess.run(["git", "-C", repo, "-c", "user.name=load", "-c", "user.email=load@example.com",
                     "commit", "-q", "--allow-empty", "-m", "init"], check=True)
     fake = data + "-fake.json"
-    Path(fake).write_text(json.dumps(script()))
+    Path(fake).write_text(json.dumps(steps))
     env = {**os.environ, "PLXD_DATA_DIR": data, "PLXD_FAKE_BACKEND": fake}
     daemon = subprocess.Popen([plxd, "serve"], env=env, stderr=open(f"{data}.log", "w"))
     try:
@@ -170,7 +189,7 @@ async def run(plxd: str, count: int) -> dict:
         queues = [s["queues"] for s in samples if "queues" in s]
         return {
             "threads": count,
-            "emitsPerThread": EMITS,
+            "emitsPerThread": sum("emit" in step for step in steps),
             "wallS": round(wall, 2),
             # A busy host stretches the latency tail; compare runs taken at similar load.
             "loadAvg1m": round(os.getloadavg()[0], 1),
@@ -232,12 +251,14 @@ def main():
     parser.add_argument("--out", default="load.json")
     parser.add_argument("--compare", nargs="+", metavar="JSON", help="chart these results")
     parser.add_argument("--png", default="load.png")
+    parser.add_argument("--replay", metavar="EVENTS", help="play this replay snapshot's events")
     args = parser.parse_args()
     if args.compare:
         return compare(args.compare, args.png)
     if not args.plxd:
         parser.error("give a plxd binary, or --compare")
-    result = asyncio.run(run(args.plxd, args.threads))
+    steps = replay(args.replay) if args.replay else script()
+    result = asyncio.run(run(args.plxd, args.threads, steps))
     Path(args.out).write_text(json.dumps(result, indent=2) + "\n")
     keys = ("threads", "wallS", "loadAvg1m", "latencyMs", "connection", "plxd", "resync")
     summary = {k: result.get(k) for k in keys}
