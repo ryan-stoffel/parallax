@@ -66,7 +66,8 @@ impl WorktreeManager {
             loop {
                 match process.next().await {
                     Some(Output::Line(line)) => {
-                        output.extend_from_slice(&line);
+                        // stdout's lines keep Windows' `\r`; stderr's lose it.
+                        output.extend_from_slice(line.strip_suffix(b"\r").unwrap_or(&line));
                         output.push(b'\n');
                     }
                     Some(Output::Oversized { bytes }) => {
