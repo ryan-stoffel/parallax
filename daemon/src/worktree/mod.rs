@@ -18,8 +18,9 @@
 //! [`WorktreeManager::diff_commits`] and [`WorktreeManager::read_blob`] (#157), and
 //! [`WorktreeManager::open_pr`] pushes its branch and opens a pull request for it (PLX-168).
 //! `folder` has the git calls a run's Git menu makes, in its worktree or checkout (PLX-298).
-//! `integration` keeps each Project's integration branch and its worktree (PLX-409, 0045), and
-//! `coordinator` its coordinator's detached worktree at that branch's tip (PLX-397, 0042).
+//! `integration` keeps each Project's integration branch and its worktree (PLX-409, 0045),
+//! `coordinator` its coordinator's detached worktree at that branch's tip (PLX-397, 0042), and
+//! `landing` merges its children onto it (PLX-410).
 //!
 //! # Layout and naming
 //!
@@ -100,6 +101,7 @@
 mod coordinator;
 mod folder;
 mod integration;
+mod landing;
 mod pull_request;
 mod refs;
 mod review;
@@ -110,6 +112,7 @@ mod tests;
 mod windows_tests;
 
 pub use folder::{PushError, RunFolder};
+pub use landing::Merged;
 pub use pull_request::{PrError, github_pr_urls};
 pub use review::{
     AcceptError, Accepted, Blob, CommitDiff, FileDiff, MAX_BLOB_BYTES, MergeHow, validate_repo_path,

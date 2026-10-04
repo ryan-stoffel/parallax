@@ -436,6 +436,20 @@ export type ParallaxRequests = {
 	 * `memory/propose`: a thread proposes an entry, for its coordinator or the user.
 	 */
 	"memory/propose": { params: MemoryProposeParams, result: MemoryProposeResult },
+	/**
+	 * `land/queue`: queues a Project's finished child to land on its integration branch, as
+	 * the coordinator's `land` tool does (PLX-410, 0045). Gated on the `landing` capability,
+	 * like every `land/*` method.
+	 */
+	"land/queue": { params: LandQueueParams, result: LandResult },
+	/**
+	 * `land/approve`: lands a child waiting for the user's approval, in its turn.
+	 */
+	"land/approve": { params: LandApproveParams, result: LandResult },
+	/**
+	 * `land/sendBack`: sends a child waiting for approval the user's message instead.
+	 */
+	"land/sendBack": { params: LandSendBackParams, result: LandResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -675,6 +689,11 @@ export type Project = {
 	 * Absent until plxd cuts it, when the project is created or a run in it starts.
 	 */
 	integrationBranch?: string,
+	/**
+	 * Its children land without waiting for the user's approval (0045), behind the `landing`
+	 * capability. Absent means false.
+	 */
+	autoLand?: boolean,
 	/**
 	 * When the project was created, in RFC 3339 UTC.
 	 */
@@ -3788,8 +3807,8 @@ export type ProjectStartParams = {
 /**
  * Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
  * capability (PLX-227, 0032), its permission mode, behind `projectPermission` (0042), its
- * autonomy level, behind `projectAutonomy` (0043), or its base branch, behind `integrationBranch`
- * (0045).
+ * autonomy level, behind `projectAutonomy` (0043), its base branch, behind `integrationBranch`
+ * (0045), or automatic landing, behind `landing` (0045).
  *
  * A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
  * `project/create`'s rules, and the repository can't change. A rename, a new icon, a new mode,
@@ -3824,6 +3843,11 @@ export type ProjectUpdateParams = {
 	 * already cut stays where it is.
 	 */
 	baseBranch?: string,
+	/**
+	 * Turns automatic landing on or off, behind `landing` (0045). Absent keeps it. Children
+	 * already waiting for approval keep waiting.
+	 */
+	autoLand?: boolean,
 };
 
 /**
@@ -4945,6 +4969,87 @@ export type MemoryProposeResult = {
 export type MemoryProposalTo = "coordinator" | "user";
 
 /**
+ * Params of `land/queue`: queues a finished child of a Project to land on its integration
+ * branch, as the coordinator's `land` tool does. It waits for the user's approval unless the
+ * Project's `autoLand` is on. A child already waiting, queued, or sent back stays as it is.
+ *
+ * Fails with `runNotFound`, or `landRefused` for a run that isn't a Project's completed child
+ * with a branch, such as one started with `explore`.
+ */
+export type LandQueueParams = {
+	/**
+	 * The child's run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Result of `land/queue`, `land/approve`, and `land/sendBack`.
+ */
+export type LandResult = {
+	/**
+	 * The child's landing as it stands.
+	 */
+	landing: Landing,
+};
+
+/**
+ * A child in its Project's landing queue.
+ */
+export type Landing = {
+	/**
+	 * The child's run.
+	 */
+	runId: RunId,
+	/**
+	 * Its Project.
+	 */
+	project: ProjectId,
+	/**
+	 * Where it is.
+	 */
+	status: LandingStatus,
+	/**
+	 * When it was last queued, in RFC 3339 UTC. The queue lands the oldest first.
+	 */
+	queuedAt: string,
+};
+
+/**
+ * Where a child is in its Project's landing queue.
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type LandingStatus = "waiting" | "queued" | "sentBack" | "landed" | "needsYou";
+
+/**
+ * Params of `land/approve`: lands a child waiting for approval, in its turn. Fails with
+ * `landRefused` unless it is `waiting`.
+ */
+export type LandApproveParams = {
+	/**
+	 * The child's run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Params of `land/sendBack`: sends a child waiting for approval a message from the user instead
+ * of landing it. plxd queues it again, waiting for approval, when that turn ends. Fails with
+ * `landRefused` unless it is `waiting`.
+ */
+export type LandSendBackParams = {
+	/**
+	 * The child's run.
+	 */
+	runId: RunId,
+	/**
+	 * What the child should change, sent as the user's message.
+	 */
+	text: string,
+};
+
+/**
  * Params of `$/cancelRequest`.
  */
 export type CancelRequestParams = {
@@ -5006,7 +5111,7 @@ export type ErrorData = {
  * A newer plxd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it

@@ -10,10 +10,11 @@
 //! 0019's, from [`super`].
 //!
 //! A caller in a Project also gets [`CONTEXT_TOOLS`], the Project's shared context, and the
-//! question tools for its role ([`super::question`], PLX-402). A Project's coordinator launches
-//! its children in its Project, through `agent/start` with itself as their coordinator thread, so
-//! they show in the Project's Agents panel, run as threads that ask through the inbox, in the
-//! Project's mode, and `thread_list` lists its Project's runs, each once.
+//! question tools for its role ([`super::question`], PLX-402), and its coordinator gets
+//! [`super::land`]'s `land` (PLX-410). A Project's coordinator launches its children in its
+//! Project, through `agent/start` with itself as their coordinator thread, so they show in the
+//! Project's Agents panel, run as threads that ask through the inbox, in the Project's mode, and
+//! `thread_list` lists its Project's runs, each once.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -39,11 +40,11 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{Instant, sleep};
 use uuid::Uuid;
 
-use super::question;
 use super::{
     MAX_CONTEXT_BYTES, MAX_PATH_BYTES, MAX_TEXT_BYTES, Plxd, Tools, check_text, clip, last_output,
     parse, pretty, tail,
 };
+use super::{land, question};
 
 /// Every tool the server offers a thread outside a Project.
 pub const TOOLS: &[&str] = &[
@@ -104,6 +105,7 @@ pub const ALLOWED_TOOLS: &[&str] = &[
     "mcp__plxd__memory_read",
     "mcp__plxd__memory_propose",
     "mcp__plxd__memory_write",
+    "mcp__plxd__land",
 ];
 
 /// About how much transcript one `thread_read` page carries, in bytes. A page ends at an event,
@@ -182,7 +184,12 @@ pub async fn run(
 impl Tools for Server {
     fn names(&self) -> Vec<&'static str> {
         let tools = if self.project.is_some() {
-            [PROJECT_TOOLS, question::tools(self.coordinator)].concat()
+            [
+                PROJECT_TOOLS,
+                question::tools(self.coordinator),
+                land::tools(self.coordinator),
+            ]
+            .concat()
         } else {
             TOOLS.to_vec()
         };
@@ -198,6 +205,7 @@ impl Tools for Server {
         if let Some(list) = tools.as_array_mut() {
             if self.project.is_some() {
                 list.extend(question::definitions(self.coordinator));
+                list.extend(land::definitions(self.coordinator));
             }
             if let Some(memory) = &self.memory {
                 list.extend(memory.definitions());
@@ -590,6 +598,7 @@ async fn list(server: &Server, args: ListArgs) -> Result<String, String> {
     Ok(pretty(&json!({"threads": listed})))
 }
 
+#[expect(clippy::too_many_lines, reason = "one arm per tool, read side by side")]
 async fn call_tool(server: &Server, name: &str, arguments: Value) -> Result<String, String> {
     let binding = &server.binding;
     let caller = binding.run;
@@ -660,6 +669,14 @@ async fn call_tool(server: &Server, name: &str, arguments: Value) -> Result<Stri
             context_tool(server, project, name, arguments).await
         }
         "ask" | "answer" | "escalate" => question::call(binding, name, arguments).await,
+        "land" => {
+            land::call(
+                binding,
+                server.project.filter(|_| server.coordinator),
+                arguments,
+            )
+            .await
+        }
         other => Err(format!("no tool is named {other:?}")),
     }
 }
@@ -1326,7 +1343,7 @@ async fn update(binding: &Binding, args: UpdateArgs) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{ALLOWED_TOOLS, CONTEXT_TOOLS, PROJECT_TOOLS, TOOLS, definitions};
-    use crate::mcp::{SERVER, question};
+    use crate::mcp::{SERVER, land, question};
 
     #[test]
     fn the_allowlist_is_exactly_the_tools_under_the_servers_name() {
@@ -1335,6 +1352,7 @@ mod tests {
             question::CHILD_TOOLS,
             question::COORDINATOR_TOOLS,
             crate::mcp::memory::TOOLS,
+            land::TOOLS,
         ]
         .concat()
         .iter()
@@ -1352,12 +1370,19 @@ mod tests {
             assert_eq!(listed, tools);
         }
         for coordinator in [false, true] {
-            let tools = question::definitions(coordinator);
+            let tools = [
+                question::definitions(coordinator),
+                land::definitions(coordinator),
+            ]
+            .concat();
             let listed: Vec<&str> = tools
                 .iter()
                 .map(|tool| tool["name"].as_str().unwrap())
                 .collect();
-            assert_eq!(listed, question::tools(coordinator));
+            assert_eq!(
+                listed,
+                [question::tools(coordinator), land::tools(coordinator)].concat()
+            );
         }
     }
 
@@ -1381,6 +1406,7 @@ mod tests {
         let mut tools = definitions(true).as_array().unwrap().clone();
         tools.extend(question::definitions(false));
         tools.extend(question::definitions(true));
+        tools.extend(land::definitions(true));
         for tool in &tools {
             let schema = &tool["inputSchema"];
             assert_eq!(schema["additionalProperties"], false, "{tool}");

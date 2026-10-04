@@ -210,6 +210,7 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 permission: None,
                 autonomy: None,
                 base_branch: None,
+                auto_land: None,
             },
         )
         .expect("a rename");
@@ -232,6 +233,7 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 permission: None,
                 autonomy: None,
                 base_branch: None,
+                auto_land: None,
             },
         )
         .expect("an icon");
@@ -249,6 +251,7 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 permission: None,
                 autonomy: None,
                 base_branch: None,
+                auto_land: None,
             },
         )
         .expect("an icon without a color");
@@ -297,6 +300,7 @@ fn an_icon_image_round_trips_and_an_icon_without_one_clears_it() {
                 permission: None,
                 autonomy: None,
                 base_branch: None,
+                auto_land: None,
             },
         )
         .expect("an icon without an image");
@@ -434,6 +438,7 @@ fn a_projects_branches_are_stored_and_a_retry_without_a_base_matches() {
             id,
             &ProjectEdit {
                 base_branch: Some("develop".to_string()),
+                auto_land: None,
                 ..ProjectEdit::default()
             },
         )
@@ -462,6 +467,7 @@ fn an_update_that_changes_nothing_reports_no_change() {
             permission: None,
             autonomy: None,
             base_branch: None,
+            auto_land: None,
         },
     ] {
         let (project, changed) = store.update_project(id, &edit).expect("update");
@@ -485,6 +491,7 @@ fn update_of_a_missing_project_fails_with_not_found() {
                 permission: None,
                 autonomy: None,
                 base_branch: None,
+                auto_land: None,
             },
         )
         .expect_err("update of a missing project should fail");
@@ -779,7 +786,8 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
             "permission",
             "base_branch",
             "integration_branch",
-            "autonomy"
+            "autonomy",
+            "auto_land"
         ]
     );
     let version: i64 = conn
@@ -788,12 +796,12 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
         })
         .expect("read schema version");
     assert_eq!(
-        version, 32,
+        version, 33,
         "migrations 3 (accounts, #117), 4 (usage, #120), 5 (worktrees, #154), 6 (role \
          defaults, #119), 7 (runs and events, #156), 8 (accepted runs, #157), 9 (threads, \
          #110), 10 (turns, #190), 11 (coordinator threads, #195), 12 (worktree base_dirty, \
          #257), 13 (run options, PLX-97), 14 (wakes, PLX-178), 15 (images, PLX-191), 16 \
-         (project icons, PLX-227), 17 (approvals, PLX-222), 18 (checkout runs), 19 (thread          attention, PLX-270), 20 (context window and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), 30 (questions, PLX-402), 31 (project autonomy, PLX-403), and 32 (question delivery, PLX-469) also apply"
+         (project icons, PLX-227), 17 (approvals, PLX-222), 18 (checkout runs), 19 (thread          attention, PLX-270), 20 (context window and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), 30 (questions, PLX-402), 31 (project autonomy, PLX-403), 32 (question delivery, PLX-469), and 33 (landing queues, PLX-410) also apply"
     );
     let account_columns: Vec<String> = conn
         .prepare("SELECT name FROM pragma_table_info('accounts')")
@@ -840,6 +848,7 @@ fn a_version_15_database_gains_project_icons_and_keeps_its_projects() {
                 permission: None,
                 autonomy: None,
                 base_branch: None,
+                auto_land: None,
             },
         )
         .expect("set an icon after migrating");
@@ -921,12 +930,12 @@ fn a_version_3_database_from_develop_migrates_to_usage_tables_and_keeps_its_acco
         })
         .expect("read schema version");
     assert_eq!(
-        version, 32,
+        version, 33,
         "migrations 5 (worktrees, #154), 6 (role defaults, #119), 7 (runs and events, #156), \
          8 (accepted runs, #157), 9 (threads, #110), 10 (turns, #190), 11 (coordinator \
          threads, #195), 12 (worktree base_dirty, #257), 13 (run options, PLX-97), 14 (wakes, \
          PLX-178), 15 (images, PLX-191), 16 (project icons, PLX-227), 17 (approvals, \
-         PLX-222), 18 (checkout runs), 19 (thread attention, PLX-270), 20 (context window          and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), 30 (questions, PLX-402), 31 (project autonomy, PLX-403), and 32 (question delivery, PLX-469) also apply"
+         PLX-222), 18 (checkout runs), 19 (thread attention, PLX-270), 20 (context window          and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), 30 (questions, PLX-402), 31 (project autonomy, PLX-403), 32 (question delivery, PLX-469), and 33 (landing queues, PLX-410) also apply"
     );
 }
 

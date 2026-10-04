@@ -153,6 +153,8 @@ pub(crate) fn initialize(
 /// `from` and the `interrupted` item, and `pr/link` and `pr/unlink`, which a thread's Parallax
 /// tools use.
 /// `inbox` (PLX-401, 0043): `inbox/list`, `inbox/seen`, and `inbox.added`.
+/// `landing` (PLX-410, 0045): `land/queue`, `land/approve`, `land/sendBack`, and `autoLand` on
+/// `Project` and `project/update`, which an older plxd would silently ignore.
 /// `queue` (PLX-370, 0048): `queue/list`, `queue/edit`, `queue/reorder`, `queue/cancel`,
 /// `queue/steer`, and `queue.updated`, and `agent/send` takes `delivery`, which an older plxd
 /// would silently ignore, queueing a steer.
@@ -187,6 +189,7 @@ fn capabilities_advertised() -> Capabilities {
         ("githubStatus".to_owned(), serde_json::Map::new()),
         ("inbox".to_owned(), serde_json::Map::new()),
         ("integrationBranch".to_owned(), serde_json::Map::new()),
+        ("landing".to_owned(), serde_json::Map::new()),
         ("memory".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
         ("prDiff".to_owned(), serde_json::Map::new()),

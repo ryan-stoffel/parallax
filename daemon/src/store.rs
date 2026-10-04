@@ -228,6 +228,7 @@ pub(crate) fn edit(params: ProjectUpdateParams) -> (Uuid, ProjectEdit) {
             permission: params.permission.map(stored_permission),
             autonomy: params.autonomy.and_then(option_name),
             base_branch: params.base_branch,
+            auto_land: params.auto_land,
         },
     )
 }
@@ -297,6 +298,7 @@ pub(crate) fn project(
         coordinator,
         base_branch: row.base_branch,
         integration_branch: row.integration_branch,
+        auto_land: row.auto_land,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
@@ -499,6 +501,7 @@ mod tests {
             updated_at: "2026-09-24T12:00:01Z".parse().unwrap(),
             base_branch: None,
             integration_branch: None,
+            auto_land: false,
         }
     }
 
@@ -567,6 +570,7 @@ mod tests {
             permission: Some(ProjectPermission::Bypass),
             autonomy: Some(ProjectAutonomy::Full),
             base_branch: None,
+            auto_land: None,
         });
         assert_eq!(uuid, Uuid::from(id));
         assert_eq!(edit.name, None);

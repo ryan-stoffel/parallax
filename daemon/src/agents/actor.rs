@@ -2508,6 +2508,15 @@ impl Actor {
         {
             wake::notify(&self.daemon, parent, wake::summary(&run, &outcome));
         }
+        // A child sent back from landing goes back in its Project's queue (PLX-410).
+        if self.worktree.is_some()
+            && matches!(
+                outcome,
+                AgentOutcome::Completed { .. } | AgentOutcome::Failed { .. }
+            )
+        {
+            crate::methods::land::turn_ended(&self.daemon, self.id);
+        }
     }
 
     /// Records the run's new commit and its diff, and tells clients, as `agent.diffReady`. The

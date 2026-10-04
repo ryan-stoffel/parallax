@@ -45,6 +45,7 @@ mod host;
 mod id;
 mod inbox;
 pub mod jsonrpc;
+mod land;
 mod memory;
 pub mod methods;
 mod project;
@@ -110,6 +111,9 @@ pub use id::InvalidId;
 pub use inbox::{
     InboxItem, InboxItemId, InboxKind, InboxListParams, InboxListResult, InboxSeenParams,
     InboxSeenResult,
+};
+pub use land::{
+    LandApproveParams, LandQueueParams, LandResult, LandSendBackParams, Landing, LandingStatus,
 };
 pub use memory::{
     MemoryDeleteParams, MemoryDeleteResult, MemoryFile, MemoryKind, MemoryListParams,
@@ -193,6 +197,7 @@ mod tests {
             updated_at: "2026-09-24T12:05:00.125Z".parse().unwrap(),
             base_branch: None,
             integration_branch: None,
+            auto_land: false,
         }
     }
 
@@ -364,6 +369,7 @@ mod tests {
                     permission: None,
                     autonomy: None,
                     base_branch: None,
+                    auto_land: None,
                 });
             }
         }
@@ -384,6 +390,7 @@ mod tests {
                 permission: None,
                 autonomy: None,
                 base_branch: None,
+                auto_land: None,
             })
             .unwrap(),
             json!({"project": id}),
@@ -431,6 +438,7 @@ mod tests {
                 permission: Some(permission),
                 autonomy: None,
                 base_branch: None,
+                auto_land: None,
             });
         }
         assert_eq!(
@@ -472,6 +480,7 @@ mod tests {
                 permission: None,
                 autonomy: Some(autonomy),
                 base_branch: None,
+                auto_land: None,
             });
         }
         assert_eq!(

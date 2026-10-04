@@ -498,6 +498,7 @@ async fn a_coordinator_gets_plxds_mcp_tools_on_claude_codes_own_configuration() 
          mcp__plxd__pr_link,mcp__plxd__pr_unlink,mcp__plxd__read_context,\
          mcp__plxd__write_context,mcp__plxd__ask,mcp__plxd__answer,mcp__plxd__escalate,\
          mcp__plxd__memory_read,mcp__plxd__memory_propose,mcp__plxd__memory_write,\
+         mcp__plxd__land,\
          TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate"
             .to_owned(),
         "--settings".to_owned(),

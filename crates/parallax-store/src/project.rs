@@ -77,6 +77,7 @@ pub struct ProjectEdit {
     pub permission: Option<String>,
     pub autonomy: Option<String>,
     pub base_branch: Option<String>,
+    pub auto_land: Option<bool>,
 }
 
 /// A project row.
@@ -91,6 +92,8 @@ pub struct Project {
     pub base_branch: Option<String>,
     /// Its integration branch (decision record 0045), once plxd has cut it.
     pub integration_branch: Option<String>,
+    /// Whether its children land without the user's approval (PLX-410, decision record 0045).
+    pub auto_land: bool,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -106,6 +109,7 @@ struct RawProject {
     autonomy: String,
     base_branch: Option<String>,
     integration_branch: Option<String>,
+    auto_land: bool,
     created_at: String,
     updated_at: String,
 }
@@ -116,11 +120,12 @@ impl RawProject {
             id: row.get(0)?,
             name: row.get(1)?,
             repo_path: row.get(2)?,
-            icon: icon_from_row(row, 9)?,
+            icon: icon_from_row(row, 10)?,
             permission: row.get(5)?,
             autonomy: row.get(8)?,
             base_branch: row.get(6)?,
             integration_branch: row.get(7)?,
+            auto_land: row.get(9)?,
             created_at: row.get(3)?,
             updated_at: row.get(4)?,
         })
@@ -145,6 +150,7 @@ impl RawProject {
             autonomy: self.autonomy,
             base_branch: self.base_branch,
             integration_branch: self.integration_branch,
+            auto_land: self.auto_land,
             created_at: timestamp::parse(&self.created_at)?,
             updated_at: timestamp::parse(&self.updated_at)?,
         })
@@ -156,7 +162,7 @@ fn fetch_raw(conn: &Connection, id_text: &str) -> Result<Option<RawProject>, Sto
         .query_row(
             &format!(
                 "SELECT id, name, repo_path, created_at, updated_at, permission, base_branch,
-                     integration_branch, autonomy, {ICON_COLUMNS}
+                     integration_branch, autonomy, auto_land, {ICON_COLUMNS}
                  FROM projects WHERE id = ?1"
             ),
             params![id_text],
@@ -258,7 +264,7 @@ impl Store {
     pub fn list_projects(&self) -> Result<Vec<Project>, StoreError> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT id, name, repo_path, created_at, updated_at, permission, base_branch,
-                     integration_branch, autonomy, {ICON_COLUMNS}
+                     integration_branch, autonomy, auto_land, {ICON_COLUMNS}
              FROM projects
              ORDER BY created_at ASC, id ASC"
         ))?;
@@ -271,8 +277,9 @@ impl Store {
         Ok(projects)
     }
 
-    /// Renames project `id`, or sets its icon, permission mode, autonomy level, or base branch, as
-    /// `edit` says, and returns the project with whether anything changed. When nothing would
+    /// Renames project `id`, or sets its icon, permission mode, autonomy level, base branch, or
+    /// automatic landing, as `edit` says, and returns the project with whether anything changed.
+    /// When nothing would
     /// change, it writes nothing.
     ///
     /// `repo_path` never changes, and `updated_at` stays as it is: a rename,
@@ -320,13 +327,19 @@ impl Store {
             raw.base_branch.clone_from(&edit.base_branch);
             changed = true;
         }
+        if let Some(auto_land) = edit.auto_land
+            && auto_land != raw.auto_land
+        {
+            raw.auto_land = auto_land;
+            changed = true;
+        }
 
         if changed {
             let (icon_name, icon_color, image_type, image_data) = icon_columns(raw.icon.as_ref());
             tx.execute(
                 "UPDATE projects SET name = ?2, icon_name = ?3, icon_color = ?4,
                      icon_image_type = ?5, icon_image_data = ?6, permission = ?7,
-                     base_branch = ?8, autonomy = ?9
+                     base_branch = ?8, autonomy = ?9, auto_land = ?10
                  WHERE id = ?1",
                 params![
                     id_text,
@@ -337,7 +350,8 @@ impl Store {
                     image_data,
                     raw.permission,
                     raw.base_branch,
-                    raw.autonomy
+                    raw.autonomy,
+                    raw.auto_land
                 ],
             )?;
             tx.commit()?;
@@ -365,7 +379,8 @@ impl Store {
         Ok(changed > 0)
     }
 
-    /// Deletes a project by id, if it exists, with its inbox (PLX-401) and questions (PLX-402).
+    /// Deletes a project by id, if it exists, with its inbox (PLX-401), questions (PLX-402), and
+    /// landing queue (PLX-410).
     ///
     /// Returns whether a row was deleted.
     ///
@@ -373,14 +388,12 @@ impl Store {
     ///
     /// Returns a database error.
     pub fn delete_project(&self, id: Uuid) -> Result<bool, StoreError> {
-        self.conn.execute(
-            "DELETE FROM inbox WHERE project_id = ?1",
-            params![id.to_string()],
-        )?;
-        self.conn.execute(
-            "DELETE FROM questions WHERE project_id = ?1",
-            params![id.to_string()],
-        )?;
+        for table in ["inbox", "questions", "landings"] {
+            self.conn.execute(
+                &format!("DELETE FROM {table} WHERE project_id = ?1"),
+                params![id.to_string()],
+            )?;
+        }
         let changed = self.conn.execute(
             "DELETE FROM projects WHERE id = ?1",
             params![id.to_string()],

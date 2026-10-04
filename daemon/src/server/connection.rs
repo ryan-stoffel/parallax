@@ -544,6 +544,7 @@ mod tests {
                 updated_at: Timestamp::now(),
                 base_branch: None,
                 integration_branch: None,
+                auto_land: false,
             };
             daemon
                 .log
@@ -695,6 +696,7 @@ mod tests {
                     updated_at: Timestamp::now(),
                     base_branch: None,
                     integration_branch: None,
+                    auto_land: false,
                 },
             },
         };

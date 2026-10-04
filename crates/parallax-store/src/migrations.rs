@@ -435,6 +435,22 @@ const MIGRATIONS: &[Migration] = &[
         version: 32,
         sql: "ALTER TABLE questions ADD COLUMN delivered_to TEXT;",
     },
+    // A Project's landing queue (PLX-410, decision 0045): one row per child the coordinator
+    // queued with `land`, its status (`waiting`, `queued`, `sentBack`, `landed`, or `needsYou`),
+    // how many times landing it conflicted, and when it was last queued, which orders the queue.
+    // And whether a project lands its children without waiting for the user's approval.
+    Migration {
+        version: 33,
+        sql: "CREATE TABLE landings (
+            run_id TEXT NOT NULL PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            conflicts INTEGER NOT NULL DEFAULT 0,
+            queued_at TEXT NOT NULL
+        );
+        CREATE INDEX landings_project ON landings (project_id, status, queued_at);
+        ALTER TABLE projects ADD COLUMN auto_land INTEGER NOT NULL DEFAULT 0;",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose
