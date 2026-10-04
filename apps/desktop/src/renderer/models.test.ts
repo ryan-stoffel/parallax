@@ -2,6 +2,7 @@ import { expect, test } from "vite-plus/test";
 
 import type { ProviderInfo, ProviderInstance } from "../protocol/generated/protocol";
 import { catalogOf, instanceModels } from "./models";
+import { knownModel } from "./Subagents";
 
 const info = (instance: Partial<ProviderInstance>, rest: Partial<ProviderInfo> = {}) =>
   ({
@@ -67,4 +68,10 @@ test("an older plxd's catalog is the built-in one, turned off as this computer s
 test("an instance that lists no models offers its agent's default, which sends no model", () => {
   const models = instanceModels(info({ id: "amp", name: "Amp" }));
   expect(models.map((m) => [m.id, m.name, m.provider])).toEqual([["", "Default model", "amp"]]);
+});
+
+test("a reported model is its exact id before a longer one's prefix (PLX-495)", () => {
+  expect(knownModel("claude-opus-5-5-medium")?.provider).toBe("cursor");
+  expect(knownModel("claude-opus-5-5[1m]")?.provider).toBe("claude");
+  expect(knownModel("claude-haiku-4-5-20251001")?.provider).toBe("claude");
 });
