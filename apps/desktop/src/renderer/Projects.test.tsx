@@ -2169,7 +2169,7 @@ test("a question in Needs you is answered in place, and a decided one can be cha
   expect(inboxGroupsShown()).not.toContain("Decided for you");
 });
 
-test("a new Needs you item raises a system notification that opens its Project, and joins the open inbox", async () => {
+test("a new Needs you item notifies with Open Project, from the OS while the window is in the background, and joins the open inbox", async () => {
   capabilities = { inbox: {} };
   // One scope, as the fake sends every event to every subscription.
   answers["thread/list"] = () => ({ result: { repos: [], threads: [], seq: 7 } });
@@ -2195,20 +2195,35 @@ test("a new Needs you item raises a system notification that opens its Project, 
         event: { subscription: "s-1", seq, time: "", event: { kind: "inbox.added", item } },
       }),
     );
+  const toast = () => document.querySelector('[aria-label="Notifications"] > div');
   await renderApp();
   await added(8, inboxItem("i-done", "done", "Fix the login bug: done"));
-  expect(notes).toEqual([]);
+  expect(toast()).toBeNull();
 
+  // In the focused window, a notification in the app, whose Open Project opens it.
   await added(9, inboxItem("i-needs", "needsYou", "Fix the login bug: wake-ups paused"));
+  expect(notes).toEqual([]);
+  expect(toast()!.textContent).toBe(
+    "emberNeeds you: Fix the login bug: wake-ups pausedOpen Project",
+  );
+  const open = [...toast()!.querySelectorAll("button")].find(
+    (b) => b.textContent === "Open Project",
+  );
+  await act(async () => open!.click());
+  await settle();
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
+  expect(toast()).toBeNull();
+
+  // In the background, the OS's too, which opens it when clicked.
+  vi.spyOn(document, "hasFocus").mockReturnValue(false);
+  onTestFinished(() => void vi.restoreAllMocks());
+  await added(10, inboxItem("i-asks", "needsYou", "Write the docs: asks which tone"));
   expect(notes.map((n) => [n.title, n.body])).toEqual([
-    ["ember", "Needs you: Fix the login bug: wake-ups paused"],
+    ["ember", "Needs you: Write the docs: asks which tone"],
   ]);
   await act(async () => notes[0]!.onclick?.());
   await settle();
   expect(crumbs()).toEqual(["This Mac", "ember"]);
-
-  await added(10, inboxItem("i-asks", "needsYou", "Write the docs: asks which tone"));
-  await settle();
-  expect(notes).toHaveLength(2);
   expect(inbox()!.textContent).toContain("Write the docs: asks which tone");
+  act(() => toast()!.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click());
 });

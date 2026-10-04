@@ -1,13 +1,16 @@
-import { ArrowUpRight, Check, CircleCheck, Download, RefreshCw, RotateCw, X } from "lucide-react";
+import { Check, Download, RefreshCw, RotateCw } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { UpdateState } from "../preload/bridge";
+import { notify } from "./notifications";
 import { IconButton } from "./ui";
 
-/** The updater's state from main, kept current. */
+/** The updater's state from main, kept current, in an `updatable` app. */
 function useUpdateState(): UpdateState {
   const [state, setState] = useState<UpdateState>({});
-  useEffect(() => window.parallax.onUpdateState(setState), []);
+  useEffect(() => {
+    if (window.parallax.updatable) return window.parallax.onUpdateState(setState);
+  }, []);
   return state;
 }
 
@@ -21,7 +24,7 @@ const downloadedVersion = ({ available, ready }: UpdateState) =>
  * release's notes, which stays open while the pointer is on the button or the card. A click
  * opens the same card and starts the download, whose progress the card shows; the dot goes away.
  * Once downloaded, the icon is a restart icon with a check, and a click asks to confirm before it
- * installs and restarts (UpdateToast says so). Under `pnpm dev` it offers the commits main has, a
+ * installs and restarts (`useUpdateAlarms` says so). Under `pnpm dev` it offers the commits main has, a
  * click takes them, and the card shows the answer. Its label carries the updater's note, such as
  * an error.
  */
@@ -208,45 +211,34 @@ export function UpdateButton() {
 }
 
 /**
- * A toast in the window's top right once a packaged app's release has downloaded, pointing to the
- * Update button's restart, with a link to the release. It stays until closed.
+ * Notifications for a packaged app's update: once a release has downloaded, a toast pointing to
+ * the Update button's restart, with a link to the release, that stays until closed; and when a
+ * download fails, or a downloaded release won't install, why.
  */
-export function UpdateToast() {
-  const toast = useRef<HTMLDivElement>(null);
+export function useUpdateAlarms() {
   const state = useUpdateState();
   const downloaded = downloadedVersion(state);
+  const url = state.available?.url;
+  // Whether the last state was downloading or downloaded, so a note after it is its failure, and
+  // the version last announced, so a closed toast stays closed.
+  const busy = useRef(false);
+  const announced = useRef<string>(undefined);
+  const { progress, note } = state;
   useEffect(() => {
-    toast.current?.togglePopover(downloaded !== undefined);
-  }, [downloaded]);
-  return (
-    <div
-      ref={toast}
-      popover="manual"
-      role="status"
-      className="inset-auto top-16 right-4 m-0 w-80 rounded-xl border border-border bg-surface py-3 pr-9 pl-3.5 text-foreground shadow-composer"
-    >
-      <div className="flex items-center gap-2 text-[13.5px] font-medium">
-        <CircleCheck className="size-4 text-added" />
-        Update downloaded
-      </div>
-      <p className="mt-1 text-[12.5px] text-muted-foreground">
-        Restart the app from the update button to install it.{" "}
-        <a
-          href={state.available?.url}
-          className="inline-flex items-center gap-0.5 underline decoration-dotted underline-offset-4 hover:text-foreground"
-        >
-          Read more
-          <ArrowUpRight className="size-3" />
-        </a>
-      </p>
-      <button
-        type="button"
-        aria-label="Close"
-        onClick={() => toast.current?.togglePopover(false)}
-        className="absolute top-2 right-2 grid size-6 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
-      >
-        <X className="size-3.5" />
-      </button>
-    </div>
-  );
+    const wasBusy = busy.current;
+    busy.current = progress !== undefined || downloaded !== undefined;
+    if (downloaded !== undefined) {
+      if (announced.current === downloaded) return;
+      announced.current = downloaded;
+      notify({
+        key: "update",
+        tone: "success",
+        title: "Update downloaded",
+        body: "Restart the app from the update button to install it.",
+        action: url ? { label: "Read more", href: url } : undefined,
+        sticky: true,
+      });
+    } else if (wasBusy && progress === undefined && note)
+      notify({ key: "update", tone: "error", title: "Update failed", body: note });
+  }, [downloaded, url, progress, note]);
 }

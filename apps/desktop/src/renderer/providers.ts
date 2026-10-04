@@ -9,6 +9,7 @@ import type {
   ProvidersListResult,
 } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
+import { notify } from "./notifications";
 import { merged, stored } from "./stored";
 import {
   AmpLogo,
@@ -38,9 +39,32 @@ const subscribe = (listener: () => void) => {
 };
 
 function put(hostId: string, result: ProvidersListResult | undefined) {
+  const before = lists.get(hostId);
+  if (before && result) notifySignIns(hostId, before, result);
   if (result) lists.set(hostId, result);
   else lists.delete(hostId);
   for (const listener of listeners) listener();
+}
+
+/**
+ * A notification for each enabled instance whose sign-in changed between two lists (PLX-507):
+ * signed in, as when Sign in's terminal ends, or signed out, which its threads would fail on.
+ */
+function notifySignIns(hostId: string, before: ProvidersListResult, after: ProvidersListResult) {
+  for (const { instance, signedIn, account } of after.providers) {
+    const was = before.providers.find((p) => p.instance.id === instance.id)?.signedIn;
+    if (!instance.enabled || was == null || signedIn == null || was === signedIn) continue;
+    const key = `provider/${hostId}/${instance.id}`;
+    if (signedIn)
+      notify({ key, tone: "success", title: `Signed in to ${instance.name}`, body: account });
+    else
+      notify({
+        key,
+        tone: "error",
+        title: `${instance.name} is signed out`,
+        body: "Its threads can't run until you sign in again in Settings > Providers.",
+      });
+  }
 }
 
 /**

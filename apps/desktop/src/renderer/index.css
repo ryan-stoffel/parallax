@@ -670,13 +670,24 @@ body {
     translate: 0 8px;
   }
 }
+/* A notification (notifications.tsx) slides in from the window's right edge. */
+.toast-in {
+  animation: toast-in 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    translate: 16px 0;
+  }
+}
 :root.reduce-motion {
   .plan-bar {
     transition: none;
   }
   .plan-check-draw :is(circle, path),
   .plan-strip,
-  .approval-in {
+  .approval-in,
+  .toast-in {
     animation: none;
   }
 }
