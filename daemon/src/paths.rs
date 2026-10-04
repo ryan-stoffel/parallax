@@ -12,7 +12,7 @@
 //!   next to it.
 //! - `worktrees/`: agent runs' git worktrees (#154), and `context/`: shared context (#155).
 //! - `tmp/`: files plxd writes for a run and deletes when it ends, such as a Claude worker's
-//!   `CLAUDE_ENV_FILE` (PLX-126) and a Codex worker's `ZDOTDIR` (PLX-141). See
+//!   `CLAUDE_ENV_FILE` (PLX-126) and a Codex thread's prompt images (PLX-191). See
 //!   [`DataDir::temp_dir`].
 //! - `tools/`: CLIs plxd installs itself, which is only `gh` (`tools/gh/`, PLX-423). See
 //!   [`DataDir::tools_dir`].
@@ -160,10 +160,9 @@ impl DataDir {
     }
 
     /// `tmp/`: files plxd writes for a run and deletes when the run ends, such as a Claude
-    /// worker's `CLAUDE_ENV_FILE` (PLX-126) and a Codex worker's `ZDOTDIR` (PLX-141), and `serve`
-    /// sweeps at startup. No worker's commands can write them or read another run's, since the
-    /// data folder is unreadable to every worker (0013). A Codex worker's own `ZDOTDIR` is
-    /// readable to it.
+    /// worker's `CLAUDE_ENV_FILE` (PLX-126) and a Codex thread's prompt images (PLX-191), and
+    /// `serve` sweeps at startup. No worker's commands can write them or read another run's,
+    /// since the data folder is unreadable to every worker (0013).
     #[must_use]
     pub fn temp_dir(&self) -> PathBuf {
         self.root.join("tmp")

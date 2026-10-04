@@ -235,8 +235,9 @@ const NO_SANDBOX_HINT: &str = "choose a Claude Code account";
 const NO_SANDBOX_HINT: &str = "Claude Code has no sandbox on native Windows, so run plxd in \
                                WSL2 and add that as the host for workers";
 
-/// Refuses a run that isn't a thread, or a thread without `approvals` on Claude Code, on a backend
-/// that doesn't enforce the worker sandbox (0013).
+/// Refuses any run on a backend that doesn't enforce the worker sandbox (0013). `prepare_run`
+/// skips it only for a thread on a backend that runs threads as the full agent, Codex and Cursor
+/// (0035, 0036).
 pub(super) fn check_backend(backend: &dyn Backend) -> Result<(), ErrorObject> {
     if backend.capabilities().worker_sandbox {
         return Ok(());

@@ -1127,7 +1127,12 @@ async fn a_child_learns_its_project_and_a_fallback_moves_its_usage_to_the_new_ac
         .expect("the fake echoed its prompt");
     assert_eq!(
         prompt,
-        "You are working on a task in the Parallax Project \"app\".\n\nYour task:\nTidy the build"
+        "You are working on a task in the Parallax Project \"app\".\n\
+         Your Parallax tools are on the plxd MCP server: thread_list, thread_read, thread_search, \
+         thread_launch, thread_send, thread_wait, thread_interrupt, thread_update, pr_link, \
+         pr_unlink, read_context, write_context, ask.\n\
+         \n\
+         Your task:\nTidy the build"
     );
     host.server.stop().await;
 }
@@ -1244,10 +1249,29 @@ async fn runs_plxd_cannot_start_are_refused() {
     server.stop().await;
 }
 
+/// What the stand-in for `program` recorded in `out`'s `file`, once it holds `wanted`.
+#[cfg(target_os = "macos")]
+async fn recorded(out: &Path, program: &str, file: &str, wanted: &str) -> String {
+    let path = out.join(format!("{program}.{file}"));
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        if text.contains(wanted) {
+            return text;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{program} never wrote {wanted:?}: {text}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 /// PLX-396 (0042): a Project's child starts on each built-in kind as a thread the user starts
 /// would, through plxd's real backends: Claude Code as full Claude Code with plxd's thread tools,
-/// Codex on `codex app-server`, and Cursor on its ACP agent, each in the Project's Bypass and
-/// asking through the inbox. Each stand-in CLI records its arguments and what plxd writes it.
+/// Codex on `codex app-server`, and Cursor on its ACP agent, each in the Project's mode and
+/// asking through the inbox. Auto is where a worker would have kept the sandbox's flags. Each
+/// stand-in CLI records its arguments and what plxd writes it.
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn a_projects_child_starts_as_a_thread_on_each_built_in_kind() {
@@ -1279,36 +1303,28 @@ async fn a_projects_child_starts_as_a_thread_on_each_built_in_kind() {
         ],
     );
     let mut client = Conn::ready(&server.socket).await;
-    let project = create(
-        &mut client,
-        ProjectCreateParams {
-            permission: Some(ProjectPermission::Bypass),
-            ..project_params(dir.path())
-        },
-    )
-    .await;
+    let mut projects = Vec::new();
+    for permission in [ProjectPermission::Auto, ProjectPermission::Bypass] {
+        let repo = temp_dir();
+        let params = ProjectCreateParams {
+            permission: Some(permission),
+            ..project_params(repo.path())
+        };
+        projects.push((create(&mut client, params).await, repo));
+    }
+    let (auto, bypass) = (&projects[0].0, &projects[1].0);
 
-    // What the stand-in for `program` recorded in `file`, once it holds `wanted`.
-    let recorded = async |program: &str, file: &str, wanted: &str| {
-        let path = out.join(format!("{program}.{file}"));
-        let deadline = Instant::now() + PATIENCE;
-        loop {
-            let text = std::fs::read_to_string(&path).unwrap_or_default();
-            if text.contains(wanted) {
-                return text;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "{program} never wrote {wanted:?}: {text}"
-            );
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    };
-    for (backend, program) in [
-        ("claude", "claude"),
-        ("codex", "codex"),
-        ("cursor", "agent"),
+    let (auto_mode, bypass_mode) = (AgentPermission::Auto, AgentPermission::Bypass);
+    for (project, mode, backend, program) in [
+        (auto, auto_mode, "claude", "claude"),
+        (auto, auto_mode, "codex", "codex"),
+        (bypass, bypass_mode, "claude", "claude"),
+        (bypass, bypass_mode, "codex", "codex"),
+        (bypass, bypass_mode, "cursor", "agent"),
     ] {
+        for file in ["argv", "stdin"] {
+            let _ = std::fs::remove_file(out.join(format!("{program}.{file}")));
+        }
         let run = client
             .call::<AgentStart>(AgentStartParams {
                 account: Some(AccountChoice::Subscription {
@@ -1320,20 +1336,25 @@ async fn a_projects_child_starts_as_a_thread_on_each_built_in_kind() {
             .unwrap()
             .run;
         assert!(run.approvals, "{backend} asks through the inbox");
-        assert_eq!(run.permission, Some(AgentPermission::Bypass), "{backend}");
+        assert_eq!(run.permission, Some(mode), "{backend}");
         assert!(run.branch.is_some(), "{backend} works in its own worktree");
 
-        let argv = recorded(program, "argv", "\n").await;
+        let argv = recorded(&out, program, "argv", "\n").await;
         let argv: Vec<&str> = argv.lines().collect();
         match backend {
             "claude" => {
                 for worker in ["--restricted", "--tools", "--strict-mcp-config"] {
-                    assert!(!argv.contains(&worker), "{argv:?}");
+                    assert!(!argv.contains(&worker), "{mode:?}: {argv:?}");
                 }
-                let mode = argv.iter().position(|arg| *arg == "--permission-mode");
-                assert_eq!(mode.map(|at| argv[at + 1]), Some("bypassPermissions"));
+                let flag = argv.iter().position(|arg| *arg == "--permission-mode");
+                let expected = if mode == auto_mode {
+                    "auto"
+                } else {
+                    "bypassPermissions"
+                };
+                assert_eq!(flag.map(|at| argv[at + 1]), Some(expected));
                 assert!(argv.contains(&"--mcp-config"), "the thread tools: {argv:?}");
-                let stdin = recorded(program, "stdin", "Tidy the build").await;
+                let stdin = recorded(&out, program, "stdin", "Tidy the build").await;
                 assert!(
                     stdin.contains(
                         "You are working on a task in the Parallax Project \\\"app\\\".\\n\

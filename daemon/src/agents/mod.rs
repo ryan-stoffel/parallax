@@ -60,7 +60,7 @@ use parallax_protocol::{
     AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentApproveParams, AgentApproveResult,
     AgentDelivery, AgentEffort, AgentImageParams, AgentOpenPrResult, AgentOutcome, AgentOutputItem,
     AgentPermission, AgentRun, AgentRunState, AgentSendParams, AgentStartParams, ApprovalId,
-    CliKind, CoordinatorThreadId, ErrorKind, GitStatus, ImageMediaType, ParallaxEvent, PrActParams,
+    CoordinatorThreadId, ErrorKind, GitStatus, ImageMediaType, ParallaxEvent, PrActParams,
     PrDiffResult, PrViewParams, ProjectId, ProjectPermission, PromptImage, PullRequest,
     QueueResult, Role, RunId, TurnId,
 };
@@ -447,9 +447,7 @@ async fn prepare_run(
     })?;
     let context = sandbox_path(&context, "the shared context folder")?;
     sandbox_path(Path::new(&repo_path), "the project's repository")?;
-    // Claude Code gives a thread plxd's thread tools (0041). The other CLIs don't have them yet.
-    let tools = resolved.backend().cli() == Some(CliKind::Claude);
-    let header = project_name.map(|name| child_header(&name, tools));
+    let header = project_name.map(|name| child_header(&name));
     let prepared = Prepared {
         resolved,
         accounts,
@@ -1213,25 +1211,20 @@ pub(super) fn first_prompt(prompt: &str, place: &Place) -> Result<String, ErrorO
     }
 }
 
-/// The start of a Project child's first message (0042): the Project's name and, when its CLI has
-/// them (`tools`), plxd's tools. The task follows it.
-fn child_header(project: &str, tools: bool) -> String {
-    let tools = if tools {
-        let names: Vec<&str> = crate::mcp::thread::TOOLS
-            .iter()
-            .chain(crate::mcp::thread::CONTEXT_TOOLS)
-            .copied()
-            .collect();
-        format!(
-            "Your Parallax tools are on the plxd MCP server: {}.\n",
-            names.join(", ")
-        )
-    } else {
-        String::new()
-    };
+/// The start of a Project child's first message (0042): the Project's name and the plxd tools
+/// every kind gives a child, which always runs with `approvals` (0041). The task follows it.
+fn child_header(project: &str) -> String {
+    let tools = [
+        crate::mcp::thread::TOOLS,
+        crate::mcp::thread::CONTEXT_TOOLS,
+        crate::mcp::question::CHILD_TOOLS,
+    ]
+    .concat()
+    .join(", ");
     // PLX-406 adds the Project's brief and memory index between the tools and the task.
     format!(
-        "You are working on a task in the Parallax Project \"{project}\".\n{tools}\nYour task:\n"
+        "You are working on a task in the Parallax Project \"{project}\".\n\
+         Your Parallax tools are on the plxd MCP server: {tools}.\n\nYour task:\n"
     )
 }
 
