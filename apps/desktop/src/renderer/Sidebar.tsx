@@ -1237,22 +1237,26 @@ function ProjectRow({
           aria-label={`${project.name} permissions`}
           className="m-auto w-[26rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
         >
-          <form method="dialog" className="px-5 pt-4 pb-4">
+          {/* Save is the submit button, so Enter on a radio saves. */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              permissions.current?.close();
+              void onUpdate({ permission: mode });
+            }}
+            className="px-5 pt-4 pb-4"
+          >
             <ProjectPermissionChoice value={mode} onChange={setMode} />
             <div className="mt-4 flex justify-end gap-2">
               <button
-                type="submit"
-                value="cancel"
+                type="button"
+                onClick={() => permissions.current?.close()}
                 className="rounded-md px-3 py-1.5 text-[13px] hover:bg-hover"
               >
                 Cancel
               </button>
               <button
-                type="button"
-                onClick={() => {
-                  permissions.current?.close();
-                  void onUpdate({ permission: mode });
-                }}
+                type="submit"
                 className="rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground hover:opacity-90"
               >
                 Save

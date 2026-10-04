@@ -1007,6 +1007,21 @@ test("Permissions… opens on the Project's mode with the same disclaimer, and S
   await click([...settings.querySelectorAll("button")].find((b) => b.textContent === "Save"));
   expect(settings.open).toBe(false);
   expect(calls("project/update")).toEqual([{ project: "p-ember", permission: "auto" }]);
+
+  // Submitting the form, as Enter on a radio does, saves too. Cancel sends nothing.
+  await click(menuItem("ember", "Permissions…"));
+  await pickMode(settings, "bypass");
+  await act(async () => settings.querySelector("form")!.requestSubmit());
+  await settle();
+  expect(settings.open).toBe(false);
+  await click(menuItem("ember", "Permissions…"));
+  await pickMode(settings, "auto");
+  await click([...settings.querySelectorAll("button")].find((b) => b.textContent === "Cancel"));
+  expect(settings.open).toBe(false);
+  expect(calls("project/update")).toEqual([
+    { project: "p-ember", permission: "auto" },
+    { project: "p-ember", permission: "bypass" },
+  ]);
 });
 
 /** A Project's coordinator run, as `project/start` answers it (0024). */
