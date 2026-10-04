@@ -13,7 +13,8 @@ import { useConnection } from "./ConnectionStatus";
 import { describeError, githubProblem } from "./errors";
 import { titleOf } from "./threads";
 import { isRunning } from "./transcript";
-import { menuButton, menuItem, menuPanel, moveFocus, SetUpGithub } from "./ui";
+import { notify, type Notice } from "./notifications";
+import { menuButton, menuItem, menuPanel, moveFocus } from "./ui";
 
 export type GitAction = "commit" | "push" | "pr";
 
@@ -59,8 +60,9 @@ export function gitActions(
  * asks for a message, prefilled with the thread's title. Create PR pushes and opens the pull
  * request through `agent/openPr`, in the browser, or with `onPrOpened`, in the PR view. The status
  * is read again after each action and whenever the run's status or commit changes, as when a turn
- * ends. A Create PR that fails for `gh` offers `onSetUpGithub` (PLX-423). Absent until the host's
- * plxd has the `git` capability.
+ * ends. Each action's result is a notification (PLX-507), except a failed commit, which stays in
+ * its dialog; a push or Create PR that fails for `gh` offers `onSetUpGithub` (PLX-423). Absent
+ * until the host's plxd has the `git` capability.
  */
 export function GitMenu({
   hostId,
@@ -83,9 +85,8 @@ export function GitMenu({
   const capabilities = connection?.status === "connected" ? connection.capabilities : undefined;
   const able = !!capabilities && "git" in capabilities;
   const [status, setStatus] = useState<GitStatus>();
+  // Why the status couldn't load, or the commit failed.
   const [error, setError] = useState<string>();
-  // Whether that error is `gh` missing or signed out, shown as a short line by Set up GitHub.
-  const [github, setGithub] = useState(false);
   const [busy, setBusy] = useState<GitAction>();
   const [message, setMessage] = useState("");
   const runId = run?.id;
@@ -95,10 +96,8 @@ export function GitMenu({
       if (!runId) return;
       const answer = await window.parallax.request(hostId, "agent/gitStatus", { runId });
       if (!live()) return;
-      if ("error" in answer) {
-        setError(describeError(answer.error));
-        setGithub(false);
-      } else setStatus(answer.result);
+      if ("error" in answer) setError(describeError(answer.error));
+      else setStatus(answer.result);
     },
     [hostId, runId],
   );
@@ -117,20 +116,29 @@ export function GitMenu({
   const { why, main, note } = gitActions(run, status, "openPr" in capabilities);
   const primary = actions.find((a) => a.action === main)!;
 
-  // Runs `action`; a failure shows in the menu, opened to say so, or in the commit dialog.
+  // Runs `action`. Its result is a notification, but a failed commit says so in its dialog.
   const perform = async (action: GitAction) => {
     setBusy(action);
     setError(undefined);
     let failed: RpcError | undefined;
+    let done: Notice | undefined;
     if (action === "pr") {
+      const prTitle = title ?? titleOf(run);
       const answer = await window.parallax.request(hostId, "agent/openPr", {
         runId: run.id,
-        title: title ?? titleOf(run),
+        title: prTitle,
       });
       if ("error" in answer) failed = answer.error;
       else {
-        if (onPrOpened) onPrOpened(answer.result.url);
-        else window.open(answer.result.url, "_blank");
+        const { url } = answer.result;
+        if (onPrOpened) onPrOpened(url);
+        else window.open(url, "_blank");
+        done = {
+          tone: "success",
+          title: "Pull request opened",
+          body: prTitle,
+          action: { label: "View on GitHub", href: url },
+        };
         await load();
       }
     } else {
@@ -139,14 +147,30 @@ export function GitMenu({
           ? await window.parallax.request(hostId, "agent/commit", { runId: run.id, message })
           : await window.parallax.request(hostId, "agent/push", { runId: run.id });
       if ("error" in answer) failed = answer.error;
-      else setStatus(answer.result);
+      else {
+        setStatus(answer.result);
+        done =
+          action === "commit"
+            ? { tone: "success", title: "Committed", body: message.trim().split("\n")[0] }
+            : { tone: "success", title: "Pushed", body: answer.result.branch ?? undefined };
+      }
     }
     setBusy(undefined);
-    const short = onSetUpGithub && githubProblem(failed);
-    if (failed) setError(short || describeError(failed));
-    setGithub(!!short);
-    if (action === "commit" && !failed) dialog.current?.close();
-    if (action !== "commit" && failed) menu.current?.showPopover();
+    const key = `git/${hostId}/${run.id}`;
+    if (done) notify({ ...done, key });
+    if (action === "commit") {
+      if (failed) setError(describeError(failed));
+      else dialog.current?.close();
+    } else if (failed) {
+      const short = onSetUpGithub && githubProblem(failed);
+      notify({
+        key,
+        tone: "error",
+        title: action === "push" ? "Push failed" : "Couldn't create the pull request",
+        body: short || describeError(failed),
+        action: short ? { label: "Set up GitHub", run: onSetUpGithub } : undefined,
+      });
+    }
   };
   const start = (action: GitAction) => {
     menu.current?.hidePopover();
@@ -213,16 +237,6 @@ export function GitMenu({
           <p role="alert" className="px-2 pt-1 pb-1.5 text-[12px] text-danger">
             {error}
           </p>
-        )}
-        {error && github && onSetUpGithub && (
-          <div className="px-2 pb-1.5">
-            <SetUpGithub
-              onClick={() => {
-                menu.current?.hidePopover();
-                onSetUpGithub();
-              }}
-            />
-          </div>
         )}
       </div>
       <dialog

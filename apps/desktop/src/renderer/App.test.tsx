@@ -141,13 +141,15 @@ test("the footer's Usage opens the Usage page, and Update shows when it's ready 
   act(() => unmount());
 
   let answer: (text: string) => void = () => {};
-  let publish: (state: UpdateState) => void = () => {};
+  // The Update button and its notifications each listen.
+  const listeners: ((state: UpdateState) => void)[] = [];
+  const publish = (state: UpdateState) => listeners.forEach((listener) => listener(state));
   const update = vi.fn(() => new Promise<string>((resolve) => (answer = resolve)));
   Object.assign(bridge, {
     updatable: true,
     update,
     onUpdateState: (listener: (state: UpdateState) => void) => {
-      publish = listener;
+      listeners.push(listener);
       return () => {};
     },
   });
@@ -172,7 +174,7 @@ test("a packaged app's release shows its notes on hover, downloads on click, the
   vi.useFakeTimers();
   const button = (name: string) =>
     document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
-  // The Update button and its toast each listen.
+  // The Update button and its notifications each listen.
   const listeners: ((state: UpdateState) => void)[] = [];
   const publish = (state: UpdateState) => listeners.forEach((listener) => listener(state));
   const update = vi.fn(async () => "");
@@ -227,17 +229,22 @@ test("a packaged app's release shows its notes on hover, downloads on click, the
   );
   expect(dot()).toBeNull();
 
-  // Downloaded: a restart icon and a toast, but no dialog until the click.
+  // Downloaded: a restart icon and a notification, but no dialog until the click.
   const confirm = document.querySelector('button[value="confirm"]')!.closest("dialog")!;
-  const toast = document.querySelector<HTMLElement>('[role="status"][popover]')!;
-  act(() => publish({ available, ready: `Parallax ${available.version} to install` }));
+  const toast = () => document.querySelector<HTMLElement>('[aria-label="Notifications"]');
+  expect(toast()).toBeNull();
+  const ready = { available, ready: `Parallax ${available.version} to install` };
+  act(() => publish(ready));
   expect(isOpen()).toBe(false);
   expect(confirm.open).toBe(false);
-  expect(toast.hasAttribute("data-open")).toBe(true);
-  expect(toast.textContent).toContain("Update downloaded");
-  expect(toast.querySelector("a")!.href).toBe(available.url);
-  act(() => toast.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click());
-  expect(toast.hasAttribute("data-open")).toBe(false);
+  expect(toast()!.textContent).toContain("Update downloaded");
+  expect(toast()!.querySelector("a")!.href).toBe(available.url);
+  // It stays until closed, and the same download doesn't bring it back.
+  act(() => void vi.advanceTimersByTime(60_000));
+  act(() => toast()!.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click());
+  expect(toast()).toBeNull();
+  act(() => publish({ ...ready }));
+  expect(toast()).toBeNull();
 
   act(() => button("Restart to install Parallax 2610.10205.13230-nightly")!.click());
   expect(confirm.open).toBe(true);

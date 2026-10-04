@@ -7,6 +7,7 @@ import samples from "../../../../crates/parallax-protocol/samples/v1/agents.json
 import type { ParallaxBridge } from "../preload/bridge";
 import type { AgentRun, GitStatus, LoggedEvent } from "../protocol/generated/protocol";
 import { gitActions, GitMenu } from "./GitMenu";
+import { Notifications } from "./notifications";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The menu is in the DOM either way.
@@ -88,6 +89,11 @@ function fakeBridge(
 
 let root: Root | undefined;
 afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] button[aria-label="Close"]',
+  ))
+    act(() => close.click());
   act(() => root?.unmount());
   root = undefined;
   document.body.innerHTML = "";
@@ -100,9 +106,19 @@ const settle = async () => {
 
 async function render(run: AgentRun) {
   root ??= createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root!.render(<GitMenu hostId="local" run={run} />));
+  act(() =>
+    root!.render(
+      <>
+        <GitMenu hostId="local" run={run} />
+        <Notifications />
+      </>,
+    ),
+  );
   await settle();
 }
+
+/** The newest notification, which an action's result is. */
+const notice = () => document.querySelector('[aria-label="Notifications"] > div');
 
 const button = (name: string) =>
   [...document.querySelectorAll("button")].find((b) => b.textContent === name);
@@ -141,12 +157,13 @@ test("Commit asks for a message prefilled from the title, then the menu shows th
     runId: finished.id,
     message: "Add a README that explains how to build the app.",
   });
-  // Committed: Push is next.
+  // Committed: a notification says so, and Push is next.
+  expect(notice()!.textContent).toContain("Committed");
   expect(button("Push")).toBeDefined();
   expect(item("Commit").textContent).toContain("No changes");
 });
 
-test("a failed push says why in the menu", async () => {
+test("a failed push says why in a notification", async () => {
   fakeBridge(
     { git: {}, openPr: {} },
     {
@@ -158,7 +175,8 @@ test("a failed push says why in the menu", async () => {
   );
   await render(finished);
   await act(async () => button("Push")!.click());
-  expect(document.querySelector('[role="alert"]')!.textContent).toBe("could not push");
+  expect(notice()!.getAttribute("role")).toBe("alert");
+  expect(notice()!.textContent).toBe("Push failedcould not push");
 });
 
 test("Create PR opens the pull request in the browser and reads the status again", async () => {
@@ -202,7 +220,7 @@ test("with onPrOpened, Create PR opens the PR view in place of the browser", asy
   expect(open).not.toHaveBeenCalled();
 });
 
-test("a Create PR that fails for gh says so in one line by Set up GitHub, and another failure keeps its text", async () => {
+test("a Create PR that fails for gh says so in one line with Set up GitHub, and another failure keeps its text", async () => {
   let kind = "ghUnavailable";
   let message = "GitHub CLI isn't signed in on the host; run `gh auth login` there: not logged in";
   fakeBridge(
@@ -216,23 +234,31 @@ test("a Create PR that fails for gh says so in one line by Set up GitHub, and an
   );
   const onSetUpGithub = vi.fn();
   root ??= createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root!.render(<GitMenu hostId="local" run={finished} onSetUpGithub={onSetUpGithub} />));
+  act(() =>
+    root!.render(
+      <>
+        <GitMenu hostId="local" run={finished} onSetUpGithub={onSetUpGithub} />
+        <Notifications />
+      </>,
+    ),
+  );
   await settle();
+  const body = () => notice()!.querySelector("p")!.textContent;
   await act(async () => item("Create PR").click());
-  const alert = () => document.querySelector('[role="alert"]')!.textContent;
-  expect(alert()).toBe("GitHub isn't signed in on this host.");
+  expect(body()).toBe("GitHub isn't signed in on this host. Set up GitHub");
   await act(async () => button("Set up GitHub")!.click());
   expect(onSetUpGithub).toHaveBeenCalledOnce();
 
   message = "GitHub CLI isn't installed on the host: gh was not found; looked in /usr/bin";
   await act(async () => item("Create PR").click());
-  expect(alert()).toBe("GitHub isn't installed on this host.");
+  expect(body()).toBe("GitHub isn't installed on this host. Set up GitHub");
 
+  // Another failure replaces it, with plxd's message and nothing to set up.
   kind = "prFailed";
   message = "gh pr create failed: no commits between main and readme";
   await act(async () => item("Create PR").click());
-  expect(alert()).toBe(message);
-  expect(button("Set up GitHub")).toBeUndefined();
+  expect(body()).toBe(message);
+  expect(document.querySelectorAll('[aria-label="Notifications"] > div')).toHaveLength(1);
 });
 
 test("the status is read again when a turn ends, and every action waits while one runs", async () => {

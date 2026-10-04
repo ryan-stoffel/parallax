@@ -13,6 +13,7 @@ import { LineageTrail } from "./Lineage";
 import { MemoryPanel } from "./MemoryPanel";
 import { NewThread } from "./NewThread";
 import { NewThreadPicker } from "./NewThreadPicker";
+import { Notifications } from "./notifications";
 import { localId, useHosts } from "./hosts";
 import { iconImageBytes } from "./images";
 import { OpenMenu } from "./OpenMenu";
@@ -23,7 +24,13 @@ import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
 import type { NativeSubagent } from "./Subagents";
 import { attentionOf } from "./attention";
-import { useNeedsYouAlarm, useSnoozeAlarms } from "./alarms";
+import {
+  useAccountAlarms,
+  useConnectionAlarms,
+  useNeedsYouAlarm,
+  useSnoozeAlarms,
+  useThreadAlarms,
+} from "./alarms";
 import { ProjectIcon, RepoIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
 import { useThemePreference } from "./theme";
 import type { ThreadLinks } from "./threadContext";
@@ -45,7 +52,7 @@ import {
 } from "./threads";
 import { isRunning } from "./transcript";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
-import { UpdateToast } from "./Update";
+import { useUpdateAlarms } from "./Update";
 import { UsagePage } from "./UsagePage";
 
 /**
@@ -253,7 +260,17 @@ export function App() {
     setSelection(next);
     setOpening(undefined);
   };
-  useSnoozeAlarms(listed, (hostId, threadId) => openOnHost(hostId, { kind: "thread", threadId }));
+  const openHostThread = (hostId: string, threadId: string) =>
+    openOnHost(hostId, { kind: "thread", threadId });
+  useSnoozeAlarms(listed, openHostThread);
+  useThreadAlarms(
+    listed,
+    openHostThread,
+    selection.kind === "thread" && !settings ? `${host.id}/${selection.threadId}` : undefined,
+  );
+  useConnectionAlarms(hosts);
+  useAccountAlarms();
+  useUpdateAlarms();
   const needsYou = useNeedsYouAlarm(listed, (hostId, projectId) =>
     openOnHost(hostId, { kind: "project", projectId }),
   );
@@ -470,7 +487,7 @@ export function App() {
       {hosts.map((h) => (
         <HostLoader key={h.id} hostId={h.id} onView={report} onNeedsYou={needsYou} />
       ))}
-      {window.parallax.updatable && <UpdateToast />}
+      <Notifications />
       <NewThreadPicker
         ref={picker}
         groups={groups}

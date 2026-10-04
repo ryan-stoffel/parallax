@@ -29,6 +29,7 @@ import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId, useHosts, type Host } from "./hosts";
 import { models, setCliEnabled, useDisabledClis } from "./models";
+import { notify } from "./notifications";
 import {
   kindOf,
   logoOf,
@@ -240,6 +241,7 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
       }
       const failed = "error" in clis ? clis.error : "error" in keyList ? keyList.error : undefined;
       setError(failed && accountsError(failed));
+      return "result" in clis ? clis.result.clis : undefined;
     },
     [host.id],
   );
@@ -372,7 +374,17 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
                 onPeriod={setPeriod}
                 keys={keys}
                 onKeys={setKeys}
-                onSignedIn={() => void load("accounts/refresh")}
+                onSignedIn={() =>
+                  void load("accounts/refresh").then((clis) => {
+                    // Sign in's terminal ended: news only if it signed in (PLX-507).
+                    if (clis?.find((c) => c.cli === cli.cli)?.signedIn)
+                      notify({
+                        key: `provider/${host.id}/${cli.cli}`,
+                        tone: "success",
+                        title: `Signed in to ${cliInfo[cli.cli]?.name ?? cli.cli}`,
+                      });
+                  })
+                }
               />
             ))}
           </div>
