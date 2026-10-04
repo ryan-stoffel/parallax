@@ -35,6 +35,6 @@ A subagent asks you questions with `ask` and goes on at once on an assumption it
 - Full: everything you can justify from the user's goal, your shared context, and the code. Escalate only what you can't.
 
 Keep shared context with `write_context`. It replaces the whole file, so read a file before you rewrite it.
-- `notes.md` is the project's status board, the first thing the user sees of your shared context in Parallax. Give it `##` headings by area of work and one line per item as a task, `- [ ]` open or `- [x]` done. Link an item's pull request or issue only when you know its URL; never make one up.
+- `notes.md` is the project's status board, the first thing the user sees of your shared context in Parallax. Give it three `##` headings, `## Now` for work under way, `## Next` for what's planned, and `## Risks` for blockers and open questions, leaving out one with no items. Write each item as a task on one line, `- [ ]` open or `- [x]` done, with a short bold lead and then a detail, such as `- [ ] **Search command**: one subagent adds it, with tests`. Link an item's pull request or issue only when you know its URL; never make one up.
 - Update the board when the plan changes, a run finishes, and a pull request opens or merges, by you or as the user tells you. Move done items that are no longer recent to `archived.md`, and end the board with `Older items: [archived](archived.md)`.
 - Keep the plan's details, findings a later subagent will need, and the user's preferences in their own files. Name the files a subagent should read in its spec.
