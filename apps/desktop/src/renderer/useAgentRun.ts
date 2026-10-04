@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type {
@@ -71,12 +71,27 @@ export function useAgentRun(
 
   const [queue, setQueue] = useState<QueuedMessage[]>([]);
   const [queueError, setQueueError] = useState<string>();
-  const knownQueue = useRef<QueuedMessage[]>([]);
 
   useEffect(() => {
     if (!connected) return;
     let stopped = false;
     let unsubscribe = () => {};
+
+    // The queue as plxd has it. Messages sent from here keep plxd's text, edits included, so a
+    // dropped one's Send again sends what the user last saw.
+    function showQueue(messages: QueuedMessage[]) {
+      setQueue(messages);
+      setQueueError(undefined);
+      setSent((prev) => {
+        if (!messages.some((m) => prev.has(m.id) && prev.get(m.id)!.text !== m.text)) return prev;
+        const next = new Map(prev);
+        for (const m of messages) {
+          const mine = next.get(m.id);
+          if (mine) next.set(m.id, { ...mine, text: m.text });
+        }
+        return next;
+      });
+    }
 
     async function load() {
       let t = emptyTranscript;
@@ -113,11 +128,7 @@ export function useAgentRun(
         const listed = await window.parallax.request(hostId, "queue/list", { runId });
         if (stopped) return;
         if ("error" in listed) setQueueError(listed.error.message);
-        else {
-          knownQueue.current = listed.result.messages;
-          setQueue(listed.result.messages);
-          setQueueError(undefined);
-        }
+        else showQueue(listed.result.messages);
       }
       setTranscript(t);
       setError(undefined);
@@ -128,18 +139,8 @@ export function useAgentRun(
           if (stopped) return;
           if (message.type === "event") {
             const event = message.event.event;
-            if (queueEnabled && event.kind === "queue.updated" && event.runId === runId) {
-              const ids = new Set(event.messages.map((m) => m.id));
-              const removed = knownQueue.current.filter((m) => !ids.has(m.id));
-              knownQueue.current = event.messages;
-              setQueue(event.messages);
-              setQueueError(undefined);
-              setSent((prev) => {
-                const next = new Map(prev);
-                for (const m of removed) next.delete(m.id);
-                return next;
-              });
-            }
+            if (queueEnabled && event.kind === "queue.updated" && event.runId === runId)
+              showQueue(event.messages);
             setTranscript((prev) => applyEvents(prev, [message.event], runId));
           } else if (message.type === "resync") void load();
           else setError(message.error.message);

@@ -23,6 +23,7 @@ export function QueueStrip({
   running,
   disabledReason,
   loadError,
+  onCancelled,
 }: {
   hostId: string;
   runId: string;
@@ -30,6 +31,8 @@ export function QueueStrip({
   running: boolean;
   disabledReason?: string;
   loadError?: string;
+  /** Called with a message's id once plxd has cancelled it. */
+  onCancelled?: (id: string) => void;
 }) {
   const [editing, setEditing] = useState<string>();
   const [text, setText] = useState("");
@@ -52,8 +55,9 @@ export function QueueStrip({
           ? await window.parallax.request(hostId, method, { runId, id: message!.id, text })
           : await window.parallax.request(hostId, method, { runId, id: message!.id });
     setBusy(false);
-    if ("error" in answer) setError(answer.error.message);
-    else setEditing(undefined);
+    if ("error" in answer) return setError(answer.error.message);
+    setEditing(undefined);
+    if (method === "queue/cancel") onCancelled?.(message!.id);
   }
 
   function move(id: string, to: number) {

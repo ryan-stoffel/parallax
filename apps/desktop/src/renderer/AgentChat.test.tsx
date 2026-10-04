@@ -1755,3 +1755,72 @@ test("queued messages track host updates, Enter queues, and Cmd+Enter steers (PL
   expect(document.querySelector('[aria-label="Queued messages"]')).toBeNull();
   expect(transcriptText()).not.toContain("Do this next");
 });
+
+test("with queueing, Stop puts the last queued message back and offers the rest again (PLX-376)", async () => {
+  const { request, emit } = fakeBridge(4, { capabilities: { queue: {} } });
+  await renderChat();
+  const sends = () => request.mock.calls.filter(([, method]) => method === "agent/send");
+  for (const text of ["First", "Second"]) {
+    type(text);
+    await act(async () =>
+      composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
+  }
+  const [first, second] = sends().map(([, , params]) => (params as { turnId: string }).turnId);
+  const event = (seq: number, e: object) =>
+    emit({ type: "event", event: { subscription: "s", seq, time: "", event: e as never } });
+  event(50, {
+    kind: "queue.updated",
+    runId,
+    messages: [
+      { id: first, text: "First, edited", images: 0, threads: [] },
+      { id: second, text: "Second", images: 0, threads: [] },
+    ],
+  });
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.click(),
+  );
+  expect(composer().textContent).toBe("Second");
+  event(51, {
+    kind: "agent.output",
+    runId,
+    items: [
+      { kind: "followUpDropped", turnId: first },
+      { kind: "followUpDropped", turnId: second },
+    ],
+  });
+  event(52, { kind: "queue.updated", runId, messages: [] });
+  const sendAgain = () =>
+    [...document.querySelectorAll("button")].filter((b) => b.textContent === "Send again");
+  expect(sendAgain()).toHaveLength(1);
+  await act(async () => sendAgain()[0]!.click());
+  expect(sends().at(-1)![2]).toMatchObject({ text: "First, edited" });
+});
+
+test("a queued message cancelled from here leaves no notice or Send again (PLX-376)", async () => {
+  const { request, emit } = fakeBridge(4, { capabilities: { queue: {} } });
+  await renderChat();
+  type("Never mind");
+  await act(async () =>
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+  );
+  const { turnId } = request.mock.calls.find(([, method]) => method === "agent/send")![2] as {
+    turnId: string;
+  };
+  const event = (seq: number, e: object) =>
+    emit({ type: "event", event: { subscription: "s", seq, time: "", event: e as never } });
+  event(50, {
+    kind: "queue.updated",
+    runId,
+    messages: [{ id: turnId, text: "Never mind", images: 0, threads: [] }],
+  });
+  const before = transcriptText();
+  await act(async () =>
+    document
+      .querySelector<HTMLButtonElement>('button[aria-label="Cancel queued message 1"]')!
+      .click(),
+  );
+  event(51, { kind: "agent.output", runId, items: [{ kind: "followUpDropped", turnId }] });
+  event(52, { kind: "queue.updated", runId, messages: [] });
+  expect(transcriptText()).toBe(before);
+});

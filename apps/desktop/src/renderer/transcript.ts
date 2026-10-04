@@ -270,7 +270,7 @@ function applyOutput(items: Item[], item: AgentOutputItem, key: string, time: st
         kind: "notice",
         key,
         tone: "warning",
-        text: "A message didn't reach the agent because it stopped first.",
+        text: "A message wasn't sent to the agent.",
         turnId: item.turnId,
       });
       break;

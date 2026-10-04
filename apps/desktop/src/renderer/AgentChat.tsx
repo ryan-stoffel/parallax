@@ -246,6 +246,8 @@ export function AgentChat({
     if (compose.send) void send(compose.text).then((failed) => setResendError(failed?.message));
     onComposed?.();
   }, [compose, send, onComposed]);
+  // Queued messages the user cancelled from here, whose followUpDropped notice is left out.
+  const [cancelled, setCancelled] = useState<ReadonlySet<string>>(new Set());
   const unsent = useMemo(
     () => new Map([...sent].filter(([turnId]) => !resent.has(turnId))),
     [sent, resent],
@@ -323,14 +325,17 @@ export function AgentChat({
         threads,
         turnId,
       }));
-    const all = [...items, ...pending];
+    const shown = items.filter(
+      (i) => !(i.kind === "notice" && i.turnId && cancelled.has(i.turnId)),
+    );
+    const all = [...shown, ...pending];
     if (all.length > 0 || !prompt) return all;
     return [
       going
         ? { kind: "pending", key: "pending:prompt", text: prompt }
         : { kind: "user", key: "prompt", text: prompt },
     ];
-  }, [items, sent, prompt, going, queue]);
+  }, [items, sent, prompt, going, queue, cancelled]);
   // The user's prompts, for the composer's Up: not Parallax's wake-ups or other threads' messages.
   const history = useMemo(
     () =>
@@ -346,6 +351,12 @@ export function AgentChat({
   // its text, its attached threads, and its images: at hand when sent from here, or fetched from
   // plxd by id on Stop.
   const unanswered = useMemo<(Unanswered & { turnId?: string }) | undefined>(() => {
+    // The last message queued from here comes after every row.
+    const queued = queue.findLast((m) => sent.has(m.id));
+    if (queued) {
+      const { text, images, threads } = sent.get(queued.id)!;
+      return { text, images: async () => images, threads, turnId: queued.id };
+    }
     const at = rows.findLastIndex((r) => r.kind === "user" || r.kind === "pending");
     const row = rows[at];
     if (
@@ -371,7 +382,7 @@ export function AgentChat({
     const threads = row.threads ?? mine?.threads;
     // Only one still on its way can be dropped, and so offer Send again.
     return { text, images, threads, turnId: row.kind === "pending" ? row.turnId : undefined };
-  }, [rows, sent, hostId, runId]);
+  }, [rows, sent, queue, hostId, runId]);
   // A stopped prompt goes back in the box, so if plxd drops it, it offers no Send again too.
   const stop = async () => {
     const back = unanswered;
@@ -495,6 +506,7 @@ export function AgentChat({
             running={isRunning(run?.status)}
             disabledReason={disabledReason}
             loadError={queueError}
+            onCancelled={(id) => setCancelled((prev) => new Set(prev).add(id))}
           />
         )}
         <Composer
