@@ -401,6 +401,7 @@ test("starts the project's tasks from its composer, shows them over it and on it
   await expect(crumbs).not.toContainText("Tag the release");
   await expect(bar).toContainText("1 working");
   await expect(transcript.getByText("Plan the ember release")).toBeVisible();
+  // Two wake-ups: one for the task started from the composer (0043), and one for the stop.
   await expect(transcript.getByText("From Parallax: subagents finished").first()).toBeVisible();
 });
 
