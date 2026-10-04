@@ -265,6 +265,16 @@ body,
   height: 100%;
 }
 
+/* The window never scrolls; panes scroll inside it. An absolute element with no
+   positioned ancestor, like an sr-only input, would otherwise sit outside every
+   pane, stretch the page past the window, and scroll the whole window up when
+   focused, with nothing to scroll it back (PLX-441). `clip`, unlike `hidden`,
+   can't be scrolled even by focus. */
+#root {
+  position: relative;
+  overflow: clip;
+}
+
 body {
   margin: 0;
   overflow: hidden;
