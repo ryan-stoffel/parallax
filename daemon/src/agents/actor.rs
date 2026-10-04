@@ -2508,13 +2508,9 @@ impl Actor {
         {
             wake::notify(&self.daemon, parent, wake::summary(&run, &outcome));
         }
-        // A child sent back from landing goes back in its Project's queue (PLX-410).
-        if self.worktree.is_some()
-            && matches!(
-                outcome,
-                AgentOutcome::Completed { .. } | AgentOutcome::Failed { .. }
-            )
-        {
+        // A child sent back from landing goes back in its Project's queue once a turn completes
+        // (PLX-410).
+        if self.worktree.is_some() && matches!(outcome, AgentOutcome::Completed { .. }) {
             crate::methods::land::turn_ended(&self.daemon, self.id);
         }
     }

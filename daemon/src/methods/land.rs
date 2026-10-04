@@ -158,13 +158,17 @@ async fn send_back(
 ) -> Result<LandResult, ErrorObject> {
     let LandSendBackParams { run_id, text } = params;
     check_message("text", &text, &[])?;
-    let row = waiting(context, run_id).await?;
-    send(&context.daemon, run_id, text).await?;
+    let waiting = waiting(context, run_id).await?;
+    // Stored first, so a turn that ends at once still finds it sent back.
     let row = parallax_store::Landing {
         status: SENT_BACK.to_owned(),
-        ..row
+        ..waiting.clone()
     };
     put(&context.daemon, row.clone()).await?;
+    if let Err(error) = send(&context.daemon, run_id, text).await {
+        put(&context.daemon, waiting).await?;
+        return Err(error);
+    }
     Ok(LandResult {
         landing: landing(&row)?,
     })
@@ -189,8 +193,7 @@ async fn waiting(context: &Context, run_id: RunId) -> Result<parallax_store::Lan
 }
 
 /// Queues a child sent back to its worktree again, now that its turn has ended. Called when any
-/// child's CLI process ends after completing or failing; a run with no landing sent back is left
-/// alone.
+/// child's CLI process ends after completing; a run with no landing sent back is left alone.
 pub(crate) fn turn_ended(daemon: &Arc<Daemon>, run_id: RunId) {
     let owned = Arc::clone(daemon);
     spawn(daemon, async move {
@@ -321,6 +324,8 @@ enum Attempt {
     Landed(Option<String>),
     /// The child's branch conflicts with the integration branch at `tip` on `paths`.
     Conflict { tip: String, paths: Vec<String> },
+    /// The child resolved a conflict but left these markers, as `path:line`.
+    Markers(Vec<String>),
 }
 
 /// What [`attempt`] needs to know about a child.
@@ -329,7 +334,6 @@ struct Child {
     prompt: String,
     branch: String,
     worktree: parallax_store::Worktree,
-    running: bool,
 }
 
 /// Lands one queued child and records how it went. Only a store failure is an error; anything
@@ -353,7 +357,7 @@ async fn land(daemon: &Arc<Daemon>, row: parallax_store::Landing) -> Result<(), 
             return Ok(());
         }
     };
-    let attempt = attempt(daemon, project, run_id, &child).await;
+    let attempt = attempt(daemon, project, run_id, &child, row.conflicts).await;
     let (status, conflicts, kind, text) = match attempt {
         Ok(Attempt::Landed(commit)) => {
             let how = commit.map_or_else(
@@ -362,6 +366,14 @@ async fn land(daemon: &Arc<Daemon>, row: parallax_store::Landing) -> Result<(), 
             );
             let text = format!("{}: landed on the integration branch, {how}", child.task);
             (LANDED, 0, InboxKind::Done, text)
+        }
+        Ok(Attempt::Markers(markers)) => {
+            let text = format!(
+                "{}: its conflict resolution left conflict markers, at {}",
+                child.task,
+                listed(&markers)
+            );
+            (NEEDS_YOU, row.conflicts, InboxKind::NeedsYou, text)
         }
         Ok(Attempt::Conflict { paths, .. }) if row.conflicts > 0 => {
             let text = format!(
@@ -425,13 +437,11 @@ async fn child(daemon: &Arc<Daemon>, run_id: RunId) -> Result<Child, ErrorObject
                 .get_worktree(run.id)
                 .map_err(|e| store_error(&e))?
                 .ok_or_else(|| ErrorObject::internal_error("a landing child has no worktree"))?;
-            let status = agents::snapshot(&run, Some(&worktree))?.status;
             Ok(Child {
                 task: task(&run.fields.prompt),
                 prompt: run.fields.prompt,
                 branch: worktree.branch.clone(),
                 worktree,
-                running: matches!(status, AgentStatus::Starting | AgentStatus::Running),
             })
         })
         .await
@@ -439,12 +449,14 @@ async fn child(daemon: &Arc<Daemon>, run_id: RunId) -> Result<Child, ErrorObject
 
 /// Fetches the base branch and merges it alone when it moved, then squash-merges `child`'s
 /// branch, in `project`'s integration worktree. A conflict with the base adds `needsYou` and the
-/// child still lands on the tip, since the conflict isn't its own.
+/// child still lands on the tip, since the conflict isn't its own. A child that has resolved
+/// `conflicts` before is refused if its branch adds a conflict marker.
 async fn attempt(
     daemon: &Arc<Daemon>,
     project: ProjectId,
     run_id: RunId,
     child: &Child,
+    conflicts: u32,
 ) -> Result<Attempt, String> {
     let row = agents::integration(daemon, project)
         .await
@@ -485,6 +497,15 @@ async fn attempt(
             }
         }
     }
+    if conflicts > 0 {
+        let markers = worktrees
+            .conflict_markers(project, &tip, &child.branch)
+            .await
+            .map_err(failed)?;
+        if !markers.is_empty() {
+            return Ok(Attempt::Markers(markers));
+        }
+    }
     let message = format!(
         "{}\n\nLanded by Parallax from run {run_id}, branch {}.",
         task(&child.prompt),
@@ -513,7 +534,8 @@ async fn checks(_daemon: &Arc<Daemon>, _project: ProjectId, _commit: &str) -> Re
 
 /// Starts merging the integration branch's `tip` into `child`'s worktree and tells it to resolve
 /// the conflicts, as a message queued behind any turn in progress. A child that is working
-/// can't have its worktree changed under it, so it goes to the user instead.
+/// can't have its worktree changed under it, so it goes to the user instead. If the message
+/// can't be sent, the merge is aborted again.
 async fn send_conflict(
     daemon: &Arc<Daemon>,
     run_id: RunId,
@@ -521,17 +543,20 @@ async fn send_conflict(
     tip: &str,
     paths: &[String],
 ) -> Result<(), String> {
-    if child.running {
+    // Read now, not when the landing began: the user may have messaged the child since.
+    if working(daemon, run_id)
+        .await
+        .map_err(|error| error.message)?
+    {
         return Err("the child is working, so plxd can't start the merge in its worktree".into());
     }
-    daemon
-        .agents
-        .worktrees()
-        .start_merge(
-            Path::new(&child.worktree.path),
-            Path::new(&child.worktree.git_dir),
-            tip,
-        )
+    let worktrees = daemon.agents.worktrees();
+    let (path, git_dir) = (
+        Path::new(&child.worktree.path),
+        Path::new(&child.worktree.git_dir),
+    );
+    worktrees
+        .start_merge(path, git_dir, tip)
         .await
         .map_err(|error| format!("plxd couldn't start the merge in its worktree: {error}"))?;
     let text = format!(
@@ -543,9 +568,31 @@ async fn send_conflict(
          again.",
         listed(paths)
     );
-    send(daemon, run_id, text)
+    if let Err(error) = send(daemon, run_id, text).await {
+        if let Err(abort) = worktrees.abort_merge(path, git_dir).await {
+            warn!(run = %run_id, %abort, "could not abort a merge the child was never told about");
+        }
+        return Err(format!("plxd couldn't message it: {}", error.message));
+    }
+    Ok(())
+}
+
+/// Whether `run_id`'s CLI is starting or running, as the store has it now.
+async fn working(daemon: &Arc<Daemon>, run_id: RunId) -> Result<bool, ErrorObject> {
+    daemon
+        .store
+        .run(&CancellationToken::new(), move |store| {
+            let run = store
+                .get_run(run_id.into())
+                .map_err(|e| store_error(&e))?
+                .ok_or_else(|| agents::run_not_found(run_id))?;
+            let status = agents::snapshot(&run, None)?.status;
+            Ok(matches!(
+                status,
+                AgentStatus::Starting | AgentStatus::Running
+            ))
+        })
         .await
-        .map_err(|error| format!("plxd couldn't message it: {}", error.message))
 }
 
 /// Sends `run_id` a message as the user's, queued behind any turn in progress (PLX-370). One

@@ -95,7 +95,8 @@ impl WorktreeManager {
     ///
     /// # Errors
     ///
-    /// A git failure, such as a repository with no `user.name` and `user.email`.
+    /// [`WorktreeError::MissingIdentity`] when the repository has no `user.name` and
+    /// `user.email`, or a git failure.
     pub async fn merge_into_integration(
         &self,
         project: ProjectId,
@@ -144,7 +145,22 @@ impl WorktreeManager {
         if tree == tip_tree.trim() {
             return Ok(Merged::Unchanged);
         }
-        let mut commit_args = vec!["commit-tree", "--no-gpg-sign", &tree, "-p", tip];
+        // The identity the user's checkout configures, passed explicitly, as a run's commit is.
+        let Some((name, email)) = self.resolve_identity(&path).await? else {
+            return Err(WorktreeError::MissingIdentity { repo: path });
+        };
+        let (name, email) = (format!("user.name={name}"), format!("user.email={email}"));
+        let mut commit_args = vec![
+            "-c",
+            &name,
+            "-c",
+            &email,
+            "commit-tree",
+            "--no-gpg-sign",
+            &tree,
+            "-p",
+            tip,
+        ];
         if !squash {
             commit_args.extend(["-p", theirs]);
         }
@@ -156,6 +172,45 @@ impl WorktreeManager {
         Ok(Merged::Commit(commit))
     }
 
+    /// The lines the commits from `tip` to `theirs` add that hold a leftover conflict marker, as
+    /// `path:line`, from `git diff --check` in `project`'s integration worktree. Whitespace errors
+    /// it also reports are ignored.
+    ///
+    /// # Errors
+    ///
+    /// A git failure.
+    pub async fn conflict_markers(
+        &self,
+        project: ProjectId,
+        tip: &str,
+        theirs: &str,
+    ) -> Result<Vec<String>, WorktreeError> {
+        let path = self.integration_path(project);
+        let args = [
+            "diff",
+            "--check",
+            "--no-ext-diff",
+            "--no-textconv",
+            tip,
+            theirs,
+        ];
+        let checked = self.run_git(&path, &args).await?;
+        // A problem found exits non-zero with it on stdout; a git failure prints nothing there.
+        if !checked.success() && checked.stdout.trim().is_empty() {
+            return Err(WorktreeError::GitFailed {
+                cwd: path,
+                args: owned_args(&args),
+                detail: describe_failure(&checked),
+            });
+        }
+        Ok(checked
+            .stdout
+            .lines()
+            .filter_map(|line| line.strip_suffix(": leftover conflict marker"))
+            .map(str::to_owned)
+            .collect())
+    }
+
     /// Starts merging `tip` into a child's worktree, leaving conflict markers in its files for it
     /// to resolve, so it edits files and never runs git, as a child is told. The merge stays in
     /// progress, so the commit plxd makes when its turn ends ([`WorktreeManager::commit_all`])
@@ -164,7 +219,7 @@ impl WorktreeManager {
     /// # Errors
     ///
     /// A git failure, or git refusing to start the merge, as when the child's uncommitted
-    /// changes touch the files it would change.
+    /// changes touch the files it would change, or a merge of anything but `tip` in progress.
     pub async fn start_merge(
         &self,
         worktree_path: &Path,
@@ -180,13 +235,28 @@ impl WorktreeManager {
                 &["rev-parse", "--quiet", "--verify", "MERGE_HEAD"],
             )
             .await?;
-        if !started.success() {
+        if started.stdout.trim() != tip {
             return Err(WorktreeError::GitFailed {
                 cwd: worktree_path.to_owned(),
                 args: owned_args(&args),
                 detail: describe_failure(&merged),
             });
         }
+        Ok(())
+    }
+
+    /// Aborts the merge [`WorktreeManager::start_merge`] started in a child's worktree.
+    ///
+    /// # Errors
+    ///
+    /// A git failure.
+    pub async fn abort_merge(
+        &self,
+        worktree_path: &Path,
+        git_dir: &Path,
+    ) -> Result<(), WorktreeError> {
+        self.run_worktree_git_ok(worktree_path, git_dir, &["merge", "--abort"])
+            .await?;
         Ok(())
     }
 }

@@ -115,6 +115,24 @@ fn worktree(run: &AgentRun) -> PathBuf {
     PathBuf::from(run.worktree_path.as_deref().expect("a worktree"))
 }
 
+/// Turns on `project`'s automatic landing.
+async fn lands_automatically(client: &mut Conn, project: ProjectId) {
+    let updated = client
+        .call::<ProjectUpdate>(ProjectUpdateParams {
+            project,
+            name: None,
+            icon: None,
+            permission: None,
+            autonomy: None,
+            base_branch: None,
+            auto_land: Some(true),
+        })
+        .await
+        .unwrap()
+        .project;
+    assert!(updated.auto_land);
+}
+
 /// Commits `content` as `notes.txt` and `extra` in `dir`, as the user would by hand.
 fn commit(dir: &Path, content: &str, extra: &str) {
     std::fs::write(dir.join("notes.txt"), content).unwrap();
@@ -155,7 +173,6 @@ async fn two_children_touching_one_file_land_in_turn_and_a_conflict_goes_back_th
         item.kind == InboxKind::NeedsYou
     })
     .await;
-    assert_eq!(waiting.kind, InboxKind::NeedsYou);
     assert_eq!(
         waiting.text,
         "Write the notes: ready to land, waiting for your approval"
@@ -302,20 +319,7 @@ async fn a_project_that_lands_automatically_needs_no_approval_and_never_lands_an
     let host = Host::start(temp_dir(), notes());
     let mut client = host.client().await;
     let project = create(&mut client, project_params(host.dir.path())).await;
-    let updated = client
-        .call::<ProjectUpdate>(ProjectUpdateParams {
-            project: project.id,
-            name: None,
-            icon: None,
-            permission: None,
-            autonomy: None,
-            base_branch: None,
-            auto_land: Some(true),
-        })
-        .await
-        .unwrap()
-        .project;
-    assert!(updated.auto_land);
+    lands_automatically(&mut client, project.id).await;
     let explore = finished(
         &mut client,
         AgentStartParams {
@@ -346,5 +350,57 @@ async fn a_project_that_lands_automatically_needs_no_approval_and_never_lands_an
         item.text.contains("landed on the integration branch")
     })
     .await;
+    host.server.stop().await;
+}
+
+/// A child whose conflict resolution leaves a marker in a file is refused, and goes to the user.
+/// Two children conflict on `notes.txt`, which the second one's turn rewrites, and on `extra.txt`,
+/// which it leaves as plxd's merge left it.
+#[tokio::test]
+async fn a_resolution_that_leaves_a_conflict_marker_goes_to_the_user() {
+    let host = Host::start(temp_dir(), notes());
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    lands_automatically(&mut client, project.id).await;
+    let repo = PathBuf::from(&project.repo_path);
+    let a = finished(&mut client, start_params(project.id, "Write the notes")).await;
+    let b = finished(&mut client, start_params(project.id, "Rewrite the notes")).await;
+    for (run, side) in [(&a, "a"), (&b, "b")] {
+        let dir = worktree(run);
+        std::fs::write(dir.join("notes.txt"), format!("from {side}\n")).unwrap();
+        std::fs::write(dir.join("extra.txt"), format!("{side}\n")).unwrap();
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-q", "-m", "by hand"]);
+    }
+    for run in [&a, &b] {
+        client
+            .call::<LandQueue>(LandQueueParams { run_id: run.id })
+            .await
+            .unwrap();
+    }
+    item(&mut client, project.id, a.id, |item| {
+        item.text.contains("landed on the integration branch")
+    })
+    .await;
+    let landed = git(&repo, &["rev-parse", "parallax/app"]);
+
+    let refused = item(&mut client, project.id, b.id, |item| {
+        item.kind == InboxKind::NeedsYou
+    })
+    .await;
+    assert_eq!(
+        refused.text,
+        "Rewrite the notes: its conflict resolution left conflict markers, at extra.txt:1, extra.txt:3, extra.txt:5"
+    );
+    assert_eq!(
+        git(&worktree(&b), &["rev-parse", "HEAD^2"]),
+        landed,
+        "it was sent back"
+    );
+    assert_eq!(
+        git(&repo, &["rev-parse", "parallax/app"]),
+        landed,
+        "nothing landed"
+    );
     host.server.stop().await;
 }

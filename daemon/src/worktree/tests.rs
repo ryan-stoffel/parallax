@@ -440,14 +440,34 @@ async fn two_children_touching_one_file_land_one_at_a_time_through_a_conflict() 
     assert_eq!(rev_parse(&path, "HEAD"), landed, "the branch is untouched");
     assert_eq!(git_output(&path, &["status", "--porcelain"]), "");
 
+    let readme = || std::fs::read_to_string(b.path.join("README.md")).unwrap();
     mgr.start_merge(&b.path, &b.git_dir, &landed).await.unwrap();
-    let marked = std::fs::read_to_string(b.path.join("README.md")).unwrap();
-    assert!(marked.contains("<<<<<<<"), "{marked}");
-    std::fs::write(b.path.join("README.md"), "from a and b\n").unwrap();
+    assert!(readme().contains("<<<<<<<"), "{}", readme());
+    mgr.abort_merge(&b.path, &b.git_dir).await.unwrap();
+    assert_eq!(readme(), "from b\n", "aborted");
+    mgr.start_merge(&b.path, &b.git_dir, &landed).await.unwrap();
+
+    // A resolution that keeps a marker is found; one with only a whitespace error isn't.
     mgr.commit_all(&b.path, &b.git_dir, &repo, "resolve")
         .await
         .unwrap();
     assert_eq!(rev_parse(&b.path, "HEAD^2"), landed, "a merge commit");
+    assert_eq!(
+        mgr.conflict_markers(project, &landed, &b.branch)
+            .await
+            .unwrap(),
+        ["README.md:1", "README.md:3", "README.md:5"]
+    );
+    std::fs::write(b.path.join("README.md"), "from a and b \n").unwrap();
+    mgr.commit_all(&b.path, &b.git_dir, &repo, "resolve")
+        .await
+        .unwrap();
+    assert!(
+        mgr.conflict_markers(project, &landed, &b.branch)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     let Merged::Commit(second) = mgr
         .merge_into_integration(project, &landed, &b.branch, "Do b", true)
@@ -459,7 +479,7 @@ async fn two_children_touching_one_file_land_one_at_a_time_through_a_conflict() 
     assert_eq!(rev_parse(&path, "HEAD^"), landed);
     assert_eq!(
         std::fs::read_to_string(path.join("README.md")).unwrap(),
-        "from a and b\n"
+        "from a and b \n"
     );
     assert_eq!(
         mgr.merge_into_integration(project, &second, &b.branch, "Do b", true)
