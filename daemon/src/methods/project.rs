@@ -144,11 +144,11 @@ pub(crate) async fn start(
 /// anything. Runs pick up a new mode when they next start a CLI process (0042), questions a new
 /// level when they are next asked (0043), and waiting children new placement settings at once
 /// (0046). A new proposal for its checks adds a `needsYou` item for the user to confirm it
-/// (PLX-411).
+/// (PLX-411). Ask me also sends the questions already open to Needs you (PLX-474).
 ///
-/// The event is appended after the row is written, as `project/create`'s is, so a subscriber
-/// after a `project/list` snapshot's `seq` never misses the change. `updatedAt` stays as it is
-/// (0032).
+/// `project.updated` and the escalated questions' `inbox.added` events are appended after their
+/// rows are written, as `project/create`'s is, so a subscriber after a `project/list` or
+/// `inbox/list` snapshot's `seq` never misses them. `updatedAt` stays as it is (0032).
 pub(crate) async fn update(
     context: &Context,
     mut params: ProjectUpdateParams,
@@ -182,6 +182,7 @@ pub(crate) async fn update(
         .proposed_checks
         .clone()
         .filter(|command| params.checks.is_none() && !command.is_empty());
+    let ask_me = params.autonomy == Some(ProjectAutonomy::Ask);
     let log = Arc::clone(&context.daemon.log);
     let (result, proposed) = context
         .daemon
@@ -202,6 +203,9 @@ pub(crate) async fn update(
                     },
                 );
                 info!(project = %project.id, seq, "updated a project");
+            }
+            if ask_me {
+                super::question::escalate_open(store, &log, project.id)?;
             }
             let proposed = proposal.filter(|_| changed).zip(project.coordinator);
             Ok((ProjectUpdateResult { project }, proposed))

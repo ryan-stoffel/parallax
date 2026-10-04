@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::Context;
+use crate::event_log::EventLog;
 use crate::server::Daemon;
 use crate::store::store_error;
 
@@ -73,31 +74,43 @@ pub(crate) async fn add(
     let added = daemon
         .store
         .run(&CancellationToken::new(), move |store| {
-            let row = parallax_store::InboxItem {
-                id: InboxItemId::generate().into(),
-                project_id: project.into(),
-                run_id: run.into(),
-                kind: kind_name(kind),
-                text,
-                created_at: Timestamp::now(),
-                seen_at: None,
-            };
-            store
-                .add_inbox_item(&row)
-                .map_err(|error| store_error(&error))?;
-            let item = item(row)?;
-            let seq = log.append_blocking(
-                item.created_at,
-                Some(project),
-                ParallaxEvent::InboxAdded { item },
-            );
-            info!(%project, %run, seq, "added an inbox item");
-            Ok(())
+            record(store, &log, project, run, kind, text)
         })
         .await;
     if let Err(error) = added {
         warn!(%project, %run, error = %error.message, "could not add an inbox item");
     }
+}
+
+/// [`add`]'s work, for a caller already in a store job.
+pub(crate) fn record(
+    store: &Store,
+    log: &EventLog,
+    project: ProjectId,
+    run: RunId,
+    kind: InboxKind,
+    text: String,
+) -> Result<(), ErrorObject> {
+    let row = parallax_store::InboxItem {
+        id: InboxItemId::generate().into(),
+        project_id: project.into(),
+        run_id: run.into(),
+        kind: kind_name(kind),
+        text,
+        created_at: Timestamp::now(),
+        seen_at: None,
+    };
+    store
+        .add_inbox_item(&row)
+        .map_err(|error| store_error(&error))?;
+    let item = item(row)?;
+    let seq = log.append_blocking(
+        item.created_at,
+        Some(project),
+        ParallaxEvent::InboxAdded { item },
+    );
+    info!(%project, %run, seq, "added an inbox item");
+    Ok(())
 }
 
 /// `projectNotFound` unless `project` exists.
