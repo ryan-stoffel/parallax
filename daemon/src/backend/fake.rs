@@ -282,7 +282,6 @@ impl Backend for FakeBackend {
         Capabilities {
             follow_ups: self.follow_ups,
             resume: true,
-            coordinator: true,
             reports_cost: true,
             rate_limits: true,
             worker_sandbox: true,

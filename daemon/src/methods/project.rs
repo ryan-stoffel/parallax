@@ -271,13 +271,18 @@ async fn remove(
             }
         }
     };
-    if let Err(error) = daemon
-        .agents
-        .worktrees()
+    let worktrees = daemon.agents.worktrees();
+    if let Err(error) = worktrees
         .remove_integration(Path::new(&repo_path), project)
         .await
     {
         warn!(%project, %error, "could not remove the project's integration worktree");
+    }
+    if let Err(error) = worktrees
+        .remove_coordinator(Path::new(&repo_path), project)
+        .await
+    {
+        warn!(%project, %error, "could not remove the project's coordinator's worktree");
     }
     crate::threads::remove_context(&daemon, project);
     Ok(ProjectDeleteResult {})

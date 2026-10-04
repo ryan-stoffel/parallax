@@ -808,22 +808,30 @@ async fn a_steer_cancels_the_running_turn_and_goes_next() {
 }
 
 /// The thread's server goes in `session/new` and `session/load` only with `approvals` or Bypass,
-/// and its tools then run without asking.
+/// and its tools then run without asking. A coordinator's go the same way (0042).
 #[tokio::test]
 async fn thread_mcp_is_injected_on_new_and_load_and_preapproved() {
-    for (resume, approvals, bypass) in [
-        (false, true, false),
-        (true, true, false),
-        (false, false, false),
-        (false, false, true),
+    for (resume, approvals, bypass, coordinator) in [
+        (false, true, false, false),
+        (true, true, false, false),
+        (false, false, false, false),
+        (false, false, true, false),
+        (false, false, true, true),
     ] {
         let fake = Fake::new("thread-mcp");
         let mut request = fake.request();
-        request.thread_tools = Some(crate::backend::ThreadTools {
+        let tools = Some(crate::backend::ThreadTools {
             program: "/bin/plxd".into(),
             data_dir: "/tmp/parallax data".into(),
             run: request.run_id,
         });
+        if coordinator {
+            request.thread = false;
+            request.policy = crate::backend::ToolPolicy::NoWrite;
+            request.coordinator_tools = tools;
+        } else {
+            request.thread_tools = tools;
+        }
         let run_id = request.run_id;
         request.approvals = approvals;
         request.permission = bypass.then_some(AgentPermission::Bypass);

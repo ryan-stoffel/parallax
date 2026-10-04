@@ -425,6 +425,34 @@ async fn a_steer_joins_the_running_turn_and_a_held_thread_stays_open() {
     );
 }
 
+/// A Project's coordinator runs on app-server as a thread does, with its own tools (0042).
+#[test]
+fn a_coordinator_gets_its_tools_as_a_thread_does() {
+    let mut request = request(AgentPermission::Auto);
+    request.thread = false;
+    request.policy = crate::backend::ToolPolicy::NoWrite;
+    request.coordinator_tools = Some(crate::backend::ThreadTools {
+        program: "/bin/plxd".into(),
+        data_dir: "/tmp/parallax".into(),
+        run: request.run_id,
+    });
+    assert!(request.full_agent());
+    let (method, params) = super::thread_params(&request).unwrap();
+    assert_eq!(method, "thread/start");
+    assert_eq!(
+        params["config"]["mcp_servers.plxd.args"],
+        json!([
+            "mcp",
+            "--data-dir",
+            "/tmp/parallax",
+            "--thread",
+            request.run_id.to_string()
+        ])
+    );
+    request.coordinator_tools = None;
+    assert!(!request.full_agent(), "any other run is refused");
+}
+
 /// Session overrides add only plxd's keys, so app-server retains the user's servers.
 #[test]
 fn thread_mcp_joins_user_config_on_start_resume_and_fork() {

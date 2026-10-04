@@ -22,9 +22,8 @@
 //! still running [`EXIT_GRACE`] after plxd closes its stdin, idle, failed, or cancelled, has its
 //! process group stopped. A finished turn still counts as completed.
 //!
-//! Only threads run on ACP agents (`RunRequest::thread`): none has a worker sandbox plxd can
-//! check, and 0004 keeps the coordinator on Claude Code, so anything else is
-//! [`StartError::Unsupported`].
+//! Only threads and a Project's coordinator run on ACP agents (`RunRequest::full_agent`, 0042):
+//! none has a worker sandbox plxd can check, so anything else is [`StartError::Unsupported`].
 //!
 //! # Credentials and configuration
 //!
@@ -264,14 +263,14 @@ pub fn authenticate(program: &OsStr, args: &[OsString], method: &str) -> Result<
 ///
 /// # Errors
 ///
-/// [`StartError::Unsupported`] for a run that isn't a thread, a key account or another account
-/// folder, an effort, context window, or fast mode, or a permission the agent doesn't map, and
-/// [`StartError::Invalid`] for a model that could be read as an option.
+/// [`StartError::Unsupported`] for a run that isn't a thread or a coordinator, a key account or
+/// another account folder, an effort, context window, or fast mode, or a permission the agent
+/// doesn't map, and [`StartError::Invalid`] for a model that could be read as an option.
 pub fn arguments(agent: &AcpAgent, request: &RunRequest) -> Result<Vec<OsString>, StartError> {
     let label = &agent.label;
-    if !request.thread {
+    if !request.full_agent() {
         return Err(StartError::Unsupported(format!(
-            "plxd runs only threads on {label}: it has no worker sandbox, and no coordinator (0036)"
+            "plxd runs only threads and coordinators on {label}: it has no worker sandbox (0036)"
         )));
     }
     match &request.account.credential {
@@ -333,8 +332,7 @@ pub fn scrubbed(base: &Environment, prefixes: &[String]) -> Vec<OsString> {
 /// or Bypass, as Claude Code gets it (0041). The agent's own configured servers still load.
 fn thread_mcp_servers(request: &RunRequest) -> Result<Vec<Value>, StartError> {
     let tools = request
-        .thread_tools
-        .as_ref()
+        .full_agent_tools()
         .filter(|_| request.approvals || request.permission == Some(AgentPermission::Bypass));
     let Some(tools) = tools else {
         return Ok(Vec::new());
@@ -358,7 +356,6 @@ impl Backend for AcpBackend {
         Capabilities {
             follow_ups: true,
             resume: true,
-            coordinator: false,
             reports_cost: false,
             rate_limits: false,
             worker_sandbox: false,

@@ -18,7 +18,8 @@
 //! [`WorktreeManager::diff_commits`] and [`WorktreeManager::read_blob`] (#157), and
 //! [`WorktreeManager::open_pr`] pushes its branch and opens a pull request for it (PLX-168).
 //! `folder` has the git calls a run's Git menu makes, in its worktree or checkout (PLX-298).
-//! `integration` keeps each Project's integration branch and its worktree (PLX-409, 0045).
+//! `integration` keeps each Project's integration branch and its worktree (PLX-409, 0045), and
+//! `coordinator` its coordinator's detached worktree at that branch's tip (PLX-397, 0042).
 //!
 //! # Layout and naming
 //!
@@ -96,6 +97,7 @@
 //! repository's git folder — so this needs an unusual repository configuration to matter; #175
 //! tracks closing it.
 
+mod coordinator;
 mod folder;
 mod integration;
 mod pull_request;
@@ -149,6 +151,9 @@ const WORKTREES_DIR: &str = "worktrees";
 
 /// The folder under the data directory holding each Project's integration worktree (0045).
 const INTEGRATION_DIR: &str = "integration";
+
+/// The folder under the data directory holding each Project's coordinator's worktree (0042).
+const COORDINATORS_DIR: &str = "coordinators";
 
 /// Environment variables scrubbed from every git invocation, on top of
 /// [`crate::backend::process::ALWAYS_SCRUBBED`]: anything that could redirect git to a different
@@ -419,6 +424,7 @@ pub struct WorktreeManager {
     launcher: Launcher,
     root: PathBuf,
     integration_root: PathBuf,
+    coordinator_root: PathBuf,
     git_safe_home: PathBuf,
     timeout: Duration,
     max_diff_bytes: usize,
@@ -436,6 +442,7 @@ impl WorktreeManager {
             launcher,
             root: data_dir_root.join(WORKTREES_DIR),
             integration_root: data_dir_root.join(INTEGRATION_DIR),
+            coordinator_root: data_dir_root.join(COORDINATORS_DIR),
             git_safe_home: data_dir_root.join(GIT_SAFE_HOME_DIR),
             timeout: DEFAULT_TIMEOUT,
             max_diff_bytes: DEFAULT_MAX_DIFF_BYTES,

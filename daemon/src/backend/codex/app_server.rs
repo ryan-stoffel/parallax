@@ -238,7 +238,7 @@ fn thread_params(request: &RunRequest) -> Result<(&'static str, Value), StartErr
     }
     let mut config = serde_json::Map::new();
     if (request.approvals || request.permission == Some(AgentPermission::Bypass))
-        && let Some(tools) = &request.thread_tools
+        && let Some(tools) = request.full_agent_tools()
     {
         let server = &tools.mcp_config()?["mcpServers"][crate::mcp::SERVER];
         // Dotted overrides merge into the user's MCP map rather than replacing it.

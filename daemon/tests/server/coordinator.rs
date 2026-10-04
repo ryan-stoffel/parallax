@@ -1,6 +1,7 @@
 //! A project's coordinator chat end to end (PLX-41, decision 0024): `project/start` against an
 //! in-process plxd whose backend is the fake CLI, in a real git repository. The coordinator runs
-//! in the project's repository, in the project's permission mode (0042).
+//! in a detached worktree at the integration branch's tip, in the project's permission mode
+//! (0042).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -85,7 +86,7 @@ pub(crate) fn start_params(project: ProjectId, prompt: &str) -> ProjectStartPara
 }
 
 #[tokio::test]
-async fn a_coordinator_runs_in_the_projects_repository_and_resumes_there_after_a_restart() {
+async fn a_coordinator_runs_in_its_worktree_and_resumes_there_after_a_restart() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let script = || {
         vec![
@@ -133,7 +134,7 @@ async fn a_coordinator_runs_in_the_projects_repository_and_resumes_there_after_a
     }));
     let first = seen.lock().unwrap()[0].clone();
     assert_eq!(first.policy, ToolPolicy::NoWrite);
-    assert_eq!(first.cwd, repo, "it runs in the user's checkout");
+    assert_eq!(first.cwd, coordinator_worktree(&host, project.id));
     assert!(first.sandbox.is_none());
     // A thread's tools, bound to its own run (PLX-380).
     assert_eq!(first.coordinator_tools.map(|tools| tools.run), Some(run.id));
@@ -185,9 +186,94 @@ async fn a_coordinator_runs_in_the_projects_repository_and_resumes_there_after_a
         "a message resumes the session"
     );
     assert_eq!(resumed.prompt, "Go on.");
-    assert_eq!(resumed.cwd, repo, "the session resumes where it started");
+    assert_eq!(resumed.cwd, first.cwd, "it resumes where it started");
     assert_eq!(resumed.policy, ToolPolicy::NoWrite);
     assert!(resumed.coordinator_tools.is_some());
+    host.server.stop().await;
+}
+
+/// Where `host` keeps the coordinator's worktree for `project` (0042).
+fn coordinator_worktree(host: &Host, project: ProjectId) -> PathBuf {
+    host.dir
+        .path()
+        .join("coordinators")
+        .join(project.to_string())
+}
+
+/// PLX-397: what a coordinator writes stays in its own worktree. Neither the user's checkout nor
+/// the integration branch sees it, and its next CLI process starts from a clean copy of the tip.
+#[tokio::test]
+async fn a_coordinators_edit_never_reaches_the_checkout_or_the_integration_branch() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let write = |path: &str| Step::WriteFile {
+        path: path.to_owned(),
+        content: "the coordinator's\n".to_owned(),
+    };
+    let script = vec![
+        init("coordinator-1"),
+        write("README.md"),
+        write("stray.txt"),
+        end_turn("Edited."),
+    ];
+    let host = Host::start(temp_dir(), recording(script, &seen));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    let repo = PathBuf::from(&project.repo_path);
+    let integration = host
+        .dir
+        .path()
+        .join("integration")
+        .join(project.id.to_string());
+    let tip = git(&repo, &["rev-parse", "parallax/app"]);
+    subscribe(&mut client, project.id, 0).await;
+
+    let run = client
+        .call::<ProjectStart>(start_params(project.id, "Fix the README yourself."))
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let worktree = coordinator_worktree(&host, project.id);
+    assert_eq!(seen.lock().unwrap()[0].cwd, worktree);
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), tip, "at the tip");
+    assert_eq!(git(&worktree, &["branch", "--show-current"]), "");
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("README.md")).unwrap(),
+        "the coordinator's\n",
+        "the edit is in its worktree"
+    );
+    for checkout in [&repo, &integration] {
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("README.md")).unwrap(),
+            "hello\n"
+        );
+        assert!(!checkout.join("stray.txt").exists());
+        assert_eq!(git(checkout, &["status", "--porcelain"]), "");
+    }
+    assert_eq!(git(&repo, &["rev-parse", "parallax/app"]), tip);
+    assert_eq!(git(&repo, &["rev-parse", "main"]), tip);
+
+    // The next process, one that writes nothing, starts from a clean copy of the tip.
+    let host = host
+        .restart(recording(
+            vec![init("coordinator-1"), end_turn("Read.")],
+            &seen,
+        ))
+        .await;
+    let mut client = host.client().await;
+    subscribe(&mut client, project.id, 0).await;
+    client
+        .call::<AgentSend>(send_params(run.id, TurnId::generate(), "Go on."))
+        .await
+        .unwrap();
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("README.md")).unwrap(),
+        "hello\n"
+    );
+    assert!(!worktree.join("stray.txt").exists());
+    assert_eq!(git(&repo, &["rev-parse", "parallax/app"]), tip);
     host.server.stop().await;
 }
 
@@ -961,6 +1047,10 @@ async fn deleting_a_project_stops_its_agents_and_removes_everything() {
     let branches = git(&repo, &["branch", "--list", &branch]);
     assert!(branches.is_empty(), "the branch is removed: {branches}");
     assert!(!context.exists(), "the project's notes are removed");
+    assert!(
+        !coordinator_worktree(&host, project.id).exists(),
+        "the coordinator's worktree is removed"
+    );
     assert!(repo.join("README.md").is_file(), "the repository stays");
 
     let mut replay = host.client().await;
