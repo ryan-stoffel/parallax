@@ -658,6 +658,7 @@ function fakeBridge(
   let listener: (m: SubscriptionMessage) => void = () => {};
   const connections = new Set<(hostId: string, state: ConnectionState) => void>();
   const request = vi.fn(async (_host: string, method: string, params: { after?: number }) => {
+    if (method === "queue/list") return { result: { messages: [] }, logId: "log-1" };
     if (method === "agent/list") return { result: { runs: [], seq: listSeq }, logId: "log-1" };
     if (method === "agent/cancel" && cancelError)
       return { error: { code: -32000, message: cancelError } };
@@ -1702,4 +1703,55 @@ test("a web link gets its site's logo, or a globe, and other links none (PLX-330
   expect(linkIcon("mailto:a@b.c")).toBeUndefined();
   expect(linkIcon("archived.md")).toBeUndefined();
   expect(linkIcon(undefined)).toBeUndefined();
+});
+
+test("queued messages track host updates, Enter queues, and Cmd+Enter steers (PLX-376)", async () => {
+  const { request, emit } = fakeBridge(4, { capabilities: { queue: {} } });
+  await renderChat();
+  expect(request).toHaveBeenCalledWith("local", "queue/list", { runId });
+  type("Do this next");
+  await act(async () =>
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+  );
+  const queued = request.mock.calls.find(([, method]) => method === "agent/send")![2] as {
+    turnId: string;
+  };
+  expect(queued).toMatchObject({ delivery: "queue", text: "Do this next" });
+  const update = (
+    messages: { id: string; text: string; images: number; threads: string[] }[],
+    seq: number,
+  ) =>
+    emit({
+      type: "event",
+      event: {
+        subscription: "s",
+        seq,
+        time: "",
+        event: { kind: "queue.updated", runId, messages },
+      },
+    });
+  update([{ id: queued.turnId, text: "Do this next", images: 0, threads: [] }], 50);
+  expect(document.querySelector('[aria-label="Queued messages"]')?.textContent).toContain(
+    "Do this next",
+  );
+  expect(transcriptText()).not.toContain("Do this next");
+  update(
+    [{ id: queued.turnId, text: "Edited on another device", images: 1, threads: [runId] }],
+    51,
+  );
+  expect(document.querySelector('[aria-label="Queued messages"]')?.textContent).toContain(
+    "Edited on another device",
+  );
+  type("Change direction now");
+  await act(async () =>
+    composer().dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }),
+    ),
+  );
+  expect(
+    request.mock.calls.filter(([, method]) => method === "agent/send").at(-1)![2],
+  ).toMatchObject({ delivery: "steer", text: "Change direction now" });
+  update([], 52);
+  expect(document.querySelector('[aria-label="Queued messages"]')).toBeNull();
+  expect(transcriptText()).not.toContain("Do this next");
 });

@@ -47,6 +47,7 @@ import remarkGfm from "remark-gfm";
 
 import type { RpcError } from "../preload/bridge";
 import type {
+  AgentDelivery,
   AgentRun,
   AgentToolStatus,
   ImageId,
@@ -84,6 +85,7 @@ import {
 } from "./Plan";
 import { plainText, PromptRail, ScrollToEnd, type Prompt } from "./PromptRail";
 import { attachThreads, SentThread, ThreadLinksContext, type ThreadLinks } from "./threadContext";
+import { QueueStrip } from "./QueueStrip";
 import { titleOf } from "./threads";
 import {
   failureText,
@@ -209,7 +211,13 @@ export function AgentChat({
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
   const catalog = useCatalog(hostId);
-  const { transcript, error, sent, send, cancel } = useAgentRun(hostId, runId, connected);
+  const queueEnabled = connected && "queue" in connection.capabilities;
+  const { transcript, error, sent, send, cancel, queue, queueError } = useAgentRun(
+    hostId,
+    runId,
+    connected,
+    queueEnabled,
+  );
   // Permission requests (PLX-196): those answered here read as answered at once.
   const { answers, answer, dismiss } = useAnswers(hostId);
   const [resendError, setResendError] = useState<string>();
@@ -268,8 +276,9 @@ export function AgentChat({
     options: RunOptions,
     images: PromptImage[],
     threads: string[],
+    delivery?: AgentDelivery,
   ) => {
-    const failed = await send(text, options, images, threads);
+    const failed = await send(text, options, images, threads, delivery);
     if (!startOver || failed?.data?.kind !== "runNotResumable") return failed?.message;
     setRefused({ text, options, images, why: failed.message });
     return ""; // Back in the box; the line above it says why and offers Start over.
@@ -305,7 +314,7 @@ export function AgentChat({
   const rows = useMemo<Row[]>(() => {
     const seen = new Set(items.flatMap((i) => ("turnId" in i && i.turnId ? [i.turnId] : [])));
     const pending = [...sent]
-      .filter(([turnId]) => !seen.has(turnId))
+      .filter(([turnId]) => !seen.has(turnId) && !queue.some((m) => m.id === turnId))
       .map(([turnId, { text, images, threads }]) => ({
         kind: "pending" as const,
         key: `pending:${turnId}`,
@@ -321,7 +330,7 @@ export function AgentChat({
         ? { kind: "pending", key: "pending:prompt", text: prompt }
         : { kind: "user", key: "prompt", text: prompt },
     ];
-  }, [items, sent, prompt, going]);
+  }, [items, sent, prompt, going, queue]);
   // The user's prompts, for the composer's Up: not Parallax's wake-ups or other threads' messages.
   const history = useMemo(
     () =>
@@ -478,8 +487,26 @@ export function AgentChat({
             returnFocus={focusComposer}
           />
         )}
+        {queueEnabled && (
+          <QueueStrip
+            hostId={hostId}
+            runId={runId}
+            messages={queue}
+            running={isRunning(run?.status)}
+            disabledReason={disabledReason}
+            loadError={queueError}
+          />
+        )}
         <Composer
-          onSend={sendText}
+          onSend={(text, options, images, threads) =>
+            sendText(text, options, images, threads, queueEnabled ? "queue" : undefined)
+          }
+          onSteer={
+            queueEnabled && isRunning(run?.status)
+              ? (text, options, images, threads) =>
+                  sendText(text, options, images, threads, "steer")
+              : undefined
+          }
           history={history}
           onStop={isRunning(run?.status) ? stop : undefined}
           unanswered={unanswered}

@@ -56,8 +56,17 @@ export function KeybindSettings() {
             {shortcut("1")} – {shortcut("9")}
           </kbd>
         </Row>
-        <Row title="Send a message">
+        <Row
+          title="Send a message"
+          description="While an agent runs, Enter queues the message for its next turn."
+        >
           <kbd className={kbd}>Enter</kbd>
+        </Row>
+        <Row
+          title="Steer an agent now"
+          description="In an active thread, send into the current turn."
+        >
+          <kbd className={kbd}>{shortcut("Enter")}</kbd>
         </Row>
         <Row title="Start a new thread and stay here">
           <kbd className={kbd}>{shortcut("Enter")}</kbd>

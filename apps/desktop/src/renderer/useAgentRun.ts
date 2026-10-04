@@ -1,7 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
-import type { AgentSendParams, PromptImage } from "../protocol/generated/protocol";
+import type {
+  AgentDelivery,
+  AgentSendParams,
+  PromptImage,
+  QueuedMessage,
+} from "../protocol/generated/protocol";
 import { applyEvents, emptyTranscript, isRunning, type Transcript } from "./transcript";
 import { uuidv7 } from "./uuidv7";
 
@@ -11,6 +16,8 @@ export interface AgentRunView {
   error?: string;
   /** Messages this window sent, by turn id, since older logs hold only the id (PLX-92). */
   sent: ReadonlyMap<string, SentMessage>;
+  queue: QueuedMessage[];
+  queueError?: string;
   /**
    * Sends a message, its images, and the threads attached to it as the run's next turn, with a new
    * model, effort, or access for the run if given. Resolves to plxd's error, or why the run
@@ -21,6 +28,7 @@ export interface AgentRunView {
     options?: SendOptions,
     images?: PromptImage[],
     threads?: string[],
+    delivery?: AgentDelivery,
   ) => Promise<RpcError | undefined>;
   /** Stops the run. Resolves to an error message, or undefined. */
   cancel: () => Promise<string | undefined>;
@@ -51,10 +59,19 @@ export type SendOptions = Pick<
  * Loads only while `connected`; a reconnect loads again. Key the caller by host
  * and run, so another run starts from an empty transcript.
  */
-export function useAgentRun(hostId: string, runId: string, connected: boolean): AgentRunView {
+export function useAgentRun(
+  hostId: string,
+  runId: string,
+  connected: boolean,
+  queueEnabled = false,
+): AgentRunView {
   const [transcript, setTranscript] = useState(emptyTranscript);
   const [error, setError] = useState<string>();
   const [sent, setSent] = useState<ReadonlyMap<string, SentMessage>>(new Map());
+
+  const [queue, setQueue] = useState<QueuedMessage[]>([]);
+  const [queueError, setQueueError] = useState<string>();
+  const knownQueue = useRef<QueuedMessage[]>([]);
 
   useEffect(() => {
     if (!connected) return;
@@ -92,6 +109,16 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
       }
       // The loop only ends with both, but the types can't tell.
       if (!t.run || snapshot === undefined || logId === undefined) return;
+      if (queueEnabled) {
+        const listed = await window.parallax.request(hostId, "queue/list", { runId });
+        if (stopped) return;
+        if ("error" in listed) setQueueError(listed.error.message);
+        else {
+          knownQueue.current = listed.result.messages;
+          setQueue(listed.result.messages);
+          setQueueError(undefined);
+        }
+      }
       setTranscript(t);
       setError(undefined);
       unsubscribe = window.parallax.subscribe(
@@ -99,9 +126,22 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
         { after: Math.max(t.seq, snapshot), project: t.run.project, logId },
         (message) => {
           if (stopped) return;
-          if (message.type === "event")
+          if (message.type === "event") {
+            const event = message.event.event;
+            if (queueEnabled && event.kind === "queue.updated" && event.runId === runId) {
+              const ids = new Set(event.messages.map((m) => m.id));
+              const removed = knownQueue.current.filter((m) => !ids.has(m.id));
+              knownQueue.current = event.messages;
+              setQueue(event.messages);
+              setQueueError(undefined);
+              setSent((prev) => {
+                const next = new Map(prev);
+                for (const m of removed) next.delete(m.id);
+                return next;
+              });
+            }
             setTranscript((prev) => applyEvents(prev, [message.event], runId));
-          else if (message.type === "resync") void load();
+          } else if (message.type === "resync") void load();
           else setError(message.error.message);
         },
       );
@@ -112,7 +152,7 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
       stopped = true;
       unsubscribe();
     };
-  }, [hostId, runId, connected]);
+  }, [hostId, runId, connected, queueEnabled]);
 
   const send = useCallback(
     async (
@@ -120,6 +160,7 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
       options?: SendOptions,
       images: PromptImage[] = [],
       threads: string[] = [],
+      delivery?: AgentDelivery,
     ) => {
       const turnId = uuidv7();
       setSent((prev) => new Map(prev).set(turnId, { text, images, threads }));
@@ -128,6 +169,7 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
         turnId,
         text,
         ...options,
+        ...(delivery && { delivery }),
         ...(images.length > 0 && { images }),
         ...(threads.length > 0 && { threads }),
       });
@@ -151,5 +193,5 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
     return "error" in answer ? answer.error.message : undefined;
   }, [hostId, runId]);
 
-  return { transcript, error, sent, send, cancel };
+  return { transcript, error, sent, send, cancel, queue, queueError };
 }
