@@ -105,25 +105,6 @@ impl WorktreeManager {
     }
 }
 
-impl WorktreeManager {
-    /// Puts `project`'s integration branch and worktree back on `tip`, as red checks do.
-    ///
-    /// # Errors
-    ///
-    /// A git failure.
-    pub async fn reset_integration(
-        &self,
-        project: parallax_protocol::ProjectId,
-        tip: &str,
-    ) -> Result<(), WorktreeError> {
-        let path = self.integration_path(project);
-        self.run_git_ok(&path, &["reset", "--hard", "--quiet", tip])
-            .await?;
-        self.run_git_ok(&path, &["clean", "-fd", "--quiet"]).await?;
-        Ok(())
-    }
-}
-
 /// `limit` as people say it: whole minutes, or seconds.
 fn minutes_or_seconds(limit: Duration) -> String {
     let seconds = limit.as_secs();
@@ -138,7 +119,7 @@ fn minutes_or_seconds(limit: Duration) -> String {
 mod tests {
     use std::time::Duration;
 
-    use super::{CHECKS_OUTPUT_BYTES, Checked};
+    use super::Checked;
     use crate::backend::process::Launcher;
     use crate::paths::DataDir;
     use crate::worktree::WorktreeManager;
@@ -184,7 +165,7 @@ mod tests {
         let Checked::Failed { output, .. } = failed else {
             panic!("passed");
         };
-        assert_eq!(output.len(), CHECKS_OUTPUT_BYTES);
+        assert_eq!(output.len(), super::CHECKS_OUTPUT_BYTES);
         assert!(
             output.ends_with("line 19999\n"),
             "{}",

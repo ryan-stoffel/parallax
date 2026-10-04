@@ -41,7 +41,8 @@ impl WorktreeManager {
 
     /// Makes sure `project`'s integration worktree exists on its branch, and returns the branch.
     ///
-    /// A worktree already in place keeps the branch it has out. Otherwise the branch is `branch`
+    /// A worktree already in place keeps the branch it has out, or `branch` while the landing
+    /// queue has it detached for the checks (PLX-411). Otherwise the branch is `branch`
     /// when plxd recorded one, or a new `parallax/<slug of name>`, with the project id's short
     /// hash after it when another branch has that name. A branch that exists is checked out as it
     /// is, and a missing one is cut from `base`, which must be a local or remote-tracking branch.
@@ -68,6 +69,14 @@ impl WorktreeManager {
                 .await?;
             if head.success() {
                 return Ok(head.stdout.trim().to_owned());
+            }
+            // Detached at a merge whose checks are running (PLX-411): the branch is still there.
+            if let Some(branch) = branch
+                && self
+                    .has_ref(&repo_root, &format!("refs/heads/{branch}"))
+                    .await?
+            {
+                return Ok(branch.to_owned());
             }
         }
         // A folder that isn't a worktree on a branch is plxd's own leftover.

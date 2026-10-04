@@ -142,3 +142,48 @@ async fn red_checks_after_the_base_merge_are_the_bases_and_the_child_still_lands
     );
     host.server.stop().await;
 }
+
+/// The checks run on the merge with the branch still on the old tip, so nothing cut from the
+/// branch meanwhile sees an unchecked merge. It moves once they pass.
+#[tokio::test]
+async fn the_branch_moves_only_once_the_checks_pass() {
+    let host = Host::start(temp_dir(), notes());
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    let repo = PathBuf::from(&project.repo_path);
+    let seen = host.dir.path().join("seen.txt");
+    let command = format!("git rev-parse parallax/app HEAD > {}", seen.display());
+    let updated = client
+        .call::<ProjectUpdate>(ProjectUpdateParams {
+            project: project.id,
+            name: None,
+            icon: None,
+            permission: None,
+            autonomy: None,
+            base_branch: None,
+            auto_land: Some(true),
+            checks: Some(command),
+            proposed_checks: None,
+            max_children: None,
+            allow_api_keys: None,
+        })
+        .await
+        .unwrap()
+        .project;
+    assert!(updated.checks.is_some());
+    let tip = git(&repo, &["rev-parse", "parallax/app"]);
+    let run = finished(&mut client, start_params(project.id, "Write the notes")).await;
+    client
+        .call::<LandQueue>(LandQueueParams { run_id: run.id })
+        .await
+        .unwrap();
+    item(&mut client, project.id, run.id, |item| {
+        item.text.contains("landed on the integration branch")
+    })
+    .await;
+    let landed = git(&repo, &["rev-parse", "parallax/app"]);
+    let seen = std::fs::read_to_string(&seen).unwrap();
+    let seen: Vec<&str> = seen.lines().map(str::trim).collect();
+    assert_eq!(seen, [tip.as_str(), landed.as_str()], "branch, then HEAD");
+    host.server.stop().await;
+}
