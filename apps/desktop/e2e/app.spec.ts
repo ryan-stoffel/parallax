@@ -253,10 +253,8 @@ test("changing a setting never scrolls the window itself (PLX-441)", async () =>
   // Focusing an option's hidden radio once scrolled the whole window up, for good.
   for (const option of ["More", "Standard", "Blue & orange", "Red & green"])
     await page.getByText(option, { exact: true }).click();
-  const scroll = await page.evaluate(() => {
-    const { scrollTop, scrollHeight, clientHeight } = document.documentElement;
-    return { scrollTop, overflow: scrollHeight - clientHeight };
-  });
+  const scroll = await page.evaluate(`(({ scrollTop, scrollHeight, clientHeight }) =>
+    ({ scrollTop, overflow: scrollHeight - clientHeight }))(document.documentElement)`);
   expect(scroll).toEqual({ scrollTop: 0, overflow: 0 });
   await page.getByRole("button", { name: "Back to app" }).click();
 });
