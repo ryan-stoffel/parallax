@@ -67,7 +67,7 @@ import {
   type Asked,
   type ToolLook,
 } from "./Approval";
-import { Composer, tabItem, type Unanswered } from "./Composer";
+import { Composer, tabItem, type ComposerProps, type Unanswered } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError, githubProblem } from "./errors";
 import { imageCaps, imageUrl, loadImage } from "./images";
@@ -152,6 +152,7 @@ export function AgentChat({
   tab,
   startOver,
   others,
+  projectMode,
   pullRequests,
   onPrOpened,
   onSetUpGithub,
@@ -190,6 +191,8 @@ export function AgentChat({
    * runs' are in each of its chats (PLX-196).
    */
   others?: readonly Asked[];
+  /** The Project's permission mode, shown in place of Access, for a run in a Project (0042). */
+  projectMode?: ComposerProps["projectMode"];
   /** The run tab's link to its linked pull requests (PLX-319), in place of Open PR. */
   pullRequests?: ReactNode;
   /** Opens the pull request Open PR opened, in place of linking to it. */
@@ -548,6 +551,7 @@ export function AgentChat({
           optionsDisabled={optionsDisabled}
           imageCaps={imageCaps(connection)}
           manualDenied={manualDenied}
+          projectMode={projectMode}
           insert={compose && !compose.send ? compose.text : undefined}
           menus={
             connected && "composerMenus" in connection.capabilities ? { hostId, runId } : undefined

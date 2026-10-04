@@ -16,6 +16,7 @@ import type {
   AgentRun,
   LoggedEvent,
   Project,
+  ProjectPermission,
   Repo,
   ParallaxEvent,
   Thread,
@@ -1112,6 +1113,63 @@ test("a Project's first message starts its coordinator; later ones and Stop go t
   await click(button("Stop"));
   expect(calls("agent/cancel")).toEqual([{ runId: started!.id }]);
   expect(calls("project/start")).toHaveLength(1);
+});
+
+test("with projectPermission, a Project's composers show its mode in place of Access and send no permission", async () => {
+  capabilities = { coordinator: {}, projectPermission: {} };
+  let started: AgentRun | undefined;
+  answers["project/list"] = () => ({
+    result: {
+      projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), permission: "bypass" }],
+      seq: 7,
+    },
+  });
+  answers["accounts/defaults/get"] = () => ({
+    result: { coordinator: { kind: "subscription", backend: "claude" } },
+  });
+  answers["project/start"] = (p) => {
+    started = {
+      ...coordinatorRun(p["runId"] as string, p["prompt"] as string),
+      permission: "edit",
+    };
+    return { result: { run: started } };
+  };
+  answers["agent/events"] = serveEvents(() => [started]);
+  answers["agent/send"] = () => ({ result: { run: started } });
+  const mode = () => document.querySelector('main [title^="This Project\'s mode"]')?.textContent;
+  const access = () => document.querySelector('main button[aria-label^="Access:"]');
+  await renderApp();
+  await openEmber();
+  expect(mode()).toBe("Bypass");
+  expect(access()).toBeNull();
+
+  type("Add a dark mode");
+  await click(button("Send"));
+  expect(calls("project/start")).toEqual([
+    expect.not.objectContaining({ permission: expect.anything() }),
+  ]);
+  // The coordinator's chat too, though its run says another mode.
+  expect(mode()).toBe("Bypass");
+  expect(access()).toBeNull();
+  type("Start with the settings page");
+  await click(button("Send"));
+  expect(calls("agent/send")).toEqual([
+    { runId: started!.id, turnId: expect.any(String), text: "Start with the settings page" },
+  ]);
+});
+
+test("a Project's mode this app doesn't know shows by its name, not as Bypass", async () => {
+  capabilities = { coordinator: {}, projectPermission: {} };
+  const permission = "ask" as ProjectPermission;
+  answers["project/list"] = () => ({
+    result: { projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), permission }], seq: 7 },
+  });
+  answers["accounts/defaults/get"] = () => ({
+    result: { coordinator: { kind: "subscription", backend: "claude" } },
+  });
+  await renderApp();
+  await openEmber();
+  expect(document.querySelector('main [title^="This Project\'s mode"]')?.textContent).toBe("ask");
 });
 
 test("a Project whose coordinator ran before opens on its transcript", async () => {

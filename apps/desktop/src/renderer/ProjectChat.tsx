@@ -74,7 +74,8 @@ export function ProjectChat({
   );
 
   // Starts the coordinator as run `id`. With no coordinator account on the host, the run gets the
-  // host's first Claude account, its login before its keys (0004), and the chat says so.
+  // host's first Claude account, its login before its keys (0004), and the chat says so. A Project
+  // with a mode runs in it (0042), so it gets no permission.
   const start = async (
     id: string,
     text: string,
@@ -82,7 +83,8 @@ export function ProjectChat({
     images: PromptImage[],
   ) => {
     setStarted(id);
-    let error = await startCoordinator(project.id, id, text, images, { model, effort, permission });
+    const options = { model, effort, ...(!project.permission && { permission }) };
+    let error = await startCoordinator(project.id, id, text, images, options);
     const kind = error?.data?.kind;
     if (kind === "noDefaultAccount" || kind === "accountNotFound") {
       const accounts = await accountOptions(hostId);
@@ -91,9 +93,7 @@ export function ProjectChat({
       if (!first)
         return "No account can run the coordinator yet. Sign in to Claude Code, or add an API key, then try again.";
       error = await startCoordinator(project.id, id, text, images, {
-        model,
-        effort,
-        permission,
+        ...options,
         account: first.account,
       });
       if (!error) setNotice(`Using ${first.label} for this Project's coordinator.`);
@@ -114,6 +114,7 @@ export function ProjectChat({
         // A new coordinator replaces one that can't take messages (0024).
         startOver={(text, options, images) => start(uuidv7(), text, options, images)}
         others={others}
+        projectMode={project.permission}
       />
     );
 
@@ -167,6 +168,7 @@ export function ProjectChat({
           menus={connected && "composerMenus" in connection.capabilities ? { hostId } : undefined}
           // The coordinator asks only through a plxd that sends its requests.
           manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
+          projectMode={project.permission}
         />
       </div>
     </>

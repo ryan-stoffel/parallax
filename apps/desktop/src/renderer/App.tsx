@@ -572,6 +572,7 @@ export function App() {
                 // A Project's subagents are kept current.
                 going={isRunning(agent?.status)}
                 others={othersAsked(agentId)}
+                projectMode={project?.permission}
               />
             ) : (
               project && (
