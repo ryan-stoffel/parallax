@@ -78,22 +78,24 @@ impl WorktreeManager {
         Ok(())
     }
 
-    /// The path of every file on local branch `branch` of `repo_path`'s repository, from `git
-    /// ls-tree`, for the stale memory check (0044). A path with a character git quotes comes back
-    /// quoted.
+    /// The path of every file on `branch` of `repo_path`'s repository, from `git ls-tree`, for
+    /// the stale memory check (0044). `branch` is a local branch or a remote-tracking one such as
+    /// `origin/main`, resolved to its commit as `fetch_base` resolves a base. A path with a
+    /// character git quotes comes back quoted.
     ///
     /// # Errors
     ///
-    /// [`WorktreeError::NotAGitRepo`], or [`WorktreeError::GitFailed`] when there is no such
-    /// branch, [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`].
+    /// [`WorktreeError::NotAGitRepo`], [`WorktreeError::UnknownRevision`] when there is no such
+    /// branch, [`WorktreeError::GitFailed`], [`WorktreeError::Timeout`], or
+    /// [`WorktreeError::Spawn`].
     pub async fn branch_files(
         &self,
         repo_path: &Path,
         branch: &str,
     ) -> Result<Vec<String>, WorktreeError> {
         let repo_root = self.repo_root(repo_path).await?;
-        let tree = format!("refs/heads/{branch}");
-        let args = ["ls-tree", "-r", "--name-only", "--full-tree", &tree];
+        let commit = self.resolve_commit(&repo_root, branch).await?;
+        let args = ["ls-tree", "-r", "--name-only", "--full-tree", &commit];
         let output = self.run_git_ok(&repo_root, &args).await?;
         Ok(output.lines().map(str::to_owned).collect())
     }

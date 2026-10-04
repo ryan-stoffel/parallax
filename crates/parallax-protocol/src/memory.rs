@@ -119,7 +119,8 @@ pub struct MemoryFile {
     #[ts(optional)]
     pub replaces: Option<String>,
     /// An entry plxd marked for review because a path it names in backticks is missing from its
-    /// Project's integration branch (0044, PLX-407). Rewriting the entry clears it.
+    /// branch: the integration branch for a Project entry, the base branch for a repo entry
+    /// (0044, PLX-407). Rewriting the entry clears it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub stale: bool,

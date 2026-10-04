@@ -602,6 +602,41 @@ async fn a_moved_base_is_fetched_and_merged_alone() {
     assert_eq!(rev_parse(&path, "HEAD"), landed);
 }
 
+/// PLX-407: the stale check lists a local branch's files or a remote-tracking base's.
+#[tokio::test]
+async fn branch_files_lists_a_local_or_a_remote_tracking_branch() {
+    let origin_dir = tempfile::tempdir().unwrap();
+    let origin = init_repo(origin_dir.path()).canonicalize().unwrap();
+    std::fs::create_dir(origin.join("docs")).unwrap();
+    std::fs::write(origin.join("docs/remote.md"), "remote\n").unwrap();
+    git(&origin, &["add", "-A"]);
+    git(&origin, &["commit", "-q", "-m", "remote only"]);
+    let clone_dir = tempfile::tempdir().unwrap();
+    git(
+        clone_dir.path(),
+        &["clone", "-q", origin.to_str().unwrap(), "clone"],
+    );
+    let clone = clone_dir.path().join("clone").canonicalize().unwrap();
+    git(&clone, &["config", "user.name", "Test User"]);
+    git(&clone, &["config", "user.email", "test@example.com"]);
+    git(&clone, &["rm", "-q", "docs/remote.md"]);
+    std::fs::write(clone.join("local.txt"), "local\n").unwrap();
+    git(&clone, &["add", "-A"]);
+    git(&clone, &["commit", "-q", "-m", "local only"]);
+    let data_dir = tempfile::tempdir().unwrap();
+    let mgr = manager(data_dir.path());
+
+    let remote = mgr.branch_files(&clone, "origin/main").await.unwrap();
+    assert_eq!(remote, ["README.md", "docs/remote.md"]);
+    let local = mgr.branch_files(&clone, "main").await.unwrap();
+    assert_eq!(local, ["README.md", "local.txt"]);
+    let missing = mgr.branch_files(&clone, "origin/gone").await.unwrap_err();
+    assert!(
+        matches!(missing, WorktreeError::UnknownRevision { .. }),
+        "{missing:?}"
+    );
+}
+
 #[test]
 fn project_names_become_branch_slugs() {
     for (name, slug) in [

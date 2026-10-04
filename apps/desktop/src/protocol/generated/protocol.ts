@@ -4929,7 +4929,8 @@ export type MemoryFile = {
 	replaces?: string,
 	/**
 	 * An entry plxd marked for review because a path it names in backticks is missing from its
-	 * Project's integration branch (0044, PLX-407). Rewriting the entry clears it.
+	 * branch: the integration branch for a Project entry, the base branch for a repo entry
+	 * (0044, PLX-407). Rewriting the entry clears it.
 	 */
 	stale?: boolean,
 };
