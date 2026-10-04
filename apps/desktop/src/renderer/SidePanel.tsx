@@ -104,6 +104,7 @@ export function SidePanel({
   browse,
   pullRequests,
   pullRequest,
+  show,
 }: {
   open: boolean;
   onClose: () => void;
@@ -119,6 +120,8 @@ export function SidePanel({
   browse?: { url: string };
   pullRequests?: { urls: readonly string[]; list: ReactNode; view: (url: string) => ReactNode };
   pullRequest?: { url?: string };
+  /** Each new one opens the view of that name. */
+  show?: { name: string };
 }) {
   // The open views in tab order, and the one shown; with none shown, the list is.
   const [tabs, setTabs] = useState<Surface[]>([]);
@@ -155,6 +158,12 @@ export function SidePanel({
     const url = pullRequest?.url;
     if (url) openView({ name: `#${numberOf(url)}`, icon: GitPullRequest, key: url, url });
     else if (pullRequest) openView(surfaces.find((s) => s.name === "Pull requests")!);
+  }
+  const [shownView, setShownView] = useState(show);
+  if (show !== shownView) {
+    setShownView(show);
+    const s = show && surfaces.find((s) => s.name === show.name);
+    if (s) openView(s);
   }
   const emptyOf = (s: Surface) => (
     <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">

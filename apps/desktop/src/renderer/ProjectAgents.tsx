@@ -371,3 +371,71 @@ function StartAgent({
     </form>
   );
 }
+
+/**
+ * A Project's agents at a glance, over its composer: a chip for each child, most urgent first,
+ * opening its chat, and the rest behind a count that opens the Agents view. Shows nothing until the
+ * Project has a child.
+ */
+export function AgentStrip({
+  agents,
+  titles = {},
+  onOpen,
+  onShowAll,
+  max = 3,
+}: {
+  agents: ProjectAgentsView;
+  titles?: Readonly<Record<string, string>>;
+  onOpen: (runId: string) => void;
+  onShowAll: () => void;
+  max?: number;
+}) {
+  const asks = (run: AgentRun) => agents.waiting[run.id]?.length ?? 0;
+  const rank = (run: AgentRun) => childOrder.indexOf(runAttention(run, asks(run)));
+  const shown = agents.runs
+    .filter((r) => r.policy !== "noWrite")
+    .toReversed()
+    .toSorted((a, b) => rank(a) - rank(b));
+  if (shown.length === 0) return null;
+  const working = shown.filter((r) => runAttention(r, asks(r)) === "working").length;
+  const rest = shown.length - max;
+  return (
+    <nav aria-label="Project agents" className="flex min-w-0 items-center gap-1.5 px-1 pb-2">
+      <span className="shrink-0 pr-0.5 text-[12px] text-faint-foreground tabular-nums">
+        {working > 0 ? `${working} working` : `${shown.length} agents`}
+      </span>
+      <ul className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+        {shown.slice(0, max).map((run) => {
+          const look = statusLooks[run.status] ?? statusLooks.completed!;
+          const title = titles[run.id] ?? titleOf(run);
+          return (
+            <li key={run.id} className="min-w-0 shrink">
+              <button
+                type="button"
+                onClick={() => onOpen(run.id)}
+                title={title}
+                className="flex max-w-44 min-w-0 items-center gap-1.5 rounded-full border border-border bg-surface py-0.5 pr-2.5 pl-2 text-[12.5px] text-foreground/85 hover:bg-hover hover:text-foreground"
+              >
+                {asks(run) > 0 ? (
+                  <ShieldQuestion aria-hidden className="size-3.5 shrink-0 text-warning" />
+                ) : (
+                  <look.Icon aria-hidden className={`size-3.5 shrink-0 ${look.color}`} />
+                )}
+                <span className="truncate">{title}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {rest > 0 && (
+        <button
+          type="button"
+          onClick={onShowAll}
+          className="shrink-0 rounded-full px-2 py-0.5 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground"
+        >
+          +{rest} more
+        </button>
+      )}
+    </nav>
+  );
+}

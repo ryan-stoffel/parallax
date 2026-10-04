@@ -5,7 +5,9 @@ import {
   Hand,
   ListChecks,
   LoaderCircle,
+  MessagesSquare,
   Paperclip,
+  SquarePlus,
   ShieldOff,
   Sparkles,
   Square,
@@ -42,7 +44,7 @@ import { ModelMenu } from "./ModelMenu";
 import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
 import { lookOf, ThreadChip, type AttachThreads } from "./threadContext";
 import { draggedThread, threadDragType } from "./threadDrag";
-import { menuButton, menuItem, Picker, Segmented, type PickerOption } from "./ui";
+import { menuButton, menuItem, Picker, type PickerOption } from "./ui";
 
 // Claude Code's permission modes, under its own names (0027). A thread is full Claude Code in
 // every mode (0034), and a project's worker keeps its sandbox in every mode but Bypass (0013).
@@ -359,8 +361,8 @@ export interface ComposerProps {
    */
   projectMode?: ProjectPermission;
   /**
-   * A Project's New task target, on a plxd with `projectTasks` (0042): a New task / Ask toggle,
-   * whose tooltip names the `projectTarget` keybinding. New task sends through this `onSend`
+   * A Project's New task target, on a plxd with `projectTasks` (0042): a Send to picker, New task
+   * or Coordinator, whose other choice names the `projectTarget` keybinding. New task sends through this `onSend`
    * with a new thread's options on `backend`, the worker default's; Ask is the composer as it is
    * without it.
    */
@@ -799,9 +801,13 @@ export function Composer({
 
   const placeholder =
     disabledReason ??
-    (newThread || task
-      ? "Describe a change, paste an error, or drop in a plan"
-      : "Reply, add detail, or steer what it does next");
+    (task
+      ? "Describe a task and an agent starts on it"
+      : newTask
+        ? "Ask the coordinator, or have it plan and split the work"
+        : newThread
+          ? "Describe a change, paste an error, or drop in a plan"
+          : "Reply, add detail, or steer what it does next");
   // Its props are read again on every render, so its handlers see this render's state.
   const editor: Editor = useEditor({
     extensions,
@@ -1121,20 +1127,32 @@ export function Composer({
         )}
         <div className="flex items-center gap-0.5 px-3 pt-1 pb-3">
           {newTask && (
-            <div
-              className="mr-1"
-              title={`New task starts a thread in the Project. Ask sends to its coordinator.${targetKeys ? ` (${targetKeys})` : ""}`}
-            >
-              <Segmented
-                label="Send as"
+            <>
+              <Picker
+                label="Send to"
                 value={task ? "task" : "ask"}
                 onChange={(v) => newTask.onAsking(v === "ask")}
+                panelClassName="w-[22rem]"
                 options={[
-                  { value: "task", name: "New task" },
-                  { value: "ask", name: "Ask" },
+                  {
+                    value: "task",
+                    label: "New task",
+                    icon: <SquarePlus />,
+                    description:
+                      "Starts an agent on it in its own thread. Send the next one right away.",
+                    hint: task ? undefined : targetKeys,
+                  },
+                  {
+                    value: "ask",
+                    label: "Coordinator",
+                    icon: <MessagesSquare />,
+                    description: "Ask, plan, or steer. It splits the work and reports back here.",
+                    hint: task ? targetKeys : undefined,
+                  },
                 ]}
               />
-            </div>
+              {run && divider}
+            </>
           )}
           {run && (
             <>

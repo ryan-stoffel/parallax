@@ -184,6 +184,7 @@ export function AgentChat({
   onSubagents,
   forked,
   onFork,
+  above,
 }: {
   hostId: string;
   runId: string;
@@ -191,6 +192,8 @@ export function AgentChat({
   title?: string;
   /** A quiet note shown over the composer, such as which account a new thread got. */
   notice?: string;
+  /** Shown just over the composer, such as a Project's agents. */
+  above?: ReactNode;
   /** The run's first prompt, shown until the transcript loads, so a new thread opens on it. */
   prompt?: string;
   /**
@@ -584,6 +587,7 @@ export function AgentChat({
             </button>
           </p>
         )}
+        {above}
         {/* The latest turn's plan, while the run works on it. */}
         {plan && isRunning(run?.status) && !stalled && (
           <PlanStrip

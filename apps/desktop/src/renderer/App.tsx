@@ -215,6 +215,8 @@ export function App() {
     setPanelOpen(true);
     setShowPr({ url });
   };
+  // Each new one opens that side panel view, as the Project's agent strip opens Agents.
+  const [showView, setShowView] = useState<{ name: string }>();
   // Shrinks an expanded side panel, which hides the main pane the chat opens in.
   const openAgent = (id?: string) => {
     if (!project) return;
@@ -682,6 +684,12 @@ export function App() {
                   startTask={threads.startTask}
                   others={othersAsked(project.coordinator)}
                   onOpenRun={(id) => openAgent(id === project.coordinator ? undefined : id)}
+                  agents={agents}
+                  titles={threads.state.titles}
+                  onShowAgents={() => {
+                    setPanelOpen(true);
+                    setShowView({ name: "Agents" });
+                  }}
                 />
               )
             )}
@@ -706,6 +714,7 @@ export function App() {
         remoteHost={host.id === localId ? undefined : host.name}
         browse={browse}
         pullRequest={showPr}
+        show={showView}
         pullRequests={
           linksPrs && threadRun
             ? {

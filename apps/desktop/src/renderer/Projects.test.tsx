@@ -1086,7 +1086,7 @@ test("a Project's first message starts its coordinator; later ones and Stop go t
   expect(button("Model: Claude Opus 5.5")).not.toBeNull();
   expect(button("Access: Accept Edits")).not.toBeNull();
   // Without projectTasks every message goes to the coordinator, with no New task.
-  expect(document.querySelector('main fieldset[aria-label="Send as"]')).toBeNull();
+  expect(target()).toBeNull();
 
   type("Add a dark mode");
   await click(button("Send"));
@@ -1582,9 +1582,9 @@ const startsTask = (p: Record<string, unknown>) => {
   });
   return { result: { run, thread: { id: run.id, repo: "p-ember", createdAt: run.createdAt } } };
 };
-// The Project composer's New task / Ask toggle (0042), and which is on.
-const target = () => document.querySelector('main fieldset[aria-label="Send as"]');
-const targetOn = () => target()?.querySelector("input:checked")?.parentElement?.textContent;
+// The Project composer's Send to picker (0042), New task or Coordinator, and which is on.
+const target = () => document.querySelector('main button[aria-label^="Send to: "]');
+const targetOn = () => target()?.getAttribute("aria-label")?.slice("Send to: ".length);
 // The default Switch New task and Ask, Cmd+. on macOS.
 const flipTarget = () =>
   act(() => {
@@ -1604,8 +1604,9 @@ test("with projectTasks, New task is the default: Enter starts a child through t
   await renderApp();
   await openEmber();
   expect(targetOn()).toBe("New task");
-  expect(target()!.parentElement!.title).toBe(
-    "New task starts a thread in the Project. Ask sends to its coordinator. (⌘.)",
+  // The other choice names the shortcut that switches to it.
+  expect(document.querySelector('main [role="menu"][aria-label="Send to"]')!.textContent).toContain(
+    "⌘.",
   );
 
   type("Add a dark mode");
@@ -1613,7 +1614,7 @@ test("with projectTasks, New task is the default: Enter starts a child through t
   // Still in flight, and the box already takes the next one.
   expect(composer()!.textContent).toBe("");
   expect(composer()!.getAttribute("aria-placeholder")).toBe(
-    "Describe a change, paste an error, or drop in a plan",
+    "Describe a task and an agent starts on it",
   );
   type("Add a light mode");
   expect(button("Send")!.disabled).toBe(false);
@@ -1657,7 +1658,7 @@ test("the shortcut flips the Project composer to Ask, which starts and then mess
   await renderApp();
   await openEmber();
   flipTarget();
-  expect(targetOn()).toBe("Ask");
+  expect(targetOn()).toBe("Coordinator");
   type("How should we split this?");
   await click(button("Send"));
   expect(calls("project/start")).toEqual([
@@ -1666,7 +1667,7 @@ test("the shortcut flips the Project composer to Ask, which starts and then mess
   expect(transcript()).toContain("I'll plan it.");
 
   // The coordinator's chat keeps Ask, so a follow-up goes to it.
-  expect(targetOn()).toBe("Ask");
+  expect(targetOn()).toBe("Coordinator");
   type("Which is riskier?");
   await click(button("Send"));
   expect(calls("agent/send")).toEqual([

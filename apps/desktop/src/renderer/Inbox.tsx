@@ -3,6 +3,7 @@ import {
   CircleAlert,
   CircleCheck,
   CircleDot,
+  ChevronRight,
   CircleQuestionMark,
   type LucideIcon,
 } from "lucide-react";
@@ -134,8 +135,8 @@ const kindLooks: Record<InboxKind, { Icon: LucideIcon; color: string }> = {
 
 /**
  * A Project's unread inbox items, at the top of its coordinator chat, grouped as 0043 orders them.
- * Needs you items are cards; the rest are one line each. Opening an item opens its child's chat and
- * marks it seen, and Mark all read clears the inbox. With `answerable`, an open question takes an
+ * Needs you items are cards, always shown; the rest fold into one line of counts that opens to a
+ * line each. Opening an item opens its child's chat and marks it seen, and Mark all read clears it. With `answerable`, an open question takes an
  * answer in place, or keeps what the child assumed, and a decided one can be changed: "went with X,
  * change it?". Shows nothing once every item is seen.
  */
@@ -149,17 +150,75 @@ export function Inbox({
   /** Opens a run's chat: a child's, or the coordinator's for its paused wake-ups. */
   onOpen: (runId: string) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const unread = view.items.filter((i) => !i.seenAt);
   if (unread.length === 0) return null;
-  const needs = unread.filter((i) => i.kind === "needsYou").length;
+  const groups = inboxGroups
+    .map((g) => ({ ...g, items: unread.filter((i) => i.kind === g.kind) }))
+    .filter((g) => g.items.length > 0);
+  const needs = groups.find((g) => g.kind === "needsYou");
+  const updates = groups.filter((g) => g.kind !== "needsYou");
+  const count = updates.reduce((n, g) => n + g.items.length, 0);
+  const rowsOf = (items: InboxItem[]) =>
+    items.map((item) => {
+      const open = () => {
+        onOpen(item.run);
+        void view.seen([item.id]);
+      };
+      const question = answerable ? questionOf(item, view.questions) : undefined;
+      const onAnswer = (q: Question, text: string) => view.answer(item, q, text);
+      const Row = item.kind === "needsYou" ? NeedsYouCard : InboxRow;
+      return (
+        <Row key={item.id} item={item} question={question} onOpen={open} onAnswer={onAnswer} />
+      );
+    });
   return (
     <section aria-label="Inbox" className="mx-auto w-full max-w-3xl shrink-0 px-6 pt-4">
-      <div className="max-h-[34vh] overflow-y-auto rounded-xl border border-border bg-surface">
-        <div className="flex items-center gap-2 py-1.5 pr-1.5 pl-3.5">
-          <p className="min-w-0 flex-1 truncate text-[12.5px] text-muted-foreground">
-            {needs > 0 ? `${needs} waiting on you, ` : ""}
-            {unread.length} new since you last looked
-          </p>
+      <div className="max-h-[40vh] overflow-y-auto rounded-xl border border-border bg-surface">
+        {needs && (
+          <section aria-label={needs.label} className="px-2 pt-2 pb-1">
+            <h3 className="px-1.5 pb-1.5 text-[11.5px] font-medium text-faint-foreground">
+              {needs.label} <span className="tabular-nums">{needs.items.length}</span>
+            </h3>
+            <ul className="flex flex-col gap-1.5">{rowsOf(needs.items)}</ul>
+          </section>
+        )}
+        {/* Everything else is news, folded into one line until it's opened. */}
+        <div
+          className={`flex items-center gap-2 py-1 pr-1.5 pl-2 ${needs ? "border-t border-border/60" : ""}`}
+        >
+          <button
+            type="button"
+            aria-expanded={expanded}
+            disabled={count === 0}
+            onClick={() => setExpanded(!expanded)}
+            className="flex min-w-0 flex-1 items-center gap-3 rounded-md px-1.5 py-1 text-left text-[12.5px] text-muted-foreground enabled:hover:text-foreground"
+          >
+            <span className="flex items-center gap-1.5">
+              {count > 0 && (
+                <ChevronRight
+                  aria-hidden
+                  className={`size-3.5 transition-transform ${expanded ? "rotate-90" : ""}`}
+                />
+              )}
+              {count === 0 ? "Nothing else new" : `${count} ${count === 1 ? "update" : "updates"}`}
+            </span>
+            {updates.map((g) => {
+              const { Icon, color } = kindLooks[g.kind];
+              return (
+                <span
+                  key={g.kind}
+                  title={g.label}
+                  className="flex items-center gap-1 tabular-nums [&_svg]:size-3.5"
+                >
+                  <span className={color}>
+                    <Icon aria-hidden />
+                  </span>
+                  {g.items.length}
+                </span>
+              );
+            })}
+          </button>
           <button
             type="button"
             onClick={() => void view.seen(unread.map((i) => i.id))}
@@ -168,44 +227,16 @@ export function Inbox({
             Mark all read
           </button>
         </div>
-        {inboxGroups.map(({ kind, label }) => {
-          const group = unread.filter((i) => i.kind === kind);
-          if (group.length === 0) return null;
-          return (
-            <section key={kind} aria-label={label} className="border-t border-border/60 py-1.5">
+        <div hidden={!expanded}>
+          {updates.map((g) => (
+            <section key={g.kind} aria-label={g.label} className="border-t border-border/60 py-1.5">
               <h3 className="px-3.5 pt-0.5 pb-1 text-[11.5px] font-medium text-faint-foreground">
-                {label} <span className="tabular-nums">{group.length}</span>
+                {g.label} <span className="tabular-nums">{g.items.length}</span>
               </h3>
-              <ul className={kind === "needsYou" ? "flex flex-col gap-1.5 px-2 pb-1" : undefined}>
-                {group.map((item) => {
-                  const open = () => {
-                    onOpen(item.run);
-                    void view.seen([item.id]);
-                  };
-                  const question = answerable ? questionOf(item, view.questions) : undefined;
-                  const onAnswer = (q: Question, text: string) => view.answer(item, q, text);
-                  return kind === "needsYou" ? (
-                    <NeedsYouCard
-                      key={item.id}
-                      item={item}
-                      question={question}
-                      onOpen={open}
-                      onAnswer={onAnswer}
-                    />
-                  ) : (
-                    <InboxRow
-                      key={item.id}
-                      item={item}
-                      question={question}
-                      onOpen={open}
-                      onAnswer={onAnswer}
-                    />
-                  );
-                })}
-              </ul>
+              <ul>{rowsOf(g.items)}</ul>
             </section>
-          );
-        })}
+          ))}
+        </div>
       </div>
     </section>
   );
