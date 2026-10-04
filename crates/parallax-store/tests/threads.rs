@@ -28,6 +28,7 @@ fn run_fields(repo: Uuid) -> RunFields {
         backend: "claude".to_owned(),
         coordinator_thread: None,
         parent: None,
+        notify_parent: false,
         model: None,
         effort: None,
         permission: None,

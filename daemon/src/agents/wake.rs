@@ -1,17 +1,19 @@
-//! Waking a project's coordinator when runs it started finish (PLX-42, decision 0025).
+//! Waking a parent when the children it launched finish (PLX-42, PLX-380, decision 0025): a
+//! Project's coordinator, or any thread that launched a child with `thread_launch` (0041).
 //!
-//! When a worker with a `coordinatorThread` ends a CLI process, [`notify`] hands a summary of it
-//! to the coordinator's actor, which keeps it in [`Wakes`]. The actor sends what is waiting as one
-//! turn, through the same resume as `agent/send`, once [`BATCH`] has passed since the first
-//! summary arrived and its own CLI isn't running: a turn in progress gets them next. After
-//! [`CAP`] wake-ups in a row with no message from the user, after the user stops the coordinator,
-//! or when a wake-up can't start it, it pauses them until the user writes and reports
-//! `agent.wakeupsPaused`.
+//! When a run whose `notify_parent` is set ends a CLI process, [`notify`] hands a summary of it
+//! to its parent's actor, which keeps it in [`Wakes`]. A run started in a Project other than
+//! through its coordinator's own tools wakes the coordinator too ([`started`], 0043). The actor
+//! sends what is waiting as one turn, through the same resume as `agent/send`, once [`BATCH`]
+//! has passed since the first summary arrived and its own CLI isn't running: a turn in progress
+//! gets them next. After [`CAP`] wake-ups in a row with no message from the user, after the user
+//! stops the parent, or when a wake-up can't start it, it pauses them until the user writes and
+//! reports `agent.wakeupsPaused`.
 //!
 //! A restart keeps the count and a pause in the store (PLX-178). What was waiting, and the runs
 //! the stop interrupted, [`catch_up`] rebuilds from the store when plxd starts.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,15 +31,15 @@ use crate::server::Daemon;
 /// How long wake-ups wait after the first arrives, so runs that finish together make one turn.
 const BATCH: Duration = Duration::from_secs(2);
 
-/// Wake-up turns a coordinator takes in a row, with no message from the user, before plxd
-/// pauses them.
-pub(super) const CAP: u32 = 10;
+/// Wake-up turns a parent takes in a row, with no message from the user, before plxd pauses
+/// them (0043).
+pub(super) const CAP: u32 = 100;
 
 /// How much of a run's task and last message a summary quotes.
 const TASK_BYTES: usize = 200;
 pub(super) const EXCERPT_BYTES: usize = 500;
 
-/// A coordinator's waiting wake-ups, how many it has taken since the user last wrote, and whether
+/// A parent's waiting wake-ups, how many it has taken since the user last wrote, and whether
 /// they are paused. The actor stores `state` whenever it changes, so a restart keeps it.
 #[derive(Debug, Default)]
 pub(super) struct Wakes {
@@ -45,7 +47,7 @@ pub(super) struct Wakes {
     since: Option<Instant>,
     state: WakeState,
     /// The wake-up turn last sent, until its `turnStarted` is logged. Only one can be in flight,
-    /// since none is sent while the coordinator's CLI runs.
+    /// since none is sent while the parent's CLI runs.
     sent: Option<TurnId>,
 }
 
@@ -74,7 +76,7 @@ impl Wakes {
         Some((turn, message(&self.waiting)))
     }
 
-    /// The wake-up from [`Wakes::next`] reached the coordinator's CLI: it counts against the cap,
+    /// The wake-up from [`Wakes::next`] reached the parent's CLI: it counts against the cap,
     /// and what waited is gone.
     pub fn delivered(&mut self) {
         self.state.in_a_row += 1;
@@ -82,13 +84,13 @@ impl Wakes {
         self.since = None;
     }
 
-    /// The user wrote to the coordinator: the count starts over, and a pause ends. Whether that
+    /// The user wrote to the parent: the count starts over, and a pause ends. Whether that
     /// changed anything.
     pub fn attended(&mut self) -> bool {
         std::mem::take(&mut self.state) != WakeState::default()
     }
 
-    /// Nothing wakes the coordinator until the user writes again. Whether it wasn't paused
+    /// Nothing wakes the parent until the user writes again. Whether it wasn't paused
     /// already.
     pub fn pause(&mut self) -> bool {
         !std::mem::replace(&mut self.state.paused, true)
@@ -116,60 +118,94 @@ impl Wakes {
     }
 }
 
-/// Hands `summary` to coordinator `thread`'s actor, spawning one after a restart, without waiting
-/// for it.
-pub(super) fn notify(daemon: &Arc<Daemon>, thread: Uuid, summary: String) {
-    let Ok(id) = RunId::try_from(thread) else {
+/// Hands `summary` to run `parent`'s actor, spawning one after a restart, without waiting for it.
+pub(super) fn notify(daemon: &Arc<Daemon>, parent: Uuid, summary: String) {
+    let Ok(id) = RunId::try_from(parent) else {
         return;
     };
     let owned = Arc::clone(daemon);
     daemon.agents.tracker.spawn(async move {
         match super::actor_for(&owned, id).await {
             Ok(actor) => {
-                // A closed channel is a coordinator that stopped or was deleted: nothing to wake.
+                // A closed channel is a parent that stopped or was deleted: nothing to wake.
                 let _ = actor.send(Command::Wake(summary)).await;
             }
             Err(error) => {
-                warn!(coordinator = %id, error = %error.message, "could not wake a coordinator");
+                warn!(parent = %id, error = %error.message, "could not wake a parent");
             }
         }
     });
 }
 
-/// After a restart, hands each project's current coordinator one summary of the runs it started
-/// that ended after its last turn began (PLX-178): the runs the stop interrupted, and any whose
-/// wake-up was still waiting. A run a wake-up already named ended before that wake-up's turn, so
-/// it isn't named again. If the coordinator's own turn was interrupted, the summary says so, since
-/// nothing else would pick it back up. Called once at startup, after runs the store still has
-/// running are marked interrupted.
+/// Wakes `run`'s Project's current coordinator, if it has one, to say the run started (0043), so
+/// it can step in early. For a run started in a Project other than through its coordinator's own
+/// tools: the coordinator knows about the ones it launched.
+// ponytail: a start line waits only in memory, so a restart before it is sent drops it; store
+// it, as `catch_up` rebuilds ends, if that matters.
+pub(super) fn started(daemon: &Arc<Daemon>, run: &AgentRun) {
+    let project = Uuid::from(run.project);
+    let line = format!("- Run {} ({}): started.", run.id, task(&run.prompt));
+    let owned = Arc::clone(daemon);
+    daemon.agents.tracker.spawn(async move {
+        let current = store(&owned, move |db| {
+            super::coordinator::coordinator_of(db, project)
+        })
+        .await;
+        match current {
+            Ok(Some(coordinator)) => notify(&owned, coordinator.into(), line),
+            Ok(None) => {}
+            Err(error) => {
+                warn!(error = %error.message, "could not find a Project's coordinator to wake");
+            }
+        }
+    });
+}
+
+/// After a restart, hands each parent one summary of its notifying children that ended after its
+/// last turn began (PLX-178): the runs the stop interrupted, and any whose wake-up was still
+/// waiting. A run a wake-up already named ended before that wake-up's turn, so it isn't named
+/// again. If a Project's current coordinator's own turn was interrupted, the summary says so,
+/// since nothing else would pick it back up. A replaced coordinator is skipped (0024). Called once
+/// at startup, after runs the store still has running are marked interrupted.
 // ponytail: rebuilt from run rows, so a summary lacks the run's last result, and a run that ended
 // before the user's last message to the coordinator isn't named; store the summaries if that
 // matters.
 pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
     let missed = store(daemon, |db| {
         let runs = db.list_runs(None).map_err(|e| store_error(&e))?;
+        let by_id: HashMap<Uuid, &parallax_store::Run> =
+            runs.iter().map(|run| (run.id, run)).collect();
         // Oldest first, so each project keeps its newest no-write run: its coordinator (0024).
-        let coordinators: HashMap<Uuid, &parallax_store::Run> = runs
+        let coordinators: HashMap<Uuid, Uuid> = runs
             .iter()
             .filter(|run| run.fields.policy == NO_WRITE)
-            .map(|run| (run.fields.project_id, run))
+            .map(|run| (run.fields.project_id, run.id))
             .collect();
+        let mut parents: BTreeSet<Uuid> = coordinators.values().copied().collect();
+        parents.extend(
+            runs.iter()
+                .filter(|run| run.fields.notify_parent)
+                .filter_map(|run| run.fields.parent),
+        );
         let mut missed = Vec::new();
-        for coordinator in coordinators.into_values() {
+        for parent in parents.iter().filter_map(|id| by_id.get(id)) {
+            let current = coordinators.get(&parent.fields.project_id) == Some(&parent.id);
+            if parent.fields.policy == NO_WRITE && !current {
+                continue;
+            }
             let since = db
-                .last_turn_at(coordinator.id)
+                .last_turn_at(parent.id)
                 .map_err(|e| store_error(&e))?
-                .unwrap_or(coordinator.created_at);
+                .unwrap_or(parent.created_at);
             let mut lines = Vec::new();
+            if current && parent.state.status == INTERRUPTED && parent.updated_at > since {
+                lines.push(OWN_TURN.to_owned());
+            }
             for run in runs.iter().filter(|run| {
-                run.fields.coordinator_thread == Some(coordinator.id) && run.updated_at > since
+                run.fields.parent == Some(parent.id)
+                    && run.fields.notify_parent
+                    && run.updated_at > since
             }) {
-                if run.id == coordinator.id {
-                    if run.state.status == INTERRUPTED {
-                        lines.push(OWN_TURN.to_owned());
-                    }
-                    continue;
-                }
                 let worktree = db.get_worktree(run.id).map_err(|e| store_error(&e))?;
                 if let Some(line) = agent_run(run, worktree.as_ref())
                     .ok()
@@ -179,7 +215,7 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
                 }
             }
             if !lines.is_empty() {
-                missed.push((coordinator.id, lines.join("\n")));
+                missed.push((parent.id, lines.join("\n")));
             }
         }
         Ok(missed)
@@ -187,13 +223,13 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
     .await;
     match missed {
         Ok(missed) => {
-            for (thread, summary) in missed {
-                info!(coordinator = %thread, "waking a coordinator for what it missed while plxd was stopped");
-                notify(daemon, thread, summary);
+            for (parent, summary) in missed {
+                info!(parent = %parent, "waking a parent for what it missed while plxd was stopped");
+                notify(daemon, parent, summary);
             }
         }
         Err(error) => {
-            warn!(error = %error.message, "could not find what coordinators missed while plxd was stopped");
+            warn!(error = %error.message, "could not find what parents missed while plxd was stopped");
         }
     }
 }
@@ -236,7 +272,7 @@ pub(super) fn summary(run: &AgentRun, outcome: &AgentOutcome) -> String {
         ),
         AgentOutcome::Cancelled => "cancelled".to_owned(),
         AgentOutcome::Interrupted => {
-            "interrupted when plxd stopped; message_agent resumes it".to_owned()
+            "interrupted when plxd stopped; thread_send resumes it".to_owned()
         }
         AgentOutcome::Unknown => "stopped".to_owned(),
     };
@@ -275,9 +311,9 @@ pub(super) fn one_line(text: &str, max: usize) -> String {
 /// A wake-up turn's message: the summaries, and what to do with them.
 fn message(summaries: &[String]) -> String {
     format!(
-        "Parallax, not the user: runs you started ended.\n\n{}\n\nReview them with agent_status \
-         and agent_diff, message or start runs if more is needed, and tell the user where things \
-         stand.",
+        "Parallax, not the user: these threads ended or started.\n\n{}\n\nReview \
+         them with thread_read, message them with thread_send or launch more if needed, and tell \
+         the user where things stand.",
         summaries.join("\n")
     )
 }

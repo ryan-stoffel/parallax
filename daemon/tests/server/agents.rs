@@ -117,6 +117,7 @@ pub(crate) fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams
             backend: "fake".to_owned(),
         }),
         coordinator_thread: None,
+        notify: None,
         model: None,
         effort: None,
         permission: None,

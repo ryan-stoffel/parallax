@@ -1679,6 +1679,11 @@ export type AgentStartParams = {
 	 */
 	coordinatorThread?: CoordinatorThreadId,
 	/**
+	 * Whether the run wakes its coordinator when a CLI process of its ends (PLX-380, 0025), for
+	 * a run with a `coordinatorThread`. Absent means true. A retry must repeat it.
+	 */
+	notify?: boolean,
+	/**
 	 * The model, in the backend's naming, such as `opus`. Absent means the CLI's default. Send
 	 * it, `effort`, and `permission` only to a plxd that advertises `runOptions`. The run keeps
 	 * all three when it resumes, and a retry must repeat them.
@@ -3343,6 +3348,12 @@ export type ThreadStartParams = {
 	 * with `runNotFound`. Behind `threadLineage`.
 	 */
 	parent?: RunId,
+	/**
+	 * Whether the thread wakes its `parent` when a CLI process of its ends, as a Project's
+	 * coordinator wakes for its subagents (PLX-380, 0025). Absent means true. A retry must repeat
+	 * it.
+	 */
+	notify?: boolean,
 	/**
 	 * Its title, as `thread/update` takes it. Not part of what makes a retry with the same run id
 	 * conflict, since the title can change. Behind `threadLineage`.

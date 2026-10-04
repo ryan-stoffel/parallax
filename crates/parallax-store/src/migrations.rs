@@ -388,6 +388,15 @@ const MIGRATIONS: &[Migration] = &[
             PRIMARY KEY (run_id, turn_id)
         );",
     },
+    // Whether a child wakes its parent when a CLI process of its ends (PLX-380, decisions 0025
+    // and 0041): `thread_launch`'s `notify`. Existing runs keep what they did: a coordinator's
+    // subagents woke it, and a thread's children didn't wake it.
+    Migration {
+        version: 28,
+        sql: "ALTER TABLE runs ADD COLUMN notify_parent INTEGER NOT NULL DEFAULT 0;
+        UPDATE runs SET notify_parent = 1
+            WHERE parent IS NOT NULL AND coordinator_thread IS NOT NULL;",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

@@ -225,9 +225,10 @@ pub struct RunRequest {
     pub context_window: Option<u32>,
     /// Fast mode on or off, or the CLI's default. Only for a backend with [`Backend::fast_mode`].
     pub fast: Option<bool>,
-    /// plxd's MCP tools, for a coordinator's [`ToolPolicy::NoWrite`] run only (#195, 0019).
-    /// Routing drops them for every other role, and a backend refuses them on a worker.
-    pub coordinator_tools: Option<CoordinatorTools>,
+    /// plxd's host-wide thread tools bound to a coordinator's own run, for its
+    /// [`ToolPolicy::NoWrite`] run only (0041, PLX-380). Routing drops them for every other role,
+    /// and a backend refuses them on a worker.
+    pub coordinator_tools: Option<ThreadTools>,
     /// plxd's host-wide thread tools, for a normal thread's run only (0041). Routing drops them
     /// for every other run, and Claude Code attaches them only to a thread that runs as full
     /// Claude Code ([`claude::unsandboxed`]), since the server runs outside any sandbox.
@@ -242,39 +243,8 @@ pub struct RunRequest {
     pub thread: bool,
 }
 
-/// How a coordinator's CLI launches `plxd mcp` (0019): the server is bound to one project and one
-/// coordinator thread by these arguments, which plxd sets and the model never sees or chooses.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CoordinatorTools {
-    /// The `plxd` executable that serves the tools.
-    pub program: PathBuf,
-    /// plxd's data folder, which tells `plxd mcp` where the socket is.
-    pub data_dir: PathBuf,
-    /// The only project the tools can reach.
-    pub project: parallax_protocol::ProjectId,
-    /// The coordinator thread that runs spawned through the tools are tagged with.
-    pub thread: parallax_protocol::CoordinatorThreadId,
-}
-
-impl CoordinatorTools {
-    /// `{"mcpServers": {"plxd": ...}}`, for a CLI's `--mcp-config`: the one stdio server, with
-    /// its program and arguments.
-    ///
-    /// # Errors
-    ///
-    /// [`StartError::Invalid`] if the program's or the data folder's path isn't UTF-8.
-    pub fn mcp_config(&self) -> Result<serde_json::Value, StartError> {
-        let (project, thread) = (self.project.to_string(), self.thread.to_string());
-        mcp_config(
-            &self.program,
-            &self.data_dir,
-            &["--project", &project, "--coordinator-thread", &thread],
-        )
-    }
-}
-
-/// How a normal thread's CLI launches `plxd mcp --thread` (0041): the server is bound to the
-/// thread's own run, which plxd sets and the model never sees or chooses, so a thread it
+/// How a thread's CLI, or a coordinator's, launches `plxd mcp --thread` (0041): the server is
+/// bound to the run's own id, which plxd sets and the model never sees or chooses, so a thread it
 /// launches records it as the parent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThreadTools {
@@ -287,7 +257,8 @@ pub struct ThreadTools {
 }
 
 impl ThreadTools {
-    /// `{"mcpServers": {"plxd": ...}}`, for a CLI's `--mcp-config`, as [`CoordinatorTools`]'s.
+    /// `{"mcpServers": {"plxd": ...}}`, for a CLI's `--mcp-config`: the one stdio server, with
+    /// its program and arguments.
     ///
     /// # Errors
     ///

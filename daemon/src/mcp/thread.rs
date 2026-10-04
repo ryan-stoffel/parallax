@@ -1,4 +1,5 @@
-//! `plxd mcp --thread <runId>`: a normal thread's host-wide Parallax tools (0041, PLX-373).
+//! `plxd mcp --thread <runId>`: a thread's host-wide Parallax tools (0041, PLX-373), a Project's
+//! coordinator's included (PLX-380).
 //!
 //! plxd writes `--thread` into the thread's `--mcp-config` ([`crate::backend::ThreadTools`]), so
 //! the server knows its caller and no tool takes the caller's id. The tools reach every thread on
@@ -7,29 +8,42 @@
 //! as its `parent`, and a message or interrupt names the caller in the target's transcript
 //! (`agent/send`'s and `agent/cancel`'s `from`). Framing, connections, errors, and size caps are
 //! 0019's, from [`super`].
+//!
+//! A caller in a Project also gets [`CONTEXT_TOOLS`], the Project's shared context. A Project's
+//! coordinator launches its children in its Project, through `agent/start` with itself as their
+//! coordinator thread, so they show in the Project's Agents panel, keep the worker sandbox, and
+//! run in the Project's mode, and `thread_list` lists its Project's runs, which have no thread
+//! rows.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use parallax_protocol::methods::{
-    AgentCancel, AgentEvents, AgentList, AgentSend, PrLink, PrUnlink, RepoAdd, ThreadArchive,
-    ThreadList, ThreadSearch, ThreadStart, ThreadUpdate,
+    AgentCancel, AgentEvents, AgentList, AgentSend, AgentStart, ContextList, ContextRead,
+    ContextWrite, PrLink, PrUnlink, ProjectList, RepoAdd, ThreadArchive, ThreadList, ThreadSearch,
+    ThreadStart, ThreadUpdate,
 };
 use parallax_protocol::{
     AccountChoice, AccountId, AgentCancelParams, AgentEffort, AgentEventsParams, AgentListParams,
-    AgentOutcome, AgentOutputItem, AgentPermission, AgentRun, AgentSendParams, AgentStatus,
-    AgentToolStatus, ParallaxEvent, PrViewParams, Repo, RepoAddParams, RepoId, RunId, Thread,
-    ThreadArchiveParams, ThreadListParams, ThreadListResult, ThreadSearchParams, ThreadStartParams,
-    ThreadUpdateParams, TurnId,
+    AgentOutcome, AgentOutputItem, AgentPermission, AgentPolicy, AgentRun, AgentSendParams,
+    AgentStartParams, AgentStatus, AgentToolStatus, ContextListParams, ContextReadParams,
+    ContextWriteId, ContextWriteParams, CoordinatorThreadId, ParallaxEvent, PrViewParams,
+    ProjectId, ProjectListParams, Repo, RepoAddParams, RepoId, RunId, Thread, ThreadArchiveParams,
+    ThreadListParams, ThreadListResult, ThreadSearchParams, ThreadStartParams, ThreadUpdateParams,
+    TurnId,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{Instant, sleep};
+use uuid::Uuid;
 
-use super::{MAX_TEXT_BYTES, Plxd, Tools, check_text, clip, last_output, parse, pretty, tail};
+use super::{
+    MAX_CONTEXT_BYTES, MAX_PATH_BYTES, MAX_TEXT_BYTES, Plxd, Tools, check_text, clip, last_output,
+    parse, pretty, tail,
+};
 
-/// Every tool the server offers.
+/// Every tool the server offers a thread outside a Project.
 pub const TOOLS: &[&str] = &[
     "thread_list",
     "thread_read",
@@ -43,8 +57,29 @@ pub const TOOLS: &[&str] = &[
     "pr_unlink",
 ];
 
-/// [`TOOLS`] as Claude Code names them, `mcp__<server>__<tool>`: a thread's `--allowedTools`, so
-/// they run without asking in every permission mode. Claude Code's todo tools follow them there.
+/// The tools a caller in a Project also gets: its shared context (0019).
+pub const CONTEXT_TOOLS: &[&str] = &["read_context", "write_context"];
+
+/// [`TOOLS`], then [`CONTEXT_TOOLS`]: what a caller in a Project gets.
+const PROJECT_TOOLS: &[&str] = &[
+    "thread_list",
+    "thread_read",
+    "thread_search",
+    "thread_launch",
+    "thread_send",
+    "thread_wait",
+    "thread_interrupt",
+    "thread_update",
+    "pr_link",
+    "pr_unlink",
+    "read_context",
+    "write_context",
+];
+
+/// Every tool as Claude Code names them, `mcp__<server>__<tool>`: a thread's and a coordinator's
+/// `--allowedTools`, so they run without asking in every permission mode. Claude Code's todo tools
+/// follow them there. Outside a Project the server doesn't offer the context tools, so their names
+/// allow nothing.
 pub const ALLOWED_TOOLS: &[&str] = &[
     "mcp__plxd__thread_list",
     "mcp__plxd__thread_read",
@@ -56,6 +91,8 @@ pub const ALLOWED_TOOLS: &[&str] = &[
     "mcp__plxd__thread_update",
     "mcp__plxd__pr_link",
     "mcp__plxd__pr_unlink",
+    "mcp__plxd__read_context",
+    "mcp__plxd__write_context",
 ];
 
 /// About how much transcript one `thread_read` page carries, in bytes. A page ends at an event,
@@ -90,6 +127,15 @@ pub struct Binding {
     pub run: RunId,
 }
 
+/// A bound server: its [`Binding`], and what the caller's run is.
+struct Server {
+    binding: Binding,
+    /// The caller's Project, when its run is in one rather than in a repo entry.
+    project: Option<ProjectId>,
+    /// The caller is its Project's coordinator (0024), whose children start in the Project.
+    coordinator: bool,
+}
+
 /// Checks that the bound run exists, then serves MCP on `input` and `output` until `input` ends.
 ///
 /// # Errors
@@ -102,18 +148,33 @@ pub async fn run(
     output: impl AsyncWrite + Unpin,
 ) -> Result<(), String> {
     let mut plxd = Plxd::open(&binding.socket).await?;
-    find_run(&mut plxd, binding.run).await?;
+    let caller = find_run(&mut plxd, binding.run).await?;
+    let projects = plxd.call::<ProjectList>(ProjectListParams {}).await?;
     drop(plxd);
-    super::serve(binding, input, output).await
+    let project = projects
+        .projects
+        .iter()
+        .any(|project| project.id == caller.project)
+        .then_some(caller.project);
+    let server = Server {
+        binding: binding.clone(),
+        project,
+        coordinator: project.is_some() && caller.policy == AgentPolicy::NoWrite,
+    };
+    super::serve(&server, input, output).await
 }
 
-impl Tools for Binding {
+impl Tools for Server {
     fn names(&self) -> &'static [&'static str] {
-        TOOLS
+        if self.project.is_some() {
+            PROJECT_TOOLS
+        } else {
+            TOOLS
+        }
     }
 
     fn definitions(&self) -> Value {
-        definitions()
+        definitions(self.project.is_some())
     }
 
     async fn call(&self, name: &str, arguments: Value) -> Result<String, String> {
@@ -125,7 +186,7 @@ impl Tools for Binding {
     clippy::too_many_lines,
     reason = "one schema per tool, read side by side"
 )]
-fn definitions() -> Value {
+fn definitions(project: bool) -> Value {
     let run_id = |what: &str| json!({"type": "string", "description": what});
     let object = |properties: Value, required: &[&str]| {
         json!({
@@ -151,7 +212,7 @@ fn definitions() -> Value {
         "description": "Run ids of threads whose summaries to attach to the message as context, at most 8.",
     });
     let mine = run_id("The thread's run id, from thread_list. Omit it for your own thread.");
-    json!([
+    let mut tools = json!([
         tool(
             "thread_list",
             "List the threads on this host, newest first: each one's run id, title, status, backend, model, mode, repository, branch, parent, and whether it is settled. Yours has \"you\": true.",
@@ -204,6 +265,7 @@ fn definitions() -> Value {
                     "repo": {"type": "string", "description": "The repository, by absolute path or thread_list's repo id. Default: yours."},
                     "base": {"type": "string", "description": "With worktree, the ref it starts from, such as origin/develop. Default HEAD."},
                     "branch": {"type": "string", "description": "With checkout, the branch to switch the checkout to first."},
+                    "notify": {"type": "boolean", "description": "Wake you with a message from Parallax each time it finishes or stops, so you needn't wait on it. Default true."},
                 }),
                 &["prompt"]
             ),
@@ -278,7 +340,38 @@ fn definitions() -> Value {
             ),
             false,
         ),
-    ])
+    ]);
+    if project {
+        let context = [
+            tool(
+                "read_context",
+                "Read your Project's shared context: one file's content by path, or the list of files without a path.",
+                object(
+                    json!({
+                        "path": {"type": "string", "description": "A file name such as plan.md. Omit it to list the files."},
+                    }),
+                    &[],
+                ),
+                true,
+            ),
+            tool(
+                "write_context",
+                "Write a file in your Project's shared context, replacing it. Only .md, .markdown, and .txt names, with no folders.",
+                object(
+                    json!({
+                        "path": {"type": "string", "description": "A file name such as plan.md."},
+                        "content": {"type": "string", "description": "The whole new content, at most 1 MiB."},
+                    }),
+                    &["path", "content"],
+                ),
+                false,
+            ),
+        ];
+        if let Some(list) = tools.as_array_mut() {
+            list.extend(context);
+        }
+    }
+    tools
 }
 
 #[derive(Deserialize)]
@@ -338,6 +431,22 @@ struct LaunchArgs {
     base: Option<String>,
     #[serde(default)]
     branch: Option<String>,
+    #[serde(default)]
+    notify: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadContextArgs {
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WriteContextArgs {
+    path: String,
+    content: String,
 }
 
 #[derive(Deserialize)]
@@ -384,17 +493,38 @@ struct PrArgs {
     run_id: Option<RunId>,
 }
 
-async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<String, String> {
+/// `thread_list`: the host's threads, newest first, after the caller's Project's runs. A Project's
+/// runs have no thread rows, so a coordinator's children are listed from its runs.
+async fn list(server: &Server, args: ListArgs) -> Result<String, String> {
+    let caller = server.binding.run;
+    let mut plxd = Plxd::open(&server.binding.socket).await?;
+    let mut listed = Vec::new();
+    if let Some(project) = server.project {
+        let runs = plxd
+            .call::<AgentList>(AgentListParams {
+                project: Some(project),
+            })
+            .await?
+            .runs;
+        listed.extend(
+            runs.iter()
+                .rev()
+                .filter(|run| run.id != caller)
+                .map(|run| describe(run, None, &[], caller)),
+        );
+    }
+    let mut threads = plxd.call::<ThreadList>(ThreadListParams {}).await?.threads;
+    threads.reverse();
+    threads.retain(|thread| args.include_archived || !thread.archived);
+    listed.extend(described(&mut plxd, &threads, caller).await?);
+    Ok(pretty(&json!({"threads": listed})))
+}
+
+async fn call_tool(server: &Server, name: &str, arguments: Value) -> Result<String, String> {
+    let binding = &server.binding;
     let caller = binding.run;
     match name {
-        "thread_list" => {
-            let ListArgs { include_archived } = parse(arguments)?;
-            let mut plxd = Plxd::open(&binding.socket).await?;
-            let mut threads = plxd.call::<ThreadList>(ThreadListParams {}).await?.threads;
-            threads.reverse();
-            threads.retain(|thread| include_archived || !thread.archived);
-            described(&mut plxd, &threads, caller).await
-        }
+        "thread_list" => list(server, parse(arguments)?).await,
         "thread_read" => {
             let ReadArgs { run_id, after } = parse(arguments)?;
             let mut plxd = Plxd::open(&binding.socket).await?;
@@ -407,8 +537,10 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
             let found = plxd
                 .call::<ThreadSearch>(ThreadSearchParams { query, limit })
                 .await?;
-            described(&mut plxd, &found.threads, caller).await
+            let threads = described(&mut plxd, &found.threads, caller).await?;
+            Ok(pretty(&json!({"threads": threads})))
         }
+        "thread_launch" if server.coordinator => launch_child(server, parse(arguments)?).await,
         "thread_launch" => launch(binding, parse(arguments)?).await,
         "thread_send" => {
             let SendArgs {
@@ -478,21 +610,76 @@ async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<St
                 &json!({"runId": run.id, "pullRequests": run.pull_requests}),
             ))
         }
+        "read_context" | "write_context" => {
+            let project = server
+                .project
+                .ok_or("your thread isn't in a Project, so it has no shared context")?;
+            context_tool(server, project, name, arguments).await
+        }
         other => Err(format!("no tool is named {other:?}")),
     }
 }
 
-/// `{"threads": [...]}`, each of `threads` with its run, in their order.
-async fn described(plxd: &mut Plxd, threads: &[Thread], caller: RunId) -> Result<String, String> {
+/// `read_context` and `write_context`, on the caller's Project's shared context.
+async fn context_tool(
+    server: &Server,
+    project: ProjectId,
+    name: &str,
+    arguments: Value,
+) -> Result<String, String> {
+    let mut plxd = Plxd::open(&server.binding.socket).await?;
+    if name == "read_context" {
+        let ReadContextArgs { path } = parse(arguments)?;
+        let Some(path) = path else {
+            let files = plxd
+                .call::<ContextList>(ContextListParams { project })
+                .await?
+                .files;
+            return Ok(pretty(&json!({"files": files})));
+        };
+        check_text("path", &path, MAX_PATH_BYTES)?;
+        let read = plxd
+            .call::<ContextRead>(ContextReadParams { project, path })
+            .await?;
+        return Ok(read.content);
+    }
+    let WriteContextArgs { path, content } = parse(arguments)?;
+    check_text("path", &path, MAX_PATH_BYTES)?;
+    if content.len() > MAX_CONTEXT_BYTES {
+        return Err(format!("content must be at most {MAX_CONTEXT_BYTES} bytes"));
+    }
+    let writer = if server.coordinator {
+        "coordinator".to_owned()
+    } else {
+        format!("thread {}", server.binding.run)
+    };
+    let file = plxd
+        .call::<ContextWrite>(ContextWriteParams {
+            id: ContextWriteId::generate(),
+            project,
+            path,
+            content,
+            writer: Some(writer),
+        })
+        .await?
+        .file;
+    Ok(pretty(&file))
+}
+
+/// Each of `threads` with its run, in their order.
+async fn described(
+    plxd: &mut Plxd,
+    threads: &[Thread],
+    caller: RunId,
+) -> Result<Vec<Value>, String> {
     let (listed, runs) = host(plxd).await?;
-    let threads: Vec<Value> = threads
+    Ok(threads
         .iter()
         .filter_map(|thread| {
             let run = runs.iter().find(|run| run.id == thread.id)?;
             Some(describe(run, Some(thread), &listed.repos, caller))
         })
-        .collect();
-    Ok(pretty(&json!({"threads": threads})))
+        .collect())
 }
 
 /// Refuses a tool that would act on the caller itself: a thread can't wait on, message, or stop
@@ -551,6 +738,9 @@ fn describe(run: &AgentRun, thread: Option<&Thread>, repos: &[Repo], caller: Run
         value["parent"] = json!(thread.parent);
         value["settled"] = json!(thread.settled);
         value["archived"] = json!(thread.archived);
+    } else if run.policy == AgentPolicy::WorkspaceWrite {
+        // A Project's run: its coordinator's thread is its parent's run id (0024).
+        value["parent"] = json!(run.coordinator_thread);
     }
     value
 }
@@ -693,14 +883,10 @@ async fn launch(binding: &Binding, args: LaunchArgs) -> Result<String, String> {
         repo,
         base,
         branch,
+        notify,
     } = args;
     check_text("prompt", &prompt, MAX_TEXT_BYTES)?;
-    let account = match (backend, account) {
-        (Some(_), Some(_)) => return Err("give a backend or an account, not both".to_owned()),
-        (Some(backend), None) => Some(AccountChoice::Subscription { backend }),
-        (None, Some(id)) => Some(AccountChoice::Key { id }),
-        (None, None) => None,
-    };
+    let account = account_choice(backend, account)?;
     let mut plxd = Plxd::open(&binding.socket).await?;
     let (listed, runs) = host(&mut plxd).await?;
     let caller = runs
@@ -754,6 +940,7 @@ async fn launch(binding: &Binding, args: LaunchArgs) -> Result<String, String> {
             run_id: RunId::generate(),
             repo,
             parent: Some(binding.run),
+            notify,
             title,
             prompt,
             account,
@@ -779,6 +966,86 @@ async fn launch(binding: &Binding, args: LaunchArgs) -> Result<String, String> {
         &listed.repos,
         binding.run,
     )))
+}
+
+/// `thread_launch`'s account: a backend's login or a key account, or the default.
+fn account_choice(
+    backend: Option<String>,
+    account: Option<AccountId>,
+) -> Result<Option<AccountChoice>, String> {
+    match (backend, account) {
+        (Some(_), Some(_)) => Err("give a backend or an account, not both".to_owned()),
+        (Some(backend), None) => Ok(Some(AccountChoice::Subscription { backend })),
+        (None, Some(id)) => Ok(Some(AccountChoice::Key { id })),
+        (None, None) => Ok(None),
+    }
+}
+
+/// `thread_launch` for a Project's coordinator: a child in its Project, through `agent/start` with
+/// the caller as its coordinator thread, so its parent is the caller (0041). It works in a new
+/// worktree of the Project's repository and keeps the worker sandbox until PLX-396, and plxd runs
+/// it in the Project's mode (0042), so the options that pick a workspace, a mode, or a title are
+/// refused.
+async fn launch_child(server: &Server, args: LaunchArgs) -> Result<String, String> {
+    let LaunchArgs {
+        prompt,
+        threads,
+        title,
+        backend,
+        account,
+        model,
+        effort,
+        mode,
+        workspace,
+        repo,
+        base,
+        branch,
+        notify,
+    } = args;
+    let fixed = [
+        ("title", title.is_some()),
+        ("mode", mode.is_some()),
+        ("workspace", workspace.is_some()),
+        ("repo", repo.is_some()),
+        ("base", base.is_some()),
+        ("branch", branch.is_some()),
+    ];
+    if let Some((name, _)) = fixed.iter().find(|(_, given)| *given) {
+        return Err(format!(
+            "a Project's child runs in a new worktree of the Project's repository, in the \
+             Project's mode, with no title; leave out {name}"
+        ));
+    }
+    check_text("prompt", &prompt, MAX_TEXT_BYTES)?;
+    let account = account_choice(backend, account)?;
+    let caller = server.binding.run;
+    let project = server.project.ok_or("your thread isn't in a Project")?;
+    let thread = CoordinatorThreadId::try_from(Uuid::from(caller))
+        .map_err(|_| format!("run {caller} can't be a coordinator thread"))?;
+    let mut plxd = Plxd::open(&server.binding.socket).await?;
+    let run = plxd
+        .call::<AgentStart>(AgentStartParams {
+            run_id: RunId::generate(),
+            project,
+            prompt,
+            policy: AgentPolicy::WorkspaceWrite,
+            account,
+            coordinator_thread: Some(thread),
+            notify,
+            model,
+            effort,
+            context_window: None,
+            fast: None,
+            // The Project's mode, whatever is asked (0042).
+            permission: None,
+            images: Vec::new(),
+            // plxd gives the run its coordinator's (0031).
+            approvals: false,
+            threads,
+        })
+        .await?
+        .run;
+    Ok(pretty(&describe(&run, None, &[], caller)))
 }
 
 /// Refuses a child `mode` that needs less approval than the caller's `theirs` (0041). No mode
@@ -913,29 +1180,46 @@ async fn update(binding: &Binding, args: UpdateArgs) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ALLOWED_TOOLS, TOOLS, definitions};
+    use super::{ALLOWED_TOOLS, CONTEXT_TOOLS, PROJECT_TOOLS, TOOLS, definitions};
     use crate::mcp::SERVER;
 
     #[test]
     fn the_allowlist_is_exactly_the_tools_under_the_servers_name() {
-        let expected: Vec<String> = TOOLS
+        let expected: Vec<String> = PROJECT_TOOLS
             .iter()
             .map(|tool| format!("mcp__{SERVER}__{tool}"))
             .collect();
         assert_eq!(ALLOWED_TOOLS, expected.as_slice());
-        let listed: Vec<String> = definitions()
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|tool| tool["name"].as_str().unwrap().to_owned())
-            .collect();
-        assert_eq!(listed, TOOLS);
+        assert_eq!(PROJECT_TOOLS, [TOOLS, CONTEXT_TOOLS].concat());
+        for (project, tools) in [(false, TOOLS), (true, PROJECT_TOOLS)] {
+            let listed: Vec<String> = definitions(project)
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap().to_owned())
+                .collect();
+            assert_eq!(listed, tools);
+        }
+    }
+
+    #[test]
+    fn the_coordinators_instructions_name_only_real_tools() {
+        let instructions = include_str!("../agents/coordinator.md");
+        // Every `snake_case` span between backticks.
+        for name in instructions.split('`').skip(1).step_by(2) {
+            if name.contains('_') && name.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+                assert!(
+                    PROJECT_TOOLS.contains(&name),
+                    "coordinator.md names `{name}`, not a tool"
+                );
+            }
+        }
     }
 
     /// The caller is bound by `--thread`: no tool takes it, so only a target may be named.
     #[test]
     fn no_tool_takes_the_callers_id_or_unknown_fields() {
-        for tool in definitions().as_array().unwrap() {
+        for tool in definitions(true).as_array().unwrap() {
             let schema = &tool["inputSchema"];
             assert_eq!(schema["additionalProperties"], false, "{tool}");
             let properties = schema["properties"].as_object().unwrap();

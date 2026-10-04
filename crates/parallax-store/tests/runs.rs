@@ -20,6 +20,7 @@ fn fields(project_id: Uuid) -> RunFields {
         backend: "claude".to_owned(),
         coordinator_thread: None,
         parent: None,
+        notify_parent: false,
         model: Some("opus".to_owned()),
         effort: Some("high".to_owned()),
         permission: None,

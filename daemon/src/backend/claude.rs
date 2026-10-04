@@ -12,9 +12,10 @@
 //!   check, a no-write run whose `system/init` lists any tool outside [`NO_WRITE_TOOLS`] fails with
 //!   [`FailureKind::PolicyViolation`].
 //! - **A coordinator**, a no-write run with plxd's own MCP tools attached (0019), is full Claude
-//!   Code instead (0027): the run's [`permission_mode`], then `--mcp-config` with the `plxd mcp`
-//!   server, which joins the user's, the repository's, and plugins' servers, and `--allowedTools`
-//!   with [`crate::mcp::ALLOWED_TOOLS`], so plxd's tools work in every mode, and [`TODO_TOOLS`],
+//!   Code instead (0027): the run's [`permission_mode`], then `--mcp-config` with its
+//!   `plxd mcp --thread` server (PLX-380), which joins the user's, the repository's, and plugins'
+//!   servers, and `--allowedTools` with [`crate::mcp::thread::ALLOWED_TOOLS`], so plxd's tools
+//!   work in every mode, and [`TODO_TOOLS`],
 //!   so it keeps a plan on every model (PLX-249), then `--settings` with only [`settings_env`].
 //!   Its user and project settings, hooks, skills, plugins, and subagents all load, as in a
 //!   terminal. As a second check, a coordinator whose `system/init` reports another permission
@@ -687,7 +688,7 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
         }
     }
     if let Some(tools) = &request.coordinator_tools {
-        let allowed: Vec<&str> = mcp::ALLOWED_TOOLS
+        let allowed: Vec<&str> = mcp::thread::ALLOWED_TOOLS
             .iter()
             .chain(TODO_TOOLS)
             .copied()

@@ -68,7 +68,7 @@ fn recording(steps: Vec<Step>, seen: &Arc<Mutex<Vec<RunRequest>>>) -> BackendReg
     backends
 }
 
-fn start_params(project: ProjectId, prompt: &str) -> ProjectStartParams {
+pub(crate) fn start_params(project: ProjectId, prompt: &str) -> ProjectStartParams {
     ProjectStartParams {
         project,
         run_id: RunId::generate(),
@@ -135,9 +135,9 @@ async fn a_coordinator_runs_in_the_projects_repository_and_resumes_there_after_a
     assert_eq!(first.policy, ToolPolicy::NoWrite);
     assert_eq!(first.cwd, repo, "it runs in the user's checkout");
     assert!(first.sandbox.is_none());
-    let tools = first.coordinator_tools.expect("plxd's tools are attached");
-    assert_eq!((tools.project, tools.thread), (project.id, thread));
-    assert!(first.prompt.contains("spawn_agent"), "{}", first.prompt);
+    // A thread's tools, bound to its own run (PLX-380).
+    assert_eq!(first.coordinator_tools.map(|tools| tools.run), Some(run.id));
+    assert!(first.prompt.contains("thread_launch"), "{}", first.prompt);
     assert!(
         first.prompt.ends_with("Plan the README."),
         "{}",
@@ -279,7 +279,7 @@ impl Backend for Roles {
 
 /// Workers on `worker`, and each coordinator launch on the next of `coordinator`, in Auto or
 /// Bypass.
-fn roles(
+pub(crate) fn roles(
     worker: Vec<Step>,
     coordinator: Vec<Vec<Step>>,
     seen: &Arc<Mutex<Vec<RunRequest>>>,
@@ -642,6 +642,47 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
         images: Vec::new(),
         threads: Vec::new(),
     }));
+    host.server.stop().await;
+}
+
+/// PLX-380 (0043): a run the user starts in the Project wakes the coordinator to say so. One the
+/// coordinator launches itself doesn't, since it knows.
+#[tokio::test]
+async fn a_run_the_user_starts_in_the_project_wakes_the_coordinator() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let turn = |result: &str| vec![init("coordinator-1"), end_turn(result)];
+    let hang = vec![init("worker-1"), Step::Hang];
+    let backends = roles(hang, vec![turn("Planned."), turn("Noted.")], &seen);
+    let host = Host::start(temp_dir(), backends);
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let coordinator = client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    let launched = spawn(&mut client, &coordinator, "Its own task.").await;
+    let mine = client
+        .call::<AgentStart>(crate::agents::start_params(project.id, "Add a README."))
+        .await
+        .unwrap()
+        .run
+        .id;
+    let wake = nth_launch(&seen, 1).await;
+    assert!(
+        wake.prompt
+            .contains(&format!("- Run {mine} (Add a README.): started.")),
+        "{}",
+        wake.prompt
+    );
+    assert!(
+        !wake.prompt.contains(&launched.to_string()),
+        "{}",
+        wake.prompt
+    );
     host.server.stop().await;
 }
 

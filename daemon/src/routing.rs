@@ -368,12 +368,12 @@ pub fn start(
         request.sandbox = None;
     }
     if role != Role::Coordinator {
-        // Only the coordinator starts and steers other runs (0019).
+        // Only a coordinator gets its Parallax tools here (0019, PLX-380).
         request.coordinator_tools = None;
     }
     if !request.thread {
-        // Only a normal thread gets the host-wide thread tools (0041); a coordinator keeps its
-        // own, and its subagents get none.
+        // Only a normal thread gets them as a thread (0041); a coordinator gets them above, and
+        // its subagents get none.
         request.thread_tools = None;
     }
     let started = backend.start(request.clone())?;

@@ -19,10 +19,10 @@
 //! waits, and a steer goes into the running turn instead, through the backend, or by cancelling
 //! the CLI and resuming it with the message where the backend takes no messages while it runs.
 //!
-//! A project's coordinator (0024) differs in four places: it starts in a detached worktree of
-//! the project's repository (PLX-171) with plxd's tools and no sandbox, that worktree is checked
-//! after every turn (0004), it is never committed, and runs it started wake it when they finish
-//! (PLX-42, [`super::wake`]).
+//! A project's coordinator (0024) differs in three places: it starts in the project's repository
+//! with a thread's Parallax tools and no sandbox (0027, PLX-380), it is never committed, and only
+//! the project's current one wakes. Any run wakes when children it launched finish (PLX-42,
+//! PLX-380, [`super::wake`]).
 //!
 //! A thread in its repository's own checkout has no worktree: every launch, a resume included,
 //! starts in the checkout, and it is never committed either.
@@ -41,9 +41,8 @@ use parallax_protocol::{AcceptId, AgentMerge};
 use parallax_protocol::{
     AccountChoice, AccountId, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision,
     AgentApproveParams, AgentApproveResult, AgentFailureKind, AgentOutcome, AgentOutputItem,
-    AgentRun, ApprovalId, CoordinatorThreadId, DiffSummary, ErrorKind, GitStatus, ImageId,
-    InboxKind, ParallaxEvent, ProjectId, PromptImage, QueueResult, QueuedMessage, Role, RunId,
-    TurnId,
+    AgentRun, ApprovalId, DiffSummary, ErrorKind, GitStatus, ImageId, InboxKind, ParallaxEvent,
+    ProjectId, PromptImage, QueueResult, QueuedMessage, Role, RunId, TurnId,
 };
 use parallax_store::{
     QueuedRow, Run as RunRow, RunAccept, SessionModelUsage, StoredImage, Worktree,
@@ -65,9 +64,8 @@ use super::wake::{self, Wakes};
 use super::worker::{sandbox_path, worker_prompt, worker_unavailable};
 use super::{Place, Prepared, RunOptions, prepare, store, store_error};
 use crate::backend::{
-    AccountRef, Answer, AnswerError, Backend, CoordinatorTools, Credential, Decision, Event,
-    EventStream, FollowUp, ModelUsage, Outcome, Resume, Run, RunRequest, SendError, ThreadTools,
-    Usage, WorkerSandbox,
+    AccountRef, Answer, AnswerError, Backend, Credential, Decision, Event, EventStream, FollowUp,
+    ModelUsage, Outcome, Resume, Run, RunRequest, SendError, ThreadTools, Usage, WorkerSandbox,
     run_temp::{self, RunTemp},
 };
 use crate::routing;
@@ -187,7 +185,8 @@ pub(super) enum Command {
     Delete {
         reply: oneshot::Sender<Result<(), ErrorObject>>,
     },
-    /// A run this coordinator started finished, as [`wake::summary`] tells it (PLX-42).
+    /// A child of this run finished, or a run started in this coordinator's Project, as
+    /// [`wake::summary`] and [`wake::started`] tell it (PLX-42, PLX-380).
     Wake(String),
     /// `agent/resumeNow` (PLX-371).
     ResumeNow {
@@ -340,7 +339,7 @@ struct Setup {
     cwd: PathBuf,
     sandbox: Option<WorkerSandbox>,
     temp: Option<RunTemp>,
-    tools: Option<CoordinatorTools>,
+    tools: Option<ThreadTools>,
     thread_tools: Option<ThreadTools>,
     thread: bool,
 }
@@ -386,7 +385,7 @@ pub(super) struct Actor {
     /// Set once `thread/delete` or `project/delete` removed the run: the actor stops, refusing
     /// what is still queued.
     deleted: bool,
-    /// A coordinator's wake-ups (PLX-42).
+    /// The run's wake-ups, as a parent (PLX-42, PLX-380).
     wakes: Wakes,
     /// What a usage limit's resume needs (PLX-371).
     resumes: Resumes,
@@ -480,14 +479,12 @@ impl Actor {
     }
 
     pub async fn run(mut self, mut commands: mpsc::Receiver<Command>, shutdown: CancellationToken) {
-        if self.is_coordinator() {
-            self.load_wakes().await;
-        }
+        self.load_wakes().await;
         self.load_queue().await;
         loop {
             self.deliver().await;
             let deadline = self.batch.since.map(|since| since + COALESCE);
-            // A coordinator's turn in progress gets its wake-ups next, once its CLI has exited.
+            // A turn in progress gets its wake-ups next, once its CLI has exited.
             let wake_at = self.wakes.due().filter(|_| self.live.is_none());
             let expire_at = self.approvals.due();
             let resume_at = self.resume_due();
@@ -622,11 +619,7 @@ impl Actor {
                 }
                 let _ = reply.send(answer);
             }
-            Command::Wake(summary) => {
-                if self.is_coordinator() {
-                    self.wakes.push(summary, Instant::now());
-                }
-            }
+            Command::Wake(summary) => self.wakes.push(summary, Instant::now()),
             Command::ResumeNow { reply } => {
                 let _ = reply.send(self.resume_now().await);
             }
@@ -654,40 +647,57 @@ impl Actor {
         if let Some(live) = &self.live {
             live.run.cancel();
         }
-        // Stop means stop: a run finishing a moment later doesn't start the coordinator again
-        // before the user writes.
-        if self.is_coordinator() {
+        // Stop means stop: a child finishing a moment later doesn't start its parent again before
+        // the user writes.
+        if self.is_coordinator() || self.has_children().await {
             self.pause_wakes(false).await;
         }
     }
 
-    /// Sends what is waiting as the coordinator's next turn, through the same resume as
-    /// `agent/send` (PLX-42). Pauses wake-ups at the cap, or when this fails, keeping what is
-    /// waiting. Only the project's current coordinator wakes: a replaced one drops them, so a
-    /// project never has two live (0024).
-    async fn wake(&mut self) {
-        let project = self.project.into();
-        let current = store(&self.daemon, move |db| {
-            super::coordinator::coordinator_of(db, project)
+    /// Whether any run wakes this one when it finishes (PLX-380). A run with none has no
+    /// wake-ups to pause.
+    async fn has_children(&self) -> bool {
+        let id = self.row.id;
+        let found = store(&self.daemon, move |db| {
+            let runs = db.list_runs(None).map_err(|error| store_error(&error))?;
+            Ok(runs
+                .iter()
+                .any(|run| run.fields.parent == Some(id) && run.fields.notify_parent))
         })
         .await;
-        match current {
-            Ok(Some(current)) if current == self.id => {}
-            Ok(_) => {
-                self.wakes.clear();
-                return;
-            }
-            Err(error) => {
-                warn!(run = %self.id, error = %error.message, "could not check a coordinator before waking it");
-                self.pause_wakes(true).await;
-                return;
+        // A store that can't answer pauses them anyway, as a failed wake-up check does.
+        found.unwrap_or(true)
+    }
+
+    /// Sends what is waiting as the run's next turn, through the same resume as `agent/send`
+    /// (PLX-42, PLX-380). Pauses wake-ups at the cap, or when this fails, keeping what is
+    /// waiting. Only a project's current coordinator wakes: a replaced one drops them, so a
+    /// project never has two live (0024).
+    async fn wake(&mut self) {
+        if self.is_coordinator() {
+            let project = self.project.into();
+            let current = store(&self.daemon, move |db| {
+                super::coordinator::coordinator_of(db, project)
+            })
+            .await;
+            match current {
+                Ok(Some(current)) if current == self.id => {}
+                Ok(_) => {
+                    self.wakes.clear();
+                    return;
+                }
+                Err(error) => {
+                    warn!(run = %self.id, error = %error.message, "could not check a coordinator before waking it");
+                    self.pause_wakes(true).await;
+                    return;
+                }
             }
         }
         let Some((turn_id, text)) = self.wakes.next() else {
             self.pause_wakes(true).await;
             return;
         };
-        info!(run = %self.id, "waking a coordinator: runs it started finished");
+        info!(run = %self.id, "waking a parent: threads it launched finished");
         match self
             .resume(
                 turn_id,
@@ -705,30 +715,30 @@ impl Actor {
             }
             Ok(_) => self.pause_wakes(true).await,
             Err(error) => {
-                warn!(run = %self.id, error = %error.message, "could not wake a coordinator");
+                warn!(run = %self.id, error = %error.message, "could not wake a parent");
                 self.pause_wakes(true).await;
             }
         }
     }
 
-    /// Stops waking the coordinator until the user writes, and says so once (PLX-42). A pause
-    /// plxd makes on its own, `notify`, also adds a `needsYou` inbox item (PLX-401); the user's
-    /// own Stop doesn't.
+    /// Stops waking the run until the user writes, and says so once (PLX-42). A pause plxd makes
+    /// on its own, `notify`, also adds a `needsYou` item to a coordinator's Project's inbox
+    /// (PLX-401); the user's own Stop doesn't.
     async fn pause_wakes(&mut self, notify: bool) {
         if self.wakes.pause() {
-            info!(run = %self.id, "pausing a coordinator's wake-ups until the user writes");
+            info!(run = %self.id, "pausing a run's wake-ups until the user writes");
             self.save_wakes().await;
             self.append(ParallaxEvent::AgentWakeupsPaused { run_id: self.id })
                 .await;
-            if notify {
+            if notify && self.is_coordinator() {
                 self.inbox(InboxKind::NeedsYou, WAKEUPS_PAUSED.to_owned())
                     .await;
             }
         }
     }
 
-    /// Takes up the coordinator's wake-up count and pause where the last plxd left them
-    /// (PLX-178). If they can't be read, pauses wake-ups, as a failed check does.
+    /// Takes up the run's wake-up count and pause where the last plxd left them (PLX-178). If
+    /// they can't be read, pauses wake-ups, as a failed check does.
     async fn load_wakes(&mut self) {
         let id = self.row.id;
         let stored = store(&self.daemon, move |db| {
@@ -738,13 +748,13 @@ impl Actor {
         match stored {
             Ok(state) => self.wakes.restore(state),
             Err(error) => {
-                warn!(run = %self.id, error = %error.message, "could not read a coordinator's wake-ups");
+                warn!(run = %self.id, error = %error.message, "could not read a run's wake-ups");
                 self.pause_wakes(true).await;
             }
         }
     }
 
-    /// Stores the coordinator's wake-up count and pause, so a restart keeps them (PLX-178).
+    /// Stores the run's wake-up count and pause, so a restart keeps them (PLX-178).
     async fn save_wakes(&self) {
         let (id, state) = (self.row.id, self.wakes.state());
         let saved = store(&self.daemon, move |db| {
@@ -753,7 +763,7 @@ impl Actor {
         })
         .await;
         if let Err(error) = saved {
-            warn!(run = %self.id, error = %error.message, "could not store a coordinator's wake-ups");
+            warn!(run = %self.id, error = %error.message, "could not store a run's wake-ups");
         }
     }
 
@@ -2142,21 +2152,13 @@ impl Actor {
         })
     }
 
-    /// A coordinator runs in the project's repository (0027), with its Parallax tools, bound to its
-    /// project and to its own thread (0019).
+    /// A coordinator runs in the project's repository (0027), with a thread's Parallax tools bound
+    /// to its own run (0041, PLX-380).
     fn coordinator_setup(&mut self, repo: PathBuf) -> Result<Setup, String> {
-        let program = plxd_program()?;
-        let thread = self
-            .row
-            .fields
-            .coordinator_thread
-            .and_then(|id| CoordinatorThreadId::try_from(id).ok())
-            .ok_or_else(|| format!("coordinator run {} has no thread id", self.id))?;
-        let tools = CoordinatorTools {
-            program,
+        let tools = ThreadTools {
+            program: plxd_program()?,
             data_dir: self.daemon.data_dir.root().to_owned(),
-            project: self.project,
-            thread,
+            run: self.id,
         };
         Ok(Setup {
             cwd: repo,
@@ -2398,8 +2400,8 @@ impl Actor {
     }
 
     /// Records how a CLI process ended. Unless plxd stopped it, commits a worker's changes first,
-    /// through #166's hardened commit, and reports the commit, then wakes the coordinator that
-    /// started the run.
+    /// through #166's hardened commit, and reports the commit, then wakes the run's parent unless
+    /// it was launched with `notify: false` (PLX-380).
     async fn finish(&mut self, outcome: &Outcome) {
         self.flush().await;
         if self.stopping && matches!(outcome, Outcome::Cancelled) {
@@ -2449,14 +2451,18 @@ impl Actor {
         self.after_limit(&outcome).await;
         info!(run = %self.id, status = %self.row.state.status, "an agent run's CLI finished");
         self.save().await;
-        if let Some(thread) = self.row.fields.coordinator_thread
-            && !self.is_coordinator()
-            && let Ok(run) = self.snapshot()
+        let Ok(run) = self.snapshot() else {
+            return;
+        };
+        if self.is_child()
+            && let Some((kind, text)) = ended_item(&run, &outcome)
         {
-            if let Some((kind, text)) = ended_item(&run, &outcome) {
-                self.inbox(kind, text).await;
-            }
-            wake::notify(&self.daemon, thread, wake::summary(&run, &outcome));
+            self.inbox(kind, text).await;
+        }
+        if let Some(parent) = self.row.fields.parent
+            && self.row.fields.notify_parent
+        {
+            wake::notify(&self.daemon, parent, wake::summary(&run, &outcome));
         }
     }
 
@@ -2879,6 +2885,7 @@ mod tests {
                 backend: "fake".to_owned(),
                 coordinator_thread: None,
                 parent: None,
+                notify_parent: false,
                 model: None,
                 effort: None,
                 permission: None,

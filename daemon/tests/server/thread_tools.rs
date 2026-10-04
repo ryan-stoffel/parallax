@@ -2,6 +2,8 @@
 //! speaking MCP on stdio, against an in-process plxd whose threads run on the fake backend in a
 //! real git repository.
 
+use std::time::Duration;
+
 use parallax_protocol::methods::{AgentEvents, RepoAdd, ThreadList, ThreadStart};
 use parallax_protocol::{
     AccountChoice, AgentEventsParams, AgentOutputItem, ParallaxEvent, RepoAddParams, RepoId, RunId,
@@ -11,10 +13,11 @@ use plxd::backend::fake::Step;
 use plxd::mcp::thread::TOOLS;
 use serde_json::{Value, json};
 use tempfile::TempDir;
+use tokio::time::{Instant, sleep};
 
 use crate::agents::{Conn, Host, end_turn, fake, init, real_repo};
 use crate::mcp::{Mcp, mcp_command};
-use crate::support::temp_dir;
+use crate::support::{PATIENCE, temp_dir};
 
 /// Echoes each message, takes a moment, and finishes its turn.
 fn echo() -> Vec<Step> {
@@ -46,6 +49,7 @@ async fn caller(client: &mut Conn, repos: &TempDir) -> (RunId, RepoId) {
             run_id: RunId::generate(),
             repo: Some(repo.id),
             parent: None,
+            notify: None,
             title: None,
             prompt: "Plan the work.".to_owned(),
             account: Some(AccountChoice::Subscription {
@@ -366,5 +370,60 @@ async fn the_server_refuses_a_thread_plxd_doesnt_know() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("no thread has run id"), "{stderr}");
+    host.server.stop().await;
+}
+
+/// PLX-380 (0025): a normal thread wakes, with no client connected, when a child it launched with
+/// `thread_launch` finishes, in one turn from Parallax that names the child. A child launched with
+/// `notify: false` wakes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_thread_wakes_when_a_child_it_launched_finishes_unless_it_opted_out() {
+    let host = Host::start(temp_dir(), fake(echo()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    let mut mcp = tools(&host, me).await;
+    let launch = |prompt: &str, notify: bool| json!({"prompt": prompt, "backend": "fake", "workspace": "none", "notify": notify});
+    let told = id(&mcp.ok("thread_launch", launch("Tell me.", true)).await);
+    let quiet = id(&mcp.ok("thread_launch", launch("Stay quiet.", false)).await);
+    for child in [told, quiet] {
+        mcp.ok("thread_wait", json!({"runId": child.to_string()}))
+            .await;
+    }
+    drop(client);
+
+    let mut client = host.client().await;
+    let deadline = Instant::now() + PATIENCE;
+    let wakes = loop {
+        let wakes: Vec<String> = transcript(&mut client, me)
+            .await
+            .into_iter()
+            .filter_map(|item| match item {
+                AgentOutputItem::TurnStarted {
+                    text: Some(text),
+                    wake: true,
+                    ..
+                } => Some(text),
+                _ => None,
+            })
+            .collect();
+        if !wakes.is_empty() {
+            break wakes;
+        }
+        assert!(Instant::now() < deadline, "the parent was never woken");
+        sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(wakes.len(), 1, "{wakes:?}");
+    assert!(
+        wakes[0].starts_with("Parallax, not the user"),
+        "{}",
+        wakes[0]
+    );
+    assert!(
+        wakes[0].contains(&format!("- Run {told} (Tell me.): completed")),
+        "{}",
+        wakes[0]
+    );
+    assert!(!wakes[0].contains(&quiet.to_string()), "{}", wakes[0]);
     host.server.stop().await;
 }

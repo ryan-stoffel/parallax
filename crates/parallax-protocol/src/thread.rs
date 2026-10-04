@@ -229,6 +229,12 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub parent: Option<RunId>,
+    /// Whether the thread wakes its `parent` when a CLI process of its ends, as a Project's
+    /// coordinator wakes for its subagents (PLX-380, 0025). Absent means true. A retry must repeat
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub notify: Option<bool>,
     /// Its title, as `thread/update` takes it. Not part of what makes a retry with the same run id
     /// conflict, since the title can change. Behind `threadLineage`.
     #[serde(default, skip_serializing_if = "Option::is_none")]

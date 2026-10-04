@@ -460,6 +460,7 @@ mod tests {
                     backend: "fake".to_owned(),
                     coordinator_thread: None,
                     parent: None,
+                    notify_parent: false,
                     model: None,
                     effort: None,
                     permission: None,
