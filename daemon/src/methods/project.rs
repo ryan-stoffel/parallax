@@ -365,7 +365,7 @@ fn check_permission(permission: Option<ProjectPermission>) -> Result<(), ErrorOb
 }
 
 /// A base branch is passed to git as an argument (0045), so it is checked as one. Whether it names
-/// a branch shows when the integration branch is cut.
+/// a local or remote-tracking branch is checked when the integration branch is cut.
 fn check_base_branch(base: Option<&str>) -> Result<(), ErrorObject> {
     if let Some(base) = base {
         if base.len() > MAX_NAME_BYTES {

@@ -11,6 +11,10 @@ use crate::{Store, Worktree, WorktreeFields, timestamp};
 /// `agent/send` (PLX-161, PLX-163), and the backend, when `agent/send` moves the run to another
 /// backend's account.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about a run, not states of one thing"
+)]
 pub struct RunFields {
     pub project_id: Uuid,
     pub prompt: String,
@@ -106,6 +110,10 @@ const COLUMNS: &str = "id, project_id, prompt, requested_account, policy, backen
                        approvals, checkout, context_window, fast, pull_requests, parent, \
                        auto_resume, resume_at, resume_tries, notify_parent, explore";
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about a run, not states of one thing"
+)]
 struct RawRun {
     id: String,
     project_id: String,

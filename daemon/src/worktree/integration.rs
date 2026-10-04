@@ -44,12 +44,13 @@ impl WorktreeManager {
     /// A worktree already in place keeps the branch it has out. Otherwise the branch is `branch`
     /// when plxd recorded one, or a new `parallax/<slug of name>`, with the project id's short
     /// hash after it when another branch has that name. A branch that exists is checked out as it
-    /// is, and a missing one is cut from `base`.
+    /// is, and a missing one is cut from `base`, which must be a local or remote-tracking branch.
+    /// A checkout that fails removes the worktree again and keeps the branch.
     ///
     /// # Errors
     ///
-    /// [`WorktreeError::NotAGitRepo`], [`WorktreeError::UnknownRevision`] when `base` doesn't
-    /// resolve, or a git or filesystem failure.
+    /// [`WorktreeError::NotAGitRepo`], [`WorktreeError::UnknownRevision`] when `base` isn't a
+    /// branch, or a git or filesystem failure.
     pub async fn ensure_integration(
         &self,
         repo_path: &Path,
@@ -105,6 +106,20 @@ impl WorktreeManager {
             )
             .await?;
         } else {
+            // A sha, a tag, or `HEAD~1` isn't a base a PR can target (0045).
+            if !self
+                .has_ref(&repo_root, &format!("refs/heads/{base}"))
+                .await?
+                && !self
+                    .has_ref(&repo_root, &format!("refs/remotes/{base}"))
+                    .await?
+            {
+                return Err(WorktreeError::UnknownRevision {
+                    repo: repo_root,
+                    reference: base.to_owned(),
+                    detail: "it is not a local or remote-tracking branch".to_owned(),
+                });
+            }
             let commit = self.resolve_commit(&repo_root, base).await?;
             self.run_git_ok(
                 &repo_root,
@@ -122,8 +137,15 @@ impl WorktreeManager {
         }
         // The checkout, the slow part, runs outside the repo lock, as a run's does.
         drop(guard);
-        self.run_git_ok(&path, &["reset", "--hard", "--quiet"])
-            .await?;
+        if let Err(error) = self
+            .run_git_ok(&path, &["reset", "--hard", "--quiet"])
+            .await
+        {
+            if let Err(cleanup) = self.remove_integration(&repo_root, project).await {
+                warn!(path = %path.display(), %cleanup, "could not remove an integration worktree whose checkout failed");
+            }
+            return Err(error);
+        }
         Ok(branch)
     }
 

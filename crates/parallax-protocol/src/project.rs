@@ -152,8 +152,8 @@ pub struct ProjectCreateParams {
     #[ts(optional)]
     pub permission: Option<ProjectPermission>,
     /// The project's base branch (0045), sent only to a plxd that advertises
-    /// `integrationBranch`. Absent means the repository's default branch. A retry that leaves it
-    /// out matches any.
+    /// `integrationBranch`: a local or remote-tracking branch, such as `main` or `origin/main`.
+    /// Absent means the repository's default branch. A retry that leaves it out matches any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub base_branch: Option<String>,

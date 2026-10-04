@@ -179,11 +179,12 @@ async fn an_integration_branch_is_cut_once_and_outlives_its_worktree() {
     let mgr = manager(data_dir.path());
     assert_eq!(mgr.default_branch(&repo).await.unwrap(), "main");
     let base = rev_parse(&repo, "HEAD");
+    git(&repo, &["branch", "release"]);
     git(&repo, &["commit", "-q", "--allow-empty", "-m", "later"]);
 
     let project = ProjectId::generate();
     let branch = mgr
-        .ensure_integration(&repo, project, None, "Auth Rewrite!", &base)
+        .ensure_integration(&repo, project, None, "Auth Rewrite!", "release")
         .await
         .unwrap();
     assert_eq!(branch, "parallax/auth-rewrite");
@@ -224,6 +225,60 @@ async fn an_integration_branch_is_cut_once_and_outlives_its_worktree() {
         .unwrap();
     assert_eq!(back, branch);
     assert_eq!(rev_parse(&path, "HEAD"), base, "the branch as it was");
+}
+
+/// PLX-409: a base that isn't a branch is refused, and a checkout that fails leaves no worktree
+/// for the next call to return, only the branch.
+#[tokio::test]
+async fn an_integration_branch_needs_a_branch_base_and_a_checkout() {
+    let repo_dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
+    let data_dir = tempfile::tempdir().unwrap();
+    let mgr = manager(data_dir.path());
+    let project = ProjectId::generate();
+
+    let sha = rev_parse(&repo, "HEAD");
+    git(&repo, &["tag", "v1"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "later"]);
+    for base in [sha.as_str(), "v1", "HEAD~1"] {
+        let error = mgr
+            .ensure_integration(&repo, project, None, "app", base)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, WorktreeError::UnknownRevision { .. }),
+            "{base}: {error}"
+        );
+    }
+    assert!(
+        git_output(&repo, &["branch", "--list", "parallax/*"]).is_empty(),
+        "nothing was cut"
+    );
+
+    // A required smudge filter that fails makes the checkout fail after the worktree is added.
+    std::fs::write(repo.join(".gitattributes"), "* filter=broken\n").unwrap();
+    git(&repo, &["add", ".gitattributes"]);
+    git(&repo, &["commit", "-q", "-m", "filter"]);
+    git(&repo, &["config", "filter.broken.smudge", "false"]);
+    git(&repo, &["config", "filter.broken.required", "true"]);
+    mgr.ensure_integration(&repo, project, None, "app", "main")
+        .await
+        .unwrap_err();
+    assert!(
+        !mgr.integration_path(project).exists(),
+        "no broken worktree"
+    );
+    assert_eq!(worktree_count(&repo), 1);
+    assert_eq!(rev_parse(&repo, "parallax/app"), rev_parse(&repo, "main"));
+
+    git(&repo, &["config", "--unset", "filter.broken.required"]);
+    git(&repo, &["config", "filter.broken.smudge", "cat"]);
+    let branch = mgr
+        .ensure_integration(&repo, project, Some("parallax/app"), "app", "main")
+        .await
+        .unwrap();
+    assert_eq!(branch, "parallax/app");
+    assert!(mgr.integration_path(project).join("README.md").is_file());
 }
 
 #[test]
