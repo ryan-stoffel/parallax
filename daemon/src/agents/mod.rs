@@ -33,7 +33,8 @@
 //! A normal thread's run is full Claude Code in every mode, with no worker sandbox, when its client
 //! answers permission requests, and its first message is the user's own (0034). A Project's
 //! children run the same way, through `agent/start`: always with `approvals`, and with a short
-//! header naming the Project and its tools before the task (0042). A thread started
+//! header naming the Project and its tools, then its brief and memory index (0044), before the
+//! task (0042). A thread started
 //! with `checkout` has no worktree either: it runs in its repo entry's own checkout, on the branch
 //! the user has out or the one `checkoutRef` switches it to first. plxd never commits it, since the
 //! checkout can hold the user's own uncommitted work, so its changes stay there for the user to
@@ -50,6 +51,7 @@ pub(crate) mod wake;
 pub(crate) mod worker;
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -81,6 +83,7 @@ use self::convert::{
 pub(crate) use self::resume::Timing as ResumeTiming;
 use self::worker::{StoredKeyAccounts, sandbox_path, worker_unavailable};
 use crate::backend::{Backend, ToolPolicy, check_argument};
+use crate::context::memory;
 use crate::routing::{self, BackendRegistry, Defaults, Resolved, RoutingError};
 use crate::server::Daemon;
 use crate::worktree::{CreatedWorktree, PrError, WorktreeError, WorktreeManager, github_pr_urls};
@@ -446,7 +449,10 @@ async fn prepare_run(
     })?;
     let context = sandbox_path(&context, "the shared context folder")?;
     sandbox_path(Path::new(&repo_path), "the project's repository")?;
-    let header = project_name.map(|name| child_header(&name));
+    let header = match project_name {
+        Some(name) => Some(child_header(&name, &memory::start(daemon, project).await?)),
+        None => None,
+    };
     let prepared = Prepared {
         resolved,
         accounts,
@@ -1210,9 +1216,10 @@ pub(super) fn first_prompt(prompt: &str, place: &Place) -> Result<String, ErrorO
     }
 }
 
-/// The start of a Project child's first message (0042): the Project's name and the plxd tools
-/// every kind gives a child, which always runs with `approvals` (0041). The task follows it.
-fn child_header(project: &str) -> String {
+/// The start of a Project child's first message (0042): the Project's name, the plxd tools
+/// every kind gives a child, which always runs with `approvals` (0041), and then the brief and
+/// memory index when there are any (0044). The task follows it.
+fn child_header(project: &str, start: &memory::Start) -> String {
     let tools = [
         crate::mcp::thread::TOOLS,
         crate::mcp::thread::CONTEXT_TOOLS,
@@ -1221,11 +1228,19 @@ fn child_header(project: &str) -> String {
     ]
     .concat()
     .join(", ");
-    // PLX-406 adds the Project's brief and memory index between the tools and the task.
-    format!(
+    let mut header = format!(
         "You are working on a task in the Parallax Project \"{project}\".\n\
-         Your Parallax tools are on the plxd MCP server: {tools}.\n\nYour task:\n"
-    )
+         Your Parallax tools are on the plxd MCP server: {tools}.\n\n"
+    );
+    if let Some(brief) = &start.brief {
+        let _ = write!(header, "The Project's brief:\n{brief}\n\n");
+    }
+    if !start.index.is_empty() {
+        header.push_str(&start.index);
+        header.push('\n');
+    }
+    header.push_str("Your task:\n");
+    header
 }
 
 impl Agents {
@@ -1724,8 +1739,30 @@ mod tests {
     use parallax_store::{ProjectFields, RunFields, RunState};
     use uuid::Uuid;
 
-    use super::{StartLocks, in_mode, record, store, store_error};
+    use super::{StartLocks, child_header, in_mode, record, store, store_error};
+    use crate::context::memory::Start;
     use crate::server::Daemon;
+
+    /// PLX-406 (0044): the brief, then the index, between the tools and the task, and neither
+    /// when the Project has none.
+    #[test]
+    fn a_childs_header_carries_the_brief_then_the_index() {
+        let start = Start {
+            brief: Some("Ship v2.".to_owned()),
+            index: "Memory:\n- you preference: Terse (memory/preference/terse.md)\n".to_owned(),
+            over: false,
+        };
+        let header = child_header("app", &start);
+        assert!(
+            header.ends_with(
+                ".\n\nThe Project's brief:\nShip v2.\n\nMemory:\n\
+                 - you preference: Terse (memory/preference/terse.md)\n\nYour task:\n"
+            ),
+            "{header}"
+        );
+        let bare = child_header("app", &Start::default());
+        assert!(bare.ends_with("memory_propose.\n\nYour task:\n"), "{bare}");
+    }
 
     /// PLX-394 (0042): each built-in kind in each Project mode. Claude Code and Codex map both,
     /// and Cursor only Bypass, so a Cursor run in an Auto Project is refused with why, never

@@ -5,11 +5,18 @@
 //! A proposal, `proposals/<slug>.md`, has the same form. A Project child's also names the scope
 //! it is for (`Scope:`), and waits in the Project's folder until its coordinator's next wake-up
 //! carries it ([`pending`]).
+//!
+//! A Project's child starts with the brief and an [`index`] of the entries' titles ([`start`]).
 
 use std::fmt::Write as _;
 use std::path::Path;
 
-use parallax_protocol::MemoryKind;
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{MemoryKind, ProjectId};
+use tokio_util::sync::CancellationToken;
+
+use crate::server::Daemon;
+use crate::store::store_error;
 
 /// The header's fields, in the order they are written.
 const FIELDS: [&str; 5] = ["Kind", "Title", "Source", "Date", "Writer"];
@@ -155,6 +162,126 @@ pub(crate) fn pending(dir: &Path) -> Vec<(String, String)> {
     pending
 }
 
+/// The most a memory index takes, its note included (0044).
+pub(crate) const INDEX_BYTES: usize = 8 * 1024;
+
+/// Room kept under [`INDEX_BYTES`] for the note that ends an index over the cap.
+const NOTE_BYTES: usize = 160;
+
+/// What a Project's child starts with (0044): the brief, and the memory index. `over` says the
+/// index left entries out, which the coordinator's next wake-up asks it to fix.
+#[derive(Debug, Default)]
+pub(crate) struct Start {
+    pub brief: Option<String>,
+    pub index: String,
+    pub over: bool,
+}
+
+/// Reads Project `project`'s brief and builds its memory index from the You, Repo, and Project
+/// folders. Repo is left out when no repo entry has the Project's repository. A file that can't
+/// be read is left out too.
+pub(crate) async fn start(daemon: &Daemon, project: ProjectId) -> Result<Start, ErrorObject> {
+    let (repo_path, repos) = daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            let repo_path = db
+                .get_project(project.into())
+                .map_err(|e| store_error(&e))?
+                .map(|row| row.repo_path);
+            let repos = db.list_repos().map_err(|e| store_error(&e))?;
+            Ok((repo_path, repos))
+        })
+        .await?;
+    let data_dir = daemon.data_dir.clone();
+    let built = tokio::task::spawn_blocking(move || {
+        // Repo entries keep canonical paths; a Project keeps the one it was created with.
+        let repo_dir = repo_path
+            .map(|path| std::fs::canonicalize(&path).unwrap_or_else(|_| path.into()))
+            .and_then(|path| {
+                repos
+                    .iter()
+                    .find(|repo| !repo.fields.scratch && Path::new(&repo.fields.path) == path)
+            })
+            .and_then(|repo| ProjectId::try_from(repo.id).ok())
+            .map(|id| data_dir.context_dir(id));
+        let project_dir = data_dir.context_dir(project);
+        let brief = super::read_file(&project_dir, "brief.md")
+            .ok()
+            .and_then(|(bytes, _)| String::from_utf8(bytes).ok())
+            .map(|brief| brief.trim().to_owned())
+            .filter(|brief| !brief.is_empty());
+        let you_dir = super::you_dir(&data_dir);
+        let mut scopes = vec![("you", you_dir.as_path())];
+        scopes.extend(repo_dir.as_deref().map(|dir| ("repo", dir)));
+        scopes.push(("project", project_dir.as_path()));
+        let (index, over) = index(&scopes);
+        Start { brief, index, over }
+    })
+    .await;
+    Ok(built.unwrap_or_default())
+}
+
+/// The memory index of `scopes`, in order: one line per entry and knowledge file, from its
+/// title, or its path when it has none, at most [`INDEX_BYTES`]. When lines don't fit, it ends
+/// with a note to read the rest, and says so with `true`. Empty when there are no entries.
+pub(crate) fn index(scopes: &[(&str, &Path)]) -> (String, bool) {
+    let mut lines = Vec::new();
+    for (scope, dir) in scopes {
+        let Ok(files) = super::list_files(dir) else {
+            continue;
+        };
+        // Entries, then knowledge.
+        let mut paths: Vec<String> = files
+            .into_iter()
+            .map(|(path, _)| path)
+            .filter(|path| path.starts_with("memory/") || path.starts_with("knowledge/"))
+            .collect();
+        paths.sort_by_key(|path| (path.starts_with("knowledge/"), path.clone()));
+        for path in paths {
+            let text = super::read_file(dir, &path)
+                .ok()
+                .and_then(|(bytes, _)| String::from_utf8(bytes).ok())
+                .unwrap_or_default();
+            let (header, _) = parse(&text);
+            let kind = entry_kind(&path).and_then(kind_name).unwrap_or("knowledge");
+            let title = header.title.filter(|title| !title.is_empty());
+            lines.push(format!(
+                "- {scope} {kind}: {} ({path})\n",
+                title.as_deref().unwrap_or(&path)
+            ));
+        }
+    }
+    if lines.is_empty() {
+        return (String::new(), false);
+    }
+    let mut index = "Memory, one line per entry as scope, kind, title, and path. Read one with \
+                     memory_read:\n"
+        .to_owned();
+    let fit = lines
+        .iter()
+        .take_while(|line| {
+            let fits = index.len() + line.len() <= INDEX_BYTES - NOTE_BYTES;
+            if fits {
+                index.push_str(line);
+            }
+            fits
+        })
+        .count();
+    let left = lines.len() - fit;
+    if left > 0 {
+        let _ = writeln!(
+            index,
+            "- {left} more not listed. List each scope with memory_read and no path."
+        );
+    }
+    (index, left > 0)
+}
+
+/// The line a coordinator's wake-up carries while its Project's index is over the cap (0044).
+pub(crate) const MERGE: &str = "- The Project's memory index is over 8 KiB, so children start \
+     without some entries. Merge related entries with memory_write, and delete ones that no \
+     longer hold.";
+
 /// A file name for `title`: lowercase ASCII letters and digits, with `-` between words, at most
 /// 60 bytes, or `entry` if nothing is left.
 pub(crate) fn slug(title: &str) -> String {
@@ -182,7 +309,84 @@ pub(crate) fn slug(title: &str) -> String {
 mod tests {
     use parallax_protocol::MemoryKind;
 
-    use super::{Header, entry_kind, parse, render, slug};
+    use std::path::Path;
+
+    use super::{Header, INDEX_BYTES, entry_kind, index, parse, render, slug};
+
+    /// Writes an entry titled `title` at `path` in `dir`.
+    fn entry(dir: &Path, path: &str, title: &str) {
+        let file = dir.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let text = render(MemoryKind::Decision, title, "s", "d", "w", None, "Body.");
+        std::fs::write(file, text).unwrap();
+    }
+
+    #[test]
+    fn the_index_lists_you_then_repo_then_project_one_line_each() {
+        let [you, repo, project] = [(); 3].map(|()| tempfile::tempdir().unwrap());
+        entry(project.path(), "memory/decision/b.md", "Project entry");
+        entry(project.path(), "knowledge/a.md", "Project write-up");
+        entry(repo.path(), "memory/gotcha/c.md", "Repo entry");
+        entry(you.path(), "memory/preference/d.md", "You entry");
+        // Not memory: neither is listed.
+        entry(project.path(), "proposals/e.md", "A proposal");
+        std::fs::write(project.path().join("brief.md"), "The goal.").unwrap();
+        let scopes = [
+            ("you", you.path()),
+            ("repo", repo.path()),
+            ("project", project.path()),
+        ];
+        let (text, over) = index(&scopes);
+        assert!(!over);
+        let lines: Vec<&str> = text.lines().skip(1).collect();
+        assert_eq!(
+            lines,
+            [
+                "- you preference: You entry (memory/preference/d.md)",
+                "- repo gotcha: Repo entry (memory/gotcha/c.md)",
+                "- project decision: Project entry (memory/decision/b.md)",
+                "- project knowledge: Project write-up (knowledge/a.md)",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_project_lists_the_other_scopes_and_no_memory_lists_nothing() {
+        let [you, project] = [(); 2].map(|()| tempfile::tempdir().unwrap());
+        let missing = project.path().join("never-made");
+        assert_eq!(index(&[("project", &missing)]), (String::new(), false));
+        let scopes = [("you", you.path()), ("project", project.path())];
+        assert_eq!(index(&scopes), (String::new(), false));
+        entry(you.path(), "memory/preference/d.md", "You entry");
+        let (text, _) = index(&scopes);
+        assert!(text.ends_with("- you preference: You entry (memory/preference/d.md)\n"));
+    }
+
+    #[test]
+    fn an_index_over_the_cap_keeps_the_first_lines_and_ends_with_a_note() {
+        let [you, project] = [(); 2].map(|()| tempfile::tempdir().unwrap());
+        entry(you.path(), "memory/preference/first.md", "First");
+        let title = "t".repeat(250);
+        for n in 0..40 {
+            entry(
+                project.path(),
+                &format!("memory/decision/{n:02}.md"),
+                &title,
+            );
+        }
+        let (text, over) = index(&[("you", you.path()), ("project", project.path())]);
+        assert!(over);
+        assert!(text.len() <= INDEX_BYTES, "{}", text.len());
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines[1].starts_with("- you preference: First"));
+        let listed = lines.len() - 3;
+        assert!(lines[2].ends_with("(memory/decision/00.md)"));
+        let note = format!(
+            "- {} more not listed. List each scope with memory_read and no path.",
+            40 - listed
+        );
+        assert_eq!(lines.last(), Some(&note.as_str()));
+    }
 
     #[test]
     fn an_entry_reads_back_its_header_and_body() {

@@ -432,6 +432,90 @@ async fn a_childs_proposal_survives_a_restart() {
     host.server.stop().await;
 }
 
+/// The first launch of a child whose task is `task`.
+async fn child_launch(seen: &Mutex<Vec<RunRequest>>, task: &str) -> RunRequest {
+    let deadline = tokio::time::Instant::now() + crate::support::PATIENCE;
+    loop {
+        let launches = seen.lock().unwrap().clone();
+        let found = launches.into_iter().find(|request| {
+            request.policy == ToolPolicy::WorkspaceWrite && request.prompt.ends_with(task)
+        });
+        if let Some(launch) = found {
+            return launch;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "never launched");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// A child's first message carries the brief and then the memory index, You before Project,
+/// after its header (0044, PLX-406).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_childs_first_message_carries_the_brief_then_the_index() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (host, mut client, project, coordinator) = project_with_coordinator(&seen).await;
+    let scope = MemoryScope::Project { id: project.id };
+    let brief = write(scope, "brief.md", "Ship v2 by Friday.\n", None);
+    client.call::<MemoryWrite>(brief).await.unwrap();
+    let decision = write(
+        scope,
+        "memory/decision/vitest.md",
+        "Body.",
+        Some("Use Vitest"),
+    );
+    client.call::<MemoryWrite>(decision).await.unwrap();
+    let terse = write(
+        MemoryScope::You,
+        "memory/preference/terse.md",
+        "Body.",
+        Some("Answer tersely"),
+    );
+    client.call::<MemoryWrite>(terse).await.unwrap();
+
+    spawn(&mut client, &coordinator, "Fix the build.").await;
+    let prompt = child_launch(&seen, "Fix the build.").await.prompt;
+    let expected = "memory_propose.\n\nThe Project's brief:\nShip v2 by Friday.\n\n\
+                    Memory, one line per entry as scope, kind, title, and path. Read one with \
+                    memory_read:\n\
+                    - you preference: Answer tersely (memory/preference/terse.md)\n\
+                    - project decision: Use Vitest (memory/decision/vitest.md)\n\n\
+                    Your task:\nFix the build.";
+    assert!(prompt.ends_with(expected), "{prompt}");
+    host.server.stop().await;
+}
+
+/// Over 8 KiB, the index ends with a note, and the coordinator's next wake-up asks it to merge
+/// entries, without waking it on its own (0044).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_index_over_the_cap_asks_the_coordinator_to_merge_entries() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (host, mut client, project, _coordinator) = project_with_coordinator(&seen).await;
+    let scope = MemoryScope::Project { id: project.id };
+    let title = "t".repeat(250);
+    for n in 0..40 {
+        let path = format!("memory/gotcha/{n:02}.md");
+        let entry = write(scope, &path, "Body.", Some(&title));
+        client.call::<MemoryWrite>(entry).await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(
+        coordinator_launches(&seen).len(),
+        1,
+        "no wake-up of its own"
+    );
+
+    let theirs = crate::agents::start_params(project.id, "Add a README.");
+    client.call::<AgentStart>(theirs).await.unwrap();
+    let prompt = child_launch(&seen, "Add a README.").await.prompt;
+    assert!(
+        prompt.contains("more not listed. List each scope with memory_read and no path.\n"),
+        "{prompt}"
+    );
+    let wake = nth_launch(&seen, 1).await.prompt;
+    assert!(wake.contains("memory index is over 8 KiB"), "{wake}");
+    host.server.stop().await;
+}
+
 /// A thread outside a Project proposes only at its repository's scope, and the proposal waits
 /// for the user in `proposals/`. A thread with no repository has no memory tools.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
