@@ -244,7 +244,15 @@ function ChildRow({
                   Working
                 </span>
               ) : (
-                (subject ?? (row.attention === "failed" ? "Failed" : "Finished"))
+                (subject ??
+                (row.attention === "failed" ? (
+                  "Failed"
+                ) : (
+                  <span className="flex items-center gap-1.5 text-added [&_svg]:size-3">
+                    <DoneMark animate={false} />
+                    Done
+                  </span>
+                )))
               )}
             </span>
           )}

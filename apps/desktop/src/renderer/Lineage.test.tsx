@@ -334,6 +334,10 @@ test("a Project's children never show in the main sidebar, and its row shows the
   expect(titles("Working")).toEqual(["Check the links"]);
   await click(document.querySelector('#side-panel section[aria-label="Resolved"] h3 button'));
   expect(titles("Resolved")).toEqual(["Write the docs"]);
+  // With nothing reported, a finished child says Done, as a thread does.
+  expect(
+    document.querySelector('#side-panel section[aria-label="Resolved"] li > button')!.textContent,
+  ).toContain("Done");
 });
 
 test("without threadLineage, children aren't nested and there are no chips", async () => {
