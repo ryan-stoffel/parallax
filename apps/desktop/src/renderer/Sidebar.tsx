@@ -51,6 +51,7 @@ import type {
   AgentStatus,
   Project,
   ProjectIcon as ProjectIconValue,
+  ProjectPermission,
   Repo,
   Thread,
 } from "../protocol/generated/protocol";
@@ -68,6 +69,7 @@ import {
   type Attention,
 } from "./attention";
 import { AttentionBadge } from "./AttentionMark";
+import { ProjectPermissionChoice } from "./ProjectPermission";
 import { ConnectionStatus } from "./ConnectionStatus";
 import { Avatar, useProfile } from "./profile";
 import { localId, type Host } from "./hosts";
@@ -473,6 +475,7 @@ export function ThreadList({
           selected={selected}
           badge={badge}
           editable={item.view.editable}
+          moded={item.view.moded}
           iconImageBytes={item.view.iconImageBytes}
           onOpen={() => openItem(item)}
           onUpdate={async (change) =>
@@ -996,7 +999,8 @@ function Footer({
  * its runs ask of the user or its age. Its tooltip counts its agents, and names its host when there
  * are several. Where its host's plxd can edit or delete Projects, hovering or focusing it swaps the
  * status for its actions, which also open by right-clicking the row: Rename, which edits the name
- * in place, Change icon, which opens the icon picker under the row's icon, and Delete….
+ * in place, Change icon, which opens the icon picker under the row's icon, Permissions…, which
+ * changes its permission mode with Create Project's disclaimer (0042), and Delete….
  */
 function ProjectRow({
   project,
@@ -1006,6 +1010,7 @@ function ProjectRow({
   selected,
   badge,
   editable,
+  moded,
   iconImageBytes,
   onOpen,
   onUpdate,
@@ -1020,6 +1025,8 @@ function ProjectRow({
   /** Its Mod+number badge, shown in place of its status while Mod is held. */
   badge?: ReactNode;
   editable: boolean;
+  /** Whether its host's plxd keeps its permission mode (`projectPermission`). */
+  moded: boolean;
   /** Its host's cap on an icon image, where its plxd keeps them. */
   iconImageBytes?: number;
   onOpen: () => void;
@@ -1035,6 +1042,9 @@ function ProjectRow({
   const button = useRef<HTMLButtonElement>(null);
   const iconSpot = useRef<HTMLSpanElement>(null);
   const picker = useRef<HTMLDivElement>(null);
+  const permissions = useRef<HTMLDialogElement>(null);
+  // The mode picked in Permissions…, which opens on the Project's own.
+  const [mode, setMode] = useState<ProjectPermission>("auto");
   // The name the field opened with, while Rename is open.
   const [renaming, setRenaming] = useState<string>();
   // The new name, shown until plxd answers.
@@ -1072,7 +1082,7 @@ function ProjectRow({
   };
 
   const icon = <ProjectIcon icon={project.icon} className="size-4" />;
-  const actionable = editable || !!onDelete;
+  const actionable = editable || moded || !!onDelete;
   const tooltip =
     [runs.length > 0 && `${runs.length} ${runs.length === 1 ? "agent" : "agents"}`, host?.name]
       .filter(Boolean)
@@ -1185,6 +1195,19 @@ function ProjectRow({
                 </button>
               </>
             )}
+            {moded && (
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItem}
+                onClick={choose(() => {
+                  setMode(project.permission ?? "auto");
+                  permissions.current?.showModal();
+                })}
+              >
+                Permissions…
+              </button>
+            )}
             {onDelete && (
               <button
                 type="button"
@@ -1207,6 +1230,36 @@ function ProjectRow({
           onPick={(next) => void onUpdate({ icon: next })}
           maxImageBytes={iconImageBytes}
         />
+      )}
+      {moded && (
+        <dialog
+          ref={permissions}
+          aria-label={`${project.name} permissions`}
+          className="m-auto w-[26rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+        >
+          <form method="dialog" className="px-5 pt-4 pb-4">
+            <ProjectPermissionChoice value={mode} onChange={setMode} />
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="submit"
+                value="cancel"
+                className="rounded-md px-3 py-1.5 text-[13px] hover:bg-hover"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  permissions.current?.close();
+                  void onUpdate({ permission: mode });
+                }}
+                className="rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground hover:opacity-90"
+              >
+                Save
+              </button>
+            </div>
+          </form>
+        </dialog>
       )}
     </li>
   );

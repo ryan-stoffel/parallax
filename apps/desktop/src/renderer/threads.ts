@@ -6,6 +6,7 @@ import type {
   LoggedEvent,
   Project,
   ProjectIcon as ProjectIconValue,
+  ProjectPermission,
   ProjectStartParams,
   ProjectUpdateParams,
   PromptImage,
@@ -305,14 +306,16 @@ export interface ThreadsView {
   archive: (runId: string, archived: boolean) => Promise<string | undefined>;
   remove: (thread: Thread) => Promise<string | undefined>;
   /**
-   * Creates a project on a repository's path, with `icon` if one was chosen. Reuse `id`, with the
-   * same name, path, and icon, to retry. Resolves to the project or an error message.
+   * Creates a project on a repository's path, with `icon` if one was chosen and `permission` where
+   * the host keeps it. Reuse `id`, with the same name, path, icon, and mode, to retry. Resolves to
+   * the project or an error message.
    */
   createProject: (
     id: string,
     name: string,
     repoPath: string,
     icon?: ProjectIconValue,
+    permission?: ProjectPermission,
   ) => Promise<Project | string>;
   /**
    * Renames a project or sets its icon, which replaces the whole icon (0032). Resolves to an error
@@ -343,6 +346,8 @@ export interface ThreadsView {
   editable: boolean;
   /** Whether the host's plxd deletes Projects (`projectDelete`, PLX-338). */
   deletable: boolean;
+  /** Whether the host's plxd keeps a Project's permission mode (`projectPermission`, 0042). */
+  moded: boolean;
   /** The cap on an icon image's base64, where the host's plxd keeps icon images (`iconImages`, 0038). */
   iconImageBytes?: number;
   /** Whether the host's plxd keeps threads' parents and titles (`threadLineage`, 0041). */
@@ -359,7 +364,7 @@ export interface ThreadsView {
 /** What `thread/update` changes. */
 export type ThreadChange = { seen?: boolean; snoozedUntil?: string };
 
-/** What `project/update` changes: a project's name, its icon, or both. */
+/** What `project/update` changes: a project's name, icon, or permission mode. */
 export type ProjectChange = Omit<ProjectUpdateParams, "project">;
 
 /** What a new coordinator runs on: its model, effort, permission, and account (`project/start`'s). */
@@ -386,10 +391,14 @@ export function useThreads(
     attention = false,
     editable = false,
     deletable = false,
+    moded = false,
     iconImageBytes,
     lineage = false,
   }: Partial<
-    Pick<ThreadsView, "attention" | "editable" | "deletable" | "iconImageBytes" | "lineage">
+    Pick<
+      ThreadsView,
+      "attention" | "editable" | "deletable" | "moded" | "iconImageBytes" | "lineage"
+    >
   > & {
     approvals?: boolean;
   } = {},
@@ -580,12 +589,19 @@ export function useThreads(
   );
 
   const createProject = useCallback(
-    async (id: string, name: string, repoPath: string, icon?: ProjectIconValue) => {
+    async (
+      id: string,
+      name: string,
+      repoPath: string,
+      icon?: ProjectIconValue,
+      permission?: ProjectPermission,
+    ) => {
       const answer = await window.parallax.request(hostId, "project/create", {
         id,
         name,
         repoPath,
         ...(icon && { icon }),
+        ...(permission && { permission }),
       });
       if ("error" in answer) return describeError(answer.error);
       // Not into another host's list, if the user has left this one.
@@ -678,6 +694,7 @@ export function useThreads(
       attention,
       editable,
       deletable,
+      moded,
       iconImageBytes,
       lineage,
       update,
@@ -697,6 +714,7 @@ export function useThreads(
       attention,
       editable,
       deletable,
+      moded,
       iconImageBytes,
       lineage,
       update,
@@ -743,6 +761,7 @@ export const idleThreads: ThreadsView = {
   attention: false,
   editable: false,
   deletable: false,
+  moded: false,
   lineage: false,
   addRepo: async () => notConnected,
   start: async () => ({ code: -32000, message: notConnected }),

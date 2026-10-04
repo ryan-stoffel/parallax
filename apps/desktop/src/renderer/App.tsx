@@ -692,6 +692,7 @@ function HostLoader({
     attention: !!capabilities && "threadAttention" in capabilities,
     editable: !!capabilities && "projectEdit" in capabilities,
     deletable: !!capabilities && "projectDelete" in capabilities,
+    moded: !!capabilities && "projectPermission" in capabilities,
     iconImageBytes: iconImageBytes(connection),
     lineage: !!capabilities && "threadLineage" in capabilities,
   });
