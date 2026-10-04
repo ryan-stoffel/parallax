@@ -1056,7 +1056,7 @@ function ProjectRow({
   editable: boolean;
   /** Whether its host's plxd keeps its permission mode (`projectPermission`). */
   moded: boolean;
-  /** Whether its host's plxd keeps its autonomy (`autonomy`, 0043). */
+  /** Whether its host's plxd keeps its autonomy (`projectAutonomy`, 0043). */
   autonomous: boolean;
   /** Its host's cap on an icon image, where its plxd keeps them. */
   iconImageBytes?: number;

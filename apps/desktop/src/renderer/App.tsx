@@ -716,7 +716,7 @@ function HostLoader({
     editable: !!capabilities && "projectEdit" in capabilities,
     deletable: !!capabilities && "projectDelete" in capabilities,
     moded: !!capabilities && "projectPermission" in capabilities,
-    autonomous: !!capabilities && "autonomy" in capabilities,
+    autonomous: !!capabilities && "projectAutonomy" in capabilities,
     iconImageBytes: iconImageBytes(connection),
     lineage: !!capabilities && "threadLineage" in capabilities,
     autoResume: !!capabilities && "autoResume" in capabilities,

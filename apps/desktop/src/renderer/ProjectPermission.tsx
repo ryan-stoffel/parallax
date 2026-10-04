@@ -4,7 +4,7 @@ import type { ProjectPermission } from "../protocol/generated/protocol";
 
 /**
  * A Project's autonomy: who answers its children's questions (0043). plxd keeps it behind the
- * `autonomy` capability (PLX-403); the app names it here until the generated protocol does.
+ * `projectAutonomy` capability (PLX-403); the app names it here until the generated protocol does.
  */
 export type Autonomy = "ask" | "routine" | "full";
 

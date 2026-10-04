@@ -202,6 +202,7 @@ function InboxRow({
       {question && asking && (
         <AnswerForm
           label={changing ? "Change" : "Answer"}
+          question={question.question}
           onAnswer={(text) => onAnswer(question, text)}
           onCancel={changing ? () => setChanging(false) : undefined}
         />
@@ -210,13 +211,18 @@ function InboxRow({
   );
 }
 
-/** An answer box and its button. It keeps the text, and shows why, when the answer fails. */
+/**
+ * An answer box and its button, named for its question so each box is told apart. It keeps the
+ * text, and shows why, when the answer fails.
+ */
 function AnswerForm({
   label,
+  question,
   onAnswer,
   onCancel,
 }: {
   label: string;
+  question: string;
   onAnswer: (text: string) => Promise<string | undefined>;
   onCancel?: () => void;
 }) {
@@ -237,7 +243,7 @@ function AnswerForm({
     >
       <div className="flex items-center gap-2">
         <input
-          aria-label={`${label} the question`}
+          aria-label={`${label}: ${question}`}
           placeholder="Your answer"
           value={text}
           disabled={busy}

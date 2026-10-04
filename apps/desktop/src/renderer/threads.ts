@@ -385,7 +385,7 @@ export interface ThreadsView {
   deletable: boolean;
   /** Whether the host's plxd keeps a Project's permission mode (`projectPermission`, 0042). */
   moded: boolean;
-  /** Whether the host's plxd keeps a Project's autonomy (`autonomy`, 0043). */
+  /** Whether the host's plxd keeps a Project's autonomy (`projectAutonomy`, 0043). */
   autonomous: boolean;
   /** The cap on an icon image's base64, where the host's plxd keeps icon images (`iconImages`, 0038). */
   iconImageBytes?: number;

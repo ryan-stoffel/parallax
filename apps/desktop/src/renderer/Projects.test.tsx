@@ -1910,7 +1910,7 @@ test("without projectDelete there's no Delete…, and another client's project.d
 });
 
 test("Autonomy… opens on the Project's level, one line on each, and Save sends the new one", async () => {
-  capabilities = { autonomy: {} };
+  capabilities = { projectAutonomy: {} };
   answers["project/list"] = () => ({
     result: {
       projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), autonomy: "full" } as Project],
@@ -2036,9 +2036,10 @@ test("a question in Needs you is answered in place, and a decided one can be cha
   await renderApp();
   await openEmber();
 
-  const answerBox = inbox()!.querySelector<HTMLInputElement>(
-    'input[aria-label="Answer the question"]',
-  )!;
+  // Each box is named for its question.
+  const box = (name: string) =>
+    [...inbox()!.querySelectorAll("input")].find((i) => i.getAttribute("aria-label") === name)!;
+  const answerBox = box('Answer: Which "theme" key?');
   typeInto(answerBox, "theme.dark");
   await act(async () => answerBox.form!.requestSubmit());
   await settle();
@@ -2047,9 +2048,7 @@ test("a question in Needs you is answered in place, and a decided one can be cha
   expect(inboxGroupsShown()).not.toContain("Needs you");
 
   await click(inboxButton("Change it?"));
-  const changeBox = inbox()!.querySelector<HTMLInputElement>(
-    'input[aria-label="Change the question"]',
-  )!;
+  const changeBox = box("Change: Keep the old flag?");
   typeInto(changeBox, "yes, keep it");
   await act(async () => changeBox.form!.requestSubmit());
   await settle();
