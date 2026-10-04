@@ -127,6 +127,7 @@ pub(crate) async fn start(
     // The actor owns a live CLI from here on, so it is spawned whatever the snapshot says.
     let run = actor.snapshot();
     daemon.agents.spawn(actor);
+    super::wake::hand_over(&daemon, project.into(), run_id);
     run
 }
 

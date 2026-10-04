@@ -742,12 +742,12 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
         })
         .expect("read schema version");
     assert_eq!(
-        version, 29,
+        version, 30,
         "migrations 3 (accounts, #117), 4 (usage, #120), 5 (worktrees, #154), 6 (role \
          defaults, #119), 7 (runs and events, #156), 8 (accepted runs, #157), 9 (threads, \
          #110), 10 (turns, #190), 11 (coordinator threads, #195), 12 (worktree base_dirty, \
          #257), 13 (run options, PLX-97), 14 (wakes, PLX-178), 15 (images, PLX-191), 16 \
-         (project icons, PLX-227), 17 (approvals, PLX-222), 18 (checkout runs), 19 (thread          attention, PLX-270), 20 (context window and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), and 29 (integration branches, PLX-409) also apply"
+         (project icons, PLX-227), 17 (approvals, PLX-222), 18 (checkout runs), 19 (thread          attention, PLX-270), 20 (context window and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), and 30 (questions, PLX-402) also apply"
     );
     let account_columns: Vec<String> = conn
         .prepare("SELECT name FROM pragma_table_info('accounts')")
@@ -874,12 +874,12 @@ fn a_version_3_database_from_develop_migrates_to_usage_tables_and_keeps_its_acco
         })
         .expect("read schema version");
     assert_eq!(
-        version, 29,
+        version, 30,
         "migrations 5 (worktrees, #154), 6 (role defaults, #119), 7 (runs and events, #156), \
          8 (accepted runs, #157), 9 (threads, #110), 10 (turns, #190), 11 (coordinator \
          threads, #195), 12 (worktree base_dirty, #257), 13 (run options, PLX-97), 14 (wakes, \
          PLX-178), 15 (images, PLX-191), 16 (project icons, PLX-227), 17 (approvals, \
-         PLX-222), 18 (checkout runs), 19 (thread attention, PLX-270), 20 (context window          and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), and 29 (integration branches, PLX-409) also apply"
+         PLX-222), 18 (checkout runs), 19 (thread attention, PLX-270), 20 (context window          and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), and 30 (questions, PLX-402) also apply"
     );
 }
 

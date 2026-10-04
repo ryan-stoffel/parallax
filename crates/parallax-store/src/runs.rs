@@ -309,8 +309,8 @@ impl Store {
         Ok((run, worktree))
     }
 
-    /// Deletes run `id` with its worktree row, stored events, sent turns, images, and wake-up
-    /// state, in one transaction: how `project/delete` (PLX-338) removes a Project's run. Returns
+    /// Deletes run `id` with its worktree row, stored events, sent turns, images, wake-up state,
+    /// queued messages, and questions, in one transaction: how `project/delete` (PLX-338) removes a Project's run. Returns
     /// whether the run existed.
     ///
     /// # Errors
@@ -507,7 +507,7 @@ pub(crate) fn delete_run_rows(conn: &Connection, id: Uuid) -> Result<bool, Store
     let key = id.to_string();
     let existed = conn.execute("DELETE FROM runs WHERE id = ?1", params![key])? > 0;
     conn.execute("DELETE FROM worktrees WHERE id = ?1", params![key])?;
-    for table in ["events", "turns", "images", "wakes", "queued"] {
+    for table in ["events", "turns", "images", "wakes", "queued", "questions"] {
         conn.execute(
             &format!("DELETE FROM {table} WHERE run_id = ?1"),
             params![key],

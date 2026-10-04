@@ -10,6 +10,7 @@ use std::time::Duration;
 use parallax_protocol::methods::{AgentList, ContextList, ProjectStart, ThreadStart};
 use parallax_protocol::{AgentListParams, AgentRun, ContextListParams, Project, ProjectId};
 use plxd::backend::fake::Step;
+use plxd::mcp::question::COORDINATOR_TOOLS;
 use plxd::mcp::thread::{CONTEXT_TOOLS, TOOLS};
 use plxd::mcp::{MAX_CONTEXT_BYTES, MAX_MESSAGE_BYTES, MAX_PATH_BYTES, MAX_TEXT_BYTES};
 use serde_json::{Value, json};
@@ -203,7 +204,7 @@ async fn a_coordinator_launches_steers_and_records_through_the_thread_tools() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, [TOOLS, CONTEXT_TOOLS].concat());
+    assert_eq!(names, [TOOLS, CONTEXT_TOOLS, COORDINATOR_TOOLS].concat());
 
     let launched = mcp
         .ok(

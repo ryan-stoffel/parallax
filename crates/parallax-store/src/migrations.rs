@@ -405,6 +405,24 @@ const MIGRATIONS: &[Migration] = &[
         ALTER TABLE projects ADD COLUMN integration_branch TEXT;
         ALTER TABLE runs ADD COLUMN explore INTEGER NOT NULL DEFAULT 0;",
     },
+    // A Project's children's questions (PLX-402, decision 0043): what a child asked with `ask`
+    // and the assumption it went on with, its status (`open`, `escalated`, `decided`, or
+    // `answered`), and the answer once there is one. `Store::delete_project` deletes a project's
+    // questions.
+    Migration {
+        version: 30,
+        sql: "CREATE TABLE questions (
+            id TEXT NOT NULL PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            question TEXT NOT NULL,
+            assumption TEXT NOT NULL,
+            status TEXT NOT NULL,
+            answer TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX questions_project ON questions (project_id, created_at);",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

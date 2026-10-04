@@ -32,7 +32,7 @@ fn child(project: ProjectId, task: &str) -> AgentStartParams {
 }
 
 /// The next `inbox.added`, checked to be on `project`'s events.
-async fn added(client: &mut Conn, project: ProjectId) -> InboxItem {
+pub(crate) async fn added(client: &mut Conn, project: ProjectId) -> InboxItem {
     let events = until(client, |event| {
         matches!(event.event, ParallaxEvent::InboxAdded { .. })
     })

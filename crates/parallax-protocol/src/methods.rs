@@ -47,13 +47,15 @@ use crate::{
     ProjectDeleteResult, ProjectListParams, ProjectListResult, ProjectStartParams,
     ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
     ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, PullRequest,
-    QueueCancelParams, QueueEditParams, QueueListParams, QueueReorderParams, QueueResult,
-    QueueSteerParams, RepoAddParams, RepoAddResult, RepoFilesParams, RepoFilesResult,
-    RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams,
-    ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams,
-    ThreadListParams, ThreadListResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams,
-    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult,
-    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
+    QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
+    QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
+    QueueReorderParams, QueueResult, QueueSteerParams, RepoAddParams, RepoAddResult,
+    RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
+    RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult, ThreadSearchParams,
+    ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
+    ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
+    UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -352,6 +354,16 @@ method_table! {
         QueueCancel = "queue/cancel": QueueCancelParams => QueueResult;
         /// `queue/steer`: sends a waiting message into the turn running now.
         QueueSteer = "queue/steer": QueueSteerParams => QueueResult;
+        /// `question/ask`: records a Project child's question and wakes its coordinator; the
+        /// child goes on with its assumption (PLX-402, 0043). Gated on the `questions`
+        /// capability, like every `question/*` method.
+        QuestionAsk = "question/ask": QuestionAskParams => QuestionResult;
+        /// `question/answer`: the coordinator's or the user's answer to a question.
+        QuestionAnswer = "question/answer": QuestionAnswerParams => QuestionResult;
+        /// `question/escalate`: the coordinator passes a question to the user.
+        QuestionEscalate = "question/escalate": QuestionEscalateParams => QuestionResult;
+        /// `question/list`: a Project's questions, oldest first.
+        QuestionList = "question/list": QuestionListParams => QuestionListResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -464,6 +476,10 @@ mod tests {
                 "queue/reorder",
                 "queue/cancel",
                 "queue/steer",
+                "question/ask",
+                "question/answer",
+                "question/escalate",
+                "question/list",
                 "$/cancelRequest",
                 "events/event",
             ]

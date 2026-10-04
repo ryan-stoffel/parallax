@@ -9,11 +9,11 @@
 //! (`agent/send`'s and `agent/cancel`'s `from`). Framing, connections, errors, and size caps are
 //! 0019's, from [`super`].
 //!
-//! A caller in a Project also gets [`CONTEXT_TOOLS`], the Project's shared context. A Project's
-//! coordinator launches its children in its Project, through `agent/start` with itself as their
-//! coordinator thread, so they show in the Project's Agents panel, keep the worker sandbox, and
-//! run in the Project's mode, and `thread_list` lists its Project's runs, which have no thread
-//! rows.
+//! A caller in a Project also gets [`CONTEXT_TOOLS`], the Project's shared context, and the
+//! question tools for its role ([`super::question`], PLX-402). A Project's coordinator launches
+//! its children in its Project, through `agent/start` with itself as their coordinator thread, so
+//! they show in the Project's Agents panel, keep the worker sandbox, and run in the Project's
+//! mode, and `thread_list` lists its Project's runs, which have no thread rows.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -38,6 +38,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{Instant, sleep};
 use uuid::Uuid;
 
+use super::question;
 use super::{
     MAX_CONTEXT_BYTES, MAX_PATH_BYTES, MAX_TEXT_BYTES, Plxd, Tools, check_text, clip, last_output,
     parse, pretty, tail,
@@ -78,8 +79,8 @@ const PROJECT_TOOLS: &[&str] = &[
 
 /// Every tool as Claude Code names them, `mcp__<server>__<tool>`: a thread's and a coordinator's
 /// `--allowedTools`, so they run without asking in every permission mode. Claude Code's todo tools
-/// follow them there. Outside a Project the server doesn't offer the context tools, so their names
-/// allow nothing.
+/// follow them there. The server offers each caller only its own role's tools, so the others'
+/// names allow nothing.
 pub const ALLOWED_TOOLS: &[&str] = &[
     "mcp__plxd__thread_list",
     "mcp__plxd__thread_read",
@@ -93,6 +94,9 @@ pub const ALLOWED_TOOLS: &[&str] = &[
     "mcp__plxd__pr_unlink",
     "mcp__plxd__read_context",
     "mcp__plxd__write_context",
+    "mcp__plxd__ask",
+    "mcp__plxd__answer",
+    "mcp__plxd__escalate",
 ];
 
 /// About how much transcript one `thread_read` page carries, in bytes. A page ends at an event,
@@ -165,16 +169,22 @@ pub async fn run(
 }
 
 impl Tools for Server {
-    fn names(&self) -> &'static [&'static str] {
+    fn names(&self) -> Vec<&'static str> {
         if self.project.is_some() {
-            PROJECT_TOOLS
+            [PROJECT_TOOLS, question::tools(self.coordinator)].concat()
         } else {
-            TOOLS
+            TOOLS.to_vec()
         }
     }
 
     fn definitions(&self) -> Value {
-        definitions(self.project.is_some())
+        let mut tools = definitions(self.project.is_some());
+        if self.project.is_some()
+            && let Some(list) = tools.as_array_mut()
+        {
+            list.extend(question::definitions(self.coordinator));
+        }
+        tools
     }
 
     async fn call(&self, name: &str, arguments: Value) -> Result<String, String> {
@@ -616,6 +626,7 @@ async fn call_tool(server: &Server, name: &str, arguments: Value) -> Result<Stri
                 .ok_or("your thread isn't in a Project, so it has no shared context")?;
             context_tool(server, project, name, arguments).await
         }
+        "ask" | "answer" | "escalate" => question::call(binding, name, arguments).await,
         other => Err(format!("no tool is named {other:?}")),
     }
 }
@@ -1182,14 +1193,19 @@ async fn update(binding: &Binding, args: UpdateArgs) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{ALLOWED_TOOLS, CONTEXT_TOOLS, PROJECT_TOOLS, TOOLS, definitions};
-    use crate::mcp::SERVER;
+    use crate::mcp::{SERVER, question};
 
     #[test]
     fn the_allowlist_is_exactly_the_tools_under_the_servers_name() {
-        let expected: Vec<String> = PROJECT_TOOLS
-            .iter()
-            .map(|tool| format!("mcp__{SERVER}__{tool}"))
-            .collect();
+        let expected: Vec<String> = [
+            PROJECT_TOOLS,
+            question::CHILD_TOOLS,
+            question::COORDINATOR_TOOLS,
+        ]
+        .concat()
+        .iter()
+        .map(|tool| format!("mcp__{SERVER}__{tool}"))
+        .collect();
         assert_eq!(ALLOWED_TOOLS, expected.as_slice());
         assert_eq!(PROJECT_TOOLS, [TOOLS, CONTEXT_TOOLS].concat());
         for (project, tools) in [(false, TOOLS), (true, PROJECT_TOOLS)] {
@@ -1200,6 +1216,14 @@ mod tests {
                 .map(|tool| tool["name"].as_str().unwrap().to_owned())
                 .collect();
             assert_eq!(listed, tools);
+        }
+        for coordinator in [false, true] {
+            let tools = question::definitions(coordinator);
+            let listed: Vec<&str> = tools
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(listed, question::tools(coordinator));
         }
     }
 
@@ -1220,7 +1244,10 @@ mod tests {
     /// The caller is bound by `--thread`: no tool takes it, so only a target may be named.
     #[test]
     fn no_tool_takes_the_callers_id_or_unknown_fields() {
-        for tool in definitions(true).as_array().unwrap() {
+        let mut tools = definitions(true).as_array().unwrap().clone();
+        tools.extend(question::definitions(false));
+        tools.extend(question::definitions(true));
+        for tool in &tools {
             let schema = &tool["inputSchema"];
             assert_eq!(schema["additionalProperties"], false, "{tool}");
             let properties = schema["properties"].as_object().unwrap();
