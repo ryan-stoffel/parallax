@@ -29,6 +29,15 @@ import {
 } from "./terminal";
 import { dataDir, findPlxd, replaceServe, plxdVersion } from "./plxd";
 
+// With PLX_IPC_STATS set, the subscription messages sent to renderers and their JSON bytes, for
+// the load test (PLX-447), which reads `globalThis.ipcStats` through Playwright's `app.evaluate`.
+const ipcStats = process.env["PLX_IPC_STATS"]
+  ? ((globalThis as { ipcStats?: { messages: number; bytes: number } }).ipcStats = {
+      messages: 0,
+      bytes: 0,
+    })
+  : undefined;
+
 // The methods the renderer may call, checked at runtime because the renderer is untrusted
 // (0022). Typed so that adding a method to the protocol fails the type-check until it is here.
 const rendererMethods: Record<RendererMethod, true> = {
@@ -196,7 +205,12 @@ export function startHosts(): void {
           ended = true;
           windowSubscriptions(sender).delete(key);
         }
-        if (!sender.isDestroyed()) sender.send("parallax:subscription", key, message);
+        if (sender.isDestroyed()) return;
+        if (ipcStats) {
+          ipcStats.messages += 1;
+          ipcStats.bytes += Buffer.byteLength(JSON.stringify(message));
+        }
+        sender.send("parallax:subscription", key, message);
       },
     );
     // It ends at once when `logId` is stale.

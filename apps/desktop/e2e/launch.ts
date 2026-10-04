@@ -21,9 +21,14 @@ export interface Launched {
 
 /**
  * Launches the app with a plxd of its own, whose workers play `script`, a fake backend script in
- * this folder. `bin`, when given, goes first on PATH.
+ * this folder or at an absolute path. `bin`, when given, goes first on PATH. `recordVideo`, when
+ * given, records the window as Playwright's option of that name does.
  */
-export async function launch(script: string, bin?: string): Promise<Launched> {
+export async function launch(
+  script: string,
+  bin?: string,
+  recordVideo?: { dir: string; size?: { width: number; height: number } },
+): Promise<Launched> {
   if (!existsSync(plxd)) throw new Error(`no plxd at ${plxd}; see the top of launch.ts`);
   const dataDir = mkdtempSync(path.join(tmpdir(), "parallax-e2e-"));
   const env: NodeJS.ProcessEnv = {
@@ -31,7 +36,7 @@ export async function launch(script: string, bin?: string): Promise<Launched> {
     PLX_NO_NAMER: "1",
     PLXD_PATH: plxd,
     PLXD_DATA_DIR: dataDir,
-    PLXD_FAKE_BACKEND: path.join(import.meta.dirname, script),
+    PLXD_FAKE_BACKEND: path.resolve(import.meta.dirname, script),
   };
   if (bin) {
     // Windows spells it Path, and a second PATH key would leave which one wins to chance.
@@ -47,6 +52,7 @@ export async function launch(script: string, bin?: string): Promise<Launched> {
   const app = await _electron.launch({
     args: [desktop, userData],
     env: env as Record<string, string>,
+    ...(recordVideo && { recordVideo }),
   });
   return { app, page: await app.firstWindow(), dataDir };
 }
