@@ -567,7 +567,9 @@ impl Actor {
                 if answer.is_err() && from.is_some() {
                     self.senders.remove(&turn_id);
                 }
-                if answer.is_ok() && self.wakes.attended() {
+                // Only the user's own message resets the count and ends a pause (0025): a child's
+                // `thread_send` (with `from`) leaves them, so a loop still reaches the cap.
+                if answer.is_ok() && from.is_none() && self.wakes.attended() {
                     self.save_wakes().await;
                 }
                 let _ = reply.send(answer);

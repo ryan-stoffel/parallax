@@ -801,6 +801,62 @@ async fn a_pause_survives_a_restart_and_what_waits_follows_the_users_message() {
     host.server.stop().await;
 }
 
+/// PLX-380 (0025): only the user's own message ends a pause. A child's message to its parent
+/// (`thread_send`, with `from`) reaches it but leaves its wake-ups paused, so a loop between them
+/// can't get past the cap.
+#[tokio::test]
+async fn a_childs_message_leaves_its_parents_wake_ups_paused() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let hang = vec![init("worker-1"), Step::Hang];
+    let turn = |result: &str| vec![init("coordinator-1"), end_turn(result)];
+    let backends = roles(hang, vec![turn("Planned."), turn("Heard it.")], &seen);
+    let host = Host::start(temp_dir(), backends);
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let coordinator = client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let worker = spawn(&mut client, &coordinator, "Add a README.").await;
+    sessions(&mut client, &[worker]).await;
+    client
+        .call::<AgentCancel>(AgentCancelParams {
+            run_id: coordinator.id,
+            from: None,
+        })
+        .await
+        .unwrap();
+    until(&mut client, |event| {
+        matches!(event.event, ParallaxEvent::AgentWakeupsPaused { .. })
+    })
+    .await;
+
+    client
+        .call::<AgentSend>(AgentSendParams {
+            from: Some(worker),
+            ..send_params(coordinator.id, TurnId::generate(), "Done, check it.")
+        })
+        .await
+        .unwrap();
+    let heard = nth_launch(&seen, 1).await;
+    assert_eq!(heard.prompt, "Done, check it.", "the message reaches it");
+    until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
+            if *run_id == coordinator.id && state.status == AgentStatus::Completed)
+    })
+    .await;
+    host.server.stop().await;
+    let store =
+        parallax_store::Store::open(DataDir::new(host.dir.path()).unwrap().store_file()).unwrap();
+    assert!(
+        store.wake_state(coordinator.id.into()).unwrap().paused,
+        "still paused until the user writes"
+    );
+}
+
 fn subscribe_host(after: u64) -> EventsSubscribeParams {
     EventsSubscribeParams {
         after,
