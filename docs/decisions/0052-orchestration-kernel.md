@@ -121,7 +121,7 @@ Ryan chose to build all of it now rather than wait for the numbers to demand eac
 - The effect snapshots the run's folder, a worktree or a Current checkout thread's checkout, without touching the user's index or branch. It uses a temporary `GIT_INDEX_FILE` in the run's temp folder: `read-tree HEAD`, then `add -A` (untracked files that aren't ignored are included), then `write-tree`, then `commit-tree` parented on `HEAD`, then `update-ref refs/parallax/checkpoints/<run>/turn/<n>`. It uses #166's pinned git folder, with no hooks. A coordinator's run writes nothing (0024) and gets none.
 - The next turn waits for the checkpoint, as for any open effect, so the snapshot is the turn's own. One exception is a background subagent that writes after its turn ends. Its writes land in the next turn's checkpoint.
 - `agent/turnDiff {runId, turn}` diffs turn `n`'s checkpoint tree against `n - 1`'s, and turn 1's against the worktree's base. It uses 0014's caps.
-- Pruning: a run keeps its newest 100 checkpoints, and each capture deletes refs beyond that. All of a run's refs are deleted when it is accepted or deleted, with its worktree and branch.
+- Pruning: a run keeps its newest 101 checkpoints, and each capture deletes refs beyond that. `agent/turnDiff` answers for the newest 100. The 101st is kept only as the oldest one's diff base, and an older turn is `invalidParams`. All of a run's refs are deleted when it is accepted or deleted, with its worktree and branch.
 
 ### The handoff budget (PLX-486)
 
@@ -135,15 +135,15 @@ Ryan chose to build all of it now rather than wait for the numbers to demand eac
 | A move to another backend or provider (0014, 0046) | `summary`, 64 KiB |
 | A fork with no session to continue (0050) | `summary`, 64 KiB, of the log up to the fork's turn |
 | An attached thread the target hasn't seen (0047) | `summary`, 32 KiB (`maxSummaryBytes` stays) |
-| An attached thread the target saw before | `since` the `seq` of the target's last `turnStarted` that listed it, 32 KiB |
+| An attached thread the target saw before | `since` the source `seq` its last summary covered, 32 KiB |
 
-  `seq` is daemon-wide, so the target's own event marks what it saw in the other run's log, and nothing new is stored. A resume by session gets no handoff, since the session has it.
+  The cursor is the source's own: the newest `seq` the summary read. It is stored in `attached_seen`, primary key `(target_run, source_run)`, with column `seq`, upserted in the transaction that records the target's turn. The target's later `turnStarted` would be the wrong cursor, because a running source can log events between the read and that event, and `since` would then skip them. Rows go with either run. A resume by session gets no handoff, since the session has it.
 
 ### Compacting finished turns (PLX-491)
 
 - A finished turn's `agent.output` batches become one row, in place. In one transaction, the last batch's payload is rewritten to the turn's final items, and the turn's other batches are deleted. The final items merge consecutive text deltas and drop deltas that a whole `text` repeats. Tool calls and results stay as they are. Reusing the last batch's `seq` keeps the turn's place in the log, and no new table or reader logic is needed. The rewritten event carries `compacted: {from}`, the turn's first `seq`.
 - Only turns whose last batch is older than the in-memory window's oldest `seq` are compacted, so a live subscriber never sees a change. A sweep runs at start and hourly, one turn per job so it never holds the writer for long.
-- A subscriber whose cursor falls inside a compacted turn, which can happen after a restart reloads further back, gets `resyncRequired`.
+- A cursor that falls inside a compacted turn (`from` ≤ cursor < the row's `seq`) gets `resyncRequired`. That covers an `events/subscribe` cursor after a restart reloads further back, and an `agent/events` pager whose `after` ended a page inside a turn the sweep then compacted. Without it, the pager's next page would repeat the items it already read. The client reads the run again from 0, as it does after any resync.
 - PLX-491 updates 0016: a run's events still stay as long as its run does, now one row per finished turn.
 
 ### Write path
