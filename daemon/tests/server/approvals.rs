@@ -6,20 +6,20 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use parallax_protocol::jsonrpc::INVALID_PARAMS;
 use parallax_protocol::methods::{
-    AgentApprove, AgentCancel, AgentEvents, AgentStart, ProjectStart,
+    AgentApprove, AgentCancel, AgentEvents, AgentStart, ProjectStart, RepoAdd,
 };
 use parallax_protocol::{
     AccountChoice, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams,
     AgentApproveResult, AgentCancelParams, AgentEventsParams, AgentOutcome, AgentOutputItem,
     AgentStartParams, AgentStatus, ApprovalId, ErrorKind, EventsEventParams, ParallaxEvent,
-    ProjectStartParams, RunId,
+    ProjectId, ProjectStartParams, RepoAddParams, RepoId, RunId,
 };
 use plxd::backend::fake::{AskedApproval, Step};
 use serde_json::{Value, json};
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake, init, items, outcomes, project_params, start_params,
-    subscribe, until, updated_to,
+    Conn, Host, create, end_turn, fake, init, items, outcomes, project_params, real_repo,
+    start_params, subscribe, until, updated_to,
 };
 use crate::support::{InProcess, kind, temp_dir};
 
@@ -255,16 +255,41 @@ async fn an_allowed_request_reaches_the_cli_and_its_answer_is_logged_once() {
 }
 
 /// A client that doesn't set `approvals`, such as an app from before them, gets what it always
-/// did: its run never asks, and so has no request to answer.
+/// did outside a Project: its run never asks, and so has no request to answer. In a Project it
+/// asks anyway, since the inbox answers (0042).
 #[tokio::test]
-async fn a_run_started_without_approvals_never_asks() {
+async fn a_run_started_without_approvals_never_asks_outside_a_project() {
     let script = vec![
         init("approval-1"),
         Step::RequestApproval(bash()),
         end_turn("Done."),
     ];
     let host = host(script, NEVER);
-    let (mut client, run_id) = start_run(&host, false).await;
+    let (mut in_project, child) = start_run(&host, false).await;
+    until(&mut in_project, |event| !requested(event).is_empty()).await;
+    in_project
+        .call::<AgentCancel>(AgentCancelParams {
+            run_id: child,
+            from: None,
+        })
+        .await
+        .unwrap();
+
+    let mut client = host.client().await;
+    let work = temp_dir();
+    let entry = client
+        .call::<RepoAdd>(RepoAddParams {
+            id: RepoId::generate(),
+            path: real_repo(work.path()).to_str().unwrap().to_owned(),
+        })
+        .await
+        .unwrap()
+        .repo;
+    let scope = ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap();
+    subscribe(&mut client, scope, 0).await;
+    let params = start_params(scope, "Run the tests");
+    let run_id = params.run_id;
+    client.call::<AgentStart>(params).await.unwrap();
     let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
     assert!(
         events.iter().all(|event| requested(event).is_empty()),

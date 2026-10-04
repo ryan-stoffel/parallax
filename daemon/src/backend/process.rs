@@ -209,7 +209,7 @@ impl fmt::Debug for Environment {
 /// What a backend's process gets on stdin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StdinMode {
-    /// `/dev/null` (`NUL` on Windows), for CLIs that must see stdin closed, such as `codex exec`.
+    /// `/dev/null` (`NUL` on Windows), for CLIs and commands that must see stdin closed.
     Null,
     /// A pipe the backend writes to with [`Process::take_stdin`], for follow-up messages.
     Piped,

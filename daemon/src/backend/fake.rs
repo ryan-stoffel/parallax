@@ -265,7 +265,7 @@ impl FakeBackend {
         Ok(Some(Self::new(launcher.clone(), script)))
     }
 
-    /// Takes no follow-ups, and gives the CLI a closed stdin, as `codex exec` needs.
+    /// Takes no follow-ups, and gives the CLI a closed stdin, as a one-turn CLI needs.
     #[must_use]
     pub fn without_follow_ups(mut self) -> Self {
         self.follow_ups = false;

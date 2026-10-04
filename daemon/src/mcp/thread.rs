@@ -12,8 +12,8 @@
 //! A caller in a Project also gets [`CONTEXT_TOOLS`], the Project's shared context, and the
 //! question tools for its role ([`super::question`], PLX-402). A Project's coordinator launches
 //! its children in its Project, through `agent/start` with itself as their coordinator thread, so
-//! they show in the Project's Agents panel, keep the worker sandbox, and run in the Project's
-//! mode, and `thread_list` lists its Project's runs, which have no thread rows.
+//! they show in the Project's Agents panel, run as threads that ask through the inbox, in the
+//! Project's mode, and `thread_list` lists its Project's runs, which have no thread rows.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -994,7 +994,7 @@ fn account_choice(
 
 /// `thread_launch` for a Project's coordinator: a child in its Project, through `agent/start` with
 /// the caller as its coordinator thread, so its parent is the caller (0041). It works in a new
-/// worktree of the Project's repository and keeps the worker sandbox until PLX-396, and plxd runs
+/// worktree of the Project's repository as a thread asking through the inbox, and plxd runs
 /// it in the Project's mode (0042), so the options that pick a workspace, a mode, or a title are
 /// refused.
 async fn launch_child(server: &Server, args: LaunchArgs) -> Result<String, String> {
@@ -1050,7 +1050,7 @@ async fn launch_child(server: &Server, args: LaunchArgs) -> Result<String, Strin
             // The Project's mode, whatever is asked (0042).
             permission: None,
             images: Vec::new(),
-            // plxd gives the run its coordinator's (0031).
+            // plxd turns them on for every run in a Project (0042).
             approvals: false,
             threads,
             explore: false,

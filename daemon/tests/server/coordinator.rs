@@ -497,10 +497,10 @@ async fn a_backend_without_the_projects_mode_is_refused_and_never_moved_up() {
 }
 
 /// PLX-222 (0031): a coordinator whose client answers permission requests keeps `approvals` when
-/// it resumes, and the subagents it spawns get them too. One started without them, as an older
-/// app starts it, and its subagents never ask.
+/// it resumes. One started without them, as an older app starts it, never asks. Every child asks
+/// either way, since the inbox answers (0042).
 #[tokio::test]
-async fn approvals_last_through_a_resume_and_reach_the_coordinators_subagents() {
+async fn approvals_last_through_a_resume_and_every_child_has_them() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     // Workers never finish, so no wake-up takes a coordinator script.
     let backends = roles(
@@ -552,7 +552,7 @@ async fn approvals_last_through_a_resume_and_reach_the_coordinators_subagents() 
             .map(|request| request.approvals)
     };
     assert_eq!(launched(subagent), Some(true));
-    assert_eq!(launched(quiet_subagent), Some(false));
+    assert_eq!(launched(quiet_subagent), Some(true));
     host.server.stop().await;
 }
 

@@ -9,8 +9,8 @@
 //! `agent/send` and `agent/cancel`, and when a CLI process ends, commits the worktree through
 //! #166's hardened `commit_all` and reports `agent.diffReady`.
 //!
-//! A run whose client started it with `approvals`, and a subagent of a coordinator that has them,
-//! lets its CLI ask before a tool call (PLX-222, decision 0031). It logs the request, takes
+//! A run whose client started it with `approvals`, and every run in a Project but its coordinator,
+//! lets its CLI ask before a tool call (PLX-222, decisions 0031 and 0042). It logs the request, takes
 //! `agent/approve`'s answer, and denies it itself when nobody answers in time ([`approvals`]).
 //! Every launch of the run, a resume included, keeps the flag.
 //!
@@ -31,7 +31,9 @@
 //! backend that doesn't map the mode is refused ([`in_mode`]), never moved to another mode.
 //!
 //! A normal thread's run is full Claude Code in every mode, with no worker sandbox, when its client
-//! answers permission requests, and its first message is the user's own (0034). A thread started
+//! answers permission requests, and its first message is the user's own (0034). A Project's
+//! children run the same way, through `agent/start`: always with `approvals`, and with a short
+//! header naming the Project and its tools before the task (0042). A thread started
 //! with `checkout` has no worktree either: it runs in its repo entry's own checkout, on the branch
 //! the user has out or the one `checkoutRef` switches it to first. plxd never commits it, since the
 //! checkout can hold the user's own uncommitted work, so its changes stay there for the user to
@@ -183,14 +185,15 @@ pub(super) struct Prepared {
 
 /// Where a run's CLI starts, and what that needs.
 pub(super) enum Place {
-    /// A worker, in its worktree, inside the worker sandbox (0013), which needs these folders.
-    /// A normal thread is placed the same way (`thread`), and with `approvals` runs as full
-    /// Claude Code instead (0034).
+    /// A thread, in its worktree or its repo entry's checkout: a normal thread, or a Project's
+    /// child (0042). With `approvals` it runs as the full CLI (0034). Without, Claude Code keeps
+    /// the worker sandbox (0013), which needs these folders. A child's first message starts with
+    /// `header`.
     Worker {
         home: PathBuf,
         data_dir: PathBuf,
         context: PathBuf,
-        thread: bool,
+        header: Option<String>,
     },
     /// A project's coordinator, with no sandbox (0024), in a detached worktree of `repo` that the
     /// actor refreshes before each CLI process (PLX-171).
@@ -353,17 +356,19 @@ async fn prepare_run(
     role: Role,
     new_thread: bool,
 ) -> Result<(Prepared, String), ErrorObject> {
-    let (repo_path, context_scope, thread, thread_run, defaults, accounts) =
+    let (repo_path, context_scope, project_name, thread_run, defaults, accounts) =
         store(daemon, move |db| {
             let repo_path = crate::threads::scope_path(db, project)?;
-            // A run whose scope is a repo entry is a normal thread's (0017).
-            let thread = db
-                .get_repo(project.into())
+            // A run whose scope is a Project, not a repo entry, is its coordinator or one of its
+            // children (0042).
+            let project_name = db
+                .get_project(project.into())
                 .map_err(|e| store_error(&e))?
-                .is_some();
-            // The run itself is a thread: one `thread/start` made, not any run on a repo entry,
-            // such as a coordinator's worker started on one.
+                .map(|row| row.name);
+            // The run itself is a thread: one `thread/start` made, or a Project's child, not any
+            // run on a repo entry, such as one `agent/start` made there.
             let thread_run = new_thread
+                || project_name.is_some()
                 || db
                     .get_thread(run.into())
                     .map_err(|e| store_error(&e))?
@@ -378,7 +383,7 @@ async fn prepare_run(
             Ok((
                 repo_path,
                 context_scope,
-                thread,
+                project_name,
                 thread_run,
                 defaults,
                 StoredKeyAccounts(accounts),
@@ -415,8 +420,8 @@ async fn prepare_run(
         return Ok((prepared, repo_path));
     }
     // A Codex or Cursor thread is full Codex or Cursor Agent, with no worker sandbox to check
-    // (0035, 0036). Any other run on them is refused, even one on a repo entry: Cursor runs
-    // nothing else, and Codex workers wait on PLX-153.
+    // (0035, 0036). Any other run on them is refused, even one on a repo entry: they run nothing
+    // else.
     if !(thread_run && resolved.backend().full_thread()) {
         worker::check_backend(resolved.backend())?;
     }
@@ -442,6 +447,7 @@ async fn prepare_run(
     })?;
     let context = sandbox_path(&context, "the shared context folder")?;
     sandbox_path(Path::new(&repo_path), "the project's repository")?;
+    let header = project_name.map(|name| child_header(&name));
     let prepared = Prepared {
         resolved,
         accounts,
@@ -449,7 +455,7 @@ async fn prepare_run(
             home,
             data_dir,
             context,
-            thread,
+            header,
         },
     };
     Ok((prepared, repo_path))
@@ -774,28 +780,6 @@ async fn record(
     recorded
 }
 
-/// A coordinator's subagent forwards its permission requests when the coordinator does (0031):
-/// sets `approvals` when the run whose thread is `coordinator_thread`, the coordinator's own run
-/// (0024), has them. Its `approvals` never change, so a retried spawn gets the same.
-async fn inherit(
-    daemon: &Arc<Daemon>,
-    coordinator_thread: Option<CoordinatorThreadId>,
-    approvals: &mut bool,
-) -> Result<(), ErrorObject> {
-    let Some(thread) = coordinator_thread else {
-        return Ok(());
-    };
-    let id = Uuid::from(thread);
-    let row = store(daemon, move |db| {
-        db.get_run(id).map_err(|e| store_error(&e))
-    })
-    .await?;
-    if let Some(row) = row {
-        *approvals |= row.fields.approvals;
-    }
-    Ok(())
-}
-
 /// The permission mode every run in `scope` runs in (0042): its Project's, or `None` when `scope`
 /// is a repo entry, whose threads keep their own.
 pub(super) async fn project_mode(
@@ -1088,13 +1072,14 @@ pub(crate) async fn create_started(
         mut thread,
     } = new;
     let fork = thread.as_mut().and_then(|thread| thread.fork.take());
-    inherit(&daemon, coordinator_thread, &mut approvals).await?;
-    // A run in a Project runs in its mode, whatever the request asked for (0042).
+    // A run in a Project runs in its mode, whatever the request asked for, and asks through the
+    // inbox, whoever started it (0042).
     // ponytail: a retry after `project/update` changed the mode gets idConflict; compare the
     // stored mode instead if that bites.
     let mode = project_mode(&daemon, project).await?;
     if let Some(mode) = mode {
         options.permission = mode.agent();
+        approvals = true;
     }
     // What the request asks for, as the runs table stores it. Routing fills in the backend below.
     let mut fields = RunFields {
@@ -1195,7 +1180,7 @@ pub(crate) async fn create_started(
 
     // A run just created here has no sent turns yet.
     let mut actor = Actor::new(Arc::clone(&daemon), row, worktree, HashMap::new());
-    let task = first_prompt(&sent, &prepared.place, &cwd)?;
+    let task = first_prompt(&sent, &prepared.place)?;
     let paths = Some((cwd, git_common_dir));
     actor.attach(None, threads);
     actor
@@ -1215,17 +1200,32 @@ pub(crate) async fn create_started(
     })
 }
 
-/// A new run's first message: a worker's limits, for its CLI started in `cwd`, then `prompt`. A
-/// thread's (a run whose scope is a repo entry) is `prompt` as the user wrote it, as in Claude
-/// Code (0034).
-fn first_prompt(prompt: &str, place: &Place, cwd: &Path) -> Result<String, ErrorObject> {
+/// A new thread's first message: `prompt` as the user or the coordinator wrote it, as in Claude
+/// Code (0034), after a Project child's header (0042).
+pub(super) fn first_prompt(prompt: &str, place: &Place) -> Result<String, ErrorObject> {
     match place {
-        Place::Worker { thread: true, .. } => Ok(prompt.to_owned()),
-        Place::Worker { context, .. } => Ok(worker::worker_prompt(prompt, cwd, context)),
+        Place::Worker { header, .. } => Ok(format!("{}{prompt}", header.as_deref().unwrap_or(""))),
         Place::Coordinator { .. } => Err(ErrorObject::internal_error(
-            "a worker was prepared as a coordinator",
+            "a thread was prepared as a coordinator",
         )),
     }
+}
+
+/// The start of a Project child's first message (0042): the Project's name and the plxd tools
+/// every kind gives a child, which always runs with `approvals` (0041). The task follows it.
+fn child_header(project: &str) -> String {
+    let tools = [
+        crate::mcp::thread::TOOLS,
+        crate::mcp::thread::CONTEXT_TOOLS,
+        crate::mcp::question::CHILD_TOOLS,
+    ]
+    .concat()
+    .join(", ");
+    // PLX-406 adds the Project's brief and memory index between the tools and the task.
+    format!(
+        "You are working on a task in the Parallax Project \"{project}\".\n\
+         Your Parallax tools are on the plxd MCP server: {tools}.\n\nYour task:\n"
+    )
 }
 
 impl Agents {
