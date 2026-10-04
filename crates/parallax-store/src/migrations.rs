@@ -467,6 +467,15 @@ const MIGRATIONS: &[Migration] = &[
             created_at TEXT NOT NULL
         );",
     },
+    // A Project's checks (PLX-411, decision 0045): the command the user confirmed, which runs
+    // after each landing, and the one its coordinator proposed, which never runs. NULL is none.
+    // And how many times a child's landing failed the checks since it was queued.
+    Migration {
+        version: 35,
+        sql: "ALTER TABLE projects ADD COLUMN checks TEXT;
+        ALTER TABLE projects ADD COLUMN proposed_checks TEXT;
+        ALTER TABLE landings ADD COLUMN failures INTEGER NOT NULL DEFAULT 0;",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

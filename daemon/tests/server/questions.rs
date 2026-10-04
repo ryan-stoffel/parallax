@@ -673,6 +673,8 @@ async fn ask_me_sends_questions_to_needs_you_and_refuses_the_coordinators_answer
             auto_land: None,
             allow_api_keys: None,
             max_children: None,
+            checks: None,
+            proposed_checks: None,
         })
         .await
         .unwrap()

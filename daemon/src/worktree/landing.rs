@@ -2,9 +2,11 @@
 //! 0045). The queue itself is [`crate::methods::land`].
 //!
 //! A merge is built in the object store with `git merge-tree --write-tree` and committed with
-//! `git commit-tree`, so a conflict changes neither the branch nor its worktree. Only a clean
-//! result moves the branch, with `reset --hard` in the integration worktree, which only the
-//! landing queue writes. Every call runs with hooks off, as all of plxd's git calls do.
+//! `git commit-tree`, so a conflict changes neither the branch nor its worktree. A clean result is
+//! checked out detached in the integration worktree, which only the landing queue writes, for the
+//! Project's checks (PLX-411), and the branch moves to it only once they pass
+//! ([`WorktreeManager::advance_integration`]). Every call runs with hooks off, as all of plxd's
+//! git calls do.
 
 use std::path::Path;
 use std::time::Duration;
@@ -30,14 +32,22 @@ pub enum Merged {
 }
 
 impl WorktreeManager {
-    /// Puts `project`'s integration worktree back on its branch's tip, dropping whatever a
-    /// landing that plxd's stop interrupted left behind, and returns the tip.
+    /// Puts `project`'s integration worktree back on `branch`'s tip, attached to it, dropping
+    /// whatever a landing left behind: a merge its checks failed, or one that plxd's stop
+    /// interrupted. Returns the tip.
     ///
     /// # Errors
     ///
     /// A git failure.
-    pub async fn integration_tip(&self, project: ProjectId) -> Result<String, WorktreeError> {
+    pub async fn integration_tip(
+        &self,
+        project: ProjectId,
+        branch: &str,
+    ) -> Result<String, WorktreeError> {
         let path = self.integration_path(project);
+        let reference = format!("refs/heads/{branch}");
+        self.run_git_ok(&path, &["symbolic-ref", "HEAD", &reference])
+            .await?;
         self.run_git_ok(&path, &["reset", "--hard", "--quiet", "HEAD"])
             .await?;
         self.run_git_ok(&path, &["clean", "-fd", "--quiet"]).await?;
@@ -92,6 +102,8 @@ impl WorktreeManager {
 
     /// Merges `theirs` into `project`'s integration branch at `tip`, with `message`. A squash
     /// commits the result with `tip` as its only parent; otherwise it is a merge commit of both.
+    /// The commit is checked out detached in the integration worktree, and the branch stays on
+    /// `tip` until [`WorktreeManager::advance_integration`].
     ///
     /// # Errors
     ///
@@ -167,9 +179,32 @@ impl WorktreeManager {
         commit_args.extend(["-m", message]);
         let commit = self.run_git_ok(&path, &commit_args).await?;
         let commit = commit.trim().to_owned();
-        self.run_git_ok(&path, &["reset", "--hard", "--quiet", &commit])
-            .await?;
+        let args = ["checkout", "--quiet", "--force", "--detach", &commit];
+        self.run_git_ok(&path, &args).await?;
         Ok(Merged::Commit(commit))
+    }
+
+    /// Moves `project`'s integration `branch` from `tip` to `commit`, the merge checked out
+    /// detached in its worktree, and attaches the worktree to it. Fails, moving nothing, if the
+    /// branch isn't on `tip`.
+    ///
+    /// # Errors
+    ///
+    /// A git failure.
+    pub async fn advance_integration(
+        &self,
+        project: ProjectId,
+        branch: &str,
+        tip: &str,
+        commit: &str,
+    ) -> Result<(), WorktreeError> {
+        let path = self.integration_path(project);
+        let reference = format!("refs/heads/{branch}");
+        self.run_git_ok(&path, &["update-ref", &reference, commit, tip])
+            .await?;
+        self.run_git_ok(&path, &["symbolic-ref", "HEAD", &reference])
+            .await?;
+        Ok(())
     }
 
     /// The lines `theirs` adds since its merge base with `tip` that hold a leftover conflict

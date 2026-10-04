@@ -760,6 +760,17 @@ export type Project = {
 	 */
 	allowApiKeys?: boolean,
 	/**
+	 * The command plxd runs in the integration worktree after each landing (0045), behind the
+	 * `checks` capability: through `sh -c` (`cmd /C` on Windows), with a 30-minute limit. Absent
+	 * means none, so a clean merge is enough.
+	 */
+	checks?: string,
+	/**
+	 * The checks command the coordinator proposed, behind `checks`. It never runs: the user
+	 * confirms it, or another, by setting `checks`. Absent means none.
+	 */
+	proposedChecks?: string,
+	/**
 	 * When the project was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
@@ -3878,8 +3889,8 @@ export type ProjectStartParams = {
  * Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
  * capability (PLX-227, 0032), its permission mode, behind `projectPermission` (0042), its
  * autonomy level, behind `projectAutonomy` (0043), its base branch, behind `integrationBranch`
- * (0045), automatic landing, behind `landing` (0045), or how its children are placed, behind
- * `projectPlacement` (0046).
+ * (0045), automatic landing, behind `landing` (0045), how its children are placed, behind
+ * `projectPlacement` (0046), or its checks, behind `checks` (0045).
  *
  * A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
  * `project/create`'s rules, and the repository can't change. A rename, a new icon, a new mode,
@@ -3928,6 +3939,16 @@ export type ProjectUpdateParams = {
 	 * Whether children may run on an API key account, behind `projectPlacement`. Absent keeps it.
 	 */
 	allowApiKeys?: boolean,
+	/**
+	 * The checks command the user confirms or edits, behind `checks` (0045): at most 4,096
+	 * bytes. Empty clears it, and setting it clears `proposedChecks`. Absent keeps it.
+	 */
+	checks?: string,
+	/**
+	 * The coordinator's proposal for `checks`, behind `checks`, which adds a `needsYou` item
+	 * naming it and never runs. Empty clears it. Ignored when `checks` is set too. Absent keeps it.
+	 */
+	proposedChecks?: string,
 };
 
 /**

@@ -698,6 +698,8 @@ mod tests {
             auto_land: false,
             max_children: 10,
             allow_api_keys,
+            checks: None,
+            proposed_checks: None,
             created_at: now(),
             updated_at: now(),
         };

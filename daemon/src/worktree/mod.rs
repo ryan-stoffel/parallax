@@ -98,6 +98,7 @@
 //! repository's git folder — so this needs an unusual repository configuration to matter; #175
 //! tracks closing it.
 
+mod checks;
 mod coordinator;
 mod folder;
 mod integration;
@@ -111,6 +112,7 @@ mod tests;
 #[cfg(all(test, windows))]
 mod windows_tests;
 
+pub use checks::{CHECKS_TIMEOUT, Checked};
 pub use folder::{PushError, RunFolder};
 pub use landing::Merged;
 pub use pull_request::{PrError, github_pr_urls};

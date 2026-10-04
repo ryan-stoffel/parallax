@@ -378,6 +378,62 @@ async fn an_integration_branch_needs_a_branch_base_and_a_checkout() {
     assert!(mgr.integration_path(project).join("README.md").is_file());
 }
 
+/// PLX-411: the merge `landed`, of `branch` onto `tip`, waits detached in the integration
+/// worktree with the branch on `tip` until the checks pass. A stop before then leaves it out, and
+/// once it lands again the branch advances to it. Returns the commit that landed.
+async fn waits_detached(
+    mgr: &WorktreeManager,
+    repo: &Path,
+    project: ProjectId,
+    tip: &str,
+    branch: &str,
+    landed: &str,
+) -> String {
+    let path = mgr.integration_path(project);
+    assert_eq!(rev_parse(&path, "parallax/app"), tip);
+    assert_eq!(
+        mgr.ensure_integration(repo, project, Some("parallax/app"), "app", "main")
+            .await
+            .unwrap(),
+        "parallax/app",
+        "a detached worktree is kept"
+    );
+    assert_eq!(rev_parse(&path, "HEAD"), landed, "and left as it is");
+    // A stop before they pass leaves the merge out: the tip attaches the worktree again.
+    assert_eq!(
+        mgr.integration_tip(project, "parallax/app").await.unwrap(),
+        tip
+    );
+    assert_eq!(rev_parse(&path, "HEAD"), tip);
+    assert_eq!(
+        std::fs::read_to_string(path.join("README.md")).unwrap(),
+        "hello\n"
+    );
+    let Merged::Commit(again) = mgr
+        .merge_into_integration(project, tip, branch, "Do a\n\nLanded by Parallax.", true)
+        .await
+        .unwrap()
+    else {
+        panic!("a merges cleanly again");
+    };
+    let landed = again;
+    mgr.advance_integration(project, "parallax/app", tip, &landed)
+        .await
+        .unwrap();
+    assert_eq!(rev_parse(&path, "parallax/app"), landed);
+    assert_eq!(
+        git_output(&path, &["symbolic-ref", "HEAD"]),
+        "refs/heads/parallax/app"
+    );
+    assert!(
+        mgr.advance_integration(project, "parallax/app", tip, &landed)
+            .await
+            .is_err(),
+        "the branch has moved on from that tip"
+    );
+    landed
+}
+
 /// PLX-410 (0045): two children change the same file. The first squash-merges as one commit; the
 /// second conflicts and changes nothing, until plxd starts the merge in its worktree, it
 /// resolves the markers, and the commit its turn ends with concludes the merge, which then lands.
@@ -392,7 +448,7 @@ async fn two_children_touching_one_file_land_one_at_a_time_through_a_conflict() 
         .await
         .unwrap();
     let path = mgr.integration_path(project);
-    let tip = mgr.integration_tip(project).await.unwrap();
+    let tip = mgr.integration_tip(project, "parallax/app").await.unwrap();
     let mut children = Vec::new();
     for text in ["from a\n", "from b\n"] {
         let child = mgr
@@ -431,6 +487,7 @@ async fn two_children_touching_one_file_land_one_at_a_time_through_a_conflict() 
         std::fs::read_to_string(path.join("README.md")).unwrap(),
         "from a\n"
     );
+    let landed = waits_detached(&mgr, &repo, project, &tip, &a.branch, &landed).await;
 
     let conflict = mgr
         .merge_into_integration(project, &landed, &b.branch, "Do b", true)
@@ -512,7 +569,7 @@ async fn a_moved_base_is_fetched_and_merged_alone() {
         .await
         .unwrap();
     let path = mgr.integration_path(project);
-    let tip = mgr.integration_tip(project).await.unwrap();
+    let tip = mgr.integration_tip(project, "parallax/app").await.unwrap();
 
     std::fs::write(origin.join("base.txt"), "base\n").unwrap();
     git(&origin, &["add", "-A"]);

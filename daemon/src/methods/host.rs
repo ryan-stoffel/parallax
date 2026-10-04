@@ -159,6 +159,8 @@ pub(crate) fn initialize(
 /// `inbox` (PLX-401, 0043): `inbox/list`, `inbox/seen`, and `inbox.added`.
 /// `landing` (PLX-410, 0045): `land/queue`, `land/approve`, `land/sendBack`, and `autoLand` on
 /// `Project` and `project/update`, which an older plxd would silently ignore.
+/// `checks` (PLX-411, 0045): `checks` and `proposedChecks` on `Project` and `project/update`,
+/// which an older plxd would silently ignore, and the checks running after each landing.
 /// `queue` (PLX-370, 0048): `queue/list`, `queue/edit`, `queue/reorder`, `queue/cancel`,
 /// `queue/steer`, and `queue.updated`, and `agent/send` takes `delivery`, which an older plxd
 /// would silently ignore, queueing a steer.
@@ -181,6 +183,7 @@ fn capabilities_advertised() -> Capabilities {
         ("agents".to_owned(), serde_json::Map::new()),
         ("approvals".to_owned(), serde_json::Map::new()),
         ("autoResume".to_owned(), serde_json::Map::new()),
+        ("checks".to_owned(), serde_json::Map::new()),
         ("checkout".to_owned(), serde_json::Map::new()),
         ("composerMenus".to_owned(), serde_json::Map::new()),
         ("contextAndFast".to_owned(), serde_json::Map::new()),

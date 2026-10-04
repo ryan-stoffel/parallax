@@ -554,6 +554,8 @@ mod tests {
                 auto_land: false,
                 allow_api_keys: None,
                 max_children: None,
+                checks: None,
+                proposed_checks: None,
             };
             daemon
                 .log
@@ -708,6 +710,8 @@ mod tests {
                     auto_land: false,
                     allow_api_keys: None,
                     max_children: None,
+                    checks: None,
+                    proposed_checks: None,
                 },
             },
         };
