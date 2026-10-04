@@ -134,7 +134,8 @@ export function threadNotice(
 
 /**
  * A notification when any host's thread finishes, fails, needs the user, or hits a usage limit,
- * with Open thread. A thread's state when it's first listed is never news. The thread `openKey`
+ * with Open thread. A thread's state when it's first listed is never news, nor is any change
+ * while its host's list loads. The thread `openKey`
  * names (`hostId/threadId`) is skipped while the window is focused, as are snoozed and archived
  * threads: the snooze alarm covers those.
  */
@@ -151,7 +152,9 @@ export function useThreadAlarms(
 
   useEffect(() => {
     const now = Date.now();
-    for (const { host, view } of hosts)
+    for (const { host, view } of hosts) {
+      // Mid-load, a thread's requests may not be in yet; its marks wait for the whole answer.
+      if (view.loading) continue;
       for (const t of view.state.threads) {
         const key = `${host.id}/${t.id}`;
         const run = view.state.runs[t.id];
@@ -170,6 +173,7 @@ export function useThreadAlarms(
           system: true,
         });
       }
+    }
   }, [hosts]);
 }
 
@@ -179,16 +183,25 @@ export function useThreadAlarms(
  */
 export function useConnectionAlarms(hosts: Host[]) {
   const names = useRef(hosts);
+  // Each host's last state. Main connects hosts before the window listens, so each host's
+  // current state is read too, unless a change has come by then.
+  const last = useRef(new Map<string, ConnectionState>());
   useEffect(() => {
     names.current = hosts;
-  });
+    for (const { id } of hosts)
+      if (!last.current.has(id))
+        window.parallax.connectionState(id).then(
+          (state) => void (last.current.has(id) || last.current.set(id, state)),
+          // It rejects only for a host just removed.
+          () => {},
+        );
+  }, [hosts]);
   useEffect(() => {
-    const last = new Map<string, ConnectionState>();
     // Hosts with a lost or failed notice up, which connecting replaces.
     const troubled = new Set<string>();
     return window.parallax.onConnectionState((hostId, state) => {
-      const before = last.get(hostId);
-      last.set(hostId, state);
+      const before = last.current.get(hostId);
+      last.current.set(hostId, state);
       const name = names.current.find((h) => h.id === hostId)?.name ?? "a host";
       const key = `connection/${hostId}`;
       if (state.status === "connected") {

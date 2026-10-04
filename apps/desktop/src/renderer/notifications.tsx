@@ -6,7 +6,7 @@ import {
   MessageCircleQuestion,
   X,
 } from "lucide-react";
-import { useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 
 // Every notification the app shows (PLX-507): one stack of toasts in the window's top right, in
 // the update toast's look. Anything can call `notify`; App draws the stack once.
@@ -37,7 +37,6 @@ const MAX_SHOWN = 4;
 
 let shown: readonly Shown[] = [];
 let nextId = 0;
-const timers = new Map<number, number>();
 const listeners = new Set<() => void>();
 const subscribe = (listener: () => void) => {
   listeners.add(listener);
@@ -45,11 +44,6 @@ const subscribe = (listener: () => void) => {
 };
 
 function set(next: readonly Shown[]) {
-  for (const [id, timer] of timers)
-    if (!next.some((n) => n.id === id)) {
-      window.clearTimeout(timer);
-      timers.delete(id);
-    }
   shown = next;
   for (const listener of listeners) listener();
 }
@@ -59,12 +53,6 @@ export function notify(notice: Notice) {
   const id = nextId++;
   const kept = shown.filter((n) => notice.key === undefined || n.key !== notice.key);
   set([{ ...notice, id }, ...kept].slice(0, MAX_SHOWN));
-  const sticky = notice.sticky ?? (notice.tone === "attention" || notice.tone === "error");
-  if (!sticky)
-    timers.set(
-      id,
-      window.setTimeout(() => close(id), NOTICE_MS),
-    );
   if (notice.system && !document.hasFocus()) {
     const note = new Notification(notice.title, { body: notice.body });
     note.onclick = () => {
@@ -109,40 +97,61 @@ export function Notifications() {
   );
 }
 
+/**
+ * One notice. One that isn't sticky closes `NOTICE_MS` after it shows, or after the pointer or
+ * focus last left it.
+ */
 function Toast({ notice, onClose }: { notice: Notice; onClose: () => void }) {
   const { tone, title, body, action } = notice;
+  const sticky = notice.sticky ?? (tone === "attention" || tone === "error");
+  const [held, setHeld] = useState(false);
+  const close = useRef(onClose);
+  useEffect(() => {
+    close.current = onClose;
+  });
+  useEffect(() => {
+    if (sticky || held) return;
+    const timer = window.setTimeout(() => close.current(), NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [sticky, held]);
   return (
     <div
       role={tone === "error" ? "alert" : "status"}
+      onPointerEnter={() => setHeld(true)}
+      onPointerLeave={() => setHeld(false)}
+      onFocus={() => setHeld(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) setHeld(false);
+      }}
       className="toast-in relative rounded-xl border border-border bg-surface py-3 pr-9 pl-3.5 text-foreground shadow-composer"
     >
       <div className="flex items-center gap-2 text-[13.5px] font-medium">
         {icons[tone]}
         <span className="truncate">{title}</span>
       </div>
-      {(body || action) && (
-        <p className="mt-1 line-clamp-3 text-[12.5px] break-words text-muted-foreground">
-          {body}
-          {body && action && " "}
-          {action &&
-            ("href" in action ? (
-              <a href={action.href} className={link}>
-                {action.label}
-                <ArrowUpRight className="size-3" />
-              </a>
-            ) : (
-              <button
-                type="button"
-                className={link}
-                onClick={() => {
-                  onClose();
-                  action.run();
-                }}
-              >
-                {action.label}
-              </button>
-            ))}
-        </p>
+      {body && (
+        <p className="mt-1 line-clamp-3 text-[12.5px] break-words text-muted-foreground">{body}</p>
+      )}
+      {action && (
+        <div className="mt-1 text-[12.5px] text-muted-foreground">
+          {"href" in action ? (
+            <a href={action.href} className={link}>
+              {action.label}
+              <ArrowUpRight className="size-3" />
+            </a>
+          ) : (
+            <button
+              type="button"
+              className={link}
+              onClick={() => {
+                onClose();
+                action.run();
+              }}
+            >
+              {action.label}
+            </button>
+          )}
+        </div>
       )}
       <button
         type="button"

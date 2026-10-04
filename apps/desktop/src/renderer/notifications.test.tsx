@@ -3,11 +3,12 @@ import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
+import type { ConnectionState, ParallaxBridge } from "../preload/bridge";
 import type { AgentRun, Thread } from "../protocol/generated/protocol";
-import { threadNotice, useThreadAlarms, type ThreadMark } from "./alarms";
+import { threadNotice, useConnectionAlarms, useThreadAlarms, type ThreadMark } from "./alarms";
 import { NOTICE_MS, Notifications, notify } from "./notifications";
 import type { HostThreads } from "./Sidebar";
-import { emptyThreads, idleThreads } from "./threads";
+import { emptyThreads, idleThreads, type ThreadsState } from "./threads";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers.
@@ -149,4 +150,74 @@ test("any host's thread notifies with Open thread, except the one open in the fo
   rerender(<Alarms list={hosts("running")} openKey="dev/t-1" />);
   rerender(<Alarms list={hosts("failed")} openKey="dev/t-1" />);
   expect(titles()).toEqual(["Thread failed"]);
+});
+
+test("a notice stays while the pointer is on it, and closes once it leaves", () => {
+  vi.useFakeTimers();
+  render(<Notifications />);
+  act(() => notify({ tone: "success", title: "Pushed" }));
+  const toast = document.querySelector('[aria-label="Notifications"] > div')!;
+  act(() => void toast.dispatchEvent(new PointerEvent("pointerover", { bubbles: true })));
+  act(() => void vi.advanceTimersByTime(NOTICE_MS * 2));
+  expect(titles()).toEqual(["Pushed"]);
+  act(() => void toast.dispatchEvent(new PointerEvent("pointerout", { bubbles: true })));
+  act(() => void vi.advanceTimersByTime(NOTICE_MS));
+  expect(titles()).toEqual([]);
+});
+
+test("a thread waiting on the user as its host's list loads, or reloads, is not news", () => {
+  const thread = { id: "t-1", createdAt: "2026-10-04T12:00:00Z" } as Thread;
+  const run = { id: "t-1", status: "running", updatedAt: "2026-10-04T12:05:00Z" } as AgentRun;
+  // The list comes in before its permission requests.
+  const hosts = (asks: number, loading: boolean): HostThreads[] => [
+    {
+      host: { id: "dev", name: "dev box" },
+      view: {
+        ...idleThreads,
+        loading,
+        state: {
+          ...emptyThreads,
+          threads: [thread],
+          runs: { "t-1": run },
+          approvals: asks ? { "t-1": { seq: 1, items: [{}] } } : {},
+        } as unknown as ThreadsState,
+      },
+    },
+  ];
+  function Alarms({ list }: { list: HostThreads[] }) {
+    useThreadAlarms(list, () => {}, undefined);
+    return <Notifications />;
+  }
+  const rerender = render(<Alarms list={hosts(0, true)} />);
+  rerender(<Alarms list={hosts(1, false)} />);
+  // A resync: the list again, then its requests.
+  rerender(<Alarms list={hosts(0, true)} />);
+  rerender(<Alarms list={hosts(1, false)} />);
+  expect(titles()).toEqual([]);
+  // A request that comes after is.
+  rerender(<Alarms list={hosts(0, false)} />);
+  rerender(<Alarms list={hosts(1, false)} />);
+  expect(titles()).toEqual(["Thread needs your input"]);
+});
+
+test("a host connected before the window listened says so when it drops and comes back", async () => {
+  let change: (hostId: string, state: ConnectionState) => void = () => {};
+  const connected = { status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} } as const;
+  window.parallax = {
+    connectionState: async () => connected,
+    onConnectionState: (listener: typeof change) => {
+      change = listener;
+      return () => {};
+    },
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  function Alarms() {
+    useConnectionAlarms([{ id: "dev", name: "dev box" }]);
+    return <Notifications />;
+  }
+  render(<Alarms />);
+  await act(async () => {});
+  act(() => change("dev", { status: "connecting" }));
+  expect(titles()).toEqual(["Lost connection to dev box"]);
+  act(() => change("dev", connected));
+  expect(titles()).toEqual(["Reconnected to dev box"]);
 });

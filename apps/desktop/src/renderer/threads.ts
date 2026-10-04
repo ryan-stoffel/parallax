@@ -319,6 +319,11 @@ export interface ThreadsView {
   state: ThreadsState;
   /** Why the list couldn't load or stopped updating, for people. */
   error?: string;
+  /**
+   * While a load or resync is under way: its list can be in without the permission requests
+   * that follow it, so who needs the user isn't settled yet (PLX-507's alarms wait it out).
+   */
+  loading?: boolean;
   /** Registers a repository (idempotent on its path). Resolves to its entry or an error message. */
   addRepo: (path: string) => Promise<Repo | string>;
   /**
@@ -488,6 +493,7 @@ export function useThreads(
 ): ThreadsView {
   const [state, dispatch] = useReducer(threadsReducer, emptyThreads);
   const [error, setError] = useState<string>();
+  const [loading, setLoading] = useState(false);
   // Another host starts empty, rather than showing this one's threads until its list loads.
   const [shownHost, setShownHost] = useState(hostId);
   if (shownHost !== hostId) {
@@ -548,6 +554,7 @@ export function useThreads(
     }
 
     async function load() {
+      setLoading(true);
       for (const stop of scopes.values()) stop();
       scopes = new Map();
       const list = await window.parallax.request(hostId, "thread/list", {});
@@ -575,6 +582,7 @@ export function useThreads(
       const backlog = await waitingSince(hostId, runs.result.runs, () => stopped);
       if (stopped) return;
       dispatch({ type: "approvals", events: backlog });
+      setLoading(false);
       // From the run list's `seq`, which plxd replays from, so no change since is missed.
       const after = runs.result.seq;
       for (const r of list.result.repos) watch(r.id, after, runs.logId);
@@ -825,6 +833,7 @@ export function useThreads(
     () => ({
       state,
       error,
+      loading,
       attention,
       editable,
       deletable,
@@ -850,6 +859,7 @@ export function useThreads(
     [
       state,
       error,
+      loading,
       attention,
       editable,
       deletable,

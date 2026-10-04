@@ -2204,7 +2204,7 @@ test("a new Needs you item notifies with Open Project, from the OS while the win
   await added(9, inboxItem("i-needs", "needsYou", "Fix the login bug: wake-ups paused"));
   expect(notes).toEqual([]);
   expect(toast()!.textContent).toBe(
-    "emberNeeds you: Fix the login bug: wake-ups paused Open Project",
+    "emberNeeds you: Fix the login bug: wake-ups pausedOpen Project",
   );
   const open = [...toast()!.querySelectorAll("button")].find(
     (b) => b.textContent === "Open Project",

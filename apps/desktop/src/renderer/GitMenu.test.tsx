@@ -245,19 +245,20 @@ test("a Create PR that fails for gh says so in one line with Set up GitHub, and 
   await settle();
   const body = () => notice()!.querySelector("p")!.textContent;
   await act(async () => item("Create PR").click());
-  expect(body()).toBe("GitHub isn't signed in on this host. Set up GitHub");
+  expect(body()).toBe("GitHub isn't signed in on this host.");
   await act(async () => button("Set up GitHub")!.click());
   expect(onSetUpGithub).toHaveBeenCalledOnce();
 
   message = "GitHub CLI isn't installed on the host: gh was not found; looked in /usr/bin";
   await act(async () => item("Create PR").click());
-  expect(body()).toBe("GitHub isn't installed on this host. Set up GitHub");
+  expect(body()).toBe("GitHub isn't installed on this host.");
 
   // Another failure replaces it, with plxd's message and nothing to set up.
   kind = "prFailed";
   message = "gh pr create failed: no commits between main and readme";
   await act(async () => item("Create PR").click());
   expect(body()).toBe(message);
+  expect(button("Set up GitHub")).toBeUndefined();
   expect(document.querySelectorAll('[aria-label="Notifications"] > div')).toHaveLength(1);
 });
 
