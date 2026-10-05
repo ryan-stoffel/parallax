@@ -247,6 +247,18 @@ test("the usage period picker shows its choice on each provider (PLX-284)", asyn
   await page.getByRole("button", { name: "Back to app" }).click();
 });
 
+test("changing a setting never scrolls the window itself (PLX-441)", async () => {
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Appearance" }).click();
+  // Focusing an option's hidden radio once scrolled the whole window up, for good.
+  for (const option of ["More", "Standard", "Blue & orange", "Red & green"])
+    await page.getByText(option, { exact: true }).click();
+  const scroll = await page.evaluate(`(({ scrollTop, scrollHeight, clientHeight }) =>
+    ({ scrollTop, overflow: scrollHeight - clientHeight }))(document.documentElement)`);
+  expect(scroll).toEqual({ scrollTop: 0, overflow: 0 });
+  await page.getByRole("button", { name: "Back to app" }).click();
+});
+
 test("signs in to a CLI in a host terminal, then shows it signed in (PLX-35)", async () => {
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Providers" }).click();

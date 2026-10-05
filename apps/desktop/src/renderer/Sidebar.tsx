@@ -794,10 +794,7 @@ export function ThreadList({
       </dialog>
       <div className="border-t border-border p-2">
         <ConnectionStatus hostId={host.id} />
-        <Footer
-          onOpenSettings={onOpenSettings}
-          onOpenUsage={() => onSelect(host.id, { kind: "usage" })}
-        />
+        <Footer onOpenSettings={onOpenSettings} />
       </div>
     </>
   );
@@ -1005,10 +1002,7 @@ function RepoFilterMenu({
  * The footer's buttons: Profile, which opens Settings > Account and shows the account's picture or
  * initials (0037), Settings, Usage, and Update when `updatable` (Update.tsx).
  */
-function Footer({
-  onOpenSettings,
-  onOpenUsage,
-}: Pick<ThreadListProps, "onOpenSettings"> & { onOpenUsage: () => void }) {
+function Footer({ onOpenSettings }: Pick<ThreadListProps, "onOpenSettings">) {
   const profile = useProfile();
   return (
     <div className="flex items-center gap-1">
@@ -1021,7 +1015,7 @@ function Footer({
       <IconButton label="Settings" command="settings" onClick={() => onOpenSettings("general")}>
         <Settings />
       </IconButton>
-      <IconButton label="Usage" onClick={onOpenUsage}>
+      <IconButton label="Usage" onClick={() => onOpenSettings("usage")}>
         <ChartNoAxesColumn />
       </IconButton>
       {window.parallax.updatable && <UpdateButton />}
@@ -1824,6 +1818,7 @@ export function age(time: string, now = Date.now()): string {
 /** Each Settings section's name and icon, in the nav's order. */
 const sections: { id: SettingsSection; name: string; Icon: LucideIcon }[] = [
   { id: "account", name: "Account", Icon: CircleUser },
+  { id: "usage", name: "Usage", Icon: ChartNoAxesColumn },
   { id: "general", name: "General", Icon: Settings },
   { id: "appearance", name: "Appearance", Icon: Palette },
   { id: "keybinds", name: "Keybinds", Icon: Keyboard },
