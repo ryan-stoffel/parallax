@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -24,8 +24,25 @@ use crate::backend::{
 };
 use crate::paths::DataDir;
 
-/// `opencode:hunter2`, as basic auth sends it.
-const AUTH: &str = "Basic b3BlbmNvZGU6aHVudGVyMg==";
+/// The `Authorization` header curl sends for `opencode:hunter2`.
+static AUTH: LazyLock<String> = LazyLock::new(|| {
+    const DIGITS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::from("Basic ");
+    for chunk in b"opencode:hunter2".chunks(3) {
+        let bits = chunk.iter().enumerate().fold(0u32, |bits, (i, byte)| {
+            bits | u32::from(*byte) << (16 - 8 * i)
+        });
+        for i in 0..4 {
+            let digit = usize::try_from(bits >> (18 - 6 * i) & 63).unwrap();
+            encoded.push(if i <= chunk.len() {
+                char::from(DIGITS[digit])
+            } else {
+                '='
+            });
+        }
+    }
+    encoded
+});
 
 /// One request the fake server took.
 #[derive(Clone, Debug)]
@@ -90,7 +107,7 @@ impl Server {
                     let mut body = vec![0; length];
                     read.read_exact(&mut body).await.unwrap();
                     let auth = headers.get("authorization").cloned();
-                    if target.starts_with("/event") && auth.as_deref() != Some(AUTH) {
+                    if target.starts_with("/event") && auth.as_deref() != Some(AUTH.as_str()) {
                         let head = "HTTP/1.1 401 X\r\ncontent-length: 0\r\n\r\n";
                         write.write_all(head.as_bytes()).await.unwrap();
                         return;
@@ -121,7 +138,7 @@ impl Server {
                         auth,
                     };
                     requests.lock().unwrap().push(request.clone());
-                    let (status, answer, then) = if request.auth.as_deref() != Some(AUTH) {
+                    let (status, answer, then) = if request.auth.as_deref() != Some(AUTH.as_str()) {
                         (401, json!({"name": "Unauthorized"}), Vec::new())
                     } else if request.target == "/global/health" {
                         (
@@ -185,12 +202,17 @@ fn part(part: Value) -> Value {
 }
 
 fn bash(status: &str) -> Value {
+    call("call_1", status)
+}
+
+/// A `bash` call `cat a.txt`, `id`, in `status`.
+fn call(id: &str, status: &str) -> Value {
     let mut state = json!({"status": status, "input": {"command": "cat a.txt"}});
     if status == "completed" {
         state["output"] = "hello world\n".into();
     }
     part(
-        json!({"id": "prt_tool", "type": "tool", "tool": "bash", "callID": "call_1", "state": state}),
+        json!({"id": format!("prt_{id}"), "type": "tool", "tool": "bash", "callID": id, "state": state}),
     )
 }
 
@@ -208,10 +230,15 @@ fn reply(text: &str) -> Vec<Value> {
 }
 
 fn asked() -> Value {
+    asked_for("per_1", "call_1")
+}
+
+/// `OpenCode` asks `id` before the `bash` call `call`.
+fn asked_for(id: &str, call: &str) -> Value {
     event(
         "permission.asked",
-        json!({"id": "per_1", "permission": "bash", "patterns": ["cat a.txt"], "metadata": {"command": "cat a.txt"},
-               "always": ["cat *"], "tool": {"messageID": "msg_2", "callID": "call_1"}}),
+        json!({"id": id, "permission": "bash", "patterns": ["cat a.txt"], "metadata": {"command": "cat a.txt"},
+               "always": ["cat *"], "tool": {"messageID": "msg_2", "callID": call}}),
     )
 }
 
@@ -380,17 +407,14 @@ async fn a_thread_at_a_server_url_streams_asks_and_finishes() {
         server
             .requests()
             .iter()
-            .all(|r| r.auth.as_deref() == Some(AUTH)
+            .all(|r| r.auth.as_deref() == Some(AUTH.as_str())
                 && (r.target == "/global/health"
                     || r.target.ends_with(&format!("?directory={folder}"))))
     );
     let session = server.find("POST", "/session?").unwrap();
     assert_eq!(
         session.body["permission"],
-        json!([
-            {"permission": "bash", "pattern": "*", "action": "ask"},
-            {"permission": "edit", "pattern": "*", "action": "allow"},
-        ])
+        super::rules(AgentPermission::Edit)
     );
     let prompt = server.find("POST", "/session/ses_1/prompt_async").unwrap();
     assert_eq!(
@@ -613,14 +637,126 @@ async fn inspecting_a_server_lists_its_models_and_version() {
     assert!(found.note.unwrap().contains("couldn't reach"));
 }
 
+#[tokio::test]
+async fn a_denial_goes_on_and_a_request_opencode_rejected_is_withdrawn() {
+    let server = Server::start(|request| {
+        let path = request.target.split('?').next().unwrap_or_default();
+        match (request.method.as_str(), path) {
+            ("POST", "/session") => (200, json!({"id": "ses_1"}), Vec::new()),
+            ("POST", "/session/ses_1/prompt_async") => {
+                let then = vec![
+                    busy(),
+                    call("call_1", "running"),
+                    call("call_2", "running"),
+                    asked_for("per_1", "call_1"),
+                    asked_for("per_2", "call_2"),
+                ];
+                (204, Value::Null, then)
+            }
+            // As `OpenCode` does, one rejection rejects the session's other requests.
+            ("POST", "/permission/per_1/reply") => {
+                let replied = event(
+                    "permission.replied",
+                    json!({"requestID": "per_2", "reply": "reject"}),
+                );
+                let mut then = vec![replied];
+                then.extend(reply("Skipped both."));
+                then.push(idle());
+                (200, json!(true), then)
+            }
+            _ => (404, Value::Null, Vec::new()),
+        }
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (launcher, cwd) = launcher(&dir, "/usr/bin:/bin");
+    let backend = OpencodeBackend::new(launcher, opencode(Some(&server.url), Some("hunter2")));
+    let mut request = request(cwd);
+    request.permission = Some(AgentPermission::Manual);
+    let started = backend.start(request).unwrap();
+    let mut events = started.events;
+    let mut asked = Vec::new();
+    while asked.len() < 2 {
+        if let Event::ApprovalRequested(request) = next(&mut events).await {
+            asked.push(request);
+        }
+    }
+    started
+        .run
+        .answer(Answer {
+            approval_id: asked[0].approval_id,
+            decision: Decision::Deny {
+                message: String::new(),
+                interrupt: false,
+            },
+        })
+        .unwrap();
+    let seen = until(&mut events, |e| matches!(e, Event::Finished { .. })).await;
+    assert!(seen.contains(&Event::ApprovalWithdrawn {
+        approval_id: asked[1].approval_id
+    }));
+    assert!(seen.contains(&Event::ToolResult {
+        call_id: "call_2".into(),
+        status: ToolStatus::Denied,
+        output: None
+    }));
+    assert!(matches!(
+        seen.last(),
+        Some(Event::Finished {
+            outcome: Outcome::Completed { .. },
+            ..
+        })
+    ));
+    let denied = server.find("POST", "/permission/per_1/reply").unwrap();
+    assert_eq!(
+        denied.body,
+        json!({"reply": "reject", "message": "The user denied this."}),
+        "a message keeps the turn going"
+    );
+    assert!(server.find("POST", "/session/ses_1/abort").is_none());
+}
+
 #[test]
-fn a_model_is_provider_and_model() {
+fn every_level_below_full_access_turns_off_subagents_and_questions() {
+    let rule = |level, permission: &str| {
+        let rules = super::rules(level);
+        let rules = rules.as_array().unwrap();
+        let rule = rules
+            .iter()
+            .find(|rule| rule["permission"] == permission)
+            .unwrap();
+        rule["action"].as_str().unwrap().to_owned()
+    };
+    for (level, bash, edit, task) in [
+        (AgentPermission::Manual, "ask", "ask", "deny"),
+        (AgentPermission::Edit, "ask", "allow", "deny"),
+        (AgentPermission::Plan, "ask", "deny", "deny"),
+        (AgentPermission::Bypass, "allow", "allow", "allow"),
+    ] {
+        assert_eq!(
+            [
+                rule(level, "bash"),
+                rule(level, "edit"),
+                rule(level, "task"),
+                rule(level, "question")
+            ],
+            [bash, edit, task, "deny"],
+            "{level:?}"
+        );
+    }
+}
+
+#[test]
+fn a_bad_model_or_url_is_refused() {
     let mut request = request(PathBuf::from("/"));
     request.model = Some("big-pickle".into());
     assert!(matches!(
         super::check("OpenCode", &request),
         Err(StartError::Invalid(_))
     ));
+    assert!(super::check_url("--config=/x").is_err());
+    assert!(super::check_url("file:///tmp/x").is_err());
+    assert!(super::check_url("https://oc.example.com").is_ok());
 }
 
 #[test]
@@ -678,13 +814,24 @@ fn the_translator_keeps_to_its_session_and_the_turn_in_flight() {
         "another session's request isn't the run's"
     );
 
-    let question = event("question.asked", json!({"id": "que_1", "questions": []}));
+    let replied = json!({"type": "permission.replied", "properties": {"sessionID": "ses_2", "requestID": "per_2", "reply": "once"}});
     assert_eq!(
-        translator.event(&question),
-        [Step::Post {
-            path: "/question/que_1/reject".into(),
-            body: Value::Null
+        translator.event(&replied),
+        [Step::Replied {
+            id: "per_2".into(),
+            rejected: false
         }]
+    );
+
+    // Without anyone to ask, plxd rejects with a message, so the agent goes on.
+    translator.asks = false;
+    let bash = event(
+        "permission.asked",
+        json!({"id": "per_4", "permission": "bash", "patterns": [], "metadata": {}, "always": []}),
+    );
+    assert!(
+        matches!(&translator.event(&bash)[..], [Step::Post { body, .. }]
+        if body["reply"] == "reject" && body["message"].is_string())
     );
     let todos = event(
         "todo.updated",

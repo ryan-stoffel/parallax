@@ -49,7 +49,7 @@ Desk research and local runs on 2026-10-03 found:
 ### Cursor, OpenCode, and Grok
 
 - **Cursor runs through the SDK** since [0053](0053-cursor-sdk.md). This record had left it on `agent acp`: `@cursor/sdk` 1.0.35 needed a browser login that mints a key, ran tools with no approval callback, was a Node library, and had no Windows arm64 build. 0053 takes that path anyway, as a sidecar, with the login stored in plxd's data folder.
-- **OpenCode runs through its HTTP server** since [0055](0055-opencode-http.md), at a URL the user gives or one `opencode serve` per run, since `opencode acp` can't use a server the user runs.
+- **OpenCode 1.x runs through its HTTP server** since [0055](0055-opencode-http.md), at a URL the user gives or one `opencode serve` per run, since `opencode acp` can't use a server the user runs. OpenCode 2 (`opencode2`) stays on `opencode2 acp`.
 - **Grok** runs two ways: Grok models through Cursor, and Grok Build as its own provider for a SuperGrok or X Premium+ login.
 
 ### The app

@@ -23,6 +23,10 @@ pub(super) enum Step {
     Ask(ApprovalRequest, Ask),
     /// Answer `OpenCode` at once: `POST path` with `body`.
     Post { path: String, body: Value },
+    /// `OpenCode` no longer waits on the permission request with this id: it was answered, by
+    /// plxd, another client, or `OpenCode` itself, which rejects a session's other requests
+    /// when one is rejected.
+    Replied { id: String, rejected: bool },
     /// The session went idle after a prompt: the turn in flight ended.
     Idle,
     /// The turn failed, with `OpenCode`'s message.
@@ -32,6 +36,8 @@ pub(super) enum Step {
 /// A permission request `OpenCode` waits on, as the driver keeps it until the user answers.
 #[derive(Debug, PartialEq)]
 pub(super) struct Ask {
+    /// `OpenCode`'s id for the request.
+    pub id: String,
     /// Where the answer goes: `/permission/<id>/reply`.
     pub path: String,
     /// The tool call it is about.
@@ -101,11 +107,24 @@ impl Translator {
             }
             return Vec::new();
         }
-        if session != self.session {
-            if kind == "permission.asked" && self.children.contains(session) {
-                return self.permission(properties);
-            }
+        if session != self.session && !self.children.contains(session) {
             return Vec::new();
+        }
+        match kind {
+            "permission.asked" => return self.permission(properties),
+            "permission.replied" => {
+                return properties["requestID"]
+                    .as_str()
+                    .map(|id| Step::Replied {
+                        id: id.to_owned(),
+                        rejected: properties["reply"] == "reject",
+                    })
+                    .into_iter()
+                    .collect();
+            }
+            // A subagent's own events stay out of the thread's transcript.
+            _ if session != self.session => return Vec::new(),
+            _ => {}
         }
         match kind {
             "message.updated" => {
@@ -119,17 +138,6 @@ impl Translator {
             }
             "message.part.updated" => self.part(&properties["part"]),
             "message.part.delta" => self.delta(properties),
-            "permission.asked" => self.permission(properties),
-            // The app has no card for multiple-choice questions, so the tool fails and the agent
-            // goes on, as Cursor's `ask_question` is skipped over ACP.
-            "question.asked" => properties["id"]
-                .as_str()
-                .map(|id| Step::Post {
-                    path: format!("/question/{id}/reject"),
-                    body: Value::Null,
-                })
-                .into_iter()
-                .collect(),
             "todo.updated" => {
                 let items = properties["todos"]
                     .as_array()
@@ -378,7 +386,9 @@ impl Translator {
             if let Some(call_id) = &call_id {
                 self.denied.insert(call_id.clone());
             }
-            let body = json!({"reply": "reject"});
+            // With a message, `OpenCode` tells the agent and goes on; without, it ends the turn.
+            let message = "Parallax denied this: nobody can approve it in this thread.";
+            let body = json!({"reply": "reject", "message": message});
             steps.push(Step::Post { path, body });
             return steps;
         }
@@ -402,7 +412,8 @@ impl Translator {
             always_allow: Vec::new(),
             interactive: false,
         };
-        steps.push(Step::Ask(request, Ask { path, call_id }));
+        let id = id.to_owned();
+        steps.push(Step::Ask(request, Ask { id, path, call_id }));
         steps
     }
 }

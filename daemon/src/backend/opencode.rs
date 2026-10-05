@@ -18,8 +18,10 @@
 //!
 //! plxd has no HTTP client of its own, so every call is a `curl` run, as a model service's model
 //! list is (0040): the credentials and the JSON body go to curl as a config on stdin, which `ps`
-//! never shows, and https works for a remote server. The event stream is one `curl -N` on
-//! `/event` for the run's folder, read line by line.
+//! never shows, and https works for a remote server. No proxy is used, so none sees the
+//! password, and a URL must be `http://` or `https://`. The event stream is one `curl -N` on
+//! `/event` for the run's folder, read line by line, which fails once it is quiet for a minute,
+//! though the server sends a heartbeat every few seconds.
 //!
 //! # Sessions and turns
 //!
@@ -42,12 +44,16 @@
 //!
 //! `OpenCode`'s `build` and `plan` agents allow everything unless told otherwise, and a session's
 //! rules come after the agent's, the last match winning. So every run appends its level's rules
-//! for `bash` and `edit` to the session (0054): Supervised asks for both, Auto-accept edits
-//! allows `edit`, Plan denies `edit`, and Full access allows both. A `permission.asked` is
-//! answered by level as ACP agents' requests are ([`stream::Translator`]), else becomes
-//! [`Event::ApprovalRequested`], and [`Run::answer`] replies `once` or `reject` with the user's
-//! message. Without `approvals`, plxd rejects what its level doesn't allow. A question for the
-//! user is rejected, as the app has no card for one.
+//! to the session ([`rules`], 0054): Supervised asks for `bash` and `edit`, Auto-accept edits
+//! allows `edit`, Plan denies `edit`, and Full access allows both. Below Full access `task` is
+//! denied too, since a subagent's session keeps only its parent's denials, and the `question`
+//! tool is always denied, since the app has no card for it. A `permission.asked` is answered by
+//! level as ACP agents' requests are ([`stream::Translator`]), else becomes
+//! [`Event::ApprovalRequested`], and [`Run::answer`] replies `once` or `reject`. A rejection
+//! carries a message, the user's or a default, since `OpenCode` ends the turn on one without;
+//! only an interrupt goes without and aborts. Without `approvals`, plxd rejects what its level
+//! doesn't allow. A request answered elsewhere, or that `OpenCode` rejected itself after a sibling
+//! was rejected (`permission.replied`), is withdrawn.
 //!
 //! # Cancel
 //!
@@ -189,6 +195,17 @@ impl Opencode {
     }
 }
 
+/// Checks that `url` is an `http://` or `https://` URL, so curl never reads it as an option.
+fn check_url(url: &str) -> Result<(), String> {
+    if url.starts_with("http://") || url.starts_with("https://") {
+        Ok(())
+    } else {
+        Err(format!(
+            "{URL_VAR} must start with http:// or https://, not {url:?}"
+        ))
+    }
+}
+
 /// A random password for a server plxd starts with none of the instance's.
 fn random_password() -> String {
     uuid::Uuid::new_v4().simple().to_string()
@@ -250,6 +267,8 @@ impl Server {
         // `-q` first: a `.curlrc` could change what curl prints.
         spec.args = [
             "-q",
+            "--noproxy",
+            "*",
             "-sS",
             "--max-time",
             max_time.as_str(),
@@ -330,10 +349,25 @@ impl Server {
     fn events(&self, launcher: &Launcher, folder: &Path) -> Result<Process, String> {
         let url = format!("{}/event?directory={}", self.url, encode(folder));
         let mut spec = ProcessSpec::new("curl", std::env::temp_dir());
-        spec.args = ["-q", "-sSN", "--fail", "-K", "-", url.as_str()]
-            .iter()
-            .map(Into::into)
-            .collect();
+        // The server sends a heartbeat every few seconds, so a stream that goes quiet for a
+        // minute is dead, such as a remote server's that the network dropped.
+        spec.args = [
+            "-q",
+            "--noproxy",
+            "*",
+            "-sSN",
+            "--fail",
+            "--speed-limit",
+            "1",
+            "--speed-time",
+            "60",
+            "-K",
+            "-",
+            url.as_str(),
+        ]
+        .iter()
+        .map(Into::into)
+        .collect();
         spec.stdin = StdinMode::Piped;
         let mut process = launcher
             .spawn(&spec)
@@ -390,6 +424,7 @@ pub async fn inspect(launcher: &Launcher, opencode: &Opencode, secret: bool) -> 
     let read = async {
         let mut started = None;
         let server = if let Some(url) = &opencode.url {
+            check_url(url)?;
             opencode.server(url, opencode.password.as_ref().map(ApiKey::expose))
         } else {
             let password = random_password();
@@ -481,17 +516,22 @@ impl OpencodeBackend {
 }
 
 /// The session rules a run with `permission` appends, which win over the agent's and every
-/// earlier run's, since they come last (0054).
+/// earlier run's, since they come last (0054). A `task` subagent's session takes only its
+/// parent's `deny` rules, never an `ask`, and runs on an agent that allows everything, so
+/// below Full access the thread has no subagents. The `question` tool is always off: the app
+/// has no card for it, and rejecting a question ends the turn.
 fn rules(permission: AgentPermission) -> Value {
-    let (bash, edit) = match permission {
-        AgentPermission::Bypass => ("allow", "allow"),
-        AgentPermission::Edit => ("ask", "allow"),
-        AgentPermission::Plan => ("ask", "deny"),
-        _ => ("ask", "ask"),
+    let (bash, edit, task) = match permission {
+        AgentPermission::Bypass => ("allow", "allow", "allow"),
+        AgentPermission::Edit => ("ask", "allow", "deny"),
+        AgentPermission::Plan => ("ask", "deny", "deny"),
+        _ => ("ask", "ask", "deny"),
     };
     json!([
         {"permission": "bash", "pattern": "*", "action": bash},
         {"permission": "edit", "pattern": "*", "action": edit},
+        {"permission": "task", "pattern": "*", "action": task},
+        {"permission": "question", "pattern": "*", "action": "deny"},
     ])
 }
 
@@ -595,6 +635,9 @@ impl Backend for OpencodeBackend {
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
         let model = check(&self.opencode.label, &request)?;
+        if let Some(url) = &self.opencode.url {
+            check_url(url).map_err(StartError::Invalid)?;
+        }
         let mcp = thread_mcp(&request)?;
         let switch = CancelSwitch::new();
         // A server of plxd's own starts here, so a missing program fails the start.
@@ -961,6 +1004,23 @@ impl Driver {
                     self.emit(Event::ApprovalRequested(request)).await;
                 }
                 Step::Post { path, body } => self.post(&path, &body).await,
+                Step::Replied { id, rejected } => {
+                    let replied: Vec<ApprovalId> = self
+                        .asks
+                        .iter()
+                        .filter(|(_, ask)| ask.id == id)
+                        .map(|(approval_id, _)| *approval_id)
+                        .collect();
+                    for approval_id in replied {
+                        if let Some(ask) = self.asks.remove(&approval_id)
+                            && let Some(call_id) = ask.call_id
+                            && rejected
+                        {
+                            self.translator.denied.insert(call_id);
+                        }
+                        self.emit(Event::ApprovalWithdrawn { approval_id }).await;
+                    }
+                }
                 Step::Idle => self.finish_turn(None).await,
                 Step::Failed(message) if self.in_flight.is_some() => {
                     self.failure = Some(failure(classify(&message), message.clone()));
@@ -1056,6 +1116,13 @@ impl Driver {
                 if let Some(call_id) = ask.call_id {
                     self.translator.denied.insert(call_id);
                 }
+                // With a message, `OpenCode` tells the agent and goes on; without, it ends the
+                // turn, which only an interrupt should.
+                let message = if message.trim().is_empty() && !interrupt {
+                    "The user denied this.".to_owned()
+                } else {
+                    message
+                };
                 let mut body = json!({"reply": "reject"});
                 if !message.trim().is_empty() {
                     body["message"] = message.into();

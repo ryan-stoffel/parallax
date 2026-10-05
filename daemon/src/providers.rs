@@ -176,6 +176,25 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
     })
 }
 
+/// `instance`'s defaults: its kind's, except that `OpenCode` 2 (`opencode2`) stays on
+/// `opencode2 acp`, since its HTTP API isn't 1.x's (0055, PLX-566).
+fn preset_for(instance: &ProviderInstance) -> Option<Preset> {
+    let mut preset = preset(instance.kind)?;
+    let opencode2 = instance
+        .program
+        .as_deref()
+        .and_then(|program| Path::new(program).file_stem())
+        .is_some_and(|stem| stem == "opencode2");
+    if instance.kind == ProviderKind::Opencode && opencode2 {
+        preset.driver = Driver::Acp(Box::new(AcpAgent {
+            modes: vec![(AgentPermission::Plan, "plan".to_owned())],
+            edit_mode: Some("build".to_owned()),
+            ..acp_agent("OpenCode", "opencode2", &["acp"])
+        }));
+    }
+    Some(preset)
+}
+
 /// The built-in instances: what a first run lists when their CLI is installed, and the ids whose
 /// startup backends an instance with no settings runs.
 const BUILT_IN: &[(&str, ProviderKind, &str)] = &[
@@ -571,7 +590,7 @@ impl Providers {
         if instance.kind == ProviderKind::Cursor {
             return probe_cursor(&self.launcher, entry).await;
         }
-        let Some(preset) = preset(instance.kind) else {
+        let Some(preset) = preset_for(instance) else {
             return Found {
                 note: Some("this plxd doesn't know this kind of provider; update plxd".into()),
                 ..Found::default()
@@ -579,7 +598,7 @@ impl Providers {
         };
         let default_program = detected_cli(&instance.id).filter(|_| instance.program.is_none());
         // An `OpenCode` server at a URL needs no `opencode` on this host.
-        let mut found = if opencode_at_url(instance) {
+        let mut found = if matches!(preset.driver, Driver::Opencode) && opencode_at_url(instance) {
             Found {
                 installed: true,
                 ..Found::default()
@@ -838,7 +857,7 @@ fn build(
     env: Vec<(OsString, OsString)>,
 ) -> Option<Arc<dyn Backend>> {
     let instance = &entry.instance;
-    let preset = preset(instance.kind)?;
+    let preset = preset_for(instance)?;
     let launcher = launcher.clone();
     let mut overrides = overrides(entry, env);
     Some(match &preset.driver {
@@ -1293,7 +1312,7 @@ fn check(instance: &ProviderInstance) -> Result<(), ErrorObject> {
 
 /// What `providers/list` says about one instance.
 fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
-    let preset = preset(instance.kind);
+    let preset = preset_for(&instance);
     let (permissions, efforts) = match preset.as_ref().map(|p| &p.driver) {
         Some(Driver::Claude) => (
             vec![
@@ -1646,6 +1665,16 @@ mod tests {
             found.note.as_deref(),
             Some("pi isn't installed on this host")
         );
+    }
+
+    #[test]
+    fn opencode_2_stays_on_acp() {
+        let mut instance = ollama();
+        instance.kind = ProviderKind::Opencode;
+        let driver = |instance: &ProviderInstance| super::preset_for(instance).unwrap().driver;
+        assert!(matches!(driver(&instance), super::Driver::Opencode));
+        instance.program = Some("/opt/homebrew/bin/opencode2".into());
+        assert!(matches!(driver(&instance), super::Driver::Acp(agent) if agent.args == ["acp"]));
     }
 
     #[tokio::test]
