@@ -1,16 +1,25 @@
-import { Bot, GitFork, PanelBottom, PanelLeftOpen, PanelRight, Workflow } from "lucide-react";
+import {
+  ArrowLeft,
+  Bot,
+  GitFork,
+  PanelBottom,
+  PanelLeftOpen,
+  PanelRight,
+  Workflow,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { InboxItem, Thread } from "../protocol/generated/protocol";
 import { Actions, type RepoAction } from "./Actions";
 import { AgentChat } from "./AgentChat";
+import { ChildStrip } from "./ChildStrip";
 import type { Asked } from "./Approval";
 import { useConnection } from "./ConnectionStatus";
-import { ContextPanel } from "./ContextPanel";
 import { FilesPanel } from "./FilesPanel";
+import { useInbox } from "./Inbox";
 import { GitMenu } from "./GitMenu";
+import { KnowledgePanel } from "./Knowledge";
 import { LineageTrail } from "./Lineage";
-import { MemoryPanel } from "./MemoryPanel";
 import { NewThread } from "./NewThread";
 import { NewThreadPicker } from "./NewThreadPicker";
 import { Notifications } from "./notifications";
@@ -19,6 +28,7 @@ import { iconImageBytes } from "./images";
 import { OpenMenu } from "./OpenMenu";
 import { AgentsPanel, useProjectAgents, withProjectThreads } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
+import { ProjectHome, waitingCount } from "./ProjectHome";
 import { PullRequestChip, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
@@ -180,12 +190,30 @@ export function App() {
   );
   // The open subagent, whose chat takes the coordinator's place while the Project stays selected.
   const agentId = selection.kind === "project" ? selection.agentId : undefined;
+  // Entering a Project shows its inbox in the side panel.
+  const [panelProject, setPanelProject] = useState(project?.id);
+  if (project?.id !== panelProject) {
+    setPanelProject(project?.id);
+    if (project) setPanelOpen(true);
+  }
+  // The Project's inbox (0043), on a plxd with `inbox`, and the children whose questions wait in it.
+  const answerable = connected && "questions" in connection.capabilities;
+  const inbox = useInbox(
+    host.id,
+    project?.id ?? "",
+    connected && !!project && "inbox" in connection.capabilities,
+    answerable,
+  );
+  const needs = useMemo(
+    () => new Set(inbox.items.filter((i) => !i.seenAt && i.kind === "needsYou").map((i) => i.run)),
+    [inbox.items],
+  );
   const agent = agents.runs.find((r) => r.id === agentId);
   // Its thread's title from plxd (0041), else its prompt's.
   const agentTitle = agentId
     ? (threads.state.titles[agentId] ?? (agent ? titleOf(agent) : "Subagent"))
     : undefined;
-  // Whose memory the side panel's Memory view shows, on a plxd with `memory` (0044): the open
+  // Whose memory the side panel's Knowledge view shows, on a plxd with `memory` (0044): the open
   // Project's, with its repository's, or the open thread's repository's.
   // ponytail: a repo entry's path is canonical and a Project's is as created, so a Project made
   // through a symlink finds no Repo scope; match canonical paths if that shows up.
@@ -449,9 +477,13 @@ export function App() {
         !dialog &&
         (command === "parentThread" || command === "nextThread" || command === "previousThread")
       ) {
-        const next = lineageStep(command);
-        if (!next) return;
-        openThreadId(next);
+        // In a Project, Go to parent goes from a child back to the coordinator.
+        if (command === "parentThread" && agentId && !settings) openAgent();
+        else {
+          const next = lineageStep(command);
+          if (!next) return;
+          openThreadId(next);
+        }
       } else return;
       e.preventDefault();
     };
@@ -542,6 +574,15 @@ export function App() {
           <>
             <TopBar className={`@container ${topBarInset}`}>
               {showSidebar}
+              {agentId && (
+                <IconButton
+                  label="Back to the coordinator"
+                  command="parentThread"
+                  onClick={() => openAgent()}
+                >
+                  <ArrowLeft />
+                </IconButton>
+              )}
               <Breadcrumb
                 items={crumbs}
                 trail={
@@ -671,6 +712,7 @@ export function App() {
                 going={isRunning(agent?.status)}
                 others={othersAsked(agentId)}
                 projectMode={project?.permission}
+                strip={project && <ChildStrip project={project} onBack={() => openAgent()} />}
               />
             ) : (
               project && (
@@ -682,6 +724,9 @@ export function App() {
                   startCoordinator={threads.startCoordinator}
                   startTask={threads.startTask}
                   others={othersAsked(project.coordinator)}
+                  agents={agents}
+                  titles={threads.state.titles}
+                  needs={needs}
                   onOpenRun={(id) => openAgent(id === project.coordinator ? undefined : id)}
                 />
               )
@@ -707,6 +752,21 @@ export function App() {
         remoteHost={host.id === localId ? undefined : host.name}
         browse={browse}
         pullRequest={showPr}
+        project={
+          project && {
+            waiting: waitingCount(project, agents, inbox),
+            home: (
+              <ProjectHome
+                project={project}
+                agents={agents}
+                titles={threads.state.titles}
+                inbox={inbox}
+                answerable={answerable}
+                onOpen={openAgent}
+              />
+            ),
+          }
+        }
         pullRequests={
           linksPrs && threadRun
             ? {
@@ -756,25 +816,25 @@ export function App() {
             />
           )
         }
-        context={
-          project && (
-            <ContextPanel
-              key={`${host.id}/${project.id}`}
-              hostId={host.id}
-              project={project.id}
-              name={project.name}
-              connected={connected}
-            />
-          )
-        }
-        memory={
-          memory && (
-            <MemoryPanel
+        knowledge={
+          (project || memory) && (
+            <KnowledgePanel
               key={`${host.id}/${project?.id ?? memoryRepo}`}
               hostId={host.id}
               project={project?.id}
               repo={memoryRepo}
-              coordinator={project?.coordinator}
+              coordinator={
+                project?.coordinator
+                  ? agents.runs.find((r) => r.id === project.coordinator)
+                  : undefined
+              }
+              connected={connected}
+              memory={!!memory}
+              inbox={project ? inbox : undefined}
+              working={agents.runs.some(
+                (r) => r.id !== project?.coordinator && isRunning(r.status),
+              )}
+              expanded={panelExpanded}
             />
           )
         }

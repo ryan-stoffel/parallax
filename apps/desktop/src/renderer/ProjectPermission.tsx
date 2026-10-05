@@ -1,29 +1,14 @@
 import { useId, type ReactNode } from "react";
 
-import type { ProjectAutonomy, ProjectPermission } from "../protocol/generated/protocol";
+import type { ProjectAutonomy } from "../protocol/generated/protocol";
 
 type Option<T> = { value: T; name: string; detail: string };
-
-const modes: Option<ProjectPermission>[] = [
-  {
-    value: "auto",
-    name: "Auto",
-    detail:
-      "A safety check reviews each action first and asks you about any it won't decide. Claude Code and Codex offer it.",
-  },
-  {
-    value: "bypass",
-    name: "Bypass",
-    detail:
-      "Every action runs with no second check. Cursor, Grok Build, Hermes Agent, and the Ollama Cloud, OpenRouter, and local model providers need it.",
-  },
-];
 
 const levels: Option<ProjectAutonomy>[] = [
   {
     value: "ask",
     name: "Ask me",
-    detail: "The coordinator answers nothing. Every question waits for you in Needs you.",
+    detail: "The coordinator answers nothing. Every question waits on you.",
   },
   {
     value: "routine",
@@ -38,24 +23,6 @@ const levels: Option<ProjectAutonomy>[] = [
   },
 ];
 
-/**
- * A Project's permission mode and the disclaimer that goes with it (0042): why its agents run
- * without asking, what that lets them do, and the choice of Auto or Bypass. Create Project and
- * a Project's Permissions… dialog both show it, so they say the same thing.
- */
-export function ProjectPermissionChoice(props: {
-  value: ProjectPermission;
-  onChange: (value: ProjectPermission) => void;
-}) {
-  return (
-    <Choice legend="Permissions" options={modes} {...props}>
-      A Project's agents run without asking. In any other mode an agent stops at its first command
-      until someone answers, so the Project couldn't keep working while you're away. They can edit
-      files, run commands, use the network, and push with your credentials.
-    </Choice>
-  );
-}
-
 /** A Project's autonomy (0043), in its Autonomy… dialog. */
 export function AutonomyChoice(props: {
   value: ProjectAutonomy;
@@ -64,7 +31,7 @@ export function AutonomyChoice(props: {
   return (
     <Choice legend="Autonomy" options={levels} {...props}>
       A child never waits on a question: it goes on with what it assumed. This decides who answers
-      it. Every answer shows in the inbox, and you can change it.
+      it. Every answer shows on the Project tab.
     </Choice>
   );
 }

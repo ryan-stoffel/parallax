@@ -169,6 +169,7 @@ export function AgentChat({
   going,
   noRepo,
   tab,
+  strip,
   startOver,
   others,
   projectMode,
@@ -202,6 +203,8 @@ export function AgentChat({
   noRepo?: boolean;
   /** The composer's tab in place of the run's worktree, such as a coordinator's repository. */
   tab?: ReactNode;
+  /** A strip tucked over the composer, above the plan's, such as a Project's agents. */
+  strip?: ReactNode;
   /**
    * Starts a new run with `text` and `images` in place of this one once this one can't take
    * messages, as a Project's coordinator can (0024). Resolves to an error message, or undefined.
@@ -584,6 +587,7 @@ export function AgentChat({
             </button>
           </p>
         )}
+        {strip}
         {/* The latest turn's plan, while the run works on it. */}
         {plan && isRunning(run?.status) && !stalled && (
           <PlanStrip

@@ -3,25 +3,26 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { Project, PromptImage } from "../protocol/generated/protocol";
 import { AgentChat, PinnedApprovals } from "./AgentChat";
+import { AgentsBar } from "./AgentsBar";
 import { queueOf, useAnswers, type Asked } from "./Approval";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { imageCaps } from "./images";
-import { Inbox, useInbox } from "./Inbox";
 import type { RunOptions } from "./models";
 import { accountOptions, defaultBackend } from "./NewThread";
+import type { ProjectAgentsView } from "./ProjectAgents";
 import { ProjectIcon } from "./Sidebar";
 import type { ThreadsView } from "./threads";
-import { appShortcut } from "./ui";
 import { uuidv7 } from "./uuidv7";
 
 /**
  * A Project's coordinator chat (0024). Until its first message the Project introduces itself, and
  * sending starts the coordinator. From then on it is the coordinator run's `AgentChat`, so replies,
- * Stop, and the transcript work as a thread's do. Either way the Project's unread inbox (0043) sits
- * at the top, on a plxd with `inbox`. On a plxd with `projectTasks`, its composer sends a New task,
- * which starts a child, or Ask, which goes to the coordinator (0042). Key it by host and Project.
+ * Stop, and the transcript work as a thread's do. Either way its children ride over the composer
+ * (`AgentsBar`), and its inbox is the side panel's. On a plxd with `projectTasks`, the composer
+ * starts a child for a task, or one each for a list of them, and sends a question to the
+ * coordinator (0042). Key it by host and Project.
  */
 export function ProjectChat({
   hostId,
@@ -30,6 +31,9 @@ export function ProjectChat({
   startCoordinator,
   startTask,
   others,
+  agents,
+  titles,
+  needs,
   onOpenRun,
 }: {
   hostId: string;
@@ -40,19 +44,16 @@ export function ProjectChat({
   startTask: ThreadsView["startTask"];
   /** Permission requests the Project's subagents wait on, pinned over the composer (PLX-196). */
   others?: readonly Asked[];
-  /** Opens a run's chat, as an inbox item links to its child. */
+  /** The Project's runs, whose children show over the composer. */
+  agents: ProjectAgentsView;
+  titles?: Readonly<Record<string, string>>;
+  /** The children whose questions wait in the inbox. */
+  needs?: ReadonlySet<string>;
+  /** Opens a child's chat. */
   onOpenRun: (runId: string) => void;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
-  const answerable = connected && "questions" in connection.capabilities;
-  const inboxView = useInbox(
-    hostId,
-    project.id,
-    connected && "inbox" in connection.capabilities,
-    answerable,
-  );
-  const inbox = <Inbox view={inboxView} answerable={answerable} onOpen={onOpenRun} />;
   // The first message's run id, reused when it's sent again after failing (0007).
   const [runId] = useState(uuidv7);
   const [starting, setStarting] = useState(false);
@@ -65,18 +66,8 @@ export function ProjectChat({
   const tasks = connected && "projectTasks" in connection.capabilities;
   // The worker default's backend, a New task's, as New Thread's.
   const [taskBackend, setTaskBackend] = useState<string>();
-  // The composer's target, New task until switched, kept as the coordinator starts.
-  const [asking, setAsking] = useState(false);
-  useEffect(() => {
-    if (!tasks) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (appShortcut(e) !== "projectTarget") return;
-      e.preventDefault();
-      setAsking((a) => !a);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [tasks]);
+  // Where the user pointed the composer, over what its text suggests, until it sends.
+  const [asking, setAsking] = useState<boolean>();
   // Before there's a coordinator, subagents started by hand still ask here (PLX-196).
   const { answers, answer, dismiss } = useAnswers(hostId);
   const asked = useMemo(() => queueOf(others ?? [], answers), [others, answers]);
@@ -134,6 +125,16 @@ export function ProjectChat({
     return error && describeError(error);
   };
 
+  const bar = (
+    <AgentsBar
+      agents={agents}
+      titles={titles}
+      coordinator={project.coordinator}
+      needs={needs}
+      onOpen={onOpenRun}
+    />
+  );
+
   // A New task never waits on the coordinator, so the box is free for the next one at once.
   const newTask = tasks
     ? {
@@ -155,7 +156,6 @@ export function ProjectChat({
   if (project.coordinator)
     return (
       <>
-        {inbox}
         <AgentChat
           key={project.coordinator}
           hostId={hostId}
@@ -164,6 +164,7 @@ export function ProjectChat({
           going={started === project.coordinator}
           notice={notice}
           tab={tab}
+          strip={bar}
           // A new coordinator replaces one that can't take messages (0024).
           startOver={(text, options, images) => start(uuidv7(), text, options, images)}
           others={others}
@@ -189,7 +190,6 @@ export function ProjectChat({
 
   return (
     <>
-      {inbox}
       {/* It gives way first in a short window, so a pinned card and the composer keep their room,
           and whole: once it doesn't fit, it wraps into a second column, out of view, rather than
           show cut in two (PLX-259). */}
@@ -200,7 +200,9 @@ export function ProjectChat({
           <ProjectIcon icon={project.icon} className="size-10" />
           <h2 className="mt-5 text-[18px] font-medium tracking-tight">{project.name}</h2>
           <p className="mt-2 max-w-sm text-[14px] text-muted-foreground">
-            Agents working on {project.name} report back and coordinate here.
+            {tasks
+              ? "Describe a task and an agent starts on it, or list a few to start them together. Ask a question and the coordinator answers."
+              : `Agents working on ${project.name} report back and coordinate here.`}
           </p>
         </div>
       </div>
@@ -213,6 +215,7 @@ export function ProjectChat({
           onDismiss={dismiss}
           disabledReason={connected ? undefined : "Connecting to plxd…"}
         />
+        {bar}
         <Composer
           newThread
           onSend={send}

@@ -53,7 +53,6 @@ import type {
   Project,
   ProjectAutonomy,
   ProjectIcon as ProjectIconValue,
-  ProjectPermission,
   Repo,
   Thread,
 } from "../protocol/generated/protocol";
@@ -72,7 +71,7 @@ import {
   type Attention,
 } from "./attention";
 import { AttentionBadge } from "./AttentionMark";
-import { AutonomyChoice, ProjectPermissionChoice } from "./ProjectPermission";
+import { AutonomyChoice } from "./ProjectPermission";
 import { resumeTime } from "./ResumeCard";
 import { ConnectionStatus } from "./ConnectionStatus";
 import { Avatar, useProfile } from "./profile";
@@ -1035,9 +1034,9 @@ function Footer({
  * its runs ask of the user or its age. Its tooltip counts its agents, and names its host when there
  * are several. Where its host's plxd can edit or delete Projects, hovering or focusing it swaps the
  * status for its actions, which also open by right-clicking the row: Rename, which edits the name
- * in place, Change icon, which opens the icon picker under the row's icon, Permissions…, which
- * changes its permission mode with Create Project's disclaimer (0042), Autonomy…, which sets who
- * answers its children's questions (0043), and Delete….
+ * in place, Change icon, which opens the icon picker under the row's icon, Full access…, which
+ * moves a Project not yet in Bypass there for good (0042), as Create Project now starts every
+ * one, Autonomy…, which sets who answers its children's questions (0043), and Delete….
  */
 function ProjectRow({
   project,
@@ -1082,10 +1081,10 @@ function ProjectRow({
   const button = useRef<HTMLButtonElement>(null);
   const iconSpot = useRef<HTMLSpanElement>(null);
   const picker = useRef<HTMLDivElement>(null);
-  const permissions = useRef<HTMLDialogElement>(null);
   const autonomyDialog = useRef<HTMLDialogElement>(null);
-  // The mode picked in Permissions…, which opens on the Project's own.
-  const [mode, setMode] = useState<ProjectPermission>("auto");
+  const accessDialog = useRef<HTMLDialogElement>(null);
+  // A Project made before full access was the only mode, such as one on Auto, can move to it.
+  const upgradable = moded && project.permission !== "bypass";
   // The level picked in Autonomy…, which opens on the Project's own.
   const [autonomy, setAutonomy] = useState<ProjectAutonomy>("routine");
   // The name the field opened with, while Rename is open.
@@ -1125,7 +1124,7 @@ function ProjectRow({
   };
 
   const icon = <ProjectIcon icon={project.icon} className="size-4" />;
-  const actionable = editable || moded || autonomous || !!onDelete;
+  const actionable = editable || upgradable || autonomous || !!onDelete;
   const tooltip =
     [runs.length > 0 && `${runs.length} ${runs.length === 1 ? "agent" : "agents"}`, host?.name]
       .filter(Boolean)
@@ -1238,17 +1237,14 @@ function ProjectRow({
                 </button>
               </>
             )}
-            {moded && (
+            {upgradable && (
               <button
                 type="button"
                 role="menuitem"
                 className={menuItem}
-                onClick={choose(() => {
-                  setMode(project.permission ?? "auto");
-                  permissions.current?.showModal();
-                })}
+                onClick={choose(() => accessDialog.current?.showModal())}
               >
-                Permissions…
+                Full access…
               </button>
             )}
             {autonomous && (
@@ -1287,13 +1283,20 @@ function ProjectRow({
           maxImageBytes={iconImageBytes}
         />
       )}
-      {moded && (
+      {upgradable && (
         <SettingDialog
-          ref={permissions}
-          label={`${project.name} permissions`}
-          onSave={() => void onUpdate({ permission: mode })}
+          ref={accessDialog}
+          label={`${project.name} full access`}
+          action="Give full access"
+          onSave={() => void onUpdate({ permission: "bypass" })}
         >
-          <ProjectPermissionChoice value={mode} onChange={setMode} />
+          <p className="text-[13px] font-medium">Full access</p>
+          <p className="mt-1 text-[12.5px] text-muted-foreground">
+            New agents in this Project run commands and edit files without asking, as in new
+            Projects. Agents running now keep asking until they next start. Agents on Cursor, Grok
+            Build, Hermes Agent, Ollama Cloud, OpenRouter, and local models need it. You can't
+            switch back.
+          </p>
         </SettingDialog>
       )}
       {autonomous && (
@@ -1309,15 +1312,17 @@ function ProjectRow({
   );
 }
 
-/** A Project setting's dialog: its choice, then Cancel and Save, which closes it and saves. */
+/** A Project setting's dialog: its choice, then Cancel and `action`, which closes it and saves. */
 function SettingDialog({
   ref,
   label,
+  action = "Save",
   onSave,
   children,
 }: {
   ref: RefObject<HTMLDialogElement | null>;
   label: string;
+  action?: string;
   onSave: () => void;
   children: ReactNode;
 }) {
@@ -1349,7 +1354,7 @@ function SettingDialog({
             type="submit"
             className="rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground hover:opacity-90"
           >
-            Save
+            {action}
           </button>
         </div>
       </form>

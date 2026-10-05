@@ -5,14 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ParallaxBridge } from "../preload/bridge";
 import type { MemoryFile, MemoryScope } from "../protocol/generated/protocol";
-import {
-  changeMessage,
-  MemoryPanel,
-  nextScope,
-  savedAs,
-  sectionsOf,
-  type Memory,
-} from "./MemoryPanel";
+import { MemoryPanel, nextScope, savedAs, sectionsOf, type Memory } from "./MemoryPanel";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -99,11 +92,9 @@ beforeEach(() => {
 let unmount = () => {};
 afterEach(() => act(() => unmount()));
 
-async function render(coordinator?: string) {
+async function render() {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() =>
-    root.render(<MemoryPanel hostId="local" project="p-1" repo="r-1" coordinator={coordinator} />),
-  );
+  act(() => root.render(<MemoryPanel hostId="local" project="p-1" repo="r-1" />));
   unmount = () => {
     root.unmount();
     document.body.innerHTML = "";
@@ -218,31 +209,6 @@ test("an entry shows its scope, source, and stale mark, and promotes to the next
     },
   ]);
   expect(calls("memory/delete")).toEqual([{ scope: project, path: "memory/decision/sqlite.md" }]);
-});
-
-test("the box sends the change to the coordinator, and is off without one", async () => {
-  await render();
-  const box = () => document.querySelector<HTMLTextAreaElement>('[aria-label="Change memory"]')!;
-  expect(box().disabled).toBe(true);
-  act(() => unmount());
-
-  await render("k-1");
-  act(() => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
-      box(),
-      "we moved off Jest, use Vitest",
-    );
-    box().dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  await click("Send to coordinator");
-  expect(calls("agent/send")).toEqual([
-    {
-      runId: "k-1",
-      turnId: expect.any(String),
-      text: changeMessage("we moved off Jest, use Vitest"),
-    },
-  ]);
-  expect(box().value).toBe("");
 });
 
 const sqlite = () =>

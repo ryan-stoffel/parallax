@@ -4,9 +4,9 @@ import {
   GitCompare,
   GitPullRequest,
   Globe,
+  SquareKanban,
   Maximize2,
   Minimize2,
-  NotebookText,
   PanelRight,
   Plus,
   Terminal,
@@ -31,6 +31,9 @@ interface Surface {
   url?: string;
 }
 
+// A Project's own views, pinned first in its panel.
+const overview: Surface = { name: "Project", icon: SquareKanban, key: "O" };
+
 const isBuilt = (s: Surface) => !!s.empty || s.name === "Browser";
 
 const surfaces: Surface[] = [
@@ -41,16 +44,13 @@ const surfaces: Surface[] = [
     empty: { title: "No changes yet", hint: "Edits from this thread show up here for review." },
   },
   {
-    name: "Context",
-    icon: NotebookText,
-    key: "C",
-    empty: { title: "No shared context", hint: "Only a Project's agents share context." },
-  },
-  {
-    name: "Memory",
+    name: "Knowledge",
     icon: Brain,
-    key: "M",
-    empty: { title: "No memory here", hint: "A Project or a thread in a repository has memory." },
+    key: "K",
+    empty: {
+      title: "Nothing known here yet",
+      hint: "A Project, or a thread in a repository, keeps what its agents learn.",
+    },
   },
   {
     name: "Agents",
@@ -79,6 +79,8 @@ const surfaces: Surface[] = [
   },
 ];
 
+const knowledgeSurface = surfaces.find((s) => s.name === "Knowledge")!;
+
 /**
  * The collapsible right column. Each view opens as a tab in its top bar, VS Code style; the + after
  * the tabs, or closing the last one, shows the list of views, where each view's letter opens it
@@ -86,7 +88,7 @@ const surfaces: Surface[] = [
  * a view keeps its state behind another. The top bar keeps the hide button where the main pane
  * shows it while the panel is closed. Expanded, it fills everything right of the sidebar, and
  * `leading` and `topBarClassName` stand in for the hidden main pane's top-left corner. `agents`,
- * `context`, `memory`, and `files` are those views, such as a Project's, in place of their empty states.
+ * `knowledge`, and `files` are those views, such as a Project's, in place of their empty states.
  * `remoteHost` is the open host's name when it's an SSH host. `terminal` draws the Terminal view,
  * told whether it's shown and given its empty state. Each new `browse` opens the Browser
  * view at its url. `pullRequests` are the open thread's linked pull requests (PLX-319): its URLs,
@@ -101,14 +103,14 @@ export function SidePanel({
   leading,
   topBarClassName = "",
   agents,
-  context,
-  memory,
+  knowledge,
   remoteHost,
   terminal,
   files,
   browse,
   pullRequests,
   pullRequest,
+  project,
 }: {
   open: boolean;
   onClose: () => void;
@@ -117,24 +119,36 @@ export function SidePanel({
   leading?: ReactNode;
   topBarClassName?: string;
   agents?: ReactNode;
-  context?: ReactNode;
-  memory?: ReactNode;
+  knowledge?: ReactNode;
   remoteHost?: string;
   terminal?: (shown: boolean, empty: ReactNode) => ReactNode;
   files?: ReactNode;
   browse?: { url: string };
   pullRequests?: { urls: readonly string[]; list: ReactNode; view: (url: string) => ReactNode };
   pullRequest?: { url?: string };
+  /** An open Project, whose home the panel rests on, with Knowledge beside it, and how many
+   * things wait on the user there. */
+  project?: { home: ReactNode; waiting: number };
 }) {
   // The open views in tab order, and the one shown; with none shown, the list is.
   const [tabs, setTabs] = useState<Surface[]>([]);
   const [active, setActive] = useState<Surface>();
+  // Whether + is showing the list, in a Project, where the panel otherwise rests on its Overview.
+  const [listing, setListing] = useState(false);
 
+  // A Project pins its Overview and Knowledge first, without close buttons.
+  const pinned = project ? [overview, knowledgeSurface] : [];
   // Another thread's pull request tabs stay open, but hidden.
-  const shown = tabs.filter((s) => !s.url || pullRequests?.urls.includes(s.url));
-  const current = active && shown.includes(active) ? active : undefined;
+  const shown = [
+    ...pinned,
+    ...tabs.filter((s) => !pinned.includes(s) && (!s.url || pullRequests?.urls.includes(s.url))),
+  ];
+  const current =
+    active && shown.includes(active) ? active : project && !listing ? overview : undefined;
 
   const openView = (s: Surface) => {
+    setListing(false);
+    if (pinned.includes(s)) return setActive(s);
     const open = tabs.find((t) => t.key === s.key);
     if (!open) setTabs([...tabs, s]);
     setActive(open ?? s);
@@ -170,14 +184,14 @@ export function SidePanel({
     </div>
   );
   const viewOf = (s: Surface) =>
-    s.name === "Browser" ? (
+    s === overview && project ? (
+      project.home
+    ) : s.name === "Browser" ? (
       <Browser page={browse} remoteHost={remoteHost} />
     ) : s.name === "Agents" && agents ? (
       agents
-    ) : s.name === "Context" && context ? (
-      context
-    ) : s.name === "Memory" && memory ? (
-      memory
+    ) : s.name === "Knowledge" && knowledge ? (
+      knowledge
     ) : s.name === "Terminal" && terminal ? (
       terminal(open && s === current, emptyOf(s))
     ) : s.name === "Files" && files ? (
@@ -218,33 +232,43 @@ export function SidePanel({
                 id={`side-panel-tab-${s.key}`}
                 aria-current={s === current ? "true" : undefined}
                 onClick={() => setActive(s)}
-                className="flex items-center gap-1.5 py-1 pl-2 text-[13px]"
+                className={`flex items-center gap-1.5 py-1 pl-2 text-[13px] ${pinned.includes(s) ? "pr-2" : ""}`}
               >
                 <s.icon aria-hidden className="size-3.5" />
                 {s.name}
+                {s === overview && !!project?.waiting && (
+                  <span className="font-mono text-[11px] text-warning tabular-nums">
+                    {project.waiting}
+                  </span>
+                )}
               </button>
-              <button
-                type="button"
-                aria-label={`Close ${s.name}`}
-                title={`Close ${s.name}`}
-                onClick={() => closeView(s)}
-                className="mx-0.5 grid size-5 place-items-center rounded-md hover:bg-hover [&_svg]:size-3.5"
-              >
-                <X />
-              </button>
+              {!pinned.includes(s) && (
+                <button
+                  type="button"
+                  aria-label={`Close ${s.name}`}
+                  title={`Close ${s.name}`}
+                  onClick={() => closeView(s)}
+                  className="mx-0.5 grid size-5 place-items-center rounded-md hover:bg-hover [&_svg]:size-3.5"
+                >
+                  <X />
+                </button>
+              )}
             </li>
           ))}
         </ul>
         <IconButton
           id="side-panel-open-view"
           label="Open a view"
-          onClick={() => setActive(undefined)}
+          onClick={() => {
+            setActive(undefined);
+            setListing(true);
+          }}
         >
           <Plus />
         </IconButton>
         <div className="ml-auto flex items-center gap-0.5">
           <IconButton
-            label={expanded ? "Shrink panel" : "Expand panel"}
+            label={expanded ? "Exit full screen" : "Full screen"}
             onClick={() => onExpandedChange(!expanded)}
           >
             {expanded ? <Minimize2 /> : <Maximize2 />}

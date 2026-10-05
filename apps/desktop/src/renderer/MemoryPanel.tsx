@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { MemoryFile, MemoryKind, MemoryScope } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
 import { outlineButton, quietButton } from "./Approval";
 import { describeError } from "./errors";
-import { uuidv7 } from "./uuidv7";
 
 /**
  * A memory file with the scope it was listed from. `stale` is PLX-407's review mark, read when
@@ -196,25 +195,34 @@ function useMemory(hostId: string, project: string | undefined, repo: string | u
  * The side panel's Memory view (0044) for a Project, or for a thread's repository. It shows the
  * Project's brief, then entries grouped Preferences, Conventions, Decisions, and Gotchas, then
  * knowledge, from the You, Repo, and Project scopes; then the proposals waiting for the user. Each
- * opens to its text, to edit, promote, or delete it, or for a proposal to save or discard it. A
- * Project's box sends a change in plain words to its coordinator. Show it only on a plxd with
- * `memory`, and key it by host and folder.
+ * opens to its text, to edit, promote, or delete it, or for a proposal to save or discard it.
+ * Show it only on a plxd with `memory`, and key it by host and folder. `start` and `footer` are
+ * the Knowledge view's: what it shows before the list, and the box under it.
  */
 export function MemoryPanel({
   hostId,
   project,
   repo,
-  coordinator,
+  start,
+  footer,
+  onFiles,
 }: {
   hostId: string;
   /** The open Project, or absent for a thread outside one. */
   project?: string;
   /** The repo entry whose memory is the Repo scope, if there is one. */
   repo?: string;
-  /** The Project's coordinator run, which the box sends to. */
-  coordinator?: string;
+  /** Before everything, scrolling with it. */
+  start?: ReactNode;
+  /** Under the list, such as a box that sends a change to the coordinator. */
+  footer?: ReactNode;
+  /** Told the listed files each time they load. */
+  onFiles?: (files: readonly Memory[]) => void;
 }) {
   const { files, error, reload } = useMemory(hostId, project, repo);
+  useEffect(() => {
+    if (files) onFiles?.(files);
+  }, [files, onFiles]);
   const calls = useMemo(() => memoryCalls(hostId), [hostId]);
   const sections = files && sectionsOf(files);
   const taken = ({ scope, path }: Target) =>
@@ -241,6 +249,7 @@ export function MemoryPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+        {start}
         {project && (
           <section aria-label="Brief">
             <h3 className={sectionHeading}>Brief</h3>
@@ -283,13 +292,13 @@ export function MemoryPanel({
           </p>
         )}
       </div>
-      {project && <ChangeBox hostId={hostId} coordinator={coordinator} />}
+      {footer}
     </div>
   );
 }
 
-const sectionHeading = "px-2.5 pt-2 pb-1 text-[11.5px] font-medium text-faint-foreground";
-const badge = "shrink-0 rounded bg-selected px-1.5 text-[11px] text-muted-foreground";
+const sectionHeading = "px-2.5 pt-3 pb-1 text-[12.5px] text-muted-foreground";
+const badge = "shrink-0 text-[11.5px] text-faint-foreground";
 const field =
   "w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px] placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50";
 
@@ -336,7 +345,7 @@ function BriefStart({
 
 /**
  * One memory file: its title, scope, source, and stale mark, opening to its text and actions.
- * The brief opens at once and only edits. A proposal saves or discards. Promote and Save ask
+ * The brief only edits. A proposal saves or discards. Promote and Save ask
  * before replacing a file already at their target. Entries and proposals show as plain text, so an
  * agent's link can't hide where it goes.
  */
@@ -363,7 +372,7 @@ function MemoryRow({
   const brief = file.path === "brief.md";
   const proposal = file.path.startsWith("proposals/");
   const plain = proposal || file.path.startsWith("memory/");
-  const [open, setOpen] = useState(brief);
+  const [open, setOpen] = useState(false);
   const [content, setContent] = useState<string>();
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -593,67 +602,6 @@ function Editor({
           {error}
         </p>
       )}
-    </form>
-  );
-}
-
-/**
- * The box that takes a change to memory in plain words ("we moved off Jest, use Vitest") and sends
- * it to the coordinator, whose rewrite comes back as a proposal (0044). Off until the Project has
- * a coordinator.
- */
-function ChangeBox({ hostId, coordinator }: { hostId: string; coordinator?: string }) {
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<{ error: boolean; text: string }>();
-  return (
-    <form
-      onSubmit={async (e) => {
-        e.preventDefault();
-        if (!coordinator || !text.trim() || busy) return;
-        setBusy(true);
-        const answer = await window.parallax.request(hostId, "agent/send", {
-          runId: coordinator,
-          turnId: uuidv7(),
-          text: changeMessage(text.trim()),
-        });
-        setBusy(false);
-        if ("error" in answer) return setNote({ error: true, text: describeError(answer.error) });
-        setText("");
-        setNote({ error: false, text: "Sent. The coordinator's rewrite shows up in Proposals." });
-      }}
-      className="shrink-0 border-t border-border px-4 py-3"
-    >
-      <textarea
-        aria-label="Change memory"
-        placeholder={
-          coordinator
-            ? "Change memory in plain words, such as “we moved off Jest, use Vitest”"
-            : "Start the coordinator to change memory in plain words"
-        }
-        rows={2}
-        value={text}
-        disabled={!coordinator || busy}
-        onChange={(e) => setText(e.target.value)}
-        className={`${field} resize-none`}
-      />
-      <div className="mt-1.5 flex items-center gap-2">
-        {note && (
-          <p
-            role={note.error ? "alert" : "status"}
-            className={`min-w-0 flex-1 text-[12px] ${note.error ? "text-danger" : "text-muted-foreground"}`}
-          >
-            {note.text}
-          </p>
-        )}
-        <button
-          type="submit"
-          disabled={!coordinator || busy || !text.trim()}
-          className={`${outlineButton} ml-auto`}
-        >
-          Send to coordinator
-        </button>
-      </div>
     </form>
   );
 }
