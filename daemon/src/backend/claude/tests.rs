@@ -47,6 +47,7 @@ fn fixture(name: &str) -> &'static str {
         "malformed" => include_str!("fixtures/malformed.jsonl"),
         "follow-up-folded" => include_str!("fixtures/follow-up-folded.jsonl"),
         "follow-up-turns" => include_str!("fixtures/follow-up-turns.jsonl"),
+        "follow-up-late-report" => include_str!("fixtures/follow-up-late-report.jsonl"),
         "held" => include_str!("fixtures/held.jsonl"),
         "cancel" => include_str!("fixtures/cancel.jsonl"),
         "stubborn" => include_str!("fixtures/stubborn.jsonl"),
@@ -1567,6 +1568,69 @@ async fn a_follow_up_can_be_its_own_turn_and_stdin_waits_for_it() {
             result: Some("Second answer.".into())
         }
     );
+}
+
+/// PLX-523: a follow-up the CLI answers before the writer reports writing it, as Claude Code does
+/// a local slash command, still starts and ends its turn, and stdin then closes.
+#[tokio::test]
+async fn a_follow_up_answered_before_its_write_is_reported_still_ends() {
+    crate::backend::REPORT_STALL.set(Duration::from_millis(300));
+    let fake = Fake::new("follow-up-late-report");
+    let Started { run, mut events } = launch(&fake.backend, request(&fake.root())).await;
+    assert!(matches!(
+        next(&mut events).await,
+        Event::SessionStarted { .. }
+    ));
+    run.send(FollowUp {
+        turn_id: turn(TURN_2),
+        text: "And now the docs.".into(),
+        images: Vec::new(),
+        steer: false,
+    })
+    .unwrap();
+    let all = rest(&mut events).await;
+    let turns: Vec<&Event> = all
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::TurnStarted { .. }
+                    | Event::TurnFinished { .. }
+                    | Event::Text { .. }
+                    | Event::RateLimit(_)
+            )
+        })
+        .collect();
+    let rate_limit = all
+        .iter()
+        .find(|event| matches!(event, Event::RateLimit(_)))
+        .expect("the rate-limit event")
+        .clone();
+    let text = |id: &str, text: &str| Event::Text {
+        message_id: Some(id.into()),
+        text: text.into(),
+    };
+    assert_eq!(
+        turns,
+        [
+            &text("msg_01Ft1", "First answer."),
+            &Event::TurnFinished {
+                turn_id: Some(turn(TURN_1)),
+                result: Some("First answer.".into())
+            },
+            // Outside any turn, so it doesn't start the follow-up's.
+            &rate_limit,
+            &Event::TurnStarted {
+                turn_id: Some(turn(TURN_2))
+            },
+            &text("msg_01Ft2", "Second answer."),
+            &Event::TurnFinished {
+                turn_id: Some(turn(TURN_2)),
+                result: Some("Second answer.".into())
+            },
+        ]
+    );
+    assert!(matches!(outcome(&all), Outcome::Completed { .. }));
 }
 
 #[tokio::test]

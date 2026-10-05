@@ -343,6 +343,9 @@ async fn cancel_escalates_to_sigkill_after_the_grace_period() {
 
 #[tokio::test]
 async fn a_follow_up_becomes_the_next_turn() {
+    // Its TurnStarted still comes first when the CLI answers before the writer reports writing
+    // it (PLX-523).
+    crate::backend::REPORT_STALL.set(Duration::from_millis(300));
     let Started { run, mut events } = launch(&backend("follow-up"), request(&root())).await;
     assert!(matches!(
         next(&mut events).await,
