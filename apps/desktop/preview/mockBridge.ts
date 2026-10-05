@@ -56,6 +56,7 @@ export const capabilities: Capabilities = Object.fromEntries(
     "projectAutonomy",
     "projectDelete",
     "projectEdit",
+    "projectFromThreads",
     "projectPermission",
     "projectPlacement",
     "projectTasks",
