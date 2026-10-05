@@ -10,6 +10,7 @@ import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { imageCaps } from "./images";
 import type { RunOptions } from "./models";
+import { newThreadPrefs } from "./prefs";
 import { RefMenu } from "./RefMenu";
 import { RunTargetMenu, type Workspace } from "./RunTargetMenu";
 import { attachThreads, ThreadLinksContext, type ThreadLinks } from "./threadContext";
@@ -179,7 +180,8 @@ export function NewThread({
   }>();
   const failed = useRef<Attempt>(undefined);
   const group = groups.find((g) => g.id === groupId) ?? groups.at(-1)!;
-  const [workspace, setWorkspace] = useState<Workspace>("worktree");
+  // Starts as Settings > General says; picking one here is for this thread only.
+  const [workspace, setWorkspace] = useState<Workspace>(() => newThreadPrefs.get().workspace);
   // Only a repository has a checkout, and only a plxd that takes `checkout` would use it: an
   // older one would make a worktree anyway.
   const checkoutUnavailable =

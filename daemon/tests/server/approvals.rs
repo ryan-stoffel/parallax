@@ -740,9 +740,20 @@ async fn run_and_shell_subscriptions_get_only_their_part_of_the_scope() {
     let cut: Vec<_> = all
         .into_iter()
         .filter_map(|(seq, event)| match event {
-            ParallaxEvent::AgentOutput { run_id, items } => {
+            ParallaxEvent::AgentOutput {
+                run_id,
+                items,
+                compacted,
+            } => {
                 let items: Vec<_> = items.into_iter().filter(is_approval).collect();
-                (!items.is_empty()).then_some((seq, ParallaxEvent::AgentOutput { run_id, items }))
+                (!items.is_empty()).then_some((
+                    seq,
+                    ParallaxEvent::AgentOutput {
+                        run_id,
+                        items,
+                        compacted,
+                    },
+                ))
             }
             event => Some((seq, event)),
         })
@@ -751,7 +762,7 @@ async fn run_and_shell_subscriptions_get_only_their_part_of_the_scope() {
     let approvals: Vec<_> = shell
         .iter()
         .filter_map(|(_, event)| match event {
-            ParallaxEvent::AgentOutput { run_id, items } => Some((*run_id, items.len())),
+            ParallaxEvent::AgentOutput { run_id, items, .. } => Some((*run_id, items.len())),
             _ => None,
         })
         .collect();

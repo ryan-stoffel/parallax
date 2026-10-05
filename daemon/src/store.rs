@@ -204,6 +204,7 @@ impl Tx {
             project,
             event,
             bytes: stored.payload.len(),
+            compacted_from: None,
         });
         seq
     }

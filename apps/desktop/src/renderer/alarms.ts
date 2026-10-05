@@ -7,6 +7,7 @@ import type { Host } from "./hosts";
 import { notify, type Notice } from "./notifications";
 import type { HostThreads } from "./Sidebar";
 import { asksOf } from "./threads";
+import { clockOptions } from "./prefs";
 
 // The app's notifications about things that happen away from the screen the user is on (PLX-507).
 // Each hook watches one source and calls `notify`.
@@ -99,8 +100,7 @@ export function markOf(thread: Thread, run: AgentRun | undefined, asks: number):
 // rather than, say, a pull request linked to a run that finished long ago.
 const active: ThreadMark[] = ["working", "needsYou", "waiting"];
 
-const clock = (at: string) =>
-  new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+const clock = (at: string) => new Date(at).toLocaleTimeString([], clockOptions());
 
 /**
  * The notice for a thread whose mark changed from `before` to `now`, named `name`, if the change

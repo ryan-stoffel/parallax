@@ -97,7 +97,7 @@ pub use defaults::{
 };
 pub use error::{ErrorData, ErrorKind, IncompatibleProtocolDetail};
 pub use events::{
-    EventsEventParams, EventsResyncParams, EventsSubscribeParams, EventsSubscribeResult,
+    Compacted, EventsEventParams, EventsResyncParams, EventsSubscribeParams, EventsSubscribeResult,
     EventsUnsubscribeParams, EventsUnsubscribeResult, LogId, ParallaxEvent, SubscriptionId,
 };
 pub use git::{AgentCommitParams, AgentGitStatusParams, AgentPushParams, GitStatus};
@@ -159,9 +159,9 @@ pub use thread::{
     ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
 };
 pub use usage::{
-    AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageDay, UsageGetParams,
-    UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageHour, UsageLimitWindow,
-    UsagePeriod, UsageProblem, UsageSource,
+    AccountLimits, AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageDay,
+    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageHour,
+    UsageLimitWindow, UsageLimitsParams, UsageLimitsResult, UsagePeriod, UsageProblem, UsageSource,
 };
 
 /// The newest protocol version this crate speaks. Versions start at 1.

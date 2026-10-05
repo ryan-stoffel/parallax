@@ -12,6 +12,7 @@ import { instanceLogo } from "./providers";
 import { age, backendLogos, ProjectIcon } from "./Sidebar";
 import { titleOf } from "./threads";
 import type { Approval } from "./transcript";
+import { clockOptions } from "./prefs";
 
 type Group = "waiting" | "working" | "ready" | "resolved";
 
@@ -396,8 +397,7 @@ const columns = 18;
 const columnMs = 10 * 60 * 1000;
 const rows = 5;
 
-const clock = (at: number) =>
-  new Date(at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+const clock = (at: number) => new Date(at).toLocaleTimeString(undefined, clockOptions());
 
 /**
  * The Project's pulse as a dot matrix: a column every ten minutes over the last three hours, lit

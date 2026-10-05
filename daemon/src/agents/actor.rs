@@ -67,6 +67,7 @@ use super::attached;
 use super::convert::{
     self, WORKSPACE_WRITE, agent_run, item_bytes, option_name, option_value, output_item,
 };
+use super::handoff::{self, Budget, HandoffEvent};
 use super::resume::Resumes;
 use super::wake::{self, Wakes};
 use super::worker::{sandbox_path, worker_unavailable};
@@ -331,13 +332,21 @@ impl Queued {
 
     /// It, for the live CLI as its next turn, after the summaries of the threads attached to it
     /// (PLX-372).
-    async fn follow_up(&self, daemon: &Daemon) -> Result<FollowUp, ErrorObject> {
-        Ok(FollowUp {
-            turn_id: self.turn_id,
-            text: attached::prompt(daemon, &self.threads, &self.text).await?,
-            images: self.images.clone(),
-            steer: false,
-        })
+    async fn follow_up(
+        &self,
+        daemon: &Daemon,
+        target: RunId,
+    ) -> Result<(FollowUp, Vec<(Uuid, u64)>), ErrorObject> {
+        let prompt = attached::prompt(daemon, target, &self.threads, &self.text).await?;
+        Ok((
+            FollowUp {
+                turn_id: self.turn_id,
+                text: prompt.text,
+                images: self.images.clone(),
+                steer: false,
+            },
+            prompt.seen,
+        ))
     }
 
     fn message(&self) -> QueuedMessage {
@@ -1412,8 +1421,8 @@ impl Actor {
         }
         if self.live.is_some() {
             match self.hand_over(&queued).await? {
-                Ok(()) => {
-                    self.handed_over(queued).await;
+                Ok(seen) => {
+                    self.handed_over(queued, seen).await;
                     return self.snapshot();
                 }
                 Err(SendError::IdConflict) => return Err(id_conflict(turn_id)),
@@ -1448,13 +1457,13 @@ impl Actor {
                  options, or account; queue the message instead",
             ));
         }
-        let mut steer = queued.follow_up(&self.daemon).await?;
+        let (mut steer, seen) = queued.follow_up(&self.daemon, self.id).await?;
         steer.steer = true;
         let sent = self.live.as_ref().map(|live| live.run.send(steer));
         match sent {
             Some(Ok(())) => {
                 info!(run = %self.id, turn = %queued.turn_id, "steering a running turn");
-                self.handed_over(queued).await;
+                self.handed_over(queued, seen).await;
                 return self.snapshot();
             }
             Some(Err(SendError::IdConflict)) => return Err(id_conflict(queued.turn_id)),
@@ -1481,19 +1490,23 @@ impl Actor {
     }
 
     /// Hands `queued` to the live CLI as its next turn.
-    async fn hand_over(&self, queued: &Queued) -> Result<Result<(), SendError>, ErrorObject> {
-        let follow_up = queued.follow_up(&self.daemon).await?;
+    async fn hand_over(
+        &self,
+        queued: &Queued,
+    ) -> Result<Result<Vec<(Uuid, u64)>, SendError>, ErrorObject> {
+        let (follow_up, seen) = queued.follow_up(&self.daemon, self.id).await?;
         Ok(match &self.live {
-            Some(live) => live.run.send(follow_up),
+            Some(live) => live.run.send(follow_up).map(|()| seen),
             None => Err(SendError::Finished),
         })
     }
 
     /// Records `queued`, which the live CLI has taken.
-    async fn handed_over(&mut self, queued: Queued) {
+    async fn handed_over(&mut self, queued: Queued, seen: Vec<(Uuid, u64)>) {
         self.in_flight += 1;
         self.handed.push(queued.clone());
-        self.record_turn(queued.turn_id, queued.text.clone()).await;
+        self.record_turn(queued.turn_id, queued.text.clone(), seen)
+            .await;
         self.keep_images(Some(queued.turn_id), queued.images).await;
         self.attach(Some(queued.turn_id), queued.threads);
         self.last_message = queued.text;
@@ -1577,9 +1590,9 @@ impl Actor {
                 }
             };
             match handed {
-                Ok(()) => {
+                Ok(seen) => {
                     self.queued.pop_front();
-                    self.handed_over(next).await;
+                    self.handed_over(next, seen).await;
                     self.save_queue().await;
                 }
                 Err(SendError::IdConflict) => {
@@ -1890,7 +1903,8 @@ impl Actor {
         }
         let session_id = session_id.filter(|_| backend == from);
         let paths = self.checkout_paths(&repo_path).await?;
-        let sent = attached::prompt(&self.daemon, &threads, &text).await?;
+        let attached = attached::prompt(&self.daemon, self.id, &threads, &text).await?;
+        let (sent, seen) = (attached.text, attached.seen);
         // The run's fields before it moves, to move it back if its new CLI doesn't start.
         let moved_from = self
             .store_options(prepared.resolved.backend(), changes)
@@ -1924,7 +1938,7 @@ impl Actor {
             }
             // Only a turn that reached a CLI counts as sent: a retry after a failed start
             // tries again.
-            self.record_turn(turn_id, message.clone()).await;
+            self.record_turn(turn_id, message.clone(), seen).await;
             self.attach(Some(turn_id), threads);
             self.last_message = message;
         } else {
@@ -2150,7 +2164,13 @@ impl Actor {
         // What the agent said last is logged before the conversation is read.
         self.flush().await;
         let events = logged_events(&self.daemon, self.id).await?;
-        let message = handoff_message(from, &conversation(&events, HISTORY_BYTES), text);
+        let conversation = handoff::handoff(
+            &events,
+            Budget::Summary {
+                cap: handoff::HANDOFF_BYTES,
+            },
+        );
+        let message = handoff_message(from, &conversation, text);
         match place {
             Place::Coordinator { repo } => {
                 let project = self.project.into();
@@ -2168,6 +2188,23 @@ impl Actor {
         }
     }
 
+    /// A first attachment counts as seen only after its prompt reaches a CLI.
+    pub(super) async fn record_initial_seen(&mut self, seen: Vec<(Uuid, u64)>) {
+        if seen.is_empty() {
+            return;
+        }
+        let run_id = self.row.id;
+        let stored = self
+            .write(move |db, _| {
+                db.record_attached_seen(run_id, &seen)
+                    .map_err(|error| store_error(&error))
+            })
+            .await;
+        if let Err(error) = stored {
+            warn!(run = %self.id, error = %error.message, "could not store initial attachment cursors");
+        }
+    }
+
     /// Records that `turn_id` was sent with `text`, in memory and in the store, so a retry of
     /// `agent/send` stays idempotent across a plxd restart, not only across a resumed CLI
     /// process within the same plxd (#190).
@@ -2177,11 +2214,13 @@ impl Actor {
     /// note). That's the same failure mode #190 was fixing in the other direction (a restart
     /// forgetting a turn was ever sent), and strictly better: a duplicate is visible in the
     /// transcript, a lost retry silently drops the user's message.
-    async fn record_turn(&mut self, turn_id: TurnId, text: String) {
+    async fn record_turn(&mut self, turn_id: TurnId, text: String, seen: Vec<(Uuid, u64)>) {
         self.turns.insert(turn_id, text.clone());
         let (run_id, id) = (self.row.id, self.id);
         let stored = store(&self.daemon, move |db| {
             db.record_turn(run_id, turn_id.into(), &text)
+                .map_err(|error| store_error(&error))?;
+            db.record_attached_seen(run_id, &seen)
                 .map_err(|error| store_error(&error))?;
             crate::threads::prompted(db, run_id)
         })
@@ -2827,7 +2866,11 @@ impl Actor {
                 db.stage(
                     now,
                     Some(project),
-                    ParallaxEvent::AgentOutput { run_id, items },
+                    ParallaxEvent::AgentOutput {
+                        run_id,
+                        items,
+                        compacted: None,
+                    },
                 );
             }
             job(db, now)
@@ -2921,102 +2964,55 @@ pub(crate) fn session_account(account_id: &str) -> AccountChoice {
     }
 }
 
-/// About the most of the conversation a new session is told, in bytes: its latest messages.
-const HISTORY_BYTES: usize = 64 * 1024;
-
-/// What a [`conversation`] cut to its cap starts with. One that isn't cut starts with who spoke.
-pub(super) const LEFT_OUT: &str = "(Earlier messages are left out.)\n\n";
-
 /// Every event run `run` logged, oldest first: what a handoff (0014) and a fork (0050) read.
+/// Pages run inside one read transaction so a compact sweep cannot land between them (0052).
 pub(crate) async fn logged_events(
     daemon: &Daemon,
     run: RunId,
-) -> Result<Vec<ParallaxEvent>, ErrorObject> {
+) -> Result<Vec<HandoffEvent>, ErrorObject> {
     let log = Arc::clone(&daemon.log);
     tokio::task::spawn_blocking(move || {
-        let mut events = Vec::new();
-        let mut after = 0;
-        loop {
-            let (page, more) = log.run_events(run, after, 1000, 4 * 1024 * 1024)?;
-            after = page.last().map_or(after, |entry| entry.seq);
-            events.extend(page.iter().map(|entry| entry.event.clone()));
-            if !more || page.is_empty() {
-                return Ok(events);
-            }
+        if let Some(events) = log.with_stored_read(|db| collect_run_events(db, run))? {
+            return Ok(events);
         }
+        let (page, _) = log.run_events(run, 0, usize::MAX, usize::MAX)?;
+        Ok(page
+            .iter()
+            .map(|entry| HandoffEvent::from_entry(entry))
+            .collect())
     })
     .await
     .map_err(ErrorObject::internal_error)?
     .map_err(|error| store_error(&error))
 }
 
-/// A run's conversation as `events` logged it, for a new session to take over (0014) or a
-/// message it's attached to (PLX-372): the user's messages, Parallax's wake-ups, and the agent's
-/// replies, oldest first, without its tool calls, whose work is in the run's folder. Only the
-/// latest that fit in about `cap` bytes are kept.
-pub(super) fn conversation(events: &[ParallaxEvent], cap: usize) -> String {
-    let mut said: Vec<String> = Vec::new();
-    // The last thing the agent said, which a turn's result often repeats.
-    let mut last_reply = String::new();
-    for event in events {
-        match event {
-            ParallaxEvent::AgentStarted { run: Some(run), .. } => {
-                said.push(format!("User:\n{}", run.prompt.trim()));
+fn collect_run_events(
+    db: &parallax_store::Store,
+    run: RunId,
+) -> Result<Vec<HandoffEvent>, parallax_store::StoreError> {
+    let mut events = Vec::new();
+    let mut after = 0;
+    loop {
+        let (page, more) = db.run_events(run.into(), after, 1000, 4 * 1024 * 1024)?;
+        after = page.last().map_or(after, |entry| entry.seq);
+        events.extend(page.iter().map(|stored| {
+            let event = serde_json::from_str(&stored.payload).unwrap_or(ParallaxEvent::Unknown);
+            let compacted_from = match &event {
+                ParallaxEvent::AgentOutput {
+                    compacted: Some(compacted),
+                    ..
+                } => Some(compacted.from),
+                _ => None,
+            };
+            HandoffEvent {
+                seq: stored.seq,
+                event,
+                compacted_from,
             }
-            ParallaxEvent::AgentOutput { items, .. } => {
-                for item in items {
-                    match item {
-                        AgentOutputItem::TurnStarted {
-                            text: Some(text),
-                            wake,
-                            from,
-                            ..
-                        } => {
-                            let who = match from {
-                                _ if *wake => "Parallax".to_owned(),
-                                Some(from) => format!("Thread {from}"),
-                                None => "User".to_owned(),
-                            };
-                            said.push(format!("{who}:\n{}", text.trim()));
-                        }
-                        AgentOutputItem::Text { text, .. } if !text.trim().is_empty() => {
-                            text.trim().clone_into(&mut last_reply);
-                            said.push(format!("Agent:\n{last_reply}"));
-                        }
-                        AgentOutputItem::TurnFinished {
-                            result: Some(result),
-                            ..
-                        } if !result.trim().is_empty() && result.trim() != last_reply => {
-                            result.trim().clone_into(&mut last_reply);
-                            said.push(format!("Agent:\n{last_reply}"));
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
+        }));
+        if !more || page.is_empty() {
+            return Ok(events);
         }
-    }
-    let mut kept = Vec::new();
-    let mut bytes = 0;
-    for message in said.iter().rev() {
-        if bytes + message.len() > cap {
-            // One message longer than the whole is cut, rather than leaving nothing.
-            if kept.is_empty() {
-                kept.push(convert::truncate(message, cap));
-            }
-            break;
-        }
-        bytes += message.len();
-        kept.push(message.clone());
-    }
-    let cut = kept.len() < said.len();
-    kept.reverse();
-    let conversation = kept.join("\n\n");
-    if cut {
-        format!("{LEFT_OUT}{conversation}")
-    } else {
-        conversation
     }
 }
 
@@ -3140,11 +3136,10 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{
-        Actor, Command, HISTORY_BYTES, Live, Queued, attached, commit_message, conversation,
-        handoff_message, handoff_notice, session_account,
+        Actor, Command, Live, Queued, commit_message, handoff_message, handoff_notice,
+        session_account,
     };
     use crate::agents::RunOptions;
-    use crate::agents::convert::agent_run;
     use crate::backend::{
         Answer, AnswerError, ApprovalRequest, Event, EventSink, FollowUp, Run, SendError,
     };
@@ -3384,82 +3379,6 @@ mod tests {
         assert_eq!(resolved.by, AgentApprovalBy::Agent);
     }
 
-    /// A run's turns as a new session is told them: the user's messages, Parallax's wake-ups,
-    /// and the agent's replies, with a turn's result only where it adds to what the agent said.
-    #[test]
-    fn a_new_session_is_told_the_conversation_so_far() {
-        let (row, worktree) = fake_row_and_worktree();
-        let run = agent_run(&row, Some(&worktree)).unwrap();
-        let output = |items| ParallaxEvent::AgentOutput {
-            run_id: run.id,
-            items,
-        };
-        let turn = |text: &str, wake| AgentOutputItem::TurnStarted {
-            turn_id: Some(TurnId::generate()),
-            text: Some(text.to_owned()),
-            wake,
-            from: None,
-            images: Vec::new(),
-            threads: Vec::new(),
-        };
-        let finished = |result: &str| AgentOutputItem::TurnFinished {
-            turn_id: None,
-            result: Some(result.to_owned()),
-        };
-        let events = [
-            ParallaxEvent::AgentStarted {
-                run_id: run.id,
-                run: Some(run.clone()),
-            },
-            output(vec![
-                AgentOutputItem::TurnStarted {
-                    turn_id: None,
-                    text: None,
-                    wake: false,
-                    from: None,
-                    images: Vec::new(),
-                    threads: Vec::new(),
-                },
-                AgentOutputItem::ToolCall {
-                    call_id: "call-1".to_owned(),
-                    name: "Read".to_owned(),
-                    input: serde_json::json!({"file_path": "README.md"}),
-                },
-                AgentOutputItem::Text {
-                    message_id: None,
-                    text: "Read it.\n".to_owned(),
-                },
-                finished("Read it."),
-            ]),
-            output(vec![turn(" And now? ", false), finished("All done.")]),
-            output(vec![turn("Subagents finished", true)]),
-        ];
-        assert_eq!(
-            conversation(&events, HISTORY_BYTES),
-            "User:\nflood\n\nAgent:\nRead it.\n\nUser:\nAnd now?\n\nAgent:\nAll done.\n\n\
-             Parallax:\nSubagents finished"
-        );
-
-        // A long one keeps its latest messages.
-        let long: Vec<_> = (0..20)
-            .map(|i| output(vec![turn(&format!("{i}{}", "x".repeat(8 * 1024)), false)]))
-            .collect();
-        let kept = conversation(&long, HISTORY_BYTES);
-        assert!(kept.starts_with("(Earlier messages are left out.)\n\nUser:\n"));
-        assert!(kept.ends_with(&format!("19{}", "x".repeat(8 * 1024))));
-        assert!(kept.len() <= HISTORY_BYTES + 64, "{}", kept.len());
-        // An attached thread's summary is cut the same way, to its own cap (PLX-372).
-        let summary = conversation(&long, attached::SUMMARY_BYTES);
-        assert!(summary.starts_with("(Earlier messages are left out.)\n\nUser:\n"));
-        assert!(summary.ends_with(&format!("19{}", "x".repeat(8 * 1024))));
-        assert!(
-            summary.len() <= attached::SUMMARY_BYTES + 64,
-            "{}",
-            summary.len()
-        );
-        assert!(summary.len() < kept.len());
-    }
-
     #[test]
     fn a_handoff_names_where_the_conversation_began() {
         let message = handoff_message("claude", "User:\nHi", "Carry on");
@@ -3629,6 +3548,7 @@ mod tests {
             [ParallaxEvent::AgentOutput {
                 run_id: actor.id,
                 items: vec![text],
+                compacted: None,
             }]
         );
     }

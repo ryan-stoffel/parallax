@@ -119,14 +119,26 @@ async fn an_attached_threads_summary_goes_ahead_of_the_message_and_its_turn_list
     let [_, (first, false), (follow_up, true)] = prompts.as_slice() else {
         panic!("three CLIs: the earlier thread's, this one's, and its resume: {prompts:?}");
     };
-    for (prompt, text) in [(first, "Use what we learned"), (follow_up, "And again")] {
-        assert!(prompt.starts_with("The user attached these Parallax threads"));
-        assert_eq!(prompt.matches(&summary).count(), 1, "once each: {prompt}");
-        assert!(
-            prompt.ends_with(&format!("The user's message:\n{text}")),
-            "{prompt}"
-        );
-    }
+    assert!(first.starts_with("The user attached these Parallax threads"));
+    assert_eq!(first.matches(&summary).count(), 1, "{first}");
+    assert!(
+        first.ends_with("The user's message:\nUse what we learned"),
+        "{first}"
+    );
+    // A later attach sends only what the source logged since the last summary (0052).
+    assert!(follow_up.starts_with("The user attached these Parallax threads"));
+    assert!(
+        follow_up.contains(&format!("<thread id=\"{earlier}\">\nTitle: Flaky attach\n")),
+        "{follow_up}"
+    );
+    assert!(
+        !follow_up.contains("Fix the flaky attach test"),
+        "the last summary already covered it: {follow_up}"
+    );
+    assert!(
+        follow_up.ends_with("The user's message:\nAnd again"),
+        "{follow_up}"
+    );
     let turns = client.turns_started(run).await;
     assert!(
         turns.iter().any(started_with(None, vec![earlier])),
@@ -141,7 +153,7 @@ async fn an_attached_threads_summary_goes_ahead_of_the_message_and_its_turn_list
     host.server.stop().await;
 }
 
-/// A summary keeps a long thread's latest messages, cut from the front to the cap, and an id
+/// A summary keeps a long thread's first task and latest messages within the cap, and an id
 /// that is no thread's is refused before anything starts.
 #[tokio::test]
 async fn a_summary_is_capped_and_an_unknown_thread_is_refused() {
@@ -178,12 +190,10 @@ async fn a_summary_is_capped_and_an_unknown_thread_is_refused() {
     let prompts = prompts.lock().unwrap().clone();
     let (prompt, _) = &prompts[1];
     assert!(
-        prompt.contains(&format!(
-            "<thread id=\"{earlier}\">\n(Earlier messages are left out.)\n\nAgent:\nDone.\n\
-             </thread>"
-        )),
+        prompt.contains(&format!("<thread id=\"{earlier}\">\nUser:\nxxx")),
         "{prompt}"
     );
+    assert!(prompt.contains("Agent:\nDone.\n</thread>"), "{prompt}");
     assert!(prompt.len() < long.len(), "{}", prompt.len());
     assert_eq!(client.list().await.threads.len(), 2, "{run} and {earlier}");
     host.server.stop().await;
@@ -226,5 +236,58 @@ async fn thread_search_finds_threads_by_their_messages_newest_first() {
         .await
         .unwrap_err();
     assert_eq!(empty.code, INVALID_PARAMS);
+    host.server.stop().await;
+}
+
+#[tokio::test]
+async fn a_failed_initial_launch_preserves_attachment_context_for_retry() {
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    let other = Other::new(fake_backend(editing()), &prompts);
+    other.first.lock().unwrap().push_back(None);
+    let mut backends = fake(editing());
+    backends.register(Provider::Openai, Arc::new(other));
+    let host = Host::start(backends);
+    let mut client = host.client().await;
+    let earlier = client
+        .finished_thread(start_params(None, "SOURCE TASK MUST REACH CLI"))
+        .await;
+    let params = ThreadStartParams {
+        threads: vec![earlier],
+        ..on_other("Use source")
+    };
+    let run = params.run_id;
+    let result = client.call::<ThreadStart>(params).await.unwrap();
+    assert_eq!(result.run.status, AgentStatus::Failed);
+    client
+        .call::<AgentSend>(AgentSendParams {
+            threads: vec![earlier],
+            ..message(run, "Retry with source")
+        })
+        .await
+        .unwrap();
+    client.until(completed(run)).await;
+    let recorded = prompts.lock().unwrap().clone();
+    assert_eq!(recorded.len(), 2);
+    let successful = &recorded[1].0;
+    assert!(
+        successful.contains("SOURCE TASK MUST REACH CLI"),
+        "successful CLI never received attachment: {successful}"
+    );
+    assert!(successful.contains("Agent:\nDone."), "{successful}");
+    client
+        .call::<AgentSend>(AgentSendParams {
+            threads: vec![earlier],
+            ..message(run, "Attach again after delivery")
+        })
+        .await
+        .unwrap();
+    client.until(completed(run)).await;
+    let recorded = prompts.lock().unwrap().clone();
+    assert_eq!(recorded.len(), 3);
+    assert!(
+        !recorded[2].0.contains("SOURCE TASK MUST REACH CLI"),
+        "successful delivery must advance the cursor: {}",
+        recorded[2].0
+    );
     host.server.stop().await;
 }

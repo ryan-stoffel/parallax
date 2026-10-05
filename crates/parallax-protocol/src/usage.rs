@@ -53,13 +53,15 @@ pub struct UsagePeriod {
     pub cost_usd_micros: Option<u64>,
 }
 
-/// One of an account's limit windows, as a vendor last reported it (0004's `rate_limit_event` and
-/// Codex's `account/rateLimits/read`).
+/// One of an account's limit windows, as a vendor reported it (0004's `rate_limit_event` and
+/// Codex's `account/rateLimits/updated` in `usage/get`, Claude Code's `get_usage` and Codex's
+/// `account/rateLimits/read` in `usage/limits`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageLimitWindow {
-    /// The vendor's name for the window, such as `five_hour`, `seven_day`, `primary`, or
-    /// `secondary`.
+    /// The vendor's name for the window, such as `five_hour`, `seven_day`, `seven_day_opus`,
+    /// `primary`, or `secondary`. `usage/limits` names Codex's five-hour and weekly windows
+    /// `five_hour` and `seven_day`, as Claude's are.
     pub window: String,
     /// How much of the window is used, from 0 to 100, when the vendor says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -71,6 +73,35 @@ pub struct UsageLimitWindow {
     pub resets_at: Option<Timestamp>,
     /// When plxd captured this snapshot.
     pub captured_at: Timestamp,
+}
+
+/// Params of `usage/limits`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageLimitsParams {}
+
+/// Result of `usage/limits`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageLimitsResult {
+    /// Every subscription account whose CLI reports limits and could be started, in no
+    /// particular order.
+    pub accounts: Vec<AccountLimits>,
+}
+
+/// One subscription account's limit windows, as its CLI reports them now.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountLimits {
+    /// plxd's id for the account: its backend's name, such as `claude`.
+    pub account_id: String,
+    /// The windows. Empty when the account has none, such as an API key login, or when
+    /// `problem` says why the CLI didn't answer.
+    pub limits: Vec<UsageLimitWindow>,
+    /// Why the CLI didn't report its windows, for people.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub problem: Option<String>,
 }
 
 /// Params of `usage/history`.

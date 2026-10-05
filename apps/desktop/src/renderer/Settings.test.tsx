@@ -7,6 +7,7 @@ import type { ConnectionState, Profile, SshHost, ParallaxBridge } from "../prelo
 import type { ProviderInfo, ProviderInstance, ProviderKind } from "../protocol/generated/protocol";
 import type { SettingsSection } from "./App";
 import { models } from "./models";
+import { behaviorDefaults, behaviorPrefs, setBehaviorPrefs } from "./prefs";
 import { Settings } from "./Settings";
 import { accessDefaults, accessPrefs } from "./accessPrefs";
 import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
@@ -116,7 +117,7 @@ const button = (within: Element, name: string) =>
 const tabs = () => [...document.querySelectorAll('[role="tab"]')].map((t) => t.textContent);
 const tab = (name: string) =>
   [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find((t) =>
-    t.textContent?.startsWith(name),
+    t.textContent?.trim().startsWith(name),
   )!;
 const pane = () => visible('[role="tabpanel"]');
 // The Work key's row.
@@ -746,11 +747,8 @@ describe("on a plxd with providers", () => {
 
   test("lists the host's instances, and a switch turns one off on the host", async () => {
     await renderSettings();
-    expect(tabs()).toEqual([
-      "Claude Code2.1.281Authenticated · ryan@example.com",
-      "CodexNot authenticated",
-    ]);
-    expect(rows("Account")[0]).toBe("Display nameAuthenticated as ryan@example.com");
+    expect(tabs()).toEqual(["Claude Code2.1.281Authenticated", "CodexNot authenticated"]);
+    expect(rows("Account")[1]).toBe("AccountAuthenticated as ryan@example.com");
     expect(calls("accounts/list")).toEqual([]);
 
     await click(
@@ -763,6 +761,50 @@ describe("on a plxd with providers", () => {
       document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Use Claude Code"]')!
         .disabled,
     ).toBe(true);
+  });
+
+  test("Remove beside Refresh and + removes the chosen provider once it's confirmed", async () => {
+    answers["providers/remove"] = (p) => {
+      listed = listed.filter((each) => each.instance.id !== p["id"]);
+      return result();
+    };
+    await renderSettings();
+    await click(tab("Codex"));
+    await click(document.querySelector<HTMLElement>('[aria-label="Remove Codex"]')!);
+    expect(calls("providers/remove")).toEqual([]);
+    await click(button(document.body, "Cancel"));
+    await click(document.querySelector<HTMLElement>('[aria-label="Remove Codex"]')!);
+    await click(button(document.body, "Remove"));
+    expect(calls("providers/remove")[0]!.params).toEqual({ id: "codex" });
+    expect(tabs()).toEqual(["Claude Code2.1.281Authenticated"]);
+  });
+
+  test("an agent Parallax installs offers Install when it isn't installed, and a custom binary doesn't", async () => {
+    listed[1] = {
+      ...listed[1]!,
+      instance: instance("pi", "pi", "Pi"),
+      installed: false,
+      signedIn: undefined,
+      note: "pi isn't installed on this host",
+    };
+    await renderSettings();
+    expect(tabs()[1]!.trim()).toBe("PiNot installed");
+    await click(tab("Pi"));
+    expect(rows("Account")[1]).toBe("AccountPi isn't installed on this hostInstall");
+
+    listed[1] = { ...listed[1]!, instance: { ...listed[1]!.instance, program: "/opt/npx" } };
+    unmount();
+    await renderSettings();
+    await click(tab("Pi"));
+    expect(rows("Account")[1]).toBe("AccountPi isn't installed on this host");
+
+    // Pi's installer puts `pi` on the host, not the 0.x one this instance runs.
+    const env = [{ name: "PI_ACP_PI_COMMAND", value: "pi-0.73", secret: false }];
+    listed[1] = { ...listed[1]!, instance: { ...instance("pi", "pi", "Pi"), env } };
+    unmount();
+    await renderSettings();
+    await click(tab("Pi"));
+    expect(rows("Account")[1]).toBe("AccountPi isn't installed on this host");
   });
 
   const dialog = () => document.querySelector("dialog")!;
@@ -1021,6 +1063,21 @@ test("General's sidebar switches turn the Working section and archive pages off"
     pageArchived: false,
   });
   sidebarPrefs.set(sidebarDefaults);
+});
+
+test("General's New threads and Behavior settings are kept (PLX-538)", async () => {
+  window.parallax.openTargets = async () => [];
+  window.parallax.version = async () => "1.2.3";
+  await renderSettings("general");
+  const sw = (label: string) =>
+    document.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${label}"]`)!;
+  await click(sw("System notifications"));
+  expect(behaviorPrefs.get().systemNotifications).toBe(false);
+  const select = (label: string) =>
+    document.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
+  expect(select("Time format").value).toBe("system");
+  expect(section("New threads").textContent).toContain("Permissions");
+  setBehaviorPrefs(behaviorDefaults);
 });
 
 test("General's Legacy Plan mode switch lists Plan in the Access picker", async () => {

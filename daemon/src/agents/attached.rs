@@ -2,29 +2,32 @@
 //!
 //! `agent/start`, `thread/start`, and `agent/send` take `threads`, which [`check`] checks when
 //! the request arrives. Once the message reaches a CLI, [`prompt`] puts a summary of each thread
-//! ahead of the user's text: its id, its title, and what was said in it, rendered as 0014's handoff renders a
-//! conversation, without tool calls, and cut from the front to [`SUMMARY_BYTES`]. The transcript
+//! ahead of the user's text: its id, its title, and what was said in it, rendered as 0014's handoff
+//! renders a conversation, without tool calls, and kept to [`SUMMARY_BYTES`] by [`super::handoff`].
+//! A thread the target has seen before sends only what was logged after that cursor. The transcript
 //! keeps the user's own text, and the message's `turnStarted` lists the threads.
 
-use std::collections::VecDeque;
 use std::fmt::Write as _;
-use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{ErrorKind, RunId};
+use uuid::Uuid;
 
-use super::actor::{LEFT_OUT, conversation};
+use super::handoff::{self, Budget};
 use super::{store, store_error};
 use crate::server::Daemon;
 
 /// The most threads one message takes.
 pub(crate) const MAX_THREADS: usize = 8;
 
-/// About the most of one thread's conversation its summary holds, in bytes: its latest messages.
+/// About the most of one thread's conversation its summary holds, in bytes.
 pub(crate) const SUMMARY_BYTES: usize = 32 * 1024;
 
-/// How many of a thread's events [`summary`] reads at a time, newest first.
-const PAGE_EVENTS: usize = 100;
+/// `text` as its CLI gets it, and the source `seq` each attached thread's summary read.
+pub(super) struct Prompt {
+    pub text: String,
+    pub seen: Vec<(Uuid, u64)>,
+}
 
 /// `threads` without repeats, in order, after checking there are at most [`MAX_THREADS`] and
 /// each is a thread on this host (`threadNotFound` otherwise).
@@ -65,26 +68,32 @@ pub(crate) async fn check(daemon: &Daemon, threads: Vec<RunId>) -> Result<Vec<Ru
 /// now. `text` alone when there are none.
 pub(super) async fn prompt(
     daemon: &Daemon,
+    target: RunId,
     threads: &[RunId],
     text: &str,
-) -> Result<String, ErrorObject> {
+) -> Result<Prompt, ErrorObject> {
     if threads.is_empty() {
-        return Ok(text.to_owned());
+        return Ok(Prompt {
+            text: text.to_owned(),
+            seen: Vec::new(),
+        });
     }
     let mut prompt = String::from(
         "The user attached these Parallax threads for context. Each holds what was said in \
          it, oldest first, without tool calls:\n\n",
     );
+    let mut seen = Vec::with_capacity(threads.len());
     for &id in threads {
         let _ = writeln!(prompt, "<thread id=\"{id}\">");
         if let Some(title) = title(daemon, id).await? {
             let _ = writeln!(prompt, "Title: {title}");
         }
-        let summary = summary(daemon, id).await?;
+        let (summary, cursor) = summary(daemon, target, id).await?;
+        seen.push((id.into(), cursor));
         let _ = write!(prompt, "{summary}\n</thread>\n\n");
     }
     let _ = write!(prompt, "The user's message:\n{text}");
-    Ok(prompt)
+    Ok(Prompt { text: prompt, seen })
 }
 
 /// Thread `id`'s title, when it has one (0041). A thread deleted since [`check`] has none.
@@ -96,31 +105,28 @@ async fn title(daemon: &Daemon, id: RunId) -> Result<Option<String>, ErrorObject
     .await
 }
 
-/// Thread `id`'s conversation, cut to [`SUMMARY_BYTES`]. Its events are read newest first, a page
-/// at a time, and only until the messages read fill the cap, so a long thread's older events,
-/// tool output included, are never loaded.
-async fn summary(daemon: &Daemon, id: RunId) -> Result<String, ErrorObject> {
-    let log = Arc::clone(&daemon.log);
-    tokio::task::spawn_blocking(move || {
-        let mut events = VecDeque::new();
-        let mut before = u64::MAX;
-        loop {
-            let (page, more) = log.run_events_before(id, before, PAGE_EVENTS, usize::MAX)?;
-            if let Some(oldest) = page.last() {
-                before = oldest.seq;
-            }
-            for entry in page {
-                events.push_front(entry.event.clone());
-            }
-            let summary = conversation(events.make_contiguous(), SUMMARY_BYTES);
-            if !more || summary.starts_with(LEFT_OUT) {
-                return Ok(summary);
-            }
-        }
+/// Thread `source`'s conversation for `target`: a full summary the first time, then only what
+/// was logged after the last cursor.
+async fn summary(
+    daemon: &Daemon,
+    target: RunId,
+    source: RunId,
+) -> Result<(String, u64), ErrorObject> {
+    let seen = store(daemon, move |db| {
+        db.attached_seen(target.into(), source.into())
+            .map_err(|e| store_error(&e))
     })
-    .await
-    .map_err(ErrorObject::internal_error)?
-    .map_err(|error| store_error(&error))
+    .await?;
+    let events = super::actor::logged_events(daemon, source).await?;
+    let cursor = events.last().map_or(seen.unwrap_or(0), |event| event.seq);
+    let budget = match seen {
+        Some(seq) => Budget::Since {
+            seq,
+            cap: SUMMARY_BYTES,
+        },
+        None => Budget::Summary { cap: SUMMARY_BYTES },
+    };
+    Ok((handoff::handoff(&events, budget), cursor))
 }
 
 #[cfg(test)]
@@ -130,24 +136,89 @@ mod tests {
     use jiff::Timestamp;
     use parallax_protocol::{AgentOutputItem, ParallaxEvent, RunId};
 
-    use super::{LEFT_OUT, PAGE_EVENTS, SUMMARY_BYTES, summary};
+    use super::{SUMMARY_BYTES, summary};
+    use crate::agents::handoff::LEFT_OUT;
     use crate::server::Daemon;
 
-    /// A thread longer than the cap is read newest first, here two pages of its three, and keeps
-    /// its latest messages. A short one is read whole.
+    /// Recovery rows injected on older pages must not repeat an already read turn.
     #[tokio::test]
-    async fn a_summary_keeps_the_latest_messages_across_pages() {
+    async fn a_compacted_turn_spanning_summary_pages_is_included_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let id = RunId::generate();
+        let first = daemon
+            .store
+            .append(
+                Timestamp::now(),
+                None,
+                ParallaxEvent::AgentOutput {
+                    run_id: id,
+                    items: vec![],
+                    compacted: None,
+                },
+            )
+            .await;
+        for _ in 0..=1000 {
+            daemon
+                .store
+                .append(
+                    Timestamp::now(),
+                    None,
+                    ParallaxEvent::AgentWakeupsPaused { run_id: id },
+                )
+                .await;
+        }
+        daemon
+            .store
+            .append(
+                Timestamp::now(),
+                None,
+                ParallaxEvent::AgentOutput {
+                    run_id: id,
+                    items: vec![AgentOutputItem::Text {
+                        message_id: None,
+                        text: "Hello".to_owned(),
+                    }],
+                    compacted: Some(parallax_protocol::Compacted { from: first }),
+                },
+            )
+            .await;
+        assert_eq!(
+            summary(&daemon, RunId::generate(), id).await.unwrap().0,
+            "Agent:\nHello"
+        );
+        let events = crate::agents::actor::logged_events(&daemon, id)
+            .await
+            .unwrap();
+        assert_eq!(events.last().unwrap().compacted_from, Some(first));
+        assert_eq!(
+            crate::agents::handoff::handoff(
+                &events,
+                crate::agents::handoff::Budget::Since {
+                    seq: first + 500,
+                    cap: SUMMARY_BYTES,
+                },
+            ),
+            "Agent:\nHello"
+        );
+    }
+
+    /// A thread longer than the cap keeps its first task and its latest messages.
+    #[tokio::test]
+    async fn a_summary_keeps_the_task_and_the_latest_messages() {
         let dir = tempfile::tempdir().unwrap();
         let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
         let (long, short) = (RunId::generate(), RunId::generate());
+        let target = RunId::generate();
         let said = |run_id, text: String| ParallaxEvent::AgentOutput {
             run_id,
             items: vec![AgentOutputItem::Text {
                 message_id: None,
                 text,
             }],
+            compacted: None,
         };
-        for i in 0..PAGE_EVENTS * 3 {
+        for i in 0..300 {
             let text = format!("{i:03}{}", "x".repeat(200));
             daemon
                 .store
@@ -159,12 +230,20 @@ mod tests {
             .append(Timestamp::now(), None, said(short, "Hi".to_owned()))
             .await;
 
-        let kept = summary(&daemon, long).await.unwrap();
-        assert!(kept.starts_with(LEFT_OUT), "{}", &kept[..80]);
-        let newest = format!("{}{}", PAGE_EVENTS * 3 - 1, "x".repeat(200));
+        let (kept, cursor) = summary(&daemon, target, long).await.unwrap();
+        assert!(
+            kept.starts_with("Agent:\n000"),
+            "{}",
+            &kept[..80.min(kept.len())]
+        );
+        assert!(kept.contains(LEFT_OUT), "{}", &kept[..80.min(kept.len())]);
+        let newest = format!("{}{}", 299, "x".repeat(200));
         assert!(kept.ends_with(&newest));
-        // The cap counts messages, not the blank lines between them.
-        assert!(kept.len() <= SUMMARY_BYTES + 1024, "{}", kept.len());
-        assert_eq!(summary(&daemon, short).await.unwrap(), "Agent:\nHi");
+        assert!(kept.len() <= SUMMARY_BYTES, "{}", kept.len());
+        assert!(cursor > 0);
+        assert_eq!(
+            summary(&daemon, target, short).await.unwrap().0,
+            "Agent:\nHi"
+        );
     }
 }

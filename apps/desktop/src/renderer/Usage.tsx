@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type { AccountUsage, UsageLimitWindow, UsagePeriod } from "../protocol/generated/protocol";
+import { hourCycle } from "./prefs";
 
 /** The two periods `usage/get` reports: today, and this week from Monday, in the host's local time. */
 export type Period = "today" | "week";
@@ -161,18 +162,23 @@ const capitalize = (s: string) => {
   return words.charAt(0).toUpperCase() + words.slice(1);
 };
 
-/** "42 min", "2 h 14 min", "3 d 4 h", rounded up to the minute. */
-function duration(ms: number): string {
+/** "42 min", "2 h 14 min", "3 d 4 h", rounded up to the minute; `short`, "42m", "2h 14m", "3d 4h". */
+function duration(ms: number, short = false): string {
+  const [m, h, d] = short ? ["m", "h", "d"] : [" min", " h", " d"];
   const minutes = Math.max(1, Math.ceil(ms / 60_000));
-  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 60) return `${minutes}${m}`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return minutes % 60 ? `${hours} h ${minutes % 60} min` : `${hours} h`;
+  if (hours < 24) return minutes % 60 ? `${hours}${h} ${minutes % 60}${m}` : `${hours}${h}`;
   const days = Math.floor(hours / 24);
-  return hours % 24 ? `${days} d ${hours % 24} h` : `${days} d`;
+  return hours % 24 ? `${days}${d} ${hours % 24}${h}` : `${days}${d}`;
 }
 
 const at = (iso: string) =>
-  new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  new Date(iso).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+    ...hourCycle(),
+  });
 
 /** When a limit resets and when plxd heard about it, for a tooltip. */
 export function limitDetails(limit: UsageLimitWindow): string {
@@ -184,14 +190,15 @@ export function limitDetails(limit: UsageLimitWindow): string {
 export type LimitTone = "normal" | "warning" | "danger";
 
 /**
- * A limit window for its meter on the Usage page: a short name ("Session", "Weekly · Opus"), how
- * much is used (0 to 100, rounded down) when the vendor says, its tone, and when it resets. Once
- * the reset time has passed, the last percent is stale and none of the window is used.
+ * A limit window for its row on the Usage page: a short name ("Session", "Weekly · Opus"), how
+ * much is left (0 to 100, from the rounded-down percent used) when the vendor says, its tone, and
+ * how long until it resets ("4h 40m"). Once the reset time has passed, the last percent is stale
+ * and all of the window is left.
  */
 export function limitMeter(
   limit: UsageLimitWindow,
   now: number,
-): { name: string; used?: number; tone: LimitTone; resets: string } {
+): { name: string; left?: number; tone: LimitTone; resetsIn?: string } {
   const weekly = /^seven_day(?:_(.+))?$/.exec(limit.window);
   const name =
     limit.window === "five_hour"
@@ -202,8 +209,7 @@ export function limitMeter(
           : "Weekly"
         : capitalize(limit.window);
   const resets = limit.resetsAt === undefined ? undefined : Date.parse(limit.resetsAt);
-  if (resets !== undefined && resets <= now)
-    return { name, used: 0, tone: "normal", resets: "Has reset" };
+  if (resets !== undefined && resets <= now) return { name, left: 100, tone: "normal" };
   const used =
     limit.usedPercent === undefined
       ? undefined
@@ -211,8 +217,8 @@ export function limitMeter(
   const tone = used === undefined || used < 75 ? "normal" : used < 90 ? "warning" : "danger";
   return {
     name,
-    used,
+    ...(used !== undefined && { left: 100 - used }),
     tone,
-    resets: resets === undefined ? "Reset time unknown" : `Resets in ${duration(resets - now)}`,
+    ...(resets !== undefined && { resetsIn: duration(resets - now, true) }),
   };
 }
