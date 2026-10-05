@@ -47,6 +47,7 @@ fn fixture(name: &str) -> &'static str {
         "malformed" => include_str!("fixtures/malformed.jsonl"),
         "follow-up-folded" => include_str!("fixtures/follow-up-folded.jsonl"),
         "follow-up-turns" => include_str!("fixtures/follow-up-turns.jsonl"),
+        "follow-up-late-report" => include_str!("fixtures/follow-up-late-report.jsonl"),
         "held" => include_str!("fixtures/held.jsonl"),
         "cancel" => include_str!("fixtures/cancel.jsonl"),
         "stubborn" => include_str!("fixtures/stubborn.jsonl"),
@@ -1574,7 +1575,7 @@ async fn a_follow_up_can_be_its_own_turn_and_stdin_waits_for_it() {
 #[tokio::test]
 async fn a_follow_up_answered_before_its_write_is_reported_still_ends() {
     crate::backend::REPORT_STALL.set(Duration::from_millis(300));
-    let fake = Fake::new("follow-up-turns");
+    let fake = Fake::new("follow-up-late-report");
     let Started { run, mut events } = launch(&fake.backend, request(&fake.root())).await;
     assert!(matches!(
         next(&mut events).await,
@@ -1593,10 +1594,18 @@ async fn a_follow_up_answered_before_its_write_is_reported_still_ends() {
         .filter(|event| {
             matches!(
                 event,
-                Event::TurnStarted { .. } | Event::TurnFinished { .. } | Event::Text { .. }
+                Event::TurnStarted { .. }
+                    | Event::TurnFinished { .. }
+                    | Event::Text { .. }
+                    | Event::RateLimit(_)
             )
         })
         .collect();
+    let rate_limit = all
+        .iter()
+        .find(|event| matches!(event, Event::RateLimit(_)))
+        .expect("the rate-limit event")
+        .clone();
     let text = |id: &str, text: &str| Event::Text {
         message_id: Some(id.into()),
         text: text.into(),
@@ -1609,6 +1618,8 @@ async fn a_follow_up_answered_before_its_write_is_reported_still_ends() {
                 turn_id: Some(turn(TURN_1)),
                 result: Some("First answer.".into())
             },
+            // Outside any turn, so it doesn't start the follow-up's.
+            &rate_limit,
             &Event::TurnStarted {
                 turn_id: Some(turn(TURN_2))
             },

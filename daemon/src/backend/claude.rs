@@ -1428,10 +1428,19 @@ impl Driver {
 
     async fn apply(&mut self, steps: Vec<Step>, stdin: &mut Stdin) {
         for step in steps {
-            // Turns finish in order, so output while the oldest outstanding turn is an unreported
-            // follow-up is that follow-up's: its TurnStarted goes first (PLX-523).
-            if matches!(step, Step::Emit(_) | Step::Ask(..))
-                && let Some((turn_id, uuid)) = self.turns.front().cloned()
+            // Turns finish in order, so a turn's content while the oldest outstanding turn is an
+            // unreported follow-up is that follow-up's: its TurnStarted goes first (PLX-523).
+            // Events outside a turn, such as a warning or a rate limit, don't start it.
+            if matches!(
+                step,
+                Step::Emit(
+                    Event::TextDelta { .. }
+                        | Event::Text { .. }
+                        | Event::Reasoning { .. }
+                        | Event::ToolCall { .. }
+                        | Event::ToolResult { .. }
+                ) | Step::Ask(..)
+            ) && let Some((turn_id, uuid)) = self.turns.front().cloned()
                 && self.unreported.remove(&uuid)
             {
                 self.emit(Event::TurnStarted { turn_id }).await;
