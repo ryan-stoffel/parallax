@@ -49,6 +49,7 @@ pub(crate) mod attached;
 pub(crate) mod compact;
 pub(crate) mod convert;
 pub(crate) mod coordinator;
+pub(crate) mod handoff;
 mod placement;
 mod resume;
 pub(crate) mod review;
@@ -1171,7 +1172,8 @@ pub(crate) async fn create_started(
         return Ok(CreatedRun { run, thread: row });
     }
     // The attached threads are read before anything is created, so a failure leaves nothing.
-    let sent = attached::prompt(&daemon, &threads, &prompt).await?;
+    let attached = attached::prompt(&daemon, run_id, &threads, &prompt).await?;
+    let (sent, seen) = (attached.text, attached.seen);
     // A Project's child goes where its rules say, or waits (0046).
     let requested = account.clone();
     let mut waiting = None;
@@ -1260,7 +1262,7 @@ pub(crate) async fn create_started(
     }
     if waiting.is_some() {
         let run = agent_run(&row, worktree.as_ref())?;
-        placement::queue(&daemon, &run, sent, images, threads, requested).await?;
+        placement::queue(&daemon, &run, prompt, images, threads, requested).await?;
         if coordinator_thread.is_none() {
             wake::started(&daemon, &run);
         }
@@ -1275,9 +1277,12 @@ pub(crate) async fn create_started(
     let task = first_prompt(&sent, &prepared.place)?;
     let paths = Some((cwd, git_common_dir));
     actor.attach(None, threads);
-    actor
+    if actor
         .launch(prepared, task, images, None, None, paths)
-        .await;
+        .await
+    {
+        actor.record_initial_seen(seen).await;
+    }
     // The actor owns a live CLI from here on, so it is spawned whatever the snapshot says.
     let run = actor.snapshot();
     agents.spawn(actor);

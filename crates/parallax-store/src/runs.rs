@@ -580,6 +580,10 @@ pub(crate) fn delete_run_rows(conn: &Connection, id: Uuid) -> Result<bool, Store
         )?;
     }
     conn.execute(
+        "DELETE FROM attached_seen WHERE target_run = ?1 OR source_run = ?1",
+        params![key],
+    )?;
+    conn.execute(
         "UPDATE runs SET parent = NULL WHERE parent = ?1",
         params![key],
     )?;

@@ -269,6 +269,8 @@ fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
         };
         store.add_images(run, &[(image, stored)]).unwrap();
     }
+    store.record_attached_seen(gone, &[(kept, 3)]).unwrap();
+    store.record_attached_seen(kept, &[(gone, 4)]).unwrap();
 
     assert!(store.delete_thread(gone).unwrap());
     assert!(
@@ -281,6 +283,8 @@ fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
     assert!(store.run_events(gone, 0, 10, 1 << 20).unwrap().0.is_empty());
     assert_eq!(store.run_turns(gone).unwrap(), []);
     assert_eq!(store.image(gone, image).unwrap(), None);
+    assert_eq!(store.attached_seen(gone, kept).unwrap(), None);
+    assert_eq!(store.attached_seen(kept, gone).unwrap(), None);
     let found: Vec<Uuid> = (store.search_threads("flaky", 10).unwrap())
         .iter()
         .map(|thread| thread.id)

@@ -522,6 +522,19 @@ const MIGRATIONS: &[Migration] = &[
                 WHERE run_id = new.run_id), 0), new.text);
         END;",
     },
+    // The newest source `seq` an attached thread's summary already covered for a target run
+    // (0052, PLX-486). The next attach sends only what was logged after it. Rows go with either
+    // run. No foreign key, like `turns`.
+    Migration {
+        version: 37,
+        sql: "CREATE TABLE attached_seen (
+            target_run TEXT NOT NULL,
+            source_run TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            PRIMARY KEY (target_run, source_run)
+        );
+        CREATE INDEX attached_seen_source ON attached_seen (source_run);",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose
