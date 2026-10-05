@@ -9,13 +9,14 @@ import type { PackUserConfig } from "vite-plus/pack";
 // rows with <style> tags it writes, as Vite's dev server does. Scripts stay
 // 'self', except for React Refresh's inline preamble in dev. The dev server's
 // HMR websocket is same-origin, so 'self'. Images may be data: URLs, which is
-// how a message's images show (PLX-193); agent Markdown never loads images.
+// how a message's images show (PLX-193), or GitHub's, which a pull request's
+// description and comments show (PLX-517); agent Markdown never loads images.
 const csp = (dev: boolean) =>
   [
     "default-src 'self'",
     dev && "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data:",
+    "img-src 'self' data: https://github.com https://*.githubusercontent.com",
     "object-src 'none'",
     "base-uri 'none'",
   ]
