@@ -109,6 +109,11 @@ impl Wakes {
         !std::mem::replace(&mut self.state.paused, true)
     }
 
+    /// Whether nothing waits, which only memory holds.
+    pub fn is_empty(&self) -> bool {
+        self.waiting.is_empty()
+    }
+
     /// The count and pause, as the store keeps them across a restart (PLX-178).
     pub fn state(&self) -> WakeState {
         self.state
