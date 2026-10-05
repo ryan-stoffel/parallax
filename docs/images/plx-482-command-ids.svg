@@ -26,8 +26,8 @@
   <text x="40" y="264" font-family="ui-monospace, monospace" font-size="12" fill="#1f1a14">method       project/delete</text>
   <text x="40" y="284" font-family="ui-monospace, monospace" font-size="12" fill="#1f1a14">params_hash  same request</text>
   <text x="40" y="304" font-family="ui-monospace, monospace" font-size="12" fill="#1f1a14">result       first answer</text>
-  <text x="400" y="256" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" fill="#5c5348">Retry with A1 ’ return that result.</text>
-  <text x="400" y="280" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" fill="#5c5348">Same id, different params ’ idConflict.</text>
+  <text x="400" y="256" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" fill="#5c5348">Retry with A1 â†’ return that result.</text>
+  <text x="400" y="280" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" fill="#5c5348">Same id, different params â†’ idConflict.</text>
 
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
