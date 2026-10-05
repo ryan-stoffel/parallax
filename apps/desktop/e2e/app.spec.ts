@@ -494,7 +494,7 @@ test("starts a thread in the repository's current checkout, on its branch, with 
   await page.getByRole("button", { name: "Send", exact: true }).click();
   const transcript = page.getByRole("log", { name: "Transcript" });
   await expect(transcript.getByText("The fake agent is on it.")).toBeVisible();
-  await expect(page.getByText("Local checkout", { exact: true })).toBeVisible();
+  await expect(page.getByText(/·Local checkout/)).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("current-checkout-thread.png") });
 
   const listed = (await page.evaluate(
