@@ -2,9 +2,14 @@
 //! protocol's types.
 //!
 //! SQLite calls block, so one thread owns [`parallax_store::Store`] and runs the jobs that requests
-//! send it, one at a time. Running them in order is also what keeps a snapshot consistent:
-//! `project/create` appends its event in the job that writes the row, and `project/list` reads the
-//! head `seq` in the job that reads the rows.
+//! send it, one at a time. It is the only writer.
+//!
+//! Lists and search run on a second handle, the daemon's `reader` (PLX-457): its own thread and a
+//! `query_only` connection, which WAL lets read while the writer writes, so a slow search never
+//! holds up a write. A list that clients subscribe after reads the event log's head before its
+//! rows ([`StoreHandle::snapshot`]). Every write commits its row before its event is published, so
+//! a write the read misses has an event after that head, which `events/subscribe` replays. A write
+//! the read already saw can be replayed too; the app's reducers are upserts, so that's harmless.
 //!
 //! A job whose request is cancelled is skipped if it hasn't started. Once it has started, it runs
 //! to the end and the request gets its real result, so -32800 always means nothing was done.
@@ -32,6 +37,7 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::agents::convert::{option_name, option_value};
+use crate::event_log::EventLog;
 use crate::repo;
 
 const QUEUED: u8 = 0;
@@ -118,10 +124,25 @@ impl StoreHandle {
     /// Opens the store at `path` and starts its thread. If it can't be opened, plxd keeps
     /// running without it: `host/health` says so, and project methods fail.
     pub fn open(path: &Path) -> Self {
-        let store = match Store::open(path) {
+        Self::start(path, Store::open(path), "plxd-store")
+    }
+
+    /// Opens a read-only connection to this store's file at `path`, on a thread of its own: the
+    /// daemon's `reader`, for lists and search. Unavailable when this store is, so a database this
+    /// build can't migrate (a newer schema, say) is never read either.
+    // ponytail: one read thread, so reads queue behind each other; a pool if that shows up.
+    pub fn open_reader(&self, path: &Path) -> Self {
+        if self.state() != StoreState::Ok {
+            return Self::unavailable();
+        }
+        Self::start(path, Store::open_read_only(path), "plxd-store-read")
+    }
+
+    fn start(path: &Path, store: Result<Store, StoreError>, name: &str) -> Self {
+        let store = match store {
             Ok(store) => store,
             Err(error) => {
-                error!(path = %path.display(), %error, "could not open the project store");
+                error!(path = %path.display(), %error, name, "could not open the project store");
                 return Self::unavailable();
             }
         };
@@ -129,11 +150,11 @@ impl StoreHandle {
         let counters = Arc::new(QueueCounters::default());
         let thread_counters = Arc::clone(&counters);
         let spawned = thread::Builder::new()
-            .name("plxd-store".to_owned())
+            .name(name.to_owned())
             .spawn(move || run(store, &queue, &thread_counters));
         match spawned {
             Ok(thread) => {
-                info!(path = %path.display(), "opened the project store");
+                info!(path = %path.display(), name, "opened the project store");
                 Self {
                     state: State::Open {
                         jobs,
@@ -227,6 +248,23 @@ impl StoreHandle {
                 Err(unavailable())
             }
         })
+    }
+
+    /// [`StoreHandle::run`] for a list that clients subscribe after: returns `job`'s rows with the
+    /// event log's head, read before the rows. A write that lands during the read then has its
+    /// event after that `seq`, so a subscriber replays it.
+    pub async fn snapshot<T: Send + 'static>(
+        &self,
+        cancel: &CancellationToken,
+        log: &Arc<EventLog>,
+        job: impl FnOnce(&mut Store) -> Result<T, ErrorObject> + Send + 'static,
+    ) -> Result<(T, u64), ErrorObject> {
+        let log = Arc::clone(log);
+        self.run(cancel, move |store| {
+            let seq = log.head();
+            Ok((job(store)?, seq))
+        })
+        .await
     }
 
     /// Stops the thread after the job it is running, and closes the database.
@@ -546,20 +584,23 @@ pub(crate) fn key_account(row: parallax_store::Account) -> Result<KeyAccount, Er
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::time::Duration;
 
+    use jiff::Timestamp;
     use parallax_protocol::jsonrpc::{INTERNAL_ERROR, PLX_ERROR, REQUEST_CANCELLED};
     use parallax_protocol::{
-        AccountId, ErrorKind, ImageMediaType, ProjectAutonomy, ProjectCreateParams, ProjectIcon,
-        ProjectId, ProjectPermission, ProjectUpdateParams, PromptImage, Provider, StoreState,
+        AccountId, ErrorKind, ImageMediaType, ParallaxEvent, ProjectAutonomy, ProjectCreateParams,
+        ProjectIcon, ProjectId, ProjectPermission, ProjectUpdateParams, PromptImage, Provider,
+        StoreState,
     };
     use parallax_store::StoreError;
     use tokio_util::sync::CancellationToken;
     use uuid::Uuid;
 
     use super::{
-        StoreHandle, account_fields, account_store_error, edit, fields, key_account, project,
-        store_error,
+        EventLog, StoreHandle, account_fields, account_store_error, edit, fields, key_account,
+        project, store_error,
     };
 
     fn row(id: Uuid) -> parallax_store::Project {
@@ -830,5 +871,117 @@ mod tests {
         assert!(stats.total_wait_micros >= stats.max_wait_micros);
         assert!(stats.max_run_micros >= 50_000, "{stats:?}");
         store.stop().await;
+    }
+
+    /// A project written while a snapshot on the reader is reading: the snapshot's `seq` is from
+    /// before the write's event, so a subscriber after it replays the event, even though the rows
+    /// already have the project (PLX-457).
+    #[tokio::test]
+    async fn a_write_during_a_snapshot_has_its_event_after_the_snapshots_seq() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        let store = StoreHandle::open(&path);
+        let reader = store.open_reader(&path);
+        let log = Arc::new(EventLog::new(10));
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let cancel = CancellationToken::new();
+        let snapshot = reader.snapshot(&cancel, &log, move |db| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            db.list_projects().map_err(|error| store_error(&error))
+        });
+        let write_log = Arc::clone(&log);
+        let write = async {
+            tokio::task::spawn_blocking(move || started_rx.recv().unwrap())
+                .await
+                .unwrap();
+            let seq = store
+                .run(&cancel, move |db| {
+                    let (id, fields) = fields(ProjectCreateParams {
+                        id: ProjectId::generate(),
+                        name: "n".to_owned(),
+                        repo_path: "/r".to_owned(),
+                        icon: None,
+                        permission: None,
+                        autonomy: None,
+                        base_branch: None,
+                    });
+                    db.create_project(id, &fields)
+                        .map_err(|error| store_error(&error))?;
+                    Ok(write_log.append_blocking(Timestamp::now(), None, ParallaxEvent::Unknown))
+                })
+                .await
+                .unwrap();
+            release_tx.send(()).unwrap();
+            seq
+        };
+        let (snapshot, written) = tokio::join!(snapshot, write);
+        let (projects, seq) = snapshot.unwrap();
+        assert_eq!(projects.len(), 1, "the read sees the committed row");
+        assert!(
+            written > seq,
+            "event {written} replays after snapshot {seq}"
+        );
+        store.stop().await;
+        reader.stop().await;
+    }
+
+    /// A database from a newer build: the writer won't open it, so the reader doesn't either and
+    /// lists fail as unavailable instead of reading a schema this build doesn't know.
+    #[tokio::test]
+    async fn the_reader_is_unavailable_when_the_writer_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        let first = StoreHandle::open(&path);
+        first.stop().await;
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (1000000, 'now')",
+                [],
+            )
+            .unwrap();
+
+        let store = StoreHandle::open(&path);
+        let reader = store.open_reader(&path);
+        assert_eq!(store.state(), StoreState::Unavailable);
+        assert_eq!(reader.state(), StoreState::Unavailable);
+        let error = reader
+            .run(&CancellationToken::new(), |db| {
+                db.list_projects().map_err(|error| store_error(&error))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.message,
+            "Internal error: the project store is unavailable"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_reader_refuses_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        let store = StoreHandle::open(&path);
+        let reader = store.open_reader(&path);
+        let (id, fields) = fields(ProjectCreateParams {
+            id: ProjectId::generate(),
+            name: "n".to_owned(),
+            repo_path: "/r".to_owned(),
+            icon: None,
+            permission: None,
+            autonomy: None,
+            base_branch: None,
+        });
+        let refused = reader
+            .run(&CancellationToken::new(), move |db| {
+                db.create_project(id, &fields)
+                    .map_err(|error| store_error(&error))
+            })
+            .await;
+        assert_eq!(refused.unwrap_err().code, INTERNAL_ERROR);
+        store.stop().await;
+        reader.stop().await;
     }
 }

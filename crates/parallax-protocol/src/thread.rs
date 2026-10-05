@@ -186,8 +186,9 @@ pub struct ThreadListResult {
     pub repos: Vec<Repo>,
     /// Every thread, oldest first.
     pub threads: Vec<Thread>,
-    /// The `seq` of the last event the snapshot reflects. Subscribe to host-level events with
-    /// `after` set to it.
+    /// The event log's `seq` from before the list was read. Subscribe to host-level events with
+    /// `after` set to it. The list may already reflect some events after it, and replaying them is
+    /// harmless.
     pub seq: u64,
 }
 

@@ -207,16 +207,13 @@ pub(crate) async fn list(
     context: &Context,
     params: AgentListParams,
 ) -> Result<AgentListResult, ErrorObject> {
-    let log = Arc::clone(&context.daemon.log);
     let project = params.project.map(uuid::Uuid::from);
     let (runs, seq) = context
         .daemon
-        .store
-        .run(&context.cancel, move |db| {
-            let runs = db
-                .list_runs_with_worktrees(project)
-                .map_err(|error| crate::agents::store_error(&error))?;
-            Ok((runs, log.head()))
+        .reader
+        .snapshot(&context.cancel, &context.daemon.log, move |db| {
+            db.list_runs_with_worktrees(project)
+                .map_err(|error| crate::agents::store_error(&error))
         })
         .await?;
     let runs = runs

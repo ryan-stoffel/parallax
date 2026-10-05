@@ -38,7 +38,7 @@ export type ParallaxRequests = {
 	 */
 	"host/version": { params: HostVersionParams, result: HostVersionResult },
 	/**
-	 * `project/list`: every project, and the `seq` the list reflects.
+	 * `project/list`: every project, and the event log's `seq` from before the read.
 	 */
 	"project/list": { params: ProjectListParams, result: ProjectListResult },
 	/**
@@ -153,7 +153,8 @@ export type ParallaxRequests = {
 	 */
 	"agent/cancel": { params: AgentCancelParams, result: AgentRunResult },
 	/**
-	 * `agent/list`: every run, or one project's, and the `seq` the list reflects.
+	 * `agent/list`: every run, or one project's, and the event log's `seq` from before the
+	 * read.
 	 */
 	"agent/list": { params: AgentListParams, result: AgentListResult },
 	/**
@@ -220,8 +221,8 @@ export type ParallaxRequests = {
 	 */
 	"agent/approve": { params: AgentApproveParams, result: AgentApproveResult },
 	/**
-	 * `thread/list`: every repo entry and normal thread, and the `seq` the list reflects
-	 * (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
+	 * `thread/list`: every repo entry and normal thread, and the event log's `seq` from before
+	 * the read (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
 	 */
 	"thread/list": { params: ThreadListParams, result: ThreadListResult },
 	/**
@@ -351,8 +352,8 @@ export type ParallaxRequests = {
 	 */
 	"host/settings/set": { params: HostSettingsSetParams, result: HostSettings },
 	/**
-	 * `inbox/list`: a Project's inbox, oldest first, and the `seq` the list reflects (PLX-401,
-	 * 0043). Gated on the `inbox` capability, like `inbox/seen`.
+	 * `inbox/list`: a Project's inbox, oldest first, and the event log's `seq` from before the
+	 * read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
 	 */
 	"inbox/list": { params: InboxListParams, result: InboxListResult },
 	/**
@@ -686,7 +687,8 @@ export type ProjectListResult = {
 	 */
 	projects: Array<Project>,
 	/**
-	 * The `seq` of the last event the snapshot reflects. Subscribe with `after` set to it.
+	 * The event log's `seq` from before the list was read. Subscribe with `after` set to it. The
+	 * list may already reflect some events after it, and replaying them is harmless.
 	 */
 	seq: number,
 };
@@ -2241,7 +2243,8 @@ export type AgentListResult = {
 	 */
 	runs: Array<AgentRun>,
 	/**
-	 * The `seq` of the last event the list reflects, to subscribe after.
+	 * The event log's `seq` from before the list was read. Subscribe with `after` set to it. The
+	 * list may already reflect some events after it, and replaying them is harmless.
 	 */
 	seq: number,
 };
@@ -3513,8 +3516,9 @@ export type ThreadListResult = {
 	 */
 	threads: Array<Thread>,
 	/**
-	 * The `seq` of the last event the snapshot reflects. Subscribe to host-level events with
-	 * `after` set to it.
+	 * The event log's `seq` from before the list was read. Subscribe to host-level events with
+	 * `after` set to it. The list may already reflect some events after it, and replaying them is
+	 * harmless.
 	 */
 	seq: number,
 };
@@ -4578,8 +4582,9 @@ export type InboxListResult = {
 	 */
 	items: Array<InboxItem>,
 	/**
-	 * The `seq` of the last event the list reflects. Subscribe to the Project's events with
-	 * `after` set to it for the items added since.
+	 * The event log's `seq` from before the list was read. Subscribe to the Project's events
+	 * with `after` set to it for the items added since. The list may already reflect some events
+	 * after it, and replaying them is harmless.
 	 */
 	seq: number,
 };

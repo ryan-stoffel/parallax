@@ -9,7 +9,7 @@ use parallax_protocol::{
     Capabilities, ClientInfo, HostHealthParams, HostHealthResult, HostQueues, HostSettings,
     HostSettingsGetParams, HostSettingsSetParams, HostVersionParams, HostVersionResult,
     IncompatibleProtocolDetail, InitializeParams, InitializeProtocol, InitializeResult,
-    ProtocolRange,
+    ProtocolRange, StoreState,
 };
 use tracing::info;
 
@@ -237,7 +237,11 @@ pub(crate) fn health(context: &Context, _: HostHealthParams) -> HostHealthResult
     let daemon = &context.daemon;
     HostHealthResult {
         uptime_seconds: daemon.started.elapsed().as_secs(),
-        store: daemon.store.state(),
+        // Lists and search read through `reader`, so the store is only usable with both.
+        store: match (daemon.store.state(), daemon.reader.state()) {
+            (StoreState::Ok, StoreState::Ok) => StoreState::Ok,
+            _ => StoreState::Unavailable,
+        },
         running_agents: daemon.agents.running(),
         queues: Some(HostQueues {
             store: daemon.store.queue_stats(),

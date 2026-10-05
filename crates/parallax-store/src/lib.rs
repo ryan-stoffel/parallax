@@ -85,6 +85,20 @@ impl Store {
 
         Ok(Self { conn })
     }
+
+    /// Opens a second connection to a database that [`Store::open`] already opened, for reads
+    /// only: `query_only` makes any write fail. It runs no migrations, and WAL, which the file
+    /// keeps, lets it read while the other connection writes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SQLite can't open or configure the connection.
+    pub fn open_read_only(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        let conn = Connection::open(path)?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        conn.pragma_update(None, "query_only", "ON")?;
+        Ok(Self { conn })
+    }
 }
 
 /// Sets the pragmas every connection needs: a busy timeout so lock
@@ -157,5 +171,23 @@ mod tests {
             .pragma_query_value(None, "busy_timeout", |row| row.get(0))
             .expect("read busy_timeout");
         assert_eq!(busy_timeout, 5000, "busy_timeout should match BUSY_TIMEOUT");
+    }
+
+    #[test]
+    fn a_read_only_store_reads_the_writers_rows_and_refuses_writes() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("parallax.sqlite3");
+        let writer = Store::open(&path).expect("open");
+        let reader = Store::open_read_only(&path).expect("open read-only");
+        writer.conn.execute_batch("CREATE TABLE t (a)").unwrap();
+        writer.conn.execute("INSERT INTO t VALUES (1)", []).unwrap();
+
+        let a: i64 = reader
+            .conn
+            .query_row("SELECT a FROM t", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(a, 1);
+        let refused = reader.conn.execute("INSERT INTO t VALUES (2)", []);
+        assert!(refused.is_err(), "{refused:?}");
     }
 }
