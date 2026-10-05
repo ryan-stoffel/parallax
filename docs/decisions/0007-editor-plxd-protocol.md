@@ -122,7 +122,7 @@ Later milestones add methods and events behind a capability, with no version bum
 | M5 `localRunner` | `runner/start {runId, ...}`, `runner/stop`, and the shared context mirror sync (0005), which the host sends over the connection the MacBook opened. `client.machineId` tells two machines apart. | `runner.output`, `runner.finished` |
 | M6 `triggers` | `trigger/list`, `trigger/create {id, ...}` | `trigger.fired` |
 
-`plxd mcp` (M4) is an MCP server on stdio and a normal Parallax client on the socket. It sends `initialize` and heartbeats like any other client, and exposes only its project's coordinator tools (0004), never `plan/approve`.
+`plxd mcp` (M4) is an MCP server on stdio and a normal Parallax client on the socket. It sends `initialize` like any other client but no heartbeats: it keeps one connection, stops using it after 75 s without a write (under plxd's 90 s idle limit), and opens a new one on the next call. It exposes only its project's coordinator tools (0004), never `plan/approve`.
 
 ## Alternatives
 
