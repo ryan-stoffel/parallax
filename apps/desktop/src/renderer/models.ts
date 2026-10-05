@@ -210,7 +210,10 @@ export function instanceModels(info: ProviderInfo): Model[] {
     // Zen/Big Pickle", by version: the picker already says OpenCode.
     ...info.models.map((m) => ({
       ...m,
-      name: m.id.startsWith("opencode/") ? m.name.replace(/^[^/]*\//, "") : m.name,
+      name:
+        instance.kind === "opencode" && m.id.startsWith("opencode/")
+          ? m.name.replace(/^[^/]*\//, "")
+          : m.name,
       contexts: [],
     })),
     ...instance.models.map((m) => ({ ...m, contexts: [] })),

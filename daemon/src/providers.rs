@@ -673,17 +673,7 @@ impl Providers {
                 );
                 acp_probe(&self.launcher, &agent, &mut found).await;
                 if instance.kind == ProviderKind::Pi {
-                    // Pi signs in in the `pi` its adapter runs, found where plxd found it, since
-                    // the app's own PATH may not have it.
-                    found.login = detect::resolve(&self.launcher, &pi_command(instance))
-                        .map(|path| vec![path.display().to_string()]);
-                    // pi-acp says only that it needs a sign-in; Pi's own words say how (PLX-558).
-                    if found.signed_in == Some(false)
-                        || (found.signed_in == Some(true) && found.models.is_empty())
-                    {
-                        found.signed_in = Some(false);
-                        found.note = Some(PI_NO_MODELS.into());
-                    }
+                    pi_sign_in(&self.launcher, instance, &mut found);
                 }
             }
             _ => {}
@@ -939,6 +929,27 @@ impl Backend for WithSecrets {
             return Ok(None);
         }
         self.plain.limits(cwd)
+    }
+}
+
+/// How Pi signs in, from what its adapter's probe found: in the `pi` the adapter runs, where plxd
+/// found it, with plxd's PATH, since the app's own may have neither it nor the `node` an npm install
+/// of it runs on. With no model it can use, it says how (PLX-558).
+fn pi_sign_in(launcher: &Launcher, instance: &ProviderInstance, found: &mut Found) {
+    found.login = detect::resolve(launcher, &pi_command(instance))
+        .map(|path| vec![path.display().to_string()]);
+    let env = launcher.environment(&detect::probe_spec("pi"));
+    if let Some(path) = env.get("PATH") {
+        found
+            .login_env
+            .get_or_insert_with(Vec::new)
+            .push(("PATH".into(), path.to_owned()));
+    }
+    // pi-acp says only that it needs a sign-in.
+    if found.signed_in == Some(false) || (found.signed_in == Some(true) && found.models.is_empty())
+    {
+        found.signed_in = Some(false);
+        found.note = Some(PI_NO_MODELS.into());
     }
 }
 
@@ -1650,6 +1661,17 @@ read b; echo '{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"Authenti
         assert_eq!(
             found.login,
             Some(vec![bin.join("pi").display().to_string()])
+        );
+        let path = found
+            .login_env
+            .unwrap()
+            .into_iter()
+            .find(|(name, _)| name == "PATH")
+            .map(|(_, value)| value);
+        assert_eq!(
+            path,
+            Some(bin.into_os_string()),
+            "with plxd's PATH, for its node"
         );
     }
 

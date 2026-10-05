@@ -162,8 +162,8 @@ export function installCommand(
 }
 
 /**
- * Runs `command`, an install, with no terminal. Resolves to an error for people, with the end of
- * what it printed, or undefined once it exits with 0.
+ * Runs `command`, an install, with no terminal. Resolves to an error for people, with npm's first
+ * error lines (else the end of what it printed), or undefined once it exits with 0.
  */
 export function runInstall(command: Command | string): Promise<string | undefined> {
   if (typeof command === "string") return Promise.resolve(command);
@@ -176,8 +176,11 @@ export function runInstall(command: Command | string): Promise<string | undefine
   return new Promise((resolve) =>
     execFile(command.file, args, options, (error, stdout, stderr) => {
       if (!error) return resolve(undefined);
-      const tail = `${stderr}`.trim() || `${stdout}`.trim() || error.message;
-      resolve(`The install failed: ${tail.split("\n").slice(-3).join("\n")}`);
+      const lines = (`${stderr}`.trim() || `${stdout}`.trim() || error.message).split("\n");
+      // npm's error lines say why, such as `npm error code E404`; it ends with generic advice.
+      const npm = lines.filter((line) => /^npm (error|ERR!) /.test(line));
+      const why = (npm.length ? npm.slice(0, 3) : lines.slice(-3)).join("\n");
+      resolve(`The install failed: ${why}`);
     }),
   );
 }

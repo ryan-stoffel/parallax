@@ -155,6 +155,20 @@ test.skipIf(process.platform === "win32")(
         args: ["-c", "echo one; echo 'npm ERR! EACCES' >&2; exit 1"],
       }),
     ).toBe("The install failed: npm ERR! EACCES");
+    // npm's real output: its error code first, then advice and its log's path.
+    const npm = [
+      "npm error code E404",
+      "npm error 404 Not Found - GET https://registry.npmjs.org/nope",
+      "npm error 404",
+      "npm error 404  'nope@*' is not in this registry.",
+      "npm error A complete log of this run can be found in: /tmp/x.log",
+    ];
+    expect(
+      await runInstall({
+        file: "/bin/sh",
+        args: ["-c", `printf '%s\\n' ${npm.map((l) => `"${l}"`).join(" ")} >&2; exit 1`],
+      }),
+    ).toBe(`The install failed: ${npm.slice(0, 3).join("\n")}`);
     expect(await runInstall("Parallax can't install this agent on Windows.")).toMatch(/can't/);
   },
 );

@@ -84,6 +84,9 @@ test("OpenCode's own models are named without OpenCode's name, another vendor's 
     "Ling 3.1 Flash Free",
     "Anthropic/Claude Sonnet 5",
   ]);
+  // Another agent on OpenCode's models keeps the vendor in each name.
+  const pi = instanceModels(info({ id: "pi", kind: "pi" }, listed));
+  expect(pi[0]!.name).toBe("opencode/Big Pickle");
 });
 
 test("a reported model is its exact id before a longer one's prefix (PLX-495)", () => {
