@@ -509,7 +509,9 @@ export function Tooltips() {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const hide = () => {
       clearTimeout(timer);
-      if (target && title !== null) target.setAttribute("title", title);
+      // Unless React set a new title meanwhile.
+      if (target && title !== null && !target.hasAttribute("title"))
+        target.setAttribute("title", title);
       target = undefined;
       title = null;
       setTip(undefined);
@@ -529,6 +531,7 @@ export function Tooltips() {
       el.removeAttribute("title");
       timer = setTimeout(
         () => {
+          if (!el.isConnected) return;
           const r = el.getBoundingClientRect();
           const above = r.bottom + 40 > window.innerHeight;
           setTip({
