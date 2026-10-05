@@ -1,10 +1,13 @@
 //! Claude Code's and Codex's usage for `usage/daily`, from ccusage (0039), which reads their
 //! session logs (`~/.claude/projects`, `~/.codex/sessions`) and prices them.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
+use jiff::Timestamp;
 use jiff::civil::Date;
-use parallax_protocol::{CliKind, UsageDay};
+use jiff::tz::TimeZone;
+use parallax_protocol::{CliKind, UsageDay, UsageSessions};
 use serde::Deserialize;
 
 use crate::backend::claude::usd_micros;
@@ -15,15 +18,39 @@ use crate::detect::{resolve, run};
 const TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Every Claude Code and Codex session's usage since `since`, by local day in `time_zone`, from
-/// `ccusage` on the launcher's `PATH`, else `npx -y ccusage@20`. `Err` is why, for people.
+/// `ccusage daily`. `Err` is why, for people.
 pub(super) async fn daily(
     launcher: &Launcher,
     since: Date,
     time_zone: &str,
 ) -> Result<Vec<UsageDay>, String> {
+    let stdout = ccusage(launcher, "daily", since, time_zone).await?;
+    parse(&stdout).ok_or_else(|| "ccusage answered with output plxd can't read.".to_owned())
+}
+
+/// How many Claude Code and Codex sessions last did something on each local day in `zone` since
+/// `since`, from `ccusage session`. `None` when they couldn't be counted.
+pub(super) async fn sessions(
+    launcher: &Launcher,
+    since: Date,
+    time_zone: &str,
+    zone: &TimeZone,
+) -> Option<Vec<UsageSessions>> {
+    let stdout = ccusage(launcher, "session", since, time_zone).await.ok()?;
+    parse_sessions(&stdout, zone)
+}
+
+/// `ccusage <report> --json --by-agent` since `since` in `time_zone`'s days, from `ccusage` on the
+/// launcher's `PATH`, else `npx -y ccusage@20`. Its stdout, or why it failed, for people.
+async fn ccusage(
+    launcher: &Launcher,
+    report: &str,
+    since: Date,
+    time_zone: &str,
+) -> Result<String, String> {
     let since = since.strftime("%Y%m%d").to_string();
     let args = [
-        "daily",
+        report,
         "--json",
         "--by-agent",
         "--since",
@@ -47,7 +74,56 @@ pub(super) async fn daily(
         let why = ran.stderr_tail.trim().lines().last().unwrap_or("no output");
         return Err(format!("ccusage failed: {why}"));
     }
-    parse(&ran.stdout).ok_or_else(|| "ccusage answered with output plxd can't read.".to_owned())
+    Ok(ran.stdout)
+}
+
+#[derive(Deserialize)]
+struct SessionReport {
+    session: Vec<Session>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Session {
+    agent: String,
+    metadata: Option<SessionMetadata>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionMetadata {
+    last_activity: Option<Timestamp>,
+}
+
+/// `ccusage session --json`'s report as Claude Code's and Codex's sessions per local day in
+/// `zone` of their last activity. A session without one is left out. `None` if it isn't that
+/// report.
+fn parse_sessions(stdout: &str, zone: &TimeZone) -> Option<Vec<UsageSessions>> {
+    let report: SessionReport = serde_json::from_str(&stdout[stdout.find('{')?..]).ok()?;
+    let mut counts: HashMap<(Date, CliKind), u32> = HashMap::new();
+    for session in report.session {
+        let agent = match session.agent.as_str() {
+            "claude" => CliKind::Claude,
+            "codex" => CliKind::Codex,
+            _ => continue,
+        };
+        let Some(at) = session.metadata.and_then(|m| m.last_activity) else {
+            continue;
+        };
+        *counts
+            .entry((at.to_zoned(zone.clone()).date(), agent))
+            .or_default() += 1;
+    }
+    let mut days: Vec<_> = counts
+        .into_iter()
+        .map(|((date, agent), sessions)| UsageSessions {
+            date,
+            agent,
+            sessions,
+        })
+        .collect();
+    days.sort_by_key(|day| (day.date, day.agent == CliKind::Codex));
+    Some(days)
 }
 
 #[derive(Deserialize)]
@@ -116,9 +192,39 @@ fn parse(stdout: &str) -> Option<Vec<UsageDay>> {
 #[cfg(test)]
 mod tests {
     use jiff::civil::date;
-    use parallax_protocol::{CliKind, UsageDay};
+    use jiff::tz::TimeZone;
+    use parallax_protocol::{CliKind, UsageDay, UsageSessions};
 
-    use super::parse;
+    use super::{parse, parse_sessions};
+
+    #[test]
+    fn sessions_count_on_the_local_day_of_their_last_activity() {
+        let stdout = r#"{
+  "session": [
+    { "agent": "claude", "period": "a", "metadata": { "lastActivity": "2026-10-05T01:17:29.743Z" } },
+    { "agent": "claude", "period": "b", "metadata": { "lastActivity": "2026-10-04T20:00:00Z" } },
+    { "agent": "codex", "period": "c", "metadata": { "lastActivity": "2026-10-05T18:00:00Z" } },
+    { "agent": "opencode", "period": "d", "metadata": { "lastActivity": "2026-10-05T18:00:00Z" } },
+    { "agent": "claude", "period": "e" }
+  ],
+  "totals": {}
+}"#;
+        let zone = TimeZone::get("America/Los_Angeles").unwrap();
+        let day = |date, agent, sessions| UsageSessions {
+            date,
+            agent,
+            sessions,
+        };
+        // 01:17 UTC on the 5th is still the 4th in Los Angeles.
+        assert_eq!(
+            parse_sessions(stdout, &zone).unwrap(),
+            [
+                day(date(2026, 10, 4), CliKind::Claude, 2),
+                day(date(2026, 10, 5), CliKind::Codex, 1),
+            ]
+        );
+        assert!(parse_sessions("Error: no data", &zone).is_none());
+    }
 
     #[test]
     fn a_report_becomes_a_row_per_day_agent_and_model_and_skips_other_agents() {

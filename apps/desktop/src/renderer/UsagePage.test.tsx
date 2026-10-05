@@ -8,7 +8,6 @@ import type { UsageDay } from "../protocol/generated/protocol";
 import {
   attribute,
   buckets,
-  change,
   localDate,
   niceTop,
   resetTime,
@@ -75,7 +74,7 @@ test("a flat rate shows no change at any time of day, though today isn't over", 
     for (const range of ["today", "7d", "30d"] as const) {
       const now = new Date(2026, 8, 29, ...clock).getTime();
       const { summary } = flat(range, now);
-      expect(change(tokensOf(summary.total), tokensOf(summary.previous))).toBeCloseTo(0, 10);
+      expect(tokensOf(summary.total) / tokensOf(summary.previous)).toBeCloseTo(1, 10);
     }
 });
 
@@ -132,12 +131,21 @@ test("days sum by agent, model, and bucket, keep unreported cost apart, and coun
   expect(opus.byBucket.map((m) => m.cost).slice(-2)).toEqual([2_000_000, 1_000_000]);
 });
 
-test("a change is a fraction of the range before, and needs a range before with some", () => {
-  expect(change(125, 100)).toBe(0.25);
-  expect(change(50, 100)).toBe(-0.5);
-  expect(change(100, 100)).toBe(0);
-  expect(change(100, 0)).toBeUndefined();
-  expect(change(100, undefined)).toBeUndefined();
+test("sessions count in the range and the range before, the last day before only in part", () => {
+  const now = new Date(2026, 8, 29, 12, 0).getTime();
+  const { starts, previous, partial } = buckets("7d", now);
+  const day = (at: number, sessions: number) => ({
+    date: localDate(at),
+    agent: "claude" as const,
+    sessions,
+  });
+  const sum = (sessions?: ReturnType<typeof day>[]) =>
+    summarize([], starts, previous, partial, sessions).sessions;
+  expect(sum([day(starts[0]!, 3), day(starts.at(-1)!, 2), day(previous.at(-1)!, 4)])).toEqual({
+    total: 5,
+    previous: 4 * partial,
+  });
+  expect(sum()).toBeUndefined();
 });
 
 test("models rank by the measure, share the whole, and the chart stacks two and the rest", () => {
@@ -263,11 +271,12 @@ const daily =
   ({ since }: Record<string, unknown>) => ({
     days: days.filter((d) => d.date >= (since as string)),
     problems,
+    sessions: [{ date: localDate(now), agent: "claude", sessions: 7 }],
   });
 
 const now = Date.now();
 
-test("Cost leads with the total, its change, and the busiest model, and reads each bar out", async () => {
+test("Cost leads with the total, its sessions, and the busiest model, and reads each bar out", async () => {
   await renderPage({
     "accounts/keys/list": () => ({ accounts: [] }),
     "usage/daily": daily([
@@ -279,7 +288,7 @@ test("Cost leads with the total, its change, and the busiest model, and reads ea
   });
   const strip = document.querySelector("dl")!.textContent;
   expect(strip).toContain("Total cost$3.00");
-  expect(strip).toContain("+50%From $2.00 in the previous 30 days");
+  expect(strip).toContain("Sessions70 in the previous 30 days");
   expect(strip).toContain("Busiest modelopus66.7% of cost · $2.00");
 
   // Every bar says its numbers; the latest is the one in the tab order.
@@ -354,6 +363,41 @@ test("Cost leads with the total, its change, and the busiest model, and reads ea
   expect(readout()).toBeUndefined();
 });
 
+test("the breakdown shows five models until Show more, and Refresh spins until it's answered", async () => {
+  let release = () => {};
+  let hold: Promise<void> | undefined;
+  const answer = daily(
+    ["a", "b", "c", "d", "e", "f", "g"].map((m, i) =>
+      usage(now, "claude", m, 10, (7 - i) * 1_000_000),
+    ),
+  );
+  await renderPage({
+    "accounts/keys/list": () => ({ accounts: [] }),
+    "usage/daily": async (params) => {
+      await hold;
+      return answer(params);
+    },
+  });
+  const breakdown = document.querySelector('section[aria-label="Breakdown"]')!;
+  const names = () => [...breakdown.querySelectorAll("li")].map((li) => li.textContent![0]);
+  expect(names()).toEqual(["a", "b", "c", "d", "e"]);
+  const more = breakdown.querySelector("button")!;
+  expect(more.textContent).toBe("Show 2 more");
+  act(() => more.click());
+  expect(names()).toEqual(["a", "b", "c", "d", "e", "f", "g"]);
+  expect(more.textContent).toBe("Show less");
+
+  const refresh = document.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!;
+  expect(refresh.getAttribute("aria-busy")).toBe("false");
+  hold = new Promise((resolve) => (release = resolve));
+  act(() => refresh.click());
+  await settle();
+  expect(refresh.getAttribute("aria-busy")).toBe("true");
+  release();
+  await settle();
+  expect(refresh.getAttribute("aria-busy")).toBe("false");
+});
+
 test("an answer for a range left behind doesn't replace the range shown", async () => {
   let release = () => {};
   let hold: Promise<void> | undefined;
@@ -379,7 +423,7 @@ test("an answer for a range left behind doesn't replace the range shown", async 
   release();
   await settle();
   expect(document.querySelectorAll("[data-bar]")).toHaveLength(90);
-  expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+  expect(document.querySelector('div[aria-busy="true"]')).toBeNull();
 });
 
 test("a new range keeps the last one in view, dimmed, until its answer comes", async () => {
@@ -396,13 +440,13 @@ test("a new range keeps the last one in view, dimmed, until its answer comes", a
   hold = new Promise((resolve) => (release = resolve));
   act(() => document.querySelector<HTMLInputElement>('input[value="7d"]')!.click());
   await settle();
-  const held = document.querySelector('[aria-busy="true"]')!;
+  const held = document.querySelector('div[aria-busy="true"]')!;
   expect(held.querySelectorAll("[data-bar]")).toHaveLength(30);
   expect(document.querySelector('[role="status"]')!.textContent).toBe("Loading usage…");
 
   release();
   await settle();
-  expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+  expect(document.querySelector('div[aria-busy="true"]')).toBeNull();
   expect(document.querySelectorAll("[data-bar]")).toHaveLength(7);
 });
 

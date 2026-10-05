@@ -179,6 +179,24 @@ pub struct UsageDailyResult {
     pub days: Vec<UsageDay>,
     /// Each source that failed, so the others still show.
     pub problems: Vec<UsageProblem>,
+    /// Sessions per local day and agent, counted on the day of their last activity: Claude
+    /// Code's and Codex's, from ccusage. Absent when they couldn't be counted, and from a plxd
+    /// older than the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sessions: Option<Vec<UsageSessions>>,
+}
+
+/// How many of one agent's sessions last did something on one local day.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageSessions {
+    /// The local day.
+    pub date: jiff::civil::Date,
+    /// The agent: Claude Code or Codex.
+    pub agent: crate::CliKind,
+    /// Sessions whose last activity was that day.
+    pub sessions: u32,
 }
 
 /// One agent's usage of one model on one local day, from every session on the host, not only

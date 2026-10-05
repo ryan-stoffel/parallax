@@ -22,6 +22,7 @@ import type {
   Repo,
   Thread,
   UsageDay,
+  UsageSessions,
   UsageHour,
 } from "../src/protocol/generated/protocol";
 
@@ -65,6 +66,7 @@ export interface Fixtures {
   limits: AccountLimits[];
   usageHours: UsageHour[];
   usageDays: UsageDay[];
+  usageSessions: UsageSessions[];
   commands: AgentCommand[];
   repoFiles: string[];
 }
@@ -1409,6 +1411,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
     });
   }
   const usageDays: UsageDay[] = [];
+  const usageSessions: UsageSessions[] = [];
   for (let d = 0; d < 30; d++) {
     const date = new Date(now - d * 86_400_000).toISOString().slice(0, 10);
     const busy = 0.4 + Math.abs(Math.cos(d / 2.5));
@@ -1432,6 +1435,29 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
         cacheReadTokens: Math.round(1_500_000 * busy),
         cacheWriteTokens: 0,
       },
+      // Cursor's models, a few a day, for a breakdown longer than five.
+      ...[
+        "grok-4.7",
+        "claude-fable-5-1-thinking-high",
+        "gpt-5.6-sol-high",
+        "cursor-grok-4.6-xhigh",
+        "composer-2.5-fast",
+      ]
+        .filter((_, i) => (d + i) % 3 !== 0)
+        .map((model, i) => ({
+          date,
+          agent: "cursor" as const,
+          model,
+          inputTokens: Math.round(200_000 * busy),
+          outputTokens: Math.round(20_000 * busy),
+          cacheReadTokens: Math.round(2_000_000 * busy),
+          cacheWriteTokens: 0,
+          costUsdMicros: Math.round((14_000_000 / (i + 1)) * busy),
+        })),
+    );
+    usageSessions.unshift(
+      { date, agent: "claude", sessions: Math.round(9 * busy) },
+      { date, agent: "codex", sessions: Math.round(3 * busy) },
     );
   }
 
@@ -1488,6 +1514,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
     usage,
     limits,
     usageHours,
+    usageSessions,
     usageDays,
     commands,
     repoFiles,

@@ -1636,6 +1636,12 @@ export type UsageDailyResult = {
 	 * Each source that failed, so the others still show.
 	 */
 	problems: Array<UsageProblem>,
+	/**
+	 * Sessions per local day and agent, counted on the day of their last activity: Claude
+	 * Code's and Codex's, from ccusage. Absent when they couldn't be counted, and from a plxd
+	 * older than the field.
+	 */
+	sessions?: Array<UsageSessions>,
 };
 
 /**
@@ -1698,6 +1704,24 @@ export type UsageProblem = {
  * A newer plxd may send sources that are not listed here. Treat those as unknown.
  */
 export type UsageSource = "ccusage" | "cursor";
+
+/**
+ * How many of one agent's sessions last did something on one local day.
+ */
+export type UsageSessions = {
+	/**
+	 * The local day.
+	 */
+	date: string,
+	/**
+	 * The agent: Claude Code or Codex.
+	 */
+	agent: CliKind,
+	/**
+	 * Sessions whose last activity was that day.
+	 */
+	sessions: number,
+};
 
 /**
  * Params of `usage/limits`.

@@ -640,15 +640,50 @@ body {
 
 /* The Usage page (UsagePage.tsx): bars rise from the baseline, --delay apart, and meters fill
    from the left, as they appear. Under reduced motion they are simply there. */
+/* A bar springs up from the baseline, a little past its height and back. */
 .usage-rise {
-  animation: usage-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) var(--delay, 0s) both;
+  transform-origin: bottom;
+  animation: usage-rise 0.75s cubic-bezier(0.22, 1, 0.36, 1) var(--delay, 0s) both;
 }
 @keyframes usage-rise {
+  0% {
+    transform: scaleY(0);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  60% {
+    transform: scaleY(1.06);
+  }
+  82% {
+    transform: scaleY(0.985);
+  }
+  100% {
+    transform: scaleY(1);
+  }
+}
+/* The axis's lines draw across before the bars rise; the average follows them. */
+.usage-grid {
+  transform-origin: left;
+  animation: usage-grid 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes usage-grid {
   from {
-    clip-path: inset(100% 0 0 0);
+    transform: scaleX(0);
+  }
+}
+.usage-average {
+  animation: usage-average 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.7s both;
+}
+@keyframes usage-average {
+  from {
+    clip-path: inset(-12px 100% -12px 0);
+    opacity: 0;
   }
   to {
-    clip-path: inset(0);
+    clip-path: inset(-12px 0 -12px 0);
+    opacity: 1;
   }
 }
 .usage-fill {
@@ -664,6 +699,8 @@ body {
 }
 :root.reduce-motion {
   .usage-rise,
+  .usage-grid,
+  .usage-average,
   .usage-fill {
     animation: none;
   }
