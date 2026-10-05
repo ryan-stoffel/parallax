@@ -213,9 +213,10 @@ async function run() {
         current?.cancel().catch(() => {});
         return true;
       }
-      if (message.type === "send" && message.steer && current) {
+      // Armed means a turn is in progress, even before `agent.send` has returned its run.
+      if (message.type === "send" && message.steer) {
         steers.push(message);
-        current.cancel().catch(() => {});
+        current?.cancel().catch(() => {});
         return true;
       }
       return false;
@@ -230,6 +231,8 @@ async function run() {
     arm();
     const outcome = await turn(agent, message, start, permission, (run) => {
       current = run;
+      // A steer that arrived while the run was starting cancels it now.
+      if (run && steers.length) run.cancel().catch(() => {});
     });
     current = null;
     disarm();
