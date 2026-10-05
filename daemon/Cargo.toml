@@ -30,7 +30,8 @@ tokio = { workspace = true, features = ["fs", "io-std", "io-util", "macros", "ne
 tokio-util = { workspace = true, features = ["codec", "rt"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["fmt", "std"] }
-uuid.workspace = true
+# `v4` for the random password of an `opencode serve` plxd starts (PLX-559).
+uuid = { workspace = true, features = ["v4"] }
 parallax-protocol = { path = "../crates/parallax-protocol" }
 parallax-store = { path = "../crates/parallax-store" }
 # Reads Cursor desktop's sign-in for `usage/daily` (0039). The store already builds it.
