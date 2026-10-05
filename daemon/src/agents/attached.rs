@@ -11,7 +11,10 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
-use parallax_protocol::{ErrorKind, RunId};
+use parallax_protocol::{ErrorKind, ParallaxEvent, RunId};
+use parallax_store::{Store, StoreError};
+
+use crate::event_log::EventLog;
 
 use super::actor::{LEFT_OUT, conversation};
 use super::{store, store_error};
@@ -102,25 +105,53 @@ async fn title(daemon: &Daemon, id: RunId) -> Result<Option<String>, ErrorObject
 async fn summary(daemon: &Daemon, id: RunId) -> Result<String, ErrorObject> {
     let log = Arc::clone(&daemon.log);
     tokio::task::spawn_blocking(move || {
-        let mut events = VecDeque::new();
-        let mut before = u64::MAX;
-        loop {
-            let (page, more) = log.run_events_before(id, before, PAGE_EVENTS, usize::MAX)?;
-            if let Some(oldest) = page.last() {
-                before = oldest.seq;
-            }
-            for entry in page {
-                events.push_front(entry.event.clone());
-            }
-            let summary = conversation(events.make_contiguous(), SUMMARY_BYTES);
-            if !more || summary.starts_with(LEFT_OUT) {
-                return Ok(summary);
-            }
+        if let Some(summary) = log.with_stored_read(|db| summary_from(db, id))? {
+            return Ok(summary);
         }
+        summary_from_log(&log, id)
     })
     .await
     .map_err(ErrorObject::internal_error)?
     .map_err(|error| store_error(&error))
+}
+
+/// Pages `id`'s events newest first inside the caller's read transaction (0052).
+fn summary_from(db: &Store, id: RunId) -> Result<String, StoreError> {
+    let mut events = VecDeque::new();
+    let mut before = u64::MAX;
+    loop {
+        let (page, more) = db.run_events_before(id.into(), before, PAGE_EVENTS, usize::MAX)?;
+        if let Some(oldest) = page.iter().rfind(|event| event.seq < before) {
+            before = oldest.seq;
+        }
+        for stored in page {
+            events.push_front(
+                serde_json::from_str(&stored.payload).unwrap_or(ParallaxEvent::Unknown),
+            );
+        }
+        let summary = conversation(events.make_contiguous(), SUMMARY_BYTES);
+        if !more || summary.starts_with(LEFT_OUT) {
+            return Ok(summary);
+        }
+    }
+}
+
+fn summary_from_log(log: &EventLog, id: RunId) -> Result<String, StoreError> {
+    let mut events = VecDeque::new();
+    let mut before = u64::MAX;
+    loop {
+        let (page, more) = log.run_events_before(id, before, PAGE_EVENTS, usize::MAX)?;
+        if let Some(oldest) = page.iter().rfind(|entry| entry.seq < before) {
+            before = oldest.seq;
+        }
+        for entry in page {
+            events.push_front(entry.event.clone());
+        }
+        let summary = conversation(events.make_contiguous(), SUMMARY_BYTES);
+        if !more || summary.starts_with(LEFT_OUT) {
+            return Ok(summary);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -146,6 +177,7 @@ mod tests {
                 message_id: None,
                 text,
             }],
+            compacted: None,
         };
         for i in 0..PAGE_EVENTS * 3 {
             let text = format!("{i:03}{}", "x".repeat(200));

@@ -14,14 +14,16 @@
 //! the log runs in memory only, starting over with a new `logId` on every start, as it did in M1.
 //!
 //! The table is compacted on a retention policy (#187, decision 0016): an agent run's events stay
-//! as long as its run row does, while host and project events with no `run_id` —
-//! `project.created`, `context.changed` — are pruned to the newest `host_retention` whenever one
-//! is staged. `host_retention` is always at least `retention` (`EventLog::with` enforces it): a
-//! restart only ever reloads the newest `retention` events, and by pigeonhole every host or
-//! project event in that reload is among the newest `retention` host and project events too, so
-//! keeping at least that many never lets pruning remove one a reload still needs. The in-memory
-//! window is bounded by both count (`retention`) and bytes (`max_bytes`), evicting from the front
-//! once either is exceeded, on every publish and once more on load.
+//! as long as its run row does, now one row per finished turn (0052), while host and project
+//! events with no `run_id` — `project.created`, `context.changed` — are pruned to the newest
+//! `host_retention` whenever one is staged. `host_retention` is always at least `retention`
+//! (`EventLog::with` enforces it): a restart only ever reloads the newest `retention` events, and
+//! by pigeonhole every host or project event in that reload is among the newest `retention` host
+//! and project events too, so keeping at least that many never lets pruning remove one a reload
+//! still needs. The in-memory window is bounded by both count (`retention`) and bytes
+//! (`max_bytes`), evicting from the front once either is exceeded, on every publish and once more
+//! on load. A finished turn is rewritten in place only after its last batch is older than this
+//! window, so a live subscriber never sees the rewrite.
 //!
 //! Subscribers don't get their own queues. Each subscription is a cursor that reads the log (see
 //! `methods::events::Cursors`), so a slow subscriber costs nothing until it reads, and whoever
@@ -117,6 +119,17 @@ pub(crate) fn run_of(event: &ParallaxEvent) -> Option<RunId> {
         | ParallaxEvent::ThreadUpdated { .. }
         | ParallaxEvent::ThreadDeleted { .. }
         | ParallaxEvent::Unknown => None,
+    }
+}
+
+/// The turn's first `seq` when `event` is a compacted `agent.output`.
+fn compacted_from(event: &ParallaxEvent) -> Option<u64> {
+    match event {
+        ParallaxEvent::AgentOutput {
+            compacted: Some(compacted),
+            ..
+        } => Some(compacted.from),
+        _ => None,
     }
 }
 
@@ -274,6 +287,35 @@ impl EventLog {
         self.inner().head
     }
 
+    /// The oldest `seq` still in the in-memory window. A finished turn is compacted only when
+    /// its last batch is older than this (0052).
+    pub fn floor(&self) -> u64 {
+        self.inner().floor
+    }
+
+    /// Runs `f` against the stored log inside one read transaction, so a compact sweep cannot
+    /// land between pages. `None` when the log is memory-only.
+    pub fn with_stored_read<T>(
+        &self,
+        f: impl FnOnce(&Store) -> Result<T, StoreError>,
+    ) -> Result<Option<T>, StoreError> {
+        let Some(reader) = &self.reader else {
+            return Ok(None);
+        };
+        let db = reader.lock().unwrap_or_else(PoisonError::into_inner);
+        db.begin_read()?;
+        match f(&db) {
+            Ok(value) => {
+                db.commit()?;
+                Ok(Some(value))
+            }
+            Err(error) => {
+                let _ = db.rollback();
+                Err(error)
+            }
+        }
+    }
+
     /// A receiver that wakes after every publish.
     pub fn watch(&self) -> watch::Receiver<u64> {
         self.head_watch.subscribe()
@@ -393,20 +435,29 @@ impl EventLog {
         let inner = self.inner();
         let mut entries = Vec::new();
         let mut bytes = 0;
-        for entry in inner
+        let mut more = false;
+        for event in inner
             .events
             .iter()
             .rev()
             .filter(|entry| entry.seq < before && run_of(&entry.event) == Some(run))
         {
-            let size = serde_json::to_string(&entry.event).map_or(0, |json| json.len());
+            let size = serde_json::to_string(&event.event).map_or(0, |json| json.len());
             if entries.len() >= limit.max(1) || (!entries.is_empty() && bytes + size > max_bytes) {
-                return Ok((entries, true));
+                more = true;
+                break;
             }
             bytes += size;
-            entries.push(Arc::clone(entry));
+            entries.push(Arc::clone(event));
         }
-        Ok((entries, false))
+        if let Some(compacted) = inner.events.iter().find(|entry| {
+            entry.seq >= before
+                && run_of(&entry.event) == Some(run)
+                && compacted_from(&entry.event).is_some_and(|from| from < before)
+        }) {
+            entries.insert(0, Arc::clone(compacted));
+        }
+        Ok((entries, more))
     }
 
     /// Removes `run`'s events from the in-memory replay window, for a deleted thread (#110), so
@@ -712,6 +763,7 @@ mod tests {
                 message_id: None,
                 text: text.to_owned(),
             }],
+            compacted: None,
         }
     }
 

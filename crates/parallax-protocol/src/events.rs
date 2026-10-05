@@ -102,6 +102,15 @@ pub struct EventsResyncParams {
     pub subscription: SubscriptionId,
 }
 
+/// A finished turn rewritten in place as one `agent.output` row (0052).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Compacted {
+    /// The turn's first `seq`. A reader that meets this row first drops any `agent.output` of
+    /// the same run with `seq` in [`from`, this row's `seq`), then takes the row.
+    pub from: u64,
+}
+
 /// What happened, by `kind`.
 ///
 /// A newer plxd may send kinds that are not listed here. Skip those events but still count their
@@ -157,13 +166,18 @@ pub enum ParallaxEvent {
         state: AgentRunState,
     },
     /// Part of a run's transcript. plxd sends at most one per run every 50 ms, with everything
-    /// that happened in between.
+    /// that happened in between. A finished turn that has left the in-memory window is rewritten
+    /// in place as one row (0052), and then carries [`Compacted`].
     #[serde(rename = "agent.output")]
     AgentOutput {
         /// The run's id.
         run_id: RunId,
         /// What happened, in order.
         items: Vec<AgentOutputItem>,
+        /// Set when this row is a finished turn's batches rewritten as one (0052).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        compacted: Option<Compacted>,
     },
     /// Routing (#119) moved a run to another account after its subscription failed signed out
     /// or rate limited. Its usage from here on is charged to `toAccount`.
@@ -287,6 +301,37 @@ mod tests {
         .unwrap();
         assert_eq!(params.event, ParallaxEvent::Unknown);
         assert!(params.project.is_some());
+    }
+
+    #[test]
+    fn a_compacted_turn_encodes_from_and_omits_it_when_absent() {
+        let run = "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01";
+        let compacted: ParallaxEvent = serde_json::from_value(json!({
+            "kind": "agent.output",
+            "runId": run,
+            "items": [{"kind": "text", "text": "Hello"}],
+            "compacted": {"from": 4}
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&compacted).unwrap(),
+            json!({
+                "kind": "agent.output",
+                "runId": run,
+                "items": [{"kind": "text", "text": "Hello"}],
+                "compacted": {"from": 4}
+            })
+        );
+        let raw: ParallaxEvent = serde_json::from_value(json!({
+            "kind": "agent.output",
+            "runId": run,
+            "items": []
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&raw).unwrap(),
+            json!({ "kind": "agent.output", "runId": run, "items": [] })
+        );
     }
 
     #[test]

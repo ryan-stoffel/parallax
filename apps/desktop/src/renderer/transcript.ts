@@ -107,6 +107,8 @@ export interface Transcript {
   subagents?: Readonly<Record<string, Subagent>>;
   /** The last `seq` applied. Anything at or below it is a repeat. */
   seq: number;
+  /** Events applied so far, after the compacted-row rule, so a later rewrite can replace them. */
+  events?: LoggedEvent[];
 }
 
 /**
@@ -177,13 +179,85 @@ export function subagentRows(s: Subagent): Item[] {
 
 export const emptyTranscript: Transcript = { items: [], seq: 0 };
 
+/** The first `seq` of a compacted turn, when `event` is that rewritten row (0052). */
+export function compactedFrom(event: ParallaxEvent): number | undefined {
+  return event.kind === "agent.output" ? event.compacted?.from : undefined;
+}
+
+/**
+ * A reader that meets a compacted row first drops any `agent.output` of that run with `seq` in
+ * [`from`, the row's `seq`), then takes the row, replacing any held event at that `seq` (0052).
+ */
+export function applyCompacted(events: LoggedEvent[]): LoggedEvent[] {
+  const out: LoggedEvent[] = [];
+  const taken = new Map<string, { from: number; seq: number }[]>();
+  for (const event of events) {
+    const from = compactedFrom(event.event);
+    if (from !== undefined && event.event.kind === "agent.output") {
+      const runId = event.event.runId;
+      const ranges = taken.get(runId) ?? [];
+      ranges.push({ from, seq: event.seq });
+      taken.set(runId, ranges);
+      for (let i = out.length - 1; i >= 0; i--) {
+        const held = out[i]!;
+        if (held.seq === event.seq) {
+          out.splice(i, 1);
+          continue;
+        }
+        if (
+          held.event.kind === "agent.output" &&
+          held.event.runId === runId &&
+          held.seq >= from &&
+          held.seq < event.seq
+        )
+          out.splice(i, 1);
+      }
+      out.push(event);
+      continue;
+    }
+    if (event.event.kind === "agent.output") {
+      const ranges = taken.get(event.event.runId) ?? [];
+      if (ranges.some((range) => event.seq >= range.from && event.seq < range.seq)) continue;
+      if (ranges.some((range) => event.seq === range.seq)) continue;
+    }
+    out.push(event);
+  }
+  return out;
+}
+
 const isText = (v?: JsonValue) => (typeof v === "string" ? v : undefined);
 
 /**
  * Applies events, in `seq` order, for one run. Repeats and other runs' events are
  * skipped, and kinds this version doesn't know still count their `seq`.
  */
+function mergeHeld(held: LoggedEvent[], incoming: LoggedEvent[]): LoggedEvent[] {
+  const all = applyCompacted([...held, ...incoming]);
+  const bySeq = new Map<number, LoggedEvent>();
+  for (const event of all) bySeq.set(event.seq, event);
+  return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+}
+
 export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string): Transcript {
+  const incoming = applyCompacted(events);
+  const all = mergeHeld(t.events ?? [], incoming);
+  const replacing = incoming.some((event) => {
+    const from = compactedFrom(event.event);
+    return (
+      from !== undefined &&
+      event.event.kind === "agent.output" &&
+      event.event.runId === runId &&
+      from <= t.seq
+    );
+  });
+  if (replacing) {
+    const built = applyEventsInner({ ...emptyTranscript, run: t.run }, all, runId);
+    return { ...built, run: t.run ?? built.run, events: all };
+  }
+  return { ...applyEventsInner(t, incoming, runId), events: all };
+}
+
+function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): Transcript {
   let { run, seq } = t;
   const items = [...t.items];
   const subagents = { ...t.subagents };
@@ -244,8 +318,9 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
  * events never change it.
  */
 export function rebuild(t: Transcript, events: LoggedEvent[], runId: string): Transcript {
-  const built = applyEvents({ ...emptyTranscript, run: t.run }, events, runId);
-  return { ...built, run: t.run, seq: Math.max(t.seq, built.seq) };
+  const all = applyCompacted(events);
+  const built = applyEventsInner({ ...emptyTranscript, run: t.run }, all, runId);
+  return { ...built, run: t.run, seq: Math.max(t.seq, built.seq), events: all };
 }
 
 /** A run as `event` leaves it: `agent.started` sets it, and `agent.updated` and fallbacks change it. */

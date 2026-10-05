@@ -3,6 +3,7 @@ import { expect, test } from "vite-plus/test";
 import samples from "../../../../crates/parallax-protocol/samples/v1/agents.json";
 import type { AgentOutputItem, LoggedEvent, ParallaxEvent } from "../protocol/generated/protocol";
 import {
+  applyCompacted,
   applyEvents,
   emptyTranscript,
   groupWork,
@@ -191,6 +192,38 @@ test("a transcript opened at its end, built again with each older page, reads as
   }
   expect(t).toEqual(full);
   expect(of(t.items, "assistant").at(-1)).toMatchObject({ text: "Looking." });
+});
+
+test("a compacted row replaces raw batches of that turn and builds the same items (PLX-491)", () => {
+  const turnId = uuidv7();
+  const started = { kind: "turnStarted" as const, turnId, text: "Hi" };
+  const raw = [
+    output(started),
+    output({ kind: "textDelta", text: "Hel" }),
+    output({ kind: "textDelta", text: "lo" }),
+    output({ kind: "text", text: "Hello" }, { kind: "turnFinished", result: "Hello" }),
+  ];
+  const folded: LoggedEvent = {
+    ...raw[3]!,
+    event: {
+      kind: "agent.output",
+      runId,
+      items: [started, { kind: "text", text: "Hello" }, { kind: "turnFinished", result: "Hello" }],
+      compacted: { from: raw[0]!.seq },
+    },
+  };
+  const fromRaw = build(...raw);
+  const fromFolded = build(folded);
+  expect(of(fromFolded.items, "assistant").map((i) => i.text)).toEqual(
+    of(fromRaw.items, "assistant").map((i) => i.text),
+  );
+  expect(of(fromFolded.items, "user").at(-1)).toMatchObject({ text: "Hi", turnId });
+
+  // Newest-first: held raw batches, then the compacted row whose seq is already held.
+  expect(applyCompacted([...raw.slice(1), folded])).toEqual([folded]);
+  const t = applyEvents(build(...raw.slice(1)), [folded], runId);
+  expect(of(t.items, "assistant").map((i) => i.text)).toEqual(["Hello"]);
+  expect(of(t.items, "assistant")).toHaveLength(1);
 });
 
 test("a turn's result that repeats its last message isn't shown twice", () => {

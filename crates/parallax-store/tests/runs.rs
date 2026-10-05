@@ -340,6 +340,28 @@ fn a_page_of_run_events_stops_at_its_byte_budget_but_never_comes_back_empty() {
     assert!(!more);
 }
 
+#[test]
+fn a_before_page_inside_a_compacted_turn_carries_the_rewritten_row() {
+    let (_dir, store) = open();
+    let run = Uuid::now_v7();
+    store.append_event(&event(1, Some(run))).unwrap();
+    store.append_event(&event(2, Some(run))).unwrap();
+    let mut compacted = event(5, Some(run));
+    compacted.payload =
+        format!(r#"{{"kind":"agent.output","runId":"{run}","items":[],"compacted":{{"from":3}}}}"#);
+    store.append_event(&compacted).unwrap();
+    store.append_event(&event(6, Some(run))).unwrap();
+
+    let (page, more) = store.run_events_before(run, 4, 500, 10_000).unwrap();
+    let seqs: Vec<u64> = page.iter().map(|e| e.seq).collect();
+    assert_eq!(
+        seqs,
+        [5, 2, 1],
+        "the compacted row leads a newest-first page"
+    );
+    assert!(!more);
+}
+
 fn worktree_fields() -> WorktreeFields {
     WorktreeFields {
         repo_path: "/src/app".to_owned(),
