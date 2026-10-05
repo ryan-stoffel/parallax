@@ -757,3 +757,69 @@ async fn kept_after_restart(
     assert_eq!(needs_you, [true, false], "{items:?}");
     host.server.stop().await;
 }
+
+/// A committed answer retains its delivery error even when receipt UPDATE fails and DELETE
+/// remains allowed. Both user and coordinator retries must finish with the same failure.
+#[tokio::test]
+async fn an_answer_delivery_and_receipt_failure_retains_the_terminal_error() {
+    for coordinated in [false, true] {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (host, mut client, project, coordinator, child) = project_with_child(&seen).await;
+        let question = ask(&mut client, child, "Which port?", "8080")
+            .await
+            .unwrap();
+        let db = rusqlite::Connection::open(host.dir.path().join("plxd.sqlite3")).unwrap();
+        db.execute_batch("CREATE TRIGGER fail_answer_delivery BEFORE INSERT ON queued BEGIN SELECT RAISE(FAIL, 'answer delivery failed'); END;
+            CREATE TRIGGER fail_answer_receipt BEFORE UPDATE ON command_receipts BEGIN SELECT RAISE(FAIL, 'answer receipt failed'); END;").unwrap();
+        let mut commands = crate::support::Client::ready(&host.server.socket).await;
+        let id = uuid::Uuid::now_v7();
+        let params = QuestionAnswerParams {
+            question: question.id,
+            text: "9090".to_owned(),
+            from: coordinated.then_some(coordinator),
+        };
+        let first =
+            crate::commands::call_with_command::<QuestionAnswer>(&mut commands, params.clone(), id)
+                .await
+                .unwrap_err();
+        assert!(
+            first.message.contains("the child didn't get it"),
+            "{first:?}"
+        );
+        assert!(
+            first.message.contains("answer delivery failed"),
+            "{first:?}"
+        );
+        let retry = tokio::time::timeout(
+            Duration::from_secs(2),
+            crate::commands::call_with_command::<QuestionAnswer>(&mut commands, params, id),
+        )
+        .await
+        .expect("partial answer retry must terminate")
+        .unwrap_err();
+        assert_eq!(retry, first);
+        let listed = questions(&mut client, project).await;
+        assert_eq!(listed[0].answer.as_deref(), Some("9090"));
+        assert_eq!(
+            listed[0].status,
+            if coordinated {
+                QuestionStatus::Decided
+            } else {
+                QuestionStatus::Answered
+            }
+        );
+        assert!(queued(&mut client, child).await.is_empty());
+        let stored: Option<String> = db
+            .query_row(
+                "SELECT result FROM command_receipts WHERE command_id = ?1",
+                [id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            stored.is_none(),
+            "the incomplete claim must survive with DELETE permitted"
+        );
+        host.server.stop().await;
+    }
+}

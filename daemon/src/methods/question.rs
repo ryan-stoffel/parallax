@@ -208,6 +208,9 @@ async fn answer(
     {
         // The answer row already committed. Keep the failure so retry cannot deliver twice.
         let command_id = context.command_id;
+        if let Some(id) = command_id {
+            context.daemon.commands.applied_error(id, error.clone());
+        }
         let stored_error = error.clone();
         context
             .daemon
