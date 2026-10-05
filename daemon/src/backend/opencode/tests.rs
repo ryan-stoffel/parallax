@@ -256,12 +256,25 @@ fn launcher(dir: &TempDir, path: &str) -> (Launcher, PathBuf) {
 
 /// [`launcher`], with every proxy variable set to `proxy`.
 fn proxied(dir: &TempDir, path: &str, proxy: Option<&str>) -> (Launcher, PathBuf) {
+    proxied_except(dir, path, proxy, None)
+}
+
+/// [`proxied`], with `NO_PROXY` set to `except`.
+fn proxied_except(
+    dir: &TempDir,
+    path: &str,
+    proxy: Option<&str>,
+    except: Option<&str>,
+) -> (Launcher, PathBuf) {
     let root = dir.path().canonicalize().unwrap();
     let mut base: Environment = [("PATH", path.to_owned())].into_iter().collect();
     if let Some(proxy) = proxy {
         for name in ["http_proxy", "https_proxy", "HTTPS_PROXY", "ALL_PROXY"] {
             base.set(name, proxy);
         }
+    }
+    if let Some(except) = except {
+        base.set("NO_PROXY", except);
     }
     let launcher = Launcher::new(DataDir::new(root.join("data")).unwrap(), base);
     (launcher, root)
@@ -667,6 +680,17 @@ async fn inspecting_a_server_lists_its_models_and_version() {
         "{:?}",
         found.note
     );
+    // A host the environment's `NO_PROXY` names skips the proxy, as curl would without
+    // `--noproxy`: here it goes straight to a name that doesn't resolve.
+    let (except, _) = proxied_except(
+        &dir,
+        "/usr/bin:/bin",
+        Some(&server.url),
+        Some("intranet.invalid,opencode.example.invalid"),
+    );
+    let found = inspect(&except, &remote, false).await;
+    assert!(found.version.is_none(), "it went through the proxy");
+    assert!(found.note.unwrap().contains("couldn't reach"));
     let (dead_proxy, _) = proxied(&dir, "/usr/bin:/bin", Some("http://127.0.0.1:9"));
     let found = inspect(
         &dead_proxy,

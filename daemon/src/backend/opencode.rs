@@ -19,7 +19,7 @@
 //! plxd has no HTTP client of its own, so every call is a `curl` run, as a model service's model
 //! list is (0040): the credentials and the JSON body go to curl as a config on stdin, which `ps`
 //! never shows, and https works for a remote server. A loopback server is reached without the
-//! host's proxy, so none sees its password ([`LOOPBACK`]), and a URL must be `http://` or
+//! host's proxy, nor is one the environment's `NO_PROXY` names ([`no_proxy`]), and a URL must be `http://` or
 //! `https://`. The event stream is one `curl -N` on
 //! `/event` for the run's folder, read line by line, which fails once it is quiet for a minute,
 //! though the server sends a heartbeat every few seconds.
@@ -104,9 +104,24 @@ pub const PERMISSIONS: &[AgentPermission] = &[
     AgentPermission::Bypass,
 ];
 
-/// The hosts curl reaches without a proxy, so no proxy sees a local server's password. A remote
-/// server still goes through the host's proxy, which only tunnels https.
+/// The hosts curl always reaches without a proxy, so no proxy sees a local server's password.
+/// [`no_proxy`] adds the environment's own list, which `--noproxy` would otherwise replace.
 const LOOPBACK: &str = "127.0.0.1,localhost,::1";
+
+/// `--noproxy`'s list: [`LOOPBACK`], and the hosts `launcher`'s `NO_PROXY` or `no_proxy` names.
+/// Any other server goes through the host's proxy, which sees the password of an `http://` one.
+fn no_proxy(launcher: &Launcher) -> String {
+    let mut hosts = LOOPBACK.to_owned();
+    for name in ["NO_PROXY", "no_proxy"] {
+        if let Some(list) = launcher.base().get(name).and_then(|list| list.to_str())
+            && !list.trim().is_empty()
+        {
+            hosts.push(',');
+            hosts.push_str(list.trim());
+        }
+    }
+    hosts
+}
 
 /// The config a server plxd starts gets, unless the instance or plxd's environment sets one:
 /// without it, `OpenCode` ends the turn when it rejects a request's siblings with no message,
@@ -281,11 +296,12 @@ impl Server {
         let url = format!("{}{path}", self.url);
         let mut spec = ProcessSpec::new("curl", std::env::temp_dir());
         let max_time = CALL_TIMEOUT.as_secs().to_string();
+        let no_proxy = no_proxy(launcher);
         // `-q` first: a `.curlrc` could change what curl prints.
         spec.args = [
             "-q",
             "--noproxy",
-            LOOPBACK,
+            no_proxy.as_str(),
             "-sS",
             "--max-time",
             max_time.as_str(),
@@ -366,12 +382,13 @@ impl Server {
     fn events(&self, launcher: &Launcher, folder: &Path) -> Result<Process, String> {
         let url = format!("{}/event?directory={}", self.url, encode(folder));
         let mut spec = ProcessSpec::new("curl", std::env::temp_dir());
+        let no_proxy = no_proxy(launcher);
         // The server sends a heartbeat every few seconds, so a stream that goes quiet for a
         // minute is dead, such as a remote server's that the network dropped.
         spec.args = [
             "-q",
             "--noproxy",
-            LOOPBACK,
+            no_proxy.as_str(),
             "-sSN",
             "--fail",
             "--speed-limit",
