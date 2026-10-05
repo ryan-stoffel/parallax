@@ -1307,6 +1307,10 @@ export type ProviderInfo = {
 	 * instance's, and for an ACP agent its home folder's.
 	 */
 	loginEnv?: Array<ProviderEnvVar>,
+	/**
+	 * Why the last Cursor browser sign-in failed (0053), until the next one starts.
+	 */
+	signInError?: string,
 };
 
 /**

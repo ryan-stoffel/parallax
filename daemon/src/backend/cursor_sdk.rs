@@ -5,7 +5,7 @@
 //! `CURSOR_*` is dropped. A `CURSOR_API_KEY` set on the provider instance wins over the login, as
 //! in T3 Code.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -296,10 +296,15 @@ pub(crate) async fn inspect(
     report
 }
 
+/// What Settings shows when a browser login fails, T3 Code's wording.
+const SIGN_IN_FAILED: &str = "Cursor sign-in failed or expired. Start sign-in again.";
+
 /// A Cursor account login in the browser, one at a time per daemon.
 pub struct CursorAuth {
     launcher: Launcher,
-    pending: Mutex<Option<Signals>>,
+    pending: Arc<Mutex<Option<Arc<Signals>>>>,
+    /// Instances whose last login failed after its URL went out, until the next one starts.
+    failed: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl CursorAuth {
@@ -308,7 +313,8 @@ impl CursorAuth {
     pub fn new(launcher: Launcher) -> Self {
         Self {
             launcher,
-            pending: Mutex::new(None),
+            pending: Arc::default(),
+            failed: Arc::default(),
         }
     }
 
@@ -319,6 +325,10 @@ impl CursorAuth {
     /// When the sidecar cannot start, or it ends without a URL.
     pub async fn sign_in(&self, instance: &str) -> Result<String, String> {
         self.cancel();
+        self.failed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(instance);
         let cwd = self.launcher.data_dir().root().to_owned();
         let spec = command(&self.launcher, instance, "login", &cwd, &[])
             .map_err(|error| error.to_string())?;
@@ -357,9 +367,44 @@ impl CursorAuth {
         })
         .await
         .map_err(|_| "timed out waiting for the sign-in URL".to_owned())??;
-        *self.pending.lock().unwrap_or_else(PoisonError::into_inner) = Some(signals);
-        tokio::spawn(async move { while process.next().await.is_some() {} });
+        let signals = Arc::new(signals);
+        *self.pending.lock().unwrap_or_else(PoisonError::into_inner) = Some(signals.clone());
+        let (pending, failed, instance) = (
+            self.pending.clone(),
+            self.failed.clone(),
+            instance.to_owned(),
+        );
+        // The login ends when the browser finishes or it times out. A failure is kept for
+        // `providers/list` unless the login was cancelled or replaced.
+        tokio::spawn(async move {
+            let mut success = false;
+            while let Some(output) = process.next().await {
+                if let Output::Exited(exit) = output {
+                    success = exit.info.success();
+                }
+            }
+            let mut pending = pending.lock().unwrap_or_else(PoisonError::into_inner);
+            if pending.as_ref().is_some_and(|p| Arc::ptr_eq(p, &signals)) {
+                pending.take();
+                if !success {
+                    failed
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .insert(instance, SIGN_IN_FAILED.to_owned());
+                }
+            }
+        });
         Ok(url)
+    }
+
+    /// Why `instance`'s last browser login failed, if it did.
+    #[must_use]
+    pub fn failure(&self, instance: &str) -> Option<String> {
+        self.failed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(instance)
+            .cloned()
     }
 
     /// Stops a login that is still waiting on the browser.
@@ -668,8 +713,10 @@ impl Driver {
             .map_err(|_| ())
     }
 
+    /// Closes the sidecar's stdin once it is idle with no turn plxd sent still to start, so a
+    /// follow-up written just before `idle` isn't cancelled by the close.
     fn close_if_idle(&mut self) {
-        if !self.idle || self.held.now() {
+        if !self.idle || self.held.now() || !self.turns.is_empty() {
             return;
         }
         if let Ok(follow) = self.control.try_recv() {
@@ -931,7 +978,8 @@ mod tests {
     use super::CursorSdkBackend;
     use crate::backend::process::{Environment, Launcher};
     use crate::backend::{
-        AccountRef, Backend, Credential, Event, Outcome, Overrides, RunRequest, ToolPolicy,
+        AccountRef, Backend, Credential, Event, FollowUp, Outcome, Overrides, RunRequest,
+        ToolPolicy, TurnId,
     };
     use crate::paths::DataDir;
 
@@ -1034,6 +1082,96 @@ esac
         assert!(
             leaked.trim().is_empty(),
             "CURSOR_* reached the sidecar: {leaked}"
+        );
+    }
+
+    /// A login that fails after its URL went out is kept for `providers/list`, as T3 Code's
+    /// "failed" phase, and the next sign-in clears it.
+    #[tokio::test]
+    async fn a_login_that_fails_in_the_browser_is_reported() {
+        const FAILS: &str = "#!/bin/sh\n\
+            printf '%s\\n' '{\"type\":\"url\",\"url\":\"https://cursor.com/login\"}'\n\
+            sleep 0.2\n\
+            printf '%s\\n' '{\"type\":\"error\",\"failure\":\"failed\",\"message\":\"denied\"}'\n\
+            exit 1\n";
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let program = root.join("fake-cursor");
+        fs::write(&program, FAILS).unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        let auth = super::CursorAuth::new(launcher(&root, &program));
+        assert_eq!(
+            auth.sign_in("cursor").await.unwrap(),
+            "https://cursor.com/login"
+        );
+        assert_eq!(auth.failure("cursor"), None, "still waiting on the browser");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while auth.failure("cursor").is_none() {
+            assert!(std::time::Instant::now() < deadline, "never reported");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(auth.failure("other"), None);
+        let _ = auth.sign_in("cursor").await;
+        assert_eq!(auth.failure("cursor"), None, "a new sign-in clears it");
+        auth.cancel();
+    }
+
+    /// A follow-up plxd wrote before the sidecar said `idle` keeps stdin open: closing it would
+    /// cancel that turn in the sidecar.
+    #[tokio::test]
+    async fn a_follow_up_sent_before_idle_keeps_stdin_open() {
+        const LATE_IDLE: &str = r#"#!/bin/sh
+dir="${FAKE_CURSOR_DIR:?}"
+read -r start
+read -r follow
+printf '%s\n' "$follow" >> "$dir/stdin"
+printf '%s\n' '{"type":"session","agentId":"agent-1","model":"auto"}'
+printf '%s\n' '{"type":"turnStarted"}' '{"type":"turnFinished","result":"one"}' '{"type":"idle"}'
+{ while read -r _; do :; done; touch "$dir/eof"; } <&0 &
+sleep 1
+[ -f "$dir/eof" ] && touch "$dir/closed-early"
+printf '%s\n' '{"type":"turnStarted"}' '{"type":"turnFinished","result":"two"}' '{"type":"idle"}'
+wait
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let program = root.join("fake-cursor");
+        fs::write(&program, LATE_IDLE).unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut env = Environment::empty();
+        env.set("PATH", "/usr/bin:/bin");
+        env.set("PLXD_CURSOR_SDK", &program);
+        env.set("FAKE_CURSOR_DIR", &root);
+        let launcher = Launcher::new(DataDir::new(root.join("data")).unwrap(), env);
+        let started = CursorSdkBackend::new(launcher)
+            .start(request(root.clone()))
+            .unwrap();
+        started
+            .run
+            .send(FollowUp {
+                turn_id: TurnId::generate(),
+                text: "and the tests".into(),
+                images: Vec::new(),
+                steer: false,
+            })
+            .unwrap();
+        let mut events = started.events;
+        while let Some(event) = tokio::time::timeout(Duration::from_secs(5), events.next())
+            .await
+            .unwrap()
+        {
+            if matches!(event, Event::Finished { .. }) {
+                break;
+            }
+        }
+        assert!(
+            fs::read_to_string(root.join("stdin"))
+                .unwrap()
+                .contains("and the tests")
+        );
+        assert!(
+            !root.join("closed-early").exists(),
+            "stdin closed with a turn still to start"
         );
     }
 

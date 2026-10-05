@@ -157,6 +157,10 @@ pub struct ProviderInfo {
     /// instance's, and for an ACP agent its home folder's.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub login_env: Vec<ProviderEnvVar>,
+    /// Why the last Cursor browser sign-in failed (0053), until the next one starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sign_in_error: Option<String>,
 }
 
 /// Params of `providers/list`.

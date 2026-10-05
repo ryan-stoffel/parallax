@@ -1323,6 +1323,7 @@ fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
         coordinator,
         login,
         login_env,
+        sign_in_error: None,
     }
 }
 

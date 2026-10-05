@@ -51,7 +51,6 @@ const {
   FileCredentialStore,
   InMemoryCredentialStore,
   JsonlLocalAgentStore,
-  createAgentPlatform,
 } = sdk;
 
 /** Every Cursor settings layer the Cursor CLI loads, as T3 Code passes them. */
@@ -203,17 +202,19 @@ async function run() {
 
   let current = null;
   let shuttingDown = false;
-  let supersede = null;
+  // Steers that cancelled the running turn, oldest first. Each runs as its own turn, as T3 Code
+  // interrupts and starts the next turn, so none is lost when two arrive close together.
+  const steers = [];
   const arm = () => {
     lines.setImmediate((message) => {
       if (!message || message.type === "cancel") {
         shuttingDown = true;
-        supersede = null;
+        steers.length = 0;
         current?.cancel().catch(() => {});
         return true;
       }
       if (message.type === "send" && message.steer && current) {
-        supersede = message;
+        steers.push(message);
         current.cancel().catch(() => {});
         return true;
       }
@@ -236,10 +237,9 @@ async function run() {
       emit({ type: "turnFinished", result: null });
       break;
     }
-    if (supersede) {
+    if (steers.length) {
       emit({ type: "turnFinished", result: outcome.result ?? null });
-      next = supersede;
-      supersede = null;
+      next = steers.shift();
       continue;
     }
     // A plan ends the turn, as in T3 Code: the app shows it, and building it is the next message.
@@ -256,8 +256,10 @@ async function run() {
 
 /** The agent options T3 Code's `makeCursorAgentOptions` builds, for Parallax's modes. */
 async function openAgent(apiKey, store, start, permission) {
+  // T3 Code warms a sandboxed workspace before an unsandboxed run, because the SDK caches
+  // "sandbox unsupported" per process. Each run here is its own process, so there is no later run
+  // for that cache to break.
   const sandboxed = permission !== "bypass";
-  if (!sandboxed) await primeSandbox(apiKey, start.cwd);
   const options = {
     apiKey,
     model: { id: start.model || "auto" },
@@ -280,23 +282,6 @@ async function openAgent(apiKey, store, start, permission) {
 
 function mcpOf(start) {
   return start.mcp && typeof start.mcp === "object" ? { mcpServers: start.mcp } : {};
-}
-
-/**
- * The SDK decides once per process whether sandboxing works. After an unsandboxed run it caches
- * "unsupported", so a bare sandboxed workspace is warmed first, as T3 Code does. Best effort.
- */
-async function primeSandbox(apiKey, cwd) {
-  try {
-    const platform = await createAgentPlatform({ workspaceRef: cwd });
-    const release = await platform.prewarmLocalWorkspace({
-      apiKey,
-      local: { cwd, settingSources: [], sandboxOptions: { enabled: true } },
-    });
-    await release();
-  } catch {
-    // A sandboxed run later in this process reports the SDK's own error.
-  }
 }
 
 function modeOf(permission) {

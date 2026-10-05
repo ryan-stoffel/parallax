@@ -965,6 +965,13 @@ function InstancePane({
   useEffect(() => {
     if (cursorWaiting && info.signedIn === true) setCursorWaiting(false);
   }, [cursorWaiting, info.signedIn]);
+  // plxd reports a login that failed in the browser or was rejected, as T3 Code's "failed" phase.
+  useEffect(() => {
+    if (cursorWaiting && info.signInError) {
+      setCursorWaiting(false);
+      setError(info.signInError);
+    }
+  }, [cursorWaiting, info.signInError]);
   const signInCursor = async () => {
     setError(undefined);
     const answer = await window.parallax.request(hostId, "cursor/signIn", {

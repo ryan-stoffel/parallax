@@ -322,7 +322,15 @@ async fn providers_method(
     request: &Request,
 ) -> Option<Result<Value, ErrorObject>> {
     let daemon = &context.daemon;
-    let list = |refresh| daemon.providers.list(&daemon.cli_detector, refresh);
+    let list = |refresh| async move {
+        let mut listed = daemon.providers.list(&daemon.cli_detector, refresh).await;
+        for info in &mut listed.providers {
+            if info.instance.kind == parallax_protocol::ProviderKind::Cursor {
+                info.sign_in_error = daemon.cursor.failure(&info.instance.id);
+            }
+        }
+        listed
+    };
     Some(match request.method.as_str() {
         ProvidersList::NAME => {
             handle::<ProvidersList, _, _>(request, |p| async move { Ok(list(p.refresh).await) })

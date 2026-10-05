@@ -952,6 +952,31 @@ describe("on a plxd with providers", () => {
     expect(calls("cursor/signOut")[0]!.params).toEqual({ instance: "cursor" });
   });
 
+  test("a Cursor sign-in that fails in the browser stops waiting and says so", async () => {
+    const cursor = {
+      instance: instance("cursor", "cursor", "Cursor"),
+      installed: true,
+      signedIn: false,
+      models: [],
+      permissions: ["edit", "plan", "auto", "bypass"],
+      efforts: false,
+      coordinator: true,
+    } satisfies (typeof listed)[number];
+    listed = [cursor];
+    answers["cursor/signIn"] = () => ({ result: { url: "https://cursor.com/loginDeepControl" } });
+    answers["cursor/signInCancel"] = () => ({ result: {} });
+    window.open = vi.fn();
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+
+    await renderSettings();
+    await click(button(section("Account"), "Sign in"));
+    expect(section("Account").textContent).toContain("Approve the sign-in in your browser");
+    listed = [{ ...cursor, signInError: "Cursor sign-in failed or expired. Start sign-in again." }];
+    await act(() => vi.advanceTimersByTimeAsync(2100));
+    expect(pane().textContent).toContain("Cursor sign-in failed or expired");
+    expect(section("Account").textContent).not.toContain("Approve the sign-in in your browser");
+  });
+
   test("a Cursor instance with its own CURSOR_API_KEY has no browser sign-in", async () => {
     listed = [
       {
