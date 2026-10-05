@@ -432,6 +432,24 @@ pub struct FollowUp {
     pub steer: bool,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How long a test's stdin writers wait between writing a follow-up and reporting it, so the
+    /// CLI can answer it before its driver hears it was written (PLX-523). Per thread, so it
+    /// reaches the writers of one `#[tokio::test]` on its current-thread runtime.
+    pub(crate) static REPORT_STALL: std::cell::Cell<std::time::Duration> =
+        const { std::cell::Cell::new(std::time::Duration::ZERO) };
+}
+
+/// A test's stdin writer's pause between writing a follow-up and reporting it.
+#[cfg(test)]
+async fn report_stall() {
+    let stall = REPORT_STALL.get();
+    if !stall.is_zero() {
+        tokio::time::sleep(stall).await;
+    }
+}
+
 /// The answer to a permission request (PLX-222).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Answer {

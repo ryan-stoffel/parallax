@@ -414,6 +414,8 @@ async fn write_inputs(
         line.push('\n');
         broken = broken || stdin.write_all(line.as_bytes()).await.is_err();
         if let Some(turn_id) = turn_id {
+            #[cfg(test)]
+            super::report_stall().await;
             let result = if broken {
                 Delivery::Failed(turn_id)
             } else {
@@ -546,11 +548,11 @@ async fn drive(
             }
             output = process.next() => {
                 // The CLI can read a follow-up and answer it before the writer reports writing
-                // it, so a line waits for that report and comes after its turn's TurnStarted
-                // (PLX-523). ponytail: this stops reading the CLI's output meanwhile, which hangs
+                // it, so its output waits for that report and comes after its turn's TurnStarted
+                // (PLX-523); its exit doesn't, so a follow-up it never answered is dropped. ponytail: this stops reading the CLI's output meanwhile, which hangs
                 // a CLI that leaves a pipe's worth of follow-ups unread and then fills its stdout;
                 // scripts' follow-ups are far smaller.
-                if matches!(output, Some(Output::Line(_))) {
+                if !matches!(output, Some(Output::Exited(_)) | None) {
                     while writing > 0
                         && let Some(delivery) = recv(&mut stdin.results).await
                     {

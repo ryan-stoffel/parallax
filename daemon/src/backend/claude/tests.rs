@@ -1569,6 +1569,53 @@ async fn a_follow_up_can_be_its_own_turn_and_stdin_waits_for_it() {
     );
 }
 
+/// PLX-523: a follow-up the CLI answers before the writer reports writing it, as Claude Code does
+/// a local slash command, still starts and ends its turn, and stdin then closes.
+#[tokio::test]
+async fn a_follow_up_answered_before_its_write_is_reported_still_ends() {
+    crate::backend::REPORT_STALL.set(Duration::from_millis(300));
+    let fake = Fake::new("follow-up-turns");
+    let Started { run, mut events } = launch(&fake.backend, request(&fake.root())).await;
+    assert!(matches!(
+        next(&mut events).await,
+        Event::SessionStarted { .. }
+    ));
+    run.send(FollowUp {
+        turn_id: turn(TURN_2),
+        text: "And now the docs.".into(),
+        images: Vec::new(),
+        steer: false,
+    })
+    .unwrap();
+    let all = rest(&mut events).await;
+    let turns: Vec<&Event> = all
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::TurnStarted { .. } | Event::TurnFinished { .. }
+            )
+        })
+        .collect();
+    assert_eq!(
+        turns,
+        [
+            &Event::TurnFinished {
+                turn_id: Some(turn(TURN_1)),
+                result: Some("First answer.".into())
+            },
+            &Event::TurnStarted {
+                turn_id: Some(turn(TURN_2))
+            },
+            &Event::TurnFinished {
+                turn_id: Some(turn(TURN_2)),
+                result: Some("Second answer.".into())
+            },
+        ]
+    );
+    assert!(matches!(outcome(&all), Outcome::Completed { .. }));
+}
+
 #[tokio::test]
 async fn images_go_before_the_text_as_base64_blocks_and_a_message_of_images_alone_has_no_text() {
     let png = PromptImage {
