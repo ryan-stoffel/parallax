@@ -37,7 +37,7 @@
       "subscriptions.open.events": 160,
       "subscriptions.open.bytes": 160000,
       "plxd.rssGrowthMiB": 30,
-      "plxd.cpuS": 8,
+      "plxd.cpuS": 6.5,
       "latencyMs.p95": 50
     }
   }
