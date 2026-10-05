@@ -808,7 +808,7 @@ export function Composer({
     disabledReason ??
     hint ??
     (newThread
-      ? "Describe a change, paste an error, or drop in a plan"
+      ? "Build a feature, fix a bug, paste an image, use /skills, @files or threads"
       : "Reply, add detail, or steer what it does next");
   // Its props are read again on every render, so its handlers see this render's state.
   const editor: Editor = useEditor({
