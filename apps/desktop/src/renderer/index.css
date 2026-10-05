@@ -1315,11 +1315,35 @@ body {
   animation: none;
 }
 
-.panel-divider:hover,
-.panel-divider:focus {
-  background: #000;
+/* A faint line plus a short dashed grip, so the divider reads as draggable without shouting. */
+.panel-divider::before,
+.panel-divider::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  opacity: 0;
+  transition: opacity 120ms;
+  transform: translateX(-50%);
 }
-:root.dark .panel-divider:hover,
-:root.dark .panel-divider:focus {
-  background: #fff;
+.panel-divider::before {
+  inset-block: 0;
+  width: 2px;
+  background: color-mix(in srgb, var(--muted-foreground) 25%, transparent);
+}
+.panel-divider::after {
+  top: 50%;
+  height: 56px;
+  width: 2px;
+  margin-top: -28px;
+  background: repeating-linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--muted-foreground) 70%, transparent) 0 3px,
+    transparent 3px 7px
+  );
+}
+.panel-divider:hover::before,
+.panel-divider:hover::after,
+.panel-divider:focus-visible::before,
+.panel-divider:focus-visible::after {
+  opacity: 1;
 }

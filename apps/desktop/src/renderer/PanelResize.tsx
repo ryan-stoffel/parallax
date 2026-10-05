@@ -35,6 +35,7 @@ export function PanelResize({
     <div
       role="separator"
       aria-label={`Resize ${side === "left" ? "sidebar" : "side panel"}`}
+      title={`Drag to resize ${side === "left" ? "sidebar" : "side panel"}`}
       aria-orientation="vertical"
       aria-valuenow={Math.round(width)}
       tabIndex={0}
