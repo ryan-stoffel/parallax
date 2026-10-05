@@ -50,6 +50,7 @@ pub(crate) struct Commands {
 #[derive(Clone, Debug)]
 enum CommandOutcome {
     Ready(Result<Value, ErrorObject>),
+    AppliedError(ErrorObject),
 }
 
 /// What [`claim`] decided.
@@ -107,6 +108,13 @@ impl Commands {
         let tx = lock(&self.waiters).remove(command_id);
         if let Some(tx) = tx {
             let _ = tx.send(Some(CommandOutcome::Ready(outcome)));
+        }
+    }
+
+    /// A side effect happened before its final write failed. Never delete this claim on error.
+    pub(crate) fn applied_error(&self, command_id: Uuid, error: ErrorObject) {
+        if let Some(tx) = lock(&self.waiters).get(&command_id.hyphenated().to_string()) {
+            tx.send_replace(Some(CommandOutcome::AppliedError(error)));
         }
     }
 
@@ -310,8 +318,10 @@ async fn claim<M: RequestMethod>(
 async fn wait_for(
     waiting: &mut watch::Receiver<Option<CommandOutcome>>,
 ) -> Result<Option<Result<Value, ErrorObject>>, ErrorObject> {
-    if let Some(CommandOutcome::Ready(ready)) = waiting.borrow().clone() {
-        return Ok(Some(ready));
+    match waiting.borrow().clone() {
+        Some(CommandOutcome::Ready(ready)) => return Ok(Some(ready)),
+        Some(CommandOutcome::AppliedError(error)) => return Ok(Some(Err(error))),
+        None => {}
     }
     waiting
         .changed()
@@ -319,6 +329,7 @@ async fn wait_for(
         .map_err(|_| ErrorObject::internal_error("the command waiter closed"))?;
     match waiting.borrow().clone() {
         Some(CommandOutcome::Ready(ready)) => Ok(Some(ready)),
+        Some(CommandOutcome::AppliedError(error)) => Ok(Some(Err(error))),
         None => Err(ErrorObject::internal_error("the command waiter closed")),
     }
 }
@@ -333,7 +344,13 @@ async fn finish(
         Err(error) => serde_json::to_string(error),
     };
     let id = command_id.to_owned();
-    let fill = outcome.is_ok();
+    let applied_error = lock(&daemon.commands.waiters)
+        .get(command_id)
+        .and_then(|tx| match tx.borrow().clone() {
+            Some(CommandOutcome::AppliedError(error)) => Some(error),
+            _ => None,
+        });
+    let fill = outcome.is_ok() || applied_error.is_some();
     let persisted = daemon
         .store
         .run(&CancellationToken::new(), move |db| {
@@ -368,6 +385,7 @@ async fn finish(
         })
         .await;
     if let Err(error) = persisted {
+        let error = applied_error.unwrap_or(error);
         // Keep a terminal failure for this process: the durable claim may still be incomplete.
         // A later retry must fail explicitly rather than create a waiter with no owner.
         if let Some(tx) = lock(&daemon.commands.waiters).get(command_id) {

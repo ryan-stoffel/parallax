@@ -1747,8 +1747,25 @@ impl Actor {
                         self.queued.insert(at, queued);
                         return Err(error);
                     }
-                    self.store_queue_command(&self.queued.clone(), command_id)
-                        .await?;
+                    if let Err(error) = self
+                        .store_queue_command(&self.queued.clone(), command_id)
+                        .await
+                    {
+                        // Delivery already happened. Remove its durable queue entry without the
+                        // failing receipt update, and retain the error even if persistence fails.
+                        let reconciled = self.store_queue_for(&self.queued.clone()).await;
+                        let error = match reconciled {
+                            Ok(()) => error,
+                            Err(reconcile) => ErrorObject::internal_error(format!(
+                                "{}; could not reconcile the steered queue: {}",
+                                error.message, reconcile.message
+                            )),
+                        };
+                        if let Some(id) = command_id {
+                            self.daemon.commands.applied_error(id, error.clone());
+                        }
+                        return Err(error);
+                    }
                 }
             }
         }

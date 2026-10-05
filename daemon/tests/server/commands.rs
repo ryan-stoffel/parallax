@@ -194,7 +194,7 @@ async fn names(client: &mut Client) -> Vec<String> {
         .collect()
 }
 
-async fn call_with_command<M: RequestMethod>(
+pub(crate) async fn call_with_command<M: RequestMethod>(
     client: &mut Client,
     params: M::Params,
     command_id: Uuid,

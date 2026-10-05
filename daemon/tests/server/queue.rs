@@ -472,3 +472,93 @@ async fn a_steer_interrupts_a_cli_that_takes_no_messages_and_resumes_with_it() {
     until(&mut client, updated_to(AgentStatus::Cancelled)).await;
     host.server.stop().await;
 }
+
+#[tokio::test]
+async fn a_steer_receipt_failure_retains_the_error_and_removes_the_delivered_queue_entry() {
+    // First allow error receipts, then fail every UPDATE. DELETE is allowed in both cases.
+    for persistent in [false, true] {
+        let script = vec![
+            init("receipt-steer"),
+            text("Working"),
+            Step::AwaitFollowUp,
+            text("Steered once"),
+            Step::Hang,
+        ];
+        let host = Host::start(temp_dir(), fake(script));
+        let mut client = host.client().await;
+        let project = create(&mut client, project_params(host.dir.path())).await;
+        subscribe(&mut client, project.id, 0).await;
+        let params = start_params(project.id, "Work");
+        let run_id = params.run_id;
+        client.call::<AgentStart>(params).await.unwrap();
+        until(&mut client, working()).await;
+        let turn = TurnId::generate();
+        client
+            .call::<AgentSend>(send_params(run_id, turn, "Change course"))
+            .await
+            .unwrap();
+        let db = rusqlite::Connection::open(host.dir.path().join("plxd.sqlite3")).unwrap();
+        let condition = if persistent {
+            "1"
+        } else {
+            "json_extract(NEW.result, '$.code') IS NULL"
+        };
+        db.execute_batch(&format!(
+            "CREATE TRIGGER fail_steer_receipt BEFORE UPDATE ON command_receipts WHEN {condition} BEGIN SELECT RAISE(FAIL, 'steer receipt failed'); END;"
+        )).unwrap();
+        let mut commands = crate::support::Client::ready(&host.server.socket).await;
+        let id = uuid::Uuid::now_v7();
+        let params = QueueSteerParams { run_id, id: turn };
+        let first =
+            crate::commands::call_with_command::<QueueSteer>(&mut commands, params.clone(), id)
+                .await
+                .unwrap_err();
+        assert!(first.message.contains("steer receipt failed"), "{first:?}");
+        // The backend's output proves steering succeeded before the receipt failed.
+        until(
+            &mut client,
+            has_item(AgentOutputItem::Text {
+                message_id: None,
+                text: "Steered once".to_owned(),
+            }),
+        )
+        .await;
+        let retry = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::commands::call_with_command::<QueueSteer>(&mut commands, params, id),
+        )
+        .await
+        .expect("partial command retry must terminate")
+        .unwrap_err();
+        assert_eq!(retry, first);
+        assert!(queue(&mut client, run_id).await.is_empty());
+        let left: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM queued WHERE run_id = ?1",
+                [run_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "delivered message must not remain queued on disk");
+        let stored: Option<String> = db
+            .query_row(
+                "SELECT result FROM command_receipts WHERE command_id = ?1",
+                [id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        if persistent {
+            assert!(
+                stored.is_none(),
+                "claim must survive even when error persistence fails"
+            );
+        } else {
+            assert_eq!(
+                serde_json::from_str::<parallax_protocol::jsonrpc::ErrorObject>(&stored.unwrap())
+                    .unwrap(),
+                first
+            );
+        }
+        host.server.stop().await;
+    }
+}
