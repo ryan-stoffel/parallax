@@ -245,7 +245,7 @@ async fn codexs_plan_comes_from_the_app_server_only_when_signed_in() {
     env.set("FAKE_CLI_EXIT", "0");
     env.set(
         "FAKE_CLI_APP_SERVER_RESPONSE",
-        r#"{"id":1,"result":{"planType":"plus"}}"#,
+        r#"{"id":1,"result":{"account":{"type":"chatgpt","planType":"plus"}}}"#,
     );
     let clis = detect(&fixture, env).await;
     let codex = find(&clis, CliKind::Codex);
@@ -385,7 +385,7 @@ async fn detection_never_touches_files_under_vendor_config_directories() {
     env.set("FAKE_CLI_ABOUT_STDOUT", "Subscription Tier: Pro+\n");
     env.set(
         "FAKE_CLI_APP_SERVER_RESPONSE",
-        r#"{"id":1,"result":{"planType":"plus"}}"#,
+        r#"{"id":1,"result":{"account":{"type":"chatgpt","planType":"plus"}}}"#,
     );
     let clis = detect(&fixture, env).await;
     assert_eq!(clis.len(), 3);

@@ -117,7 +117,7 @@ const button = (within: Element, name: string) =>
 const tabs = () => [...document.querySelectorAll('[role="tab"]')].map((t) => t.textContent);
 const tab = (name: string) =>
   [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find((t) =>
-    t.textContent?.startsWith(name),
+    t.textContent?.trim().startsWith(name),
   )!;
 const pane = () => visible('[role="tabpanel"]');
 // The Work key's row.
@@ -747,11 +747,8 @@ describe("on a plxd with providers", () => {
 
   test("lists the host's instances, and a switch turns one off on the host", async () => {
     await renderSettings();
-    expect(tabs()).toEqual([
-      "Claude Code2.1.281Authenticated · ryan@example.com",
-      "CodexNot authenticated",
-    ]);
-    expect(rows("Account")[0]).toBe("Display nameAuthenticated as ryan@example.com");
+    expect(tabs()).toEqual(["Claude Code2.1.281Authenticated", "CodexNot authenticated"]);
+    expect(rows("Account")[1]).toBe("AccountAuthenticated as ryan@example.com");
     expect(calls("accounts/list")).toEqual([]);
 
     await click(
@@ -764,6 +761,50 @@ describe("on a plxd with providers", () => {
       document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Use Claude Code"]')!
         .disabled,
     ).toBe(true);
+  });
+
+  test("Remove beside Refresh and + removes the chosen provider once it's confirmed", async () => {
+    answers["providers/remove"] = (p) => {
+      listed = listed.filter((each) => each.instance.id !== p["id"]);
+      return result();
+    };
+    await renderSettings();
+    await click(tab("Codex"));
+    await click(document.querySelector<HTMLElement>('[aria-label="Remove Codex"]')!);
+    expect(calls("providers/remove")).toEqual([]);
+    await click(button(document.body, "Cancel"));
+    await click(document.querySelector<HTMLElement>('[aria-label="Remove Codex"]')!);
+    await click(button(document.body, "Remove"));
+    expect(calls("providers/remove")[0]!.params).toEqual({ id: "codex" });
+    expect(tabs()).toEqual(["Claude Code2.1.281Authenticated"]);
+  });
+
+  test("an agent Parallax installs offers Install when it isn't installed, and a custom binary doesn't", async () => {
+    listed[1] = {
+      ...listed[1]!,
+      instance: instance("pi", "pi", "Pi"),
+      installed: false,
+      signedIn: undefined,
+      note: "pi isn't installed on this host",
+    };
+    await renderSettings();
+    expect(tabs()[1]!.trim()).toBe("PiNot installed");
+    await click(tab("Pi"));
+    expect(rows("Account")[1]).toBe("AccountPi isn't installed on this hostInstall");
+
+    listed[1] = { ...listed[1]!, instance: { ...listed[1]!.instance, program: "/opt/npx" } };
+    unmount();
+    await renderSettings();
+    await click(tab("Pi"));
+    expect(rows("Account")[1]).toBe("AccountPi isn't installed on this host");
+
+    // Pi's installer puts `pi` on the host, not the 0.x one this instance runs.
+    const env = [{ name: "PI_ACP_PI_COMMAND", value: "pi-0.73", secret: false }];
+    listed[1] = { ...listed[1]!, instance: { ...instance("pi", "pi", "Pi"), env } };
+    unmount();
+    await renderSettings();
+    await click(tab("Pi"));
+    expect(rows("Account")[1]).toBe("AccountPi isn't installed on this host");
   });
 
   const dialog = () => document.querySelector("dialog")!;
