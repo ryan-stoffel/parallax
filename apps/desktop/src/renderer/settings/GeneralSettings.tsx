@@ -1,16 +1,35 @@
 import { useEffect, useState } from "react";
 
 import type { OpenTarget } from "../../preload/bridge";
+import type { AgentPermission } from "../../protocol/generated/protocol";
+import { accessOptions } from "../Composer";
 import { useConnection } from "../ConnectionStatus";
+import { EffortMenu } from "../EffortMenu";
 import { localId, useHosts } from "../hosts";
+import { ModelMenu } from "../ModelMenu";
+import { useCatalog, type Provider } from "../models";
 import { nameOf, OPEN_TARGET_KEY } from "../OpenMenu";
+import {
+  behaviorPrefs,
+  newThreadPrefs,
+  setBehaviorPrefs,
+  setNewThreadPrefs,
+  type BehaviorPrefs,
+} from "../prefs";
+import { workspaces } from "../RunTargetMenu";
 import { archivePageSize, sidebarPrefs, type SidebarPrefs } from "../sidebarPrefs";
+import { Picker } from "../ui";
 import { notices } from "./licenses";
 import { HostPicker, PageTitle, quietButton, Row, Section, Switch } from "./parts";
 
+const selectClass = "rounded-md border border-border bg-background px-2 py-1 text-[13px]";
+/** The composer's own pickers are borderless; on a settings row they get the select's outline. */
+const pickerBox = "rounded-md border border-border bg-background";
+
 /**
- * Settings > General: where Open sends a folder, usage limits on a host, and the app's version
- * and bundled-font notices.
+ * Settings > General: what new threads start with, the sidebar's organization, where Open sends a
+ * folder, how the app behaves, usage limits on a host, and the app's version and bundled-font
+ * notices.
  */
 export function GeneralSettings() {
   const [showNotices, setShowNotices] = useState(false);
@@ -29,7 +48,8 @@ export function GeneralSettings() {
   return (
     <>
       <PageTitle title="General" />
-      <Section title="Sidebar">
+      <NewThreads />
+      <Section title="Organization">
         <Row
           title="Working section"
           description="While a thread is working, list it under Working, above Archived. Off keeps it in Threads."
@@ -64,7 +84,7 @@ export function GeneralSettings() {
               localStorage.setItem(OPEN_TARGET_KEY, e.target.value);
               setChosen(e.target.value);
             }}
-            className="rounded-md border border-border bg-background px-2 py-1 text-[13px]"
+            className={selectClass}
           >
             {targets.map((t) => (
               <option key={t} value={t}>
@@ -74,6 +94,7 @@ export function GeneralSettings() {
           </select>
         </Row>
       </Section>
+      <Behavior />
       <UsageLimits />
       <Section title="About">
         <Row title="Version">
@@ -108,6 +129,162 @@ export function GeneralSettings() {
           ))}
       </Section>
     </>
+  );
+}
+
+/**
+ * What a new thread starts with, picked with the composer's own menus (`newThreadPrefs`). The
+ * model list is this computer's; a thread on a host that lacks the model starts on that host's
+ * first.
+ */
+function NewThreads() {
+  const catalog = useCatalog(localId);
+  const prefs = newThreadPrefs.use();
+  const blocked: Partial<Record<Provider, string>> = {};
+  for (const i of catalog.instances)
+    if (!i.enabled) blocked[i.id] = `${i.name} is turned off in Settings > Providers.`;
+  const choices = catalog.models.filter((m) => !blocked[m.provider]);
+  const model =
+    choices.find((m) => m.provider === prefs.model?.provider && m.id === prefs.model.id) ??
+    choices[0];
+  const instance = catalog.instances.find((i) => i.id === model?.provider);
+  const permissions = instance?.permissions ?? [];
+  const permission = permissions.includes(prefs.permission) ? prefs.permission : "edit";
+  const contexts = model?.contexts ?? [];
+  const context =
+    prefs.context !== undefined && contexts.includes(prefs.context) ? prefs.context : contexts[0];
+  const hasFast = !!model?.fast;
+  const workspace = workspaces.find((w) => w.value === prefs.workspace) ?? workspaces[0]!;
+
+  return (
+    <Section title="New threads">
+      <Row title="Model" description="The model a new thread starts on.">
+        {model ? (
+          <span className={pickerBox}>
+            <ModelMenu
+              catalog={catalog}
+              unavailable={blocked}
+              value={model}
+              onChange={(m) =>
+                setNewThreadPrefs({ model: { provider: m.provider, id: m.id }, context: undefined })
+              }
+            />
+          </span>
+        ) : (
+          <span className="text-[13px] text-muted-foreground">No models</span>
+        )}
+      </Row>
+      {/* A backend that maps no efforts (Cursor) has none to default. */}
+      {model && instance?.efforts !== false && (
+        <Row
+          title="Reasoning"
+          description="How hard it thinks, and its context window and fast mode where the model has them."
+        >
+          <span className={pickerBox}>
+            <EffortMenu
+              value={prefs.effort}
+              onChange={(effort) => setNewThreadPrefs({ effort })}
+              contexts={contexts}
+              context={context}
+              onContext={(next) => setNewThreadPrefs({ context: next })}
+              fastMode={hasFast ? instance?.kind : undefined}
+              fast={hasFast && prefs.fast}
+              onFast={(fast) => setNewThreadPrefs({ fast })}
+            />
+          </span>
+        </Row>
+      )}
+      {permissions.length > 1 && (
+        <Row title="Permissions" description="What a new thread may do without asking.">
+          <span className={pickerBox}>
+            <Picker
+              label="Permissions"
+              value={permission}
+              onChange={(value) => setNewThreadPrefs({ permission: value as AgentPermission })}
+              options={permissions.map((p) => accessOptions[p])}
+              align="end"
+              panelClassName="w-[25rem]"
+            />
+          </span>
+        </Row>
+      )}
+      <Row
+        title="Workspace"
+        description="Where a thread in a repository works. Each thread's menu can pick another."
+      >
+        <span className={pickerBox}>
+          <Picker
+            label="Workspace"
+            value={workspace.value}
+            onChange={(value) => setNewThreadPrefs({ workspace: value as typeof prefs.workspace })}
+            options={workspaces}
+            align="end"
+            panelClassName="w-[24rem]"
+          />
+        </span>
+      </Row>
+    </Section>
+  );
+}
+
+/** Notifications, the clock, and what sends a prompt (`behaviorPrefs`). */
+function Behavior() {
+  const prefs = behaviorPrefs.use();
+  const set = (patch: Partial<BehaviorPrefs>) => setBehaviorPrefs(patch);
+  const mac = window.parallax.platform === "darwin";
+  return (
+    <Section title="Behavior">
+      <Row
+        title="System notifications"
+        description="An alert from your computer when a thread finishes, fails, or needs you while Parallax isn't in front."
+      >
+        <Switch
+          label="System notifications"
+          checked={prefs.systemNotifications}
+          onChange={(systemNotifications) => set({ systemNotifications })}
+        />
+      </Row>
+      <Row
+        title="In-app notifications"
+        description="A toast when a thread finishes, fails, or needs you."
+      >
+        <Switch
+          label="In-app notifications"
+          checked={prefs.inAppNotifications}
+          onChange={(inAppNotifications) => set({ inAppNotifications })}
+        />
+      </Row>
+      <Row title="Time format" description="System default follows your OS clock preference.">
+        <select
+          aria-label="Time format"
+          value={prefs.timeFormat}
+          onChange={(e) => set({ timeFormat: e.target.value as BehaviorPrefs["timeFormat"] })}
+          className={selectClass}
+        >
+          <option value="system">System default</option>
+          <option value="12">12-hour</option>
+          <option value="24">24-hour</option>
+        </select>
+      </Row>
+      <Row
+        title="Send shortcut"
+        description={
+          prefs.sendKey === "enter"
+            ? "Enter sends. Shift+Enter starts a new line."
+            : `${mac ? "⌘ Enter" : "Ctrl+Enter"} sends. Enter starts a new line.`
+        }
+      >
+        <select
+          aria-label="Send shortcut"
+          value={prefs.sendKey}
+          onChange={(e) => set({ sendKey: e.target.value as BehaviorPrefs["sendKey"] })}
+          className={selectClass}
+        >
+          <option value="enter">Enter</option>
+          <option value="modEnter">{mac ? "⌘ Enter" : "Ctrl+Enter"}</option>
+        </select>
+      </Row>
+    </Section>
   );
 }
 

@@ -41,6 +41,7 @@ import { imageUrl, readImage, type ImageCaps } from "./images";
 import { useShortcutLabel } from "./keybindings";
 import { ModelMenu } from "./ModelMenu";
 import { PixelStack } from "./Pixels";
+import { behaviorPrefs, newThreadPrefs } from "./prefs";
 import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
 import { lookOf, ThreadChip, type AttachThreads } from "./threadContext";
 import { draggedThread, threadDragType } from "./threadDrag";
@@ -50,7 +51,7 @@ import { appShortcut, menuButton, menuItem, Picker, type PickerOption } from "./
 // every mode (0034), and a project's worker keeps its sandbox in every mode but Bypass (0013).
 // What would prompt comes to the chat as approval cards (PLX-196), unless the run can't send them
 // (`manualDenied`).
-const accessOptions: Record<AgentPermission, PickerOption> = {
+export const accessOptions: Record<AgentPermission, PickerOption> = {
   auto: {
     value: "auto",
     label: "Auto",
@@ -279,6 +280,13 @@ interface MenuEntry {
   pick: () => void;
 }
 
+/** The line under a run's box saying what queues and what steers. */
+function steerHint(sendKey: "enter" | "modEnter", mac: boolean): string {
+  const mod = mac ? "⌘ Enter" : "Ctrl+Enter";
+  if (sendKey === "enter") return `Enter queues · ${mod} steers now`;
+  return `${mod} queues · ${mac ? "⌘ ⇧ Enter" : "Ctrl+Shift+Enter"} steers now`;
+}
+
 /** A plain item in the composer's tab, sized like the pickers that can sit beside it. */
 export const tabItem =
   "flex min-w-0 items-center gap-1.5 px-2 py-1 text-[13.5px] text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0";
@@ -484,6 +492,9 @@ export function Composer({
   const [pickedPermission, setPermission] = useState<AgentPermission>();
   const [pickedContext, setContext] = useState<number>();
   const [pickedFast, setFast] = useState<boolean>();
+  // A composer with no open run starts from Settings > General's new-thread defaults.
+  const defaults = newThreadPrefs.use();
+  const { sendKey } = behaviorPrefs.use();
   // What `backend` can honor: another backend's pick falls back to its first model and `edit`.
   const catalog = useCatalog(host);
   const instanceOf = (id: string | undefined) => catalog.instances.find((i) => i.id === id);
@@ -507,9 +518,13 @@ export function Composer({
       contexts: [],
     });
   // A pick is kept by its instance and id, since the catalog's models are made again as it changes.
+  const defaultModel = started
+    ? undefined
+    : choices.find((m) => m.provider === defaults.model?.provider && m.id === defaults.model.id);
   const model =
     choices.find((m) => m.provider === pickedModel?.provider && m.id === pickedModel.id) ??
     startedModel ??
+    defaultModel ??
     runModels.find((m) => choices.includes(m)) ??
     choices[0];
   // Where the message goes: the run's backend, or the instance that runs the picked model.
@@ -519,20 +534,21 @@ export function Composer({
   const permissions = projectMode ? [] : (targetBackend?.permissions ?? []);
   // A backend that maps no efforts (Cursor) gets none, and shows no effort menu.
   const efforts = targetBackend?.efforts !== false;
-  const startedEffort = started?.effort ?? "high";
-  const startedPermission = started?.permission ?? "edit";
+  const startedEffort = started?.effort ?? (started ? "high" : defaults.effort);
+  const startedPermission = started?.permission ?? (started ? "edit" : defaults.permission);
   const effort = pickedEffort ?? startedEffort;
   const wanted = pickedPermission ?? startedPermission;
   const permission = permissions.includes(wanted) ? wanted : "edit";
   // The model's context windows and fast mode, on a plxd that takes them. One the model doesn't
   // offer falls back to its default, and fast mode to off.
   const contexts = (contextAndFast && model?.contexts) || [];
-  const startedContext = started?.contextWindow ?? startedModel?.contexts[0];
+  const startedContext =
+    started?.contextWindow ?? (started ? startedModel?.contexts[0] : defaults.context);
   const wantedContext = pickedContext ?? startedContext;
   const context =
     wantedContext !== undefined && contexts.includes(wantedContext) ? wantedContext : contexts[0];
   const hasFast = !!contextAndFast && !!model?.fast;
-  const startedFast = started?.fast ?? false;
+  const startedFast = started?.fast ?? (started ? false : defaults.fast);
   const fast = hasFast && (pickedFast ?? startedFast);
   const speed = {
     ...(context !== undefined && { contextWindow: context }),
@@ -919,15 +935,19 @@ export function Composer({
         // In a Project's list of tasks, Enter adds the next one, as in a notes app.
         const inList = !!newTask && editor.isActive("listItem");
         const mod = event.metaKey || event.ctrlKey;
-        if (inCode || inList ? mod : !event.shiftKey) {
-          void submit(!!onSendInBackground && mod, !!onSteer && mod);
+        // Settings > General: Cmd/Ctrl+Enter sends and Enter is a new line. Its background start
+        // and steer then take Cmd/Ctrl+Shift+Enter.
+        const modEnter = behaviorPrefs.get().sendKey === "modEnter";
+        const alt = mod && (!modEnter || event.shiftKey);
+        if (inCode || inList || modEnter ? mod : !event.shiftKey) {
+          void submit(!!onSendInBackground && alt, !!onSteer && alt);
           return true;
         }
         // Shift+Enter does what Enter does in other editors: a new line, list item, or line of
         // code, or out of an empty list item. A line of just ``` or ```lang starts a code block,
         // as ``` and a space does.
         return (
-          (event.shiftKey || inList) &&
+          (event.shiftKey || inList || modEnter) &&
           editor.commands.first(({ commands }) => [
             () => commands.newlineInCode(),
             ({ state }) => {
@@ -1278,8 +1298,7 @@ export function Composer({
       )}
       {onSteer && !disabledReason && (
         <p className="px-2 pt-1.5 text-[11.5px] text-faint-foreground">
-          Enter queues · {window.parallax.platform === "darwin" ? "⌘ Enter" : "Ctrl+Enter"} steers
-          now
+          {steerHint(sendKey, window.parallax.platform === "darwin")}
         </p>
       )}
       {error && (

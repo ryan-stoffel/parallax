@@ -7,7 +7,7 @@ import { MenuOption, menuButton, menuHeading, menuPanel, moveFocus, type PickerO
 /** Where a new thread works: a worktree of its own, or the repository's own checkout. */
 export type Workspace = "worktree" | "checkout";
 
-const workspaces: (PickerOption & { value: Workspace })[] = [
+export const workspaces: (PickerOption & { value: Workspace })[] = [
   {
     value: "worktree",
     label: "New worktree",

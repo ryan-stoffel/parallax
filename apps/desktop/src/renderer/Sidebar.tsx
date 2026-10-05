@@ -106,6 +106,7 @@ import {
 } from "./ui";
 import { instanceLogo, instanceName } from "./providers";
 import { UpdateButton } from "./Update";
+import { clockOptions } from "./prefs";
 
 const row =
   "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] hover:bg-hover";
@@ -1805,7 +1806,7 @@ function ThreadRow({
 
 /** A day and time a snooze ends, as its menu writes it: "Mon 9:00 AM". */
 function when(date: Date): string {
-  return date.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+  return date.toLocaleString(undefined, { weekday: "short", ...clockOptions() });
 }
 
 /** A run's status as its icon and color, in a thread's card and the Agents list. */

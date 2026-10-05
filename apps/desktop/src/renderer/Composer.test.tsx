@@ -9,6 +9,13 @@ import type { AgentRun, PromptImage } from "../protocol/generated/protocol";
 import { Composer, type ComposerProps } from "./Composer";
 import type { ImageCaps } from "./images";
 import { setCliEnabled } from "./models";
+import {
+  behaviorDefaults,
+  newThreadDefaults,
+  newThreadPrefs,
+  setBehaviorPrefs,
+  setNewThreadPrefs,
+} from "./prefs";
 import type { AttachThreads } from "./threadContext";
 import { dragThread } from "./threadDrag";
 import { emptyThreads } from "./threads";
@@ -36,6 +43,8 @@ vi.mock(import("./images"), async (importOriginal) => {
 let unmount = () => {};
 afterEach(() => {
   act(() => unmount());
+  newThreadPrefs.set(newThreadDefaults);
+  setBehaviorPrefs(behaviorDefaults);
   vi.useRealTimers();
 });
 
@@ -122,6 +131,35 @@ test("Manual says its requests are denied when they can't come to the chat, and 
   expect(shown("run")).toBe(
     "ManualAsks before edits and commands. This chat started before Parallax could show those requests, so they're denied.",
   );
+});
+
+test("a new thread starts from Settings > General's defaults (PLX-538)", async () => {
+  setNewThreadPrefs({
+    model: { provider: "claude", id: "claude-sonnet-5" },
+    effort: "low",
+    permission: "plan",
+  });
+  const onSend = vi.fn(async () => undefined);
+  const { type, press } = render(onSend, caps, { newThread: true, backend: "claude" });
+  type("Hello");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(
+    "Hello",
+    { model: "claude-sonnet-5", effort: "low", permission: "plan" },
+    [],
+    [],
+  );
+});
+
+test("with the Cmd/Ctrl+Enter send shortcut, Enter is a new line and the chord sends (PLX-538)", async () => {
+  setBehaviorPrefs({ sendKey: "modEnter" });
+  const onSend = vi.fn(async () => undefined);
+  const { type, press } = render(onSend);
+  type("Hello");
+  await press("Enter");
+  expect(onSend).not.toHaveBeenCalled();
+  await press("Enter", { metaKey: true });
+  expect(onSend).toHaveBeenCalledOnce();
 });
 
 test("a new thread's Cursor model starts it on Cursor, which takes no effort (0036)", async () => {

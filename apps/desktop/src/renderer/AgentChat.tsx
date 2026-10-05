@@ -121,6 +121,7 @@ import {
 } from "./transcript";
 import { SetUpGithub } from "./ui";
 import { useAgentRun, type SentMessage } from "./useAgentRun";
+import { clockOptions } from "./prefs";
 
 /** A row: a transcript item, or a message this window sent that hasn't reached the agent yet. */
 type Row =
@@ -1907,7 +1908,7 @@ function PromptMeta({ at, text, fork }: { at?: string; text?: string | null; for
 /** "3:04 PM" today, and "Sep 25, 3:04 PM" before. */
 function sentAt(at: string) {
   const date = new Date(at);
-  const time: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+  const time = clockOptions();
   return date.toDateString() === new Date().toDateString()
     ? date.toLocaleTimeString([], time)
     : date.toLocaleString([], { month: "short", day: "numeric", ...time });
