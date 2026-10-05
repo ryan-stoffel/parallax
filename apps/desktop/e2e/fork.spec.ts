@@ -88,7 +88,12 @@ test("forks a thread from a message and from its menu, and the fork links back (
   await expect(answers).toHaveCount(2);
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
   await expect(copied).toHaveCount(2);
-  await expect(transcript.getByRole("button", { name: "Fork from here" })).toHaveCount(1);
+  // Its prompt and its reply offer Fork.
+  await expect(transcript.getByRole("button", { name: "Fork from here" })).toHaveCount(2);
+  const reply = transcript.locator(".group\\/prompt", { hasText: "The fake agent answered." });
+  await reply.last().hover();
+  await expect(reply.last().getByRole("button", { name: "Copy message" })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("fork-reply-hover.png") });
   await page.mouse.move(0, 0);
   await page.screenshot({ path: test.info().outputPath("fork-thread.png") });
 
