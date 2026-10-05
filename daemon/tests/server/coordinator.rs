@@ -160,6 +160,7 @@ async fn a_coordinator_runs_in_its_worktree_and_resumes_there_after_a_restart() 
     let mut client = host.client().await;
     let transcript = client
         .call::<AgentEvents>(AgentEventsParams {
+            before: None,
             run_id: run.id,
             after: 0,
             limit: None,
@@ -1122,6 +1123,7 @@ async fn deleting_a_project_stops_its_agents_and_removes_everything() {
     for run_id in [coordinator.id, worker] {
         let events = client
             .call::<AgentEvents>(AgentEventsParams {
+                before: None,
                 run_id,
                 after: 0,
                 limit: None,

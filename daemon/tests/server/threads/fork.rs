@@ -138,6 +138,7 @@ async fn conflicting_forks(host: &Host, left: ThreadForkParams, right: ThreadFor
     );
     let events = client
         .call::<AgentEvents>(AgentEventsParams {
+            before: None,
             run_id: params.new_run_id,
             after: 0,
             limit: None,
@@ -264,6 +265,7 @@ async fn concurrent_cross_provider_fork_retries_return_the_same_fork() {
 async fn transcript(client: &mut Conn, run_id: RunId) -> (String, Vec<AgentOutputItem>) {
     let events = client
         .call::<AgentEvents>(AgentEventsParams {
+            before: None,
             run_id,
             after: 0,
             limit: None,

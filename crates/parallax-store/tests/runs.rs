@@ -330,6 +330,14 @@ fn a_page_of_run_events_stops_at_its_byte_budget_but_never_comes_back_empty() {
         }
     }
     assert_eq!(seen, (1..=10).collect::<Vec<_>>());
+
+    // Newest first, it pages the same way (PLX-490).
+    let (newest, more) = store.run_events_before(run, u64::MAX, 500, 2500).unwrap();
+    assert_eq!(newest.iter().map(|e| e.seq).collect::<Vec<_>>(), [10, 9]);
+    assert!(more);
+    let (oldest, more) = store.run_events_before(run, 2, 500, 10).unwrap();
+    assert_eq!(oldest.iter().map(|e| e.seq).collect::<Vec<_>>(), [1]);
+    assert!(!more);
 }
 
 fn worktree_fields() -> WorktreeFields {

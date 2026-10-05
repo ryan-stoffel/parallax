@@ -177,6 +177,8 @@ pub(crate) fn initialize(
 /// `agentWait` (PLX-451): `agent/wait`.
 /// `eventFilters` (PLX-453): `events/subscribe` takes `run` and `shell`, which an older plxd
 /// would silently ignore.
+/// `eventsBefore` (PLX-490): `agent/events` takes `before`, to page a run's events newest first,
+/// and answers it with the run and the log's `seq`; an older plxd would page from the start.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -197,6 +199,7 @@ fn capabilities_advertised() -> Capabilities {
         ("contextAndFast".to_owned(), serde_json::Map::new()),
         ("coordinator".to_owned(), serde_json::Map::new()),
         ("eventFilters".to_owned(), serde_json::Map::new()),
+        ("eventsBefore".to_owned(), serde_json::Map::new()),
         ("files".to_owned(), serde_json::Map::new()),
         ("git".to_owned(), serde_json::Map::new()),
         (

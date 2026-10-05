@@ -6,6 +6,7 @@ import {
   applyEvents,
   emptyTranscript,
   groupWork,
+  rebuild,
   subagentRows,
   subagentState,
   trackApprovals,
@@ -161,6 +162,35 @@ test("deltas without a message id stream into one message that the full text rep
     text: "Hello!",
     at: "",
   });
+});
+
+test("a transcript opened at its end, built again with each older page, reads as a full load (PLX-490)", () => {
+  const events = [
+    ...upTo(8),
+    output({ kind: "turnStarted", turnId: uuidv7(), text: "And the tests." }),
+    output({ kind: "textDelta", text: "Look" }),
+    output({ kind: "textDelta", text: "ing." }),
+    output({ kind: "toolCall", callId: "c1", name: "Bash", input: { command: "ls" } }),
+    output(agentCall("s1", "Read the tests")),
+    output(inSub("s1", { kind: "text", text: "Read them." })),
+    output({ kind: "toolResult", callId: "c1", status: "ok", output: "tests" }),
+    output({ kind: "text", text: "Looking." }),
+  ];
+  const full = build(...events);
+
+  // Pages of three, newest first, from the run as it stands: six pages, the newest starting
+  // inside the last turn, between a tool call and its result.
+  let held = events.slice(-3);
+  let t = rebuild({ ...emptyTranscript, run: full.run }, held, runId);
+  expect(t.run).toBe(full.run);
+  expect(of(t.items, "tool")).toMatchObject([{ callId: "c1", name: null, status: "ok" }]);
+  expect(t.subagents!["s1"]!.description).toBeUndefined();
+  for (let end = events.length - 3; end > 0; end -= 3) {
+    held = [...events.slice(Math.max(0, end - 3), end), ...held];
+    t = rebuild(t, held, runId);
+  }
+  expect(t).toEqual(full);
+  expect(of(t.items, "assistant").at(-1)).toMatchObject({ text: "Looking." });
 });
 
 test("a turn's result that repeats its last message isn't shown twice", () => {

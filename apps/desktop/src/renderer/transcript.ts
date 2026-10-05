@@ -236,6 +236,18 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
   return { run, items, subagents, seq };
 }
 
+/**
+ * `t` built again from `events`, every event of its run loaded so far, oldest first, as when a
+ * transcript that opened at its end gets an older page in front (PLX-490). A page that starts
+ * inside a turn reads on its own as a message's tail, or a tool result with no call; built again
+ * with the page before, it reads as a full load does. The run stays as `t` has it, since older
+ * events never change it.
+ */
+export function rebuild(t: Transcript, events: LoggedEvent[], runId: string): Transcript {
+  const built = applyEvents({ ...emptyTranscript, run: t.run }, events, runId);
+  return { ...built, run: t.run, seq: Math.max(t.seq, built.seq) };
+}
+
 /** A run as `event` leaves it: `agent.started` sets it, and `agent.updated` and fallbacks change it. */
 export function updateRun(run: AgentRun | undefined, event: ParallaxEvent): AgentRun | undefined {
   switch (event.kind) {

@@ -1,0 +1,5 @@
+[
+  { "init": { "sessionId": "e2e-paged", "model": "fake-model" } },
+  { "emit": { "kind": "text", "text": "The fake agent answered." } },
+  { "endTurn": {} }
+]

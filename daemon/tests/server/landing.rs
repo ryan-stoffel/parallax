@@ -88,6 +88,7 @@ pub(crate) async fn item(
 pub(crate) async fn messages(client: &mut Conn, run_id: RunId) -> Vec<String> {
     let events = client
         .call::<AgentEvents>(AgentEventsParams {
+            before: None,
             run_id,
             after: 0,
             limit: None,

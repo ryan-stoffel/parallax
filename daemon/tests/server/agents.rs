@@ -410,6 +410,7 @@ async fn assert_replays(
 
     let page = replay
         .call::<AgentEvents>(AgentEventsParams {
+            before: None,
             run_id,
             after: 0,
             limit: Some(3),
@@ -420,6 +421,7 @@ async fn assert_replays(
     assert_eq!(page.events.len(), 3);
     let rest = replay
         .call::<AgentEvents>(AgentEventsParams {
+            before: None,
             run_id,
             after: page.events[2].seq,
             limit: None,
@@ -834,6 +836,7 @@ async fn cancel_stops_a_running_worker() {
     assert_eq!(kind(&unknown), ErrorKind::RunNotFound);
     let unknown = client
         .call::<AgentEvents>(AgentEventsParams {
+            before: None,
             run_id: RunId::generate(),
             after: 0,
             limit: None,

@@ -250,6 +250,7 @@ async fn last_output(plxd: &Plxd, run_id: RunId) -> Result<Option<String>, Strin
     loop {
         let page = plxd
             .call::<AgentEvents>(AgentEventsParams {
+                before: None,
                 run_id,
                 after,
                 limit: Some(1000),

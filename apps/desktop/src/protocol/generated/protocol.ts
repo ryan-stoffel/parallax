@@ -2280,7 +2280,8 @@ export type AgentListResult = {
 
 /**
  * Params of `agent/events`: one run's events from plxd's log, for rebuilding its transcript
- * after `resyncRequired` or a restart.
+ * after `resyncRequired` or a restart. Pages go oldest first from `after`, or, with `before`
+ * (the `eventsBefore` capability, PLX-490), newest first.
  */
 export type AgentEventsParams = {
 	/**
@@ -2288,9 +2289,16 @@ export type AgentEventsParams = {
 	 */
 	runId: RunId,
 	/**
-	 * Return the events whose `seq` is greater than this; 0 for the first page.
+	 * Return the events whose `seq` is greater than this; 0 for the first page. Ignored with
+	 * `before`.
 	 */
 	after: number,
+	/**
+	 * Return the newest events whose `seq` is less than this instead, for a transcript that opens
+	 * at its end: `Number.MAX_SAFE_INTEGER` for the newest page, then the first `seq` of the last
+	 * page returned. An older plxd ignores it.
+	 */
+	before?: number,
 	/**
 	 * The most events to return: 500 by default, and at most 1000.
 	 */
@@ -2306,9 +2314,20 @@ export type AgentEventsResult = {
 	 */
 	events: Array<LoggedEvent>,
 	/**
-	 * Whether more events follow the last one returned. Ask again after its `seq`.
+	 * Whether more events follow the last one returned, or with `before`, precede the first.
+	 * Ask again after the last one's `seq`, or before the first one's.
 	 */
 	more: boolean,
+	/**
+	 * With `before`: the run as it stands, read after the page, since a page that doesn't reach
+	 * back to the run's start has no `agent.started`. Events in the page never change it.
+	 */
+	run?: AgentRun,
+	/**
+	 * With `before`: the event log's `seq` from before the page was read. Subscribe with `after`
+	 * set to it or to the page's last `seq`, whichever is greater, as after `agent/list`.
+	 */
+	seq?: number,
 };
 
 /**

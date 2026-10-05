@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type {
   AgentDelivery,
   AgentSendParams,
+  LoggedEvent,
   PromptImage,
   QueuedMessage,
 } from "../protocol/generated/protocol";
-import { applyEvents, emptyTranscript, isRunning, type Transcript } from "./transcript";
+import { applyEvents, emptyTranscript, isRunning, rebuild, type Transcript } from "./transcript";
 import { uuidv7 } from "./uuidv7";
 
 export interface AgentRunView {
@@ -32,6 +33,21 @@ export interface AgentRunView {
   ) => Promise<RpcError | undefined>;
   /** Stops the run. Resolves to an error message, or undefined. */
   cancel: () => Promise<string | undefined>;
+  /** Whether older events are left to load, for a transcript that opened at its end (PLX-490). */
+  older: boolean;
+  /** Loads the page of events before the oldest loaded, one page at a time. */
+  loadOlder: () => void;
+}
+
+/**
+ * A transcript that opened at its end: every event of its run loaded so far, oldest first, the
+ * `seq` to load older ones before, absent once the first is in, and the log they came from.
+ */
+interface Pages {
+  events: LoggedEvent[];
+  before?: number;
+  logId: string;
+  loading?: boolean;
 }
 
 /**
@@ -59,17 +75,21 @@ export type SendOptions = Pick<
  * `eventFilters`, sends the whole scope's), and starts over on `resync`. Loads only
  * while `connected`; a reconnect loads again, from a new snapshot, so a quiet run's
  * old `seq` is never resubscribed from. Key the caller by host and run, so another
- * run starts from an empty transcript.
+ * run starts from an empty transcript. With `paged`, for a plxd that advertises
+ * `eventsBefore`, it reads only the newest page, and `loadOlder` reads the rest.
  */
 export function useAgentRun(
   hostId: string,
   runId: string,
   connected: boolean,
   queueEnabled = false,
+  paged = false,
 ): AgentRunView {
   const [transcript, setTranscript] = useState(emptyTranscript);
   const [error, setError] = useState<string>();
   const [sent, setSent] = useState<ReadonlyMap<string, SentMessage>>(new Map());
+  const pages = useRef<Pages>(undefined);
+  const [older, setOlder] = useState(false);
 
   const [queue, setQueue] = useState<QueuedMessage[]>([]);
   const [queueError, setQueueError] = useState<string>();
@@ -96,6 +116,41 @@ export function useAgentRun(
     }
 
     async function load() {
+      pages.current = undefined;
+      setOlder(false);
+      return paged ? loadNewest() : loadAll();
+    }
+
+    // The newest page, the run read after it, and the log's seq read before it, so a subscribe
+    // after that seq misses nothing. Older pages follow while there's nothing to show, as when
+    // the newest holds only the run's last updates.
+    async function loadNewest() {
+      let p: Pages | undefined;
+      let t = emptyTranscript;
+      let snapshot = 0;
+      do {
+        const page = await window.parallax.request(hostId, "agent/events", {
+          runId,
+          after: 0,
+          before: p?.before ?? Number.MAX_SAFE_INTEGER,
+        });
+        if (stopped) return;
+        if ("error" in page) return setError(page.error.message);
+        const { events, more, run, seq = 0 } = page.result;
+        if (!run) return setError("This agent run hasn't started.");
+        if (!p) [t, snapshot] = [{ ...emptyTranscript, run }, seq];
+        p = {
+          events: [...events, ...(p?.events ?? [])],
+          before: more ? events[0]?.seq : undefined,
+          logId: p?.logId ?? page.logId,
+        };
+        t = rebuild(t, p.events, runId);
+      } while (t.items.length === 0 && p.before !== undefined);
+      pages.current = p;
+      await live(t, snapshot, p.logId, p);
+    }
+
+    async function loadAll() {
       let t = emptyTranscript;
       // The scope's seq from `agent/list`, taken before the last page is read. The run's
       // own last seq can be too old for plxd to replay the scope from, which would
@@ -126,6 +181,12 @@ export function useAgentRun(
       }
       // The loop only ends with both, but the types can't tell.
       if (!t.run || snapshot === undefined || logId === undefined) return;
+      await live(t, snapshot, logId);
+    }
+
+    // Shows `t` and subscribes after `snapshot`, adding the run's events to `p` when paged.
+    async function live(t: Transcript, snapshot: number, logId: string, p?: Pages) {
+      if (!t.run) return;
       if (queueEnabled) {
         const listed = await window.parallax.request(hostId, "queue/list", { runId });
         if (stopped) return;
@@ -133,6 +194,7 @@ export function useAgentRun(
         else showQueue(listed.result.messages);
       }
       setTranscript(t);
+      setOlder(p?.before !== undefined);
       setError(undefined);
       unsubscribe = window.parallax.subscribe(
         hostId,
@@ -143,6 +205,7 @@ export function useAgentRun(
             const event = message.event.event;
             if (queueEnabled && event.kind === "queue.updated" && event.runId === runId)
               showQueue(event.messages);
+            if (p && "runId" in event && event.runId === runId) p.events.push(message.event);
             setTranscript((prev) => applyEvents(prev, [message.event], runId));
           } else if (message.type === "resync") void load();
           else setError(message.error.message);
@@ -155,7 +218,27 @@ export function useAgentRun(
       stopped = true;
       unsubscribe();
     };
-  }, [hostId, runId, connected, queueEnabled]);
+  }, [hostId, runId, connected, queueEnabled, paged]);
+
+  const loadOlder = useCallback(() => {
+    const p = pages.current;
+    if (!p || p.before === undefined || p.loading) return;
+    p.loading = true;
+    void window.parallax
+      .request(hostId, "agent/events", { runId, after: 0, before: p.before })
+      .then((page) => {
+        p.loading = false;
+        // A resync or reconnect started over meanwhile.
+        if (pages.current !== p) return;
+        if ("error" in page) return setError(page.error.message);
+        if (page.logId !== p.logId) return;
+        const { events, more } = page.result;
+        p.events = [...events, ...p.events];
+        p.before = more ? events[0]?.seq : undefined;
+        setOlder(p.before !== undefined);
+        setTranscript((prev) => rebuild(prev, p.events, runId));
+      });
+  }, [hostId, runId]);
 
   const send = useCallback(
     async (
@@ -196,5 +279,5 @@ export function useAgentRun(
     return "error" in answer ? answer.error.message : undefined;
   }, [hostId, runId]);
 
-  return { transcript, error, sent, send, cancel, queue, queueError };
+  return { transcript, error, sent, send, cancel, queue, queueError, older, loadOlder };
 }

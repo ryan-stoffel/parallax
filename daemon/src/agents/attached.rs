@@ -105,8 +105,7 @@ async fn summary(daemon: &Daemon, id: RunId) -> Result<String, ErrorObject> {
         let mut events = VecDeque::new();
         let mut before = u64::MAX;
         loop {
-            let page = log.run_events_before(id, before, PAGE_EVENTS)?;
-            let last = page.len() < PAGE_EVENTS;
+            let (page, more) = log.run_events_before(id, before, PAGE_EVENTS, usize::MAX)?;
             if let Some(oldest) = page.last() {
                 before = oldest.seq;
             }
@@ -114,7 +113,7 @@ async fn summary(daemon: &Daemon, id: RunId) -> Result<String, ErrorObject> {
                 events.push_front(entry.event.clone());
             }
             let summary = conversation(events.make_contiguous(), SUMMARY_BYTES);
-            if last || summary.starts_with(LEFT_OUT) {
+            if !more || summary.starts_with(LEFT_OUT) {
                 return Ok(summary);
             }
         }

@@ -659,31 +659,41 @@ impl EventLog {
         Ok((entries, false))
     }
 
-    /// `run`'s events before `before`, newest first, at most `limit` of them, from the database,
-    /// or from memory for a log that has none, as [`EventLog::run_events`] reads them (PLX-372).
+    /// `run`'s events before `before`, newest first, paged as [`EventLog::run_events`] pages
+    /// (PLX-372, PLX-490): the flag says whether older ones remain.
     pub fn run_events_before(
         &self,
         run: RunId,
         before: u64,
         limit: usize,
-    ) -> Result<Vec<Arc<Entry>>, StoreError> {
+        max_bytes: usize,
+    ) -> Result<(Vec<Arc<Entry>>, bool), StoreError> {
         if let Some(reader) = &self.reader {
             let db = reader.lock().unwrap_or_else(PoisonError::into_inner);
-            let stored = db.run_events_before(run.into(), before, limit)?;
-            return Ok(stored
+            let (stored, more) = db.run_events_before(run.into(), before, limit, max_bytes)?;
+            let entries = stored
                 .iter()
                 .map(|stored| Arc::new(entry(stored)))
-                .collect());
+                .collect();
+            return Ok((entries, more));
         }
         let inner = self.inner();
-        Ok(inner
+        let mut entries = Vec::new();
+        let mut bytes = 0;
+        for entry in inner
             .events
             .iter()
             .rev()
             .filter(|entry| entry.seq < before && run_of(&entry.event) == Some(run))
-            .take(limit)
-            .map(Arc::clone)
-            .collect())
+        {
+            let size = serde_json::to_string(&entry.event).map_or(0, |json| json.len());
+            if entries.len() >= limit.max(1) || (!entries.is_empty() && bytes + size > max_bytes) {
+                return Ok((entries, true));
+            }
+            bytes += size;
+            entries.push(Arc::clone(entry));
+        }
+        Ok((entries, false))
     }
 
     /// Removes `run`'s events from the in-memory replay window, for a deleted thread (#110), so
