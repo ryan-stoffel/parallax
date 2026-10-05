@@ -268,8 +268,10 @@ jobs:
           electron_config_cache: ${{ runner.temp }}/electron
         run: scripts/ci/e2e-app
 
-  # 30 fake-backend threads streaming through the rust job's Linux plxd, failed when a daemon number
-  # exceeds scripts/bench/budgets.json (PLX-452). App frame times under xvfb are too noisy to gate.
+  # 30 fake-backend threads streaming through the rust job's Linux plxd, subscribed as the app did
+  # before PLX-454 and, with --filtered, as it does since. Each run fails when a daemon number falls
+  # outside its set in scripts/bench/budgets.json (PLX-452). App frame times under xvfb are too
+  # noisy to gate.
   load:
     needs: rust
     runs-on: ubuntu-24.04
@@ -290,16 +292,26 @@ jobs:
           chmod +x "$RUNNER_TEMP/plxd/plxd"
           python3 scripts/bench/load.py "$RUNNER_TEMP/plxd/plxd" --threads 30 --out load.json
 
+      - name: Run the load harness with filtered subscriptions
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/bench/load.py "$RUNNER_TEMP/plxd/plxd" --threads 30 --filtered \
+            --out load-filtered.json
+
       - name: Check the budgets
         if: ${{ !cancelled() && hashFiles('load.json') != '' }}
-        run: scripts/ci/check-load load.json
+        run: scripts/ci/check-load load.json unfiltered
+
+      - name: Check the filtered budgets
+        if: ${{ !cancelled() && hashFiles('load-filtered.json') != '' }}
+        run: scripts/ci/check-load load-filtered.json filtered
 
       - name: Upload the results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: load
-          path: load.json
+          path: load*.json
           retention-days: 7
 
   actionlint:

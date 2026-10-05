@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Fails when a load harness result (scripts/bench/load.py) exceeds scripts/bench/budgets.json.
+"""Fails when a load harness result (scripts/bench/load.py) falls outside one budget set in
+scripts/bench/budgets.json.
 
-    scripts/ci/check-load load.json
+    scripts/ci/check-load load.json unfiltered
+    scripts/ci/check-load load-filtered.json filtered
 
-Each budget is a maximum, or under "min" a minimum, for a dotted path into the result. The minimum
-on the scope subscription's bytes catches a run whose workers failed and delivered almost nothing.
-A missing path fails, so renaming a subscription or metric means updating the budgets too. Any
-resync fails. Writes a Markdown table
-to $GITHUB_STEP_SUMMARY when set, else to stdout. p50 and p99 are shown but not gated: the latency
-tail is too noisy on a shared runner.
+The set names the harness mode it assumes: its `threads` and `filtered` must match the result's.
+Each budget is a maximum, or under "min" a minimum, for a dotted path into the result. A floor on
+delivered bytes catches a run whose workers failed and delivered almost nothing. A missing path
+fails, so renaming a subscription or metric means updating the budgets too. Any resync fails.
+Writes a Markdown table to $GITHUB_STEP_SUMMARY when set, and to stdout. p50, p99, and peak RSS
+are shown but not gated: the latency tail is too noisy on a shared runner, and RSS growth over the
+idle daemon is gated instead of the peak.
 """
 
 import json
@@ -17,7 +20,7 @@ import sys
 from pathlib import Path
 
 BUDGETS = Path(__file__).resolve().parents[1] / "bench" / "budgets.json"
-SHOWN = ("latencyMs.p50", "latencyMs.p99", "wallS")
+SHOWN = ("latencyMs.p50", "latencyMs.p99", "plxd.rssPeakMiB", "wallS")
 
 
 def get(result: dict, path: str):
@@ -31,16 +34,22 @@ def get(result: dict, path: str):
 def fmt(value) -> str:
     if value is None:
         return "missing"
+    if isinstance(value, bool):
+        return str(value).lower()
     return f"{value:,}" if isinstance(value, int) else f"{value:,.2f}"
 
 
 def main() -> int:
+    if len(sys.argv) != 3:
+        sys.exit("usage: check-load <result.json> <budget set>")
     result = json.loads(Path(sys.argv[1]).read_text())
-    budgets = json.loads(BUDGETS.read_text())
+    name = sys.argv[2]
+    budgets = json.loads(BUDGETS.read_text())[name]
     rows, failed = [], False
-    if result.get("threads") != budgets["threads"]:
-        rows.append(f"| threads | {result.get('threads')} | = {budgets['threads']} | fail |")
-        failed = True
+    for key in ("threads", "filtered"):
+        ok = result.get(key) == budgets[key]
+        failed |= not ok
+        rows.append(f"| {key} | {fmt(result.get(key))} | = {fmt(budgets[key])} | {'ok' if ok else 'fail'} |")
     checks = [(p, ">=", v) for p, v in budgets["min"].items()]
     checks += [(p, "<=", v) for p, v in budgets["max"].items()]
     for path, op, limit in checks:
@@ -54,7 +63,9 @@ def main() -> int:
     rows += [f"| {path} | {fmt(get(result, path))} | | not gated |" for path in SHOWN]
 
     summary = "\n".join([
-        f"### plxd load, {result.get('threads')} threads: {'over budget' if failed else 'within budget'}",
+        f"### plxd load, {name}: {'over budget' if failed else 'within budget'}",
+        "",
+        budgets["about"],
         "",
         "| Metric | Value | Budget | |",
         "| --- | --- | --- | --- |",
