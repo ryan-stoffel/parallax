@@ -18,8 +18,9 @@
 //!
 //! plxd has no HTTP client of its own, so every call is a `curl` run, as a model service's model
 //! list is (0040): the credentials and the JSON body go to curl as a config on stdin, which `ps`
-//! never shows, and https works for a remote server. No proxy is used, so none sees the
-//! password, and a URL must be `http://` or `https://`. The event stream is one `curl -N` on
+//! never shows, and https works for a remote server. A loopback server is reached without the
+//! host's proxy, so none sees its password ([`LOOPBACK`]), and a URL must be `http://` or
+//! `https://`. The event stream is one `curl -N` on
 //! `/event` for the run's folder, read line by line, which fails once it is quiet for a minute,
 //! though the server sends a heartbeat every few seconds.
 //!
@@ -52,8 +53,11 @@
 //! [`Event::ApprovalRequested`], and [`Run::answer`] replies `once` or `reject`. A rejection
 //! carries a message, the user's or a default, since `OpenCode` ends the turn on one without;
 //! only an interrupt goes without and aborts. Without `approvals`, plxd rejects what its level
-//! doesn't allow. A request answered elsewhere, or that `OpenCode` rejected itself after a sibling
-//! was rejected (`permission.replied`), is withdrawn.
+//! doesn't allow. Rejecting one request makes `OpenCode` reject the session's other pending ones
+//! with no message (`permission.replied`), which plxd withdraws; that still ends the turn,
+//! except on a server plxd started, which gets `continue_loop_on_deny` ([`CONFIG_CONTENT`]).
+//! A question another tool still asks is answered with [`stream::QUESTION_ANSWER`], so the
+//! agent goes on.
 //!
 //! # Cancel
 //!
@@ -99,6 +103,15 @@ pub const PERMISSIONS: &[AgentPermission] = &[
     AgentPermission::Plan,
     AgentPermission::Bypass,
 ];
+
+/// The hosts curl reaches without a proxy, so no proxy sees a local server's password. A remote
+/// server still goes through the host's proxy, which only tunnels https.
+const LOOPBACK: &str = "127.0.0.1,localhost,::1";
+
+/// The config a server plxd starts gets, unless the instance or plxd's environment sets one:
+/// without it, `OpenCode` ends the turn when it rejects a request's siblings with no message,
+/// as it does once one of several parallel requests is denied.
+const CONFIG_CONTENT: &str = r#"{"experimental":{"continue_loop_on_deny":true}}"#;
 
 /// How long a server plxd starts may take to say where it listens, and its event stream to open.
 const START_TIMEOUT: Duration = Duration::from_secs(30);
@@ -173,8 +186,8 @@ impl Opencode {
         }
     }
 
-    /// `opencode serve` in `cwd`, with `password`, as [`listening`] reads it.
-    fn serve_spec(&self, cwd: &Path, password: &str) -> ProcessSpec {
+    /// `opencode serve` in `cwd`, with `password`, as [`listening`] reads it, through `launcher`.
+    fn serve_spec(&self, launcher: &Launcher, cwd: &Path, password: &str) -> ProcessSpec {
         let mut spec = ProcessSpec::new(&self.program, cwd);
         spec.args = ["serve", "--hostname", "127.0.0.1", "--port", "0"]
             .iter()
@@ -190,6 +203,10 @@ impl Opencode {
         spec.inject.set(PASSWORD_VAR, password);
         if let Some(user) = &self.username {
             spec.inject.set(USERNAME_VAR, user);
+        }
+        let config = "OPENCODE_CONFIG_CONTENT";
+        if spec.inject.get(config).is_none() && launcher.base().get(config).is_none() {
+            spec.inject.set(config, CONFIG_CONTENT);
         }
         spec
     }
@@ -268,7 +285,7 @@ impl Server {
         spec.args = [
             "-q",
             "--noproxy",
-            "*",
+            LOOPBACK,
             "-sS",
             "--max-time",
             max_time.as_str(),
@@ -354,7 +371,7 @@ impl Server {
         spec.args = [
             "-q",
             "--noproxy",
-            "*",
+            LOOPBACK,
             "-sSN",
             "--fail",
             "--speed-limit",
@@ -429,7 +446,7 @@ pub async fn inspect(launcher: &Launcher, opencode: &Opencode, secret: bool) -> 
         } else {
             let password = random_password();
             let home = std::env::home_dir().unwrap_or_else(std::env::temp_dir);
-            let spec = opencode.serve_spec(&home, &password);
+            let spec = opencode.serve_spec(launcher, &home, &password);
             let mut serve = launcher
                 .spawn(&spec)
                 .map_err(|error| format!("couldn't start opencode serve: {error}"))?;
@@ -519,7 +536,9 @@ impl OpencodeBackend {
 /// earlier run's, since they come last (0054). A `task` subagent's session takes only its
 /// parent's `deny` rules, never an `ask`, and runs on an agent that allows everything, so
 /// below Full access the thread has no subagents. The `question` tool is always off: the app
-/// has no card for it, and rejecting a question ends the turn.
+/// has no card for it. So is the experimental `plan_exit`, which would take plxd's answer to its
+/// question as the user's approval and leave the `plan` agent; a thread leaves Plan when the
+/// user picks another level.
 fn rules(permission: AgentPermission) -> Value {
     let (bash, edit, task) = match permission {
         AgentPermission::Bypass => ("allow", "allow", "allow"),
@@ -532,6 +551,7 @@ fn rules(permission: AgentPermission) -> Value {
         {"permission": "edit", "pattern": "*", "action": edit},
         {"permission": "task", "pattern": "*", "action": task},
         {"permission": "question", "pattern": "*", "action": "deny"},
+        {"permission": "plan_exit", "pattern": "*", "action": "deny"},
     ])
 }
 
@@ -649,7 +669,9 @@ impl Backend for OpencodeBackend {
                 .password
                 .as_ref()
                 .map_or_else(random_password, |password| password.expose().to_owned());
-            let spec = self.opencode.serve_spec(&request.cwd, &password);
+            let spec = self
+                .opencode
+                .serve_spec(&self.launcher, &request.cwd, &password);
             let serve = self.launcher.spawn(&spec)?;
             switch.arm(serve.signals().clone(), CancelPolicy::default());
             (Some(serve), Some(password))
@@ -1117,7 +1139,7 @@ impl Driver {
                     self.translator.denied.insert(call_id);
                 }
                 // With a message, `OpenCode` tells the agent and goes on; without, it ends the
-                // turn, which only an interrupt should.
+                // turn, which only an interrupt should. The siblings it then rejects carry none.
                 let message = if message.trim().is_empty() && !interrupt {
                     "The user denied this.".to_owned()
                 } else {

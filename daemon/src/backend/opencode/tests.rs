@@ -91,7 +91,7 @@ impl Server {
                     read.read_line(&mut line).await.unwrap();
                     let mut words = line.split_whitespace();
                     let (method, target) = (words.next().unwrap(), words.next().unwrap());
-                    let (method, target) = (method.to_owned(), target.to_owned());
+                    let (method, target) = (method.to_owned(), path_of(target).to_owned());
                     let mut headers = HashMap::new();
                     loop {
                         line.clear();
@@ -179,6 +179,13 @@ impl Server {
     }
 }
 
+/// A request's path and query: as a proxy, the fake takes `GET http://host/path`.
+fn path_of(target: &str) -> &str {
+    target
+        .strip_prefix("http://")
+        .map_or(target, |rest| &rest[rest.find('/').unwrap_or(rest.len())..])
+}
+
 /// An `OpenCode` event for the session `ses_1`.
 fn event(kind: &str, properties: Value) -> Value {
     let mut properties = properties;
@@ -244,8 +251,18 @@ fn asked_for(id: &str, call: &str) -> Value {
 
 /// A launcher with curl on `PATH`, and the folder a run works in.
 fn launcher(dir: &TempDir, path: &str) -> (Launcher, PathBuf) {
+    proxied(dir, path, None)
+}
+
+/// [`launcher`], with every proxy variable set to `proxy`.
+fn proxied(dir: &TempDir, path: &str, proxy: Option<&str>) -> (Launcher, PathBuf) {
     let root = dir.path().canonicalize().unwrap();
-    let base: Environment = [("PATH", path.to_owned())].into_iter().collect();
+    let mut base: Environment = [("PATH", path.to_owned())].into_iter().collect();
+    if let Some(proxy) = proxy {
+        for name in ["http_proxy", "https_proxy", "HTTPS_PROXY", "ALL_PROXY"] {
+            base.set(name, proxy);
+        }
+    }
     let launcher = Launcher::new(DataDir::new(root.join("data")).unwrap(), base);
     (launcher, root)
 }
@@ -586,6 +603,9 @@ async fn a_started_server_gets_the_password_and_no_url() {
 
     let env = fs::read_to_string(dir.path().join("env")).unwrap();
     assert!(env.contains("OPENCODE_SERVER_PASSWORD=hunter2\n"));
+    assert!(
+        env.contains(r#"OPENCODE_CONFIG_CONTENT={"experimental":{"continue_loop_on_deny":true}}"#)
+    );
     assert!(env.contains("OPENCODE_CONFIG_DIR=/oc\n"));
     assert!(!env.contains("OPENCODE_SERVER_URL"));
     let args = fs::read_to_string(dir.path().join("args")).unwrap();
@@ -635,6 +655,31 @@ async fn inspecting_a_server_lists_its_models_and_version() {
     )
     .await;
     assert!(found.note.unwrap().contains("couldn't reach"));
+
+    // A remote server goes through the host's proxy, here the fake server itself, and a
+    // loopback one never does, here past a proxy that isn't there.
+    let (behind_proxy, _) = proxied(&dir, "/usr/bin:/bin", Some(&server.url));
+    let remote = opencode(Some("http://opencode.example.invalid"), Some("hunter2"));
+    let found = inspect(&behind_proxy, &remote, false).await;
+    assert_eq!(
+        found.version.as_deref(),
+        Some("1.18.34"),
+        "{:?}",
+        found.note
+    );
+    let (dead_proxy, _) = proxied(&dir, "/usr/bin:/bin", Some("http://127.0.0.1:9"));
+    let found = inspect(
+        &dead_proxy,
+        &opencode(Some(&server.url), Some("hunter2")),
+        false,
+    )
+    .await;
+    assert_eq!(
+        found.version.as_deref(),
+        Some("1.18.34"),
+        "{:?}",
+        found.note
+    );
 }
 
 #[tokio::test]
@@ -717,7 +762,7 @@ async fn a_denial_goes_on_and_a_request_opencode_rejected_is_withdrawn() {
 }
 
 #[test]
-fn every_level_below_full_access_turns_off_subagents_and_questions() {
+fn every_level_below_full_access_turns_off_subagents_and_every_level_questions() {
     let rule = |level, permission: &str| {
         let rules = super::rules(level);
         let rules = rules.as_array().unwrap();
@@ -738,9 +783,10 @@ fn every_level_below_full_access_turns_off_subagents_and_questions() {
                 rule(level, "bash"),
                 rule(level, "edit"),
                 rule(level, "task"),
-                rule(level, "question")
+                rule(level, "question"),
+                rule(level, "plan_exit"),
             ],
-            [bash, edit, task, "deny"],
+            [bash, edit, task, "deny", "deny"],
             "{level:?}"
         );
     }
@@ -832,6 +878,18 @@ fn the_translator_keeps_to_its_session_and_the_turn_in_flight() {
     assert!(
         matches!(&translator.event(&bash)[..], [Step::Post { body, .. }]
         if body["reply"] == "reject" && body["message"].is_string())
+    );
+    // A question another tool asks is answered, so the turn goes on.
+    let question = event(
+        "question.asked",
+        json!({"id": "que_1", "questions": [{"question": "Build it?", "header": "Plan", "options": []}]}),
+    );
+    assert_eq!(
+        translator.event(&question),
+        [Step::Post {
+            path: "/question/que_1/reply".into(),
+            body: json!({"answers": [[super::stream::QUESTION_ANSWER]]}),
+        }]
     );
     let todos = event(
         "todo.updated",

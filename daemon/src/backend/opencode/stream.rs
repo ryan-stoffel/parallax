@@ -14,6 +14,10 @@ use crate::backend::event::{
 };
 use crate::backend::{AgentPermission, ApprovalId};
 
+/// The answer to every question `OpenCode` asks, since the app can't show one.
+pub(super) const QUESTION_ANSWER: &str =
+    "Parallax can't show this question. Ask it in your reply instead, and go on.";
+
 /// What one event asks the driver to do.
 #[derive(Debug, PartialEq)]
 pub(super) enum Step {
@@ -112,6 +116,7 @@ impl Translator {
         }
         match kind {
             "permission.asked" => return self.permission(properties),
+            "question.asked" => return question(properties),
             "permission.replied" => {
                 return properties["requestID"]
                     .as_str()
@@ -416,6 +421,26 @@ impl Translator {
         steps.push(Step::Ask(request, Ask { id, path, call_id }));
         steps
     }
+}
+
+/// The answer to a `question.asked`. The `question` and `plan_exit` tools are denied, but another
+/// tool, such as a plugin's, can still ask. The app has no card for a question, so each gets
+/// [`QUESTION_ANSWER`], and the agent goes on, where a rejection would end the turn.
+fn question(properties: &Value) -> Vec<Step> {
+    let answers: Vec<Value> = properties["questions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|_| json!([QUESTION_ANSWER]))
+        .collect();
+    properties["id"]
+        .as_str()
+        .map(|id| Step::Post {
+            path: format!("/question/{id}/reply"),
+            body: json!({"answers": answers}),
+        })
+        .into_iter()
+        .collect()
 }
 
 /// A tool's name as the Claude Code tool the app already draws for it, or `OpenCode`'s own.
