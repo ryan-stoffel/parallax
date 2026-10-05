@@ -1,0 +1,15 @@
+{
+  "name": "parallax-cursor-sdk",
+  "private": true,
+  "type": "module",
+  "description": "Parallax's Cursor SDK sidecar. plxd starts it; it is not a package anyone installs.",
+  "scripts": {
+    "test": "node --test src/protocol.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "@cursor/sdk": "1.0.35"
+  }
+}

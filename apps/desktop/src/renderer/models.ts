@@ -190,7 +190,7 @@ const builtIns: Omit<Instance, "enabled">[] = [
     id: "cursor",
     name: "Cursor",
     kind: "cursor",
-    permissions: ["edit", "plan", "bypass"],
+    permissions: ["edit", "plan", "auto", "bypass"],
     efforts: false,
     coordinator: false,
   },

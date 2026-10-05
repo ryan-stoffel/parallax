@@ -138,7 +138,10 @@ const cliInfo: Record<string, { name: string; install: string; keyProvider?: Pro
     install: "https://learn.chatgpt.com/docs/codex/cli",
     keyProvider: "openai",
   },
-  cursor: { name: "Cursor", install: "https://cursor.com/docs/cli/installation" },
+  cursor: {
+    name: "Cursor",
+    install: "https://cursor.com/docs/cli/installation",
+  },
 };
 
 const providerNames: Record<string, string> = {
@@ -852,7 +855,10 @@ function SavedField({
   value,
   onSave,
   ...props
-}: { value: string; onSave: (value: string) => void } & InputHTMLAttributes<HTMLInputElement>) {
+}: {
+  value: string;
+  onSave: (value: string) => void;
+} & InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       // A new value, once saved, is the field's again.
@@ -938,6 +944,47 @@ function InstancePane({
   const save = async (change: Partial<ProviderInstance>) =>
     setError(await saveProvider(hostId, { ...instance, ...change }));
   const program = instance.program ?? kind.program ?? "the program";
+  // A Cursor instance with its own CURSOR_API_KEY runs on that key, with no browser sign-in (as T3 Code).
+  const cursorAccount =
+    instance.kind === "cursor" && !instance.env.some((v) => v.name === "CURSOR_API_KEY");
+  const [cursorWaiting, setCursorWaiting] = useState(false);
+  useEffect(() => {
+    if (!cursorWaiting) return;
+    const timer = setInterval(() => {
+      void loadProviders(hostId, true);
+    }, 2000);
+    const giveUp = setTimeout(() => setCursorWaiting(false), 5 * 60 * 1000);
+    return () => {
+      clearInterval(timer);
+      clearTimeout(giveUp);
+      void window.parallax.request(hostId, "cursor/signInCancel", {
+        instance: instance.id,
+      });
+    };
+  }, [cursorWaiting, hostId, instance.id]);
+  useEffect(() => {
+    if (cursorWaiting && info.signedIn === true) setCursorWaiting(false);
+  }, [cursorWaiting, info.signedIn]);
+  const signInCursor = async () => {
+    setError(undefined);
+    const answer = await window.parallax.request(hostId, "cursor/signIn", {
+      instance: instance.id,
+    });
+    if ("error" in answer) {
+      setError(describeError(answer.error));
+      return;
+    }
+    window.open(answer.result.url, "_blank");
+    setCursorWaiting(true);
+  };
+  const signOutCursor = async () => {
+    setError(undefined);
+    const answer = await window.parallax.request(hostId, "cursor/signOut", {
+      instance: instance.id,
+    });
+    if ("error" in answer) setError(describeError(answer.error));
+    else void loadProviders(hostId, true);
+  };
 
   let account = instanceStatus(info);
   if (info.signedIn === true && info.account)
@@ -972,11 +1019,17 @@ function InstancePane({
       )}
       <Card label="Account">
         <Row title="Display name" description={account}>
-          {info.login && info.installed && info.signedIn !== true && !signingIn && (
+          {cursorAccount && info.installed && info.signedIn === true && !cursorWaiting && (
+            <button type="button" onClick={() => void signOutCursor()} className={quietButton}>
+              Sign out
+            </button>
+          )}
+          {((cursorAccount && info.installed && info.signedIn !== true && !cursorWaiting) ||
+            (info.login && info.installed && info.signedIn !== true && !signingIn)) && (
             <button
               type="button"
               aria-label={`Sign in to ${instance.name}`}
-              onClick={() => onSignIn(true)}
+              onClick={() => (cursorAccount ? void signInCursor() : onSignIn(true))}
               className={quietButton}
             >
               Sign in
@@ -990,6 +1043,16 @@ function InstancePane({
             onSave={(name) => void save({ name: name.trim() })}
           />
         </Row>
+        {cursorWaiting && (
+          <Row
+            title="Sign-in"
+            description="Approve the sign-in in your browser. This keeps waiting until you do."
+          >
+            <button type="button" onClick={() => setCursorWaiting(false)} className={quietButton}>
+              Cancel
+            </button>
+          </Row>
+        )}
         {signingIn && (
           <Suspense>
             <SignInTerminal
@@ -1002,66 +1065,80 @@ function InstancePane({
         )}
       </Card>
       <Section title="Runtime">
-        {choices && version && (
-          <Row title="Version" description={`Which ${kind.name} this instance runs.`}>
-            <Segmented
-              label="Version"
-              options={choices.map((v) => ({ value: v.label, name: v.label }))}
-              value={version.label}
-              onChange={(label) =>
-                void save(
-                  withVersion(
-                    instance,
-                    choices.find((v) => v.label === label)!,
-                  ),
-                )
-              }
-            />
-          </Row>
-        )}
-        <Row
-          title="Binary path"
-          description={
-            info.path
-              ? `Path to the ${kind.name} binary this instance runs. Found at ${info.path}.`
-              : `Path to the ${kind.name} binary this instance runs. Not found on the host.`
-          }
-        >
-          <SavedField
-            aria-label="Binary path"
-            placeholder={kind.program}
-            required={instance.kind === "acp"}
-            value={instance.program ?? ""}
-            onSave={(next) => void save({ program: next.trim() || undefined })}
-          />
-        </Row>
-        {homeVar && (
+        {instance.kind === "cursor" ? (
           <Row
-            title={`${homeVar} path`}
-            description={`Custom ${kind.name} home and config directory, for a second account.`}
-          >
-            <SavedField
-              aria-label={`${homeVar} path`}
-              placeholder="Default"
-              value={instance.home ?? ""}
-              onSave={(home) => void save({ home: home.trim() || undefined })}
-            />
-          </Row>
-        )}
-        <Row
-          title={kind.wholeArgs ? "Arguments" : "Launch arguments"}
-          description={
-            kind.wholeArgs
-              ? `Every argument passed to ${program}, separated by spaces.`
-              : `Additional arguments passed to ${program} on session start, separated by spaces.`
-          }
-        >
-          <SavedField
-            aria-label={kind.wholeArgs ? "Arguments" : "Launch arguments"}
-            value={instance.args.join(" ")}
-            onSave={(args) => void save({ args: argsOf(args) })}
+            title="Cursor SDK"
+            description={
+              info.note ?? "Runs through the Cursor SDK on this host. Needs Node.js 22.13 or newer."
+            }
           />
-        </Row>
+        ) : (
+          <>
+            {choices && version && (
+              <Row title="Version" description={`Which ${kind.name} this instance runs.`}>
+                <Segmented
+                  label="Version"
+                  options={choices.map((v) => ({
+                    value: v.label,
+                    name: v.label,
+                  }))}
+                  value={version.label}
+                  onChange={(label) =>
+                    void save(
+                      withVersion(
+                        instance,
+                        choices.find((v) => v.label === label)!,
+                      ),
+                    )
+                  }
+                />
+              </Row>
+            )}
+            <Row
+              title="Binary path"
+              description={
+                info.path
+                  ? `Path to the ${kind.name} binary this instance runs. Found at ${info.path}.`
+                  : `Path to the ${kind.name} binary this instance runs. Not found on the host.`
+              }
+            >
+              <SavedField
+                aria-label="Binary path"
+                placeholder={kind.program}
+                required={instance.kind === "acp"}
+                value={instance.program ?? ""}
+                onSave={(next) => void save({ program: next.trim() || undefined })}
+              />
+            </Row>
+            {homeVar && (
+              <Row
+                title={`${homeVar} path`}
+                description={`Custom ${kind.name} home and config directory, for a second account.`}
+              >
+                <SavedField
+                  aria-label={`${homeVar} path`}
+                  placeholder="Default"
+                  value={instance.home ?? ""}
+                  onSave={(home) => void save({ home: home.trim() || undefined })}
+                />
+              </Row>
+            )}
+            <Row
+              title={kind.wholeArgs ? "Arguments" : "Launch arguments"}
+              description={
+                kind.wholeArgs
+                  ? `Every argument passed to ${program}, separated by spaces.`
+                  : `Additional arguments passed to ${program} on session start, separated by spaces.`
+              }
+            >
+              <SavedField
+                aria-label={kind.wholeArgs ? "Arguments" : "Launch arguments"}
+                value={instance.args.join(" ")}
+                onSave={(args) => void save({ args: argsOf(args) })}
+              />
+            </Row>
+          </>
+        )}
       </Section>
       <EnvSection env={instance.env} onSave={(env) => save({ env })} />
       <ProviderModels hostId={hostId} info={info} onSave={(models) => save({ models })} />

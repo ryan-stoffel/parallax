@@ -155,7 +155,9 @@ pub(crate) fn initialize(
 /// `host/settings/set`, the `waiting` status, and `resumeAt` and `autoResume` on `AgentRun` and
 /// `agent.updated`.
 /// `providers` (0040): `providers/list`, `providers/save`, and `providers/remove`, and a
-/// subscription `AccountChoice` naming any enabled instance.
+/// subscription `AccountChoice` naming any enabled instance. `cursor/signIn`,
+/// `cursor/signInCancel`, and `cursor/signOut` (0053) sign a Cursor instance in through the
+/// SDK.
 /// `githubSetup` (PLX-423, 0050): `github/install`, `github/signIn`, and `github/signInCancel`,
 /// and `managed`, `installing`, `signingIn`, and `setupNote` on `github/status`, which an older
 /// plxd never fills.

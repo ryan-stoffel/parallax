@@ -23,7 +23,7 @@ pub enum ProviderKind {
     Claude,
     /// Codex, `codex app-server`.
     Codex,
-    /// Cursor Agent, `agent acp`.
+    /// Cursor, through the official SDK (0053).
     Cursor,
     /// Google Antigravity, `agy`.
     Antigravity,
@@ -193,3 +193,37 @@ pub struct ProvidersRemoveParams {
     /// The instance's id.
     pub id: String,
 }
+
+/// Params of `cursor/signIn`, `cursor/signInCancel`, and `cursor/signOut` (0053).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorSignInParams {
+    /// The instance, or the built-in `cursor` when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub instance: Option<String>,
+}
+
+/// Result of `cursor/signIn`: the browser URL the app opens.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorSignInResult {
+    /// The Cursor account login page.
+    pub url: String,
+}
+
+/// Params of `cursor/signInCancel`.
+pub type CursorSignInCancelParams = CursorSignInParams;
+
+/// Result of `cursor/signInCancel`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorSignInCancelResult {}
+
+/// Params of `cursor/signOut`.
+pub type CursorSignOutParams = CursorSignInParams;
+
+/// Result of `cursor/signOut`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorSignOutResult {}

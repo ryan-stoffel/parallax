@@ -1,4 +1,4 @@
-//! Detection against fake `claude`, `codex`, and `agent` binaries on `PATH`, so every test spawns
+//! Detection against fake `claude`, `codex`, and Cursor SDK binaries, so every test spawns
 //! a real process through the supervisor. No test runs a real vendor CLI, and every fixture's
 //! output is synthetic (invented for these tests), not captured from a real CLI; see #124.
 
@@ -106,7 +106,7 @@ async fn a_cli_absent_from_path_is_reported_not_installed_and_nothing_else() {
     let fixture = Fixture::new();
     // No fake binaries installed at all.
     let clis = detect(&fixture, fixture.env()).await;
-    for cli in [CliKind::Claude, CliKind::Codex, CliKind::Cursor] {
+    for cli in [CliKind::Claude, CliKind::Codex] {
         let detected = find(&clis, cli);
         assert_eq!(
             *detected,
@@ -120,6 +120,18 @@ async fn a_cli_absent_from_path_is_reported_not_installed_and_nothing_else() {
                 plan: None,
                 note: None,
             }
+        );
+    }
+    let cursor = find(&clis, CliKind::Cursor);
+    assert_eq!(
+        cursor.installed,
+        crate::backend::cursor_sdk::script_present()
+    );
+    assert_eq!(cursor.plan, None);
+    if cursor.installed && cursor.note.is_some() {
+        assert!(
+            cursor.note.as_deref().unwrap().contains("Node.js"),
+            "{cursor:?}"
         );
     }
 }
@@ -149,69 +161,79 @@ async fn a_status_command_that_never_answers_times_out_without_a_signed_in_state
     );
 }
 
-#[tokio::test]
-async fn garbage_output_with_a_documented_exit_code_falls_back_to_it() {
-    let fixture = Fixture::new();
-    fixture.install("agent", FAKE_AGENT);
+const FAKE_CURSOR: &str = r#"#!/bin/sh
+case "$1" in
+  status)
+    if [ -n "$FAKE_CURSOR_STATUS" ]; then
+      printf '%s\n' "$FAKE_CURSOR_STATUS"
+    else
+      printf '%s\n' '{"signedIn":false,"version":"1.0.35"}'
+    fi
+    exit "${FAKE_CURSOR_EXIT:-0}"
+    ;;
+esac
+printf '%s\n' '{"type":"error","message":"unexpected"}'
+exit 1
+"#;
+
+fn cursor_env(fixture: &Fixture) -> Environment {
+    fixture.install("cursor-sdk", FAKE_CURSOR);
     let mut env = fixture.env();
-    env.set("FAKE_CLI_STDOUT", "not json at all {{{");
-    // 0004: exit 0 means signed in, even without a parseable body.
-    env.set("FAKE_CLI_EXIT", "0");
-    let clis = detect(&fixture, env).await;
-    let cursor = find(&clis, CliKind::Cursor);
-    assert!(cursor.installed, "{cursor:?}");
-    assert_eq!(cursor.signed_in, Some(true));
-    assert_eq!(
-        cursor.note, None,
-        "the documented exit code is enough; no note is needed"
-    );
+    env.set("PLXD_CURSOR_SDK", fixture.bin.join("cursor-sdk"));
+    env
 }
 
 #[tokio::test]
-async fn an_undocumented_exit_code_with_unparseable_output_leaves_signed_in_unknown() {
+async fn unreadable_cursor_status_leaves_signed_in_unknown() {
     let fixture = Fixture::new();
-    fixture.install("agent", FAKE_AGENT);
-    let mut env = fixture.env();
-    env.set("FAKE_CLI_STDOUT", "not json at all {{{");
-    env.set("FAKE_CLI_STDERR", "internal error\n");
-    env.set("FAKE_CLI_EXIT", "2");
+    let mut env = cursor_env(&fixture);
+    env.set("FAKE_CURSOR_STATUS", "not json at all {{{");
     let clis = detect(&fixture, env).await;
     let cursor = find(&clis, CliKind::Cursor);
     assert!(cursor.installed, "{cursor:?}");
     assert_eq!(cursor.signed_in, None);
-    assert!(
-        cursor.note.as_ref().is_some_and(|note| note.contains('2')),
-        "{cursor:?}"
-    );
+    assert!(cursor.note.is_some(), "{cursor:?}");
+    assert_eq!(cursor.plan, None);
 }
 
 #[tokio::test]
-async fn cursors_plan_comes_from_a_separate_about_command_only_when_signed_in() {
+async fn a_failing_cursor_sidecar_leaves_signed_in_unknown() {
     let fixture = Fixture::new();
-    fixture.install("agent", FAKE_AGENT);
-    let mut env = fixture.env();
+    let mut env = cursor_env(&fixture);
+    env.set("FAKE_CURSOR_STATUS", "not json at all {{{");
+    env.set("FAKE_CURSOR_EXIT", "2");
+    let clis = detect(&fixture, env).await;
+    let cursor = find(&clis, CliKind::Cursor);
+    assert!(cursor.installed, "{cursor:?}");
+    assert_eq!(cursor.signed_in, None);
+    assert!(cursor.note.is_some(), "{cursor:?}");
+}
+
+#[tokio::test]
+async fn cursor_status_reports_the_account_without_a_plan() {
+    let fixture = Fixture::new();
+    let mut env = cursor_env(&fixture);
     env.set(
-        "FAKE_CLI_STDOUT",
-        r#"{"loggedIn":true,"authType":"subscription"}"#,
-    );
-    env.set(
-        "FAKE_CLI_ABOUT_STDOUT",
-        "Cursor CLI 2026.09.23\nSubscription Tier: Pro+\n",
+        "FAKE_CURSOR_STATUS",
+        r#"{"signedIn":true,"email":"ryan@example.com","version":"1.0.35"}"#,
     );
     let clis = detect(&fixture, env).await;
     let cursor = find(&clis, CliKind::Cursor);
     assert_eq!(cursor.signed_in, Some(true));
-    assert_eq!(cursor.plan.as_deref(), Some("Pro+"));
+    assert_eq!(cursor.auth_kind, Some(AuthKind::Subscription));
+    assert_eq!(cursor.version.as_deref(), Some("1.0.35"));
+    assert_eq!(cursor.plan, None);
 
-    // Signed out: `about` is never consulted, even though its variables are set.
     let fixture = Fixture::new();
-    fixture.install("agent", FAKE_AGENT);
-    let mut env = fixture.env();
-    env.set("FAKE_CLI_EXIT", "1");
-    env.set("FAKE_CLI_ABOUT_STDOUT", "Subscription Tier: Pro+\n");
+    let mut env = cursor_env(&fixture);
+    env.set(
+        "FAKE_CURSOR_STATUS",
+        r#"{"signedIn":false,"version":"1.0.35"}"#,
+    );
     let clis = detect(&fixture, env).await;
     let cursor = find(&clis, CliKind::Cursor);
     assert_eq!(cursor.signed_in, Some(false));
+    assert_eq!(cursor.auth_kind, None);
     assert_eq!(cursor.plan, None);
 }
 
@@ -313,10 +335,9 @@ async fn get_probes_only_the_cli_asked_for() {
     assert_eq!(detector.get(CliKind::Claude).await, claude);
     assert_eq!(status_runs("claude"), 1);
 
-    // The full list probes Cursor, so the check above could have failed, and the list serves what
-    // `refresh_one` just probed rather than the older entry.
+    // The full list no longer runs `agent status`: Cursor is the SDK sidecar (0053).
     detector.list().await;
-    assert_eq!(status_runs("agent"), 1);
+    assert_eq!(status_runs("agent"), 0);
     detector.refresh_one(CliKind::Claude).await;
     assert_eq!(
         status_runs("claude"),

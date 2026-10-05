@@ -1879,12 +1879,11 @@ mod tests {
         assert!(bare.ends_with("memory_propose.\n\nYour task:\n"), "{bare}");
     }
 
-    /// PLX-394 (0042): each built-in kind in each Project mode. Claude Code and Codex map both,
-    /// and Cursor only Bypass, so a Cursor run in an Auto Project is refused with why, never
-    /// moved up to Bypass.
+    /// PLX-394 (0042): each built-in kind in each Project mode. Claude Code, Codex, and Cursor
+    /// map both Auto and Bypass (0053: Cursor's Auto is the SDK's classifier). A run is never
+    /// moved up to another mode.
     #[test]
     fn each_kind_runs_a_projects_mode_or_says_why_not() {
-        use parallax_protocol::jsonrpc::PLX_ERROR;
         use parallax_protocol::{AgentPermission, ProjectPermission};
 
         use crate::backend::claude::ClaudeBackend;
@@ -1901,21 +1900,10 @@ mod tests {
         let codex = CodexBackend::new(launcher.clone());
         let cursor = crate::providers::cursor_backend(launcher);
         let (auto, bypass) = (ProjectPermission::Auto, ProjectPermission::Bypass);
-        for backend in [&claude as &dyn crate::backend::Backend, &codex] {
+        for backend in [&claude as &dyn crate::backend::Backend, &codex, &cursor] {
             assert_eq!(in_mode(backend, auto).unwrap(), AgentPermission::Auto);
             assert_eq!(in_mode(backend, bypass).unwrap(), AgentPermission::Bypass);
         }
-        assert_eq!(in_mode(&cursor, bypass).unwrap(), AgentPermission::Bypass);
-        let refused = in_mode(&cursor, auto).unwrap_err();
-        assert_eq!(refused.code, PLX_ERROR);
-        assert_eq!(
-            refused.parallax_data().unwrap().kind,
-            ErrorKind::UnsupportedOption
-        );
-        assert_eq!(
-            refused.message,
-            "Cursor has no Auto. Set the Project to Bypass to use it."
-        );
     }
 
     /// PLX-433 (0042): a model service runs Claude Code, which has Auto, but runs a Project's

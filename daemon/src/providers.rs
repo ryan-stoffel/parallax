@@ -50,6 +50,8 @@ enum Driver {
     Claude,
     /// Codex's `app-server`.
     Codex,
+    /// Cursor through the official SDK sidecar (0053).
+    CursorSdk,
     /// An ACP agent.
     Acp(Box<AcpAgent>),
 }
@@ -97,23 +99,12 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
             login: &["codex", "login"],
             ..base("codex", Driver::Codex)
         },
-        ProviderKind::Cursor => {
-            let (modes, edit_mode) = plan("agent");
-            Preset {
-                login: &["agent", "login"],
-                ..base(
-                    "agent",
-                    Driver::Acp(Box::new(AcpAgent {
-                        scrub: vec!["CURSOR_".into()],
-                        model_flag: Some("--model".into()),
-                        bypass_flag: Some("--force".into()),
-                        modes,
-                        edit_mode,
-                        ..acp_agent("Cursor Agent", "agent", &["acp"])
-                    })),
-                )
-            }
-        }
+        ProviderKind::Cursor => Preset {
+            // Sign-in is `cursor/signIn`, not a terminal command. The program is unused: the
+            // sidecar is what runs, and a first run seeds Cursor when that script is present.
+            login: &[],
+            ..base("node", Driver::CursorSdk)
+        },
         ProviderKind::Opencode => {
             let (modes, edit_mode) = plan("build");
             Preset {
@@ -207,6 +198,15 @@ const BUILT_IN: &[(&str, ProviderKind, &str)] = &[
     ("cursor", ProviderKind::Cursor, "Cursor"),
 ];
 
+/// Whether a first run should list this built-in. Cursor is present when its sidecar script is,
+/// which the app ships beside `plxd`; the others when their CLI is on `PATH`.
+fn built_in_present(launcher: &Launcher, kind: ProviderKind) -> bool {
+    if kind == ProviderKind::Cursor {
+        return crate::backend::cursor_sdk::script_present();
+    }
+    preset(kind).is_some_and(|preset| detect::resolve(launcher, preset.program).is_some())
+}
+
 /// The CLI plxd's detector already probes for a built-in instance.
 fn detected_cli(id: &str) -> Option<CliKind> {
     match id {
@@ -283,8 +283,7 @@ impl Providers {
         let first = saved.is_none();
         let mut stored = saved.unwrap_or_default();
         for (id, kind, name) in BUILT_IN {
-            let program = preset(*kind).map_or("", |preset| preset.program);
-            if first && detect::resolve(launcher, program).is_some() {
+            if first && built_in_present(launcher, *kind) {
                 let instance = ProviderInstance {
                     id: (*id).to_owned(),
                     kind: *kind,
@@ -326,6 +325,21 @@ impl Providers {
         }
         providers.stored.try_lock().map(|mut s| *s = stored).ok();
         providers
+    }
+
+    /// Drops a cached probe so the next list reads the sidecar again.
+    pub async fn invalidate(&self, id: &str) {
+        self.cache.lock().await.remove(id);
+    }
+
+    /// Whether the instance `id` sets the variable `name`, secret or not.
+    pub async fn sets(&self, id: &str, name: &str) -> bool {
+        self.stored
+            .lock()
+            .await
+            .iter()
+            .filter(|entry| entry.instance.id == id)
+            .any(|entry| entry.instance.env.iter().any(|var| var.name == name))
     }
 
     /// Every instance with its state, probing those whose cached state is older than
@@ -567,6 +581,9 @@ impl Providers {
 
     async fn probe(&self, detector: &CliDetector, entry: &Stored, refresh: bool) -> Found {
         let instance = &entry.instance;
+        if instance.kind == ProviderKind::Cursor {
+            return probe_cursor(&self.launcher, entry).await;
+        }
         let Some(preset) = preset(instance.kind) else {
             return Found {
                 note: Some("this plxd doesn't know this kind of provider; update plxd".into()),
@@ -638,7 +655,7 @@ impl Providers {
             (Driver::Claude, Some((url, key_name))) => {
                 probe_service(&self.launcher, entry, &env, url, key_name, &mut found).await;
             }
-            (Driver::Acp(agent), _) if instance.kind != ProviderKind::Cursor => {
+            (Driver::Acp(agent), _) => {
                 // Probed without its secrets, which only a run reads, and which never go on the
                 // sign-in command line, where `ps` would show them.
                 let agent = acp_for(
@@ -694,6 +711,43 @@ async fn probe_service(
     found.signed_in = Some(has_secret || key.is_some());
     if found.signed_in == Some(false) {
         found.note = Some("Add the service's API key".into());
+    }
+}
+
+/// Cursor's state from its SDK sidecar (0053), with the instance's plain `CURSOR_API_KEY`.
+async fn probe_cursor(launcher: &Launcher, entry: &Stored) -> Found {
+    let instance = &entry.instance;
+    // A `CURSOR_API_KEY` kept as a secret isn't read here: the keychain can ask the user
+    // first. The sidecar checks a plain one with `Cursor.me`.
+    let api_key = crate::backend::cursor_sdk::API_KEY;
+    let env: Vec<_> = plain_env(entry)
+        .into_iter()
+        .filter(|(name, _)| name == api_key)
+        .collect();
+    let secret_key = env.is_empty()
+        && instance
+            .env
+            .iter()
+            .any(|var| var.secret && var.name == api_key);
+    let report = if secret_key {
+        crate::backend::cursor_sdk::Report {
+            installed: crate::backend::cursor_sdk::script_present(),
+            signed_in: Some(true),
+            note: Some("Uses CURSOR_API_KEY from this provider's settings".into()),
+            ..Default::default()
+        }
+    } else {
+        crate::backend::cursor_sdk::inspect(launcher, &instance.id, &env, PROBE_TIMEOUT).await
+    };
+    Found {
+        installed: report.installed,
+        path: report.path,
+        version: report.version,
+        signed_in: report.signed_in,
+        account: report.email,
+        note: report.note,
+        models: report.models,
+        ..Found::default()
     }
 }
 
@@ -767,6 +821,9 @@ fn build(
             }
         }
         Driver::Codex => Arc::new(CodexBackend::new(launcher).with_overrides(overrides)),
+        Driver::CursorSdk => Arc::new(
+            crate::backend::cursor_sdk::CursorSdkBackend::new(launcher).with_overrides(overrides),
+        ),
         Driver::Acp(agent) => Arc::new(AcpBackend::new(
             launcher,
             acp_for(instance, &preset, (**agent).clone(), overrides),
@@ -1197,6 +1254,15 @@ fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
             ],
             true,
         ),
+        Some(Driver::CursorSdk) => (
+            vec![
+                AgentPermission::Edit,
+                AgentPermission::Plan,
+                AgentPermission::Auto,
+                AgentPermission::Bypass,
+            ],
+            false,
+        ),
         Some(Driver::Acp(agent)) => (agent.permissions(), false),
         None => (vec![AgentPermission::Edit], false),
     };
@@ -1260,20 +1326,11 @@ fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
     }
 }
 
-/// The built-in `cursor` instance's backend before any setting changes it: Cursor Agent's
-/// `agent acp` (0036).
+/// The built-in `cursor` instance's backend before any setting changes it: the Cursor SDK
+/// sidecar (0053).
 #[must_use]
-pub fn cursor_backend(launcher: Launcher) -> AcpBackend {
-    let Some(Driver::Acp(agent)) = preset(ProviderKind::Cursor).map(|preset| preset.driver) else {
-        unreachable!("Cursor's preset is an ACP agent");
-    };
-    AcpBackend::new(
-        launcher,
-        AcpAgent {
-            name: "cursor".into(),
-            ..*agent
-        },
-    )
+pub fn cursor_backend(launcher: Launcher) -> crate::backend::cursor_sdk::CursorSdkBackend {
+    crate::backend::cursor_sdk::CursorSdkBackend::new(launcher)
 }
 
 #[cfg(test)]
@@ -1453,17 +1510,26 @@ mod tests {
         let mut registry = BackendRegistry::new();
         startup(&mut registry);
         let providers = Providers::load(dir.path(), keys(), &launcher(), &registry);
-        let ids: Vec<String> = providers
+        let mut ids: Vec<String> = providers
             .stored
             .lock()
             .await
             .iter()
             .map(|s| s.instance.id.clone())
             .collect();
-        assert_eq!(ids, ["codex"], "only the installed built-in");
+        ids.sort();
+        let mut expected = vec!["codex".to_owned()];
+        if crate::backend::cursor_sdk::script_present() {
+            expected.push("cursor".to_owned());
+        }
+        expected.sort();
+        assert_eq!(ids, expected, "only the installed built-ins");
         assert!(registry.by_backend_name("codex").is_some());
 
         providers.remove("codex").await.unwrap();
+        if expected.iter().any(|id| id == "cursor") {
+            providers.remove("cursor").await.unwrap();
+        }
         assert!(registry.by_backend_name("codex").is_none());
         assert!(
             registry

@@ -49,7 +49,7 @@ struct Fake {
     backend: AcpBackend,
 }
 
-/// Cursor Agent as plxd's built-in `cursor` provider describes it (0036).
+/// The ACP shape Cursor used before the SDK sidecar (0036). The ACP driver still serves the other agents.
 fn cursor() -> AcpAgent {
     AcpAgent {
         scrub: vec!["CURSOR_".into()],

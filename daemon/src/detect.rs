@@ -9,7 +9,7 @@
 //! - Runs the read-only status commands 0004 lists, through the same [`Launcher`] and
 //!   environment scrubbing the agent backends use, with a timeout.
 //!
-//! The exact shape of `claude auth status` and `agent status --format json` is undocumented, so
+//! The exact shape of `claude auth status` is undocumented, so
 //! [`apply_json_status`] reads the fields these sources show and tolerates everything else,
 //! mirroring 0007's forward-compatible parsing rule. A field plxd could not read is left `None`
 //! rather than guessed, and [`DetectedCli::note`] says why when that happens.
@@ -461,29 +461,20 @@ async fn probe_codex_plan(launcher: &Launcher, timeout: Duration) -> Option<Stri
     plan
 }
 
+/// Cursor's account, from the SDK sidecar (0053), not from `agent status`. The SDK reports an
+/// email and no subscription tier.
 async fn probe_cursor(launcher: &Launcher, timeout: Duration) -> DetectedCli {
-    let Some(path) = resolve(launcher, "agent") else {
-        return not_installed(CliKind::Cursor);
-    };
-    let mut detected = installed(CliKind::Cursor, &path);
-    match run(launcher, "agent", &["status", "--format", "json"], timeout).await {
-        Ok(ran) => apply_json_status(&mut detected, &ran),
-        Err(note) => detected.note = Some(note),
+    let report = crate::backend::cursor_sdk::inspect(launcher, "cursor", &[], timeout).await;
+    DetectedCli {
+        cli: CliKind::Cursor,
+        installed: report.installed,
+        path: report.path,
+        version: report.version,
+        signed_in: report.signed_in,
+        auth_kind: (report.signed_in == Some(true)).then_some(AuthKind::Subscription),
+        plan: None,
+        note: report.note,
     }
-    if detected.signed_in == Some(true)
-        && let Ok(ran) = run(launcher, "agent", &["about"], timeout).await
-    {
-        detected.plan = extract_subscription_tier(&ran.stdout).or(detected.plan);
-    }
-    detected
-}
-
-/// Reads a `Subscription Tier: <value>` line from `agent about`'s plain text (0004, undocumented).
-fn extract_subscription_tier(text: &str) -> Option<String> {
-    text.lines().find_map(|line| {
-        let tier = line.trim().strip_prefix("Subscription Tier:")?.trim();
-        (!tier.is_empty()).then(|| tier.to_owned())
-    })
 }
 
 /// Runs `gh --version` and `gh auth status --hostname github.com`, never with `--show-token`, so
