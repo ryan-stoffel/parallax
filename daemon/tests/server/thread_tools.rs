@@ -12,6 +12,7 @@ use parallax_protocol::{
     RepoAddParams, RepoId, RunId, Thread, ThreadListParams, ThreadStartParams, TurnId,
 };
 use plxd::backend::fake::Step;
+use plxd::mcp::MAX_CALLS;
 use plxd::mcp::thread::TOOLS;
 use plxd::paths::DataDir;
 use serde_json::{Value, json};
@@ -734,6 +735,35 @@ async fn tool_calls_share_one_connection_while_a_wait_runs() {
         .filter(|method| *method == "initialize")
         .count();
     assert_eq!(initialized, 1);
+    host.server.stop().await;
+}
+
+/// PLX-488: the server runs at most `MAX_CALLS` tool calls at once, and reads the next request
+/// only once one of them finishes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_server_runs_at_most_max_calls_at_once() {
+    let host = Host::start(temp_dir(), fake(hang()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    let mut mcp = tools(&host, me).await;
+    let launch = json!({"prompt": "Wait here.", "backend": "fake", "workspace": "none"});
+    let child = id(&mcp.ok("thread_launch", launch).await);
+
+    let wait = json!({"name": "thread_wait", "arguments": {"runId": child, "timeoutSeconds": 2}});
+    for n in 0..MAX_CALLS {
+        let id = format!("wait-{n}");
+        mcp.send(&json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": wait}))
+            .await;
+    }
+    let list = json!({"name": "thread_list", "arguments": {}});
+    mcp.send(&json!({"jsonrpc": "2.0", "id": "list", "method": "tools/call", "params": list}))
+        .await;
+    let first = mcp.read().await.expect("an answer");
+    assert!(
+        first["id"].as_str().unwrap().starts_with("wait-"),
+        "{first}"
+    );
     host.server.stop().await;
 }
 

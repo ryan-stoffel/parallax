@@ -69,6 +69,10 @@ pub const MAX_RESULT_BYTES: usize = 256 * 1024;
 /// the newest; the tools use nothing that differs between them.
 const MCP_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
 
+/// The most tool calls the server runs at once. Each has at most one request in flight to plxd,
+/// so staying under plxd's 32 per connection means long waits never fill the connection.
+pub const MAX_CALLS: usize = 16;
+
 /// One server's tools: what `tools/list` shows, and how `tools/call` runs one.
 trait Tools {
     /// Every tool's name, as [`Tools::definitions`] lists them.
@@ -87,12 +91,13 @@ async fn serve(
     let mut reader = FramedRead::new(input, FrameCodec::with_max_frame_bytes(MAX_MESSAGE_BYTES));
     let mut writer = FramedWrite::new(output, FrameCodec::new());
     // Requests are answered concurrently, each as it finishes, so a long `thread_wait` doesn't
-    // hold up the calls after it. Once `input` ends, the ones read are still answered.
+    // hold up the calls after it. At `MAX_CALLS` the server stops reading until one finishes.
+    // Once `input` ends, the ones read are still answered.
     let mut answering = FuturesUnordered::new();
     let mut reading = true;
     loop {
         let response = tokio::select! {
-            frame = reader.next(), if reading => {
+            frame = reader.next(), if reading && answering.len() < MAX_CALLS => {
                 let frame = match frame {
                     None => {
                         reading = false;
