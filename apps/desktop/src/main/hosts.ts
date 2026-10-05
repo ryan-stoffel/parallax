@@ -19,7 +19,9 @@ import { checkHost, readSettings, writeSettings, type Settings } from "./setting
 import {
   closeAllTerminals,
   closeTerminal,
+  installCommand,
   isCliKind,
+  isInstallable,
   loginCommand,
   openTerminal,
   resizeTerminal,
@@ -240,16 +242,24 @@ export function startHosts(): void {
   ipcMain.handle("parallax:retry", (_event, hostId: unknown) => connection(hostId).retry());
 
   // A window's terminals (terminal.ts), by an id it picks: a CLI's or a provider instance's
-  // sign-in, or a shell in a thread's folder. The renderer names the host and the CLI, instance,
-  // or folder; only main decides what runs.
+  // sign-in, a CLI's install, or a shell in a thread's folder. The renderer names the host and the
+  // CLI, instance, or folder; only main decides what runs.
   ipcMain.handle(
     "parallax:openTerminal",
     (event, id: unknown, target: unknown, cols: unknown, rows: unknown) => {
       if (!isTerminalId(id) || !isObject(target) || !isSize(cols) || !isSize(rows)) {
         return "invalid terminal";
       }
-      const { hostId, cli, provider, path } = target;
+      const { hostId, cli, provider, install, path } = target;
       if (typeof hostId !== "string") return "invalid terminal";
+      if (isInstallable(install)) {
+        // A host that's gone has no ssh target, and mustn't install here instead.
+        const command = async () =>
+          connections.has(hostId)
+            ? installCommand(install, sshOf(hostId))
+            : "That host isn't in Parallax anymore.";
+        return openTerminal(event.sender, id, command, cols, rows);
+      }
       if (isCliKind(cli)) {
         return openTerminal(event.sender, id, () => signInCommand(hostId, cli), cols, rows);
       }
@@ -279,6 +289,12 @@ export function startHosts(): void {
     for (const each of connections.values()) each.dispose();
     closeAllTerminals();
   });
+}
+
+/** How a host is reached, if it's an SSH host. */
+function sshOf(hostId: string) {
+  const saved = settings.hosts.find((h) => h.id === hostId);
+  return saved && { destination: saved.destination, ssh: settings.ssh ?? "ssh" };
 }
 
 /**

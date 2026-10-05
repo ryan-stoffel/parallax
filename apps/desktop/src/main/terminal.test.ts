@@ -1,7 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import type { CliKind } from "../protocol/generated/protocol";
-import { loginCommand, shellCommand, terminalEnv } from "./terminal";
+import { installCommand, loginCommand, shellCommand, terminalEnv } from "./terminal";
 
 const mini = { destination: "me@mini", ssh: "ssh" };
 
@@ -103,4 +103,20 @@ test("gives the terminal a UTF-8 LANG only when no locale is set", () => {
   expect(terminalEnv({ LANG: "fr_FR.UTF-8" })).toEqual({ LANG: "fr_FR.UTF-8" });
   expect(terminalEnv({ LC_CTYPE: "UTF-8" })).toEqual({ LC_CTYPE: "UTF-8" });
   expect(terminalEnv({ LC_ALL: "C" })).toEqual({ LC_ALL: "C" });
+});
+
+test("installs a CLI with its own script in the login shell, here or over ssh", () => {
+  expect(installCommand("claude", undefined, "darwin", { SHELL: "/bin/zsh" })).toEqual({
+    file: "/bin/zsh",
+    args: ["-lc", "curl -fsSL https://claude.ai/install.sh | bash"],
+  });
+  expect(installCommand("claude", undefined, "win32").args).toEqual([
+    "-NoLogo",
+    "-NoProfile",
+    "-Command",
+    "irm https://claude.ai/install.ps1 | iex",
+  ]);
+  expect(installCommand("codex", mini, "darwin").args.at(-1)).toBe(
+    `exec "$SHELL" -lc 'npm install -g @openai/codex'`,
+  );
 });

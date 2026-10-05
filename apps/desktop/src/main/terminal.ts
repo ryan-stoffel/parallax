@@ -74,6 +74,36 @@ export function loginCommand(
   return overSsh(ssh, `${prefix}${quote(path)} ${line}`, forward, platform);
 }
 
+/** Each vendor CLI's own install, as its docs give it: for a POSIX shell, and for PowerShell. */
+const installScripts: Partial<Record<CliKind, { posix: string; windows: string }>> = {
+  claude: {
+    posix: "curl -fsSL https://claude.ai/install.sh | bash",
+    windows: "irm https://claude.ai/install.ps1 | iex",
+  },
+  codex: { posix: "npm install -g @openai/codex", windows: "npm install -g @openai/codex" },
+};
+
+export const isInstallable = (value: unknown): value is CliKind =>
+  typeof value === "string" && Object.hasOwn(installScripts, value);
+
+/**
+ * The command that installs `cli` on a host: its install script in the user's login shell, so
+ * it finds `npm` where the user would (PowerShell on Windows), or on an SSH host, the host's.
+ * ponytail: an SSH host is assumed POSIX; a Windows one over ssh fails.
+ */
+export function installCommand(
+  cli: CliKind,
+  ssh?: SshTarget,
+  platform = process.platform,
+  env = process.env,
+): Command {
+  const script = installScripts[cli]!;
+  if (ssh) return overSsh(ssh, `exec "$SHELL" -lc ${quote(script.posix)}`, [], platform);
+  if (platform === "win32")
+    return { file: "powershell.exe", args: ["-NoLogo", "-NoProfile", "-Command", script.windows] };
+  return { file: env["SHELL"] || "/bin/sh", args: ["-lc", script.posix] };
+}
+
 /**
  * The command that opens the user's login shell in `path`, a thread's folder: here, `$SHELL -l`
  * (PowerShell on Windows), or on an SSH host, the host's login shell after a `cd` to it over

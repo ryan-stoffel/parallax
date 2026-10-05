@@ -5,8 +5,8 @@ import { TerminalView } from "./Terminal";
 
 /**
  * A terminal running a sign-in on a host, in the main process's pty, as the window's terminal
- * `sign-in`: a CLI's own (0004), or a provider instance's `login`. `onExit` runs when the sign-in
- * ends; closing the pane (`onClose`, or unmounting) ends it if it's still running.
+ * `sign-in`: a CLI's own (0004), a provider instance's `login`, or a CLI's install. `onExit` runs
+ * when it ends; closing the pane (`onClose`, or unmounting) ends it if it's still running.
  */
 export function SignInTerminal({
   target,
@@ -14,7 +14,7 @@ export function SignInTerminal({
   onExit,
   onClose,
 }: {
-  /** A CLI's or a provider instance's sign-in. */
+  /** A CLI's or a provider instance's sign-in, or a CLI's install. */
   target: Exclude<TerminalTarget, { path: string }>;
   /** What signs in, as people know it, such as "Claude Code". */
   name: string;
@@ -25,11 +25,18 @@ export function SignInTerminal({
   const [ended, setEnded] = useState(false);
 
   const done = ended || error !== undefined;
+  const install = "install" in target;
   return (
     <div className="flex flex-col gap-2 border-border px-4 py-3 not-last:border-b">
       <div className="flex items-center justify-between gap-4">
         <span className="text-[12.5px] text-muted-foreground">
-          {done ? `${name} sign-in ended.` : `Signing in to ${name}…`}
+          {install
+            ? done
+              ? `${name} install ended.`
+              : `Installing ${name}…`
+            : done
+              ? `${name} sign-in ended.`
+              : `Signing in to ${name}…`}
         </span>
         <button
           type="button"
@@ -50,7 +57,7 @@ export function SignInTerminal({
           key={JSON.stringify(target)}
           id="sign-in"
           target={target}
-          label={`${name} sign-in terminal`}
+          label={`${name} ${install ? "install" : "sign-in"} terminal`}
           onEnd={(why) => {
             if (why) return setError(why);
             setEnded(true);

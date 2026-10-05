@@ -745,11 +745,8 @@ describe("on a plxd with providers", () => {
 
   test("lists the host's instances, and a switch turns one off on the host", async () => {
     await renderSettings();
-    expect(tabs()).toEqual([
-      "Claude Code2.1.281Authenticated · ryan@example.com",
-      "CodexNot authenticated",
-    ]);
-    expect(rows("Account")[0]).toBe("Display nameAuthenticated as ryan@example.com");
+    expect(tabs()).toEqual(["Claude Code2.1.281Authenticated", "CodexNot authenticated"]);
+    expect(rows("Account")[1]).toBe("AccountAuthenticated as ryan@example.com");
     expect(calls("accounts/list")).toEqual([]);
 
     await click(
@@ -762,6 +759,36 @@ describe("on a plxd with providers", () => {
       document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Use Claude Code"]')!
         .disabled,
     ).toBe(true);
+  });
+
+  test("Remove beside Refresh and + removes the chosen provider once it's confirmed", async () => {
+    answers["providers/remove"] = (p) => {
+      listed = listed.filter((each) => each.instance.id !== p["id"]);
+      return result();
+    };
+    await renderSettings();
+    await click(tab("Codex"));
+    await click(document.querySelector<HTMLElement>('[aria-label="Remove Codex"]')!);
+    expect(calls("providers/remove")).toEqual([]);
+    await click(button(document.body, "Cancel"));
+    await click(document.querySelector<HTMLElement>('[aria-label="Remove Codex"]')!);
+    await click(button(document.body, "Remove"));
+    expect(calls("providers/remove")[0]!.params).toEqual({ id: "codex" });
+    expect(tabs()).toEqual(["Claude Code2.1.281Authenticated"]);
+  });
+
+  test("a Claude Code or Codex that isn't installed offers Install, and a custom binary doesn't", async () => {
+    listed[1] = { ...listed[1]!, installed: false, signedIn: undefined };
+    await renderSettings();
+    expect(tabs()[1]).toBe("CodexNot installed");
+    await click(tab("Codex"));
+    expect(rows("Account")[1]).toBe("AccountNot installedInstall");
+
+    listed[1] = { ...listed[1]!, instance: { ...listed[1]!.instance, program: "/opt/codex" } };
+    unmount();
+    await renderSettings();
+    await click(tab("Codex"));
+    expect(rows("Account")[1]).toBe("AccountNot installed");
   });
 
   const dialog = () => document.querySelector("dialog")!;

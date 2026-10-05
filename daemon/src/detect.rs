@@ -16,7 +16,7 @@
 //!
 //! Plan/tier is available for Codex only through its `app-server`'s `account/read`, a JSON-RPC
 //! server on stdio rather than a one-shot command. [`probe_codex_plan`] does the smallest useful
-//! thing: one request, one response, then the process is killed. A real Codex backend (#122)
+//! thing: the `initialize` handshake, one request, one response, then the process is killed. A real Codex backend (#122)
 //! will want a proper client with its own handshake; this is not it.
 
 use std::collections::HashMap;
@@ -422,7 +422,8 @@ async fn probe_codex(launcher: &Launcher, timeout: Duration) -> DetectedCli {
 }
 
 /// Asks a running `codex app-server` for the signed-in account's plan, over one NDJSON
-/// request/response on stdio. Best-effort: any failure, including a malformed reply, is `None`
+/// request/response on stdio after its `initialize` handshake, without which it answers "Not
+/// initialized" (checked with 0.160.0). Best-effort: any failure, including a malformed reply, is `None`
 /// rather than an error, since a subscription's plan is metadata, not a fact plxd depends on.
 /// The process is killed once this returns, whether or not it answered in time.
 async fn probe_codex_plan(launcher: &Launcher, timeout: Duration) -> Option<String> {
@@ -433,10 +434,16 @@ async fn probe_codex_plan(launcher: &Launcher, timeout: Duration) -> Option<Stri
     let plan = tokio::time::timeout(timeout, async {
         let mut stdin = process.take_stdin()?;
         stdin
-            .write_all(br#"{"id":1,"method":"account/read","params":{}}"#)
+            .write_all(concat!(
+                r#"{"id":0,"method":"initialize","params":{"clientInfo":{"name":"plxd","version":"0"}}}"#,
+                "\n",
+                r#"{"method":"initialized"}"#,
+                "\n",
+                r#"{"id":1,"method":"account/read","params":{}}"#,
+                "\n",
+            ).as_bytes())
             .await
             .ok()?;
-        stdin.write_all(b"\n").await.ok()?;
         while let Some(output) = process.next().await {
             let Output::Line(bytes) = output else {
                 continue;
@@ -448,7 +455,7 @@ async fn probe_codex_plan(launcher: &Launcher, timeout: Duration) -> Option<Stri
                 continue;
             }
             return value
-                .pointer("/result/planType")
+                .pointer("/result/account/planType")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
         }
