@@ -279,8 +279,10 @@ test("a Project is one row that opens its chat: its repository and branch, with 
   const welcome = main.querySelector("h2")!.parentElement!.parentElement!;
   for (const name of ["min-h-0", "flex-wrap", "overflow-hidden"])
     expect(welcome.classList.contains(name)).toBe(true);
-  expect(main.textContent).toContain("/src/ember");
+  expect(main.textContent).toContain("This Mac");
+  expect(main.textContent).toContain("Local checkout");
   expect(main.textContent).toContain("main");
+  expect(main.textContent).not.toContain("/src/ember");
   expect(composer()!.getAttribute("aria-placeholder")).toBe(
     "This host's plxd can't run a Project's coordinator yet",
   );
@@ -1078,10 +1080,12 @@ test("a Project's first message starts its coordinator; later ones and Stop go t
   ]);
   expect(transcript()).toContain("Add a dark mode");
   expect(transcript()).toContain("I'll plan it.");
-  // The tab is the Project's repository, not a thread's worktree.
+  // The tab is the host and checkout, not a thread's worktree or the full path.
   const main = document.querySelector("main")!;
-  expect(main.textContent).toContain("/src/ember");
+  expect(main.textContent).toContain("This Mac");
+  expect(main.textContent).toContain("Local checkout");
   expect(main.textContent).not.toContain("Worktree");
+  expect(main.textContent).not.toContain("/src/ember");
 
   type("Start with the settings page");
   await click(button("Send"));
@@ -1547,7 +1551,7 @@ test("the agents bar over a Project's composer shows its first three providers, 
   expect(bar()).toBeNull();
 });
 
-test("a child's chat says whose it is, and its Coordinator button, the top bar's back arrow, and Go to parent return to the coordinator", async () => {
+test("a child's chat says whose it is, and its Open parent button, the top bar's back arrow, and Go to parent return to the coordinator", async () => {
   await openEmberAgents(login);
   const strip = () => document.querySelector('main section[aria-label="Child thread"]');
   const back = async () => {
@@ -1556,11 +1560,14 @@ test("a child's chat says whose it is, and its Coordinator button, the top bar's
   };
   expect(strip()).toBeNull();
   await back();
-  expect(strip()!.textContent).toBe(
-    "A child thread of ember, started by its coordinatorCoordinator⌥⌘↑",
-  );
+  expect(strip()!.textContent).toBe('A child thread of "ember"Open parent⌥⌘↑');
+  await click(strip()!.querySelector("button")!);
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
+  expect(strip()).toBeNull();
+
+  await back();
   await click(
-    [...strip()!.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Coordinator")),
+    [...strip()!.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Open parent")),
   );
   expect(crumbs()).toEqual(["This Mac", "ember"]);
   expect(strip()).toBeNull();
@@ -1707,7 +1714,7 @@ test("with projectTasks, a task is the default: Send starts a child through thre
   };
   await renderApp();
   await openEmber();
-  expect(route()).toBe("New task");
+  expect(route()).toBe("New thread");
   expect(composer()!.getAttribute("aria-placeholder")).toBe(
     "Describe a task, list a few, or ask the coordinator",
   );
@@ -1742,9 +1749,9 @@ test("a question goes to the coordinator, anything else starts a task, and the s
   await openEmber();
   // A question mark, or a question word without one.
   type("How should we split this");
-  expect(route()).toBe("Coordinator");
+  expect(route()).toBe("Chat");
   type("Split it by area?");
-  expect(route()).toBe("Coordinator");
+  expect(route()).toBe("Chat");
   await click(button("Send"));
   expect(calls("project/start")).toEqual([
     expect.objectContaining({ project: "p-ember", prompt: "Split it by area?" }),
@@ -1758,7 +1765,7 @@ test("a question goes to the coordinator, anything else starts a task, and the s
     { runId: coordinator()!.id, turnId: expect.any(String), text: "Which is riskier?" },
   ]);
   type("Add a dark mode");
-  expect(route()).toBe("New task");
+  expect(route()).toBe("New thread");
   await click(button("Send"));
   expect(calls("thread/start")).toEqual([
     expect.objectContaining({ project: "p-ember", prompt: "Add a dark mode" }),
@@ -1767,16 +1774,16 @@ test("a question goes to the coordinator, anything else starts a task, and the s
   // The shortcut, or the chip, sends this one message the other way.
   type("Add a light mode");
   flipTarget();
-  expect(route()).toBe("Coordinator");
+  expect(route()).toBe("Chat");
   await click(button("Send"));
   expect(calls("agent/send")).toHaveLength(2);
   expect(calls("agent/send")[1]).toMatchObject({ text: "Add a light mode" });
   type("Add a blue mode");
-  expect(route()).toBe("New task");
+  expect(route()).toBe("New thread");
   await click(document.querySelector('main button[aria-label^="Sends to: "]'));
-  expect(route()).toBe("Coordinator");
+  expect(route()).toBe("Chat");
   await click(document.querySelector('main button[aria-label^="Sends to: "]'));
-  expect(route()).toBe("New task");
+  expect(route()).toBe("New thread");
   expect(calls("project/start")).toHaveLength(1);
 });
 
@@ -1790,16 +1797,16 @@ test("a list starts one task per item, a question among them too: Enter adds an 
         "<ul><li><p>Add a dark mode</p></li><li><p>Add a light mode</p></li></ul>",
       ),
   );
-  expect(route()).toBe("2 tasks");
+  expect(route()).toBe("2 threads");
   act(() => void composer()!.editor!.commands.focus("end"));
   await enter();
   expect(calls("thread/start")).toEqual([]);
   // An item that asks is still a task.
   act(() => void composer()!.editor!.commands.insertContent("Can it be blue?"));
-  expect(route()).toBe("3 tasks");
+  expect(route()).toBe("3 threads");
   // Enter on the last item leaves an empty one, which starts nothing.
   await enter();
-  expect(route()).toBe("3 tasks");
+  expect(route()).toBe("3 threads");
   await enter(true);
   await settle();
   expect(calls("thread/start").map((p) => p["prompt"])).toEqual([

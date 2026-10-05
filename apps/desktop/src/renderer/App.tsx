@@ -304,6 +304,7 @@ export function App() {
 
   // The open thread's parent and children or siblings, on a plxd that keeps them (0041).
   const lineage = threads.lineage && openThread ? lineageOf(threads.state, openThread) : undefined;
+  const parentId = lineage?.parent?.id;
   // The open thread's agent's own subagents, as its chat reports them (PLX-382).
   const [native, setNative] = useState<{ threadId: string; list: NativeSubagent[] }>();
   const reportNative = useCallback(
@@ -654,6 +655,7 @@ export function App() {
               <AgentChat
                 key={`${host.id}/${selection.threadId}`}
                 hostId={host.id}
+                host={host}
                 runId={selection.threadId}
                 title={threads.state.titles[selection.threadId]}
                 notice={notice?.threadId === selection.threadId ? notice.text : undefined}
@@ -670,6 +672,15 @@ export function App() {
                 subagent={selection.subagent}
                 onOpenSubagent={openSubagent}
                 onSubagents={reportNative}
+                strip={
+                  parentId && (
+                    <ChildStrip
+                      name={threads.state.titles[parentId] ?? "Thread"}
+                      onOpenName={() => openThreadId(parentId)}
+                      onBack={() => openThreadId(parentId)}
+                    />
+                  )
+                }
                 forked={!!openThread?.forkedFrom}
                 onFork={
                   threads.forkable
@@ -709,7 +720,17 @@ export function App() {
                 going={isRunning(agent?.status)}
                 others={othersAsked(agentId)}
                 projectMode={project?.permission}
-                strip={project && <ChildStrip project={project} onBack={() => openAgent()} />}
+                host={host}
+                strip={
+                  project && (
+                    <ChildStrip
+                      name={project.name}
+                      icon={<ProjectIcon icon={project.icon} className="size-3.5 shrink-0" />}
+                      onOpenName={() => setSelection({ kind: "project", projectId: project.id })}
+                      onBack={() => openAgent()}
+                    />
+                  )
+                }
               />
             ) : (
               project && (
@@ -720,6 +741,9 @@ export function App() {
                   prompt={project.coordinator && threads.state.runs[project.coordinator]?.prompt}
                   startCoordinator={threads.startCoordinator}
                   startTask={threads.startTask}
+                  updateProject={threads.updateProject}
+                  host={host}
+                  repo={threads.state.repos.find((r) => r.path === project.repoPath)?.id}
                   others={othersAsked(project.coordinator)}
                   agents={agents}
                   titles={threads.state.titles}
