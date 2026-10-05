@@ -1968,6 +1968,53 @@ const withThread = () => {
 /** Every row's title, in the sidebar's order. */
 const sidebarTitles = () =>
   [...document.querySelectorAll("#sidebar li[data-kind] [data-title]")].map((t) => t.textContent);
+
+test("side panel visibility belongs to each thread, while entering a Project still opens it", async () => {
+  const second = { ...flaky, id: "t-second" };
+  answers["thread/list"] = () => ({
+    result: { repos: [parallax], threads: [flaky, second], seq: 7 },
+  });
+  answers["agent/list"] = () => ({
+    result: {
+      runs: [flaky, second].map((t, i) => ({
+        ...coordinatorRun(t.id, `Thread ${i + 1}`),
+        project: parallax.id,
+        status: "completed",
+      })),
+      seq: 7,
+    },
+  });
+  await renderApp();
+  const threadButton = (name: string) =>
+    [
+      ...document.querySelectorAll<HTMLButtonElement>('#sidebar li[data-kind="thread"] > button'),
+    ].find((b) => b.querySelector("[data-title]")?.textContent === name)!;
+  const panel = () => document.getElementById("side-panel")!;
+  const close = () =>
+    click(document.querySelector('#side-panel button[aria-label="Hide side panel"]'));
+  await click(threadButton("Thread 1"));
+  await click(button("Show side panel"));
+  expect(panel().hidden).toBe(false);
+  await click(threadButton("Thread 2"));
+  expect(panel().hidden).toBe(true);
+  await click(button("Show side panel"));
+  await click(threadButton("Thread 1"));
+  expect(panel().hidden).toBe(false);
+  await close();
+  await click(threadButton("Thread 2"));
+  expect(panel().hidden).toBe(false);
+  await click(threadButton("Thread 1"));
+  expect(panel().hidden).toBe(true);
+  await openEmber();
+  expect(panel().hidden).toBe(false);
+  await close();
+  await click(threadButton("Thread 2"));
+  expect(panel().hidden).toBe(false);
+  await openEmber();
+  expect(panel().hidden).toBe(false);
+  await click(threadButton("Thread 1"));
+  expect(panel().hidden).toBe(true);
+});
 const sectionHeadings = () =>
   [...document.querySelectorAll("#sidebar > div h2")].map((h) => h.textContent);
 const projectsToggle = () =>

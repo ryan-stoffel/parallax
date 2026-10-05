@@ -109,7 +109,25 @@ export function App() {
     setSettingsHost(hostId);
   };
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [panelOpen, setPanelOpen] = useState(false);
+  // Keep each host's chats independent when switching between them.
+  const [openPanels, setOpenPanels] = useState<Record<string, boolean>>({});
+  const panelKey = JSON.stringify([
+    host.id,
+    selection.kind,
+    selection.kind === "thread"
+      ? selection.threadId
+      : selection.kind === "project"
+        ? selection.projectId
+        : selection.kind === "new"
+          ? selection.groupId
+          : undefined,
+  ]);
+  const panelOpen = openPanels[panelKey] ?? false;
+  const setPanelOpen = (next: boolean | ((open: boolean) => boolean)) =>
+    setOpenPanels((panels) => ({
+      ...panels,
+      [panelKey]: typeof next === "function" ? next(panels[panelKey] ?? false) : next,
+    }));
   const [panelExpanded, setPanelExpanded] = useState(false);
   // The folders whose terminal drawer is open, by key (ThreadTerminal.tsx).
   const [drawers, setDrawers] = useState<ReadonlySet<string>>(new Set());
@@ -190,9 +208,10 @@ export function App() {
   // The open subagent, whose chat takes the coordinator's place while the Project stays selected.
   const agentId = selection.kind === "project" ? selection.agentId : undefined;
   // Entering a Project shows its inbox in the side panel.
-  const [panelProject, setPanelProject] = useState(project?.id);
-  if (project?.id !== panelProject) {
-    setPanelProject(project?.id);
+  const projectPanelKey = project ? panelKey : undefined;
+  const [panelProject, setPanelProject] = useState(projectPanelKey);
+  if (projectPanelKey !== panelProject) {
+    setPanelProject(projectPanelKey);
     if (project) setPanelOpen(true);
   }
   // The Project's inbox (0043), on a plxd with `inbox`, and the children whose questions wait in it.
