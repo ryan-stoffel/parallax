@@ -2191,19 +2191,21 @@ impl Actor {
         }
     }
 
-    /// Logs the pending batch, then indexes what the run said since the last turn for
-    /// `thread/search` (PLX-487). Runs when a turn ends and when the CLI exits.
+    /// Logs the pending batch and, in the same job, indexes what the run said since the last turn
+    /// for `thread/search` (PLX-487). Runs when a turn ends and when the CLI exits. An index that
+    /// fails is logged, and the batch commits anyway.
     async fn index_text(&mut self) {
-        self.flush().await;
-        let id = self.id;
-        let run_id = self.row.id;
-        let indexed = store(&self.daemon, move |db| {
-            db.index_run_text(run_id)
-                .map_err(|error| store_error(&error))
-        })
-        .await;
-        if let Err(error) = indexed {
-            warn!(run = %id, error = %error.message, "could not index a turn's text");
+        let (id, run_id) = (self.id, self.row.id);
+        let logged = self
+            .with_output(false, move |db, _| {
+                if let Err(error) = db.index_run_text(run_id) {
+                    warn!(run = %id, %error, "could not index a turn's text");
+                }
+                Ok(())
+            })
+            .await;
+        if let Err(error) = logged {
+            warn!(run = %id, error = %error.message, "could not store a run's output; it was dropped");
         }
     }
 

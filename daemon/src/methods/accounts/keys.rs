@@ -72,7 +72,8 @@ static CHANGING: Mutex<()> = Mutex::new(());
 /// is a lossy display form and two different keys can share one. Anything else with an existing
 /// row is `idConflict`. A new row's key is stored in the Keychain first, so a row is never created
 /// for a key that failed to save; if the store job then fails, its commit included, the key is
-/// deleted again, so a failed add never leaves a key with no record behind it either.
+/// deleted again, best effort: a failed delete is logged, and only then can a key outlive its
+/// add.
 fn add_account(
     store: &StoreHandle,
     keys: &dyn KeyStore,
