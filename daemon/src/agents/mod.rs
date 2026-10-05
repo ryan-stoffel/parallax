@@ -48,6 +48,7 @@ mod approvals;
 pub(crate) mod attached;
 pub(crate) mod convert;
 pub(crate) mod coordinator;
+pub(crate) mod handoff;
 mod placement;
 mod resume;
 pub(crate) mod review;
@@ -732,6 +733,7 @@ async fn record(
     thread: Option<ThreadFields>,
     repo_path: &Path,
     created: Option<&CreatedWorktree>,
+    seen: Vec<(Uuid, u64)>,
 ) -> Result<
     (
         parallax_store::Run,
@@ -786,6 +788,8 @@ async fn record(
         if let Some(thread) = &thread {
             crate::threads::stage_started(db, thread)?;
         }
+        db.record_attached_seen(run_id.into(), &seen)
+            .map_err(|e| store_error(&e))?;
         Ok((run, worktree, thread))
     })
     .await;
@@ -1166,7 +1170,8 @@ pub(crate) async fn create_started(
         return Ok(CreatedRun { run, thread: row });
     }
     // The attached threads are read before anything is created, so a failure leaves nothing.
-    let sent = attached::prompt(&daemon, &threads, &prompt).await?;
+    let attached = attached::prompt(&daemon, run_id, &threads, &prompt).await?;
+    let (sent, seen) = (attached.text, attached.seen);
     // A Project's child goes where its rules say, or waits (0046).
     let requested = account.clone();
     let mut waiting = None;
@@ -1245,6 +1250,7 @@ pub(crate) async fn create_started(
         thread.map(|thread| thread.fields),
         Path::new(&repo_path),
         created.as_ref(),
+        seen,
     )
     .await?;
     // It counts as starting or waiting now.
@@ -2037,6 +2043,7 @@ mod tests {
             None,
             Path::new("/src/app"),
             None,
+            Vec::new(),
         )
         .await
         .unwrap_err();

@@ -50,6 +50,8 @@ pub(crate) struct Entry {
     pub event: ParallaxEvent,
     /// The event's JSON size, for the in-memory replay window's byte bound.
     pub bytes: usize,
+    /// A compacted turn's first `seq` (`compacted.from`), when the payload has one (PLX-491).
+    pub compacted_from: Option<u64>,
 }
 
 /// Why the events after a `seq` can't be replayed.
@@ -325,6 +327,7 @@ impl EventLog {
             project,
             event,
             bytes,
+            compacted_from: None,
         }));
         *total += bytes;
         *head = seq;
@@ -479,7 +482,15 @@ fn entry(stored: &StoredEvent) -> Entry {
             .and_then(|id| ProjectId::try_from(id).ok()),
         bytes: stored.payload.len(),
         event: serde_json::from_str(&stored.payload).unwrap_or(ParallaxEvent::Unknown),
+        compacted_from: compacted_from(&stored.payload),
     }
+}
+
+/// `compacted.from` on an event payload, when present (PLX-491). Absent until turns are compacted.
+fn compacted_from(payload: &str) -> Option<u64> {
+    serde_json::from_str::<serde_json::Value>(payload)
+        .ok()
+        .and_then(|value| value.get("compacted")?.get("from")?.as_u64())
 }
 
 #[cfg(test)]
