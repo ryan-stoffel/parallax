@@ -463,7 +463,7 @@ fn runs_list_with_their_worktrees_as_read_one_by_one() {
 
 /// PLX-338: `project/delete` removes each of a Project's runs with every row kept for it.
 #[test]
-fn deleting_a_run_removes_its_worktree_events_turns_images_and_wakes_only() {
+fn deleting_a_run_removes_its_worktree_events_turns_images_wakes_and_attached_seen() {
     let (_dir, mut store) = open();
     let project = Uuid::now_v7();
     let [kept, gone] = [Uuid::now_v7(), Uuid::now_v7()];
@@ -485,6 +485,8 @@ fn deleting_a_run_removes_its_worktree_events_turns_images_and_wakes_only() {
         };
         store.set_wake_state(id, wakes).unwrap();
     }
+    store.record_attached_seen(gone, &[(kept, 3)]).unwrap();
+    store.record_attached_seen(kept, &[(gone, 4)]).unwrap();
 
     assert!(store.delete_run(gone).unwrap());
     assert!(
@@ -497,6 +499,8 @@ fn deleting_a_run_removes_its_worktree_events_turns_images_and_wakes_only() {
     assert_eq!(store.run_turns(gone).unwrap(), []);
     assert_eq!(store.image(gone, image).unwrap(), None);
     assert_eq!(store.wake_state(gone).unwrap(), WakeState::default());
+    assert_eq!(store.attached_seen(gone, kept).unwrap(), None);
+    assert_eq!(store.attached_seen(kept, gone).unwrap(), None);
 
     assert!(store.get_run(kept).unwrap().is_some());
     assert!(store.get_worktree(kept).unwrap().is_some());
@@ -537,8 +541,8 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     // migration 27), the project branch columns (PLX-409's migration 29), the questions
     // table (PLX-402's migration 30), the project autonomy column (PLX-403's migration 31), the
     // landings table and auto-land column (PLX-410's migration 33), the placement columns and
-    // table (PLX-413's migration 34), the checks columns (PLX-411's migration 35), or the search
-    // index (PLX-487's migration 36).
+    // table (PLX-413's migration 34), the checks columns (PLX-411's migration 35), the search
+    // index (PLX-487's migration 36), or the attached-thread cursors (PLX-486's migration 37).
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
@@ -549,6 +553,7 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
              DROP TABLE placements;
              DROP TABLE thread_text_fts; DROP TABLE thread_text;
              DROP TABLE command_receipts;
+             DROP TABLE attached_seen;
              ALTER TABLE worktrees DROP COLUMN git_dir;
              ALTER TABLE worktrees DROP COLUMN base_dirty;
              ALTER TABLE projects DROP COLUMN icon_name;

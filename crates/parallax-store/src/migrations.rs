@@ -522,10 +522,23 @@ const MIGRATIONS: &[Migration] = &[
                 WHERE run_id = new.run_id), 0), new.text);
         END;",
     },
+    // The newest source `seq` an attached thread's summary already covered for a target run
+    // (0052, PLX-486). The next attach sends only what was logged after it. Rows go with either
+    // run. No foreign key, like `turns`.
+    Migration {
+        version: 37,
+        sql: "CREATE TABLE attached_seen (
+            target_run TEXT NOT NULL,
+            source_run TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            PRIMARY KEY (target_run, source_run)
+        );
+        CREATE INDEX attached_seen_source ON attached_seen (source_run);",
+    },
     // Command receipts (0052, PLX-482): a client-chosen commandId claims a row before a listed
     // method runs. `result` stays null until the command ends; `effect_id` is for PLX-483.
     Migration {
-        version: 37,
+        version: 38,
         sql: "CREATE TABLE command_receipts (
             command_id TEXT NOT NULL PRIMARY KEY,
             method TEXT NOT NULL,

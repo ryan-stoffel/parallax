@@ -650,6 +650,7 @@ pub(crate) async fn fork(
     let turn = fork_turn(&parent, run_id, turn_id)?;
     let events = agents::logged_events(&daemon, run_id).await?;
     let first = first_turn(run_id)?;
+    let events: Vec<_> = events.into_iter().map(|event| event.event).collect();
     let (transcript, ended) = transcript_until(&events, turn, first, &parent);
     if !ended && matches!(parent.status, AgentStatus::Starting | AgentStatus::Running) {
         return Err(still_running(run_id, turn));

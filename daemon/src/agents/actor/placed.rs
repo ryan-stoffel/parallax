@@ -51,10 +51,23 @@ impl Actor {
         };
         self.store_options(backend, changes).await?;
         let paths = self.checkout_paths(&repo_path).await?;
-        let task = first_prompt(&pending.prompt, &prepared.place)?;
+        // Re-read attachments when delivery becomes possible. Older queue rows may already
+        // contain an expanded prompt, so use the run's original message.
+        let attached = super::super::attached::prompt(
+            &self.daemon,
+            self.id,
+            &pending.threads,
+            &self.row.fields.prompt,
+        )
+        .await?;
+        let task = first_prompt(&attached.text, &prepared.place)?;
         self.attach(None, pending.threads);
-        self.launch(prepared, task, pending.images, None, None, paths)
-            .await;
+        if self
+            .launch(prepared, task, pending.images, None, None, paths)
+            .await
+        {
+            self.record_initial_seen(attached.seen).await;
+        }
         Ok(())
     }
 }

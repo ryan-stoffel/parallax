@@ -10,6 +10,7 @@
 //! in this database (#117).
 
 mod accounts;
+mod attached;
 mod defaults;
 mod error;
 mod events;

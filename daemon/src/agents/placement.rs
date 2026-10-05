@@ -379,7 +379,6 @@ pub(super) async fn queue(
 
 /// A waiting child's first message, for its actor to start it with once placed.
 pub(super) struct Pending {
-    pub prompt: String,
     pub images: Vec<PromptImage>,
     pub threads: Vec<RunId>,
 }
@@ -396,15 +395,14 @@ pub(super) async fn take(daemon: &Daemon, id: RunId) -> Result<Option<Pending>, 
             db.remove_placement(id.into())
                 .map_err(|e| store_error(&e))?;
         }
-        Ok(row.map(pending))
+        Ok(row.as_ref().map(pending))
     })
     .await
 }
 
-fn pending(row: parallax_store::Placement) -> Pending {
+fn pending(row: &parallax_store::Placement) -> Pending {
     let extra: Extra = serde_json::from_str(&row.extra).unwrap_or_default();
     Pending {
-        prompt: row.prompt,
         images: extra.images,
         threads: extra.threads,
     }
@@ -486,7 +484,7 @@ async fn dispatch_one(
         Placed::Picked => session_account(&run.state.account_id),
     };
     info!(run = %id, account = ?account, "placing a waiting child");
-    let pending = pending(row);
+    let pending = pending(&row);
     ask(daemon, id, |reply| Command::Place {
         account,
         pending,
