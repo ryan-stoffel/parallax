@@ -1,7 +1,9 @@
 //! A project's coordinator chat end to end (PLX-41, decision 0024): `project/start` against an
 //! in-process plxd whose backend is the fake CLI, in a real git repository. The coordinator runs
-//! in the project's repository, in the project's permission mode (0042).
+//! in a detached worktree at the integration branch's tip, in the project's permission mode
+//! (0042).
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -20,6 +22,7 @@ use parallax_protocol::{
     Provider, RepoAddParams, RepoId, RunId, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
+use plxd::backend::process::{Environment, Launcher};
 use plxd::backend::{Backend, Capabilities, RunRequest, StartError, Started, ToolPolicy};
 use plxd::paths::DataDir;
 use plxd::routing::BackendRegistry;
@@ -29,7 +32,7 @@ use crate::agents::{
     Conn, Host, create, end_turn, fake, fake_backend, git, init, items, project_params, real_repo,
     send_params, subscribe, text, until, updated_to,
 };
-use crate::support::{PATIENCE, kind, temp_dir};
+use crate::support::{InProcess, PATIENCE, kind, temp_dir};
 
 /// The fake backend, keeping every request it is asked to start.
 struct Recording {
@@ -68,7 +71,7 @@ fn recording(steps: Vec<Step>, seen: &Arc<Mutex<Vec<RunRequest>>>) -> BackendReg
     backends
 }
 
-fn start_params(project: ProjectId, prompt: &str) -> ProjectStartParams {
+pub(crate) fn start_params(project: ProjectId, prompt: &str) -> ProjectStartParams {
     ProjectStartParams {
         project,
         run_id: RunId::generate(),
@@ -85,7 +88,7 @@ fn start_params(project: ProjectId, prompt: &str) -> ProjectStartParams {
 }
 
 #[tokio::test]
-async fn a_coordinator_runs_in_the_projects_repository_and_resumes_there_after_a_restart() {
+async fn a_coordinator_runs_in_its_worktree_and_resumes_there_after_a_restart() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let script = || {
         vec![
@@ -133,11 +136,11 @@ async fn a_coordinator_runs_in_the_projects_repository_and_resumes_there_after_a
     }));
     let first = seen.lock().unwrap()[0].clone();
     assert_eq!(first.policy, ToolPolicy::NoWrite);
-    assert_eq!(first.cwd, repo, "it runs in the user's checkout");
+    assert_eq!(first.cwd, coordinator_worktree(&host, project.id));
     assert!(first.sandbox.is_none());
-    let tools = first.coordinator_tools.expect("plxd's tools are attached");
-    assert_eq!((tools.project, tools.thread), (project.id, thread));
-    assert!(first.prompt.contains("spawn_agent"), "{}", first.prompt);
+    // A thread's tools, bound to its own run (PLX-380).
+    assert_eq!(first.coordinator_tools.map(|tools| tools.run), Some(run.id));
+    assert!(first.prompt.contains("thread_launch"), "{}", first.prompt);
     assert!(
         first.prompt.ends_with("Plan the README."),
         "{}",
@@ -157,6 +160,7 @@ async fn a_coordinator_runs_in_the_projects_repository_and_resumes_there_after_a
     let mut client = host.client().await;
     let transcript = client
         .call::<AgentEvents>(AgentEventsParams {
+            before: None,
             run_id: run.id,
             after: 0,
             limit: None,
@@ -185,9 +189,94 @@ async fn a_coordinator_runs_in_the_projects_repository_and_resumes_there_after_a
         "a message resumes the session"
     );
     assert_eq!(resumed.prompt, "Go on.");
-    assert_eq!(resumed.cwd, repo, "the session resumes where it started");
+    assert_eq!(resumed.cwd, first.cwd, "it resumes where it started");
     assert_eq!(resumed.policy, ToolPolicy::NoWrite);
     assert!(resumed.coordinator_tools.is_some());
+    host.server.stop().await;
+}
+
+/// Where `host` keeps the coordinator's worktree for `project` (0042).
+fn coordinator_worktree(host: &Host, project: ProjectId) -> PathBuf {
+    host.dir
+        .path()
+        .join("coordinators")
+        .join(project.to_string())
+}
+
+/// PLX-397: what a coordinator writes stays in its own worktree. Neither the user's checkout nor
+/// the integration branch sees it, and its next CLI process starts from a clean copy of the tip.
+#[tokio::test]
+async fn a_coordinators_edit_never_reaches_the_checkout_or_the_integration_branch() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let write = |path: &str| Step::WriteFile {
+        path: path.to_owned(),
+        content: "the coordinator's\n".to_owned(),
+    };
+    let script = vec![
+        init("coordinator-1"),
+        write("README.md"),
+        write("stray.txt"),
+        end_turn("Edited."),
+    ];
+    let host = Host::start(temp_dir(), recording(script, &seen));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    let repo = PathBuf::from(&project.repo_path);
+    let integration = host
+        .dir
+        .path()
+        .join("integration")
+        .join(project.id.to_string());
+    let tip = git(&repo, &["rev-parse", "parallax/app"]);
+    subscribe(&mut client, project.id, 0).await;
+
+    let run = client
+        .call::<ProjectStart>(start_params(project.id, "Fix the README yourself."))
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let worktree = coordinator_worktree(&host, project.id);
+    assert_eq!(seen.lock().unwrap()[0].cwd, worktree);
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), tip, "at the tip");
+    assert_eq!(git(&worktree, &["branch", "--show-current"]), "");
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("README.md")).unwrap(),
+        "the coordinator's\n",
+        "the edit is in its worktree"
+    );
+    for checkout in [&repo, &integration] {
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("README.md")).unwrap(),
+            "hello\n"
+        );
+        assert!(!checkout.join("stray.txt").exists());
+        assert_eq!(git(checkout, &["status", "--porcelain"]), "");
+    }
+    assert_eq!(git(&repo, &["rev-parse", "parallax/app"]), tip);
+    assert_eq!(git(&repo, &["rev-parse", "main"]), tip);
+
+    // The next process, one that writes nothing, starts from a clean copy of the tip.
+    let host = host
+        .restart(recording(
+            vec![init("coordinator-1"), end_turn("Read.")],
+            &seen,
+        ))
+        .await;
+    let mut client = host.client().await;
+    subscribe(&mut client, project.id, 0).await;
+    client
+        .call::<AgentSend>(send_params(run.id, TurnId::generate(), "Go on."))
+        .await
+        .unwrap();
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("README.md")).unwrap(),
+        "hello\n"
+    );
+    assert!(!worktree.join("stray.txt").exists());
+    assert_eq!(git(&repo, &["rev-parse", "parallax/app"]), tip);
     host.server.stop().await;
 }
 
@@ -279,7 +368,7 @@ impl Backend for Roles {
 
 /// Workers on `worker`, and each coordinator launch on the next of `coordinator`, in Auto or
 /// Bypass.
-fn roles(
+pub(crate) fn roles(
     worker: Vec<Step>,
     coordinator: Vec<Vec<Step>>,
     seen: &Arc<Mutex<Vec<RunRequest>>>,
@@ -293,7 +382,7 @@ fn roles(
 }
 
 /// [`roles`], mapping only `permissions`.
-fn roles_mapping(
+pub(crate) fn roles_mapping(
     worker: Vec<Step>,
     coordinator: Vec<Vec<Step>>,
     seen: &Arc<Mutex<Vec<RunRequest>>>,
@@ -313,7 +402,7 @@ fn roles_mapping(
 }
 
 /// Every coordinator launch `seen` so far.
-fn coordinator_launches(seen: &Mutex<Vec<RunRequest>>) -> Vec<RunRequest> {
+pub(crate) fn coordinator_launches(seen: &Mutex<Vec<RunRequest>>) -> Vec<RunRequest> {
     seen.lock()
         .unwrap()
         .iter()
@@ -323,7 +412,7 @@ fn coordinator_launches(seen: &Mutex<Vec<RunRequest>>) -> Vec<RunRequest> {
 }
 
 /// The `n`th coordinator launch, once it happens.
-async fn nth_launch(seen: &Mutex<Vec<RunRequest>>, n: usize) -> RunRequest {
+pub(crate) async fn nth_launch(seen: &Mutex<Vec<RunRequest>>, n: usize) -> RunRequest {
     let deadline = Instant::now() + PATIENCE;
     loop {
         if let Some(launch) = coordinator_launches(seen).get(n) {
@@ -335,7 +424,7 @@ async fn nth_launch(seen: &Mutex<Vec<RunRequest>>, n: usize) -> RunRequest {
 }
 
 /// A worker `project`'s coordinator starts through its tools, as `spawn_agent` would.
-async fn spawn(client: &mut Conn, coordinator: &AgentRun, task: &str) -> RunId {
+pub(crate) async fn spawn(client: &mut Conn, coordinator: &AgentRun, task: &str) -> RunId {
     let params = AgentStartParams {
         coordinator_thread: coordinator.coordinator_thread,
         ..crate::agents::start_params(coordinator.project, task)
@@ -344,7 +433,7 @@ async fn spawn(client: &mut Conn, coordinator: &AgentRun, task: &str) -> RunId {
 }
 
 /// Waits until each of `runs` has reported its session, so it can be resumed.
-async fn sessions(client: &mut Conn, runs: &[RunId]) {
+pub(crate) async fn sessions(client: &mut Conn, runs: &[RunId]) {
     let mut left = runs.to_vec();
     until(client, |event| {
         if let ParallaxEvent::AgentUpdated { run_id, state } = &event.event
@@ -414,6 +503,13 @@ async fn a_projects_runs_run_in_its_mode_and_a_new_mode_applies_from_their_next_
             name: None,
             icon: None,
             permission: Some(ProjectPermission::Auto),
+            autonomy: None,
+            base_branch: None,
+            auto_land: None,
+            allow_api_keys: None,
+            max_children: None,
+            checks: None,
+            proposed_checks: None,
         })
         .await
         .unwrap()
@@ -482,6 +578,13 @@ async fn a_backend_without_the_projects_mode_is_refused_and_never_moved_up() {
             name: None,
             icon: None,
             permission: Some(ProjectPermission::Bypass),
+            autonomy: None,
+            base_branch: None,
+            auto_land: None,
+            allow_api_keys: None,
+            max_children: None,
+            checks: None,
+            proposed_checks: None,
         })
         .await
         .unwrap();
@@ -494,11 +597,10 @@ async fn a_backend_without_the_projects_mode_is_refused_and_never_moved_up() {
     host.server.stop().await;
 }
 
-/// PLX-222 (0031): a coordinator whose client answers permission requests keeps `approvals` when
-/// it resumes, and the subagents it spawns get them too. One started without them, as an older
-/// app starts it, and its subagents never ask.
+/// PLX-222 (0031): a coordinator keeps `approvals` when it resumes. One started without them, as
+/// an older app starts it, asks too (PLX-473), as every child does, since the inbox answers (0042).
 #[tokio::test]
-async fn approvals_last_through_a_resume_and_reach_the_coordinators_subagents() {
+async fn approvals_last_through_a_resume_and_every_child_has_them() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     // Workers never finish, so no wake-up takes a coordinator script.
     let backends = roles(
@@ -538,7 +640,7 @@ async fn approvals_last_through_a_resume_and_reach_the_coordinators_subagents() 
         .await
         .unwrap()
         .run;
-    assert!(!nth_launch(&seen, 2).await.approvals);
+    assert!(nth_launch(&seen, 2).await.approvals);
     until(&mut client, updated_to(AgentStatus::Completed)).await;
     let quiet_subagent = spawn(&mut client, &quiet, "Add a license.").await;
 
@@ -550,7 +652,81 @@ async fn approvals_last_through_a_resume_and_reach_the_coordinators_subagents() 
             .map(|request| request.approvals)
     };
     assert_eq!(launched(subagent), Some(true));
-    assert_eq!(launched(quiet_subagent), Some(false));
+    assert_eq!(launched(quiet_subagent), Some(true));
+    host.server.stop().await;
+}
+
+/// A `codex app-server` stand-in for one turn, in the Codex backend's fixture format: it answers
+/// `initialize`, `thread/start`, and `turn/start`, then completes the turn.
+const CODEX_TURN: &str = r#"<
+{"id":1,"result":{"userAgent":"plxd/0.159.3","codexHome":"/tmp/codex","platformFamily":"unix","platformOs":"macos"}}
+<
+<
+{"id":2,"result":{"thread":{"id":"t-1","sessionId":"t-1","preview":"","ephemeral":false,"modelProvider":"openai","model":"gpt-6-sol","status":{"type":"idle"},"turns":[]},"model":"gpt-6-sol","modelProvider":"openai","cwd":"/repo","approvalPolicy":"on-request","sandbox":{"type":"readOnly"},"reasoningEffort":"high"}}
+<
+{"id":3,"result":{"turn":{"id":"u-1","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}
+{"method":"turn/completed","params":{"threadId":"t-1","turn":{"id":"u-1","items":[],"itemsView":"summary","status":"completed","error":null,"startedAt":1790919494,"completedAt":1790919501,"durationMs":7424}}}
+"#;
+
+/// PLX-473: a Codex coordinator started without `approvals` still gets plxd's MCP server, which
+/// app-server attaches only with them, so it can launch threads.
+#[tokio::test]
+async fn a_codex_coordinator_started_without_approvals_gets_plxds_tools() {
+    let dir = temp_dir();
+    let root = dir.path().canonicalize().unwrap();
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let codex = bin.join("codex");
+    std::fs::write(
+        &codex,
+        include_str!("../../src/backend/codex/fixtures/fake-app-server.sh"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let fixture = root.join("conversation.jsonl");
+    std::fs::write(&fixture, CODEX_TURN).unwrap();
+    let mut environment = Environment::empty();
+    environment.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
+    environment.set("FAKE_CODEX_DIR", root.display().to_string());
+    environment.set("FAKE_CODEX_FIXTURE", fixture.display().to_string());
+    let mut backends = BackendRegistry::new();
+    backends.register(
+        Provider::Openai,
+        Arc::new(plxd::backend::codex::CodexBackend::new(Launcher::new(
+            DataDir::new(&root).unwrap(),
+            environment.clone(),
+        ))),
+    );
+    let mut config = InProcess::config(&root);
+    config.agent_environment = Some(environment);
+    config.backends = Some(backends);
+    let host = Host {
+        dir,
+        server: InProcess::start(config),
+    };
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(&root)).await;
+    subscribe(&mut client, project.id, 0).await;
+
+    let run = client
+        .call::<ProjectStart>(ProjectStartParams {
+            account: Some(AccountChoice::Subscription {
+                backend: "codex".to_owned(),
+            }),
+            ..start_params(project.id, "Plan.")
+        })
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let start = std::fs::read_to_string(root.join("stdin"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|message| message["method"] == "thread/start")
+        .expect("plxd started a thread");
+    let args = &start["params"]["config"]["mcp_servers.plxd.args"];
+    assert_eq!(args[4], run.id.to_string(), "bound to its own run: {args}");
     host.server.stop().await;
 }
 
@@ -642,6 +818,47 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
         images: Vec::new(),
         threads: Vec::new(),
     }));
+    host.server.stop().await;
+}
+
+/// PLX-380 (0043): a run the user starts in the Project wakes the coordinator to say so. One the
+/// coordinator launches itself doesn't, since it knows.
+#[tokio::test]
+async fn a_run_the_user_starts_in_the_project_wakes_the_coordinator() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let turn = |result: &str| vec![init("coordinator-1"), end_turn(result)];
+    let hang = vec![init("worker-1"), Step::Hang];
+    let backends = roles(hang, vec![turn("Planned."), turn("Noted.")], &seen);
+    let host = Host::start(temp_dir(), backends);
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let coordinator = client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    let launched = spawn(&mut client, &coordinator, "Its own task.").await;
+    let mine = client
+        .call::<AgentStart>(crate::agents::start_params(project.id, "Add a README."))
+        .await
+        .unwrap()
+        .run
+        .id;
+    let wake = nth_launch(&seen, 1).await;
+    assert!(
+        wake.prompt
+            .contains(&format!("- Run {mine} (Add a README.): started.")),
+        "{}",
+        wake.prompt
+    );
+    assert!(
+        !wake.prompt.contains(&launched.to_string()),
+        "{}",
+        wake.prompt
+    );
     host.server.stop().await;
 }
 
@@ -760,10 +977,68 @@ async fn a_pause_survives_a_restart_and_what_waits_follows_the_users_message() {
     host.server.stop().await;
 }
 
+/// PLX-380 (0025): only the user's own message ends a pause. A child's message to its parent
+/// (`thread_send`, with `from`) reaches it but leaves its wake-ups paused, so a loop between them
+/// can't get past the cap.
+#[tokio::test]
+async fn a_childs_message_leaves_its_parents_wake_ups_paused() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let hang = vec![init("worker-1"), Step::Hang];
+    let turn = |result: &str| vec![init("coordinator-1"), end_turn(result)];
+    let backends = roles(hang, vec![turn("Planned."), turn("Heard it.")], &seen);
+    let host = Host::start(temp_dir(), backends);
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let coordinator = client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let worker = spawn(&mut client, &coordinator, "Add a README.").await;
+    sessions(&mut client, &[worker]).await;
+    client
+        .call::<AgentCancel>(AgentCancelParams {
+            run_id: coordinator.id,
+            from: None,
+        })
+        .await
+        .unwrap();
+    until(&mut client, |event| {
+        matches!(event.event, ParallaxEvent::AgentWakeupsPaused { .. })
+    })
+    .await;
+
+    client
+        .call::<AgentSend>(AgentSendParams {
+            from: Some(worker),
+            ..send_params(coordinator.id, TurnId::generate(), "Done, check it.")
+        })
+        .await
+        .unwrap();
+    let heard = nth_launch(&seen, 1).await;
+    assert_eq!(heard.prompt, "Done, check it.", "the message reaches it");
+    until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
+            if *run_id == coordinator.id && state.status == AgentStatus::Completed)
+    })
+    .await;
+    host.server.stop().await;
+    let store =
+        parallax_store::Store::open(DataDir::new(host.dir.path()).unwrap().store_file()).unwrap();
+    assert!(
+        store.wake_state(coordinator.id.into()).unwrap().paused,
+        "still paused until the user writes"
+    );
+}
+
 fn subscribe_host(after: u64) -> EventsSubscribeParams {
     EventsSubscribeParams {
         after,
         project: None,
+        run: None,
+        shell: false,
     }
 }
 
@@ -848,6 +1123,7 @@ async fn deleting_a_project_stops_its_agents_and_removes_everything() {
     for run_id in [coordinator.id, worker] {
         let events = client
             .call::<AgentEvents>(AgentEventsParams {
+                before: None,
                 run_id,
                 after: 0,
                 limit: None,
@@ -860,6 +1136,10 @@ async fn deleting_a_project_stops_its_agents_and_removes_everything() {
     let branches = git(&repo, &["branch", "--list", &branch]);
     assert!(branches.is_empty(), "the branch is removed: {branches}");
     assert!(!context.exists(), "the project's notes are removed");
+    assert!(
+        !coordinator_worktree(&host, project.id).exists(),
+        "the coordinator's worktree is removed"
+    );
     assert!(repo.join("README.md").is_file(), "the repository stays");
 
     let mut replay = host.client().await;

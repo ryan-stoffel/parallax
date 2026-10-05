@@ -19,6 +19,7 @@ use parallax_protocol::{
 
 use super::Context;
 use crate::agents::GitAction;
+use crate::event_log::Entry;
 use crate::{agents, images};
 
 /// The longest prompt or message plxd takes, in bytes. It goes on the CLI's stdin, never in
@@ -207,24 +208,13 @@ pub(crate) async fn list(
     context: &Context,
     params: AgentListParams,
 ) -> Result<AgentListResult, ErrorObject> {
-    let log = Arc::clone(&context.daemon.log);
     let project = params.project.map(uuid::Uuid::from);
     let (runs, seq) = context
         .daemon
-        .store
-        .run(&context.cancel, move |db| {
-            let rows = db
-                .list_runs(project)
-                .map_err(|error| crate::agents::store_error(&error))?;
-            let seq = log.head();
-            let mut runs = Vec::with_capacity(rows.len());
-            for row in rows {
-                let worktree = db
-                    .get_worktree(row.id)
-                    .map_err(|error| crate::agents::store_error(&error))?;
-                runs.push((row, worktree));
-            }
-            Ok((runs, seq))
+        .reader
+        .snapshot(&context.cancel, move |db| {
+            db.list_runs_with_worktrees(project)
+                .map_err(|error| crate::agents::store_error(&error))
         })
         .await?;
     let runs = runs
@@ -387,11 +377,15 @@ pub(crate) async fn events(
     let AgentEventsParams {
         run_id,
         after,
+        before,
         limit,
     } = params;
     let limit = limit
         .unwrap_or(DEFAULT_EVENTS_LIMIT)
         .clamp(1, MAX_EVENTS_LIMIT) as usize;
+    if let Some(before) = before {
+        return events_before(context, run_id, before, limit).await;
+    }
     let exists = context
         .daemon
         .store
@@ -414,16 +408,59 @@ pub(crate) async fn events(
     .await
     .map_err(ErrorObject::internal_error)?
     .map_err(|error| crate::agents::store_error(&error))?;
-    let events = entries
-        .iter()
-        .map(|entry| LoggedEvent {
-            seq: entry.seq,
-            time: entry.time,
-            project: entry.project,
-            event: entry.event.clone(),
+    Ok(AgentEventsResult {
+        events: entries.iter().map(|entry| logged(entry)).collect(),
+        more,
+        run: None,
+        seq: None,
+    })
+}
+
+/// `agent/events` with `before` (PLX-490): the page of `run_id`'s events before it, oldest first,
+/// with the log's head from before the page and the run read after it, so the run reflects every
+/// event in the page (the actor stores a run's row before its `agent.updated`).
+async fn events_before(
+    context: &Context,
+    run_id: RunId,
+    before: u64,
+    limit: usize,
+) -> Result<AgentEventsResult, ErrorObject> {
+    let log = Arc::clone(&context.daemon.log);
+    let (seq, (entries, more)) = tokio::task::spawn_blocking(move || {
+        let seq = log.head();
+        log.run_events_before(run_id, before, limit, MAX_EVENTS_PAGE_BYTES)
+            .map(|page| (seq, page))
+    })
+    .await
+    .map_err(ErrorObject::internal_error)?
+    .map_err(|error| crate::agents::store_error(&error))?;
+    let run = context
+        .daemon
+        .reader
+        .run(&context.cancel, move |db| {
+            let store_error = |error| crate::agents::store_error(&error);
+            let Some(row) = db.get_run(run_id.into()).map_err(store_error)? else {
+                return Err(agents::run_not_found(run_id));
+            };
+            let worktree = db.get_worktree(row.id).map_err(store_error)?;
+            agents::snapshot(&row, worktree.as_ref())
         })
-        .collect();
-    Ok(AgentEventsResult { events, more })
+        .await?;
+    Ok(AgentEventsResult {
+        events: entries.iter().rev().map(|entry| logged(entry)).collect(),
+        more,
+        run: Some(run),
+        seq: Some(seq),
+    })
+}
+
+fn logged(entry: &Entry) -> LoggedEvent {
+    LoggedEvent {
+        seq: entry.seq,
+        time: entry.time,
+        project: entry.project,
+        event: entry.event.clone(),
+    }
 }
 
 #[cfg(test)]
@@ -440,13 +477,14 @@ mod tests {
     use super::{Context, MAX_EVENTS_PAGE_BYTES, events};
     use crate::server::Daemon;
 
-    #[tokio::test]
-    async fn pages_of_large_output_fit_in_a_frame_and_page_through_everything() {
+    /// A daemon with one run, `running`, and a context to call methods with.
+    async fn daemon_with_run() -> (tempfile::TempDir, Arc<Daemon>, Context, RunId, ProjectId) {
         let dir = tempfile::tempdir().unwrap();
         let daemon = Daemon::for_tests(dir.path(), 10_000, Duration::from_secs(90));
         let context = Context {
             daemon: Arc::clone(&daemon),
             cancel: CancellationToken::new(),
+            stopped_reading: CancellationToken::new(),
         };
         let (run_id, project) = (RunId::generate(), ProjectId::generate());
         daemon
@@ -460,6 +498,7 @@ mod tests {
                     backend: "fake".to_owned(),
                     coordinator_thread: None,
                     parent: None,
+                    notify_parent: false,
                     model: None,
                     effort: None,
                     permission: None,
@@ -467,6 +506,7 @@ mod tests {
                     fast: None,
                     approvals: false,
                     checkout: false,
+                    explore: false,
                 };
                 let state = RunState {
                     status: "running".to_owned(),
@@ -478,22 +518,32 @@ mod tests {
             })
             .await
             .unwrap();
+        (dir, daemon, context, run_id, project)
+    }
+
+    fn text(run_id: RunId, text: String) -> ParallaxEvent {
+        ParallaxEvent::AgentOutput {
+            run_id,
+            items: vec![AgentOutputItem::Text {
+                message_id: None,
+                text,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn pages_of_large_output_fit_in_a_frame_and_page_through_everything() {
+        let (_dir, daemon, context, run_id, project) = daemon_with_run().await;
         // 60 batches of about 250 KiB, as a tool-heavy run's `agent.output` events can be: 15
         // MiB in all, which a page counted by events alone would put in one oversized frame.
-        let text = "x".repeat(250 * 1024);
+        let big = "x".repeat(250 * 1024);
         for _ in 0..60 {
             daemon
-                .log
+                .store
                 .append(
                     jiff::Timestamp::now(),
                     Some(project),
-                    ParallaxEvent::AgentOutput {
-                        run_id,
-                        items: vec![AgentOutputItem::Text {
-                            message_id: None,
-                            text: text.clone(),
-                        }],
-                    },
+                    text(run_id, big.clone()),
                 )
                 .await;
         }
@@ -507,6 +557,7 @@ mod tests {
                 AgentEventsParams {
                     run_id,
                     after,
+                    before: None,
                     limit: None,
                 },
             )
@@ -526,5 +577,56 @@ mod tests {
         }
         assert_eq!(seen, 60);
         assert!(pages >= 4, "{pages} pages");
+    }
+
+    /// A run of four pages read newest first comes back whole and in order, each page oldest
+    /// first, with the run and the log's head from before the read, though no page but the oldest
+    /// reaches back to the run's start.
+    #[tokio::test]
+    async fn before_pages_a_long_run_newest_first_with_its_snapshot() {
+        let (_dir, daemon, context, run_id, project) = daemon_with_run().await;
+        let other = RunId::generate();
+        let mut appended = Vec::new();
+        for i in 0..350 {
+            let at = jiff::Timestamp::now();
+            appended.push(
+                daemon
+                    .log
+                    .append(at, Some(project), text(run_id, i.to_string()))
+                    .await,
+            );
+            daemon
+                .log
+                .append(at, Some(project), text(other, i.to_string()))
+                .await;
+        }
+        let head = daemon.log.head();
+
+        let (mut seen, mut pages, mut before) = (Vec::new(), 0, (1 << 53) - 1);
+        loop {
+            let page = events(
+                &context,
+                AgentEventsParams {
+                    run_id,
+                    after: 0,
+                    before: Some(before),
+                    limit: Some(100),
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(page.run.unwrap().id, run_id);
+            assert_eq!(page.seq, Some(head));
+            let seqs: Vec<u64> = page.events.iter().map(|e| e.seq).collect();
+            assert!(seqs.is_sorted(), "a page is oldest first");
+            before = seqs[0];
+            seen.splice(0..0, seqs);
+            pages += 1;
+            if !page.more {
+                break;
+            }
+        }
+        assert_eq!(seen, appended);
+        assert_eq!(pages, 4);
     }
 }

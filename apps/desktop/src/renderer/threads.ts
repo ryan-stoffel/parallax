@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 
 import type { RpcError, ThreadName } from "../preload/bridge";
 import type {
+  AccountChoice,
   AgentRun,
   LoggedEvent,
   Project,
   ProjectIcon as ProjectIconValue,
+  ProjectPermission,
+  InboxItem,
   ProjectStartParams,
   ProjectUpdateParams,
   PromptImage,
@@ -243,6 +246,41 @@ export const groupOf = (state: ThreadsState, thread: Thread) =>
 export const parentOf = (state: ThreadsState, thread: Thread) =>
   thread.parent === undefined ? undefined : state.threads.find((t) => t.id === thread.parent);
 
+/**
+ * By thread id: the Project each thread is in (0042), where its own run or an ancestor's is one of
+ * a Project's, as a coordinator's child's parent is. Threads in no Project are left out. Such a
+ * thread shows only inside its Project, never in the main sidebar. A loop of parents stops where
+ * it repeats.
+ */
+export function threadProjects(state: ThreadsState): Map<string, string> {
+  const projects = new Set(state.projects.map((p) => p.id));
+  const parents = new Map(state.threads.map((t) => [t.id, t.parent]));
+  const found = new Map<string, string>();
+  for (const thread of state.threads) {
+    const seen = new Set<string>();
+    for (let id = thread.id as string | undefined; id && !seen.has(id); id = parents.get(id)) {
+      seen.add(id);
+      const project = state.runs[id]?.project;
+      if (project && projects.has(project)) {
+        found.set(thread.id, project);
+        break;
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Project `project`'s runs: its own, coordinators included, and those of the threads in it
+ * (`threadProjects`). Its side panel and its sidebar row count the same runs.
+ */
+export const projectRuns = (
+  state: ThreadsState,
+  project: string,
+  inProject: ReadonlyMap<string, string>,
+) =>
+  Object.values(state.runs).filter((r) => r.project === project || inProject.get(r.id) === project);
+
 /** The threads `id` launched, oldest first, so their order holds as they start. */
 export const childrenOf = (state: ThreadsState, id: string) =>
   state.threads
@@ -281,6 +319,11 @@ export interface ThreadsView {
   state: ThreadsState;
   /** Why the list couldn't load or stopped updating, for people. */
   error?: string;
+  /**
+   * While a load or resync is under way: its list can be in without the permission requests
+   * that follow it, so who needs the user isn't settled yet (PLX-507's alarms wait it out).
+   */
+  loading?: boolean;
   /** Registers a repository (idempotent on its path). Resolves to its entry or an error message. */
   addRepo: (path: string) => Promise<Repo | string>;
   /**
@@ -302,17 +345,28 @@ export interface ThreadsView {
     name?: ThreadName,
     attached?: string[],
   ) => Promise<RpcError | undefined>;
+  /**
+   * Forks thread `runId` at `turnId`, or at its latest turn (`thread/fork`, 0050), keeping its model
+   * or running on `choice`'s. Resolves to the fork's id, or plxd's error.
+   */
+  fork: (
+    runId: string,
+    turnId: string | undefined,
+    choice: ForkChoice,
+  ) => Promise<string | RpcError>;
   archive: (runId: string, archived: boolean) => Promise<string | undefined>;
   remove: (thread: Thread) => Promise<string | undefined>;
   /**
-   * Creates a project on a repository's path, with `icon` if one was chosen. Reuse `id`, with the
-   * same name, path, and icon, to retry. Resolves to the project or an error message.
+   * Creates a project on a repository's path, with `icon` if one was chosen and `permission` where
+   * the host keeps it. Reuse `id`, with the same name, path, icon, and mode, to retry. Resolves to
+   * the project or an error message.
    */
   createProject: (
     id: string,
     name: string,
     repoPath: string,
     icon?: ProjectIconValue,
+    permission?: ProjectPermission,
   ) => Promise<Project | string>;
   /**
    * Renames a project or sets its icon, which replaces the whole icon (0032). Resolves to an error
@@ -337,16 +391,37 @@ export interface ThreadsView {
     images: PromptImage[],
     options: CoordinatorOptions,
   ) => Promise<RpcError | undefined>;
+  /**
+   * Starts a child of Project `project` with `prompt` (0042): `thread/start` with `project`, behind
+   * `projectTasks`. plxd answers at once, and the child joins the Project's runs. Resolves to
+   * plxd's error, or undefined.
+   */
+  startTask: (
+    project: string,
+    runId: string,
+    prompt: string,
+    images: PromptImage[],
+    options: RunOptions,
+    attached: string[],
+  ) => Promise<RpcError | undefined>;
   /** Whether the host's plxd keeps seen and snooze state and repo icons (`threadAttention`, 0033). */
   attention: boolean;
   /** Whether the host's plxd renames Projects and sets their icons (`projectEdit`, 0032). */
   editable: boolean;
   /** Whether the host's plxd deletes Projects (`projectDelete`, PLX-338). */
   deletable: boolean;
+  /** Whether the host's plxd keeps a Project's permission mode (`projectPermission`, 0042). */
+  moded: boolean;
+  /** Whether the host's plxd keeps a Project's autonomy (`projectAutonomy`, 0043). */
+  autonomous: boolean;
   /** The cap on an icon image's base64, where the host's plxd keeps icon images (`iconImages`, 0038). */
   iconImageBytes?: number;
   /** Whether the host's plxd keeps threads' parents and titles (`threadLineage`, 0041). */
   lineage: boolean;
+  /** Whether the host's plxd resumes runs after usage limits (`autoResume`, 0049). */
+  autoResume: boolean;
+  /** Whether the host's plxd forks threads (`threadFork`, 0050). */
+  forkable: boolean;
   /**
    * Marks a thread seen, or snoozes it until a time (a past one ends the snooze). Resolves to an
    * error message, or undefined.
@@ -356,10 +431,13 @@ export interface ThreadsView {
   updateRepo: (repo: string, icon: ProjectIconValue) => Promise<string | undefined>;
 }
 
+/** What a fork runs on: absent keeps the thread's model and account. */
+export type ForkChoice = { model?: string; account?: AccountChoice };
+
 /** What `thread/update` changes. */
 export type ThreadChange = { seen?: boolean; snoozedUntil?: string };
 
-/** What `project/update` changes: a project's name, its icon, or both. */
+/** What `project/update` changes: a project's name, icon, permission mode, or autonomy. */
 export type ProjectChange = Omit<ProjectUpdateParams, "project">;
 
 /** What a new coordinator runs on: its model, effort, permission, and account (`project/start`'s). */
@@ -375,8 +453,9 @@ export type CoordinatorOptions = Pick<
  * `resync`. Loads only while `connected`. The flags are what the host's plxd advertises: with
  * `approvals`, the threads and coordinators started here forward their permission requests
  * (PLX-196, 0031); with `lineage`, a thread's generated title goes to plxd (0041), and titles kept
- * in this app move there once; `attention`, `editable`, `deletable`, `iconImageBytes`, and
- * `lineage` are passed through for the sidebar and top bar.
+ * in this app move there once; `attention`, `editable`, `deletable`, `iconImageBytes`,
+ * `lineage`, `autoResume`, and `forkable` are passed through for the sidebar and top bar. A
+ * Project's new Needs you inbox item (0043) goes to `onNeedsYou`.
  */
 export function useThreads(
   hostId: string,
@@ -386,16 +465,35 @@ export function useThreads(
     attention = false,
     editable = false,
     deletable = false,
+    moded = false,
+    autonomous = false,
     iconImageBytes,
     lineage = false,
+    autoResume = false,
+    onNeedsYou,
+    forkable = false,
   }: Partial<
-    Pick<ThreadsView, "attention" | "editable" | "deletable" | "iconImageBytes" | "lineage">
+    Pick<
+      ThreadsView,
+      | "attention"
+      | "editable"
+      | "deletable"
+      | "moded"
+      | "autonomous"
+      | "iconImageBytes"
+      | "lineage"
+      | "autoResume"
+      | "forkable"
+    >
   > & {
     approvals?: boolean;
+    /** Called for each new Needs you item in one of the host's Projects' inboxes (0043). */
+    onNeedsYou?: (project: string, item: InboxItem) => void;
   } = {},
 ): ThreadsView {
   const [state, dispatch] = useReducer(threadsReducer, emptyThreads);
   const [error, setError] = useState<string>();
+  const [loading, setLoading] = useState(false);
   // Another host starts empty, rather than showing this one's threads until its list loads.
   const [shownHost, setShownHost] = useState(hostId);
   if (shownHost !== hostId) {
@@ -408,22 +506,32 @@ export function useThreads(
   useEffect(() => {
     shown.current = hostId;
   }, [hostId]);
+  const needsYou = useRef(onNeedsYou);
+  useEffect(() => {
+    needsYou.current = onNeedsYou;
+  });
 
   useEffect(() => {
     if (!connected) return;
     let stopped = false;
     let unsubscribe = () => {};
 
-    // Each repo's and Project's own events, for its runs' status and permission requests.
+    // Each repo's and Project's own events, for its runs' status and permission requests. `shell`
+    // leaves out the rest of their output (PLX-453); an older plxd ignores it and sends it all.
     let scopes = new Map<string, () => void>();
     const watch = (scope: string, after: number, logId: string) => {
       if (scopes.has(scope)) return;
+      const params = { after, project: scope, shell: true, logId };
       scopes.set(
         scope,
-        window.parallax.subscribe(hostId, { after, project: scope, logId }, (message) => {
+        window.parallax.subscribe(hostId, params, (message) => {
           if (stopped) return;
           if (message.type === "resync") return void load();
-          if (message.type === "event") dispatch({ type: "scope", events: [message.event] });
+          if (message.type !== "event") return;
+          dispatch({ type: "scope", events: [message.event] });
+          const { event } = message.event;
+          if (event.kind === "inbox.added" && event.item.kind === "needsYou")
+            needsYou.current?.(scope, event.item);
         }),
       );
     };
@@ -448,6 +556,7 @@ export function useThreads(
     }
 
     async function load() {
+      setLoading(true);
       for (const stop of scopes.values()) stop();
       scopes = new Map();
       const list = await window.parallax.request(hostId, "thread/list", {});
@@ -475,6 +584,7 @@ export function useThreads(
       const backlog = await waitingSince(hostId, runs.result.runs, () => stopped);
       if (stopped) return;
       dispatch({ type: "approvals", events: backlog });
+      setLoading(false);
       // From the run list's `seq`, which plxd replays from, so no change since is missed.
       const after = runs.result.seq;
       for (const r of list.result.repos) watch(r.id, after, runs.logId);
@@ -556,6 +666,23 @@ export function useThreads(
     [hostId, approvals, lineage],
   );
 
+  const fork = useCallback(
+    async (runId: string, turnId: string | undefined, choice: ForkChoice) => {
+      const newRunId = uuidv7();
+      const answer = await window.parallax.request(hostId, "thread/fork", {
+        runId,
+        newRunId,
+        ...(turnId && { turnId }),
+        ...choice,
+      });
+      if ("error" in answer) return answer.error;
+      dispatch({ type: "runs", runs: [answer.result.run] });
+      dispatch({ type: "event", event: { kind: "thread.started", thread: answer.result.thread } });
+      return newRunId;
+    },
+    [hostId],
+  );
+
   const archive = useCallback(
     async (runId: string, archived: boolean) => {
       const answer = await window.parallax.request(hostId, "thread/archive", { runId, archived });
@@ -580,12 +707,19 @@ export function useThreads(
   );
 
   const createProject = useCallback(
-    async (id: string, name: string, repoPath: string, icon?: ProjectIconValue) => {
+    async (
+      id: string,
+      name: string,
+      repoPath: string,
+      icon?: ProjectIconValue,
+      permission?: ProjectPermission,
+    ) => {
       const answer = await window.parallax.request(hostId, "project/create", {
         id,
         name,
         repoPath,
         ...(icon && { icon }),
+        ...(permission && { permission }),
       });
       if ("error" in answer) return describeError(answer.error);
       // Not into another host's list, if the user has left this one.
@@ -650,6 +784,32 @@ export function useThreads(
     [hostId, approvals],
   );
 
+  const startTask = useCallback(
+    async (
+      project: string,
+      runId: string,
+      prompt: string,
+      images: PromptImage[],
+      options: RunOptions,
+      attached: string[],
+    ) => {
+      const answer = await window.parallax.request(hostId, "thread/start", {
+        runId,
+        project,
+        prompt,
+        ...(images.length > 0 && { images }),
+        ...(attached.length > 0 && { threads: attached }),
+        ...options,
+      });
+      if ("error" in answer) return answer.error;
+      if (shown.current !== hostId) return undefined;
+      dispatch({ type: "runs", runs: [answer.result.run] });
+      dispatch({ type: "event", event: { kind: "thread.started", thread: answer.result.thread } });
+      return undefined;
+    },
+    [hostId],
+  );
+
   const update = useCallback(
     async (runId: string, change: ThreadChange) => {
       const answer = await window.parallax.request(hostId, "thread/update", { runId, ...change });
@@ -675,40 +835,54 @@ export function useThreads(
     () => ({
       state,
       error,
+      loading,
       attention,
       editable,
       deletable,
+      moded,
+      autonomous,
       iconImageBytes,
       lineage,
+      autoResume,
+      forkable,
       update,
       updateRepo,
       addRepo,
       start,
+      fork,
       archive,
       remove,
       createProject,
       updateProject,
       removeProject,
       startCoordinator,
+      startTask,
     }),
     [
       state,
       error,
+      loading,
       attention,
       editable,
       deletable,
+      moded,
+      autonomous,
       iconImageBytes,
       lineage,
+      autoResume,
+      forkable,
       update,
       updateRepo,
       addRepo,
       start,
+      fork,
       archive,
       remove,
       createProject,
       updateProject,
       removeProject,
       startCoordinator,
+      startTask,
     ],
   );
 }
@@ -743,15 +917,21 @@ export const idleThreads: ThreadsView = {
   attention: false,
   editable: false,
   deletable: false,
+  moded: false,
+  autonomous: false,
   lineage: false,
+  autoResume: false,
+  forkable: false,
   addRepo: async () => notConnected,
   start: async () => ({ code: -32000, message: notConnected }),
+  fork: async () => ({ code: -32000, message: notConnected }),
   archive: async () => notConnected,
   remove: async () => notConnected,
   createProject: async () => notConnected,
   updateProject: async () => notConnected,
   removeProject: async () => notConnected,
   startCoordinator: async () => ({ code: -32000, message: notConnected }),
+  startTask: async () => ({ code: -32000, message: notConnected }),
   update: async () => notConnected,
   updateRepo: async () => notConnected,
 };

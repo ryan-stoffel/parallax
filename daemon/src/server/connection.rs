@@ -5,7 +5,8 @@
 //! client. Every reply goes through a bounded queue to the writer. The writer empties that queue
 //! before it writes any event, and it takes events from the event log through each
 //! subscription's cursor rather than from a queue of its own, so a subscriber that lags reads from
-//! the log until it catches up.
+//! the log until it catches up. A subscriber that falls behind the log's retention ends with
+//! `events/resync` when its client declared `resyncNotice`; otherwise the connection closes.
 //!
 //! When the client closes its side, or the server starts shutting down, the reader stops, and the
 //! connection closes once every request it read has been answered. When the client is gone, has
@@ -26,9 +27,9 @@ use parallax_protocol::jsonrpc::{
     Response,
 };
 use parallax_protocol::methods::{
-    CancelRequest, EventsEvent, Initialize, NotificationMethod, RequestMethod,
+    CancelRequest, EventsEvent, EventsResync, Initialize, NotificationMethod, RequestMethod,
 };
-use parallax_protocol::{ErrorKind, EventsEventParams};
+use parallax_protocol::{ErrorKind, EventsEventParams, EventsResyncParams};
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{Semaphore, mpsc};
@@ -65,6 +66,7 @@ pub(crate) async fn serve<S>(
         session: None,
         in_flight: InFlight::default(),
         handlers: JoinSet::new(),
+        stopped_reading: stop_reading.child_token(),
         stop_reading: stop_reading.clone(),
         closing: closing.clone(),
     };
@@ -108,12 +110,17 @@ struct Reader<S> {
     handlers: JoinSet<()>,
     permits: Arc<Semaphore>,
     stop_reading: CancellationToken,
+    /// Cancelled once this connection stops reading, for any reason, so a request that waits
+    /// on something else ends instead of holding the drain open ([`Context::stopped_reading`]).
+    stopped_reading: CancellationToken,
     closing: CancellationToken,
 }
 
 impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
     async fn run(mut self) -> Option<Session> {
-        match self.read().await {
+        let end = self.read().await;
+        self.stopped_reading.cancel();
+        match end {
             End::Drain => self.drain().await,
             End::Close => self.closing.cancel(),
         }
@@ -231,6 +238,7 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
         let context = Context {
             daemon: Arc::clone(&self.daemon),
             cancel,
+            stopped_reading: self.stopped_reading.clone(),
         };
         let in_flight = Arc::clone(&self.in_flight);
         let replies = self.replies.clone();
@@ -265,22 +273,26 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
     // Requests before `initialize` run in order, right here, so a request pipelined behind
     // `initialize` already sees the connection initialized.
     async fn before_initialize(&mut self, request: Request) -> bool {
-        let response = if request.method == Initialize::NAME {
+        let reply = if request.method == Initialize::NAME {
             match methods::initialize(&self.daemon, &request) {
                 Ok((session, result)) => {
+                    let resync_notice = session.resync_notice;
                     self.session = Some(session);
-                    methods::success(request.id, &result)
+                    Reply::Initialized {
+                        response: methods::success(request.id, &result),
+                        resync_notice,
+                    }
                 }
-                Err(error) => Response::error(Some(request.id), error),
+                Err(error) => Reply::Response(Response::error(Some(request.id), error)),
             }
         } else {
             let error = ErrorObject::parallax(
                 ErrorKind::NotInitialized,
                 "initialize must be the first request",
             );
-            Response::error(Some(request.id), error)
+            Reply::Response(Response::error(Some(request.id), error))
         };
-        self.reply(Reply::Response(response)).await
+        self.reply(reply).await
     }
 
     fn notification(&self, notification: &Notification) {
@@ -396,11 +408,17 @@ async fn write_loop<W: AsyncWrite + Unpin>(
 ) -> Result<(), FrameError> {
     let mut appended = log.watch();
     let mut cursors = Cursors::default();
+    let mut resync_notice = false;
     loop {
         match queue.try_recv() {
             Ok(reply) => {
                 stall
-                    .guard(send_reply(&mut sink, reply, &mut cursors))
+                    .guard(send_reply(
+                        &mut sink,
+                        reply,
+                        &mut cursors,
+                        &mut resync_notice,
+                    ))
                     .await?;
                 continue;
             }
@@ -415,6 +433,15 @@ async fn write_loop<W: AsyncWrite + Unpin>(
                 continue;
             }
             Ok(None) => {}
+            Err(subscription) if resync_notice => {
+                info!(
+                    %subscription,
+                    "a subscriber fell behind the event log's retention; ending it with events/resync"
+                );
+                let resync = Notification::new::<EventsResync>(EventsResyncParams { subscription });
+                stall.guard(sink.feed(resync)).await?;
+                continue;
+            }
             Err(subscription) => {
                 warn!(
                     %subscription,
@@ -429,7 +456,7 @@ async fn write_loop<W: AsyncWrite + Unpin>(
             reply = queue.recv() => match reply {
                 Some(reply) => {
                     stall
-                        .guard(send_reply(&mut sink, reply, &mut cursors))
+                        .guard(send_reply(&mut sink, reply, &mut cursors, &mut resync_notice))
                         .await?;
                 }
                 None => break,
@@ -446,9 +473,17 @@ async fn send_reply<W: AsyncWrite + Unpin>(
     sink: &mut FramedWrite<W, FrameCodec>,
     reply: Reply,
     cursors: &mut Cursors,
+    resync_notice: &mut bool,
 ) -> Result<(), FrameError> {
     match reply {
         Reply::Response(response) => send_response(sink, response).await,
+        Reply::Initialized {
+            response,
+            resync_notice: declared,
+        } => {
+            *resync_notice = declared;
+            send_response(sink, response).await
+        }
         Reply::Subscribe { response, cursor } => {
             send_response(sink, response).await?;
             cursors.add(cursor);
@@ -539,11 +574,19 @@ mod tests {
                 branch: None,
                 coordinator: None,
                 permission: None,
+                autonomy: None,
                 created_at: Timestamp::now(),
                 updated_at: Timestamp::now(),
+                base_branch: None,
+                integration_branch: None,
+                auto_land: false,
+                allow_api_keys: None,
+                max_children: None,
+                checks: None,
+                proposed_checks: None,
             };
             daemon
-                .log
+                .store
                 .append(
                     Timestamp::now(),
                     None,
@@ -573,11 +616,15 @@ mod tests {
     }
 
     fn requests(after: u64) -> [Value; 3] {
+        requests_with(after, &json!({}))
+    }
+
+    fn requests_with(after: u64, capabilities: &Value) -> [Value; 3] {
         [
             json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
                 "protocol": {"min": 1, "max": 1},
                 "client": {"name": "test", "version": "0"},
-                "capabilities": {}
+                "capabilities": capabilities
             }}),
             json!({"jsonrpc": "2.0", "id": 2, "method": "events/subscribe", "params": {"after": after}}),
             json!({"jsonrpc": "2.0", "id": 3, "method": "host/health"}),
@@ -638,6 +685,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_lagging_subscriber_with_resync_notice_gets_events_resync_and_keeps_its_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = daemon(dir.path(), 5);
+        let capabilities = json!({"resyncNotice": {}});
+        let (mut frames, mut write) =
+            connect(Arc::clone(&daemon), &requests_with(0, &capabilities)).await;
+        let mut subscription = None;
+        for _ in 0..3 {
+            let Some(Message::Response(response)) = next(&mut frames).await else {
+                panic!("expected a response");
+            };
+            if response.id == Some(2.into()) {
+                subscription = Some(response.result.unwrap()["subscription"].clone());
+            }
+        }
+        append(&daemon, 1_000).await;
+
+        let resync = loop {
+            match next(&mut frames).await.expect("the connection stays open") {
+                Message::Notification(n) if n.method == "events/resync" => break n,
+                Message::Notification(n) => assert_eq!(n.method, "events/event"),
+                other => panic!("unexpected {other:?}"),
+            }
+        };
+        assert_eq!(
+            resync.params.unwrap()["subscription"],
+            subscription.unwrap()
+        );
+
+        // The connection still answers, and the ended subscription sends nothing more.
+        write
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"host/health\"}\n")
+            .await
+            .unwrap();
+        let Some(Message::Response(health)) = next(&mut frames).await else {
+            panic!("expected the health answer");
+        };
+        assert_eq!(health.id, Some(4.into()));
+        assert!(health.result.is_ok());
+    }
+
+    #[tokio::test]
     async fn a_client_that_stops_reading_is_dropped() {
         let dir = tempfile::tempdir().unwrap();
         let idle = Duration::from_millis(300);
@@ -687,8 +776,16 @@ mod tests {
                     branch: None,
                     coordinator: None,
                     permission: None,
+                    autonomy: None,
                     created_at: Timestamp::now(),
                     updated_at: Timestamp::now(),
+                    base_branch: None,
+                    integration_branch: None,
+                    auto_land: false,
+                    allow_api_keys: None,
+                    max_children: None,
+                    checks: None,
+                    proposed_checks: None,
                 },
             },
         };

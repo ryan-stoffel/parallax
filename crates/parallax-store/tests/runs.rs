@@ -20,6 +20,7 @@ fn fields(project_id: Uuid) -> RunFields {
         backend: "claude".to_owned(),
         coordinator_thread: None,
         parent: None,
+        notify_parent: false,
         model: Some("opus".to_owned()),
         effort: Some("high".to_owned()),
         permission: None,
@@ -27,6 +28,7 @@ fn fields(project_id: Uuid) -> RunFields {
         fast: None,
         approvals: false,
         checkout: false,
+        explore: false,
     }
 }
 
@@ -328,6 +330,14 @@ fn a_page_of_run_events_stops_at_its_byte_budget_but_never_comes_back_empty() {
         }
     }
     assert_eq!(seen, (1..=10).collect::<Vec<_>>());
+
+    // Newest first, it pages the same way (PLX-490).
+    let (newest, more) = store.run_events_before(run, u64::MAX, 500, 2500).unwrap();
+    assert_eq!(newest.iter().map(|e| e.seq).collect::<Vec<_>>(), [10, 9]);
+    assert!(more);
+    let (oldest, more) = store.run_events_before(run, 2, 500, 10).unwrap();
+    assert_eq!(oldest.iter().map(|e| e.seq).collect::<Vec<_>>(), [1]);
+    assert!(!more);
 }
 
 fn worktree_fields() -> WorktreeFields {
@@ -383,6 +393,52 @@ fn a_run_and_its_worktree_are_created_together_or_not_at_all() {
     assert_eq!(store.get_worktree(run_only).unwrap(), None);
 }
 
+/// PLX-450: `agent/list`'s one query reads what `list_runs` and `get_worktree` per run read.
+#[test]
+fn runs_list_with_their_worktrees_as_read_one_by_one() {
+    let (_dir, mut store) = open();
+    let (one, two) = (Uuid::now_v7(), Uuid::now_v7());
+    store
+        .create_run_with_worktree(
+            Uuid::now_v7(),
+            &fields(one),
+            &starting(),
+            &worktree_fields(),
+        )
+        .unwrap();
+    let checkout = RunFields {
+        checkout: true,
+        ..fields(one)
+    };
+    store
+        .create_run(Uuid::now_v7(), &checkout, &starting())
+        .unwrap();
+    store
+        .create_run_with_worktree(
+            Uuid::now_v7(),
+            &fields(two),
+            &starting(),
+            &worktree_fields(),
+        )
+        .unwrap();
+
+    let all = store.list_runs_with_worktrees(None).unwrap();
+    let has_worktree = all.iter().map(|(_, worktree)| worktree.is_some());
+    assert_eq!(has_worktree.collect::<Vec<_>>(), [true, false, true]);
+    for project in [None, Some(one), Some(two), Some(Uuid::now_v7())] {
+        let one_by_one = store
+            .list_runs(project)
+            .unwrap()
+            .into_iter()
+            .map(|run| {
+                let worktree = store.get_worktree(run.id).unwrap();
+                (run, worktree)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(store.list_runs_with_worktrees(project).unwrap(), one_by_one);
+    }
+}
+
 /// PLX-338: `project/delete` removes each of a Project's runs with every row kept for it.
 #[test]
 fn deleting_a_run_removes_its_worktree_events_turns_images_and_wakes_only() {
@@ -429,16 +485,6 @@ fn deleting_a_run_removes_its_worktree_events_turns_images_and_wakes_only() {
 }
 
 #[test]
-fn resetting_the_log_id_makes_the_next_one_new() {
-    let (_dir, store) = open();
-    let first = store.event_log_id(Uuid::now_v7()).unwrap();
-    store.reset_event_log_id().unwrap();
-    let second = Uuid::now_v7();
-    assert_eq!(store.event_log_id(second).unwrap(), second);
-    assert_ne!(second, first);
-}
-
-#[test]
 fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("parallax.sqlite3");
@@ -465,14 +511,21 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     // normal threads tables (#110's migration 9), the wakes table (PLX-178's migration 14), the
     // images table (PLX-191's migration 15), the project icon columns (PLX-227's migration 16),
     // the host settings table (PLX-371's migration 24), the inbox table (PLX-401's migration 25),
-    // the project permission column (PLX-394's migration 26), or the queued table (PLX-370's
-    // migration 27).
+    // the project permission column (PLX-394's migration 26), the queued table (PLX-370's
+    // migration 27), the project branch columns (PLX-409's migration 29), the questions
+    // table (PLX-402's migration 30), the project autonomy column (PLX-403's migration 31), the
+    // landings table and auto-land column (PLX-410's migration 33), the placement columns and
+    // table (PLX-413's migration 34), the checks columns (PLX-411's migration 35), or the search
+    // index (PLX-487's migration 36).
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "DROP TABLE runs; DROP TABLE log_meta; DROP TABLE events; DROP TABLE turns;
              DROP TABLE threads; DROP TABLE repos; DROP TABLE wakes; DROP TABLE images;
-             DROP TABLE host_settings; DROP TABLE inbox; DROP TABLE queued;
+             DROP TABLE host_settings; DROP TABLE inbox; DROP TABLE queued; DROP TABLE questions;
+             DROP TABLE landings;
+             DROP TABLE placements;
+             DROP TABLE thread_text_fts; DROP TABLE thread_text;
              ALTER TABLE worktrees DROP COLUMN git_dir;
              ALTER TABLE worktrees DROP COLUMN base_dirty;
              ALTER TABLE projects DROP COLUMN icon_name;
@@ -480,6 +533,14 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
              ALTER TABLE projects DROP COLUMN icon_image_type;
              ALTER TABLE projects DROP COLUMN icon_image_data;
              ALTER TABLE projects DROP COLUMN permission;
+             ALTER TABLE projects DROP COLUMN base_branch;
+             ALTER TABLE projects DROP COLUMN integration_branch;
+             ALTER TABLE projects DROP COLUMN autonomy;
+             ALTER TABLE projects DROP COLUMN auto_land;
+             ALTER TABLE projects DROP COLUMN max_children;
+             ALTER TABLE projects DROP COLUMN allow_api_keys;
+             ALTER TABLE projects DROP COLUMN checks;
+             ALTER TABLE projects DROP COLUMN proposed_checks;
              DELETE FROM schema_version WHERE version >= 7;",
         )
         .unwrap();

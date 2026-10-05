@@ -80,6 +80,8 @@ pub(super) struct Translator {
     /// The client answers permission requests (`RunRequest::approvals`). Without it, plxd rejects
     /// each one at once, as headless Claude Code denies what would prompt (0031).
     pub asks: bool,
+    /// The run has the injected `plxd mcp --thread` server, whose tools run without asking (0041).
+    pub thread_tools: bool,
     calls: HashMap<String, Call>,
     /// Calls the user (or plxd, without `asks`) rejected, which end `completed` all the same.
     pub denied: HashSet<String>,
@@ -406,6 +408,25 @@ impl Translator {
             })
         };
         let reject = option(&["reject_once", "reject_always"]);
+        if self.thread_tools
+            && call_id
+                .as_deref()
+                .and_then(|id| self.calls.get(id))
+                .is_some_and(|call| {
+                    call.kind == "other"
+                        && call.input.get("providerIdentifier").and_then(Value::as_str)
+                            == Some(crate::mcp::SERVER)
+                        && call
+                            .input
+                            .get("toolName")
+                            .and_then(Value::as_str)
+                            .is_some_and(|name| crate::mcp::thread::TOOLS.contains(&name))
+                })
+        {
+            let allow = option(&["allow_once", "allow_always"]);
+            steps.push(Step::Reply(permission_answer(&id, allow.as_deref())));
+            return steps;
+        }
         if !self.asks {
             if let Some(call_id) = &call_id {
                 self.denied.insert(call_id.clone());

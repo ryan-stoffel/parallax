@@ -105,6 +105,11 @@ pub struct ProviderInstance {
     /// Models the user added, offered beside the ones plxd finds.
     #[serde(default)]
     pub models: Vec<ProviderModel>,
+    /// The percent of each limit window that a Project's children leave for the user, from 0 to
+    /// 100 (0046). At or past its limit minus this, it takes no new children. Absent means none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reserve: Option<u8>,
 }
 
 /// An instance's detected state, and what it offers.

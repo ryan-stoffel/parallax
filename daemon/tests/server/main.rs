@@ -7,9 +7,11 @@
 //! CLIs. `tests/windows.rs` covers `serve` on Windows.
 #![cfg(unix)]
 
+mod agent_wait;
 mod agents;
 mod approvals;
 mod auto_resume;
+mod checks;
 mod context;
 mod coordinator;
 mod events;
@@ -17,11 +19,15 @@ mod git;
 mod handshake;
 mod inbox;
 mod keys;
+mod landing;
 mod lifecycle;
 mod mcp;
+mod memory;
+mod memory_upkeep;
 mod open_pr;
 mod projects;
 mod pull_requests;
+mod questions;
 mod queue;
 mod requests;
 mod support;

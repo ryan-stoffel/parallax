@@ -196,6 +196,10 @@ pub struct DiffSummary {
 /// One agent run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about a run, not states of one thing"
+)]
 pub struct AgentRun {
     /// The run's id.
     pub id: RunId,
@@ -264,8 +268,9 @@ pub struct AgentRun {
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
     /// True when it forwards its permission requests to the client, as the start method that
-    /// made it asked with `approvals` (PLX-222, decision 0031). It never changes. Absent means
-    /// false: its CLI denies what would prompt.
+    /// made it asked with `approvals` (PLX-222, decision 0031). It changes only when
+    /// `project/fromThreads` makes the run a Project's child, which sets it. Absent means false:
+    /// its CLI denies what would prompt.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub approvals: bool,
     /// True for a thread started with `checkout`: it works in its repository's own checkout, so it
@@ -273,6 +278,10 @@ pub struct AgentRun {
     /// Absent means false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub checkout: bool,
+    /// True for a Project's exploration child, started with `explore` (0045): it never lands.
+    /// Absent means false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub explore: bool,
     /// The web URLs of the pull requests linked to it, oldest first, with no duplicates: the one
     /// `agent/openPr` returned, and any its agent opened with `gh pr create` (PLX-318). Behind the
     /// `pullRequests` capability. Absent means none.
@@ -679,7 +688,55 @@ pub enum AgentOutputItem {
         #[ts(optional)]
         message: Option<String>,
     },
+    /// What one of the agent's own subagents did (PLX-382, decision 0041), such as Claude Code's
+    /// Agent tool: an item from its own transcript, not the agent's. Show it with the subagent,
+    /// apart from the agent's own items. A subagent can start another, whose items name the call
+    /// it was started with in the first one's transcript.
+    Subagent {
+        /// The tool call that started the subagent, whose `toolCall` names its task.
+        call_id: String,
+        /// The subagent's type, such as `general-purpose`, when the vendor says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        agent_type: Option<String>,
+        /// The model that wrote the item, when the vendor says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        model: Option<String>,
+        /// The item.
+        item: Box<AgentOutputItem>,
+    },
+    /// One of the agent's own subagents ended (PLX-382). One started in the background ends
+    /// after its tool call's result.
+    SubagentFinished {
+        /// The tool call that started it.
+        call_id: String,
+        /// How it ended.
+        status: AgentSubagentStatus,
+        /// Its final report, when the vendor includes it, cut short when it is long.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        summary: Option<String>,
+    },
     /// A kind this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// How one of an agent's own subagents ended (PLX-382).
+///
+/// A newer plxd may send a status this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentSubagentStatus {
+    /// It finished its work.
+    Completed,
+    /// It failed.
+    Failed,
+    /// It was stopped before it finished.
+    Stopped,
+    /// A status this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
     Unknown,
@@ -710,6 +767,11 @@ pub struct AgentStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub coordinator_thread: Option<CoordinatorThreadId>,
+    /// Whether the run wakes its coordinator when a CLI process of its ends (PLX-380, 0025), for
+    /// a run with a `coordinatorThread`. Absent means true. A retry must repeat it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub notify: Option<bool>,
     /// The model, in the backend's naming, such as `opus`. Absent means the CLI's default. Send
     /// it, `effort`, and `permission` only to a plxd that advertises `runOptions`. The run keeps
     /// all three when it resumes, and a retry must repeat them.
@@ -760,6 +822,11 @@ pub struct AgentStartParams {
     /// them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub threads: Vec<RunId>,
+    /// Start a Project's child as an exploration, such as a spike or a comparison, which never
+    /// lands (0045). Sent only to a plxd that advertises `integrationBranch`. A retry must repeat
+    /// it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub explore: bool,
 }
 
 /// Result of `agent/start`, `agent/send`, `agent/cancel`, `agent/resumeNow`, and
@@ -899,19 +966,68 @@ pub struct AgentListParams {
 pub struct AgentListResult {
     /// The runs, oldest first.
     pub runs: Vec<AgentRun>,
-    /// The `seq` of the last event the list reflects, to subscribe after.
+    /// The event log's `seq` from before the list was read. Subscribe with `after` set to it. The
+    /// list may already reflect some events after it, and replaying them is harmless.
     pub seq: u64,
 }
 
+/// Params of `agent/wait` (PLX-451): waits until runs are idle, that is neither `starting` nor
+/// `running`, or until the timeout.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentWaitParams {
+    /// The runs, from 1 to 50 of them.
+    pub run_ids: Vec<RunId>,
+    /// Whether any one of them or all of them have to be idle.
+    pub until: AgentWaitUntil,
+    /// How long to wait, in milliseconds: at most 60000, which keeps the request under the
+    /// connection's idle timeout.
+    pub timeout_ms: u32,
+}
+
+/// Which of `agent/wait`'s runs have to be idle.
+///
+/// A newer peer may send a value this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentWaitUntil {
+    /// Any one of them.
+    Any,
+    /// All of them.
+    All,
+    /// A value this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// Result of `agent/wait`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentWaitResult {
+    /// The runs as they stand, in the order asked for.
+    pub runs: Vec<AgentRun>,
+    /// Whether the timeout passed first.
+    pub timed_out: bool,
+}
+
 /// Params of `agent/events`: one run's events from plxd's log, for rebuilding its transcript
-/// after `resyncRequired` or a restart.
+/// after `resyncRequired` or a restart. Pages go oldest first from `after`, or, with `before`
+/// (the `eventsBefore` capability, PLX-490), newest first.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEventsParams {
     /// The run.
     pub run_id: RunId,
-    /// Return the events whose `seq` is greater than this; 0 for the first page.
+    /// Return the events whose `seq` is greater than this; 0 for the first page. Ignored with
+    /// `before`.
     pub after: u64,
+    /// Return the newest events whose `seq` is less than this instead, for a transcript that opens
+    /// at its end: `Number.MAX_SAFE_INTEGER` for the newest page, then the first `seq` of the last
+    /// page returned. An older plxd ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub before: Option<u64>,
     /// The most events to return: 500 by default, and at most 1000.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -935,8 +1051,19 @@ pub struct AgentImageParams {
 pub struct AgentEventsResult {
     /// The events, oldest first.
     pub events: Vec<LoggedEvent>,
-    /// Whether more events follow the last one returned. Ask again after its `seq`.
+    /// Whether more events follow the last one returned, or with `before`, precede the first.
+    /// Ask again after the last one's `seq`, or before the first one's.
     pub more: bool,
+    /// With `before`: the run as it stands, read after the page, since a page that doesn't reach
+    /// back to the run's start has no `agent.started`. Events in the page never change it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub run: Option<AgentRun>,
+    /// With `before`: the event log's `seq` from before the page was read. Subscribe with `after`
+    /// set to it or to the page's last `seq`, whichever is greater, as after `agent/list`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub seq: Option<u64>,
 }
 
 /// An event from plxd's log, as `agent/events` returns it.

@@ -12,9 +12,10 @@
 //!   check, a no-write run whose `system/init` lists any tool outside [`NO_WRITE_TOOLS`] fails with
 //!   [`FailureKind::PolicyViolation`].
 //! - **A coordinator**, a no-write run with plxd's own MCP tools attached (0019), is full Claude
-//!   Code instead (0027): the run's [`permission_mode`], then `--mcp-config` with the `plxd mcp`
-//!   server, which joins the user's, the repository's, and plugins' servers, and `--allowedTools`
-//!   with [`crate::mcp::ALLOWED_TOOLS`], so plxd's tools work in every mode, and [`TODO_TOOLS`],
+//!   Code instead (0027): the run's [`permission_mode`], then `--mcp-config` with its
+//!   `plxd mcp --thread` server (PLX-380), which joins the user's, the repository's, and plugins'
+//!   servers, and `--allowedTools` with [`crate::mcp::thread::ALLOWED_TOOLS`], so plxd's tools
+//!   work in every mode, and [`TODO_TOOLS`],
 //!   so it keeps a plan on every model (PLX-249), then `--settings` with only [`settings_env`].
 //!   Its user and project settings, hooks, skills, plugins, and subagents all load, as in a
 //!   terminal. As a second check, a coordinator whose `system/init` reports another permission
@@ -156,7 +157,7 @@ mod stream;
 #[cfg(all(test, unix))]
 mod tests;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
@@ -534,6 +535,7 @@ pub struct ClaudeBackend {
     cancel: CancelPolicy,
     limits: OutputLimits,
     overrides: Overrides,
+    project_permissions: &'static [AgentPermission],
 }
 
 impl ClaudeBackend {
@@ -546,7 +548,16 @@ impl ClaudeBackend {
             cancel: CancelPolicy::default(),
             limits: OutputLimits::default(),
             overrides: Overrides::default(),
+            project_permissions: PERMISSIONS,
         }
+    }
+
+    /// Runs a Project's agents only in Bypass, for a model service whose endpoint Auto's
+    /// classifier isn't tested against (0042). Its threads keep every mode.
+    #[must_use]
+    pub fn bypass_only_in_projects(mut self) -> Self {
+        self.project_permissions = &[AgentPermission::Bypass];
+        self
     }
 
     /// Runs as a provider instance (0040): its name, program, folder, arguments, and variables,
@@ -627,6 +638,7 @@ impl ClaudeBackend {
         }
         spec.stdin = StdinMode::Piped;
         spec.limits = self.limits;
+        spec.record = Some("claude");
         Ok((spec, key_source))
     }
 }
@@ -677,7 +689,7 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
         }
     }
     if let Some(tools) = &request.coordinator_tools {
-        let allowed: Vec<&str> = mcp::ALLOWED_TOOLS
+        let allowed: Vec<&str> = mcp::thread::ALLOWED_TOOLS
             .iter()
             .chain(TODO_TOOLS)
             .copied()
@@ -960,7 +972,6 @@ impl Backend for ClaudeBackend {
         Capabilities {
             follow_ups: true,
             resume: true,
-            coordinator: true,
             reports_cost: true,
             rate_limits: true,
             worker_sandbox: cfg!(any(target_os = "macos", target_os = "linux")),
@@ -974,6 +985,10 @@ impl Backend for ClaudeBackend {
 
     fn permissions(&self) -> &[AgentPermission] {
         PERMISSIONS
+    }
+
+    fn project_permissions(&self) -> &[AgentPermission] {
+        self.project_permissions
     }
 
     fn context_windows(&self) -> &'static [u32] {
@@ -1074,6 +1089,7 @@ impl Backend for ClaudeBackend {
                 .with_prompts(asks)
                 .with_plan_exit(plan_exit),
             turns: VecDeque::new(),
+            unreported: HashSet::new(),
             asks: HashMap::new(),
             violation: None,
             env_file,
@@ -1213,6 +1229,10 @@ async fn write_messages(
     let mut broken = false;
     while let Some(message) = queue.recv().await {
         broken = broken || stdin.write_all(message.line.as_bytes()).await.is_err();
+        #[cfg(test)]
+        if message.follow_up {
+            super::report_stall().await;
+        }
         let result = if broken {
             Delivery::Failed(message)
         } else {
@@ -1285,6 +1305,9 @@ struct Driver {
     translator: Translator,
     /// Turns the CLI has been sent but hasn't finished, oldest first: their ids and `uuid`s.
     turns: VecDeque<(Option<TurnId>, String)>,
+    /// The `uuid`s of follow-ups in `turns` with no `TurnStarted` yet: the writer hasn't reported
+    /// them written, and the CLI hasn't answered them (PLX-523).
+    unreported: HashSet<String>,
     /// Permission requests the CLI waits on (PLX-222).
     asks: HashMap<ApprovalId, Ask>,
     violation: Option<Failure>,
@@ -1315,13 +1338,15 @@ impl Driver {
                 Some(delivery) = stdin.results.recv() => {
                     stdin.pending = stdin.pending.saturating_sub(1);
                     match delivery {
-                        Delivery::Written(message) if message.follow_up => {
-                            self.turns.push_back((message.turn_id, message.uuid));
-                            let started = Event::TurnStarted { turn_id: message.turn_id };
-                            self.emit(started).await;
+                        Delivery::Written(message) => {
+                            if self.unreported.remove(&message.uuid) {
+                                let started = Event::TurnStarted { turn_id: message.turn_id };
+                                self.emit(started).await;
+                            }
                         }
-                        Delivery::Written(_) => {}
                         Delivery::Failed(message) => {
+                            self.unreported.remove(&message.uuid);
+                            self.turns.retain(|(_, uuid)| *uuid != message.uuid);
                             // stdin is gone, so no later message can arrive either.
                             stdin.close();
                             self.control.close();
@@ -1359,8 +1384,15 @@ impl Driver {
                             &follow_up.images,
                             true,
                         );
-                        if let Err(message) = stdin.send(message) {
-                            self.dropped(&message).await;
+                        let (turn_id, uuid) = (message.turn_id, message.uuid.clone());
+                        match stdin.send(message) {
+                            // A turn already: the CLI can answer it before the writer reports
+                            // writing it (PLX-523).
+                            Ok(()) => {
+                                self.turns.push_back((turn_id, uuid.clone()));
+                                self.unreported.insert(uuid);
+                            }
+                            Err(message) => self.dropped(&message).await,
                         }
                     }
                     None => control_open = false,
@@ -1396,6 +1428,23 @@ impl Driver {
 
     async fn apply(&mut self, steps: Vec<Step>, stdin: &mut Stdin) {
         for step in steps {
+            // Turns finish in order, so a turn's content while the oldest outstanding turn is an
+            // unreported follow-up is that follow-up's: its TurnStarted goes first (PLX-523).
+            // Events outside a turn, such as a warning or a rate limit, don't start it.
+            if matches!(
+                step,
+                Step::Emit(
+                    Event::TextDelta { .. }
+                        | Event::Text { .. }
+                        | Event::Reasoning { .. }
+                        | Event::ToolCall { .. }
+                        | Event::ToolResult { .. }
+                ) | Step::Ask(..)
+            ) && let Some((turn_id, uuid)) = self.turns.front().cloned()
+                && self.unreported.remove(&uuid)
+            {
+                self.emit(Event::TurnStarted { turn_id }).await;
+            }
             match step {
                 Step::Emit(event) => self.emit(event).await,
                 Step::Total(total) => {
@@ -1408,7 +1457,11 @@ impl Driver {
                     }
                 }
                 Step::TurnDone(done) => {
-                    for turn_id in self.finish_turns(&done) {
+                    for (turn_id, uuid) in self.finish_turns(&done) {
+                        // Answered before the writer reported writing it.
+                        if self.unreported.remove(&uuid) {
+                            self.emit(Event::TurnStarted { turn_id }).await;
+                        }
                         let result = done.result.clone();
                         self.emit(Event::TurnFinished { turn_id, result }).await;
                     }
@@ -1460,9 +1513,9 @@ impl Driver {
         let _ = stdin.send(Message::control(&response));
     }
 
-    /// The turns a `result` ended, oldest first. Turns finish in the order they started, so a
-    /// result ends every outstanding turn up to the newest one it names.
-    fn finish_turns(&mut self, done: &TurnDone) -> Vec<Option<TurnId>> {
+    /// The turns a `result` ended, oldest first, with their `uuid`s. Turns finish in the order
+    /// they started, so a result ends every outstanding turn up to the newest one it names.
+    fn finish_turns(&mut self, done: &TurnDone) -> Vec<(Option<TurnId>, String)> {
         let named = self
             .turns
             .iter()
@@ -1476,10 +1529,7 @@ impl Driver {
             (None, _) => 1,
         };
         let count = count.min(self.turns.len());
-        self.turns
-            .drain(..count)
-            .map(|(turn_id, _)| turn_id)
-            .collect()
+        self.turns.drain(..count).collect()
     }
 
     /// Closes stdin once no turn is outstanding, no permission request waits, and plxd holds no
@@ -1527,8 +1577,12 @@ impl Driver {
                 &follow_up.images,
                 true,
             );
-            if let Err(message) = stdin.send(message) {
-                self.dropped(&message).await;
+            let uuid = message.uuid.clone();
+            match stdin.send(message) {
+                Ok(()) => {
+                    self.unreported.insert(uuid);
+                }
+                Err(message) => self.dropped(&message).await,
             }
         }
         stdin.close();
@@ -1539,7 +1593,10 @@ impl Driver {
         }
         while let Ok(delivery) = stdin.results.try_recv() {
             let (Delivery::Written(message) | Delivery::Failed(message)) = delivery;
-            self.dropped(&message).await;
+            // A follow-up the CLI answered before the writer reported it wasn't dropped.
+            if self.unreported.remove(&message.uuid) {
+                self.dropped(&message).await;
+            }
         }
     }
 

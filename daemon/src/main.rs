@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
-use parallax_protocol::{CoordinatorThreadId, ProjectId, RunId};
+use parallax_protocol::RunId;
 use plxd::attach::{
     self, DEFAULT_CONNECT_TIMEOUT, EXIT_UNAVAILABLE, MAX_CONNECT_TIMEOUT, Options, report,
 };
@@ -35,7 +35,7 @@ enum Command {
     /// user unit on Linux.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     Service(ServiceArgs),
-    /// Serve a coordinator's or a thread's Parallax tools over MCP on stdin and stdout. plxd
+    /// Serve a thread's Parallax tools over MCP on stdin and stdout. plxd
     /// starts it.
     #[command(hide = true)]
     Mcp(McpArgs),
@@ -63,22 +63,10 @@ struct McpArgs {
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
-    /// The only project the coordinator's tools reach
-    #[arg(
-        long,
-        value_name = "ID",
-        required_unless_present = "thread",
-        requires = "coordinator_thread"
-    )]
-    project: Option<ProjectId>,
-
-    /// The coordinator thread that spawned runs are tagged with
-    #[arg(long, value_name = "ID", requires = "project")]
-    coordinator_thread: Option<CoordinatorThreadId>,
-
-    /// The thread whose host-wide tools to serve: the caller of every tool (0041)
-    #[arg(long, value_name = "RUN_ID", conflicts_with_all = ["project", "coordinator_thread"])]
-    thread: Option<RunId>,
+    /// The thread whose Parallax tools to serve, a Project's coordinator included: the caller of
+    /// every tool (0041)
+    #[arg(long, value_name = "RUN_ID")]
+    thread: RunId,
 }
 
 #[derive(Debug, Args)]
@@ -200,22 +188,11 @@ fn mcp(args: &McpArgs) -> ! {
         }
     };
     let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
-    let served = match (args.thread, args.project, args.coordinator_thread) {
-        (Some(run), _, _) => {
-            let binding = plxd::mcp::thread::Binding { socket, run };
-            runtime.block_on(plxd::mcp::thread::run(&binding, stdin, stdout))
-        }
-        (None, Some(project), Some(thread)) => {
-            let binding = plxd::mcp::Binding {
-                socket,
-                project,
-                thread,
-            };
-            runtime.block_on(plxd::mcp::run(&binding, stdin, stdout))
-        }
-        // clap requires `--thread`, or `--project` with `--coordinator-thread`.
-        _ => Err("give --thread, or --project and --coordinator-thread".to_owned()),
+    let binding = plxd::mcp::thread::Binding {
+        plxd: plxd::mcp::Plxd::new(socket),
+        run: args.thread,
     };
+    let served = runtime.block_on(plxd::mcp::thread::run(&binding, stdin, stdout));
     if let Err(error) = served {
         report(&error);
         std::process::exit(1);
@@ -616,44 +593,26 @@ mod tests {
     }
 
     #[test]
-    fn mcp_needs_a_project_and_a_coordinator_thread_or_a_thread_as_uuidv7s() {
-        let project = "01a0d349-6e00-7c9e-80e2-0426486a8cae";
+    fn mcp_needs_a_thread_as_a_uuidv7() {
         let thread = "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b";
-        let cli = Cli::try_parse_from([
-            "plxd",
-            "mcp",
-            "--project",
-            project,
-            "--coordinator-thread",
-            thread,
-        ])
-        .unwrap();
-        let Command::Mcp(args) = cli.command else {
-            panic!("expected mcp, got {:?}", cli.command);
-        };
-        assert_eq!(args.project.unwrap().to_string(), project);
-        assert_eq!(args.coordinator_thread.unwrap().to_string(), thread);
-        assert_eq!(args.thread, None);
         let cli = Cli::try_parse_from(["plxd", "mcp", "--thread", thread]).unwrap();
         let Command::Mcp(args) = cli.command else {
             panic!("expected mcp, got {:?}", cli.command);
         };
-        assert_eq!(args.thread.unwrap().to_string(), thread);
+        assert_eq!(args.thread.to_string(), thread);
         assert!(Cli::try_parse_from(["plxd", "mcp"]).is_err());
-        assert!(Cli::try_parse_from(["plxd", "mcp", "--project", project]).is_err());
-        assert!(
-            Cli::try_parse_from(["plxd", "mcp", "--thread", thread, "--project", project]).is_err()
-        );
+        assert!(Cli::try_parse_from(["plxd", "mcp", "--thread", "not-an-id"]).is_err());
         assert!(
             Cli::try_parse_from([
                 "plxd",
                 "mcp",
                 "--project",
-                "not-an-id",
-                "--coordinator-thread",
                 thread,
+                "--coordinator-thread",
+                thread
             ])
-            .is_err()
+            .is_err(),
+            "the project-bound server is gone (PLX-380)"
         );
     }
 

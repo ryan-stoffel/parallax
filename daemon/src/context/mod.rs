@@ -1,15 +1,17 @@
-//! Shared context: a folder per project, outside its git repository, that every agent and the
-//! editor read and write (decision record 0005, #155).
+//! Shared context: a folder per scope, outside any git repository, that agents and the editor
+//! read and write (decision records 0005 and 0044, #155, PLX-405).
 //!
-//! Layout: [`crate::paths::DataDir::context_dir`] under the data folder, one file deep. A path is
-//! always exactly one file name relative to that folder: no `..`, no leading `/`, no
-//! subdirectory, no hidden (dot) name, and it must end in `.md`, `.markdown`, or `.txt`. That
-//! restriction is deliberate scope, not an oversight (see the issue's Plan comment): 0005
-//! describes shared context as a folder of Markdown files, never a hierarchy, and keeping it flat
-//! removes an entire class of intermediate-directory symlink attacks.
+//! Layout: [`crate::paths::DataDir::context_dir`] under the data folder for a Project or a repo
+//! entry, and [`you_dir`] for the user's own memory. A path is relative to that folder: one file
+//! name, or a file in one of 0044's [`FOLDERS`], `memory/<kind>/`, `knowledge/`, `history/`, and
+//! `proposals/` (a plain thread's memory proposals, waiting for the user). Every component is a
+//! normal, non-hidden name with no `..`, `\`, `:`, or leading `/`, and the file ends in `.md`,
+//! `.markdown`, or `.txt`. Nothing else nests, so the folders stay a fixed, shallow set.
 //!
-//! Two more defenses hold even when a path passes that check:
+//! Three more defenses hold even when a path passes that check:
 //!
+//! - Each folder between the scope's folder and the file must be a real folder, never a symlink
+//!   ([`parent_dir`]), so a planted link can't send a read or write outside the scope.
 //! - Reads open with `O_NOFOLLOW` (the same technique `server::setup` uses for the lock file and
 //!   socket), so a symlink swapped in after validation is refused atomically, with no race.
 //! - Writes go to a temporary file in the same folder, then `rename` it over the target
@@ -22,6 +24,10 @@
 //! file on disk is 0005's durable source of truth, and this is only bookkeeping for idempotent
 //! retries and the `lastWriter` display field.
 
+pub(crate) mod corrections;
+pub(crate) mod history;
+pub(crate) mod memory;
+pub(crate) mod stale;
 pub(crate) mod watcher;
 
 use std::collections::HashMap;
@@ -69,7 +75,17 @@ const ALLOWED_EXTENSIONS: [&str; 3] = ["md", "markdown", "txt"];
 /// effort, and every `context/*` call calls it again lazily, so an existing project that predates
 /// this feature still gets one.
 pub(crate) fn ensure_dir(data_dir: &DataDir, project: ProjectId) -> io::Result<PathBuf> {
-    let dir = data_dir.context_dir(project);
+    ensure(data_dir.context_dir(project))
+}
+
+/// The user's own scope, You (0044): preferences across every Project and thread.
+pub(crate) fn you_dir(data_dir: &DataDir) -> PathBuf {
+    data_dir.context_root().join("you")
+}
+
+/// Creates `dir`, a scope's context folder, if it does not exist yet, private like the data
+/// folder itself.
+pub(crate) fn ensure(dir: PathBuf) -> io::Result<PathBuf> {
     std::fs::create_dir_all(&dir)?;
     #[cfg(unix)]
     {
@@ -79,42 +95,115 @@ pub(crate) fn ensure_dir(data_dir: &DataDir, project: ProjectId) -> io::Result<P
     Ok(dir)
 }
 
-/// Rejects `path` unless it is exactly one normal, non-hidden file name ending in `.md`,
-/// `.markdown`, or `.txt`. This alone rejects `..`, a leading `/`, and any subdirectory, since all
-/// of those need more than one path component or a component that is not [`Component::Normal`].
+/// The folders a path may name before its file name (0044).
+const FOLDERS: [&[&str]; 7] = [
+    &["memory", "preference"],
+    &["memory", "convention"],
+    &["memory", "decision"],
+    &["memory", "gotcha"],
+    &["knowledge"],
+    &["history"],
+    &["proposals"],
+];
+
+/// Rejects `path` unless it is one normal, non-hidden file name ending in `.md`, `.markdown`, or
+/// `.txt`, alone or under one of [`FOLDERS`], separated by `/`. This alone rejects `..`, a leading
+/// `/`, and any other folder, since each component must be a [`Component::Normal`] name.
 ///
 /// Returns the same string back, borrowed, so a caller can use it as the file name without
 /// re-deriving it from the path.
 pub(crate) fn validate_relative_path(path: &str) -> Result<&str, ErrorObject> {
     let invalid = || {
         ErrorObject::invalid_params(
-            "path must be a single relative file name, with no \"..\", no leading \"/\", no \
-             subdirectory, and no hidden (dot) name, ending in .md, .markdown, or .txt",
+            "path must be a relative file name ending in .md, .markdown, or .txt, alone or under \
+             memory/<preference|convention|decision|gotcha>/, knowledge/, history/, or \
+             proposals/, with no \"..\", no leading \"/\", and no hidden (dot) name",
         )
     };
-    if path.is_empty() || path.len() > 255 || path.contains('\0') {
+    // Control characters and line separators would let a file name break a line where plxd
+    // shows it, such as a child's memory index.
+    let breaks = |c: char| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}');
+    if path.is_empty() || path.len() > 255 || path.contains(['\\', ':']) || path.contains(breaks) {
         return Err(invalid());
     }
-    let mut components = Path::new(path).components();
-    let Some(Component::Normal(name)) = components.next() else {
+    let parts: Vec<&str> = path.split('/').collect();
+    let Some((name, folders)) = parts.split_last() else {
         return Err(invalid());
     };
-    if components.next().is_some() {
+    if !folders.is_empty() && !FOLDERS.contains(&folders) {
         return Err(invalid());
     }
-    // `Component::Normal` only guarantees no separator survives; compare back to the original so
-    // a name that doesn't round-trip losslessly (not valid UTF-8) can't sneak through.
-    if name.to_str() != Some(path) {
+    // `Component::Normal` only guarantees no separator survives; comparing back to the original
+    // keeps out a name that doesn't round-trip losslessly.
+    let normal = |part: &str| {
+        let mut components = Path::new(part).components();
+        matches!(components.next(), Some(Component::Normal(one)) if one.to_str() == Some(part))
+            && components.next().is_none()
+            && !part.starts_with('.')
+    };
+    if !parts.iter().all(|part| normal(part)) {
         return Err(invalid());
     }
-    if path.starts_with('.') {
-        return Err(invalid());
-    }
-    let extension = Path::new(path).extension().and_then(|ext| ext.to_str());
+    let extension = Path::new(name).extension().and_then(|ext| ext.to_str());
     if !extension.is_some_and(|ext| ALLOWED_EXTENSIONS.contains(&ext)) {
         return Err(invalid());
     }
     Ok(path)
+}
+
+/// The folder that holds `name` in `dir`, checking that each folder between them is a real
+/// folder, not a symlink (or on Windows another reparse point), and creating missing ones when
+/// `create` is set. `name` must already have passed [`validate_relative_path`].
+///
+/// # Errors
+///
+/// [`io::ErrorKind::NotFound`] for a missing folder when `create` isn't set, a [`symlink_error`]
+/// for a symlinked one, or another [`io::Error`] from creating one.
+// ponytail: checks each folder, then uses the path, so a folder swapped for a symlink in between
+// is followed; openat with O_NOFOLLOW per folder if an agent that can write the folder matters.
+fn parent_dir(dir: &Path, name: &str, create: bool) -> io::Result<PathBuf> {
+    let mut parent = dir.to_owned();
+    let Some((folders, _)) = name.rsplit_once('/') else {
+        return Ok(parent);
+    };
+    for folder in folders.split('/') {
+        parent.push(folder);
+        match std::fs::symlink_metadata(&parent) {
+            Ok(metadata) if is_link(&metadata) => return Err(symlink_error()),
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => return Err(io::Error::from(io::ErrorKind::NotFound)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound && create => {
+                if let Err(error) = std::fs::create_dir(&parent)
+                    && error.kind() != io::ErrorKind::AlreadyExists
+                {
+                    return Err(error);
+                }
+                if is_link(&std::fs::symlink_metadata(&parent)?) {
+                    return Err(symlink_error());
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(parent)
+}
+
+/// Whether `metadata`, from [`std::fs::symlink_metadata`], is a symlink, or on Windows any reparse
+/// point, such as a junction.
+fn is_link(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    if metadata.file_attributes()
+        & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+        != 0
+    {
+        return true;
+    }
+    metadata.file_type().is_symlink()
+}
+
+/// The last component of a validated path: its file name.
+fn file_name(name: &str) -> &str {
+    name.rsplit_once('/').map_or(name, |(_, file)| file)
 }
 
 /// Reads a shared context file's content and metadata.
@@ -127,9 +216,9 @@ pub(crate) fn validate_relative_path(path: &str) -> Result<&str, ErrorObject> {
 ///
 /// An [`io::Error`] of kind [`io::ErrorKind::NotFound`] if there is no such file (also raised for
 /// a directory, so one can't be read as though it were content), or an `ELOOP` error (see
-/// [`is_symlink_error`]) if it is a symlink.
+/// [`is_symlink_error`]) if it or a folder on its way is a symlink.
 pub(crate) fn read_file(dir: &Path, name: &str) -> io::Result<(Vec<u8>, std::fs::Metadata)> {
-    let path = dir.join(name);
+    let path = parent_dir(dir, name, false)?.join(file_name(name));
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -161,9 +250,9 @@ pub(crate) fn read_file(dir: &Path, name: &str) -> io::Result<(Vec<u8>, std::fs:
     Ok((content, metadata))
 }
 
-/// Writes `content` to `name` in `dir`, replacing it in full.
+/// Writes `content` to `name` in `dir`, replacing it in full, and creates the folders it names.
 ///
-/// Writes to a temporary file in `dir` first, then renames it over `name`
+/// Writes to a temporary file in the same folder first, then renames it over `name`
 /// ([`tempfile::NamedTempFile::persist`]). `rename` replaces whatever is at the destination
 /// without following it, so even a symlink swapped in after an earlier check is never written
 /// through; a symlink already there is rejected outright first, for a clearer error in the
@@ -171,10 +260,11 @@ pub(crate) fn read_file(dir: &Path, name: &str) -> io::Result<(Vec<u8>, std::fs:
 ///
 /// # Errors
 ///
-/// A [`symlink_error`] if `name` is already a symlink, or another
-/// [`io::Error`] from creating or renaming the temporary file.
+/// A [`symlink_error`] if `name` or a folder on its way is already a symlink, or another
+/// [`io::Error`] from creating a folder or creating or renaming the temporary file.
 pub(crate) fn write_file(dir: &Path, name: &str, content: &[u8]) -> io::Result<std::fs::Metadata> {
-    let target = dir.join(name);
+    let parent = parent_dir(dir, name, true)?;
+    let target = parent.join(file_name(name));
     if let Ok(metadata) = std::fs::symlink_metadata(&target)
         && metadata.file_type().is_symlink()
     {
@@ -182,24 +272,32 @@ pub(crate) fn write_file(dir: &Path, name: &str, content: &[u8]) -> io::Result<s
     }
     let mut temp = tempfile::Builder::new()
         .prefix(".parallax-context-")
-        .tempfile_in(dir)?;
+        .tempfile_in(&parent)?;
     temp.write_all(content)?;
     temp.as_file().sync_all()?;
     let file = temp.persist(&target).map_err(|error| error.error)?;
     file.metadata()
 }
 
-/// Lists the shared context files in `dir`, ordered by path.
+/// Lists the shared context files in `dir`, and in the [`FOLDERS`] under it, ordered by path.
 ///
-/// A directory, a hidden (dot) entry (including plxd's own temporary files while a write is in
-/// progress), a symlink, or a name with a disallowed extension is skipped rather than listed:
-/// [`std::fs::DirEntry::file_type`] does not follow a symlink, so one is reported as a symlink,
-/// never as whatever it points to.
+/// A hidden (dot) entry (including plxd's own temporary files while a write is in progress), a
+/// symlink, or a name with a disallowed extension or in another folder is skipped rather than
+/// listed: [`std::fs::DirEntry::file_type`] does not follow a symlink, so one is reported as a
+/// symlink, never as whatever it points to, and a symlinked folder is never walked.
 pub(crate) fn list_files(dir: &Path) -> io::Result<Vec<(String, std::fs::Metadata)>> {
     let mut files = Vec::new();
-    let entries = match std::fs::read_dir(dir) {
+    walk(dir, "", &mut files)?;
+    files.sort_by(|(a, _), (b, _)| a.cmp(b));
+    Ok(files)
+}
+
+/// Adds the files in `dir`'s folder `folder` (`""` for `dir` itself) to `files`, and walks those
+/// of its folders that lead to one of [`FOLDERS`].
+fn walk(dir: &Path, folder: &str, files: &mut Vec<(String, std::fs::Metadata)>) -> io::Result<()> {
+    let entries = match std::fs::read_dir(dir.join(folder)) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(files),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
     };
     for entry in entries {
@@ -207,18 +305,36 @@ pub(crate) fn list_files(dir: &Path) -> io::Result<Vec<(String, std::fs::Metadat
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
-        if validate_relative_path(&name).is_err() {
-            continue;
-        }
+        let path = if folder.is_empty() {
+            name
+        } else {
+            format!("{folder}/{name}")
+        };
         let file_type = entry.file_type()?;
-        if !file_type.is_file() {
-            continue;
+        if file_type.is_dir() {
+            let prefix: Vec<&str> = path.split('/').collect();
+            if FOLDERS.iter().any(|allowed| allowed.starts_with(&prefix)) {
+                walk(dir, &path, files)?;
+            }
+        } else if file_type.is_file() && validate_relative_path(&path).is_ok() {
+            files.push((path, entry.metadata()?));
         }
-        let metadata = entry.metadata()?;
-        files.push((name, metadata));
     }
-    files.sort_by(|(a, _), (b, _)| a.cmp(b));
-    Ok(files)
+    Ok(())
+}
+
+/// Deletes `name` in `dir`: the file, or a symlink itself, never what it points to.
+///
+/// # Errors
+///
+/// [`io::ErrorKind::NotFound`] if there is no such file, a [`symlink_error`] if a folder on its
+/// way is a symlink, or another [`io::Error`] from removing it.
+pub(crate) fn delete_file(dir: &Path, name: &str) -> io::Result<()> {
+    let path = parent_dir(dir, name, false)?.join(file_name(name));
+    if std::fs::symlink_metadata(&path)?.is_dir() {
+        return Err(io::Error::from(io::ErrorKind::NotFound));
+    }
+    std::fs::remove_file(path)
 }
 
 /// The total size of a project's shared context, in bytes, apart from `except`'s own current
@@ -423,14 +539,26 @@ mod tests {
     use parallax_protocol::jsonrpc::INVALID_PARAMS;
 
     use super::{
-        ContextIndex, Existing, MAX_FILE_BYTES, ensure_dir, list_files, other_files_total,
-        read_file, validate_relative_path, write_file,
+        ContextIndex, Existing, MAX_FILE_BYTES, delete_file, ensure_dir, list_files,
+        other_files_total, read_file, validate_relative_path, write_file,
     };
     use crate::paths::DataDir;
 
     #[test]
-    fn only_a_single_normal_markdown_or_text_name_is_valid() {
-        for good in ["notes.md", "research.markdown", "todo.txt"] {
+    fn only_a_normal_markdown_or_text_name_alone_or_in_a_memory_folder_is_valid() {
+        for good in [
+            "notes.md",
+            "research.markdown",
+            "todo.txt",
+            "brief.md",
+            "memory/preference/tabs.md",
+            "memory/convention/naming.md",
+            "memory/decision/use-vitest.md",
+            "memory/gotcha/flaky-ci.md",
+            "knowledge/auth.md",
+            "history/run.md",
+            "proposals/idea.md",
+        ] {
             assert_eq!(validate_relative_path(good), Ok(good), "{good}");
         }
         for bad in [
@@ -443,6 +571,23 @@ mod tests {
             "notes.png",
             "..",
             ".",
+            "memory/notes.md",
+            "memory/other/notes.md",
+            "memory/decision/deeper/notes.md",
+            "knowledge/../notes.md",
+            "knowledge/./notes.md",
+            "knowledge//notes.md",
+            "knowledge/.hidden.md",
+            "knowledge/",
+            "knowledge\\notes.md",
+            "c:notes.md",
+            "/knowledge/notes.md",
+            "nul\0.md",
+            "memory/decision/a\nb.md",
+            "knowledge/a\rb.md",
+            "knowledge/a\u{1b}b.md",
+            "knowledge/a\u{2028}b.md",
+            "knowledge/a\u{85}b.md",
         ] {
             let error = validate_relative_path(bad).unwrap_err();
             assert_eq!(error.code, INVALID_PARAMS, "{bad}");
@@ -476,6 +621,55 @@ mod tests {
         let files = list_files(dir.path()).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].0, "notes.md");
+    }
+
+    #[test]
+    fn nested_files_are_written_read_listed_and_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "memory/decision/vitest.md", b"Use Vitest").unwrap();
+        write_file(dir.path(), "knowledge/auth.md", b"How auth works").unwrap();
+        write_file(dir.path(), "notes.md", b"Board").unwrap();
+        std::fs::create_dir_all(dir.path().join("elsewhere")).unwrap();
+        std::fs::write(dir.path().join("elsewhere/x.md"), "not listed").unwrap();
+        let (content, _) = read_file(dir.path(), "memory/decision/vitest.md").unwrap();
+        assert_eq!(content, b"Use Vitest");
+        let listed: Vec<String> = list_files(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+        assert_eq!(
+            listed,
+            ["knowledge/auth.md", "memory/decision/vitest.md", "notes.md"]
+        );
+        delete_file(dir.path(), "knowledge/auth.md").unwrap();
+        let error = read_file(dir.path(), "knowledge/auth.md").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        let error = delete_file(dir.path(), "knowledge/auth.md").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        let error = read_file(dir.path(), "history/none.md").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    /// A folder on the way that is a symlink is refused, for reads, writes, and deletes, so a
+    /// planted link can't reach outside the scope's folder.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_folder_is_never_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.md"), "secret").unwrap();
+        symlink(outside.path(), dir.path().join("knowledge")).unwrap();
+
+        let error = read_file(dir.path(), "knowledge/secret.md").unwrap_err();
+        assert!(super::is_symlink_error(&error));
+        let error = write_file(dir.path(), "knowledge/new.md", b"x").unwrap_err();
+        assert!(super::is_symlink_error(&error));
+        let error = delete_file(dir.path(), "knowledge/secret.md").unwrap_err();
+        assert!(super::is_symlink_error(&error));
+        assert!(list_files(dir.path()).unwrap().is_empty());
+        assert!(!outside.path().join("new.md").exists());
+        assert!(outside.path().join("secret.md").exists());
     }
 
     #[test]

@@ -20,6 +20,11 @@
 //! transcript up to that turn, and its first message either forks the parent's vendor session
 //! (the actor's `fork_source`) or hands that transcript to a new session, as 0014's move does.
 //!
+//! `thread/start` with `project` starts a Project's child (0042) through the same
+//! [`agents::create`] as a Project's other runs, so it runs in the Project's mode with its header,
+//! cut from the integration branch, and wakes the coordinator. Its scope and thread row's repo are
+//! the Project, and its parent the Project's current coordinator, or none before it has one.
+//!
 //! A thread started with `checkout` gets no worktree: it works in its repo entry's own checkout,
 //! on the branch the user has out or the one `checkoutRef` switches it to, and plxd leaves its
 //! changes there uncommitted. A thread with no repo has no checkout, so it can't ask for one.
@@ -65,7 +70,7 @@ const MAX_QUERY_BYTES: usize = 1024;
 
 async fn store<T: Send + 'static>(
     daemon: &Daemon,
-    job: impl FnOnce(&mut parallax_store::Store) -> Result<T, ErrorObject> + Send + 'static,
+    job: impl FnOnce(&mut crate::store::Tx) -> Result<T, ErrorObject> + Send + 'static,
 ) -> Result<T, ErrorObject> {
     daemon.store.run(&CancellationToken::new(), job).await
 }
@@ -199,40 +204,38 @@ pub(crate) async fn existing_thread(
     .await
 }
 
-/// Reports a new thread as `thread.started`, a host-level event.
-pub(crate) async fn log_started(daemon: &Daemon, row: &parallax_store::Thread) {
-    match thread_entry(row) {
-        Ok(thread) => {
-            daemon
-                .log
-                .append(
-                    thread.created_at,
-                    None,
-                    ParallaxEvent::ThreadStarted { thread },
-                )
-                .await;
-        }
-        Err(error) => warn!(error = %error.message, "could not report a new thread"),
-    }
+/// Stages a new thread's `thread.started`, a host-level event, in the job that records it.
+pub(crate) fn stage_started(
+    db: &mut crate::store::Tx,
+    row: &parallax_store::Thread,
+) -> Result<(), ErrorObject> {
+    let thread = thread_entry(row)?;
+    db.stage(
+        thread.created_at,
+        None,
+        ParallaxEvent::ThreadStarted { thread },
+    );
+    Ok(())
 }
 
 /// `thread/list`.
 pub(crate) async fn list(daemon: &Arc<Daemon>) -> Result<ThreadListResult, ErrorObject> {
-    let log = Arc::clone(&daemon.log);
-    store(daemon, move |db| {
-        let repos = db.list_repos().map_err(|e| store_error(&e))?;
-        let threads = db.list_threads().map_err(|e| store_error(&e))?;
-        let seq = log.head();
-        Ok(ThreadListResult {
-            repos: repos
-                .into_iter()
-                .map(repo_entry)
-                .collect::<Result<_, _>>()?,
-            threads: threads.iter().map(thread_entry).collect::<Result<_, _>>()?,
-            seq,
+    let ((repos, threads), seq) = daemon
+        .reader
+        .snapshot(&CancellationToken::new(), |db| {
+            let repos = db.list_repos().map_err(|e| store_error(&e))?;
+            let threads = db.list_threads().map_err(|e| store_error(&e))?;
+            Ok((repos, threads))
         })
+        .await?;
+    Ok(ThreadListResult {
+        repos: repos
+            .into_iter()
+            .map(repo_entry)
+            .collect::<Result<_, _>>()?,
+        threads: threads.iter().map(thread_entry).collect::<Result<_, _>>()?,
+        seq,
     })
-    .await
 }
 
 fn check_path(path: &str) -> Result<(), ErrorObject> {
@@ -292,7 +295,6 @@ pub(crate) async fn add_repo(
         .and_then(|name| name.to_str())
         .unwrap_or(&canonical)
         .to_owned();
-    let log = Arc::clone(&daemon.log);
     store(daemon, move |db| {
         let fields = RepoFields {
             name,
@@ -302,7 +304,7 @@ pub(crate) async fn add_repo(
         let (repo, created) = add(db, id.into(), &fields)?;
         let repo = repo_entry(repo)?;
         if created {
-            log.append_blocking(
+            db.stage(
                 repo.created_at,
                 None,
                 ParallaxEvent::RepoAdded { repo: repo.clone() },
@@ -351,7 +353,6 @@ fn scratch_root(daemon: &Daemon) -> Result<PathBuf, ErrorObject> {
 /// plxd's scratch entry, made on first use.
 async fn scratch_entry(daemon: &Arc<Daemon>) -> Result<parallax_store::Repo, ErrorObject> {
     let root = scratch_root(daemon)?;
-    let log = Arc::clone(&daemon.log);
     store(daemon, move |db| {
         if let Some(repo) = db.scratch_repo().map_err(|e| store_error(&e))? {
             return Ok(repo);
@@ -364,7 +365,7 @@ async fn scratch_entry(daemon: &Arc<Daemon>) -> Result<parallax_store::Repo, Err
         let (row, created) = add(db, RepoId::generate().into(), &fields)?;
         if created {
             let repo = repo_entry(row.clone())?;
-            log.append_blocking(repo.created_at, None, ParallaxEvent::RepoAdded { repo });
+            db.stage(repo.created_at, None, ParallaxEvent::RepoAdded { repo });
         }
         Ok(row)
     })
@@ -425,9 +426,11 @@ pub(crate) async fn start(
     daemon: Arc<Daemon>,
     params: ThreadStartParams,
 ) -> Result<ThreadStartResult, ErrorObject> {
+    check_start(&params)?;
     let ThreadStartParams {
         run_id,
         repo,
+        project,
         parent,
         title,
         prompt,
@@ -444,37 +447,31 @@ pub(crate) async fn start(
         base,
         checkout_ref,
         threads,
+        notify,
     } = params;
-    if let Some(slug) = &branch_slug
-        && !valid_branch_slug(slug)
-    {
-        return Err(ErrorObject::invalid_params(
-            "branchSlug must be 1 to 40 lowercase letters, digits, and hyphens, \
-             with no leading or trailing hyphen",
-        ));
-    }
     let git_ref = git_ref(checkout, base, checkout_ref)?;
     let title = title.as_deref().map(check_title).transpose()?.flatten();
-    let entry = start_entry(&daemon, repo).await?;
-    if checkout && entry.fields.scratch {
-        return Err(ErrorObject::invalid_params(
-            "checkout needs a repo: a thread with no repo has no checkout to work in",
-        ));
-    }
-    let scope = ProjectId::try_from(entry.id).map_err(|_| corrupt("repo entry", entry.id))?;
     // A retry, or a run id that is taken, needs no new scratch repository: `agents::create`
     // answers it from the existing run.
-    let taken = store(&daemon, move |db| {
+    let stored = store(&daemon, move |db| {
         db.get_run(run_id.into())
-            .map(|row| row.is_some())
+            .map(|row| row.map(|row| row.fields.parent))
             .map_err(|e| store_error(&e))
     })
     .await?;
-    // A retry is answered from its run, whatever became of its parent since.
-    if !taken {
-        check_parent(&daemon, parent).await?;
-    }
-    let scratch = scratch_dir(&daemon, &entry, run_id, taken).await?;
+    let taken = stored.is_some();
+    let (scope, scratch) = workspace(&daemon, project, repo, checkout, run_id, taken).await?;
+    // A retry is answered from its run, whatever became of its parent since, and a Project's
+    // child keeps the coordinator it started under.
+    let parent = match (project, stored) {
+        (Some(_), Some(stored)) => stored.and_then(|id| RunId::try_from(id).ok()),
+        (Some(project), None) => coordinator(&daemon, project).await?,
+        (None, Some(_)) => parent,
+        (None, None) => {
+            check_parent(&daemon, parent).await?;
+            parent
+        }
+    };
     let new = NewRun {
         run_id,
         scope,
@@ -483,6 +480,7 @@ pub(crate) async fn start(
         threads,
         account,
         coordinator_thread: None,
+        notify: notify.unwrap_or(true),
         options: RunOptions {
             model,
             effort,
@@ -491,6 +489,7 @@ pub(crate) async fn start(
             fast,
         },
         approvals,
+        explore: false,
         thread: Some(NewThread {
             scratch: scratch.clone(),
             branch_slug,
@@ -523,6 +522,78 @@ pub(crate) async fn start(
         thread: thread_entry(thread)?,
         run: created.run,
     })
+}
+
+/// Refuses an invalid `branchSlug`, and, with `project`, what the Project decides for its child
+/// (0042).
+fn check_start(params: &ThreadStartParams) -> Result<(), ErrorObject> {
+    if let Some(slug) = &params.branch_slug
+        && !valid_branch_slug(slug)
+    {
+        return Err(ErrorObject::invalid_params(
+            "branchSlug must be 1 to 40 lowercase letters, digits, and hyphens, \
+             with no leading or trailing hyphen",
+        ));
+    }
+    if params.project.is_none() {
+        return Ok(());
+    }
+    let decided = [
+        ("repo", params.repo.is_some()),
+        ("parent", params.parent.is_some()),
+        ("checkout", params.checkout),
+        ("base", params.base.is_some()),
+        ("checkoutRef", params.checkout_ref.is_some()),
+    ];
+    match decided.iter().find(|(_, given)| *given) {
+        Some((name, _)) => Err(ErrorObject::invalid_params(format!(
+            "a Project's child runs in a new worktree of the Project's repository, with its \
+             coordinator as parent; leave out {name}"
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// A new thread's scope, and the scratch repository it runs in, if any: `project`, or else the
+/// repo entry `repo` names, the scratch entry when it names none.
+async fn workspace(
+    daemon: &Arc<Daemon>,
+    project: Option<ProjectId>,
+    repo: Option<RepoId>,
+    checkout: bool,
+    run_id: RunId,
+    taken: bool,
+) -> Result<(ProjectId, Option<PathBuf>), ErrorObject> {
+    if let Some(project) = project {
+        return Ok((project, None));
+    }
+    let entry = start_entry(daemon, repo).await?;
+    if checkout && entry.fields.scratch {
+        return Err(ErrorObject::invalid_params(
+            "checkout needs a repo: a thread with no repo has no checkout to work in",
+        ));
+    }
+    let scope = ProjectId::try_from(entry.id).map_err(|_| corrupt("repo entry", entry.id))?;
+    Ok((scope, scratch_dir(daemon, &entry, run_id, taken).await?))
+}
+
+/// A new child's parent (0042): `project`'s current coordinator, or `None` before it has one.
+/// Fails with `projectNotFound` unless `project` is a Project.
+async fn coordinator(daemon: &Daemon, project: ProjectId) -> Result<Option<RunId>, ErrorObject> {
+    store(daemon, move |db| {
+        if db
+            .get_project(project.into())
+            .map_err(|e| store_error(&e))?
+            .is_none()
+        {
+            return Err(ErrorObject::parallax(
+                ErrorKind::ProjectNotFound,
+                format!("no project has id {project}"),
+            ));
+        }
+        agents::coordinator::coordinator_of(db, project.into())
+    })
+    .await
 }
 
 /// Fails with `runNotFound` unless `parent`, when set, is a run that exists (0041).
@@ -565,10 +636,16 @@ pub(crate) async fn fork(
         turn_id,
         account,
         model,
+        parent: caller,
     } = params;
-    if let Some(done) = existing_fork(&daemon, new_run_id, run_id, turn_id).await? {
+    // Share creation's per-id guard so a retry checks its fork identity after any competing
+    // creation finishes, and concurrent forks cannot prepare the same scratch repository.
+    // Check retries before generic creation compares options, which another backend may filter.
+    let starting = daemon.agents.start_guard(new_run_id).await;
+    if let Some(done) = existing_fork(&daemon, new_run_id, run_id, turn_id, caller).await? {
         return Ok(done);
     }
+    check_parent(&daemon, caller).await?;
     let parent = load_parent(&daemon, run_id).await?;
     let turn = fork_turn(&parent, run_id, turn_id)?;
     let events = agents::logged_events(&daemon, run_id).await?;
@@ -591,6 +668,8 @@ pub(crate) async fn fork(
             account.unwrap_or_else(|| agents::session_account(&parent.run.state.account_id)),
         ),
         coordinator_thread: None,
+        // A fork with a parent wakes it as a launched child does, once its CLIs end (0041).
+        notify: caller.is_some(),
         options: RunOptions {
             model: model.clone().or_else(|| fields.model.clone()),
             effort: fields.effort.as_deref().and_then(option_value),
@@ -604,7 +683,7 @@ pub(crate) async fn fork(
             branch_slug: None,
             checkout,
             git_ref,
-            parent: None,
+            parent: caller,
             fields: ThreadFields {
                 forked_from: Some(parallax_store::ForkedFrom {
                     run: run_id.into(),
@@ -615,11 +694,13 @@ pub(crate) async fn fork(
             fork: Some(NewFork {
                 parent_backend: fields.backend.clone(),
                 model_given: model.is_some(),
+                keep_permission: caller.is_some(),
                 transcript,
             }),
         }),
+        explore: false,
     };
-    let created = match agents::create(Arc::clone(&daemon), new).await {
+    let created = match agents::create_started(Arc::clone(&daemon), new, &starting).await {
         Ok(created) => created,
         Err(error) => {
             if let Some(dir) = scratch {
@@ -639,12 +720,14 @@ pub(crate) async fn fork(
 }
 
 /// The fork a retried `thread/fork` already made: `None` if `new_run_id` is free, and
-/// `idConflict` if it is anything but a fork of `run_id`, at `turn_id` if that is given.
+/// `idConflict` if it is anything but a fork of `run_id`, at `turn_id` if that is given, for
+/// `caller`. An empty stored parent isn't compared, since deleting the parent cleared it (0041).
 async fn existing_fork(
     daemon: &Daemon,
     new_run_id: RunId,
     run_id: RunId,
     turn_id: Option<TurnId>,
+    caller: Option<RunId>,
 ) -> Result<Option<ThreadStartResult>, ErrorObject> {
     store(daemon, move |db| {
         let Some(run) = db.get_run(new_run_id.into()).map_err(|e| store_error(&e))? else {
@@ -657,7 +740,12 @@ async fn existing_fork(
         let thread = db
             .get_thread(new_run_id.into())
             .map_err(|e| store_error(&e))?
-            .filter(|thread| thread.fields.forked_from.is_some_and(same))
+            .filter(|thread| {
+                thread.fields.forked_from.is_some_and(same)
+                    && thread
+                        .parent
+                        .is_none_or(|parent| caller.map(Uuid::from) == Some(parent))
+            })
             .ok_or_else(|| {
                 ErrorObject::parallax(
                     ErrorKind::IdConflict,
@@ -941,8 +1029,8 @@ fn remove_scratch(daemon: &Daemon, run_id: RunId, dir: &Path) {
     }
 }
 
-/// `thread/search` (PLX-372): the threads whose messages contain the query, trimmed, the one with
-/// the newest message first.
+/// `thread/search` (PLX-372, PLX-487): the threads whose title or messages match the query,
+/// trimmed, title matches first, then the one with the newest message.
 pub(crate) async fn search(
     daemon: &Arc<Daemon>,
     params: ThreadSearchParams,
@@ -960,14 +1048,15 @@ pub(crate) async fn search(
         .limit
         .unwrap_or(DEFAULT_SEARCH_LIMIT)
         .min(MAX_SEARCH_LIMIT) as usize;
-    store(daemon, move |db| {
-        let rows = db
-            .search_threads(&query, limit)
-            .map_err(|e| store_error(&e))?;
-        let threads = rows.iter().map(thread_entry).collect::<Result<_, _>>()?;
-        Ok(ThreadSearchResult { threads })
-    })
-    .await
+    let rows = daemon
+        .reader
+        .run(&CancellationToken::new(), move |db| {
+            db.search_threads(&query, limit)
+                .map_err(|e| store_error(&e))
+        })
+        .await?;
+    let threads = rows.iter().map(thread_entry).collect::<Result<_, _>>()?;
+    Ok(ThreadSearchResult { threads })
 }
 
 /// `thread/archive`.
@@ -976,7 +1065,6 @@ pub(crate) async fn archive(
     params: ThreadArchiveParams,
 ) -> Result<ThreadArchiveResult, ErrorObject> {
     let ThreadArchiveParams { run_id, archived } = params;
-    let log = Arc::clone(&daemon.log);
     store(daemon, move |db| {
         let before = db
             .get_thread(run_id.into())
@@ -994,7 +1082,7 @@ pub(crate) async fn archive(
                 other => store_error(&other),
             })?;
         let thread = thread_entry(&row)?;
-        log.append_blocking(
+        db.stage(
             Timestamp::now(),
             None,
             ParallaxEvent::ThreadUpdated {
@@ -1025,7 +1113,6 @@ pub(crate) async fn update(
         title: title.as_deref().map(check_title).transpose()?,
         settled,
     };
-    let log = Arc::clone(&daemon.log);
     store(daemon, move |db| {
         let (row, changed) =
             db.update_thread(run_id.into(), &update)
@@ -1035,7 +1122,7 @@ pub(crate) async fn update(
                 })?;
         let thread = thread_entry(&row)?;
         if changed {
-            log.append_blocking(
+            db.stage(
                 Timestamp::now(),
                 None,
                 ParallaxEvent::ThreadUpdated {
@@ -1048,17 +1135,14 @@ pub(crate) async fn update(
     .await
 }
 
-/// After a message to run `run_id` is recorded: if the run is a thread, its `lastPromptAt` moved,
-/// so this appends `thread.updated` for the sidebar's order (0033). Runs on the store's thread.
-pub(crate) fn prompted(
-    db: &parallax_store::Store,
-    log: &crate::event_log::EventLog,
-    run_id: Uuid,
-) -> Result<(), ErrorObject> {
+/// After run `run_id`'s thread row changed in this job, stages `thread.updated` if the run is a
+/// thread: a recorded message moved its `lastPromptAt`, for the sidebar's order (0033), or joining
+/// a Project gave it a parent (PLX-419).
+pub(crate) fn prompted(db: &mut crate::store::Tx, run_id: Uuid) -> Result<(), ErrorObject> {
     let Some(row) = db.get_thread(run_id).map_err(|e| store_error(&e))? else {
         return Ok(());
     };
-    log.append_blocking(
+    db.stage(
         Timestamp::now(),
         None,
         ParallaxEvent::ThreadUpdated {
@@ -1075,7 +1159,6 @@ pub(crate) async fn update_repo(
 ) -> Result<RepoUpdateResult, ErrorObject> {
     let RepoUpdateParams { repo, icon } = params;
     crate::methods::project::check_icon(&icon)?;
-    let log = Arc::clone(&daemon.log);
     let stored = crate::store::stored_icon(icon);
     store(daemon, move |db| {
         let (row, changed) =
@@ -1089,7 +1172,7 @@ pub(crate) async fn update_repo(
                 })?;
         let repo = repo_entry(row)?;
         if changed {
-            log.append_blocking(
+            db.stage(
                 Timestamp::now(),
                 None,
                 ParallaxEvent::RepoUpdated { repo: repo.clone() },
@@ -1112,23 +1195,25 @@ pub(crate) async fn delete(
             .ok_or_else(|| thread_not_found(run_id))
     })
     .await?;
-    agents::delete(daemon, run_id).await.map_err(|error| {
-        let gone = error
-            .parallax_data()
-            .is_some_and(|data| data.kind == ErrorKind::RunNotFound);
-        if gone {
-            thread_not_found(run_id)
-        } else {
-            error
-        }
-    })?;
+    agents::delete(daemon, run_id, false)
+        .await
+        .map_err(|error| {
+            let gone = error
+                .parallax_data()
+                .is_some_and(|data| data.kind == ErrorKind::RunNotFound);
+            if gone {
+                thread_not_found(run_id)
+            } else {
+                error
+            }
+        })?;
     Ok(ThreadDeleteResult {})
 }
 
-/// Deletes run `run_id` once its CLI has exited: its rows and stored events in one transaction,
-/// its events in memory, then `worktree` and its branch. For a thread, also its thread row, and
-/// for a thread with no repo its scratch repository and its own context folder, then appends
-/// `thread.deleted`. A Project's run (`project/delete`, PLX-338) has no thread row and gets no
+/// Deletes run `run_id` once its CLI has exited: its rows and stored events, and for a thread its
+/// thread row and `thread.deleted`, in one transaction, then its events in memory, then
+/// `worktree` and its branch, and for a thread with no repo its scratch repository and its own
+/// context folder. A Project's run (`project/delete`, PLX-338) has no thread row and gets no
 /// event of its own. The store clears the run from its children's parent and its forks' origin,
 /// and each such thread gets `thread.updated` (0041). Startup's garbage collection removes a
 /// worktree folder that a crash left behind.
@@ -1137,7 +1222,6 @@ pub(crate) async fn purge(
     run_id: RunId,
     worktree: Option<parallax_store::Worktree>,
 ) -> Result<(), ErrorObject> {
-    let log = Arc::clone(&daemon.log);
     let thread = store(daemon, move |db| {
         let id = Uuid::from(run_id);
         let children: Vec<Uuid> = db
@@ -1156,14 +1240,21 @@ pub(crate) async fn purge(
                 .map_err(|e| store_error(&e))?
                 .is_some_and(|repo| repo.fields.scratch);
             db.delete_thread(id).map_err(|e| store_error(&e))?;
-            Some((thread, scratch))
+            let repo =
+                RepoId::try_from(thread.repo_id).map_err(|_| corrupt("thread", thread.id))?;
+            db.stage(
+                Timestamp::now(),
+                None,
+                ParallaxEvent::ThreadDeleted { run_id, repo },
+            );
+            Some(scratch)
         } else {
             db.delete_run(id).map_err(|e| store_error(&e))?;
             None
         };
         for child in children {
             if let Some(row) = db.get_thread(child).map_err(|e| store_error(&e))? {
-                log.append_blocking(
+                db.stage(
                     Timestamp::now(),
                     None,
                     ParallaxEvent::ThreadUpdated {
@@ -1189,7 +1280,7 @@ pub(crate) async fn purge(
     {
         warn!(run = %run_id, %error, "could not remove a deleted run's worktree");
     }
-    let Some((thread, scratch)) = thread else {
+    let Some(scratch) = thread else {
         info!(run = %run_id, "deleted a project's run");
         return Ok(());
     };
@@ -1201,15 +1292,6 @@ pub(crate) async fn purge(
             remove_context(daemon, scope);
         }
     }
-    let repo = RepoId::try_from(thread.repo_id).map_err(|_| corrupt("thread", thread.id))?;
-    daemon
-        .log
-        .append(
-            Timestamp::now(),
-            None,
-            ParallaxEvent::ThreadDeleted { run_id, repo },
-        )
-        .await;
     info!(run = %run_id, "deleted a thread");
     Ok(())
 }

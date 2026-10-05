@@ -1,50 +1,55 @@
 //! `project/list`, `project/create`, `project/start`, which starts a project's coordinator behind
 //! the `coordinator` capability (0024), and `project/update`, which renames a project or sets its
-//! icon behind the `projectEdit` capability (PLX-227, 0032) or its permission mode behind
-//! `projectPermission` (0042), and `project/delete`, behind `projectDelete` (PLX-338).
+//! icon behind the `projectEdit` capability (PLX-227, 0032), its permission mode behind
+//! `projectPermission` (0042), its autonomy level behind `projectAutonomy` (0043), its base
+//! branch behind `integrationBranch` (0045), how its children are placed behind
+//! `projectPlacement` (0046), or its checks behind `checks` (PLX-411, 0045),
+//! `project/delete`, behind `projectDelete` (PLX-338), and `project/fromThreads`, behind
+//! `projectFromThreads` (0042).
 
+use std::collections::HashSet;
 use std::path::{Component, Path};
 use std::sync::Arc;
 
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AgentRunResult, ErrorKind, ParallaxEvent, ProjectCreateParams, ProjectCreateResult,
-    ProjectDeleteParams, ProjectDeleteResult, ProjectIcon, ProjectId, ProjectListParams,
-    ProjectListResult, ProjectPermission, ProjectStartParams, ProjectUpdateParams,
-    ProjectUpdateResult, RunId,
+    AgentRunResult, ErrorKind, InboxKind, ParallaxEvent, ProjectAutonomy, ProjectCreateParams,
+    ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult, ProjectFromThreadsParams,
+    ProjectFromThreadsResult, ProjectIcon, ProjectId, ProjectListParams, ProjectListResult,
+    ProjectPermission, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, RunId,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use super::Context;
 use crate::agents::{self, coordinator};
+use crate::backend::check_argument;
 use crate::repo;
 use crate::server::Daemon;
 use crate::store::{self, store_error};
 
-/// Every project, oldest first, with the `seq` of the last event the list reflects.
+/// Every project, oldest first, with the event log's `seq` from before the read, to subscribe
+/// after.
 pub(crate) async fn list(
     context: &Context,
     _: ProjectListParams,
 ) -> Result<ProjectListResult, ErrorObject> {
-    let log = Arc::clone(&context.daemon.log);
-    context
+    let (projects, seq) = context
         .daemon
-        .store
-        .run(&context.cancel, move |store| {
+        .reader
+        .snapshot(&context.cancel, move |store| {
             let rows = store.list_projects().map_err(|error| store_error(&error))?;
-            let seq = log.head();
-            let projects = rows
-                .into_iter()
+            rows.into_iter()
                 .map(|row| {
                     let coordinator = coordinator::coordinator_of(store, row.id)?;
                     store::project(row, coordinator)
                 })
-                .collect::<Result<_, _>>()?;
-            Ok(ProjectListResult { projects, seq })
+                .collect::<Result<_, _>>()
         })
-        .await
+        .await?;
+    Ok(ProjectListResult { projects, seq })
 }
 
 /// Creates a project, or returns the one that already has this id and these params.
@@ -55,14 +60,25 @@ pub(crate) async fn list(
 ///
 /// Only a new project's `repoPath` has to be a repository, so a retry still returns the project
 /// after its folder is gone.
+///
+/// A new project's integration branch and its worktree are cut after the row is written, as best
+/// effort (0045): a repository with no commit yet has nothing to cut from, and the first run
+/// started in the project tries again.
 pub(crate) async fn create(
     context: &Context,
     params: ProjectCreateParams,
 ) -> Result<ProjectCreateResult, ErrorObject> {
+    Ok(create_or_get(context, params).await?.0)
+}
+
+/// [`create`], and whether the project already existed.
+async fn create_or_get(
+    context: &Context,
+    params: ProjectCreateParams,
+) -> Result<(ProjectCreateResult, bool), ErrorObject> {
     check(&params)?;
-    let log = Arc::clone(&context.daemon.log);
     let data_dir = context.daemon.data_dir.clone();
-    context
+    let (mut result, existed) = context
         .daemon
         .store
         .run(&context.cancel, move |store| {
@@ -82,7 +98,7 @@ pub(crate) async fn create(
             let coordinator = coordinator::coordinator_of(store, id)?;
             let project = store::project(row, coordinator)?;
             if !existed {
-                let seq = log.append_blocking(
+                let seq = store.stage(
                     project.created_at,
                     None,
                     ParallaxEvent::ProjectCreated {
@@ -96,9 +112,25 @@ pub(crate) async fn create(
                     warn!(project = %project.id, %error, "could not create the shared context folder");
                 }
             }
-            Ok(ProjectCreateResult { project })
+            Ok((ProjectCreateResult { project }, existed))
         })
-        .await
+        .await?;
+    if !existed {
+        // Detached, so a dropped connection never leaves a worktree half checked out.
+        let (daemon, id) = (Arc::clone(&context.daemon), result.project.id);
+        let cut = async move { agents::integration(&daemon, id).await };
+        match context.daemon.agents.detached(cut).await {
+            Ok(Some(row)) => {
+                result.project.base_branch = row.base_branch;
+                result.project.integration_branch = row.integration_branch;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                warn!(project = %result.project.id, %error, "could not cut the project's integration branch");
+            }
+        }
+    }
+    Ok((result, existed))
 }
 
 /// Starts the project's coordinator, detached from the request as `agent/start` is, so a dropped
@@ -117,14 +149,182 @@ pub(crate) async fn start(
     Ok(AgentRunResult { run })
 }
 
-/// Renames a project or sets its icon or permission mode, and appends `project.updated` when that
-/// changed anything. Runs pick up a new mode when they next start a CLI process (0042).
+/// Makes a Project from threads (0042): checks them, creates the Project on their repository as
+/// `project/create` does, starts its coordinator, and moves each thread into it as the
+/// coordinator's child. The coordinator and the moves are detached from the request, as
+/// `project/start` is. Each step is idempotent, so a retry finishes what a failed request left,
+/// except a coordinator that can't start: that refusal would repeat, so the Project this call
+/// created is removed.
+pub(crate) async fn from_threads(
+    context: &Context,
+    params: ProjectFromThreadsParams,
+) -> Result<ProjectFromThreadsResult, ErrorObject> {
+    let ProjectFromThreadsParams {
+        id,
+        run_id,
+        name,
+        permission,
+        threads,
+        account,
+    } = params;
+    if threads.is_empty() {
+        return Err(ErrorObject::invalid_params(
+            "threads must name at least one thread",
+        ));
+    }
+    if threads.iter().collect::<HashSet<_>>().len() != threads.len() {
+        return Err(ErrorObject::invalid_params(
+            "threads must not name a thread twice",
+        ));
+    }
+    let (repo_path, backends) = threads_repo(context, id, threads.clone()).await?;
+    for (thread, backend) in backends {
+        agents::fits_mode(&context.daemon, &backend, permission).map_err(|mut error| {
+            error.message = format!("thread {thread}: {}", error.message);
+            error
+        })?;
+    }
+    let (mut created, existed) = create_or_get(
+        context,
+        ProjectCreateParams {
+            id,
+            name,
+            repo_path,
+            icon: None,
+            permission: Some(permission),
+            autonomy: None,
+            base_branch: None,
+        },
+    )
+    .await?;
+    let daemon = Arc::clone(&context.daemon);
+    let start = ProjectStartParams {
+        project: id,
+        run_id,
+        prompt: coordinator::from_threads_prompt(&threads),
+        account,
+        model: None,
+        effort: None,
+        permission: None,
+        images: Vec::new(),
+        approvals: true,
+    };
+    let run = context
+        .daemon
+        .agents
+        .detached(async move {
+            let run = match coordinator::start(Arc::clone(&daemon), start).await {
+                Ok(run) => run,
+                Err(error) => {
+                    // A retry would be refused the same way, so don't leave an empty Project.
+                    if !existed && let Err(error) = remove(Arc::clone(&daemon), id).await {
+                        warn!(project = %id, %error, "could not remove the project its coordinator didn't start in");
+                    }
+                    return Err(error);
+                }
+            };
+            for thread in threads {
+                agents::join(&daemon, thread, id, run_id).await?;
+            }
+            Ok(run)
+        })
+        .await?;
+    created.project.coordinator = Some(run_id);
+    Ok(ProjectFromThreadsResult {
+        project: created.project,
+        run,
+    })
+}
+
+/// The path of the repository `threads` are all on, with each thread's backend, or why they
+/// can't make Project `project`: each must be a thread on a repo entry, not the scratch one, with
+/// a worktree of its own, and in no Project but this one, which a retry finds them in. One plxd
+/// is one host, so threads on one repo entry share a host too.
+async fn threads_repo(
+    context: &Context,
+    project: ProjectId,
+    threads: Vec<RunId>,
+) -> Result<(String, Vec<(RunId, String)>), ErrorObject> {
+    context
+        .daemon
+        .store
+        .run(&context.cancel, move |db| {
+            let mut repo: Option<parallax_store::Repo> = None;
+            let mut backends = Vec::new();
+            for id in threads {
+                let not_found = || {
+                    ErrorObject::parallax(
+                        ErrorKind::ThreadNotFound,
+                        format!("no thread has run id {id}"),
+                    )
+                };
+                let thread = db
+                    .get_thread(id.into())
+                    .map_err(|e| store_error(&e))?
+                    .ok_or_else(not_found)?;
+                let run = db
+                    .get_run(id.into())
+                    .map_err(|e| store_error(&e))?
+                    .ok_or_else(not_found)?;
+                let in_other_project = run.fields.project_id != Uuid::from(project)
+                    && db
+                        .get_project(run.fields.project_id)
+                        .map_err(|e| store_error(&e))?
+                        .is_some();
+                // A child `thread/start` made has the Project's id as its repo, not an entry's.
+                let entry = db.get_repo(thread.repo_id).map_err(|e| store_error(&e))?;
+                let Some(entry) = entry.filter(|_| !in_other_project) else {
+                    return Err(ErrorObject::invalid_params(format!(
+                        "thread {id} is already in a Project"
+                    )));
+                };
+                if entry.fields.scratch {
+                    return Err(ErrorObject::invalid_params(format!(
+                        "thread {id} has no repository, so it has no branch to land"
+                    )));
+                }
+                if db
+                    .get_worktree(id.into())
+                    .map_err(|e| store_error(&e))?
+                    .is_none()
+                {
+                    return Err(ErrorObject::invalid_params(format!(
+                        "thread {id} has no worktree of its own: it works in the repository's \
+                         checkout, or its worktree was removed"
+                    )));
+                }
+                match &repo {
+                    Some(first) if first.id != entry.id => {
+                        return Err(ErrorObject::invalid_params(format!(
+                            "the threads are on two repositories, {} and {}",
+                            first.fields.path, entry.fields.path
+                        )));
+                    }
+                    Some(_) => {}
+                    None => repo = Some(entry),
+                }
+                backends.push((id, run.fields.backend));
+            }
+            repo.map(|repo| (repo.fields.path, backends))
+                .ok_or_else(|| ErrorObject::invalid_params("threads must name at least one thread"))
+        })
+        .await
+}
+
+/// Renames a project or sets its icon, permission mode, autonomy level, base branch, automatic
+/// landing, placement settings, or checks, and appends `project.updated` when that changed
+/// anything. Runs pick up a new mode when they next start a CLI process (0042), questions a new
+/// level when they are next asked (0043), and waiting children new placement settings at once
+/// (0046). A new proposal for its checks adds a `needsYou` item for the user to confirm it
+/// (PLX-411). Ask me also sends the questions already open to Needs you (PLX-474).
 ///
-/// The event is appended in the job that writes the row, as `project/create`'s is, so a
-/// `project/list` snapshot and its `seq` always agree. `updatedAt` stays as it is (0032).
+/// `project.updated` and the escalated questions' `inbox.added` events are staged in their
+/// rows' transaction and published once it commits (0052), so a subscriber after a
+/// `project/list` or `inbox/list` snapshot's `seq` never misses them. `updatedAt` stays as it is
+/// (0032).
 pub(crate) async fn update(
     context: &Context,
-    params: ProjectUpdateParams,
+    mut params: ProjectUpdateParams,
 ) -> Result<ProjectUpdateResult, ErrorObject> {
     if let Some(name) = &params.name {
         check_name(name)?;
@@ -133,8 +333,30 @@ pub(crate) async fn update(
         check_icon(icon)?;
     }
     check_permission(params.permission)?;
-    let log = Arc::clone(&context.daemon.log);
-    context
+    check_autonomy(params.autonomy)?;
+    check_base_branch(params.base_branch.as_deref())?;
+    if params
+        .max_children
+        .is_some_and(|max| !(1..=MAX_CHILDREN).contains(&max))
+    {
+        return Err(ErrorObject::invalid_params(format!(
+            "maxChildren must be from 1 to {MAX_CHILDREN}"
+        )));
+    }
+    for (name, checks) in [
+        ("checks", &mut params.checks),
+        ("proposedChecks", &mut params.proposed_checks),
+    ] {
+        if let Some(command) = checks {
+            *command = check_checks(name, command)?;
+        }
+    }
+    let proposal = params
+        .proposed_checks
+        .clone()
+        .filter(|command| params.checks.is_none() && !command.is_empty());
+    let ask_me = params.autonomy == Some(ProjectAutonomy::Ask);
+    let (result, proposed) = context
         .daemon
         .store
         .run(&context.cancel, move |store| {
@@ -145,7 +367,7 @@ pub(crate) async fn update(
             let coordinator = coordinator::coordinator_of(store, id)?;
             let project = store::project(row, coordinator)?;
             if changed {
-                let seq = log.append_blocking(
+                let seq = store.stage(
                     Timestamp::now(),
                     None,
                     ParallaxEvent::ProjectUpdated {
@@ -154,10 +376,55 @@ pub(crate) async fn update(
                 );
                 info!(project = %project.id, seq, "updated a project");
             }
-            Ok(ProjectUpdateResult { project })
+            if ask_me {
+                super::question::escalate_open(store, project.id)?;
+            }
+            let proposed = proposal.filter(|_| changed).zip(project.coordinator);
+            Ok((ProjectUpdateResult { project }, proposed))
         })
-        .await
+        .await?;
+    // More room, or API keys allowed, may start a waiting child (0046).
+    context.daemon.agents.placement.notify_one();
+    if let Some((command, coordinator)) = proposed {
+        let text = format!(
+            "The coordinator proposes these checks, to run after each landing: {command}. \
+             Confirm or edit them in the Project's settings."
+        );
+        let project = result.project.id;
+        super::inbox::add(
+            &context.daemon,
+            project,
+            coordinator,
+            InboxKind::NeedsYou,
+            text,
+        )
+        .await;
+    }
+    Ok(result)
 }
+
+/// The most children a Project may run at once (0046).
+const MAX_CHILDREN: u32 = 100;
+
+/// A checks command as `project/update` stores it, trimmed: at most [`MAX_CHECKS_BYTES`], with
+/// no NUL, which no shell can run (PLX-411).
+fn check_checks(name: &str, command: &str) -> Result<String, ErrorObject> {
+    let command = command.trim();
+    if command.len() > MAX_CHECKS_BYTES {
+        return Err(ErrorObject::invalid_params(format!(
+            "{name} must be at most {MAX_CHECKS_BYTES} bytes"
+        )));
+    }
+    if command.contains('\0') {
+        return Err(ErrorObject::invalid_params(format!(
+            "{name} must not contain NUL"
+        )));
+    }
+    Ok(command.to_owned())
+}
+
+/// The longest checks command `project/update` takes.
+const MAX_CHECKS_BYTES: usize = 4096;
 
 /// Deletes a project (PLX-338), detached from the request as `thread/delete` is, so a dropped
 /// connection never leaves it half deleted.
@@ -179,25 +446,27 @@ pub(crate) async fn delete(
 /// context folder. It looks again after each pass, for a run a coordinator started while it was
 /// stopping; a worker is recorded only while its scope exists, so none can start after the row
 /// is gone. A crash midway leaves the project listed, and deleting it again finishes the job.
+/// Then it removes the integration worktree, keeping its branch (0045), and the coordinator's
+/// worktree (0042).
+// ponytail: a crash between the row and the worktrees leaves their folders under `integration/`
+// and `coordinators/`; sweep folders with no project at startup if that turns up.
 async fn remove(
     daemon: Arc<Daemon>,
     project: ProjectId,
 ) -> Result<ProjectDeleteResult, ErrorObject> {
-    loop {
-        let log = Arc::clone(&daemon.log);
-        let runs = daemon
+    let repo_path = loop {
+        let (runs, repo_path) = daemon
             .store
             .run(&CancellationToken::new(), move |store| {
-                if store
+                let Some(row) = store
                     .get_project(project.into())
                     .map_err(|error| store_error(&error))?
-                    .is_none()
-                {
+                else {
                     return Err(ErrorObject::parallax(
                         ErrorKind::ProjectNotFound,
                         format!("no project has id {project}"),
                     ));
-                }
+                };
                 let mut runs = store
                     .list_runs(Some(project.into()))
                     .map_err(|error| store_error(&error))?;
@@ -205,7 +474,7 @@ async fn remove(
                     store
                         .delete_project(project.into())
                         .map_err(|error| store_error(&error))?;
-                    let seq = log.append_blocking(
+                    let seq = store.stage(
                         Timestamp::now(),
                         None,
                         ParallaxEvent::ProjectDeleted { project },
@@ -214,7 +483,8 @@ async fn remove(
                 }
                 // A coordinator's thread is its own run (0024).
                 runs.sort_by_key(|run| run.fields.coordinator_thread != Some(run.id));
-                runs.into_iter()
+                let runs = runs
+                    .into_iter()
                     .map(|run| {
                         RunId::try_from(run.id).map_err(|_| {
                             ErrorObject::internal_error(format!(
@@ -223,14 +493,15 @@ async fn remove(
                             ))
                         })
                     })
-                    .collect::<Result<Vec<_>, _>>()
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok((runs, row.repo_path))
             })
             .await?;
         if runs.is_empty() {
-            break;
+            break repo_path;
         }
         for run in runs {
-            match agents::delete(&daemon, run).await {
+            match agents::delete(&daemon, run, true).await {
                 Ok(()) => {}
                 // Another `project/delete` got to it first.
                 Err(error)
@@ -240,6 +511,19 @@ async fn remove(
                 Err(error) => return Err(error),
             }
         }
+    };
+    let worktrees = daemon.agents.worktrees();
+    if let Err(error) = worktrees
+        .remove_integration(Path::new(&repo_path), project)
+        .await
+    {
+        warn!(%project, %error, "could not remove the project's integration worktree");
+    }
+    if let Err(error) = worktrees
+        .remove_coordinator(Path::new(&repo_path), project)
+        .await
+    {
+        warn!(%project, %error, "could not remove the project's coordinator's worktree");
     }
     crate::threads::remove_context(&daemon, project);
     Ok(ProjectDeleteResult {})
@@ -265,10 +549,14 @@ fn check(params: &ProjectCreateParams) -> Result<(), ErrorObject> {
         repo_path,
         icon,
         permission,
+        autonomy,
+        base_branch,
         ..
     } = params;
     check_name(name)?;
     check_permission(*permission)?;
+    check_autonomy(*autonomy)?;
+    check_base_branch(base_branch.as_deref())?;
     if let Some(icon) = icon {
         check_icon(icon)?;
     }
@@ -327,6 +615,31 @@ fn check_permission(permission: Option<ProjectPermission>) -> Result<(), ErrorOb
     Ok(())
 }
 
+/// A level this plxd doesn't know would leave nobody sure who answers (0043), so it is refused.
+fn check_autonomy(autonomy: Option<ProjectAutonomy>) -> Result<(), ErrorObject> {
+    if autonomy == Some(ProjectAutonomy::Unknown) {
+        return Err(ErrorObject::invalid_params(
+            "autonomy must be ask, routine, or full",
+        ));
+    }
+    Ok(())
+}
+
+/// A base branch is passed to git as an argument (0045), so it is checked as one. Whether it names
+/// a local or remote-tracking branch is checked when the integration branch is cut.
+fn check_base_branch(base: Option<&str>) -> Result<(), ErrorObject> {
+    if let Some(base) = base {
+        if base.len() > MAX_NAME_BYTES {
+            return Err(ErrorObject::invalid_params(format!(
+                "baseBranch must be at most {MAX_NAME_BYTES} bytes"
+            )));
+        }
+        check_argument("baseBranch", base)
+            .map_err(|e| ErrorObject::invalid_params(e.to_string()))?;
+    }
+    Ok(())
+}
+
 /// An icon's name and color are keys of `a-z`, `0-9`, and `-` (0032). plxd never reads them, so
 /// that is all it checks. Its image is capped and checked as a prompt's are (0038).
 pub(crate) fn check_icon(icon: &ProjectIcon) -> Result<(), ErrorObject> {
@@ -368,6 +681,8 @@ mod tests {
             repo_path: repo_path.to_owned(),
             icon: None,
             permission: None,
+            autonomy: None,
+            base_branch: None,
         }
     }
 

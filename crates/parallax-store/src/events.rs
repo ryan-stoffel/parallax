@@ -83,8 +83,8 @@ impl Store {
     }
 
     /// Makes this connection's commits durable against a crash of the process but not of the
-    /// machine (`synchronous = NORMAL`, which SQLite recommends with WAL). The event log uses it
-    /// for its own connection, which commits once per event.
+    /// machine (`synchronous = NORMAL`, which SQLite recommends with WAL). plxd's one write
+    /// connection uses it, since it commits once per `agent.output` batch (0052).
     ///
     /// # Errors
     ///
@@ -195,9 +195,10 @@ impl Store {
         Ok((events, false))
     }
 
-    /// Run `run_id`'s events before `before`, newest first: at most `limit` of them (PLX-372).
-    /// Rows are read one at a time, so a reader that only wants the latest few never loads the
-    /// rest.
+    /// Run `run_id`'s events before `before`, newest first: at most `limit` of them and about
+    /// `max_bytes` of payload, but always at least one when any exists, as [`Store::run_events`]
+    /// pages. The flag says whether older ones remain (PLX-372, PLX-490). Rows are read one at a
+    /// time, so a reader that only wants the latest few never loads the rest.
     ///
     /// # Errors
     ///
@@ -207,33 +208,26 @@ impl Store {
         run_id: Uuid,
         before: u64,
         limit: usize,
-    ) -> Result<Vec<StoredEvent>, StoreError> {
+        max_bytes: usize,
+    ) -> Result<(Vec<StoredEvent>, bool), StoreError> {
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT {COLUMNS} FROM events WHERE run_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3"
+            "SELECT {COLUMNS} FROM events WHERE run_id = ?1 AND seq < ?2 ORDER BY seq DESC"
         ))?;
         let before = i64::try_from(before).unwrap_or(i64::MAX);
-        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let rows = stmt.query_map(
-            params![run_id.to_string(), before, limit],
-            RawEvent::from_row,
-        )?;
+        let rows = stmt.query_map(params![run_id.to_string(), before], RawEvent::from_row)?;
         let mut events = Vec::new();
+        let mut bytes = 0_usize;
         for row in rows {
-            events.push(row?.into_event()?);
+            let event = row?.into_event()?;
+            let full = events.len() >= limit.max(1)
+                || (!events.is_empty() && bytes + event.payload.len() > max_bytes);
+            if full {
+                return Ok((events, true));
+            }
+            bytes += event.payload.len();
+            events.push(event);
         }
-        Ok(events)
-    }
-
-    /// Forgets the log's id, so the next [`Store::event_log_id`] stores a new one. The event log
-    /// calls it after an event failed to be stored: the log then has a hole, and possibly a
-    /// `seq` a later plxd would give out again, so clients must resync rather than trust it.
-    ///
-    /// # Errors
-    ///
-    /// A database error.
-    pub fn reset_event_log_id(&self) -> Result<(), StoreError> {
-        self.conn.execute("DELETE FROM log_meta", [])?;
-        Ok(())
+        Ok((events, false))
     }
 
     /// Deletes host and project events (those with no `run_id`, such as `project.created` and

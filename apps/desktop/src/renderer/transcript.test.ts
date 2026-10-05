@@ -6,10 +6,14 @@ import {
   applyEvents,
   emptyTranscript,
   groupWork,
+  rebuild,
+  subagentRows,
+  subagentState,
   trackApprovals,
   waitingApprovals,
   workedFor,
   type Item,
+  type Subagent,
   type Work,
 } from "./transcript";
 import { uuidv7 } from "./uuidv7";
@@ -63,7 +67,13 @@ test("rebuilds the sample run's transcript, item by item", () => {
     { name: null, callId: "toolu_3", status: "error" },
   ]);
   expect(of(t.items, "session")).toEqual([
-    { kind: "session", key: "3:0", sessionId: "session-7f3a", at: "2026-09-25T12:00:02Z" },
+    {
+      kind: "session",
+      key: "3:0",
+      sessionId: "session-7f3a",
+      model: "claude-opus-4-5",
+      at: "2026-09-25T12:00:02Z",
+    },
   ]);
   expect(of(t.items, "notice").map((i) => i.tone)).toEqual(["info", "warning", "warning"]);
   expect(of(t.items, "end")[0]!.outcome).toEqual({
@@ -119,6 +129,22 @@ test("each way a run ends is an end item, and an update clears a stale error", (
   expect(t.run).toMatchObject({ status: "cancelled", error: undefined });
 });
 
+test("an update without resumeAt or autoResume clears them, as plxd leaves them out once cleared", () => {
+  const updated = (state: Record<string, unknown>) =>
+    at({
+      kind: "agent.updated",
+      runId,
+      state: { status: "waiting", updatedAt: "", ...state },
+    } as ParallaxEvent);
+  const waiting = build(
+    ...upTo(1),
+    updated({ resumeAt: "2026-10-04T22:40:00Z", autoResume: true }),
+  );
+  expect(waiting.run).toMatchObject({ resumeAt: "2026-10-04T22:40:00Z", autoResume: true });
+  const resumed = applyEvents(waiting, [updated({ status: "running" })], runId);
+  expect(resumed.run).toMatchObject({ resumeAt: undefined, autoResume: undefined });
+});
+
 test("deltas without a message id stream into one message that the full text replaces", () => {
   const t = build(
     ...upTo(1),
@@ -136,6 +162,35 @@ test("deltas without a message id stream into one message that the full text rep
     text: "Hello!",
     at: "",
   });
+});
+
+test("a transcript opened at its end, built again with each older page, reads as a full load (PLX-490)", () => {
+  const events = [
+    ...upTo(8),
+    output({ kind: "turnStarted", turnId: uuidv7(), text: "And the tests." }),
+    output({ kind: "textDelta", text: "Look" }),
+    output({ kind: "textDelta", text: "ing." }),
+    output({ kind: "toolCall", callId: "c1", name: "Bash", input: { command: "ls" } }),
+    output(agentCall("s1", "Read the tests")),
+    output(inSub("s1", { kind: "text", text: "Read them." })),
+    output({ kind: "toolResult", callId: "c1", status: "ok", output: "tests" }),
+    output({ kind: "text", text: "Looking." }),
+  ];
+  const full = build(...events);
+
+  // Pages of three, newest first, from the run as it stands: six pages, the newest starting
+  // inside the last turn, between a tool call and its result.
+  let held = events.slice(-3);
+  let t = rebuild({ ...emptyTranscript, run: full.run }, held, runId);
+  expect(t.run).toBe(full.run);
+  expect(of(t.items, "tool")).toMatchObject([{ callId: "c1", name: null, status: "ok" }]);
+  expect(t.subagents!["s1"]!.description).toBeUndefined();
+  for (let end = events.length - 3; end > 0; end -= 3) {
+    held = [...events.slice(Math.max(0, end - 3), end), ...held];
+    t = rebuild(t, held, runId);
+  }
+  expect(t).toEqual(full);
+  expect(of(t.items, "assistant").at(-1)).toMatchObject({ text: "Looking." });
 });
 
 test("a turn's result that repeats its last message isn't shown twice", () => {
@@ -460,4 +515,117 @@ test("a Project's waiting requests are tracked by run, once each, until resolved
   ]);
   expect(ids(runId)).toEqual([]);
   expect(ids(other)).toEqual(["b2"]);
+});
+
+// Two of Claude Code's own subagents (PLX-382), as plxd tags their items, one of them starting
+// another.
+const agentCall = (callId: string, description: string): AgentOutputItem => ({
+  kind: "toolCall",
+  callId,
+  name: "Agent",
+  input: {
+    description,
+    prompt: `${description}, then reply.`,
+    subagent_type: "Explore",
+    model: "haiku",
+  },
+});
+const inSub = (callId: string, item: AgentOutputItem, model?: string): AgentOutputItem => ({
+  kind: "subagent",
+  callId,
+  agentType: "Explore",
+  ...(model && { model }),
+  item,
+});
+
+test("a subagent's items stay out of the agent's flow, in its own transcript under its call", () => {
+  const t = build(
+    output(agentCall("a", "Read the docs"), agentCall("b", "Read the tests")),
+    output(
+      inSub(
+        "a",
+        { kind: "toolCall", callId: "a1", name: "Read", input: { file_path: "README.md" } },
+        "claude-haiku-4-5-20251001",
+      ),
+      inSub("a", { kind: "toolResult", callId: "a1", status: "ok", output: "# App" }),
+      inSub("b", agentCall("c", "Grep the tests")),
+      inSub("a", { kind: "text", messageId: "m", text: "Docs read." }, "claude-haiku-4-5-20251001"),
+      { kind: "toolResult", callId: "a", status: "ok", output: "Docs read." },
+      { kind: "subagentFinished", callId: "a", status: "completed", summary: "Docs read." },
+    ),
+  );
+  // The agent's own flow has its two calls, and nothing its subagents did.
+  expect(t.items.map((i) => (i.kind === "tool" ? i.callId : i.kind))).toEqual(["a", "b"]);
+  const { a, b, c } = t.subagents!;
+  expect(a).toMatchObject({
+    description: "Read the docs",
+    prompt: "Read the docs, then reply.",
+    agentType: "Explore",
+    model: "claude-haiku-4-5-20251001",
+    call: "ok",
+    finished: { status: "completed", summary: "Docs read." },
+  });
+  expect(a!.items.map((i) => i.kind)).toEqual(["tool", "assistant"]);
+  expect(a!.items[0]).toMatchObject({ callId: "a1", status: "ok", output: "# App" });
+  // Until it writes something, the model is the one asked for.
+  expect(b).toMatchObject({ model: "haiku", items: [{ kind: "tool", callId: "c" }] });
+  // A subagent one of them started names it as its parent.
+  expect(c).toMatchObject({ parent: "b", description: "Grep the tests" });
+  expect(a!.parent).toBeUndefined();
+
+  // Its transcript: the prompt, what it did, and no repeat of a final report it already said.
+  expect(subagentRows(a!).map((i) => i.kind)).toEqual(["user", "tool", "assistant"]);
+  const quiet = { ...b!, finished: { status: "completed" as const, summary: "No tests." } };
+  expect(subagentRows(quiet).at(-1)).toMatchObject({ kind: "assistant", text: "No tests." });
+});
+
+test("a subagent works until it says how it ended, whatever its call's result", () => {
+  const sub = { callId: "a", items: [] };
+  // A subagent in the background has its call succeed at once.
+  expect(subagentState({ ...sub, call: "ok" }, true)).toBe("running");
+  expect(subagentState({ ...sub, call: "ok", finished: { status: "completed" } }, true)).toBe(
+    "completed",
+  );
+  expect(subagentState({ ...sub, finished: { status: "failed" } }, true)).toBe("failed");
+  expect(subagentState({ ...sub, call: "error" }, true)).toBe("failed");
+  // Once the run is done without its finish, it was stopped, its call launched or not.
+  expect(subagentState({ ...sub, call: "ok" }, false)).toBe("stopped");
+  expect(subagentState(sub, false)).toBe("stopped");
+  // A finish this app doesn't know isn't Done.
+  const newer = { status: "paused" } as unknown as NonNullable<Subagent["finished"]>;
+  expect(subagentState({ ...sub, finished: newer }, true)).toBe("stopped");
+});
+
+test("marks a session on another model above the message sent with it (PLX-495)", () => {
+  const timed = (time: string, ...items: AgentOutputItem[]): LoggedEvent => ({
+    ...output(...items),
+    time,
+  });
+  const turnId = uuidv7();
+  const t = build(
+    timed("1", { kind: "sessionStarted", sessionId: "s1", model: "claude-opus-5-5" }),
+    timed("2", { kind: "turnStarted", turnId, text: "Go on" }),
+    // Claude Code reports a resumed session after its turn, and a context window as `[1m]`.
+    timed("3", { kind: "sessionStarted", sessionId: "s1", model: "claude-opus-5-5[1m]" }),
+    timed("4", { kind: "turnStarted", turnId: uuidv7(), text: "Now on Codex" }),
+    timed("5", { kind: "sessionStarted", sessionId: "s2", model: "gpt-6.1-sol" }),
+  );
+  expect(t.items.map((i) => i.kind)).toEqual([
+    "session",
+    "user",
+    "session",
+    "modelSwitch",
+    "user",
+    "session",
+  ]);
+  expect(of(t.items, "modelSwitch")).toEqual([
+    {
+      kind: "modelSwitch",
+      key: expect.any(String),
+      from: "claude-opus-5-5[1m]",
+      to: "gpt-6.1-sol",
+      at: "5",
+    },
+  ]);
+  expect(of(t.items, "user").map((i) => i.at)).toEqual(["2", "4"]);
 });

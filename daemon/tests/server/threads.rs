@@ -35,6 +35,8 @@ use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
 mod context;
 mod files;
 mod fork;
+mod from_threads;
+mod project;
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -207,7 +209,9 @@ pub(crate) fn start_params(repo: Option<RepoId>, prompt: &str) -> ThreadStartPar
     ThreadStartParams {
         run_id: RunId::generate(),
         repo,
+        project: None,
         parent: None,
+        notify: None,
         title: None,
         prompt: prompt.to_owned(),
         account: Some(AccountChoice::Subscription {
@@ -310,9 +314,14 @@ impl Conn {
     }
 
     async fn subscribe(&mut self, after: u64, project: Option<ProjectId>) {
-        self.call::<EventsSubscribe>(EventsSubscribeParams { after, project })
-            .await
-            .unwrap();
+        self.call::<EventsSubscribe>(EventsSubscribeParams {
+            after,
+            project,
+            run: None,
+            shell: false,
+        })
+        .await
+        .unwrap();
     }
 
     async fn until(
@@ -692,6 +701,7 @@ async fn deleting_a_running_thread_stops_its_agent_and_removes_everything() {
     assert!(runs.is_empty());
     let events = client
         .call::<AgentEvents>(AgentEventsParams {
+            before: None,
             run_id: params.run_id,
             after: 0,
             limit: None,

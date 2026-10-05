@@ -45,10 +45,13 @@ mod host;
 mod id;
 mod inbox;
 pub mod jsonrpc;
+mod land;
+mod memory;
 pub mod methods;
 mod project;
 mod provider;
 mod pull_request;
+mod question;
 mod queue;
 mod review;
 mod thread;
@@ -67,8 +70,9 @@ pub use agent::{
     AgentAutoResumeParams, AgentCancelParams, AgentEffort, AgentEventsParams, AgentEventsResult,
     AgentFailureKind, AgentImageParams, AgentListParams, AgentListResult, AgentOutcome,
     AgentOutputItem, AgentPermission, AgentPolicy, AgentResumeNowParams, AgentRun, AgentRunResult,
-    AgentRunState, AgentSendParams, AgentStartParams, AgentStatus, AgentTodoItem, AgentTodoStatus,
-    AgentToolStatus, CoordinatorThreadId, DiffSummary, ImageId, ImageMediaType, LoggedEvent,
+    AgentRunState, AgentSendParams, AgentStartParams, AgentStatus, AgentSubagentStatus,
+    AgentTodoItem, AgentTodoStatus, AgentToolStatus, AgentWaitParams, AgentWaitResult,
+    AgentWaitUntil, CoordinatorThreadId, DiffSummary, ImageId, ImageMediaType, LoggedEvent,
     PromptImage, RunId, TurnId,
 };
 pub use approval::{
@@ -93,26 +97,35 @@ pub use defaults::{
 };
 pub use error::{ErrorData, ErrorKind, IncompatibleProtocolDetail};
 pub use events::{
-    EventsEventParams, EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams,
-    EventsUnsubscribeResult, LogId, ParallaxEvent, SubscriptionId,
+    EventsEventParams, EventsResyncParams, EventsSubscribeParams, EventsSubscribeResult,
+    EventsUnsubscribeParams, EventsUnsubscribeResult, LogId, ParallaxEvent, SubscriptionId,
 };
 pub use git::{AgentCommitParams, AgentGitStatusParams, AgentPushParams, GitStatus};
 pub use handshake::{
     Capabilities, ClientInfo, InitializeParams, InitializeProtocol, InitializeResult, ProtocolRange,
 };
 pub use host::{
-    HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
-    HostVersionParams, HostVersionResult, StoreState,
+    HostHealthParams, HostHealthResult, HostQueues, HostSettings, HostSettingsGetParams,
+    HostSettingsSetParams, HostVersionParams, HostVersionResult, QueueStats, StoreState,
 };
 pub use id::InvalidId;
 pub use inbox::{
     InboxItem, InboxItemId, InboxKind, InboxListParams, InboxListResult, InboxSeenParams,
     InboxSeenResult,
 };
+pub use land::{
+    LandApproveParams, LandQueueParams, LandResult, LandSendBackParams, Landing, LandingStatus,
+};
+pub use memory::{
+    MemoryDeleteParams, MemoryDeleteResult, MemoryFile, MemoryKind, MemoryListParams,
+    MemoryListResult, MemoryProposalTo, MemoryProposeParams, MemoryProposeResult, MemoryReadParams,
+    MemoryReadResult, MemoryScope, MemoryScopeKind, MemoryWriteParams, MemoryWriteResult,
+};
 pub use project::{
-    Project, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
-    ProjectIcon, ProjectId, ProjectListParams, ProjectListResult, ProjectPermission,
-    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult,
+    Project, ProjectAutonomy, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
+    ProjectDeleteResult, ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectIcon,
+    ProjectId, ProjectListParams, ProjectListResult, ProjectPermission, ProjectStartParams,
+    ProjectUpdateParams, ProjectUpdateResult,
 };
 pub use provider::{
     ProviderEnvVar, ProviderInfo, ProviderInstance, ProviderKind, ProviderModel,
@@ -121,6 +134,10 @@ pub use provider::{
 pub use pull_request::{
     PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrMergeMethod,
     PrMergeState, PrReview, PrReviewState, PrState, PrViewParams, PullRequest,
+};
+pub use question::{
+    Question, QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionId,
+    QuestionListParams, QuestionListResult, QuestionResult, QuestionStatus,
 };
 pub use queue::{
     AgentDelivery, QueueCancelParams, QueueEditParams, QueueListParams, QueueReorderParams,
@@ -177,8 +194,16 @@ mod tests {
             branch: Some("main".to_owned()),
             coordinator: None,
             permission: None,
+            autonomy: None,
             created_at: "2026-09-24T12:00:00Z".parse().unwrap(),
             updated_at: "2026-09-24T12:05:00.125Z".parse().unwrap(),
+            base_branch: None,
+            integration_branch: None,
+            auto_land: false,
+            allow_api_keys: None,
+            max_children: None,
+            checks: None,
+            proposed_checks: None,
         }
     }
 
@@ -224,6 +249,7 @@ mod tests {
                 uptime_seconds: 1,
                 store,
                 running_agents: 0,
+                queues: None,
             });
         }
         round_trip(&HostVersionParams {});
@@ -241,7 +267,12 @@ mod tests {
         // `project_edit_types_round_trip_and_omit_what_is_absent` covers `ProjectCreateParams`.
         round_trip(&ProjectCreateResult { project: project() });
         for project in [None, Some(ProjectId::generate())] {
-            round_trip(&EventsSubscribeParams { after: 7, project });
+            round_trip(&EventsSubscribeParams {
+                after: 7,
+                project,
+                run: project.map(|_| RunId::generate()),
+                shell: project.is_some(),
+            });
             round_trip(&EventsEventParams {
                 subscription: SubscriptionId::generate(),
                 seq: 8,
@@ -291,6 +322,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::too_many_lines, reason = "one round trip per edit field")]
     fn project_edit_types_round_trip_and_omit_what_is_absent() {
         let icons = [
             ProjectIcon {
@@ -329,6 +361,8 @@ mod tests {
                 repo_path: "/".to_owned(),
                 icon: icon.clone(),
                 permission: None,
+                autonomy: None,
+                base_branch: None,
             });
             round_trip(&ProjectUpdateResult {
                 project: with_icon.clone(),
@@ -346,6 +380,13 @@ mod tests {
                     name,
                     icon: icon.clone(),
                     permission: None,
+                    autonomy: None,
+                    base_branch: None,
+                    auto_land: None,
+                    allow_api_keys: None,
+                    max_children: None,
+                    checks: None,
+                    proposed_checks: None,
                 });
             }
         }
@@ -364,6 +405,13 @@ mod tests {
                 name: None,
                 icon: None,
                 permission: None,
+                autonomy: None,
+                base_branch: None,
+                auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
+                checks: None,
+                proposed_checks: None,
             })
             .unwrap(),
             json!({"project": id}),
@@ -401,12 +449,21 @@ mod tests {
                 repo_path: "/".to_owned(),
                 icon: None,
                 permission: Some(permission),
+                autonomy: None,
+                base_branch: None,
             });
             round_trip(&ProjectUpdateParams {
                 project: ProjectId::generate(),
                 name: None,
                 icon: None,
                 permission: Some(permission),
+                autonomy: None,
+                base_branch: None,
+                auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
+                checks: None,
+                proposed_checks: None,
             });
         }
         assert_eq!(
@@ -416,6 +473,52 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<ProjectPermission>(json!("manual")).unwrap(),
             ProjectPermission::Unknown
+        );
+    }
+
+    /// PLX-403 (0043): a project's autonomy level round trips on each type that carries it, and a
+    /// level from a newer peer reads as unknown.
+    #[test]
+    fn project_autonomy_round_trips_and_an_unknown_level_reads_as_unknown() {
+        for autonomy in [
+            ProjectAutonomy::Ask,
+            ProjectAutonomy::Routine,
+            ProjectAutonomy::Full,
+        ] {
+            round_trip(&Project {
+                autonomy: Some(autonomy),
+                ..project()
+            });
+            round_trip(&ProjectCreateParams {
+                id: ProjectId::generate(),
+                name: "parallax".to_owned(),
+                repo_path: "/".to_owned(),
+                icon: None,
+                permission: None,
+                autonomy: Some(autonomy),
+                base_branch: None,
+            });
+            round_trip(&ProjectUpdateParams {
+                project: ProjectId::generate(),
+                name: None,
+                icon: None,
+                permission: None,
+                autonomy: Some(autonomy),
+                base_branch: None,
+                auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
+                checks: None,
+                proposed_checks: None,
+            });
+        }
+        assert_eq!(
+            serde_json::to_value(ProjectAutonomy::Ask).unwrap(),
+            json!("ask")
+        );
+        assert_eq!(
+            serde_json::from_value::<ProjectAutonomy>(json!("never")).unwrap(),
+            ProjectAutonomy::Unknown
         );
     }
 

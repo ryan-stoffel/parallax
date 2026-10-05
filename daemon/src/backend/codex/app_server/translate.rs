@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value, json};
 
-use super::super::stream::classify;
+use super::super::classify;
 use jiff::Timestamp;
 
 use crate::backend::event::{
@@ -512,7 +512,7 @@ fn rate_limits(params: &Map<String, Value>) -> Vec<Step> {
 }
 
 /// A failed turn's [`Failure`]: `codexErrorInfo` says when routing should fall back (0012), and
-/// the message says the rest, as for exec.
+/// the message says the rest ([`classify`]).
 fn turn_failure(error: Option<&Value>) -> Failure {
     let message = error
         .and_then(|error| error.get("message"))

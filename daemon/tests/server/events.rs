@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use parallax_protocol::jsonrpc::{Message, Notification};
+use parallax_protocol::jsonrpc::{INVALID_PARAMS, Message, Notification};
 use parallax_protocol::methods::{
     EventsSubscribe, EventsUnsubscribe, HostHealth, NotificationMethod, ProjectCreate, ProjectList,
     ProjectUpdate,
@@ -11,7 +11,7 @@ use parallax_protocol::methods::{
 use parallax_protocol::{
     ErrorKind, EventsEventParams, EventsSubscribeParams, EventsUnsubscribeParams, HostHealthParams,
     ImageMediaType, ParallaxEvent, Project, ProjectIcon, ProjectId, ProjectListParams,
-    ProjectUpdateParams, PromptImage, SubscriptionId,
+    ProjectUpdateParams, PromptImage, RunId, SubscriptionId,
 };
 use rustix::process::Signal;
 
@@ -30,6 +30,8 @@ async fn subscribe(client: &mut Client, after: u64) -> SubscriptionId {
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after,
             project: None,
+            run: None,
+            shell: false,
         })
         .await
         .unwrap()
@@ -109,6 +111,13 @@ async fn an_update_is_a_host_level_event_that_outlives_a_restart() {
             }),
         }),
         permission: None,
+        autonomy: None,
+        base_branch: None,
+        auto_land: None,
+        allow_api_keys: None,
+        max_children: None,
+        checks: None,
+        proposed_checks: None,
     };
     let updated = editor
         .call::<ProjectUpdate>(edit.clone())
@@ -174,6 +183,8 @@ async fn a_subscription_to_a_missing_project_is_refused() {
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after: 0,
             project: Some(ProjectId::generate()),
+            run: None,
+            shell: false,
         })
         .await
         .unwrap_err();
@@ -185,10 +196,31 @@ async fn a_subscription_to_a_missing_project_is_refused() {
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after: 0,
             project: Some(project.id),
+            run: None,
+            shell: false,
         })
         .await
         .unwrap();
     client.stays_quiet(Duration::from_millis(200)).await;
+}
+
+#[tokio::test]
+async fn run_or_shell_without_a_project_is_invalid() {
+    let dir = temp_dir();
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
+    for (run, shell) in [(Some(RunId::generate()), false), (None, true)] {
+        let error = client
+            .call::<EventsSubscribe>(EventsSubscribeParams {
+                after: 0,
+                project: None,
+                run,
+                shell,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, INVALID_PARAMS, "{run:?} {shell}: {error:?}");
+    }
 }
 
 #[tokio::test]
@@ -201,6 +233,8 @@ async fn a_seq_this_log_never_reached_needs_a_resync() {
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after: 5,
             project: None,
+            run: None,
+            shell: false,
         })
         .await
         .unwrap_err();
@@ -247,6 +281,8 @@ async fn events_older_than_the_retention_need_a_resync() {
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after: 0,
             project: None,
+            run: None,
+            shell: false,
         })
         .await
         .unwrap_err();
@@ -268,6 +304,8 @@ async fn events_reach_a_subscriber_while_it_is_also_making_requests() {
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after: 0,
             project: None,
+            run: None,
+            shell: false,
         })
         .await
         .unwrap();

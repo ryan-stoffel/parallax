@@ -5,7 +5,14 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { RpcResponse, ParallaxBridge } from "../preload/bridge";
-import type { AgentRun, Capabilities, Repo, Thread } from "../protocol/generated/protocol";
+import type {
+  AgentOutputItem,
+  AgentRun,
+  Capabilities,
+  LoggedEvent,
+  Repo,
+  Thread,
+} from "../protocol/generated/protocol";
 import { App } from "./App";
 
 // A thread's parent and children in the top bar and the sidebar (PLX-374, 0041).
@@ -73,7 +80,12 @@ beforeEach(() => {
   runs = [run("parent"), run("a"), run("b", "failed", "codex"), run("solo", "completed")];
   answers = {
     "thread/list": () => ({ result: { repos: [parallax], threads, seq: 7 } }),
-    "agent/list": () => ({ result: { runs, seq: 7 } }),
+    "agent/list": (p) => ({
+      result: {
+        runs: p["project"] ? runs.filter((r) => r.project === p["project"]) : runs,
+        seq: 7,
+      },
+    }),
     "project/list": () => ({ result: { projects: [], seq: 7 } }),
   };
   window.parallax = {
@@ -274,6 +286,60 @@ test("the sidebar nests children under their parent, collapsed, with a count and
   expect(sidebarRow("Style the chips")!.getAttribute("aria-current")).toBe("page");
 });
 
+test("a Project's children never show in the main sidebar, and its row shows their status (0042)", async () => {
+  const coordinator = {
+    ...run("coord", "completed"),
+    project: "p-ember",
+    policy: "noWrite" as const,
+  };
+  threads = [
+    ...threads,
+    thread("kid", 4, { parent: "coord", title: "Write the docs" }),
+    thread("grandkid", 5, { parent: "kid", title: "Check the links" }),
+  ];
+  const child = (id: string, status?: string) => ({ ...run(id, status), accountId: "claude" });
+  runs = [...runs, coordinator, child("kid", "completed"), child("grandkid")];
+  answers["project/list"] = () => ({
+    result: {
+      projects: [
+        {
+          id: "p-ember",
+          name: "ember",
+          repoPath: parallax.path,
+          coordinator: "coord",
+          createdAt: "2026-10-01T09:00:00Z",
+          updatedAt: "2026-10-01T09:00:00Z",
+        },
+      ],
+      seq: 7,
+    },
+  });
+  await renderApp();
+  await click(toggle("2 threads"));
+  expect(sidebarTitles()).toEqual([
+    "Fix the README",
+    "Ship lineage",
+    "Style the chips",
+    "Write the test",
+  ]);
+  const ember = document.querySelector('#sidebar li[data-kind="project"]');
+  expect(ember?.querySelector("[data-status]")?.textContent).toBe("Working");
+
+  // `agent/list {project}` has only the coordinator, so its Project tab lists the threads in it.
+  await click(ember?.querySelector("button"));
+  const titles = (group: string) =>
+    [...document.querySelectorAll(`#side-panel section[aria-label="${group}"] li > button`)].map(
+      (b) => b.querySelector("span span")?.textContent,
+    );
+  expect(titles("Working")).toEqual(["Check the links"]);
+  await click(document.querySelector('#side-panel section[aria-label="Resolved"] h3 button'));
+  expect(titles("Resolved")).toEqual(["Write the docs"]);
+  // With nothing reported, a finished child says Done, as a thread does.
+  expect(
+    document.querySelector('#side-panel section[aria-label="Resolved"] li > button')!.textContent,
+  ).toContain("Done");
+});
+
 test("without threadLineage, children aren't nested and there are no chips", async () => {
   capabilities = {};
   await renderApp();
@@ -314,4 +380,89 @@ test("titles come from plxd: a new thread sends its generated title, and a title
   ]);
   expect(Object.keys(localStorage).filter((k) => k.startsWith("parallax:title:"))).toEqual([]);
   expect(crumbs()).toEqual(["This Mac", "parallax", "Fix flaky test"]);
+});
+
+// The parent's agent's own subagents (PLX-382): two of Claude Code's Agent calls, one done.
+const agentCall = (callId: string, description: string): AgentOutputItem => ({
+  kind: "toolCall",
+  callId,
+  name: "Agent",
+  input: { description, prompt: `${description}.`, subagent_type: "Explore", model: "haiku" },
+});
+const parentLog = (): LoggedEvent[] => [
+  {
+    seq: 1,
+    time: "2026-10-01T10:00:00Z",
+    event: { kind: "agent.started", runId: "parent", run: run("parent") },
+  },
+  {
+    seq: 2,
+    time: "2026-10-01T10:00:05Z",
+    event: {
+      kind: "agent.output",
+      runId: "parent",
+      items: [
+        agentCall("toolu_a", "Read the docs"),
+        agentCall("toolu_b", "Read the tests"),
+        {
+          kind: "subagent",
+          callId: "toolu_a",
+          agentType: "Explore",
+          model: "claude-haiku-4-5-20251001",
+          item: {
+            kind: "toolCall",
+            callId: "toolu_r",
+            name: "Read",
+            input: { file_path: "README.md" },
+          },
+        },
+        {
+          kind: "subagentFinished",
+          callId: "toolu_a",
+          status: "completed",
+          summary: "The docs say pnpm.",
+        },
+      ],
+    },
+  },
+];
+
+test("an agent's own subagents are read-only chips after its children, and one opens without a composer", async () => {
+  answers["agent/events"] = (params) => ({
+    result: {
+      events: params["runId"] === "parent" && params["after"] === 0 ? parentLog() : [],
+      more: false,
+    },
+  });
+  await renderApp();
+  await click(sidebarRow("Ship lineage"));
+  expect(chips()).toEqual(["Style the chips", "Write the test", "Read the docs", "Read the tests"]);
+  const docs = chip("Read the docs")!;
+  expect(docs.getAttribute("aria-label")).toBe("Read the docs, read-only subagent, Done");
+  expect(chip("Read the tests")!.getAttribute("title")).toBe(
+    "Read the tests · Working · Read-only subagent",
+  );
+  // The parent's own transcript has the calls, not what the subagents did.
+  const log = () => document.querySelector('[role="log"]')!;
+  await click(log().querySelector("button[aria-expanded]"));
+  expect(log().textContent).not.toContain("README.md");
+  const row = log().querySelector('button[aria-label="Open subagent: Read the tests, Working"]');
+  expect(row).not.toBeNull();
+
+  await click(docs);
+  expect(crumbs()).toEqual(["This Mac", "parallax", "Ship lineage", "Read the docs"]);
+  expect(chips()).toContain("Read the docs*");
+  expect(log().textContent).toContain("Read the docs.");
+  expect(log().textContent).toContain("The docs say pnpm.");
+  expect(document.querySelector('[role="status"][aria-label="Subagent"]')!.textContent).toBe(
+    "Explore · Claude Haiku 4.5 · DoneRead-only: Claude Code's own subagent",
+  );
+  expect(document.querySelector('[role="textbox"][aria-label="Message"]')).toBeNull();
+
+  // Its thread's crumb goes back, and the call's row opens the other one.
+  await click(crumb("Ship lineage"));
+  expect(document.querySelector('[role="textbox"][aria-label="Message"]')).not.toBeNull();
+  await click(log().querySelector("button[aria-expanded]"));
+  await click(log().querySelector('button[aria-label="Open subagent: Read the tests, Working"]'));
+  expect(crumbs().at(-1)).toBe("Read the tests");
 });

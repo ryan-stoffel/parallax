@@ -730,6 +730,8 @@ mod tests {
             repo_path: "/Users/ryan/parallax".to_owned(),
             icon: None,
             permission: None,
+            autonomy: None,
+            base_branch: None,
         };
         let frame =
             serde_json::to_vec(&Request::new::<ProjectCreate>("r1", params.clone())).unwrap();

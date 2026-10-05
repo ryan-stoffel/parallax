@@ -29,6 +29,7 @@ import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId, useHosts, type Host } from "./hosts";
 import { models, setCliEnabled, useDisabledClis } from "./models";
+import { notify } from "./notifications";
 import {
   kindOf,
   logoOf,
@@ -66,6 +67,7 @@ import { StorageSettings } from "./settings/StorageSettings";
 import type { ThreadsView } from "./threads";
 import { IconButton, Segmented } from "./ui";
 import { periods, UsageLines, useUsage, type Period } from "./Usage";
+import { UsagePage } from "./UsagePage";
 import { uuidv7 } from "./uuidv7";
 
 // xterm.js is large, so it loads when a sign-in first opens.
@@ -91,13 +93,16 @@ export function Settings({
   onThemeChange,
   sourceControlHost,
 }: SettingsProps) {
+  const hosts = useHosts();
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div
-        className={`mx-auto px-8 pt-6 pb-16 ${section === "providers" ? "max-w-5xl" : "max-w-3xl"}`}
+        className={`mx-auto px-8 pt-6 pb-16 ${section === "providers" || section === "usage" ? "max-w-5xl" : "max-w-3xl"}`}
       >
         {section === "account" ? (
           <AccountSettings listed={listed} />
+        ) : section === "usage" ? (
+          <UsagePage hosts={hosts} />
         ) : section === "general" ? (
           <GeneralSettings />
         ) : section === "appearance" ? (
@@ -240,6 +245,7 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
       }
       const failed = "error" in clis ? clis.error : "error" in keyList ? keyList.error : undefined;
       setError(failed && accountsError(failed));
+      return "result" in clis ? clis.result.clis : undefined;
     },
     [host.id],
   );
@@ -372,7 +378,17 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
                 onPeriod={setPeriod}
                 keys={keys}
                 onKeys={setKeys}
-                onSignedIn={() => void load("accounts/refresh")}
+                onSignedIn={() =>
+                  void load("accounts/refresh").then((clis) => {
+                    // Sign in's terminal ended: news only if it signed in (PLX-507).
+                    if (clis?.find((c) => c.cli === cli.cli)?.signedIn)
+                      notify({
+                        key: `provider/${host.id}/${cli.cli}`,
+                        tone: "success",
+                        title: `Signed in to ${cliInfo[cli.cli]?.name ?? cli.cli}`,
+                      });
+                  })
+                }
               />
             ))}
           </div>

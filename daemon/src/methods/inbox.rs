@@ -15,31 +15,29 @@ use tracing::{info, warn};
 
 use super::Context;
 use crate::server::Daemon;
+use crate::store::Tx;
 use crate::store::store_error;
 
-/// `project`'s inbox, oldest first, with the `seq` of the last event it reflects.
+/// `project`'s inbox, oldest first, with the event log's `seq` from before the read, to
+/// subscribe after.
 pub(crate) async fn list(
     context: &Context,
     params: InboxListParams,
 ) -> Result<InboxListResult, ErrorObject> {
-    let log = Arc::clone(&context.daemon.log);
-    context
+    let (items, seq) = context
         .daemon
-        .store
-        .run(&context.cancel, move |store| {
+        .reader
+        .snapshot(&context.cancel, move |store| {
             found(store, params.project)?;
-            let items = store
+            store
                 .inbox(params.project.into())
                 .map_err(|error| store_error(&error))?
                 .into_iter()
                 .map(item)
-                .collect::<Result<_, _>>()?;
-            Ok(InboxListResult {
-                items,
-                seq: log.head(),
-            })
+                .collect::<Result<_, _>>()
         })
-        .await
+        .await?;
+    Ok(InboxListResult { items, seq })
 }
 
 /// Marks items of `project`'s inbox seen now, and returns them as they stand.
@@ -62,9 +60,9 @@ pub(crate) async fn seen(
         .await
 }
 
-/// Adds an item about `run` to `project`'s inbox and appends `inbox.added`, in one store job so
-/// `inbox/list`'s `seq` always agrees with its items. Never fails its caller: a store error is
-/// logged.
+/// Adds an item about `run` to `project`'s inbox and stages `inbox.added` in the row's
+/// transaction (0052), so a subscriber after `inbox/list`'s `seq` never misses it. Never fails
+/// its caller: a store error is logged.
 pub(crate) async fn add(
     daemon: &Arc<Daemon>,
     project: ProjectId,
@@ -72,35 +70,45 @@ pub(crate) async fn add(
     kind: InboxKind,
     text: String,
 ) {
-    let log = Arc::clone(&daemon.log);
     let added = daemon
         .store
         .run(&CancellationToken::new(), move |store| {
-            let row = parallax_store::InboxItem {
-                id: InboxItemId::generate().into(),
-                project_id: project.into(),
-                run_id: run.into(),
-                kind: kind_name(kind),
-                text,
-                created_at: Timestamp::now(),
-                seen_at: None,
-            };
-            store
-                .add_inbox_item(&row)
-                .map_err(|error| store_error(&error))?;
-            let item = item(row)?;
-            let seq = log.append_blocking(
-                item.created_at,
-                Some(project),
-                ParallaxEvent::InboxAdded { item },
-            );
-            info!(%project, %run, seq, "added an inbox item");
-            Ok(())
+            record(store, project, run, kind, text)
         })
         .await;
     if let Err(error) = added {
         warn!(%project, %run, error = %error.message, "could not add an inbox item");
     }
+}
+
+/// [`add`]'s work, for a caller already in a store job.
+pub(crate) fn record(
+    store: &mut Tx,
+    project: ProjectId,
+    run: RunId,
+    kind: InboxKind,
+    text: String,
+) -> Result<(), ErrorObject> {
+    let row = parallax_store::InboxItem {
+        id: InboxItemId::generate().into(),
+        project_id: project.into(),
+        run_id: run.into(),
+        kind: kind_name(kind),
+        text,
+        created_at: Timestamp::now(),
+        seen_at: None,
+    };
+    store
+        .add_inbox_item(&row)
+        .map_err(|error| store_error(&error))?;
+    let item = item(row)?;
+    let seq = store.stage(
+        item.created_at,
+        Some(project),
+        ParallaxEvent::InboxAdded { item },
+    );
+    info!(%project, %run, seq, "added an inbox item");
+    Ok(())
 }
 
 /// `projectNotFound` unless `project` exists.

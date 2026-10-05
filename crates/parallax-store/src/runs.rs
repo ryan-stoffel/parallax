@@ -1,9 +1,9 @@
 use jiff::Timestamp;
-use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
 use crate::error::StoreError;
-use crate::worktree::insert_worktree;
+use crate::worktree::{RawWorktree, insert_worktree};
 use crate::{Store, Worktree, WorktreeFields, timestamp};
 
 /// What an `agent/start` asked for, plus the backend routing resolved it to (#156). Only model,
@@ -11,6 +11,10 @@ use crate::{Store, Worktree, WorktreeFields, timestamp};
 /// `agent/send` (PLX-161, PLX-163), and the backend, when `agent/send` moves the run to another
 /// backend's account.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about a run, not states of one thing"
+)]
 pub struct RunFields {
     pub project_id: Uuid,
     pub prompt: String,
@@ -24,6 +28,9 @@ pub struct RunFields {
     /// subagents, or the parent a client named for a thread. `None` for a top-level run, and once
     /// the parent is deleted.
     pub parent: Option<Uuid>,
+    /// Whether the run wakes its `parent` when a CLI process of its ends (PLX-380, decision
+    /// 0025). Fixed when the run is created, except that [`Store::join_project`] sets it.
+    pub notify_parent: bool,
     /// The model, effort, and permission the run asked for (PLX-97), each `None` for the CLI's
     /// default. Effort and permission are their protocol names, such as `high` and `plan`.
     pub model: Option<String>,
@@ -34,12 +41,15 @@ pub struct RunFields {
     pub context_window: Option<u32>,
     pub fast: Option<bool>,
     /// Whether the run forwards its CLI's permission requests to the client (PLX-222, decision
-    /// 0031). Fixed when the run is created.
+    /// 0031). Fixed when the run is created, except that [`Store::join_project`] sets it.
     pub approvals: bool,
     /// Whether the run works in its repository's own checkout, on the branch the user has out,
     /// rather than in a worktree of its own. Such a run has no worktree row. Fixed when the run is
     /// created.
     pub checkout: bool,
+    /// Whether a Project's child explores, such as a spike, and never lands (PLX-409, decision
+    /// 0045). Fixed when the run is created.
+    pub explore: bool,
 }
 
 /// A run's state, which changes as it runs.
@@ -98,8 +108,12 @@ const COLUMNS: &str = "id, project_id, prompt, requested_account, policy, backen
                        deletions, created_at, updated_at, accept_id, merge_commit, \
                        merge_into, merge_how, coordinator_thread, model, effort, permission, \
                        approvals, checkout, context_window, fast, pull_requests, parent, \
-                       auto_resume, resume_at, resume_tries";
+                       auto_resume, resume_at, resume_tries, notify_parent, explore";
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about a run, not states of one thing"
+)]
 struct RawRun {
     id: String,
     project_id: String,
@@ -134,6 +148,8 @@ struct RawRun {
     auto_resume: Option<bool>,
     resume_at: Option<String>,
     resume_tries: u32,
+    notify_parent: bool,
+    explore: bool,
 }
 
 impl RawRun {
@@ -172,6 +188,8 @@ impl RawRun {
             auto_resume: row.get(30)?,
             resume_at: row.get(31)?,
             resume_tries: row.get(32)?,
+            notify_parent: row.get(33)?,
+            explore: row.get(34)?,
         })
     }
 
@@ -204,6 +222,7 @@ impl RawRun {
                     .map(Uuid::parse_str)
                     .transpose()?,
                 parent: self.parent.as_deref().map(Uuid::parse_str).transpose()?,
+                notify_parent: self.notify_parent,
                 model: self.model,
                 effort: self.effort,
                 permission: self.permission,
@@ -211,6 +230,7 @@ impl RawRun {
                 fast: self.fast,
                 approvals: self.approvals,
                 checkout: self.checkout,
+                explore: self.explore,
             },
             state: RunState {
                 status: self.status,
@@ -280,26 +300,22 @@ impl Store {
         state: &RunState,
         worktree: &WorktreeFields,
     ) -> Result<(Run, Worktree), StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         let worktree = insert_worktree(&tx, id, worktree)?;
         let run = insert_run(&tx, id, fields, state)?;
         tx.commit()?;
         Ok((run, worktree))
     }
 
-    /// Deletes run `id` with its worktree row, stored events, sent turns, images, and wake-up
-    /// state, in one transaction: how `project/delete` (PLX-338) removes a Project's run. Returns
+    /// Deletes run `id` with its worktree row, stored events, sent turns, images, wake-up state,
+    /// queued messages, and questions, in one transaction: how `project/delete` (PLX-338) removes a Project's run. Returns
     /// whether the run existed.
     ///
     /// # Errors
     ///
     /// A database error.
     pub fn delete_run(&mut self, id: Uuid) -> Result<bool, StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         let existed = delete_run_rows(&tx, id)?;
         tx.commit()?;
         Ok(existed)
@@ -329,6 +345,43 @@ impl Store {
         let mut runs = Vec::new();
         for row in rows {
             runs.push(row?.into_run()?);
+        }
+        Ok(runs)
+    }
+
+    /// [`Store::list_runs`] with each run's worktree, `None` for a run without one, in one query
+    /// for `agent/list` (PLX-450).
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored id or timestamp is corrupt.
+    pub fn list_runs_with_worktrees(
+        &self,
+        project: Option<Uuid>,
+    ) -> Result<Vec<(Run, Option<Worktree>)>, StoreError> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT r.*, w.id, w.repo_path, w.path, w.branch, w.base, w.git_dir, w.base_dirty,
+                    w.created_at
+             FROM (SELECT {COLUMNS} FROM runs WHERE ?1 IS NULL OR project_id = ?1) AS r
+             LEFT JOIN worktrees AS w ON w.id = r.id
+             ORDER BY r.created_at ASC, r.id ASC"
+        ))?;
+        // The worktree's columns follow the run's.
+        let start = COLUMNS.split(',').count();
+        let rows = stmt.query_map(params![project.map(|id| id.to_string())], |row| {
+            let worktree = match row.get::<_, Option<String>>(start)? {
+                Some(_) => Some(RawWorktree::at(row, start)?),
+                None => None,
+            };
+            Ok((RawRun::from_row(row)?, worktree))
+        })?;
+        let mut runs = Vec::new();
+        for row in rows {
+            let (run, worktree) = row?;
+            runs.push((
+                run.into_run()?,
+                worktree.map(RawWorktree::into_worktree).transpose()?,
+            ));
         }
         Ok(runs)
     }
@@ -379,9 +432,7 @@ impl Store {
     /// [`StoreError::NotFound`] if no run has `id`, in which case nothing is written, or a
     /// database error.
     pub fn accept_run(&mut self, id: Uuid, state: &RunState) -> Result<Run, StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         let run = update(&tx, id, state)?;
         tx.execute(
             "DELETE FROM worktrees WHERE id = ?1",
@@ -389,6 +440,32 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(run)
+    }
+
+    /// Moves run `id` into Project `project` as the child of its coordinator `parent` (decision
+    /// 0042): a thread made into a Project's child. Like a child the Project starts, it wakes
+    /// `parent` when a CLI process of its ends and asks through the inbox, so `notify_parent` and
+    /// `approvals` are set. Returns the updated row.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::NotFound`] if no run has `id`, or a database error.
+    pub fn join_project(&self, id: Uuid, project: Uuid, parent: Uuid) -> Result<Run, StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE runs SET project_id = ?2, parent = ?3, notify_parent = 1, approvals = 1,
+                             updated_at = ?4
+             WHERE id = ?1",
+            params![
+                id.to_string(),
+                project.to_string(),
+                parent.to_string(),
+                timestamp::now()
+            ],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::NotFound { id });
+        }
+        fetch(&self.conn, id)?.ok_or(StoreError::NotFound { id })
     }
 }
 
@@ -441,9 +518,9 @@ pub(crate) fn insert_run(
                            account_id, status, session_id, error, commit_sha,
                            files_changed, insertions, deletions, created_at, updated_at,
                            coordinator_thread, model, effort, permission, approvals, checkout,
-                           context_window, fast, parent)
+                           context_window, fast, parent, notify_parent, explore)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16,
-                 ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+                 ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
          ON CONFLICT (id) DO NOTHING",
         params![
             id.to_string(),
@@ -470,6 +547,8 @@ pub(crate) fn insert_run(
             fields.context_window,
             fields.fast,
             fields.parent.map(|id| id.to_string()),
+            fields.notify_parent,
+            fields.explore,
         ],
     )?;
     if inserted == 0 {
@@ -485,7 +564,16 @@ pub(crate) fn delete_run_rows(conn: &Connection, id: Uuid) -> Result<bool, Store
     let key = id.to_string();
     let existed = conn.execute("DELETE FROM runs WHERE id = ?1", params![key])? > 0;
     conn.execute("DELETE FROM worktrees WHERE id = ?1", params![key])?;
-    for table in ["events", "turns", "images", "wakes", "queued"] {
+    for table in [
+        "events",
+        "turns",
+        "images",
+        "wakes",
+        "queued",
+        "questions",
+        "landings",
+        "thread_text",
+    ] {
         conn.execute(
             &format!("DELETE FROM {table} WHERE run_id = ?1"),
             params![key],

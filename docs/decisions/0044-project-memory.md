@@ -35,7 +35,7 @@ A thread starts from zero. Each Project has a context folder (0005), where the c
 
 ### Format
 
-- One Markdown file per entry, `memory/<kind>/<slug>.md`, whose first lines are its kind, title, source (the run or message it came from), date, and writer. Knowledge is `knowledge/<slug>.md`, the brief `brief.md`, and history `history/<run id>.md`. Files keep 0005's mirroring and let the user edit them anywhere. The context folder accepts these folders, where today it takes only one flat file name.
+- One Markdown file per entry, `memory/<kind>/<slug>.md`, whose first lines are its kind, title, source (the run or message it came from), date, and writer. Knowledge is `knowledge/<slug>.md`, the brief `brief.md`, and history `history/<run id>.md`. `proposals/<slug>.md` holds both kinds of proposal (PLX-405): in a Project's folder, a child's, which names the scope it is for and waits there until the coordinator's next wake-up carries it, and in a repo's folder, a plain thread's, which waits for the user. Files keep 0005's mirroring and let the user edit them anywhere. The context folder accepts these folders, where today it takes only one flat file name.
 - The index is built by plxd from the entries' titles: You, then Repo, then Project, capped at 8 KiB. Over the cap, it ends with a note to read the rest, and the coordinator's next wake-up asks it to merge entries.
 
 ### Who writes

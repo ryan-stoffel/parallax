@@ -6,24 +6,23 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use parallax_protocol::{CoordinatorThreadId, ProjectId};
 use serde_json::Value;
 use tempfile::TempDir;
 
 use super::stream::{Ask, Step, Translator};
 use super::{
-    ClaudeBackend, EXIT_PLAN_MODE, NO_WRITE_ARGS, PLAN_WORKER_TOOL_LIST, PLAN_WORKSPACE_WRITE_ARGS,
-    PROMPT_TOOL_ARGS, TODO_TOOLS, WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS,
-    no_write_settings, write_env_file,
+    BYPASS_PERMISSION_MODE, ClaudeBackend, EXIT_PLAN_MODE, NO_WRITE_ARGS, PLAN_WORKER_TOOL_LIST,
+    PLAN_WORKSPACE_WRITE_ARGS, PROMPT_TOOL_ARGS, TODO_TOOLS, WORKER_TOOL_LIST, WORKER_TOOLS,
+    WORKSPACE_WRITE_ARGS, no_write_settings, write_env_file,
 };
 use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
 use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
 use crate::backend::{
-    AccountRef, AgentEffort, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend,
-    CoordinatorTools, Credential, Decision, Event, EventStream, FailureKind, FollowUp,
-    ImageMediaType, LimitStatus, LimitWindow, ModelUsage, Outcome, PromptImage, Resume, RunId,
-    RunRequest, SendError, StartError, Started, ThreadTools, TodoItem, TodoStatus, ToolPolicy,
-    ToolStatus, TurnId, Usage, WarningKind, WorkerSandbox,
+    AccountRef, AgentEffort, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend, Credential,
+    Decision, Event, EventStream, FailureKind, FollowUp, ImageMediaType, LimitStatus, LimitWindow,
+    ModelUsage, Outcome, PromptImage, Resume, RunId, RunRequest, SendError, StartError, Started,
+    SubagentStatus, ThreadTools, TodoItem, TodoStatus, ToolPolicy, ToolStatus, TurnId, Usage,
+    WarningKind, WorkerSandbox,
 };
 use crate::mcp;
 use crate::paths::DataDir;
@@ -48,6 +47,7 @@ fn fixture(name: &str) -> &'static str {
         "malformed" => include_str!("fixtures/malformed.jsonl"),
         "follow-up-folded" => include_str!("fixtures/follow-up-folded.jsonl"),
         "follow-up-turns" => include_str!("fixtures/follow-up-turns.jsonl"),
+        "follow-up-late-report" => include_str!("fixtures/follow-up-late-report.jsonl"),
         "held" => include_str!("fixtures/held.jsonl"),
         "cancel" => include_str!("fixtures/cancel.jsonl"),
         "stubborn" => include_str!("fixtures/stubborn.jsonl"),
@@ -62,6 +62,7 @@ fn fixture(name: &str) -> &'static str {
         "worker-exit-plan" => include_str!("fixtures/worker-exit-plan.jsonl"),
         "worker-tasks" => include_str!("fixtures/worker-tasks.jsonl"),
         "coordinator-tasks" => include_str!("fixtures/coordinator-tasks.jsonl"),
+        "recorded" => include_str!("fixtures/recorded.jsonl"),
         other => panic!("no fixture {other}"),
     }
 }
@@ -408,11 +409,10 @@ async fn a_coordinator_runs_in_its_mode_without_the_subprocess_scrub() {
     let fake = Fake::new("tool-call");
     let cwd = fake.root();
     let request = RunRequest {
-        coordinator_tools: Some(CoordinatorTools {
+        coordinator_tools: Some(ThreadTools {
             program: PathBuf::from("/Applications/Parallax.app/Contents/Resources/plxd"),
             data_dir: cwd.join("data"),
-            project: ProjectId::generate(),
-            thread: CoordinatorThreadId::generate(),
+            run: RunId::generate(),
         }),
         ..request(&cwd)
     };
@@ -1570,6 +1570,69 @@ async fn a_follow_up_can_be_its_own_turn_and_stdin_waits_for_it() {
     );
 }
 
+/// PLX-523: a follow-up the CLI answers before the writer reports writing it, as Claude Code does
+/// a local slash command, still starts and ends its turn, and stdin then closes.
+#[tokio::test]
+async fn a_follow_up_answered_before_its_write_is_reported_still_ends() {
+    crate::backend::REPORT_STALL.set(Duration::from_millis(300));
+    let fake = Fake::new("follow-up-late-report");
+    let Started { run, mut events } = launch(&fake.backend, request(&fake.root())).await;
+    assert!(matches!(
+        next(&mut events).await,
+        Event::SessionStarted { .. }
+    ));
+    run.send(FollowUp {
+        turn_id: turn(TURN_2),
+        text: "And now the docs.".into(),
+        images: Vec::new(),
+        steer: false,
+    })
+    .unwrap();
+    let all = rest(&mut events).await;
+    let turns: Vec<&Event> = all
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::TurnStarted { .. }
+                    | Event::TurnFinished { .. }
+                    | Event::Text { .. }
+                    | Event::RateLimit(_)
+            )
+        })
+        .collect();
+    let rate_limit = all
+        .iter()
+        .find(|event| matches!(event, Event::RateLimit(_)))
+        .expect("the rate-limit event")
+        .clone();
+    let text = |id: &str, text: &str| Event::Text {
+        message_id: Some(id.into()),
+        text: text.into(),
+    };
+    assert_eq!(
+        turns,
+        [
+            &text("msg_01Ft1", "First answer."),
+            &Event::TurnFinished {
+                turn_id: Some(turn(TURN_1)),
+                result: Some("First answer.".into())
+            },
+            // Outside any turn, so it doesn't start the follow-up's.
+            &rate_limit,
+            &Event::TurnStarted {
+                turn_id: Some(turn(TURN_2))
+            },
+            &text("msg_01Ft2", "Second answer."),
+            &Event::TurnFinished {
+                turn_id: Some(turn(TURN_2)),
+                result: Some("Second answer.".into())
+            },
+        ]
+    );
+    assert!(matches!(outcome(&all), Outcome::Completed { .. }));
+}
+
 #[tokio::test]
 async fn images_go_before_the_text_as_base64_blocks_and_a_message_of_images_alone_has_no_text() {
     let png = PromptImage {
@@ -1999,7 +2062,7 @@ fn a_coordinator_and_a_bypass_worker_allow_the_todo_tools_in_every_mode() {
             .map(|(at, _)| args[at + 1].clone())
             .collect()
     };
-    let coordinator_list = format!("{},{todo}", mcp::ALLOWED_TOOLS.join(","));
+    let coordinator_list = format!("{},{todo}", mcp::thread::ALLOWED_TOOLS.join(","));
     for permission in [
         None,
         Some(AgentPermission::Edit),
@@ -2360,11 +2423,10 @@ fn retries_and_rejected_limits_name_a_failed_turn_s_kind_until_it_ends() {
 /// A coordinator's request at `cwd`, whose plxd tools make it full Claude Code (0027).
 fn coordinator(cwd: &Path) -> RunRequest {
     RunRequest {
-        coordinator_tools: Some(CoordinatorTools {
+        coordinator_tools: Some(ThreadTools {
             program: PathBuf::from("/Applications/Parallax.app/Contents/Resources/plxd"),
             data_dir: cwd.join("data"),
-            project: ProjectId::generate(),
-            thread: CoordinatorThreadId::generate(),
+            run: RunId::generate(),
         }),
         ..request(cwd)
     }
@@ -3191,4 +3253,131 @@ async fn a_held_cli_waits_after_its_turn_for_the_next_message() {
         result: Some("Second answer.".into()),
     }));
     assert!(matches!(outcome(&all), Outcome::Completed { .. }));
+}
+
+/// PLX-382: a real run's two Agent subagents. Every line with a `parent_tool_use_id` is the
+/// subagent's, tagged with that call, its type, and on its own messages its model, so none of
+/// its calls or text reach the parent's flow. Each ends with its `task_notification`'s summary.
+#[test]
+fn a_subagent_s_lines_are_tagged_with_the_call_that_started_it() {
+    const APPLE: &str = "toolu_01VQi3sYAiLsdpzR4SwrsTPq";
+    const PEAR: &str = "toolu_017AYTwajJNAA67dec3ZXKC2";
+    const HAIKU: &str = "claude-haiku-4-5-20251001";
+    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none")
+        .with_thread(true)
+        .with_permission_mode(BYPASS_PERMISSION_MODE);
+    let events: Vec<Event> = include_str!("fixtures/subagents.jsonl")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .flat_map(|line| translator.line(line.as_bytes()))
+        .filter_map(|step| match step {
+            Step::Emit(event) => Some(event),
+            Step::Violation(failure) => panic!("{failure:?}"),
+            _ => None,
+        })
+        .collect();
+
+    let own_calls: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::ToolCall { call_id, name, .. } => {
+                assert_eq!(name, "Agent");
+                Some(call_id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(own_calls, [APPLE, PEAR]);
+    assert_eq!(
+        texts(&events).last(),
+        Some(
+            &"Both agents completed.\n\n**Agent 1** (`echo apple`): `apple`\n\n**Agent 2** (`echo pear`): `pear`"
+        )
+    );
+
+    let of = |call: &str| -> Vec<(Option<&str>, Option<&str>, &Event)> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Subagent {
+                    call_id,
+                    agent_type,
+                    model,
+                    event,
+                } if call_id == call => Some((agent_type.as_deref(), model.as_deref(), &**event)),
+                _ => None,
+            })
+            .filter(|(.., event)| !matches!(event, Event::Reasoning { .. }))
+            .collect()
+    };
+    let apple = of(APPLE);
+    let general = Some("general-purpose");
+    assert!(
+        matches!(
+            apple.as_slice(),
+            [
+                (agent, Some(HAIKU), Event::ToolCall { name, input, .. }),
+                (agent2, None, Event::ToolResult { status: ToolStatus::Ok, output: Some(out), .. }),
+                (agent3, Some(HAIKU), Event::Text { text, .. }),
+            ] if *agent == general && *agent2 == general && *agent3 == general
+                && name == "Bash" && input["command"] == "echo apple" && out == "apple"
+                && text == "apple"
+        ),
+        "{apple:#?}"
+    );
+    assert_eq!(of(PEAR).len(), 3);
+
+    let finished: Vec<&Event> = events
+        .iter()
+        .filter(|event| matches!(event, Event::SubagentFinished { .. }))
+        .collect();
+    assert_eq!(
+        finished,
+        [
+            &Event::SubagentFinished {
+                call_id: PEAR.into(),
+                status: SubagentStatus::Completed,
+                summary: Some("Output:\n\n```\npear\n```".into()),
+            },
+            &Event::SubagentFinished {
+                call_id: APPLE.into(),
+                status: SubagentStatus::Completed,
+                summary: Some("apple".into()),
+            },
+        ]
+    );
+}
+
+/// PLX-382: a background command's `task_notification` names no subagent, so it ends none.
+#[test]
+fn only_a_subagent_s_task_notification_ends_a_subagent() {
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+    let started = br#"{"type":"system","subtype":"task_started","task_id":"b1","tool_use_id":"toolu_bash","description":"sleep","task_type":"local_bash"}"#;
+    let ended = br#"{"type":"system","subtype":"task_notification","task_id":"b1","tool_use_id":"toolu_bash","status":"completed","summary":"done"}"#;
+    assert_eq!(translator.line(started), []);
+    assert_eq!(translator.line(ended), []);
+}
+
+/// A real session, recorded with `PLXD_RECORD_CLI` (PLX-493), replays to its snapshot: a
+/// subagent's tool call, a Write that asks first, and the reply.
+#[tokio::test]
+async fn a_recorded_session_replays_to_its_snapshot() {
+    let fake = Fake::new("recorded");
+    let request = RunRequest {
+        policy: ToolPolicy::WorkspaceWrite,
+        sandbox: Some(worker_sandbox(&fake.root())),
+        permission: Some(AgentPermission::Manual),
+        model: Some("claude-haiku-4-5".into()),
+        approvals: true,
+        thread: true,
+        ..request(&fake.root())
+    };
+    crate::backend::record::assert_replays(
+        fake.backend.start(request).unwrap(),
+        Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/backend/claude/fixtures/recorded.events.jsonl"
+        )),
+    )
+    .await;
 }

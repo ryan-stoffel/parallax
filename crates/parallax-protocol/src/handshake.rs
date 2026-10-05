@@ -43,7 +43,8 @@ pub struct InitializeParams {
     pub protocol: ProtocolRange,
     /// Who is connecting.
     pub client: ClientInfo,
-    /// What the client supports.
+    /// What the client supports. `resyncNotice` (PLX-455): end a subscription that falls behind
+    /// with `events/resync` instead of closing the connection.
     pub capabilities: Capabilities,
 }
 

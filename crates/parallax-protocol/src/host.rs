@@ -18,6 +18,39 @@ pub struct HostHealthResult {
     pub store: StoreState,
     /// Agents running on this host. Always 0 before M3.
     pub running_agents: u32,
+    /// How busy the store's job queue is (PLX-445). An older plxd leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub queues: Option<HostQueues>,
+}
+
+/// The job queue of plxd's database thread, which runs its jobs one at a time.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HostQueues {
+    /// The project store's thread, which writes rows and their events (0052).
+    pub store: QueueStats,
+    /// The event log's writer thread, which a plxd before PLX-481 had. Its events are now written
+    /// by the store's jobs, so this is always zero.
+    pub events: QueueStats,
+}
+
+/// Counts and times for one job queue since plxd started. Divide a total by `jobs` for the average.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueStats {
+    /// Jobs sent and not yet started.
+    pub queued: u64,
+    /// Jobs started.
+    pub jobs: u64,
+    /// The longest a job sat in the queue before its thread took it, in microseconds.
+    pub max_wait_micros: u64,
+    /// Every started job's wait, added up, in microseconds.
+    pub total_wait_micros: u64,
+    /// The longest a job took to run, in microseconds.
+    pub max_run_micros: u64,
+    /// Every finished job's run time, added up, in microseconds. It leaves out the one running.
+    pub total_run_micros: u64,
 }
 
 /// The state of plxd's project store.

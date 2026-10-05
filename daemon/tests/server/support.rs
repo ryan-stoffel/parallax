@@ -350,6 +350,8 @@ pub fn create_params(dir: &Path, name: &str) -> ProjectCreateParams {
         repo_path: repo(dir, name),
         icon: None,
         permission: None,
+        autonomy: None,
+        base_branch: None,
     }
 }
 

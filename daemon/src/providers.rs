@@ -295,6 +295,7 @@ impl Providers {
                     args: Vec::new(),
                     env: Vec::new(),
                     models: Vec::new(),
+                    reserve: None,
                 };
                 stored.push(Stored {
                     instance,
@@ -344,6 +345,39 @@ impl Providers {
             providers,
             checked_at: Timestamp::now(),
         }
+    }
+
+    /// Every instance with what placing a Project's child needs (0046), from what plxd last found
+    /// without probing anything, since a probe can take seconds: an instance's last probe however
+    /// old, or for a built-in agent the detector's fresh answer. One never probed has no sign-in
+    /// or models.
+    pub async fn known(&self, detector: &CliDetector) -> Vec<ProviderInfo> {
+        let stored = self.stored.lock().await.clone();
+        let mut known = Vec::with_capacity(stored.len());
+        for entry in stored {
+            let cached = self
+                .cache
+                .lock()
+                .await
+                .get(&entry.instance.id)
+                .map(|(_, found)| found.clone());
+            let found = match cached {
+                Some(found) => found,
+                None => match detected_cli(&entry.instance.id) {
+                    Some(cli) if entry.instance.program.is_none() => detector
+                        .cached(cli)
+                        .await
+                        .map(|detected| Found {
+                            signed_in: detected.signed_in,
+                            ..Found::default()
+                        })
+                        .unwrap_or_default(),
+                    _ => Found::default(),
+                },
+            };
+            known.push(info(entry.instance, found));
+        }
+        known
     }
 
     /// Adds `instance`, or replaces the one with its id, keeping stored secrets it sends no value
@@ -724,7 +758,13 @@ fn build(
             if overrides.program.is_none() && preset.program != "claude" {
                 overrides.program = Some(preset.program.into());
             }
-            Arc::new(ClaudeBackend::new(launcher).with_overrides(overrides))
+            let backend = ClaudeBackend::new(launcher).with_overrides(overrides);
+            // A model service runs a Project's agents only in Bypass (0042).
+            if preset.models_url.is_some() {
+                Arc::new(backend.bypass_only_in_projects())
+            } else {
+                Arc::new(backend)
+            }
         }
         Driver::Codex => Arc::new(CodexBackend::new(launcher).with_overrides(overrides)),
         Driver::Acp(agent) => Arc::new(AcpBackend::new(
@@ -782,6 +822,10 @@ impl Backend for WithSecrets {
 
     fn permissions(&self) -> &[AgentPermission] {
         self.plain.permissions()
+    }
+
+    fn project_permissions(&self) -> &[AgentPermission] {
+        self.plain.project_permissions()
     }
 
     fn full_thread(&self) -> bool {
@@ -1122,13 +1166,18 @@ fn check(instance: &ProviderInstance) -> Result<(), ErrorObject> {
             )));
         }
     }
+    if instance.reserve.is_some_and(|reserve| reserve > 100) {
+        return Err(ErrorObject::invalid_params(
+            "a reserve is a percent from 0 to 100",
+        ));
+    }
     Ok(())
 }
 
 /// What `providers/list` says about one instance.
 fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
     let preset = preset(instance.kind);
-    let (permissions, efforts, coordinator) = match preset.as_ref().map(|p| &p.driver) {
+    let (permissions, efforts) = match preset.as_ref().map(|p| &p.driver) {
         Some(Driver::Claude) => (
             vec![
                 AgentPermission::Auto,
@@ -1137,8 +1186,6 @@ fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
                 AgentPermission::Plan,
                 AgentPermission::Bypass,
             ],
-            true,
-            // Any Claude Code instance can run a Project's coordinator (0004).
             true,
         ),
         Some(Driver::Codex) => (
@@ -1149,11 +1196,15 @@ fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
                 AgentPermission::Bypass,
             ],
             true,
-            false,
         ),
-        Some(Driver::Acp(agent)) => (agent.permissions(), false, false),
-        None => (vec![AgentPermission::Edit], false, false),
+        Some(Driver::Acp(agent)) => (agent.permissions(), false),
+        None => (vec![AgentPermission::Edit], false),
     };
+    // A kind with Auto or Bypass can run a Project's coordinator (0042). A model service's Auto
+    // isn't offered in a Project, but its Bypass is.
+    let coordinator = permissions
+        .iter()
+        .any(|p| matches!(p, AgentPermission::Auto | AgentPermission::Bypass));
     // The login runs the instance's own program where it is the kind's. An agent without a
     // preset login says how it signs in.
     let login = preset.filter(|p| !p.login.is_empty()).map(|p| {
@@ -1269,6 +1320,7 @@ mod tests {
                 },
             ],
             models: Vec::new(),
+            reserve: None,
         }
     }
 

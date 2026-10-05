@@ -1,27 +1,30 @@
-//! A project's coordinator chat (PLX-41, decision 0024): a no-write run with plxd's MCP tools
-//! bound to the project and to the run's own id as its coordinator thread (0019). The Claude
-//! backend runs it as full Claude Code (0027) in the project's permission mode (0042).
+//! A project's coordinator chat (PLX-41, decision 0024): a no-write run whose coordinator thread is
+//! its own id, with a thread's Parallax tools bound to that run (0041, PLX-380). Any backend whose
+//! kind has the project's permission mode runs it, as its full CLI in that mode (0042).
 //!
 //! `project/start` records it like any run, without a worktree row, and hands it to the same
 //! actor as a worker's, so `agent/send`, `agent/cancel`, `agent/events`, the `agent.*` events, and
-//! resuming after a restart work unchanged. The actor runs it in the project's repository, as
-//! Claude Code runs in the folder it was started in (0027). A project has one live coordinator: a
-//! new run replaces the last one unless that one is still starting or running.
+//! resuming after a restart work unchanged. The actor runs it in a detached worktree at the
+//! integration branch's tip, refreshed before each CLI process, so its edits reach neither the
+//! user's checkout nor the branch (0042). A project has one live coordinator: a new run replaces
+//! the last one unless that one is still starting or running, and takes over the same worktree.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
-use parallax_protocol::{AgentRun, ErrorKind, ProjectPermission, ProjectStartParams, Role, RunId};
+use parallax_protocol::{
+    AgentRun, ErrorKind, ProjectAutonomy, ProjectPermission, ProjectStartParams, Role, RunId,
+};
 use parallax_store::{RunFields, RunState};
 use tracing::info;
 use uuid::Uuid;
 
 use super::actor::Actor;
-use super::convert::{NO_WRITE, RUNNING, STARTING, agent_run, option_name};
-use super::worker::worker_unavailable;
-use super::{RunOptions, existing, log_started, prepare, requested_account, store, store_error};
-use crate::backend::Backend;
+use super::convert::{NO_WRITE, RUNNING, STARTING, option_name};
+use super::{RunOptions, existing, prepare, requested_account, stage_started, store, store_error};
+use crate::methods::question::level;
 use crate::server::Daemon;
 
 /// The coordinator's instructions, sent ahead of the user's first message.
@@ -43,7 +46,9 @@ pub(crate) async fn start(
         // It runs in the project's mode instead (0042).
         permission: _,
         images,
-        approvals,
+        // It asks through the inbox, as every Project child does (0042), and so gets plxd's tools
+        // on Codex and ACP, which attach them only with `approvals`.
+        approvals: _,
     } = params;
     let _starting = daemon.agents.start_guard(run_id).await;
     // An unknown project has no mode, and fails below with `projectNotFound`.
@@ -63,13 +68,15 @@ pub(crate) async fn start(
         coordinator_thread: Some(Uuid::from(run_id)),
         // Its own thread, never its own parent (0041).
         parent: None,
+        notify_parent: false,
         model: options.model.clone(),
         effort: options.effort.and_then(option_name),
         permission: options.permission.and_then(option_name),
         context_window: None,
         fast: None,
-        approvals,
+        approvals: true,
         checkout: false,
+        explore: false,
     };
     if let Some(run) = existing(&daemon, run_id, &fields).await? {
         return Ok(run);
@@ -87,17 +94,16 @@ pub(crate) async fn start(
         ..RunState::default()
     };
     // One store job, so two starts with different run ids can't both find no live coordinator.
-    let row = store(&daemon, move |db| {
-        if db
+    let (row, autonomy) = store(&daemon, move |db| {
+        let Some(project_row) = db
             .get_project(project.into())
             .map_err(|e| store_error(&e))?
-            .is_none()
-        {
+        else {
             return Err(ErrorObject::parallax(
                 ErrorKind::ProjectNotFound,
                 format!("no project has id {project}"),
             ));
-        }
+        };
         if let Some(current) = newest(db, project.into())?
             && (current.state.status == STARTING || current.state.status == RUNNING)
         {
@@ -110,34 +116,25 @@ pub(crate) async fn start(
                 ),
             ));
         }
-        db.create_run(run_id.into(), &fields, &state)
-            .map_err(|e| store_error(&e))
+        let row = db
+            .create_run(run_id.into(), &fields, &state)
+            .map_err(|e| store_error(&e))?;
+        stage_started(db, &row, None)?;
+        Ok((row, crate::store::project_autonomy(&project_row.autonomy)))
     })
     .await?;
-    log_started(&daemon, project, agent_run(&row, None)?).await;
     info!(run = %run_id, project = %project, backend = %row.fields.backend, "created a project's coordinator");
 
     let mut actor = Actor::new(Arc::clone(&daemon), row, None, HashMap::new());
-    let message = first_message(&prompt, &repo_path);
+    let message = first_message(&prompt, &repo_path, autonomy);
     actor
         .launch(prepared, message, images, None, None, None)
         .await;
     // The actor owns a live CLI from here on, so it is spawned whatever the snapshot says.
     let run = actor.snapshot();
     daemon.agents.spawn(actor);
+    super::wake::hand_over(&daemon, project.into(), run_id);
     run
-}
-
-/// Refuses a backend that can't run a coordinator (0004: Claude Code and Codex; Codex's is
-/// PLX-39).
-pub(super) fn check_backend(backend: &dyn Backend) -> Result<(), ErrorObject> {
-    if backend.capabilities().coordinator {
-        return Ok(());
-    }
-    Err(worker_unavailable(format!(
-        "the {} backend can't run a project's coordinator yet; choose a Claude Code account",
-        backend.name()
-    )))
 }
 
 /// `project`'s coordinator: its newest no-write run. `project/start` with a new run id replaces it
@@ -169,10 +166,31 @@ fn newest(
         .find(|run| run.fields.policy == NO_WRITE))
 }
 
-/// The coordinator's first message: its instructions, where it is, then the user's message.
-pub(super) fn first_message(message: &str, repo: &str) -> String {
+/// The user's first message to the coordinator of a Project made from `threads`
+/// (`project/fromThreads`, 0042): read them and propose a brief for the user to save.
+pub(crate) fn from_threads_prompt(threads: &[RunId]) -> String {
+    let mut list = String::new();
+    for id in threads {
+        let _ = writeln!(list, "- {id}");
+    }
     format!(
-        "{INSTRUCTIONS}\nThe project's repository is {repo}, your working directory: the user's \
-         own checkout, uncommitted changes included.\n\nThe user's message:\n{message}"
+        "I made this Project from these threads, which are now your children:\n{list}\nRead each \
+         with thread_read. Then draft the Project's brief: its goal, scope, and constraints, in a \
+         few lines, from what the threads were doing. Propose it with memory_propose (kind brief, \
+         project scope) for me to save or discard, and start no new work until I save it."
+    )
+}
+
+/// The coordinator's first message: its instructions, where it is, the Project's autonomy level
+/// (0043), then the user's message.
+pub(super) fn first_message(message: &str, repo: &str, autonomy: ProjectAutonomy) -> String {
+    format!(
+        "{INSTRUCTIONS}\nThe project's repository is {repo}, the user's own checkout: leave it \
+         alone. Read the code in your working directory instead, a copy of the integration \
+         branch's latest commit that Parallax resets each time it starts you, so it doesn't have \
+         the user's uncommitted changes, and nothing written there is kept.\n\n{} Each question \
+         Parallax wakes you with names the level as it is then, since the user can change \
+         it.\n\nThe user's message:\n{message}",
+        level(autonomy)
     )
 }

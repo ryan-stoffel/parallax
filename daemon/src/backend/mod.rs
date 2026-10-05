@@ -25,6 +25,7 @@ pub mod event;
 pub mod fake;
 pub mod key_account;
 pub mod process;
+pub mod record;
 pub mod run_temp;
 pub mod sandbox;
 
@@ -47,7 +48,8 @@ use zeroize::Zeroize;
 pub use self::commands::CommandsProbe;
 pub use self::event::{
     ApprovalRequest, CumulativeUsage, Event, ExitInfo, Failure, FailureKind, LimitStatus,
-    LimitWindow, ModelUsage, Outcome, TodoItem, TodoStatus, ToolStatus, Usage, WarningKind,
+    LimitWindow, ModelUsage, Outcome, SubagentStatus, TodoItem, TodoStatus, ToolStatus, Usage,
+    WarningKind,
 };
 use self::process::{CancelPolicy, Signals, SpawnError};
 pub use self::sandbox::WorkerSandbox;
@@ -85,6 +87,11 @@ pub trait Backend: Send + Sync {
     /// means [`AgentPermission::Edit`].
     fn permissions(&self) -> &[AgentPermission] {
         &[]
+    }
+
+    /// The [`Backend::permissions`] a run in a Project may take (0042). All of them by default.
+    fn project_permissions(&self) -> &[AgentPermission] {
+        self.permissions()
     }
 
     /// The vendor CLI it runs, which plxd checks before starting a worker on it (0013), whatever
@@ -220,9 +227,10 @@ pub struct RunRequest {
     pub context_window: Option<u32>,
     /// Fast mode on or off, or the CLI's default. Only for a backend with [`Backend::fast_mode`].
     pub fast: Option<bool>,
-    /// plxd's MCP tools, for a coordinator's [`ToolPolicy::NoWrite`] run only (#195, 0019).
-    /// Routing drops them for every other role, and a backend refuses them on a worker.
-    pub coordinator_tools: Option<CoordinatorTools>,
+    /// plxd's host-wide thread tools bound to a coordinator's own run, for its
+    /// [`ToolPolicy::NoWrite`] run only (0041, PLX-380). Routing drops them for every other role,
+    /// and a backend refuses them on a worker.
+    pub coordinator_tools: Option<ThreadTools>,
     /// plxd's host-wide thread tools, for a normal thread's run only (0041). Routing drops them
     /// for every other run, and Claude Code attaches them only to a thread that runs as full
     /// Claude Code ([`claude::unsandboxed`]), since the server runs outside any sandbox.
@@ -231,45 +239,31 @@ pub struct RunRequest {
     /// call asks through [`Event::ApprovalRequested`] and [`Run::answer`]. Without it, the CLI
     /// runs as it did before, denying what would prompt.
     pub approvals: bool,
-    /// A normal thread's run (0017), which the user talks to directly. With [`Self::approvals`],
-    /// Claude Code runs it as full Claude Code in every mode, with no worker sandbox (0034);
-    /// without, it keeps the sandbox. A coordinator's subagents leave it false.
+    /// A thread's run (0017): a normal thread or a Project's child (0042), but not a coordinator.
+    /// With [`Self::approvals`], Claude Code runs it as full Claude Code in every mode, with no
+    /// worker sandbox (0034); without, it keeps the sandbox.
     pub thread: bool,
 }
 
-/// How a coordinator's CLI launches `plxd mcp` (0019): the server is bound to one project and one
-/// coordinator thread by these arguments, which plxd sets and the model never sees or chooses.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CoordinatorTools {
-    /// The `plxd` executable that serves the tools.
-    pub program: PathBuf,
-    /// plxd's data folder, which tells `plxd mcp` where the socket is.
-    pub data_dir: PathBuf,
-    /// The only project the tools can reach.
-    pub project: parallax_protocol::ProjectId,
-    /// The coordinator thread that runs spawned through the tools are tagged with.
-    pub thread: parallax_protocol::CoordinatorThreadId,
-}
+impl RunRequest {
+    /// Whether a backend that runs only full agents, Codex and ACP agents, takes it: a thread, or
+    /// a coordinator, which runs there as a thread does (0042).
+    #[must_use]
+    pub fn full_agent(&self) -> bool {
+        self.thread || self.coordinator_tools.is_some()
+    }
 
-impl CoordinatorTools {
-    /// `{"mcpServers": {"plxd": ...}}`, for a CLI's `--mcp-config`: the one stdio server, with
-    /// its program and arguments.
-    ///
-    /// # Errors
-    ///
-    /// [`StartError::Invalid`] if the program's or the data folder's path isn't UTF-8.
-    pub fn mcp_config(&self) -> Result<serde_json::Value, StartError> {
-        let (project, thread) = (self.project.to_string(), self.thread.to_string());
-        mcp_config(
-            &self.program,
-            &self.data_dir,
-            &["--project", &project, "--coordinator-thread", &thread],
-        )
+    /// Its Parallax tools on such a backend: a thread's, or a coordinator's (0041).
+    #[must_use]
+    pub fn full_agent_tools(&self) -> Option<&ThreadTools> {
+        self.thread_tools
+            .as_ref()
+            .or(self.coordinator_tools.as_ref())
     }
 }
 
-/// How a normal thread's CLI launches `plxd mcp --thread` (0041): the server is bound to the
-/// thread's own run, which plxd sets and the model never sees or chooses, so a thread it
+/// How a thread's CLI, or a coordinator's, launches `plxd mcp --thread` (0041): the server is
+/// bound to the run's own id, which plxd sets and the model never sees or chooses, so a thread it
 /// launches records it as the parent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThreadTools {
@@ -282,7 +276,8 @@ pub struct ThreadTools {
 }
 
 impl ThreadTools {
-    /// `{"mcpServers": {"plxd": ...}}`, for a CLI's `--mcp-config`, as [`CoordinatorTools`]'s.
+    /// `{"mcpServers": {"plxd": ...}}`, for a CLI's `--mcp-config`: the one stdio server, with
+    /// its program and arguments.
     ///
     /// # Errors
     ///
@@ -437,6 +432,24 @@ pub struct FollowUp {
     pub steer: bool,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How long a test's stdin writers wait between writing a follow-up and reporting it, so the
+    /// CLI can answer it before its driver hears it was written (PLX-523). Per thread, so it
+    /// reaches the writers of one `#[tokio::test]` on its current-thread runtime.
+    pub(crate) static REPORT_STALL: std::cell::Cell<std::time::Duration> =
+        const { std::cell::Cell::new(std::time::Duration::ZERO) };
+}
+
+/// A test's stdin writer's pause between writing a follow-up and reporting it.
+#[cfg(test)]
+async fn report_stall() {
+    let stall = REPORT_STALL.get();
+    if !stall.is_zero() {
+        tokio::time::sleep(stall).await;
+    }
+}
+
 /// The answer to a permission request (PLX-222).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Answer {
@@ -558,9 +571,6 @@ pub struct Capabilities {
     pub follow_ups: bool,
     /// [`RunRequest::resume`] works.
     pub resume: bool,
-    /// It can run the coordinator: no-write mode with plxd's MCP tools (0004: Claude Code and
-    /// Codex, not Cursor).
-    pub coordinator: bool,
     /// Its usage includes a cost.
     pub reports_cost: bool,
     /// Its runs report limit windows.

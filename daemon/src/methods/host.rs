@@ -6,10 +6,10 @@ use std::fs;
 use parallax_protocol::framing::MAX_FRAME_BYTES;
 use parallax_protocol::jsonrpc::{ErrorObject, Request};
 use parallax_protocol::{
-    Capabilities, ClientInfo, HostHealthParams, HostHealthResult, HostSettings,
+    Capabilities, ClientInfo, HostHealthParams, HostHealthResult, HostQueues, HostSettings,
     HostSettingsGetParams, HostSettingsSetParams, HostVersionParams, HostVersionResult,
     IncompatibleProtocolDetail, InitializeParams, InitializeProtocol, InitializeResult,
-    ProtocolRange,
+    ProtocolRange, QueueStats, StoreState,
 };
 use tracing::info;
 
@@ -27,6 +27,9 @@ const SYSTEM_VERSION: &str = "/System/Library/CoreServices/SystemVersion.plist";
 pub(crate) struct Session {
     pub protocol: u32,
     pub client: ClientInfo,
+    /// The client declared `resyncNotice`: a subscription that falls behind ends with
+    /// `events/resync` instead of closing the connection (PLX-455).
+    pub resync_notice: bool,
 }
 
 /// `initialize`: agrees on a protocol version, or fails with `incompatibleProtocol`.
@@ -70,6 +73,7 @@ pub(crate) fn initialize(
     let session = Session {
         protocol: version,
         client,
+        resync_notice: capabilities.0.contains_key("resyncNotice"),
     };
     Ok((session, result))
 }
@@ -104,6 +108,21 @@ pub(crate) fn initialize(
 /// `projectPermission` (PLX-394, 0042): a project's `permission`, Auto or Bypass, on `Project`,
 /// `project/create`, and `project/update`, which an older plxd would silently drop. Every run in
 /// the project, its coordinator included, runs in it.
+/// `projectAutonomy` (PLX-403, 0043): a project's `autonomy`, Ask me, Routine, or Full, on
+/// `Project`, `project/create`, and `project/update`, which an older plxd would silently drop. In
+/// Ask me plxd refuses the coordinator's `answer` and sends every question to Needs you.
+/// `integrationBranch` (PLX-409, 0045): `baseBranch` and `integrationBranch` on `Project`,
+/// `baseBranch` on `project/create` and `project/update`, and `explore` on `agent/start` and
+/// `AgentRun`, which an older plxd would silently drop. A run in a Project is cut from its
+/// integration branch's tip.
+/// `projectPlacement` (PLX-413, 0046): `maxChildren` and `allowApiKeys` on `Project` and
+/// `project/update`, and `reserve` on a provider instance, which an older plxd would silently
+/// drop. A Project's child is placed on an instance with room, or waits as `waiting` until one
+/// frees up.
+/// `projectTasks` (PLX-398, 0042): `thread/start` takes `project`, to start a Project's child
+/// under its coordinator, which an older plxd would silently ignore, starting a scratch thread.
+/// `projectFromThreads` (PLX-419, 0042): `project/fromThreads`, which makes a Project from
+/// threads on one repo entry, each with its own worktree.
 /// `threadAttention` (PLX-270, 0033): `thread/update`, `repo/update`, `repo.updated`, and
 /// `seenAt`, `snoozedUntil`, and `lastPromptAt` on `Thread` and `icon` on `Repo`.
 /// `threadLineage` (PLX-369, 0041): `parent`, `forkedFrom`, `title`, and `settled` on `Thread`,
@@ -144,9 +163,22 @@ pub(crate) fn initialize(
 /// `from` and the `interrupted` item, and `pr/link` and `pr/unlink`, which a thread's Parallax
 /// tools use.
 /// `inbox` (PLX-401, 0043): `inbox/list`, `inbox/seen`, and `inbox.added`.
+/// `landing` (PLX-410, 0045): `land/queue`, `land/approve`, `land/sendBack`, and `autoLand` on
+/// `Project` and `project/update`, which an older plxd would silently ignore.
+/// `checks` (PLX-411, 0045): `checks` and `proposedChecks` on `Project` and `project/update`,
+/// which an older plxd would silently ignore, and the checks running after each landing.
 /// `queue` (PLX-370, 0048): `queue/list`, `queue/edit`, `queue/reorder`, `queue/cancel`,
 /// `queue/steer`, and `queue.updated`, and `agent/send` takes `delivery`, which an older plxd
 /// would silently ignore, queueing a steer.
+/// `questions` (PLX-402, 0043): `question/ask`, `question/answer`, `question/escalate`, and
+/// `question/list`.
+/// `memory` (PLX-405, 0044): `memory/list`, `memory/read`, `memory/write`, `memory/delete`, and
+/// `memory/propose`, and shared context paths in 0044's folders.
+/// `agentWait` (PLX-451): `agent/wait`.
+/// `eventFilters` (PLX-453): `events/subscribe` takes `run` and `shell`, which an older plxd
+/// would silently ignore.
+/// `eventsBefore` (PLX-490): `agent/events` takes `before`, to page a run's events newest first,
+/// and answers it with the run and the log's `seq`; an older plxd would page from the start.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -157,13 +189,17 @@ fn capabilities_advertised() -> Capabilities {
         ("accounts".to_owned(), serde_json::Map::new()),
         ("agentClis".to_owned(), serde_json::Map::new()),
         ("agentReview".to_owned(), serde_json::Map::new()),
+        ("agentWait".to_owned(), serde_json::Map::new()),
         ("agents".to_owned(), serde_json::Map::new()),
         ("approvals".to_owned(), serde_json::Map::new()),
         ("autoResume".to_owned(), serde_json::Map::new()),
+        ("checks".to_owned(), serde_json::Map::new()),
         ("checkout".to_owned(), serde_json::Map::new()),
         ("composerMenus".to_owned(), serde_json::Map::new()),
         ("contextAndFast".to_owned(), serde_json::Map::new()),
         ("coordinator".to_owned(), serde_json::Map::new()),
+        ("eventFilters".to_owned(), serde_json::Map::new()),
+        ("eventsBefore".to_owned(), serde_json::Map::new()),
         ("files".to_owned(), serde_json::Map::new()),
         ("git".to_owned(), serde_json::Map::new()),
         (
@@ -173,15 +209,23 @@ fn capabilities_advertised() -> Capabilities {
         ("githubSetup".to_owned(), serde_json::Map::new()),
         ("githubStatus".to_owned(), serde_json::Map::new()),
         ("inbox".to_owned(), serde_json::Map::new()),
+        ("integrationBranch".to_owned(), serde_json::Map::new()),
+        ("landing".to_owned(), serde_json::Map::new()),
+        ("memory".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
         ("prDiff".to_owned(), serde_json::Map::new()),
+        ("projectAutonomy".to_owned(), serde_json::Map::new()),
         ("projectDelete".to_owned(), serde_json::Map::new()),
         ("projectEdit".to_owned(), serde_json::Map::new()),
+        ("projectFromThreads".to_owned(), serde_json::Map::new()),
         ("projectPermission".to_owned(), serde_json::Map::new()),
+        ("projectPlacement".to_owned(), serde_json::Map::new()),
+        ("projectTasks".to_owned(), serde_json::Map::new()),
         ("providers".to_owned(), serde_json::Map::new()),
         ("promptImages".to_owned(), prompt_images),
         ("pullRequests".to_owned(), serde_json::Map::new()),
         ("queue".to_owned(), serde_json::Map::new()),
+        ("questions".to_owned(), serde_json::Map::new()),
         ("repoRefs".to_owned(), serde_json::Map::new()),
         ("runOptions".to_owned(), serde_json::Map::new()),
         ("sendAccount".to_owned(), serde_json::Map::new()),
@@ -206,8 +250,17 @@ pub(crate) fn health(context: &Context, _: HostHealthParams) -> HostHealthResult
     let daemon = &context.daemon;
     HostHealthResult {
         uptime_seconds: daemon.started.elapsed().as_secs(),
-        store: daemon.store.state(),
+        // Lists and search read through `reader`, so the store is only usable with both.
+        store: match (daemon.store.state(), daemon.reader.state()) {
+            (StoreState::Ok, StoreState::Ok) => StoreState::Ok,
+            _ => StoreState::Unavailable,
+        },
         running_agents: daemon.agents.running(),
+        queues: Some(HostQueues {
+            store: daemon.store.queue_stats(),
+            // Events are written by the store's own jobs since PLX-481.
+            events: QueueStats::default(),
+        }),
     }
 }
 

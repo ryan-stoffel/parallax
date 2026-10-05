@@ -5,9 +5,9 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentApproveResult, AgentFailureKind, AgentMerge, AgentMergeKind, AgentOutcome,
-    AgentOutputItem, AgentPolicy, AgentRun, AgentRunState, AgentStatus, AgentTodoItem,
-    AgentTodoStatus, AgentToolStatus, ApprovalId, CoordinatorThreadId, DiffSummary, ProjectId,
-    RunId,
+    AgentOutputItem, AgentPolicy, AgentRun, AgentRunState, AgentStatus, AgentSubagentStatus,
+    AgentTodoItem, AgentTodoStatus, AgentToolStatus, ApprovalId, CoordinatorThreadId, DiffSummary,
+    ProjectId, RunId,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -16,7 +16,7 @@ use tracing::error;
 
 use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
 use crate::backend::{
-    ApprovalRequest, Event, FailureKind, Outcome, TodoItem, TodoStatus, ToolStatus,
+    ApprovalRequest, Event, FailureKind, Outcome, SubagentStatus, TodoItem, TodoStatus, ToolStatus,
 };
 use crate::json::escaped_len;
 use crate::worktree::MergeHow;
@@ -69,7 +69,8 @@ pub(super) const WORKSPACE_WRITE: &str = "workspaceWrite";
 /// The store's text for a project coordinator's policy (0024).
 pub(crate) const NO_WRITE: &str = "noWrite";
 
-fn status(text: &str) -> AgentStatus {
+/// The protocol's status for a run row's stored `status`.
+pub(crate) fn status(text: &str) -> AgentStatus {
     match text {
         STARTING => AgentStatus::Starting,
         RUNNING => AgentStatus::Running,
@@ -129,6 +130,7 @@ pub(crate) fn agent_run(
         fast: row.fields.fast,
         approvals: row.fields.approvals,
         checkout: row.fields.checkout,
+        explore: row.fields.explore,
         pull_requests: state.pull_requests.clone(),
         resume_at: state.resume_at,
         auto_resume: state.auto_resume,
@@ -265,6 +267,15 @@ fn tool_status(status: ToolStatus) -> AgentToolStatus {
         ToolStatus::Error => AgentToolStatus::Error,
         ToolStatus::Denied => AgentToolStatus::Denied,
         ToolStatus::Other => AgentToolStatus::Unknown,
+    }
+}
+
+fn subagent_status(status: SubagentStatus) -> AgentSubagentStatus {
+    match status {
+        SubagentStatus::Completed => AgentSubagentStatus::Completed,
+        SubagentStatus::Failed => AgentSubagentStatus::Failed,
+        SubagentStatus::Stopped => AgentSubagentStatus::Stopped,
+        SubagentStatus::Other => AgentSubagentStatus::Unknown,
     }
 }
 
@@ -412,6 +423,7 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
         Event::Warning { detail, .. } => AgentOutputItem::Warning {
             detail: truncate(detail, MAX_TEXT_ITEM_BYTES),
         },
+        Event::Subagent { .. } | Event::SubagentFinished { .. } => return subagent_item(event),
         // The run's actor reports permission requests, with when they expire and how they end.
         Event::ApprovalRequested(_)
         | Event::ApprovalWithdrawn { .. }
@@ -419,6 +431,38 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
         | Event::AccountFallback { .. }
         | Event::Finished { .. }
         | Event::Unknown => return None,
+    })
+}
+
+/// The transcript item for one of the agent's own subagents' events (PLX-382). Its own item is
+/// capped as the agent's would be, and left out where the agent's would be.
+fn subagent_item(event: &Event) -> Option<AgentOutputItem> {
+    Some(match event {
+        Event::Subagent {
+            call_id,
+            agent_type,
+            model,
+            event,
+        } => AgentOutputItem::Subagent {
+            call_id: truncate(call_id, MAX_ID_BYTES),
+            agent_type: agent_type
+                .as_deref()
+                .map(|kind| truncate(kind, MAX_ID_BYTES)),
+            model: model.as_deref().map(|model| truncate(model, MAX_ID_BYTES)),
+            item: Box::new(output_item(event)?),
+        },
+        Event::SubagentFinished {
+            call_id,
+            status,
+            summary,
+        } => AgentOutputItem::SubagentFinished {
+            call_id: truncate(call_id, MAX_ID_BYTES),
+            status: subagent_status(*status),
+            summary: summary
+                .as_deref()
+                .map(|summary| truncate(summary, MAX_TEXT_ITEM_BYTES)),
+        },
+        _ => return None,
     })
 }
 

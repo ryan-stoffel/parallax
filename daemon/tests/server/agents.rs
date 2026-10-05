@@ -12,7 +12,7 @@ use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS, Message, Notificat
 use parallax_protocol::methods::{
     AgentAccept, AgentCancel, AgentDiff, AgentEvents, AgentFile, AgentImage, AgentList,
     AgentRequestChanges, AgentSend, AgentStart, EventsEvent, EventsSubscribe, HostHealth,
-    NotificationMethod, ProjectCreate, RepoAdd, RequestMethod, UsageGet,
+    NotificationMethod, ProjectCreate, ProjectDelete, RepoAdd, RequestMethod, UsageGet,
 };
 use parallax_protocol::{
     AcceptId, AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentCancelParams,
@@ -22,8 +22,8 @@ use parallax_protocol::{
     AgentRequestChangesParams, AgentRun, AgentSendParams, AgentStartParams, AgentStatus,
     CoordinatorThreadId, DiffSummary, ErrorKind, EventsEventParams, EventsSubscribeParams,
     HostHealthParams, ImageId, ImageMediaType, InitializeResult, ParallaxEvent, Project,
-    ProjectCreateParams, ProjectId, PromptImage, Provider, RepoAddParams, RepoId, RunId, TurnId,
-    UsageGetParams,
+    ProjectCreateParams, ProjectDeleteParams, ProjectId, PromptImage, Provider, RepoAddParams,
+    RepoId, RunId, TurnId, UsageGetParams,
 };
 use plxd::backend::fake::{FakeBackend, Script, Step};
 use plxd::backend::process::{CancelPolicy, Environment, Launcher};
@@ -117,6 +117,7 @@ pub(crate) fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams
             backend: "fake".to_owned(),
         }),
         coordinator_thread: None,
+        notify: None,
         model: None,
         effort: None,
         permission: None,
@@ -125,6 +126,7 @@ pub(crate) fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams
         images: Vec::new(),
         approvals: false,
         threads: Vec::new(),
+        explore: false,
     }
 }
 
@@ -179,6 +181,8 @@ pub(crate) fn project_params(dir: &Path) -> ProjectCreateParams {
         repo_path: real_repo(dir).to_str().unwrap().to_owned(),
         icon: None,
         permission: None,
+        autonomy: None,
+        base_branch: None,
     }
 }
 
@@ -191,6 +195,8 @@ pub(crate) async fn subscribe(client: &mut Conn, project: ProjectId, after: u64)
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after,
             project: Some(project),
+            run: None,
+            shell: false,
         })
         .await
         .unwrap();
@@ -404,6 +410,7 @@ async fn assert_replays(
 
     let page = replay
         .call::<AgentEvents>(AgentEventsParams {
+            before: None,
             run_id,
             after: 0,
             limit: Some(3),
@@ -414,6 +421,7 @@ async fn assert_replays(
     assert_eq!(page.events.len(), 3);
     let rest = replay
         .call::<AgentEvents>(AgentEventsParams {
+            before: None,
             run_id,
             after: page.events[2].seq,
             limit: None,
@@ -828,6 +836,7 @@ async fn cancel_stops_a_running_worker() {
     assert_eq!(kind(&unknown), ErrorKind::RunNotFound);
     let unknown = client
         .call::<AgentEvents>(AgentEventsParams {
+            before: None,
             run_id: RunId::generate(),
             after: 0,
             limit: None,
@@ -847,7 +856,18 @@ async fn agent_start_is_idempotent_on_its_run_id() {
     subscribe(&mut client, project.id, 0).await;
     let params = start_params(project.id, "Do it once");
     let first = client.call::<AgentStart>(params.clone()).await.unwrap().run;
-    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    // A run in a Project is a child, so its end also adds an inbox item (0043) and writes its
+    // history (0044).
+    let mut completed = updated_to(AgentStatus::Completed);
+    let (mut done, mut inboxed, mut history) = (false, false, false);
+    until(&mut client, |event| {
+        done |= completed(event);
+        inboxed |= matches!(event.event, ParallaxEvent::InboxAdded { .. });
+        history |= matches!(&event.event, ParallaxEvent::ContextChanged { file }
+            if file.path.starts_with("history/"));
+        done && inboxed && history
+    })
+    .await;
 
     let retried = client.call::<AgentStart>(params.clone()).await.unwrap().run;
     assert_eq!(retried.id, first.id);
@@ -959,20 +979,35 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
     .await;
     drop(client);
 
-    // A crash: the store still says `running` when plxd starts.
+    // A crash: the store still says `running` when plxd starts, and the turn that never ended
+    // left its replies unindexed (PLX-487).
     let Host { dir, server } = host;
     server.stop().await;
+    let replies = |dir: &std::path::Path| -> i64 {
+        rusqlite::Connection::open(dir.join("plxd.sqlite3"))
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM thread_text WHERE text LIKE '%Working%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
     {
         let db = rusqlite::Connection::open(dir.path().join("plxd.sqlite3")).unwrap();
         db.execute("UPDATE runs SET status = 'running'", [])
             .unwrap();
+        db.execute("DELETE FROM thread_text WHERE seq > 0", [])
+            .unwrap();
     }
+    assert_eq!(replies(dir.path()), 0);
     let host = Host::start(dir, fake(hang()));
     let mut client = host.client().await;
     let runs = list(&mut client).await;
     assert_eq!(runs[0].status, AgentStatus::Interrupted);
     assert_eq!(runs[0].session_id.as_deref(), Some("hang-1"));
     host.server.stop().await;
+    assert_eq!(replies(host.dir.path()), 1, "indexed at startup");
 }
 
 /// #190 N5: a fresh actor after a restart has no in-memory record of a turn it (or a plxd
@@ -1047,14 +1082,11 @@ async fn a_sent_turn_stays_idempotent_across_a_restart() {
     host.server.stop().await;
 }
 
+/// A Project's child gets a header naming the Project before its task, and no limits (0042).
 #[tokio::test]
-async fn a_worker_learns_its_limits_and_a_fallback_moves_its_usage_to_the_new_account() {
+async fn a_child_learns_its_project_and_a_fallback_moves_its_usage_to_the_new_account() {
     let dir = temp_dir();
     let project_params = project_params(dir.path());
-    let context = dir
-        .path()
-        .join("context")
-        .join(project_params.id.to_string());
     let host = Host::start(
         dir,
         fake(vec![
@@ -1125,45 +1157,35 @@ async fn a_worker_learns_its_limits_and_a_fallback_moves_its_usage_to_the_new_ac
             _ => None,
         })
         .expect("the fake echoed its prompt");
-    let context = context.canonicalize().unwrap();
-    assert!(
-        prompt.contains(&context.display().to_string()),
-        "names the shared context folder: {prompt}"
+    assert_eq!(
+        prompt,
+        "You are working on a task in the Parallax Project \"app\".\n\
+         Your Parallax tools are on the plxd MCP server: thread_list, thread_read, thread_search, \
+         thread_launch, thread_fork, thread_send, thread_wait, thread_interrupt, thread_update, \
+         pr_link, pr_unlink, read_context, write_context, ask, memory_read, memory_propose.\n\
+         \n\
+         Your task:\nTidy the build"
     );
-    assert!(prompt.contains("Don't commit"), "{prompt}");
-    assert!(prompt.contains("localhost"), "{prompt}");
-    assert!(prompt.ends_with("Your task:\nTidy the build"), "{prompt}");
     host.server.stop().await;
 }
 
-#[tokio::test]
-async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
-    let dir = temp_dir();
-    // A `claude` older than the sandbox needs, found where agents' CLIs are looked up.
-    let bin = dir.path().join("bin");
+/// An in-process plxd whose Claude Code, Codex, and Cursor backends are plxd's real ones,
+/// running `scripts`, stand-ins for `claude`, `codex`, and `agent`, from a folder in `dir` that is
+/// the agents' whole `PATH` besides the system's.
+fn built_in_kinds(dir: &Path, scripts: [(&str, String); 3]) -> InProcess {
+    let bin = dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    let claude = bin.join("claude");
-    std::fs::write(
-        &claude,
-        "#!/bin/sh\n\
-         if [ \"$1\" = --version ]; then echo '2.1.100 (Claude Code)'; exit 0; fi\n\
-         printf '%s' '{\"loggedIn\":true}'\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
-    // Codex and Cursor installed too, so the host lists them (0040).
-    for program in ["codex", "agent"] {
-        std::fs::write(bin.join(program), "#!/bin/sh\n").unwrap();
-        std::fs::set_permissions(bin.join(program), std::fs::Permissions::from_mode(0o755))
-            .unwrap();
+    for (program, script) in scripts {
+        let path = bin.join(program);
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     let mut environment = Environment::empty();
     environment.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
-
-    let mut config = InProcess::config(dir.path());
+    let mut config = InProcess::config(dir);
     config.agent_environment = Some(environment.clone());
     let mut backends = BackendRegistry::new();
-    let launcher = Launcher::new(DataDir::new(dir.path()).unwrap(), environment);
+    let launcher = Launcher::new(DataDir::new(dir).unwrap(), environment);
     backends.register(
         Provider::Anthropic,
         Arc::new(plxd::backend::claude::ClaudeBackend::new(launcher.clone())),
@@ -1177,7 +1199,26 @@ async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
         Arc::new(plxd::providers::cursor_backend(launcher)),
     );
     config.backends = Some(backends);
-    let server = InProcess::start(config);
+    InProcess::start(config)
+}
+
+#[tokio::test]
+async fn runs_plxd_cannot_start_are_refused() {
+    let dir = temp_dir();
+    // A `claude` older than the sandbox needs, found where agents' CLIs are looked up. Codex and
+    // Cursor installed too, so the host lists them (0040).
+    let claude = "#!/bin/sh\n\
+         if [ \"$1\" = --version ]; then echo '2.1.100 (Claude Code)'; exit 0; fi\n\
+         printf '%s' '{\"loggedIn\":true}'\n";
+    let empty = || "#!/bin/sh\n".to_owned();
+    let server = built_in_kinds(
+        dir.path(),
+        [
+            ("claude", claude.to_owned()),
+            ("codex", empty()),
+            ("agent", empty()),
+        ],
+    );
     let mut client = Conn::ready(&server.socket).await;
     let project = create(&mut client, project_params(dir.path())).await;
 
@@ -1194,20 +1235,7 @@ async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
     assert!(old.message.contains("2.1.100"), "{}", old.message);
     assert!(old.message.contains("2.1.248"), "{}", old.message);
 
-    // Codex workers are off until PLX-145 isolates their temp folder (PLX-153).
-    let codex = client
-        .call::<AgentStart>(AgentStartParams {
-            account: Some(AccountChoice::Subscription {
-                backend: "codex".to_owned(),
-            }),
-            ..start_params(project.id, "Fix it")
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&codex), ErrorKind::WorkerUnavailable);
-    assert!(codex.message.contains("PLX-145"), "{}", codex.message);
-
-    // Cursor runs only threads (0036), so a project's worker never routes to it.
+    // Cursor has only Bypass, and the Project runs in Auto (0042).
     let cursor = client
         .call::<AgentStart>(AgentStartParams {
             account: Some(AccountChoice::Subscription {
@@ -1217,10 +1245,10 @@ async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
         })
         .await
         .unwrap_err();
-    assert_eq!(kind(&cursor), ErrorKind::WorkerUnavailable);
+    assert_eq!(kind(&cursor), ErrorKind::UnsupportedOption);
 
-    // A Codex worker on a repo entry, such as a coordinator's started on one, isn't a thread, so
-    // it is refused too; only `thread/start` runs Codex unsandboxed (0035).
+    // A Codex run `agent/start` makes on a repo entry isn't a thread, so it is refused: Codex
+    // runs only threads (0035).
     let work = temp_dir();
     let entry = client
         .call::<RepoAdd>(RepoAddParams {
@@ -1244,8 +1272,140 @@ async fn workers_are_refused_where_plxd_cannot_sandbox_them() {
         .await
         .unwrap_err();
     assert_eq!(kind(&on_entry), ErrorKind::WorkerUnavailable);
-    assert!(on_entry.message.contains("PLX-145"), "{}", on_entry.message);
+    assert!(
+        on_entry.message.contains("runs only threads"),
+        "{}",
+        on_entry.message
+    );
 
+    server.stop().await;
+}
+
+/// What the stand-in for `program` recorded in `out`'s `file`, once it holds `wanted`.
+#[cfg(target_os = "macos")]
+async fn recorded(out: &Path, program: &str, file: &str, wanted: &str) -> String {
+    let path = out.join(format!("{program}.{file}"));
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        if text.contains(wanted) {
+            return text;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{program} never wrote {wanted:?}: {text}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// PLX-396 (0042): a Project's child starts on each built-in kind as a thread the user starts
+/// would, through plxd's real backends: Claude Code as full Claude Code with plxd's thread tools,
+/// Codex on `codex app-server`, and Cursor on its ACP agent, each in the Project's mode and
+/// asking through the inbox. Auto is where a worker would have kept the sandbox's flags. Each
+/// stand-in CLI records its arguments and what plxd writes it.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn a_projects_child_starts_as_a_thread_on_each_built_in_kind() {
+    use parallax_protocol::{AgentPermission, ProjectPermission};
+
+    let dir = temp_dir();
+    let out = dir.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let out = out.canonicalize().unwrap();
+    let script = |program: &'static str, version: &str| {
+        let out = out.display();
+        let script = format!(
+            "#!/bin/sh\n\
+             case \"$1\" in\n\
+             --version) echo '{version}'; exit 0 ;;\n\
+             auth|login|status) printf '%s' '{{\"loggedIn\":true}}'; exit 0 ;;\n\
+             esac\n\
+             printf '%s\\n' \"$@\" > '{out}/{program}.argv'\n\
+             while IFS= read -r line; do printf '%s\\n' \"$line\" >> '{out}/{program}.stdin'; done\n"
+        );
+        (program, script)
+    };
+    let server = built_in_kinds(
+        dir.path(),
+        [
+            script("claude", "2.1.300 (Claude Code)"),
+            script("codex", "codex-cli 0.160.0"),
+            script("agent", "2026.10.01"),
+        ],
+    );
+    let mut client = Conn::ready(&server.socket).await;
+    let mut projects = Vec::new();
+    for permission in [ProjectPermission::Auto, ProjectPermission::Bypass] {
+        let repo = temp_dir();
+        let params = ProjectCreateParams {
+            permission: Some(permission),
+            ..project_params(repo.path())
+        };
+        projects.push((create(&mut client, params).await, repo));
+    }
+    let (auto, bypass) = (&projects[0].0, &projects[1].0);
+
+    let (auto_mode, bypass_mode) = (AgentPermission::Auto, AgentPermission::Bypass);
+    for (project, mode, backend, program) in [
+        (auto, auto_mode, "claude", "claude"),
+        (auto, auto_mode, "codex", "codex"),
+        (bypass, bypass_mode, "claude", "claude"),
+        (bypass, bypass_mode, "codex", "codex"),
+        (bypass, bypass_mode, "cursor", "agent"),
+    ] {
+        for file in ["argv", "stdin"] {
+            let _ = std::fs::remove_file(out.join(format!("{program}.{file}")));
+        }
+        let run = client
+            .call::<AgentStart>(AgentStartParams {
+                account: Some(AccountChoice::Subscription {
+                    backend: backend.to_owned(),
+                }),
+                ..start_params(project.id, "Tidy the build")
+            })
+            .await
+            .unwrap()
+            .run;
+        assert!(run.approvals, "{backend} asks through the inbox");
+        assert_eq!(run.permission, Some(mode), "{backend}");
+        assert!(run.branch.is_some(), "{backend} works in its own worktree");
+
+        let argv = recorded(&out, program, "argv", "\n").await;
+        let argv: Vec<&str> = argv.lines().collect();
+        match backend {
+            "claude" => {
+                for worker in ["--restricted", "--tools", "--strict-mcp-config"] {
+                    assert!(!argv.contains(&worker), "{mode:?}: {argv:?}");
+                }
+                let flag = argv.iter().position(|arg| *arg == "--permission-mode");
+                let expected = if mode == auto_mode {
+                    "auto"
+                } else {
+                    "bypassPermissions"
+                };
+                assert_eq!(flag.map(|at| argv[at + 1]), Some(expected));
+                assert!(argv.contains(&"--mcp-config"), "the thread tools: {argv:?}");
+                let stdin = recorded(&out, program, "stdin", "Tidy the build").await;
+                assert!(
+                    stdin.contains(
+                        "You are working on a task in the Parallax Project \\\"app\\\".\\n\
+                         Your Parallax tools are on the plxd MCP server: thread_list,"
+                    ),
+                    "{stdin}"
+                );
+                assert!(
+                    stdin.contains("\\n\\nYour task:\\nTidy the build"),
+                    "{stdin}"
+                );
+            }
+            "codex" => assert_eq!(argv, ["app-server"]),
+            _ => assert!(
+                argv.contains(&"acp") && argv.contains(&"--force"),
+                "{argv:?}"
+            ),
+        }
+    }
     server.stop().await;
 }
 
@@ -1269,7 +1429,8 @@ async fn agent_start_from_a_repo_with_local_changes_never_blocks() {
     assert!(!untracked.base_dirty, "an untracked file needs no notice");
     assert!(untracked.branch.is_some(), "a worktree was made");
 
-    // A tracked, uncommitted change: still starts the worktree from HEAD, but is flagged.
+    // A tracked, uncommitted change: a Project's run is cut from its integration branch, not the
+    // checkout (0045), so the change isn't the run's to flag.
     std::fs::write(Path::new(&project.repo_path).join("README.md"), "dirty\n").unwrap();
     let dirty = client
         .call::<AgentStart>(start_params(project.id, "Fix it too"))
@@ -1277,8 +1438,8 @@ async fn agent_start_from_a_repo_with_local_changes_never_blocks() {
         .unwrap()
         .run;
     assert!(
-        dirty.base_dirty,
-        "a tracked, uncommitted change is flagged so the editor can tell the user"
+        !dirty.base_dirty,
+        "the checkout's changes are never in a Project's run"
     );
     assert!(
         dirty.branch.is_some(),
@@ -1290,6 +1451,66 @@ async fn agent_start_from_a_repo_with_local_changes_never_blocks() {
         worktree_count(host.dir.path()),
         2,
         "and both worktrees were made"
+    );
+    host.server.stop().await;
+}
+
+/// PLX-409 (0045): a new Project gets its integration branch, cut from the repository's default
+/// branch. A run in it is cut from that branch's tip, not the checkout's HEAD, and keeps
+/// `explore`. Deleting the Project removes the worktree and keeps the branch.
+#[tokio::test]
+async fn a_project_run_is_cut_from_the_integration_branch_tip() {
+    let dir = temp_dir();
+    let host = Host::start(dir, fake(vec![init("s"), end_turn("ok")]));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    assert_eq!(project.base_branch.as_deref(), Some("main"));
+    assert_eq!(project.integration_branch.as_deref(), Some("parallax/app"));
+    let repo = Path::new(&project.repo_path);
+    let tip = git(repo, &["rev-parse", "parallax/app"]);
+    assert_eq!(tip, git(repo, &["rev-parse", "main"]));
+    let integration = host
+        .dir
+        .path()
+        .join("integration")
+        .join(project.id.to_string());
+    assert_eq!(
+        git(&integration, &["branch", "--show-current"]),
+        "parallax/app"
+    );
+
+    git(
+        repo,
+        &["commit", "-q", "--allow-empty", "-m", "the user's own work"],
+    );
+    let run = client
+        .call::<AgentStart>(AgentStartParams {
+            explore: true,
+            ..start_params(project.id, "Spike it")
+        })
+        .await
+        .unwrap()
+        .run;
+    assert!(run.explore);
+    let worktree = PathBuf::from(run.worktree_path.expect("a worktree"));
+    assert_eq!(
+        git(&worktree, &["rev-parse", "HEAD"]),
+        tip,
+        "cut from the integration branch's tip, not the checkout's HEAD"
+    );
+    assert!(list(&mut client).await[0].explore, "stored");
+
+    client
+        .call::<ProjectDelete>(ProjectDeleteParams {
+            project: project.id,
+        })
+        .await
+        .unwrap();
+    assert!(!integration.exists(), "the worktree is removed");
+    assert_eq!(
+        git(repo, &["rev-parse", "parallax/app"]),
+        tip,
+        "the branch stays"
     );
     host.server.stop().await;
 }

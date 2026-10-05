@@ -265,6 +265,16 @@ body,
   height: 100%;
 }
 
+/* The window never scrolls; panes scroll inside it. An absolute element with no
+   positioned ancestor, like an sr-only input, would otherwise sit outside every
+   pane, stretch the page past the window, and scroll the whole window up when
+   focused, with nothing to scroll it back (PLX-441). `clip`, unlike `hidden`,
+   can't be scrolled even by focus. */
+#root {
+  position: relative;
+  overflow: clip;
+}
+
 body {
   margin: 0;
   overflow: hidden;
@@ -561,22 +571,13 @@ body {
   }
 }
 
-/* The Context view (ContextPanel.tsx). Its files draw a task's checkbox as a circle, so a task
-   has no bullet, and a top-level task list sits flush; plain items and nested lists keep theirs.
-   A Recents card previews the top of a file in small type. */
-:is(.context-doc, .context-preview) .task-list-item {
+/* A context file (ContextPanel.tsx) draws a task's checkbox as a circle, so a task has no
+   bullet, and a top-level task list sits flush; plain items and nested lists keep theirs. */
+.context-doc .task-list-item {
   list-style: none;
 }
-:is(.context-doc, .context-preview) .markdown > .contains-task-list {
+.context-doc .markdown > .contains-task-list {
   padding-left: 0;
-}
-.context-preview .markdown {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--muted-foreground);
-}
-.context-preview .markdown > * {
-  margin-top: 0.3em;
 }
 
 /* The Usage page (UsagePage.tsx): bars rise from the baseline, --delay apart, and meters fill
@@ -670,13 +671,24 @@ body {
     translate: 0 8px;
   }
 }
+/* A notification (notifications.tsx) slides in from the window's right edge. */
+.toast-in {
+  animation: toast-in 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    translate: 16px 0;
+  }
+}
 :root.reduce-motion {
   .plan-bar {
     transition: none;
   }
   .plan-check-draw :is(circle, path),
   .plan-strip,
-  .approval-in {
+  .approval-in,
+  .toast-in {
     animation: none;
   }
 }
@@ -1257,4 +1269,17 @@ body {
   .mark-done-animate :is(.mark-blue, .mark-coral) {
     display: none;
   }
+}
+
+/* A line that's new arrives in three steps, as a pixel would. */
+.pixel-fade {
+  animation: pixel-fade 0.6s steps(3, end) both;
+}
+@keyframes pixel-fade {
+  from {
+    opacity: 0;
+  }
+}
+:root.reduce-motion .pixel-fade {
+  animation: none;
 }

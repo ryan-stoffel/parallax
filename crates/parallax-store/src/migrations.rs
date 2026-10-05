@@ -388,6 +388,140 @@ const MIGRATIONS: &[Migration] = &[
             PRIMARY KEY (run_id, turn_id)
         );",
     },
+    // Whether a child wakes its parent when a CLI process of its ends (PLX-380, decisions 0025
+    // and 0041): `thread_launch`'s `notify`. Existing runs keep what they did: a coordinator's
+    // subagents woke it, and a thread's children didn't wake it.
+    Migration {
+        version: 28,
+        sql: "ALTER TABLE runs ADD COLUMN notify_parent INTEGER NOT NULL DEFAULT 0;
+        UPDATE runs SET notify_parent = 1
+            WHERE parent IS NOT NULL AND coordinator_thread IS NOT NULL;",
+    },
+    // A project's base branch and integration branch (PLX-409, decision 0045), NULL until set or
+    // cut, and whether a run in a project is an exploration child, which never lands.
+    Migration {
+        version: 29,
+        sql: "ALTER TABLE projects ADD COLUMN base_branch TEXT;
+        ALTER TABLE projects ADD COLUMN integration_branch TEXT;
+        ALTER TABLE runs ADD COLUMN explore INTEGER NOT NULL DEFAULT 0;",
+    },
+    // A Project's children's questions (PLX-402, decision 0043): what a child asked with `ask`
+    // and the assumption it went on with, its status (`open`, `escalated`, `decided`, or
+    // `answered`), and the answer once there is one. `Store::delete_project` deletes a project's
+    // questions.
+    Migration {
+        version: 30,
+        sql: "CREATE TABLE questions (
+            id TEXT NOT NULL PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            question TEXT NOT NULL,
+            assumption TEXT NOT NULL,
+            status TEXT NOT NULL,
+            answer TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX questions_project ON questions (project_id, created_at);",
+    },
+    // A project's autonomy level (PLX-403, decision 0043), `ask`, `routine`, or `full`: who
+    // answers its children's questions. Existing projects get `routine`.
+    Migration {
+        version: 31,
+        sql: "ALTER TABLE projects ADD COLUMN autonomy TEXT NOT NULL DEFAULT 'routine';",
+    },
+    // The coordinator whose wake-up turn carried a question to its CLI (PLX-469), NULL until one
+    // did, so a restart's catch-up names only questions that coordinator hasn't seen.
+    Migration {
+        version: 32,
+        sql: "ALTER TABLE questions ADD COLUMN delivered_to TEXT;",
+    },
+    // A Project's landing queue (PLX-410, decision 0045): one row per child the coordinator
+    // queued with `land`, its status (`waiting`, `queued`, `sentBack`, `landed`, or `needsYou`),
+    // how many times landing it conflicted, and when it was last queued, which orders the queue.
+    // And whether a project lands its children without waiting for the user's approval.
+    Migration {
+        version: 33,
+        sql: "CREATE TABLE landings (
+            run_id TEXT NOT NULL PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            conflicts INTEGER NOT NULL DEFAULT 0,
+            queued_at TEXT NOT NULL
+        );
+        CREATE INDEX landings_project ON landings (project_id, status, queued_at);
+        ALTER TABLE projects ADD COLUMN auto_land INTEGER NOT NULL DEFAULT 0;",
+    },
+    // Placing a Project's children (PLX-413, decision 0046): how many may run at once, whether
+    // they may use an API key, and the children waiting to be placed, oldest first. `prompt` is
+    // a child's first message with its attached threads, and `extra` the daemon's JSON for its
+    // images, threads, and requested account. `Store::delete_project` deletes a project's rows.
+    Migration {
+        version: 34,
+        sql: "ALTER TABLE projects ADD COLUMN max_children INTEGER NOT NULL DEFAULT 10;
+        ALTER TABLE projects ADD COLUMN allow_api_keys INTEGER NOT NULL DEFAULT 0;
+        CREATE TABLE placements (
+            run_id TEXT NOT NULL PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            extra TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );",
+    },
+    // A Project's checks (PLX-411, decision 0045): the command the user confirmed, which runs
+    // after each landing, and the one its coordinator proposed, which never runs. NULL is none.
+    // And how many times a child's landing failed the checks since it was queued.
+    Migration {
+        version: 35,
+        sql: "ALTER TABLE projects ADD COLUMN checks TEXT;
+        ALTER TABLE projects ADD COLUMN proposed_checks TEXT;
+        ALTER TABLE landings ADD COLUMN failures INTEGER NOT NULL DEFAULT 0;",
+    },
+    // `thread/search`'s full-text index (PLX-487): a run's messages, never tool calls or their
+    // output. The triggers on `runs` and `turns` index a prompt and each sent turn as they're
+    // stored, and `Store::index_run_text` adds the agent's `text` replies when a turn ends. A
+    // reply row's `seq` is the newest event it covers, where the next one starts; a message's
+    // row keeps the run's current one. `thread_text_fts` indexes `text` without a copy of it,
+    // the `thread_text` triggers keep it in step, and `delete_run_rows` deletes a run's rows.
+    // Existing runs get their prompt, their turns, and one row of all their replies.
+    Migration {
+        version: 36,
+        sql: "CREATE TABLE thread_text (
+            id INTEGER PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            text TEXT NOT NULL
+        );
+        CREATE INDEX thread_text_run ON thread_text (run_id, seq);
+        CREATE VIRTUAL TABLE thread_text_fts USING fts5(
+            text, content = 'thread_text', content_rowid = 'id',
+            tokenize = 'unicode61 remove_diacritics 2'
+        );
+        CREATE TRIGGER thread_text_insert AFTER INSERT ON thread_text BEGIN
+            INSERT INTO thread_text_fts (rowid, text) VALUES (new.id, new.text);
+        END;
+        CREATE TRIGGER thread_text_delete AFTER DELETE ON thread_text BEGIN
+            INSERT INTO thread_text_fts (thread_text_fts, rowid, text)
+            VALUES ('delete', old.id, old.text);
+        END;
+        INSERT INTO thread_text (run_id, seq, text) SELECT id, 0, prompt FROM runs;
+        INSERT INTO thread_text (run_id, seq, text) SELECT run_id, 0, text FROM turns;
+        INSERT INTO thread_text (run_id, seq, text)
+        SELECT events.run_id, MAX(events.seq),
+            group_concat(json_extract(item.value, '$.text'), char(10))
+        FROM events, json_each(events.payload, '$.items') AS item
+        WHERE events.kind = 'agent.output' AND events.run_id IS NOT NULL
+            AND json_extract(item.value, '$.kind') = 'text'
+            AND json_extract(item.value, '$.text') IS NOT NULL
+        GROUP BY events.run_id;
+        CREATE TRIGGER thread_text_prompt AFTER INSERT ON runs BEGIN
+            INSERT INTO thread_text (run_id, seq, text) VALUES (new.id, 0, new.prompt);
+        END;
+        CREATE TRIGGER thread_text_turn AFTER INSERT ON turns BEGIN
+            INSERT INTO thread_text (run_id, seq, text)
+            VALUES (new.run_id, COALESCE((SELECT MAX(seq) FROM thread_text
+                WHERE run_id = new.run_id), 0), new.text);
+        END;",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

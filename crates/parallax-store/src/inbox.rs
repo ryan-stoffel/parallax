@@ -106,7 +106,7 @@ impl Store {
         items: &[Uuid],
         at: Timestamp,
     ) -> Result<Vec<InboxItem>, StoreError> {
-        let tx = self.conn.transaction()?;
+        let tx = self.conn.savepoint()?;
         for id in items {
             tx.execute(
                 "UPDATE inbox SET seen_at = ?3

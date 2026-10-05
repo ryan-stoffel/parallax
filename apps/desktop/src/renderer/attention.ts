@@ -15,6 +15,8 @@ export function attentionOf(thread: Thread, run: AgentRun | undefined, asks: num
   if (asks > 0) return "needsYou";
   if (!run) return "settled";
   if (isRunning(run.status)) return "working";
+  // A run waiting out a usage limit (0049) is no news yet: its row shows when it resumes.
+  if (run.status === "waiting") return "settled";
   const unseen = !thread.seenAt || Date.parse(run.updatedAt) > Date.parse(thread.seenAt);
   if (!unseen) return "settled";
   return run.status === "failed" ? "failed" : "done";
@@ -25,6 +27,19 @@ export function projectAttention(runs: AgentRun[], asks: (runId: string) => numb
   if (runs.some((r) => asks(r.id) > 0)) return "needsYou";
   return runs.some((r) => isRunning(r.status)) ? "working" : "settled";
 }
+
+/**
+ * A Project child's attention in its side panel (0042): it waits on the user, it's working, or it
+ * stopped, done or failed. It has no seen state, so it never settles.
+ */
+export function runAttention(run: AgentRun, asks: number): Attention {
+  if (asks > 0) return "needsYou";
+  if (isRunning(run.status)) return "working";
+  return run.status === "failed" ? "failed" : "done";
+}
+
+/** The side panel's order for a Project's children (0042). */
+export const childOrder: Attention[] = ["needsYou", "working", "done", "failed"];
 
 // Most urgent first: what waits on the user, then news, then work still going.
 const urgency: Attention[] = ["needsYou", "failed", "done", "working", "settled"];

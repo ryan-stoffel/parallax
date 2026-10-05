@@ -3,13 +3,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use parallax_protocol::{AccountChoice, AccountId, CoordinatorThreadId, ProjectId, Provider, Role};
+use parallax_protocol::{AccountChoice, AccountId, Provider, Role};
 
 use super::{BackendRegistry, Defaults, KeyAccounts, RoutingError, resolve, start};
 use crate::backend::{
-    AccountRef, Backend, CancelSwitch, Capabilities, CoordinatorTools, Credential, EVENT_BUFFER,
-    Event, EventSink, EventStream, Failure, FailureKind, ModelUsage, Outcome, RunHandle, RunId,
-    RunRequest, StartError, Started, ThreadTools, ToolPolicy, Usage, WorkerSandbox, claude,
+    AccountRef, Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER, Event, EventSink,
+    EventStream, Failure, FailureKind, ModelUsage, Outcome, RunHandle, RunId, RunRequest,
+    StartError, Started, ThreadTools, ToolPolicy, Usage, WorkerSandbox, claude,
 };
 use crate::keystore::{KeyStore, MemoryKeyStore};
 
@@ -437,17 +437,17 @@ async fn start_sends_no_write_to_the_backend_for_a_coordinator() {
     );
 }
 
-fn coordinator_tools() -> CoordinatorTools {
-    CoordinatorTools {
+fn coordinator_tools() -> ThreadTools {
+    ThreadTools {
         program: PathBuf::from("/Applications/Parallax.app/Contents/Resources/plxd"),
         data_dir: PathBuf::from("/Users/u/Library/Application Support/parallax"),
-        project: ProjectId::generate(),
-        thread: CoordinatorThreadId::generate(),
+        run: RunId::generate(),
     }
 }
 
 /// #195, 0027: a coordinator is Claude Code in its permission mode, with none of 0004's no-write
-/// flags, `plxd mcp` joining its own MCP servers, and plxd's eight tools allowed in every mode.
+/// flags, `plxd mcp --thread` joining its own MCP servers, and plxd's tools allowed in every mode
+/// (PLX-380).
 /// The allowlist also names Claude Code's todo tools, so it keeps a plan on any model (PLX-249),
 /// and its only `--settings` keeps its task list its own (PLX-251).
 #[tokio::test]
@@ -483,8 +483,7 @@ async fn a_coordinator_gets_plxds_mcp_tools_on_claude_codes_own_configuration() 
         "args": [
             "mcp",
             "--data-dir", "/Users/u/Library/Application Support/parallax",
-            "--project", tools.project.to_string(),
-            "--coordinator-thread", tools.thread.to_string(),
+            "--thread", tools.run.to_string(),
         ],
     }}});
     expected.extend([
@@ -493,9 +492,13 @@ async fn a_coordinator_gets_plxds_mcp_tools_on_claude_codes_own_configuration() 
         "--mcp-config".to_owned(),
         config.to_string(),
         "--allowedTools".to_owned(),
-        "mcp__plxd__spawn_agent,mcp__plxd__list_agents,mcp__plxd__agent_status,\
-         mcp__plxd__message_agent,mcp__plxd__cancel_agent,mcp__plxd__agent_diff,\
-         mcp__plxd__read_context,mcp__plxd__write_context,\
+        "mcp__plxd__thread_list,mcp__plxd__thread_read,mcp__plxd__thread_search,\
+         mcp__plxd__thread_launch,mcp__plxd__thread_fork,mcp__plxd__thread_send,\
+         mcp__plxd__thread_wait,mcp__plxd__thread_interrupt,mcp__plxd__thread_update,\
+         mcp__plxd__pr_link,mcp__plxd__pr_unlink,mcp__plxd__read_context,\
+         mcp__plxd__write_context,mcp__plxd__ask,mcp__plxd__answer,mcp__plxd__escalate,\
+         mcp__plxd__memory_read,mcp__plxd__memory_propose,mcp__plxd__memory_write,\
+         mcp__plxd__land,mcp__plxd__checks_propose,\
          TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate"
             .to_owned(),
         "--settings".to_owned(),

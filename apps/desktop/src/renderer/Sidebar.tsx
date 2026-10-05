@@ -42,6 +42,7 @@ import {
   useState,
   type ComponentType,
   type ReactNode,
+  type RefObject,
   type SVGProps,
   type ToggleEvent,
 } from "react";
@@ -50,10 +51,12 @@ import type {
   AgentRun,
   AgentStatus,
   Project,
+  ProjectAutonomy,
   ProjectIcon as ProjectIconValue,
   Repo,
   Thread,
 } from "../protocol/generated/protocol";
+import type { RpcError } from "../preload/bridge";
 import type { Selection, SettingsSection } from "./App";
 import { clock } from "./Approval";
 import { AddRepositoryDialog } from "./AddRepositoryDialog";
@@ -68,6 +71,8 @@ import {
   type Attention,
 } from "./attention";
 import { AttentionBadge } from "./AttentionMark";
+import { AutonomyChoice } from "./ProjectPermission";
+import { resumeTime } from "./ResumeCard";
 import { ConnectionStatus } from "./ConnectionStatus";
 import { Avatar, useProfile } from "./profile";
 import { localId, type Host } from "./hosts";
@@ -76,9 +81,17 @@ import { imageUrl } from "./images";
 import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { iconColors, iconLook } from "./projectIcons";
+import { ForkMenu } from "./Fork";
 import { archivePageSize, sidebarPrefs } from "./sidebarPrefs";
 import { dragThread } from "./threadDrag";
-import { asksOf, type ProjectChange, type ThreadsView } from "./threads";
+import {
+  asksOf,
+  projectRuns,
+  threadProjects,
+  type ForkChoice,
+  type ProjectChange,
+  type ThreadsView,
+} from "./threads";
 import { accountLabel, isRunning, statusLabel as runStatusLabel } from "./transcript";
 import {
   IconButton,
@@ -272,7 +285,8 @@ type Item = (
  * every host's Projects and threads, each in a collapsible section, most recently active first
  * (0033). A thread row shows its repo, how long ago it was prompted or what it asks of the user,
  * its title, branch, and provider. A thread's children (0041) nest under it, collapsed behind
- * their count and most urgent status. While a top-level thread is working, it and its children
+ * their count and most urgent status, but a Project's children show only inside it, its row
+ * showing their combined status (0042). While a top-level thread is working, it and its children
  * sit in a Working drawer above Snoozed and Archived, until it finishes. Archived threads list a
  * page at a time. Both are settings (sidebarPrefs). Resting on a thread shows a card.
  */
@@ -336,21 +350,25 @@ export function ThreadList({
   const items: Item[] = hosts.flatMap(({ host: h, view }) => {
     const { state } = view;
     const repoOf = (id: string) => state.repos.find((r) => r.id === id);
-    const threads = state.threads.map((t): Item => {
-      const run = state.runs[t.id];
-      return {
-        kind: "thread",
-        thread: t,
-        key: `${h.id}/${t.id}`,
-        host: h,
-        view,
-        repo: repoOf(t.repo),
-        attention: attentionOf(t, run, asksOf(state, t.id)),
-        at: lastPrompt(t),
-      };
-    });
+    // A Project's children show only inside it, and count toward its row's status (0042).
+    const inProject = threadProjects(state);
+    const threads = state.threads
+      .filter((t) => !inProject.get(t.id))
+      .map((t): Item => {
+        const run = state.runs[t.id];
+        return {
+          kind: "thread",
+          thread: t,
+          key: `${h.id}/${t.id}`,
+          host: h,
+          view,
+          repo: repoOf(t.repo),
+          attention: attentionOf(t, run, asksOf(state, t.id)),
+          at: lastPrompt(t),
+        };
+      });
     const projects = state.projects.map((p): Item => {
-      const runs = Object.values(state.runs).filter((r) => r.project === p.id);
+      const runs = projectRuns(state, p.id, inProject);
       return {
         kind: "project",
         project: p,
@@ -493,6 +511,8 @@ export function ThreadList({
           selected={selected}
           badge={badge}
           editable={item.view.editable}
+          moded={item.view.moded}
+          autonomous={item.view.autonomous}
           iconImageBytes={item.view.iconImageBytes}
           onOpen={() => openItem(item)}
           onUpdate={async (change) =>
@@ -515,12 +535,30 @@ export function ThreadList({
         badge={badge}
         nested={nested}
         snoozable={view.attention}
+        autoResumable={view.autoResume}
         onOpen={() => openItem(item)}
         onArchive={async () => setActionError(await view.archive(t.id, !t.archived))}
         onSnooze={async (until) =>
           setActionError(await view.update(t.id, { snoozedUntil: until.toISOString() }))
         }
         onDelete={() => askDelete(item)}
+        onFork={
+          view.forkable
+            ? async (choice) => {
+                const forked = await view.fork(t.id, undefined, choice);
+                if (typeof forked !== "string") return forked;
+                onSelect(item.host.id, { kind: "thread", threadId: forked });
+                return undefined;
+              }
+            : undefined
+        }
+        onAutoResume={async (autoResume) => {
+          const answer = await window.parallax.request(item.host.id, "agent/autoResume", {
+            runId: t.id,
+            ...(autoResume !== undefined && { autoResume }),
+          });
+          setActionError("error" in answer ? answer.error.message : undefined);
+        }}
         onRest={(el) => showCard(item, el)}
         onLeave={hideCard}
       />
@@ -788,10 +826,7 @@ export function ThreadList({
       </dialog>
       <div className="border-t border-border p-2">
         <ConnectionStatus hostId={host.id} />
-        <Footer
-          onOpenSettings={onOpenSettings}
-          onOpenUsage={() => onSelect(host.id, { kind: "usage" })}
-        />
+        <Footer onOpenSettings={onOpenSettings} />
       </div>
     </>
   );
@@ -1069,10 +1104,7 @@ function RepoFilterMenu({
  * The footer's buttons: Profile, which opens Settings > Account and shows the account's picture or
  * initials (0037), Settings, Usage, and Update when `updatable` (Update.tsx).
  */
-function Footer({
-  onOpenSettings,
-  onOpenUsage,
-}: Pick<ThreadListProps, "onOpenSettings"> & { onOpenUsage: () => void }) {
+function Footer({ onOpenSettings }: Pick<ThreadListProps, "onOpenSettings">) {
   const profile = useProfile();
   return (
     <div className="flex items-center gap-1">
@@ -1085,7 +1117,7 @@ function Footer({
       <IconButton label="Settings" command="settings" onClick={() => onOpenSettings("general")}>
         <Settings />
       </IconButton>
-      <IconButton label="Usage" onClick={onOpenUsage}>
+      <IconButton label="Usage" onClick={() => onOpenSettings("usage")}>
         <ChartNoAxesColumn />
       </IconButton>
       {window.parallax.updatable && <UpdateButton />}
@@ -1098,7 +1130,9 @@ function Footer({
  * its runs ask of the user or its age. Its tooltip counts its agents, and names its host when there
  * are several. Where its host's plxd can edit or delete Projects, hovering or focusing it swaps the
  * status for its actions, which also open by right-clicking the row: Rename, which edits the name
- * in place, Change icon, which opens the icon picker under the row's icon, and Delete….
+ * in place, Change icon, which opens the icon picker under the row's icon, Full access…, which
+ * moves a Project not yet in Bypass there for good (0042), as Create Project now starts every
+ * one, Autonomy…, which sets who answers its children's questions (0043), and Delete….
  */
 function ProjectRow({
   project,
@@ -1108,6 +1142,8 @@ function ProjectRow({
   selected,
   badge,
   editable,
+  moded,
+  autonomous,
   iconImageBytes,
   onOpen,
   onUpdate,
@@ -1122,6 +1158,10 @@ function ProjectRow({
   /** Its Mod+number badge, shown in place of its status while Mod is held. */
   badge?: ReactNode;
   editable: boolean;
+  /** Whether its host's plxd keeps its permission mode (`projectPermission`). */
+  moded: boolean;
+  /** Whether its host's plxd keeps its autonomy (`projectAutonomy`, 0043). */
+  autonomous: boolean;
   /** Its host's cap on an icon image, where its plxd keeps them. */
   iconImageBytes?: number;
   onOpen: () => void;
@@ -1137,6 +1177,12 @@ function ProjectRow({
   const button = useRef<HTMLButtonElement>(null);
   const iconSpot = useRef<HTMLSpanElement>(null);
   const picker = useRef<HTMLDivElement>(null);
+  const autonomyDialog = useRef<HTMLDialogElement>(null);
+  const accessDialog = useRef<HTMLDialogElement>(null);
+  // A Project made before full access was the only mode, such as one on Auto, can move to it.
+  const upgradable = moded && project.permission !== "bypass";
+  // The level picked in Autonomy…, which opens on the Project's own.
+  const [autonomy, setAutonomy] = useState<ProjectAutonomy>("routine");
   // The name the field opened with, while Rename is open.
   const [renaming, setRenaming] = useState<string>();
   // The new name, shown until plxd answers.
@@ -1174,7 +1220,7 @@ function ProjectRow({
   };
 
   const icon = <ProjectIcon icon={project.icon} className="size-4" />;
-  const actionable = editable || !!onDelete;
+  const actionable = editable || upgradable || autonomous || !!onDelete;
   const tooltip =
     [runs.length > 0 && `${runs.length} ${runs.length === 1 ? "agent" : "agents"}`, host?.name]
       .filter(Boolean)
@@ -1287,6 +1333,29 @@ function ProjectRow({
                 </button>
               </>
             )}
+            {upgradable && (
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItem}
+                onClick={choose(() => accessDialog.current?.showModal())}
+              >
+                Full access…
+              </button>
+            )}
+            {autonomous && (
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItem}
+                onClick={choose(() => {
+                  setAutonomy(project.autonomy ?? "routine");
+                  autonomyDialog.current?.showModal();
+                })}
+              >
+                Autonomy…
+              </button>
+            )}
             {onDelete && (
               <button
                 type="button"
@@ -1310,7 +1379,82 @@ function ProjectRow({
           maxImageBytes={iconImageBytes}
         />
       )}
+      {upgradable && (
+        <SettingDialog
+          ref={accessDialog}
+          label={`${project.name} full access`}
+          action="Give full access"
+          onSave={() => void onUpdate({ permission: "bypass" })}
+        >
+          <p className="text-[13px] font-medium">Full access</p>
+          <p className="mt-1 text-[12.5px] text-muted-foreground">
+            New agents in this Project run commands and edit files without asking, as in new
+            Projects. Agents running now keep asking until they next start. Agents on Cursor, Grok
+            Build, Hermes Agent, Ollama Cloud, OpenRouter, and local models need it. You can't
+            switch back.
+          </p>
+        </SettingDialog>
+      )}
+      {autonomous && (
+        <SettingDialog
+          ref={autonomyDialog}
+          label={`${project.name} autonomy`}
+          onSave={() => void onUpdate({ autonomy })}
+        >
+          <AutonomyChoice value={autonomy} onChange={setAutonomy} />
+        </SettingDialog>
+      )}
     </li>
+  );
+}
+
+/** A Project setting's dialog: its choice, then Cancel and `action`, which closes it and saves. */
+function SettingDialog({
+  ref,
+  label,
+  action = "Save",
+  onSave,
+  children,
+}: {
+  ref: RefObject<HTMLDialogElement | null>;
+  label: string;
+  action?: string;
+  onSave: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <dialog
+      ref={ref}
+      aria-label={label}
+      className="m-auto w-[26rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+    >
+      {/* Save is the submit button, so Enter on a radio saves. */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          ref.current?.close();
+          onSave();
+        }}
+        className="px-5 pt-4 pb-4"
+      >
+        {children}
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => ref.current?.close()}
+            className="rounded-md px-3 py-1.5 text-[13px] hover:bg-hover"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground hover:opacity-90"
+          >
+            {action}
+          </button>
+        </div>
+      </form>
+    </dialog>
   );
 }
 
@@ -1358,10 +1502,13 @@ function ThreadRow({
   badge,
   nested,
   snoozable,
+  autoResumable,
   onOpen,
   onArchive,
   onSnooze,
   onDelete,
+  onFork,
+  onAutoResume,
   onRest,
   onLeave,
 }: {
@@ -1379,19 +1526,30 @@ function ThreadRow({
   nested?: boolean;
   /** Whether its plxd keeps seen and snooze state (`threadAttention`). */
   snoozable: boolean;
+  /** Whether its plxd resumes runs after usage limits (`autoResume`, 0049). */
+  autoResumable: boolean;
   onOpen: () => void;
   onArchive: () => void;
   onSnooze: (until: Date) => void;
   onDelete: () => void;
+  /** Forks it at its latest turn and opens the fork (0050), where its plxd forks threads. */
+  onFork?: (choice: ForkChoice) => Promise<RpcError | undefined>;
+  /** Sets its run's auto-resume override, or clears it with undefined. */
+  onAutoResume: (autoResume?: boolean) => void;
   onRest: (row: HTMLElement) => void;
   onLeave: () => void;
 }) {
   const menuId = useId();
   const snoozeId = useId();
+  const forkId = useId();
   const menu = useRef<HTMLDivElement>(null);
+  const forkMenu = useRef<HTMLDivElement>(null);
   const snoozeMenu = useRef<HTMLDivElement>(null);
   const actions = useRef<HTMLButtonElement>(null);
   const [custom, setCustom] = useState("");
+  // The host's auto-resume setting, read as the menu opens, for the run's own toggle.
+  const [hostResumes, setHostResumes] = useState<boolean>();
+  const resumes = run?.autoResume ?? hostResumes ?? true;
   const choose = (action: () => void) => () => {
     menu.current?.hidePopover();
     snoozeMenu.current?.hidePopover();
@@ -1409,7 +1567,12 @@ function ThreadRow({
   );
   const status =
     badge ??
-    (attention === "settled" ? (
+    (run?.status === "waiting" && attention === "settled" ? (
+      <span className="flex items-center gap-1 text-[11.5px] font-medium text-warning [&_svg]:size-3.5">
+        <AlarmClock aria-hidden />
+        {run.resumeAt ? `Resumes ${resumeTime(run.resumeAt)}` : "Waiting"}
+      </span>
+    ) : attention === "settled" ? (
       age(lastPrompt(thread))
     ) : (
       <AttentionBadge attention={attention} since={lastPrompt(thread)} />
@@ -1576,8 +1739,12 @@ function ThreadRow({
         role="menu"
         aria-label="Thread actions"
         onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-          if (e.newState === "open")
-            e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+          if (e.newState !== "open") return;
+          e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+          if (autoResumable && run)
+            void window.parallax.request(hostId, "host/settings/get", {}).then((answer) => {
+              if ("result" in answer) setHostResumes(answer.result.autoResume);
+            });
         }}
         onKeyDown={moveFocus}
         className={`${menuPanel("end")} min-w-36 p-1`}
@@ -1585,6 +1752,34 @@ function ThreadRow({
         <button type="button" role="menuitem" className={menuItem} onClick={choose(onArchive)}>
           {thread.archived ? "Unarchive" : "Archive"}
         </button>
+        {onFork && run && (
+          // Its latest turn forks once it ends; Fork's own menu opens under the actions button.
+          <button
+            type="button"
+            role="menuitem"
+            disabled={isRunning(run.status)}
+            title={isRunning(run.status) ? "Fork once this turn finishes" : undefined}
+            className={`${menuItem} disabled:opacity-50`}
+            onClick={choose(() =>
+              forkMenu.current?.showPopover({ source: actions.current ?? undefined }),
+            )}
+          >
+            Fork…
+          </button>
+        )}
+        {autoResumable && run && (
+          // Choosing the host's setting clears the override, so the thread follows the host again.
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={resumes}
+            className={menuItem}
+            onClick={choose(() => onAutoResume(!resumes === hostResumes ? undefined : !resumes))}
+          >
+            Resume after usage limits
+            {resumes && <Check aria-hidden className="ml-auto size-3.5" />}
+          </button>
+        )}
         <button
           type="button"
           role="menuitem"
@@ -1594,6 +1789,16 @@ function ThreadRow({
           Delete…
         </button>
       </div>
+      {onFork && run && (
+        <ForkMenu
+          ref={forkMenu}
+          id={forkId}
+          hostId={hostId}
+          run={run}
+          onFork={onFork}
+          align="end"
+        />
+      )}
     </li>
   );
 }
@@ -1611,6 +1816,7 @@ export const statusLooks: Partial<Record<AgentStatus, { Icon: LucideIcon; color:
   failed: { Icon: CircleAlert, color: "text-danger" },
   cancelled: { Icon: CircleSlash, color: "text-muted-foreground" },
   interrupted: { Icon: CirclePause, color: "text-amber-500" },
+  waiting: { Icon: AlarmClock, color: "text-warning" },
   accepted: { Icon: GitMerge, color: "text-violet-500" },
 };
 
@@ -1689,6 +1895,9 @@ function ThreadCard({
             <span className="line-clamp-2">
               {runStatusLabel(run.status)}
               {run.status === "failed" && run.error && `: ${run.error}`}
+              {run.status === "waiting" &&
+                run.resumeAt &&
+                `: resumes at ${resumeTime(run.resumeAt)}`}
             </span>
           </li>
         )}
@@ -1711,6 +1920,7 @@ export function age(time: string, now = Date.now()): string {
 /** Each Settings section's name and icon, in the nav's order. */
 const sections: { id: SettingsSection; name: string; Icon: LucideIcon }[] = [
   { id: "account", name: "Account", Icon: CircleUser },
+  { id: "usage", name: "Usage", Icon: ChartNoAxesColumn },
   { id: "general", name: "General", Icon: Settings },
   { id: "appearance", name: "Appearance", Icon: Palette },
   { id: "keybinds", name: "Keybinds", Icon: Keyboard },

@@ -1,5 +1,5 @@
 import { ArrowUpRight, Check, Copy, LoaderCircle, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { GithubStatus } from "../../protocol/generated/protocol";
 import { useCopy } from "../AgentChat";
@@ -7,6 +7,7 @@ import { statusLabel, useConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { localId, useHosts, type Host } from "../hosts";
 import { GitHubLogo } from "../logos";
+import { notify } from "../notifications";
 import { IconButton } from "../ui";
 import {
   HostPicker,
@@ -86,6 +87,42 @@ function GitHub({
     const timer = setInterval(() => void load(true), POLL_MS);
     return () => clearInterval(timer);
   }, [waiting, load]);
+
+  // An install or sign-in that ends is news, as a notification (PLX-507).
+  const before = useRef<GithubStatus>(undefined);
+  useEffect(() => {
+    const was = before.current;
+    before.current = status;
+    if (!was || !status) return;
+    const key = `github/${host.id}`;
+    const on = `On ${host.name}.`;
+    if (was.installing && !status.installing)
+      notify(
+        status.installed
+          ? { key, tone: "success", title: "GitHub CLI installed", body: on }
+          : {
+              key,
+              tone: "error",
+              title: "Couldn't install the GitHub CLI",
+              body: status.setupNote,
+            },
+      );
+    else if (was.signingIn && !status.signingIn)
+      if (status.signedIn)
+        notify({
+          key,
+          tone: "success",
+          title: "Signed in to GitHub",
+          body: status.account ? `As @${status.account}. ${on}` : on,
+        });
+      else if (status.setupNote)
+        notify({
+          key,
+          tone: "error",
+          title: "GitHub sign-in didn't finish",
+          body: status.setupNote,
+        });
+  }, [status, host.id, host.name]);
 
   const install = async () => {
     setFailed(undefined);

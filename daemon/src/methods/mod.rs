@@ -4,10 +4,10 @@
 //! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4
 //! `coordinator`: `project/start` in `project.rs`; #110 `threads`: `thread.rs`; PLX-227
 //! `projectEdit`: `project/update` in `project.rs`; PLX-338 `projectDelete`: `project/delete` in
-//! `project.rs`; PLX-318 `pullRequests`, PLX-328 `prDiff`, and PLX-373 `threadTools` (`pr/link`
+//! `project.rs`; 0042 `projectFromThreads`: `project/fromThreads` in `project.rs`; PLX-318 `pullRequests`, PLX-328 `prDiff`, and PLX-373 `threadTools` (`pr/link`
 //! and `pr/unlink`): `pr.rs`; PLX-359 `composerMenus`: `composer.rs`; PLX-336 `githubStatus`:
 //! `github/status` in `accounts.rs`; PLX-423 `githubSetup`: `github/install`, `github/signIn`, and
-//! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`; PLX-370 `queue`: `queue.rs`), and `host.rs` advertises the
+//! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`; PLX-370 `queue`: `queue.rs`; PLX-402 `questions`: `question.rs`; PLX-405 `memory`: `memory.rs`; PLX-410 `landing`: `land.rs`), and `host.rs` advertises the
 //! capability in `initialize`.
 
 mod accounts;
@@ -18,8 +18,11 @@ mod defaults;
 mod events;
 mod host;
 pub(crate) mod inbox;
+pub(crate) mod land;
+mod memory;
 mod pr;
 pub(crate) mod project;
+pub(crate) mod question;
 mod queue;
 mod thread;
 mod usage;
@@ -33,12 +36,12 @@ use parallax_protocol::methods::{
     AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentApprove, AgentAutoResume,
     AgentCancel, AgentCommands, AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFiles,
     AgentGitStatus, AgentImage, AgentList, AgentOpenPr, AgentPush, AgentRequestChanges,
-    AgentResumeNow, AgentSend, AgentStart, ContextList, ContextRead, ContextWrite, EventsSubscribe,
-    EventsUnsubscribe, GithubInstall, GithubSignInCancel, GithubSignInStart, GithubStatusGet,
-    HostHealth, HostSettingsGet, HostSettingsSet, HostVersion, InboxList, InboxSeen, Initialize,
-    PrAct, PrDiff, PrLink, PrUnlink, PrView, ProjectCreate, ProjectDelete, ProjectList,
-    ProjectStart, ProjectUpdate, ProvidersList, ProvidersRemove, ProvidersSave, RequestMethod,
-    UsageDaily, UsageGet, UsageHistory,
+    AgentResumeNow, AgentSend, AgentStart, AgentWait, ContextList, ContextRead, ContextWrite,
+    EventsSubscribe, EventsUnsubscribe, GithubInstall, GithubSignInCancel, GithubSignInStart,
+    GithubStatusGet, HostHealth, HostSettingsGet, HostSettingsSet, HostVersion, InboxList,
+    InboxSeen, Initialize, PrAct, PrDiff, PrLink, PrUnlink, PrView, ProjectCreate, ProjectDelete,
+    ProjectFromThreads, ProjectList, ProjectStart, ProjectUpdate, ProvidersList, ProvidersRemove,
+    ProvidersSave, RequestMethod, UsageDaily, UsageGet, UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -54,14 +57,23 @@ use crate::server::Daemon;
 /// What a request handler has to work with.
 pub(crate) struct Context {
     pub daemon: Arc<Daemon>,
-    /// Cancelled by `$/cancelRequest`, or when the connection closes.
+    /// Cancelled by `$/cancelRequest`, or when the connection closes at once. When the client
+    /// closes its side or plxd shuts down, the connection answers what it read first instead.
     pub cancel: CancellationToken,
+    /// Cancelled when the connection stops reading: the client closed its side or plxd is
+    /// shutting down. A request that waits for something else, like `agent/wait`, ends then.
+    pub stopped_reading: CancellationToken,
 }
 
 /// What the connection's writer sends for a request.
 #[derive(Debug)]
 pub(crate) enum Reply {
     Response(Response),
+    /// `initialize`'s answer, and whether a lagging subscription gets `events/resync`.
+    Initialized {
+        response: Response,
+        resync_notice: bool,
+    },
     /// Send the response, then start delivering the subscription's events.
     Subscribe {
         response: Response,
@@ -132,6 +144,9 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
             .await
             .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
         name if name.starts_with("queue/") => queue::dispatch(&context, &request).await,
+        name if name.starts_with("question/") => question::dispatch(&context, &request).await,
+        name if name.starts_with("memory/") => memory::dispatch(&context, &request).await,
+        name if name.starts_with("land/") => land::dispatch(&context, &request).await,
         name if thread::handles(name) => thread::dispatch(&context, &request).await,
         EventsSubscribe::NAME => {
             let subscribed = match request.params() {
@@ -267,6 +282,9 @@ async fn project_method(
         ProjectDelete::NAME => {
             handle::<ProjectDelete, _, _>(request, |p| project::delete(context, p)).await
         }
+        ProjectFromThreads::NAME => {
+            handle::<ProjectFromThreads, _, _>(request, |p| project::from_threads(context, p)).await
+        }
         InboxList::NAME => handle::<InboxList, _, _>(request, |p| inbox::list(context, p)).await,
         InboxSeen::NAME => handle::<InboxSeen, _, _>(request, |p| inbox::seen(context, p)).await,
         _ => return None,
@@ -289,6 +307,8 @@ async fn providers_method(
         ProvidersSave::NAME => {
             handle::<ProvidersSave, _, _>(request, |p| async move {
                 daemon.providers.save(p.instance).await?;
+                // A lower reserve, or an instance turned on, may start a waiting child (0046).
+                daemon.agents.placement.notify_one();
                 Ok(list(false).await)
             })
             .await
@@ -350,6 +370,9 @@ async fn agent_method(context: &Context, request: &Request) -> Option<Result<Val
         AgentAutoResume::NAME => {
             handle::<AgentAutoResume, _, _>(request, |p| agent::auto_resume(context, p)).await
         }
+        AgentWait::NAME => {
+            handle::<AgentWait, _, _>(request, |p| crate::agents::wait::wait(context, p)).await
+        }
         _ => return None,
     })
 }
@@ -370,5 +393,85 @@ pub(crate) fn success(id: RequestId, result: &impl Serialize) -> Response {
     match serde_json::to_value(result) {
         Ok(value) => Response::success(id, value),
         Err(error) => Response::error(Some(id), ErrorObject::internal_error(error)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use parallax_protocol::jsonrpc::Request;
+    use parallax_protocol::methods::{HostSettingsSet, RequestMethod, ThreadSearch};
+    use serde_json::json;
+    use tokio_util::sync::CancellationToken;
+
+    use super::{Context, Reply, dispatch};
+    use crate::server::Daemon;
+
+    /// Answers `M` with `params` through the dispatcher, as a connection would.
+    async fn call<M: RequestMethod>(daemon: Arc<Daemon>, params: serde_json::Value) -> M::Result {
+        let context = Context {
+            daemon,
+            cancel: CancellationToken::new(),
+            stopped_reading: CancellationToken::new(),
+        };
+        let request = Request {
+            id: 1.into(),
+            method: M::NAME.to_owned(),
+            params: Some(params),
+        };
+        let Reply::Response(response) = dispatch(context, request).await else {
+            panic!("expected a response");
+        };
+        response.into_result().unwrap()
+    }
+
+    /// `thread/search` runs on the reader, so while the reader is busy the search waits and a
+    /// write doesn't (PLX-457). The blocked job stands in for a slow search.
+    #[tokio::test]
+    async fn a_busy_reader_holds_up_search_but_not_a_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let reader = Arc::clone(&daemon);
+        let blocked = tokio::spawn(async move {
+            reader
+                .reader
+                .run(&CancellationToken::new(), move |_| {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Ok(())
+                })
+                .await
+        });
+        tokio::task::spawn_blocking(move || started_rx.recv().unwrap())
+            .await
+            .unwrap();
+
+        let search = tokio::spawn(call::<ThreadSearch>(
+            Arc::clone(&daemon),
+            json!({ "query": "notes" }),
+        ));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!search.is_finished(), "the search waits for the reader");
+
+        let settings = tokio::time::timeout(
+            Duration::from_secs(10),
+            call::<HostSettingsSet>(Arc::clone(&daemon), json!({ "autoResume": false })),
+        )
+        .await
+        .expect("the write doesn't wait for the reader");
+        assert!(!settings.auto_resume);
+        assert!(!search.is_finished(), "the reader is still busy");
+
+        release_tx.send(()).unwrap();
+        blocked.await.unwrap().unwrap();
+        let found = tokio::time::timeout(Duration::from_secs(10), search)
+            .await
+            .expect("the search answers once the reader is free")
+            .unwrap();
+        assert!(found.threads.is_empty());
     }
 }

@@ -1,10 +1,11 @@
-import { X } from "lucide-react";
+import { LockOpen, X } from "lucide-react";
 import { useId, useRef, useState, type Ref } from "react";
 
 import type {
   Project,
   ProjectCreateParams,
   ProjectIcon as ProjectIconValue,
+  ProjectPermission,
   Repo,
 } from "../protocol/generated/protocol";
 import { useConnection } from "./ConnectionStatus";
@@ -23,7 +24,9 @@ import { WorkspaceMenu, type Workspace } from "./WorkspaceMenu";
  * like Cursor's: the Project's icon and name, then its Workspace, a repository on any host. Open
  * it with `ref.current.showModal()`. Creating closes it and calls `onCreated` with the host it
  * was made on, and plxd's error stays in the dialog. The icon is a button that opens the icon
- * picker where the Workspace's host can keep one (`projectEdit`, 0032).
+ * picker where the Workspace's host can keep one (`projectEdit`, 0032). Where that host keeps a
+ * Project's permission mode (`projectPermission`, 0042), its agents get full access (Bypass), and
+ * the dialog says so.
  */
 export function NewProjectDialog({
   ref,
@@ -61,9 +64,13 @@ export function NewProjectDialog({
   let icon = iconable ? chosenIcon : undefined;
   // Nor an image where it would drop that (0038), after a Workspace on another host.
   if (icon?.image && maxImageBytes === undefined) icon = { ...icon, image: undefined };
+  const permission: ProjectPermission | undefined =
+    connection?.status === "connected" && "projectPermission" in connection.capabilities
+      ? "bypass"
+      : undefined;
   const [error, setError] = useState<string>();
   const [creating, setCreating] = useState(false);
-  // The last try's params, whose id a retry with the same host, name, path, and icon sends again
+  // The last try's params, whose id a retry with the same host, name, path, icon, and mode sends again
   // (0007).
   const attempt = useRef<ProjectCreateParams & { hostId: string }>(undefined);
 
@@ -86,7 +93,8 @@ export function NewProjectDialog({
       last.repoPath === workspace.repo.path &&
       last.icon?.name === icon?.name &&
       last.icon?.color === icon?.color &&
-      last.icon?.image === icon?.image
+      last.icon?.image === icon?.image &&
+      last.permission === permission
         ? last
         : {
             hostId: workspace.hostId,
@@ -94,13 +102,14 @@ export function NewProjectDialog({
             name,
             repoPath: workspace.repo.path,
             ...(icon && { icon }),
+            ...(permission && { permission }),
           };
     attempt.current = params;
     setCreating(true);
     setError(undefined);
     const project =
       params.hostId === hostId
-        ? await create(params.id, params.name, params.repoPath, params.icon)
+        ? await create(params.id, params.name, params.repoPath, params.icon, params.permission)
         : await createOn(params.hostId, params);
     setCreating(false);
     // Closed while it was creating, as with Escape: drop the late answer.
@@ -184,6 +193,17 @@ export function NewProjectDialog({
             onChooseFolder={() => void chooseFolder()}
           />
         </div>
+        {permission && (
+          <div className="mx-5 mb-5 rounded-lg bg-selected px-3 py-2.5">
+            <p className="flex items-center gap-2 text-[13px] font-medium">
+              <LockOpen aria-hidden className="size-4 text-muted-foreground" />
+              Full access
+            </p>
+            <p className="mt-0.5 pl-6 text-[12px] text-muted-foreground">
+              Agents in this Project run commands and edit files without asking.
+            </p>
+          </div>
+        )}
         <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-3">
           {error && (
             <p role="alert" className="min-w-0 text-[12px] text-danger">
@@ -218,13 +238,14 @@ const iconTile = "grid size-16 place-items-center rounded-2xl border border-bord
 /** `project/create` on a host that isn't open. Its list has the Project once it's opened. */
 async function createOn(
   hostId: string,
-  { id, name, repoPath, icon }: ProjectCreateParams,
+  { id, name, repoPath, icon, permission }: ProjectCreateParams,
 ): Promise<Project | string> {
   const answer = await window.parallax.request(hostId, "project/create", {
     id,
     name,
     repoPath,
     ...(icon && { icon }),
+    ...(permission && { permission }),
   });
   return "error" in answer ? describeError(answer.error) : answer.result.project;
 }

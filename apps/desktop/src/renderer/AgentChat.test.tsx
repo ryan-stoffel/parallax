@@ -13,16 +13,24 @@ import type {
   AgentTodoItem,
   AgentToolStatus,
   LoggedEvent,
+  ParallaxEvent,
 } from "../protocol/generated/protocol";
 import { activity, AgentChat, linkIcon, RowView, RunTab, TranscriptView } from "./AgentChat";
 import { Composer } from "./Composer";
+import { ForkContext } from "./Fork";
 import { GitHubLogo, LinearLogo } from "./logos";
+import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
 import { ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { dragThread } from "./threadDrag";
 import { emptyThreads } from "./threads";
 import type { Item } from "./transcript";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// The real split, watched, to see which messages take it.
+vi.mock("./markdownBlocks", async (actual) => {
+  const real = await actual<typeof import("./markdownBlocks")>();
+  return { ...real, markdownBlocks: vi.fn(real.markdownBlocks) };
+});
 // happy-dom has no popovers. Menus are in the DOM either way.
 HTMLElement.prototype.hidePopover = () => {};
 // happy-dom lays nothing out. Give the transcript a tall viewport and each row a
@@ -95,6 +103,48 @@ test("a prompt shows when it was sent and copies its text, on hover", async () =
   );
   expect(writeText).toHaveBeenCalledWith("Fix the build");
   expect(document.querySelector('button[aria-label="Copied"]')).not.toBeNull();
+});
+
+test("in a fork, the history it copied is muted and offers no Fork, and the latest turn waits for the run", async () => {
+  window.parallax = {
+    connectionState: async () => ({ status: "connecting" as const }),
+    onConnectionState: () => () => {},
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  const copiedAt = "2026-10-04T10:00:00.000Z";
+  const rows: Item[] = [
+    { kind: "user", key: "p", text: "Plan it", at: copiedAt },
+    { kind: "tool", key: "t1", callId: "1", name: "Bash", status: "ok", at: copiedAt },
+    { kind: "assistant", key: "a1", text: "Planned", at: copiedAt },
+    { kind: "user", key: "f", text: "Build it", turnId: "turn-2", at: "2026-10-04T10:05:00Z" },
+    { kind: "assistant", key: "a2", text: "Built", at: "2026-10-04T10:06:00Z" },
+    { kind: "user", key: "g", text: "Ship it", turnId: "turn-3", at: "2026-10-04T10:07:00Z" },
+  ];
+  const onFork = vi.fn(async () => undefined);
+  const run = { id: "fork", status: "running", backend: "claude" } as AgentRun;
+  render(
+    <ForkContext value={{ hostId: "local", run, onFork }}>
+      <TranscriptView rows={rows} sent={new Map()} live copiedAt={copiedAt} />
+    </ForkContext>,
+  );
+  const copied = [...document.querySelectorAll("[data-copied]")].map((e) => e.textContent);
+  expect(copied).toEqual([expect.stringContaining("Plan it"), expect.anything(), "Planned"]);
+  // Its copied work's times are all the fork's creation, so it says neither how long nor "briefly".
+  const work = document
+    .querySelectorAll("[data-copied]")[1]!
+    .querySelector("button[aria-expanded]")!;
+  expect(work.textContent).toContain("Worked");
+  expect(work.textContent).not.toContain("Worked briefly");
+  expect(document.querySelector("[data-copied]")!.className).toContain("opacity-60");
+  // A copied message's logged time is the fork's, so it shows none.
+  expect(document.querySelector("[data-copied] time")).toBeNull();
+  const forks = () => [...document.querySelectorAll('button[aria-label="Fork from here"]')];
+  expect(forks()).toHaveLength(1);
+  expect(forks()[0]!.closest(".group\\/prompt")!.textContent).toContain("Build it");
+  const keep = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) =>
+    b.textContent?.startsWith("Keep"),
+  )!;
+  await act(async () => keep.click());
+  expect(onFork).toHaveBeenCalledWith("turn-2", {});
 });
 
 test("a user message shows its text, or a neutral label when the log has none", () => {
@@ -227,6 +277,68 @@ test("an assistant message renders Markdown, but never raw HTML or images", () =
   expect(links.map((a) => a.textContent)).toEqual(["docs", "a diagram"]);
   // Its file: source is unsafe, so it has no href at all rather than an empty one.
   expect(links[1]!.hasAttribute("href")).toBe(false);
+});
+
+test("a streaming message renders as the whole text does, at every line", () => {
+  // Past SPLIT_FROM, so each reply renders block by block.
+  const lead = "A long reply opens with a paragraph. ".repeat(30) + "\n\n";
+  const replies = [
+    [
+      "Setext\n===\n\nIntro with `code` and **bold**.",
+      "- loose\n\n- list\n  continued\n\n  - nested\n\n    ```sh\n    cargo test\n\n    ```",
+      "1. one\n\n2) two\n\n10. ten",
+      "    indented code\n\n    more\n\n> quote\n> lines",
+      "| a | b |\n| - | - |\n| 1 | 2 |\n\n---\n\n- [x] done\n- [ ] not",
+      "```ts\nconst a = 1;\n\n~~~\n```\n\n~~~~\n```\n\n~~~~\n\nEnd.",
+      "- tight\n- list\n\nText\n\n  ```\n  indented fence\n  ```\n\nEnd.",
+    ].join("\n\n"),
+    // A list item's fence that a column-0 fence ends, which opens a new one.
+    "1. Run:\n   ```sh\n   cargo test\n```\n\nThen check.\n\nDone.",
+    // A fence on a list marker's line.
+    "- ```\n  a\n  ```\n\nText\n\n```\ncode\n\nmore\n```",
+    // A fence inside an HTML block.
+    "<details>\n```ts\nconst a = 1;\n\nconst b = 2;\n```\n\n</details>\n\nAfter",
+    "```\r\ncode\r\n\r\nmore\r\n```\r\n\r\n- a\r\n\r\n- b\r\n-\r\n\r\nEnd",
+    // Definitions inside containers.
+    "See [x].\n\n> [x]: https://example.com",
+    "See [x].\n\nok\n\n- [x]: https://example.com",
+    "A[^1]\n\nB\n\n> [^1]: Note",
+    "a\n\u00a0\nb",
+    // A loose list whose next item, while it arrives, reads as a paragraph.
+    "1. a\n\n2. b\n\n3. c\n\nText\n\n- d\n\n- e",
+  ];
+  // A row in a root of its own, which keeps it across renders, as the transcript does.
+  const view = () => {
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    return (text: string, partial: boolean) => {
+      const row: Item = { kind: "assistant", key: "a", text, partial };
+      act(() => root.render(<RowView row={row} live={false} open={false} onToggle={() => {}} />));
+      return container.innerHTML.replaceAll(">\n<", "><");
+    };
+  };
+  for (const reply of replies.map((r) => lead + r)) {
+    const streaming = view();
+    // Each length that ends a line or stops in its first characters, which decide its kind.
+    for (let n = 1; n <= reply.length; n++) {
+      const column = n - 1 - reply.lastIndexOf("\n", n - 1);
+      if (column > 4 && n < reply.length && reply[n] !== "\n") continue;
+      const text = reply.slice(0, n);
+      expect(streaming(text, true), JSON.stringify(text)).toBe(view()(text, false));
+    }
+  }
+  // Hundreds of renders, a few seconds when other files run alongside.
+}, 30_000);
+
+test("a short streaming message renders whole, without the split", () => {
+  vi.mocked(markdownBlocks).mockClear();
+  const text = "Short.\n\nStill short.";
+  row({ kind: "assistant", key: "a", text, partial: true });
+  expect(markdownBlocks).not.toHaveBeenCalled();
+  expect(document.querySelectorAll(".markdown p")).toHaveLength(2);
+  act(() => unmount());
+  row({ kind: "assistant", key: "a", text: text.padEnd(SPLIT_FROM, "!"), partial: true });
+  expect(markdownBlocks).toHaveBeenCalled();
 });
 
 test("a code block names its language, highlights it, and copies its text", async () => {
@@ -641,7 +753,7 @@ const sampleRun = (logged[0]!.event as { run: AgentRun }).run;
  * when it can't replay that far back. The first `resyncs` subscribes resync anyway.
  * plxd advertises `capabilities`, `agent/send` answers the run as `sent` leaves it (running by
  * default), `agent/openPr` answers `prUrl`, or fails with `prError`, and `agent/image` a tiny PNG.
- * `connect` changes the connection's state.
+ * `connect` changes the connection's state, and `traffic` moves the scope's log to `listSeq`.
  */
 function fakeBridge(
   seq: number,
@@ -657,7 +769,9 @@ function fakeBridge(
 ) {
   let listener: (m: SubscriptionMessage) => void = () => {};
   const connections = new Set<(hostId: string, state: ConnectionState) => void>();
-  const request = vi.fn(async (_host: string, method: string, params: { after?: number }) => {
+  type Params = { after?: number; before?: number };
+  const request = vi.fn(async (_host: string, method: string, params: Params) => {
+    if (method === "queue/list") return { result: { messages: [] }, logId: "log-1" };
     if (method === "agent/list") return { result: { runs: [], seq: listSeq }, logId: "log-1" };
     if (method === "agent/cancel" && cancelError)
       return { error: { code: -32000, message: cancelError } };
@@ -668,6 +782,13 @@ function fakeBridge(
     if (method === "agent/image")
       return { result: { mediaType: "image/png", data: "AAAA" }, logId: "log-1" };
     if (method !== "agent/events") return { result: {}, logId: "log-1" };
+    if (params.before !== undefined) {
+      const older = logged.filter((e) => e.seq < params.before! && e.seq <= seq);
+      return {
+        result: { events: older.slice(-2), more: older.length > 2, run: sampleRun, seq: listSeq },
+        logId: "log-1",
+      };
+    }
     const rest = logged.filter((e) => e.seq > params.after! && e.seq <= seq);
     return { result: { events: rest.slice(0, 2), more: rest.length > 2 }, logId: "log-1" };
   });
@@ -699,6 +820,9 @@ function fakeBridge(
     emit: (m: SubscriptionMessage) => act(() => listener(m)),
     connect: (state: ConnectionState) =>
       act(() => connections.forEach((connection) => connection("local", state))),
+    traffic: (seq: number) => {
+      listSeq = seq;
+    },
   };
 }
 
@@ -719,7 +843,7 @@ test("loads every page, subscribes after the last seq, and appends live events",
   expect(request).toHaveBeenCalledWith("local", "agent/events", { runId, after: 0 });
   expect(subscribe).toHaveBeenCalledWith(
     "local",
-    { after: 2, project: "01a0d349-6e00-7c9e-80e2-0426486a8cae", logId: "log-1" },
+    { after: 2, project: "01a0d349-6e00-7c9e-80e2-0426486a8cae", run: runId, logId: "log-1" },
     expect.any(Function),
   );
   expect(transcriptText()).toContain("Add a README");
@@ -739,12 +863,58 @@ test("loads every page, subscribes after the last seq, and appends live events",
   expect(unsubscribe).toHaveBeenCalled();
 });
 
+test("with eventsBefore, opens at the newest page and loads older ones near the top (PLX-490)", async () => {
+  const { request, subscribe, emit } = fakeBridge(8, {
+    listSeq: 20,
+    capabilities: { eventsBefore: {} },
+  });
+  await renderChat();
+  const befores = () =>
+    request.mock.calls.filter(([, method]) => method === "agent/events").map(([, , p]) => p.before);
+  // The newest page holds only the run's last updates, so the one before it loads too.
+  expect(befores()).toEqual([Number.MAX_SAFE_INTEGER, 7]);
+  expect(request).not.toHaveBeenCalledWith("local", "agent/list", expect.anything());
+  // After the log's seq from before the newest page, which is past that page's last.
+  expect(subscribe).toHaveBeenCalledOnce();
+  expect(subscribe.mock.calls[0]![1]).toMatchObject({ after: 20, run: runId, logId: "log-1" });
+  expect(transcriptText()).not.toContain("Add a README");
+
+  const text = "Live, and kept when older pages come in.";
+  const event: ParallaxEvent = { kind: "agent.output", runId, items: [{ kind: "text", text }] };
+  emit({ type: "event", event: { subscription: "s", seq: 21, time: "", event } });
+  // Scrolled to within a screen of the top, the rest loads, a page at a time: four in all.
+  const tall = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(10_000);
+  act(() => void document.querySelector('[role="log"]')!.dispatchEvent(new Event("scroll")));
+  await settle();
+  tall.mockRestore();
+  expect(befores()).toEqual([Number.MAX_SAFE_INTEGER, 7, 5, 3]);
+  const shown = transcriptText();
+  expect(shown.indexOf("Add a README")).toBeGreaterThanOrEqual(0);
+  expect(shown.indexOf("Add a README")).toBeLessThan(shown.indexOf("Mentioned the tests"));
+  expect(shown.indexOf("Mentioned the tests")).toBeLessThan(shown.indexOf(text));
+});
+
 test("subscribes after the scope's snapshot seq, so repeated resyncs end", async () => {
   // The run's last event is seq 8, but its project's log is at 1000.
   const { subscribe } = fakeBridge(8, { listSeq: 1000, resyncs: 2 });
   await renderChat();
   await settle();
   expect(subscribe.mock.calls.map(([, params]) => params.after)).toEqual([1000, 1000, 1000]);
+  expect(transcriptText()).toContain("Add a README");
+});
+
+test("a reconnect after siblings' traffic subscribes from the new snapshot, so it never resyncs", async () => {
+  // A quiet run's subscription only sees its own events, so its last seq falls behind the scope.
+  const { subscribe, unsubscribe, connect, traffic } = fakeBridge(8);
+  await renderChat();
+  const failed = { reason: "exited", message: "plxd exited" } as const;
+  connect({ status: "failed", retrying: true, error: failed });
+  expect(unsubscribe).toHaveBeenCalled();
+  traffic(50_000); // Far past what plxd's window replays from seq 8.
+  connect({ status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} });
+  await settle();
+  // The fake answers a subscribe from before `listSeq` with a resync, which would add a third.
+  expect(subscribe.mock.calls.map(([, params]) => params.after)).toEqual([8, 50_000]);
   expect(transcriptText()).toContain("Add a README");
 });
 
@@ -1702,4 +1872,124 @@ test("a web link gets its site's logo, or a globe, and other links none (PLX-330
   expect(linkIcon("mailto:a@b.c")).toBeUndefined();
   expect(linkIcon("archived.md")).toBeUndefined();
   expect(linkIcon(undefined)).toBeUndefined();
+});
+
+test("queued messages track host updates, Enter queues, and Cmd+Enter steers (PLX-376)", async () => {
+  const { request, emit } = fakeBridge(4, { capabilities: { queue: {} } });
+  await renderChat();
+  expect(request).toHaveBeenCalledWith("local", "queue/list", { runId });
+  type("Do this next");
+  await act(async () =>
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+  );
+  const queued = request.mock.calls.find(([, method]) => method === "agent/send")![2] as {
+    turnId: string;
+  };
+  expect(queued).toMatchObject({ delivery: "queue", text: "Do this next" });
+  const update = (
+    messages: { id: string; text: string; images: number; threads: string[] }[],
+    seq: number,
+  ) =>
+    emit({
+      type: "event",
+      event: {
+        subscription: "s",
+        seq,
+        time: "",
+        event: { kind: "queue.updated", runId, messages },
+      },
+    });
+  update([{ id: queued.turnId, text: "Do this next", images: 0, threads: [] }], 50);
+  expect(document.querySelector('[aria-label="Queued messages"]')?.textContent).toContain(
+    "Do this next",
+  );
+  expect(transcriptText()).not.toContain("Do this next");
+  update(
+    [{ id: queued.turnId, text: "Edited on another device", images: 1, threads: [runId] }],
+    51,
+  );
+  expect(document.querySelector('[aria-label="Queued messages"]')?.textContent).toContain(
+    "Edited on another device",
+  );
+  type("Change direction now");
+  await act(async () =>
+    composer().dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }),
+    ),
+  );
+  expect(
+    request.mock.calls.filter(([, method]) => method === "agent/send").at(-1)![2],
+  ).toMatchObject({ delivery: "steer", text: "Change direction now" });
+  update([], 52);
+  expect(document.querySelector('[aria-label="Queued messages"]')).toBeNull();
+  expect(transcriptText()).not.toContain("Do this next");
+});
+
+test("with queueing, Stop puts the last queued message back and offers the rest again (PLX-376)", async () => {
+  const { request, emit } = fakeBridge(4, { capabilities: { queue: {} } });
+  await renderChat();
+  const sends = () => request.mock.calls.filter(([, method]) => method === "agent/send");
+  for (const text of ["First", "Second"]) {
+    type(text);
+    await act(async () =>
+      composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
+  }
+  const [first, second] = sends().map(([, , params]) => (params as { turnId: string }).turnId);
+  const event = (seq: number, e: object) =>
+    emit({ type: "event", event: { subscription: "s", seq, time: "", event: e as never } });
+  event(50, {
+    kind: "queue.updated",
+    runId,
+    messages: [
+      { id: first, text: "First, edited", images: 0, threads: [] },
+      { id: second, text: "Second", images: 0, threads: [] },
+    ],
+  });
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.click(),
+  );
+  expect(composer().textContent).toBe("Second");
+  event(51, {
+    kind: "agent.output",
+    runId,
+    items: [
+      { kind: "followUpDropped", turnId: first },
+      { kind: "followUpDropped", turnId: second },
+    ],
+  });
+  event(52, { kind: "queue.updated", runId, messages: [] });
+  const sendAgain = () =>
+    [...document.querySelectorAll("button")].filter((b) => b.textContent === "Send again");
+  expect(sendAgain()).toHaveLength(1);
+  await act(async () => sendAgain()[0]!.click());
+  expect(sends().at(-1)![2]).toMatchObject({ text: "First, edited" });
+});
+
+test("a queued message cancelled from here leaves no notice or Send again (PLX-376)", async () => {
+  const { request, emit } = fakeBridge(4, { capabilities: { queue: {} } });
+  await renderChat();
+  type("Never mind");
+  await act(async () =>
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+  );
+  const { turnId } = request.mock.calls.find(([, method]) => method === "agent/send")![2] as {
+    turnId: string;
+  };
+  const event = (seq: number, e: object) =>
+    emit({ type: "event", event: { subscription: "s", seq, time: "", event: e as never } });
+  event(50, {
+    kind: "queue.updated",
+    runId,
+    messages: [{ id: turnId, text: "Never mind", images: 0, threads: [] }],
+  });
+  const before = transcriptText();
+  await act(async () =>
+    document
+      .querySelector<HTMLButtonElement>('button[aria-label="Cancel queued message 1"]')!
+      .click(),
+  );
+  event(51, { kind: "agent.output", runId, items: [{ kind: "followUpDropped", turnId }] });
+  event(52, { kind: "queue.updated", runId, messages: [] });
+  expect(transcriptText()).toBe(before);
 });

@@ -71,8 +71,9 @@ pub struct InboxListParams {
 pub struct InboxListResult {
     /// Every item, oldest first.
     pub items: Vec<InboxItem>,
-    /// The `seq` of the last event the list reflects. Subscribe to the Project's events with
-    /// `after` set to it for the items added since.
+    /// The event log's `seq` from before the list was read. Subscribe to the Project's events
+    /// with `after` set to it for the items added since. The list may already reflect some events
+    /// after it, and replaying them is harmless.
     pub seq: u64,
 }
 

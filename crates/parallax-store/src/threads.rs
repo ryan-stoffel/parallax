@@ -1,5 +1,5 @@
 use jiff::Timestamp;
-use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
 use crate::error::StoreError;
@@ -186,6 +186,23 @@ fn like_pattern(text: &str) -> String {
     pattern
 }
 
+/// `query` as an FTS5 query for [`Store::search_threads`]: every word of it, each as a prefix.
+/// Each word is quoted, its own quotes doubled, so nothing in it is an operator. A word with no
+/// letter or digit is dropped, as the tokenizer would drop it; with none left, the query is
+/// `""`, which matches nothing. A NUL, which FTS5 takes as the query's end, separates words.
+fn match_query(query: &str) -> String {
+    let words: Vec<String> = query
+        .split(|c: char| c.is_whitespace() || c == '\0')
+        .filter(|word| word.chars().any(char::is_alphanumeric))
+        .map(|word| format!("\"{}\"*", word.replace('"', "\"\"")))
+        .collect();
+    if words.is_empty() {
+        "\"\"".to_owned()
+    } else {
+        words.join(" ")
+    }
+}
+
 fn fetch_repo(conn: &Connection, sql_where: &str, key: &str) -> Result<Option<Repo>, StoreError> {
     conn.query_row(
         &format!("SELECT {REPO_COLUMNS} FROM repos WHERE {sql_where}"),
@@ -217,9 +234,7 @@ impl Store {
     /// [`StoreError::IdConflict`] if `id` is taken by an entry with another path, or a database
     /// error.
     pub fn add_repo(&mut self, id: Uuid, fields: &RepoFields) -> Result<Repo, StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         if let Some(existing) = fetch_repo(&tx, "path = ?1", &fields.path)? {
             return Ok(existing);
         }
@@ -306,9 +321,7 @@ impl Store {
         worktree: Option<&WorktreeFields>,
         thread: &ThreadFields,
     ) -> Result<(Thread, Run, Option<Worktree>), StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         let worktree = worktree
             .map(|worktree| insert_worktree(&tx, id, worktree))
             .transpose()?;
@@ -361,41 +374,61 @@ impl Store {
         Ok(threads)
     }
 
-    /// The threads whose title or messages contain `query`, the one with the newest message
-    /// first, at most `limit` (PLX-372). A message is the run's prompt, a sent turn's text, or the agent's
-    /// reply: a `text` item of the run's `agent.output` events. Tool calls and their output don't
-    /// count. Matching is SQLite's `LIKE`: case-insensitive for ASCII letters only.
+    /// The threads whose title contains `query` or whose messages hold every word of it, at most
+    /// `limit` (PLX-372, PLX-487). A message is the run's prompt, a sent turn's text, or the
+    /// agent's reply, as migration 36's triggers and [`Store::index_run_text`] indexed them; tool
+    /// calls and their output don't count. A word matches any word it starts, ignoring case and
+    /// accents, and punctuation is ignored. Title matches come first, then the one with the
+    /// newest message, as the thread list orders them.
     ///
     /// # Errors
     ///
     /// A database error, or an error if a stored id or timestamp is corrupt.
     pub fn search_threads(&self, query: &str, limit: usize) -> Result<Vec<Thread>, StoreError> {
-        let pattern = like_pattern(query);
-        // The event's JSON holds a reply's text JSON-escaped, so this cheap test on the raw
-        // payload finds every event that could match, and only those are parsed.
-        let escaped = serde_json::to_string(query).unwrap_or_default();
-        let payload_pattern = like_pattern(&escaped[1..escaped.len() - 1]);
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT {THREAD_COLUMNS} FROM threads WHERE
-                title LIKE ?1 ESCAPE '\\'
-                OR EXISTS (SELECT 1 FROM runs WHERE runs.id = threads.id
-                    AND runs.prompt LIKE ?1 ESCAPE '\\')
-                OR EXISTS (SELECT 1 FROM turns WHERE turns.run_id = threads.id
-                    AND turns.text LIKE ?1 ESCAPE '\\')
-                OR EXISTS (SELECT 1 FROM events, json_each(events.payload, '$.items') AS item
-                    WHERE events.run_id = threads.id AND events.kind = 'agent.output'
-                    AND events.payload LIKE ?2 ESCAPE '\\'
-                    AND json_extract(item.value, '$.kind') = 'text'
-                    AND json_extract(item.value, '$.text') LIKE ?1 ESCAPE '\\')
-             ORDER BY last_prompt_at DESC, id DESC LIMIT ?3"
+            "SELECT {THREAD_COLUMNS} FROM threads
+             WHERE title LIKE ?2 ESCAPE '\\' OR threads.id IN (
+                SELECT run_id FROM thread_text WHERE thread_text.id IN (
+                    SELECT rowid FROM thread_text_fts WHERE thread_text_fts MATCH ?1))
+             ORDER BY title LIKE ?2 ESCAPE '\\' DESC, last_prompt_at DESC, id DESC
+             LIMIT ?3"
         ))?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let rows = stmt.query_map(params![pattern, payload_pattern, limit], thread_from_row)?;
+        let rows = stmt.query_map(
+            params![match_query(query), like_pattern(query), limit],
+            thread_from_row,
+        )?;
         let mut threads = Vec::new();
         for row in rows {
             threads.push(into_thread(row?)?);
         }
         Ok(threads)
+    }
+
+    /// Indexes the agent's replies in `run_id`'s `agent.output` events logged since its newest
+    /// indexed reply, for [`Store::search_threads`] (PLX-487), as one row: the events' `text`
+    /// items. Its prompt and sent turns are indexed as they're stored. Called when a turn ends,
+    /// and for a run plxd stopped mid-turn, so a turn is one row however many batches it
+    /// streamed in, and compacting the turn later (decision record 0052) leaves the row alone.
+    /// Does nothing if nothing is new.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn index_run_text(&self, run_id: Uuid) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO thread_text (run_id, seq, text)
+             SELECT ?1, MAX(events.seq), group_concat(json_extract(item.value, '$.text'), char(10))
+             FROM events, json_each(events.payload, '$.items') AS item
+             WHERE events.run_id = ?1 AND events.kind = 'agent.output'
+                AND events.seq > (SELECT COALESCE(MAX(seq), 0) FROM thread_text
+                    WHERE run_id = ?1)
+                AND json_extract(item.value, '$.kind') = 'text'
+                AND json_extract(item.value, '$.text') IS NOT NULL
+             HAVING COUNT(*) > 0",
+            params![run_id.to_string()],
+        )?;
+        Ok(())
     }
 
     /// Archives thread `id` or brings it back, and returns it.
@@ -492,9 +525,7 @@ impl Store {
     ///
     /// A database error.
     pub fn delete_thread(&mut self, id: Uuid) -> Result<bool, StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         let existed = tx.execute("DELETE FROM threads WHERE id = ?1", params![id.to_string()])? > 0;
         delete_run_rows(&tx, id)?;
         tx.commit()?;

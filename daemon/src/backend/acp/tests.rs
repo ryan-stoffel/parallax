@@ -26,6 +26,7 @@ const PROMPT: &str = "Make a todo list of two items, then run the shell command 
 
 fn fixture(name: &str) -> &'static str {
     match name {
+        "thread-mcp" => include_str!("fixtures/thread-mcp.jsonl"),
         "approval" => include_str!("fixtures/approval.jsonl"),
         "plan" => include_str!("fixtures/plan.jsonl"),
         "resume" => include_str!("fixtures/resume.jsonl"),
@@ -37,6 +38,7 @@ fn fixture(name: &str) -> &'static str {
         "hermes" => include_str!("fixtures/hermes.jsonl"),
         "plan-refused" => include_str!("fixtures/plan-refused.jsonl"),
         "steer" => include_str!("fixtures/steer.jsonl"),
+        "recorded" => include_str!("fixtures/recorded.jsonl"),
         other => panic!("no fixture {other}"),
     }
 }
@@ -804,4 +806,191 @@ async fn a_steer_cancels_the_running_turn_and_goes_next() {
         stdin[4]["params"]["prompt"][0]["text"],
         "Change of plan: reply BANANA instead."
     );
+}
+
+/// The thread's server goes in `session/new` and `session/load` only with `approvals` or Bypass,
+/// and its tools then run without asking. A coordinator's go the same way (0042).
+#[tokio::test]
+async fn thread_mcp_is_injected_on_new_and_load_and_preapproved() {
+    for (resume, approvals, bypass, coordinator) in [
+        (false, true, false, false),
+        (true, true, false, false),
+        (false, false, false, false),
+        (false, false, true, false),
+        (false, false, true, true),
+    ] {
+        let fake = Fake::new("thread-mcp");
+        let mut request = fake.request();
+        let tools = Some(crate::backend::ThreadTools {
+            program: "/bin/plxd".into(),
+            data_dir: "/tmp/parallax data".into(),
+            run: request.run_id,
+        });
+        if coordinator {
+            request.thread = false;
+            request.policy = crate::backend::ToolPolicy::NoWrite;
+            request.coordinator_tools = tools;
+        } else {
+            request.thread_tools = tools;
+        }
+        let run_id = request.run_id;
+        request.approvals = approvals;
+        request.permission = bypass.then_some(AgentPermission::Bypass);
+        request.resume = resume.then(|| Resume::new("mcp-session"));
+        let events = run(
+            &fake,
+            request,
+            |_| panic!("Parallax tools must not ask"),
+            None,
+        )
+        .await;
+        assert!(matches!(outcome(&events), Outcome::Completed { .. }));
+        let messages = fake.stdin();
+        assert_eq!(
+            messages[1]["method"],
+            if resume {
+                "session/load"
+            } else {
+                "session/new"
+            }
+        );
+        let expected_servers = if approvals || bypass {
+            json!([{
+                "name": "plxd", "command": "/bin/plxd",
+                "args": ["mcp", "--data-dir", "/tmp/parallax data", "--thread", run_id.to_string()],
+                "env": [],
+            }])
+        } else {
+            json!([])
+        };
+        assert_eq!(messages[1]["params"]["mcpServers"], expected_servers);
+        assert_eq!(
+            messages[3]["result"]["outcome"]["optionId"],
+            if approvals || bypass {
+                "allow-once"
+            } else {
+                "reject-once"
+            }
+        );
+    }
+}
+
+/// A matching title alone never authorizes a shell or another server's tool.
+#[test]
+fn thread_mcp_autoapproval_is_scoped_to_the_injected_server_and_known_tools() {
+    use super::stream::{Step, Translator};
+    for (provider, tool, kind, injected, allowed) in [
+        ("plxd", "thread_list", "other", true, true),
+        ("user-server", "thread_list", "other", true, false),
+        ("plxd", "unknown", "other", true, false),
+        ("plxd", "thread_list", "execute", true, false),
+        ("plxd", "thread_list", "other", false, false),
+    ] {
+        let mut translator = Translator::default();
+        translator.asks = true;
+        translator.thread_tools = injected;
+        let update = json!({"method": "session/update", "params": {"update": {
+            "sessionUpdate": "tool_call", "toolCallId": "call", "kind": kind,
+            "title": "plxd: thread_list", "status": "pending",
+            "rawInput": {"providerIdentifier": provider, "toolName": tool}
+        }}});
+        translator.line(update.to_string().as_bytes());
+        let ask = json!({"id": 7, "method": "session/request_permission", "params": {
+            "toolCall": {"toolCallId": "call"},
+            "options": [{"optionId": "yes", "kind": "allow_once"}],
+        }});
+        let steps = translator.line(ask.to_string().as_bytes());
+        assert_eq!(
+            steps.iter().any(|step| matches!(step, Step::Ask(..))),
+            !allowed
+        );
+        let allowed_at_once = steps.iter().any(|step| {
+            matches!(step, Step::Reply(value) if value["result"]["outcome"]["optionId"] == "yes")
+        });
+        assert_eq!(allowed_at_once, allowed);
+    }
+}
+
+/// An agent that stays up after stdin closes, as Cursor does while a stdio MCP server it started
+/// is connected, is stopped once nothing is held for it, and its finished turn still completes.
+#[tokio::test]
+async fn an_agent_that_outlives_its_stdin_is_stopped_after_held_messages_are_released() {
+    let fake = Fake::new("resume");
+    fs::write(
+        fake.root().join("fixture.jsonl"),
+        format!("{}\n@linger\n", fixture("resume")),
+    )
+    .unwrap();
+    let mut request = fake.request();
+    request.resume = Some(Resume::new("0cb4faa6-1a77-49e3-a4c7-572c1a178f9a"));
+    let started = fake.backend.start(request).unwrap();
+    started.run.hold(true);
+    let mut events = started.events;
+    while !matches!(next(&mut events).await, Event::TurnFinished { .. }) {}
+    assert!(
+        tokio::time::timeout(Duration::from_secs(3), events.next())
+            .await
+            .is_err(),
+        "a held session stays alive for its queued message"
+    );
+    started.run.hold(false);
+    // The fake lingers for a minute, so only plxd stopping it ends the run this soon.
+    let finished = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Event::Finished { outcome, .. } = next(&mut events).await {
+                break outcome;
+            }
+        }
+    });
+    let outcome = finished.await.expect("plxd stops the agent");
+    assert!(matches!(outcome, Outcome::Completed { .. }), "{outcome:?}");
+}
+
+/// A turn that fails also closes stdin, so an agent that stays up after it is stopped too, and the
+/// run keeps its failure.
+#[tokio::test]
+async fn an_agent_that_outlives_a_failed_turn_is_stopped_and_the_run_fails() {
+    let fake = Fake::new("resume");
+    let lines = [
+        "@read",
+        r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}"#,
+        "@read",
+        r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s"}}"#,
+        "@read",
+        r#"{"jsonrpc":"2.0","id":3,"error":{"code":-32603,"message":"usage limit reached"}}"#,
+        "@linger",
+    ];
+    fs::write(fake.root().join("fixture.jsonl"), lines.join("\n") + "\n").unwrap();
+    let started = fake.backend.start(fake.request()).unwrap();
+    let mut events = started.events;
+    let finished = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Event::Finished { outcome, .. } = next(&mut events).await {
+                break outcome;
+            }
+        }
+    });
+    let outcome = finished.await.expect("plxd stops the agent");
+    let Outcome::Failed(failure) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert!(
+        failure.message.contains("usage limit reached"),
+        "{failure:?}"
+    );
+}
+
+/// A real session, recorded with `PLXD_RECORD_CLI` (PLX-493), replays to its snapshot: a read, a
+/// shell command that asks first, and the reply.
+#[tokio::test]
+async fn a_recorded_session_replays_to_its_snapshot() {
+    let fake = Fake::new("recorded");
+    crate::backend::record::assert_replays(
+        fake.backend.start(fake.request()).unwrap(),
+        std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/backend/acp/fixtures/recorded.events.jsonl"
+        )),
+    )
+    .await;
 }

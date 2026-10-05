@@ -38,7 +38,7 @@ export type ParallaxRequests = {
 	 */
 	"host/version": { params: HostVersionParams, result: HostVersionResult },
 	/**
-	 * `project/list`: every project, and the `seq` the list reflects.
+	 * `project/list`: every project, and the event log's `seq` from before the read.
 	 */
 	"project/list": { params: ProjectListParams, result: ProjectListResult },
 	/**
@@ -153,7 +153,8 @@ export type ParallaxRequests = {
 	 */
 	"agent/cancel": { params: AgentCancelParams, result: AgentRunResult },
 	/**
-	 * `agent/list`: every run, or one project's, and the `seq` the list reflects.
+	 * `agent/list`: every run, or one project's, and the event log's `seq` from before the
+	 * read.
 	 */
 	"agent/list": { params: AgentListParams, result: AgentListResult },
 	/**
@@ -220,8 +221,8 @@ export type ParallaxRequests = {
 	 */
 	"agent/approve": { params: AgentApproveParams, result: AgentApproveResult },
 	/**
-	 * `thread/list`: every repo entry and normal thread, and the `seq` the list reflects
-	 * (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
+	 * `thread/list`: every repo entry and normal thread, and the event log's `seq` from before
+	 * the read (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
 	 */
 	"thread/list": { params: ThreadListParams, result: ThreadListResult },
 	/**
@@ -328,8 +329,9 @@ export type ParallaxRequests = {
 	 */
 	"github/status": { params: GithubStatusParams, result: GithubStatus },
 	/**
-	 * `thread/search`: the host's threads whose messages contain a query, the one with the
-	 * newest message first (PLX-372). Gated on the `threadContext` capability.
+	 * `thread/search`: the host's threads whose title or messages match a query, title
+	 * matches first, then the one with the newest message (PLX-372, PLX-487). Gated on the
+	 * `threadContext` capability.
 	 */
 	"thread/search": { params: ThreadSearchParams, result: ThreadSearchResult },
 	/**
@@ -351,8 +353,8 @@ export type ParallaxRequests = {
 	 */
 	"host/settings/set": { params: HostSettingsSetParams, result: HostSettings },
 	/**
-	 * `inbox/list`: a Project's inbox, oldest first, and the `seq` the list reflects (PLX-401,
-	 * 0043). Gated on the `inbox` capability, like `inbox/seen`.
+	 * `inbox/list`: a Project's inbox, oldest first, and the event log's `seq` from before the
+	 * read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
 	 */
 	"inbox/list": { params: InboxListParams, result: InboxListResult },
 	/**
@@ -396,6 +398,71 @@ export type ParallaxRequests = {
 	 * `queue/steer`: sends a waiting message into the turn running now.
 	 */
 	"queue/steer": { params: QueueSteerParams, result: QueueResult },
+	/**
+	 * `question/ask`: records a Project child's question and wakes its coordinator; the
+	 * child goes on with its assumption (PLX-402, 0043). Gated on the `questions`
+	 * capability, like every `question/*` method.
+	 */
+	"question/ask": { params: QuestionAskParams, result: QuestionResult },
+	/**
+	 * `question/answer`: the coordinator's or the user's answer to a question.
+	 */
+	"question/answer": { params: QuestionAnswerParams, result: QuestionResult },
+	/**
+	 * `question/escalate`: the coordinator passes a question to the user.
+	 */
+	"question/escalate": { params: QuestionEscalateParams, result: QuestionResult },
+	/**
+	 * `question/list`: a Project's questions, oldest first.
+	 */
+	"question/list": { params: QuestionListParams, result: QuestionListResult },
+	/**
+	 * `memory/list`: a scope's brief, memory entries, knowledge, and proposals, with each
+	 * entry's header (PLX-405, 0044). Gated on the `memory` capability, like every
+	 * `memory/*` method.
+	 */
+	"memory/list": { params: MemoryListParams, result: MemoryListResult },
+	/**
+	 * `memory/read`: one memory file's header and body.
+	 */
+	"memory/read": { params: MemoryReadParams, result: MemoryReadResult },
+	/**
+	 * `memory/write`: writes the brief, knowledge, or an entry, as the user or a coordinator.
+	 */
+	"memory/write": { params: MemoryWriteParams, result: MemoryWriteResult },
+	/**
+	 * `memory/delete`: deletes a memory file.
+	 */
+	"memory/delete": { params: MemoryDeleteParams, result: MemoryDeleteResult },
+	/**
+	 * `memory/propose`: a thread proposes an entry, for its coordinator or the user.
+	 */
+	"memory/propose": { params: MemoryProposeParams, result: MemoryProposeResult },
+	/**
+	 * `land/queue`: queues a Project's finished child to land on its integration branch, as
+	 * the coordinator's `land` tool does (PLX-410, 0045). Gated on the `landing` capability,
+	 * like every `land/*` method.
+	 */
+	"land/queue": { params: LandQueueParams, result: LandResult },
+	/**
+	 * `land/approve`: lands a child waiting for the user's approval, in its turn.
+	 */
+	"land/approve": { params: LandApproveParams, result: LandResult },
+	/**
+	 * `land/sendBack`: sends a child waiting for approval the user's message instead.
+	 */
+	"land/sendBack": { params: LandSendBackParams, result: LandResult },
+	/**
+	 * `agent/wait`: waits until any or all of up to 50 runs are idle, or for at most 60 s,
+	 * without polling (PLX-451). Gated on the `agentWait` capability.
+	 */
+	"agent/wait": { params: AgentWaitParams, result: AgentWaitResult },
+	/**
+	 * `project/fromThreads`: makes a Project from threads on one repo entry, each with its
+	 * own worktree, starts its coordinator, and makes each thread its child (0042).
+	 * Idempotent on its client-generated ids. Gated on the `projectFromThreads` capability.
+	 */
+	"project/fromThreads": { params: ProjectFromThreadsParams, result: ProjectFromThreadsResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -409,6 +476,11 @@ export type ParallaxNotifications = {
 	 * `events/event`: one event for a subscription. plxd sends it.
 	 */
 	"events/event": EventsEventParams,
+	/**
+	 * `events/resync`: plxd ended a subscription that fell behind, and the connection
+	 * stays open. plxd sends it only to a client that declared `resyncNotice` (PLX-455).
+	 */
+	"events/resync": EventsResyncParams,
 };
 
 /**
@@ -427,7 +499,8 @@ export type InitializeParams = {
 	 */
 	client: ClientInfo,
 	/**
-	 * What the client supports.
+	 * What the client supports. `resyncNotice` (PLX-455): end a subscription that falls behind
+	 * with `events/resync` instead of closing the connection.
 	 */
 	capabilities: Capabilities,
 };
@@ -527,6 +600,55 @@ export type HostHealthResult = {
 	 * Agents running on this host. Always 0 before M3.
 	 */
 	runningAgents: number,
+	/**
+	 * How busy the store's job queue is (PLX-445). An older plxd leaves it out.
+	 */
+	queues?: HostQueues,
+};
+
+/**
+ * The job queue of plxd's database thread, which runs its jobs one at a time.
+ */
+export type HostQueues = {
+	/**
+	 * The project store's thread, which writes rows and their events (0052).
+	 */
+	store: QueueStats,
+	/**
+	 * The event log's writer thread, which a plxd before PLX-481 had. Its events are now written
+	 * by the store's jobs, so this is always zero.
+	 */
+	events: QueueStats,
+};
+
+/**
+ * Counts and times for one job queue since plxd started. Divide a total by `jobs` for the average.
+ */
+export type QueueStats = {
+	/**
+	 * Jobs sent and not yet started.
+	 */
+	queued: number,
+	/**
+	 * Jobs started.
+	 */
+	jobs: number,
+	/**
+	 * The longest a job sat in the queue before its thread took it, in microseconds.
+	 */
+	maxWaitMicros: number,
+	/**
+	 * Every started job's wait, added up, in microseconds.
+	 */
+	totalWaitMicros: number,
+	/**
+	 * The longest a job took to run, in microseconds.
+	 */
+	maxRunMicros: number,
+	/**
+	 * Every finished job's run time, added up, in microseconds. It leaves out the one running.
+	 */
+	totalRunMicros: number,
 };
 
 /**
@@ -578,7 +700,8 @@ export type ProjectListResult = {
 	 */
 	projects: Array<Project>,
 	/**
-	 * The `seq` of the last event the snapshot reflects. Subscribe with `after` set to it.
+	 * The event log's `seq` from before the list was read. Subscribe with `after` set to it. The
+	 * list may already reflect some events after it, and replaying them is harmless.
 	 */
 	seq: number,
 };
@@ -620,6 +743,49 @@ export type Project = {
 	 */
 	permission?: ProjectPermission,
 	/**
+	 * Who answers its children's questions (0043), behind the `projectAutonomy` capability.
+	 * Absent only from an older plxd.
+	 */
+	autonomy?: ProjectAutonomy,
+	/**
+	 * The branch its integration branch is cut from and its PR targets (0045), behind the
+	 * `integrationBranch` capability. Absent until set, or until plxd cuts the integration branch
+	 * from the repository's default branch.
+	 */
+	baseBranch?: string,
+	/**
+	 * Its integration branch, `parallax/<project slug>` (0045), behind `integrationBranch`.
+	 * Absent until plxd cuts it, when the project is created or a run in it starts.
+	 */
+	integrationBranch?: string,
+	/**
+	 * Its children land without waiting for the user's approval (0045), behind the `landing`
+	 * capability. Absent means false.
+	 */
+	autoLand?: boolean,
+	/**
+	 * How many of its children run at once (0046), behind `projectPlacement`. Over it, a new
+	 * child waits in the Project's queue. Absent only from an older plxd.
+	 */
+	maxChildren?: number,
+	/**
+	 * Whether its children may run on an API key account (0046), behind `projectPlacement`. Off,
+	 * a child never starts on one, nor falls back to one on a usage limit. Absent only from an
+	 * older plxd.
+	 */
+	allowApiKeys?: boolean,
+	/**
+	 * The command plxd runs in the integration worktree after each landing (0045), behind the
+	 * `checks` capability: through `sh -c` (`cmd /C` on Windows), with a 30-minute limit. Absent
+	 * means none, so a clean merge is enough.
+	 */
+	checks?: string,
+	/**
+	 * The checks command the coordinator proposed, behind `checks`. It never runs: the user
+	 * confirms it, or another, by setting `checks`. Absent means none.
+	 */
+	proposedChecks?: string,
+	/**
 	 * When the project was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
@@ -629,6 +795,14 @@ export type Project = {
 	 */
 	updatedAt: string,
 };
+
+/**
+ * A project's autonomy level (0043): who answers its children's questions. Separate from its
+ * permission mode, which decides what they may run.
+ *
+ * A newer plxd may send a value this version does not know; treat it as unknown.
+ */
+export type ProjectAutonomy = "ask" | "routine" | "full";
 
 /**
  * A project's icon (PLX-227, 0032): a Lucide icon and a color from the app's palette, both by
@@ -702,8 +876,8 @@ export type RunId = string;
  * Params of `project/create`.
  *
  * It is idempotent on `id`: if a project with that id exists, plxd returns it instead of
- * creating another, and fails with `idConflict` if `name`, `repoPath`, `icon`, or `permission`
- * differ. A new project's `repoPath` must be the top folder of a git working tree on this host,
+ * creating another, and fails with `idConflict` if `name`, `repoPath`, `icon`, `permission`,
+ * `autonomy`, or a given `baseBranch` differ. A new project's `repoPath` must be the top folder of a git working tree on this host,
  * or it fails with `notARepository`.
  */
 export type ProjectCreateParams = {
@@ -729,6 +903,17 @@ export type ProjectCreateParams = {
 	 * Absent means `auto`, the mode projects from before it have.
 	 */
 	permission?: ProjectPermission,
+	/**
+	 * The project's autonomy level, sent only to a plxd that advertises `projectAutonomy`.
+	 * Absent means `routine`, the level projects from before it have.
+	 */
+	autonomy?: ProjectAutonomy,
+	/**
+	 * The project's base branch (0045), sent only to a plxd that advertises
+	 * `integrationBranch`: a local or remote-tracking branch, such as `main` or `origin/main`.
+	 * Absent means the repository's default branch. A retry that leaves it out matches any.
+	 */
+	baseBranch?: string,
 };
 
 /**
@@ -747,6 +932,12 @@ export type ProjectCreateResult = {
  * plxd replays the events after `after`, then sends new ones as they happen, each as an
  * `events/event` notification. If those events are gone or too many to replay, it fails with
  * `resyncRequired`.
+ *
+ * `run` and `shell` narrow the `project` subscription, only for a plxd that advertises
+ * `eventFilters` (PLX-453); an older one ignores them and sends everything. Either one without
+ * `project` fails with `invalidParams` (PLX-455). Like a scope, a filter skips the `seq`s of the
+ * events it leaves out: `seq` only ever increases, and resuming from the last one delivered is
+ * still exact.
  */
 export type EventsSubscribeParams = {
 	/**
@@ -759,6 +950,15 @@ export type EventsSubscribeParams = {
 	 * such as `project.created`.
 	 */
 	project?: ProjectId,
+	/**
+	 * Only this run's events, for an open transcript.
+	 */
+	run?: RunId,
+	/**
+	 * Every event, but each `agent.output` cut down to its `approvalRequested` and
+	 * `approvalResolved` items, for a sidebar. A batch with neither is left out.
+	 */
+	shell?: boolean,
 };
 
 /**
@@ -1163,6 +1363,11 @@ export type ProviderInstance = {
 	 * Models the user added, offered beside the ones plxd finds.
 	 */
 	models: Array<ProviderModel>,
+	/**
+	 * The percent of each limit window that a Project's children leave for the user, from 0 to
+	 * 100 (0046). At or past its limit minus this, it takes no new children. Absent means none.
+	 */
+	reserve?: number,
 };
 
 /**
@@ -1679,6 +1884,11 @@ export type AgentStartParams = {
 	 */
 	coordinatorThread?: CoordinatorThreadId,
 	/**
+	 * Whether the run wakes its coordinator when a CLI process of its ends (PLX-380, 0025), for
+	 * a run with a `coordinatorThread`. Absent means true. A retry must repeat it.
+	 */
+	notify?: boolean,
+	/**
 	 * The model, in the backend's naming, such as `opus`. Absent means the CLI's default. Send
 	 * it, `effort`, and `permission` only to a plxd that advertises `runOptions`. The run keeps
 	 * all three when it resumes, and a retry must repeat them.
@@ -1731,6 +1941,12 @@ export type AgentStartParams = {
 	 * them.
 	 */
 	threads?: Array<RunId>,
+	/**
+	 * Start a Project's child as an exploration, such as a spike or a comparison, which never
+	 * lands (0045). Sent only to a plxd that advertises `integrationBranch`. A retry must repeat
+	 * it.
+	 */
+	explore?: boolean,
 };
 
 /**
@@ -1854,8 +2070,9 @@ export type AgentRun = {
 	permission?: AgentPermission,
 	/**
 	 * True when it forwards its permission requests to the client, as the start method that
-	 * made it asked with `approvals` (PLX-222, decision 0031). It never changes. Absent means
-	 * false: its CLI denies what would prompt.
+	 * made it asked with `approvals` (PLX-222, decision 0031). It changes only when
+	 * `project/fromThreads` makes the run a Project's child, which sets it. Absent means false:
+	 * its CLI denies what would prompt.
 	 */
 	approvals?: boolean,
 	/**
@@ -1864,6 +2081,11 @@ export type AgentRun = {
 	 * Absent means false.
 	 */
 	checkout?: boolean,
+	/**
+	 * True for a Project's exploration child, started with `explore` (0045): it never lands.
+	 * Absent means false.
+	 */
+	explore?: boolean,
 	/**
 	 * The web URLs of the pull requests linked to it, oldest first, with no duplicates: the one
 	 * `agent/openPr` returned, and any its agent opened with `gh pr create` (PLX-318). Behind the
@@ -2050,14 +2272,16 @@ export type AgentListResult = {
 	 */
 	runs: Array<AgentRun>,
 	/**
-	 * The `seq` of the last event the list reflects, to subscribe after.
+	 * The event log's `seq` from before the list was read. Subscribe with `after` set to it. The
+	 * list may already reflect some events after it, and replaying them is harmless.
 	 */
 	seq: number,
 };
 
 /**
  * Params of `agent/events`: one run's events from plxd's log, for rebuilding its transcript
- * after `resyncRequired` or a restart.
+ * after `resyncRequired` or a restart. Pages go oldest first from `after`, or, with `before`
+ * (the `eventsBefore` capability, PLX-490), newest first.
  */
 export type AgentEventsParams = {
 	/**
@@ -2065,9 +2289,16 @@ export type AgentEventsParams = {
 	 */
 	runId: RunId,
 	/**
-	 * Return the events whose `seq` is greater than this; 0 for the first page.
+	 * Return the events whose `seq` is greater than this; 0 for the first page. Ignored with
+	 * `before`.
 	 */
 	after: number,
+	/**
+	 * Return the newest events whose `seq` is less than this instead, for a transcript that opens
+	 * at its end: `Number.MAX_SAFE_INTEGER` for the newest page, then the first `seq` of the last
+	 * page returned. An older plxd ignores it.
+	 */
+	before?: number,
 	/**
 	 * The most events to return: 500 by default, and at most 1000.
 	 */
@@ -2083,9 +2314,20 @@ export type AgentEventsResult = {
 	 */
 	events: Array<LoggedEvent>,
 	/**
-	 * Whether more events follow the last one returned. Ask again after its `seq`.
+	 * Whether more events follow the last one returned, or with `before`, precede the first.
+	 * Ask again after the last one's `seq`, or before the first one's.
 	 */
 	more: boolean,
+	/**
+	 * With `before`: the run as it stands, read after the page, since a page that doesn't reach
+	 * back to the run's start has no `agent.started`. Events in the page never change it.
+	 */
+	run?: AgentRun,
+	/**
+	 * With `before`: the event log's `seq` from before the page was read. Subscribe with `after`
+	 * set to it or to the page's last `seq`, whichever is greater, as after `agent/list`.
+	 */
+	seq?: number,
 };
 
 /**
@@ -2504,7 +2746,35 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
 	 * The user's message to the agent with a denial, cut short when it is long.
 	 */
-	message?: string,
+	message?: string, } | { "kind": "subagent",
+	/**
+	 * The tool call that started the subagent, whose `toolCall` names its task.
+	 */
+	callId: string,
+	/**
+	 * The subagent's type, such as `general-purpose`, when the vendor says.
+	 */
+	agentType?: string,
+	/**
+	 * The model that wrote the item, when the vendor says.
+	 */
+	model?: string,
+	/**
+	 * The item.
+	 */
+	item: AgentOutputItem, } | { "kind": "subagentFinished",
+	/**
+	 * The tool call that started it.
+	 */
+	callId: string,
+	/**
+	 * How it ended.
+	 */
+	status: AgentSubagentStatus,
+	/**
+	 * Its final report, when the vendor includes it, cut short when it is long.
+	 */
+	summary?: string,
 };
 
 /**
@@ -2520,6 +2790,13 @@ export type AgentApprovalBy = "user" | "timeout" | "cancel" | "stop" | "agent";
  * A newer plxd may send a value this version does not know; treat it as unknown.
  */
 export type AgentApprovalDecision = "allowed" | "denied" | "expired" | "withdrawn";
+
+/**
+ * How one of an agent's own subagents ended (PLX-382).
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type AgentSubagentStatus = "completed" | "failed" | "stopped";
 
 /**
  * One item of an agent's checklist.
@@ -2743,7 +3020,9 @@ export type Thread = {
 	 */
 	id: RunId,
 	/**
-	 * Its repo entry: the scratch entry for a thread with no repo.
+	 * Its repo entry: the scratch entry for a thread with no repo. A Project's child started with
+	 * `thread/start`'s `project` has the Project's id here instead (0042), while a thread
+	 * `project/fromThreads` made a Project's child keeps its repo entry.
 	 */
 	repo: RepoId,
 	/**
@@ -3286,8 +3565,9 @@ export type ThreadListResult = {
 	 */
 	threads: Array<Thread>,
 	/**
-	 * The `seq` of the last event the snapshot reflects. Subscribe to host-level events with
-	 * `after` set to it.
+	 * The event log's `seq` from before the list was read. Subscribe to host-level events with
+	 * `after` set to it. The list may already reflect some events after it, and replaying them is
+	 * harmless.
 	 */
 	seq: number,
 };
@@ -3339,10 +3619,25 @@ export type ThreadStartParams = {
 	 */
 	repo?: RepoId,
 	/**
+	 * Starts a child of this Project instead (0042), behind `projectTasks`: it runs in the
+	 * Project's mode with `approvals`, in a new worktree cut from the Project's integration branch,
+	 * and its first message is the child's header, then `prompt`. Its parent is the Project's
+	 * current coordinator, which a batched wake-up tells of the start; with no coordinator yet it
+	 * has none. Not with `repo`, `parent`, `checkout`, `base`, or `checkoutRef`, which the Project
+	 * decides.
+	 */
+	project?: ProjectId,
+	/**
 	 * The run that launches it, recorded as its parent (0041). It must exist, or the start fails
 	 * with `runNotFound`. Behind `threadLineage`.
 	 */
 	parent?: RunId,
+	/**
+	 * Whether the thread wakes its `parent` when a CLI process of its ends, as a Project's
+	 * coordinator wakes for its subagents (PLX-380, 0025). Absent means true. A retry must repeat
+	 * it.
+	 */
+	notify?: boolean,
 	/**
 	 * Its title, as `thread/update` takes it. Not part of what makes a retry with the same run id
 	 * conflict, since the title can change. Behind `threadLineage`.
@@ -3442,10 +3737,10 @@ export type ThreadStartResult = {
  * parent's latest commit, for a thread with no repo.
  *
  * Idempotent on `newRunId`: a retry returns the fork, and a run id that is taken by anything
- * else fails with `idConflict`. Fails with `threadNotFound` for an unknown parent, and with
- * `invalidParams` for a turn the parent didn't record or one it is still running. A fork's
- * copied turns aren't its own: they are part of its prompt's turn, and forking at one of their
- * ids fails.
+ * else, a fork with another `parent` field included, fails with `idConflict`. Fails with
+ * `threadNotFound` for an unknown parent, and with `invalidParams` for a turn the parent didn't
+ * record or one it is still running. A fork's copied turns aren't its own: they are part of its
+ * prompt's turn, and forking at one of their ids fails.
  */
 export type ThreadForkParams = {
 	/**
@@ -3469,6 +3764,12 @@ export type ThreadForkParams = {
 	 * The model. Absent means the parent's, when the fork runs on the parent's backend.
 	 */
 	model?: string,
+	/**
+	 * The run that asked for the fork, such as a thread's `thread_fork` tool, recorded as the
+	 * fork's `parent` (0041). It must exist, or the fork fails with `runNotFound`. Absent means
+	 * none, as for a fork the user makes.
+	 */
+	parent?: RunId,
 };
 
 /**
@@ -3569,7 +3870,8 @@ export type RepoUpdateResult = {
  * no repo's scratch repository, and its stored events.
  *
  * A running CLI is cancelled first, and the delete answers once it has exited and its changes
- * were committed. Deleting a thread that doesn't exist fails with `threadNotFound`.
+ * were committed. Deleting a thread that doesn't exist fails with `threadNotFound`, and one
+ * whose push or Open PR is running with `gitRefused` (PLX-458).
  */
 export type ThreadDeleteParams = {
 	/**
@@ -3631,19 +3933,22 @@ export type ProjectStartParams = {
 	 */
 	images?: Array<PromptImage>,
 	/**
-	 * Forward the coordinator's permission requests to the client, as `agent/start` takes it.
-	 * The runs it spawns forward theirs too.
+	 * Ignored: plxd starts the coordinator as if it were set, as it does every Project child,
+	 * since the inbox answers its permission requests (0042).
 	 */
 	approvals?: boolean,
 };
 
 /**
  * Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
- * capability (PLX-227, 0032), or its permission mode, behind `projectPermission` (0042).
+ * capability (PLX-227, 0032), its permission mode, behind `projectPermission` (0042), its
+ * autonomy level, behind `projectAutonomy` (0043), its base branch, behind `integrationBranch`
+ * (0045), automatic landing, behind `landing` (0045), how its children are placed, behind
+ * `projectPlacement` (0046), or its checks, behind `checks` (0045).
  *
  * A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
- * `project/create`'s rules, and the repository can't change. A rename, a new icon, or a new mode
- * is not activity, so `updatedAt` stays as it is. Fails with `projectNotFound` for an unknown project.
+ * `project/create`'s rules, and the repository can't change. A rename, a new icon, a new mode,
+ * or a new level is not activity, so `updatedAt` stays as it is. Fails with `projectNotFound` for an unknown project.
  * A change appends `project.updated`; an update that changes nothing appends no event.
  */
 export type ProjectUpdateParams = {
@@ -3664,6 +3969,40 @@ export type ProjectUpdateParams = {
 	 * CLI process in it, and a running CLI keeps its mode until it exits.
 	 */
 	permission?: ProjectPermission,
+	/**
+	 * The new autonomy level. Absent keeps it. It applies to the next question: one already
+	 * waiting for the coordinator stays with it, though in `ask` plxd refuses its answer.
+	 */
+	autonomy?: ProjectAutonomy,
+	/**
+	 * The new base branch, behind `integrationBranch`. Absent keeps it. An integration branch
+	 * already cut stays where it is.
+	 */
+	baseBranch?: string,
+	/**
+	 * Turns automatic landing on or off, behind `landing` (0045). Absent keeps it. Children
+	 * already waiting for approval keep waiting.
+	 */
+	autoLand?: boolean,
+	/**
+	 * How many children may run at once, from 1 to 100, behind `projectPlacement`. Absent keeps
+	 * it. Children already running keep running, and a higher number starts waiting ones.
+	 */
+	maxChildren?: number,
+	/**
+	 * Whether children may run on an API key account, behind `projectPlacement`. Absent keeps it.
+	 */
+	allowApiKeys?: boolean,
+	/**
+	 * The checks command the user confirms or edits, behind `checks` (0045): at most 4,096
+	 * bytes. Empty clears it, and setting it clears `proposedChecks`. Absent keeps it.
+	 */
+	checks?: string,
+	/**
+	 * The coordinator's proposal for `checks`, behind `checks`, which adds a `needsYou` item
+	 * naming it and never runs. Empty clears it. Ignored when `checks` is set too. Absent keeps it.
+	 */
+	proposedChecks?: string,
 };
 
 /**
@@ -4015,9 +4354,10 @@ export type PrDiffResult = {
  * stored events, sent turns, images, worktrees, and branches, and its shared context folder,
  * behind the `projectDelete` capability (PLX-338).
  *
- * Running CLIs are cancelled first, and the delete answers once they have exited and the
- * project is gone, after appending `project.deleted`. Deleting a project that doesn't exist, or
- * a repo entry's id, fails with `projectNotFound`.
+ * Running CLIs are cancelled first, and the delete answers once they have exited, the runs'
+ * pushes and Open PRs in flight have finished (PLX-458), and the project is gone, after
+ * appending `project.deleted`. Deleting a project that doesn't exist, or a repo entry's id,
+ * fails with `projectNotFound`.
  */
 export type ProjectDeleteParams = {
 	/**
@@ -4194,8 +4534,10 @@ export type GithubSignIn = {
  * Params of `thread/search`: finds threads by what was said in them (PLX-372, decision 0047),
  * behind the `threadContext` capability.
  *
- * Matches `query` anywhere in a thread's messages: the user's, Parallax's wake-ups, and the
- * agent's replies, but not its tool calls. Case-insensitive for ASCII letters. An empty query
+ * Matches a thread whose title contains `query`, or whose messages hold every word of it: the
+ * user's, Parallax's wake-ups, and the agent's replies, but not its tool calls. A word matches
+ * any word it starts, ignoring case, accents, and punctuation (PLX-487). The user's message is
+ * searchable once it's sent, and the agent's replies once their turn ends. An empty query
  * fails with `invalidParams`.
  */
 export type ThreadSearchParams = {
@@ -4214,7 +4556,7 @@ export type ThreadSearchParams = {
  */
 export type ThreadSearchResult = {
 	/**
-	 * The matching threads, the one with the newest message first.
+	 * The matching threads: title matches first, then the one with the newest message.
 	 */
 	threads: Array<Thread>,
 };
@@ -4293,8 +4635,9 @@ export type InboxListResult = {
 	 */
 	items: Array<InboxItem>,
 	/**
-	 * The `seq` of the last event the list reflects. Subscribe to the Project's events with
-	 * `after` set to it for the items added since.
+	 * The event log's `seq` from before the list was read. Subscribe to the Project's events
+	 * with `after` set to it for the items added since. The list may already reflect some events
+	 * after it, and replaying them is harmless.
 	 */
 	seq: number,
 };
@@ -4427,6 +4770,582 @@ export type QueueSteerParams = {
 };
 
 /**
+ * Params of `question/ask`. Fails with `invalidParams` unless `run` is in a Project and isn't
+ * its coordinator, and with `runNotFound` for an unknown run.
+ */
+export type QuestionAskParams = {
+	/**
+	 * The child asking.
+	 */
+	run: RunId,
+	/**
+	 * The question, at most 4 KiB.
+	 */
+	question: string,
+	/**
+	 * What the child goes on assuming until it hears otherwise, at most 4 KiB.
+	 */
+	assumption: string,
+};
+
+/**
+ * Result of `question/ask`, `question/answer`, and `question/escalate`.
+ */
+export type QuestionResult = {
+	/**
+	 * The question as it stands.
+	 */
+	question: Question,
+};
+
+/**
+ * A question a child asked.
+ */
+export type Question = {
+	/**
+	 * The question's id.
+	 */
+	id: QuestionId,
+	/**
+	 * The child that asked it.
+	 */
+	run: RunId,
+	/**
+	 * The question.
+	 */
+	question: string,
+	/**
+	 * What the child went on assuming.
+	 */
+	assumption: string,
+	/**
+	 * Where it stands.
+	 */
+	status: QuestionStatus,
+	/**
+	 * The coordinator's or the user's answer. Absent while `open` or `escalated`.
+	 */
+	answer?: string,
+	/**
+	 * When the child asked it, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+};
+
+/**
+ * Identifies one question. plxd generates it.
+ */
+export type QuestionId = string;
+
+/**
+ * Where a question stands.
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type QuestionStatus = "open" | "escalated" | "decided" | "answered";
+
+/**
+ * Params of `question/answer`. With `from`, the Project's current coordinator answers an `open`
+ * question, which becomes `decided`; otherwise it fails with `invalidParams`. Without `from`,
+ * the user answers any question, which becomes `answered`. The child gets the answer as a
+ * queued message when it differs from what it was last told: its assumption, or the decided
+ * answer the user changes. Fails with `invalidParams` for an unknown question, or one whose
+ * child is gone.
+ */
+export type QuestionAnswerParams = {
+	/**
+	 * The question.
+	 */
+	question: QuestionId,
+	/**
+	 * The answer, at most 4 KiB.
+	 */
+	text: string,
+	/**
+	 * The coordinator's run, when it answers. Absent for the user.
+	 */
+	from?: RunId,
+};
+
+/**
+ * Params of `question/escalate`: the Project's current coordinator passes an `open` question to
+ * the user, adding a `needsYou` inbox item. Fails with `invalidParams` from any other run or for
+ * a question that isn't open or is unknown.
+ */
+export type QuestionEscalateParams = {
+	/**
+	 * The question.
+	 */
+	question: QuestionId,
+	/**
+	 * The coordinator's run.
+	 */
+	from: RunId,
+};
+
+/**
+ * Params of `question/list`. Fails with `projectNotFound` for an unknown project.
+ */
+export type QuestionListParams = {
+	/**
+	 * The Project.
+	 */
+	project: ProjectId,
+};
+
+/**
+ * Result of `question/list`.
+ */
+export type QuestionListResult = {
+	/**
+	 * Every question, oldest first.
+	 */
+	questions: Array<Question>,
+};
+
+/**
+ * Params of `memory/list`.
+ */
+export type MemoryListParams = {
+	/**
+	 * The scope.
+	 */
+	scope: MemoryScope,
+};
+
+/**
+ * Whose memory: the user's own, a repository's, or a Project's (0044).
+ */
+export type MemoryScope = { "kind": "you" } | { "kind": "repo",
+	/**
+	 * The repo entry.
+	 */
+	id: RepoId, } | { "kind": "project",
+	/**
+	 * The Project.
+	 */
+	id: ProjectId,
+};
+
+/**
+ * Result of `memory/list`.
+ */
+export type MemoryListResult = {
+	/**
+	 * The brief, entries, knowledge, and proposals, ordered by path.
+	 */
+	files: Array<MemoryFile>,
+};
+
+/**
+ * One memory file, without its body. The header fields are read from an entry's file, and are
+ * absent for one that lacks them, such as the brief or knowledge.
+ */
+export type MemoryFile = {
+	/**
+	 * The file's path in the scope's folder.
+	 */
+	path: string,
+	/**
+	 * Its size in bytes.
+	 */
+	size: number,
+	/**
+	 * When it was last modified, in RFC 3339 UTC.
+	 */
+	modifiedAt: string,
+	/**
+	 * An entry's or proposal's kind.
+	 */
+	kind?: MemoryKind,
+	/**
+	 * Its title.
+	 */
+	title?: string,
+	/**
+	 * The run or message it came from.
+	 */
+	source?: string,
+	/**
+	 * The day it was written, as its file says, such as `2026-10-04`.
+	 */
+	date?: string,
+	/**
+	 * Who wrote it: `user`, or `coordinator <run id>`, or for a proposal `thread <run id>` or
+	 * `coordinator <run id>`.
+	 */
+	writer?: string,
+	/**
+	 * For a proposal in a Project's folder, the scope it is for: a child's, which its
+	 * coordinator curates, or a coordinator's, which the user saves there.
+	 */
+	forScope?: MemoryScopeKind,
+	/**
+	 * For a coordinator's proposal, the entry it rewrites, `memory/<kind>/<name>.md` at
+	 * `for_scope`, which saving it replaces.
+	 */
+	replaces?: string,
+	/**
+	 * An entry plxd marked for review because a path it names in backticks is missing from its
+	 * branch: the integration branch for a Project entry, the base branch for a repo entry
+	 * (0044, PLX-407). Rewriting the entry clears it.
+	 */
+	stale?: boolean,
+};
+
+/**
+ * What an entry records (0044).
+ *
+ * A newer plxd may send a kind this version does not know; treat it as unknown.
+ */
+export type MemoryKind = "preference" | "convention" | "decision" | "gotcha";
+
+/**
+ * A scope's name, as a proposal's file names the scope it is for.
+ *
+ * A newer plxd may send a value this version does not know; treat it as unknown.
+ */
+export type MemoryScopeKind = "you" | "repo" | "project";
+
+/**
+ * Params of `memory/read`. Fails with `contextNotFound` if there is no such file.
+ */
+export type MemoryReadParams = {
+	/**
+	 * The scope.
+	 */
+	scope: MemoryScope,
+	/**
+	 * The file's path.
+	 */
+	path: string,
+};
+
+/**
+ * Result of `memory/read`.
+ */
+export type MemoryReadResult = {
+	/**
+	 * The file, with its header's fields.
+	 */
+	file: MemoryFile,
+	/**
+	 * Its body: an entry's or proposal's text after its header, or the whole of any other file.
+	 */
+	content: string,
+};
+
+/**
+ * Params of `memory/write`: replaces `brief.md`, `knowledge/<slug>.md`, or an entry,
+ * `memory/<kind>/<slug>.md`, in full. For an entry, plxd writes the header from `title`, which it
+ * then needs, `source`, today's UTC date, and the writer. Fails with `contextTooLarge` over the
+ * shared context caps. Only the user writes the brief: a coordinator proposes it.
+ */
+export type MemoryWriteParams = {
+	/**
+	 * The scope.
+	 */
+	scope: MemoryScope,
+	/**
+	 * The file's path.
+	 */
+	path: string,
+	/**
+	 * The new content: an entry's body, or the whole file.
+	 */
+	content: string,
+	/**
+	 * An entry's title, one line.
+	 */
+	title?: string,
+	/**
+	 * The run or message an entry came from. Absent: `user`, or the writing run.
+	 */
+	source?: string,
+	/**
+	 * The run writing, for a thread's Parallax tools. It must be its Project's current
+	 * coordinator, or the write fails with `invalidParams`, and the write adds a `learned` item to
+	 * that Project's inbox. Absent: the user writes.
+	 */
+	from?: RunId,
+};
+
+/**
+ * Result of `memory/write`.
+ */
+export type MemoryWriteResult = {
+	/**
+	 * The file as written.
+	 */
+	file: MemoryFile,
+};
+
+/**
+ * Params of `memory/delete`: deletes the brief, an entry, knowledge, or a proposal. Fails with
+ * `contextNotFound` if there is no such file.
+ */
+export type MemoryDeleteParams = {
+	/**
+	 * The scope.
+	 */
+	scope: MemoryScope,
+	/**
+	 * The file's path.
+	 */
+	path: string,
+};
+
+/**
+ * Result of `memory/delete`.
+ */
+export type MemoryDeleteResult = Record<symbol, never>;
+
+/**
+ * Params of `memory/propose`, for a thread's Parallax tools: run `from` proposes an entry, saved
+ * as `proposals/<slug>.md`. A Project's child's is saved in the Project's folder, with a `Scope:`
+ * line naming `scope`, and its coordinator's next wake-up carries it, then removes it; it
+ * doesn't wake the coordinator. A coordinator's is saved the same way, for the user, and no
+ * wake-up carries it. A plain thread's, only at its own repository's scope, is saved there for
+ * the user. Any other run's fails with `invalidParams`.
+ */
+export type MemoryProposeParams = {
+	/**
+	 * The run proposing.
+	 */
+	from: RunId,
+	/**
+	 * The scope the entry belongs in.
+	 */
+	scope: MemoryScope,
+	/**
+	 * Its kind. Absent: a rewrite of the Project's brief, which only its coordinator proposes,
+	 * at the Project's scope. Its proposal has no kind.
+	 */
+	kind?: MemoryKind,
+	/**
+	 * Its title, one line.
+	 */
+	title: string,
+	/**
+	 * Its body.
+	 */
+	content: string,
+	/**
+	 * The entry it rewrites, `memory/<kind>/<name>.md` of the same kind at `scope`, which must
+	 * exist. Only a coordinator names one; its proposal records it as `replaces`.
+	 */
+	replaces?: string,
+};
+
+/**
+ * Result of `memory/propose`.
+ */
+export type MemoryProposeResult = {
+	/**
+	 * Who it went to.
+	 */
+	to: MemoryProposalTo,
+	/**
+	 * The proposal's file. Absent only from an older plxd.
+	 */
+	file?: MemoryFile,
+};
+
+/**
+ * Who a proposal went to.
+ *
+ * A newer plxd may send a value this version does not know; treat it as unknown.
+ */
+export type MemoryProposalTo = "coordinator" | "user";
+
+/**
+ * Params of `land/queue`: queues a finished child of a Project to land on its integration
+ * branch, as the coordinator's `land` tool does. It waits for the user's approval unless the
+ * Project's `autoLand` is on. A child already waiting, queued, or sent back stays as it is.
+ *
+ * Fails with `runNotFound`, or `landRefused` for a run that isn't a Project's completed child
+ * with a branch, such as one started with `explore`.
+ */
+export type LandQueueParams = {
+	/**
+	 * The child's run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Result of `land/queue`, `land/approve`, and `land/sendBack`.
+ */
+export type LandResult = {
+	/**
+	 * The child's landing as it stands.
+	 */
+	landing: Landing,
+};
+
+/**
+ * A child in its Project's landing queue.
+ */
+export type Landing = {
+	/**
+	 * The child's run.
+	 */
+	runId: RunId,
+	/**
+	 * Its Project.
+	 */
+	project: ProjectId,
+	/**
+	 * Where it is.
+	 */
+	status: LandingStatus,
+	/**
+	 * When it was last queued, in RFC 3339 UTC. The queue lands the oldest first.
+	 */
+	queuedAt: string,
+};
+
+/**
+ * Where a child is in its Project's landing queue.
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type LandingStatus = "waiting" | "queued" | "sentBack" | "landed" | "needsYou";
+
+/**
+ * Params of `land/approve`: lands a child waiting for approval, in its turn. Fails with
+ * `landRefused` unless it is `waiting`.
+ */
+export type LandApproveParams = {
+	/**
+	 * The child's run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Params of `land/sendBack`: sends a child waiting for approval a message from the user instead
+ * of landing it. plxd queues it again, waiting for approval, when that turn ends. Fails with
+ * `landRefused` unless it is `waiting`.
+ */
+export type LandSendBackParams = {
+	/**
+	 * The child's run.
+	 */
+	runId: RunId,
+	/**
+	 * What the child should change, sent as the user's message.
+	 */
+	text: string,
+};
+
+/**
+ * Params of `agent/wait` (PLX-451): waits until runs are idle, that is neither `starting` nor
+ * `running`, or until the timeout.
+ */
+export type AgentWaitParams = {
+	/**
+	 * The runs, from 1 to 50 of them.
+	 */
+	runIds: Array<RunId>,
+	/**
+	 * Whether any one of them or all of them have to be idle.
+	 */
+	until: AgentWaitUntil,
+	/**
+	 * How long to wait, in milliseconds: at most 60000, which keeps the request under the
+	 * connection's idle timeout.
+	 */
+	timeoutMs: number,
+};
+
+/**
+ * Which of `agent/wait`'s runs have to be idle.
+ *
+ * A newer peer may send a value this version does not know; treat it as unknown.
+ */
+export type AgentWaitUntil = "any" | "all";
+
+/**
+ * Result of `agent/wait`.
+ */
+export type AgentWaitResult = {
+	/**
+	 * The runs as they stand, in the order asked for.
+	 */
+	runs: Array<AgentRun>,
+	/**
+	 * Whether the timeout passed first.
+	 */
+	timedOut: boolean,
+};
+
+/**
+ * Params of `project/fromThreads`: makes a Project from threads (0042), behind the
+ * `projectFromThreads` capability.
+ *
+ * Each thread must be on the same repo entry and have its own worktree, so a thread on the
+ * scratch entry, one in the user's checkout, one whose worktree `agent/accept` removed, or one
+ * already in a Project fails with `invalidParams`, as do threads on two repo entries. A thread
+ * whose kind has no `permission` in a Project fails with `unsupportedOption`. An unknown thread
+ * fails with `threadNotFound`.
+ *
+ * plxd creates the Project on the threads' repository as `project/create` does, starts its
+ * coordinator as `project/start` does, with a first message asking it to read the threads and
+ * propose the brief with `memory_propose` for the user to save, and makes each thread the
+ * coordinator's child. When the coordinator can't start, plxd removes the Project it just
+ * created and leaves the threads as they were.
+ *
+ * A thread keeps its history, worktree, branch, and `Thread.repo`. Its run moves to the
+ * Project, so its later `agent.*` events are on the Project's scope, and it forwards its
+ * permission requests (`approvals`) to the inbox. It takes the coordinator as its `parent`
+ * (reported as `thread.updated`), replacing any parent it had: a thread another thread started
+ * stops waking that thread. It runs in the Project's mode from its next CLI process. Idempotent
+ * on `id` and `runId`: a retry returns the same Project and coordinator.
+ */
+export type ProjectFromThreadsParams = {
+	/**
+	 * The new project's id, a version 7 UUID generated by the client.
+	 */
+	id: ProjectId,
+	/**
+	 * The coordinator run's id, a version 7 UUID generated by the client.
+	 */
+	runId: RunId,
+	/**
+	 * The name shown in the app.
+	 */
+	name: string,
+	/**
+	 * The project's permission mode, which the user picked in the disclaimer.
+	 */
+	permission: ProjectPermission,
+	/**
+	 * The threads, by run id: at least one.
+	 */
+	threads: Array<RunId>,
+	/**
+	 * The coordinator's account, as `project/start`'s. Absent means the coordinator role's
+	 * default.
+	 */
+	account?: AccountChoice,
+};
+
+/**
+ * Result of `project/fromThreads`.
+ */
+export type ProjectFromThreadsResult = {
+	/**
+	 * The project, with its coordinator.
+	 */
+	project: Project,
+	/**
+	 * The coordinator's run.
+	 */
+	run: AgentRun,
+};
+
+/**
  * Params of `$/cancelRequest`.
  */
 export type CancelRequestParams = {
@@ -4469,6 +5388,19 @@ export type EventsEventParams = {
 };
 
 /**
+ * Params of `events/resync`: plxd ended a subscription that fell behind its event log's
+ * retention (PLX-455). Reload the snapshot it started from and subscribe again. plxd sends it
+ * only to a client that declared the `resyncNotice` capability; it closes any other client's
+ * connection instead.
+ */
+export type EventsResyncParams = {
+	/**
+	 * The subscription plxd ended.
+	 */
+	subscription: SubscriptionId,
+};
+
+/**
  * The `data` of a Parallax error (code -32000).
  */
 export type ErrorData = {
@@ -4488,7 +5420,7 @@ export type ErrorData = {
  * A newer plxd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it

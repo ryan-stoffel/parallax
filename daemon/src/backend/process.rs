@@ -47,6 +47,7 @@ use tokio::time::{Instant, sleep_until, timeout};
 use zeroize::Zeroize;
 
 use super::event::ExitInfo;
+use super::record::Recorder;
 use crate::paths::DataDir;
 
 /// The write end of a process's stdin.
@@ -209,7 +210,7 @@ impl fmt::Debug for Environment {
 /// What a backend's process gets on stdin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StdinMode {
-    /// `/dev/null` (`NUL` on Windows), for CLIs that must see stdin closed, such as `codex exec`.
+    /// `/dev/null` (`NUL` on Windows), for CLIs and commands that must see stdin closed.
     Null,
     /// A pipe the backend writes to with [`Process::take_stdin`], for follow-up messages.
     Piped,
@@ -260,6 +261,9 @@ pub struct ProcessSpec {
     pub stderr_lines: bool,
     /// Output limits.
     pub limits: OutputLimits,
+    /// The name a recording of this process's session goes under when plxd records CLI
+    /// sessions (see [`record`](super::record)). `None` for anything that isn't an agent's CLI.
+    pub record: Option<&'static str>,
 }
 
 impl ProcessSpec {
@@ -274,6 +278,7 @@ impl ProcessSpec {
             stdin: StdinMode::Null,
             stderr_lines: false,
             limits: OutputLimits::default(),
+            record: None,
         }
     }
 }
@@ -384,6 +389,10 @@ impl Launcher {
         let env = self.environment(spec);
         check_working_directory(&spec.cwd)?;
         let program = find_program(&spec.program, env.get("PATH"))?;
+        let recorder = match spec.record {
+            Some(name) => Recorder::open(name)?,
+            None => None,
+        };
         let Started {
             signals,
             exited,
@@ -391,6 +400,17 @@ impl Launcher {
             stdout,
             stderr,
         } = start(spec, &program, &env)?;
+        #[cfg(unix)]
+        let stdin = match (&recorder, stdin) {
+            (Some(recorder), Some(child)) => match record_stdin(recorder.clone(), child) {
+                Ok(pipe) => Some(pipe),
+                Err(error) => {
+                    let _ = signals.signal_group(Signal::KILL);
+                    return Err(error.into());
+                }
+            },
+            (_, stdin) => stdin,
+        };
 
         let tail = Arc::new(Mutex::new(Tail::new(spec.limits.stderr_tail_bytes)));
         let (output_tx, output) = mpsc::channel(64);
@@ -407,6 +427,7 @@ impl Launcher {
             },
             output_tx,
             spec.limits.drain_after_exit,
+            recorder,
         ));
 
         Ok(Process {
@@ -930,6 +951,7 @@ async fn pump<R: AsyncRead + Unpin>(
     stderr: StderrTail,
     output: mpsc::Sender<Output>,
     drain: Duration,
+    recorder: Option<Recorder>,
 ) {
     let unknown = ExitInfo {
         code: None,
@@ -944,6 +966,9 @@ async fn pump<R: AsyncRead + Unpin>(
             biased;
             line = lines.next() => match line {
                 Ok(Some(line)) => {
+                    if let (Some(recorder), Output::Line(line)) = (&recorder, &line) {
+                        recorder.stdout(line);
+                    }
                     if output.send(line).await.is_err() {
                         return;
                     }
@@ -984,6 +1009,33 @@ async fn pump<R: AsyncRead + Unpin>(
     let _ = output
         .send(Output::Exited(Exit { info, stderr_tail }))
         .await;
+}
+
+/// A stdin for plxd that marks each line in `recorder` before passing it on to `child`, so a
+/// recording has each `@read` before the output that answers it.
+#[cfg(unix)]
+fn record_stdin(recorder: Recorder, mut child: StdinPipe) -> io::Result<StdinPipe> {
+    use std::os::fd::OwnedFd;
+
+    use tokio::io::AsyncWriteExt as _;
+    use tokio::net::unix::pipe;
+
+    let (reader, writer) = io::pipe()?;
+    let mut reader = pipe::Receiver::from_owned_fd(OwnedFd::from(reader))?;
+    let writer = pipe::Sender::from_owned_fd(OwnedFd::from(writer))?;
+    tokio::spawn(async move {
+        let mut buf = vec![0; 8192];
+        // Ends when plxd closes its end, which drops `child` and closes the CLI's stdin.
+        while let Ok(read @ 1..) = reader.read(&mut buf).await {
+            for _ in buf[..read].iter().filter(|&&byte| byte == b'\n') {
+                recorder.stdin();
+            }
+            if child.write_all(&buf[..read]).await.is_err() {
+                break;
+            }
+        }
+    });
+    Ok(writer)
 }
 
 /// Keeps stderr's tail, and with `lines` also sends each line of it up to the size limit, without
@@ -1574,6 +1626,7 @@ mod tests {
             stderr,
             output_tx,
             drain,
+            None,
         ));
         output
     }

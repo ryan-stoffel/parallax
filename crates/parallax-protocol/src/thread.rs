@@ -12,6 +12,12 @@
 //!
 //! Since 0041, behind `threadLineage`, a thread also has a parent (the run that launched it), a
 //! fork origin, a title, and a settled flag.
+//!
+//! Since 0042, behind `projectTasks`, `thread/start` with `project` starts a Project's child: a
+//! thread whose run, and `repo`, is the Project's id, whose parent is its coordinator. Behind
+//! `projectFromThreads`, `project/fromThreads` makes existing threads a new Project's children:
+//! their runs move to the Project, so their later `agent.*` events take its id, while `repo`
+//! keeps their repo entry.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -19,7 +25,8 @@ use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
 use crate::{
-    AccountChoice, AgentEffort, AgentPermission, AgentRun, ProjectIcon, PromptImage, RunId, TurnId,
+    AccountChoice, AgentEffort, AgentPermission, AgentRun, ProjectIcon, ProjectId, PromptImage,
+    RunId, TurnId,
 };
 
 /// The longest title `thread/start` and `thread/update` take, in bytes once trimmed (0041).
@@ -60,7 +67,9 @@ pub struct Repo {
 pub struct Thread {
     /// The thread's run id.
     pub id: RunId,
-    /// Its repo entry: the scratch entry for a thread with no repo.
+    /// Its repo entry: the scratch entry for a thread with no repo. A Project's child started with
+    /// `thread/start`'s `project` has the Project's id here instead (0042), while a thread
+    /// `project/fromThreads` made a Project's child keeps its repo entry.
     pub repo: RepoId,
     /// Whether the user archived it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -181,8 +190,9 @@ pub struct ThreadListResult {
     pub repos: Vec<Repo>,
     /// Every thread, oldest first.
     pub threads: Vec<Thread>,
-    /// The `seq` of the last event the snapshot reflects. Subscribe to host-level events with
-    /// `after` set to it.
+    /// The event log's `seq` from before the list was read. Subscribe to host-level events with
+    /// `after` set to it. The list may already reflect some events after it, and replaying them is
+    /// harmless.
     pub seq: u64,
 }
 
@@ -224,11 +234,26 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub repo: Option<RepoId>,
+    /// Starts a child of this Project instead (0042), behind `projectTasks`: it runs in the
+    /// Project's mode with `approvals`, in a new worktree cut from the Project's integration branch,
+    /// and its first message is the child's header, then `prompt`. Its parent is the Project's
+    /// current coordinator, which a batched wake-up tells of the start; with no coordinator yet it
+    /// has none. Not with `repo`, `parent`, `checkout`, `base`, or `checkoutRef`, which the Project
+    /// decides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub project: Option<ProjectId>,
     /// The run that launches it, recorded as its parent (0041). It must exist, or the start fails
     /// with `runNotFound`. Behind `threadLineage`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub parent: Option<RunId>,
+    /// Whether the thread wakes its `parent` when a CLI process of its ends, as a Project's
+    /// coordinator wakes for its subagents (PLX-380, 0025). Absent means true. A retry must repeat
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub notify: Option<bool>,
     /// Its title, as `thread/update` takes it. Not part of what makes a retry with the same run id
     /// conflict, since the title can change. Behind `threadLineage`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -301,8 +326,10 @@ pub struct ThreadStartParams {
 /// Params of `thread/search`: finds threads by what was said in them (PLX-372, decision 0047),
 /// behind the `threadContext` capability.
 ///
-/// Matches `query` anywhere in a thread's messages: the user's, Parallax's wake-ups, and the
-/// agent's replies, but not its tool calls. Case-insensitive for ASCII letters. An empty query
+/// Matches a thread whose title contains `query`, or whose messages hold every word of it: the
+/// user's, Parallax's wake-ups, and the agent's replies, but not its tool calls. A word matches
+/// any word it starts, ignoring case, accents, and punctuation (PLX-487). The user's message is
+/// searchable once it's sent, and the agent's replies once their turn ends. An empty query
 /// fails with `invalidParams`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -319,7 +346,7 @@ pub struct ThreadSearchParams {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSearchResult {
-    /// The matching threads, the one with the newest message first.
+    /// The matching threads: title matches first, then the one with the newest message.
     pub threads: Vec<Thread>,
 }
 
@@ -332,10 +359,10 @@ pub struct ThreadSearchResult {
 /// parent's latest commit, for a thread with no repo.
 ///
 /// Idempotent on `newRunId`: a retry returns the fork, and a run id that is taken by anything
-/// else fails with `idConflict`. Fails with `threadNotFound` for an unknown parent, and with
-/// `invalidParams` for a turn the parent didn't record or one it is still running. A fork's
-/// copied turns aren't its own: they are part of its prompt's turn, and forking at one of their
-/// ids fails.
+/// else, a fork with another `parent` field included, fails with `idConflict`. Fails with
+/// `threadNotFound` for an unknown parent, and with `invalidParams` for a turn the parent didn't
+/// record or one it is still running. A fork's copied turns aren't its own: they are part of its
+/// prompt's turn, and forking at one of their ids fails.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadForkParams {
@@ -356,6 +383,12 @@ pub struct ThreadForkParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub model: Option<String>,
+    /// The run that asked for the fork, such as a thread's `thread_fork` tool, recorded as the
+    /// fork's `parent` (0041). It must exist, or the fork fails with `runNotFound`. Absent means
+    /// none, as for a fork the user makes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parent: Option<RunId>,
 }
 
 /// Params of `repo/refs`, behind the `repoRefs` capability. Fails with `repoNotFound` for an
@@ -434,7 +467,8 @@ pub struct ThreadArchiveResult {
 /// no repo's scratch repository, and its stored events.
 ///
 /// A running CLI is cancelled first, and the delete answers once it has exited and its changes
-/// were committed. Deleting a thread that doesn't exist fails with `threadNotFound`.
+/// were committed. Deleting a thread that doesn't exist fails with `threadNotFound`, and one
+/// whose push or Open PR is running with `gitRefused` (PLX-458).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDeleteParams {

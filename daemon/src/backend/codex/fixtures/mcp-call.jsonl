@@ -1,7 +1,0 @@
-# Synthetic: an MCP tool call, in McpToolCallItem's shape (exec_events.rs at rust-v0.157.1). A
-# worker's flags load no MCP servers, so a real run can't produce one; the CLI then hangs, so only
-# the backend's kill can end it.
-{"type":"thread.started","thread_id":"01a0eb10-5c3d-7e21-9f40-6a1b2c3d4e60"}
-{"type":"turn.started"}
-{"type":"item.started","item":{"id":"item_0","type":"mcp_tool_call","server":"github","tool":"create_issue","arguments":{},"result":null,"error":null,"status":"in_progress"}}
-@hang

@@ -218,6 +218,9 @@ pub(crate) struct Daemon {
     pub started: Instant,
     pub log: Arc<EventLog>,
     pub store: StoreHandle,
+    /// A read-only connection to the same store on a thread of its own, for lists and search
+    /// (PLX-457), so they never queue a write behind them.
+    pub reader: StoreHandle,
     /// The operating system and version, for `host/version`.
     pub os: String,
     pub limits: Limits,
@@ -338,18 +341,20 @@ impl Server {
             backends
         });
         let worktrees = WorktreeManager::new(launcher.clone(), data_dir.root());
-        let store = StoreHandle::open(&data_dir.store_file());
+        let store = StoreHandle::open(
+            &data_dir.store_file(),
+            config.event_retention,
+            config.event_retention_bytes,
+            config.host_event_retention,
+        );
+        let reader = store.open_reader(&data_dir.store_file());
         let keys = keystore::system_store();
         let providers = Providers::load(data_dir.root(), keys.clone(), &launcher, &backends);
         let daemon = Arc::new(Daemon {
             started: Instant::now(),
-            log: Arc::new(EventLog::open(
-                &data_dir.store_file(),
-                config.event_retention,
-                config.event_retention_bytes,
-                config.host_event_retention,
-            )),
+            log: store.log(),
             store,
+            reader,
             os: methods::os_version(),
             github: Github::new(launcher.clone(), github::RELEASE_URL),
             cli_detector: CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT),
@@ -439,12 +444,14 @@ impl Server {
             Err(error) => {
                 socket.remove();
                 daemon.store.stop().await;
+                daemon.reader.stop().await;
                 lock.release();
                 return Err(error);
             }
         };
         agents::recover(&daemon).await;
         agents::deliver_queued(&daemon).await;
+        crate::methods::land::resume(&daemon).await;
         let connections = TaskTracker::new();
         let abort = CancellationToken::new();
         let period = config.socket_check_interval;
@@ -504,6 +511,7 @@ impl Server {
         }
         daemon.agents.shutdown().await;
         daemon.store.stop().await;
+        daemon.reader.stop().await;
         lock.release();
         info!("stopped");
         Ok(())
@@ -616,19 +624,21 @@ impl Daemon {
             Environment::empty(),
         );
         let worktrees = WorktreeManager::new(launcher.clone(), dir);
-        let store = StoreHandle::open(&dir.join("plxd.sqlite3"));
+        let store = StoreHandle::open(
+            &dir.join("plxd.sqlite3"),
+            event_retention,
+            usize::MAX,
+            usize::MAX,
+        );
+        let reader = store.open_reader(&dir.join("plxd.sqlite3"));
         let keys: Arc<dyn KeyStore> = Arc::new(crate::keystore::MemoryKeyStore::new());
         let backends = BackendRegistry::new();
         let providers = Providers::load(dir, Arc::clone(&keys), &launcher, &backends);
         Arc::new(Self {
             started: Instant::now(),
-            log: Arc::new(EventLog::open(
-                &dir.join("plxd.sqlite3"),
-                event_retention,
-                usize::MAX,
-                usize::MAX,
-            )),
+            log: store.log(),
             store,
+            reader,
             os: "test".to_owned(),
             github: Github::new(launcher.clone(), github::RELEASE_URL),
             cli_detector: CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT),

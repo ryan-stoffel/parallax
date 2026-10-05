@@ -3,11 +3,12 @@
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    ErrorKind, EventsEventParams, EventsSubscribeParams, ProjectId, SubscriptionId,
+    AgentOutputItem, ErrorKind, EventsEventParams, EventsSubscribeParams, ParallaxEvent, ProjectId,
+    RunId, SubscriptionId,
 };
 
 use super::Context;
-use crate::event_log::{EventLog, Gone};
+use crate::event_log::{EventLog, Gone, run_of};
 use crate::store::store_error;
 
 /// One subscription's place in the event log.
@@ -18,6 +19,46 @@ pub(crate) struct Cursor {
     pub project: Option<ProjectId>,
     /// The `seq` of the last event delivered or skipped.
     pub after: u64,
+    /// Only this run's events (PLX-453).
+    pub run: Option<RunId>,
+    /// `agent.output` cut down to its approval items, and left out when it has none (PLX-453).
+    pub shell: bool,
+}
+
+impl Cursor {
+    /// Whether this subscription's `run` and `shell` keep `event`.
+    fn keeps(&self, event: &ParallaxEvent) -> bool {
+        self.run.is_none_or(|run| run_of(event) == Some(run))
+            && !(self.shell
+                && matches!(event, ParallaxEvent::AgentOutput { items, .. }
+                    if !items.iter().any(is_approval)))
+    }
+
+    /// `event` as this subscription delivers it.
+    fn view(&self, event: &ParallaxEvent) -> ParallaxEvent {
+        match event {
+            ParallaxEvent::AgentOutput { run_id, items } if self.shell => {
+                ParallaxEvent::AgentOutput {
+                    run_id: *run_id,
+                    items: items
+                        .iter()
+                        .filter(|item| is_approval(item))
+                        .cloned()
+                        .collect(),
+                }
+            }
+            event => event.clone(),
+        }
+    }
+}
+
+/// What a sidebar needs from a run's output: its permission requests and how they ended, as the
+/// app's `trackApprovals` reads them.
+fn is_approval(item: &AgentOutputItem) -> bool {
+    matches!(
+        item,
+        AgentOutputItem::ApprovalRequested { .. } | AgentOutputItem::ApprovalResolved { .. }
+    )
 }
 
 /// Checks a subscription and returns its cursor. The connection's writer sends the response and
@@ -26,6 +67,10 @@ pub(crate) async fn subscribe(
     context: &Context,
     params: EventsSubscribeParams,
 ) -> Result<Cursor, ErrorObject> {
+    if params.project.is_none() && (params.run.is_some() || params.shell) {
+        // A run's events and approvals are never host-level, so this would deliver nothing.
+        return Err(ErrorObject::invalid_params("run and shell need a project"));
+    }
     if let Some(project) = params.project {
         let exists = context
             .daemon
@@ -59,6 +104,8 @@ pub(crate) async fn subscribe(
         subscription: SubscriptionId::generate(),
         project: params.project,
         after: params.after,
+        run: params.run,
+        shell: params.shell,
     })
 }
 
@@ -95,15 +142,17 @@ impl Cursors {
     ///
     /// # Errors
     ///
-    /// The subscription whose next events the log no longer has.
+    /// The subscription whose next events the log no longer has, which this removes.
     pub fn next(&mut self, log: &EventLog) -> Result<Option<EventsEventParams>, SubscriptionId> {
         for _ in 0..self.cursors.len() {
             let index = self.turn % self.cursors.len();
             self.turn = self.turn.wrapping_add(1);
             let cursor = &mut self.cursors[index];
-            let (event, seq) = log
-                .next(cursor.after, cursor.project)
-                .map_err(|_| cursor.subscription)?;
+            let Ok((event, seq)) =
+                log.next(cursor.after, cursor.project, |event| cursor.keeps(event))
+            else {
+                return Err(self.cursors.remove(index).subscription);
+            };
             cursor.after = seq;
             if let Some(event) = event {
                 return Ok(Some(EventsEventParams {
@@ -111,7 +160,7 @@ impl Cursors {
                     seq: event.seq,
                     time: event.time,
                     project: event.project,
-                    event: event.event.clone(),
+                    event: cursor.view(&event.event),
                 }));
             }
         }
@@ -122,7 +171,10 @@ impl Cursors {
 #[cfg(test)]
 mod tests {
     use jiff::Timestamp;
-    use parallax_protocol::{ParallaxEvent, ProjectId, SubscriptionId};
+    use parallax_protocol::{
+        AgentApprovalBy, AgentApprovalDecision, AgentOutputItem, ApprovalId, ParallaxEvent,
+        ProjectId, RunId, SubscriptionId,
+    };
 
     use super::{Cursor, Cursors};
     use crate::event_log::EventLog;
@@ -132,6 +184,8 @@ mod tests {
             subscription: SubscriptionId::generate(),
             project,
             after,
+            run: None,
+            shell: false,
         }
     }
 
@@ -148,7 +202,7 @@ mod tests {
         let log = EventLog::new(10);
         let project = ProjectId::generate();
         for owner in [None, Some(project), None] {
-            log.append_blocking(Timestamp::now(), owner, ParallaxEvent::Unknown);
+            log.append_in_memory(Timestamp::now(), owner, ParallaxEvent::Unknown);
         }
         let host = cursor(None, 0);
         let (host_id, late_id) = (host.subscription, SubscriptionId::generate());
@@ -161,6 +215,8 @@ mod tests {
             subscription: late_id,
             project: None,
             after: 1,
+            run: None,
+            shell: false,
         });
 
         let mut delivered = drain(&mut cursors, &log);
@@ -169,20 +225,91 @@ mod tests {
         expected.sort_by_key(|&(subscription, seq)| (seq, subscription));
         assert_eq!(delivered, expected);
 
-        log.append_blocking(Timestamp::now(), None, ParallaxEvent::Unknown);
+        log.append_in_memory(Timestamp::now(), None, ParallaxEvent::Unknown);
         cursors.remove(host_id);
         assert_eq!(drain(&mut cursors, &log), [(late_id, 4)]);
     }
 
     #[test]
-    fn a_cursor_behind_the_retention_is_reported() {
+    fn run_and_shell_cursors_skip_what_they_filter_out_and_keep_the_order() {
+        let log = EventLog::new(20);
+        let project = ProjectId::generate();
+        let (open, sibling) = (RunId::generate(), RunId::generate());
+        let text = AgentOutputItem::Text {
+            message_id: None,
+            text: "Reading the code.".to_owned(),
+        };
+        let approval = AgentOutputItem::ApprovalResolved {
+            approval_id: ApprovalId::generate(),
+            decision: AgentApprovalDecision::Allowed,
+            by: AgentApprovalBy::User,
+            always: false,
+            message: None,
+        };
+        let output =
+            |run_id, items: Vec<AgentOutputItem>| ParallaxEvent::AgentOutput { run_id, items };
+        for event in [
+            output(open, vec![text.clone()]),                      // 1
+            output(sibling, vec![text.clone(), approval.clone()]), // 2
+            ParallaxEvent::AgentWakeupsPaused { run_id: sibling }, // 3
+            output(open, vec![approval.clone()]),                  // 4
+            output(sibling, vec![text.clone()]),                   // 5
+        ] {
+            log.append_in_memory(Timestamp::now(), Some(project), event);
+        }
+        let run = Cursor {
+            run: Some(open),
+            ..cursor(Some(project), 0)
+        };
+        let shell = Cursor {
+            shell: true,
+            ..cursor(Some(project), 0)
+        };
+        let (run_id, shell_id) = (run.subscription, shell.subscription);
+        let mut cursors = Cursors::default();
+        cursors.add(run);
+        cursors.add(shell);
+
+        let mut delivered = Vec::new();
+        while let Some(event) = cursors.next(&log).unwrap() {
+            delivered.push((event.subscription, event.seq, event.event));
+        }
+        let of = |id| {
+            delivered
+                .iter()
+                .filter(|(subscription, ..)| *subscription == id)
+                .map(|(_, seq, event)| (*seq, event.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            of(run_id),
+            [
+                (1, output(open, vec![text.clone()])),
+                (4, output(open, vec![approval.clone()]))
+            ]
+        );
+        assert_eq!(
+            of(shell_id),
+            [
+                (2, output(sibling, vec![approval.clone()])),
+                (3, ParallaxEvent::AgentWakeupsPaused { run_id: sibling }),
+                (4, output(open, vec![approval])),
+            ]
+        );
+        // Both cursors moved past the last event, which neither delivered.
+        assert!(cursors.cursors.iter().all(|cursor| cursor.after == 5));
+    }
+
+    #[test]
+    fn a_cursor_behind_the_retention_is_reported_and_removed() {
         let log = EventLog::new(1);
-        log.append_blocking(Timestamp::now(), None, ParallaxEvent::Unknown);
-        log.append_blocking(Timestamp::now(), None, ParallaxEvent::Unknown);
+        log.append_in_memory(Timestamp::now(), None, ParallaxEvent::Unknown);
+        log.append_in_memory(Timestamp::now(), None, ParallaxEvent::Unknown);
         let lagging = cursor(None, 0);
         let id = lagging.subscription;
         let mut cursors = Cursors::default();
         cursors.add(lagging);
         assert_eq!(cursors.next(&log).unwrap_err(), id);
+        assert_eq!(cursors.next(&log), Ok(None));
     }
 }

@@ -41,6 +41,48 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<ProjectPermission>,
+    /// Who answers its children's questions (0043), behind the `projectAutonomy` capability.
+    /// Absent only from an older plxd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub autonomy: Option<ProjectAutonomy>,
+    /// The branch its integration branch is cut from and its PR targets (0045), behind the
+    /// `integrationBranch` capability. Absent until set, or until plxd cuts the integration branch
+    /// from the repository's default branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub base_branch: Option<String>,
+    /// Its integration branch, `parallax/<project slug>` (0045), behind `integrationBranch`.
+    /// Absent until plxd cuts it, when the project is created or a run in it starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub integration_branch: Option<String>,
+    /// Its children land without waiting for the user's approval (0045), behind the `landing`
+    /// capability. Absent means false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_land: bool,
+    /// How many of its children run at once (0046), behind `projectPlacement`. Over it, a new
+    /// child waits in the Project's queue. Absent only from an older plxd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_children: Option<u32>,
+    /// Whether its children may run on an API key account (0046), behind `projectPlacement`. Off,
+    /// a child never starts on one, nor falls back to one on a usage limit. Absent only from an
+    /// older plxd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub allow_api_keys: Option<bool>,
+    /// The command plxd runs in the integration worktree after each landing (0045), behind the
+    /// `checks` capability: through `sh -c` (`cmd /C` on Windows), with a 30-minute limit. Absent
+    /// means none, so a clean merge is enough.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub checks: Option<String>,
+    /// The checks command the coordinator proposed, behind `checks`. It never runs: the user
+    /// confirms it, or another, by setting `checks`. Absent means none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub proposed_checks: Option<String>,
     /// When the project was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// When the project last changed, in RFC 3339 UTC. `project/update` leaves it as it is, since
@@ -78,6 +120,26 @@ impl ProjectPermission {
     }
 }
 
+/// A project's autonomy level (0043): who answers its children's questions. Separate from its
+/// permission mode, which decides what they may run.
+///
+/// A newer plxd may send a value this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ProjectAutonomy {
+    /// Ask me: the coordinator answers nothing. plxd refuses its `answer`, and every question
+    /// goes to Needs you without waking it.
+    Ask,
+    /// Routine, the default: the coordinator answers what memory or the code clearly answers.
+    Routine,
+    /// Full: the coordinator answers everything it can justify.
+    Full,
+    /// A value this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
 /// A project's icon (PLX-227, 0032): a Lucide icon and a color from the app's palette, both by
 /// name, and optionally an uploaded image (PLX-339, 0038). plxd stores them as the client sent
 /// them and never reads them.
@@ -111,15 +173,16 @@ pub struct ProjectListParams {}
 pub struct ProjectListResult {
     /// Every project, oldest first.
     pub projects: Vec<Project>,
-    /// The `seq` of the last event the snapshot reflects. Subscribe with `after` set to it.
+    /// The event log's `seq` from before the list was read. Subscribe with `after` set to it. The
+    /// list may already reflect some events after it, and replaying them is harmless.
     pub seq: u64,
 }
 
 /// Params of `project/create`.
 ///
 /// It is idempotent on `id`: if a project with that id exists, plxd returns it instead of
-/// creating another, and fails with `idConflict` if `name`, `repoPath`, `icon`, or `permission`
-/// differ. A new project's `repoPath` must be the top folder of a git working tree on this host,
+/// creating another, and fails with `idConflict` if `name`, `repoPath`, `icon`, `permission`,
+/// `autonomy`, or a given `baseBranch` differ. A new project's `repoPath` must be the top folder of a git working tree on this host,
 /// or it fails with `notARepository`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -140,6 +203,17 @@ pub struct ProjectCreateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<ProjectPermission>,
+    /// The project's autonomy level, sent only to a plxd that advertises `projectAutonomy`.
+    /// Absent means `routine`, the level projects from before it have.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub autonomy: Option<ProjectAutonomy>,
+    /// The project's base branch (0045), sent only to a plxd that advertises
+    /// `integrationBranch`: a local or remote-tracking branch, such as `main` or `origin/main`.
+    /// Absent means the repository's default branch. A retry that leaves it out matches any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub base_branch: Option<String>,
 }
 
 /// Result of `project/create`.
@@ -151,11 +225,14 @@ pub struct ProjectCreateResult {
 }
 
 /// Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
-/// capability (PLX-227, 0032), or its permission mode, behind `projectPermission` (0042).
+/// capability (PLX-227, 0032), its permission mode, behind `projectPermission` (0042), its
+/// autonomy level, behind `projectAutonomy` (0043), its base branch, behind `integrationBranch`
+/// (0045), automatic landing, behind `landing` (0045), how its children are placed, behind
+/// `projectPlacement` (0046), or its checks, behind `checks` (0045).
 ///
 /// A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
-/// `project/create`'s rules, and the repository can't change. A rename, a new icon, or a new mode
-/// is not activity, so `updatedAt` stays as it is. Fails with `projectNotFound` for an unknown project.
+/// `project/create`'s rules, and the repository can't change. A rename, a new icon, a new mode,
+/// or a new level is not activity, so `updatedAt` stays as it is. Fails with `projectNotFound` for an unknown project.
 /// A change appends `project.updated`; an update that changes nothing appends no event.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -175,6 +252,40 @@ pub struct ProjectUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<ProjectPermission>,
+    /// The new autonomy level. Absent keeps it. It applies to the next question: one already
+    /// waiting for the coordinator stays with it, though in `ask` plxd refuses its answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub autonomy: Option<ProjectAutonomy>,
+    /// The new base branch, behind `integrationBranch`. Absent keeps it. An integration branch
+    /// already cut stays where it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub base_branch: Option<String>,
+    /// Turns automatic landing on or off, behind `landing` (0045). Absent keeps it. Children
+    /// already waiting for approval keep waiting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub auto_land: Option<bool>,
+    /// How many children may run at once, from 1 to 100, behind `projectPlacement`. Absent keeps
+    /// it. Children already running keep running, and a higher number starts waiting ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_children: Option<u32>,
+    /// Whether children may run on an API key account, behind `projectPlacement`. Absent keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub allow_api_keys: Option<bool>,
+    /// The checks command the user confirms or edits, behind `checks` (0045): at most 4,096
+    /// bytes. Empty clears it, and setting it clears `proposedChecks`. Absent keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub checks: Option<String>,
+    /// The coordinator's proposal for `checks`, behind `checks`, which adds a `needsYou` item
+    /// naming it and never runs. Empty clears it. Ignored when `checks` is set too. Absent keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub proposed_checks: Option<String>,
 }
 
 /// Result of `project/update`.
@@ -225,19 +336,71 @@ pub struct ProjectStartParams {
     /// Images for the first message, as `agent/start`'s.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<PromptImage>,
-    /// Forward the coordinator's permission requests to the client, as `agent/start` takes it.
-    /// The runs it spawns forward theirs too.
+    /// Ignored: plxd starts the coordinator as if it were set, as it does every Project child,
+    /// since the inbox answers its permission requests (0042).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub approvals: bool,
+}
+
+/// Params of `project/fromThreads`: makes a Project from threads (0042), behind the
+/// `projectFromThreads` capability.
+///
+/// Each thread must be on the same repo entry and have its own worktree, so a thread on the
+/// scratch entry, one in the user's checkout, one whose worktree `agent/accept` removed, or one
+/// already in a Project fails with `invalidParams`, as do threads on two repo entries. A thread
+/// whose kind has no `permission` in a Project fails with `unsupportedOption`. An unknown thread
+/// fails with `threadNotFound`.
+///
+/// plxd creates the Project on the threads' repository as `project/create` does, starts its
+/// coordinator as `project/start` does, with a first message asking it to read the threads and
+/// propose the brief with `memory_propose` for the user to save, and makes each thread the
+/// coordinator's child. When the coordinator can't start, plxd removes the Project it just
+/// created and leaves the threads as they were.
+///
+/// A thread keeps its history, worktree, branch, and `Thread.repo`. Its run moves to the
+/// Project, so its later `agent.*` events are on the Project's scope, and it forwards its
+/// permission requests (`approvals`) to the inbox. It takes the coordinator as its `parent`
+/// (reported as `thread.updated`), replacing any parent it had: a thread another thread started
+/// stops waking that thread. It runs in the Project's mode from its next CLI process. Idempotent
+/// on `id` and `runId`: a retry returns the same Project and coordinator.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectFromThreadsParams {
+    /// The new project's id, a version 7 UUID generated by the client.
+    pub id: ProjectId,
+    /// The coordinator run's id, a version 7 UUID generated by the client.
+    pub run_id: RunId,
+    /// The name shown in the app.
+    pub name: String,
+    /// The project's permission mode, which the user picked in the disclaimer.
+    pub permission: ProjectPermission,
+    /// The threads, by run id: at least one.
+    pub threads: Vec<RunId>,
+    /// The coordinator's account, as `project/start`'s. Absent means the coordinator role's
+    /// default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub account: Option<AccountChoice>,
+}
+
+/// Result of `project/fromThreads`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectFromThreadsResult {
+    /// The project, with its coordinator.
+    pub project: Project,
+    /// The coordinator's run.
+    pub run: crate::AgentRun,
 }
 
 /// Params of `project/delete`: deletes a project with its coordinator and every run in it, their
 /// stored events, sent turns, images, worktrees, and branches, and its shared context folder,
 /// behind the `projectDelete` capability (PLX-338).
 ///
-/// Running CLIs are cancelled first, and the delete answers once they have exited and the
-/// project is gone, after appending `project.deleted`. Deleting a project that doesn't exist, or
-/// a repo entry's id, fails with `projectNotFound`.
+/// Running CLIs are cancelled first, and the delete answers once they have exited, the runs'
+/// pushes and Open PRs in flight have finished (PLX-458), and the project is gone, after
+/// appending `project.deleted`. Deleting a project that doesn't exist, or a repo entry's id,
+/// fails with `projectNotFound`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectDeleteParams {

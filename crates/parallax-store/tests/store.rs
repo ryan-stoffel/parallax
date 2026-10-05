@@ -22,6 +22,8 @@ fn sample_fields() -> ProjectFields {
         repo_path: "/Users/ryan/dev/parallax".to_string(),
         icon: None,
         permission: "auto".to_string(),
+        autonomy: "routine".to_string(),
+        base_branch: None,
     }
 }
 
@@ -206,6 +208,13 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 name: Some("renamed".to_string()),
                 icon: None,
                 permission: None,
+                autonomy: None,
+                base_branch: None,
+                auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
+                checks: None,
+                proposed_checks: None,
             },
         )
         .expect("a rename");
@@ -226,6 +235,13 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 name: None,
                 icon: Some(icon("rocket", Some("green"))),
                 permission: None,
+                autonomy: None,
+                base_branch: None,
+                auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
+                checks: None,
+                proposed_checks: None,
             },
         )
         .expect("an icon");
@@ -241,6 +257,13 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 name: None,
                 icon: Some(icon("rocket", None)),
                 permission: None,
+                autonomy: None,
+                base_branch: None,
+                auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
+                checks: None,
+                proposed_checks: None,
             },
         )
         .expect("an icon without a color");
@@ -287,6 +310,13 @@ fn an_icon_image_round_trips_and_an_icon_without_one_clears_it() {
                 name: None,
                 icon: Some(icon("rocket", Some("green"))),
                 permission: None,
+                autonomy: None,
+                base_branch: None,
+                auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
+                checks: None,
+                proposed_checks: None,
             },
         )
         .expect("an icon without an image");
@@ -339,6 +369,191 @@ fn a_projects_permission_mode_is_checked_on_retry_and_changed_by_update() {
     );
 }
 
+/// A project's autonomy level (PLX-403, decision record 0043) is part of the retry check, and an
+/// update changes it alone.
+#[test]
+fn a_projects_autonomy_level_is_checked_on_retry_and_changed_by_update() {
+    let (_dir, path) = temp_db_path();
+    let mut store = Store::open(&path).expect("open");
+    let id = Uuid::now_v7();
+    let fields = ProjectFields {
+        autonomy: "ask".to_string(),
+        ..sample_fields()
+    };
+    let created = store.create_project(id, &fields).expect("create");
+    assert_eq!(created.autonomy, "ask");
+    match store.create_project(id, &sample_fields()) {
+        Err(StoreError::IdConflict { id: conflicted }) => assert_eq!(conflicted, id),
+        result => panic!("expected IdConflict for another level, got {result:?}"),
+    }
+
+    let edit = ProjectEdit {
+        autonomy: Some("full".to_string()),
+        ..ProjectEdit::default()
+    };
+    let (updated, changed) = store.update_project(id, &edit).expect("a new level");
+    assert!(changed);
+    assert_eq!(
+        updated,
+        parallax_store::Project {
+            autonomy: "full".to_string(),
+            ..created
+        }
+    );
+    assert_eq!(
+        store.get_project(id).expect("get").expect("the project"),
+        updated
+    );
+    let (_, changed) = store.update_project(id, &edit).expect("the same level");
+    assert!(!changed, "the same level writes nothing");
+}
+
+/// A Project's placement settings (PLX-413, decision record 0046) start at 10 children and no API
+/// keys, and its waiting children are kept oldest first until taken out or the Project is deleted.
+#[test]
+fn a_projects_placement_settings_and_waiting_children_are_stored() {
+    let (_dir, path) = temp_db_path();
+    let mut store = Store::open(&path).expect("open");
+    let id = Uuid::now_v7();
+    let created = store.create_project(id, &sample_fields()).expect("create");
+    assert_eq!((created.max_children, created.allow_api_keys), (10, false));
+    let edit = ProjectEdit {
+        max_children: Some(2),
+        allow_api_keys: Some(true),
+        ..ProjectEdit::default()
+    };
+    let (updated, changed) = store.update_project(id, &edit).expect("update");
+    assert!(changed);
+    assert_eq!((updated.max_children, updated.allow_api_keys), (2, true));
+
+    let waiting = |run_id: Uuid| parallax_store::Placement {
+        run_id,
+        project_id: id,
+        prompt: "fix the bug".to_owned(),
+        extra: "{}".to_owned(),
+    };
+    let (first, second) = (Uuid::now_v7(), Uuid::now_v7());
+    store.add_placement(&waiting(first)).expect("add");
+    store.add_placement(&waiting(second)).expect("add");
+    store
+        .add_placement(&waiting(first))
+        .expect("adding again keeps its place");
+    let ids = |store: &Store| -> Vec<Uuid> {
+        store
+            .placements()
+            .expect("list")
+            .iter()
+            .map(|p| p.run_id)
+            .collect()
+    };
+    assert_eq!(ids(&store), [first, second]);
+    assert!(store.remove_placement(first).expect("remove"));
+    assert!(!store.remove_placement(first).expect("remove again"));
+    assert_eq!(ids(&store), [second]);
+
+    store.delete_project(id).expect("delete");
+    assert!(
+        ids(&store).is_empty(),
+        "a deleted Project's children don't wait"
+    );
+}
+
+/// A project's base branch (PLX-409, decision record 0045) is checked on a retry only when
+/// given, and recording the integration branch fills in a base only when there was none.
+#[test]
+fn a_projects_branches_are_stored_and_a_retry_without_a_base_matches() {
+    let (_dir, path) = temp_db_path();
+    let mut store = Store::open(&path).expect("open");
+    let id = Uuid::now_v7();
+    let created = store.create_project(id, &sample_fields()).expect("create");
+    assert_eq!(
+        (created.base_branch, created.integration_branch),
+        (None, None)
+    );
+
+    assert!(
+        store
+            .set_integration_branch(id, "parallax/app", "main")
+            .expect("record")
+    );
+    assert!(
+        !store
+            .set_integration_branch(id, "parallax/app", "other")
+            .expect("record again"),
+        "nothing changes"
+    );
+    let project = store.get_project(id).expect("get").expect("the project");
+    assert_eq!(project.base_branch.as_deref(), Some("main"));
+    assert_eq!(project.integration_branch.as_deref(), Some("parallax/app"));
+    store
+        .create_project(id, &sample_fields())
+        .expect("a retry with no base matches");
+    match store.create_project(
+        id,
+        &ProjectFields {
+            base_branch: Some("develop".to_string()),
+            ..sample_fields()
+        },
+    ) {
+        Err(StoreError::IdConflict { id: conflicted }) => assert_eq!(conflicted, id),
+        result => panic!("expected IdConflict for another base, got {result:?}"),
+    }
+
+    let (updated, changed) = store
+        .update_project(
+            id,
+            &ProjectEdit {
+                base_branch: Some("develop".to_string()),
+                auto_land: None,
+                ..ProjectEdit::default()
+            },
+        )
+        .expect("a new base");
+    assert!(changed);
+    assert_eq!(updated.base_branch.as_deref(), Some("develop"));
+    assert_eq!(updated.integration_branch.as_deref(), Some("parallax/app"));
+}
+
+/// PLX-411: a coordinator's proposal never becomes the checks; the user's confirmation does, and
+/// clears the proposal. Empty clears either.
+#[test]
+fn confirming_checks_clears_the_proposal_and_empty_clears_them() {
+    let (_dir, path) = temp_db_path();
+    let mut store = Store::open(&path).expect("open");
+    let id = Uuid::now_v7();
+    store.create_project(id, &sample_fields()).expect("create");
+    let edit = |checks: Option<&str>, proposed: Option<&str>| ProjectEdit {
+        checks: checks.map(str::to_owned),
+        proposed_checks: proposed.map(str::to_owned),
+        ..ProjectEdit::default()
+    };
+
+    let (proposed, changed) = store
+        .update_project(id, &edit(None, Some("cargo test")))
+        .expect("a proposal");
+    assert!(changed);
+    assert_eq!(proposed.proposed_checks.as_deref(), Some("cargo test"));
+    assert_eq!(proposed.checks, None, "a proposal never runs");
+
+    let (confirmed, changed) = store
+        .update_project(id, &edit(Some("cargo test"), None))
+        .expect("a confirmation");
+    assert!(changed);
+    assert_eq!(confirmed.checks.as_deref(), Some("cargo test"));
+    assert_eq!(confirmed.proposed_checks, None);
+    let (_, changed) = store
+        .update_project(id, &edit(Some("cargo test"), None))
+        .expect("the same again");
+    assert!(!changed);
+
+    let (cleared, changed) = store
+        .update_project(id, &edit(Some(""), None))
+        .expect("cleared");
+    assert!(changed);
+    assert_eq!(cleared.checks, None);
+    assert_eq!(store.get_project(id).unwrap().unwrap(), cleared);
+}
+
 #[test]
 fn an_update_that_changes_nothing_reports_no_change() {
     let (_dir, path) = temp_db_path();
@@ -356,6 +571,13 @@ fn an_update_that_changes_nothing_reports_no_change() {
             name: Some(fields.name.clone()),
             icon: fields.icon.clone(),
             permission: None,
+            autonomy: None,
+            base_branch: None,
+            auto_land: None,
+            allow_api_keys: None,
+            max_children: None,
+            checks: None,
+            proposed_checks: None,
         },
     ] {
         let (project, changed) = store.update_project(id, &edit).expect("update");
@@ -377,6 +599,13 @@ fn update_of_a_missing_project_fails_with_not_found() {
                 name: Some("renamed".to_string()),
                 icon: None,
                 permission: None,
+                autonomy: None,
+                base_branch: None,
+                auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
+                checks: None,
+                proposed_checks: None,
             },
         )
         .expect_err("update of a missing project should fail");
@@ -596,6 +825,10 @@ fn reads_timestamps_written_in_the_old_variable_width_format() {
 /// version 1, with a row in it, must open, keep the row, and lose the
 /// column.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "checks every column the migrations add"
+)]
 fn a_version_1_database_migrates_and_keeps_its_projects() {
     let (_dir, path) = temp_db_path();
     let id = Uuid::now_v7();
@@ -641,8 +874,8 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
             &ProjectFields {
                 name: "parallax".to_string(),
                 repo_path: "/r".to_string(),
-                icon: None,
-                permission: "auto".to_string(),
+                // No icon, Auto, and Routine: what migrations 16, 26, and 31 give an old row.
+                ..sample_fields()
             },
         )
         .expect("an idempotent create should match the migrated row");
@@ -668,7 +901,15 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
             "icon_color",
             "icon_image_type",
             "icon_image_data",
-            "permission"
+            "permission",
+            "base_branch",
+            "integration_branch",
+            "autonomy",
+            "auto_land",
+            "max_children",
+            "allow_api_keys",
+            "checks",
+            "proposed_checks"
         ]
     );
     let version: i64 = conn
@@ -677,12 +918,12 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
         })
         .expect("read schema version");
     assert_eq!(
-        version, 27,
+        version, 36,
         "migrations 3 (accounts, #117), 4 (usage, #120), 5 (worktrees, #154), 6 (role \
          defaults, #119), 7 (runs and events, #156), 8 (accepted runs, #157), 9 (threads, \
          #110), 10 (turns, #190), 11 (coordinator threads, #195), 12 (worktree base_dirty, \
          #257), 13 (run options, PLX-97), 14 (wakes, PLX-178), 15 (images, PLX-191), 16 \
-         (project icons, PLX-227), 17 (approvals, PLX-222), 18 (checkout runs), 19 (thread          attention, PLX-270), 20 (context window and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), and 27 (queued messages, PLX-370) also apply"
+         (project icons, PLX-227), 17 (approvals, PLX-222), 18 (checkout runs), 19 (thread          attention, PLX-270), 20 (context window and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), 30 (questions, PLX-402), 31 (project autonomy, PLX-403), 32 (question delivery, PLX-469), 33 (landing queues, PLX-410), 34 (placement, PLX-413), 35 (checks, PLX-411), and 36 (search index, PLX-487) also apply"
     );
     let account_columns: Vec<String> = conn
         .prepare("SELECT name FROM pragma_table_info('accounts')")
@@ -727,6 +968,13 @@ fn a_version_15_database_gains_project_icons_and_keeps_its_projects() {
                 name: None,
                 icon: Some(icon("rocket", Some("green"))),
                 permission: None,
+                autonomy: None,
+                base_branch: None,
+                auto_land: None,
+                allow_api_keys: None,
+                max_children: None,
+                checks: None,
+                proposed_checks: None,
             },
         )
         .expect("set an icon after migrating");
@@ -808,12 +1056,12 @@ fn a_version_3_database_from_develop_migrates_to_usage_tables_and_keeps_its_acco
         })
         .expect("read schema version");
     assert_eq!(
-        version, 27,
+        version, 36,
         "migrations 5 (worktrees, #154), 6 (role defaults, #119), 7 (runs and events, #156), \
          8 (accepted runs, #157), 9 (threads, #110), 10 (turns, #190), 11 (coordinator \
          threads, #195), 12 (worktree base_dirty, #257), 13 (run options, PLX-97), 14 (wakes, \
          PLX-178), 15 (images, PLX-191), 16 (project icons, PLX-227), 17 (approvals, \
-         PLX-222), 18 (checkout runs), 19 (thread attention, PLX-270), 20 (context window          and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), and 27 (queued messages, PLX-370) also apply"
+         PLX-222), 18 (checkout runs), 19 (thread attention, PLX-270), 20 (context window          and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), 30 (questions, PLX-402), 31 (project autonomy, PLX-403), 32 (question delivery, PLX-469), 33 (landing queues, PLX-410), 34 (placement, PLX-413), 35 (checks, PLX-411), and 36 (search index, PLX-487) also apply"
     );
 }
 

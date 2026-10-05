@@ -1,5 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  ArrowLeftRight,
+  ArrowRight,
   Ban,
   Bot,
   Brain,
@@ -47,6 +49,7 @@ import remarkGfm from "remark-gfm";
 
 import type { RpcError } from "../preload/bridge";
 import type {
+  AgentDelivery,
   AgentRun,
   AgentToolStatus,
   ImageId,
@@ -66,13 +69,16 @@ import {
   type Asked,
   type ToolLook,
 } from "./Approval";
-import { Composer, tabItem, type Unanswered } from "./Composer";
+import { Composer, tabItem, type ComposerProps, type Unanswered } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError, githubProblem } from "./errors";
+import { ForkButton, ForkContext, type ForkTarget } from "./Fork";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { Loader, type LoaderStyle } from "./Loader";
 import { GitHubLogo, LinearLogo } from "./logos";
+import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
 import { useCatalog, type Provider, type RunOptions } from "./models";
+import { kinds } from "./providers";
 import {
   latestPlan,
   PlanStrip,
@@ -84,16 +90,31 @@ import {
 } from "./Plan";
 import { plainText, PromptRail, ScrollToEnd, type Prompt } from "./PromptRail";
 import { attachThreads, SentThread, ThreadLinksContext, type ThreadLinks } from "./threadContext";
-import { titleOf } from "./threads";
+import { QueueStrip } from "./QueueStrip";
+import { ResumeCard } from "./ResumeCard";
+import {
+  knownModel,
+  modelName,
+  nativeSubagents,
+  SubagentCall,
+  SubagentsContext,
+  type NativeSubagent,
+} from "./Subagents";
+import { titleOf, type ForkChoice } from "./threads";
 import {
   failureText,
   groupWork,
   isRunning,
+  isSubagentTool,
+  subagentLabels,
+  subagentRows,
+  subagentState,
   waitingApprovals,
   workedFor,
   plxdTools,
   type Approval,
   type Item,
+  type Subagent,
   type Work,
 } from "./transcript";
 import { SetUpGithub } from "./ui";
@@ -148,14 +169,22 @@ export function AgentChat({
   going,
   noRepo,
   tab,
+  strip,
   startOver,
   others,
+  projectMode,
+  newTask,
   pullRequests,
   onPrOpened,
   onSetUpGithub,
   compose,
   onComposed,
   threadLinks,
+  subagent,
+  onOpenSubagent,
+  onSubagents,
+  forked,
+  onFork,
 }: {
   hostId: string;
   runId: string;
@@ -174,6 +203,8 @@ export function AgentChat({
   noRepo?: boolean;
   /** The composer's tab in place of the run's worktree, such as a coordinator's repository. */
   tab?: ReactNode;
+  /** A strip tucked over the composer, above the plan's, such as a Project's agents. */
+  strip?: ReactNode;
   /**
    * Starts a new run with `text` and `images` in place of this one once this one can't take
    * messages, as a Project's coordinator can (0024). Resolves to an error message, or undefined.
@@ -188,6 +219,10 @@ export function AgentChat({
    * runs' are in each of its chats (PLX-196).
    */
   others?: readonly Asked[];
+  /** The Project's permission mode, shown in place of Access, for a run in a Project (0042). */
+  projectMode?: ComposerProps["projectMode"];
+  /** A Project coordinator's New task target, for its composer's toggle (0042). */
+  newTask?: ComposerProps["newTask"];
   /** The run tab's link to its linked pull requests (PLX-319), in place of Open PR. */
   pullRequests?: ReactNode;
   /** Opens the pull request Open PR opened, in place of linking to it. */
@@ -205,11 +240,32 @@ export function AgentChat({
    * transcript's attached threads open from their chips.
    */
   threadLinks?: ThreadLinks;
+  /** The agent's own subagent shown in place of the chat, by its call's id (PLX-382). */
+  subagent?: string;
+  /** Opens one of the agent's own subagents in run `runId`, as its call's row does. */
+  onOpenSubagent?: (runId: string, callId: string) => void;
+  /** Told run `runId`'s own subagents whenever they change, for the top bar's chips. */
+  onSubagents?: (runId: string, subagents: NativeSubagent[]) => void;
+  /** Whether the thread is a fork (0050), whose history copied from the original shows muted. */
+  forked?: boolean;
+  /**
+   * Forks the thread at a turn, or at its latest with none, and opens the fork (0050). Its
+   * messages offer Fork only with it. Resolves to plxd's error, if it refused.
+   */
+  onFork?: (turnId: string | undefined, choice: ForkChoice) => Promise<RpcError | undefined>;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
   const catalog = useCatalog(hostId);
-  const { transcript, error, sent, send, cancel } = useAgentRun(hostId, runId, connected);
+  const queueEnabled = connected && "queue" in connection.capabilities;
+  const { transcript, error, sent, send, cancel, queue, queueError, older, loadOlder } =
+    useAgentRun(
+      hostId,
+      runId,
+      connected,
+      queueEnabled,
+      connected && "eventsBefore" in connection.capabilities,
+    );
   // Permission requests (PLX-196): those answered here read as answered at once.
   const { answers, answer, dismiss } = useAnswers(hostId);
   const [resendError, setResendError] = useState<string>();
@@ -238,6 +294,8 @@ export function AgentChat({
     if (compose.send) void send(compose.text).then((failed) => setResendError(failed?.message));
     onComposed?.();
   }, [compose, send, onComposed]);
+  // Queued messages the user cancelled from here, whose followUpDropped notice is left out.
+  const [cancelled, setCancelled] = useState<ReadonlySet<string>>(new Set());
   const unsent = useMemo(
     () => new Map([...sent].filter(([turnId]) => !resent.has(turnId))),
     [sent, resent],
@@ -268,8 +326,9 @@ export function AgentChat({
     options: RunOptions,
     images: PromptImage[],
     threads: string[],
+    delivery?: AgentDelivery,
   ) => {
-    const failed = await send(text, options, images, threads);
+    const failed = await send(text, options, images, threads, delivery);
     if (!startOver || failed?.data?.kind !== "runNotResumable") return failed?.message;
     setRefused({ text, options, images, why: failed.message });
     return ""; // Back in the box; the line above it says why and offers Start over.
@@ -305,7 +364,7 @@ export function AgentChat({
   const rows = useMemo<Row[]>(() => {
     const seen = new Set(items.flatMap((i) => ("turnId" in i && i.turnId ? [i.turnId] : [])));
     const pending = [...sent]
-      .filter(([turnId]) => !seen.has(turnId))
+      .filter(([turnId]) => !seen.has(turnId) && !queue.some((m) => m.id === turnId))
       .map(([turnId, { text, images, threads }]) => ({
         kind: "pending" as const,
         key: `pending:${turnId}`,
@@ -314,14 +373,17 @@ export function AgentChat({
         threads,
         turnId,
       }));
-    const all = [...items, ...pending];
+    const shown = items.filter(
+      (i) => !(i.kind === "notice" && i.turnId && cancelled.has(i.turnId)),
+    );
+    const all = [...shown, ...pending];
     if (all.length > 0 || !prompt) return all;
     return [
       going
         ? { kind: "pending", key: "pending:prompt", text: prompt }
         : { kind: "user", key: "prompt", text: prompt },
     ];
-  }, [items, sent, prompt, going]);
+  }, [items, sent, prompt, going, queue, cancelled]);
   // The user's prompts, for the composer's Up: not Parallax's wake-ups or other threads' messages.
   const history = useMemo(
     () =>
@@ -337,6 +399,12 @@ export function AgentChat({
   // its text, its attached threads, and its images: at hand when sent from here, or fetched from
   // plxd by id on Stop.
   const unanswered = useMemo<(Unanswered & { turnId?: string }) | undefined>(() => {
+    // The last message queued from here comes after every row.
+    const queued = queue.findLast((m) => sent.has(m.id));
+    if (queued) {
+      const { text, images, threads } = sent.get(queued.id)!;
+      return { text, images: async () => images, threads, turnId: queued.id };
+    }
     const at = rows.findLastIndex((r) => r.kind === "user" || r.kind === "pending");
     const row = rows[at];
     if (
@@ -344,7 +412,9 @@ export function AgentChat({
       (row.kind === "user" && notTheUsers(row))
     )
       return undefined;
-    if (!rows.slice(at + 1).every((r) => ["notice", "end", "session"].includes(r.kind)))
+    if (
+      !rows.slice(at + 1).every((r) => ["notice", "end", "session", "modelSwitch"].includes(r.kind))
+    )
       return undefined;
     const mine = row.kind === "user" && row.turnId ? sent.get(row.turnId) : undefined;
     const text = row.text ?? mine?.text;
@@ -362,7 +432,7 @@ export function AgentChat({
     const threads = row.threads ?? mine?.threads;
     // Only one still on its way can be dropped, and so offer Send again.
     return { text, images, threads, turnId: row.kind === "pending" ? row.turnId : undefined };
-  }, [rows, sent, hostId, runId]);
+  }, [rows, sent, queue, hostId, runId]);
   // A stopped prompt goes back in the box, so if plxd drops it, it offers no Send again too.
   const stop = async () => {
     const back = unanswered;
@@ -370,6 +440,28 @@ export function AgentChat({
     if (!failed && back?.turnId) setResent((prev) => new Set(prev).add(back.turnId!));
     return failed;
   };
+
+  // One that couldn't load, stopped updating, or lost plxd shows nothing in progress.
+  const stalled = error !== undefined || (connection !== undefined && !connected);
+  const live = isRunning(run?.status) && !stalled;
+  const native = useMemo(
+    () => JSON.stringify(nativeSubagents(transcript.subagents, live)),
+    [transcript.subagents, live],
+  );
+  useEffect(
+    () => onSubagents?.(runId, JSON.parse(native) as NativeSubagent[]),
+    [native, onSubagents, runId],
+  );
+  const subagents = useMemo(
+    () =>
+      onOpenSubagent && {
+        subagents: transcript.subagents ?? {},
+        live,
+        open: (callId: string) => onOpenSubagent(runId, callId),
+      },
+    [transcript.subagents, live, onOpenSubagent, runId],
+  );
+  const shown = subagent ? transcript.subagents?.[subagent] : undefined;
 
   let disabledReason: string | undefined;
   if (connection?.status === "failed") disabledReason = "Disconnected from plxd";
@@ -406,21 +498,56 @@ export function AgentChat({
     !isRunning(run.status) &&
     run.status !== "accepted";
 
-  // One that couldn't load, stopped updating, or lost plxd shows nothing in progress.
-  const stalled = error !== undefined || (connection !== undefined && !connected);
+  const forkTarget = useMemo<ForkTarget | undefined>(
+    () => (run && onFork && connected ? { hostId, run, onFork } : undefined),
+    [hostId, run, onFork, connected],
+  );
+  const pinned = (
+    <PinnedApprovals
+      asked={asked}
+      answers={answers}
+      onAnswer={(a, choice, message) => void answer(a, choice, message)}
+      onDismiss={dismiss}
+      disabledReason={connected ? undefined : (disabledReason ?? "Connecting to plxd…")}
+    />
+  );
+
+  if (subagent)
+    return (
+      <SubagentsContext value={subagents}>
+        {shown ? (
+          <SubagentView sub={shown} live={live} stalled={stalled} />
+        ) : (
+          <div className="flex flex-1 items-center justify-center text-[13px] text-faint-foreground">
+            {error ?? (run ? "This subagent isn't in the transcript" : "Loading…")}
+          </div>
+        )}
+        <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 pb-5">{pinned}</div>
+      </SubagentsContext>
+    );
 
   return (
-    <>
+    <SubagentsContext value={subagents}>
       {rows.length > 0 ? (
         <ThreadLinksContext value={threadLinks}>
-          <TranscriptView
-            rows={rows}
-            sent={unsent}
-            live={isRunning(run?.status)}
-            stalled={stalled}
-            onResend={resend}
-            loadImage={showImage}
-          />
+          <ForkContext value={forkTarget}>
+            <TranscriptView
+              rows={rows}
+              sent={unsent}
+              live={isRunning(run?.status)}
+              stalled={stalled}
+              // plxd logs a fork's copied history with its agent.started, at its creation (0050).
+              copiedAt={forked ? run?.createdAt : undefined}
+              onResend={resend}
+              loadImage={showImage}
+              onNearTop={older ? loadOlder : undefined}
+              end={
+                run?.status === "waiting" && (
+                  <ResumeCard hostId={hostId} run={run} disabledReason={disabledReason} />
+                )
+              }
+            />
+          </ForkContext>
         </ThreadLinksContext>
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-1 px-8 text-center text-[13px] text-faint-foreground">
@@ -437,13 +564,7 @@ export function AgentChat({
       {/* A column the window bounds, so a pinned card's preview gives way to a grown composer. */}
       <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 pb-5">
         {/* Requests waiting on the user, pinned so they can't scroll away. */}
-        <PinnedApprovals
-          asked={asked}
-          answers={answers}
-          onAnswer={(a, choice, message) => void answer(a, choice, message)}
-          onDismiss={dismiss}
-          disabledReason={connected ? undefined : (disabledReason ?? "Connecting to plxd…")}
-        />
+        {pinned}
         {/* A loaded transcript that stopped updating, a failed Send again, or Open PR. */}
         {(error ?? resendError ?? prError) && rows.length > 0 && (
           <p role="alert" className="flex items-center gap-2 px-2 pb-2 text-[12.5px] text-danger">
@@ -469,6 +590,7 @@ export function AgentChat({
             </button>
           </p>
         )}
+        {strip}
         {/* The latest turn's plan, while the run works on it. */}
         {plan && isRunning(run?.status) && !stalled && (
           <PlanStrip
@@ -478,8 +600,27 @@ export function AgentChat({
             returnFocus={focusComposer}
           />
         )}
+        {queueEnabled && (
+          <QueueStrip
+            hostId={hostId}
+            runId={runId}
+            messages={queue}
+            running={isRunning(run?.status)}
+            disabledReason={disabledReason}
+            loadError={queueError}
+            onCancelled={(id) => setCancelled((prev) => new Set(prev).add(id))}
+          />
+        )}
         <Composer
-          onSend={sendText}
+          onSend={(text, options, images, threads) =>
+            sendText(text, options, images, threads, queueEnabled ? "queue" : undefined)
+          }
+          onSteer={
+            queueEnabled && isRunning(run?.status)
+              ? (text, options, images, threads) =>
+                  sendText(text, options, images, threads, "steer")
+              : undefined
+          }
           history={history}
           onStop={isRunning(run?.status) ? stop : undefined}
           unanswered={unanswered}
@@ -509,6 +650,8 @@ export function AgentChat({
           optionsDisabled={optionsDisabled}
           imageCaps={imageCaps(connection)}
           manualDenied={manualDenied}
+          projectMode={projectMode}
+          newTask={newTask}
           insert={compose && !compose.send ? compose.text : undefined}
           menus={
             connected && "composerMenus" in connection.capabilities ? { hostId, runId } : undefined
@@ -516,13 +659,46 @@ export function AgentChat({
           attach={attachThreads(connection, threadLinks, runId)}
         />
       </div>
+    </SubagentsContext>
+  );
+}
+
+const noneSent: ReadonlyMap<string, SentMessage> = new Map();
+
+/**
+ * One of the agent's own subagents, read-only (PLX-382): its prompt, what it did, and its final
+ * report, then its type, model, and where it stands, in place of a composer.
+ */
+function SubagentView({ sub, live, stalled }: { sub: Subagent; live: boolean; stalled: boolean }) {
+  const rows = useMemo(() => subagentRows(sub), [sub]);
+  const state = subagentState(sub, live);
+  return (
+    <>
+      <TranscriptView rows={rows} sent={noneSent} live={state === "running"} stalled={stalled} />
+      <div className="mx-auto w-full max-w-3xl px-6 pt-1">
+        <p
+          role="status"
+          aria-label="Subagent"
+          className="flex items-center gap-2 rounded-xl border border-border px-3.5 py-2.5 text-[12.5px] text-muted-foreground"
+        >
+          <Bot aria-hidden className="size-3.5 shrink-0" />
+          <span className="truncate">
+            {[sub.agentType, modelName(sub.model), subagentLabels[state]]
+              .filter(Boolean)
+              .join(" · ")}
+          </span>
+          <span className="ml-auto shrink-0 text-faint-foreground">
+            Read-only: Claude Code's own subagent
+          </span>
+        </p>
+      </div>
     </>
   );
 }
 
 /**
  * The transcript as a virtualized list. It follows new output while scrolled to
- * the bottom, and stays put once the user scrolls up.
+ * the bottom, and stays put once the user scrolls up, or older rows come in above.
  */
 export function TranscriptView({
   rows,
@@ -531,6 +707,9 @@ export function TranscriptView({
   stalled = false,
   onResend,
   loadImage,
+  onNearTop,
+  end,
+  copiedAt,
 }: {
   rows: Row[];
   sent: ReadonlyMap<string, SentMessage>;
@@ -540,6 +719,12 @@ export function TranscriptView({
   onResend?: (turnId: string, message: SentMessage) => void;
   /** Fetches a message's image by id, as a data URL. */
   loadImage?: (imageId: ImageId) => Promise<string | undefined>;
+  /** Called while the top is within a screen of view, to load older rows (PLX-490). */
+  onNearTop?: () => void;
+  /** Shown after the last row, such as a waiting run's resume card. */
+  end?: ReactNode;
+  /** In a fork, when its history copied from the original was logged: rows up to it show muted. */
+  copiedAt?: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   // Threads' titles, to name the thread that sent a message or stopped this one (0041).
@@ -582,6 +767,12 @@ export function TranscriptView({
   const tail = view.findLastIndex((r) => r.kind !== "notice");
   const activeIndex =
     view[tail]?.kind === "work" && (going || view[tail].key === "work:pending") ? tail : -1;
+  const copied = (row: ViewRow) => {
+    const at = row.kind === "work" ? row.startedAt : "at" in row ? row.at : undefined;
+    return !!copiedAt && !!at && Date.parse(at) <= Date.parse(copiedAt);
+  };
+  // A turn forks once it ends (0050), so the latest message offers no Fork while the run goes.
+  const latest = view.findLastIndex((r) => r.kind === "user" || r.kind === "pending");
 
   const virtualizer = useVirtualizer({
     count: view.length,
@@ -614,7 +805,19 @@ export function TranscriptView({
     const el = scrollRef.current;
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
     follow();
-  }, [total, view.length, follow]);
+  }, [total, view.length, follow, !!end]);
+  // Older rows put in above change the first row, so what's in view keeps its distance from the
+  // end instead of from the top. Then, near the top, the next older page loads.
+  const first = view[0]?.key;
+  const above = useRef({ first, fromEnd: 0 });
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (first !== above.current.first && !atBottom.current)
+      el.scrollTop = el.scrollHeight - above.current.fromEnd;
+    above.current = { first, fromEnd: el.scrollHeight - el.scrollTop };
+    if (onNearTop && el.scrollTop < el.clientHeight) onNearTop();
+  });
   // As the composer grows it shrinks the list from below: keep the latest output in view.
   useEffect(() => {
     const el = scrollRef.current!;
@@ -649,6 +852,8 @@ export function TranscriptView({
           if (atBottom.current) ending.current = false;
           // Scroll to end's smooth scroll passes through the middle, where it stays hidden.
           if (!ending.current) setScrolledUp(!atBottom.current);
+          above.current.fromEnd = el.scrollHeight - el.scrollTop;
+          if (onNearTop && el.scrollTop < el.clientHeight) onNearTop();
           follow();
         }}
         // Scrolling by hand cuts Scroll to end's scroll short.
@@ -660,6 +865,7 @@ export function TranscriptView({
         <div className="relative w-full" style={{ height: total }}>
           {virtualizer.getVirtualItems().map((v) => {
             const row = view[v.index]!;
+            const muted = copied(row);
             return (
               <div
                 key={v.key}
@@ -668,7 +874,10 @@ export function TranscriptView({
                 className="absolute top-0 left-0 w-full"
                 style={{ transform: `translateY(${v.start}px)` }}
               >
-                <div className="mx-auto max-w-3xl px-6 py-2">
+                <div
+                  data-copied={muted || undefined}
+                  className={`mx-auto max-w-3xl px-6 py-2 ${muted ? "opacity-60" : ""}`}
+                >
                   <RowView
                     row={row}
                     sent={"turnId" in row && row.turnId ? sent.get(row.turnId) : undefined}
@@ -680,12 +889,15 @@ export function TranscriptView({
                     onResend={onResend}
                     loadImage={loadImage}
                     sender={"from" in row && row.from ? titles?.[row.from] : undefined}
+                    copied={muted}
+                    forkable={!muted && !(live && v.index === latest)}
                   />
                 </div>
               </div>
             );
           })}
         </div>
+        {end && <div className="mx-auto max-w-3xl px-6 pb-6">{end}</div>}
       </div>
       {/* One prompt is no choice of where to go, so there's no rail for it. */}
       {prompts.length > 1 && <PromptRail prompts={prompts} current={reading} onJump={jump} />}
@@ -762,6 +974,10 @@ interface RowProps {
   loadImage?: (imageId: ImageId) => Promise<string | undefined>;
   /** The title of the thread a message or a stop came from, when the row has one and it's known. */
   sender?: string;
+  /** Whether a fork copied it from the original (0050), so its logged time is the fork's. */
+  copied?: boolean;
+  /** For a user's message: whether its turn can fork, where the chat offers Fork. */
+  forkable?: boolean;
 }
 
 /** A message Parallax or another thread sent, not the user (0025, 0041). */
@@ -779,6 +995,8 @@ export const RowView = memo(function RowView({
   onResend,
   loadImage,
   sender,
+  copied,
+  forkable,
 }: RowProps) {
   switch (row.kind) {
     case "work":
@@ -790,6 +1008,7 @@ export const RowView = memo(function RowView({
           open={open}
           openKeys={openKeys ?? new Set()}
           onToggle={onToggle}
+          copied={copied}
         />
       );
     case "user":
@@ -860,12 +1079,21 @@ export const RowView = memo(function RowView({
               {text ?? <span className="text-muted-foreground italic">Follow-up message</span>}
             </div>
           )}
-          <PromptMeta at={row.kind === "user" ? row.at : undefined} text={text} />
+          <PromptMeta
+            at={row.kind === "user" && !copied ? row.at : undefined}
+            text={text}
+            fork={forkable && row.kind === "user" && <ForkButton turnId={row.turnId} />}
+          />
         </div>
       );
     }
     case "assistant":
-      return <MarkdownText text={row.text} />;
+      // A long streaming message renders block by block. A short one renders whole, as when finished.
+      return row.partial && row.text.length >= SPLIT_FROM ? (
+        <StreamingMarkdown text={row.text} />
+      ) : (
+        <MarkdownText text={row.text} />
+      );
     case "reasoning":
       return (
         <Disclosure
@@ -939,6 +1167,19 @@ export const RowView = memo(function RowView({
           </span>
         </p>
       );
+    case "modelSwitch":
+      // Where the thread moved to another model (PLX-495), as T3 Code's context handoff.
+      return (
+        <div className="flex items-center gap-2 text-[12px] text-faint-foreground">
+          <span className="h-px flex-1 bg-border" />
+          <ArrowLeftRight aria-hidden className="size-3.5" />
+          <span>Switched model</span>
+          <ModelLabel model={row.from} />
+          <ArrowRight aria-hidden className="size-3.5" />
+          <ModelLabel model={row.to} />
+          <span className="h-px flex-1 bg-border" />
+        </div>
+      );
     case "end": {
       const { outcome } = row;
       if (outcome.status === "failed") {
@@ -978,6 +1219,18 @@ export const RowView = memo(function RowView({
     }
   }
 });
+
+/** A model's name after its provider's logo, when this app knows the model. */
+function ModelLabel({ model }: { model: string }) {
+  const provider = knownModel(model)?.provider;
+  const Logo = provider ? kinds[provider]?.Logo : undefined;
+  return (
+    <span className="flex items-center gap-1 text-muted-foreground">
+      {Logo && <Logo aria-hidden className="size-3.5" />}
+      {modelName(model)}
+    </span>
+  );
+}
 
 /**
  * One of a user message's images, as a thumbnail: at hand, or fetched by id. The same height
@@ -1024,7 +1277,8 @@ function MessageImage({
 /**
  * A run of thinking, tool calls, and checklists under one dropdown. While the agent works its
  * header says what it's doing now, with a loader for that; afterward it says how long it worked,
- * and hides the rest. Before the agent does anything, it's empty and muses.
+ * and hides the rest. Before the agent does anything, it's empty and muses. A fork's `copied`
+ * work says only "Worked", since its logged times are all the fork's creation (0050).
  */
 function WorkGroup({
   work,
@@ -1033,6 +1287,7 @@ function WorkGroup({
   open,
   openKeys,
   onToggle,
+  copied,
 }: {
   work: Work;
   active: boolean;
@@ -1040,6 +1295,7 @@ function WorkGroup({
   open: boolean;
   openKeys: ReadonlySet<string>;
   onToggle: (key: string, open: boolean) => void;
+  copied?: boolean;
 }) {
   const now = active ? activity(work.items.at(-1)) : undefined;
   return (
@@ -1063,7 +1319,9 @@ function WorkGroup({
             {now.detail && <span className="truncate text-muted-foreground">{now.detail}</span>}
           </>
         ) : (
-          <span className="text-muted-foreground">{workedFor(work.startedAt, work.endedAt)}</span>
+          <span className="text-muted-foreground">
+            {copied ? "Worked" : workedFor(work.startedAt, work.endedAt)}
+          </span>
         )}
         {work.items.length > 0 && (
           <ChevronRight
@@ -1286,6 +1544,10 @@ function ToolCall({
   open: boolean;
   onToggle: (key: string, open: boolean) => void;
 }) {
+  // A call that started one of the agent's own subagents opens it (PLX-382).
+  const subagents = useContext(SubagentsContext);
+  if (isSubagentTool(item.name) && subagents?.subagents[item.callId])
+    return <SubagentCall item={item} />;
   const named = plxdCall(item) ?? namedTool(item);
   const kind = toolKind(item);
   const status = item.status ?? (live ? "running" : "none");
@@ -1566,7 +1828,7 @@ export function MarkdownText({ text, components }: { text: string; components?: 
   return (
     <div className="markdown">
       <Markdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={gfm}
         rehypePlugins={highlight}
         components={{ ...markdownComponents, ...components }}
       >
@@ -1575,6 +1837,35 @@ export function MarkdownText({ text, components }: { text: string; components?: 
     </div>
   );
 }
+
+const gfm = [remarkGfm];
+
+/**
+ * A streaming agent message, rendered as MarkdownText renders it, but block by block: an
+ * unchanged block keeps its string, so its memo skips rendering it again, and each update
+ * renders only the last block (PLX-448). When the message finishes, its row switches to
+ * MarkdownText, which renders it whole once and remounts its code blocks.
+ */
+function StreamingMarkdown({ text }: { text: string }) {
+  // The last update's blocks, so the split parses only the end of the message again.
+  const blocks = useRef<string[]>([]);
+  blocks.current = markdownBlocks(text, blocks.current);
+  return (
+    <div className="markdown">
+      {blocks.current.map((block, i) => (
+        <MarkdownBlock key={i} text={block} />
+      ))}
+    </div>
+  );
+}
+
+const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }) {
+  return (
+    <Markdown remarkPlugins={gfm} rehypePlugins={highlight} components={markdownComponents}>
+      {text}
+    </Markdown>
+  );
+});
 
 /** Copies text to the clipboard. `copied` is true for a moment after, for a Copied check. */
 export function useCopy() {
@@ -1587,8 +1878,8 @@ export function useCopy() {
   return [copied, copy] as const;
 }
 
-/** Under a prompt, on hover or focus: when it was sent, and Copy for its text. */
-function PromptMeta({ at, text }: { at?: string; text?: string | null }) {
+/** Under a prompt, on hover or focus: when it was sent, Copy for its text, and `fork`. */
+function PromptMeta({ at, text, fork }: { at?: string; text?: string | null; fork?: ReactNode }) {
   const [copied, copy] = useCopy();
   return (
     <div className="flex h-6 items-center gap-1 text-[12px] text-faint-foreground opacity-0 group-focus-within/prompt:opacity-100 group-hover/prompt:opacity-100">
@@ -1603,6 +1894,7 @@ function PromptMeta({ at, text }: { at?: string; text?: string | null }) {
           {copied ? <Check /> : <Copy />}
         </button>
       )}
+      {fork}
     </div>
   );
 }

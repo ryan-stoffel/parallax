@@ -35,25 +35,31 @@ use crate::{
     AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentFilesParams,
     AgentFilesResult, AgentGitStatusParams, AgentImageParams, AgentListParams, AgentListResult,
     AgentOpenPrParams, AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams,
-    AgentResumeNowParams, AgentRunResult, AgentSendParams, AgentStartParams, ContextListParams,
-    ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
-    ContextWriteResult, EventsEventParams, EventsSubscribeParams, EventsSubscribeResult,
-    EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus, GithubInstallParams, GithubSignIn,
-    GithubSignInCancelParams, GithubSignInCancelResult, GithubSignInParams, GithubStatus,
-    GithubStatusParams, HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams,
-    HostSettingsSetParams, HostVersionParams, HostVersionResult, InboxListParams, InboxListResult,
-    InboxSeenParams, InboxSeenResult, InitializeParams, InitializeResult, PrActParams,
-    PrDiffResult, PrViewParams, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
-    ProjectDeleteResult, ProjectListParams, ProjectListResult, ProjectStartParams,
-    ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
+    AgentResumeNowParams, AgentRunResult, AgentSendParams, AgentStartParams, AgentWaitParams,
+    AgentWaitResult, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,
+    ContextWriteParams, ContextWriteResult, EventsEventParams, EventsResyncParams,
+    EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult,
+    GitStatus, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
+    GithubSignInCancelResult, GithubSignInParams, GithubStatus, GithubStatusParams,
+    HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
+    HostVersionParams, HostVersionResult, InboxListParams, InboxListResult, InboxSeenParams,
+    InboxSeenResult, InitializeParams, InitializeResult, LandApproveParams, LandQueueParams,
+    LandResult, LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult, MemoryListParams,
+    MemoryListResult, MemoryProposeParams, MemoryProposeResult, MemoryReadParams, MemoryReadResult,
+    MemoryWriteParams, MemoryWriteResult, PrActParams, PrDiffResult, PrViewParams,
+    ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
+    ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectListParams, ProjectListResult,
+    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
     ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, PullRequest,
-    QueueCancelParams, QueueEditParams, QueueListParams, QueueReorderParams, QueueResult,
-    QueueSteerParams, RepoAddParams, RepoAddResult, RepoFilesParams, RepoFilesResult,
-    RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams,
-    ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams,
-    ThreadListParams, ThreadListResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams,
-    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult,
-    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
+    QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
+    QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
+    QueueReorderParams, QueueResult, QueueSteerParams, RepoAddParams, RepoAddResult,
+    RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
+    RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult, ThreadSearchParams,
+    ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
+    ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
+    UsageHistoryParams, UsageHistoryResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -135,7 +141,7 @@ method_table! {
         /// `host/version`: plxd's release and protocol versions, operating system, and CPU
         /// architecture.
         HostVersion = "host/version": HostVersionParams => HostVersionResult;
-        /// `project/list`: every project, and the `seq` the list reflects.
+        /// `project/list`: every project, and the event log's `seq` from before the read.
         ProjectList = "project/list": ProjectListParams => ProjectListResult;
         /// `project/create`: creates a project, idempotent on its client-generated id.
         ProjectCreate = "project/create": ProjectCreateParams => ProjectCreateResult;
@@ -204,7 +210,8 @@ method_table! {
         AgentSend = "agent/send": AgentSendParams => AgentRunResult;
         /// `agent/cancel`: stops a running agent. Does nothing to a run that isn't running.
         AgentCancel = "agent/cancel": AgentCancelParams => AgentRunResult;
-        /// `agent/list`: every run, or one project's, and the `seq` the list reflects.
+        /// `agent/list`: every run, or one project's, and the event log's `seq` from before the
+        /// read.
         AgentList = "agent/list": AgentListParams => AgentListResult;
         /// `agent/events`: one run's events from plxd's log, a page at a time.
         AgentEvents = "agent/events": AgentEventsParams => AgentEventsResult;
@@ -245,8 +252,8 @@ method_table! {
         /// item, by allowing or denying the tool call (PLX-222, decision 0031). Idempotent on the
         /// request. Gated on the `approvals` capability.
         AgentApprove = "agent/approve": AgentApproveParams => AgentApproveResult;
-        /// `thread/list`: every repo entry and normal thread, and the `seq` the list reflects
-        /// (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
+        /// `thread/list`: every repo entry and normal thread, and the event log's `seq` from before
+        /// the read (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
         ThreadList = "thread/list": ThreadListParams => ThreadListResult;
         /// `repo/add`: registers a repository on the host for normal threads, idempotent on its
         /// client-generated id and on its path.
@@ -313,8 +320,9 @@ method_table! {
         /// github.com, and as whom (PLX-336). Read-only and never prompts. Gated on the
         /// `githubStatus` capability.
         GithubStatusGet = "github/status": GithubStatusParams => GithubStatus;
-        /// `thread/search`: the host's threads whose messages contain a query, the one with the
-        /// newest message first (PLX-372). Gated on the `threadContext` capability.
+        /// `thread/search`: the host's threads whose title or messages match a query, title
+        /// matches first, then the one with the newest message (PLX-372, PLX-487). Gated on the
+        /// `threadContext` capability.
         ThreadSearch = "thread/search": ThreadSearchParams => ThreadSearchResult;
         /// `agent/resumeNow`: resumes a run waiting for its usage limit to reset now (PLX-371,
         /// decision 0049). Gated on the `autoResume` capability, like `agent/autoResume` and
@@ -326,8 +334,8 @@ method_table! {
         HostSettingsGet = "host/settings/get": HostSettingsGetParams => HostSettings;
         /// `host/settings/set`: changes this host's settings and returns them.
         HostSettingsSet = "host/settings/set": HostSettingsSetParams => HostSettings;
-        /// `inbox/list`: a Project's inbox, oldest first, and the `seq` the list reflects (PLX-401,
-        /// 0043). Gated on the `inbox` capability, like `inbox/seen`.
+        /// `inbox/list`: a Project's inbox, oldest first, and the event log's `seq` from before the
+        /// read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
         InboxList = "inbox/list": InboxListParams => InboxListResult;
         /// `inbox/seen`: marks items of a Project's inbox seen, and returns them as they stand.
         InboxSeen = "inbox/seen": InboxSeenParams => InboxSeenResult;
@@ -352,6 +360,43 @@ method_table! {
         QueueCancel = "queue/cancel": QueueCancelParams => QueueResult;
         /// `queue/steer`: sends a waiting message into the turn running now.
         QueueSteer = "queue/steer": QueueSteerParams => QueueResult;
+        /// `question/ask`: records a Project child's question and wakes its coordinator; the
+        /// child goes on with its assumption (PLX-402, 0043). Gated on the `questions`
+        /// capability, like every `question/*` method.
+        QuestionAsk = "question/ask": QuestionAskParams => QuestionResult;
+        /// `question/answer`: the coordinator's or the user's answer to a question.
+        QuestionAnswer = "question/answer": QuestionAnswerParams => QuestionResult;
+        /// `question/escalate`: the coordinator passes a question to the user.
+        QuestionEscalate = "question/escalate": QuestionEscalateParams => QuestionResult;
+        /// `question/list`: a Project's questions, oldest first.
+        QuestionList = "question/list": QuestionListParams => QuestionListResult;
+        /// `memory/list`: a scope's brief, memory entries, knowledge, and proposals, with each
+        /// entry's header (PLX-405, 0044). Gated on the `memory` capability, like every
+        /// `memory/*` method.
+        MemoryList = "memory/list": MemoryListParams => MemoryListResult;
+        /// `memory/read`: one memory file's header and body.
+        MemoryRead = "memory/read": MemoryReadParams => MemoryReadResult;
+        /// `memory/write`: writes the brief, knowledge, or an entry, as the user or a coordinator.
+        MemoryWrite = "memory/write": MemoryWriteParams => MemoryWriteResult;
+        /// `memory/delete`: deletes a memory file.
+        MemoryDelete = "memory/delete": MemoryDeleteParams => MemoryDeleteResult;
+        /// `memory/propose`: a thread proposes an entry, for its coordinator or the user.
+        MemoryPropose = "memory/propose": MemoryProposeParams => MemoryProposeResult;
+        /// `land/queue`: queues a Project's finished child to land on its integration branch, as
+        /// the coordinator's `land` tool does (PLX-410, 0045). Gated on the `landing` capability,
+        /// like every `land/*` method.
+        LandQueue = "land/queue": LandQueueParams => LandResult;
+        /// `land/approve`: lands a child waiting for the user's approval, in its turn.
+        LandApprove = "land/approve": LandApproveParams => LandResult;
+        /// `land/sendBack`: sends a child waiting for approval the user's message instead.
+        LandSendBack = "land/sendBack": LandSendBackParams => LandResult;
+        /// `agent/wait`: waits until any or all of up to 50 runs are idle, or for at most 60 s,
+        /// without polling (PLX-451). Gated on the `agentWait` capability.
+        AgentWait = "agent/wait": AgentWaitParams => AgentWaitResult;
+        /// `project/fromThreads`: makes a Project from threads on one repo entry, each with its
+        /// own worktree, starts its coordinator, and makes each thread its child (0042).
+        /// Idempotent on its client-generated ids. Gated on the `projectFromThreads` capability.
+        ProjectFromThreads = "project/fromThreads": ProjectFromThreadsParams => ProjectFromThreadsResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -359,6 +404,9 @@ method_table! {
         CancelRequest = "$/cancelRequest": CancelRequestParams;
         /// `events/event`: one event for a subscription. plxd sends it.
         EventsEvent = "events/event": EventsEventParams;
+        /// `events/resync`: plxd ended a subscription that fell behind, and the connection
+        /// stays open. plxd sends it only to a client that declared `resyncNotice` (PLX-455).
+        EventsResync = "events/resync": EventsResyncParams;
     }
 }
 
@@ -464,8 +512,23 @@ mod tests {
                 "queue/reorder",
                 "queue/cancel",
                 "queue/steer",
+                "question/ask",
+                "question/answer",
+                "question/escalate",
+                "question/list",
+                "memory/list",
+                "memory/read",
+                "memory/write",
+                "memory/delete",
+                "memory/propose",
+                "land/queue",
+                "land/approve",
+                "land/sendBack",
+                "agent/wait",
+                "project/fromThreads",
                 "$/cancelRequest",
                 "events/event",
+                "events/resync",
             ]
         );
         assert_eq!(names.0.iter().collect::<BTreeSet<_>>().len(), names.0.len());

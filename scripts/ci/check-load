@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""Fails when a load harness result (scripts/bench/load.py) falls outside one budget set in
+scripts/bench/budgets.json.
+
+    scripts/ci/check-load load.json unfiltered
+    scripts/ci/check-load load-filtered.json filtered
+
+The set names the harness mode it assumes: its `threads` and `filtered` must match the result's.
+Each budget is a maximum, or under "min" a minimum, for a dotted path into the result. A floor on
+delivered bytes catches a run whose workers failed and delivered almost nothing. A missing path
+fails, so renaming a subscription or metric means updating the budgets too. Any resync fails.
+Writes a Markdown table to $GITHUB_STEP_SUMMARY when set, and to stdout. p50, p99, and peak RSS
+are shown but not gated: the latency tail is too noisy on a shared runner, and RSS growth over the
+idle daemon is gated instead of the peak.
+"""
+
+import json
+import os
+import sys
+from pathlib import Path
+
+BUDGETS = Path(__file__).resolve().parents[1] / "bench" / "budgets.json"
+SHOWN = ("latencyMs.p50", "latencyMs.p99", "plxd.rssPeakMiB", "wallS")
+
+
+def get(result: dict, path: str):
+    for key in path.split("."):
+        if not isinstance(result, dict) or key not in result:
+            return None
+        result = result[key]
+    return result
+
+
+def fmt(value) -> str:
+    if value is None:
+        return "missing"
+    if isinstance(value, bool):
+        return str(value).lower()
+    return f"{value:,}" if isinstance(value, int) else f"{value:,.2f}"
+
+
+def main() -> int:
+    if len(sys.argv) != 3:
+        sys.exit("usage: check-load <result.json> <budget set>")
+    result = json.loads(Path(sys.argv[1]).read_text())
+    name = sys.argv[2]
+    budgets = json.loads(BUDGETS.read_text())[name]
+    rows, failed = [], False
+    for key in ("threads", "filtered"):
+        ok = result.get(key) == budgets[key]
+        failed |= not ok
+        rows.append(f"| {key} | {fmt(result.get(key))} | = {fmt(budgets[key])} | {'ok' if ok else 'fail'} |")
+    checks = [(p, ">=", v) for p, v in budgets["min"].items()]
+    checks += [(p, "<=", v) for p, v in budgets["max"].items()]
+    for path, op, limit in checks:
+        value = get(result, path)
+        ok = value is not None and (value >= limit if op == ">=" else value <= limit)
+        failed |= not ok
+        rows.append(f"| {path} | {fmt(value)} | {op} {fmt(limit)} | {'ok' if ok else 'fail'} |")
+    resync = result.get("resync")
+    failed |= resync is not None
+    rows.append(f"| resync | {resync or 'none'} | none | {'ok' if resync is None else 'fail'} |")
+    rows += [f"| {path} | {fmt(get(result, path))} | | not gated |" for path in SHOWN]
+
+    summary = "\n".join([
+        f"### plxd load, {name}: {'over budget' if failed else 'within budget'}",
+        "",
+        budgets["about"],
+        "",
+        "| Metric | Value | Budget | |",
+        "| --- | --- | --- | --- |",
+        *rows,
+        "",
+    ])
+    if out := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(out, "a") as f:
+            f.write(summary)
+    print(summary)
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

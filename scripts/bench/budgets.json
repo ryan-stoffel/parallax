@@ -1,0 +1,44 @@
+{
+  "unfiltered": {
+    "about": "30 threads; the scope and open subscriptions take every thread's output, as the app subscribed before PLX-454.",
+    "threads": 30,
+    "filtered": false,
+    "min": {
+      "subscriptions.scope.bytes": 1600000
+    },
+    "max": {
+      "connection.events": 9700,
+      "connection.bytes": 9600000,
+      "subscriptions.host.events": 45,
+      "subscriptions.host.bytes": 17000,
+      "subscriptions.scope.events": 4800,
+      "subscriptions.scope.bytes": 4800000,
+      "subscriptions.open.events": 4800,
+      "subscriptions.open.bytes": 4800000,
+      "plxd.rssGrowthMiB": 30,
+      "plxd.cpuS": 8,
+      "latencyMs.p95": 50
+    }
+  },
+  "filtered": {
+    "about": "30 threads with --filtered; the scope subscription takes only shell events and the open one only its own run, as the app subscribes since PLX-454.",
+    "threads": 30,
+    "filtered": true,
+    "min": {
+      "subscriptions.open.bytes": 53000
+    },
+    "max": {
+      "connection.events": 430,
+      "connection.bytes": 322000,
+      "subscriptions.host.events": 45,
+      "subscriptions.host.bytes": 17000,
+      "subscriptions.scope.events": 225,
+      "subscriptions.scope.bytes": 101000,
+      "subscriptions.open.events": 160,
+      "subscriptions.open.bytes": 160000,
+      "plxd.rssGrowthMiB": 30,
+      "plxd.cpuS": 6.5,
+      "latencyMs.p95": 50
+    }
+  }
+}

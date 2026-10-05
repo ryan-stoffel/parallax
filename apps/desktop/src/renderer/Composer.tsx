@@ -5,6 +5,7 @@ import {
   Hand,
   ListChecks,
   LoaderCircle,
+  MessagesSquare,
   Paperclip,
   ShieldOff,
   Sparkles,
@@ -31,16 +32,19 @@ import type {
   AgentEffort,
   AgentPermission,
   AgentRun,
+  ProjectPermission,
   PromptImage,
 } from "../protocol/generated/protocol";
 import { lastPrompt } from "./attention";
 import { EffortMenu } from "./EffortMenu";
 import { imageUrl, readImage, type ImageCaps } from "./images";
+import { useShortcutLabel } from "./keybindings";
 import { ModelMenu } from "./ModelMenu";
+import { PixelStack } from "./Pixels";
 import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
 import { lookOf, ThreadChip, type AttachThreads } from "./threadContext";
 import { draggedThread, threadDragType } from "./threadDrag";
-import { menuItem, Picker, type PickerOption } from "./ui";
+import { appShortcut, menuButton, menuItem, Picker, type PickerOption } from "./ui";
 
 // Claude Code's permission modes, under its own names (0027). A thread is full Claude Code in
 // every mode (0034), and a project's worker keeps its sandbox in every mode but Bypass (0013).
@@ -302,6 +306,8 @@ export interface ComposerProps {
   ) => Promise<string | undefined>;
   /** Sends as `onSend` does, for Cmd/Ctrl+Enter anywhere in the box: a new thread's background start. */
   onSendInBackground?: ComposerProps["onSend"];
+  /** Cmd/Ctrl+Enter sends into the active turn instead of its queue. */
+  onSteer?: ComposerProps["onSend"];
   /**
    * While set, an empty box shows Stop instead of Send. Resolves to an error message.
    * Stop stays pending until the caller drops `onStop`, when the run stops. Esc in the box stops
@@ -350,6 +356,27 @@ export interface ComposerProps {
    */
   manualDenied?: keyof typeof manualDenials;
   /**
+   * The Project's permission mode, where plxd keeps one (0042): every run in the Project runs in
+   * it, so it shows in place of Access, and no permission is sent.
+   */
+  projectMode?: ProjectPermission;
+  /**
+   * A Project's New task target, on a plxd with `projectTasks` (0042). What's typed picks where
+   * it goes: a question asks the coordinator, and anything else starts a task, one per item of a
+   * list. A chip under the box says which, and it or the `projectTarget` keybinding flips it until
+   * the message is sent. A task sends through this `onSend`, once per task, with a new thread's
+   * options on `backend`, the worker default's; asking is the composer as it is without it.
+   */
+  newTask?: {
+    onSend: NonNullable<ComposerProps["onSend"]>;
+    backend?: string;
+    /** Where the user pointed it, over what the text suggests; undefined follows the text. */
+    asking?: boolean;
+    onAsking: (asking: boolean | undefined) => void;
+  };
+  /** The empty box's placeholder, in place of the one for a new thread or a reply. */
+  hint?: string;
+  /**
    * Text to add at the end of the box, which takes focus, such as a pull request's URL. Each new
    * value is added once.
    */
@@ -373,7 +400,8 @@ export interface ComposerProps {
 /**
  * The prompt box, the same on every screen. It formats Markdown as you type and sends it as
  * Markdown text. Enter sends and Shift+Enter starts a new line (a new item, in a list); in a code
- * block Enter adds a line and Cmd/Ctrl+Enter sends. With `onSendInBackground`, Cmd/Ctrl+Enter sends
+ * block Enter adds a line and Cmd/Ctrl+Enter sends. With `onSteer`, that press steers the active
+ * turn. With `onSendInBackground`, Cmd/Ctrl+Enter sends
  * through it, anywhere in the box. It grows with its text up to 40% of the window.
  * Pasted, dropped, and picked images sit above the text as thumbnails, and go beside it, never in
  * it (PLX-193).
@@ -387,21 +415,25 @@ export interface ComposerProps {
  */
 export function Composer({
   newThread,
-  onSend,
+  onSend: onAsk,
   onSendInBackground,
+  onSteer: onSteerAsk,
   onStop,
   unanswered,
   disabledReason,
   tab,
   footer,
-  backend,
-  started,
+  backend: askBackend,
+  started: askStarted,
   contextAndFast,
   hostId: host,
-  unavailable,
-  optionsDisabled,
+  unavailable: askUnavailable,
+  optionsDisabled: askOptionsDisabled,
   imageCaps,
   manualDenied,
+  projectMode,
+  newTask,
+  hint,
   insert,
   history = [],
   menus,
@@ -409,6 +441,30 @@ export function Composer({
 }: ComposerProps) {
   // The box as Markdown, kept on every edit.
   const [text, setText] = useState("");
+  // A New task composer is a new thread's on the worker default; Ask is the open run's.
+  const route = newTask ? routeOf(text, newTask.asking) : undefined;
+  const task = route?.kind === "task";
+  const onSend = task && newTask ? newTask.onSend : onAsk;
+  const onSteer = task ? undefined : onSteerAsk;
+  const backend = task && newTask ? newTask.backend : askBackend;
+  const started = task ? undefined : askStarted;
+  const unavailable = task ? undefined : askUnavailable;
+  const optionsDisabled = task ? undefined : askOptionsDisabled;
+  const targetKeys = useShortcutLabel(newTask ? "projectTarget" : undefined);
+  // The keybinding flips where it sends, as the chip does, from what the box holds now.
+  const flip = useRef<() => void>(undefined);
+  flip.current = newTask && route && (() => newTask.onAsking(route.kind === "task"));
+  const routed = !!newTask;
+  useEffect(() => {
+    if (!routed) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (appShortcut(e) !== "projectTarget") return;
+      e.preventDefault();
+      flip.current?.();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [routed]);
   const [error, setError] = useState<string>();
   const [stopping, setStopping] = useState(false);
   // Files that aren't images, shown as chips; plxd doesn't take them yet.
@@ -459,7 +515,8 @@ export function Composer({
   // Where the message goes: the run's backend, or the instance that runs the picked model.
   const target = run && model && model.provider !== run.id ? model.provider : backend;
   const targetBackend = instanceOf(target);
-  const permissions = targetBackend?.permissions ?? [];
+  // A Project's mode isn't a choice here.
+  const permissions = projectMode ? [] : (targetBackend?.permissions ?? []);
   // A backend that maps no efforts (Cursor) gets none, and shows no effort menu.
   const efforts = targetBackend?.efforts !== false;
   const startedEffort = started?.effort ?? "high";
@@ -507,6 +564,7 @@ export function Composer({
       ...speed,
       ...(target !== backend && { account }),
     };
+  if (projectMode) delete options.permission;
   // The `/` and `@` menus: what's typed, the lists, and the highlighted row. Esc closes the menu
   // until its `/` or `@` goes.
   const [trigger, setTrigger] = useState<Trigger>();
@@ -708,7 +766,7 @@ export function Composer({
     setImages((all) => [...all, ...ok].slice(0, maxImages));
   };
 
-  const submit = async (background = false) => {
+  const submit = async (background = false, steer = false) => {
     if (!canSend) return;
     const sent = editor.getJSON();
     const sentImages = images;
@@ -718,7 +776,23 @@ export function Composer({
     setThreads([]);
     setError(undefined);
     setAttachError(undefined);
-    const failed = await (background ? onSendInBackground! : onSend)(
+    if (newTask) newTask.onAsking(undefined);
+    // A list of tasks starts each at once, and only those that fail come back.
+    if (route?.kind === "task" && route.tasks.length > 1) {
+      const results = await Promise.all(
+        route.tasks.map((t) => onSend!(t, options, sentImages, sentThreads)),
+      );
+      const failed = route.tasks.filter((_, i) => results[i] !== undefined);
+      if (failed.length === 0) return setFiles([]);
+      if (editor.isDestroyed) return;
+      editor.commands.focus("start");
+      editor.view.pasteText(failed.map((t) => `- ${t}`).join("\n"));
+      setError(
+        `Started ${route.tasks.length - failed.length} of ${route.tasks.length}. ${results.find((r) => r)}`,
+      );
+      return;
+    }
+    const failed = await (steer ? onSteer! : background ? onSendInBackground! : onSend)(
       text,
       options,
       sentImages,
@@ -763,9 +837,12 @@ export function Composer({
 
   const placeholder =
     disabledReason ??
-    (newThread
-      ? "Describe a change, paste an error, or drop in a plan"
-      : "Reply, add detail, or steer what it does next");
+    hint ??
+    (newTask
+      ? "Describe a task, list a few, or ask the coordinator"
+      : newThread
+        ? "Describe a change, paste an error, or drop in a plan"
+        : "Reply, add detail, or steer what it does next");
   // Its props are read again on every render, so its handlers see this render's state.
   const editor: Editor = useEditor({
     extensions,
@@ -839,16 +916,18 @@ export function Composer({
         }
         if (event.key !== "Enter" || event.isComposing) return false;
         const inCode = editor.isActive("codeBlock");
+        // In a Project's list of tasks, Enter adds the next one, as in a notes app.
+        const inList = !!newTask && editor.isActive("listItem");
         const mod = event.metaKey || event.ctrlKey;
-        if (inCode ? mod : !event.shiftKey) {
-          void submit(!!onSendInBackground && mod);
+        if (inCode || inList ? mod : !event.shiftKey) {
+          void submit(!!onSendInBackground && mod, !!onSteer && mod);
           return true;
         }
         // Shift+Enter does what Enter does in other editors: a new line, list item, or line of
         // code, or out of an empty list item. A line of just ``` or ```lang starts a code block,
         // as ``` and a space does.
         return (
-          event.shiftKey &&
+          (event.shiftKey || inList) &&
           editor.commands.first(({ commands }) => [
             () => commands.newlineInCode(),
             ({ state }) => {
@@ -1084,6 +1163,17 @@ export function Composer({
           </div>
         )}
         <div className="flex items-center gap-0.5 px-3 pt-1 pb-3">
+          {newTask && route && (
+            <>
+              <RouteChip
+                route={route}
+                pinned={newTask.asking !== undefined}
+                keys={targetKeys}
+                onFlip={() => flip.current?.()}
+              />
+              {run && divider}
+            </>
+          )}
           {run && (
             <>
               {/* A disabled fieldset turns off every control in it, and its title says why. */}
@@ -1191,6 +1281,12 @@ export function Composer({
           {tab}
         </div>
       )}
+      {onSteer && !disabledReason && (
+        <p className="px-2 pt-1.5 text-[11.5px] text-faint-foreground">
+          Enter queues · {window.parallax.platform === "darwin" ? "⌘ Enter" : "Ctrl+Enter"} steers
+          now
+        </p>
+      )}
       {error && (
         <p role="alert" className="px-2 pt-2 text-[13px] text-danger">
           {error}
@@ -1198,5 +1294,88 @@ export function Composer({
       )}
       {footer}
     </div>
+  );
+}
+
+/** Where a Project's message goes: the coordinator, or tasks, one per item of a list. */
+export type Route = { kind: "ask" } | { kind: "task"; tasks: string[] };
+
+// Words that open a question, so "how does the updater pick a channel" asks without a "?".
+const questionWords =
+  /^(who|what|when|where|why|how|which|is|are|does|did|can|could|should|would|will)\b/i;
+
+/**
+ * Where `text` goes, unless `asking` says otherwise: a question to the coordinator, and anything
+ * else to a task. A message that is only a list of two or more items is a task per item, even
+ * when an item is a question.
+ */
+export function routeOf(text: string, asking?: boolean): Route {
+  const trimmed = text.trim();
+  const tasks = listItems(trimmed);
+  const question = !tasks && (trimmed.endsWith("?") || questionWords.test(trimmed));
+  if (asking ?? question) return { kind: "ask" };
+  return { kind: "task", tasks: tasks ?? [trimmed] };
+}
+
+/** The items of Markdown that is a list and nothing else, or undefined. Empty items don't count. */
+function listItems(markdown: string): string[] | undefined {
+  const items: string[] = [];
+  for (const line of markdown.split("\n")) {
+    const item = /^(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line);
+    if (item) items.push(item[1]!.trim());
+    // A blank line, or an item left empty, such as the bare `-` Enter leaves at the end.
+    else if (/^\s*(?:[-*+]|\d+[.)])?\s*$/.test(line)) continue;
+    else if (/^\s+\S/.test(line) && items.length) items[items.length - 1] += ` ${line.trim()}`;
+    else return undefined;
+  }
+  const kept = items.filter(Boolean);
+  return kept.length > 1 ? kept : undefined;
+}
+
+/**
+ * Says where Enter sends a Project's message, and flips it. The label changes as the text does,
+ * with the tasks a list makes counted.
+ */
+function RouteChip({
+  route,
+  pinned,
+  keys,
+  onFlip,
+}: {
+  route: Route;
+  /** Whether the user flipped it, rather than the text choosing. */
+  pinned: boolean;
+  keys?: string;
+  onFlip: () => void;
+}) {
+  const label =
+    route.kind === "ask"
+      ? "Coordinator"
+      : route.tasks.length > 1
+        ? `${route.tasks.length} tasks`
+        : "New task";
+  return (
+    <button
+      type="button"
+      onClick={onFlip}
+      title={`Questions go to the coordinator and anything else starts a task. Click${keys ? ` or press ${keys}` : ""} to switch.`}
+      aria-label={`Sends to: ${label}. Switch`}
+      className={`${menuButton} group gap-2 font-mono text-[12px] tracking-tight`}
+    >
+      {route.kind === "ask" ? (
+        <MessagesSquare aria-hidden />
+      ) : (
+        <PixelStack count={route.tasks.length} />
+      )}
+      <span key={label} className="working-in">
+        {label}
+      </span>
+      {pinned && <span aria-hidden className="size-1 rounded-full bg-muted-foreground" />}
+      {route.kind === "task" && route.tasks.length > 1 && (
+        <kbd className="rounded bg-selected px-1 font-mono text-[10.5px] text-faint-foreground">
+          {window.parallax.platform === "darwin" ? "⌘⏎" : "Ctrl⏎"}
+        </kbd>
+      )}
+    </button>
   );
 }

@@ -70,7 +70,7 @@ The editor and `plxd` need one protocol, whether `plxd` runs on this Mac or on a
 - **Event log:** every state change goes into one event log, numbered by a daemon-wide `seq`.
   - From M3 the log is stored in SQLite (#58).
   - `logId` changes only when the log starts over, such as after a wiped data folder or after an M1 restart that loses an in-memory log.
-- **Subscribing:** snapshot methods such as `project/list` return the `seq` they reflect. `events/subscribe {after, project?}` replays newer events, then streams live `events/event` notifications: `{subscription, seq, time, project?, event: {kind, ...}}`. Without `project`, it gets host-level events such as `project.created`.
+- **Subscribing:** snapshot methods such as `project/list` return the event log's `seq` from before they read, so they may already reflect some events after it, and replaying those is harmless (PLX-457). `events/subscribe {after, project?}` replays newer events, then streams live `events/event` notifications: `{subscription, seq, time, project?, event: {kind, ...}}`. Without `project`, it gets host-level events such as `project.created`.
 - **Several clients:** any number of connections may attach, each with its own subscriptions, and plxd broadcasts every change to all of them.
 - **Resuming:** after a reconnect, the editor resubscribes from its last `seq`. It reloads its snapshots instead if `logId` changed, or if plxd answers `resyncRequired` because the history is gone or too long to replay. From M3, `agent/output` rebuilds a running agent's transcript after a resync.
 - **Backpressure:** each connection has a bounded outbound queue.
@@ -122,7 +122,7 @@ Later milestones add methods and events behind a capability, with no version bum
 | M5 `localRunner` | `runner/start {runId, ...}`, `runner/stop`, and the shared context mirror sync (0005), which the host sends over the connection the MacBook opened. `client.machineId` tells two machines apart. | `runner.output`, `runner.finished` |
 | M6 `triggers` | `trigger/list`, `trigger/create {id, ...}` | `trigger.fired` |
 
-`plxd mcp` (M4) is an MCP server on stdio and a normal Parallax client on the socket. It sends `initialize` and heartbeats like any other client, and exposes only its project's coordinator tools (0004), never `plan/approve`.
+`plxd mcp` (M4) is an MCP server on stdio and a normal Parallax client on the socket. It sends `initialize` like any other client but no heartbeats: it keeps one connection, stops using it after 75 s without a write (under plxd's 90 s idle limit), and opens a new one on the next call. It exposes only its project's coordinator tools (0004), never `plan/approve`.
 
 ## Alternatives
 

@@ -144,7 +144,9 @@ pub(crate) fn thread(repo: Option<RepoId>) -> ThreadStartParams {
     ThreadStartParams {
         run_id: RunId::generate(),
         repo,
+        project: None,
         parent: None,
+        notify: None,
         title: None,
         prompt: "Rewrite the README".to_owned(),
         account: Some(AccountChoice::Subscription {

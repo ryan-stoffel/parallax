@@ -4,6 +4,12 @@
 //! `agent/openPr`, the Git menu's in `git`, `thread/delete`) and the run's backend events in one
 //! loop, so nothing about a run needs a lock, and events are logged in the order they happened.
 //!
+//! A push or Open PR, whose network steps can each take minutes, is the run's effect (PLX-458):
+//! it runs in a task of its own, one at a time, and its result comes back into the loop, which
+//! keeps taking commands meanwhile. While it runs, the run starts no CLI: a message waits in the
+//! queue until it ends, and commit, push, Open PR, Accept, and delete refuse the run as busy. A
+//! cancel lets it finish, since a push stopped halfway leaves `origin` in a state nobody knows.
+//!
 //! It also keeps the permission requests its CLI waits on (PLX-222, decision 0031): it logs each
 //! one with when it expires, passes `agent/approve`'s answer to the CLI, denies one nobody
 //! answered in time, and logs how each one ended, including when a cancel, a stop, or the CLI's
@@ -19,16 +25,17 @@
 //! waits, and a steer goes into the running turn instead, through the backend, or by cancelling
 //! the CLI and resuming it with the message where the backend takes no messages while it runs.
 //!
-//! A project's coordinator (0024) differs in four places: it starts in a detached worktree of
-//! the project's repository (PLX-171) with plxd's tools and no sandbox, that worktree is checked
-//! after every turn (0004), it is never committed, and runs it started wake it when they finish
-//! (PLX-42, [`super::wake`]).
+//! A project's coordinator (0024) differs in three places: it starts in a detached worktree at the
+//! integration branch's tip, refreshed before each CLI process (0042), with a thread's Parallax
+//! tools and no sandbox (PLX-380), it is never committed, and only the project's current one
+//! wakes. Any run wakes when children it launched finish (PLX-42, PLX-380, [`super::wake`]).
 //!
 //! A thread in its repository's own checkout has no worktree: every launch, a resume included,
 //! starts in the checkout, and it is never committed either.
 //!
 //! A run a usage limit stopped waits for the limit to reset and resumes itself (PLX-371,
-//! [`waiting`]).
+//! [`waiting`]). A Project's child that waits to be placed starts with its first message once
+//! [`super::placement`] finds it an account ([`placed`]).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -41,18 +48,18 @@ use parallax_protocol::{AcceptId, AgentMerge};
 use parallax_protocol::{
     AccountChoice, AccountId, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision,
     AgentApproveParams, AgentApproveResult, AgentFailureKind, AgentOutcome, AgentOutputItem,
-    AgentRun, ApprovalId, CoordinatorThreadId, DiffSummary, ErrorKind, GitStatus, ImageId,
-    InboxKind, ParallaxEvent, ProjectId, PromptImage, QueueResult, QueuedMessage, Role, RunId,
-    TurnId,
+    AgentRun, ApprovalId, DiffSummary, ErrorKind, GitStatus, ImageId, InboxKind, ParallaxEvent,
+    ProjectId, PromptImage, QueueResult, QueuedMessage, Role, RunId, TurnId,
 };
 use parallax_store::{
     QueuedRow, Run as RunRow, RunAccept, SessionModelUsage, StoredImage, Worktree,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::{JoinError, JoinHandle};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use super::approvals::{self, Approvals, Lookup, ended};
@@ -62,24 +69,29 @@ use super::convert::{
 };
 use super::resume::Resumes;
 use super::wake::{self, Wakes};
-use super::worker::{sandbox_path, worker_prompt, worker_unavailable};
+use super::worker::{sandbox_path, worker_unavailable};
 use super::{Place, Prepared, RunOptions, prepare, store, store_error};
 use crate::backend::{
-    AccountRef, Answer, AnswerError, Backend, CoordinatorTools, Credential, Decision, Event,
-    EventStream, FollowUp, ModelUsage, Outcome, Resume, Run, RunRequest, SendError, ThreadTools,
-    Usage, WorkerSandbox,
+    AccountRef, Answer, AnswerError, Backend, Credential, Decision, Event, EventStream, FollowUp,
+    ModelUsage, Outcome, Resume, Run, RunRequest, SendError, ThreadTools, Usage, WorkerSandbox,
     run_temp::{self, RunTemp},
 };
 use crate::routing;
 use crate::server::Daemon;
+use crate::store::Tx;
 use crate::worktree::github_pr_urls;
 
 mod git;
+mod placed;
 mod waiting;
 pub(crate) use git::GitAction;
 
 /// How long transcript items wait to be sent together as one `agent.output` (0007).
 const COALESCE: Duration = Duration::from_millis(50);
+
+/// How long an actor with nothing only it holds waits for a command before it stops (PLX-459).
+/// The next command starts a fresh one from the store.
+pub(super) const IDLE: Duration = Duration::from_mins(10);
 
 /// An `agent.output` is sent early once its items reach about this many bytes.
 const MAX_BATCH_BYTES: usize = 256 * 1024;
@@ -183,12 +195,15 @@ pub(super) enum Command {
         reply: oneshot::Sender<Result<GitStatus, ErrorObject>>,
     },
     /// `thread/delete` (#110) and `project/delete` (PLX-338): stops the run's CLI, waits for it to
-    /// exit, and deletes the run.
+    /// exit, and deletes the run. A push or Open PR in flight refuses it, unless `wait`.
     Delete {
+        wait: bool,
         reply: oneshot::Sender<Result<(), ErrorObject>>,
     },
-    /// A run this coordinator started finished, as [`wake::summary`] tells it (PLX-42).
-    Wake(String),
+    /// A child of this run finished, or a run started in this coordinator's Project, as
+    /// [`wake::summary`] and [`wake::started`] tell it (PLX-42, PLX-380), with the ids of the
+    /// questions it names (PLX-469).
+    Wake(String, Vec<Uuid>),
     /// `agent/resumeNow` (PLX-371).
     ResumeNow {
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
@@ -196,6 +211,18 @@ pub(super) enum Command {
     /// `agent/autoResume` (PLX-371).
     AutoResume {
         auto_resume: Option<bool>,
+        reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
+    },
+    /// Starts a Project's child that waited to be placed on `account` (PLX-413, 0046).
+    Place {
+        account: AccountChoice,
+        pending: super::placement::Pending,
+        reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
+    },
+    /// `project/fromThreads` (0042): the run joins Project `project` as `parent`'s child.
+    Join {
+        project: ProjectId,
+        parent: RunId,
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
     },
 }
@@ -208,7 +235,9 @@ impl Command {
             | Self::Cancel { reply, .. }
             | Self::LinkPr { reply, .. }
             | Self::ResumeNow { reply }
-            | Self::AutoResume { reply, .. } => {
+            | Self::AutoResume { reply, .. }
+            | Self::Place { reply, .. }
+            | Self::Join { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
             Self::Accept { reply, .. } => {
@@ -226,10 +255,10 @@ impl Command {
             Self::Git { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
-            Self::Delete { reply } => {
+            Self::Delete { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
-            Self::Wake(_) => {}
+            Self::Wake(..) => {}
         }
     }
 }
@@ -321,6 +350,16 @@ impl Queued {
     }
 }
 
+/// Where a request's answer goes.
+type Reply<T> = oneshot::Sender<Result<T, ErrorObject>>;
+
+/// What a run's effect returns to its actor (PLX-458): its result, with the reply of the request
+/// that started it.
+enum Finished {
+    Push(Result<GitStatus, ErrorObject>, Reply<GitStatus>),
+    OpenPr(Result<String, ErrorObject>, Reply<String>),
+}
+
 struct Live {
     run: Arc<dyn Run>,
     events: EventStream,
@@ -340,7 +379,7 @@ struct Setup {
     cwd: PathBuf,
     sandbox: Option<WorkerSandbox>,
     temp: Option<RunTemp>,
-    tools: Option<CoordinatorTools>,
+    tools: Option<ThreadTools>,
     thread_tools: Option<ThreadTools>,
     thread: bool,
 }
@@ -360,6 +399,8 @@ pub(super) struct Actor {
     /// The run's worktree, until `agent/accept` removes it.
     worktree: Option<Worktree>,
     live: Option<Live>,
+    /// The push or Open PR running for the run, off this loop (PLX-458).
+    effect: Option<JoinHandle<Finished>>,
     batch: Batch,
     /// Messages sent to the run, by turn id, reloaded from the store after a restart. They make
     /// `agent/send` idempotent across CLI processes and fill in the logged `TurnStarted.text`.
@@ -386,7 +427,7 @@ pub(super) struct Actor {
     /// Set once `thread/delete` or `project/delete` removed the run: the actor stops, refusing
     /// what is still queued.
     deleted: bool,
-    /// A coordinator's wake-ups (PLX-42).
+    /// The run's wake-ups, as a parent (PLX-42, PLX-380).
     wakes: Wakes,
     /// What a usage limit's resume needs (PLX-371).
     resumes: Resumes,
@@ -424,6 +465,7 @@ impl Actor {
             row,
             worktree,
             live: None,
+            effect: None,
             batch: Batch::default(),
             turns,
             images: HashMap::new(),
@@ -460,9 +502,15 @@ impl Actor {
         self.row.fields.policy == convert::NO_WRITE
     }
 
-    /// Whether a project's coordinator started this run through its tools (0019).
-    fn is_child(&self) -> bool {
-        self.row.fields.coordinator_thread.is_some() && !self.is_coordinator()
+    /// Whether this is one of a Project's children (0042): any run in a Project but its
+    /// coordinator, whether the coordinator launched it or the user started it with
+    /// `thread/start`'s `project` or `agent/start`. A store error counts as not a child.
+    async fn is_child(&self) -> bool {
+        !self.is_coordinator()
+            && matches!(
+                super::project_mode(&self.daemon, self.project).await,
+                Ok(Some(_))
+            )
     }
 
     /// Adds an item about this run to its project's inbox (PLX-401, 0043).
@@ -472,7 +520,7 @@ impl Actor {
 
     /// Adds a child's permission request for `tool` to its project's inbox as `needsYou` (0031).
     async fn inbox_approval(&self, tool: &str) {
-        if self.is_child() {
+        if self.is_child().await {
             let task = wake::task(&self.row.fields.prompt);
             let text = format!("{task}: waiting for permission to use {tool}");
             self.inbox(InboxKind::NeedsYou, text).await;
@@ -480,17 +528,21 @@ impl Actor {
     }
 
     pub async fn run(mut self, mut commands: mpsc::Receiver<Command>, shutdown: CancellationToken) {
-        if self.is_coordinator() {
-            self.load_wakes().await;
-        }
+        self.load_wakes().await;
         self.load_queue().await;
+        let mut active = Instant::now();
         loop {
             self.deliver().await;
             let deadline = self.batch.since.map(|since| since + COALESCE);
-            // A coordinator's turn in progress gets its wake-ups next, once its CLI has exited.
-            let wake_at = self.wakes.due().filter(|_| self.live.is_none());
+            // A turn in progress gets its wake-ups next, once its CLI has exited, and a push or
+            // Open PR once it's done.
+            let wake_at = self
+                .wakes
+                .due()
+                .filter(|_| self.live.is_none() && self.effect.is_none());
             let expire_at = self.approvals.due();
             let resume_at = self.resume_due();
+            let idle_at = (!self.stopping && self.idle()).then_some(active + IDLE);
             tokio::select! {
                 // Shutdown, then a command, then the due flush, and only then another backend
                 // event (#190 N6): while a CLI keeps its stream busy, that event branch is
@@ -526,12 +578,22 @@ impl Actor {
                 () = sleep_until(resume_at.unwrap_or_else(Instant::now)), if resume_at.is_some() => {
                     self.check_resume().await;
                 }
+                // Stopping frees what the actor holds, its `turns` above all (PLX-459).
+                () = sleep_until(idle_at.unwrap_or_else(Instant::now)), if idle_at.is_some() => {
+                    if self.daemon.agents.retire(self.id, &commands) {
+                        debug!(run = %self.id, "stopped an idle run's actor");
+                        return;
+                    }
+                }
+                finished = effect_done(&mut self.effect) => self.finish_effect(finished).await,
                 event = next_event(&mut self.live) => self.on_event(event).await,
             }
-            if self.stopping && self.live.is_none() {
+            // A stop waits for a push or Open PR too, so its request gets its answer.
+            if self.stopping && self.live.is_none() && self.effect.is_none() {
                 self.flush().await;
                 break;
             }
+            active = Instant::now();
         }
         if self.deleted {
             commands.close();
@@ -539,6 +601,21 @@ impl Actor {
                 command.refuse(super::run_not_found(self.id));
             }
         }
+    }
+
+    /// Whether the actor holds nothing that only memory keeps (PLX-459): no CLI, push or Open
+    /// PR, unsent output, waiting message, wake-up, permission request, or resume timer. A fresh
+    /// actor reloads `turns`, the wake-up count, and the run from the store, and what the rest
+    /// keep for a CLI's messages until their turns start has no CLI left to start them.
+    fn idle(&self) -> bool {
+        self.live.is_none()
+            && self.effect.is_none()
+            && self.batch.items.is_empty()
+            && self.queued.is_empty()
+            && self.handed.is_empty()
+            && self.wakes.is_empty()
+            && self.approvals.due().is_none()
+            && self.resume_due().is_none()
     }
 
     async fn on_command(&mut self, command: Command) {
@@ -570,7 +647,9 @@ impl Actor {
                 if answer.is_err() && from.is_some() {
                     self.senders.remove(&turn_id);
                 }
-                if answer.is_ok() && self.wakes.attended() {
+                // Only the user's own message resets the count and ends a pause (0025): a child's
+                // `thread_send` (with `from`) leaves them, so a loop still reaches the cap.
+                if answer.is_ok() && from.is_none() && self.wakes.attended() {
                     self.save_wakes().await;
                 }
                 let _ = reply.send(answer);
@@ -596,11 +675,8 @@ impl Actor {
                 let _ = reply.send(answer);
             }
             Command::OpenPr { title, body, reply } => {
-                let answer = self.open_pr(&title, &body).await;
-                if let Ok(url) = &answer {
-                    self.link_pr(url.clone()).await;
-                }
-                let _ = reply.send(answer);
+                let effect = self.open_pr(title, body).await;
+                self.start_effect(effect, reply, Finished::OpenPr);
             }
             Command::LinkPr { url, linked, reply } => {
                 if linked {
@@ -610,22 +686,17 @@ impl Actor {
                 }
                 let _ = reply.send(self.snapshot());
             }
-            Command::Git { action, reply } => {
-                let answer = self.git(action).await;
-                let _ = reply.send(answer);
-            }
-            Command::Delete { reply } => {
-                let answer = self.delete().await;
+            Command::Git { action, reply } => self.on_git(action, reply).await,
+            Command::Delete { wait, reply } => {
+                let answer = self.delete(wait).await;
                 if answer.is_ok() {
                     self.deleted = true;
                     self.stopping = true;
                 }
                 let _ = reply.send(answer);
             }
-            Command::Wake(summary) => {
-                if self.is_coordinator() {
-                    self.wakes.push(summary, Instant::now());
-                }
+            Command::Wake(summary, questions) => {
+                self.wakes.push(summary, questions, Instant::now());
             }
             Command::ResumeNow { reply } => {
                 let _ = reply.send(self.resume_now().await);
@@ -633,10 +704,48 @@ impl Actor {
             Command::AutoResume { auto_resume, reply } => {
                 let _ = reply.send(self.set_auto_resume(auto_resume).await);
             }
+            Command::Place {
+                account,
+                pending,
+                reply,
+            } => {
+                let _ = reply.send(self.place(account, pending).await);
+            }
+            Command::Join {
+                project,
+                parent,
+                reply,
+            } => {
+                let _ = reply.send(self.join(project, parent).await);
+            }
         }
     }
 
-    /// `agent/cancel`, by the user or by thread `from` through its Parallax tools (0041).
+    /// Moves the run into Project `project` as `parent`'s child (0042). Its mode, inbox, wake-ups,
+    /// and Project tools all follow its scope, so it runs as a child from its next CLI process,
+    /// and a live CLI keeps what it started with. Joining the Project it is in changes nothing.
+    async fn join(&mut self, project: ProjectId, parent: RunId) -> Result<AgentRun, ErrorObject> {
+        if self.project != project {
+            let id = self.row.id;
+            // Only its fields: its state may be newer here than in the store.
+            // Its new parent is reported as `thread.updated` in the same job.
+            self.row.fields = store(&self.daemon, move |db| {
+                let row = db
+                    .join_project(id, project.into(), parent.into())
+                    .map_err(|error| store_error(&error))?;
+                crate::threads::prompted(db, id)?;
+                Ok(row)
+            })
+            .await?
+            .fields;
+            self.project = project;
+            info!(run = %self.id, %project, "a thread joined a Project");
+        }
+        self.snapshot()
+    }
+
+    /// `agent/cancel`, by the user or by thread `from` through its Parallax tools (0041). A push
+    /// or Open PR still running finishes.
     async fn cancel(&mut self, from: Option<RunId>) {
         if self.live.is_some() {
             info!(run = %self.id, ?from, "cancelling an agent run");
@@ -654,40 +763,72 @@ impl Actor {
         if let Some(live) = &self.live {
             live.run.cancel();
         }
-        // Stop means stop: a run finishing a moment later doesn't start the coordinator again
-        // before the user writes.
-        if self.is_coordinator() {
+        // Stop means stop: a child finishing a moment later doesn't start its parent again before
+        // the user writes.
+        if self.is_coordinator() || self.has_children().await {
             self.pause_wakes(false).await;
         }
     }
 
-    /// Sends what is waiting as the coordinator's next turn, through the same resume as
-    /// `agent/send` (PLX-42). Pauses wake-ups at the cap, or when this fails, keeping what is
-    /// waiting. Only the project's current coordinator wakes: a replaced one drops them, so a
-    /// project never has two live (0024).
-    async fn wake(&mut self) {
-        let project = self.project.into();
-        let current = store(&self.daemon, move |db| {
-            super::coordinator::coordinator_of(db, project)
+    /// Whether any run wakes this one when it finishes (PLX-380). A run with none has no
+    /// wake-ups to pause.
+    async fn has_children(&self) -> bool {
+        let id = self.row.id;
+        let found = store(&self.daemon, move |db| {
+            let runs = db.list_runs(None).map_err(|error| store_error(&error))?;
+            Ok(runs
+                .iter()
+                .any(|run| run.fields.parent == Some(id) && run.fields.notify_parent))
         })
         .await;
-        match current {
-            Ok(Some(current)) if current == self.id => {}
-            Ok(_) => {
-                self.wakes.clear();
-                return;
-            }
-            Err(error) => {
-                warn!(run = %self.id, error = %error.message, "could not check a coordinator before waking it");
-                self.pause_wakes(true).await;
-                return;
+        // A store that can't answer pauses them anyway, as a failed wake-up check does.
+        found.unwrap_or(true)
+    }
+
+    /// Sends what is waiting as the run's next turn, through the same resume as `agent/send`
+    /// (PLX-42, PLX-380). Pauses wake-ups at the cap, or when this fails, keeping what is
+    /// waiting. Only a project's current coordinator wakes: a replaced one drops them, so a
+    /// project never has two live (0024).
+    async fn wake(&mut self) {
+        if self.is_coordinator() {
+            let project = self.project.into();
+            let current = store(&self.daemon, move |db| {
+                super::coordinator::coordinator_of(db, project)
+            })
+            .await;
+            match current {
+                Ok(Some(current)) if current == self.id => {}
+                Ok(_) => {
+                    self.wakes.clear();
+                    return;
+                }
+                Err(error) => {
+                    warn!(run = %self.id, error = %error.message, "could not check a coordinator before waking it");
+                    self.pause_wakes(true).await;
+                    return;
+                }
             }
         }
-        let Some((turn_id, text)) = self.wakes.next() else {
+        // A coordinator's wake-up carries its children's memory proposals (0044).
+        let proposals = if self.is_coordinator() {
+            super::wake::proposals(&self.daemon, self.project).await
+        } else {
+            Vec::new()
+        };
+        let (paths, mut lines): (Vec<String>, Vec<String>) = proposals.into_iter().unzip();
+        // And, while its memory index is over the cap, a request to merge entries (0044).
+        if self.is_coordinator()
+            && crate::context::memory::start(&self.daemon, self.project)
+                .await
+                .is_ok_and(|start| start.over)
+        {
+            lines.push(crate::context::memory::MERGE.to_owned());
+        }
+        let Some((turn_id, text)) = self.wakes.next(&lines) else {
             self.pause_wakes(true).await;
             return;
         };
-        info!(run = %self.id, "waking a coordinator: runs it started finished");
+        info!(run = %self.id, "waking a parent: threads it launched finished");
         match self
             .resume(
                 turn_id,
@@ -700,35 +841,51 @@ impl Actor {
             .await
         {
             Ok(_) if self.live.is_some() => {
-                self.wakes.delivered();
+                let questions = self.wakes.delivered();
                 self.save_wakes().await;
+                super::wake::delivered_proposals(&self.daemon, self.project, paths).await;
+                wake::deliver(&self.daemon, self.id, questions).await;
             }
             Ok(_) => self.pause_wakes(true).await,
             Err(error) => {
-                warn!(run = %self.id, error = %error.message, "could not wake a coordinator");
+                warn!(run = %self.id, error = %error.message, "could not wake a parent");
                 self.pause_wakes(true).await;
             }
         }
     }
 
-    /// Stops waking the coordinator until the user writes, and says so once (PLX-42). A pause
-    /// plxd makes on its own, `notify`, also adds a `needsYou` inbox item (PLX-401); the user's
-    /// own Stop doesn't.
+    /// Stops waking the run until the user writes, and says so once (PLX-42). A pause plxd makes
+    /// on its own, `notify`, also adds a `needsYou` item to a coordinator's Project's inbox
+    /// (PLX-401); the user's own Stop doesn't.
     async fn pause_wakes(&mut self, notify: bool) {
         if self.wakes.pause() {
-            info!(run = %self.id, "pausing a coordinator's wake-ups until the user writes");
-            self.save_wakes().await;
-            self.append(ParallaxEvent::AgentWakeupsPaused { run_id: self.id })
+            info!(run = %self.id, "pausing a run's wake-ups until the user writes");
+            let (id, state) = (self.row.id, self.wakes.state());
+            let (run_id, project) = (self.id, self.project);
+            let saved = self
+                .write(move |db, now| {
+                    db.set_wake_state(id, state)
+                        .map_err(|error| store_error(&error))?;
+                    db.stage(
+                        now,
+                        Some(project),
+                        ParallaxEvent::AgentWakeupsPaused { run_id },
+                    );
+                    Ok(())
+                })
                 .await;
-            if notify {
+            if let Err(error) = saved {
+                warn!(run = %self.id, error = %error.message, "could not store a run's wake-ups");
+            }
+            if notify && self.is_coordinator() {
                 self.inbox(InboxKind::NeedsYou, WAKEUPS_PAUSED.to_owned())
                     .await;
             }
         }
     }
 
-    /// Takes up the coordinator's wake-up count and pause where the last plxd left them
-    /// (PLX-178). If they can't be read, pauses wake-ups, as a failed check does.
+    /// Takes up the run's wake-up count and pause where the last plxd left them (PLX-178). If
+    /// they can't be read, pauses wake-ups, as a failed check does.
     async fn load_wakes(&mut self) {
         let id = self.row.id;
         let stored = store(&self.daemon, move |db| {
@@ -738,13 +895,13 @@ impl Actor {
         match stored {
             Ok(state) => self.wakes.restore(state),
             Err(error) => {
-                warn!(run = %self.id, error = %error.message, "could not read a coordinator's wake-ups");
+                warn!(run = %self.id, error = %error.message, "could not read a run's wake-ups");
                 self.pause_wakes(true).await;
             }
         }
     }
 
-    /// Stores the coordinator's wake-up count and pause, so a restart keeps them (PLX-178).
+    /// Stores the run's wake-up count and pause, so a restart keeps them (PLX-178).
     async fn save_wakes(&self) {
         let (id, state) = (self.row.id, self.wakes.state());
         let saved = store(&self.daemon, move |db| {
@@ -753,15 +910,22 @@ impl Actor {
         })
         .await;
         if let Err(error) = saved {
-            warn!(run = %self.id, error = %error.message, "could not store a coordinator's wake-ups");
+            warn!(run = %self.id, error = %error.message, "could not store a run's wake-ups");
         }
     }
 
     /// `thread/delete` and `project/delete`: cancels a running CLI and waits for it to exit and
     /// its changes to be committed, then deletes the run's rows, events, worktree, and a thread's
     /// scratch folders ([`crate::threads::purge`]), and drops this actor from the map. Running
-    /// here, between commands, it never races a resume or an accept.
-    async fn delete(&mut self) -> Result<(), ErrorObject> {
+    /// here, between commands, it never races a resume or an accept. A push or Open PR, which
+    /// works in the run's folder, makes it wait for the effect to finish with `wait`, and
+    /// otherwise refuses it (`gitRefused`).
+    async fn delete(&mut self, wait: bool) -> Result<(), ErrorObject> {
+        if wait && let Some(effect) = &mut self.effect {
+            let finished = effect.await;
+            self.finish_effect(finished).await;
+        }
+        self.effect_busy(ErrorKind::GitRefused)?;
         if self.live.is_some() {
             self.stop_approvals(AgentApprovalBy::Cancel).await;
         }
@@ -803,6 +967,7 @@ impl Actor {
                 self.id
             )));
         }
+        self.effect_busy(ErrorKind::MergeRefused)?;
         let Some(commit) = self.row.state.commit_sha.clone() else {
             return Err(refused(format!(
                 "run {} has no committed changes to accept",
@@ -850,11 +1015,31 @@ impl Actor {
         self.row.state.resume_at = None;
         self.row.state.accept = Some(accept.clone());
         let (row_id, state) = (self.row.id, self.row.state.clone());
-        let saved = store(&self.daemon, move |db| {
-            db.accept_run(row_id, &state)
-                .map_err(|error| store_error(&error))
-        })
-        .await;
+        let (run_id, project) = (self.id, self.project);
+        let merge = convert::merge(&accept);
+        let accepted_merge = merge.clone();
+        let saved = self
+            .write(move |db, now| {
+                let row = db
+                    .accept_run(row_id, &state)
+                    .map_err(|error| store_error(&error))?;
+                db.stage(
+                    now,
+                    Some(project),
+                    ParallaxEvent::AgentAccepted {
+                        run_id,
+                        merge: accepted_merge,
+                    },
+                );
+                let state = convert::run_state(&row);
+                db.stage(
+                    now,
+                    Some(project),
+                    ParallaxEvent::AgentUpdated { run_id, state },
+                );
+                Ok(row)
+            })
+            .await;
         match saved {
             Ok(row) => self.row = row,
             Err(error) => {
@@ -862,25 +1047,19 @@ impl Actor {
             }
         }
         self.worktree = None;
-        let merge = convert::merge(&accept);
-        self.flush().await;
-        self.append(ParallaxEvent::AgentAccepted {
-            run_id: self.id,
-            merge: merge.clone(),
-        })
-        .await;
-        self.append(ParallaxEvent::AgentUpdated {
-            run_id: self.id,
-            state: convert::run_state(&self.row),
-        })
-        .await;
         Ok((self.snapshot()?, merge))
     }
 
-    /// `agent/openPr`: pushes the run's branch to its repository's `origin` and returns the URL
-    /// of its pull request, opening one if none is open (PLX-168). Running here, between commands,
-    /// it never races a turn or its commit.
-    async fn open_pr(&self, title: &str, body: &str) -> Result<String, ErrorObject> {
+    /// `agent/openPr`: checks the run can open a pull request, and returns the actor's effect
+    /// that pushes its branch to its repository's `origin` and returns the URL of its pull
+    /// request, opening one if none is open (PLX-168). Checked here, between commands, and run
+    /// while no CLI does, it never races a turn or its commit.
+    async fn open_pr(
+        &self,
+        title: String,
+        body: String,
+    ) -> Result<impl Future<Output = Result<String, ErrorObject>> + Send + 'static, ErrorObject>
+    {
         if self.accepted() {
             return Err(super::run_accepted(self.id));
         }
@@ -891,8 +1070,9 @@ impl Actor {
                 self.id
             )));
         }
+        self.effect_busy(ErrorKind::PrRefused)?;
         // A Current checkout thread pushes the branch its checkout has out (PLX-298).
-        if self.row.fields.checkout {
+        let (repo, branch) = if self.row.fields.checkout {
             let repo = self.checkout_path().await?;
             let worktrees = &self.daemon.agents.worktrees;
             let branch = worktrees
@@ -906,57 +1086,98 @@ impl Actor {
                         self.id
                     ))
                 })?;
-            return self.pull_request(&repo, &branch, title, body).await;
-        }
-        if self.row.state.commit_sha.is_none() {
-            return Err(refused(format!(
-                "run {} has no committed changes to open a pull request for",
-                self.id
-            )));
-        }
-        let project = self.project;
-        if store(&self.daemon, move |db| {
-            crate::threads::is_scratch(db, project)
-        })
-        .await?
-        {
-            return Err(refused(format!(
-                "run {} is a thread with no repository, so it has no origin to push to",
-                self.id
-            )));
-        }
-        let Some(worktree) = &self.worktree else {
-            return Err(ErrorObject::internal_error(format!(
-                "run {} has no recorded worktree",
-                self.id
-            )));
+            (repo, branch)
+        } else {
+            if self.row.state.commit_sha.is_none() {
+                return Err(refused(format!(
+                    "run {} has no committed changes to open a pull request for",
+                    self.id
+                )));
+            }
+            let project = self.project;
+            if store(&self.daemon, move |db| {
+                crate::threads::is_scratch(db, project)
+            })
+            .await?
+            {
+                return Err(refused(format!(
+                    "run {} is a thread with no repository, so it has no origin to push to",
+                    self.id
+                )));
+            }
+            let Some(worktree) = &self.worktree else {
+                return Err(ErrorObject::internal_error(format!(
+                    "run {} has no recorded worktree",
+                    self.id
+                )));
+            };
+            (PathBuf::from(&worktree.repo_path), worktree.branch.clone())
         };
-        self.pull_request(
-            Path::new(&worktree.repo_path),
-            &worktree.branch,
-            title,
-            body,
-        )
-        .await
+        let (daemon, run) = (Arc::clone(&self.daemon), self.id);
+        Ok(async move {
+            let url = daemon
+                .agents
+                .worktrees
+                .open_pr(&repo, &branch, &title, &body)
+                .await
+                .map_err(|error| super::pr_error(&error))?;
+            info!(%run, %url, "opened a pull request for an agent run");
+            Ok(url)
+        })
     }
 
-    /// Pushes `branch` from `repo` and returns its pull request's URL, for `agent/openPr`.
-    async fn pull_request(
-        &self,
-        repo: &Path,
-        branch: &str,
-        title: &str,
-        body: &str,
-    ) -> Result<String, ErrorObject> {
-        let url = self
-            .daemon
-            .agents
-            .worktrees
-            .open_pr(repo, branch, title, body)
-            .await
-            .map_err(|error| super::pr_error(&error))?;
-        info!(run = %self.id, %url, "opened a pull request for an agent run");
-        Ok(url)
+    /// Runs `effect` in a task on the runs' tracker, off this loop, which gets its result back,
+    /// wrapped by `finished` with `reply`, in [`Self::finish_effect`] (PLX-458). A request its
+    /// checks refused is answered now.
+    fn start_effect<T: Send + 'static>(
+        &mut self,
+        effect: Result<impl Future<Output = Result<T, ErrorObject>> + Send + 'static, ErrorObject>,
+        reply: Reply<T>,
+        finished: fn(Result<T, ErrorObject>, Reply<T>) -> Finished,
+    ) {
+        match effect {
+            Ok(effect) => {
+                let task = async move { finished(effect.await, reply) };
+                self.effect = Some(self.daemon.agents.tracker.spawn(task));
+            }
+            Err(error) => {
+                let _ = reply.send(Err(error));
+            }
+        }
+    }
+
+    /// The run's push or Open PR ended: links the pull request it opened, and answers its
+    /// request.
+    async fn finish_effect(&mut self, finished: Result<Finished, JoinError>) {
+        self.effect = None;
+        match finished {
+            Ok(Finished::Push(answer, reply)) => {
+                let _ = reply.send(answer);
+            }
+            Ok(Finished::OpenPr(answer, reply)) => {
+                if let Ok(url) = &answer {
+                    self.link_pr(url.clone()).await;
+                }
+                let _ = reply.send(answer);
+            }
+            // Its reply went with it, so its request fails as for an actor that's gone.
+            Err(error) => warn!(run = %self.id, %error, "a push or Open PR failed"),
+        }
+    }
+
+    /// Refuses, as `kind`, what can't run beside the run's push or Open PR (PLX-458).
+    fn effect_busy(&self, kind: ErrorKind) -> Result<(), ErrorObject> {
+        if self.effect.is_none() {
+            return Ok(());
+        }
+        Err(ErrorObject::parallax(
+            kind,
+            format!(
+                "run {} is pushing its branch or opening a pull request; try again once that's \
+                 done",
+                self.id
+            ),
+        ))
     }
 
     /// Links pull request `url` to the run, unless it already is, and reports it as
@@ -985,6 +1206,11 @@ impl Actor {
     /// call is told by its input's JSON text, not by the tool's name, and remembered until its
     /// result.
     fn created_prs(&mut self, event: &Event) -> Vec<String> {
+        // A subagent's `gh pr create` opens the thread's pull request too (PLX-382).
+        let event = match event {
+            Event::Subagent { event, .. } => event,
+            event => event,
+        };
         match event {
             Event::ToolCall { call_id, input, .. }
                 if input.to_string().contains("gh pr create") =>
@@ -1168,6 +1394,11 @@ impl Actor {
                 Err(id_conflict(turn_id))
             };
         }
+        // No CLI starts while a push or Open PR runs (PLX-458). A steer waits too: no turn runs
+        // for it to go into.
+        if self.effect.is_some() {
+            return self.queue(queued).await;
+        }
         if steer {
             return self.steer(queued).await;
         }
@@ -1236,7 +1467,7 @@ impl Actor {
                 self.drain().await;
             }
             Some(Err(SendError::Finished)) => self.drain().await,
-            None => {}
+            None => self.effect_busy(ErrorKind::RunNotResumable)?,
         }
         let Queued {
             turn_id,
@@ -1312,18 +1543,18 @@ impl Actor {
             self.queued.pop_back();
             return Err(error);
         }
-        self.report_queue().await;
         self.snapshot()
     }
 
     /// Sends what waits as far as the run can take it now: while no CLI runs, the next message
-    /// to a new CLI process; while the live CLI has no turn in progress, the next message that
-    /// doesn't change what it runs with, as its next turn. Holds the CLI open while that waits.
+    /// to a new CLI process, once no push or Open PR runs either; while the live CLI has no turn
+    /// in progress, the next message that doesn't change what it runs with, as its next turn.
+    /// Holds the CLI open while that waits.
     async fn deliver(&mut self) {
         if self.stopping {
             return;
         }
-        if self.live.is_none() {
+        if self.live.is_none() && self.effect.is_none() {
             self.send_queued().await;
         }
         while self.in_flight == 0 && self.live.is_some() {
@@ -1445,12 +1676,13 @@ impl Actor {
             QueueOp::List => {}
             QueueOp::Edit { id, text } => {
                 let at = self.position(id)?;
-                let queued = &mut self.queued[at];
-                if text.trim().is_empty() && queued.images.is_empty() {
+                if text.trim().is_empty() && self.queued[at].images.is_empty() {
                     return Err(ErrorObject::invalid_params("text must not be empty"));
                 }
-                queued.text = text;
-                self.save_queue().await;
+                let mut edited = self.queued.clone();
+                edited[at].text = text;
+                self.store_queue_for(&edited).await?;
+                self.queued = edited;
             }
             QueueOp::Reorder { ids } => {
                 let mut rest = self.queued.clone();
@@ -1471,17 +1703,20 @@ impl Actor {
                         rest.len()
                     )));
                 }
+                self.store_queue_for(&reordered).await?;
                 self.queued = reordered;
-                self.save_queue().await;
             }
             QueueOp::Cancel { id } => {
                 let at = self.position(id)?;
-                self.queued.remove(at);
+                let mut remaining = self.queued.clone();
+                remaining.remove(at);
                 info!(run = %self.id, turn = %id, "cancelling a waiting message");
-                self.senders.remove(&id);
+                // Staged in the same job as the queue, so the two commit together.
                 self.push(AgentOutputItem::FollowUpDropped { turn_id: id })
                     .await;
-                self.save_queue().await;
+                self.store_queue_for(&remaining).await?;
+                self.queued = remaining;
+                self.senders.remove(&id);
             }
             QueueOp::Steer { id } => {
                 let at = self.position(id)?;
@@ -1558,27 +1793,31 @@ impl Actor {
         if let Err(error) = self.store_queue().await {
             warn!(run = %self.id, error = %error.message, "could not store a run's waiting messages");
         }
-        self.report_queue().await;
     }
 
-    /// Stores the waiting messages as they are now.
-    async fn store_queue(&self) -> Result<(), ErrorObject> {
+    /// Stores the waiting messages as they are now, and reports them as `queue.updated`.
+    async fn store_queue(&mut self) -> Result<(), ErrorObject> {
+        self.store_queue_for(&self.queued.clone()).await
+    }
+
+    /// Stores a proposed queue, before the actor applies it, and reports it as `queue.updated`,
+    /// in one job after any transcript items waiting to be sent.
+    async fn store_queue_for(&mut self, queued: &VecDeque<Queued>) -> Result<(), ErrorObject> {
         let id = self.row.id;
-        let rows: Vec<QueuedRow> = self.queued.iter().map(Queued::row).collect();
-        store(&self.daemon, move |db| {
-            db.set_queue(id, &rows).map_err(|error| store_error(&error))
+        let (run_id, project) = (self.id, self.project);
+        let rows: Vec<QueuedRow> = queued.iter().map(Queued::row).collect();
+        let messages: Vec<QueuedMessage> = queued.iter().map(Queued::message).collect();
+        self.write(move |db, now| {
+            db.set_queue(id, &rows)
+                .map_err(|error| store_error(&error))?;
+            db.stage(
+                now,
+                Some(project),
+                ParallaxEvent::QueueUpdated { run_id, messages },
+            );
+            Ok(())
         })
         .await
-    }
-
-    /// Reports the waiting messages as they are now as `queue.updated`.
-    async fn report_queue(&mut self) {
-        self.flush().await;
-        self.append(ParallaxEvent::QueueUpdated {
-            run_id: self.id,
-            messages: self.messages(),
-        })
-        .await;
     }
 
     /// Starts a new CLI process for the run with `text`, after the summaries of `threads`, and
@@ -1657,9 +1896,7 @@ impl Actor {
             .store_options(prepared.resolved.backend(), changes)
             .await?;
         let message = text;
-        let opening = self
-            .opening(session_id, from, sent, &prepared, paths.as_ref())
-            .await;
+        let opening = self.opening(session_id, from, sent, &prepared).await;
         let (prompt, resume, from) = match opening {
             Ok(opening) => opening,
             Err(error) => {
@@ -1796,7 +2033,6 @@ impl Actor {
         mut from: String,
         text: String,
         prepared: &Prepared,
-        paths: Option<&(PathBuf, PathBuf)>,
     ) -> Result<(String, Option<Resume>, String), ErrorObject> {
         if let Some(session_id) = session_id {
             info!(run = %self.id, "resuming an agent run's session");
@@ -1815,9 +2051,7 @@ impl Actor {
         }
         let to = prepared.resolved.backend().name();
         info!(run = %self.id, from, to, "starting a new session for an agent run");
-        let prompt = self
-            .handoff_prompt(&from, &text, &prepared.place, paths)
-            .await?;
+        let prompt = self.handoff_prompt(&from, &text, &prepared.place).await?;
         Ok((prompt, None, from))
     }
 
@@ -1912,26 +2146,25 @@ impl Actor {
         from: &str,
         text: &str,
         place: &Place,
-        paths: Option<&(PathBuf, PathBuf)>,
     ) -> Result<String, ErrorObject> {
         // What the agent said last is logged before the conversation is read.
         self.flush().await;
         let events = logged_events(&self.daemon, self.id).await?;
         let message = handoff_message(from, &conversation(&events, HISTORY_BYTES), text);
         match place {
-            Place::Coordinator { repo } => Ok(super::coordinator::first_message(
-                &message,
-                &repo.to_string_lossy(),
-            )),
-            // A thread's first message is the user's own (0034).
-            Place::Worker { thread: true, .. } => Ok(message),
-            Place::Worker { context, .. } => {
-                let cwd = match paths {
-                    Some((cwd, _)) => cwd.clone(),
-                    None => self.worker_paths().await?.0,
-                };
-                Ok(worker_prompt(&message, &cwd, context))
+            Place::Coordinator { repo } => {
+                let project = self.project.into();
+                let autonomy = store(&self.daemon, move |db| {
+                    crate::methods::question::autonomy_of(db, project)
+                })
+                .await?;
+                Ok(super::coordinator::first_message(
+                    &message,
+                    &repo.to_string_lossy(),
+                    autonomy,
+                ))
             }
+            Place::Worker { .. } => super::first_prompt(&message, place),
         }
     }
 
@@ -1947,15 +2180,32 @@ impl Actor {
     async fn record_turn(&mut self, turn_id: TurnId, text: String) {
         self.turns.insert(turn_id, text.clone());
         let (run_id, id) = (self.row.id, self.id);
-        let log = Arc::clone(&self.daemon.log);
         let stored = store(&self.daemon, move |db| {
             db.record_turn(run_id, turn_id.into(), &text)
                 .map_err(|error| store_error(&error))?;
-            crate::threads::prompted(db, &log, run_id)
+            crate::threads::prompted(db, run_id)
         })
         .await;
         if let Err(error) = stored {
             warn!(run = %id, error = %error.message, "could not store a sent turn");
+        }
+    }
+
+    /// Logs the pending batch and, in the same job, indexes what the run said since the last turn
+    /// for `thread/search` (PLX-487). Runs when a turn ends and when the CLI exits. An index that
+    /// fails is logged, and the batch commits anyway.
+    async fn index_text(&mut self) {
+        let (id, run_id) = (self.id, self.row.id);
+        let logged = self
+            .with_output(false, move |db, _| {
+                if let Err(error) = db.index_run_text(run_id) {
+                    warn!(run = %id, %error, "could not index a turn's text");
+                }
+                Ok(())
+            })
+            .await;
+        if let Err(error) = logged {
+            warn!(run = %id, error = %error.message, "could not store a run's output; it was dropped");
         }
     }
 
@@ -2024,12 +2274,9 @@ impl Actor {
                 home,
                 data_dir,
                 context,
-                thread,
-            } => {
-                self.worker_setup(&home, &data_dir, &context, paths, thread)
-                    .await
-            }
-            Place::Coordinator { repo } => self.coordinator_setup(repo),
+                ..
+            } => self.worker_setup(&home, &data_dir, &context, paths).await,
+            Place::Coordinator { repo } => self.coordinator_setup(&repo).await,
         };
         let Setup {
             cwd,
@@ -2095,60 +2342,65 @@ impl Actor {
         }
     }
 
-    /// A worker's worktree and sandbox, with a new temp folder for its CLI.
+    /// A thread's worktree, its own host-wide tools, bound to its run (0041), and a new temp
+    /// folder for its CLI, with the worker sandbox Claude Code keeps for a thread without
+    /// `approvals` (0013).
     async fn worker_setup(
         &self,
         home: &Path,
         data_dir: &Path,
         context: &Path,
         paths: Option<(PathBuf, PathBuf)>,
-        thread: bool,
     ) -> Result<Setup, String> {
         let (cwd, git_common_dir) = match paths {
             Some(paths) => paths,
             None => self.worker_paths().await.map_err(|error| error.message)?,
         };
         let (temp, temp_path) = self.run_temp().map_err(|error| error.message)?;
-        let sandbox =
+        let mut sandbox =
             WorkerSandbox::for_worktree(home, data_dir, &cwd, &git_common_dir, context, &temp_path);
-        // A thread's own host-wide tools, bound to its run (0041).
-        let thread_tools = if thread {
-            Some(ThreadTools {
-                program: plxd_program()?,
-                data_dir: self.daemon.data_dir.root().to_owned(),
-                run: self.id,
-            })
-        } else {
-            None
+        // A thread, a Project's child or a plain one, reaches memory only through the tools, so
+        // the shared context folder isn't an allowed directory for it, and stays as unreadable as
+        // the rest of plxd's data folder in the sandbox (0044, PLX-468).
+        sandbox.writable.clear();
+        let thread_tools = ThreadTools {
+            program: plxd_program()?,
+            data_dir: self.daemon.data_dir.root().to_owned(),
+            run: self.id,
         };
         Ok(Setup {
             cwd,
             sandbox: Some(sandbox),
             temp: Some(temp),
             tools: None,
-            thread_tools,
-            thread,
+            thread_tools: Some(thread_tools),
+            thread: true,
         })
     }
 
-    /// A coordinator runs in the project's repository (0027), with its Parallax tools, bound to its
-    /// project and to its own thread (0019).
-    fn coordinator_setup(&mut self, repo: PathBuf) -> Result<Setup, String> {
-        let program = plxd_program()?;
-        let thread = self
-            .row
-            .fields
-            .coordinator_thread
-            .and_then(|id| CoordinatorThreadId::try_from(id).ok())
-            .ok_or_else(|| format!("coordinator run {} has no thread id", self.id))?;
-        let tools = CoordinatorTools {
-            program,
+    /// A coordinator runs in its detached worktree, moved to the integration branch's tip first,
+    /// and cut with the branch if either is missing (0042, 0045), with a thread's Parallax tools
+    /// bound to its own run (0041, PLX-380).
+    async fn coordinator_setup(&mut self, repo: &Path) -> Result<Setup, String> {
+        let branch = super::integration(&self.daemon, self.project)
+            .await
+            .map_err(|error| error.message)?
+            .and_then(|row| row.integration_branch)
+            .ok_or_else(|| "the coordinator's Project has no integration branch".to_owned())?;
+        let cwd = self
+            .daemon
+            .agents
+            .worktrees
+            .refresh_coordinator(repo, self.project, &branch)
+            .await
+            .map_err(|error| format!("could not prepare the coordinator's worktree: {error}"))?;
+        let tools = ThreadTools {
+            program: plxd_program()?,
             data_dir: self.daemon.data_dir.root().to_owned(),
-            project: self.project,
-            thread,
+            run: self.id,
         };
         Ok(Setup {
-            cwd: repo,
+            cwd,
             sandbox: None,
             temp: None,
             tools: Some(tools),
@@ -2199,22 +2451,21 @@ impl Actor {
 
     async fn failed_to_start(&mut self, message: String) {
         warn!(run = %self.id, %message, "an agent run's CLI could not start");
-        self.append(ParallaxEvent::AgentFinished {
+        let finished = ParallaxEvent::AgentFinished {
             run_id: self.id,
             outcome: AgentOutcome::Failed {
                 failure: AgentFailureKind::SpawnFailed,
                 message: message.clone(),
             },
-        })
-        .await;
-        if self.is_child() {
+        };
+        convert::FAILED.clone_into(&mut self.row.state.status);
+        self.row.state.error = Some(message.clone());
+        self.row.state.resume_at = None;
+        self.save_with(vec![finished]).await;
+        if self.is_child().await {
             let text = failed_text(&self.row.fields.prompt, &message);
             self.inbox(InboxKind::Failed, text).await;
         }
-        convert::FAILED.clone_into(&mut self.row.state.status);
-        self.row.state.error = Some(message);
-        self.row.state.resume_at = None;
-        self.save().await;
     }
 
     /// Fills in a `TurnStarted` what only the actor knows: a follow-up's text, which `send`
@@ -2314,6 +2565,7 @@ impl Actor {
                     let gone = ended(AgentApprovalDecision::Withdrawn, AgentApprovalBy::Agent);
                     self.resolve_approval(approval_id, gone).await;
                 }
+                self.index_text().await;
                 self.finish(&outcome).await;
             }
             _ => {
@@ -2327,6 +2579,9 @@ impl Actor {
                 }
                 for url in created {
                     self.link_pr(url).await;
+                }
+                if matches!(event, Event::TurnFinished { .. }) {
+                    self.index_text().await;
                 }
             }
         }
@@ -2387,19 +2642,19 @@ impl Actor {
     }
 
     /// Records how a CLI process ended. Unless plxd stopped it, commits a worker's changes first,
-    /// through #166's hardened commit, and reports the commit, then wakes the coordinator that
-    /// started the run.
+    /// through #166's hardened commit, and reports the commit. A Project's child then writes its
+    /// history (0044). Last it wakes the run's parent unless
+    /// it was launched with `notify: false` (PLX-380).
     async fn finish(&mut self, outcome: &Outcome) {
         self.flush().await;
         if self.stopping && matches!(outcome, Outcome::Cancelled) {
             info!(run = %self.id, "an agent run was interrupted because plxd is stopping");
-            self.append(ParallaxEvent::AgentFinished {
+            convert::INTERRUPTED.clone_into(&mut self.row.state.status);
+            self.save_with(vec![ParallaxEvent::AgentFinished {
                 run_id: self.id,
                 outcome: AgentOutcome::Interrupted,
-            })
+            }])
             .await;
-            convert::INTERRUPTED.clone_into(&mut self.row.state.status);
-            self.save().await;
             return;
         }
         let (mut outcome, mut status, mut error) = convert::outcome(outcome);
@@ -2425,42 +2680,52 @@ impl Actor {
                 None
             }
         };
-        self.append(ParallaxEvent::AgentFinished {
+        let mut events = vec![ParallaxEvent::AgentFinished {
             run_id: self.id,
             outcome: outcome.clone(),
-        })
-        .await;
+        }];
         if let Some(diff) = diff {
-            self.record_diff(diff).await;
+            events.push(self.record_diff(diff));
         }
         status.clone_into(&mut self.row.state.status);
         self.row.state.error = error;
         self.after_limit(&outcome).await;
         info!(run = %self.id, status = %self.row.state.status, "an agent run's CLI finished");
-        self.save().await;
-        if let Some(thread) = self.row.fields.coordinator_thread
-            && !self.is_coordinator()
-            && let Ok(run) = self.snapshot()
-        {
+        self.save_with(events).await;
+        let Ok(run) = self.snapshot() else {
+            return;
+        };
+        if self.is_child().await {
             if let Some((kind, text)) = ended_item(&run, &outcome) {
                 self.inbox(kind, text).await;
             }
-            wake::notify(&self.daemon, thread, wake::summary(&run, &outcome));
+            crate::context::history::write(&self.daemon, self.project, &run, &outcome).await;
         }
+        if let Some(parent) = self.row.fields.parent
+            && self.row.fields.notify_parent
+        {
+            wake::notify(&self.daemon, parent, wake::summary(&run, &outcome));
+        }
+        // A child sent back from landing goes back in its Project's queue once a turn completes
+        // (PLX-410).
+        if self.worktree.is_some() && matches!(outcome, AgentOutcome::Completed { .. }) {
+            crate::methods::land::turn_ended(&self.daemon, self.id);
+        }
+        // A child that ended may free a slot or an account for one waiting (0046).
+        self.daemon.agents.placement.notify_one();
     }
 
-    /// Records the run's new commit and its diff, and tells clients, as `agent.diffReady`. The
-    /// caller saves the row.
-    async fn record_diff(&mut self, diff: DiffSummary) {
+    /// Records the run's new commit and its diff in its state, and returns the `agent.diffReady`
+    /// that tells clients. The caller saves the row with it ([`Actor::save_with`]).
+    fn record_diff(&mut self, diff: DiffSummary) -> ParallaxEvent {
         self.row.state.commit_sha = Some(diff.commit.clone());
         self.row.state.files_changed = Some(diff.files);
         self.row.state.insertions = Some(diff.insertions);
         self.row.state.deletions = Some(diff.deletions);
-        self.append(ParallaxEvent::AgentDiffReady {
+        ParallaxEvent::AgentDiffReady {
             run_id: self.id,
             diff,
-        })
-        .await;
+        }
     }
 
     /// Commits whatever the run changed in its worktree, on its branch, with `message`, and
@@ -2498,56 +2763,137 @@ impl Actor {
         }))
     }
 
+    /// Adds `item` to the pending batch. A `TextDelta` right after one for the same message joins
+    /// it, up to the text cap, so a streamed reply is one item per message per batch (PLX-449).
+    /// The byte count still adds the whole item, which only flushes a merged batch a little early.
     async fn push(&mut self, item: AgentOutputItem) {
         self.batch.bytes += item_bytes(&item);
-        self.batch.items.push(item);
+        match (&item, self.batch.items.last_mut()) {
+            (
+                AgentOutputItem::TextDelta { message_id, text },
+                Some(AgentOutputItem::TextDelta {
+                    message_id: last_id,
+                    text: last,
+                }),
+            ) if last_id == message_id
+                && last.len() + text.len() <= convert::MAX_TEXT_ITEM_BYTES =>
+            {
+                last.push_str(text);
+            }
+            _ => self.batch.items.push(item),
+        }
         self.batch.since.get_or_insert_with(Instant::now);
         if self.batch.bytes >= MAX_BATCH_BYTES {
             self.flush().await;
         }
     }
 
+    /// Sends the transcript items waiting to be sent, as one `agent.output` in a store job.
     async fn flush(&mut self) {
-        let batch = std::mem::take(&mut self.batch);
-        if !batch.items.is_empty() {
-            self.append(ParallaxEvent::AgentOutput {
-                run_id: self.id,
-                items: batch.items,
-            })
-            .await;
+        if self.batch.items.is_empty() {
+            self.batch = Batch::default();
+            return;
+        }
+        // A batch that fails on its own is dropped (0052), so a store that keeps failing can't
+        // grow it without bound.
+        if let Err(error) = self.with_output(false, |_, _| Ok(())).await {
+            warn!(run = %self.id, error = %error.message, "could not store a run's output; it was dropped");
         }
     }
 
-    /// From a tokio task: the event log's own writer thread does the SQLite work, so awaiting it
-    /// here yields this actor's worker thread to other work instead of blocking it (#190).
-    async fn append(&self, event: ParallaxEvent) -> u64 {
-        self.daemon
-            .log
-            .append(jiff::Timestamp::now(), Some(self.project), event)
-            .await
+    /// Runs `job` as one store job, after staging the transcript items waiting to be sent, so
+    /// they, the rows `job` writes, and the events it stages commit together or not at all
+    /// (0052). `job` gets the time to stage its events at. If the job fails, the items wait for
+    /// the next write, so a failed row write doesn't lose the turn's output.
+    async fn write<T: Send + 'static>(
+        &mut self,
+        job: impl FnOnce(&mut Tx, jiff::Timestamp) -> Result<T, ErrorObject> + Send + 'static,
+    ) -> Result<T, ErrorObject> {
+        self.with_output(true, job).await
     }
 
-    /// Stores the run's state and reports it as `agent.updated`, after any transcript items
-    /// waiting to be sent.
-    async fn save(&mut self) {
-        self.flush().await;
-        let (id, state) = (self.row.id, self.row.state.clone());
-        let saved = store(&self.daemon, move |db| {
-            db.update_run(id, &state)
-                .map_err(|error| store_error(&error))
+    /// [`Actor::write`], keeping the items for the next write on failure only when `keep`.
+    async fn with_output<T: Send + 'static>(
+        &mut self,
+        keep: bool,
+        job: impl FnOnce(&mut Tx, jiff::Timestamp) -> Result<T, ErrorObject> + Send + 'static,
+    ) -> Result<T, ErrorObject> {
+        let batch = std::mem::take(&mut self.batch);
+        let kept = (keep && !batch.items.is_empty()).then(|| batch.items.clone());
+        let items = batch.items;
+        let (run_id, project, now) = (self.id, self.project, jiff::Timestamp::now());
+        let written = store(&self.daemon, move |db| {
+            if !items.is_empty() {
+                db.stage(
+                    now,
+                    Some(project),
+                    ParallaxEvent::AgentOutput { run_id, items },
+                );
+            }
+            job(db, now)
         })
         .await;
+        if written.is_err()
+            && let Some(items) = kept
+        {
+            self.batch = Batch {
+                items,
+                bytes: batch.bytes,
+                since: batch.since,
+            };
+        }
+        written
+    }
+
+    /// Stores `event` on the run's project, after any transcript items waiting to be sent.
+    async fn append(&mut self, event: ParallaxEvent) {
+        let project = self.project;
+        let appended = self
+            .write(move |db, now| {
+                db.stage(now, Some(project), event);
+                Ok(())
+            })
+            .await;
+        if let Err(error) = appended {
+            warn!(run = %self.id, error = %error.message, "could not store a run's event; it was dropped");
+        }
+    }
+
+    /// Stores the run's state and reports it as `agent.updated`, in one job after any transcript
+    /// items waiting to be sent.
+    async fn save(&mut self) {
+        self.save_with(Vec::new()).await;
+    }
+
+    /// [`Actor::save`], staging `events` before `agent.updated` in the same job, so an
+    /// `agent.finished` or `agent.diffReady` commits with the state it reports: a crash can't
+    /// leave the event without the row, and a restart then report the run interrupted after it.
+    async fn save_with(&mut self, events: Vec<ParallaxEvent>) {
+        let (id, state) = (self.row.id, self.row.state.clone());
+        let (run_id, project) = (self.id, self.project);
+        let saved = self
+            .write(move |db, now| {
+                let row = db
+                    .update_run(id, &state)
+                    .map_err(|error| store_error(&error))?;
+                for event in events {
+                    db.stage(now, Some(project), event);
+                }
+                let state = convert::run_state(&row);
+                db.stage(
+                    now,
+                    Some(project),
+                    ParallaxEvent::AgentUpdated { run_id, state },
+                );
+                Ok(row)
+            })
+            .await;
         match saved {
             Ok(row) => self.row = row,
             Err(error) => {
                 warn!(run = %self.id, error = %error.message, "could not store an agent run's state");
             }
         }
-        self.append(ParallaxEvent::AgentUpdated {
-            run_id: self.id,
-            state: convert::run_state(&self.row),
-        })
-        .await;
     }
 }
 
@@ -2717,6 +3063,14 @@ async fn next_event(live: &mut Option<Live>) -> Option<Event> {
     }
 }
 
+/// The run's push or Open PR, once it ends; never while there is none.
+async fn effect_done(effect: &mut Option<JoinHandle<Finished>>) -> Result<Finished, JoinError> {
+    match effect {
+        Some(task) => task.await,
+        None => std::future::pending().await,
+    }
+}
+
 fn model_usage(total: SessionModelUsage) -> ModelUsage {
     ModelUsage {
         model: total.model,
@@ -2778,8 +3132,8 @@ mod tests {
 
     use parallax_protocol::{
         AccountChoice, AccountId, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision,
-        AgentApproveParams, AgentOutputItem, ApprovalId, ErrorKind, ParallaxEvent, ProjectId,
-        RunId, TurnId,
+        AgentApproveParams, AgentOutcome, AgentOutputItem, ApprovalId, ErrorKind, ParallaxEvent,
+        ProjectId, RunId, TurnId,
     };
     use parallax_store::{Run as RunRow, RunFields, RunState, Worktree};
     use tokio::sync::{mpsc, oneshot};
@@ -2868,6 +3222,7 @@ mod tests {
                 backend: "fake".to_owned(),
                 coordinator_thread: None,
                 parent: None,
+                notify_parent: false,
                 model: None,
                 effort: None,
                 permission: None,
@@ -2875,6 +3230,7 @@ mod tests {
                 fast: None,
                 approvals: false,
                 checkout: false,
+                explore: false,
             },
             state: RunState {
                 status: "running".to_owned(),
@@ -3185,6 +3541,150 @@ mod tests {
             })
             .collect();
         assert_eq!(dropped, [first, second]);
+    }
+
+    /// Codex-style deltas in one batch join while they follow one another for the same message,
+    /// never across another item or message, so each message's text reads the same (PLX-449).
+    #[tokio::test]
+    async fn adjacent_text_deltas_of_a_message_join_in_a_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let (row, worktree) = fake_row_and_worktree();
+        let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
+        let delta = |id: Option<&str>, text: &str| AgentOutputItem::TextDelta {
+            message_id: id.map(str::to_owned),
+            text: text.to_owned(),
+        };
+        let call = AgentOutputItem::ToolCall {
+            call_id: "call_1".to_owned(),
+            name: "command_execution".to_owned(),
+            input: serde_json::json!({}),
+        };
+        for item in [
+            delta(Some("msg_1"), "I’ll"),
+            delta(Some("msg_1"), " look"),
+            delta(Some("msg_1"), "."),
+            delta(Some("msg_2"), "Found"),
+            call.clone(),
+            delta(Some("msg_2"), " it"),
+            delta(None, "a"),
+            delta(None, "b"),
+        ] {
+            actor.push(item).await;
+        }
+        actor.flush().await;
+
+        let (logged, _) = daemon.log.run_events(actor.id, 0, 100, usize::MAX).unwrap();
+        let batches: Vec<_> = logged
+            .iter()
+            .filter_map(|entry| match &entry.event {
+                ParallaxEvent::AgentOutput { items, .. } => Some(items.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            batches,
+            [vec![
+                delta(Some("msg_1"), "I’ll look."),
+                delta(Some("msg_2"), "Found"),
+                call,
+                delta(Some("msg_2"), " it"),
+                delta(None, "ab"),
+            ]]
+        );
+    }
+
+    /// The kinds of `run`'s logged events, in order.
+    fn logged_kinds(daemon: &Daemon, run: RunId) -> Vec<String> {
+        let (logged, _) = daemon.log.run_events(run, 0, 100, usize::MAX).unwrap();
+        logged
+            .iter()
+            .map(|entry| crate::event_log::kind_of(&entry.event))
+            .collect()
+    }
+
+    /// A row write that fails keeps the turn's pending output for the next write, rather than
+    /// dropping it with the rolled-back job (0052).
+    #[tokio::test]
+    async fn a_failed_save_keeps_the_pending_output_for_the_next_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100, Duration::from_secs(90));
+        // Not in the store, so saving it fails.
+        let (row, worktree) = fake_row_and_worktree();
+        let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
+        let text = AgentOutputItem::Text {
+            message_id: None,
+            text: "Reading the code.".to_owned(),
+        };
+        actor.push(text.clone()).await;
+
+        actor.save().await;
+        assert!(logged_kinds(&daemon, actor.id).is_empty());
+        actor.flush().await;
+
+        let (logged, _) = daemon.log.run_events(actor.id, 0, 100, usize::MAX).unwrap();
+        let events: Vec<_> = logged.iter().map(|entry| entry.event.clone()).collect();
+        assert_eq!(
+            events,
+            [ParallaxEvent::AgentOutput {
+                run_id: actor.id,
+                items: vec![text],
+            }]
+        );
+    }
+
+    /// `agent.finished` and `agent.diffReady` commit with the state they report, in `save`'s job:
+    /// a save that fails publishes neither, and one that commits publishes them before
+    /// `agent.updated`, so a restart can't find the run running after its finish.
+    #[tokio::test]
+    async fn a_finish_commits_with_the_runs_state_or_not_at_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100, Duration::from_secs(90));
+        let (row, worktree) = fake_row_and_worktree();
+        let finished = ParallaxEvent::AgentFinished {
+            run_id: RunId::try_from(row.id).unwrap(),
+            outcome: AgentOutcome::Interrupted,
+        };
+        let mut actor = Actor::new(
+            Arc::clone(&daemon),
+            row.clone(),
+            Some(worktree),
+            HashMap::new(),
+        );
+        actor.row.state.status = "interrupted".to_owned();
+        actor.save_with(vec![finished.clone()]).await;
+        assert!(
+            logged_kinds(&daemon, actor.id).is_empty(),
+            "no finish without its row"
+        );
+
+        crate::agents::store(&daemon, move |db| {
+            let project = parallax_store::ProjectFields {
+                name: "app".to_owned(),
+                repo_path: "/src/app".to_owned(),
+                icon: None,
+                permission: "auto".to_owned(),
+                autonomy: "routine".to_owned(),
+                base_branch: None,
+            };
+            db.create_project(row.fields.project_id, &project).unwrap();
+            db.create_run(row.id, &row.fields, &row.state).unwrap();
+            Ok(())
+        })
+        .await
+        .unwrap();
+        actor.save_with(vec![finished]).await;
+        assert_eq!(
+            logged_kinds(&daemon, actor.id),
+            ["agent.finished", "agent.updated"]
+        );
+        let id = actor.row.id;
+        let status = crate::agents::store(&daemon, move |db| {
+            Ok(db.get_run(id).unwrap().unwrap().state.status)
+        })
+        .await
+        .unwrap();
+        assert_eq!(status, "interrupted");
     }
 
     /// A backend that takes no messages while it runs gets one once its CLI exits, rather than

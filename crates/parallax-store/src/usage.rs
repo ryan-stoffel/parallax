@@ -6,8 +6,8 @@
 //! `session_usage_totals` from replacing an existing row for the unnamed model.
 
 use jiff::Timestamp;
+use rusqlite::params;
 use rusqlite::types::Type;
-use rusqlite::{TransactionBehavior, params};
 use uuid::Uuid;
 
 use crate::Store;
@@ -350,9 +350,7 @@ impl Store {
         session_id: &str,
         totals: &[SessionModelUsage],
     ) -> Result<(), StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         tx.execute(
             "DELETE FROM session_usage_totals WHERE session_id = ?1",
             params![session_id],

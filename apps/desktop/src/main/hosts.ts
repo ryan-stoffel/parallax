@@ -29,6 +29,15 @@ import {
 } from "./terminal";
 import { dataDir, findPlxd, replaceServe, plxdVersion } from "./plxd";
 
+// With PLX_IPC_STATS set, the subscription messages sent to renderers and their JSON bytes, for
+// the load test (PLX-447), which reads `globalThis.ipcStats` through Playwright's `app.evaluate`.
+const ipcStats = process.env["PLX_IPC_STATS"]
+  ? ((globalThis as { ipcStats?: { messages: number; bytes: number } }).ipcStats = {
+      messages: 0,
+      bytes: 0,
+    })
+  : undefined;
+
 // The methods the renderer may call, checked at runtime because the renderer is untrusted
 // (0022). Typed so that adding a method to the protocol fails the type-check until it is here.
 const rendererMethods: Record<RendererMethod, true> = {
@@ -39,6 +48,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "project/start": true,
   "project/update": true,
   "project/delete": true,
+  "project/fromThreads": true,
   "accounts/keys/add": true,
   "accounts/keys/list": true,
   "accounts/keys/remove": true,
@@ -103,6 +113,19 @@ const rendererMethods: Record<RendererMethod, true> = {
   "queue/reorder": true,
   "queue/cancel": true,
   "queue/steer": true,
+  "question/ask": true,
+  "question/answer": true,
+  "question/escalate": true,
+  "question/list": true,
+  "memory/list": true,
+  "memory/read": true,
+  "memory/write": true,
+  "memory/delete": true,
+  "memory/propose": true,
+  "land/queue": true,
+  "land/approve": true,
+  "land/sendBack": true,
+  "agent/wait": true,
 };
 
 /** Every host's connection, by host id: `local`, then each saved SSH host. */
@@ -165,26 +188,39 @@ export function startHosts(): void {
 
   ipcMain.handle("parallax:subscribe", (event, hostId: unknown, key: unknown, params: unknown) => {
     if (!isObject(params)) throw new Error("params must be an object");
-    const { after, project, logId } = params;
+    const { after, project, logId, run, shell } = params;
     if (typeof key !== "string") throw new Error("invalid subscription key");
     if (typeof logId !== "string") throw new Error("logId must be a string");
     if (typeof after !== "number" || !Number.isSafeInteger(after) || after < 0) {
       throw new Error("after must be a non-negative integer");
     }
     if (project !== undefined && typeof project !== "string") throw new Error("invalid project");
+    if (run !== undefined && typeof run !== "string") throw new Error("invalid run");
+    if (shell !== undefined && typeof shell !== "boolean") throw new Error("invalid shell");
     const host = connection(hostId);
     const sender = event.sender;
     // A reused key replaces its subscription instead of leaking the old one.
     windowSubscriptions(sender).get(key)?.();
     let ended = false;
     const unsubscribe = host.subscribe(
-      { after, logId, ...(project !== undefined && { project }) } satisfies SubscribeParams,
+      {
+        after,
+        logId,
+        ...(project !== undefined && { project }),
+        ...(run !== undefined && { run }),
+        ...(shell !== undefined && { shell }),
+      } satisfies SubscribeParams,
       (message) => {
         if (message.type !== "event") {
           ended = true;
           windowSubscriptions(sender).delete(key);
         }
-        if (!sender.isDestroyed()) sender.send("parallax:subscription", key, message);
+        if (sender.isDestroyed()) return;
+        if (ipcStats) {
+          ipcStats.messages += 1;
+          ipcStats.bytes += Buffer.byteLength(JSON.stringify(message));
+        }
+        sender.send("parallax:subscription", key, message);
       },
     );
     // It ends at once when `logId` is stale.

@@ -1,4 +1,4 @@
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
 use crate::Store;
@@ -24,9 +24,7 @@ impl Store {
         run_id: Uuid,
         images: &[(Uuid, StoredImage)],
     ) -> Result<(), StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         let now = timestamp::now();
         for (id, image) in images {
             tx.execute(

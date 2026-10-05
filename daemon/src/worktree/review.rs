@@ -981,7 +981,7 @@ impl WorktreeManager {
         Ok(())
     }
 
-    async fn is_ancestor(
+    pub(super) async fn is_ancestor(
         &self,
         repo_root: &Path,
         ancestor: &str,
@@ -1157,7 +1157,7 @@ fn is_attributes(path: &str) -> bool {
 
 /// The NUL-terminated tokens of a `-z` output. The output collector ends the last line with a
 /// newline git never wrote, which is dropped here.
-fn z_tokens(output: &str) -> impl Iterator<Item = &str> {
+pub(super) fn z_tokens(output: &str) -> impl Iterator<Item = &str> {
     let output = output.strip_suffix('\n').unwrap_or(output);
     output.split('\0').filter(|token| !token.is_empty())
 }

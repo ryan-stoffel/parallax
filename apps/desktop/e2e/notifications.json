@@ -1,0 +1,7 @@
+[
+  { "init": { "sessionId": "e2e-notify", "model": "fake-model" } },
+  { "emit": { "kind": "text", "text": "Reading the login flow." } },
+  { "sleepMs": 2000 },
+  { "emit": { "kind": "text", "text": "Fixed the redirect loop." } },
+  { "endTurn": {} }
+]

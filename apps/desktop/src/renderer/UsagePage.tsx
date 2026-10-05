@@ -33,7 +33,7 @@ import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { ClaudeLogo, CursorLogo, OpenAILogo } from "./logos";
-import { Breadcrumb, IconButton, Segmented, TopBar } from "./ui";
+import { IconButton, Segmented } from "./ui";
 import { limitDetails, limitMeter, useUsage, type LimitTone } from "./Usage";
 
 type View = "cost" | "tokens" | "limits";
@@ -371,57 +371,43 @@ const strip = "grid gap-px overflow-hidden rounded-xl border border-border bg-bo
 const heading = "mb-2.5 text-[13px] font-medium text-muted-foreground";
 
 /**
- * The Usage page, from the sidebar's Usage button. The top bar always has the view, the range
- * (disabled on Limits, which is always now), and Refresh. Cost and Tokens sum `usage/daily`
+ * Settings > Usage, also opened by the sidebar's Usage button. The header always has the view, the
+ * range (disabled on Limits, which is always now), and Refresh. Cost and Tokens sum `usage/daily`
  * across every host; Limits shows each host's accounts' windows from `usage/get`.
  */
-export function UsagePage({
-  hosts,
-  leading,
-  topBarClassName,
-}: {
-  hosts: Host[];
-  /** Before the breadcrumb, such as Show sidebar. */
-  leading?: ReactNode;
-  topBarClassName: string;
-}) {
+export function UsagePage({ hosts }: { hosts: Host[] }) {
   const [view, setView] = useState<View>("cost");
   const [range, setRange] = useState<Range>("30d");
   // When the range was last chosen or refreshed: what the buckets end at.
   const [now, setNow] = useState(Date.now);
   return (
     <>
-      <TopBar className={topBarClassName}>
-        {leading}
-        <Breadcrumb items={[{ label: "Usage" }, { label: "All hosts" }]} />
-        <div className="ml-auto flex items-center gap-2">
-          <Segmented label="Usage view" options={views} value={view} onChange={setView} />
-          <Segmented
-            label="Usage range"
-            options={ranges}
-            value={range}
-            onChange={(next) => {
-              setRange(next);
-              setNow(Date.now());
-            }}
-            disabled={view === "limits"}
-          />
-          <IconButton label="Refresh" onClick={() => setNow(Date.now())}>
-            <RefreshCw />
-          </IconButton>
-        </div>
-      </TopBar>
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {/* A container, so the layout follows the pane's width rather than the window's. */}
-        <div className="@container mx-auto max-w-5xl px-8 pt-6 pb-16">
-          {view === "limits" ? (
-            hosts.map((h) => (
-              <HostLimits key={h.id} host={h} named={hosts.length > 1} refresh={now} />
-            ))
-          ) : (
-            <History hosts={hosts} view={view} range={range} now={now} />
-          )}
-        </div>
+      <div className="mb-6 flex flex-wrap items-center gap-2">
+        <h1 className="mr-auto text-xl font-semibold">Usage</h1>
+        <Segmented label="Usage view" options={views} value={view} onChange={setView} />
+        <Segmented
+          label="Usage range"
+          options={ranges}
+          value={range}
+          onChange={(next) => {
+            setRange(next);
+            setNow(Date.now());
+          }}
+          disabled={view === "limits"}
+        />
+        <IconButton label="Refresh" onClick={() => setNow(Date.now())}>
+          <RefreshCw />
+        </IconButton>
+      </div>
+      {/* A container, so the layout follows the pane's width rather than the window's. */}
+      <div className="@container">
+        {view === "limits" ? (
+          hosts.map((h) => (
+            <HostLimits key={h.id} host={h} named={hosts.length > 1} refresh={now} />
+          ))
+        ) : (
+          <History hosts={hosts} view={view} range={range} now={now} />
+        )}
       </div>
     </>
   );

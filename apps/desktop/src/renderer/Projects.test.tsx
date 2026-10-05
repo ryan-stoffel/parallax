@@ -14,8 +14,11 @@ import type {
 import type {
   AgentOutputItem,
   AgentRun,
+  InboxItem,
+  InboxKind,
   LoggedEvent,
   Project,
+  Question,
   Repo,
   ParallaxEvent,
   Thread,
@@ -923,6 +926,83 @@ test("Create Project's icon follows the Workspace's host: an icon only where tha
   expect(hostsOf("project/create")).toEqual([mini.id, "local"]);
 });
 
+const modeChoice = (within: Element) =>
+  [...within.querySelectorAll<HTMLInputElement>('input[type="radio"]')].filter((r) =>
+    ["auto", "bypass"].includes(r.value),
+  );
+
+test("with projectPermission, Create Project has no mode choice, says it gives full access, and sends Bypass, the same on a retry", async () => {
+  capabilities = { projectPermission: {} };
+  let fails = 1;
+  answers["project/create"] = (p) =>
+    fails-- > 0
+      ? { error: { code: -32000, message: "not a repository" } }
+      : { result: { project: { ...project("parallax", "2026-09-29T12:00:00Z"), id: p["id"] } } };
+  await renderApp();
+  await openNewProject();
+  expect(modeChoice(dialog())).toEqual([]);
+  expect(dialog().textContent).toContain("Full access");
+  expect(dialog().textContent).toContain(
+    "Agents in this Project run commands and edit files without asking.",
+  );
+
+  await click(inDialog("Create Project"));
+  await click(inDialog("Create Project"));
+  const [first, retry] = calls("project/create");
+  expect(first).toEqual({
+    id: expect.any(String),
+    name: "parallax",
+    repoPath: "/src/parallax",
+    permission: "bypass",
+  });
+  expect(retry).toEqual(first);
+  expect(dialog().open).toBe(false);
+});
+
+test("with projectPermission, a Project not in Bypass offers Full access…, a one-way move to Bypass, and one in Bypass offers no mode", async () => {
+  capabilities = { projectPermission: {} };
+  answers["project/list"] = () => ({
+    result: {
+      projects: [
+        { ...project("ember", "2026-09-26T12:00:00Z"), permission: "auto" },
+        { ...project("photon", "2026-09-29T09:00:00Z"), permission: "bypass" },
+      ],
+      seq: 7,
+    },
+  });
+  answers["project/update"] = (p) => ({
+    result: {
+      project: { ...project("ember", "2026-09-26T12:00:00Z"), permission: p["permission"] },
+    },
+  });
+  await renderApp();
+  expect(menuItem("photon", "Full access…")).toBeUndefined();
+  const access = projectRow("ember").querySelector<HTMLDialogElement>(
+    'dialog[aria-label="ember full access"]',
+  )!;
+  await click(menuItem("ember", "Full access…"));
+  expect(access.open).toBe(true);
+  expect(access.textContent).toContain("Agents running now keep asking until they next start.");
+  expect(access.textContent).toContain("You can't switch back.");
+  expect(modeChoice(access)).toEqual([]);
+  await click(
+    [...access.querySelectorAll("button")].find((b) => b.textContent === "Give full access"),
+  );
+  expect(access.open).toBe(false);
+  expect(calls("project/update")).toEqual([{ project: "p-ember", permission: "bypass" }]);
+  expect(menuItem("ember", "Full access…")).toBeUndefined();
+});
+
+test("without projectPermission, Create Project shows no mode and sends none, and a row has no Full access…", async () => {
+  capabilities = { projectEdit: {} };
+  await renderApp();
+  expect(menuItem("ember", "Full access…")).toBeUndefined();
+  expect(menuItem("ember", "Autonomy…")).toBeUndefined();
+  await openNewProject();
+  expect(modeChoice(dialog())).toEqual([]);
+  expect(dialog().textContent).not.toContain("no second check");
+});
+
 /** A Project's coordinator run, as `project/start` answers it (0024). */
 const coordinatorRun = (id: string, prompt: string): AgentRun => ({
   id,
@@ -979,6 +1059,8 @@ test("a Project's first message starts its coordinator; later ones and Stop go t
   // Claude's models and permission modes: a coordinator runs in the mode it's given (0027).
   expect(button("Model: Claude Opus 5.5")).not.toBeNull();
   expect(button("Access: Accept Edits")).not.toBeNull();
+  // Without projectTasks every message goes to the coordinator, with no New task.
+  expect(document.querySelector('main fieldset[aria-label="Send as"]')).toBeNull();
 
   type("Add a dark mode");
   await click(button("Send"));
@@ -1011,6 +1093,49 @@ test("a Project's first message starts its coordinator; later ones and Stop go t
   await click(button("Stop"));
   expect(calls("agent/cancel")).toEqual([{ runId: started!.id }]);
   expect(calls("project/start")).toHaveLength(1);
+});
+
+test("with projectPermission, a Project's composers have no permission picker or mode, and send no permission", async () => {
+  capabilities = { coordinator: {}, projectPermission: {} };
+  let started: AgentRun | undefined;
+  answers["project/list"] = () => ({
+    result: {
+      projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), permission: "bypass" }],
+      seq: 7,
+    },
+  });
+  answers["accounts/defaults/get"] = () => ({
+    result: { coordinator: { kind: "subscription", backend: "claude" } },
+  });
+  answers["project/start"] = (p) => {
+    started = {
+      ...coordinatorRun(p["runId"] as string, p["prompt"] as string),
+      permission: "edit",
+    };
+    return { result: { run: started } };
+  };
+  answers["agent/events"] = serveEvents(() => [started]);
+  answers["agent/send"] = () => ({ result: { run: started } });
+  const access = () => document.querySelector('main button[aria-label^="Access:"]');
+  const main = () => document.querySelector("main")!.textContent;
+  await renderApp();
+  await openEmber();
+  expect(access()).toBeNull();
+  expect(main()).not.toContain("Bypass");
+
+  type("Add a dark mode");
+  await click(button("Send"));
+  expect(calls("project/start")).toEqual([
+    expect.not.objectContaining({ permission: expect.anything() }),
+  ]);
+  // The coordinator's chat too, though its run says another mode.
+  expect(access()).toBeNull();
+  expect(main()).not.toContain("Bypass");
+  type("Start with the settings page");
+  await click(button("Send"));
+  expect(calls("agent/send")).toEqual([
+    { runId: started!.id, turnId: expect.any(String), text: "Start with the settings page" },
+  ]);
 });
 
 test("a Project whose coordinator ran before opens on its transcript", async () => {
@@ -1148,12 +1273,21 @@ const docs = subagent("01a0d391-0000-7000-8000-000000000002", "Write the docs", 
   accountId: "01a0d34b-3c4d-7e5f-a061-7b8c9d0e1f22",
   branch: "parallax/docs",
 });
+/** Opens a side panel view from its list, as + does. A Project opens the panel on its own tab. */
+async function openView(name: string) {
+  await click(document.querySelector('#side-panel button[aria-label="Open a view"]'));
+  await click(
+    [...document.querySelectorAll("#side-panel nav button")].find((b) =>
+      b.textContent?.startsWith(name),
+    ),
+  );
+}
 /**
  * Ember with a coordinator and `runs` after it, served by `agent/list` and `agent/events`, open
- * with its Agents view. Photon has no runs.
+ * with its Agents view, on `capabilities` with `coordinator` and `openPr`. Photon has no runs.
  */
 async function openEmberAgents(...runs: AgentRun[]) {
-  capabilities = { coordinator: {}, openPr: {} };
+  capabilities = { coordinator: {}, openPr: {}, ...capabilities };
   const all = [coordinatorRun(coordinatorId, "Plan the release"), ...runs];
   answers["project/list"] = () => ({
     result: {
@@ -1169,12 +1303,7 @@ async function openEmberAgents(...runs: AgentRun[]) {
   answers["agent/events"] = serveEvents(() => all);
   await renderApp();
   await openEmber();
-  await click(button("Show side panel"));
-  await click(
-    [...document.querySelectorAll("#side-panel button")].find((b) =>
-      b.textContent?.startsWith("Agents"),
-    ),
-  );
+  await openView("Agents");
 }
 const agentRows = () =>
   [...document.querySelectorAll('#side-panel [aria-label="Agents"] button')].map(
@@ -1185,11 +1314,15 @@ const agentRow = (title: string) =>
     b.textContent?.startsWith(title),
   );
 
-test("a Project's Agents view lists its subagents newest first, without its coordinator, and keeps them live", async () => {
-  await openEmberAgents(login, docs);
+test("a Project's Agents view lists its children Needs you, Working, Done, Failed, newest first within each, without its coordinator, and keeps them live", async () => {
+  const release = subagent("01a0d391-0000-7000-8000-000000000004", "Cut the release", {
+    status: "failed",
+  });
+  await openEmberAgents(login, docs, release);
   expect(agentRows()).toEqual([
     "Write the docsby youWorkingparallax/docsAPI key",
     "Fix the login bugby coordinatorDoneparallax/login+12 −3Claude subscription",
+    "Cut the releaseby coordinatorFailedClaude subscription",
   ]);
 
   const event = (seq: number, e: ParallaxEvent) =>
@@ -1212,7 +1345,14 @@ test("a Project's Agents view lists its subagents newest first, without its coor
     "Add the testsby coordinatorWorkingClaude subscription",
     "Write the docsby youDoneparallax/docs+4 −0API key",
     "Fix the login bugby coordinatorDoneparallax/login+12 −3Claude subscription",
+    "Cut the releaseby coordinatorFailedClaude subscription",
   ]);
+
+  // A finished child that asks again goes to the top.
+  await event(10, { kind: "agent.output", runId: login.id, items: [bashAsk("s1")] });
+  expect(agentRows()[0]).toBe(
+    "Fix the login bugby coordinatorNeeds approvalparallax/login+12 −3Claude subscription",
+  );
 });
 
 test("opening a subagent shows its chat, with Open PR, and the Project crumb goes back to the coordinator", async () => {
@@ -1242,7 +1382,7 @@ test("opening a subagent shows its chat, with Open PR, and the Project crumb goe
 
 test("opening a subagent from an expanded side panel shrinks it, so the chat shows", async () => {
   await openEmberAgents(login);
-  await click(document.querySelector('#side-panel button[aria-label="Expand panel"]'));
+  await click(document.querySelector('#side-panel button[aria-label="Full screen"]'));
   expect(document.querySelector("main")!.hidden).toBe(true);
   await click(agentRow("Fix the login bug"));
   expect(document.querySelector("main")!.hidden).toBe(false);
@@ -1282,9 +1422,9 @@ test("the Agents view starts a subagent by hand, reusing its id to retry", async
   });
   const start = document.querySelector('#side-panel button[aria-label="Start subagent"]');
   await click(start);
-  expect(document.querySelector('#side-panel [role="alert"]')?.textContent).toBe(
-    "Choose an account to run threads on this host.",
-  );
+  expect(
+    [...document.querySelectorAll('#side-panel [role="alert"]')].map((a) => a.textContent),
+  ).toContain("Choose an account to run threads on this host.");
 
   fail = false;
   await click(start);
@@ -1326,6 +1466,125 @@ test("another Project's Agents view starts with an empty box and never gets a la
   await act(async () => release());
   await settle();
   expect(agentRows()).toEqual([]);
+});
+
+const bar = () => document.querySelector<HTMLElement>('main section[aria-label="Agents"]');
+/** Opens the agents bar's card, as clicking it does in a browser. */
+const openBar = () =>
+  act(async () => {
+    bar()!
+      .querySelector("[popover]")!
+      .dispatchEvent(Object.assign(new Event("beforetoggle"), { newState: "open" }));
+  });
+const cardGroup = (label: string) =>
+  [...bar()!.querySelectorAll(`[popover] section[aria-label="${label}"] li button`)].map(
+    (b) => b.querySelector("span span")?.textContent,
+  );
+
+test("the agents bar over a Project's composer shows its first three providers, +N, the lead child, and opens a card of Working and Done whose rows open their chats", async () => {
+  const going = (n: number, prompt: string, backend: string) =>
+    subagent(`01a0d391-0000-7000-8000-00000000001${n}`, prompt, { backend });
+  const children = [
+    going(0, "Write the docs", "claude"),
+    going(1, "Add the tests", "codex"),
+    going(2, "Check the links", "cursor"),
+    going(3, "Tag the release", "claude"),
+  ];
+  capabilities = { inbox: {} };
+  answers["inbox/list"] = () => ({ result: { items: [], seq: 7 } });
+  await openEmberAgents(login, ...children);
+  // The newest going child leads, and each going child's provider is a logo, three at most.
+  expect(bar()!.querySelector("button")!.textContent).toBe(
+    "+14 agents going: Tag the release4 working",
+  );
+  expect(bar()!.querySelectorAll("button > span:first-child svg")).toHaveLength(3);
+
+  await openBar();
+  expect(cardGroup("Working")).toEqual([
+    "Tag the release",
+    "Check the links",
+    "Add the tests",
+    "Write the docs",
+  ]);
+  expect(cardGroup("Done")).toEqual(["Fix the login bug"]);
+  // Done is the green check normal threads show.
+  expect(bar()!.querySelector('[popover] section[aria-label="Done"] li')!.textContent).toContain(
+    "Done",
+  );
+  await click(
+    [...bar()!.querySelectorAll("[popover] li button")].find((b) =>
+      b.textContent?.startsWith("Add the tests"),
+    ),
+  );
+  expect(crumbs()).toEqual(["This Mac", "ember", "Add the tests"]);
+
+  // A child with a question leads, and the bar counts who needs the user.
+  await click(document.querySelector('[aria-label="Breadcrumb"] button'));
+  await act(async () =>
+    deliver({
+      type: "event",
+      event: {
+        subscription: "s",
+        seq: 8,
+        time: "",
+        event: {
+          kind: "inbox.added",
+          item: inboxItem("i-asks", "needsYou", "Write the docs: asks which tone", {
+            run: children[0]!.id,
+          }),
+        },
+      },
+    }),
+  );
+  expect(bar()!.querySelector("button")!.textContent).toBe(
+    "+14 agents going, 1 waiting on you: Write the docs1 need you",
+  );
+  // The app keeps its notifications between tests, so close the question's.
+  const closeToast = () =>
+    document.querySelector<HTMLButtonElement>('[aria-label="Notifications"] [aria-label="Close"]');
+  while (closeToast()) act(() => closeToast()!.click());
+
+  // Another Project with nothing going has no bar.
+  await click(rowButton("photon"));
+  expect(bar()).toBeNull();
+});
+
+test("a child's chat says whose it is, and its Coordinator button, the top bar's back arrow, and Go to parent return to the coordinator", async () => {
+  await openEmberAgents(login);
+  const strip = () => document.querySelector('main section[aria-label="Child thread"]');
+  const back = async () => {
+    await click(agentRow("Fix the login bug"));
+    expect(crumbs()).toEqual(["This Mac", "ember", "Fix the login bug"]);
+  };
+  expect(strip()).toBeNull();
+  await back();
+  expect(strip()!.textContent).toBe(
+    "A child thread of ember, started by its coordinatorCoordinator⌥⌘↑",
+  );
+  await click(
+    [...strip()!.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Coordinator")),
+  );
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
+  expect(strip()).toBeNull();
+
+  await back();
+  await click(document.querySelector('button[aria-label="Back to the coordinator"]'));
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
+
+  await back();
+  await act(async () => {
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowUp",
+        code: "ArrowUp",
+        metaKey: true,
+        altKey: true,
+      }),
+    );
+  });
+  await settle();
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
+  expect(transcript()).toContain("Plan the release");
 });
 
 // --- PLX-196: permission requests in a Project ---
@@ -1399,6 +1658,161 @@ const pinnedButton = (name: string) =>
   [...(pinned()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === name);
 const asking = (run: AgentRun): AgentRun => ({ ...run, approvals: true });
 
+/** `thread/start` with `project` answering with the Project's new child (0042). */
+const startsTask = (p: Record<string, unknown>) => {
+  const run = subagent(p["runId"] as string, p["prompt"] as string, {
+    coordinatorThread: undefined,
+  });
+  return { result: { run, thread: { id: run.id, repo: "p-ember", createdAt: run.createdAt } } };
+};
+// Where the Project composer sends (0042), as its chip names it.
+const route = () =>
+  document
+    .querySelector('main button[aria-label^="Sends to: "]')
+    ?.getAttribute("aria-label")
+    ?.slice("Sends to: ".length, -". Switch".length);
+// The default projectTarget shortcut, Cmd+. on macOS.
+const flipTarget = () =>
+  act(() => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "Period", key: ".", metaKey: true }));
+  });
+/** Presses Enter in the composer, with Cmd for `mod`. */
+const enter = (mod = false) =>
+  act(async () => {
+    composer()!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", metaKey: mod, bubbles: true }),
+    );
+  });
+/** Ember with `projectTasks`, whose coordinator starts and takes messages, and children start. */
+function emberTakingTasks() {
+  capabilities = { coordinator: {}, projectTasks: {} };
+  let started: AgentRun | undefined;
+  answers["accounts/defaults/get"] = () => ({
+    result: { coordinator: { kind: "subscription", backend: "claude" } },
+  });
+  answers["project/start"] = (p) => {
+    started = coordinatorRun(p["runId"] as string, p["prompt"] as string);
+    return { result: { run: started } };
+  };
+  answers["agent/events"] = serveEvents(() => [started]);
+  answers["agent/send"] = () => ({ result: { run: started } });
+  answers["thread/start"] = startsTask;
+  return () => started;
+}
+
+test("with projectTasks, a task is the default: Send starts a child through thread/start with the composer's picks, and the box is free at once", async () => {
+  emberTakingTasks();
+  let release = () => {};
+  answers["thread/start"] = async (p) => {
+    await new Promise<void>((resolve) => (release = resolve));
+    return startsTask(p);
+  };
+  await renderApp();
+  await openEmber();
+  expect(route()).toBe("New task");
+  expect(composer()!.getAttribute("aria-placeholder")).toBe(
+    "Describe a task, list a few, or ask the coordinator",
+  );
+  type("Add a dark mode");
+  await click(button("Send"));
+  // Still in flight, and the box already takes the next one.
+  expect(composer()!.textContent).toBe("");
+  type("Add a light mode");
+  expect(button("Send")!.disabled).toBe(false);
+  await act(async () => release());
+  await settle();
+  expect(calls("thread/start")).toEqual([
+    {
+      runId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-7/),
+      project: "p-ember",
+      prompt: "Add a dark mode",
+      model: "claude-opus-5-5",
+      effort: "high",
+      permission: "edit",
+    },
+  ]);
+  expect(calls("project/start")).toEqual([]);
+  // The child shows over the composer.
+  expect(document.querySelector('main section[aria-label="Agents"]')!.textContent).toContain(
+    "Add a dark mode",
+  );
+});
+
+test("a question goes to the coordinator, anything else starts a task, and the shortcut flips one message", async () => {
+  const coordinator = emberTakingTasks();
+  await renderApp();
+  await openEmber();
+  // A question mark, or a question word without one.
+  type("How should we split this");
+  expect(route()).toBe("Coordinator");
+  type("Split it by area?");
+  expect(route()).toBe("Coordinator");
+  await click(button("Send"));
+  expect(calls("project/start")).toEqual([
+    expect.objectContaining({ project: "p-ember", prompt: "Split it by area?" }),
+  ]);
+  expect(transcript()).toContain("I'll plan it.");
+
+  // In the coordinator's chat a question is a message to it, and a task still starts a child.
+  type("Which is riskier?");
+  await click(button("Send"));
+  expect(calls("agent/send")).toEqual([
+    { runId: coordinator()!.id, turnId: expect.any(String), text: "Which is riskier?" },
+  ]);
+  type("Add a dark mode");
+  expect(route()).toBe("New task");
+  await click(button("Send"));
+  expect(calls("thread/start")).toEqual([
+    expect.objectContaining({ project: "p-ember", prompt: "Add a dark mode" }),
+  ]);
+
+  // The shortcut, or the chip, sends this one message the other way.
+  type("Add a light mode");
+  flipTarget();
+  expect(route()).toBe("Coordinator");
+  await click(button("Send"));
+  expect(calls("agent/send")).toHaveLength(2);
+  expect(calls("agent/send")[1]).toMatchObject({ text: "Add a light mode" });
+  type("Add a blue mode");
+  expect(route()).toBe("New task");
+  await click(document.querySelector('main button[aria-label^="Sends to: "]'));
+  expect(route()).toBe("Coordinator");
+  await click(document.querySelector('main button[aria-label^="Sends to: "]'));
+  expect(route()).toBe("New task");
+  expect(calls("project/start")).toHaveLength(1);
+});
+
+test("a list starts one task per item, a question among them too: Enter adds an item, and Cmd+Enter sends without an empty last one", async () => {
+  emberTakingTasks();
+  await renderApp();
+  await openEmber();
+  act(
+    () =>
+      void composer()!.editor!.commands.setContent(
+        "<ul><li><p>Add a dark mode</p></li><li><p>Add a light mode</p></li></ul>",
+      ),
+  );
+  expect(route()).toBe("2 tasks");
+  act(() => void composer()!.editor!.commands.focus("end"));
+  await enter();
+  expect(calls("thread/start")).toEqual([]);
+  // An item that asks is still a task.
+  act(() => void composer()!.editor!.commands.insertContent("Can it be blue?"));
+  expect(route()).toBe("3 tasks");
+  // Enter on the last item leaves an empty one, which starts nothing.
+  await enter();
+  expect(route()).toBe("3 tasks");
+  await enter(true);
+  await settle();
+  expect(calls("thread/start").map((p) => p["prompt"])).toEqual([
+    "Add a dark mode",
+    "Add a light mode",
+    "Can it be blue?",
+  ]);
+  expect(new Set(calls("thread/start").map((p) => p["runId"])).size).toBe(3);
+  expect(composer()!.textContent).toBe("");
+});
+
 test("with approvals, a coordinator and a subagent started here ask plxd to forward their requests", async () => {
   capabilities = { coordinator: {}, approvals: {} };
   answers["accounts/defaults/get"] = () => ({
@@ -1419,12 +1833,7 @@ test("with approvals, a coordinator and a subagent started here ask plxd to forw
   await click(button("Send"));
   expect(calls("project/start")).toEqual([expect.objectContaining({ approvals: true })]);
 
-  await click(button("Show side panel"));
-  await click(
-    [...document.querySelectorAll("#side-panel button")].find((b) =>
-      b.textContent?.startsWith("Agents"),
-    ),
-  );
+  await openView("Agents");
   const box = document.querySelector<HTMLTextAreaElement>(
     '#side-panel textarea[aria-label="New subagent\'s task"]',
   )!;
@@ -1474,12 +1883,7 @@ test("a subagent's request is pinned in the coordinator's chat by name, its row 
   });
   expect(pinned()!.textContent).toContain("Subagent: Write the docs");
   expect(pinned()!.textContent).toContain("git tag v1.2.0");
-  await click(button("Show side panel"));
-  await click(
-    [...document.querySelectorAll("#side-panel button")].find((b) =>
-      b.textContent?.startsWith("Agents"),
-    ),
-  );
+  await openView("Agents");
   expect(agentRow("Write the docs")!.textContent).toContain("Needs approval");
 
   await click(pinnedButton("Open its chat"));
@@ -1516,12 +1920,7 @@ test("a subagent's chat pins the coordinator's request too, and a Project with n
     [coordinatorId]: [bashAsk("c1")],
   });
   expect(pinned()!.textContent).not.toContain("Coordinator");
-  await click(button("Show side panel"));
-  await click(
-    [...document.querySelectorAll("#side-panel button")].find((b) =>
-      b.textContent?.startsWith("Agents"),
-    ),
-  );
+  await openView("Agents");
   await click(agentRow("Write the docs"));
   expect(pinned()!.textContent).toContain("Coordinator");
   act(() => unmount());
@@ -1665,10 +2064,16 @@ test("a working thread moves to Working with its children, then back to Threads 
   answers["agent/list"] = () => ({
     result: {
       runs: [
-        coordinatorRun(running.id, "Ship the sidebar"),
-        { ...coordinatorRun(child.id, "Write the notes"), status: "completed" },
+        // Not a Project's run, so the sidebar lists the thread instead of folding it into one.
+        { ...coordinatorRun(running.id, "Ship the sidebar"), project: parallax.id },
+        {
+          ...coordinatorRun(child.id, "Write the notes"),
+          project: parallax.id,
+          status: "completed",
+        },
         {
           ...coordinatorRun(idle.id, "Read the docs"),
+          project: parallax.id,
           status: "completed",
           updatedAt: "2026-09-29T11:00:00Z",
         },
@@ -1719,6 +2124,10 @@ test("a working thread moves to Working with its children, then back to Threads 
   await renderApp();
   expect(drawer("Working")).toBeUndefined();
   expect(threadTitles()).toEqual(["Ship the sidebar", "Read the docs"]);
+  // Finishing the run notifies, and the app keeps that notice for the next test.
+  const closeToast = () =>
+    document.querySelector<HTMLButtonElement>('[aria-label="Notifications"] [aria-label="Close"]');
+  while (closeToast()) act(() => closeToast()!.click());
 });
 
 test("Archived lists 25 threads, Show more reveals the next page, and the summary stays out of the scroller", async () => {
@@ -1893,4 +2302,314 @@ test("without projectDelete there's no Delete…, and another client's project.d
   await settle();
   expect(sidebarTitles()).toEqual(["photon"]);
   expect(crumbs().at(-1)).toBe("New thread");
+});
+
+test("Autonomy… opens on the Project's level, one line on each, and Save sends the new one", async () => {
+  capabilities = { projectAutonomy: {}, projectPermission: {} };
+  answers["project/list"] = () => ({
+    result: {
+      projects: [
+        { ...project("ember", "2026-09-26T12:00:00Z"), autonomy: "full", permission: "bypass" },
+      ],
+      seq: 7,
+    },
+  });
+  answers["project/update"] = (p) => ({
+    result: { project: { ...project("ember", "2026-09-26T12:00:00Z"), autonomy: p["autonomy"] } },
+  });
+  await renderApp();
+  // A Project in Bypass offers no mode.
+  expect(menuItem("ember", "Full access…")).toBeUndefined();
+  const settings = projectRow("ember").querySelector<HTMLDialogElement>(
+    'dialog[aria-label="ember autonomy"]',
+  )!;
+  await click(menuItem("ember", "Autonomy…"));
+  expect(settings.open).toBe(true);
+  const levels = [...settings.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
+  expect(levels.map((r) => [r.value, r.checked])).toEqual([
+    ["ask", false],
+    ["routine", false],
+    ["full", true],
+  ]);
+  expect(settings.textContent).toContain("Every question waits on you.");
+
+  await click(levels[0]);
+  await click([...settings.querySelectorAll("button")].find((b) => b.textContent === "Save"));
+  expect(settings.open).toBe(false);
+  expect(calls("project/update")).toEqual([{ project: "p-ember", autonomy: "ask" }]);
+});
+
+const inboxItem = (id: string, kind: InboxKind, text: string, more: Partial<InboxItem> = {}) =>
+  ({ id, kind, run: login.id, text, createdAt: "2026-09-29T11:00:00Z", ...more }) as InboxItem;
+const escalated: Question = {
+  id: "q-1",
+  run: login.id,
+  question: 'Which "theme" key?',
+  assumption: "dark",
+  status: "escalated",
+  createdAt: "2026-09-29T10:00:00Z",
+};
+// Ember's children, one per group of its Project tab. Login asks a question, and release failed:
+// both wait on the user. Docs works. Tests finished unread, and old finished and was read.
+const release = subagent("01a0d391-0000-7000-8000-000000000004", "Cut the release", {
+  status: "failed",
+});
+const tests = subagent("01a0d391-0000-7000-8000-000000000005", "Add the tests", {
+  status: "completed",
+});
+const old = subagent("01a0d391-0000-7000-8000-000000000006", "Bump the version", {
+  status: "completed",
+});
+const inboxItems = [
+  inboxItem("i-login-done", "done", "Fix the login bug: done, 2 files +12 -3"),
+  // plxd quotes the child's words as JSON.
+  inboxItem(
+    "i-needs",
+    "needsYou",
+    'Fix the login bug: asks "Which \\"theme\\" key?", went on assuming "dark"',
+  ),
+  inboxItem("i-failed", "failed", "Cut the release: failed", { run: release.id }),
+  inboxItem("i-tests", "done", "Add the tests: done, 1 file +4 -0", { run: tests.id }),
+  inboxItem("i-old", "done", "Bump the version: done", {
+    run: old.id,
+    seenAt: "2026-09-29T11:30:00Z",
+  }),
+];
+/** Serves ember's runs, inbox, and questions, with `inbox/seen` marking what it's sent. */
+const serveInbox = () => {
+  const runs = [
+    coordinatorRun(coordinatorId, "Plan the release"),
+    login,
+    docs,
+    release,
+    tests,
+    old,
+  ];
+  answers["project/list"] = () => ({
+    result: {
+      projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), coordinator: coordinatorId }],
+      seq: 7,
+    },
+  });
+  answers["agent/list"] = (p) => ({
+    result: { runs: p["project"] === "p-ember" ? runs : [], seq: 7 },
+  });
+  answers["agent/events"] = serveEvents(() => runs);
+  answers["inbox/list"] = () => ({ result: { items: inboxItems, seq: 8 } });
+  answers["question/list"] = () => ({ result: { questions: [escalated] } });
+  answers["inbox/seen"] = (p) => ({
+    result: {
+      items: inboxItems
+        .filter((i) => (p["items"] as string[]).includes(i.id))
+        .map((i) => ({ ...i, seenAt: "2026-09-29T12:00:00Z" })),
+    },
+  });
+};
+const projectTab = () =>
+  [...document.querySelectorAll("#side-panel li button")].find((b) =>
+    b.textContent?.startsWith("Project"),
+  );
+const home = () => document.querySelector<HTMLElement>("#side-panel")!;
+/** The titles of a Project tab group's children, in order. */
+const groupTitles = (group: string) =>
+  [...home().querySelectorAll(`section[aria-label="${group}"] li > button`)].map(
+    (b) => b.querySelector("span span")?.textContent,
+  );
+const childButton = (title: string) =>
+  [...home().querySelectorAll("li > button")].find(
+    (b) => b.querySelector("span span")?.textContent === title,
+  );
+
+test("a Project opens its side panel on the Project tab: its children once each in Waiting on you, Working, Done, and Resolved, folded, with the header's count on the tab", async () => {
+  capabilities = { coordinator: {}, inbox: {} };
+  serveInbox();
+  const subscribe = vi.spyOn(window.parallax, "subscribe");
+  await renderApp();
+  await openEmber();
+  // The inbox follows its events after `inbox/list`'s seq, without the runs' output.
+  expect(subscribe).toHaveBeenCalledWith(
+    "local",
+    { after: 8, project: "p-ember", shell: true, logId: "log-1" },
+    expect.any(Function),
+  );
+  expect(projectTab()!.getAttribute("aria-current")).toBe("true");
+  expect(projectTab()!.textContent).toBe("Project2");
+  expect(home().querySelector("h2")!.textContent).toBe("ember");
+  expect(home().textContent).toContain("2 things are waiting on you. 1 working.");
+  expect(groupTitles("Waiting on you")).toEqual(["Fix the login bug", "Cut the release"]);
+  expect(groupTitles("Working")).toEqual(["Write the docs"]);
+  expect(groupTitles("Done")).toEqual(["Add the tests"]);
+  // Resolved is folded until opened.
+  expect(groupTitles("Resolved")).toEqual([]);
+  const resolved = home().querySelector('section[aria-label="Resolved"] h3 button')!;
+  expect(resolved.getAttribute("aria-expanded")).toBe("false");
+  await click(resolved);
+  expect(groupTitles("Resolved")).toEqual(["Bump the version"]);
+  // A row says what its child last reported, without its title. Without `questions`, a question
+  // is only that line.
+  expect(childButton("Fix the login bug")!.textContent).toContain(
+    'asks "Which \\"theme\\" key?", went on assuming "dark"',
+  );
+  expect(home().querySelector("input")).toBeNull();
+  // The words inbox and mail aren't shown.
+  expect(home().textContent).not.toMatch(/inbox|mail/i);
+
+  // The activity chart covers the last three hours, and names a column on hover.
+  const chart = home().querySelector("figure")!;
+  expect(chart.querySelector("figcaption")!.textContent).toBe("Last 3 hours");
+  await act(async () =>
+    chart
+      .querySelectorAll("span")
+      .item(chart.querySelectorAll("span").length - 1)!
+      .dispatchEvent(new MouseEvent("mouseover", { bubbles: true })),
+  );
+  expect(chart.querySelector("figcaption")!.textContent).toBe("Now: 5 started");
+
+  // Opening a child opens its chat and marks what it reported read, but not its question.
+  await click(childButton("Add the tests"));
+  expect(crumbs()).toEqual(["This Mac", "ember", "Add the tests"]);
+  expect(calls("inbox/seen")).toEqual([{ project: "p-ember", items: ["i-tests"] }]);
+  expect(groupTitles("Done")).toEqual([]);
+  await click(childButton("Fix the login bug"));
+  expect(calls("inbox/seen")).toEqual([
+    { project: "p-ember", items: ["i-tests"] },
+    { project: "p-ember", items: ["i-login-done"] },
+  ]);
+  expect(groupTitles("Waiting on you")).toEqual(["Fix the login bug", "Cut the release"]);
+});
+
+test("the side panel's one full screen button fills the window from any tab, and Knowledge sits beside the Project tab", async () => {
+  capabilities = { coordinator: {}, inbox: {} };
+  serveInbox();
+  await renderApp();
+  await openEmber();
+  const fullScreen = () =>
+    document.querySelectorAll('#side-panel button[aria-label="Full screen"]');
+  const tabNames = () =>
+    [...document.querySelectorAll("#side-panel li button[id^='side-panel-tab-']")].map(
+      (b) => b.textContent,
+    );
+  // The Project's own tabs are pinned, with no close buttons.
+  expect(tabNames()).toEqual(["Project2", "Knowledge"]);
+  expect(document.querySelector('#side-panel button[aria-label="Close Knowledge"]')).toBeNull();
+  for (const tab of ["Knowledge", "Changes", "Project"]) {
+    if (tab === "Changes") await openView(tab);
+    else
+      await click(
+        [...document.querySelectorAll("#side-panel li button")].find((b) =>
+          b.textContent?.startsWith(tab),
+        ),
+      );
+    expect(fullScreen()).toHaveLength(1);
+    await click(fullScreen()[0]);
+    expect(document.querySelector("main")!.hidden).toBe(true);
+    await click(document.querySelector('#side-panel button[aria-label="Exit full screen"]'));
+    expect(document.querySelector("main")!.hidden).toBe(false);
+  }
+});
+
+test("a question on the Project tab offers the child's pick as choice 1 and a free answer as choice 2", async () => {
+  capabilities = { coordinator: {}, inbox: {}, questions: {} };
+  serveInbox();
+  let fail = true;
+  answers["question/answer"] = (p) =>
+    fail
+      ? { error: { code: -32000, message: "the question was already answered" } }
+      : { result: { question: { ...escalated, status: "answered", answer: p["text"] } } };
+  await renderApp();
+  await openEmber();
+  const row = () => childButton("Fix the login bug")!.parentElement!;
+  expect(row().textContent).toContain('Which "theme" key?');
+  const pick = [...row().querySelectorAll("button")].find((b) =>
+    b.textContent?.includes("Its pick so far"),
+  )!;
+  expect(pick.textContent).toBe("1darkIts pick so far");
+  const free = [...row().querySelectorAll("input")].find(
+    (i) => i.getAttribute("aria-label") === 'Answer: Which "theme" key?',
+  )!;
+  expect(free.placeholder).toBe("Something else");
+
+  // A failed answer says why and keeps the question.
+  typeInto(free, "theme.dark");
+  await act(async () => free.form!.requestSubmit());
+  await settle();
+  expect(row().querySelector('[role="alert"]')!.textContent).toBe(
+    "the question was already answered",
+  );
+  fail = false;
+  await click(pick);
+  expect(calls("question/answer")).toEqual([
+    { question: "q-1", text: "theme.dark" },
+    { question: "q-1", text: "dark" },
+  ]);
+  expect(calls("inbox/seen")).toEqual([{ project: "p-ember", items: ["i-needs"] }]);
+  expect(groupTitles("Waiting on you")).toEqual(["Cut the release"]);
+  expect(projectTab()!.textContent).toBe("Project1");
+});
+
+test("a new Needs you item notifies with Open Project, from the OS while the window is in the background, and joins its Project tab", async () => {
+  capabilities = { inbox: {} };
+  // One scope, as the fake sends every event to every subscription.
+  answers["thread/list"] = () => ({ result: { repos: [], threads: [], seq: 7 } });
+  answers["project/list"] = () => ({
+    result: { projects: [project("ember", "2026-09-26T12:00:00Z")], seq: 7 },
+  });
+  answers["agent/list"] = (p) => ({
+    result: { runs: p["project"] === "p-ember" ? [login, docs] : [], seq: 7 },
+  });
+  answers["agent/events"] = serveEvents(() => [login, docs]);
+  answers["inbox/list"] = () => ({ result: { items: [], seq: 7 } });
+  const notes: { title: string; body: string; onclick: (() => void) | null }[] = [];
+  vi.stubGlobal(
+    "Notification",
+    class {
+      onclick = null;
+      constructor(title: string, { body }: { body: string }) {
+        notes.push(Object.assign(this, { title, body }));
+      }
+    },
+  );
+  onTestFinished(() => void vi.unstubAllGlobals());
+  const added = (seq: number, item: InboxItem) =>
+    act(async () =>
+      deliver({
+        type: "event",
+        event: { subscription: "s-1", seq, time: "", event: { kind: "inbox.added", item } },
+      }),
+    );
+  const toast = () => document.querySelector('[aria-label="Notifications"] > div');
+  await renderApp();
+  await added(8, inboxItem("i-done", "done", "Fix the login bug: done"));
+  expect(toast()).toBeNull();
+
+  // In the focused window, a notification in the app, whose Open Project opens it.
+  await added(9, inboxItem("i-needs", "needsYou", "Fix the login bug: wake-ups paused"));
+  expect(notes).toEqual([]);
+  expect(toast()!.textContent).toBe(
+    "emberNeeds you: Fix the login bug: wake-ups pausedOpen Project",
+  );
+  const open = [...toast()!.querySelectorAll("button")].find(
+    (b) => b.textContent === "Open Project",
+  );
+  await act(async () => open!.click());
+  await settle();
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
+  expect(toast()).toBeNull();
+
+  // In the background, the OS's too, which opens it when clicked.
+  vi.spyOn(document, "hasFocus").mockReturnValue(false);
+  onTestFinished(() => void vi.restoreAllMocks());
+  await added(
+    10,
+    inboxItem("i-asks", "needsYou", "Write the docs: asks which tone", { run: docs.id }),
+  );
+  expect(notes.map((n) => [n.title, n.body])).toEqual([
+    ["ember", "Needs you: Write the docs: asks which tone"],
+  ]);
+  await act(async () => notes[0]!.onclick?.());
+  await settle();
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
+  expect(groupTitles("Waiting on you")).toEqual(["Write the docs"]);
+  expect(childButton("Write the docs")!.textContent).toContain("asks which tone");
+  act(() => toast()!.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click());
 });

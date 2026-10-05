@@ -1,0 +1,7 @@
+[
+  { "init": { "sessionId": "e2e-queue", "model": "fake-model" } },
+  { "emit": { "kind": "text", "text": "I am working on the current turn." } },
+  "awaitFollowUp",
+  { "emit": { "kind": "text", "text": "Steering received during the current turn." } },
+  "hang"
+]

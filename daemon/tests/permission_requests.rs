@@ -26,13 +26,12 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use common::{ToolCall, fake_api, worker_request};
-use parallax_protocol::{CoordinatorThreadId, ProjectId};
 use plxd::backend::claude::ClaudeBackend;
 use plxd::backend::process::{Environment, Launcher};
 use plxd::backend::run_temp::RunTemp;
 use plxd::backend::{
-    AccountRef, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend, CoordinatorTools,
-    Credential, Decision, Event, Outcome, RunId, RunRequest, Started, ToolPolicy, ToolStatus,
+    AccountRef, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend, Credential, Decision,
+    Event, Outcome, RunId, RunRequest, Started, ThreadTools, ToolPolicy, ToolStatus,
 };
 use plxd::paths::DataDir;
 use serde_json::{Value, json};
@@ -111,11 +110,10 @@ fn coordinator(cwd: &Path, data: &Path) -> RunRequest {
         permission: Some(AgentPermission::Manual),
         context_window: None,
         fast: None,
-        coordinator_tools: Some(CoordinatorTools {
+        coordinator_tools: Some(ThreadTools {
             program: PathBuf::from(env!("CARGO_BIN_EXE_plxd")),
             data_dir: data.to_owned(),
-            project: ProjectId::generate(),
-            thread: CoordinatorThreadId::generate(),
+            run: RunId::generate(),
         }),
         thread_tools: None,
         approvals: true,

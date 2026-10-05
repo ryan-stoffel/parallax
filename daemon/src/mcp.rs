@@ -1,75 +1,56 @@
-//! `plxd mcp`: the coordinator's Parallax tools, as an MCP server on stdio (#195, decision 0019),
-//! and a normal thread's host-wide ones ([`thread`], 0041).
+//! `plxd mcp --thread <runId>`: a thread's Parallax tools, as an MCP server on stdio (decisions
+//! 0019 and 0041). The tools are [`thread`]'s, with [`question`]'s for a Project's threads and
+//! [`memory`]'s by the caller's role (0044); this module is the server they share.
 //!
-//! The coordinator's CLI launches it with `--project` and `--coordinator-thread`, which plxd
-//! writes into the CLI's `--mcp-config` ([`crate::backend::CoordinatorTools`]). Those bind every
-//! tool to one project and one thread: no tool takes either as an argument, and tool arguments
-//! reject fields they don't know, so the model can't pick another project's runs or context. A
-//! thread's CLI launches it with `--thread` instead ([`crate::backend::ThreadTools`]).
+//! A Project's coordinator gets the same server as any thread (PLX-380): its 0019 tools, bound to
+//! one project, are gone.
 //!
 //! MCP's stdio transport is JSON-RPC 2.0 as newline-delimited JSON, the same framing as plxd's
-//! own protocol (0007), so both sides use `parallax_protocol`'s codec and envelope. Each tool call
-//! opens its own connection to plxd's socket, initializes, and makes one or two calls, so the
-//! server needs no heartbeat and outlives a plxd restart between calls. It never starts plxd:
-//! the coordinator it serves is plxd's own child.
+//! own protocol (0007), so both sides use `parallax_protocol`'s codec and envelope. Every tool
+//! call goes through one [`Plxd`] client, which keeps one connection to plxd's socket and sends
+//! concurrent calls on it, matched by id (PLX-488). When plxd restarts or the connection drops,
+//! the next call opens a new one and reads plxd's capabilities again. A call already sent fails
+//! with its connection, except `thread_wait`, which keeps trying until its deadline. A call the
+//! MCP client cancels with `notifications/cancelled` stops, gets no answer, and cancels its plxd
+//! request with `$/cancelRequest` (PLX-524). The client stops using a connection it hasn't
+//! written to for 75 s, so it needs no heartbeat to stay under plxd's idle timeout. It never
+//! starts plxd: the thread it serves is plxd's own child.
 
-use std::fmt::Write as _;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
+use futures_util::future::{AbortHandle, Abortable, Aborted};
+use futures_util::stream::FuturesUnordered;
 use futures_util::{SinkExt, StreamExt};
 use parallax_protocol::framing::{FrameCodec, FrameError};
 use parallax_protocol::jsonrpc::{
-    ErrorObject, INVALID_REQUEST, Message, Request, RequestId, Response,
+    CancelRequestParams, ErrorObject, INVALID_REQUEST, Message, Notification, Request, RequestId,
+    Response,
 };
-use parallax_protocol::methods::{
-    AgentCancel, AgentDiff, AgentEvents, AgentList, AgentSend, AgentStart, ContextList,
-    ContextRead, ContextWrite, Initialize, ProjectList, RequestMethod,
-};
+use parallax_protocol::methods::{AgentEvents, CancelRequest, Initialize, RequestMethod};
 use parallax_protocol::{
-    AccountChoice, AgentCancelParams, AgentDiffParams, AgentDiffResult, AgentEventsParams,
-    AgentListParams, AgentOutcome, AgentOutputItem, AgentPolicy, AgentRun, AgentSendParams,
-    AgentStartParams, Capabilities, ClientInfo, ContextListParams, ContextReadParams,
-    ContextWriteId, ContextWriteParams, CoordinatorThreadId, InitializeParams, ParallaxEvent,
-    ProjectId, ProjectListParams, ProtocolRange, RunId, TurnId,
+    AgentEventsParams, AgentOutcome, AgentOutputItem, Capabilities, ClientInfo, InitializeParams,
+    InitializeResult, ParallaxEvent, ProtocolRange, RunId,
 };
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_util::codec::{Framed, FramedRead, FramedWrite};
+use tokio::io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
+use tokio::sync::{Semaphore, oneshot};
+use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::transport::{self, Stream};
 
+pub mod land;
+pub mod memory;
+pub mod question;
 pub mod thread;
 
-/// The server's name in the coordinator's `--mcp-config`, which prefixes its tools' names there.
+/// The server's name in a thread's `--mcp-config`, which prefixes its tools' names there.
 pub const SERVER: &str = "plxd";
-
-/// Every tool the server offers.
-pub const TOOLS: &[&str] = &[
-    "spawn_agent",
-    "list_agents",
-    "agent_status",
-    "message_agent",
-    "cancel_agent",
-    "agent_diff",
-    "read_context",
-    "write_context",
-];
-
-/// [`TOOLS`] as Claude Code names them, `mcp__<server>__<tool>`: the start of a coordinator's
-/// `--allowedTools`, so they run without asking in every permission mode (0027). Claude Code's
-/// todo tools follow them there (`backend::claude::TODO_TOOLS`, PLX-249).
-pub const ALLOWED_TOOLS: &[&str] = &[
-    "mcp__plxd__spawn_agent",
-    "mcp__plxd__list_agents",
-    "mcp__plxd__agent_status",
-    "mcp__plxd__message_agent",
-    "mcp__plxd__cancel_agent",
-    "mcp__plxd__agent_diff",
-    "mcp__plxd__read_context",
-    "mcp__plxd__write_context",
-];
 
 /// The longest line the server reads from the CLI. A longer one gets an error and ends the
 /// server, since the stream can't be trusted to resynchronize after it.
@@ -87,70 +68,22 @@ pub const MAX_CONTEXT_BYTES: usize = 1024 * 1024;
 /// The most text one tool result carries, in bytes. The rest is cut, with a note.
 pub const MAX_RESULT_BYTES: usize = 256 * 1024;
 
-/// How much of a run's prompt `list_agents` and the other run summaries show.
-const PROMPT_PREVIEW_BYTES: usize = 500;
-
-/// How much of a run's last output `agent_status` shows: its end.
-const LAST_OUTPUT_BYTES: usize = 8 * 1024;
-
 /// MCP protocol versions the server answers with, newest last. A client asking for another gets
 /// the newest; the tools use nothing that differs between them.
 const MCP_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
 
-/// What one server is bound to.
-#[derive(Clone, Debug)]
-pub struct Binding {
-    /// plxd's socket.
-    pub socket: PathBuf,
-    /// The only project the tools reach.
-    pub project: ProjectId,
-    /// The coordinator thread that spawned runs are tagged with.
-    pub thread: CoordinatorThreadId,
-}
-
-/// Checks that the bound project exists, then serves MCP on `input` and `output` until `input`
-/// ends.
-///
-/// # Errors
-///
-/// When plxd can't be reached or doesn't know the project, when a line is longer than
-/// [`MAX_MESSAGE_BYTES`], or when reading or writing fails.
-pub async fn run(
-    binding: &Binding,
-    input: impl AsyncRead + Unpin,
-    output: impl AsyncWrite + Unpin,
-) -> Result<(), String> {
-    let mut plxd = Plxd::open(&binding.socket).await?;
-    let projects = plxd.call::<ProjectList>(ProjectListParams {}).await?;
-    if !projects.projects.iter().any(|p| p.id == binding.project) {
-        return Err(format!("plxd has no project {}", binding.project));
-    }
-    drop(plxd);
-    serve(binding, input, output).await
-}
+/// The most tool calls the server runs at once. Each has at most one request in flight to plxd,
+/// so staying under plxd's 32 per connection means long waits never fill the connection.
+pub const MAX_CALLS: usize = 16;
 
 /// One server's tools: what `tools/list` shows, and how `tools/call` runs one.
 trait Tools {
     /// Every tool's name, as [`Tools::definitions`] lists them.
-    fn names(&self) -> &'static [&'static str];
+    fn names(&self) -> Vec<&'static str>;
     /// `tools/list`'s `tools`.
     fn definitions(&self) -> Value;
     /// Runs tool `name`, one of [`Tools::names`]: its text, or an error the model sees.
     async fn call(&self, name: &str, arguments: Value) -> Result<String, String>;
-}
-
-impl Tools for Binding {
-    fn names(&self) -> &'static [&'static str] {
-        TOOLS
-    }
-
-    fn definitions(&self) -> Value {
-        definitions()
-    }
-
-    async fn call(&self, name: &str, arguments: Value) -> Result<String, String> {
-        call_tool(self, name, arguments).await
-    }
 }
 
 async fn serve(
@@ -160,31 +93,82 @@ async fn serve(
 ) -> Result<(), String> {
     let mut reader = FramedRead::new(input, FrameCodec::with_max_frame_bytes(MAX_MESSAGE_BYTES));
     let mut writer = FramedWrite::new(output, FrameCodec::new());
-    while let Some(frame) = reader.next().await {
-        let frame = match frame {
-            Ok(frame) => frame,
-            Err(FrameError::TooLarge { max_frame_bytes }) => {
-                let message = format!("a message is longer than {max_frame_bytes} bytes");
-                let error = ErrorObject::new(INVALID_REQUEST, message.clone());
-                let _ = writer.send(&Response::error(None, error)).await;
-                return Err(message);
+    // Requests are answered concurrently, each as it finishes, so a long `thread_wait` doesn't
+    // hold up the calls after it. At most `MAX_CALLS` tool calls run at once and the rest wait
+    // their turn, while the server keeps reading so a `notifications/cancelled` still gets through
+    // (PLX-524). A cancelled request is dropped, which cancels its plxd request, and gets no
+    // answer, as MCP says. Once `input` ends, the ones read are still answered.
+    // ponytail: calls waiting for a slot queue without bound; cap the queue and stop reading
+    // past it if a client ever floods the server.
+    let slots = Semaphore::new(MAX_CALLS);
+    let mut answering = FuturesUnordered::new();
+    let mut cancels = HashMap::new();
+    let mut reading = true;
+    loop {
+        let response = tokio::select! {
+            frame = reader.next(), if reading => {
+                let frame = match frame {
+                    None => {
+                        reading = false;
+                        continue;
+                    }
+                    Some(Ok(frame)) => frame,
+                    Some(Err(FrameError::TooLarge { max_frame_bytes })) => {
+                        let message = format!("a message is longer than {max_frame_bytes} bytes");
+                        let error = ErrorObject::new(INVALID_REQUEST, message.clone());
+                        let _ = writer.send(&Response::error(None, error)).await;
+                        return Err(message);
+                    }
+                    Some(Err(error)) => return Err(error.to_string()),
+                };
+                match Message::from_frame(&frame) {
+                    Ok(Message::Request(request)) => {
+                        let id = request.id.clone();
+                        let (cancel, registration) = AbortHandle::new_pair();
+                        cancels.insert(id.clone(), cancel);
+                        let slots = &slots;
+                        let answered = async move {
+                            let _slot = match request.method.as_str() {
+                                "tools/call" => slots.acquire().await.ok(),
+                                _ => None,
+                            };
+                            Response {
+                                id: Some(request.id.clone()),
+                                result: answer(binding, &request).await,
+                            }
+                        };
+                        answering.push(async move {
+                            (id, Abortable::new(answered, registration).await)
+                        });
+                        continue;
+                    }
+                    Ok(Message::Notification(notification)) => {
+                        if notification.method == "notifications/cancelled"
+                            && let Ok(Cancelled { request_id }) = notification.params()
+                            && let Some(cancel) = cancels.get(&request_id)
+                        {
+                            cancel.abort();
+                        }
+                        continue;
+                    }
+                    Ok(Message::Response(_)) => continue,
+                    Err(malformed) => malformed.into_response(),
+                }
             }
-            Err(error) => return Err(error.to_string()),
-        };
-        let response = match Message::from_frame(&frame) {
-            Ok(Message::Request(request)) => Response {
-                id: Some(request.id.clone()),
-                result: answer(binding, &request).await,
-            },
-            Ok(Message::Notification(_) | Message::Response(_)) => continue,
-            Err(malformed) => malformed.into_response(),
+            Some((id, answered)) = answering.next() => {
+                cancels.remove(&id);
+                match answered {
+                    Ok(response) => response,
+                    Err(Aborted) => continue,
+                }
+            }
+            else => return Ok(()),
         };
         writer
             .send(&response)
             .await
             .map_err(|error| error.to_string())?;
     }
-    Ok(())
 }
 
 async fn answer(binding: &impl Tools, request: &Request) -> Result<Value, ErrorObject> {
@@ -224,6 +208,13 @@ async fn answer(binding: &impl Tools, request: &Request) -> Result<Value, ErrorO
 struct InitializeRequest {
     #[serde(default)]
     protocol_version: Option<String>,
+}
+
+/// `notifications/cancelled`'s params: the request the client no longer wants answered.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Cancelled {
+    request_id: RequestId,
 }
 
 #[derive(Deserialize)]
@@ -273,148 +264,6 @@ fn tail(text: &str, max: usize) -> String {
     )
 }
 
-fn definitions() -> Value {
-    let run_id =
-        json!({"type": "string", "description": "The run's id, from spawn_agent or list_agents."});
-    let object = |properties: Value, required: &[&str]| {
-        json!({
-            "type": "object",
-            "properties": properties,
-            "required": required,
-            "additionalProperties": false,
-        })
-    };
-    let tool = |name: &str, description: &str, schema: Value, read_only: bool| {
-        json!({
-            "name": name,
-            "description": description,
-            "inputSchema": schema,
-            "annotations": {"readOnlyHint": read_only, "destructiveHint": false},
-        })
-    };
-    json!([
-        tool(
-            "spawn_agent",
-            "Start a subagent on this project: a worker in its own git worktree that can edit files and run commands in a sandbox. Give it one self-contained task with clear done-criteria. Returns the run.",
-            object(
-                json!({
-                    "prompt": {"type": "string", "description": "The task, at most 64 KiB."},
-                    "account": {
-                        "type": "object",
-                        "description": "The account to run on. Omit it for the worker role's default. {\"kind\": \"subscription\", \"backend\": \"claude\"} or {\"kind\": \"key\", \"id\": \"<key account id>\"}.",
-                        "properties": {
-                            "kind": {"type": "string", "enum": ["subscription", "key"]},
-                            "backend": {"type": "string"},
-                            "id": {"type": "string"},
-                        },
-                        "required": ["kind"],
-                    },
-                }),
-                &["prompt"]
-            ),
-            false,
-        ),
-        tool(
-            "list_agents",
-            "List this project's agent runs, oldest first, with status and diff stats.",
-            object(json!({}), &[]),
-            true,
-        ),
-        tool(
-            "agent_status",
-            "One run's status, its last output, and its diff stats.",
-            object(json!({"runId": run_id}), &["runId"]),
-            true,
-        ),
-        tool(
-            "message_agent",
-            "Send a run a message: its next turn if it is running, or a resumed session if it has ended.",
-            object(
-                json!({
-                    "runId": run_id,
-                    "text": {"type": "string", "description": "The message, at most 64 KiB."},
-                }),
-                &["runId", "text"]
-            ),
-            false,
-        ),
-        tool(
-            "cancel_agent",
-            "Stop a running run. Its changes so far are committed on its branch.",
-            object(json!({"runId": run_id}), &["runId"]),
-            false,
-        ),
-        tool(
-            "agent_diff",
-            "A run's latest commit against the commit its worktree started from, as unified diffs.",
-            object(json!({"runId": run_id}), &["runId"]),
-            true,
-        ),
-        tool(
-            "read_context",
-            "Read this project's shared context: one file's content by path, or the list of files without a path.",
-            object(
-                json!({
-                    "path": {"type": "string", "description": "A file name such as plan.md. Omit it to list the files."},
-                }),
-                &[]
-            ),
-            true,
-        ),
-        tool(
-            "write_context",
-            "Write a file in this project's shared context, replacing it. Only .md, .markdown, and .txt names, with no folders.",
-            object(
-                json!({
-                    "path": {"type": "string", "description": "A file name such as plan.md."},
-                    "content": {"type": "string", "description": "The whole new content, at most 1 MiB."},
-                }),
-                &["path", "content"]
-            ),
-            false,
-        ),
-    ])
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SpawnArgs {
-    prompt: String,
-    #[serde(default)]
-    account: Option<AccountChoice>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct NoArgs {}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct RunArgs {
-    run_id: RunId,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct MessageArgs {
-    run_id: RunId,
-    text: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ReadContextArgs {
-    #[serde(default)]
-    path: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WriteContextArgs {
-    path: String,
-    content: String,
-}
-
 fn parse<T: DeserializeOwned>(arguments: Value) -> Result<T, String> {
     serde_json::from_value(arguments).map_err(|error| format!("invalid arguments: {error}"))
 }
@@ -429,197 +278,21 @@ fn check_text(name: &str, text: &str, max: usize) -> Result<(), String> {
     Ok(())
 }
 
-async fn call_tool(binding: &Binding, name: &str, arguments: Value) -> Result<String, String> {
-    match name {
-        "spawn_agent" => {
-            let args: SpawnArgs = parse(arguments)?;
-            check_text("prompt", &args.prompt, MAX_TEXT_BYTES)?;
-            let mut plxd = Plxd::open(&binding.socket).await?;
-            let run = plxd
-                .call::<AgentStart>(AgentStartParams {
-                    run_id: RunId::generate(),
-                    project: binding.project,
-                    prompt: args.prompt,
-                    policy: AgentPolicy::WorkspaceWrite,
-                    account: args.account,
-                    coordinator_thread: Some(binding.thread),
-                    model: None,
-                    effort: None,
-                    permission: None,
-                    context_window: None,
-                    fast: None,
-                    images: Vec::new(),
-                    // plxd gives the run its coordinator's (0031).
-                    approvals: false,
-                    threads: Vec::new(),
-                })
-                .await?
-                .run;
-            Ok(pretty(&summary(binding, &run)))
-        }
-        "list_agents" => {
-            let NoArgs {} = parse(arguments)?;
-            let mut plxd = Plxd::open(&binding.socket).await?;
-            let runs = project_runs(binding, &mut plxd).await?;
-            let runs: Vec<Value> = runs.iter().map(|run| summary(binding, run)).collect();
-            Ok(pretty(&json!({"runs": runs})))
-        }
-        "agent_status" => {
-            let RunArgs { run_id } = parse(arguments)?;
-            let mut plxd = Plxd::open(&binding.socket).await?;
-            let run = bound_run(binding, &mut plxd, run_id).await?;
-            let last_output = last_output(&mut plxd, run_id).await?;
-            Ok(pretty(&json!({
-                "run": summary(binding, &run),
-                "lastOutput": last_output.map(|text| tail(&text, LAST_OUTPUT_BYTES)),
-            })))
-        }
-        "message_agent" => {
-            let MessageArgs { run_id, text } = parse(arguments)?;
-            check_text("text", &text, MAX_TEXT_BYTES)?;
-            let mut plxd = Plxd::open(&binding.socket).await?;
-            bound_run(binding, &mut plxd, run_id).await?;
-            let run = plxd
-                .call::<AgentSend>(AgentSendParams {
-                    run_id,
-                    turn_id: TurnId::generate(),
-                    text,
-                    model: None,
-                    effort: None,
-                    permission: None,
-                    context_window: None,
-                    fast: None,
-                    account: None,
-                    images: Vec::new(),
-                    threads: Vec::new(),
-                    from: None,
-                    delivery: None,
-                })
-                .await?
-                .run;
-            Ok(pretty(&summary(binding, &run)))
-        }
-        "cancel_agent" => {
-            let RunArgs { run_id } = parse(arguments)?;
-            let mut plxd = Plxd::open(&binding.socket).await?;
-            bound_run(binding, &mut plxd, run_id).await?;
-            let run = plxd
-                .call::<AgentCancel>(AgentCancelParams { run_id, from: None })
-                .await?
-                .run;
-            Ok(pretty(&summary(binding, &run)))
-        }
-        "agent_diff" => {
-            let RunArgs { run_id } = parse(arguments)?;
-            let mut plxd = Plxd::open(&binding.socket).await?;
-            bound_run(binding, &mut plxd, run_id).await?;
-            let diff = plxd.call::<AgentDiff>(AgentDiffParams { run_id }).await?;
-            Ok(render_diff(&diff))
-        }
-        _ => context_tool(binding, name, arguments).await,
-    }
-}
-
-async fn context_tool(binding: &Binding, name: &str, arguments: Value) -> Result<String, String> {
-    match name {
-        "read_context" => {
-            let ReadContextArgs { path } = parse(arguments)?;
-            let mut plxd = Plxd::open(&binding.socket).await?;
-            let project = binding.project;
-            match path {
-                None => {
-                    let files = plxd
-                        .call::<ContextList>(ContextListParams { project })
-                        .await?
-                        .files;
-                    Ok(pretty(&json!({"files": files})))
-                }
-                Some(path) => {
-                    check_text("path", &path, MAX_PATH_BYTES)?;
-                    let read = plxd
-                        .call::<ContextRead>(ContextReadParams { project, path })
-                        .await?;
-                    Ok(read.content)
-                }
-            }
-        }
-        "write_context" => {
-            let WriteContextArgs { path, content } = parse(arguments)?;
-            check_text("path", &path, MAX_PATH_BYTES)?;
-            if content.len() > MAX_CONTEXT_BYTES {
-                return Err(format!("content must be at most {MAX_CONTEXT_BYTES} bytes"));
-            }
-            let mut plxd = Plxd::open(&binding.socket).await?;
-            let file = plxd
-                .call::<ContextWrite>(ContextWriteParams {
-                    id: ContextWriteId::generate(),
-                    project: binding.project,
-                    path,
-                    content,
-                    writer: Some("coordinator".to_owned()),
-                })
-                .await?
-                .file;
-            Ok(pretty(&file))
-        }
-        other => Err(format!("no tool is named {other:?}")),
-    }
-}
-
 fn pretty(value: &impl serde::Serialize) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|error| error.to_string())
-}
-
-/// What the model sees of a run.
-fn summary(binding: &Binding, run: &AgentRun) -> Value {
-    json!({
-        "runId": run.id,
-        "status": run.status,
-        "prompt": clip(&run.prompt, PROMPT_PREVIEW_BYTES),
-        "account": run.account_id,
-        "branch": run.branch,
-        "error": run.error,
-        "diff": run.diff,
-        "startedByThisCoordinator": run.coordinator_thread == Some(binding.thread),
-        "createdAt": run.created_at,
-        "updatedAt": run.updated_at,
-    })
-}
-
-/// The bound project's runs, without its coordinator (0024): the model never sees or steers its
-/// own run, which would message itself.
-async fn project_runs(binding: &Binding, plxd: &mut Plxd) -> Result<Vec<AgentRun>, String> {
-    let mut runs = plxd
-        .call::<AgentList>(AgentListParams {
-            project: Some(binding.project),
-        })
-        .await?
-        .runs;
-    runs.retain(|run| run.policy != AgentPolicy::NoWrite);
-    Ok(runs)
-}
-
-/// Run `run_id`, if it belongs to the bound project: the binding check every tool that takes a
-/// run id makes before it touches the run. Another project's run gets the same answer as one
-/// that doesn't exist.
-async fn bound_run(binding: &Binding, plxd: &mut Plxd, run_id: RunId) -> Result<AgentRun, String> {
-    project_runs(binding, plxd)
-        .await?
-        .into_iter()
-        .find(|run| run.id == run_id)
-        .ok_or_else(|| format!("this project has no agent run {run_id}"))
 }
 
 /// The run's latest text: its last assistant message or turn result, or how its last CLI process
 /// ended.
 // ponytail: pages through the run's whole event history on every call; add a from-the-end page
-// to agent/events if long runs make agent_status slow.
-async fn last_output(plxd: &mut Plxd, run_id: RunId) -> Result<Option<String>, String> {
+// to agent/events if long runs make thread_wait slow.
+async fn last_output(plxd: &Plxd, run_id: RunId) -> Result<Option<String>, String> {
     let mut after = 0;
     let mut last = None;
     loop {
         let page = plxd
             .call::<AgentEvents>(AgentEventsParams {
+                before: None,
                 run_id,
                 after,
                 limit: Some(1000),
@@ -653,148 +326,245 @@ async fn last_output(plxd: &mut Plxd, run_id: RunId) -> Result<Option<String>, S
     }
 }
 
-fn render_diff(diff: &AgentDiffResult) -> String {
-    let short = |sha: &str| sha.chars().take(12).collect::<String>();
-    let mut text = format!(
-        "{}..{}: {} files changed, +{} -{}\n",
-        short(&diff.base),
-        short(&diff.head),
-        diff.stats.files,
-        diff.stats.insertions,
-        diff.stats.deletions
-    );
-    for file in &diff.files {
-        match &file.diff {
-            Some(patch) => {
-                text.push('\n');
-                text.push_str(patch);
-                if !patch.ends_with('\n') {
-                    text.push('\n');
-                }
-                if file.diff_truncated {
-                    text.push_str("[this file's diff was cut short]\n");
-                }
-            }
-            None if file.binary => {
-                let _ = write!(text, "\n{}: binary\n", file.path);
-            }
-            None => {
-                let _ = write!(text, "\n{}: diff left out, over the size cap\n", file.path);
-            }
-        }
-    }
-    if diff.truncated {
-        text.push_str("\n[more files changed than one answer lists]\n");
-    }
-    text
+/// The longest `plxd mcp` keeps using a connection it hasn't written to: under plxd's 90 s idle
+/// timeout, so plxd never closes a connection just as a call is sent on it, and over the 60 s an
+/// `agent/wait` takes, so a waiting `thread_wait` keeps its connection.
+const IDLE: Duration = Duration::from_secs(75);
+
+/// `plxd mcp`'s client of plxd, shared by every tool call: one connection, opened by the first
+/// call, and again by the next call after it closes. Calls on it run concurrently, matched to
+/// their answers by id. Past plxd's limit of requests in flight on one connection, plxd stops
+/// reading, and later calls wait.
+#[derive(Clone)]
+pub struct Plxd {
+    socket: PathBuf,
+    connection: Arc<tokio::sync::Mutex<Option<Arc<Connection>>>>,
+    next_id: Arc<AtomicI64>,
 }
 
-/// One connection to plxd: `initialize`d, then calls in order.
-struct Plxd {
-    framed: Framed<Stream, FrameCodec>,
-    next_id: i64,
+/// One `initialize`d connection to plxd. Its reader task hands each answer to its caller.
+struct Connection {
+    writer: tokio::sync::Mutex<FramedWrite<WriteHalf<Stream>, FrameCodec>>,
+    state: Arc<Mutex<State>>,
+    reader: tokio::task::AbortHandle,
+    /// plxd has `agent/wait` (`agentWait`, PLX-451).
+    agent_wait: bool,
+}
+
+struct State {
+    /// Each request's caller, by id, until its answer arrives. `None` once the connection is lost.
+    waiting: Option<HashMap<RequestId, oneshot::Sender<Response>>>,
+    /// When a request was last written.
+    written: Instant,
 }
 
 /// Errors from plxd are its message: the model reads them, and nothing matches on them.
 impl Plxd {
+    /// A client of the plxd at `socket`. It connects on its first call.
+    #[must_use]
+    pub fn new(socket: PathBuf) -> Self {
+        Self {
+            socket,
+            connection: Arc::default(),
+            next_id: Arc::default(),
+        }
+    }
+
+    /// Whether plxd has `agent/wait`, as it said when the connection opened.
+    async fn agent_wait(&self) -> Result<bool, String> {
+        Ok(self.connect().await?.agent_wait)
+    }
+
+    async fn call<M: RequestMethod>(&self, params: M::Params) -> Result<M::Result, String> {
+        self.request::<M>(params)
+            .await?
+            .map_err(|error| error.message)
+    }
+
+    /// Sends one request: plxd's answer, or `Err` when the connection fails first. A request
+    /// that couldn't be written is sent once more, on a new connection; one that was written
+    /// fails with its connection. Dropped while plxd is answering, it cancels the request with
+    /// `$/cancelRequest` (PLX-524).
+    async fn request<M: RequestMethod>(
+        &self,
+        params: M::Params,
+    ) -> Result<Result<M::Result, ErrorObject>, String> {
+        let id = RequestId::Number(self.next_id.fetch_add(1, Ordering::Relaxed) + 1);
+        let request = Request::new::<M>(id, params);
+        let mut retried = false;
+        loop {
+            let connection = self.connect().await?;
+            match connection.send(&request).await {
+                Ok(answer) => {
+                    let mut in_flight = InFlight(Some((connection, request.id.clone())));
+                    let answered = answer.await;
+                    in_flight.0 = None;
+                    let response = answered.map_err(|_| lost(&"plxd closed it"))?;
+                    return Ok(response.into_result());
+                }
+                Err(error) if retried => return Err(lost(&error)),
+                Err(_) => {
+                    connection.close();
+                    retried = true;
+                }
+            }
+        }
+    }
+
+    /// The open connection, or a new one when it closed or has been idle for [`IDLE`].
+    async fn connect(&self) -> Result<Arc<Connection>, String> {
+        let mut current = self.connection.lock().await;
+        if let Some(connection) = current.as_ref()
+            && connection.usable()
+        {
+            return Ok(Arc::clone(connection));
+        }
+        let connection = Arc::new(Connection::open(&self.socket).await?);
+        *current = Some(Arc::clone(&connection));
+        Ok(connection)
+    }
+}
+
+impl Connection {
     async fn open(socket: &Path) -> Result<Self, String> {
         let stream = transport::connect(socket)
             .await
             .map_err(|error| format!("could not reach plxd at {}: {error}", socket.display()))?;
-        let mut plxd = Self {
-            framed: Framed::new(stream, FrameCodec::new()),
-            next_id: 0,
+        let (read, write) = tokio::io::split(stream);
+        let state = Arc::new(Mutex::new(State {
+            waiting: Some(HashMap::new()),
+            written: Instant::now(),
+        }));
+        let reader = tokio::spawn(answer_callers(
+            FramedRead::new(read, FrameCodec::new()),
+            Arc::clone(&state),
+        ));
+        let mut connection = Self {
+            writer: tokio::sync::Mutex::new(FramedWrite::new(write, FrameCodec::new())),
+            state,
+            reader: reader.abort_handle(),
+            agent_wait: false,
         };
-        plxd.call::<Initialize>(InitializeParams {
-            protocol: ProtocolRange::SUPPORTED,
-            client: ClientInfo {
-                name: "plxd mcp".to_owned(),
-                version: crate::version().to_owned(),
-                machine_id: None,
+        let request = Request::new::<Initialize>(
+            0,
+            InitializeParams {
+                protocol: ProtocolRange::SUPPORTED,
+                client: ClientInfo {
+                    name: "plxd mcp".to_owned(),
+                    version: crate::version().to_owned(),
+                    machine_id: None,
+                },
+                capabilities: Capabilities::default(),
             },
-            capabilities: Capabilities::default(),
-        })
-        .await?;
-        Ok(plxd)
-    }
-
-    async fn call<M: RequestMethod>(&mut self, params: M::Params) -> Result<M::Result, String> {
-        self.next_id += 1;
-        let id = RequestId::Number(self.next_id);
-        let lost =
-            |error: &dyn std::fmt::Display| format!("the connection to plxd failed: {error}");
-        self.framed
-            .send(&Request::new::<M>(id.clone(), params))
+        );
+        let answer = connection
+            .send(&request)
             .await
             .map_err(|error| lost(&error))?;
-        loop {
-            let frame = self
-                .framed
-                .next()
-                .await
-                .ok_or_else(|| lost(&"plxd closed it"))?
-                .map_err(|error| lost(&error))?;
-            match Message::from_frame(&frame) {
-                Ok(Message::Response(response)) if response.id.as_ref() == Some(&id) => {
-                    return response.into_result().map_err(|error| error.message);
-                }
-                Ok(_) => {}
-                Err(error) => return Err(lost(&error)),
+        let initialized: InitializeResult = answer
+            .await
+            .map_err(|_| lost(&"plxd closed it"))?
+            .into_result()
+            .map_err(|error| error.message)?;
+        connection.agent_wait = initialized.capabilities.0.contains_key("agentWait");
+        Ok(connection)
+    }
+
+    /// Writes `request`: a receiver for its answer, or `Err` when it wasn't written.
+    async fn send<P: Serialize>(
+        &self,
+        request: &Request<P>,
+    ) -> Result<oneshot::Receiver<Response>, String> {
+        let (answer, answered) = oneshot::channel();
+        lock(&self.state)
+            .waiting
+            .as_mut()
+            .ok_or("plxd closed it")?
+            .insert(request.id.clone(), answer);
+        let sent = self.writer.lock().await.send(request).await;
+        let mut state = lock(&self.state);
+        if let Err(error) = sent {
+            if let Some(waiting) = state.waiting.as_mut() {
+                waiting.remove(&request.id);
             }
+            return Err(error.to_string());
+        }
+        state.written = Instant::now();
+        Ok(answered)
+    }
+
+    fn usable(&self) -> bool {
+        let state = lock(&self.state);
+        state.waiting.is_some() && state.written.elapsed() < IDLE
+    }
+
+    /// Fails every call waiting on this connection, and keeps more from using it.
+    fn close(&self) {
+        lock(&self.state).waiting = None;
+    }
+}
+
+/// A request written on a connection, until its answer arrives. Dropped before then, because its
+/// tool call was cancelled, it sends plxd `$/cancelRequest`. plxd still answers it, and
+/// [`answer_callers`] drops that answer.
+struct InFlight(Option<(Arc<Connection>, RequestId)>);
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        let Some((connection, id)) = self.0.take() else {
+            return;
+        };
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        runtime.spawn(async move {
+            let cancel = Notification::new::<CancelRequest>(CancelRequestParams { id });
+            let _ = connection.writer.lock().await.send(&cancel).await;
+        });
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.reader.abort();
+    }
+}
+
+/// Reads `frames` until the connection ends, giving each answer to its caller, then fails the
+/// calls still waiting.
+async fn answer_callers(
+    mut frames: FramedRead<ReadHalf<Stream>, FrameCodec>,
+    state: Arc<Mutex<State>>,
+) {
+    while let Some(Ok(frame)) = frames.next().await {
+        match Message::from_frame(&frame) {
+            Ok(Message::Response(response)) => {
+                let caller = response
+                    .id
+                    .as_ref()
+                    .and_then(|id| lock(&state).waiting.as_mut()?.remove(id));
+                if let Some(caller) = caller {
+                    let _ = caller.send(response);
+                }
+            }
+            Ok(_) => {}
+            Err(_) => break,
         }
     }
+    lock(&state).waiting = None;
+}
+
+fn lost(error: &dyn std::fmt::Display) -> String {
+    format!("the connection to plxd failed: {error}")
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ALLOWED_TOOLS, SERVER, TOOLS, clip, definitions, tail};
-
-    #[test]
-    fn the_allowlist_is_exactly_the_tools_under_the_servers_name() {
-        let expected: Vec<String> = TOOLS
-            .iter()
-            .map(|tool| format!("mcp__{SERVER}__{tool}"))
-            .collect();
-        assert_eq!(ALLOWED_TOOLS, expected.as_slice());
-        let listed: Vec<String> = definitions()
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|tool| tool["name"].as_str().unwrap().to_owned())
-            .collect();
-        assert_eq!(listed, TOOLS);
-    }
-
-    #[test]
-    fn the_coordinators_instructions_name_only_real_tools() {
-        let instructions = include_str!("agents/coordinator.md");
-        // Every `snake_case` span between backticks.
-        for name in instructions.split('`').skip(1).step_by(2) {
-            if name.contains('_') && name.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
-                assert!(
-                    TOOLS.contains(&name),
-                    "coordinator.md names `{name}`, not a tool"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn no_tool_takes_a_project_or_a_thread() {
-        for tool in definitions().as_array().unwrap() {
-            let schema = &tool["inputSchema"];
-            assert_eq!(schema["additionalProperties"], false, "{tool}");
-            let properties = schema["properties"].as_object().unwrap();
-            for name in properties.keys() {
-                assert!(
-                    !name.to_lowercase().contains("project")
-                        && !name.to_lowercase().contains("thread"),
-                    "{} takes {name}",
-                    tool["name"]
-                );
-            }
-        }
-    }
+    use super::{clip, tail};
 
     #[test]
     fn long_text_is_cut_at_a_character_boundary_with_a_note() {

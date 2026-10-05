@@ -424,3 +424,90 @@ async fn a_steer_joins_the_running_turn_and_a_held_thread_stays_open() {
                "text": "Change of plan: reply BANANA instead.", "text_elements": []}]})
     );
 }
+
+/// A Project's coordinator runs on app-server as a thread does, with its own tools (0042).
+#[test]
+fn a_coordinator_gets_its_tools_as_a_thread_does() {
+    let mut request = request(AgentPermission::Auto);
+    request.thread = false;
+    request.policy = crate::backend::ToolPolicy::NoWrite;
+    request.coordinator_tools = Some(crate::backend::ThreadTools {
+        program: "/bin/plxd".into(),
+        data_dir: "/tmp/parallax".into(),
+        run: request.run_id,
+    });
+    assert!(request.full_agent());
+    let (method, params) = super::thread_params(&request).unwrap();
+    assert_eq!(method, "thread/start");
+    assert_eq!(
+        params["config"]["mcp_servers.plxd.args"],
+        json!([
+            "mcp",
+            "--data-dir",
+            "/tmp/parallax",
+            "--thread",
+            request.run_id.to_string()
+        ])
+    );
+    request.coordinator_tools = None;
+    assert!(!request.full_agent(), "any other run is refused");
+}
+
+/// Session overrides add only plxd's keys, so app-server retains the user's servers.
+#[test]
+fn thread_mcp_joins_user_config_on_start_resume_and_fork() {
+    for (resume, expected) in [
+        (None, "thread/start"),
+        (Some(false), "thread/resume"),
+        (Some(true), "thread/fork"),
+    ] {
+        let mut request = request(AgentPermission::Edit);
+        request.resume = resume.map(|fork| Resume {
+            fork,
+            ..Resume::new("t-parent")
+        });
+        request.context_window = Some(872_000);
+        request.thread_tools = Some(crate::backend::ThreadTools {
+            program: "/bin/plxd".into(),
+            data_dir: "/tmp/parallax data".into(),
+            run: request.run_id,
+        });
+        let (method, params) = super::thread_params(&request).unwrap();
+        assert_eq!(method, expected);
+        assert_eq!(
+            params["config"],
+            json!({
+                "model_context_window": 872_000,
+                "mcp_servers.plxd.command": "/bin/plxd",
+                "mcp_servers.plxd.args":
+                    ["mcp", "--data-dir", "/tmp/parallax data", "--thread", request.run_id.to_string()],
+                "mcp_servers.plxd.default_tools_approval_mode": "approve",
+            })
+        );
+        request.approvals = false;
+        let (_, params) = super::thread_params(&request).unwrap();
+        assert_eq!(params["config"], json!({"model_context_window": 872_000}));
+        request.permission = Some(AgentPermission::Bypass);
+        let (_, params) = super::thread_params(&request).unwrap();
+        assert_eq!(params["config"]["mcp_servers.plxd.command"], "/bin/plxd");
+    }
+}
+
+/// A real session, recorded with `PLXD_RECORD_CLI` (PLX-493), replays to its snapshot: two shell
+/// commands that each ask first, and the reply.
+#[tokio::test]
+async fn a_recorded_session_replays_to_its_snapshot() {
+    let (_dir, backend) = fake(include_str!("../fixtures/recorded.jsonl"));
+    let request = RunRequest {
+        turn_id: Some("01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01".parse().unwrap()),
+        ..request(AgentPermission::Manual)
+    };
+    crate::backend::record::assert_replays(
+        backend.start(request).unwrap(),
+        std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/backend/codex/fixtures/recorded.events.jsonl"
+        )),
+    )
+    .await;
+}

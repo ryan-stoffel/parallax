@@ -27,9 +27,13 @@ const bridge: Partial<ParallaxBridge> = {
   onProfile: () => () => {},
 };
 window.parallax = bridge as ParallaxBridge;
-// happy-dom has no popovers.
+// happy-dom has no popovers. `togglePopover` marks an open one `data-open`.
 HTMLElement.prototype.showPopover = () => {};
 HTMLElement.prototype.hidePopover = () => {};
+HTMLElement.prototype.togglePopover = function (this: HTMLElement, options) {
+  const force = typeof options === "boolean" ? options : options?.force;
+  return this.toggleAttribute("data-open", force);
+};
 
 let unmount = () => {};
 afterEach(() => {
@@ -77,7 +81,12 @@ test("the sidebar's title opens a new thread", () => {
   act(() =>
     document.querySelector<HTMLButtonElement>('#sidebar button[aria-label="Usage"]')!.click(),
   );
-  expect(crumbs()[0]).toBe("Usage");
+  expect(crumbs()).toEqual(["Settings", "Usage"]);
+  act(() =>
+    [...document.querySelectorAll<HTMLButtonElement>("#sidebar button")]
+      .find((b) => b.textContent === "Back to app")!
+      .click(),
+  );
 
   const title = [...document.querySelectorAll<HTMLButtonElement>("#sidebar button")].find(
     (b) => b.textContent === "Parallax",
@@ -86,7 +95,7 @@ test("the sidebar's title opens a new thread", () => {
   expect(crumbs().at(-1)).toBe("New thread");
 });
 
-test("Mod+S toggles the sidebar, and Mod+Alt+U opens the Usage page", () => {
+test("Mod+S toggles the sidebar, and Mod+Alt+U opens Settings > Usage", () => {
   renderApp();
   const press = (init: KeyboardEventInit) =>
     act(() => {
@@ -101,7 +110,7 @@ test("Mod+S toggles the sidebar, and Mod+Alt+U opens the Usage page", () => {
 
   press({ code: "KeyU", altKey: true });
   const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
-  expect(crumbs.map((li) => li.textContent)).toEqual(["Usage", "All hosts"]);
+  expect(crumbs.map((li) => li.textContent)).toEqual(["Settings", "Usage"]);
 });
 
 test("Ctrl+Shift+` toggles the terminal on macOS too, and Mod+Alt+O opens, not Mod+O or Mod+B", () => {
@@ -116,7 +125,7 @@ test("Ctrl+Shift+` toggles the terminal on macOS too, and Mod+Alt+O opens, not M
   expect(press({ code: "KeyO", metaKey: true, altKey: true, shiftKey: true })).toBeUndefined();
 });
 
-test("the footer's Usage opens the Usage page, and Update shows when it's ready and its answer", async () => {
+test("the footer's Usage opens Settings > Usage, and Update shows when it's ready and its answer", async () => {
   const button = (name: string) =>
     document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
   renderApp();
@@ -125,11 +134,15 @@ test("the footer's Usage opens the Usage page, and Update shows when it's ready 
 
   act(() => button("Usage")!.click());
   const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
-  expect(crumbs.map((li) => li.textContent)).toEqual(["Usage", "All hosts"]);
-  // The sidebar stays on the thread list, and the side panel is a chat's.
-  expect(button("Usage")).not.toBeNull();
+  expect(crumbs.map((li) => li.textContent)).toEqual(["Settings", "Usage"]);
+  // Settings' nav lists it after Account, and the side panel is a chat's.
+  const nav = [...document.querySelectorAll("#sidebar button")].map((b) => b.textContent);
+  expect(nav.slice(nav.indexOf("Account"), nav.indexOf("Account") + 2)).toEqual([
+    "Account",
+    "Usage",
+  ]);
   expect(document.querySelector('main [aria-controls="side-panel"]')).toBeNull();
-  // The range stays in the top bar on Limits, but can't be changed there.
+  // The range stays in the header on Limits, but can't be changed there.
   const range = document.querySelector<HTMLFieldSetElement>('main [aria-label="Usage range"]')!;
   expect(range.disabled).toBe(false);
   act(() => document.querySelector<HTMLInputElement>('main input[value="limits"]')!.click());
@@ -137,13 +150,15 @@ test("the footer's Usage opens the Usage page, and Update shows when it's ready 
   act(() => unmount());
 
   let answer: (text: string) => void = () => {};
-  let publish: (state: UpdateState) => void = () => {};
+  // The Update button and its notifications each listen.
+  const listeners: ((state: UpdateState) => void)[] = [];
+  const publish = (state: UpdateState) => listeners.forEach((listener) => listener(state));
   const update = vi.fn(() => new Promise<string>((resolve) => (answer = resolve)));
   Object.assign(bridge, {
     updatable: true,
     update,
     onUpdateState: (listener: (state: UpdateState) => void) => {
-      publish = listener;
+      listeners.push(listener);
       return () => {};
     },
   });
@@ -164,16 +179,19 @@ test("the footer's Usage opens the Usage page, and Update shows when it's ready 
   expect(button("Update Parallax")!.disabled).toBe(false);
 });
 
-test("a packaged app's release shows its notes and download in a popover, then asks to restart", () => {
+test("a packaged app's release shows its notes on hover, downloads on click, then waits for a restart", () => {
+  vi.useFakeTimers();
   const button = (name: string) =>
     document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
-  let publish: (state: UpdateState) => void = () => {};
+  // The Update button and its notifications each listen.
+  const listeners: ((state: UpdateState) => void)[] = [];
+  const publish = (state: UpdateState) => listeners.forEach((listener) => listener(state));
   const update = vi.fn(async () => "");
   Object.assign(bridge, {
     updatable: true,
     update,
     onUpdateState: (listener: (state: UpdateState) => void) => {
-      publish = listener;
+      listeners.push(listener);
       return () => {};
     },
   });
@@ -184,24 +202,67 @@ test("a packaged app's release shows its notes and download in a popover, then a
     url: "https://github.com/ryan-stoffel/parallax/releases/tag/v2610.10205.13230-nightly",
   };
   act(() => publish({ available }));
-  // Nothing downloads until the click.
+  const offered = button("Update available: Parallax 2610.10205.13230-nightly")!;
+  const dot = () => offered.querySelector(".bg-accent");
+  expect(dot()).not.toBeNull();
+  const card = document.querySelector<HTMLElement>('#sidebar [aria-label="Update"]')!;
+  const isOpen = () => card.hasAttribute("data-open");
+  const pointer = (type: string, target: Element, relatedTarget: Element | null) =>
+    act(() => {
+      target.dispatchEvent(new PointerEvent(type, { bubbles: true, relatedTarget }));
+      vi.advanceTimersByTime(200);
+    });
+
+  // Hovering opens the card with the notes, and nothing downloads.
+  pointer("pointerover", offered, document.body);
+  expect(isOpen()).toBe(true);
+  expect(card.textContent).toContain("Parallax 2610.10205.13230-nightly");
+  expect(card.textContent).toContain("• feat: a thing (PLX-1)");
+  expect(card.querySelector("a")!.href).toBe(available.url);
   expect(update).not.toHaveBeenCalled();
-  act(() => button("Update available: Parallax 2610.10205.13230-nightly")!.click());
+  // The pointer can move onto the card, and leaving the card closes it.
+  pointer("pointerout", offered, card);
+  pointer("pointerover", card, offered);
+  expect(isOpen()).toBe(true);
+  pointer("pointerout", card, document.body);
+  expect(isOpen()).toBe(false);
+
+  // A click opens the card and downloads, and the dot goes away.
+  act(() => offered.click());
+  expect(isOpen()).toBe(true);
   expect(update).toHaveBeenCalledOnce();
-  const popover = document.querySelector('#sidebar [aria-label="Update"]')!;
-  expect(popover.textContent).toContain("Parallax 2610.10205.13230-nightly");
-  expect(popover.textContent).toContain("• feat: a thing (PLX-1)");
-  expect(popover.querySelector("a")!.href).toBe(available.url);
-
   act(() => publish({ available, progress: 42 }));
-  expect(popover.querySelector('[role="progressbar"]')!.getAttribute("aria-valuenow")).toBe("42");
+  expect(card.querySelector('[role="progressbar"]')!.getAttribute("aria-valuenow")).toBe("42");
+  expect(offered.getAttribute("aria-label")).toBe(
+    "Downloading Parallax 2610.10205.13230-nightly: 42%",
+  );
+  expect(dot()).toBeNull();
 
-  const restart = document.querySelector('button[value="restart"]')!.closest("dialog")!;
-  expect(restart.open).toBe(false);
-  act(() => publish({ available, ready: `Parallax ${available.version} to install` }));
-  expect(restart.open).toBe(true);
-  act(() => restart.querySelector<HTMLButtonElement>('button[value="restart"]')!.click());
+  // Downloaded: a restart icon and a notification, but no dialog until the click.
+  const confirm = document.querySelector('button[value="confirm"]')!.closest("dialog")!;
+  const toast = () => document.querySelector<HTMLElement>('[aria-label="Notifications"]');
+  expect(toast()).toBeNull();
+  const ready = { available, ready: `Parallax ${available.version} to install` };
+  act(() => publish(ready));
+  expect(isOpen()).toBe(false);
+  expect(confirm.open).toBe(false);
+  expect(toast()!.textContent).toContain("Update downloaded");
+  expect(toast()!.querySelector("a")!.href).toBe(available.url);
+  // It stays until closed, and the same download doesn't bring it back.
+  act(() => void vi.advanceTimersByTime(60_000));
+  act(() => toast()!.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click());
+  expect(toast()).toBeNull();
+  act(() => publish({ ...ready }));
+  expect(toast()).toBeNull();
+
+  act(() => button("Restart to install Parallax 2610.10205.13230-nightly")!.click());
+  expect(confirm.open).toBe(true);
+  expect(confirm.textContent).toContain(
+    "Install update 2610.10205.13230-nightly and restart Parallax?",
+  );
+  act(() => confirm.querySelector<HTMLButtonElement>('button[value="confirm"]')!.click());
   expect(update).toHaveBeenCalledTimes(2);
+  vi.useRealTimers();
 });
 
 test("in a terminal off macOS, plain Ctrl+letter shortcuts stay the shell's", () => {

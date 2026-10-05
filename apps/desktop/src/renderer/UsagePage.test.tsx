@@ -252,9 +252,7 @@ async function renderPage(
     },
   } as unknown as ParallaxBridge;
   const root = createRoot(document.body.appendChild(document.createElement("div")));
-  await act(async () =>
-    root.render(<UsagePage hosts={[{ id: "local", name: "This Mac" }]} topBarClassName="" />),
-  );
+  await act(async () => root.render(<UsagePage hosts={[{ id: "local", name: "This Mac" }]} />));
   unmount = () => root.unmount();
   await settle();
 }

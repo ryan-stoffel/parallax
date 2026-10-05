@@ -1,27 +1,46 @@
-import { PanelBottom, PanelLeftOpen, PanelRight, Workflow } from "lucide-react";
+import {
+  ArrowLeft,
+  Bot,
+  GitFork,
+  PanelBottom,
+  PanelLeftOpen,
+  PanelRight,
+  Workflow,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { Thread } from "../protocol/generated/protocol";
+import type { InboxItem, Thread } from "../protocol/generated/protocol";
 import { Actions, type RepoAction } from "./Actions";
 import { AgentChat } from "./AgentChat";
+import { ChildStrip } from "./ChildStrip";
 import type { Asked } from "./Approval";
 import { useConnection } from "./ConnectionStatus";
-import { ContextPanel } from "./ContextPanel";
 import { FilesPanel } from "./FilesPanel";
+import { useInbox } from "./Inbox";
 import { GitMenu } from "./GitMenu";
+import { KnowledgePanel } from "./Knowledge";
 import { LineageTrail } from "./Lineage";
 import { NewThread } from "./NewThread";
 import { NewThreadPicker } from "./NewThreadPicker";
+import { Notifications } from "./notifications";
 import { localId, useHosts } from "./hosts";
 import { iconImageBytes } from "./images";
 import { OpenMenu } from "./OpenMenu";
-import { AgentsPanel, useProjectAgents } from "./ProjectAgents";
+import { AgentsPanel, useProjectAgents, withProjectThreads } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
+import { ProjectHome, waitingCount } from "./ProjectHome";
 import { PullRequestChip, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
+import type { NativeSubagent } from "./Subagents";
 import { attentionOf } from "./attention";
-import { useSnoozeAlarms } from "./alarms";
+import {
+  useAccountAlarms,
+  useConnectionAlarms,
+  useNeedsYouAlarm,
+  useSnoozeAlarms,
+  useThreadAlarms,
+} from "./alarms";
 import { ProjectIcon, RepoIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
 import { useThemePreference } from "./theme";
 import type { ThreadLinks } from "./threadContext";
@@ -35,28 +54,30 @@ import {
   lineageOf,
   noRepo,
   rootOf,
+  threadProjects,
   titleOf,
   useThreads,
+  type ForkChoice,
   type ThreadsView,
 } from "./threads";
 import { isRunning } from "./transcript";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
-import { UsagePage } from "./UsagePage";
+import { useUpdateAlarms } from "./Update";
 
 /**
  * The main pane: a Project's coordinator chat, or with `agentId` one of its subagents' chats, a
  * thread (its id is its run's; `started` when New Thread just started it, until anything else is
- * selected), a new thread in a sidebar group (`threads.ts`; with no group, it's the first
- * repository's), or Usage.
+ * selected; `subagent` when one of its agent's own subagents is open, by its call's id), a new
+ * thread in a sidebar group (`threads.ts`; with no group, it's the first repository's).
  */
 export type Selection =
   | { kind: "project"; projectId: string; agentId?: string }
-  | { kind: "thread"; threadId: string; started?: boolean }
-  | { kind: "new"; groupId?: string }
-  | { kind: "usage" };
+  | { kind: "thread"; threadId: string; started?: boolean; subagent?: string }
+  | { kind: "new"; groupId?: string };
 
 export type SettingsSection =
   | "account"
+  | "usage"
   | "general"
   | "appearance"
   | "keybinds"
@@ -158,10 +179,49 @@ export function App() {
       : undefined;
   if (selection.kind === "project" && !project && known.current.has(selection.projectId))
     setSelection({ kind: "new" });
-  const agents = useProjectAgents(host.id, project?.id, connected, approvals);
+  const projectList = useProjectAgents(host.id, project?.id, connected, approvals);
+  // With the threads in the Project that its list doesn't have, as its sidebar row counts them.
+  const inProject = useMemo(() => threadProjects(threads.state), [threads.state]);
+  const agents = useMemo(
+    () =>
+      project ? withProjectThreads(projectList, threads.state, project.id, inProject) : projectList,
+    [projectList, threads.state, project, inProject],
+  );
   // The open subagent, whose chat takes the coordinator's place while the Project stays selected.
   const agentId = selection.kind === "project" ? selection.agentId : undefined;
+  // Entering a Project shows its inbox in the side panel.
+  const [panelProject, setPanelProject] = useState(project?.id);
+  if (project?.id !== panelProject) {
+    setPanelProject(project?.id);
+    if (project) setPanelOpen(true);
+  }
+  // The Project's inbox (0043), on a plxd with `inbox`, and the children whose questions wait in it.
+  const answerable = connected && "questions" in connection.capabilities;
+  const inbox = useInbox(
+    host.id,
+    project?.id ?? "",
+    connected && !!project && "inbox" in connection.capabilities,
+    answerable,
+  );
+  const needs = useMemo(
+    () => new Set(inbox.items.filter((i) => !i.seenAt && i.kind === "needsYou").map((i) => i.run)),
+    [inbox.items],
+  );
   const agent = agents.runs.find((r) => r.id === agentId);
+  // Its thread's title from plxd (0041), else its prompt's.
+  const agentTitle = agentId
+    ? (threads.state.titles[agentId] ?? (agent ? titleOf(agent) : "Subagent"))
+    : undefined;
+  // Whose memory the side panel's Knowledge view shows, on a plxd with `memory` (0044): the open
+  // Project's, with its repository's, or the open thread's repository's.
+  // ponytail: a repo entry's path is canonical and a Project's is as created, so a Project made
+  // through a symlink finds no Repo scope; match canonical paths if that shows up.
+  const memoryRepo = project
+    ? threads.state.repos.find((r) => !r.scratch && r.path === project.repoPath)?.id
+    : selection.kind === "thread" && group.id !== noRepo
+      ? group.id
+      : undefined;
+  const memory = connected && "memory" in connection.capabilities && (project || memoryRepo);
   // The run whose folder the side panel's Files view browses: the open thread or subagent.
   const filesRunId = selection.kind === "thread" ? selection.threadId : agentId;
   // The open thread's linked pull requests, on a plxd that links them (PLX-318).
@@ -227,10 +287,37 @@ export function App() {
     setSelection(next);
     setOpening(undefined);
   };
-  useSnoozeAlarms(listed, (hostId, threadId) => openOnHost(hostId, { kind: "thread", threadId }));
+  const openHostThread = (hostId: string, threadId: string) =>
+    openOnHost(hostId, { kind: "thread", threadId });
+  useSnoozeAlarms(listed, openHostThread);
+  useThreadAlarms(
+    listed,
+    openHostThread,
+    selection.kind === "thread" && !settings ? `${host.id}/${selection.threadId}` : undefined,
+  );
+  useConnectionAlarms(hosts);
+  useAccountAlarms();
+  useUpdateAlarms();
+  const needsYou = useNeedsYouAlarm(listed, (hostId, projectId) =>
+    openOnHost(hostId, { kind: "project", projectId }),
+  );
 
   // The open thread's parent and children or siblings, on a plxd that keeps them (0041).
   const lineage = threads.lineage && openThread ? lineageOf(threads.state, openThread) : undefined;
+  // The open thread's agent's own subagents, as its chat reports them (PLX-382).
+  const [native, setNative] = useState<{ threadId: string; list: NativeSubagent[] }>();
+  const reportNative = useCallback(
+    (threadId: string, list: NativeSubagent[]) => setNative({ threadId, list }),
+    [],
+  );
+  const subagents =
+    openThread && native?.threadId === openThread.id ? native.list : ([] as NativeSubagent[]);
+  const openSubagent = useCallback(
+    (threadId: string, callId?: string) =>
+      setSelection({ kind: "thread", threadId, subagent: callId }),
+    [],
+  );
+  const subagentOpen = selection.kind === "thread" ? selection.subagent : undefined;
   const openThreadId = (threadId: string) => openOnHost(host.id, { kind: "thread", threadId });
   // Where Go to parent, Next, and Previous sibling go. From a parent, Next and Previous open its
   // first and last child.
@@ -256,7 +343,7 @@ export function App() {
         onClick: agentId ? () => openAgent() : undefined,
       },
     ];
-    if (agentId) crumbs.push({ label: agent ? titleOf(agent) : "Subagent", icon: <Workflow /> });
+    if (agentTitle) crumbs.push({ label: agentTitle, icon: <Workflow /> });
   } else {
     const repo = {
       label: group.name,
@@ -271,6 +358,7 @@ export function App() {
         ? (threads.state.titles[selection.threadId] ?? "Thread")
         : "New thread";
     crumbs = [{ label: host.name }, repo, { label: page }];
+
     // A child's parent crumb takes its title's place, the chips naming it; a thread with both a
     // parent and children has the parent's crumb before its own.
     const parent = lineage?.parent;
@@ -283,7 +371,32 @@ export function App() {
         ? [crumbs[0]!, repo, back]
         : [crumbs[0]!, repo, back, { label: page }];
     }
+    // A fork's original, while it's listed, goes before the fork's own crumb (0050).
+    const original = threads.state.threads.find((t) => t.id === openThread?.forkedFrom?.run);
+    if (original)
+      crumbs.splice(-1, 0, {
+        label: `Forked from ${threads.state.titles[original.id] ?? "Thread"}`,
+        icon: <GitFork />,
+        onClick: () => openThreadId(original.id),
+      });
+    // An open subagent's crumb comes last, and its thread's, when shown, goes back to the thread.
+    if (selection.kind === "thread" && subagentOpen) {
+      const threadId = selection.threadId;
+      if (!lineage?.active)
+        crumbs[crumbs.length - 1] = { label: page, onClick: () => openSubagent(threadId) };
+      crumbs.push({
+        label: subagents.find((s) => s.callId === subagentOpen)?.title ?? "Subagent",
+        icon: <Bot />,
+      });
+    }
   }
+  // Forks a thread (0050) and opens the fork. Resolves to plxd's error, if it refused.
+  const forkThread = async (runId: string, turnId: string | undefined, choice: ForkChoice) => {
+    const forked = await threads.fork(runId, turnId, choice);
+    if (typeof forked !== "string") return forked;
+    openThreadId(forked);
+    return undefined;
+  };
 
   // A Project created on the open host is in its list already. Another host's list loads once
   // that host is open.
@@ -317,7 +430,7 @@ export function App() {
 
   // Where the open thread's or New thread's terminals open (folderOf).
   const folder =
-    settings || selection.kind === "usage" || selection.kind === "project"
+    settings || selection.kind === "project"
       ? undefined
       : folderOf(
           host.id,
@@ -358,14 +471,18 @@ export function App() {
       } else if (command === "noRepoThread") {
         if (!dialog) newThread(noRepo);
       } else if (command === "settings") openSettings("general");
-      else if (command === "usage") openOnHost(host.id, { kind: "usage" });
+      else if (command === "usage") openSettings("usage");
       else if (
         !dialog &&
         (command === "parentThread" || command === "nextThread" || command === "previousThread")
       ) {
-        const next = lineageStep(command);
-        if (!next) return;
-        openThreadId(next);
+        // In a Project, Go to parent goes from a child back to the coordinator.
+        if (command === "parentThread" && agentId && !settings) openAgent();
+        else {
+          const next = lineageStep(command);
+          if (!next) return;
+          openThreadId(next);
+        }
       } else return;
       e.preventDefault();
     };
@@ -385,8 +502,8 @@ export function App() {
       <PanelLeftOpen />
     </IconButton>
   );
-  // The side panel is a chat's, so Settings and Usage have none.
-  const chat = !settings && selection.kind !== "usage";
+  // The side panel is a chat's, so Settings has none.
+  const chat = !settings;
   const sidePanelOpen = panelOpen && chat;
   const expanded = sidePanelOpen && panelExpanded;
   // The main pane's top row meets the traffic lights without the sidebar, and
@@ -399,8 +516,9 @@ export function App() {
   return (
     <div className="flex h-full">
       {hosts.map((h) => (
-        <HostLoader key={h.id} hostId={h.id} onView={report} />
+        <HostLoader key={h.id} hostId={h.id} onView={report} onNeedsYou={needsYou} />
       ))}
+      <Notifications />
       <NewThreadPicker
         ref={picker}
         groups={groups}
@@ -449,24 +567,34 @@ export function App() {
               sourceControlHost={settingsHost}
             />
           </>
-        ) : selection.kind === "usage" ? (
-          <UsagePage hosts={hosts} leading={showSidebar} topBarClassName={topBarInset} />
         ) : (
           <>
             <TopBar className={`@container ${topBarInset}`}>
               {showSidebar}
+              {agentId && (
+                <IconButton
+                  label="Back to the coordinator"
+                  command="parentThread"
+                  onClick={() => openAgent()}
+                >
+                  <ArrowLeft />
+                </IconButton>
+              )}
               <Breadcrumb
                 items={crumbs}
                 trail={
-                  lineage &&
-                  openThread && (
+                  openThread &&
+                  (lineage || subagents.some((s) => !s.parent)) && (
                     <LineageTrail
                       state={threads.state}
-                      chips={lineage.chips}
-                      active={lineage.active}
+                      chips={lineage?.chips ?? []}
+                      active={lineage?.active}
                       root={rootOf(threads.state, openThread)}
                       openId={openThread.id}
                       onOpen={openThreadId}
+                      subagents={subagents.filter((s) => !s.parent)}
+                      activeSubagent={subagentOpen}
+                      onOpenSubagent={(callId) => openSubagent(openThread.id, callId)}
                     />
                   )
                 }
@@ -539,6 +667,15 @@ export function App() {
                 compose={compose}
                 onComposed={composed}
                 threadLinks={threadLinks}
+                subagent={selection.subagent}
+                onOpenSubagent={openSubagent}
+                onSubagents={reportNative}
+                forked={!!openThread?.forkedFrom}
+                onFork={
+                  threads.forkable
+                    ? (turnId, choice) => forkThread(selection.threadId, turnId, choice)
+                    : undefined
+                }
               />
             ) : selection.kind === "new" ? (
               <NewThread
@@ -566,10 +703,13 @@ export function App() {
                 key={`${host.id}/${agentId}`}
                 hostId={host.id}
                 runId={agentId}
+                title={agentTitle}
                 prompt={agent?.prompt}
                 // A Project's subagents are kept current.
                 going={isRunning(agent?.status)}
                 others={othersAsked(agentId)}
+                projectMode={project?.permission}
+                strip={project && <ChildStrip project={project} onBack={() => openAgent()} />}
               />
             ) : (
               project && (
@@ -579,13 +719,18 @@ export function App() {
                   project={project}
                   prompt={project.coordinator && threads.state.runs[project.coordinator]?.prompt}
                   startCoordinator={threads.startCoordinator}
+                  startTask={threads.startTask}
                   others={othersAsked(project.coordinator)}
+                  agents={agents}
+                  titles={threads.state.titles}
+                  needs={needs}
+                  onOpenRun={(id) => openAgent(id === project.coordinator ? undefined : id)}
                 />
               )
             )}
           </>
         )}
-        {/* Outside the views, so the terminals live on behind Settings and Usage. */}
+        {/* Outside the views, so the terminals live on behind Settings. */}
         <TerminalDrawer
           open={drawerOpen}
           folder={folder}
@@ -604,6 +749,21 @@ export function App() {
         remoteHost={host.id === localId ? undefined : host.name}
         browse={browse}
         pullRequest={showPr}
+        project={
+          project && {
+            waiting: waitingCount(project, agents, inbox),
+            home: (
+              <ProjectHome
+                project={project}
+                agents={agents}
+                titles={threads.state.titles}
+                inbox={inbox}
+                answerable={answerable}
+                onOpen={openAgent}
+              />
+            ),
+          }
+        }
         pullRequests={
           linksPrs && threadRun
             ? {
@@ -631,6 +791,7 @@ export function App() {
               // Another Project's start box starts empty, with its own retry id.
               key={`${host.id}/${project.id}`}
               agents={agents}
+              titles={threads.state.titles}
               openId={agentId}
               onOpen={openAgent}
               disabledReason={offline}
@@ -652,14 +813,25 @@ export function App() {
             />
           )
         }
-        context={
-          project && (
-            <ContextPanel
-              key={`${host.id}/${project.id}`}
+        knowledge={
+          (project || memory) && (
+            <KnowledgePanel
+              key={`${host.id}/${project?.id ?? memoryRepo}`}
               hostId={host.id}
-              project={project.id}
-              name={project.name}
+              project={project?.id}
+              repo={memoryRepo}
+              coordinator={
+                project?.coordinator
+                  ? agents.runs.find((r) => r.id === project.coordinator)
+                  : undefined
+              }
               connected={connected}
+              memory={!!memory}
+              inbox={project ? inbox : undefined}
+              working={agents.runs.some(
+                (r) => r.id !== project?.coordinator && isRunning(r.status),
+              )}
+              expanded={panelExpanded}
             />
           )
         }
@@ -681,9 +853,11 @@ export function App() {
 function HostLoader({
   hostId,
   onView,
+  onNeedsYou,
 }: {
   hostId: string;
   onView: (hostId: string, view: ThreadsView) => void;
+  onNeedsYou: (hostId: string, projectId: string, item: InboxItem) => void;
 }) {
   const connection = useConnection(hostId);
   const capabilities = connection?.status === "connected" ? connection.capabilities : undefined;
@@ -692,8 +866,13 @@ function HostLoader({
     attention: !!capabilities && "threadAttention" in capabilities,
     editable: !!capabilities && "projectEdit" in capabilities,
     deletable: !!capabilities && "projectDelete" in capabilities,
+    moded: !!capabilities && "projectPermission" in capabilities,
+    autonomous: !!capabilities && "projectAutonomy" in capabilities,
     iconImageBytes: iconImageBytes(connection),
     lineage: !!capabilities && "threadLineage" in capabilities,
+    autoResume: !!capabilities && "autoResume" in capabilities,
+    onNeedsYou: (projectId, item) => onNeedsYou(hostId, projectId, item),
+    forkable: !!capabilities && "threadFork" in capabilities,
   });
   useEffect(() => onView(hostId, view), [hostId, view, onView]);
   return null;

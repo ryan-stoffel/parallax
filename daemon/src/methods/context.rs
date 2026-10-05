@@ -125,7 +125,7 @@ fn write_context_file(
         )
         .map_err(io_error(name))?;
     let file = context::context_file(name, &metadata, writer);
-    let seq = daemon.log.append_blocking(
+    let seq = daemon.store.append_blocking(
         jiff::Timestamp::now(),
         Some(project),
         ParallaxEvent::ContextChanged { file: file.clone() },
@@ -146,6 +146,15 @@ pub(crate) async fn write(
         writer,
     } = params;
     let name = context::validate_relative_path(&path)?.to_owned();
+    // 0044's folders hold memory, which only `memory/*` and the memory tools write, so a child
+    // can't skip `memory_propose` and a coordinator's write always adds its `learned` item. The
+    // brief is the user's, written or approved by them, so it goes through `memory/*` too.
+    if name.contains('/') || name == "brief.md" {
+        return Err(ErrorObject::invalid_params(
+            "context/write takes one file name other than brief.md; the brief, memory, \
+             knowledge, history, and proposals are written through memory/*",
+        ));
+    }
     // A fast, redundant check: `write_context_file` enforces this cap too, but failing here skips
     // a project lookup and a trip to the blocking pool for a request that is invalid regardless.
     if content.len() as u64 > context::MAX_FILE_BYTES {

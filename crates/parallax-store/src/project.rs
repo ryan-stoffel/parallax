@@ -1,5 +1,5 @@
 use jiff::Timestamp;
-use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
 use crate::error::StoreError;
@@ -17,6 +17,12 @@ pub struct ProjectFields {
     pub icon: Option<ProjectIcon>,
     /// The permission mode, `auto` or `bypass` (decision record 0042).
     pub permission: String,
+    /// Who answers its children's questions, `ask`, `routine`, or `full` (decision record 0043).
+    pub autonomy: String,
+    /// The branch its integration branch is cut from and ships into (decision record 0045).
+    /// `None` means the repository's default branch, stored once the integration branch is cut,
+    /// and a retry that leaves it out matches any.
+    pub base_branch: Option<String>,
 }
 
 /// A project's icon, stored as the client sent it and never read
@@ -69,6 +75,16 @@ pub struct ProjectEdit {
     pub name: Option<String>,
     pub icon: Option<ProjectIcon>,
     pub permission: Option<String>,
+    pub autonomy: Option<String>,
+    pub base_branch: Option<String>,
+    pub auto_land: Option<bool>,
+    pub max_children: Option<u32>,
+    pub allow_api_keys: Option<bool>,
+    /// The checks command the user confirmed (PLX-411). Empty clears it, and setting it clears
+    /// the proposal.
+    pub checks: Option<String>,
+    /// The checks command its coordinator proposed (PLX-411). Empty clears it.
+    pub proposed_checks: Option<String>,
 }
 
 /// A project row.
@@ -79,6 +95,20 @@ pub struct Project {
     pub repo_path: String,
     pub icon: Option<ProjectIcon>,
     pub permission: String,
+    pub autonomy: String,
+    pub base_branch: Option<String>,
+    /// Its integration branch (decision record 0045), once plxd has cut it.
+    pub integration_branch: Option<String>,
+    /// Whether its children land without the user's approval (PLX-410, decision record 0045).
+    pub auto_land: bool,
+    /// How many of its children run at once (decision record 0046), 10 unless set.
+    pub max_children: u32,
+    /// Whether its children may run on an API key (decision record 0046), off unless set.
+    pub allow_api_keys: bool,
+    /// The checks command that runs after each landing (PLX-411, decision 0045), if any.
+    pub checks: Option<String>,
+    /// The checks command its coordinator proposed, which never runs until the user confirms it.
+    pub proposed_checks: Option<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -91,6 +121,14 @@ struct RawProject {
     repo_path: String,
     icon: Option<ProjectIcon>,
     permission: String,
+    autonomy: String,
+    base_branch: Option<String>,
+    integration_branch: Option<String>,
+    auto_land: bool,
+    max_children: u32,
+    allow_api_keys: bool,
+    checks: Option<String>,
+    proposed_checks: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -101,8 +139,16 @@ impl RawProject {
             id: row.get(0)?,
             name: row.get(1)?,
             repo_path: row.get(2)?,
-            icon: icon_from_row(row, 6)?,
+            icon: icon_from_row(row, 10)?,
             permission: row.get(5)?,
+            autonomy: row.get(8)?,
+            base_branch: row.get(6)?,
+            integration_branch: row.get(7)?,
+            auto_land: row.get(9)?,
+            max_children: row.get(14)?,
+            allow_api_keys: row.get(15)?,
+            checks: row.get(16)?,
+            proposed_checks: row.get(17)?,
             created_at: row.get(3)?,
             updated_at: row.get(4)?,
         })
@@ -113,6 +159,8 @@ impl RawProject {
             && self.repo_path == fields.repo_path
             && self.icon == fields.icon
             && self.permission == fields.permission
+            && self.autonomy == fields.autonomy
+            && (fields.base_branch.is_none() || self.base_branch == fields.base_branch)
     }
 
     fn into_project(self) -> Result<Project, StoreError> {
@@ -122,6 +170,14 @@ impl RawProject {
             repo_path: self.repo_path,
             icon: self.icon,
             permission: self.permission,
+            autonomy: self.autonomy,
+            base_branch: self.base_branch,
+            integration_branch: self.integration_branch,
+            auto_land: self.auto_land,
+            max_children: self.max_children,
+            allow_api_keys: self.allow_api_keys,
+            checks: self.checks,
+            proposed_checks: self.proposed_checks,
             created_at: timestamp::parse(&self.created_at)?,
             updated_at: timestamp::parse(&self.updated_at)?,
         })
@@ -132,7 +188,9 @@ fn fetch_raw(conn: &Connection, id_text: &str) -> Result<Option<RawProject>, Sto
     Ok(conn
         .query_row(
             &format!(
-                "SELECT id, name, repo_path, created_at, updated_at, permission, {ICON_COLUMNS}
+                "SELECT id, name, repo_path, created_at, updated_at, permission, base_branch,
+                     integration_branch, autonomy, auto_land, {ICON_COLUMNS}, max_children,
+                     allow_api_keys, checks, proposed_checks
                  FROM projects WHERE id = ?1"
             ),
             params![id_text],
@@ -175,14 +233,12 @@ impl Store {
         let now = timestamp::now();
 
         let (icon_name, icon_color, image_type, image_data) = icon_columns(fields.icon.as_ref());
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         tx.execute(
             &format!(
                 "INSERT INTO projects (id, name, repo_path, created_at, updated_at, permission,
-                     {ICON_COLUMNS})
-                 VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?9)
+                     base_branch, autonomy, {ICON_COLUMNS})
+                 VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT (id) DO NOTHING"
             ),
             params![
@@ -191,6 +247,8 @@ impl Store {
                 fields.repo_path,
                 now,
                 fields.permission,
+                fields.base_branch,
+                fields.autonomy,
                 icon_name,
                 icon_color,
                 image_type,
@@ -231,7 +289,9 @@ impl Store {
     /// are corrupt.
     pub fn list_projects(&self) -> Result<Vec<Project>, StoreError> {
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT id, name, repo_path, created_at, updated_at, permission, {ICON_COLUMNS}
+            "SELECT id, name, repo_path, created_at, updated_at, permission, base_branch,
+                     integration_branch, autonomy, auto_land, {ICON_COLUMNS}, max_children,
+                     allow_api_keys, checks, proposed_checks
              FROM projects
              ORDER BY created_at ASC, id ASC"
         ))?;
@@ -244,12 +304,12 @@ impl Store {
         Ok(projects)
     }
 
-    /// Renames project `id`, or sets its icon or permission mode, as `edit` says, and returns
-    /// the project with whether anything changed. When nothing would
-    /// change, it writes nothing.
+    /// Renames project `id`, or sets its icon, permission mode, autonomy level, base branch,
+    /// automatic landing, placement settings, or checks, as `edit` says, and returns the project
+    /// with whether anything changed. When nothing would change, it writes nothing.
     ///
     /// `repo_path` never changes, and `updated_at` stays as it is: a rename,
-    /// a new icon, or a new mode is not activity (decision record 0032).
+    /// a new icon, a new mode, or a new level is not activity (decision record 0032).
     ///
     /// # Errors
     ///
@@ -261,9 +321,7 @@ impl Store {
         edit: &ProjectEdit,
     ) -> Result<(Project, bool), StoreError> {
         let id_text = id.to_string();
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         let mut raw = fetch_raw(&tx, &id_text)?.ok_or(StoreError::NotFound { id })?;
 
         let mut changed = false;
@@ -283,12 +341,56 @@ impl Store {
             raw.permission.clone_from(permission);
             changed = true;
         }
+        if let Some(autonomy) = &edit.autonomy
+            && *autonomy != raw.autonomy
+        {
+            raw.autonomy.clone_from(autonomy);
+            changed = true;
+        }
+        if edit.base_branch.is_some() && edit.base_branch != raw.base_branch {
+            raw.base_branch.clone_from(&edit.base_branch);
+            changed = true;
+        }
+        if let Some(auto_land) = edit.auto_land
+            && auto_land != raw.auto_land
+        {
+            raw.auto_land = auto_land;
+            changed = true;
+        }
+        if let Some(max) = edit.max_children
+            && max != raw.max_children
+        {
+            raw.max_children = max;
+            changed = true;
+        }
+        if let Some(allow) = edit.allow_api_keys
+            && allow != raw.allow_api_keys
+        {
+            raw.allow_api_keys = allow;
+            changed = true;
+        }
+        if let Some(checks) = &edit.checks {
+            let checks = (!checks.is_empty()).then(|| checks.clone());
+            if checks != raw.checks || raw.proposed_checks.is_some() {
+                raw.checks = checks;
+                raw.proposed_checks = None;
+                changed = true;
+            }
+        } else if let Some(proposed) = &edit.proposed_checks {
+            let proposed = (!proposed.is_empty()).then(|| proposed.clone());
+            if proposed != raw.proposed_checks {
+                raw.proposed_checks = proposed;
+                changed = true;
+            }
+        }
 
         if changed {
             let (icon_name, icon_color, image_type, image_data) = icon_columns(raw.icon.as_ref());
             tx.execute(
                 "UPDATE projects SET name = ?2, icon_name = ?3, icon_color = ?4,
-                     icon_image_type = ?5, icon_image_data = ?6, permission = ?7
+                     icon_image_type = ?5, icon_image_data = ?6, permission = ?7,
+                     base_branch = ?8, autonomy = ?9, auto_land = ?10, max_children = ?11,
+                     allow_api_keys = ?12, checks = ?13, proposed_checks = ?14
                  WHERE id = ?1",
                 params![
                     id_text,
@@ -297,7 +399,14 @@ impl Store {
                     icon_color,
                     image_type,
                     image_data,
-                    raw.permission
+                    raw.permission,
+                    raw.base_branch,
+                    raw.autonomy,
+                    raw.auto_land,
+                    raw.max_children,
+                    raw.allow_api_keys,
+                    raw.checks,
+                    raw.proposed_checks
                 ],
             )?;
             tx.commit()?;
@@ -305,7 +414,28 @@ impl Store {
         Ok((raw.into_project()?, changed))
     }
 
-    /// Deletes a project by id, if it exists, with its inbox (PLX-401).
+    /// Records project `id`'s integration branch once plxd has cut it from `base` (decision
+    /// record 0045), and `base` as its base branch when it had none. Returns whether a row changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error.
+    pub fn set_integration_branch(
+        &self,
+        id: Uuid,
+        branch: &str,
+        base: &str,
+    ) -> Result<bool, StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE projects SET integration_branch = ?2, base_branch = COALESCE(base_branch, ?3)
+             WHERE id = ?1 AND (integration_branch IS NOT ?2 OR base_branch IS NULL)",
+            params![id.to_string(), branch, base],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Deletes a project by id, if it exists, with its inbox (PLX-401), questions (PLX-402),
+    /// landing queue (PLX-410), and children waiting to be placed (PLX-413).
     ///
     /// Returns whether a row was deleted.
     ///
@@ -313,10 +443,12 @@ impl Store {
     ///
     /// Returns a database error.
     pub fn delete_project(&self, id: Uuid) -> Result<bool, StoreError> {
-        self.conn.execute(
-            "DELETE FROM inbox WHERE project_id = ?1",
-            params![id.to_string()],
-        )?;
+        for table in ["inbox", "questions", "landings", "placements"] {
+            self.conn.execute(
+                &format!("DELETE FROM {table} WHERE project_id = ?1"),
+                params![id.to_string()],
+            )?;
+        }
         let changed = self.conn.execute(
             "DELETE FROM projects WHERE id = ?1",
             params![id.to_string()],
