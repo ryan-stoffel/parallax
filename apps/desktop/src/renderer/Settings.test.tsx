@@ -584,6 +584,30 @@ test("Storage deletes only a host's archived threads, after asking", async () =>
   expect(calls("thread/delete")).toEqual([{ host: "local", params: { runId: "t-old" } }]);
 });
 
+test("Storage turns a host's merged worktree cleanup off", async () => {
+  window.parallax.storage = async () => [];
+  states["local"] = {
+    status: "connected",
+    plxd: "0.1.0",
+    protocol: 1,
+    capabilities: { worktreeCleanup: {} },
+  };
+  answers["thread/list"] = () => ({ result: { repos: [], threads: [] } });
+  answers["host/settings/get"] = () => ({ result: { autoResume: true, cleanWorktrees: true } });
+  answers["host/settings/set"] = () => ({ result: { autoResume: true, cleanWorktrees: false } });
+  await renderSettings("storage");
+  const toggle = document.querySelector<HTMLButtonElement>(
+    '[role="switch"][aria-label="Clean up merged worktrees"]',
+  )!;
+  expect(toggle.getAttribute("aria-checked")).toBe("true");
+  await click(toggle);
+  expect(calls("host/settings/set")).toEqual([
+    { host: "local", params: { cleanWorktrees: false } },
+  ]);
+  expect(toggle.getAttribute("aria-checked")).toBe("false");
+  states["local"] = { status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} };
+});
+
 test("Connections renames this computer", async () => {
   const renameLocal = vi.fn(async () => undefined);
   window.parallax.renameLocal = renameLocal;

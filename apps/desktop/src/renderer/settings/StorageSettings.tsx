@@ -12,11 +12,13 @@ import {
   quietButton,
   Row,
   Section,
+  Switch,
 } from "./parts";
 
 /**
  * Settings > Storage: what Parallax keeps on this computer and its size, each folder openable,
- * Clear for the cache, and a host's archived threads, which Delete removes with their worktrees.
+ * Clear for the cache, whether a host cleans up merged worktrees, and a host's archived threads,
+ * which Delete removes with their worktrees.
  */
 export function StorageSettings() {
   const platform = window.parallax.platform;
@@ -85,8 +87,77 @@ export function StorageSettings() {
           </Row>
         ))}
       </Section>
+      <WorktreeCleanup />
       <ArchivedThreads />
     </>
+  );
+}
+
+/**
+ * Whether a host removes a settled thread's worktree once its pull request merges
+ * (`host/settings`, `cleanWorktrees`, PLX-555).
+ */
+function WorktreeCleanup() {
+  const hosts = useHosts();
+  const [hostId, setHostId] = useState(localId);
+  const connection = useConnection(hostId);
+  const supported =
+    connection?.status === "connected" && "worktreeCleanup" in connection.capabilities;
+  const [on, setOn] = useState<boolean>();
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    setOn(undefined);
+    setError(undefined);
+    if (!supported) return;
+    let stale = false;
+    void window.parallax.request(hostId, "host/settings/get", {}).then((answer) => {
+      if (stale) return;
+      if ("error" in answer) setError(describeError(answer.error));
+      else setOn(answer.result.cleanWorktrees ?? true);
+    });
+    return () => {
+      stale = true;
+    };
+  }, [hostId, supported]);
+  const set = async (cleanWorktrees: boolean) => {
+    setOn(cleanWorktrees);
+    const answer = await window.parallax.request(hostId, "host/settings/set", { cleanWorktrees });
+    if ("error" in answer) {
+      setOn(!cleanWorktrees);
+      setError(describeError(answer.error));
+    } else {
+      setOn(answer.result.cleanWorktrees ?? cleanWorktrees);
+      setError(undefined);
+    }
+  };
+
+  return (
+    <Section
+      title="Worktrees"
+      action={<HostPicker hosts={hosts} value={hostId} onChange={setHostId} />}
+    >
+      <Row
+        title="Clean up merged worktrees"
+        description={
+          error ? (
+            <span role="alert" className="text-danger">
+              {error}
+            </span>
+          ) : connection?.status === "connected" && !supported ? (
+            "This host's plxd can't clean up worktrees."
+          ) : (
+            "When a settled thread's pull request merges, Parallax deletes its worktree and branch. The thread stays."
+          )
+        }
+      >
+        <Switch
+          label="Clean up merged worktrees"
+          checked={on ?? false}
+          disabled={on === undefined}
+          onChange={(next) => void set(next)}
+        />
+      </Row>
+    </Section>
   );
 }
 

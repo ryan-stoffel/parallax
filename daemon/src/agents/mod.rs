@@ -46,6 +46,7 @@
 mod actor;
 mod approvals;
 pub(crate) mod attached;
+pub(crate) mod cleanup;
 pub(crate) mod compact;
 pub(crate) mod convert;
 pub(crate) mod coordinator;

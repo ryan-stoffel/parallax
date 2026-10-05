@@ -183,6 +183,8 @@ pub(crate) fn initialize(
 /// and answers it with the run and the log's `seq`; an older plxd would page from the start.
 /// `commandIds` (PLX-482, 0052): every request may carry `commandId` in its params. Listed
 /// methods keep a receipt so a retry returns the first result.
+/// `worktreeCleanup` (PLX-555): `cleanWorktrees` in `host/settings`, which an older plxd would
+/// silently ignore, and the sweep that removes a settled thread's merged worktree.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -248,6 +250,7 @@ fn capabilities_advertised() -> Capabilities {
         ("threadLineage".to_owned(), serde_json::Map::new()),
         ("threadTools".to_owned(), serde_json::Map::new()),
         ("threads".to_owned(), serde_json::Map::new()),
+        ("worktreeCleanup".to_owned(), serde_json::Map::new()),
     ]))
 }
 
@@ -295,7 +298,10 @@ pub(crate) async fn set_settings(
     context: &Context,
     params: HostSettingsSetParams,
 ) -> Result<HostSettings, ErrorObject> {
-    let HostSettingsSetParams { auto_resume } = params;
+    let HostSettingsSetParams {
+        auto_resume,
+        clean_worktrees,
+    } = params;
     context
         .daemon
         .store
@@ -303,6 +309,13 @@ pub(crate) async fn set_settings(
             if let Some(on) = auto_resume {
                 db.set_auto_resume(on).map_err(|e| store_error(&e))?;
                 info!(auto_resume = on, "changed the host's auto-resume setting");
+            }
+            if let Some(on) = clean_worktrees {
+                db.set_clean_worktrees(on).map_err(|e| store_error(&e))?;
+                info!(
+                    clean_worktrees = on,
+                    "changed the host's worktree cleanup setting"
+                );
             }
             read_settings(db)
         })
@@ -312,6 +325,7 @@ pub(crate) async fn set_settings(
 fn read_settings(db: &parallax_store::Store) -> Result<HostSettings, ErrorObject> {
     Ok(HostSettings {
         auto_resume: db.auto_resume().map_err(|e| store_error(&e))?,
+        clean_worktrees: Some(db.clean_worktrees().map_err(|e| store_error(&e))?),
     })
 }
 

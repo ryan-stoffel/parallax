@@ -102,6 +102,10 @@ pub struct HostSettingsSetParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub auto_resume: Option<bool>,
+    /// The new `cleanWorktrees`, behind the `worktreeCleanup` capability. Absent leaves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub clean_worktrees: Option<bool>,
 }
 
 /// This host's settings, the result of `host/settings/get` and `host/settings/set`.
@@ -112,6 +116,12 @@ pub struct HostSettings {
     /// (PLX-371, decision 0049). On by default. A run's own `autoResume` overrides it. Turning it
     /// off stops a waiting run from resuming when its timer fires.
     pub auto_resume: bool,
+    /// Whether plxd removes a settled thread's worktree and local branch once its linked pull
+    /// requests have merged (PLX-555). On by default. The thread and its transcript stay. An
+    /// older plxd, without the `worktreeCleanup` capability, leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub clean_worktrees: Option<bool>,
 }
 
 #[cfg(test)]

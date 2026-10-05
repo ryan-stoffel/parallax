@@ -93,6 +93,16 @@ impl WorktreeManager {
         Ok(status)
     }
 
+    /// The full hash of `folder`'s `HEAD` commit.
+    ///
+    /// # Errors
+    ///
+    /// [`WorktreeError::GitFailed`], [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`].
+    pub async fn head(&self, folder: RunFolder<'_>) -> Result<String, WorktreeError> {
+        let head = self.folder_git_ok(folder, &["rev-parse", "HEAD"]).await?;
+        Ok(head.trim().to_owned())
+    }
+
     /// Stages every change in `folder` and commits it with `message`, as the identity
     /// `repo_root`'s configuration gives (see [`WorktreeManager::resolve_identity`]). Returns
     /// `None`, committing nothing, if there is nothing to commit.

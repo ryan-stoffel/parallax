@@ -336,6 +336,7 @@ async fn the_host_setting_turns_it_off() {
     let settings = client
         .call::<HostSettingsSet>(HostSettingsSetParams {
             auto_resume: Some(false),
+            ..HostSettingsSetParams::default()
         })
         .await
         .unwrap();
