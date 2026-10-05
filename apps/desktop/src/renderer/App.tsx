@@ -21,7 +21,7 @@ import { GitMenu } from "./GitMenu";
 import { KnowledgePanel } from "./Knowledge";
 import { LineageTrail } from "./Lineage";
 import { NewThread } from "./NewThread";
-import { panelWidths } from "./PanelResize";
+import { panelWidths, SIDEBAR_MIN } from "./PanelResize";
 import { NewThreadPicker } from "./NewThreadPicker";
 import { Notifications } from "./notifications";
 import { localId, useHosts } from "./hosts";
@@ -546,7 +546,7 @@ export function App() {
     setRequestedWidths((widths) => {
       const next: [number, number] = [...widths];
       next[side] = Math.max(
-        Math.min(200, maximum),
+        Math.min(side === 0 ? SIDEBAR_MIN : 200, maximum),
         Math.min(side === 0 ? 400 : 640, maximum, value),
       );
       if (other) next[side === 0 ? 1 : 0] = other;
