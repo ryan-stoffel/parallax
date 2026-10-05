@@ -1188,6 +1188,7 @@ pub(crate) async fn update_repo(
 pub(crate) async fn delete(
     daemon: &Arc<Daemon>,
     run_id: RunId,
+    command_id: Option<Uuid>,
 ) -> Result<ThreadDeleteResult, ErrorObject> {
     store(daemon, move |db| {
         db.get_thread(run_id.into())
@@ -1195,7 +1196,7 @@ pub(crate) async fn delete(
             .ok_or_else(|| thread_not_found(run_id))
     })
     .await?;
-    agents::delete(daemon, run_id, false)
+    agents::delete_command(daemon, run_id, command_id)
         .await
         .map_err(|error| {
             let gone = error
@@ -1221,6 +1222,7 @@ pub(crate) async fn purge(
     daemon: &Arc<Daemon>,
     run_id: RunId,
     worktree: Option<parallax_store::Worktree>,
+    command_id: Option<Uuid>,
 ) -> Result<(), ErrorObject> {
     let thread = store(daemon, move |db| {
         let id = Uuid::from(run_id);
@@ -1263,6 +1265,7 @@ pub(crate) async fn purge(
                 );
             }
         }
+        crate::commands::complete(db, command_id, &ThreadDeleteResult {})?;
         Ok(deleted)
     })
     .await?;

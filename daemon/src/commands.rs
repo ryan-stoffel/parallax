@@ -169,14 +169,14 @@ pub(crate) fn run_id_of(params: &impl Serialize) -> Option<String> {
 }
 
 /// Deletes claims that have no result and no `effect_id`. Call once at start, before recover.
-pub(crate) async fn purge_incomplete(daemon: &Daemon) {
-    let _ = daemon
+pub(crate) async fn purge_incomplete(daemon: &Daemon) -> Result<(), ErrorObject> {
+    daemon
         .store
         .run(&CancellationToken::new(), |db| {
             db.delete_incomplete_claims().map_err(|e| store_error(&e))?;
             Ok(())
         })
-        .await;
+        .await
 }
 
 /// Runs `handler` after claiming, fills the receipt on success, and deletes it on a clean
@@ -201,17 +201,17 @@ where
         .await;
     match ran {
         Ok(Ok(result)) => {
-            let value = serde_json::to_value(&result).map_err(ErrorObject::internal_error)?;
-            finish(daemon, &id, Ok(value.clone())).await;
-            Ok(value)
+            let outcome = serde_json::to_value(&result).map_err(ErrorObject::internal_error);
+            finish(daemon, &id, outcome.clone()).await?;
+            outcome
         }
         Ok(Err(error)) => {
-            finish(daemon, &id, Err(error.clone())).await;
+            finish(daemon, &id, Err(error.clone())).await?;
             Err(error)
         }
         Err(_) => {
             let error = ErrorObject::internal_error("the request failed unexpectedly");
-            finish(daemon, &id, Err(error.clone())).await;
+            finish(daemon, &id, Err(error.clone())).await?;
             Err(error)
         }
     }
@@ -323,20 +323,37 @@ async fn wait_for(
     }
 }
 
-async fn finish(daemon: &Daemon, command_id: &str, outcome: Result<Value, ErrorObject>) {
+async fn finish(
+    daemon: &Daemon,
+    command_id: &str,
+    outcome: Result<Value, ErrorObject>,
+) -> Result<(), ErrorObject> {
     let stored = match &outcome {
         Ok(value) => serde_json::to_string(value),
         Err(error) => serde_json::to_string(error),
     };
     let id = command_id.to_owned();
     let fill = outcome.is_ok();
-    let _ = daemon
+    let persisted = daemon
         .store
         .run(&CancellationToken::new(), move |db| {
             match (stored, fill) {
                 (Ok(json), true) => {
-                    db.fill_command_receipt(&id, &json)
-                        .map_err(|e| store_error(&e))?;
+                    let row = db
+                        .command_receipt(&id)
+                        .map_err(|e| store_error(&e))?
+                        .ok_or_else(|| {
+                            ErrorObject::internal_error("the command receipt disappeared")
+                        })?;
+                    if row.result.is_none()
+                        && !db
+                            .fill_command_receipt(&id, &json)
+                            .map_err(|e| store_error(&e))?
+                    {
+                        return Err(ErrorObject::internal_error(
+                            "the command receipt disappeared",
+                        ));
+                    }
                 }
                 (Ok(_), false) => match db.command_receipt(&id).map_err(|e| store_error(&e))? {
                     Some(row) if row.result.is_some() => {}
@@ -345,14 +362,41 @@ async fn finish(daemon: &Daemon, command_id: &str, outcome: Result<Value, ErrorO
                     }
                     None => {}
                 },
-                (Err(_), _) => {
-                    let _ = db.delete_command_claim(&id);
-                }
+                (Err(error), _) => return Err(ErrorObject::internal_error(error)),
             }
             Ok(())
         })
         .await;
+    if let Err(error) = persisted {
+        // Keep a terminal failure for this process: the durable claim may still be incomplete.
+        // A later retry must fail explicitly rather than create a waiter with no owner.
+        if let Some(tx) = lock(&daemon.commands.waiters).get(command_id) {
+            tx.send_replace(Some(CommandOutcome::Ready(Err(error.clone()))));
+        }
+        return Err(error);
+    }
     daemon.commands.wake(command_id, outcome);
+    Ok(())
+}
+
+/// Complete a command in the same writer job as its mutation.
+pub(crate) fn complete<T: Serialize>(
+    db: &mut crate::store::Tx,
+    id: Option<Uuid>,
+    result: &T,
+) -> Result<(), ErrorObject> {
+    if let Some(id) = id {
+        let json = serde_json::to_string(result).map_err(ErrorObject::internal_error)?;
+        if !db
+            .fill_command_receipt(&id.hyphenated().to_string(), &json)
+            .map_err(|e| store_error(&e))?
+        {
+            return Err(ErrorObject::internal_error(
+                "the command receipt disappeared",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn decode_stored(json: &str) -> Result<Result<Value, ErrorObject>, ErrorObject> {

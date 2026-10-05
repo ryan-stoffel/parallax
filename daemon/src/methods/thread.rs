@@ -140,9 +140,10 @@ async fn delete(
     params: ThreadDeleteParams,
 ) -> Result<ThreadDeleteResult, ErrorObject> {
     let daemon = Arc::clone(&context.daemon);
+    let command_id = context.command_id;
     context
         .daemon
         .agents
-        .detached(async move { threads::delete(&daemon, params.run_id).await })
+        .detached(async move { threads::delete(&daemon, params.run_id, command_id).await })
         .await
 }

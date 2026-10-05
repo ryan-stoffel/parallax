@@ -1491,7 +1491,29 @@ pub(crate) async fn queue(
     run_id: RunId,
     op: QueueOp,
 ) -> Result<QueueResult, ErrorObject> {
-    ask(&daemon, run_id, |reply| Command::Queue { op, reply }).await
+    ask(&daemon, run_id, |reply| Command::Queue {
+        op,
+        command_id: None,
+        reply,
+    })
+    .await
+}
+
+pub(crate) async fn queue_command(
+    daemon: Arc<Daemon>,
+    run_id: RunId,
+    op: QueueOp,
+    command_id: Option<Uuid>,
+) -> Result<QueueResult, ErrorObject> {
+    if command_id.is_none() {
+        return queue(daemon, run_id, op).await;
+    }
+    ask(&daemon, run_id, |reply| Command::Queue {
+        op,
+        command_id,
+        reply,
+    })
+    .await
 }
 
 /// Starts the actor of every run that has waiting messages a plxd before this one stored, so
@@ -1647,7 +1669,25 @@ pub(super) fn approval_not_found(run: RunId, approval: ApprovalId) -> ErrorObjec
 /// push or Open PR in flight refuses it (`gitRefused`), unless `wait`, which waits for it to
 /// finish first, as `project/delete` does so it never stops with half its runs deleted (PLX-458).
 pub(crate) async fn delete(daemon: &Arc<Daemon>, id: RunId, wait: bool) -> Result<(), ErrorObject> {
-    ask(daemon, id, |reply| Command::Delete { wait, reply }).await
+    ask(daemon, id, |reply| Command::Delete {
+        wait,
+        command_id: None,
+        reply,
+    })
+    .await
+}
+
+pub(crate) async fn delete_command(
+    daemon: &Arc<Daemon>,
+    id: RunId,
+    command_id: Option<Uuid>,
+) -> Result<(), ErrorObject> {
+    ask(daemon, id, |reply| Command::Delete {
+        wait: false,
+        command_id,
+        reply,
+    })
+    .await
 }
 
 /// `agent/accept`: through the run's actor, so it never races the run's own CLI or commit.
@@ -2318,6 +2358,7 @@ mod tests {
         tokio::time::sleep(IDLE * 2).await;
         let (reply, answer) = oneshot::channel();
         let command = Command::Queue {
+            command_id: None,
             op: QueueOp::List,
             reply,
         };

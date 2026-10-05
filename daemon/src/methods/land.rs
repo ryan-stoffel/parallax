@@ -83,6 +83,7 @@ fn refused(message: impl Into<String>) -> ErrorObject {
 /// sent back stays as it is.
 async fn queue(context: &Context, params: LandQueueParams) -> Result<LandResult, ErrorObject> {
     let run_id = params.run_id;
+    let command_id = context.command_id;
     let (row, task, fresh) = context
         .daemon
         .store
@@ -97,6 +98,13 @@ async fn queue(context: &Context, params: LandQueueParams) -> Result<LandResult,
             if let Some(existing) = existing
                 && [WAITING, QUEUED, SENT_BACK].contains(&existing.status.as_str())
             {
+                crate::commands::complete(
+                    store,
+                    command_id,
+                    &LandResult {
+                        landing: landing(&existing)?,
+                    },
+                )?;
                 return Ok((existing, task, false));
             }
             let worktree = store.get_worktree(run.id).map_err(|e| store_error(&e))?;
@@ -136,6 +144,13 @@ async fn queue(context: &Context, params: LandQueueParams) -> Result<LandResult,
                 queued_at: Timestamp::now(),
             };
             store.put_landing(&row).map_err(|e| store_error(&e))?;
+            crate::commands::complete(
+                store,
+                command_id,
+                &LandResult {
+                    landing: landing(&row)?,
+                },
+            )?;
             Ok((row, task, true))
         })
         .await?;
@@ -154,8 +169,26 @@ async fn approve(context: &Context, params: LandApproveParams) -> Result<LandRes
         queued_at: Timestamp::now(),
         ..row
     };
-    put(&context.daemon, row.clone()).await?;
-    let landing = landing(&row)?;
+    let result = LandResult {
+        landing: landing(&row)?,
+    };
+    let stored_row = row.clone();
+    let command_id = context.command_id;
+    context
+        .daemon
+        .store
+        .run(&context.cancel, move |db| {
+            db.put_landing(&stored_row).map_err(|e| store_error(&e))?;
+            crate::commands::complete(
+                db,
+                command_id,
+                &LandResult {
+                    landing: landing(&stored_row)?,
+                },
+            )
+        })
+        .await?;
+    let landing = result.landing;
     drive(&context.daemon, landing.project);
     Ok(LandResult { landing })
 }

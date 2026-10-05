@@ -111,6 +111,77 @@ async fn an_unfinished_claim_is_deleted_on_restart_and_a_retry_runs_again() {
     );
 }
 
+#[tokio::test]
+async fn receipt_failure_rolls_back_delete_and_retries_do_not_wait_without_an_owner() {
+    let dir = temp_dir();
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
+    let project = client
+        .call::<ProjectCreate>(create_params(dir.path(), "receipt-failure"))
+        .await
+        .unwrap()
+        .project;
+    let db = rusqlite::Connection::open(dir.path().join("plxd.sqlite3")).unwrap();
+    db.execute_batch("CREATE TRIGGER fail_receipt_fill BEFORE UPDATE ON command_receipts BEGIN SELECT RAISE(FAIL, 'receipt fill failed'); END;
+        CREATE TRIGGER fail_receipt_delete BEFORE DELETE ON command_receipts BEGIN SELECT RAISE(FAIL, 'receipt delete failed'); END;").unwrap();
+    let id = Uuid::now_v7();
+    let params = ProjectDeleteParams {
+        project: project.id,
+    };
+    assert!(
+        call_with_command::<ProjectDelete>(&mut client, params.clone(), id)
+            .await
+            .is_err()
+    );
+    // Both completing and cleaning up the claim fail. A later retry has no running owner.
+    let retry = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        call_with_command::<ProjectDelete>(&mut client, params, id),
+    )
+    .await
+    .expect("abandoned claim must not hang");
+    assert!(retry.is_err());
+    assert_eq!(names(&mut client).await, vec!["receipt-failure"]);
+    let result: Option<String> = db
+        .query_row(
+            "SELECT result FROM command_receipts WHERE command_id = ?1",
+            [id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn deleted_project_receipt_survives_restart() {
+    let dir = temp_dir();
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
+    let project = client
+        .call::<ProjectCreate>(create_params(dir.path(), "durable"))
+        .await
+        .unwrap()
+        .project;
+    let id = Uuid::now_v7();
+    let params = ProjectDeleteParams {
+        project: project.id,
+    };
+    let first = call_with_command::<ProjectDelete>(&mut client, params.clone(), id)
+        .await
+        .unwrap();
+    drop(client);
+    plxd.signal(Signal::TERM);
+    let _ = plxd.exit().await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
+    assert_eq!(
+        call_with_command::<ProjectDelete>(&mut client, params, id)
+            .await
+            .unwrap(),
+        first
+    );
+}
+
 async fn names(client: &mut Client) -> Vec<String> {
     let listed: ProjectListResult = client
         .call::<ProjectList>(ProjectListParams {})

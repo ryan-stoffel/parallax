@@ -269,16 +269,16 @@ async fn usage_method(context: &Context, request: &Request) -> Option<Result<Val
 async fn cursor_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
     Some(match request.method.as_str() {
         CursorSignIn::NAME => {
-            handle::<CursorSignIn, _, _>(request, |p| cursor::sign_in(context, p)).await
+            handle::<CursorSignIn, _, _>(context, request, |p| cursor::sign_in(context, p)).await
         }
         CursorSignInCancel::NAME => {
-            handle::<CursorSignInCancel, _, _>(request, |p| {
+            handle::<CursorSignInCancel, _, _>(context, request, |p| {
                 ready(Ok(cursor::sign_in_cancel(context, p)))
             })
             .await
         }
         CursorSignOut::NAME => {
-            handle::<CursorSignOut, _, _>(request, |p| cursor::sign_out(context, p)).await
+            handle::<CursorSignOut, _, _>(context, request, |p| cursor::sign_out(context, p)).await
         }
         _ => return None,
     })

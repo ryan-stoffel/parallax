@@ -70,6 +70,7 @@ async fn ask(context: &Context, params: QuestionAskParams) -> Result<QuestionRes
     } = params;
     check("question", &question)?;
     check("assumption", &assumption)?;
+    let command_id = context.command_id;
     let (row, prompt, coordinator, autonomy) = context
         .daemon
         .store
@@ -109,6 +110,13 @@ async fn ask(context: &Context, params: QuestionAskParams) -> Result<QuestionRes
                 delivered_to: None,
             };
             db.add_question(&row).map_err(|e| store_error(&e))?;
+            crate::commands::complete(
+                db,
+                command_id,
+                &QuestionResult {
+                    question: to_wire(row.clone())?,
+                },
+            )?;
             Ok((row, asker.fields.prompt, coordinator, autonomy))
         })
         .await?;
@@ -144,6 +152,7 @@ async fn answer(
     } = params;
     check("text", &text)?;
     let answered = text.clone();
+    let command_id = context.command_id;
     let (before, prompt, status) = context
         .daemon
         .store
@@ -164,6 +173,19 @@ async fn answer(
             };
             db.set_question(row.id, status, Some(&answered))
                 .map_err(|e| store_error(&e))?;
+            if from.is_none() && same(row.answer.as_deref().unwrap_or(&row.assumption), &answered) {
+                crate::commands::complete(
+                    db,
+                    command_id,
+                    &QuestionResult {
+                        question: to_wire(parallax_store::Question {
+                            status: status.to_owned(),
+                            answer: Some(answered),
+                            ..row.clone()
+                        })?,
+                    },
+                )?;
+            }
             Ok((row, prompt, status))
         })
         .await?;
@@ -181,8 +203,20 @@ async fn answer(
         inbox::add(&context.daemon, project, child, InboxKind::Decided, line).await;
     }
     let told = before.answer.as_deref().unwrap_or(&before.assumption);
-    if !same(told, &text) {
-        tell(context, &before, &text, from).await?;
+    if !same(told, &text)
+        && let Err(error) = tell(context, &before, &text, from).await
+    {
+        // The answer row already committed. Keep the failure so retry cannot deliver twice.
+        let command_id = context.command_id;
+        let stored_error = error.clone();
+        context
+            .daemon
+            .store
+            .run(&context.cancel, move |db| {
+                crate::commands::complete(db, command_id, &stored_error)
+            })
+            .await?;
+        return Err(error);
     }
     Ok(QuestionResult {
         question: to_wire(parallax_store::Question {
@@ -198,6 +232,7 @@ async fn escalate(
     params: QuestionEscalateParams,
 ) -> Result<QuestionResult, ErrorObject> {
     let QuestionEscalateParams { question, from } = params;
+    let command_id = context.command_id;
     let (row, prompt) = context
         .daemon
         .store
@@ -206,6 +241,13 @@ async fn escalate(
             open_for(db, &row, from, "escalate")?;
             db.set_question(row.id, ESCALATED, None)
                 .map_err(|e| store_error(&e))?;
+            let result = QuestionResult {
+                question: to_wire(parallax_store::Question {
+                    status: ESCALATED.to_owned(),
+                    ..row.clone()
+                })?,
+            };
+            crate::commands::complete(db, command_id, &result)?;
             Ok((row, prompt))
         })
         .await?;

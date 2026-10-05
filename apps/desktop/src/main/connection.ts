@@ -50,7 +50,7 @@ const RECEIPTED_METHODS = new Set([
   "thread/delete",
 ]);
 
-/** Mutating methods: a new commandId each time, reused when the same params are retried. */
+/** Mutating methods get one commandId per logical request, including its transport retry. */
 const MUTATING_METHODS = new Set([
   ...RECEIPTED_METHODS,
   "agent/start",
@@ -90,8 +90,6 @@ const MUTATING_METHODS = new Set([
   "github/signInCancel",
   "pr/act",
 ]);
-
-type CommandRetry = { commandId: string; inFlight: number; failed: boolean };
 
 /** The wait before reconnect attempt `failures + 1`: 1 s, doubling, capped at 10 s. */
 export const backoffMs = (failures: number) => Math.min(1000 * 2 ** failures, 10_000);
@@ -147,7 +145,7 @@ export class Connection {
   private heartbeatTimer?: NodeJS.Timeout;
   private livenessTimer?: NodeJS.Timeout;
   private readonly subscriptions = new Set<Subscription>();
-  private readonly commandRetries = new Map<string, CommandRetry>();
+  private readonly reconnectWaiters = new Set<() => void>();
 
   constructor(private readonly options: ConnectionOptions) {}
 
@@ -166,6 +164,7 @@ export class Connection {
   dispose(): void {
     this.subscriptions.clear();
     this.teardown();
+    for (const done of this.reconnectWaiters) done();
   }
 
   request<M extends keyof ParallaxRequests>(
@@ -178,11 +177,39 @@ export class Connection {
         error: { code: ErrorCodes.InternalError, message: "not connected" },
       });
     }
-    const outgoing = withCommandId(this.commandRetries, method, params);
-    // Only this client answers, and a new log needs a new connection, so this is its log.
-    return client.request(method, outgoing, REQUEST_TIMEOUT_MS).then((response) => {
-      settleCommand(this.commandRetries, method, params, !("error" in response));
-      return "result" in response ? { ...response, logId } : response;
+    const outgoing = withCommandId(method, params);
+    // Keep each attempt's log id with its response.
+    return client.request(method, outgoing, REQUEST_TIMEOUT_MS).then(async (first) => {
+      let response = first;
+      let responseLogId = logId;
+      if (RECEIPTED_METHODS.has(method) && "error" in first) {
+        // Retry only transport failures, once, within this logical request.
+        const retryClient =
+          this.client !== client
+            ? await this.afterReconnect()
+            : first.error.code === ErrorCodes.RequestCancelled
+              ? client
+              : undefined;
+        if (retryClient && this.logId !== undefined) {
+          responseLogId = this.logId;
+          response = await retryClient.request(method, outgoing, REQUEST_TIMEOUT_MS);
+        }
+      }
+      return "result" in response ? { ...response, logId: responseLogId } : response;
+    });
+  }
+
+  private afterReconnect(): Promise<RpcClient | undefined> {
+    if (this.state.status === "connected") return Promise.resolve(this.client);
+    if (this.state.status === "failed" && !this.state.retrying) return Promise.resolve(undefined);
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.reconnectWaiters.delete(done);
+        resolve(this.state.status === "connected" ? this.client : undefined);
+      };
+      const timer = setTimeout(done, REQUEST_TIMEOUT_MS);
+      this.reconnectWaiters.add(done);
     });
   }
 
@@ -310,6 +337,7 @@ export class Connection {
       protocol: result.protocol,
       capabilities: result.capabilities,
     });
+    for (const done of this.reconnectWaiters) done();
     for (const subscription of this.subscriptions) this.sendSubscribe(subscription);
   }
 
@@ -400,45 +428,12 @@ export class Connection {
   }
 }
 
-function commandKey<M extends keyof ParallaxRequests>(
-  method: M,
-  params: ParallaxRequests[M]["params"],
-): string {
-  return `${method}:${JSON.stringify(params)}`;
-}
-
 function withCommandId<M extends keyof ParallaxRequests>(
-  retries: Map<string, CommandRetry>,
   method: M,
   params: ParallaxRequests[M]["params"],
 ): ParallaxRequests[M]["params"] {
   if (!MUTATING_METHODS.has(method)) return params;
-  const key = commandKey(method, params);
-  let entry = retries.get(key);
-  if (!entry || (entry.inFlight === 0 && !entry.failed)) {
-    entry = { commandId: crypto.randomUUID(), inFlight: 0, failed: false };
-    retries.set(key, entry);
-  }
-  entry.inFlight += 1;
-  return { ...(params as object), commandId: entry.commandId } as ParallaxRequests[M]["params"];
-}
-
-function settleCommand<M extends keyof ParallaxRequests>(
-  retries: Map<string, CommandRetry>,
-  method: M,
-  params: ParallaxRequests[M]["params"],
-  ok: boolean,
-): void {
-  const key = commandKey(method, params);
-  const entry = retries.get(key);
-  if (!entry) return;
-  entry.inFlight = Math.max(0, entry.inFlight - 1);
-  if (ok) {
-    if (entry.inFlight === 0) retries.delete(key);
-    else entry.failed = false;
-  } else {
-    entry.failed = true;
-  }
+  return { ...(params as object), commandId: crypto.randomUUID() } as ParallaxRequests[M]["params"];
 }
 
 function spawnAttach(file: string, args: string[]): ChildProcessWithoutNullStreams {
