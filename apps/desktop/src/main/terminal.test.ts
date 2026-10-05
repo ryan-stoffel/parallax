@@ -120,6 +120,11 @@ test("installs a CLI with its own script in the login shell, here or over ssh", 
     "-lc",
     "curl -fsSL https://pi.dev/install.sh | sh",
   ]);
+  // A Windows SSH host gets PowerShell's, by the OS its plxd reports.
+  expect((installCommand("claude", mini, "darwin", {}, "windows") as Command).args.at(-1)).toBe(
+    'powershell -NoLogo -NoProfile -Command "irm https://claude.ai/install.ps1 | iex"',
+  );
+  expect(installCommand("antigravity", mini, "darwin", {}, "windows")).toMatch(/can't install/);
   // Antigravity has no Windows install, so it says so instead.
   expect(installCommand("antigravity", undefined, "win32")).toMatch(/can't install/);
   expect(installCommand("codex", mini, "darwin")).toMatchObject({ file: "ssh" });

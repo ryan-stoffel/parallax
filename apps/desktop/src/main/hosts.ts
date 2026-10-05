@@ -253,11 +253,16 @@ export function startHosts(): void {
       const { hostId, cli, provider, install, path } = target;
       if (typeof hostId !== "string") return "invalid terminal";
       if (isInstallable(install)) {
-        // A host that's gone has no ssh target, and mustn't install here instead.
-        const command = async () =>
-          connections.has(hostId)
-            ? installCommand(install, sshOf(hostId))
-            : "That host isn't in Parallax anymore.";
+        const command = async () => {
+          // A host that's gone has no ssh target, and mustn't install here instead.
+          const host = connections.get(hostId);
+          if (!host) return "That host isn't in Parallax anymore.";
+          const ssh = sshOf(hostId);
+          // An SSH host's OS decides its shell; this computer's is known.
+          const version = ssh ? await host.request("host/version", {}) : undefined;
+          const os = version && "result" in version ? version.result.os : undefined;
+          return installCommand(install, ssh, process.platform, process.env, os);
+        };
         return openTerminal(event.sender, id, command, cols, rows);
       }
       if (isCliKind(cli)) {

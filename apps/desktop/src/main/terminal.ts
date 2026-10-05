@@ -132,22 +132,32 @@ export const isInstallable = (value: unknown): value is string =>
 
 /**
  * The command that installs an agent of `kind` on a host: its install script in the user's login
- * shell, so it finds `npm` where the user would (PowerShell on Windows), or on an SSH host, the
- * host's. Resolves to an error for people when it has no install for Windows.
- * ponytail: an SSH host is assumed POSIX; a Windows one over ssh fails.
+ * shell, so it finds `npm` where the user would, or PowerShell on Windows. An SSH host runs it over
+ * `ssh -t`, by `hostOs` as its plxd's `host/version` gives it (`windows` on Windows). Resolves to
+ * an error for people when it has no install for Windows.
  */
 export function installCommand(
   kind: string,
   ssh?: SshTarget,
   platform = process.platform,
   env = process.env,
+  hostOs?: string,
 ): Command | string {
   const script = installScripts[kind]!;
-  if (ssh) return overSsh(ssh, `exec "$SHELL" -lc ${quote(script.posix)}`, [], platform);
-  if (platform === "win32")
-    return script.windows
-      ? { file: "powershell.exe", args: ["-NoLogo", "-NoProfile", "-Command", script.windows] }
-      : "Parallax can't install this agent on Windows. Download it, then set its binary path.";
+  const windows = ssh ? hostOs === "windows" : platform === "win32";
+  if (windows && !script.windows)
+    return "Parallax can't install this agent on Windows. Download it, then set its binary path.";
+  if (ssh)
+    return overSsh(
+      ssh,
+      windows
+        ? `powershell -NoLogo -NoProfile -Command "${script.windows}"`
+        : `exec "$SHELL" -lc ${quote(script.posix)}`,
+      [],
+      platform,
+    );
+  if (windows)
+    return { file: "powershell.exe", args: ["-NoLogo", "-NoProfile", "-Command", script.windows!] };
   return { file: env["SHELL"] || "/bin/sh", args: ["-lc", script.posix] };
 }
 
