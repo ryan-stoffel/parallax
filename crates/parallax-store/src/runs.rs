@@ -552,6 +552,7 @@ pub(crate) fn delete_run_rows(conn: &Connection, id: Uuid) -> Result<bool, Store
         "queued",
         "questions",
         "landings",
+        "thread_text",
     ] {
         conn.execute(
             &format!("DELETE FROM {table} WHERE run_id = ?1"),

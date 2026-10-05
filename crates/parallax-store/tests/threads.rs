@@ -268,6 +268,7 @@ fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
             data: "iVBORw0KGgo=".to_owned(),
         };
         store.add_images(run, &[(image, stored)]).unwrap();
+        store.index_run_text(run).unwrap();
     }
 
     assert!(store.delete_thread(gone).unwrap());
@@ -281,6 +282,15 @@ fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
     assert!(store.run_events(gone, 0, 10, 1 << 20).unwrap().0.is_empty());
     assert_eq!(store.run_turns(gone).unwrap(), []);
     assert_eq!(store.image(gone, image).unwrap(), None);
+    let found: Vec<Uuid> = (store.search_threads("flaky", 10).unwrap())
+        .iter()
+        .map(|thread| thread.id)
+        .collect();
+    assert_eq!(
+        found,
+        [kept],
+        "a deleted run's text leaves the search index"
+    );
 
     assert!(store.get_thread(kept).unwrap().is_some());
     assert!(store.get_run(kept).unwrap().is_some());
@@ -289,22 +299,33 @@ fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
     assert!(store.image(kept, image).unwrap().is_some());
 }
 
-#[test]
-fn search_matches_titles_prompts_turns_and_replies_but_not_tool_calls_newest_first() {
-    let (_dir, mut store) = open();
-    let repo = store
-        .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/parallax"))
-        .unwrap();
-    let thread = |store: &mut Store, prompt: &str| {
+/// Makes threads with a prompt and logs their `agent.output` events, for the search tests.
+struct Threads {
+    repo: Uuid,
+    seq: u64,
+}
+
+impl Threads {
+    fn new(store: &mut Store) -> Self {
+        let repo = store
+            .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/parallax"))
+            .unwrap();
+        Self {
+            repo: repo.id,
+            seq: 0,
+        }
+    }
+
+    fn thread(&self, store: &mut Store, prompt: &str) -> Uuid {
         let id = Uuid::now_v7();
         let fields = RunFields {
             prompt: prompt.to_owned(),
-            ..run_fields(repo.id)
+            ..run_fields(self.repo)
         };
         store
             .create_thread_run(
                 id,
-                repo.id,
+                self.repo,
                 &fields,
                 &state(),
                 Some(&worktree_fields(id)),
@@ -312,75 +333,214 @@ fn search_matches_titles_prompts_turns_and_replies_but_not_tool_calls_newest_fir
             )
             .unwrap();
         id
-    };
-    let output = |store: &mut Store, seq, run, items: &str| {
+    }
+
+    fn output(&mut self, store: &Store, run: Uuid, items: &str) {
+        self.seq += 1;
         let payload = format!(r#"{{"kind":"agent.output","runId":"{run}","items":{items}}}"#);
         store
             .append_event(&StoredEvent {
-                seq,
+                seq: self.seq,
                 time: "2026-09-26T12:00:00Z".parse().unwrap(),
-                project_id: Some(repo.id),
+                project_id: Some(self.repo),
                 run_id: Some(run),
                 kind: "agent.output".to_owned(),
                 payload,
             })
             .unwrap();
-    };
-    let prompted = thread(&mut store, "Fix the flaky attach test.");
-    let followed_up = thread(&mut store, "Rename the sidebar");
+    }
+}
+
+fn found(store: &Store, query: &str, limit: usize) -> Vec<Uuid> {
     store
-        .record_turn(followed_up, Uuid::now_v7(), "Also the 50% case")
-        .unwrap();
-    let replied = thread(&mut store, "Look into CI");
-    output(
-        &mut store,
-        1,
+        .search_threads(query, limit)
+        .unwrap()
+        .iter()
+        .map(|thread| thread.id)
+        .collect()
+}
+
+fn indexed_rows(path: &std::path::Path) -> i64 {
+    Connection::open(path)
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM thread_text", [], |row| row.get(0))
+        .unwrap()
+}
+
+#[test]
+fn search_matches_titles_prompts_turns_and_replies_but_not_tool_calls() {
+    let (_dir, mut store) = open();
+    let mut threads = Threads::new(&mut store);
+    let prompted = threads.thread(&mut store, "Fix the flaky attach test.");
+    let followed_up = threads.thread(&mut store, "Rename the sidebar");
+    threads.output(
+        &store,
+        followed_up,
+        r#"[{"kind":"turnStarted","text":"Also the 50% case"}]"#,
+    );
+    let replied = threads.thread(&mut store, "Look into CI");
+    threads.output(
+        &store,
         replied,
         r#"[{"kind":"text","text":"The \"flaky\" attach test passes now"}]"#,
     );
-    let tool_only = thread(&mut store, "Read the logs");
-    let titled = thread(&mut store, "Go");
+    let tool_only = threads.thread(&mut store, "Read the logs");
+    threads.output(
+        &store,
+        tool_only,
+        r#"[{"kind":"toolCall","callId":"1","name":"Bash","input":{"command":"grep flaky"}},
+            {"kind":"toolResult","callId":"1","status":"ok","output":"flaky"}]"#,
+    );
+    let titled = threads.thread(&mut store, "Go");
     let title = ThreadUpdate {
         title: Some(Some("Quarantine the attach test".to_owned())),
         ..ThreadUpdate::default()
     };
     store.update_thread(titled, &title).unwrap();
-    output(
-        &mut store,
-        2,
-        tool_only,
-        r#"[{"kind":"toolCall","callId":"1","name":"Bash","input":{"command":"grep flaky"}},
-            {"kind":"toolResult","callId":"1","status":"ok","output":"flaky"}]"#,
+    assert!(
+        found(&store, "flaky", 10).is_empty(),
+        "a run's text is indexed when its turn ends"
     );
-    let ids = |store: &Store, query: &str, limit| -> Vec<Uuid> {
-        store
-            .search_threads(query, limit)
-            .unwrap()
-            .iter()
-            .map(|thread| thread.id)
-            .collect()
-    };
+    for run in [prompted, followed_up, replied, tool_only, titled] {
+        store.index_run_text(run).unwrap();
+    }
 
     assert_eq!(
-        ids(&store, "FLAKY", 10),
-        [replied, prompted],
-        "case-insensitive, newest message first, and a tool call's text doesn't count"
+        found(&store, "FLAKY", 10),
+        [prompted, replied],
+        "case-insensitive, the shorter message first, and a tool call's text doesn't count"
     );
     assert_eq!(
-        ids(&store, "\"flaky\"", 10),
-        [replied],
-        "a reply's JSON-escaped text still matches"
+        found(&store, "fla", 10),
+        [prompted, replied],
+        "a word prefix"
     );
-    assert_eq!(ids(&store, "50%", 10), [followed_up], "a follow-up matches");
-    assert!(
-        ids(&store, "5_", 10).is_empty(),
-        "`_` is literal, not a wildcard"
-    );
-    assert_eq!(ids(&store, "flaky", 1), [replied], "the limit holds");
     assert_eq!(
-        ids(&store, "attach test", 10),
-        [titled, replied, prompted],
-        "a title matches"
+        found(&store, "50%", 10),
+        [followed_up],
+        "a follow-up matches"
+    );
+    assert_eq!(found(&store, "flaky", 1), [prompted], "the limit holds");
+    assert_eq!(
+        found(&store, "attach test", 10),
+        [titled, prompted, replied],
+        "a title matches, first"
+    );
+}
+
+#[test]
+fn search_ranks_by_bm25_then_newest() {
+    let (_dir, mut store) = open();
+    let threads = Threads::new(&mut store);
+    let long = "Look at the flaky test and then rename the sidebar and the menu";
+    let often = threads.thread(&mut store, "The flaky test is flaky again, so flaky");
+    let once = threads.thread(&mut store, long);
+    let same = threads.thread(&mut store, long);
+    for run in [often, once, same] {
+        store.index_run_text(run).unwrap();
+    }
+    assert_eq!(found(&store, "flaky", 10), [often, same, once]);
+}
+
+/// Quotes and FTS5 operators in a query are plain text: they never fail a search.
+#[test]
+fn search_takes_quotes_and_operators_as_text() {
+    let (_dir, mut store) = open();
+    let threads = Threads::new(&mut store);
+    let run = threads.thread(&mut store, "Fix the \"flaky\" attach test (again)");
+    store.index_run_text(run).unwrap();
+
+    for query in [
+        "\"flaky\"",
+        "flaky\"",
+        "(flaky)",
+        "-flaky",
+        "^flaky",
+        "flaky*",
+        "'flaky'",
+        "flaky !",
+        "\"flaky attach\"",
+    ] {
+        assert_eq!(found(&store, query, 10), [run], "{query}");
+    }
+    for query in [
+        "\"", "*", "(", "%", "\"\" OR", "AND", "NEAR(x", "text:x", "x NOT",
+    ] {
+        assert!(found(&store, query, 10).is_empty(), "{query}");
+    }
+}
+
+/// A turn's text becomes searchable when the turn ends, once however often it's indexed.
+#[test]
+fn a_new_turn_becomes_searchable_when_it_ends() {
+    let (dir, mut store) = open();
+    let path = dir.path().join("parallax.sqlite3");
+    let mut threads = Threads::new(&mut store);
+    let run = threads.thread(&mut store, "Look into CI");
+    store.index_run_text(run).unwrap();
+    assert_eq!(found(&store, "CI", 10), [run], "the prompt alone");
+
+    threads.output(
+        &store,
+        run,
+        r#"[{"kind":"textDelta","messageId":"m","text":"The ca"}]"#,
+    );
+    threads.output(
+        &store,
+        run,
+        r#"[{"kind":"text","messageId":"m","text":"The cache was stale"}]"#,
+    );
+    assert!(found(&store, "stale", 10).is_empty(), "mid-turn");
+    store.index_run_text(run).unwrap();
+    assert_eq!(found(&store, "stale", 10), [run]);
+    store.index_run_text(run).unwrap();
+    assert_eq!(
+        indexed_rows(&path),
+        2,
+        "the prompt, then the turn, and nothing again"
+    );
+}
+
+/// Migration 36 indexes a store's existing runs from their events.
+#[test]
+fn the_search_index_is_backfilled_from_existing_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("parallax.sqlite3");
+    let mut store = Store::open(&path).unwrap();
+    let mut threads = Threads::new(&mut store);
+    let run = threads.thread(&mut store, "Look into CI");
+    threads.output(
+        &store,
+        run,
+        r#"[{"kind":"text","text":"The cache was stale"}]"#,
+    );
+    threads.output(
+        &store,
+        run,
+        r#"[{"kind":"turnStarted","text":"Now the sidebar"},
+            {"kind":"toolResult","callId":"1","status":"ok","output":"grep output"}]"#,
+    );
+    let quiet = threads.thread(&mut store, "Nothing logged yet");
+    drop(store);
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "DROP TABLE thread_text_fts; DROP TABLE thread_text;
+             DELETE FROM schema_version WHERE version = 36;",
+        )
+        .unwrap();
+
+    let store = Store::open(&path).unwrap();
+    for query in ["CI", "stale", "sidebar"] {
+        assert_eq!(found(&store, query, 10), [run], "{query}");
+    }
+    assert!(found(&store, "grep", 10).is_empty(), "tool output");
+    assert_eq!(found(&store, "logged", 10), [quiet], "a run with no events");
+    store.index_run_text(run).unwrap();
+    assert_eq!(
+        indexed_rows(&path),
+        2,
+        "the backfill covers the events it read"
     );
 }
 

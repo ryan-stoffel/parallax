@@ -329,8 +329,8 @@ export type ParallaxRequests = {
 	 */
 	"github/status": { params: GithubStatusParams, result: GithubStatus },
 	/**
-	 * `thread/search`: the host's threads whose messages contain a query, the one with the
-	 * newest message first (PLX-372). Gated on the `threadContext` capability.
+	 * `thread/search`: the host's threads whose title or messages match a query, the best
+	 * match first (PLX-372, PLX-487). Gated on the `threadContext` capability.
 	 */
 	"thread/search": { params: ThreadSearchParams, result: ThreadSearchResult },
 	/**
@@ -4506,9 +4506,10 @@ export type GithubSignIn = {
  * Params of `thread/search`: finds threads by what was said in them (PLX-372, decision 0047),
  * behind the `threadContext` capability.
  *
- * Matches `query` anywhere in a thread's messages: the user's, Parallax's wake-ups, and the
- * agent's replies, but not its tool calls. Case-insensitive for ASCII letters. An empty query
- * fails with `invalidParams`.
+ * Matches a thread whose title contains `query`, or whose messages hold every word of it: the
+ * user's, Parallax's wake-ups, and the agent's replies, but not its tool calls. A word matches
+ * any word it starts, ignoring case, accents, and punctuation (PLX-487). A message is
+ * searchable once its turn ends. An empty query fails with `invalidParams`.
  */
 export type ThreadSearchParams = {
 	/**
@@ -4526,7 +4527,8 @@ export type ThreadSearchParams = {
  */
 export type ThreadSearchResult = {
 	/**
-	 * The matching threads, the one with the newest message first.
+	 * The matching threads: title matches first, then the best match by `bm25`, then the one
+	 * with the newest message.
 	 */
 	threads: Array<Thread>,
 };

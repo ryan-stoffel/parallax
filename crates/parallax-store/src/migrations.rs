@@ -476,6 +476,42 @@ const MIGRATIONS: &[Migration] = &[
         ALTER TABLE projects ADD COLUMN proposed_checks TEXT;
         ALTER TABLE landings ADD COLUMN failures INTEGER NOT NULL DEFAULT 0;",
     },
+    // `thread/search`'s full-text index (PLX-487): a run's messages, its prompt and follow-ups
+    // and the agent's `text` replies, never tool calls or their output. `Store::index_run_text`
+    // adds a row when a turn ends, and `seq` is the newest event the row covers, 0 for the
+    // prompt alone. `thread_text_fts` indexes `text` without a copy of it, and the triggers keep
+    // it in step; `delete_run_rows` deletes a run's rows. Existing runs get one row each.
+    Migration {
+        version: 36,
+        sql: "CREATE TABLE thread_text (
+            id INTEGER PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            text TEXT NOT NULL
+        );
+        CREATE INDEX thread_text_run ON thread_text (run_id, seq);
+        CREATE VIRTUAL TABLE thread_text_fts USING fts5(
+            text, content = 'thread_text', content_rowid = 'id',
+            tokenize = 'unicode61 remove_diacritics 2'
+        );
+        CREATE TRIGGER thread_text_insert AFTER INSERT ON thread_text BEGIN
+            INSERT INTO thread_text_fts (rowid, text) VALUES (new.id, new.text);
+        END;
+        CREATE TRIGGER thread_text_delete AFTER DELETE ON thread_text BEGIN
+            INSERT INTO thread_text_fts (thread_text_fts, rowid, text)
+            VALUES ('delete', old.id, old.text);
+        END;
+        INSERT INTO thread_text (run_id, seq, text)
+        SELECT runs.id, COALESCE(MAX(texts.seq), 0),
+            runs.prompt || COALESCE(char(10) || group_concat(texts.text, char(10)), '')
+        FROM runs LEFT JOIN (
+            SELECT events.run_id, events.seq, json_extract(item.value, '$.text') AS text
+            FROM events, json_each(events.payload, '$.items') AS item
+            WHERE events.kind = 'agent.output'
+                AND json_extract(item.value, '$.kind') IN ('text', 'turnStarted')
+        ) AS texts ON texts.run_id = runs.id AND texts.text IS NOT NULL
+        GROUP BY runs.id;",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

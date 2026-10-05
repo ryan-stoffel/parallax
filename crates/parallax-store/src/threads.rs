@@ -186,6 +186,23 @@ fn like_pattern(text: &str) -> String {
     pattern
 }
 
+/// `query` as an FTS5 query for [`Store::search_threads`]: every word of it, each as a prefix.
+/// Each word is quoted, its own quotes doubled, so nothing in it is an operator. A word with no
+/// letter or digit is dropped, as the tokenizer would drop it; with none left, the query is
+/// `""`, which matches nothing.
+fn match_query(query: &str) -> String {
+    let words: Vec<String> = query
+        .split_whitespace()
+        .filter(|word| word.chars().any(char::is_alphanumeric))
+        .map(|word| format!("\"{}\"*", word.replace('"', "\"\"")))
+        .collect();
+    if words.is_empty() {
+        "\"\"".to_owned()
+    } else {
+        words.join(" ")
+    }
+}
+
 fn fetch_repo(conn: &Connection, sql_where: &str, key: &str) -> Result<Option<Repo>, StoreError> {
     conn.query_row(
         &format!("SELECT {REPO_COLUMNS} FROM repos WHERE {sql_where}"),
@@ -361,41 +378,67 @@ impl Store {
         Ok(threads)
     }
 
-    /// The threads whose title or messages contain `query`, the one with the newest message
-    /// first, at most `limit` (PLX-372). A message is the run's prompt, a sent turn's text, or the agent's
-    /// reply: a `text` item of the run's `agent.output` events. Tool calls and their output don't
-    /// count. Matching is SQLite's `LIKE`: case-insensitive for ASCII letters only.
+    /// The threads whose title contains `query` or whose messages hold every word of it, at most
+    /// `limit` (PLX-372, PLX-487). A message is the run's prompt, a sent turn's text, or the
+    /// agent's reply, as [`Store::index_run_text`] indexed them; tool calls and their output
+    /// don't count. A word matches any word it starts, ignoring case and accents, and punctuation
+    /// is ignored. Title matches come first, then the threads whose best message ranks highest
+    /// by `bm25`, then the one with the newest message.
     ///
     /// # Errors
     ///
     /// A database error, or an error if a stored id or timestamp is corrupt.
     pub fn search_threads(&self, query: &str, limit: usize) -> Result<Vec<Thread>, StoreError> {
-        let pattern = like_pattern(query);
-        // The event's JSON holds a reply's text JSON-escaped, so this cheap test on the raw
-        // payload finds every event that could match, and only those are parsed.
-        let escaped = serde_json::to_string(query).unwrap_or_default();
-        let payload_pattern = like_pattern(&escaped[1..escaped.len() - 1]);
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT {THREAD_COLUMNS} FROM threads WHERE
-                title LIKE ?1 ESCAPE '\\'
-                OR EXISTS (SELECT 1 FROM runs WHERE runs.id = threads.id
-                    AND runs.prompt LIKE ?1 ESCAPE '\\')
-                OR EXISTS (SELECT 1 FROM turns WHERE turns.run_id = threads.id
-                    AND turns.text LIKE ?1 ESCAPE '\\')
-                OR EXISTS (SELECT 1 FROM events, json_each(events.payload, '$.items') AS item
-                    WHERE events.run_id = threads.id AND events.kind = 'agent.output'
-                    AND events.payload LIKE ?2 ESCAPE '\\'
-                    AND json_extract(item.value, '$.kind') = 'text'
-                    AND json_extract(item.value, '$.text') LIKE ?1 ESCAPE '\\')
-             ORDER BY last_prompt_at DESC, id DESC LIMIT ?3"
+            "SELECT {THREAD_COLUMNS} FROM threads LEFT JOIN (
+                SELECT run_id, MIN(rank) AS rank FROM thread_text_fts
+                JOIN thread_text ON thread_text.id = thread_text_fts.rowid
+                WHERE thread_text_fts MATCH ?1 GROUP BY run_id
+             ) AS hits ON hits.run_id = threads.id
+             WHERE hits.rank IS NOT NULL OR title LIKE ?2 ESCAPE '\\'
+             ORDER BY title LIKE ?2 ESCAPE '\\' DESC, hits.rank IS NULL, hits.rank,
+                last_prompt_at DESC, id DESC
+             LIMIT ?3"
         ))?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let rows = stmt.query_map(params![pattern, payload_pattern, limit], thread_from_row)?;
+        let rows = stmt.query_map(
+            params![match_query(query), like_pattern(query), limit],
+            thread_from_row,
+        )?;
         let mut threads = Vec::new();
         for row in rows {
             threads.push(into_thread(row?)?);
         }
         Ok(threads)
+    }
+
+    /// Indexes `run_id`'s messages logged since its newest indexed row for
+    /// [`Store::search_threads`] (PLX-487), as one row: the `text` items and follow-up messages of
+    /// its newer `agent.output` events, and its prompt the first time. Called when a turn ends,
+    /// so a turn is one row however many batches it streamed in, and compacting the turn later
+    /// (decision record 0052) leaves the row alone. Does nothing if nothing is new.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn index_run_text(&self, run_id: Uuid) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO thread_text (run_id, seq, text)
+             SELECT ?1, MAX(seq), group_concat(text, char(10)) FROM (
+                SELECT 0 AS seq, prompt AS text FROM runs WHERE id = ?1
+                    AND NOT EXISTS (SELECT 1 FROM thread_text WHERE run_id = ?1)
+                UNION ALL
+                SELECT events.seq, json_extract(item.value, '$.text')
+                FROM events, json_each(events.payload, '$.items') AS item
+                WHERE events.run_id = ?1 AND events.kind = 'agent.output'
+                    AND events.seq > (SELECT COALESCE(MAX(seq), 0) FROM thread_text
+                        WHERE run_id = ?1)
+                    AND json_extract(item.value, '$.kind') IN ('text', 'turnStarted')
+                    AND json_extract(item.value, '$.text') IS NOT NULL
+             ) HAVING COUNT(*) > 0",
+            params![run_id.to_string()],
+        )?;
+        Ok(())
     }
 
     /// Archives thread `id` or brings it back, and returns it.

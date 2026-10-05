@@ -517,7 +517,8 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     // migration 27), the project branch columns (PLX-409's migration 29), the questions
     // table (PLX-402's migration 30), the project autonomy column (PLX-403's migration 31), the
     // landings table and auto-land column (PLX-410's migration 33), the placement columns and
-    // table (PLX-413's migration 34), or the checks columns (PLX-411's migration 35).
+    // table (PLX-413's migration 34), the checks columns (PLX-411's migration 35), or the search
+    // index (PLX-487's migration 36).
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
@@ -526,6 +527,7 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
              DROP TABLE host_settings; DROP TABLE inbox; DROP TABLE queued; DROP TABLE questions;
              DROP TABLE landings;
              DROP TABLE placements;
+             DROP TABLE thread_text_fts; DROP TABLE thread_text;
              ALTER TABLE worktrees DROP COLUMN git_dir;
              ALTER TABLE worktrees DROP COLUMN base_dirty;
              ALTER TABLE projects DROP COLUMN icon_name;

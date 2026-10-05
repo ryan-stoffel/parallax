@@ -322,9 +322,10 @@ pub struct ThreadStartParams {
 /// Params of `thread/search`: finds threads by what was said in them (PLX-372, decision 0047),
 /// behind the `threadContext` capability.
 ///
-/// Matches `query` anywhere in a thread's messages: the user's, Parallax's wake-ups, and the
-/// agent's replies, but not its tool calls. Case-insensitive for ASCII letters. An empty query
-/// fails with `invalidParams`.
+/// Matches a thread whose title contains `query`, or whose messages hold every word of it: the
+/// user's, Parallax's wake-ups, and the agent's replies, but not its tool calls. A word matches
+/// any word it starts, ignoring case, accents, and punctuation (PLX-487). A message is
+/// searchable once its turn ends. An empty query fails with `invalidParams`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSearchParams {
@@ -340,7 +341,8 @@ pub struct ThreadSearchParams {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSearchResult {
-    /// The matching threads, the one with the newest message first.
+    /// The matching threads: title matches first, then the best match by `bm25`, then the one
+    /// with the newest message.
     pub threads: Vec<Thread>,
 }
 

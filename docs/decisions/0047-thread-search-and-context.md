@@ -1,6 +1,6 @@
 # 0047: Threads are searched by their messages and attached to a prompt as a capped summary
 
-- Status: accepted
+- Status: accepted; search matching and order changed by PLX-487: an FTS5 index of each run's messages, filled when a turn ends, matched word by word as prefixes, title matches first, then `bm25`, then the newest message
 - Date: 2026-10-03
 - Issue: PLX-372 (part of PLX-368)
 
