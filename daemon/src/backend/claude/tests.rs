@@ -1593,13 +1593,18 @@ async fn a_follow_up_answered_before_its_write_is_reported_still_ends() {
         .filter(|event| {
             matches!(
                 event,
-                Event::TurnStarted { .. } | Event::TurnFinished { .. }
+                Event::TurnStarted { .. } | Event::TurnFinished { .. } | Event::Text { .. }
             )
         })
         .collect();
+    let text = |id: &str, text: &str| Event::Text {
+        message_id: Some(id.into()),
+        text: text.into(),
+    };
     assert_eq!(
         turns,
         [
+            &text("msg_01Ft1", "First answer."),
             &Event::TurnFinished {
                 turn_id: Some(turn(TURN_1)),
                 result: Some("First answer.".into())
@@ -1607,6 +1612,7 @@ async fn a_follow_up_answered_before_its_write_is_reported_still_ends() {
             &Event::TurnStarted {
                 turn_id: Some(turn(TURN_2))
             },
+            &text("msg_01Ft2", "Second answer."),
             &Event::TurnFinished {
                 turn_id: Some(turn(TURN_2)),
                 result: Some("Second answer.".into())

@@ -1345,9 +1345,8 @@ impl Driver {
                             }
                         }
                         Delivery::Failed(message) => {
-                            if self.unreported.remove(&message.uuid) {
-                                self.turns.retain(|(_, uuid)| *uuid != message.uuid);
-                            }
+                            self.unreported.remove(&message.uuid);
+                            self.turns.retain(|(_, uuid)| *uuid != message.uuid);
                             // stdin is gone, so no later message can arrive either.
                             stdin.close();
                             self.control.close();
@@ -1429,6 +1428,14 @@ impl Driver {
 
     async fn apply(&mut self, steps: Vec<Step>, stdin: &mut Stdin) {
         for step in steps {
+            // Turns finish in order, so output while the oldest outstanding turn is an unreported
+            // follow-up is that follow-up's: its TurnStarted goes first (PLX-523).
+            if matches!(step, Step::Emit(_) | Step::Ask(..))
+                && let Some((turn_id, uuid)) = self.turns.front().cloned()
+                && self.unreported.remove(&uuid)
+            {
+                self.emit(Event::TurnStarted { turn_id }).await;
+            }
             match step {
                 Step::Emit(event) => self.emit(event).await,
                 Step::Total(total) => {

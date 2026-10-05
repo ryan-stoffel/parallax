@@ -549,9 +549,10 @@ async fn drive(
             output = process.next() => {
                 // The CLI can read a follow-up and answer it before the writer reports writing
                 // it, so its output waits for that report and comes after its turn's TurnStarted
-                // (PLX-523); its exit doesn't, so a follow-up it never answered is dropped. ponytail: this stops reading the CLI's output meanwhile, which hangs
-                // a CLI that leaves a pipe's worth of follow-ups unread and then fills its stdout;
-                // scripts' follow-ups are far smaller.
+                // (PLX-523); its exit doesn't, so a follow-up it never answered is dropped.
+                // ponytail: this stops reading the CLI's output meanwhile, which hangs a CLI that
+                // leaves a pipe's worth of follow-ups unread and then fills its stdout; scripts'
+                // follow-ups are far smaller.
                 if !matches!(output, Some(Output::Exited(_)) | None) {
                     while writing > 0
                         && let Some(delivery) = recv(&mut stdin.results).await
