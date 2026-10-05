@@ -624,6 +624,16 @@ impl Providers {
                     .unwrap_or_else(|| "pi".to_owned()),
                 _ => program.clone(),
             };
+            // `npx` alone can't run Pi: the adapter needs the `pi` it runs.
+            if instance.kind == ProviderKind::Pi
+                && detect::resolve(&self.launcher, &versioned).is_none()
+            {
+                return Found {
+                    path: Some(path.display().to_string()),
+                    note: Some(format!("{versioned} isn't installed on this host")),
+                    ..Found::default()
+                };
+            }
             // Antigravity's server prints its build, not a version, and `npx` or `uvx` would print
             // their own: the agent's `initialize` says it instead.
             let launcher_program = ["npx", "uvx"].iter().any(|launcher| {
@@ -907,6 +917,18 @@ impl Backend for WithSecrets {
     ) -> Result<Option<crate::backend::CommandsProbe>, crate::backend::StartError> {
         // A command list needs no key, so it never waits on the keychain.
         self.plain.commands(cwd)
+    }
+
+    fn limits(
+        &self,
+        cwd: &Path,
+    ) -> Result<Option<crate::backend::LimitsProbe>, crate::backend::StartError> {
+        // An instance whose credential is a secret would read another login's limits without
+        // it, and reading it on every poll could wait on the keychain, so it reports none.
+        if self.entry.instance.env.iter().any(|var| var.secret) {
+            return Ok(None);
+        }
+        self.plain.limits(cwd)
     }
 }
 
@@ -1544,6 +1566,47 @@ mod tests {
         let reloaded = Providers::load(dir.path(), keys(), &launcher(), &registry);
         assert!(reloaded.stored.lock().await.is_empty(), "not seeded again");
         assert!(registry.by_backend_name("codex").is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pi_is_installed_only_when_its_pi_is_too() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::write(bin.join("npx"), "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(bin.join("npx"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let env: Environment = [("PATH", bin.display().to_string())].into_iter().collect();
+        let launcher = Launcher::new(DataDir::new(dir.path().join("data")).unwrap(), env);
+        let providers = Providers::load(
+            dir.path(),
+            Arc::new(MemoryKeyStore::new()),
+            &launcher,
+            &BackendRegistry::new(),
+        );
+        let entry = Stored {
+            instance: ProviderInstance {
+                id: "pi".into(),
+                kind: ProviderKind::Pi,
+                name: "Pi".into(),
+                enabled: true,
+                program: None,
+                home: None,
+                args: Vec::new(),
+                env: Vec::new(),
+                models: Vec::new(),
+                reserve: None,
+            },
+            secrets: None,
+        };
+        let detector = crate::detect::CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT);
+        let found = providers.probe(&detector, &entry, true).await;
+        assert!(!found.installed, "npx alone can't run Pi");
+        assert_eq!(
+            found.note.as_deref(),
+            Some("pi isn't installed on this host")
+        );
     }
 
     #[tokio::test]

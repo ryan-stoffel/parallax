@@ -8,6 +8,8 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 
+import { behaviorPrefs } from "./prefs";
+
 // Every notification the app shows (PLX-507): one stack of toasts in the window's top right, in
 // the update toast's look. Anything can call `notify`; App draws the stack once.
 
@@ -50,16 +52,19 @@ function set(next: readonly Shown[]) {
 
 /** Shows `notice` on top of the stack, in place of any with its key. */
 export function notify(notice: Notice) {
-  const id = nextId++;
-  const kept = shown.filter((n) => notice.key === undefined || n.key !== notice.key);
-  set([{ ...notice, id }, ...kept].slice(0, MAX_SHOWN));
-  if (notice.system && !document.hasFocus()) {
+  // Settings > General turns off the OS alerts and the toasts of notices that have an OS alert.
+  const { systemNotifications, inAppNotifications } = behaviorPrefs.get();
+  if (notice.system && !document.hasFocus() && systemNotifications) {
     const note = new Notification(notice.title, { body: notice.body });
     note.onclick = () => {
       window.focus();
       if (notice.action && "run" in notice.action) notice.action.run();
     };
   }
+  if (notice.system && !inAppNotifications) return;
+  const id = nextId++;
+  const kept = shown.filter((n) => notice.key === undefined || n.key !== notice.key);
+  set([{ ...notice, id }, ...kept].slice(0, MAX_SHOWN));
 }
 
 const close = (id: number) => set(shown.filter((n) => n.id !== id));

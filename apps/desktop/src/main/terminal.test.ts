@@ -1,7 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import type { CliKind } from "../protocol/generated/protocol";
-import { loginCommand, shellCommand, terminalEnv } from "./terminal";
+import { installCommand, loginCommand, shellCommand, terminalEnv, type Command } from "./terminal";
 
 const mini = { destination: "me@mini", ssh: "ssh" };
 
@@ -103,4 +103,32 @@ test("gives the terminal a UTF-8 LANG only when no locale is set", () => {
   expect(terminalEnv({ LANG: "fr_FR.UTF-8" })).toEqual({ LANG: "fr_FR.UTF-8" });
   expect(terminalEnv({ LC_CTYPE: "UTF-8" })).toEqual({ LC_CTYPE: "UTF-8" });
   expect(terminalEnv({ LC_ALL: "C" })).toEqual({ LC_ALL: "C" });
+});
+
+test("installs a CLI with its own script in the login shell, here or over ssh", () => {
+  expect(installCommand("claude", undefined, "darwin", { SHELL: "/bin/zsh" })).toEqual({
+    file: "/bin/zsh",
+    args: ["-lc", "curl -fsSL https://claude.ai/install.sh | bash"],
+  });
+  expect((installCommand("claude", undefined, "win32") as Command).args).toEqual([
+    "-NoLogo",
+    "-NoProfile",
+    "-Command",
+    "irm https://claude.ai/install.ps1 | iex",
+  ]);
+  expect((installCommand("pi", undefined, "linux", {}) as Command).args).toEqual([
+    "-lc",
+    "curl -fsSL https://pi.dev/install.sh | sh",
+  ]);
+  // A Windows SSH host gets PowerShell's, by the OS its plxd reports.
+  expect((installCommand("claude", mini, "darwin", {}, "windows") as Command).args.at(-1)).toBe(
+    'powershell -NoLogo -NoProfile -Command "irm https://claude.ai/install.ps1 | iex"',
+  );
+  expect(installCommand("antigravity", mini, "darwin", {}, "windows")).toMatch(/can't install/);
+  // Antigravity has no Windows install, so it says so instead.
+  expect(installCommand("antigravity", undefined, "win32")).toMatch(/can't install/);
+  expect(installCommand("codex", mini, "darwin")).toMatchObject({ file: "ssh" });
+  expect((installCommand("codex", mini, "darwin") as Command).args.at(-1)).toBe(
+    `exec "$SHELL" -lc 'npm install -g @openai/codex'`,
+  );
 });

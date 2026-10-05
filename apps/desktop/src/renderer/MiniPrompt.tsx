@@ -8,6 +8,7 @@ import { changeMessage } from "./MemoryPanel";
 import { useCatalog, type Instance, type Model } from "./models";
 import { kindOf, logoOf } from "./providers";
 import { uuidv7 } from "./uuidv7";
+import { behaviorPrefs } from "./prefs";
 
 /**
  * The prompt box in miniature, for changing a Project's knowledge in plain words ("we moved off
@@ -106,6 +107,8 @@ export function MiniPrompt({
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+            // Settings > General's send shortcut: Cmd/Ctrl+Enter sends, and Enter is a new line.
+            if (behaviorPrefs.get().sendKey === "modEnter" && !(e.metaKey || e.ctrlKey)) return;
             e.preventDefault();
             void send();
           }}

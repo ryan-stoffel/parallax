@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 
 import type { RpcResponse, SubscriptionMessage, ParallaxBridge } from "../preload/bridge";
 import type { Capabilities, ErrorKind, Repo, Thread } from "../protocol/generated/protocol";
+import { accessDefaults, accessPrefs } from "./accessPrefs";
 import { App } from "./App";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -56,6 +57,7 @@ beforeEach(() => {
   capabilities = {};
   nameThread.mockReset().mockResolvedValue({});
   localStorage.clear();
+  accessPrefs.set(accessDefaults);
   answers = {
     "thread/list": () => ({ result: { repos: [parallax], threads: [thread], seq: 7 } }),
     "agent/list": () => ({
@@ -390,21 +392,21 @@ describe("with plxd's run options", () => {
     answers["thread/start"] = started;
   });
 
-  test("Manual says its requests come to the chat only when plxd advertises approvals (PLX-196)", async () => {
+  test("Supervised says its requests come to the chat only when plxd advertises approvals (PLX-196)", async () => {
     const manual = () =>
       [
         ...document.querySelectorAll(
           'main [role="menu"][aria-label="Access"] [role="menuitemradio"]',
         ),
-      ].find((o) => o.textContent?.startsWith("Manual"))!.textContent;
+      ].find((o) => o.textContent?.startsWith("Supervised"))!.textContent;
     await renderApp();
     expect(manual()).toBe(
-      "ManualAsks before edits and commands. This host's plxd can't show those requests, so they're denied.",
+      "SupervisedAsks before edits and commands. This host's plxd can't show those requests, so they're denied.",
     );
     act(() => unmount());
     capabilities = { runOptions: {}, approvals: {} };
     await renderApp();
-    expect(manual()).toBe("ManualAsks you before edits and commands.");
+    expect(manual()).toBe("SupervisedAsks you before commands and file changes.");
   });
 
   test("New Thread sends the model, effort, and access it shows, and a changed one is a new start", async () => {
@@ -422,8 +424,17 @@ describe("with plxd's run options", () => {
     await renderApp();
     // No worker default yet, so Claude's choices, as the account chooser only offers Claude.
     expect(control("Model: Claude Opus 5.5")).not.toBeNull();
-    expect(control("Access: Accept Edits")).not.toBeNull();
+    expect(control("Access: Auto-accept edits")).not.toBeNull();
 
+    // Plan is a legacy level, so the picker lists it only once Settings turns it on.
+    const levels = () =>
+      [...document.querySelectorAll('[role="menu"][aria-label="Access"] [role="menuitemradio"]')]
+        .map((o) => o.textContent)
+        .join("|");
+    await act(async () => (control("Access: Auto-accept edits") as HTMLElement).click());
+    expect(levels()).not.toContain("Plan");
+    await act(async () => (control("Access: Auto-accept edits") as HTMLElement).click());
+    act(() => accessPrefs.set({ legacyPlan: true }));
     await pick("Claude Fable 5.1");
     await pick("Plan");
     const effort = (level: string) =>
@@ -494,9 +505,9 @@ describe("with plxd's run options", () => {
     });
     await renderApp();
     expect(control("Model: GPT-6.1 Sol")).not.toBeNull();
-    const access = control("Access: Accept Edits")!;
+    const access = control("Access: Auto-accept edits")!;
     const menu = document.getElementById(access.getAttribute("popovertarget")!)!;
-    expect(menu.textContent).toContain("Bypass Permissions");
+    expect(menu.textContent).toContain("Full access");
     expect(menu.textContent).not.toContain("Plan");
 
     await send("Tidy the README");

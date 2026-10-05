@@ -2,6 +2,7 @@
 // Project on it with a coordinator and seven children, a quiet second Project, and a few plain
 // threads. Times are relative to when the page loads, so ages in the sidebar read as recent.
 import type {
+  AccountLimits,
   AccountUsage,
   AgentCommand,
   AgentOutputItem,
@@ -61,6 +62,7 @@ export interface Fixtures {
   clis: DetectedCli[];
   keys: KeyAccount[];
   usage: AccountUsage[];
+  limits: AccountLimits[];
   usageHours: UsageHour[];
   usageDays: UsageDay[];
   commands: AgentCommand[];
@@ -1271,7 +1273,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
     signedIn: true,
     account: "Claude Max",
     models: [],
-    permissions: ["auto", "manual", "edit", "plan", "bypass"],
+    permissions: ["manual", "edit", "auto", "plan", "bypass"],
     efforts: true,
     coordinator: true,
     login: ["claude", "auth", "login"],
@@ -1294,7 +1296,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
       signedIn: true,
       account: "ChatGPT Pro",
       models: [],
-      permissions: ["auto", "manual", "edit", "bypass"],
+      permissions: ["manual", "edit", "auto", "bypass"],
       efforts: true,
       coordinator: true,
       login: ["codex", "login"],
@@ -1315,7 +1317,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
       version: "1.0.35",
       signedIn: false,
       models: [],
-      permissions: ["edit", "plan", "auto", "bypass"],
+      permissions: ["edit", "auto", "plan", "bypass"],
       efforts: false,
       coordinator: true,
     },
@@ -1366,6 +1368,28 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
       limits: [
         { window: "primary", usedPercent: 18, resetsAt: ahead(200), capturedAt: ago(5) },
         { window: "secondary", usedPercent: 27, resetsAt: ahead(60 * 24 * 5), capturedAt: ago(5) },
+      ],
+    },
+  ];
+  const limits: AccountLimits[] = [
+    {
+      accountId: "claude",
+      limits: [
+        { window: "five_hour", usedPercent: 9, resetsAt: ahead(260), capturedAt: ago(0) },
+        { window: "seven_day", usedPercent: 20, resetsAt: ahead(60 * 148), capturedAt: ago(0) },
+        {
+          window: "seven_day_fable",
+          usedPercent: 0,
+          resetsAt: ahead(60 * 148),
+          capturedAt: ago(0),
+        },
+      ],
+    },
+    {
+      accountId: "codex",
+      limits: [
+        { window: "five_hour", usedPercent: 5, resetsAt: ahead(280), capturedAt: ago(0) },
+        { window: "seven_day", usedPercent: 82, resetsAt: ahead(60 * 102), capturedAt: ago(0) },
       ],
     },
   ];
@@ -1462,6 +1486,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
     clis,
     keys: [],
     usage,
+    limits,
     usageHours,
     usageDays,
     commands,

@@ -583,6 +583,7 @@ const handlers: { [M in Method]?: Handler<M> } = {
     return {};
   },
   "usage/get": () => ({ accounts: db.usage }),
+  "usage/limits": () => ({ accounts: db.limits }),
   "usage/history": (p) => {
     const hours = db.usageHours.filter((h) => h.hour >= p.since);
     return {

@@ -159,9 +159,9 @@ pub use thread::{
     ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
 };
 pub use usage::{
-    AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageDay, UsageGetParams,
-    UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageHour, UsageLimitWindow,
-    UsagePeriod, UsageProblem, UsageSource,
+    AccountLimits, AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageDay,
+    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageHour,
+    UsageLimitWindow, UsageLimitsParams, UsageLimitsResult, UsagePeriod, UsageProblem, UsageSource,
 };
 
 /// The newest protocol version this crate speaks. Versions start at 1.

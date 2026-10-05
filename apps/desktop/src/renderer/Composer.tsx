@@ -4,10 +4,10 @@ import {
   FilePen,
   Hand,
   ListChecks,
+  LockOpen,
   LoaderCircle,
   MessagesSquare,
   Paperclip,
-  ShieldOff,
   Sparkles,
   Square,
   X,
@@ -37,37 +37,39 @@ import type {
 } from "../protocol/generated/protocol";
 import { lastPrompt } from "./attention";
 import { EffortMenu } from "./EffortMenu";
+import { accessPrefs } from "./accessPrefs";
 import { imageUrl, readImage, type ImageCaps } from "./images";
 import { useShortcutLabel } from "./keybindings";
 import { ModelMenu } from "./ModelMenu";
 import { PixelStack } from "./Pixels";
+import { behaviorPrefs, newThreadPrefs } from "./prefs";
 import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
 import { lookOf, ThreadChip, type AttachThreads } from "./threadContext";
 import { draggedThread, threadDragType } from "./threadDrag";
 import { appShortcut, menuButton, menuItem, Picker, type PickerOption } from "./ui";
 
-// Claude Code's permission modes, under its own names (0027). A thread is full Claude Code in
-// every mode (0034), and a project's worker keeps its sandbox in every mode but Bypass (0013).
-// What would prompt comes to the chat as approval cards (PLX-196), unless the run can't send them
-// (`manualDenied`).
-const accessOptions: Record<AgentPermission, PickerOption> = {
+// One set of access levels for every provider (0054), from most to least supervised. Each backend
+// maps the ones it can honor, and a thread is full Claude Code in every mode (0034). A project's
+// worker keeps its sandbox in every mode but Full access (0013). What would prompt comes to the
+// chat as approval cards (PLX-196), unless the run can't send them (`manualDenied`).
+export const accessOptions: Record<AgentPermission, PickerOption> = {
+  manual: {
+    value: "manual",
+    label: "Supervised",
+    icon: <Hand />,
+    description: "Asks you before commands and file changes.",
+  },
+  edit: {
+    value: "edit",
+    label: "Auto-accept edits",
+    icon: <FilePen />,
+    description: "Accepts file edits, asks before other actions.",
+  },
   auto: {
     value: "auto",
     label: "Auto",
     icon: <Sparkles />,
-    description: "A classifier approves or blocks each action instead of asking you.",
-  },
-  manual: {
-    value: "manual",
-    label: "Manual",
-    icon: <Hand />,
-    description: "Asks you before edits and commands.",
-  },
-  edit: {
-    value: "edit",
-    label: "Accept Edits",
-    icon: <FilePen />,
-    description: "Accepts file edits without asking.",
+    description: "The provider approves routine actions for you and blocks the risky ones.",
   },
   plan: {
     value: "plan",
@@ -77,9 +79,9 @@ const accessOptions: Record<AgentPermission, PickerOption> = {
   },
   bypass: {
     value: "bypass",
-    label: "Bypass Permissions",
-    icon: <ShieldOff />,
-    description: "Skips every permission check.",
+    label: "Full access",
+    icon: <LockOpen />,
+    description: "Runs commands and edits files without asking.",
   },
 };
 
@@ -176,7 +178,7 @@ const toMarkdown = (node: ProseMirrorNode) =>
 const hasText = (html: string) =>
   !!new DOMParser().parseFromString(html, "text/html").body.textContent?.trim();
 
-/** Manual's description where its requests are denied, by why (`ComposerProps.manualDenied`). */
+/** Supervised's description where its requests are denied, by why (`ComposerProps.manualDenied`). */
 const manualDenials = {
   host: "Asks before edits and commands. This host's plxd can't show those requests, so they're denied.",
   run: "Asks before edits and commands. This chat started before Parallax could show those requests, so they're denied.",
@@ -279,6 +281,13 @@ interface MenuEntry {
   pick: () => void;
 }
 
+/** The line under a run's box saying what queues and what steers. */
+function steerHint(sendKey: "enter" | "modEnter", mac: boolean): string {
+  const mod = mac ? "⌘ Enter" : "Ctrl+Enter";
+  if (sendKey === "enter") return `Enter queues · ${mod} steers now`;
+  return `${mod} queues · ${mac ? "⌘ ⇧ Enter" : "Ctrl+Shift+Enter"} steers now`;
+}
+
 /** A plain item in the composer's tab, sized like the pickers that can sit beside it. */
 export const tabItem =
   "flex min-w-0 items-center gap-1.5 px-2 py-1 text-[13.5px] text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0";
@@ -351,7 +360,7 @@ export interface ComposerProps {
   /** The host's image caps (`promptImages`). Absent: adding an image just says it can't take them. */
   imageCaps?: ImageCaps;
   /**
-   * Why Manual's requests are denied instead of coming to the chat (0031): the host's plxd lacks
+   * Why Supervised's requests are denied instead of coming to the chat (0031): the host's plxd lacks
    * `approvals`, or the open run started without them. Absent: they come as approval cards.
    */
   manualDenied?: keyof typeof manualDenials;
@@ -402,7 +411,9 @@ export interface ComposerProps {
  * Markdown text. Enter sends and Shift+Enter starts a new line (a new item, in a list); in a code
  * block Enter adds a line and Cmd/Ctrl+Enter sends. With `onSteer`, that press steers the active
  * turn. With `onSendInBackground`, Cmd/Ctrl+Enter sends
- * through it, anywhere in the box. It grows with its text up to 40% of the window.
+ * through it, anywhere in the box. Settings > General's send shortcut can make Cmd/Ctrl+Enter
+ * send and Enter a new line everywhere; Cmd/Ctrl+Shift+Enter then steers or sends in the
+ * background. It grows with its text up to 40% of the window.
  * Pasted, dropped, and picked images sit above the text as thumbnails, and go beside it, never in
  * it (PLX-193).
  * In an empty box, Up and Down step through `history`, until the recalled prompt is edited.
@@ -484,6 +495,11 @@ export function Composer({
   const [pickedPermission, setPermission] = useState<AgentPermission>();
   const [pickedContext, setContext] = useState<number>();
   const [pickedFast, setFast] = useState<boolean>();
+  // A new thread's composer, and a Project's New task, start from Settings > General's defaults.
+  // A Project's coordinator chat keeps its coordinator's backend, so it doesn't.
+  const defaults = newThreadPrefs.use();
+  const fresh = !started && (!!newThread || (task && !!newTask));
+  const { sendKey } = behaviorPrefs.use();
   // What `backend` can honor: another backend's pick falls back to its first model and `edit`.
   const catalog = useCatalog(host);
   const instanceOf = (id: string | undefined) => catalog.instances.find((i) => i.id === id);
@@ -507,32 +523,43 @@ export function Composer({
       contexts: [],
     });
   // A pick is kept by its instance and id, since the catalog's models are made again as it changes.
+  const defaultModel = !fresh
+    ? undefined
+    : choices.find((m) => m.provider === defaults.model?.provider && m.id === defaults.model.id);
   const model =
     choices.find((m) => m.provider === pickedModel?.provider && m.id === pickedModel.id) ??
     startedModel ??
+    defaultModel ??
     runModels.find((m) => choices.includes(m)) ??
     choices[0];
   // Where the message goes: the run's backend, or the instance that runs the picked model.
   const target = run && model && model.provider !== run.id ? model.provider : backend;
   const targetBackend = instanceOf(target);
+  // Plan is legacy: listed only when Settings turns it on, or the thread already started in it.
+  const legacyPlan = accessPrefs.use().legacyPlan;
   // A Project's mode isn't a choice here.
-  const permissions = projectMode ? [] : (targetBackend?.permissions ?? []);
+  const permissions = projectMode
+    ? []
+    : (targetBackend?.permissions ?? []).filter(
+        (p) => p !== "plan" || legacyPlan || started?.permission === "plan",
+      );
   // A backend that maps no efforts (Cursor) gets none, and shows no effort menu.
   const efforts = targetBackend?.efforts !== false;
-  const startedEffort = started?.effort ?? "high";
-  const startedPermission = started?.permission ?? "edit";
+  const startedEffort = started?.effort ?? (fresh ? defaults.effort : "high");
+  const startedPermission = started?.permission ?? (fresh ? defaults.permission : "edit");
   const effort = pickedEffort ?? startedEffort;
   const wanted = pickedPermission ?? startedPermission;
   const permission = permissions.includes(wanted) ? wanted : "edit";
   // The model's context windows and fast mode, on a plxd that takes them. One the model doesn't
   // offer falls back to its default, and fast mode to off.
   const contexts = (contextAndFast && model?.contexts) || [];
-  const startedContext = started?.contextWindow ?? startedModel?.contexts[0];
+  const startedContext =
+    started?.contextWindow ?? (fresh ? defaults.context : startedModel?.contexts[0]);
   const wantedContext = pickedContext ?? startedContext;
   const context =
     wantedContext !== undefined && contexts.includes(wantedContext) ? wantedContext : contexts[0];
   const hasFast = !!contextAndFast && !!model?.fast;
-  const startedFast = started?.fast ?? false;
+  const startedFast = started?.fast ?? (fresh ? defaults.fast : false);
   const fast = hasFast && (pickedFast ?? startedFast);
   const speed = {
     ...(context !== undefined && { contextWindow: context }),
@@ -919,15 +946,19 @@ export function Composer({
         // In a Project's list of tasks, Enter adds the next one, as in a notes app.
         const inList = !!newTask && editor.isActive("listItem");
         const mod = event.metaKey || event.ctrlKey;
-        if (inCode || inList ? mod : !event.shiftKey) {
-          void submit(!!onSendInBackground && mod, !!onSteer && mod);
+        // Settings > General: Cmd/Ctrl+Enter sends and Enter is a new line. Its background start
+        // and steer then take Cmd/Ctrl+Shift+Enter.
+        const modEnter = behaviorPrefs.get().sendKey === "modEnter";
+        const alt = mod && (!modEnter || event.shiftKey);
+        if (inCode || inList || modEnter ? mod : !event.shiftKey) {
+          void submit(!!onSendInBackground && alt, !!onSteer && alt);
           return true;
         }
         // Shift+Enter does what Enter does in other editors: a new line, list item, or line of
         // code, or out of an empty list item. A line of just ``` or ```lang starts a code block,
         // as ``` and a space does.
         return (
-          (event.shiftKey || inList) &&
+          (event.shiftKey || inList || modEnter) &&
           editor.commands.first(({ commands }) => [
             () => commands.newlineInCode(),
             ({ state }) => {
@@ -1278,8 +1309,7 @@ export function Composer({
       )}
       {onSteer && !disabledReason && (
         <p className="px-2 pt-1.5 text-[11.5px] text-faint-foreground">
-          Enter queues · {window.parallax.platform === "darwin" ? "⌘ Enter" : "Ctrl+Enter"} steers
-          now
+          {steerHint(sendKey, window.parallax.platform === "darwin")}
         </p>
       )}
       {error && (
