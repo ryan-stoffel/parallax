@@ -27,6 +27,9 @@ const SYSTEM_VERSION: &str = "/System/Library/CoreServices/SystemVersion.plist";
 pub(crate) struct Session {
     pub protocol: u32,
     pub client: ClientInfo,
+    /// The client declared `resyncNotice`: a subscription that falls behind ends with
+    /// `events/resync` instead of closing the connection (PLX-455).
+    pub resync_notice: bool,
 }
 
 /// `initialize`: agrees on a protocol version, or fails with `incompatibleProtocol`.
@@ -70,6 +73,7 @@ pub(crate) fn initialize(
     let session = Session {
         protocol: version,
         client,
+        resync_notice: capabilities.0.contains_key("resyncNotice"),
     };
     Ok((session, result))
 }

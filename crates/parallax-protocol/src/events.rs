@@ -26,9 +26,10 @@ uuid_v7_id! {
 /// `resyncRequired`.
 ///
 /// `run` and `shell` narrow the `project` subscription, only for a plxd that advertises
-/// `eventFilters` (PLX-453); an older one ignores them and sends everything. Like a scope, a
-/// filter skips the `seq`s of the events it leaves out: `seq` only ever increases, and resuming
-/// from the last one delivered is still exact.
+/// `eventFilters` (PLX-453); an older one ignores them and sends everything. Either one without
+/// `project` fails with `invalidParams` (PLX-455). Like a scope, a filter skips the `seq`s of the
+/// events it leaves out: `seq` only ever increases, and resuming from the last one delivered is
+/// still exact.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct EventsSubscribeParams {
@@ -88,6 +89,17 @@ pub struct EventsEventParams {
     pub project: Option<ProjectId>,
     /// What happened.
     pub event: ParallaxEvent,
+}
+
+/// Params of `events/resync`: plxd ended a subscription that fell behind its event log's
+/// retention (PLX-455). Reload the snapshot it started from and subscribe again. plxd sends it
+/// only to a client that declared the `resyncNotice` capability; it closes any other client's
+/// connection instead.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EventsResyncParams {
+    /// The subscription plxd ended.
+    pub subscription: SubscriptionId,
 }
 
 /// What happened, by `kind`.
