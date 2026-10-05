@@ -463,6 +463,21 @@ export type ParallaxRequests = {
 	 * Idempotent on its client-generated ids. Gated on the `projectFromThreads` capability.
 	 */
 	"project/fromThreads": { params: ProjectFromThreadsParams, result: ProjectFromThreadsResult },
+	/**
+	 * `cursor/signIn`: starts a Cursor account login in the browser and answers with its
+	 * URL (0053). The app opens it. `providers/list` reports the instance signed in once
+	 * the browser login finishes. Gated on the `providers` capability, like
+	 * `cursor/signInCancel` and `cursor/signOut`.
+	 */
+	"cursor/signIn": { params: CursorSignInParams, result: CursorSignInResult },
+	/**
+	 * `cursor/signInCancel`: stops a Cursor login that is still waiting on the browser.
+	 */
+	"cursor/signInCancel": { params: CursorSignInParams, result: CursorSignInCancelResult },
+	/**
+	 * `cursor/signOut`: forgets the Cursor SDK login stored for the instance.
+	 */
+	"cursor/signOut": { params: CursorSignInParams, result: CursorSignOutResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -1292,6 +1307,10 @@ export type ProviderInfo = {
 	 * instance's, and for an ACP agent its home folder's.
 	 */
 	loginEnv?: Array<ProviderEnvVar>,
+	/**
+	 * Why the last Cursor browser sign-in failed (0053), until the next one starts.
+	 */
+	signInError?: string,
 };
 
 /**
@@ -5344,6 +5363,36 @@ export type ProjectFromThreadsResult = {
 	 */
 	run: AgentRun,
 };
+
+/**
+ * Params of `cursor/signIn`, `cursor/signInCancel`, and `cursor/signOut` (0053).
+ */
+export type CursorSignInParams = {
+	/**
+	 * The instance, or the built-in `cursor` when omitted.
+	 */
+	instance?: string,
+};
+
+/**
+ * Result of `cursor/signIn`: the browser URL the app opens.
+ */
+export type CursorSignInResult = {
+	/**
+	 * The Cursor account login page.
+	 */
+	url: string,
+};
+
+/**
+ * Result of `cursor/signInCancel`.
+ */
+export type CursorSignInCancelResult = Record<symbol, never>;
+
+/**
+ * Result of `cursor/signOut`.
+ */
+export type CursorSignOutResult = Record<symbol, never>;
 
 /**
  * Params of `$/cancelRequest`.

@@ -1,6 +1,6 @@
 # 0036: A thread can run on Cursor as full Cursor Agent
 
-- Status: accepted; supersedes in part [0004](0004-subscription-providers.md) (Cursor waits for Cursor's written OK, and its headless `-p` integration); Cursor runs a Project's coordinator and children, in Bypass, since [0042](0042-project-children-are-threads.md); its ACP driver runs every ACP agent since [0040](0040-provider-instances.md)
+- Status: superseded for Cursor by [0053](0053-cursor-sdk.md); the ACP driver still runs every other ACP agent since [0040](0040-provider-instances.md). Supersedes in part [0004](0004-subscription-providers.md) (Cursor waits for Cursor's written OK, and its headless `-p` integration); Cursor runs a Project's children, in Bypass until 0053, since [0042](0042-project-children-are-threads.md)
 - Date: 2026-10-01
 - Issue: PLX-283 (replaces PLX-40)
 

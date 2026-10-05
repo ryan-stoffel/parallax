@@ -21,6 +21,7 @@ pub mod acp;
 pub mod claude;
 pub mod codex;
 pub mod commands;
+pub mod cursor_sdk;
 pub mod event;
 pub mod fake;
 pub mod key_account;

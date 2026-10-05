@@ -128,8 +128,10 @@ pub use project::{
     ProjectUpdateParams, ProjectUpdateResult,
 };
 pub use provider::{
-    ProviderEnvVar, ProviderInfo, ProviderInstance, ProviderKind, ProviderModel,
-    ProvidersListParams, ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams,
+    CursorSignInCancelParams, CursorSignInCancelResult, CursorSignInParams, CursorSignInResult,
+    CursorSignOutParams, CursorSignOutResult, ProviderEnvVar, ProviderInfo, ProviderInstance,
+    ProviderKind, ProviderModel, ProvidersListParams, ProvidersListResult, ProvidersRemoveParams,
+    ProvidersSaveParams,
 };
 pub use pull_request::{
     PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrMergeMethod,

@@ -240,6 +240,8 @@ pub(crate) struct Daemon {
     pub agents: Agents,
     /// Provider instances (0040), whose backends are in `agents`' registry.
     pub providers: Providers,
+    /// Cursor account login through the SDK sidecar (0053).
+    pub cursor: crate::backend::cursor_sdk::CursorAuth,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -357,7 +359,7 @@ impl Server {
             reader,
             os: methods::os_version(),
             github: Github::new(launcher.clone(), github::RELEASE_URL),
-            cli_detector: CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT),
+            cli_detector: CliDetector::new(launcher.clone(), crate::detect::PROBE_TIMEOUT),
             limits: Limits {
                 idle_timeout: config.idle_timeout,
                 max_requests_in_flight: config.max_requests_in_flight.max(1),
@@ -372,6 +374,7 @@ impl Server {
                     jitter: config.resume_jitter,
                     backoff: config.resume_backoff,
                 }),
+            cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher.clone()),
             providers,
         });
         // Best effort: a project's context folder is also ensured lazily on its first
@@ -641,7 +644,7 @@ impl Daemon {
             reader,
             os: "test".to_owned(),
             github: Github::new(launcher.clone(), github::RELEASE_URL),
-            cli_detector: CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT),
+            cli_detector: CliDetector::new(launcher.clone(), crate::detect::PROBE_TIMEOUT),
             limits: Limits {
                 idle_timeout,
                 max_requests_in_flight: 32,
@@ -652,6 +655,7 @@ impl Daemon {
             context: ContextIndex::default(),
             agents: Agents::new(backends, worktrees),
             providers,
+            cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher),
         })
     }
 }
