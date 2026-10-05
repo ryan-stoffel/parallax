@@ -516,13 +516,15 @@ export function useThreads(
     let stopped = false;
     let unsubscribe = () => {};
 
-    // Each repo's and Project's own events, for its runs' status and permission requests.
+    // Each repo's and Project's own events, for its runs' status and permission requests. `shell`
+    // leaves out the rest of their output (PLX-453); an older plxd ignores it and sends it all.
     let scopes = new Map<string, () => void>();
     const watch = (scope: string, after: number, logId: string) => {
       if (scopes.has(scope)) return;
+      const params = { after, project: scope, shell: true, logId };
       scopes.set(
         scope,
-        window.parallax.subscribe(hostId, { after, project: scope, logId }, (message) => {
+        window.parallax.subscribe(hostId, params, (message) => {
           if (stopped) return;
           if (message.type === "resync") return void load();
           if (message.type !== "event") return;

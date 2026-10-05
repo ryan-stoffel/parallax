@@ -752,7 +752,7 @@ const sampleRun = (logged[0]!.event as { run: AgentRun }).run;
  * when it can't replay that far back. The first `resyncs` subscribes resync anyway.
  * plxd advertises `capabilities`, `agent/send` answers the run as `sent` leaves it (running by
  * default), `agent/openPr` answers `prUrl`, or fails with `prError`, and `agent/image` a tiny PNG.
- * `connect` changes the connection's state.
+ * `connect` changes the connection's state, and `traffic` moves the scope's log to `listSeq`.
  */
 function fakeBridge(
   seq: number,
@@ -811,6 +811,9 @@ function fakeBridge(
     emit: (m: SubscriptionMessage) => act(() => listener(m)),
     connect: (state: ConnectionState) =>
       act(() => connections.forEach((connection) => connection("local", state))),
+    traffic: (seq: number) => {
+      listSeq = seq;
+    },
   };
 }
 
@@ -831,7 +834,7 @@ test("loads every page, subscribes after the last seq, and appends live events",
   expect(request).toHaveBeenCalledWith("local", "agent/events", { runId, after: 0 });
   expect(subscribe).toHaveBeenCalledWith(
     "local",
-    { after: 2, project: "01a0d349-6e00-7c9e-80e2-0426486a8cae", logId: "log-1" },
+    { after: 2, project: "01a0d349-6e00-7c9e-80e2-0426486a8cae", run: runId, logId: "log-1" },
     expect.any(Function),
   );
   expect(transcriptText()).toContain("Add a README");
@@ -857,6 +860,21 @@ test("subscribes after the scope's snapshot seq, so repeated resyncs end", async
   await renderChat();
   await settle();
   expect(subscribe.mock.calls.map(([, params]) => params.after)).toEqual([1000, 1000, 1000]);
+  expect(transcriptText()).toContain("Add a README");
+});
+
+test("a reconnect after siblings' traffic subscribes from the new snapshot, so it never resyncs", async () => {
+  // A quiet run's subscription only sees its own events, so its last seq falls behind the scope.
+  const { subscribe, unsubscribe, connect, traffic } = fakeBridge(8);
+  await renderChat();
+  const failed = { reason: "exited", message: "plxd exited" } as const;
+  connect({ status: "failed", retrying: true, error: failed });
+  expect(unsubscribe).toHaveBeenCalled();
+  traffic(50_000); // Far past what plxd's window replays from seq 8.
+  connect({ status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} });
+  await settle();
+  // The fake answers a subscribe from before `listSeq` with a resync, which would add a third.
+  expect(subscribe.mock.calls.map(([, params]) => params.after)).toEqual([8, 50_000]);
   expect(transcriptText()).toContain("Add a README");
 });
 
