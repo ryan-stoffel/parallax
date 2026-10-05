@@ -1,6 +1,6 @@
 # 0042: A Project's coordinator and children are threads, in Auto or Bypass Permissions
 
-- Status: accepted; builds on [0041](0041-thread-lineage-and-host-mcp.md), and supersedes in part [0004](0004-subscription-providers.md) (the coordinator runs only on Claude Code or Codex), [0013](0013-worker-sandbox.md) and [0034](0034-threads-are-full-claude-code.md) (a coordinator's children keep the worker sandbox), [0024](0024-coordinator-chat.md) (only Claude Code coordinates), [0027](0027-claude-permission-modes.md) (where the coordinator runs, and children inheriting its mode), [0035](0035-codex-threads.md) (Codex children on `codex exec`), and [0036](0036-cursor-threads.md) (Cursor never runs a coordinator or its children)
+- Status: accepted; builds on [0041](0041-thread-lineage-and-host-mcp.md), and supersedes in part [0004](0004-subscription-providers.md) (the coordinator runs only on Claude Code or Codex), [0013](0013-worker-sandbox.md) and [0034](0034-threads-are-full-claude-code.md) (a coordinator's children keep the worker sandbox), [0024](0024-coordinator-chat.md) (only Claude Code coordinates), [0027](0027-claude-permission-modes.md) (where the coordinator runs, and children inheriting its mode), [0035](0035-codex-threads.md) (Codex children on `codex exec`), and [0036](0036-cursor-threads.md) (Cursor never runs a coordinator or its children); the composer's two targets replaced by one coordinator chat in PLX-569
 - Date: 2026-10-03
 - Issue: PLX-383
 
@@ -34,8 +34,8 @@ A thread is the user's own CLI in its thread mode (0034, 0035, 0036, 0040): thei
 
 ### Dispatch
 
-- **The composer has two targets.** New task, the default, starts a child. Ask sends the message to the coordinator. A keyboard shortcut flips between them.
-- **New task never waits on the coordinator.** `thread/start` gains `project`. With it, plxd sets `parent` to the Project's coordinator, cuts the worktree from the integration branch's tip ([0045](0045-integration-branch.md)), builds the first message, places the run ([0046](0046-project-scheduler.md)), and starts it.
+- **Every message goes to the coordinator** (PLX-569, replacing the composer's New task and Ask targets). It starts a child for each feature or bug the user sends, without waiting for a go-ahead, and the user can send messages back to back: the first opens the chat at once, and the rest queue to the coordinator.
+- **`thread/start` gains `project`.** With it, plxd sets `parent` to the Project's coordinator, cuts the worktree from the integration branch's tip ([0045](0045-integration-branch.md)), builds the first message, places the run ([0046](0046-project-scheduler.md)), and starts it.
 - **A child's start wakes the coordinator**, batched as 0025 batches, so it can step in early ("2 and 5 touch the same file"). Starts typed together make one wake-up turn, which counts toward the cap ([0043](0043-project-inbox-and-autonomy.md#wake-ups)).
 - **The first message** is a short header naming the Project and the child's tools, the brief, the memory index (0044), and then the user's words. A child the coordinator launches gets the same header with the coordinator's task in place of the user's words.
 

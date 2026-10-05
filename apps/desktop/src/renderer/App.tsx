@@ -788,7 +788,6 @@ export function App() {
                   project={project}
                   prompt={project.coordinator && threads.state.runs[project.coordinator]?.prompt}
                   startCoordinator={threads.startCoordinator}
-                  startTask={threads.startTask}
                   updateProject={threads.updateProject}
                   host={host}
                   repo={threads.state.repos.find((r) => r.path === project.repoPath)?.id}
