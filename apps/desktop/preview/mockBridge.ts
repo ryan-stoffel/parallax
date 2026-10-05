@@ -28,7 +28,7 @@ const LOCAL = "local";
 const LOG_ID = "0199a6f0-0000-7000-8000-preview00log";
 
 /** What plxd's `capabilities_advertised` lists (daemon/src/methods/host.rs), with the same caps. */
-export const capabilities: Capabilities = Object.fromEntries(
+const capabilities: Capabilities = Object.fromEntries(
   [
     "accounts",
     "agentClis",
@@ -76,13 +76,13 @@ export const capabilities: Capabilities = Object.fromEntries(
     "threads",
   ].map((name) => [name, {}]),
 );
-capabilities["iconImages"] = { maxBytes: 262_144 };
+capabilities["iconImages"] = { maxBytes: 64 * 1024 };
 capabilities["promptImages"] = {
-  maxImages: 20,
-  maxImageBytes: 5_242_880,
-  maxTotalBytes: 20_971_520,
+  maxImages: 10,
+  maxImageBytes: 5 * 1024 * 1024,
+  maxTotalBytes: 6 * 1024 * 1024,
 };
-capabilities["threadContext"] = { maxThreads: 5, maxSummaryBytes: 8192 };
+capabilities["threadContext"] = { maxThreads: 8, maxSummaryBytes: 32 * 1024 };
 
 const connected: ConnectionState = {
   status: "connected",

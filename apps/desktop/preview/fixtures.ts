@@ -1274,7 +1274,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
     permissions: ["auto", "manual", "edit", "plan", "bypass"],
     efforts: true,
     coordinator: true,
-    login: ["claude", "/login"],
+    login: ["claude", "auth", "login"],
   };
   const providers: ProviderInfo[] = [
     claudeInfo,
