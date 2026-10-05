@@ -4680,6 +4680,12 @@ export type HostSettings = {
 	 * off stops a waiting run from resuming when its timer fires.
 	 */
 	autoResume: boolean,
+	/**
+	 * Whether plxd removes a settled thread's worktree and local branch once its linked pull
+	 * requests have merged (PLX-555). On by default. The thread and its transcript stay. An
+	 * older plxd, without the `worktreeCleanup` capability, leaves it out.
+	 */
+	cleanWorktrees?: boolean,
 };
 
 /**
@@ -4690,6 +4696,10 @@ export type HostSettingsSetParams = {
 	 * The new `autoResume`. Absent leaves it.
 	 */
 	autoResume?: boolean,
+	/**
+	 * The new `cleanWorktrees`, behind the `worktreeCleanup` capability. Absent leaves it.
+	 */
+	cleanWorktrees?: boolean,
 };
 
 /**

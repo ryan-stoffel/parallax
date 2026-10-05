@@ -37,8 +37,9 @@ pub enum RunFolder<'a> {
 pub struct PushError(pub String);
 
 impl WorktreeManager {
-    /// The git state of `folder`: its branch, its uncommitted changes, and how far it is ahead of
-    /// its upstream. It takes no optional locks, so a turn's own git calls never trip over it.
+    /// The git state of `folder`: its branch, its uncommitted changes, untracked files included,
+    /// and how far it is ahead of its upstream. It takes no optional locks, so a turn's own git
+    /// calls never trip over it.
     ///
     /// # Errors
     ///
@@ -52,6 +53,8 @@ impl WorktreeManager {
                     "status",
                     "--porcelain=v2",
                     "--branch",
+                    // Counted whatever the repository's `status.showUntrackedFiles` says.
+                    "--untracked-files=normal",
                 ],
             )
             .await?;
@@ -91,6 +94,16 @@ impl WorktreeManager {
             status.ahead = output.stdout.trim().parse().unwrap_or(0);
         }
         Ok(status)
+    }
+
+    /// The full hash of `folder`'s `HEAD` commit.
+    ///
+    /// # Errors
+    ///
+    /// [`WorktreeError::GitFailed`], [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`].
+    pub async fn head(&self, folder: RunFolder<'_>) -> Result<String, WorktreeError> {
+        let head = self.folder_git_ok(folder, &["rev-parse", "HEAD"]).await?;
+        Ok(head.trim().to_owned())
     }
 
     /// Stages every change in `folder` and commits it with `message`, as the identity

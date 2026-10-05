@@ -477,6 +477,13 @@ impl Server {
                 crate::agents::compact::run(daemon, stop).await;
             })
         };
+        let cleanup = {
+            let daemon = Arc::clone(&daemon);
+            let stop = shutdown.graceful.clone();
+            tokio::spawn(async move {
+                crate::agents::cleanup::run(daemon, stop).await;
+            })
+        };
         let connections = TaskTracker::new();
         let abort = CancellationToken::new();
         let period = config.socket_check_interval;
@@ -540,6 +547,7 @@ impl Server {
         }
         daemon.agents.shutdown().await;
         let _ = compact.await;
+        let _ = cleanup.await;
         daemon.store.stop().await;
         daemon.reader.stop().await;
         lock.release();
