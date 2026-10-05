@@ -116,8 +116,8 @@ pub struct AcpAgent {
     /// The flag that runs every tool without asking, such as Cursor's `--force`.
     pub bypass_flag: Option<String>,
     /// The session mode each permission sets once the session starts, such as Plan's `plan` or
-    /// Hermes Agent's `accept_edits` for Edit. A permission listed here, or Bypass with a
-    /// [`Self::bypass_flag`], is one the agent maps; Edit always is, with no mode set.
+    /// Hermes Agent's `accept_edits` for Edit. A permission listed here is one the agent maps,
+    /// and Manual, Edit, and Bypass always are, since plxd answers by level (0054).
     pub modes: Vec<(AgentPermission, String)>,
     /// The session mode an approved plan switches back to, such as Cursor's `agent`.
     pub edit_mode: Option<String>,
@@ -425,9 +425,9 @@ impl Backend for AcpBackend {
         let mut translator = Translator::default();
         translator.asks = request.approvals;
         translator.thread_tools = !mcp_servers.is_empty();
-        translator.permission = Some(request.permission.unwrap_or(AgentPermission::Edit));
         translator.label.clone_from(&self.agent.label);
         let permission = request.permission.unwrap_or(AgentPermission::Edit);
+        translator.permission = Some(permission);
         // The model goes over ACP unless a flag already picked it.
         let model = request
             .model

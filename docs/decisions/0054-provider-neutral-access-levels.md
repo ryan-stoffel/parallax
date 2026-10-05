@@ -25,7 +25,7 @@ For an ACP agent, plxd enforces the ladder itself, because ACP agents ask throug
 
 - Full access allows every request.
 - Auto-accept edits allows requests for `edit`, `delete`, and `move` calls and asks for the rest.
-- Supervised, and Plan, ask for every request.
+- Supervised, Auto, and Plan ask for every request.
 - Supervised, Auto-accept edits, and Full access are offered for every ACP agent. Plan and Auto stay with agents that map a mode of their own.
 
 ## Consequences
