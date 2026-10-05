@@ -217,8 +217,8 @@ export type UpdateState = {
 };
 
 /**
- * What a terminal runs: a CLI's sign-in or install on a host, a provider instance's sign-in by
- * its id, or a shell in a folder on a host.
+ * What a terminal runs: a CLI's sign-in on a host, a provider instance's sign-in by its id, the
+ * install of an agent of a provider kind, or a shell in a folder on a host.
  */
 export type TerminalTarget =
   | { hostId: string; cli: CliKind }

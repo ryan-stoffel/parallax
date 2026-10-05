@@ -1010,7 +1010,13 @@ function InstancePane({
   // Whether the open terminal installs the CLI rather than signs in. Kept from when it opened, so
   // an install that ends and finds the CLI doesn't turn into a sign-in.
   const [installing, setInstalling] = useState(false);
-  const canInstall = !info.installed && installable.has(instance.kind) && !instance.program;
+  // Pi's installer puts `pi` on the host, which a 0.x instance's PI_ACP_PI_COMMAND doesn't run.
+  const piCommand = instance.env.find((v) => v.name === "PI_ACP_PI_COMMAND")?.value ?? "pi";
+  const canInstall =
+    !info.installed &&
+    installable.has(instance.kind) &&
+    !instance.program &&
+    (instance.kind !== "pi" || piCommand === "pi");
   const save = async (change: Partial<ProviderInstance>) =>
     setError(await saveProvider(hostId, { ...instance, ...change }));
   const program = instance.program ?? kind.program ?? "the program";

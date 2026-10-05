@@ -242,8 +242,8 @@ export function startHosts(): void {
   ipcMain.handle("parallax:retry", (_event, hostId: unknown) => connection(hostId).retry());
 
   // A window's terminals (terminal.ts), by an id it picks: a CLI's or a provider instance's
-  // sign-in, a CLI's install, or a shell in a thread's folder. The renderer names the host and the
-  // CLI, instance, or folder; only main decides what runs.
+  // sign-in, an agent's install by its provider kind, or a shell in a thread's folder. The renderer
+  // names the host and the CLI, instance, kind, or folder; only main decides what runs.
   ipcMain.handle(
     "parallax:openTerminal",
     (event, id: unknown, target: unknown, cols: unknown, rows: unknown) => {

@@ -18,12 +18,14 @@ use crate::paths::without_verbatim_prefix;
 use crate::routing::KeyAccounts;
 
 /// Folders appended to an agent's `PATH` when it lacks them (#96): the vendors' own install
-/// folder (`~/.local/bin`, where Claude Code's installer puts `claude`; `%USERPROFILE%\.local\bin`
-/// on Windows), rustup's `~/.cargo/bin` (PLX-126), Homebrew on Apple silicon (macOS only) and
+/// folders (`~/.local/bin`, where Claude Code's installer puts `claude`; `%USERPROFILE%\.local\bin`
+/// on Windows; and `~/.opencode/bin` and `~/.grok/bin`, where the `OpenCode` and Grok Build
+/// installers put theirs and add them to `PATH` only in an interactive shell's rc file, PLX-539),
+/// rustup's `~/.cargo/bin` (PLX-126), Homebrew on Apple silicon (macOS only) and
 /// `/usr/local/bin`, and the system folders (0023). They go after whatever `PATH` plxd was
 /// started with, so the user's own order still wins; they only fill in what launchd or an SSH
 /// session left out.
-const EXTRA_PATH_IN_HOME: &[&str] = &[".local/bin", ".cargo/bin"];
+const EXTRA_PATH_IN_HOME: &[&str] = &[".local/bin", ".opencode/bin", ".grok/bin", ".cargo/bin"];
 #[cfg(target_os = "macos")]
 const EXTRA_PATH: &[&str] = &[
     "/opt/homebrew/bin",
@@ -452,6 +454,8 @@ mod tests {
             "/custom/bin",
             "/run/current-system/sw/bin",
             "/Users/me/.local/bin",
+            "/Users/me/.opencode/bin",
+            "/Users/me/.grok/bin",
             "/Users/me/.cargo/bin",
         ];
         if cfg!(target_os = "macos") {

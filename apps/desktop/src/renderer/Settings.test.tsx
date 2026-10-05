@@ -795,6 +795,14 @@ describe("on a plxd with providers", () => {
     await renderSettings();
     await click(tab("Pi"));
     expect(rows("Account")[1]).toBe("AccountPi isn't installed on this host");
+
+    // Pi's installer puts `pi` on the host, not the 0.x one this instance runs.
+    const env = [{ name: "PI_ACP_PI_COMMAND", value: "pi-0.73", secret: false }];
+    listed[1] = { ...listed[1]!, instance: { ...instance("pi", "pi", "Pi"), env } };
+    unmount();
+    await renderSettings();
+    await click(tab("Pi"));
+    expect(rows("Account")[1]).toBe("AccountPi isn't installed on this host");
   });
 
   const dialog = () => document.querySelector("dialog")!;
