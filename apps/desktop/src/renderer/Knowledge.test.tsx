@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
-import type { ParallaxBridge } from "../preload/bridge";
+import type { ParallaxBridge, SubscriptionMessage } from "../preload/bridge";
 import type {
   AgentRun,
   ContextFile,
@@ -62,24 +62,44 @@ const inbox: InboxView = {
 };
 
 let capabilities: Record<string, object>;
+let files: ContextFile[];
+let contents: Record<string, string>;
 let memory: MemoryFile[];
 let providers: ProviderInfo[];
 const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
   const ok = (result: unknown) => ({ logId: "log-1", result });
   if (method === "agent/list") return ok({ runs: [], seq: 1 });
-  if (method === "context/list") return ok({ files: [file("notes.md"), file("plan.md")] });
-  if (method === "context/read")
-    return ok({ file: file(params["path"] as string), content: board });
+  if (method === "context/list") return ok({ files });
+  if (method === "context/read") {
+    const path = params["path"] as string;
+    return ok({ file: file(path), content: contents[path] ?? "" });
+  }
   if (method === "memory/list")
     return ok({ files: (params["scope"] as { kind: string }).kind === "project" ? memory : [] });
   if (method === "providers/list") return ok({ providers });
   return ok({ run: coordinator });
 });
 
+// Every subscription gets every event, as plxd's per-Project ones would here.
+let listeners: Set<(message: SubscriptionMessage) => void>;
+/** An agent's write to a context file, as plxd reports it. */
+const changed = (seq: number, f: ContextFile) =>
+  act(async () =>
+    listeners.forEach((l) =>
+      l({
+        type: "event",
+        event: { subscription: "s-1", seq, time: "", event: { kind: "context.changed", file: f } },
+      }),
+    ),
+  );
+
 beforeEach(() => {
   vi.useFakeTimers({ now, toFake: ["Date"] });
   request.mockClear();
   capabilities = { memory: {} };
+  files = [file("notes.md"), file("plan.md")];
+  contents = { "notes.md": board, "plan.md": "# Plan" };
+  listeners = new Set();
   memory = [
     { path: "brief.md", size: 10, modifiedAt: "2026-10-01T00:00:00Z" },
     { path: "memory/convention/vitest.md", size: 10, modifiedAt: "2026-10-04T08:00:00Z" },
@@ -88,7 +108,10 @@ beforeEach(() => {
   window.parallax = {
     platform: "darwin",
     request,
-    subscribe: () => () => {},
+    subscribe: (_host, _params, listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     connectionState: async () => ({
       status: "connected",
       plxd: "0.1.0",
@@ -189,6 +212,62 @@ test("the book opens Project files, the board first, and a file opens in place",
   await click([...document.querySelectorAll("button")].find((b) => b.textContent === "plan.md"));
   await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Knowledge"));
   expect(section("Where it stands")).not.toBeNull();
+});
+
+const plan = `# Plan
+
+- [ ] Unify launcher modes ([#17](https://github.com/o/r/issues/17))
+- [x] Welcome window ([#12](https://github.com/o/r/pull/12))
+
+Older items: [archived](archived.md), [gone](gone.md)`;
+const doc = (path: string) => document.querySelector(`article[aria-label="${path}"]`);
+
+test("a context file shows tasks as circles, GitHub links with their icons, opens other context files in place, and follows agents' writes", async () => {
+  files = [file("notes.md"), file("plan.md"), file("archived.md")];
+  contents = { "notes.md": board, "plan.md": plan, "archived.md": "- [x] Old work" };
+  await render("h-links");
+  await click(document.querySelector('button[aria-label="Project files"]'));
+  await click(
+    [...document.querySelectorAll("li button")].find((b) => b.textContent?.startsWith("plan.md")),
+  );
+  const shown = doc("plan.md")!;
+  expect(shown.querySelector("input")).toBeNull();
+  expect(
+    [...shown.querySelectorAll("li")].map((li) => [
+      li.querySelector("svg")?.getAttribute("aria-label"),
+      li.textContent,
+    ]),
+  ).toEqual([
+    ["Open", " Unify launcher modes (#17)"],
+    ["Done", " Welcome window (#12)"],
+  ]);
+  expect(shown.querySelector('a[href$="/pull/12"] svg.lucide-git-merge')).not.toBeNull();
+  const issue = shown.querySelector('a[href$="/issues/17"]')!;
+  expect(issue.querySelector("svg:not(.lucide)")).not.toBeNull();
+  expect(issue.getAttribute("target")).toBe("_blank");
+
+  // A missing file's link is off; an existing one opens in place, with a way back.
+  const link = (name: string) =>
+    [...shown.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === name)!;
+  expect(link("gone").disabled).toBe(true);
+  await click(link("archived"));
+  expect(doc("archived.md")!.textContent).toContain("Old work");
+
+  // It follows an agent's rewrite, and a new file joins Project files.
+  contents["archived.md"] = "- [x] Older work";
+  await changed(8, file("archived.md", "2026-10-04T12:00:00Z"));
+  expect(doc("archived.md")!.textContent).toContain("Older work");
+  await changed(9, file("research.md", "2026-10-04T12:00:00Z"));
+  await click(
+    [...document.querySelectorAll("button")].find((b) => b.textContent === "archived.md"),
+  );
+  expect(doc("archived.md")).toBeNull();
+  expect([...document.querySelectorAll("li button .font-mono")].map((f) => f.textContent)).toEqual([
+    "notes.md",
+    "archived.md",
+    "plan.md",
+    "research.md",
+  ]);
 });
 
 test("What it knows counts what's known and new today, lists the latest learned, and the brief starts folded", async () => {
