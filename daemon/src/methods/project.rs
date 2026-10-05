@@ -39,7 +39,7 @@ pub(crate) async fn list(
     let (projects, seq) = context
         .daemon
         .reader
-        .snapshot(&context.cancel, &context.daemon.log, move |store| {
+        .snapshot(&context.cancel, move |store| {
             let rows = store.list_projects().map_err(|error| store_error(&error))?;
             rows.into_iter()
                 .map(|row| {
@@ -77,7 +77,6 @@ async fn create_or_get(
     params: ProjectCreateParams,
 ) -> Result<(ProjectCreateResult, bool), ErrorObject> {
     check(&params)?;
-    let log = Arc::clone(&context.daemon.log);
     let data_dir = context.daemon.data_dir.clone();
     let (mut result, existed) = context
         .daemon
@@ -99,7 +98,7 @@ async fn create_or_get(
             let coordinator = coordinator::coordinator_of(store, id)?;
             let project = store::project(row, coordinator)?;
             if !existed {
-                let seq = log.append_blocking(
+                let seq = store.stage(
                     project.created_at,
                     None,
                     ParallaxEvent::ProjectCreated {
@@ -226,7 +225,6 @@ pub(crate) async fn from_threads(
             };
             for thread in threads {
                 agents::join(&daemon, thread, id, run_id).await?;
-                report_thread(&daemon, thread).await?;
             }
             Ok(run)
         })
@@ -313,25 +311,6 @@ async fn threads_repo(
         .await
 }
 
-/// Reports thread `run`'s new parent as `thread.updated`.
-async fn report_thread(daemon: &Arc<Daemon>, run: RunId) -> Result<(), ErrorObject> {
-    let log = Arc::clone(&daemon.log);
-    daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            if let Some(row) = db.get_thread(run.into()).map_err(|e| store_error(&e))? {
-                let thread = crate::threads::thread_entry(&row)?;
-                log.append_blocking(
-                    Timestamp::now(),
-                    None,
-                    ParallaxEvent::ThreadUpdated { thread },
-                );
-            }
-            Ok(())
-        })
-        .await
-}
-
 /// Renames a project or sets its icon, permission mode, autonomy level, base branch, automatic
 /// landing, placement settings, or checks, and appends `project.updated` when that changed
 /// anything. Runs pick up a new mode when they next start a CLI process (0042), questions a new
@@ -339,9 +318,10 @@ async fn report_thread(daemon: &Arc<Daemon>, run: RunId) -> Result<(), ErrorObje
 /// (0046). A new proposal for its checks adds a `needsYou` item for the user to confirm it
 /// (PLX-411). Ask me also sends the questions already open to Needs you (PLX-474).
 ///
-/// `project.updated` and the escalated questions' `inbox.added` events are appended after their
-/// rows are written, as `project/create`'s is, so a subscriber after a `project/list` or
-/// `inbox/list` snapshot's `seq` never misses them. `updatedAt` stays as it is (0032).
+/// `project.updated` and the escalated questions' `inbox.added` events are staged in their
+/// rows' transaction and published once it commits (0052), so a subscriber after a
+/// `project/list` or `inbox/list` snapshot's `seq` never misses them. `updatedAt` stays as it is
+/// (0032).
 pub(crate) async fn update(
     context: &Context,
     mut params: ProjectUpdateParams,
@@ -376,7 +356,6 @@ pub(crate) async fn update(
         .clone()
         .filter(|command| params.checks.is_none() && !command.is_empty());
     let ask_me = params.autonomy == Some(ProjectAutonomy::Ask);
-    let log = Arc::clone(&context.daemon.log);
     let (result, proposed) = context
         .daemon
         .store
@@ -388,7 +367,7 @@ pub(crate) async fn update(
             let coordinator = coordinator::coordinator_of(store, id)?;
             let project = store::project(row, coordinator)?;
             if changed {
-                let seq = log.append_blocking(
+                let seq = store.stage(
                     Timestamp::now(),
                     None,
                     ParallaxEvent::ProjectUpdated {
@@ -398,7 +377,7 @@ pub(crate) async fn update(
                 info!(project = %project.id, seq, "updated a project");
             }
             if ask_me {
-                super::question::escalate_open(store, &log, project.id)?;
+                super::question::escalate_open(store, project.id)?;
             }
             let proposed = proposal.filter(|_| changed).zip(project.coordinator);
             Ok((ProjectUpdateResult { project }, proposed))
@@ -476,7 +455,6 @@ async fn remove(
     project: ProjectId,
 ) -> Result<ProjectDeleteResult, ErrorObject> {
     let repo_path = loop {
-        let log = Arc::clone(&daemon.log);
         let (runs, repo_path) = daemon
             .store
             .run(&CancellationToken::new(), move |store| {
@@ -496,7 +474,7 @@ async fn remove(
                     store
                         .delete_project(project.into())
                         .map_err(|error| store_error(&error))?;
-                    let seq = log.append_blocking(
+                    let seq = store.stage(
                         Timestamp::now(),
                         None,
                         ParallaxEvent::ProjectDeleted { project },

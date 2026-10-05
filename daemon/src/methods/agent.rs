@@ -211,7 +211,7 @@ pub(crate) async fn list(
     let (runs, seq) = context
         .daemon
         .reader
-        .snapshot(&context.cancel, &context.daemon.log, move |db| {
+        .snapshot(&context.cancel, move |db| {
             db.list_runs_with_worktrees(project)
                 .map_err(|error| crate::agents::store_error(&error))
         })
@@ -475,7 +475,7 @@ mod tests {
         let text = "x".repeat(250 * 1024);
         for _ in 0..60 {
             daemon
-                .log
+                .store
                 .append(
                     jiff::Timestamp::now(),
                     Some(project),

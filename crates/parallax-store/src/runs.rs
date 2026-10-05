@@ -1,5 +1,5 @@
 use jiff::Timestamp;
-use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
 use crate::error::StoreError;
@@ -300,9 +300,7 @@ impl Store {
         state: &RunState,
         worktree: &WorktreeFields,
     ) -> Result<(Run, Worktree), StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         let worktree = insert_worktree(&tx, id, worktree)?;
         let run = insert_run(&tx, id, fields, state)?;
         tx.commit()?;
@@ -317,9 +315,7 @@ impl Store {
     ///
     /// A database error.
     pub fn delete_run(&mut self, id: Uuid) -> Result<bool, StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         let existed = delete_run_rows(&tx, id)?;
         tx.commit()?;
         Ok(existed)
@@ -436,9 +432,7 @@ impl Store {
     /// [`StoreError::NotFound`] if no run has `id`, in which case nothing is written, or a
     /// database error.
     pub fn accept_run(&mut self, id: Uuid, state: &RunState) -> Result<Run, StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         let run = update(&tx, id, state)?;
         tx.execute(
             "DELETE FROM worktrees WHERE id = ?1",

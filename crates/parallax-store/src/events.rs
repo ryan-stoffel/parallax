@@ -83,8 +83,8 @@ impl Store {
     }
 
     /// Makes this connection's commits durable against a crash of the process but not of the
-    /// machine (`synchronous = NORMAL`, which SQLite recommends with WAL). The event log uses it
-    /// for its own connection, which commits once per event.
+    /// machine (`synchronous = NORMAL`, which SQLite recommends with WAL). plxd's one write
+    /// connection uses it, since it commits once per `agent.output` batch (0052).
     ///
     /// # Errors
     ///
@@ -222,18 +222,6 @@ impl Store {
             events.push(row?.into_event()?);
         }
         Ok(events)
-    }
-
-    /// Forgets the log's id, so the next [`Store::event_log_id`] stores a new one. The event log
-    /// calls it after an event failed to be stored: the log then has a hole, and possibly a
-    /// `seq` a later plxd would give out again, so clients must resync rather than trust it.
-    ///
-    /// # Errors
-    ///
-    /// A database error.
-    pub fn reset_event_log_id(&self) -> Result<(), StoreError> {
-        self.conn.execute("DELETE FROM log_meta", [])?;
-        Ok(())
     }
 
     /// Deletes host and project events (those with no `run_id`, such as `project.created` and

@@ -18,20 +18,20 @@ pub struct HostHealthResult {
     pub store: StoreState,
     /// Agents running on this host. Always 0 before M3.
     pub running_agents: u32,
-    /// How busy the store's and the event log's job queues are (PLX-445). An older plxd leaves it
-    /// out.
+    /// How busy the store's job queue is (PLX-445). An older plxd leaves it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub queues: Option<HostQueues>,
 }
 
-/// The job queues of plxd's two database threads, each running its jobs one at a time.
+/// The job queue of plxd's database thread, which runs its jobs one at a time.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HostQueues {
-    /// The project store's thread.
+    /// The project store's thread, which writes rows and their events (0052).
     pub store: QueueStats,
-    /// The event log's writer thread, which appends events.
+    /// The event log's writer thread, which a plxd before PLX-481 had. Its events are now written
+    /// by the store's jobs, so this is always zero.
     pub events: QueueStats,
 }
 

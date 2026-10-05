@@ -1,5 +1,5 @@
 use jiff::Timestamp;
-use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
 use crate::error::StoreError;
@@ -233,9 +233,7 @@ impl Store {
         let now = timestamp::now();
 
         let (icon_name, icon_color, image_type, image_data) = icon_columns(fields.icon.as_ref());
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         tx.execute(
             &format!(
                 "INSERT INTO projects (id, name, repo_path, created_at, updated_at, permission,
@@ -323,9 +321,7 @@ impl Store {
         edit: &ProjectEdit,
     ) -> Result<(Project, bool), StoreError> {
         let id_text = id.to_string();
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         let mut raw = fetch_raw(&tx, &id_text)?.ok_or(StoreError::NotFound { id })?;
 
         let mut changed = false;

@@ -14,8 +14,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::Context;
-use crate::event_log::EventLog;
 use crate::server::Daemon;
+use crate::store::Tx;
 use crate::store::store_error;
 
 /// `project`'s inbox, oldest first, with the event log's `seq` from before the read, to
@@ -27,7 +27,7 @@ pub(crate) async fn list(
     let (items, seq) = context
         .daemon
         .reader
-        .snapshot(&context.cancel, &context.daemon.log, move |store| {
+        .snapshot(&context.cancel, move |store| {
             found(store, params.project)?;
             store
                 .inbox(params.project.into())
@@ -60,9 +60,9 @@ pub(crate) async fn seen(
         .await
 }
 
-/// Adds an item about `run` to `project`'s inbox and appends `inbox.added` after the row is
-/// written, so a subscriber after `inbox/list`'s `seq` never misses it. Never fails its caller:
-/// a store error is logged.
+/// Adds an item about `run` to `project`'s inbox and stages `inbox.added` in the row's
+/// transaction (0052), so a subscriber after `inbox/list`'s `seq` never misses it. Never fails
+/// its caller: a store error is logged.
 pub(crate) async fn add(
     daemon: &Arc<Daemon>,
     project: ProjectId,
@@ -70,11 +70,10 @@ pub(crate) async fn add(
     kind: InboxKind,
     text: String,
 ) {
-    let log = Arc::clone(&daemon.log);
     let added = daemon
         .store
         .run(&CancellationToken::new(), move |store| {
-            record(store, &log, project, run, kind, text)
+            record(store, project, run, kind, text)
         })
         .await;
     if let Err(error) = added {
@@ -84,8 +83,7 @@ pub(crate) async fn add(
 
 /// [`add`]'s work, for a caller already in a store job.
 pub(crate) fn record(
-    store: &Store,
-    log: &EventLog,
+    store: &mut Tx,
     project: ProjectId,
     run: RunId,
     kind: InboxKind,
@@ -104,7 +102,7 @@ pub(crate) fn record(
         .add_inbox_item(&row)
         .map_err(|error| store_error(&error))?;
     let item = item(row)?;
-    let seq = log.append_blocking(
+    let seq = store.stage(
         item.created_at,
         Some(project),
         ParallaxEvent::InboxAdded { item },

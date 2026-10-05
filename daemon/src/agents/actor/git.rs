@@ -82,8 +82,8 @@ impl Actor {
                     .map_err(|why| ErrorObject::parallax(ErrorKind::CommitFailed, why))?;
                 let committed = diff.is_some();
                 if let Some(diff) = diff {
-                    self.record_diff(diff).await;
-                    self.save().await;
+                    let ready = self.record_diff(diff);
+                    self.save_with(vec![ready]).await;
                 }
                 committed
             } else {

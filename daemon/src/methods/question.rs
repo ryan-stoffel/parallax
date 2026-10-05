@@ -31,7 +31,7 @@ use super::{Context, handle, inbox};
 use crate::agents::convert::NO_WRITE;
 use crate::agents::coordinator::coordinator_of;
 use crate::agents::{self, run_not_found, wake};
-use crate::event_log::EventLog;
+use crate::store::Tx;
 use crate::store::{project_autonomy, store_error};
 
 /// The longest question, assumption, or answer, in bytes. A wake-up quotes them whole.
@@ -325,11 +325,7 @@ fn asks(row: &parallax_store::Question, prompt: &str) -> String {
 
 /// Escalates `project`'s open questions to Needs you, in the caller's store job, for a Project
 /// that just switched to Ask me, whose coordinator no longer answers them (PLX-474).
-pub(crate) fn escalate_open(
-    db: &Store,
-    log: &EventLog,
-    project: ProjectId,
-) -> Result<(), ErrorObject> {
+pub(crate) fn escalate_open(db: &mut Tx, project: ProjectId) -> Result<(), ErrorObject> {
     let questions = db.questions(project.into()).map_err(|e| store_error(&e))?;
     for row in questions.iter().filter(|row| row.status == OPEN) {
         let Ok(run) = RunId::try_from(row.run_id) else {
@@ -342,14 +338,7 @@ pub(crate) fn escalate_open(
             .unwrap_or_default();
         db.set_question(row.id, ESCALATED, None)
             .map_err(|e| store_error(&e))?;
-        inbox::record(
-            db,
-            log,
-            project,
-            run,
-            InboxKind::NeedsYou,
-            asks(row, &prompt),
-        )?;
+        inbox::record(db, project, run, InboxKind::NeedsYou, asks(row, &prompt))?;
     }
     Ok(())
 }

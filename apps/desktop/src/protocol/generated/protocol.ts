@@ -601,22 +601,22 @@ export type HostHealthResult = {
 	 */
 	runningAgents: number,
 	/**
-	 * How busy the store's and the event log's job queues are (PLX-445). An older plxd leaves it
-	 * out.
+	 * How busy the store's job queue is (PLX-445). An older plxd leaves it out.
 	 */
 	queues?: HostQueues,
 };
 
 /**
- * The job queues of plxd's two database threads, each running its jobs one at a time.
+ * The job queue of plxd's database thread, which runs its jobs one at a time.
  */
 export type HostQueues = {
 	/**
-	 * The project store's thread.
+	 * The project store's thread, which writes rows and their events (0052).
 	 */
 	store: QueueStats,
 	/**
-	 * The event log's writer thread, which appends events.
+	 * The event log's writer thread, which a plxd before PLX-481 had. Its events are now written
+	 * by the store's jobs, so this is always zero.
 	 */
 	events: QueueStats,
 };

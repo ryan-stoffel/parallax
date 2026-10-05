@@ -99,6 +99,39 @@ impl Store {
         conn.pragma_update(None, "query_only", "ON")?;
         Ok(Self { conn })
     }
+
+    /// Starts a write transaction, taking the write lock now (`BEGIN IMMEDIATE`). Methods that
+    /// write several rows use savepoints, so they nest inside it.
+    ///
+    /// # Errors
+    ///
+    /// A database error, such as one already open.
+    pub fn begin(&self) -> Result<(), StoreError> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        Ok(())
+    }
+
+    /// Commits the transaction [`Store::begin`] started.
+    ///
+    /// # Errors
+    ///
+    /// A database error. The transaction may still be open then, so roll it back.
+    pub fn commit(&self) -> Result<(), StoreError> {
+        self.conn.execute_batch("COMMIT")?;
+        Ok(())
+    }
+
+    /// Rolls back the transaction [`Store::begin`] started, if it is still open.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn rollback(&self) -> Result<(), StoreError> {
+        if !self.conn.is_autocommit() {
+            self.conn.execute_batch("ROLLBACK")?;
+        }
+        Ok(())
+    }
 }
 
 /// Sets the pragmas every connection needs: a busy timeout so lock

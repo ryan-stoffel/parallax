@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::params;
 use uuid::Uuid;
 
 use crate::Store;
@@ -47,9 +47,7 @@ impl Store {
     ///
     /// A database error, including a turn id `queue` holds twice.
     pub fn set_queue(&mut self, run_id: Uuid, queue: &[QueuedRow]) -> Result<(), StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         let run = run_id.to_string();
         tx.execute("DELETE FROM queued WHERE run_id = ?1", params![run])?;
         let now = timestamp::now();

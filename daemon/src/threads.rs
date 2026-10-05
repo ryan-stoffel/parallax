@@ -70,7 +70,7 @@ const MAX_QUERY_BYTES: usize = 1024;
 
 async fn store<T: Send + 'static>(
     daemon: &Daemon,
-    job: impl FnOnce(&mut parallax_store::Store) -> Result<T, ErrorObject> + Send + 'static,
+    job: impl FnOnce(&mut crate::store::Tx) -> Result<T, ErrorObject> + Send + 'static,
 ) -> Result<T, ErrorObject> {
     daemon.store.run(&CancellationToken::new(), job).await
 }
@@ -204,28 +204,25 @@ pub(crate) async fn existing_thread(
     .await
 }
 
-/// Reports a new thread as `thread.started`, a host-level event.
-pub(crate) async fn log_started(daemon: &Daemon, row: &parallax_store::Thread) {
-    match thread_entry(row) {
-        Ok(thread) => {
-            daemon
-                .log
-                .append(
-                    thread.created_at,
-                    None,
-                    ParallaxEvent::ThreadStarted { thread },
-                )
-                .await;
-        }
-        Err(error) => warn!(error = %error.message, "could not report a new thread"),
-    }
+/// Stages a new thread's `thread.started`, a host-level event, in the job that records it.
+pub(crate) fn stage_started(
+    db: &mut crate::store::Tx,
+    row: &parallax_store::Thread,
+) -> Result<(), ErrorObject> {
+    let thread = thread_entry(row)?;
+    db.stage(
+        thread.created_at,
+        None,
+        ParallaxEvent::ThreadStarted { thread },
+    );
+    Ok(())
 }
 
 /// `thread/list`.
 pub(crate) async fn list(daemon: &Arc<Daemon>) -> Result<ThreadListResult, ErrorObject> {
     let ((repos, threads), seq) = daemon
         .reader
-        .snapshot(&CancellationToken::new(), &daemon.log, |db| {
+        .snapshot(&CancellationToken::new(), |db| {
             let repos = db.list_repos().map_err(|e| store_error(&e))?;
             let threads = db.list_threads().map_err(|e| store_error(&e))?;
             Ok((repos, threads))
@@ -298,7 +295,6 @@ pub(crate) async fn add_repo(
         .and_then(|name| name.to_str())
         .unwrap_or(&canonical)
         .to_owned();
-    let log = Arc::clone(&daemon.log);
     store(daemon, move |db| {
         let fields = RepoFields {
             name,
@@ -308,7 +304,7 @@ pub(crate) async fn add_repo(
         let (repo, created) = add(db, id.into(), &fields)?;
         let repo = repo_entry(repo)?;
         if created {
-            log.append_blocking(
+            db.stage(
                 repo.created_at,
                 None,
                 ParallaxEvent::RepoAdded { repo: repo.clone() },
@@ -357,7 +353,6 @@ fn scratch_root(daemon: &Daemon) -> Result<PathBuf, ErrorObject> {
 /// plxd's scratch entry, made on first use.
 async fn scratch_entry(daemon: &Arc<Daemon>) -> Result<parallax_store::Repo, ErrorObject> {
     let root = scratch_root(daemon)?;
-    let log = Arc::clone(&daemon.log);
     store(daemon, move |db| {
         if let Some(repo) = db.scratch_repo().map_err(|e| store_error(&e))? {
             return Ok(repo);
@@ -370,7 +365,7 @@ async fn scratch_entry(daemon: &Arc<Daemon>) -> Result<parallax_store::Repo, Err
         let (row, created) = add(db, RepoId::generate().into(), &fields)?;
         if created {
             let repo = repo_entry(row.clone())?;
-            log.append_blocking(repo.created_at, None, ParallaxEvent::RepoAdded { repo });
+            db.stage(repo.created_at, None, ParallaxEvent::RepoAdded { repo });
         }
         Ok(row)
     })
@@ -1070,7 +1065,6 @@ pub(crate) async fn archive(
     params: ThreadArchiveParams,
 ) -> Result<ThreadArchiveResult, ErrorObject> {
     let ThreadArchiveParams { run_id, archived } = params;
-    let log = Arc::clone(&daemon.log);
     store(daemon, move |db| {
         let before = db
             .get_thread(run_id.into())
@@ -1088,7 +1082,7 @@ pub(crate) async fn archive(
                 other => store_error(&other),
             })?;
         let thread = thread_entry(&row)?;
-        log.append_blocking(
+        db.stage(
             Timestamp::now(),
             None,
             ParallaxEvent::ThreadUpdated {
@@ -1119,7 +1113,6 @@ pub(crate) async fn update(
         title: title.as_deref().map(check_title).transpose()?,
         settled,
     };
-    let log = Arc::clone(&daemon.log);
     store(daemon, move |db| {
         let (row, changed) =
             db.update_thread(run_id.into(), &update)
@@ -1129,7 +1122,7 @@ pub(crate) async fn update(
                 })?;
         let thread = thread_entry(&row)?;
         if changed {
-            log.append_blocking(
+            db.stage(
                 Timestamp::now(),
                 None,
                 ParallaxEvent::ThreadUpdated {
@@ -1142,17 +1135,14 @@ pub(crate) async fn update(
     .await
 }
 
-/// After a message to run `run_id` is recorded: if the run is a thread, its `lastPromptAt` moved,
-/// so this appends `thread.updated` for the sidebar's order (0033). Runs on the store's thread.
-pub(crate) fn prompted(
-    db: &parallax_store::Store,
-    log: &crate::event_log::EventLog,
-    run_id: Uuid,
-) -> Result<(), ErrorObject> {
+/// After run `run_id`'s thread row changed in this job, stages `thread.updated` if the run is a
+/// thread: a recorded message moved its `lastPromptAt`, for the sidebar's order (0033), or joining
+/// a Project gave it a parent (PLX-419).
+pub(crate) fn prompted(db: &mut crate::store::Tx, run_id: Uuid) -> Result<(), ErrorObject> {
     let Some(row) = db.get_thread(run_id).map_err(|e| store_error(&e))? else {
         return Ok(());
     };
-    log.append_blocking(
+    db.stage(
         Timestamp::now(),
         None,
         ParallaxEvent::ThreadUpdated {
@@ -1169,7 +1159,6 @@ pub(crate) async fn update_repo(
 ) -> Result<RepoUpdateResult, ErrorObject> {
     let RepoUpdateParams { repo, icon } = params;
     crate::methods::project::check_icon(&icon)?;
-    let log = Arc::clone(&daemon.log);
     let stored = crate::store::stored_icon(icon);
     store(daemon, move |db| {
         let (row, changed) =
@@ -1183,7 +1172,7 @@ pub(crate) async fn update_repo(
                 })?;
         let repo = repo_entry(row)?;
         if changed {
-            log.append_blocking(
+            db.stage(
                 Timestamp::now(),
                 None,
                 ParallaxEvent::RepoUpdated { repo: repo.clone() },
@@ -1221,10 +1210,10 @@ pub(crate) async fn delete(
     Ok(ThreadDeleteResult {})
 }
 
-/// Deletes run `run_id` once its CLI has exited: its rows and stored events in one transaction,
-/// its events in memory, then `worktree` and its branch. For a thread, also its thread row, and
-/// for a thread with no repo its scratch repository and its own context folder, then appends
-/// `thread.deleted`. A Project's run (`project/delete`, PLX-338) has no thread row and gets no
+/// Deletes run `run_id` once its CLI has exited: its rows and stored events, and for a thread its
+/// thread row and `thread.deleted`, in one transaction, then its events in memory, then
+/// `worktree` and its branch, and for a thread with no repo its scratch repository and its own
+/// context folder. A Project's run (`project/delete`, PLX-338) has no thread row and gets no
 /// event of its own. The store clears the run from its children's parent and its forks' origin,
 /// and each such thread gets `thread.updated` (0041). Startup's garbage collection removes a
 /// worktree folder that a crash left behind.
@@ -1233,7 +1222,6 @@ pub(crate) async fn purge(
     run_id: RunId,
     worktree: Option<parallax_store::Worktree>,
 ) -> Result<(), ErrorObject> {
-    let log = Arc::clone(&daemon.log);
     let thread = store(daemon, move |db| {
         let id = Uuid::from(run_id);
         let children: Vec<Uuid> = db
@@ -1252,14 +1240,21 @@ pub(crate) async fn purge(
                 .map_err(|e| store_error(&e))?
                 .is_some_and(|repo| repo.fields.scratch);
             db.delete_thread(id).map_err(|e| store_error(&e))?;
-            Some((thread, scratch))
+            let repo =
+                RepoId::try_from(thread.repo_id).map_err(|_| corrupt("thread", thread.id))?;
+            db.stage(
+                Timestamp::now(),
+                None,
+                ParallaxEvent::ThreadDeleted { run_id, repo },
+            );
+            Some(scratch)
         } else {
             db.delete_run(id).map_err(|e| store_error(&e))?;
             None
         };
         for child in children {
             if let Some(row) = db.get_thread(child).map_err(|e| store_error(&e))? {
-                log.append_blocking(
+                db.stage(
                     Timestamp::now(),
                     None,
                     ParallaxEvent::ThreadUpdated {
@@ -1285,7 +1280,7 @@ pub(crate) async fn purge(
     {
         warn!(run = %run_id, %error, "could not remove a deleted run's worktree");
     }
-    let Some((thread, scratch)) = thread else {
+    let Some(scratch) = thread else {
         info!(run = %run_id, "deleted a project's run");
         return Ok(());
     };
@@ -1297,15 +1292,6 @@ pub(crate) async fn purge(
             remove_context(daemon, scope);
         }
     }
-    let repo = RepoId::try_from(thread.repo_id).map_err(|_| corrupt("thread", thread.id))?;
-    daemon
-        .log
-        .append(
-            Timestamp::now(),
-            None,
-            ParallaxEvent::ThreadDeleted { run_id, repo },
-        )
-        .await;
     info!(run = %run_id, "deleted a thread");
     Ok(())
 }

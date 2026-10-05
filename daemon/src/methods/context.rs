@@ -125,7 +125,7 @@ fn write_context_file(
         )
         .map_err(io_error(name))?;
     let file = context::context_file(name, &metadata, writer);
-    let seq = daemon.log.append_blocking(
+    let seq = daemon.store.append_blocking(
         jiff::Timestamp::now(),
         Some(project),
         ParallaxEvent::ContextChanged { file: file.clone() },
