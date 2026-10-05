@@ -199,6 +199,23 @@ test("an open pull request is read again every POLL_MS, and a merged one isn't",
   expect(document.body.textContent).toContain("1 of 2 running");
 });
 
+test("a poll skips a pull request whose last read hasn't answered", async () => {
+  vi.useFakeTimers({ now, toFake: ["Date", "setInterval", "clearInterval"] });
+  read = { [url(42)]: prOf(42) };
+  await render([url(42)], () => null);
+  let answer!: () => void;
+  request.mockImplementationOnce(
+    () => new Promise((resolve) => (answer = () => resolve({ logId: "l", result: prOf(42) }))),
+  );
+  request.mockClear();
+  await act(async () => void vi.advanceTimersByTime(POLL_MS * 2));
+  expect(request).toHaveBeenCalledTimes(1);
+  await act(async () => answer());
+  await settle();
+  await act(async () => void vi.advanceTimersByTime(POLL_MS));
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
 test("a read sent before a merge doesn't overwrite the merge's answer", async () => {
   read = { [url(42)]: prOf(42) };
   actions = { merge: () => ({ result: prOf(42, { state: "merged" }) }) };

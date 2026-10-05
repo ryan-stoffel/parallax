@@ -114,10 +114,16 @@ export function usePullRequests(
   const live = urls
     .filter((url) => !["merged", "closed"].includes(read[`${runId} ${url}`]?.pr?.state ?? ""))
     .join("\n");
+  // A read can take minutes (plxd's gh timeout), so a poll skips one whose last read hasn't settled.
+  const polling = useRef(new Set<string>());
   useEffect(() => {
     if (!live) return;
     const timer = setInterval(() => {
-      for (const url of live.split("\n")) void refresh(url);
+      for (const url of live.split("\n")) {
+        if (polling.current.has(url)) continue;
+        polling.current.add(url);
+        void refresh(url).finally(() => polling.current.delete(url));
+      }
     }, POLL_MS);
     return () => clearInterval(timer);
   }, [live, refresh]);
