@@ -33,64 +33,6 @@
   src: url("./fonts/SymbolsNerdFontMono-Regular.woff2") format("woff2");
 }
 
-/*! Anthropic Serif Text (c) 2025 Anthropic PBC / BSPK LLC. */
-@font-face {
-  font-family: "Anthropic Serif";
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-  src: url("./fonts/AnthropicSerif-Text-Regular.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Anthropic Serif";
-  font-weight: 400;
-  font-style: italic;
-  font-display: swap;
-  src: url("./fonts/AnthropicSerif-Text-RegularItalic.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Anthropic Serif";
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
-  src: url("./fonts/AnthropicSerif-Text-Medium.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Anthropic Serif";
-  font-weight: 500;
-  font-style: italic;
-  font-display: swap;
-  src: url("./fonts/AnthropicSerif-Text-MediumItalic.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Anthropic Serif";
-  font-weight: 600;
-  font-style: normal;
-  font-display: swap;
-  src: url("./fonts/AnthropicSerif-Text-Semibold.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Anthropic Serif";
-  font-weight: 600;
-  font-style: italic;
-  font-display: swap;
-  src: url("./fonts/AnthropicSerif-Text-SemiboldItalic.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Anthropic Serif";
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-  src: url("./fonts/AnthropicSerif-Text-Bold.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Anthropic Serif";
-  font-weight: 700;
-  font-style: italic;
-  font-display: swap;
-  src: url("./fonts/AnthropicSerif-Text-BoldItalic.woff2") format("woff2");
-}
-
 /*! JetBrains Mono Nerd Font (SIL Open Font License 1.1 / MIT). */
 @font-face {
   font-family: "JetBrains Mono Nerd Font";
@@ -303,9 +245,7 @@
 
 @theme inline {
   /* A font the user picked in Appearance comes first. */
-  --font-sans:
-    var(--ui-font, "Anthropic Serif"), -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
-    sans-serif;
+  --font-sans: var(--ui-font, -apple-system), BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono:
     var(--code-font, "JetBrains Mono Nerd Font"), "JetBrainsMono Nerd Font", ui-monospace,
     SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;

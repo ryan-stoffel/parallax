@@ -55,12 +55,6 @@ Its icon sets keep their own licenses, listed at https://github.com/ryanoasis/ne
 
 export const notices: Notice[] = [
   {
-    name: "Anthropic Serif Text",
-    license: "Copyright",
-    // ponytail: not an open license. Fill in the terms once the font's license is confirmed.
-    text: "Copyright (c) 2025 Anthropic PBC / BSPK LLC. All rights reserved.",
-  },
-  {
     name: "JetBrains Mono Nerd Font",
     license: "SIL OFL 1.1",
     text: `${OFL}\n\n${NERD_FONTS}`,

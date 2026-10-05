@@ -32,7 +32,7 @@ export function TypographySettings() {
             label="Interface font"
             value={appearance.uiFont}
             fonts={fonts.ui}
-            system="Default (Anthropic Serif)"
+            system="System"
             advanced={advanced}
             onChange={(uiFont) => setAppearance({ uiFont })}
           />
