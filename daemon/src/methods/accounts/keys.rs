@@ -4,7 +4,7 @@
 //! [`crate::keystore::KeyStore`] sees it, and [`mask_key`] turns it into the display form
 //! (`sk-ant-...abcd`) that everything else, including this module's own logging, works with.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
@@ -17,7 +17,7 @@ use tracing::{error, info};
 
 use crate::keystore::{KeyStore, KeyStoreError, UNAVAILABLE_MESSAGE};
 use crate::methods::Context;
-use crate::store::{self, account_store_error};
+use crate::store::{self, StoreHandle, account_store_error};
 
 /// The fewest bytes plxd accepts for a key. Every real Anthropic, `OpenAI`, or Cursor key is far
 /// longer; this also keeps [`mask_key`] from having only a sliver of a short, possibly-fragment
@@ -41,40 +41,55 @@ pub(crate) async fn add(
         label,
         key,
     } = params;
-    let keys = Arc::clone(&context.daemon.keys);
-    context
-        .daemon
-        .store
-        .run(&context.cancel, move |db_store| {
-            add_account(db_store, keys.as_ref(), id, provider, label, key.expose())
-        })
-        .await
+    let daemon = Arc::clone(&context.daemon);
+    // A blocking task, which runs to the end even if the request is dropped, so a key is never
+    // left without its row. The Keychain calls stay off the store's thread, which every run's
+    // output goes through.
+    tokio::task::spawn_blocking(move || {
+        add_account(
+            &daemon.store,
+            daemon.keys.as_ref(),
+            id,
+            provider,
+            label,
+            key.expose(),
+        )
+    })
+    .await
+    .map_err(|error| ErrorObject::internal_error(format!("adding a key account failed: {error}")))?
 }
 
-/// The logic behind `accounts/keys/add`, apart from plxd's dedicated store thread, so a test can
-/// run it directly and capture what it logs.
+/// Held for the whole of an add or a remove, so two of them on one id can't interleave their
+/// Keychain and store steps.
+// ponytail: one lock for every key account, since they change rarely.
+static CHANGING: Mutex<()> = Mutex::new(());
+
+/// The logic behind `accounts/keys/add`, on a blocking thread, so a test can run it directly and
+/// capture what it logs.
 ///
 /// Idempotent on `id`: if a row already exists with the same `provider`, `label`, and masked key,
 /// its *stored* key is also checked against `key` before this is treated as a retry, since a mask
 /// is a lossy display form and two different keys can share one. Anything else with an existing
 /// row is `idConflict`. A new row's key is stored in the Keychain first, so a row is never created
-/// for a key that failed to save; if the store write then fails, the Keychain write is rolled
-/// back, so a failed add never leaves a key with no record behind it either.
+/// for a key that failed to save; if the store job then fails, its commit included, the key is
+/// deleted again, so a failed add never leaves a key with no record behind it either.
 fn add_account(
-    db_store: &mut parallax_store::Store,
+    store: &StoreHandle,
     keys: &dyn KeyStore,
     id: AccountId,
     provider: Provider,
     label: String,
     key: &str,
 ) -> Result<AccountsKeysAddResult, ErrorObject> {
+    let _changing = CHANGING.lock().unwrap_or_else(PoisonError::into_inner);
     let masked_key = mask_key(key);
     let fields = store::account_fields(provider, label, masked_key);
     let uuid = id.into();
-    if let Some(existing) = db_store
-        .get_account(uuid)
-        .map_err(|error| account_store_error(&error))?
-    {
+    let existing = store.run_blocking(move |db| {
+        db.get_account(uuid)
+            .map_err(|error| account_store_error(&error))
+    })?;
+    if let Some(existing) = existing {
         let same_fields = existing.provider == fields.provider
             && existing.label == fields.label
             && existing.masked_key == fields.masked_key;
@@ -95,11 +110,16 @@ fn add_account(
         error!(%error, "could not store a key in the keychain");
         map_keychain_error(&error)
     })?;
-    let row = match db_store.create_account(uuid, &fields) {
+    let created = store.run_blocking(move |db| {
+        db.create_account(uuid, &fields)
+            .map_err(|error| account_store_error(&error))
+    });
+    let row = match created {
         Ok(row) => row,
         Err(error) => {
-            // The Keychain now holds a key with no record for it. Best-effort clean that up so a
-            // failed add never leaves a key that the protocol can no longer see or remove.
+            // The job rolled back, or never committed, so the Keychain holds a key with no row.
+            // Best-effort clean that up so a failed add never leaves a key that the protocol can
+            // no longer see or remove.
             if let Err(cleanup_error) = keys.delete(id) {
                 error!(
                     account = %id,
@@ -107,7 +127,7 @@ fn add_account(
                     "could not roll back a keychain write after the store failed"
                 );
             }
-            return Err(account_store_error(&error));
+            return Err(error);
         }
     };
     let account = store::key_account(row)?;
@@ -140,29 +160,29 @@ pub(crate) async fn remove(
     params: AccountsKeysRemoveParams,
 ) -> Result<AccountsKeysRemoveResult, ErrorObject> {
     let AccountsKeysRemoveParams { id } = params;
-    let keys = Arc::clone(&context.daemon.keys);
-    context
-        .daemon
-        .store
-        .run(&context.cancel, move |db_store| {
-            remove_account(db_store, keys.as_ref(), id)
-        })
+    let daemon = Arc::clone(&context.daemon);
+    // As `add`: a blocking task that runs to the end, with the Keychain off the store's thread.
+    tokio::task::spawn_blocking(move || remove_account(&daemon.store, daemon.keys.as_ref(), id))
         .await
+        .map_err(|error| {
+            ErrorObject::internal_error(format!("removing a key account failed: {error}"))
+        })?
 }
 
-/// The logic behind `accounts/keys/remove`, apart from plxd's dedicated store thread, so a test
-/// can run it directly against a mock `KeyStore`.
+/// The logic behind `accounts/keys/remove`, on a blocking thread, so a test can run it directly
+/// against a mock `KeyStore`.
 fn remove_account(
-    db_store: &mut parallax_store::Store,
+    store: &StoreHandle,
     keys: &dyn KeyStore,
     id: AccountId,
 ) -> Result<AccountsKeysRemoveResult, ErrorObject> {
+    let _changing = CHANGING.lock().unwrap_or_else(PoisonError::into_inner);
     let uuid = id.into();
-    if db_store
-        .get_account(uuid)
-        .map_err(|error| account_store_error(&error))?
-        .is_none()
-    {
+    let found = store.run_blocking(move |db| {
+        db.get_account(uuid)
+            .map_err(|error| account_store_error(&error))
+    })?;
+    if found.is_none() {
         return Err(account_store_error(&StoreError::NotFound { id: uuid }));
     }
     // The Keychain first, so a failed removal never leaves an account with no record but a key
@@ -171,9 +191,10 @@ fn remove_account(
         error!(%error, "could not remove a key from the keychain");
         map_keychain_error(&error)
     })?;
-    db_store
-        .delete_account(uuid)
-        .map_err(|error| account_store_error(&error))?;
+    store.run_blocking(move |db| {
+        db.delete_account(uuid)
+            .map_err(|error| account_store_error(&error))
+    })?;
     info!(account = %id, "removed a key account");
     Ok(AccountsKeysRemoveResult {})
 }
@@ -285,15 +306,15 @@ mod tests {
 
     use parallax_protocol::jsonrpc::INVALID_PARAMS;
     use parallax_protocol::{AccountId, ErrorKind, Provider, RawKey};
-    use parallax_store::Store;
     use tracing_subscriber::fmt::MakeWriter;
 
     use super::{add_account, check, mask_key, remove_account};
     use crate::keystore::{KeyStore, MemoryKeyStore};
+    use crate::store::StoreHandle;
 
-    fn temp_store() -> (tempfile::TempDir, Store) {
+    fn temp_store() -> (tempfile::TempDir, StoreHandle) {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("plxd.sqlite3")).unwrap();
+        let store = StoreHandle::open(&dir.path().join("plxd.sqlite3"), 10, usize::MAX, usize::MAX);
         (dir, store)
     }
 
@@ -382,9 +403,9 @@ mod tests {
 
     #[test]
     fn removing_an_unknown_id_is_account_not_found() {
-        let (_dir, mut db_store) = temp_store();
+        let (_dir, db_store) = temp_store();
         let keys = MemoryKeyStore::new();
-        let error = remove_account(&mut db_store, &keys, AccountId::generate()).unwrap_err();
+        let error = remove_account(&db_store, &keys, AccountId::generate()).unwrap_err();
         assert_eq!(
             error.parallax_data().unwrap().kind,
             ErrorKind::AccountNotFound
@@ -393,11 +414,11 @@ mod tests {
 
     #[test]
     fn remove_deletes_both_the_row_and_the_keychain_entry() {
-        let (_dir, mut db_store) = temp_store();
+        let (_dir, db_store) = temp_store();
         let keys = MemoryKeyStore::new();
         let id = AccountId::generate();
         add_account(
-            &mut db_store,
+            &db_store,
             &keys,
             id,
             Provider::Anthropic,
@@ -407,25 +428,24 @@ mod tests {
         .unwrap();
         assert!(keys.get(id).unwrap().is_some());
 
-        remove_account(&mut db_store, &keys, id).unwrap();
+        remove_account(&db_store, &keys, id).unwrap();
 
         assert_eq!(keys.get(id).unwrap(), None, "the key must be gone");
-        assert_eq!(
-            db_store.get_account(id.into()).unwrap(),
-            None,
-            "the row must be gone"
-        );
+        let row = db_store
+            .run_blocking(move |db| Ok(db.get_account(id.into()).unwrap()))
+            .unwrap();
+        assert_eq!(row, None, "the row must be gone");
     }
 
     #[test]
     fn a_retried_add_with_the_same_key_is_idempotent() {
-        let (_dir, mut db_store) = temp_store();
+        let (_dir, db_store) = temp_store();
         let keys = MemoryKeyStore::new();
         let id = AccountId::generate();
         let key = "sk-ant-averylongthrowawaykeyabcd1234";
 
         let first = add_account(
-            &mut db_store,
+            &db_store,
             &keys,
             id,
             Provider::Anthropic,
@@ -434,7 +454,7 @@ mod tests {
         )
         .unwrap();
         let second = add_account(
-            &mut db_store,
+            &db_store,
             &keys,
             id,
             Provider::Anthropic,
@@ -452,11 +472,11 @@ mod tests {
 
     #[test]
     fn a_retry_with_a_different_label_is_an_id_conflict() {
-        let (_dir, mut db_store) = temp_store();
+        let (_dir, db_store) = temp_store();
         let keys = MemoryKeyStore::new();
         let id = AccountId::generate();
         add_account(
-            &mut db_store,
+            &db_store,
             &keys,
             id,
             Provider::Anthropic,
@@ -466,7 +486,7 @@ mod tests {
         .unwrap();
 
         let error = add_account(
-            &mut db_store,
+            &db_store,
             &keys,
             id,
             Provider::Anthropic,
@@ -481,7 +501,7 @@ mod tests {
     /// characters), so idempotency must not trust the mask alone.
     #[test]
     fn a_retry_with_a_different_key_that_shares_a_mask_is_an_id_conflict() {
-        let (_dir, mut db_store) = temp_store();
+        let (_dir, db_store) = temp_store();
         let keys = MemoryKeyStore::new();
         let id = AccountId::generate();
         let first_key = "sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAabcd";
@@ -494,7 +514,7 @@ mod tests {
         assert_ne!(first_key, second_key);
 
         add_account(
-            &mut db_store,
+            &db_store,
             &keys,
             id,
             Provider::Anthropic,
@@ -504,7 +524,7 @@ mod tests {
         .unwrap();
 
         let error = add_account(
-            &mut db_store,
+            &db_store,
             &keys,
             id,
             Provider::Anthropic,
@@ -522,7 +542,7 @@ mod tests {
 
     #[test]
     fn a_failed_store_write_rolls_back_the_keychain_write() {
-        let (dir, mut db_store) = temp_store();
+        let (dir, db_store) = temp_store();
         // Break the schema after opening, from a second connection to the same database, so the
         // next `create_account` fails immediately and deterministically: no fault-injecting mock
         // store needed, and nothing to wait out.
@@ -534,7 +554,7 @@ mod tests {
         let id = AccountId::generate();
 
         let result = add_account(
-            &mut db_store,
+            &db_store,
             &keys,
             id,
             Provider::Anthropic,
@@ -586,7 +606,7 @@ mod tests {
             .with_ansi(false)
             .finish();
 
-        let (_dir, mut db_store) = temp_store();
+        let (_dir, db_store) = temp_store();
         let keys = MemoryKeyStore::new();
 
         tracing::subscriber::with_default(subscriber, || {
@@ -595,7 +615,7 @@ mod tests {
             for _ in 0..20 {
                 tracing::callsite::rebuild_interest_cache();
                 add_account(
-                    &mut db_store,
+                    &db_store,
                     &keys,
                     AccountId::generate(),
                     Provider::Anthropic,

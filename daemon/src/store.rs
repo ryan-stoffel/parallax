@@ -184,14 +184,19 @@ impl Tx {
             kind: kind_of(&event),
             payload,
         };
-        let mut written = self.store.append_event(&stored);
-        // Only a host or project event can grow past the retention this way (#187).
-        if written.is_ok() && run_id.is_none() {
-            written = self.store.prune_host_events(log.host_retention()).map(drop);
-        }
-        if let Err(error) = written {
-            error!(seq, %error, "could not store an event; its job rolls back");
-            self.failed = true;
+        match self.store.append_event(&stored) {
+            Err(error) => {
+                error!(seq, %error, "could not store an event; its job rolls back");
+                self.failed = true;
+            }
+            // Only a host or project event can grow past the retention this way (#187). Pruning
+            // is housekeeping, so its failure doesn't fail the write.
+            Ok(()) if run_id.is_none() => {
+                if let Err(error) = self.store.prune_host_events(log.host_retention()) {
+                    warn!(%error, "could not prune host and project events");
+                }
+            }
+            Ok(()) => {}
         }
         self.staged.push(Entry {
             seq,
@@ -444,7 +449,8 @@ impl StoreHandle {
 
     /// Stores and publishes one event in a job of its own, and returns its `seq`. With the store
     /// unavailable, the event goes to the in-memory log. An event that can't be stored is logged
-    /// and dropped, and the head is returned.
+    /// and dropped, and the head is returned. For tests: plxd's own events go in their rows' jobs.
+    #[cfg(test)]
     pub async fn append(
         &self,
         time: Timestamp,
@@ -465,37 +471,48 @@ impl StoreHandle {
         })
     }
 
-    /// [`StoreHandle::append`], for a caller with no tokio runtime context: the shared-context
-    /// `notify` watcher's callback thread, and `context/write`'s blocking task. Blocks the
-    /// calling thread until the job finishes.
+    /// Stores and publishes one event that has no row, in a job of its own, and returns its `seq`,
+    /// for a caller with no tokio runtime context: the shared-context `notify` watcher's callback
+    /// thread, and `context/write`'s blocking task. Blocks the calling thread until the job
+    /// finishes. With the store unavailable, the event goes to the in-memory log. An event that
+    /// can't be stored is logged and dropped, and the head is returned.
     pub fn append_blocking(
         &self,
         time: Timestamp,
         project: Option<ProjectId>,
         event: ParallaxEvent,
     ) -> u64 {
-        let State::Open { jobs, .. } = &self.state else {
+        if matches!(self.state, State::Unavailable) {
             return self.log.append_in_memory(time, project, event);
+        }
+        self.run_blocking(move |tx| Ok(tx.stage(time, project, event)))
+            .unwrap_or_else(|error| {
+                warn!(error = %error.message, "could not append an event; it was dropped");
+                self.log.head()
+            })
+    }
+
+    /// [`StoreHandle::run`] for a caller with no tokio runtime context, such as a blocking task.
+    /// Blocks the calling thread until the job finishes. It can't be cancelled.
+    pub fn run_blocking<T: Send + 'static>(
+        &self,
+        job: impl FnOnce(&mut Tx) -> Result<T, ErrorObject> + Send + 'static,
+    ) -> Result<T, ErrorObject> {
+        let State::Open { jobs, .. } = &self.state else {
+            return Err(unavailable());
         };
         let (reply, result) = oneshot::channel();
         let job: Job = Box::new(move |tx| {
-            let _ = reply.send(tx.write(|tx| Ok(tx.stage(time, project, event))));
+            let _ = reply.send(tx.write(job));
         });
         self.counters.sending();
         if jobs.send(Message::Job(Instant::now(), job)).is_err() {
             self.counters.unsent();
+            return Err(unavailable());
         }
-        match result.blocking_recv() {
-            Ok(Ok(seq)) => seq,
-            Ok(Err(error)) => {
-                warn!(error = %error.message, "could not append an event; it was dropped");
-                self.log.head()
-            }
-            Err(_) => {
-                warn!("could not append an event: the project store is unavailable");
-                self.log.head()
-            }
-        }
+        result
+            .blocking_recv()
+            .unwrap_or_else(|_| Err(unavailable()))
     }
 
     /// [`StoreHandle::run`] for a list that clients subscribe after: returns `job`'s rows with the

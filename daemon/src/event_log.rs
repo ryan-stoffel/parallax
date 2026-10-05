@@ -130,7 +130,7 @@ pub(crate) fn kind_of(event: &ParallaxEvent) -> String {
 /// Evicts from the front of `events` until it is within both `retention` and `max_bytes`,
 /// keeping `bytes` (the sum of what remains) in sync. Always leaves at least one event, so a
 /// single one over `max_bytes` on its own is never dropped outright. Shared by construction and
-/// by every append, so the bound holds the same way whichever put the log over it.
+/// by every publish, so the bound holds the same way whichever put the log over it.
 fn evict(
     events: &mut VecDeque<Arc<Entry>>,
     bytes: &mut usize,
@@ -146,9 +146,9 @@ fn evict(
     }
 }
 
-// The index of the first event after `after`. `seq`s increase but may have gaps: an event that
-// failed to be stored is missing from a log reloaded after a restart, and `purge_run` (#110)
-// removes a deleted thread's events from the middle of the window on purpose. Reads `head`,
+// The index of the first event after `after`. `seq`s increase but may have gaps: a deleted run's
+// events are gone from a log reloaded after a restart, and `purge_run` (#110) removes them from
+// the middle of the window on purpose. Reads `head`,
 // `floor`, and `events` from the same locked `inner`, so all three are always consistent with
 // each other (#190): `head` never says a `seq` exists that `events` hasn't published yet.
 fn start(inner: &Inner, after: u64) -> Result<usize, Gone> {
