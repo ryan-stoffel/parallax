@@ -89,6 +89,7 @@ async fn tools(host: &Host, run: RunId) -> Mcp {
 async fn transcript(client: &mut Conn, run: RunId) -> Vec<AgentOutputItem> {
     let events = client
         .call::<AgentEvents>(AgentEventsParams {
+            before: None,
             run_id: run,
             after: 0,
             limit: Some(1000),

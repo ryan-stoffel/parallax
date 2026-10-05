@@ -13,6 +13,7 @@ import type {
   AgentTodoItem,
   AgentToolStatus,
   LoggedEvent,
+  ParallaxEvent,
 } from "../protocol/generated/protocol";
 import { activity, AgentChat, linkIcon, RowView, RunTab, TranscriptView } from "./AgentChat";
 import { Composer } from "./Composer";
@@ -768,7 +769,8 @@ function fakeBridge(
 ) {
   let listener: (m: SubscriptionMessage) => void = () => {};
   const connections = new Set<(hostId: string, state: ConnectionState) => void>();
-  const request = vi.fn(async (_host: string, method: string, params: { after?: number }) => {
+  type Params = { after?: number; before?: number };
+  const request = vi.fn(async (_host: string, method: string, params: Params) => {
     if (method === "queue/list") return { result: { messages: [] }, logId: "log-1" };
     if (method === "agent/list") return { result: { runs: [], seq: listSeq }, logId: "log-1" };
     if (method === "agent/cancel" && cancelError)
@@ -780,6 +782,13 @@ function fakeBridge(
     if (method === "agent/image")
       return { result: { mediaType: "image/png", data: "AAAA" }, logId: "log-1" };
     if (method !== "agent/events") return { result: {}, logId: "log-1" };
+    if (params.before !== undefined) {
+      const older = logged.filter((e) => e.seq < params.before! && e.seq <= seq);
+      return {
+        result: { events: older.slice(-2), more: older.length > 2, run: sampleRun, seq: listSeq },
+        logId: "log-1",
+      };
+    }
     const rest = logged.filter((e) => e.seq > params.after! && e.seq <= seq);
     return { result: { events: rest.slice(0, 2), more: rest.length > 2 }, logId: "log-1" };
   });
@@ -852,6 +861,37 @@ test("loads every page, subscribes after the last seq, and appends live events",
 
   act(() => unmount());
   expect(unsubscribe).toHaveBeenCalled();
+});
+
+test("with eventsBefore, opens at the newest page and loads older ones near the top (PLX-490)", async () => {
+  const { request, subscribe, emit } = fakeBridge(8, {
+    listSeq: 20,
+    capabilities: { eventsBefore: {} },
+  });
+  await renderChat();
+  const befores = () =>
+    request.mock.calls.filter(([, method]) => method === "agent/events").map(([, , p]) => p.before);
+  // The newest page holds only the run's last updates, so the one before it loads too.
+  expect(befores()).toEqual([Number.MAX_SAFE_INTEGER, 7]);
+  expect(request).not.toHaveBeenCalledWith("local", "agent/list", expect.anything());
+  // After the log's seq from before the newest page, which is past that page's last.
+  expect(subscribe).toHaveBeenCalledOnce();
+  expect(subscribe.mock.calls[0]![1]).toMatchObject({ after: 20, run: runId, logId: "log-1" });
+  expect(transcriptText()).not.toContain("Add a README");
+
+  const text = "Live, and kept when older pages come in.";
+  const event: ParallaxEvent = { kind: "agent.output", runId, items: [{ kind: "text", text }] };
+  emit({ type: "event", event: { subscription: "s", seq: 21, time: "", event } });
+  // Scrolled to within a screen of the top, the rest loads, a page at a time: four in all.
+  const tall = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(10_000);
+  act(() => void document.querySelector('[role="log"]')!.dispatchEvent(new Event("scroll")));
+  await settle();
+  tall.mockRestore();
+  expect(befores()).toEqual([Number.MAX_SAFE_INTEGER, 7, 5, 3]);
+  const shown = transcriptText();
+  expect(shown.indexOf("Add a README")).toBeGreaterThanOrEqual(0);
+  expect(shown.indexOf("Add a README")).toBeLessThan(shown.indexOf("Mentioned the tests"));
+  expect(shown.indexOf("Mentioned the tests")).toBeLessThan(shown.indexOf(text));
 });
 
 test("subscribes after the scope's snapshot seq, so repeated resyncs end", async () => {

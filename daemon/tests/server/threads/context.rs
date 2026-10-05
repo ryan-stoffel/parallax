@@ -53,6 +53,7 @@ impl Conn {
     async fn turns_started(&mut self, run: RunId) -> Vec<AgentOutputItem> {
         let events = self
             .call::<AgentEvents>(AgentEventsParams {
+                before: None,
                 run_id: run,
                 after: 0,
                 limit: None,

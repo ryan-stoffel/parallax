@@ -258,12 +258,14 @@ export function AgentChat({
   const connected = connection?.status === "connected";
   const catalog = useCatalog(hostId);
   const queueEnabled = connected && "queue" in connection.capabilities;
-  const { transcript, error, sent, send, cancel, queue, queueError } = useAgentRun(
-    hostId,
-    runId,
-    connected,
-    queueEnabled,
-  );
+  const { transcript, error, sent, send, cancel, queue, queueError, older, loadOlder } =
+    useAgentRun(
+      hostId,
+      runId,
+      connected,
+      queueEnabled,
+      connected && "eventsBefore" in connection.capabilities,
+    );
   // Permission requests (PLX-196): those answered here read as answered at once.
   const { answers, answer, dismiss } = useAnswers(hostId);
   const [resendError, setResendError] = useState<string>();
@@ -538,6 +540,7 @@ export function AgentChat({
               copiedAt={forked ? run?.createdAt : undefined}
               onResend={resend}
               loadImage={showImage}
+              onNearTop={older ? loadOlder : undefined}
               end={
                 run?.status === "waiting" && (
                   <ResumeCard hostId={hostId} run={run} disabledReason={disabledReason} />
@@ -695,7 +698,7 @@ function SubagentView({ sub, live, stalled }: { sub: Subagent; live: boolean; st
 
 /**
  * The transcript as a virtualized list. It follows new output while scrolled to
- * the bottom, and stays put once the user scrolls up.
+ * the bottom, and stays put once the user scrolls up, or older rows come in above.
  */
 export function TranscriptView({
   rows,
@@ -704,6 +707,7 @@ export function TranscriptView({
   stalled = false,
   onResend,
   loadImage,
+  onNearTop,
   end,
   copiedAt,
 }: {
@@ -715,6 +719,8 @@ export function TranscriptView({
   onResend?: (turnId: string, message: SentMessage) => void;
   /** Fetches a message's image by id, as a data URL. */
   loadImage?: (imageId: ImageId) => Promise<string | undefined>;
+  /** Called while the top is within a screen of view, to load older rows (PLX-490). */
+  onNearTop?: () => void;
   /** Shown after the last row, such as a waiting run's resume card. */
   end?: ReactNode;
   /** In a fork, when its history copied from the original was logged: rows up to it show muted. */
@@ -800,6 +806,18 @@ export function TranscriptView({
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
     follow();
   }, [total, view.length, follow, !!end]);
+  // Older rows put in above change the first row, so what's in view keeps its distance from the
+  // end instead of from the top. Then, near the top, the next older page loads.
+  const first = view[0]?.key;
+  const above = useRef({ first, fromEnd: 0 });
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (first !== above.current.first && !atBottom.current)
+      el.scrollTop = el.scrollHeight - above.current.fromEnd;
+    above.current = { first, fromEnd: el.scrollHeight - el.scrollTop };
+    if (onNearTop && el.scrollTop < el.clientHeight) onNearTop();
+  });
   // As the composer grows it shrinks the list from below: keep the latest output in view.
   useEffect(() => {
     const el = scrollRef.current!;
@@ -834,6 +852,8 @@ export function TranscriptView({
           if (atBottom.current) ending.current = false;
           // Scroll to end's smooth scroll passes through the middle, where it stays hidden.
           if (!ending.current) setScrolledUp(!atBottom.current);
+          above.current.fromEnd = el.scrollHeight - el.scrollTop;
+          if (onNearTop && el.scrollTop < el.clientHeight) onNearTop();
           follow();
         }}
         // Scrolling by hand cuts Scroll to end's scroll short.

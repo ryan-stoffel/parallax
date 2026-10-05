@@ -22,15 +22,16 @@ export interface Launched {
 /**
  * Launches the app with a plxd of its own, whose workers play `script`, a fake backend script in
  * this folder or at an absolute path. `bin`, when given, goes first on PATH. `recordVideo`, when
- * given, records the window as Playwright's option of that name does.
+ * given, records the window as Playwright's option of that name does. `dataDir`, when given, is
+ * an earlier launch's, for plxd to start from its data again.
  */
 export async function launch(
   script: string,
   bin?: string,
   recordVideo?: { dir: string; size?: { width: number; height: number } },
+  dataDir = mkdtempSync(path.join(tmpdir(), "parallax-e2e-")),
 ): Promise<Launched> {
   if (!existsSync(plxd)) throw new Error(`no plxd at ${plxd}; see the top of launch.ts`);
-  const dataDir = mkdtempSync(path.join(tmpdir(), "parallax-e2e-"));
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PLX_NO_NAMER: "1",

@@ -173,6 +173,7 @@ fn printed(events: &[EventsEventParams]) -> Vec<Value> {
 async fn logged(client: &mut Conn, run_id: RunId) -> Vec<AgentOutputItem> {
     let page = client
         .call::<AgentEvents>(AgentEventsParams {
+            before: None,
             run_id,
             after: 0,
             limit: None,

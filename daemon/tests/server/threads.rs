@@ -701,6 +701,7 @@ async fn deleting_a_running_thread_stops_its_agent_and_removes_everything() {
     assert!(runs.is_empty());
     let events = client
         .call::<AgentEvents>(AgentEventsParams {
+            before: None,
             run_id: params.run_id,
             after: 0,
             limit: None,

@@ -875,6 +875,7 @@ async fn read(plxd: &Plxd, run_id: RunId, after: u64) -> Result<String, String> 
     loop {
         let events = plxd
             .call::<AgentEvents>(AgentEventsParams {
+                before: None,
                 run_id,
                 after: cursor,
                 limit: Some(1000),
