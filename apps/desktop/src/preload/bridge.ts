@@ -223,7 +223,7 @@ export type UpdateState = {
 export type TerminalTarget =
   | { hostId: string; cli: CliKind }
   | { hostId: string; provider: string }
-  | { hostId: string; install: CliKind }
+  | { hostId: string; install: ProviderKind }
   | { hostId: string; path: string };
 
 /** How an ACP Registry agent is run with `npx` or `uvx`: a package, pinned to its version. */

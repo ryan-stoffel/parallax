@@ -634,7 +634,8 @@ const capitalized = (text: string) =>
  */
 function instanceStatus(info: ProviderInfo): string {
   const why = info.note ? ` · ${info.note}` : "";
-  if (!info.installed) return `Not installed${why}`;
+  // plxd's note only names the missing program, which the pane says.
+  if (!info.installed) return "Not installed";
   if (info.signedIn === false) return `Not authenticated${why}`;
   if (info.signedIn !== true) return info.note ?? "Ready";
   return info.account && !info.account.includes("@")
@@ -642,8 +643,16 @@ function instanceStatus(info: ProviderInfo): string {
     : "Authenticated";
 }
 
-/** The kinds whose CLI Install puts on a host, with the vendor's own script (main's terminal.ts). */
-const installable = new Set(["claude", "codex"]);
+/** The kinds Install puts on a host, with the vendor's own script (main's terminal.ts). */
+const installable = new Set([
+  "claude",
+  "codex",
+  "pi",
+  "opencode",
+  "grokBuild",
+  "hermes",
+  "antigravity",
+]);
 
 /** The dot before a row's state: only when it needs the user. */
 const instanceTone = (info: ProviderInfo) =>
@@ -952,8 +961,9 @@ function Card({ label, children }: { label: string; children: ReactNode }) {
  * A provider instance's pane, `hidden` unless its tab is chosen: its display name with its
  * account, and Sign in (in a terminal under it, after which the instances are probed again with
  * `onSignedIn`); how it runs, with its version for a kind that has more than one; its variables;
- * its models; and Claude's and Codex's usage and API keys. A Claude Code or Codex that isn't
- * installed offers Install, which runs in the same terminal. Each change saves the instance on the
+ * its models; and Claude's and Codex's usage and API keys. An agent Parallax knows how to install
+ * (Claude Code, Codex, Pi, OpenCode, Grok Build, Hermes, Antigravity) offers Install when it isn't
+ * installed, which runs in the same terminal. Each change saves the instance on the
  * host.
  */
 function InstancePane({
@@ -1057,6 +1067,8 @@ function InstancePane({
   // The pane names the email the list leaves out; a plan reads as the list says it.
   if (info.signedIn === true && info.account?.includes("@"))
     account = `Authenticated as ${info.account}`;
+  // Such as "Pi isn't installed on this host": for Pi, the `pi` its adapter runs, not npx.
+  if (!info.installed && info.note) account = capitalized(info.note);
 
   return (
     <div
@@ -1072,9 +1084,11 @@ function InstancePane({
         </span>
         <div className="min-w-0">
           <h2 className="truncate text-[15px] font-semibold">{instance.name}</h2>
+          {/* What it is, unless its name says so, and its version. */}
           <p className="truncate text-[12.5px] text-muted-foreground">
-            {kind.name}
-            {info.version && <span className="font-mono"> · {info.version}</span>}
+            {kind.name !== instance.name && kind.name}
+            {kind.name !== instance.name && info.version && " · "}
+            {info.version && <span className="font-mono">{info.version}</span>}
           </p>
         </div>
       </div>
@@ -1157,9 +1171,7 @@ function InstancePane({
           <Suspense>
             <SignInTerminal
               target={
-                installing
-                  ? { hostId, install: instance.kind as CliKind }
-                  : { hostId, provider: instance.id }
+                installing ? { hostId, install: instance.kind } : { hostId, provider: instance.id }
               }
               name={installing ? kind.name : instance.name}
               onExit={onSignedIn}

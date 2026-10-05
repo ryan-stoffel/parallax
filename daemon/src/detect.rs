@@ -16,8 +16,7 @@
 //!
 //! Plan/tier is available for Codex only through its `app-server`'s `account/read`, a JSON-RPC
 //! server on stdio rather than a one-shot command. [`probe_codex_plan`] does the smallest useful
-//! thing: the `initialize` handshake, one request, one response, then the process is killed. A real Codex backend (#122)
-//! will want a proper client with its own handshake; this is not it.
+//! thing: the `initialize` handshake, one request, one response, then the process is killed.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

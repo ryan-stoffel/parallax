@@ -115,7 +115,7 @@ const button = (within: Element, name: string) =>
 const tabs = () => [...document.querySelectorAll('[role="tab"]')].map((t) => t.textContent);
 const tab = (name: string) =>
   [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find((t) =>
-    t.textContent?.startsWith(name),
+    t.textContent?.trim().startsWith(name),
   )!;
 const pane = () => visible('[role="tabpanel"]');
 // The Work key's row.
@@ -777,18 +777,24 @@ describe("on a plxd with providers", () => {
     expect(tabs()).toEqual(["Claude Code2.1.281Authenticated"]);
   });
 
-  test("a Claude Code or Codex that isn't installed offers Install, and a custom binary doesn't", async () => {
-    listed[1] = { ...listed[1]!, installed: false, signedIn: undefined };
+  test("an agent Parallax installs offers Install when it isn't installed, and a custom binary doesn't", async () => {
+    listed[1] = {
+      ...listed[1]!,
+      instance: instance("pi", "pi", "Pi"),
+      installed: false,
+      signedIn: undefined,
+      note: "pi isn't installed on this host",
+    };
     await renderSettings();
-    expect(tabs()[1]).toBe("CodexNot installed");
-    await click(tab("Codex"));
-    expect(rows("Account")[1]).toBe("AccountNot installedInstall");
+    expect(tabs()[1]!.trim()).toBe("PiNot installed");
+    await click(tab("Pi"));
+    expect(rows("Account")[1]).toBe("AccountPi isn't installed on this hostInstall");
 
-    listed[1] = { ...listed[1]!, instance: { ...listed[1]!.instance, program: "/opt/codex" } };
+    listed[1] = { ...listed[1]!, instance: { ...listed[1]!.instance, program: "/opt/npx" } };
     unmount();
     await renderSettings();
-    await click(tab("Codex"));
-    expect(rows("Account")[1]).toBe("AccountNot installed");
+    await click(tab("Pi"));
+    expect(rows("Account")[1]).toBe("AccountPi isn't installed on this host");
   });
 
   const dialog = () => document.querySelector("dialog")!;

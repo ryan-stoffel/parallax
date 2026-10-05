@@ -16,7 +16,8 @@ if [ "$1" = "app-server" ]; then
   IFS= read -r first
   case "$first" in
     *'"initialize"'*) IFS= read -r _initialized; IFS= read -r _request ;;
-    *) printf '%s\n' '{"error":{"code":-32600,"message":"Not initialized"},"id":1}' ;;
+    *) printf '%s\n' '{"error":{"code":-32600,"message":"Not initialized"},"id":1}'
+       FAKE_CLI_APP_SERVER_RESPONSE= ;;
   esac
   if [ -n "${FAKE_CLI_APP_SERVER_SLEEP:-}" ]; then sleep "$FAKE_CLI_APP_SERVER_SLEEP"; fi
   if [ -n "${FAKE_CLI_APP_SERVER_RESPONSE:-}" ]; then printf '%s\n' "$FAKE_CLI_APP_SERVER_RESPONSE"; fi

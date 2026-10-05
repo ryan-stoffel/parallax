@@ -1,7 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import type { CliKind } from "../protocol/generated/protocol";
-import { installCommand, loginCommand, shellCommand, terminalEnv } from "./terminal";
+import { installCommand, loginCommand, shellCommand, terminalEnv, type Command } from "./terminal";
 
 const mini = { destination: "me@mini", ssh: "ssh" };
 
@@ -110,13 +110,20 @@ test("installs a CLI with its own script in the login shell, here or over ssh", 
     file: "/bin/zsh",
     args: ["-lc", "curl -fsSL https://claude.ai/install.sh | bash"],
   });
-  expect(installCommand("claude", undefined, "win32").args).toEqual([
+  expect((installCommand("claude", undefined, "win32") as Command).args).toEqual([
     "-NoLogo",
     "-NoProfile",
     "-Command",
     "irm https://claude.ai/install.ps1 | iex",
   ]);
-  expect(installCommand("codex", mini, "darwin").args.at(-1)).toBe(
+  expect((installCommand("pi", undefined, "linux", {}) as Command).args).toEqual([
+    "-lc",
+    "curl -fsSL https://pi.dev/install.sh | sh",
+  ]);
+  // Antigravity has no Windows install, so it says so instead.
+  expect(installCommand("antigravity", undefined, "win32")).toMatch(/can't install/);
+  expect(installCommand("codex", mini, "darwin")).toMatchObject({ file: "ssh" });
+  expect((installCommand("codex", mini, "darwin") as Command).args.at(-1)).toBe(
     `exec "$SHELL" -lc 'npm install -g @openai/codex'`,
   );
 });
