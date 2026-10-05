@@ -1783,15 +1783,20 @@ test("a question goes to the coordinator, anything else starts a task, and the s
   type("Add a blue mode");
   expect(route()).toBe("New thread");
   const chip = () => document.querySelector('main button[aria-label^="Sends to: "]');
+  const keysShown = () => !chip()?.querySelector("[data-keys]")?.classList.contains("invisible");
   expect(chip()?.querySelector('[role="tooltip"]')?.textContent).toBe("New thread · ⌘.");
+  expect(keysShown()).toBe(false);
+  // Holding Cmd shows the keys over the label, and the tooltip would only repeat them.
   act(() => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Meta" }));
   });
-  expect(chip()?.textContent).toContain("⌘.");
+  expect(keysShown()).toBe(true);
+  expect(chip()?.querySelector('[role="tooltip"]')).toBeNull();
   act(() => {
     window.dispatchEvent(new KeyboardEvent("keyup", { key: "Meta" }));
   });
-  expect(chip()?.textContent).toContain("New thread");
+  expect(keysShown()).toBe(false);
+  expect(chip()?.querySelector('[role="tooltip"]')).not.toBeNull();
   await click(chip());
   expect(route()).toBe("Chat");
   expect(chip()?.querySelector('[role="tooltip"]')?.textContent).toBe("Chat · ⌘.");

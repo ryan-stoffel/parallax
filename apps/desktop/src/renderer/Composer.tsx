@@ -1390,15 +1390,23 @@ function RouteChip({ route, keys, onFlip }: { route: Route; keys?: string; onFli
       ) : (
         <PixelStack count={route.tasks.length} />
       )}
-      {/* The label stays in place, invisible, so the chip keeps its width while the keys show. */}
-      <span className="grid">
+      {/* The label and the keys share one cell, so the chip is as wide as the wider of the two
+          whether Mod is held or not. */}
+      <span className="grid text-left">
         <span
           key={label}
-          className={`col-start-1 row-start-1 ${showKeys ? "invisible" : "working-in"}`}
+          className={`working-in col-start-1 row-start-1 ${showKeys ? "invisible" : ""}`}
         >
           {label}
         </span>
-        {showKeys && <span className="col-start-1 row-start-1 text-left text-foreground">{keys}</span>}
+        {keys && (
+          <span
+            data-keys
+            className={`col-start-1 row-start-1 text-foreground ${showKeys ? "" : "invisible"}`}
+          >
+            {keys}
+          </span>
+        )}
       </span>
       {route.kind === "task" && route.tasks.length > 1 && (
         <kbd className="rounded bg-selected px-1 font-mono text-[10.5px] text-faint-foreground">
