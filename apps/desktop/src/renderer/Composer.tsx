@@ -46,7 +46,7 @@ import { behaviorPrefs, newThreadPrefs } from "./prefs";
 import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
 import { lookOf, ThreadChip, type AttachThreads } from "./threadContext";
 import { draggedThread, threadDragType } from "./threadDrag";
-import { appShortcut, menuButton, menuItem, Picker, type PickerOption } from "./ui";
+import { appShortcut, menuButton, menuItem, Picker, useModHeld, type PickerOption } from "./ui";
 
 // One set of access levels for every provider (0054), from most to least supervised. Each backend
 // maps the ones it can honor, and a thread is full Claude Code in every mode (0034). A project's
@@ -1362,27 +1362,51 @@ function listItems(markdown: string): string[] | undefined {
  * with the threads a list starts counted.
  */
 function RouteChip({ route, keys, onFlip }: { route: Route; keys?: string; onFlip: () => void }) {
+  const modHeld = useModHeld();
   const label =
     route.kind === "ask"
       ? "Chat"
       : route.tasks.length > 1
         ? `${route.tasks.length} threads`
         : "New thread";
+  const showKeys = modHeld && keys;
   return (
     <button
       type="button"
       onClick={onFlip}
-      title={`Questions go to the chat and anything else starts a thread. Click${keys ? ` or press ${keys}` : ""} to switch.`}
       aria-label={`Sends to: ${label}. Switch`}
-      className={`${menuButton} group gap-2`}
+      className={`${menuButton} group relative gap-2`}
     >
+      {keys && !showKeys && (
+        <span
+          role="tooltip"
+          className="pointer-events-none absolute bottom-full left-0 z-30 mb-1.5 translate-y-0.5 rounded-lg border border-border bg-surface px-2.5 py-1 text-[13px] whitespace-nowrap text-foreground opacity-0 shadow-composer transition duration-150 ease-out group-hover:translate-y-0 group-hover:opacity-100 group-hover:delay-300"
+        >
+          {label} · {keys}
+        </span>
+      )}
       {route.kind === "ask" ? (
         <MessagesSquare aria-hidden />
       ) : (
         <PixelStack count={route.tasks.length} />
       )}
-      <span key={label} className="working-in">
-        {label}
+      {/* The label and the keys share one cell, so the chip is as wide as the wider of the two
+          whether Mod is held or not. */}
+      <span className="grid text-left">
+        <span
+          key={label}
+          className={`working-in col-start-1 row-start-1 ${showKeys ? "invisible" : ""}`}
+        >
+          {label}
+        </span>
+        {keys && (
+          <span
+            data-keys
+            className={`col-start-1 row-start-1 text-foreground ${showKeys ? "" : "invisible"}`}
+          >
+            {keys}
+          </span>
+        )}
       </span>
       {route.kind === "task" && route.tasks.length > 1 && (
         <kbd className="rounded bg-selected px-1 font-mono text-[10.5px] text-faint-foreground">
