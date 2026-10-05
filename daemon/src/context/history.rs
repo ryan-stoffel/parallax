@@ -4,42 +4,48 @@
 //! `memory_read`. It costs no tokens.
 
 use std::fmt::Write as _;
-use std::io;
+use std::sync::Arc;
 
-use parallax_protocol::{AgentOutcome, AgentRun, ProjectId};
+use parallax_protocol::{AgentOutcome, AgentRun, ContextWriteId, ProjectId};
 use tracing::warn;
 
 use super::memory::one_line;
+use crate::methods::context::write_context_file;
 use crate::server::Daemon;
 
 /// The most of a child's task, and of its last result or error, a history file keeps.
 const TASK_BYTES: usize = 1024;
 const RESULT_BYTES: usize = 8 * 1024;
 
-/// Writes `run`'s history file in `project`'s folder for how its CLI ended. A failure is logged:
-/// the child's end doesn't wait on it.
+/// Writes `run`'s history file in `project`'s folder for how its CLI ended, and reports the
+/// change itself: `history/` is created by this write, and the watcher can miss a file written
+/// into a folder before its watch is added. A failure is logged: the child's end doesn't wait
+/// on it.
 pub(crate) async fn write(
-    daemon: &Daemon,
+    daemon: &Arc<Daemon>,
     project: ProjectId,
     run: &AgentRun,
     outcome: &AgentOutcome,
 ) {
-    let dir = daemon.data_dir.context_dir(project);
+    let daemon = Arc::clone(daemon);
     let path = format!("history/{}.md", run.id);
     let text = render(run, outcome);
+    let id = run.id;
     let written = tokio::task::spawn_blocking(move || {
-        let dir = super::ensure(dir)?;
-        let other = super::other_files_total(&dir, &path)?;
-        if other + text.len() as u64 > super::MAX_PROJECT_BYTES {
-            return Err(io::Error::other("the Project's context folder is full"));
-        }
-        super::write_file(&dir, &path, text.as_bytes()).map(drop)
+        write_context_file(
+            &daemon,
+            project,
+            &path,
+            &text,
+            None,
+            ContextWriteId::generate(),
+        )
     })
     .await;
     match written {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => warn!(run = %run.id, %error, "could not write a child's history"),
-        Err(error) => warn!(run = %run.id, %error, "could not write a child's history"),
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => warn!(run = %id, ?error, "could not write a child's history"),
+        Err(error) => warn!(run = %id, %error, "could not write a child's history"),
     }
 }
 
