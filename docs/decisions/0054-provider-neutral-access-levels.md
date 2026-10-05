@@ -16,7 +16,7 @@ One ladder, most supervised first. The wire values in `AgentPermission` are unch
 | Supervised | `manual` | Asks before commands and file changes. |
 | Auto-accept edits | `edit` | Accepts file edits, asks before other actions. The default. |
 | Auto | `auto` | The provider approves routine actions and blocks the risky ones. |
-| Plan | `plan` | Plans without editing. |
+| Plan (legacy) | `plan` | Plans without editing. Hidden unless Settings > General > Legacy Plan mode is on, or the thread is already in Plan. |
 | Full access | `bypass` | Runs commands and edits files without asking. |
 
 Each backend offers the levels it can honor. Claude and Codex keep their native mappings. Cursor's SDK has no approval callback, so it has no Supervised.

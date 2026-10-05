@@ -8,6 +8,7 @@ import type { ProviderInfo, ProviderInstance, ProviderKind } from "../protocol/g
 import type { SettingsSection } from "./App";
 import { models } from "./models";
 import { Settings } from "./Settings";
+import { accessDefaults, accessPrefs } from "./accessPrefs";
 import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
 import { appShortcut } from "./ui";
 
@@ -1020,4 +1021,18 @@ test("General's sidebar switches turn the Working section and archive pages off"
     pageArchived: false,
   });
   sidebarPrefs.set(sidebarDefaults);
+});
+
+test("General's Legacy Plan mode switch lists Plan in the Access picker", async () => {
+  accessPrefs.set(accessDefaults);
+  window.parallax.openTargets = async () => [];
+  window.parallax.version = async () => "1.2.3";
+  await renderSettings("general");
+  const legacy = document.querySelector<HTMLButtonElement>(
+    '[role="switch"][aria-label="Legacy Plan mode"]',
+  )!;
+  expect(legacy.getAttribute("aria-checked")).toBe("false");
+  await click(legacy);
+  expect(accessPrefs.get()).toEqual({ legacyPlan: true });
+  accessPrefs.set(accessDefaults);
 });

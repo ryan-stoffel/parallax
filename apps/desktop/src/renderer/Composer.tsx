@@ -4,10 +4,10 @@ import {
   FilePen,
   Hand,
   ListChecks,
+  LockOpen,
   LoaderCircle,
   MessagesSquare,
   Paperclip,
-  ShieldOff,
   Sparkles,
   Square,
   X,
@@ -37,6 +37,7 @@ import type {
 } from "../protocol/generated/protocol";
 import { lastPrompt } from "./attention";
 import { EffortMenu } from "./EffortMenu";
+import { accessPrefs } from "./accessPrefs";
 import { imageUrl, readImage, type ImageCaps } from "./images";
 import { useShortcutLabel } from "./keybindings";
 import { ModelMenu } from "./ModelMenu";
@@ -78,7 +79,7 @@ const accessOptions: Record<AgentPermission, PickerOption> = {
   bypass: {
     value: "bypass",
     label: "Full access",
-    icon: <ShieldOff />,
+    icon: <LockOpen />,
     description: "Runs commands and edits files without asking.",
   },
 };
@@ -516,7 +517,12 @@ export function Composer({
   const target = run && model && model.provider !== run.id ? model.provider : backend;
   const targetBackend = instanceOf(target);
   // A Project's mode isn't a choice here.
-  const permissions = projectMode ? [] : (targetBackend?.permissions ?? []);
+  const legacyPlan = accessPrefs.use().legacyPlan;
+  const permissions = projectMode
+    ? []
+    : (targetBackend?.permissions ?? []).filter(
+        (p) => p !== "plan" || legacyPlan || started?.permission === "plan",
+      );
   // A backend that maps no efforts (Cursor) gets none, and shows no effort menu.
   const efforts = targetBackend?.efforts !== false;
   const startedEffort = started?.effort ?? "high";

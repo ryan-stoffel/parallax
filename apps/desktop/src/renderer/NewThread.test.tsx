@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 
 import type { RpcResponse, SubscriptionMessage, ParallaxBridge } from "../preload/bridge";
 import type { Capabilities, ErrorKind, Repo, Thread } from "../protocol/generated/protocol";
+import { accessDefaults, accessPrefs } from "./accessPrefs";
 import { App } from "./App";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -56,6 +57,7 @@ beforeEach(() => {
   capabilities = {};
   nameThread.mockReset().mockResolvedValue({});
   localStorage.clear();
+  accessPrefs.set(accessDefaults);
   answers = {
     "thread/list": () => ({ result: { repos: [parallax], threads: [thread], seq: 7 } }),
     "agent/list": () => ({
@@ -424,6 +426,15 @@ describe("with plxd's run options", () => {
     expect(control("Model: Claude Opus 5.5")).not.toBeNull();
     expect(control("Access: Auto-accept edits")).not.toBeNull();
 
+    // Plan is a legacy level, so the picker lists it only once Settings turns it on.
+    const levels = () =>
+      [...document.querySelectorAll('[role="menu"][aria-label="Access"] [role="menuitemradio"]')]
+        .map((o) => o.textContent)
+        .join("|");
+    await act(async () => (control("Access: Auto-accept edits") as HTMLElement).click());
+    expect(levels()).not.toContain("Plan");
+    await act(async () => (control("Access: Auto-accept edits") as HTMLElement).click());
+    act(() => accessPrefs.set({ legacyPlan: true }));
     await pick("Claude Fable 5.1");
     await pick("Plan");
     const effort = (level: string) =>
