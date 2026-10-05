@@ -11,7 +11,6 @@ import {
   net,
   session,
   shell,
-  type NativeImage,
 } from "electron";
 import path from "node:path";
 
@@ -72,7 +71,6 @@ function createWindow() {
       additionalArguments: updatable ? ["--parallax-updatable"] : [],
     },
   });
-  if (appIcon && process.platform !== "darwin") win.setIcon(appIcon);
   win.once("ready-to-show", () => win.show());
 
   if (devServerUrl) void win.loadURL(devServerUrl);
@@ -316,14 +314,6 @@ ipcMain.handle("parallax:acpRegistry", () => (registry ??= fetchRegistry()));
 ipcMain.on("parallax:theme", (_event, preference: unknown) => {
   const source = THEME_PREFERENCES.find((p) => p === preference);
   if (source) nativeTheme.themeSource = source;
-});
-// The icon in the Appearance preset's colors (appearance.ts), kept for windows opened later.
-let appIcon: NativeImage | undefined;
-ipcMain.on("parallax:appIcon", (_event, png: unknown) => {
-  if (typeof png !== "string" || !png.startsWith("data:image/png;base64,")) return;
-  appIcon = nativeImage.createFromDataURL(png);
-  if (process.platform === "darwin") app.dock?.setIcon(appIcon);
-  else for (const win of BrowserWindow.getAllWindows()) win.setIcon(appIcon);
 });
 // Fires for the setting above, and for an OS theme change while it's "system".
 nativeTheme.on("updated", () => {

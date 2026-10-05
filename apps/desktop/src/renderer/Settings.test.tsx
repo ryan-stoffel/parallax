@@ -80,7 +80,6 @@ beforeEach(() => {
       return () => {};
     },
     setZoom: () => {},
-    setAppIcon: () => {},
     request: request as unknown as ParallaxBridge["request"],
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });

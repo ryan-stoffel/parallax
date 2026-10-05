@@ -50,7 +50,6 @@ beforeEach(() => {
       return () => {};
     },
     setZoom: () => {},
-    setAppIcon: () => {},
     version: async () => "1.0.0",
     openTargets: async () => [],
     openTargetIcons: async () => ({}),
