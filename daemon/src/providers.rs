@@ -918,6 +918,18 @@ impl Backend for WithSecrets {
         // A command list needs no key, so it never waits on the keychain.
         self.plain.commands(cwd)
     }
+
+    fn limits(
+        &self,
+        cwd: &Path,
+    ) -> Result<Option<crate::backend::LimitsProbe>, crate::backend::StartError> {
+        // An instance whose credential is a secret would read another login's limits without
+        // it, and reading it on every poll could wait on the keychain, so it reports none.
+        if self.entry.instance.env.iter().any(|var| var.secret) {
+            return Ok(None);
+        }
+        self.plain.limits(cwd)
+    }
 }
 
 /// The program `instance` runs: its own, or its kind's.

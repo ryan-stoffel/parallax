@@ -2,6 +2,7 @@
 // Project on it with a coordinator and seven children, a quiet second Project, and a few plain
 // threads. Times are relative to when the page loads, so ages in the sidebar read as recent.
 import type {
+  AccountLimits,
   AccountUsage,
   AgentCommand,
   AgentOutputItem,
@@ -61,6 +62,7 @@ export interface Fixtures {
   clis: DetectedCli[];
   keys: KeyAccount[];
   usage: AccountUsage[];
+  limits: AccountLimits[];
   usageHours: UsageHour[];
   usageDays: UsageDay[];
   commands: AgentCommand[];
@@ -1369,6 +1371,28 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
       ],
     },
   ];
+  const limits: AccountLimits[] = [
+    {
+      accountId: "claude",
+      limits: [
+        { window: "five_hour", usedPercent: 9, resetsAt: ahead(260), capturedAt: ago(0) },
+        { window: "seven_day", usedPercent: 20, resetsAt: ahead(60 * 148), capturedAt: ago(0) },
+        {
+          window: "seven_day_fable",
+          usedPercent: 0,
+          resetsAt: ahead(60 * 148),
+          capturedAt: ago(0),
+        },
+      ],
+    },
+    {
+      accountId: "codex",
+      limits: [
+        { window: "five_hour", usedPercent: 5, resetsAt: ahead(280), capturedAt: ago(0) },
+        { window: "seven_day", usedPercent: 82, resetsAt: ahead(60 * 102), capturedAt: ago(0) },
+      ],
+    },
+  ];
   const usageHours: UsageHour[] = [];
   for (let h = 0; h < 48; h++) {
     const hour = new Date(Math.floor((now - h * 3_600_000) / 3_600_000) * 3_600_000).toISOString();
@@ -1462,6 +1486,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
     clis,
     keys: [],
     usage,
+    limits,
     usageHours,
     usageDays,
     commands,

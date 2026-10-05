@@ -82,6 +82,17 @@ impl BackendRegistry {
             .remove(name);
     }
 
+    /// Every backend by name, such as `claude`: the subscriptions a run can use.
+    #[must_use]
+    pub fn by_name(&self) -> Vec<(String, Arc<dyn Backend>)> {
+        self.by_name
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(name, backend)| (name.clone(), Arc::clone(backend)))
+            .collect()
+    }
+
     /// The backend registered for `provider`.
     #[must_use]
     pub fn by_provider(&self, provider: Provider) -> Option<Arc<dyn Backend>> {

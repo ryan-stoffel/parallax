@@ -1,0 +1,2 @@
+{"id":1,"result":{"userAgent":"parallax/0.160.0"}}
+{"id":2,"result":{"rateLimits":{"limitId":"codex","limitName":null,"primary":{"usedPercent":11,"windowDurationMins":300,"resetsAt":1791227859},"secondary":{"usedPercent":100,"windowDurationMins":10080,"resetsAt":1791580937},"credits":{"hasCredits":false,"unlimited":false,"balance":"0"},"planType":"plus"}}}

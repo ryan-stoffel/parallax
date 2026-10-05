@@ -1,5 +1,6 @@
-//! `usage/get` and `usage/history`, from what plxd's own runs recorded, and `usage/daily`, from
-//! every Claude Code, Codex, and Cursor session on the host (0039).
+//! `usage/get` and `usage/history`, from what plxd's own runs recorded, `usage/daily`, from
+//! every Claude Code, Codex, and Cursor session on the host (0039), and `usage/limits`, from each
+//! subscription's CLI (PLX-541).
 
 mod ccusage;
 mod cursor;
@@ -8,14 +9,20 @@ use jiff::tz::TimeZone;
 use jiff::{ToSpan, Zoned};
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
-    UsageHistoryParams, UsageHistoryResult, UsageHour, UsageLimitWindow, UsagePeriod, UsageProblem,
-    UsageSource,
+    AccountLimits, AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageGetParams,
+    UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageHour, UsageLimitWindow,
+    UsageLimitsParams, UsageLimitsResult, UsagePeriod, UsageProblem, UsageSource,
 };
 use parallax_store::{LimitSnapshot, Store, StoreError};
 
 use super::Context;
+use crate::backend::StartError;
+use crate::backend::commands;
+use crate::backend::process::SpawnError;
 use crate::store::store_error;
+
+/// How long a CLI gets to report its limit windows.
+const LIMITS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Every account plxd has recorded usage or limits for, with today's and this week's sums
 /// (local time on this host) and the latest limit windows.
@@ -138,6 +145,51 @@ pub(crate) async fn daily(
         }
     }
     Ok(result)
+}
+
+/// Every subscription's limit windows, each read from its CLI at once, in the home folder. A
+/// CLI that isn't installed is left out; one that fails to start or answer reports why.
+pub(crate) async fn limits(
+    context: &Context,
+    _: UsageLimitsParams,
+) -> Result<UsageLimitsResult, ErrorObject> {
+    let home = std::env::home_dir()
+        .filter(|home| home.is_absolute())
+        .ok_or_else(|| ErrorObject::internal_error("the home folder is unknown"))?;
+    let reads = context
+        .daemon
+        .agents
+        .backends()
+        .by_name()
+        .into_iter()
+        .filter_map(|(name, backend)| match backend.limits(&home) {
+            Ok(None) | Err(StartError::Spawn(SpawnError::NotFound { .. })) => None,
+            Ok(Some(probe)) => Some((name, Ok(probe))),
+            Err(error) => Some((name, Err(error.to_string()))),
+        })
+        .map(|(account_id, probe)| async move {
+            let answer = match probe {
+                Ok(probe) => commands::list(probe, LIMITS_TIMEOUT).await,
+                Err(error) => Err(error),
+            };
+            match answer {
+                Ok(limits) => AccountLimits {
+                    account_id,
+                    limits,
+                    problem: None,
+                },
+                Err(problem) => AccountLimits {
+                    account_id,
+                    limits: Vec::new(),
+                    problem: Some(problem),
+                },
+            }
+        });
+    // Dropping the reads kills their CLIs.
+    tokio::select! {
+        () = context.cancel.cancelled() => Err(ErrorObject::request_cancelled()),
+        accounts = futures_util::future::join_all(reads) => Ok(UsageLimitsResult { accounts }),
+    }
 }
 
 fn usage_period(summary: parallax_store::UsageSummary) -> UsagePeriod {
