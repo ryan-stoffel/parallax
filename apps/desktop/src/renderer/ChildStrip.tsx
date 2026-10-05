@@ -27,7 +27,7 @@ export function ChildStrip({
     >
       {icon}
       <span className="min-w-0 flex-1 truncate text-muted-foreground">
-        A child thread of {'"'}
+        A child thread of{" "}
         <button
           type="button"
           onClick={onOpenName}
@@ -35,7 +35,6 @@ export function ChildStrip({
         >
           {name}
         </button>
-        {'"'}
       </span>
       <button
         type="button"

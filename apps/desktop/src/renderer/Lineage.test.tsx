@@ -199,7 +199,7 @@ test("a parent's chips open its children, and a child's parent crumb opens the p
 
   await click(chip("Write the test"));
   expect(document.querySelector('main section[aria-label="Child thread"]')!.textContent).toBe(
-    'A child thread of "Ship lineage"Open parent⌥⌘↑',
+    "A child thread of Ship lineageOpen parent⌥⌘↑",
   );
   expect(crumbs()).toEqual(["This Mac", "parallax", "Ship lineage"]);
   expect(chipGroup()!.getAttribute("aria-label")).toBe("Sibling threads");

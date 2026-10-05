@@ -1560,7 +1560,7 @@ test("a child's chat says whose it is, and its Open parent button, the top bar's
   };
   expect(strip()).toBeNull();
   await back();
-  expect(strip()!.textContent).toBe('A child thread of "ember"Open parent⌥⌘↑');
+  expect(strip()!.textContent).toBe("A child thread of emberOpen parent⌥⌘↑");
   await click(strip()!.querySelector("button")!);
   expect(crumbs()).toEqual(["This Mac", "ember"]);
   expect(strip()).toBeNull();
