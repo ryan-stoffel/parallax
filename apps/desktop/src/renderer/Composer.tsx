@@ -410,7 +410,9 @@ export interface ComposerProps {
  * Markdown text. Enter sends and Shift+Enter starts a new line (a new item, in a list); in a code
  * block Enter adds a line and Cmd/Ctrl+Enter sends. With `onSteer`, that press steers the active
  * turn. With `onSendInBackground`, Cmd/Ctrl+Enter sends
- * through it, anywhere in the box. It grows with its text up to 40% of the window.
+ * through it, anywhere in the box. Settings > General's send shortcut can make Cmd/Ctrl+Enter
+ * send and Enter a new line everywhere; Cmd/Ctrl+Shift+Enter then steers or sends in the
+ * background. It grows with its text up to 40% of the window.
  * Pasted, dropped, and picked images sit above the text as thumbnails, and go beside it, never in
  * it (PLX-193).
  * In an empty box, Up and Down step through `history`, until the recalled prompt is edited.

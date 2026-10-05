@@ -35,6 +35,7 @@ import type { Host } from "./hosts";
 import { ClaudeLogo, CursorLogo, OpenAILogo } from "./logos";
 import { IconButton, Segmented } from "./ui";
 import { limitDetails, limitMeter, useUsage, type LimitTone } from "./Usage";
+import { clockOptions } from "./prefs";
 
 type View = "cost" | "tokens" | "limits";
 const views: { value: View; name: string }[] = [
@@ -1393,7 +1394,7 @@ export function resetTime(at: number, now: number): string {
   // By local calendar days; rounding absorbs a 23- or 25-hour day.
   const days = Math.round((dayStart(at) - dayStart(now)) / (24 * HOUR));
   const when = new Date(at);
-  const time = when.toLocaleString("en", { hour: "numeric", minute: "2-digit" });
+  const time = when.toLocaleString("en", clockOptions());
   if (days === 0) return time;
   if (days === 1) return `tomorrow ${time}`;
   if (days < 7) return `${when.toLocaleString("en", { weekday: "short" })} ${time}`;

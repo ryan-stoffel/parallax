@@ -58,10 +58,11 @@ export const setBehaviorPrefs = (change: Partial<BehaviorPrefs>) =>
  * so it reads the pref directly; a change shows on the next render of each time.
  */
 export function clockOptions(): Intl.DateTimeFormatOptions {
+  return { hour: "numeric", minute: "2-digit", ...hourCycle() };
+}
+
+/** `hour12` for a chosen format, for options that already name their own time parts. */
+export function hourCycle(): Pick<Intl.DateTimeFormatOptions, "hour12"> {
   const { timeFormat } = behaviorPrefs.get();
-  return {
-    hour: "numeric",
-    minute: "2-digit",
-    ...(timeFormat !== "system" && { hour12: timeFormat === "12" }),
-  };
+  return timeFormat === "system" ? {} : { hour12: timeFormat === "12" };
 }
