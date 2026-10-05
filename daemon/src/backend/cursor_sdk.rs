@@ -1127,7 +1127,8 @@ read -r follow
 printf '%s\n' "$follow" >> "$dir/stdin"
 printf '%s\n' '{"type":"session","agentId":"agent-1","model":"auto"}'
 printf '%s\n' '{"type":"turnStarted"}' '{"type":"turnFinished","result":"one"}' '{"type":"idle"}'
-{ while read -r _; do :; done; touch "$dir/eof"; } <&0 &
+exec 3<&0
+{ while read -r _ <&3; do :; done; touch "$dir/eof"; } &
 sleep 1
 [ -f "$dir/eof" ] && touch "$dir/closed-early"
 printf '%s\n' '{"type":"turnStarted"}' '{"type":"turnFinished","result":"two"}' '{"type":"idle"}'
