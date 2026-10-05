@@ -528,6 +528,7 @@ mod tests {
                 message_id: None,
                 text,
             }],
+            compacted: None,
         }
     }
 

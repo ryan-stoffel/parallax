@@ -15,7 +15,7 @@
 
 ### Run events stay while their run does
 
-An agent run's events (`agent.started`, `agent.updated`, `agent.output`, `agent.accountFallback`, `agent.finished`, `agent.diffReady`) are never pruned by the event log itself. They stay in the table for as long as the run's row does in `runs`. Only deleting a thread (`thread/delete`) or a Project (`project/delete`, PLX-338) removes a run's row, and its events with it, so otherwise these events are not pruned by this decision — that's deliberate. `agent/events` pages a run's whole history from the table (0014), and guessing at a run-history retention policy (keep the last N finished runs? by age? per project?) without a real run-removal feature to hang it on would be arbitrary. #207 tracks pruning old finished runs (and their events) once that's needed.
+An agent run's events (`agent.started`, `agent.updated`, `agent.output`, `agent.accountFallback`, `agent.finished`, `agent.diffReady`) stay in the table for as long as the run's row does in `runs`. A finished turn's `agent.output` batches are rewritten as one row once they leave the in-memory window (0052), so a run's history is one row per finished turn rather than one per 50 ms batch. Only deleting a thread (`thread/delete`) or a Project (`project/delete`, PLX-338) removes a run's row, and its events with it. `agent/events` pages a run's whole history from the table (0014), and guessing at a run-history retention policy (keep the last N finished runs? by age? per project?) without a real run-removal feature to hang it on would be arbitrary. #207 tracks pruning old finished runs (and their events) once that's needed.
 
 ### Host and project events are pruned by count
 
@@ -46,6 +46,6 @@ Count over age: age needs a wall-clock cutoff and a periodic sweep to catch even
 
 ## Consequences
 
-- `plxd.sqlite3`'s growth from `project.created` and `context.changed` is now bounded; growth from agent runs' own events is not, until #207.
+- `plxd.sqlite3`'s growth from `project.created` and `context.changed` is now bounded; growth from agent runs' own events is one row per finished turn (0052), and is not pruned until the run is deleted (#207).
 - `host_event_retention` can't be configured below `event_retention` — it is clamped up rather than rejected, so a low value silently becomes `event_retention` instead of erroring.
 - The in-memory replay window's peak size is now bounded by `event_retention_bytes` on a fresh log and after a restart alike, not only once enough appends have evicted down to it.

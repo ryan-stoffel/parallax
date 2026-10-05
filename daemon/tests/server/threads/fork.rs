@@ -280,7 +280,9 @@ async fn transcript(client: &mut Conn, run_id: RunId) -> (String, Vec<AgentOutpu
     let items = events
         .iter()
         .filter_map(|logged| match &logged.event {
-            ParallaxEvent::AgentOutput { run_id: id, items } => {
+            ParallaxEvent::AgentOutput {
+                run_id: id, items, ..
+            } => {
                 assert_eq!(*id, run_id, "copied items carry the fork's id");
                 Some(items.clone())
             }
@@ -616,7 +618,7 @@ fn texts(items: &[AgentOutputItem]) -> Vec<&str> {
 
 fn text(run_id: RunId, wanted: &'static str) -> impl FnMut(&EventsEventParams) -> bool {
     move |event| {
-        matches!(&event.event, ParallaxEvent::AgentOutput { run_id: id, items }
+        matches!(&event.event, ParallaxEvent::AgentOutput { run_id: id, items, .. }
             if *id == run_id && texts(items).contains(&wanted))
     }
 }

@@ -806,7 +806,8 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
             matches!(item, AgentOutputItem::TurnStarted { wake: true, .. })))
     })
     .await;
-    let Some(ParallaxEvent::AgentOutput { run_id, items }) = events.last().map(|e| &e.event) else {
+    let Some(ParallaxEvent::AgentOutput { run_id, items, .. }) = events.last().map(|e| &e.event)
+    else {
         unreachable!();
     };
     assert_eq!(*run_id, coordinator.id);

@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { _electron, type ElectronApplication, type Page } from "@playwright/test";
+import { expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
 
 // The built app against a real plxd whose workers are the fake backend playing a script from
 // this folder (PLX-16). PLXD_PATH defaults to the repo's debug build, which must have the fake
@@ -81,5 +81,19 @@ export async function close(launched: Launched | undefined) {
   await launched.app.close();
   const pid = servePids(launched.dataDir).at(-1) ?? 0;
   // Never pid 0 or below, which process.kill reads as a whole process group.
-  if (Number.isSafeInteger(pid) && pid > 1) process.kill(pid, "SIGTERM");
+  if (Number.isSafeInteger(pid) && pid > 1) {
+    process.kill(pid, "SIGTERM");
+    // Seeding or reopening this data directory must wait until SQLite has closed on Windows.
+    await expect
+      .poll(() => {
+        try {
+          process.kill(pid, 0);
+          return false;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+          throw error;
+        }
+      })
+      .toBe(true);
+  }
 }
