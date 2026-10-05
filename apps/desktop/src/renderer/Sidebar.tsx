@@ -104,6 +104,7 @@ import {
   TopBar,
   useModHeld,
 } from "./ui";
+import { PanelResize } from "./PanelResize";
 import { instanceLogo, instanceName } from "./providers";
 import { UpdateButton } from "./Update";
 import { clockOptions } from "./prefs";
@@ -116,6 +117,8 @@ const sectionHeading =
 const emptyNote = "px-2 py-1 text-[12.5px] text-faint-foreground";
 
 interface SidebarProps {
+  width?: number;
+  onResize?: (width: number) => void;
   open: boolean;
   onClose: () => void;
   onNewThread: () => void;
@@ -127,14 +130,23 @@ interface SidebarProps {
  * spot the main pane shows it while this column is hidden, then the app's mark and name, which
  * open a new thread.
  */
-export function Sidebar({ open, onClose, onNewThread, children }: SidebarProps) {
+export function Sidebar({
+  open,
+  onClose,
+  onNewThread,
+  children,
+  width = 256,
+  onResize,
+}: SidebarProps) {
   return (
     <nav
       id="sidebar"
       aria-label="Sidebar"
       hidden={!open}
-      className="flex w-64 shrink-0 flex-col border-r border-border bg-sidebar"
+      style={{ width }}
+      className="relative flex min-w-0 shrink-0 flex-col border-r border-border bg-sidebar"
     >
+      {onResize && <PanelResize side="left" width={width} onResize={onResize} />}
       <TopBar className="traffic-light-inset">
         <IconButton
           label="Hide sidebar"

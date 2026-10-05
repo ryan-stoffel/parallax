@@ -21,6 +21,7 @@ import { GitMenu } from "./GitMenu";
 import { KnowledgePanel } from "./Knowledge";
 import { LineageTrail } from "./Lineage";
 import { NewThread } from "./NewThread";
+import { panelWidths } from "./PanelResize";
 import { NewThreadPicker } from "./NewThreadPicker";
 import { Notifications } from "./notifications";
 import { localId, useHosts } from "./hosts";
@@ -524,8 +525,34 @@ export function App() {
   );
   // The side panel is a chat's, so Settings has none.
   const chat = !settings;
+  const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
+  const [requestedWidths, setRequestedWidths] = useState<[number, number]>([256, 416]);
+  useEffect(() => {
+    const resize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
   const sidePanelOpen = panelOpen && chat;
   const expanded = sidePanelOpen && panelExpanded;
+  const [leftWidth, rightWidth] = panelWidths(
+    viewportWidth,
+    sidebarOpen ? requestedWidths[0] : 0,
+    sidePanelOpen && !expanded ? requestedWidths[1] : 0,
+  );
+  const resizePanel = (side: 0 | 1, value: number) => {
+    const other =
+      side === 0 ? (sidePanelOpen && !expanded ? rightWidth : 0) : sidebarOpen ? leftWidth : 0;
+    const maximum = Math.max(0, viewportWidth - Math.min(400, viewportWidth / 2) - other);
+    setRequestedWidths((widths) => {
+      const next: [number, number] = [...widths];
+      next[side] = Math.max(
+        Math.min(200, maximum),
+        Math.min(side === 0 ? 400 : 640, maximum, value),
+      );
+      if (other) next[side === 0 ? 1 : 0] = other;
+      return next;
+    });
+  };
   // The main pane's top row meets the traffic lights without the sidebar, and
   // Windows' window buttons without the side panel.
   const topBarInset = [
@@ -547,6 +574,8 @@ export function App() {
         onPick={newThread}
       />
       <Sidebar
+        width={leftWidth}
+        onResize={(width) => resizePanel(0, width)}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         onNewThread={() => newThread()}
@@ -783,6 +812,8 @@ export function App() {
       </main>
 
       <SidePanel
+        width={rightWidth}
+        onResize={(width) => resizePanel(1, width)}
         open={sidePanelOpen}
         onClose={() => setPanelOpen(false)}
         expanded={expanded}

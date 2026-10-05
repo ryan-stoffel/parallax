@@ -17,6 +17,7 @@ import {
 import { useState, type ReactNode } from "react";
 
 import { Browser } from "./Browser";
+import { PanelResize } from "./PanelResize";
 import { numberOf } from "./PullRequests";
 import { IconButton, TopBar } from "./ui";
 
@@ -96,6 +97,8 @@ const knowledgeSurface = surfaces.find((s) => s.name === "Knowledge")!;
  * Each new `pullRequest` opens that URL's tab, or without one the Pull requests view.
  */
 export function SidePanel({
+  width = 416,
+  onResize,
   open,
   onClose,
   expanded,
@@ -112,6 +115,8 @@ export function SidePanel({
   pullRequest,
   project,
 }: {
+  width?: number;
+  onResize?: (width: number) => void;
   open: boolean;
   onClose: () => void;
   expanded: boolean;
@@ -136,12 +141,23 @@ export function SidePanel({
   // Whether + is showing the list, in a Project, where the panel otherwise rests on its Overview.
   const [listing, setListing] = useState(false);
 
+  const available = project
+    ? surfaces
+    : ["Browser", "Terminal", "Files", "Changes", "Pull requests"].map((name) =>
+        surfaces.find((s) => s.name === name)!,
+      );
+  const nameOf = (s: Surface) => (!project && s.name === "Changes" ? "Diff" : s.name);
   // A Project pins its Overview and Knowledge first, without close buttons.
   const pinned = project ? [overview, knowledgeSurface] : [];
   // Another thread's pull request tabs stay open, but hidden.
   const shown = [
     ...pinned,
-    ...tabs.filter((s) => !pinned.includes(s) && (!s.url || pullRequests?.urls.includes(s.url))),
+    ...tabs.filter(
+      (s) =>
+        !pinned.includes(s) &&
+        (project || (s.name !== "Knowledge" && s.name !== "Agents")) &&
+        (!s.url || pullRequests?.urls.includes(s.url)),
+    ),
   ];
   const current =
     active && shown.includes(active) ? active : project && !listing ? overview : undefined;
@@ -212,13 +228,15 @@ export function SidePanel({
       // From the list, a view's letter opens it while focus is in the panel.
       onKeyDown={(e) => {
         if (current || e.metaKey || e.ctrlKey || e.altKey) return;
-        const next = surfaces.find((s) => isBuilt(s) && s.key === e.key.toUpperCase());
+        const next = available.find((s) => isBuilt(s) && s.key === e.key.toUpperCase());
         if (!next) return;
         e.preventDefault();
         openView(next);
       }}
-      className={`flex flex-col bg-background ${expanded ? "min-w-0 flex-1" : "w-[26rem] shrink-0 border-l border-border"}`}
+      style={expanded ? undefined : { width }}
+      className={`relative flex min-w-0 flex-col bg-background ${expanded ? "flex-1" : "shrink-0 border-l border-border"}`}
     >
+      {!expanded && onResize && <PanelResize side="right" width={width} onResize={onResize} />}
       <TopBar className={`window-controls-inset px-2 ${topBarClassName}`}>
         {leading}
         <ul aria-label="Open views" className="flex min-w-0 gap-0.5 overflow-x-auto">
@@ -235,7 +253,7 @@ export function SidePanel({
                 className={`flex items-center gap-1.5 py-1 pl-2 text-[13px] ${pinned.includes(s) ? "pr-2" : ""}`}
               >
                 <s.icon aria-hidden className="size-3.5" />
-                {s.name}
+                {nameOf(s)}
                 {s === overview && !!project?.waiting && (
                   <span className="font-mono text-[11px] text-warning tabular-nums">
                     {project.waiting}
@@ -245,8 +263,8 @@ export function SidePanel({
               {!pinned.includes(s) && (
                 <button
                   type="button"
-                  aria-label={`Close ${s.name}`}
-                  title={`Close ${s.name}`}
+                  aria-label={`Close ${nameOf(s)}`}
+                  title={`Close ${nameOf(s)}`}
                   onClick={() => closeView(s)}
                   className="mx-0.5 grid size-5 place-items-center rounded-md hover:bg-hover [&_svg]:size-3.5"
                 >
@@ -298,7 +316,7 @@ export function SidePanel({
             Open a view
           </h2>
           <ul className="w-full max-w-72">
-            {surfaces.map((s) => (
+            {available.map((s) => (
               <li key={s.name}>
                 <button
                   type="button"
@@ -309,7 +327,7 @@ export function SidePanel({
                   className="group flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[13.5px] enabled:hover:bg-hover disabled:text-faint-foreground"
                 >
                   <s.icon aria-hidden className="size-4 shrink-0" />
-                  <span className="flex-1">{s.name}</span>
+                  <span className="flex-1">{nameOf(s)}</span>
                   <kbd className="grid size-6 place-items-center rounded-md bg-selected font-sans text-[11.5px] text-muted-foreground group-disabled:opacity-50">
                     {s.key}
                   </kbd>

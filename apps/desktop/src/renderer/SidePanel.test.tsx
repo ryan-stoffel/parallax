@@ -60,55 +60,92 @@ test("views open as tabs: + shows the list, a view's letter opens it, and pickin
   expect(tabs()).toEqual([]);
   expect(listShown()).toBe(true);
 
-  await click(listButton("Changes"));
-  expect(tabs()).toEqual(["Changes*"]);
+  await click(listButton("Diff"));
+  expect(tabs()).toEqual(["Diff*"]);
   expect(listShown()).toBe(false);
   expect(shown()!.textContent).toContain("No changes yet");
 
   await click(openAView());
   expect(listShown()).toBe(true);
   openAView()!.focus();
-  press("a");
-  expect(tabs()).toEqual(["Changes", "Agents*"]);
-  expect(shown()!.textContent).toContain("No agents running");
+  press("f");
+  expect(tabs()).toEqual(["Diff", "Files*"]);
+  expect(shown()!.textContent).toContain("No thread open");
 
   await click(openAView());
-  await click(listButton("Changes"));
-  expect(tabs()).toEqual(["Changes*", "Agents"]);
+  await click(listButton("Diff"));
+  expect(tabs()).toEqual(["Diff*", "Files"]);
 });
 
 test("closing the shown tab shows its neighbour, and closing the last shows the list", async () => {
   await render();
-  for (const name of ["Changes", "Knowledge", "Agents"]) {
+  for (const name of ["Diff", "Terminal", "Files"]) {
     await click(listButton(name));
     await click(openAView());
   }
   await click(tab("D"));
-  expect(tabs()).toEqual(["Changes*", "Knowledge", "Agents"]);
+  expect(tabs()).toEqual(["Diff*", "Terminal", "Files"]);
 
-  await click(panel().querySelector('button[aria-label="Close Changes"]'));
-  expect(tabs()).toEqual(["Knowledge*", "Agents"]);
-  await click(panel().querySelector('button[aria-label="Close Agents"]'));
-  expect(tabs()).toEqual(["Knowledge*"]);
-  // Off a Project and a repository, Knowledge says there is nothing to show.
-  expect(shown()!.textContent).toContain("Nothing known here yet");
+  await click(panel().querySelector('button[aria-label="Close Diff"]'));
+  expect(tabs()).toEqual(["Terminal*", "Files"]);
+  await click(panel().querySelector('button[aria-label="Close Files"]'));
+  expect(tabs()).toEqual(["Terminal*"]);
+  // Without a folder, Terminal shows its empty state.
+  expect(shown()!.textContent).toContain("No folder here");
 
-  await click(panel().querySelector('button[aria-label="Close Knowledge"]'));
+  await click(panel().querySelector('button[aria-label="Close Terminal"]'));
   expect(tabs()).toEqual([]);
   expect(listShown()).toBe(true);
 });
 
 test("closing a tab keeps focus in the panel, so the list's letters work after closing the last", async () => {
   await render();
-  await click(listButton("Changes"));
+  await click(listButton("Diff"));
   await click(openAView());
-  await click(listButton("Agents"));
-  await click(panel().querySelector('button[aria-label="Close Agents"]'));
+  await click(listButton("Files"));
+  await click(panel().querySelector('button[aria-label="Close Files"]'));
   expect(document.activeElement).toBe(tab("D"));
 
-  await click(panel().querySelector('button[aria-label="Close Changes"]'));
+  await click(panel().querySelector('button[aria-label="Close Diff"]'));
   expect(document.activeElement).toBe(openAView());
   expect(listShown()).toBe(true);
-  press("k");
-  expect(tabs()).toEqual(["Knowledge*"]);
+  press("t");
+  expect(tabs()).toEqual(["Terminal*"]);
+});
+
+test("normal threads offer only their five views in order", async () => {
+  await render();
+  expect([...panel().querySelectorAll("nav button span")].map((s) => s.textContent)).toEqual([
+    "Browser",
+    "Terminal",
+    "Files",
+    "Diff",
+    "Pull requests",
+  ]);
+});
+
+test("Projects keep pinned Knowledge and their view list", async () => {
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() =>
+    root.render(
+      <SidePanel
+        open
+        onClose={() => {}}
+        expanded={false}
+        onExpandedChange={() => {}}
+        project={{ home: <p>Project home</p>, waiting: 0 }}
+        knowledge={<p>Project knowledge</p>}
+      />,
+    ),
+  );
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+  };
+  await settle();
+  expect(tabs()).toEqual(["Project*", "Knowledge"]);
+  await click(tab("K"));
+  expect(shown()!.textContent).toContain("Project knowledge");
+  await click(openAView());
+  expect(listButton("Knowledge")).toBeDefined();
 });

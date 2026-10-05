@@ -1314,3 +1314,12 @@ body {
 :root.reduce-motion .pixel-fade {
   animation: none;
 }
+
+.panel-divider:hover,
+.panel-divider:focus {
+  background: #000;
+}
+:root.dark .panel-divider:hover,
+:root.dark .panel-divider:focus {
+  background: #fff;
+}
