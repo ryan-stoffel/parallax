@@ -70,6 +70,22 @@ test("an instance that lists no models offers its agent's default, which sends n
   expect(models.map((m) => [m.id, m.name, m.provider])).toEqual([["", "Default model", "amp"]]);
 });
 
+test("OpenCode's own models are named without OpenCode's name, another vendor's keep theirs", () => {
+  const listed = {
+    models: [
+      { id: "opencode/big-pickle", name: "opencode/Big Pickle" },
+      { id: "opencode/ling-3.1-flash-free", name: "OpenCode Zen/Ling 3.1 Flash Free" },
+      { id: "anthropic/claude-sonnet-5", name: "Anthropic/Claude Sonnet 5" },
+    ],
+  };
+  const models = instanceModels(info({ id: "opencode", kind: "opencode" }, listed));
+  expect(models.map((m) => m.name)).toEqual([
+    "Big Pickle",
+    "Ling 3.1 Flash Free",
+    "Anthropic/Claude Sonnet 5",
+  ]);
+});
+
 test("a reported model is its exact id before a longer one's prefix (PLX-495)", () => {
   expect(knownModel("claude-opus-5-5-medium")?.provider).toBe("cursor");
   expect(knownModel("claude-opus-5-5[1m]")?.provider).toBe("claude");

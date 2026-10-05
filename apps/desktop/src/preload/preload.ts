@@ -93,6 +93,7 @@ const bridge: ParallaxBridge = {
 
   openTerminal: (id, target, cols, rows) =>
     ipcRenderer.invoke("parallax:openTerminal", id, target, cols, rows),
+  install: (hostId, kind) => ipcRenderer.invoke("parallax:install", hostId, kind),
   terminalInput: (id, data) => ipcRenderer.send("parallax:terminalInput", id, data),
   resizeTerminal: (id, cols, rows) => ipcRenderer.send("parallax:resizeTerminal", id, cols, rows),
   closeTerminal: (id) => ipcRenderer.send("parallax:closeTerminal", id),

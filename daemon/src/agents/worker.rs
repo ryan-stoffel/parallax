@@ -21,13 +21,23 @@ use crate::routing::KeyAccounts;
 /// folders (`~/.local/bin`, where Claude Code's installer puts `claude`; `%USERPROFILE%\.local\bin`
 /// on Windows; and `~/.opencode/bin` and `~/.grok/bin`, where the `OpenCode` and Grok Build
 /// installers put theirs and add them to `PATH` only in an interactive shell's rc file, PLX-539),
-/// rustup's `~/.cargo/bin` (PLX-126), Homebrew on Apple silicon (macOS only) and
-/// `/usr/local/bin`, and the system folders (0023). They go after whatever `PATH` plxd was
-/// started with, so the user's own order still wins; they only fill in what launchd or an SSH
-/// session left out.
-const EXTRA_PATH_IN_HOME: &[&str] = &[".local/bin", ".opencode/bin", ".grok/bin", ".cargo/bin"];
+/// rustup's `~/.cargo/bin` (PLX-126), npm's usual user prefix `~/.npm-global/bin`, Nix's
+/// `~/.nix-profile/bin` and nix-darwin's system and per-user profiles (PLX-558), Homebrew on Apple
+/// silicon (macOS only) and `/usr/local/bin`, and the system folders (0023). They go after
+/// whatever `PATH` plxd was started with, so the user's own order still wins; they only fill in
+/// what launchd or an SSH session left out.
+const EXTRA_PATH_IN_HOME: &[&str] = &[
+    ".local/bin",
+    ".opencode/bin",
+    ".grok/bin",
+    ".cargo/bin",
+    ".npm-global/bin",
+    ".nix-profile/bin",
+];
 #[cfg(target_os = "macos")]
 const EXTRA_PATH: &[&str] = &[
+    "/run/current-system/sw/bin",
+    "/nix/var/nix/profiles/default/bin",
     "/opt/homebrew/bin",
     "/usr/local/bin",
     "/usr/bin",
@@ -36,7 +46,15 @@ const EXTRA_PATH: &[&str] = &[
     "/sbin",
 ];
 #[cfg(target_os = "linux")]
-const EXTRA_PATH: &[&str] = &["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+const EXTRA_PATH: &[&str] = &[
+    "/run/current-system/sw/bin",
+    "/nix/var/nix/profiles/default/bin",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+];
 #[cfg(windows)]
 const EXTRA_PATH: &[&str] = &[];
 
@@ -188,8 +206,9 @@ pub(crate) fn allowlisted(env: &Environment) -> Environment {
         .collect()
 }
 
-/// `env` with the folders of `login`, the login shell's `PATH`, then [`EXTRA_PATH_IN_HOME`] and
-/// [`EXTRA_PATH`], appended to its `PATH` where missing.
+/// `env` with the folders of `login`, the login shell's `PATH`, then [`EXTRA_PATH_IN_HOME`], the
+/// user's nix-darwin profile (`/etc/profiles/per-user/$USER/bin`, on Unix), and [`EXTRA_PATH`],
+/// appended to its `PATH` where missing.
 pub(crate) fn with_extra_path(
     mut env: Environment,
     home: Option<&Path>,
@@ -208,8 +227,13 @@ pub(crate) fn with_extra_path(
         .filter(|home| home.is_absolute())
         .into_iter()
         .flat_map(|home| EXTRA_PATH_IN_HOME.iter().map(move |dir| home.join(dir)));
+    let per_user = env
+        .get("USER")
+        .filter(|_| cfg!(unix))
+        .map(|user| Path::new("/etc/profiles/per-user").join(user).join("bin"));
     for dir in login
         .chain(in_home)
+        .chain(per_user)
         .chain(EXTRA_PATH.iter().map(PathBuf::from))
     {
         if !dirs.contains(&dir) {
@@ -447,6 +471,7 @@ mod tests {
     fn a_minimal_path_is_filled_in_after_the_users_own_folders() {
         let mut env = Environment::empty();
         env.set("PATH", "/usr/bin:/custom/bin");
+        env.set("USER", "me");
         let login = OsStr::new("/run/current-system/sw/bin::.:/usr/bin");
         let env = with_extra_path(env, Some(Path::new("/Users/me")), Some(login));
         let mut expected = vec![
@@ -457,6 +482,10 @@ mod tests {
             "/Users/me/.opencode/bin",
             "/Users/me/.grok/bin",
             "/Users/me/.cargo/bin",
+            "/Users/me/.npm-global/bin",
+            "/Users/me/.nix-profile/bin",
+            "/etc/profiles/per-user/me/bin",
+            "/nix/var/nix/profiles/default/bin",
         ];
         if cfg!(target_os = "macos") {
             expected.push("/opt/homebrew/bin");

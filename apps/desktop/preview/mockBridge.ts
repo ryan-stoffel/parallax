@@ -828,6 +828,7 @@ export const mockBridge: ParallaxBridge = {
   acpRegistry: () => delay([]),
 
   openTerminal: () => delay("Terminals don't run in the preview."),
+  install: () => delay("Installs don't run in the preview."),
   terminalInput: noop,
   resizeTerminal: noop,
   closeTerminal: noop,

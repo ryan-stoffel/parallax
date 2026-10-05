@@ -198,7 +198,7 @@ const builtIns: Omit<Instance, "enabled">[] = [
 
 /**
  * An instance's models before this device's choices: its kind's built-in catalog, then those plxd
- * found, then the user's own, each id once. One that lists none offers its agent's own default,
+ * found, OpenCode's own without its name for itself, then the user's own, each id once. One that lists none offers its agent's own default,
  * whose empty id sends no `model`.
  */
 export function instanceModels(info: ProviderInfo): Model[] {
@@ -206,7 +206,13 @@ export function instanceModels(info: ProviderInfo): Model[] {
   const seen = new Set<string>();
   const listed = [
     ...models.filter((m) => m.provider === instance.kind),
-    ...info.models.map((m) => ({ ...m, contexts: [] })),
+    // OpenCode names its own models (ids `opencode/…`) "opencode/Big Pickle" or "OpenCode
+    // Zen/Big Pickle", by version: the picker already says OpenCode.
+    ...info.models.map((m) => ({
+      ...m,
+      name: m.id.startsWith("opencode/") ? m.name.replace(/^[^/]*\//, "") : m.name,
+      contexts: [],
+    })),
     ...instance.models.map((m) => ({ ...m, contexts: [] })),
   ];
   return (listed.length ? listed : [{ id: "", name: "Default model", contexts: [] }])

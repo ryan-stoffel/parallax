@@ -1,8 +1,9 @@
 import type { WebContents } from "electron";
 import type { IPty } from "node-pty";
+import { execFile } from "node:child_process";
 import os from "node:os";
 
-import type { TerminalMessage } from "../preload/bridge";
+import { NPM_INSTALLS, npmInstallLine, type TerminalMessage } from "../preload/bridge";
 import type { CliKind } from "../protocol/generated/protocol";
 
 /** Each vendor CLI's own sign-in (0004), as its `--help` gives it. */
@@ -107,14 +108,13 @@ const installScripts: Record<string, { posix: string; windows?: string }> = {
     windows: "irm https://claude.ai/install.ps1 | iex",
   },
   codex: { posix: "npm install -g @openai/codex", windows: "npm install -g @openai/codex" },
-  pi: {
-    posix: "curl -fsSL https://pi.dev/install.sh | sh",
-    windows: "irm https://pi.dev/install.ps1 | iex",
-  },
-  opencode: {
-    posix: "curl -fsSL https://opencode.ai/install | bash",
-    windows: "npm install -g opencode-ai@latest",
-  },
+  // Pi and OpenCode install with npm, in the background (`runInstall`).
+  ...Object.fromEntries(
+    Object.entries(NPM_INSTALLS).map(([kind, pkg]) => [
+      kind,
+      { posix: npmInstallLine(pkg!, false), windows: npmInstallLine(pkg!, true) },
+    ]),
+  ),
   grokBuild: {
     posix: "curl -fsSL https://x.ai/cli/install.sh | bash",
     windows: "npm install -g @xai-official/grok",
@@ -159,6 +159,27 @@ export function installCommand(
   if (windows)
     return { file: "powershell.exe", args: ["-NoLogo", "-NoProfile", "-Command", script.windows!] };
   return { file: env["SHELL"] || "/bin/sh", args: ["-lc", script.posix] };
+}
+
+/**
+ * Runs `command`, an install, with no terminal. Resolves to an error for people, with the end of
+ * what it printed, or undefined once it exits with 0.
+ */
+export function runInstall(command: Command | string): Promise<string | undefined> {
+  if (typeof command === "string") return Promise.resolve(command);
+  const args = Array.isArray(command.args) ? command.args : [command.args];
+  const options = {
+    cwd: command.cwd ?? os.homedir(),
+    env: { ...terminalEnv(), ...command.env },
+    maxBuffer: 16 * 1024 * 1024,
+  };
+  return new Promise((resolve) =>
+    execFile(command.file, args, options, (error, stdout, stderr) => {
+      if (!error) return resolve(undefined);
+      const tail = `${stderr}`.trim() || `${stdout}`.trim() || error.message;
+      resolve(`The install failed: ${tail.split("\n").slice(-3).join("\n")}`);
+    }),
+  );
 }
 
 /**

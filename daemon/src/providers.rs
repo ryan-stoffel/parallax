@@ -43,6 +43,10 @@ const CACHE_TTL: Duration = Duration::from_secs(30);
 /// How long one probe step may take: a version, a status command, or an ACP session.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// What a Pi instance with no model it can use says.
+const PI_NO_MODELS: &str = "Pi has no usable models. Run `pi` and use /login, or configure an API \
+                            key in ~/.pi/agent.";
+
 /// What runs a kind, and how.
 #[derive(Clone, Debug)]
 enum Driver {
@@ -121,14 +125,12 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
             }
         }
         // Pi has no ACP of its own: `pi-acp` runs `pi --mode rpc`. Pi before 0.81 needs
-        // `pi-acp@0.0.27`, which an instance's arguments pick.
-        ProviderKind::Pi => Preset {
-            login: &["pi"],
-            ..base(
-                "npx",
-                Driver::Acp(Box::new(acp_agent("Pi", "npx", &["-y", "pi-acp@0.0.34"]))),
-            )
-        },
+        // `pi-acp@0.0.27`, which an instance's arguments pick. It signs in in that `pi`, which
+        // the probe finds.
+        ProviderKind::Pi => base(
+            "npx",
+            Driver::Acp(Box::new(acp_agent("Pi", "npx", &["-y", "pi-acp@0.0.34"]))),
+        ),
         ProviderKind::GrokBuild => Preset {
             login: &["grok", "login"],
             ..base(
@@ -616,12 +618,7 @@ impl Providers {
             };
             // Pi runs through `npx pi-acp`, so its version is the `pi` the adapter runs.
             let versioned = match instance.kind {
-                ProviderKind::Pi => instance
-                    .env
-                    .iter()
-                    .find(|var| var.name == "PI_ACP_PI_COMMAND")
-                    .and_then(|var| var.value.clone())
-                    .unwrap_or_else(|| "pi".to_owned()),
+                ProviderKind::Pi => pi_command(instance),
                 _ => program.clone(),
             };
             // `npx` alone can't run Pi: the adapter needs the `pi` it runs.
@@ -675,6 +672,19 @@ impl Providers {
                     overrides(entry, env.clone()),
                 );
                 acp_probe(&self.launcher, &agent, &mut found).await;
+                if instance.kind == ProviderKind::Pi {
+                    // Pi signs in in the `pi` its adapter runs, found where plxd found it, since
+                    // the app's own PATH may not have it.
+                    found.login = detect::resolve(&self.launcher, &pi_command(instance))
+                        .map(|path| vec![path.display().to_string()]);
+                    // pi-acp says only that it needs a sign-in; Pi's own words say how (PLX-558).
+                    if found.signed_in == Some(false)
+                        || (found.signed_in == Some(true) && found.models.is_empty())
+                    {
+                        found.signed_in = Some(false);
+                        found.note = Some(PI_NO_MODELS.into());
+                    }
+                }
             }
             _ => {}
         }
@@ -930,6 +940,16 @@ impl Backend for WithSecrets {
         }
         self.plain.limits(cwd)
     }
+}
+
+/// The `pi` a Pi instance's adapter runs: its `PI_ACP_PI_COMMAND`, or `pi`.
+fn pi_command(instance: &ProviderInstance) -> String {
+    instance
+        .env
+        .iter()
+        .find(|var| var.name == "PI_ACP_PI_COMMAND")
+        .and_then(|var| var.value.clone())
+        .unwrap_or_else(|| "pi".to_owned())
 }
 
 /// The program `instance` runs: its own, or its kind's.
@@ -1606,6 +1626,30 @@ mod tests {
         assert_eq!(
             found.note.as_deref(),
             Some("pi isn't installed on this host")
+        );
+
+        // With its `pi`, an adapter that wants a sign-in is Pi with no models, which logs in in
+        // that `pi`, where plxd found it.
+        let script = |name: &str, body: &str| {
+            std::fs::write(bin.join(name), format!("#!/bin/sh\n{body}")).unwrap();
+            std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        };
+        script("pi", "echo 1.0.3\n");
+        script(
+            "npx",
+            r#"read a; echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read b; echo '{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"Authentication required"}}'
+"#,
+        );
+        let found = providers.probe(&detector, &entry, true).await;
+        assert!(found.installed);
+        assert_eq!(found.version.as_deref(), Some("1.0.3"));
+        assert_eq!(found.signed_in, Some(false));
+        assert_eq!(found.note.as_deref(), Some(super::PI_NO_MODELS));
+        assert_eq!(
+            found.login,
+            Some(vec![bin.join("pi").display().to_string()])
         );
     }
 

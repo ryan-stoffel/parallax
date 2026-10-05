@@ -8,6 +8,7 @@ import path from "node:path";
 import { ErrorCodes, type CliKind } from "../protocol/generated/protocol";
 import {
   HOME_VARS,
+  NPM_INSTALLS,
   type ConnectionState,
   type RendererMethod,
   type RpcResponse,
@@ -25,6 +26,7 @@ import {
   loginCommand,
   openTerminal,
   resizeTerminal,
+  runInstall,
   shellCommand,
   writeTerminal,
   type Command,
@@ -254,19 +256,7 @@ export function startHosts(): void {
       const { hostId, cli, provider, install, path } = target;
       if (typeof hostId !== "string") return "invalid terminal";
       if (isInstallable(install)) {
-        const command = async () => {
-          // A host that's gone has no ssh target, and mustn't install here instead.
-          const host = connections.get(hostId);
-          if (!host) return "That host isn't in Parallax anymore.";
-          const ssh = sshOf(hostId);
-          // An SSH host's OS decides its shell; this computer's is known.
-          const version = ssh ? await host.request("host/version", {}) : undefined;
-          if (version && "error" in version)
-            return `Parallax couldn't ask the host which OS it runs: ${version.error.message}`;
-          const os = version && "result" in version ? version.result.os : undefined;
-          return installCommand(install, ssh, process.platform, process.env, os);
-        };
-        return openTerminal(event.sender, id, command, cols, rows);
+        return openTerminal(event.sender, id, () => installOn(hostId, install), cols, rows);
       }
       if (isCliKind(cli)) {
         return openTerminal(event.sender, id, () => signInCommand(hostId, cli), cols, rows);
@@ -279,6 +269,16 @@ export function startHosts(): void {
       return openTerminal(event.sender, id, () => folderCommand(hostId, path), cols, rows);
     },
   );
+  // An npm install of an agent on a host, with no terminal (PLX-558).
+  ipcMain.handle("parallax:install", async (_event, hostId: unknown, kind: unknown) => {
+    if (
+      typeof hostId !== "string" ||
+      typeof kind !== "string" ||
+      !Object.hasOwn(NPM_INSTALLS, kind)
+    )
+      return "invalid install";
+    return runInstall(await installOn(hostId, kind));
+  });
   ipcMain.on("parallax:terminalInput", (event, id: unknown, data: unknown) => {
     if (isTerminalId(id) && typeof data === "string") writeTerminal(event.sender, id, data);
   });
@@ -303,6 +303,23 @@ export function startHosts(): void {
 function sshOf(hostId: string) {
   const saved = settings.hosts.find((h) => h.id === hostId);
   return saved && { destination: saved.destination, ssh: settings.ssh ?? "ssh" };
+}
+
+/**
+ * What installs an agent of provider kind `kind` on a host, in its shell (main's terminal.ts).
+ * Resolves to an error for people.
+ */
+async function installOn(hostId: string, kind: string): Promise<Command | string> {
+  // A host that's gone has no ssh target, and mustn't install here instead.
+  const host = connections.get(hostId);
+  if (!host) return "That host isn't in Parallax anymore.";
+  const ssh = sshOf(hostId);
+  // An SSH host's OS decides its shell; this computer's is known.
+  const version = ssh ? await host.request("host/version", {}) : undefined;
+  if (version && "error" in version)
+    return `Parallax couldn't ask the host which OS it runs: ${version.error.message}`;
+  const os = version && "result" in version ? version.result.os : undefined;
+  return installCommand(kind, ssh, process.platform, process.env, os);
 }
 
 /**

@@ -1,7 +1,14 @@
 import { expect, test } from "vite-plus/test";
 
 import type { CliKind } from "../protocol/generated/protocol";
-import { installCommand, loginCommand, shellCommand, terminalEnv, type Command } from "./terminal";
+import {
+  installCommand,
+  loginCommand,
+  runInstall,
+  shellCommand,
+  terminalEnv,
+  type Command,
+} from "./terminal";
 
 const mini = { destination: "me@mini", ssh: "ssh" };
 
@@ -117,10 +124,14 @@ test("installs a CLI with its own script in the login shell, here or over ssh", 
     "-Command",
     "irm https://claude.ai/install.ps1 | iex",
   ]);
+  // Pi installs with npm into ~/.local, which a Nix store's read-only prefix can't stop.
   expect((installCommand("pi", undefined, "linux", {}) as Command).args).toEqual([
     "-lc",
-    "curl -fsSL https://pi.dev/install.sh | sh",
+    'npm install -g --prefix "$HOME/.local" @earendil-works/pi-coding-agent',
   ]);
+  expect((installCommand("opencode", undefined, "win32") as Command).args.at(-1)).toBe(
+    "npm install -g opencode-ai",
+  );
   // A Windows SSH host gets PowerShell's, by the OS its plxd reports.
   expect((installCommand("claude", mini, "darwin", {}, "windows") as Command).args.at(-1)).toBe(
     'powershell -NoLogo -NoProfile -Command "irm https://claude.ai/install.ps1 | iex"',
@@ -133,3 +144,17 @@ test("installs a CLI with its own script in the login shell, here or over ssh", 
     `exec "$SHELL" -lc 'npm install -g @openai/codex'`,
   );
 });
+
+test.skipIf(process.platform === "win32")(
+  "runs an install with no terminal and says how it failed",
+  async () => {
+    expect(await runInstall({ file: "/bin/sh", args: ["-c", "echo ok"] })).toBeUndefined();
+    expect(
+      await runInstall({
+        file: "/bin/sh",
+        args: ["-c", "echo one; echo 'npm ERR! EACCES' >&2; exit 1"],
+      }),
+    ).toBe("The install failed: npm ERR! EACCES");
+    expect(await runInstall("Parallax can't install this agent on Windows.")).toMatch(/can't/);
+  },
+);

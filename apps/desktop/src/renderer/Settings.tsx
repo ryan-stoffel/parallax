@@ -11,7 +11,13 @@ import {
   type ReactNode,
 } from "react";
 
-import { HOME_VARS, type RpcError, type ThemePreference } from "../preload/bridge";
+import {
+  HOME_VARS,
+  NPM_INSTALLS,
+  npmInstallLine,
+  type RpcError,
+  type ThemePreference,
+} from "../preload/bridge";
 import {
   ErrorCodes,
   type AccountUsage,
@@ -962,9 +968,9 @@ function Card({ label, children }: { label: string; children: ReactNode }) {
  * account, and Sign in (in a terminal under it, after which the instances are probed again with
  * `onSignedIn`); how it runs, with its version for a kind that has more than one; its variables;
  * its models; and Claude's and Codex's usage and API keys. An agent Parallax knows how to install
- * (Claude Code, Codex, Pi, OpenCode, Grok Build, Hermes, Antigravity) offers Install when it isn't
- * installed, which runs in the same terminal. Each change saves the instance on the
- * host.
+ * (Claude Code, Codex, Pi, OpenCode, Grok Build, Hermes, Antigravity) offers Install in place of
+ * its account while it isn't installed: Pi and OpenCode with npm in the background, the others in
+ * the same terminal. Each change saves the instance on the host.
  */
 function InstancePane({
   id,
@@ -1010,6 +1016,23 @@ function InstancePane({
   // Whether the open terminal installs the CLI rather than signs in. Kept from when it opened, so
   // an install that ends and finds the CLI doesn't turn into a sign-in.
   const [installing, setInstalling] = useState(false);
+  // An npm install running in the background.
+  const [npmInstalling, setNpmInstalling] = useState(false);
+  const npmPackage = NPM_INSTALLS[instance.kind];
+  // ponytail: this computer's OS, which an SSH host's may not be; main runs the host's own.
+  const npmLine = npmPackage && npmInstallLine(npmPackage, window.parallax.platform === "win32");
+  const install = async () => {
+    if (!npmPackage) {
+      setInstalling(true);
+      return onSignIn(true);
+    }
+    setError(undefined);
+    setNpmInstalling(true);
+    const failed = await window.parallax.install(hostId, instance.kind);
+    setNpmInstalling(false);
+    if (failed) setError(failed);
+    else onSignedIn();
+  };
   // Pi's installer puts `pi` on the host, which a 0.x instance's PI_ACP_PI_COMMAND doesn't run.
   const piCommand = instance.env.find((v) => v.name === "PI_ACP_PI_COMMAND")?.value ?? "pi";
   const canInstall =
@@ -1118,51 +1141,77 @@ function InstancePane({
             onSave={(name) => void save({ name: name.trim() })}
           />
         </Row>
-        <Row
-          title="Account"
-          description={
-            <span className="flex items-center gap-1.5">
-              <StatusDot
-                tone={info.signedIn === true ? "on" : instanceTone(info) ? "error" : "off"}
-              />
-              <span className="min-w-0">{account}</span>
-            </span>
-          }
-        >
-          {canInstall && !signingIn && (
-            <button
-              type="button"
-              aria-label={`Install ${kind.name}`}
-              onClick={() => {
-                setInstalling(true);
-                onSignIn(true);
-              }}
-              className={primaryButton}
-            >
-              Install
-            </button>
-          )}
-          {cursorAccount && info.installed && info.signedIn === true && !cursorWaiting && (
-            <button type="button" onClick={() => void signOutCursor()} className={outlineButton}>
-              Sign out
-            </button>
-          )}
-          {((cursorAccount && info.installed && info.signedIn !== true && !cursorWaiting) ||
-            (info.login && info.installed && info.signedIn !== true && !signingIn)) && (
-            <button
-              type="button"
-              aria-label={`Sign in to ${instance.name}`}
-              onClick={() => {
-                if (cursorAccount) return void signInCursor();
-                setInstalling(false);
-                onSignIn(true);
-              }}
-              className={outlineButton}
-            >
-              Sign in
-            </button>
-          )}
-        </Row>
+        {canInstall ? (
+          <Row
+            title="Install"
+            description={
+              <span className="flex items-center gap-1.5">
+                <StatusDot tone="error" />
+                <span className="min-w-0">
+                  {npmInstalling ? `Installing ${kind.name}…` : account}
+                </span>
+              </span>
+            }
+          >
+            {!signingIn && (
+              // Hovering says what it runs.
+              <span className="group relative">
+                <button
+                  type="button"
+                  aria-label={`Install ${kind.name}`}
+                  aria-describedby={npmLine ? `${id}-install` : undefined}
+                  disabled={npmInstalling}
+                  onClick={() => void install()}
+                  className={primaryButton}
+                >
+                  {npmInstalling ? "Installing…" : "Install"}
+                </button>
+                {npmLine && (
+                  <span
+                    id={`${id}-install`}
+                    role="tooltip"
+                    className="pointer-events-none invisible absolute top-full right-0 z-10 mt-2 w-max max-w-96 rounded-md border border-border bg-surface px-2.5 py-1.5 text-[12px] text-foreground shadow-composer group-hover:visible"
+                  >
+                    Runs <code className="font-mono">{npmLine}</code>
+                  </span>
+                )}
+              </span>
+            )}
+          </Row>
+        ) : (
+          <Row
+            title="Account"
+            description={
+              <span className="flex items-center gap-1.5">
+                <StatusDot
+                  tone={info.signedIn === true ? "on" : instanceTone(info) ? "error" : "off"}
+                />
+                <span className="min-w-0">{account}</span>
+              </span>
+            }
+          >
+            {cursorAccount && info.installed && info.signedIn === true && !cursorWaiting && (
+              <button type="button" onClick={() => void signOutCursor()} className={outlineButton}>
+                Sign out
+              </button>
+            )}
+            {((cursorAccount && info.installed && info.signedIn !== true && !cursorWaiting) ||
+              (info.login && info.installed && info.signedIn !== true && !signingIn)) && (
+              <button
+                type="button"
+                aria-label={`Sign in to ${instance.name}`}
+                onClick={() => {
+                  if (cursorAccount) return void signInCursor();
+                  setInstalling(false);
+                  onSignIn(true);
+                }}
+                className={outlineButton}
+              >
+                {instance.kind === "pi" ? "Login" : "Sign in"}
+              </button>
+            )}
+          </Row>
+        )}
         {cursorWaiting && (
           <Row
             title="Sign-in"
