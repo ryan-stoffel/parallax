@@ -70,11 +70,17 @@ export async function createRepo(
   if (!isFolderName(name)) return { error: "Use letters, digits, ., _, and - only" };
   const root = path.join(home, ".parallax", "projects");
   const dir = path.join(root, name);
-  await mkdir(root, { recursive: true });
   try {
+    await mkdir(root, { recursive: true });
     await mkdir(dir);
-  } catch {
-    return { error: `~/.parallax/projects/${name} already exists` };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return {
+      error:
+        code === "EEXIST"
+          ? `~/.parallax/projects/${name} already exists`
+          : `Can't create ~/.parallax/projects/${name}: ${code ?? String(error)}`,
+    };
   }
   try {
     await run("git", ["init", "-q"], { cwd: dir, env: gitEnv() });

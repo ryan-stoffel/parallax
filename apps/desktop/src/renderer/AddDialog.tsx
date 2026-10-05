@@ -88,6 +88,8 @@ export function AddDialog({
   const back = () =>
     stack.length > 1 ? setStack((all) => all.slice(0, -1)) : dialog.current?.close();
   const added = (repo: Repo) => {
+    // Closed while it was being made, as with Escape: drop the late answer.
+    if (!dialog.current?.open) return;
     const project = stack.findIndex((s) => s.kind === "project");
     if (project < 0) return dialog.current?.close();
     setWorkspace({ hostId: localId, repo });
@@ -451,27 +453,32 @@ function useAdd(onAdded: (repo: Repo) => void) {
   const made = useRef<{ key: string; path: string }>(undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // A ref, so a second Enter before the first re-renders is dropped too.
+  const running = useRef(false);
   const run = async (key: string, make: () => Promise<{ path: string } | { error: string }>) => {
+    if (running.current) return;
+    running.current = true;
     setBusy(true);
     setError(undefined);
-    let failed: string | undefined;
-    if (made.current?.key !== key) {
-      const result = await make();
-      if ("error" in result) failed = result.error;
-      else made.current = { key, path: result.path };
+    try {
+      if (made.current?.key !== key) {
+        const result = await make();
+        if ("error" in result) return setError(result.error);
+        made.current = { key, path: result.path };
+      }
+      // A fresh id is safe to retry with: plxd returns the entry a path already has.
+      const answer = await window.parallax.request(localId, "repo/add", {
+        id: uuidv7(),
+        path: made.current.path,
+      });
+      if ("error" in answer) setError(describeError(answer.error));
+      else onAdded(answer.result.repo);
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      running.current = false;
+      setBusy(false);
     }
-    // A fresh id is safe to retry with: plxd returns the entry a path already has.
-    const answer =
-      failed === undefined
-        ? await window.parallax.request(localId, "repo/add", {
-            id: uuidv7(),
-            path: made.current!.path,
-          })
-        : undefined;
-    setBusy(false);
-    if (failed !== undefined) setError(failed);
-    else if (answer && "error" in answer) setError(describeError(answer.error));
-    else if (answer) onAdded(answer.result.repo);
   };
   return { busy, error, run };
 }

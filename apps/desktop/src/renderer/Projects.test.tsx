@@ -434,6 +434,8 @@ test("New repository creates it in ~/.parallax/projects and registers it, and a 
   typeInto(field(), "photon");
   expect(dialog().textContent).toContain("Creates ~/.parallax/projects/photon as a git repository");
 
+  // A second Enter while the first is under way is dropped.
+  pressKey("Enter");
   pressKey("Enter");
   await settle();
   expect(dialog().querySelector('[role="alert"]')?.textContent).toBe("plxd is busy");
