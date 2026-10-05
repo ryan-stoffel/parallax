@@ -527,6 +527,8 @@ async fn drive(
         last_result: None,
     };
     let mut control_open = true;
+    // Follow-ups handed to the writer that it hasn't reported on yet.
+    let mut writing = 0_usize;
     let first = Event::TurnStarted {
         turn_id: first_turn,
     };
@@ -539,22 +541,23 @@ async fn drive(
             // Deliveries first, so a follow-up's TurnStarted comes before what the CLI answers.
             biased;
             Some(delivery) = recv(&mut stdin.results) => {
-                let event = match delivery {
-                    Delivery::Written(turn_id) => {
-                        state.turns.push_back(Some(turn_id));
-                        Event::TurnStarted { turn_id: Some(turn_id) }
-                    }
-                    Delivery::Failed(turn_id) => {
-                        // stdin is gone, so no later follow-up can arrive either.
-                        control.close();
-                        Event::FollowUpDropped { turn_id }
-                    }
-                };
-                if sink.emit(event).await.is_err() {
-                    state.switch.cancel();
-                }
+                writing = writing.saturating_sub(1);
+                state.delivered(delivery, &mut control, &mut sink).await;
             }
             output = process.next() => {
+                // The CLI can read a follow-up and answer it before the writer reports writing
+                // it, so a line waits for that report and comes after its turn's TurnStarted
+                // (PLX-523). ponytail: this stops reading the CLI's output meanwhile, which hangs
+                // a CLI that leaves a pipe's worth of follow-ups unread and then fills its stdout;
+                // scripts' follow-ups are far smaller.
+                if matches!(output, Some(Output::Line(_))) {
+                    while writing > 0
+                        && let Some(delivery) = recv(&mut stdin.results).await
+                    {
+                        writing -= 1;
+                        state.delivered(delivery, &mut control, &mut sink).await;
+                    }
+                }
                 let sent = match output {
                     Some(Output::Line(line)) => match state.parse(&line) {
                         Parsed::Event(Some(event)) => sink.emit(event).await,
@@ -587,7 +590,9 @@ async fn drive(
             }
             follow_up = control.recv(), if control_open => match follow_up {
                 Some(follow_up) => match &stdin.queue {
-                    Some(queue) if queue.send(Input::FollowUp(follow_up.clone())).is_ok() => {}
+                    Some(queue) if queue.send(Input::FollowUp(follow_up.clone())).is_ok() => {
+                        writing += 1;
+                    }
                     _ => {
                         let dropped = Event::FollowUpDropped { turn_id: follow_up.turn_id };
                         let _ = sink.emit(dropped).await;
@@ -637,6 +642,31 @@ struct State {
 }
 
 impl State {
+    /// Reports a follow-up the writer wrote as its turn started, or one it couldn't as dropped.
+    async fn delivered(
+        &mut self,
+        delivery: Delivery,
+        control: &mut mpsc::UnboundedReceiver<FollowUp>,
+        sink: &mut EventSink,
+    ) {
+        let event = match delivery {
+            Delivery::Written(turn_id) => {
+                self.turns.push_back(Some(turn_id));
+                Event::TurnStarted {
+                    turn_id: Some(turn_id),
+                }
+            }
+            Delivery::Failed(turn_id) => {
+                // stdin is gone, so no later follow-up can arrive either.
+                control.close();
+                Event::FollowUpDropped { turn_id }
+            }
+        };
+        if sink.emit(event).await.is_err() {
+            self.switch.cancel();
+        }
+    }
+
     fn parse(&mut self, line: &[u8]) -> Parsed {
         let warning =
             |warning, detail: String| Parsed::Event(Some(Event::Warning { warning, detail }));
