@@ -4,7 +4,7 @@ import type { AgentRun, Repo, Thread } from "../protocol/generated/protocol";
 import { emptyThreads } from "./threads";
 import { folderOf } from "./ThreadTerminal";
 
-test("a thread's terminal opens in its repository's checkout, or a No Repo thread's own folder", () => {
+test("a terminal opens in a thread's worktree, else its repository's checkout, else home", () => {
   const repo = { id: "r1", name: "app", path: "/src/app" } as Repo;
   const state = {
     ...emptyThreads,
@@ -21,9 +21,14 @@ test("a thread's terminal opens in its repository's checkout, or a No Repo threa
       t3: { id: "t3", worktreePath: "/scratch/t3" } as AgentRun,
     },
   };
-  // A repository's threads and New thread share its checkout's terminal.
+  // A Current checkout thread and New thread share its repository's checkout terminal.
   const checkout = { key: "mini/new/r1", hostId: "mini", path: "/src/app" };
-  expect(folderOf("mini", state, { threadId: "t1" })).toEqual(checkout);
+  expect(folderOf("mini", state, { threadId: "t1" })).toEqual({
+    key: "mini/t1",
+    hostId: "mini",
+    path: "/wt/t1",
+    threadId: "t1",
+  });
   expect(folderOf("mini", state, { threadId: "t2" })).toEqual(checkout);
   expect(folderOf("mini", state, { repoId: "r1" })).toEqual(checkout);
   expect(folderOf("mini", state, { threadId: "t3" })).toEqual({
@@ -35,4 +40,10 @@ test("a thread's terminal opens in its repository's checkout, or a No Repo threa
   // Its scratch repository doesn't exist yet.
   expect(folderOf("mini", state, { threadId: "t4" })).toBeUndefined();
   expect(folderOf("mini", state, { repoId: "s" })).toBeUndefined();
+  // No Repo's New thread opens in the host's home folder.
+  expect(folderOf("mini", state, { repoId: "no-repo" })).toEqual({
+    key: "mini/home",
+    hostId: "mini",
+    path: "~",
+  });
 });

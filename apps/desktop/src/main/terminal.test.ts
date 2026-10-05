@@ -88,6 +88,7 @@ test("opens it on an SSH host after a cd, quoted for the host's shell", () => {
   expect(shellCommand("/home/me/wt", mini, "darwin")).toEqual(
     ssh(`cd /home/me/wt && exec "$SHELL" -l`),
   );
+  expect(shellCommand("~", mini, "darwin")).toEqual(ssh(`cd ~ && exec "$SHELL" -l`));
   expect(shellCommand("/home/it's me/wt", mini, "linux")).toEqual(
     ssh(`cd '/home/it'\\''s me/wt' && exec "$SHELL" -l`),
   );
