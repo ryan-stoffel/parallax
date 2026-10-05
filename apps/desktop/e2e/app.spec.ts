@@ -283,18 +283,16 @@ test("creates a project on a repository it adds, and opens it (PLX-166)", async 
   // A coordinator runs on a copy of the latest commit, so the repository needs one (0024).
   const identity = ["-c", "user.name=parallax", "-c", "user.email=parallax@localhost"];
   execFileSync("git", ["-C", repo, ...identity, "commit", "-q", "--allow-empty", "-m", "Start"]);
-  // The native folder picker can't be driven, so it answers with the repository.
-  await app.evaluate(({ dialog }, folder) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
-  }, repo);
-
   // The sign-in test left Settings open.
   await page.getByRole("button", { name: "Back to app" }).click();
   await page.getByRole("button", { name: "New project or repository" }).click();
-  await page.getByRole("menuitem", { name: "New project…" }).click();
-  const dialog = page.getByRole("dialog", { name: "Create Project" });
+  const dialog = page.getByRole("dialog", { name: "New project or repository" });
+  await dialog.getByRole("option", { name: /^New Project/ }).click();
   await dialog.getByRole("button", { name: /^Workspace/ }).click();
   await page.getByRole("menuitem", { name: "Choose folder…" }).click();
+  // The palette's folder step, opened on the repository itself, adds it.
+  await dialog.getByRole("combobox", { name: "Folder" }).fill(repo + path.sep);
+  await dialog.getByRole("button", { name: /^Add/ }).click();
   await expect(dialog.getByRole("button", { name: /^Workspace: ember on / })).toBeVisible();
   await expect(dialog.getByRole("textbox", { name: "Name" })).toHaveValue("ember");
   await dialog.getByRole("button", { name: "Create Project" }).click();

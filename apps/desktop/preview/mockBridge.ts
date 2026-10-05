@@ -708,6 +708,24 @@ function setCursor(id: string, signedIn: boolean) {
   );
 }
 
+// The folders the add palette browses: a home folder and what's under Developer.
+const folderTree: Record<string, string[]> = {
+  [HOME]: [
+    "Applications",
+    "Desktop",
+    "Developer",
+    "Documents",
+    "Downloads",
+    "Library",
+    "Movies",
+    "Music",
+    "Pictures",
+  ],
+  [`${HOME}/Developer`]: ["personal", "work"],
+  [`${HOME}/Developer/personal`]: ["parallax", "photon", "dotfiles"],
+};
+const expand = (p: string) => p.replace(/^~(?=\/|$)/, HOME).replace(/\/+$/, "") || "/";
+
 export const mockBridge: ParallaxBridge = {
   platform: "darwin",
   version: () => delay("0.0.0-preview"),
@@ -717,6 +735,16 @@ export const mockBridge: ParallaxBridge = {
     document.documentElement.style.zoom = String(factor);
   },
   pickFolder: () => delay(`${HOME}/Developer/personal/new-repo`),
+  listFolders: (input) => {
+    const dir = expand(input);
+    return delay(
+      dir in folderTree
+        ? { path: dir, folders: folderTree[dir]!.map((name) => ({ name, path: `${dir}/${name}` })) }
+        : { path: dir, folders: [] },
+    );
+  },
+  createRepo: (name) => delay({ path: `${HOME}/.parallax/projects/${name}` }, 400),
+  cloneRepo: (_slug, dest) => delay({ path: expand(dest) }, 1200),
   copyPicture: () => delay(undefined),
   updatable: false,
   update: () => delay("Up to date"),

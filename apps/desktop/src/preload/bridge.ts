@@ -31,6 +31,28 @@ export const HOME_VARS: Partial<Record<ProviderKind, string>> = {
   hermes: "HERMES_HOME",
 };
 
+/** A name for a folder of its own: letters, digits, `.`, `_`, and `-`, but not `.` or `..`. */
+export const isFolderName = (name: string) =>
+  /^[\w.-]+$/.test(name) && name !== "." && name !== "..";
+
+/** `owner/name` from a GitHub slug or URL, or undefined. */
+export function githubSlug(input: string): string | undefined {
+  const slug = input
+    .trim()
+    .replace(/^(https:\/\/)?github\.com\//, "")
+    .replace(/\.git$/, "")
+    .replace(/\/$/, "");
+  const [owner, name, ...rest] = slug.split("/");
+  return owner && name && rest.length === 0 && isFolderName(owner) && isFolderName(name)
+    ? `${owner}/${name}`
+    : undefined;
+}
+
+/** A folder's subfolders, by name, or why it can't be read. */
+export type FolderListing =
+  | { path: string; folders: { name: string; path: string }[] }
+  | { error: string };
+
 export interface ParallaxBridge {
   /** Node's `process.platform`, e.g. "darwin", "win32", "linux". */
   platform: string;
@@ -47,6 +69,18 @@ export interface ParallaxBridge {
   setZoom(factor: number): void;
   /** Opens the OS folder picker over this window. Resolves to the folder's path, or null if cancelled. */
   pickFolder(): Promise<string | null>;
+  /** The folders in a folder on this computer, whose path may start with `~`. */
+  listFolders(path: string): Promise<FolderListing>;
+  /**
+   * Makes `~/.parallax/projects/<name>` a git repository with an empty first commit. Resolves to
+   * its path, or an error for people.
+   */
+  createRepo(name: string): Promise<{ path: string } | { error: string }>;
+  /**
+   * Clones GitHub's `owner/name` into `dest`, which may start with `~` and must not exist.
+   * Resolves to its path, or an error for people.
+   */
+  cloneRepo(slug: string, dest: string): Promise<{ path: string } | { error: string }>;
   /** Copies a picture of this window's `rect`, in CSS pixels, to the clipboard. Rejects for an empty or invalid one. */
   copyPicture(rect: { x: number; y: number; width: number; height: number }): Promise<void>;
   /**

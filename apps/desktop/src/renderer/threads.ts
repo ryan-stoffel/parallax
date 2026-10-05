@@ -7,6 +7,7 @@ import type {
   LoggedEvent,
   Project,
   ProjectIcon as ProjectIconValue,
+  ProjectAutonomy,
   ProjectPermission,
   InboxItem,
   ProjectStartParams,
@@ -357,9 +358,9 @@ export interface ThreadsView {
   archive: (runId: string, archived: boolean) => Promise<string | undefined>;
   remove: (thread: Thread) => Promise<string | undefined>;
   /**
-   * Creates a project on a repository's path, with `icon` if one was chosen and `permission` where
-   * the host keeps it. Reuse `id`, with the same name, path, icon, and mode, to retry. Resolves to
-   * the project or an error message.
+   * Creates a project on a repository's path, with `icon` if one was chosen and `permission` and
+   * `autonomy` where the host keeps them. Reuse `id`, with the same name, path, icon, mode, and
+   * autonomy, to retry. Resolves to the project or an error message.
    */
   createProject: (
     id: string,
@@ -367,6 +368,7 @@ export interface ThreadsView {
     repoPath: string,
     icon?: ProjectIconValue,
     permission?: ProjectPermission,
+    autonomy?: ProjectAutonomy,
   ) => Promise<Project | string>;
   /**
    * Renames a project or sets its icon, which replaces the whole icon (0032). Resolves to an error
@@ -713,6 +715,7 @@ export function useThreads(
       repoPath: string,
       icon?: ProjectIconValue,
       permission?: ProjectPermission,
+      autonomy?: ProjectAutonomy,
     ) => {
       const answer = await window.parallax.request(hostId, "project/create", {
         id,
@@ -720,6 +723,7 @@ export function useThreads(
         repoPath,
         ...(icon && { icon }),
         ...(permission && { permission }),
+        ...(autonomy && { autonomy }),
       });
       if ("error" in answer) return describeError(answer.error);
       // Not into another host's list, if the user has left this one.

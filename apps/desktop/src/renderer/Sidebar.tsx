@@ -59,7 +59,7 @@ import type {
 import type { RpcError } from "../preload/bridge";
 import type { Selection, SettingsSection } from "./App";
 import { clock } from "./Approval";
-import { AddRepositoryDialog } from "./AddRepositoryDialog";
+import { AddDialog, type AddDialogHandle } from "./AddDialog";
 import {
   attentionOf,
   initials,
@@ -75,11 +75,10 @@ import { AutonomyChoice } from "./ProjectPermission";
 import { resumeTime } from "./ResumeCard";
 import { ConnectionStatus } from "./ConnectionStatus";
 import { Avatar, useProfile } from "./profile";
-import { localId, type Host } from "./hosts";
+import { type Host } from "./hosts";
 import { IconPicker } from "./IconPicker";
 import { imageUrl } from "./images";
 import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
-import { NewProjectDialog } from "./NewProjectDialog";
 import { iconColors, iconLook } from "./projectIcons";
 import { ForkMenu } from "./Fork";
 import { archivePageSize, sidebarPrefs } from "./sidebarPrefs";
@@ -313,10 +312,7 @@ export function ThreadList({
   onDelete,
   onNewThread,
 }: ThreadListProps) {
-  const newProject = useRef<HTMLDialogElement>(null);
-  const addMenuId = useId();
-  const addMenu = useRef<HTMLDivElement>(null);
-  const addRepositoryDialog = useRef<HTMLDialogElement>(null);
+  const addDialog = useRef<AddDialogHandle>(null);
   const deleteDialog = useRef<HTMLDialogElement>(null);
   const projectsId = useId();
   const threadsId = useId();
@@ -627,15 +623,6 @@ export function ThreadList({
     );
   };
 
-  const addRepository = async () => {
-    const path = await window.parallax.pickFolder();
-    if (!path || !open) return;
-    const repo = await open.addRepo(path);
-    if (typeof repo === "string") return setActionError(repo);
-    setActionError(undefined);
-    onSelect(host.id, { kind: "new", groupId: repo.id });
-  };
-
   const confirmDelete = async () => {
     if (!toDelete) return;
     setDeleting(true);
@@ -668,42 +655,9 @@ export function ThreadList({
           />
         </label>
         <RepoFilterMenu hosts={hosts} filter={filter} onFilter={setFilter} many={many} />
-        <IconButton label="New project or repository" popoverTarget={addMenuId}>
+        <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
           <FolderPlus />
         </IconButton>
-        <div
-          ref={addMenu}
-          id={addMenuId}
-          popover="auto"
-          role="menu"
-          aria-label="New project or repository"
-          onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-            if (e.newState === "open")
-              e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-          }}
-          onKeyDown={moveFocus}
-          className={`${menuPanel("end")} min-w-40 p-1`}
-        >
-          {(
-            [
-              ["New project…", newProject],
-              ["Add repository…", addRepositoryDialog],
-            ] as const
-          ).map(([label, dialog]) => (
-            <button
-              key={label}
-              type="button"
-              role="menuitem"
-              className={menuItem}
-              onClick={() => {
-                addMenu.current?.hidePopover();
-                dialog.current?.showModal();
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
         <IconButton label="New thread" command="newThread" onClick={onNewThread}>
           <SquarePen />
         </IconButton>
@@ -724,7 +678,7 @@ export function ThreadList({
                 controls={projectsId}
                 onToggle={() => setCollapsed(!collapsed)}
               />
-              <IconButton label="New project" onClick={() => newProject.current?.showModal()}>
+              <IconButton label="New project" onClick={() => addDialog.current?.open("project")}>
                 <Plus />
               </IconButton>
             </div>
@@ -785,18 +739,13 @@ export function ThreadList({
           left={card.left}
         />
       )}
-      <NewProjectDialog
-        ref={newProject}
+      <AddDialog
+        ref={addDialog}
         hosts={hosts.map((h) => h.host)}
         hostId={host.id}
         repos={open?.state.repos ?? []}
         create={open?.createProject ?? (async () => "Not connected")}
         onCreated={(hostId, project) => onOpenProject(hostId, project.id)}
-      />
-      <AddRepositoryDialog
-        ref={addRepositoryDialog}
-        local={host.id === localId}
-        onLocalFolder={() => void addRepository()}
       />
       <dialog
         ref={deleteDialog}
