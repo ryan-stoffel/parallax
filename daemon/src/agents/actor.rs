@@ -2188,6 +2188,23 @@ impl Actor {
         }
     }
 
+    /// A first attachment counts as seen only after its prompt reaches a CLI.
+    pub(super) async fn record_initial_seen(&mut self, seen: Vec<(Uuid, u64)>) {
+        if seen.is_empty() {
+            return;
+        }
+        let run_id = self.row.id;
+        let stored = self
+            .write(move |db, _| {
+                db.record_attached_seen(run_id, &seen)
+                    .map_err(|error| store_error(&error))
+            })
+            .await;
+        if let Err(error) = stored {
+            warn!(run = %self.id, error = %error.message, "could not store initial attachment cursors");
+        }
+    }
+
     /// Records that `turn_id` was sent with `text`, in memory and in the store, so a retry of
     /// `agent/send` stays idempotent across a plxd restart, not only across a resumed CLI
     /// process within the same plxd (#190).

@@ -238,3 +238,56 @@ async fn thread_search_finds_threads_by_their_messages_newest_first() {
     assert_eq!(empty.code, INVALID_PARAMS);
     host.server.stop().await;
 }
+
+#[tokio::test]
+async fn a_failed_initial_launch_preserves_attachment_context_for_retry() {
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    let other = Other::new(fake_backend(editing()), &prompts);
+    other.first.lock().unwrap().push_back(None);
+    let mut backends = fake(editing());
+    backends.register(Provider::Openai, Arc::new(other));
+    let host = Host::start(backends);
+    let mut client = host.client().await;
+    let earlier = client
+        .finished_thread(start_params(None, "SOURCE TASK MUST REACH CLI"))
+        .await;
+    let params = ThreadStartParams {
+        threads: vec![earlier],
+        ..on_other("Use source")
+    };
+    let run = params.run_id;
+    let result = client.call::<ThreadStart>(params).await.unwrap();
+    assert_eq!(result.run.status, AgentStatus::Failed);
+    client
+        .call::<AgentSend>(AgentSendParams {
+            threads: vec![earlier],
+            ..message(run, "Retry with source")
+        })
+        .await
+        .unwrap();
+    client.until(completed(run)).await;
+    let recorded = prompts.lock().unwrap().clone();
+    assert_eq!(recorded.len(), 2);
+    let successful = &recorded[1].0;
+    assert!(
+        successful.contains("SOURCE TASK MUST REACH CLI"),
+        "successful CLI never received attachment: {successful}"
+    );
+    assert!(successful.contains("Agent:\nDone."), "{successful}");
+    client
+        .call::<AgentSend>(AgentSendParams {
+            threads: vec![earlier],
+            ..message(run, "Attach again after delivery")
+        })
+        .await
+        .unwrap();
+    client.until(completed(run)).await;
+    let recorded = prompts.lock().unwrap().clone();
+    assert_eq!(recorded.len(), 3);
+    assert!(
+        !recorded[2].0.contains("SOURCE TASK MUST REACH CLI"),
+        "successful delivery must advance the cursor: {}",
+        recorded[2].0
+    );
+    host.server.stop().await;
+}

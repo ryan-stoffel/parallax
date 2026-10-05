@@ -733,7 +733,6 @@ async fn record(
     thread: Option<ThreadFields>,
     repo_path: &Path,
     created: Option<&CreatedWorktree>,
-    seen: Vec<(Uuid, u64)>,
 ) -> Result<
     (
         parallax_store::Run,
@@ -788,8 +787,6 @@ async fn record(
         if let Some(thread) = &thread {
             crate::threads::stage_started(db, thread)?;
         }
-        db.record_attached_seen(run_id.into(), &seen)
-            .map_err(|e| store_error(&e))?;
         Ok((run, worktree, thread))
     })
     .await;
@@ -1250,7 +1247,6 @@ pub(crate) async fn create_started(
         thread.map(|thread| thread.fields),
         Path::new(&repo_path),
         created.as_ref(),
-        seen,
     )
     .await?;
     // It counts as starting or waiting now.
@@ -1261,7 +1257,7 @@ pub(crate) async fn create_started(
     }
     if waiting.is_some() {
         let run = agent_run(&row, worktree.as_ref())?;
-        placement::queue(&daemon, &run, sent, images, threads, requested).await?;
+        placement::queue(&daemon, &run, prompt, images, threads, requested).await?;
         if coordinator_thread.is_none() {
             wake::started(&daemon, &run);
         }
@@ -1276,9 +1272,12 @@ pub(crate) async fn create_started(
     let task = first_prompt(&sent, &prepared.place)?;
     let paths = Some((cwd, git_common_dir));
     actor.attach(None, threads);
-    actor
+    if actor
         .launch(prepared, task, images, None, None, paths)
-        .await;
+        .await
+    {
+        actor.record_initial_seen(seen).await;
+    }
     // The actor owns a live CLI from here on, so it is spawned whatever the snapshot says.
     let run = actor.snapshot();
     agents.spawn(actor);
@@ -2043,7 +2042,6 @@ mod tests {
             None,
             Path::new("/src/app"),
             None,
-            Vec::new(),
         )
         .await
         .unwrap_err();
