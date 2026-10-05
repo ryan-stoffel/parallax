@@ -124,15 +124,15 @@ pub(crate) async fn daily(
 ) -> Result<UsageDailyResult, ErrorObject> {
     let zone = TimeZone::get(&params.time_zone).map_err(ErrorObject::invalid_params)?;
     let launcher = context.daemon.cli_detector.launcher();
-    let sources = async {
-        tokio::join!(
-            ccusage::daily(launcher, params.since, &params.time_zone),
-            ccusage::sessions(launcher, params.since, &params.time_zone, &zone),
-            cursor::daily(launcher, params.since, &zone),
-        )
+    // One ccusage at a time: two at once can fail on another agent's locked SQLite file.
+    let ccusage = async {
+        let days = ccusage::daily(launcher, params.since, &params.time_zone).await;
+        let sessions = ccusage::sessions(launcher, params.since, &params.time_zone, &zone).await;
+        (days, sessions)
     };
+    let sources = async { tokio::join!(ccusage, cursor::daily(launcher, params.since, &zone)) };
     // Dropping the sources kills whatever they're running.
-    let (claude_and_codex, sessions, cursor) = tokio::select! {
+    let ((claude_and_codex, sessions), cursor) = tokio::select! {
         () = context.cancel.cancelled() => return Err(ErrorObject::request_cancelled()),
         answers = sources => answers,
     };

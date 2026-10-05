@@ -433,7 +433,7 @@ interface Frame {
   span: ReturnType<typeof buckets>;
   /** Every host's that answered, together. */
   days: UsageDay[];
-  /** Every host's that counted them, or undefined when none did. */
+  /** Every host's, or undefined unless every host that answered counted them. */
   sessions?: UsageSessions[];
   answered: number;
   loading: boolean;
@@ -468,18 +468,27 @@ function History({
   }, []);
   const frame = useMemo<Frame>(() => {
     const days: UsageDay[] = [];
-    let sessions: UsageSessions[] | undefined;
+    let sessions: UsageSessions[] | undefined = [];
     let answered = 0;
     let loading = false;
     for (const h of hosts) {
       const state = loaded[h.id];
       if (state?.days && state.since === since) {
         days.push(...state.days);
-        if (state.sessions) (sessions ??= []).push(...state.sessions);
+        // A host that didn't count them would make the total look whole when it isn't.
+        sessions = state.sessions && sessions?.concat(state.sessions);
         answered++;
       } else if (state) loading = true;
     }
-    return { range, span, days, sessions, answered, loading, version };
+    return {
+      range,
+      span,
+      days,
+      sessions: answered ? sessions : undefined,
+      answered,
+      loading,
+      version,
+    };
   }, [hosts, loaded, since, range, span, version]);
   // The last frame with usage, shown dimmed while another range loads, so nothing jumps.
   const [held, setHeld] = useState<Frame>();
@@ -623,6 +632,8 @@ function Dashboard({
   );
   // The chart part a legend item points at, to pick it out in every bar.
   const [picked, setPicked] = useState<number>();
+  // New numbers can drop the legend from under the pointer, so nothing stays picked.
+  useEffect(() => setPicked(undefined), [frame.version]);
   const cost = view === "cost";
   const measure = (m: Measures) => (cost ? m.cost : tokensOf(m));
   const format = (n: number) => (cost ? dollars(n) : tokenCount.format(n));
@@ -690,7 +701,7 @@ function Dashboard({
           title="Claude Code and Codex sessions, each counted on the day it was last active. Cursor doesn't report sessions."
           note={
             !sessions
-              ? "Not counted on this host"
+              ? "Not counted on every host"
               : `${Math.round(sessions.previous).toLocaleString()} ${words.previous}`
           }
         >
