@@ -4,6 +4,7 @@ import type { OpenTarget } from "../../preload/bridge";
 import { useConnection } from "../ConnectionStatus";
 import { localId, useHosts } from "../hosts";
 import { nameOf, OPEN_TARGET_KEY } from "../OpenMenu";
+import { archivePageSize, sidebarPrefs, type SidebarPrefs } from "../sidebarPrefs";
 import { HostPicker, PageTitle, Row, Section, Switch } from "./parts";
 
 /** Settings > General: where Open sends a folder, usage limits on a host, and the app's version. */
@@ -16,10 +17,35 @@ export function GeneralSettings() {
     void window.parallax.version().then(setVersion);
   }, []);
   const current = targets.find((t) => t === chosen) ?? targets[0];
+  const sidebar = sidebarPrefs.use();
+  const setSidebar = (patch: Partial<SidebarPrefs>) =>
+    sidebarPrefs.set({ ...sidebarPrefs.get(), ...patch });
 
   return (
     <>
       <PageTitle title="General" />
+      <Section title="Sidebar">
+        <Row
+          title="Working section"
+          description="While a thread is working, list it under Working, above Archived. Off keeps it in Threads."
+        >
+          <Switch
+            label="Working section"
+            checked={sidebar.workingSection}
+            onChange={(workingSection) => setSidebar({ workingSection })}
+          />
+        </Row>
+        <Row
+          title="Archive pages"
+          description={`Show ${archivePageSize} archived threads at a time, with Show more for the rest. Off lists them all.`}
+        >
+          <Switch
+            label="Archive pages"
+            checked={sidebar.pageArchived}
+            onChange={(pageArchived) => setSidebar({ pageArchived })}
+          />
+        </Row>
+      </Section>
       <Section title="Open">
         <Row
           title="Open folders in"

@@ -706,14 +706,22 @@ test("the row menu archives into Archived, and unarchives back", async () => {
     result: { thread: { ...thread, archived: p["archived"] } },
   });
   await renderApp();
+  const drawer = (name: string) =>
+    [...document.querySelectorAll("#sidebar details")].find((d) =>
+      d.querySelector("summary")?.textContent?.startsWith(name),
+    );
+  // The run is still going, so the thread sits in Working until it's archived.
+  expect(drawer("Working")?.textContent).toContain("Fix the flaky test");
+
   await act(async () => button("Archive")!.click());
   expect(calls("thread/archive")).toEqual([{ runId: thread.id, archived: true }]);
-  const archived = document.querySelector("details")!;
-  expect(archived.textContent).toContain("Fix the flaky test");
+  expect(drawer("Archived")?.textContent).toContain("Fix the flaky test");
+  expect(drawer("Working")).toBeUndefined();
 
   await act(async () => button("Unarchive")!.click());
   expect(calls("thread/archive").at(-1)).toEqual({ runId: thread.id, archived: false });
-  expect(document.querySelector("details")).toBeNull();
+  expect(drawer("Archived")).toBeUndefined();
+  expect(drawer("Working")?.textContent).toContain("Fix the flaky test");
 });
 
 test("Delete asks first, and only deletes once confirmed", async () => {

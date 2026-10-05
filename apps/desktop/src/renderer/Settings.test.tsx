@@ -8,6 +8,7 @@ import type { ProviderInfo, ProviderInstance, ProviderKind } from "../protocol/g
 import type { SettingsSection } from "./App";
 import { models } from "./models";
 import { Settings } from "./Settings";
+import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
 import { appShortcut } from "./ui";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -895,4 +896,27 @@ describe("on a plxd with providers", () => {
     expect(withVersion({ ...fields, program: "opencode2" }, v1!).program).toBeUndefined();
     expect(withVersion({ ...fields, program: "/opt/oc" }, v2!).program).toBe("opencode2");
   });
+});
+
+test("General's sidebar switches turn the Working section and archive pages off", async () => {
+  sidebarPrefs.set(sidebarDefaults);
+  window.parallax.openTargets = async () => [];
+  window.parallax.version = async () => "1.2.3";
+  await renderSettings("general");
+  const working = document.querySelector<HTMLButtonElement>(
+    '[role="switch"][aria-label="Working section"]',
+  )!;
+  const pages = document.querySelector<HTMLButtonElement>(
+    '[role="switch"][aria-label="Archive pages"]',
+  )!;
+  expect(working.getAttribute("aria-checked")).toBe("true");
+  expect(pages.getAttribute("aria-checked")).toBe("true");
+  await click(working);
+  await click(pages);
+  expect(sidebarPrefs.get()).toEqual({ workingSection: false, pageArchived: false });
+  expect(JSON.parse(localStorage.getItem("parallax.sidebar")!)).toEqual({
+    workingSection: false,
+    pageArchived: false,
+  });
+  sidebarPrefs.set(sidebarDefaults);
 });

@@ -591,12 +591,12 @@ mod tests {
             let at = jiff::Timestamp::now();
             appended.push(
                 daemon
-                    .log
+                    .store
                     .append(at, Some(project), text(run_id, i.to_string()))
                     .await,
             );
             daemon
-                .log
+                .store
                 .append(at, Some(project), text(other, i.to_string()))
                 .await;
         }
