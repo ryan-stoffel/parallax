@@ -39,20 +39,45 @@ export function findPlxd(lookup: PlxdLookup): string | undefined {
   return dirs.map((dir) => path.join(dir, name)).find(exists);
 }
 
-/**
- * plxd's data folder, as `DataDir::default_location` finds it (daemon/src/paths.rs):
- * `PLXD_DATA_DIR`, else `~/Library/Application Support/parallax` on macOS,
- * `%LOCALAPPDATA%\parallax` on Windows, and `$XDG_DATA_HOME/parallax` (when absolute) or
- * `~/.local/share/parallax` on Linux.
- */
-export function dataDir(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, home: string): string {
-  const override = env["PLXD_DATA_DIR"];
-  if (override) return override;
+/** Where versions before `~/.parallax` kept plxd's data folder. */
+function legacyDataDir(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, home: string): string {
   if (platform === "darwin") return path.join(home, "Library/Application Support/parallax");
   if (platform === "win32")
     return path.join(env["LOCALAPPDATA"] ?? path.join(home, "AppData", "Local"), "parallax");
   const xdg = env["XDG_DATA_HOME"];
   return path.join(xdg && path.isAbsolute(xdg) ? xdg : path.join(home, ".local/share"), "parallax");
+}
+
+/**
+ * plxd's data folder, as `DataDir::default_location` finds it (daemon/src/paths.rs):
+ * `PLXD_DATA_DIR`, else `~/.parallax`, unless that doesn't exist and the older OS folder does
+ * (`~/Library/Application Support/parallax`, `%LOCALAPPDATA%\parallax`, or
+ * `$XDG_DATA_HOME/parallax`), which keeps working because the store holds absolute worktree paths.
+ */
+export function dataDir(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  home: string,
+  exists: (dir: string) => boolean = existsSync,
+): string {
+  const override = env["PLXD_DATA_DIR"];
+  if (override) return override;
+  const current = path.join(home, ".parallax");
+  const legacy = legacyDataDir(env, platform, home);
+  return !exists(current) && exists(legacy) ? legacy : current;
+}
+
+/**
+ * The app's own data (Electron's userData): `~/.parallax/desktop`, unless that doesn't exist and
+ * `legacy`, where Electron kept it before, does.
+ */
+export function appDataDir(
+  home: string,
+  legacy: string,
+  exists: (dir: string) => boolean = existsSync,
+): string {
+  const current = path.join(home, ".parallax", "desktop");
+  return !exists(current) && exists(legacy) ? legacy : current;
 }
 
 /** What `<plxd> --version` reports ("plxd 1.2.3" → "1.2.3"), or undefined if it can't run. */

@@ -2,7 +2,14 @@ import path from "node:path";
 
 import { expect, test, vi } from "vite-plus/test";
 
-import { dataDir, findPlxd, replaceServe, type ServeSystem, type PlxdLookup } from "./plxd";
+import {
+  appDataDir,
+  dataDir,
+  findPlxd,
+  replaceServe,
+  type ServeSystem,
+  type PlxdLookup,
+} from "./plxd";
 
 // Built with `path.join`, so the expectations hold on Windows too.
 const cargo = path.join("/repo/apps/desktop", "../../target/debug/plxd");
@@ -33,14 +40,35 @@ test("the bundled or Cargo-built plxd comes before PATH", () => {
   expect(find([])).toBeUndefined();
 });
 
-test("the data folder is PLXD_DATA_DIR, else the OS's, as plxd finds it", () => {
-  expect(dataDir({ PLXD_DATA_DIR: "/d" }, "darwin", "/h")).toBe("/d");
-  expect(dataDir({}, "darwin", "/h")).toBe(path.join("/h", "Library/Application Support/parallax"));
-  expect(dataDir({ XDG_DATA_HOME: "/x" }, "linux", "/h")).toBe(path.join("/x", "parallax"));
-  // A relative XDG_DATA_HOME is ignored, as the XDG spec says.
-  expect(dataDir({ XDG_DATA_HOME: "x" }, "linux", "/h")).toBe(
-    path.join("/h", ".local/share/parallax"),
+test("the data folder is PLXD_DATA_DIR, else ~/.parallax, else an older folder that exists", () => {
+  const only =
+    (...dirs: string[]) =>
+    (dir: string) =>
+      dirs.includes(dir);
+  const old = path.join("/h", "Library/Application Support/parallax");
+  const home = path.join("/h", ".parallax");
+  expect(dataDir({ PLXD_DATA_DIR: "/d" }, "darwin", "/h", only())).toBe("/d");
+  expect(dataDir({}, "darwin", "/h", only())).toBe(home);
+  expect(dataDir({}, "darwin", "/h", only(old))).toBe(old);
+  expect(dataDir({}, "darwin", "/h", only(old, home))).toBe(home);
+  expect(dataDir({ XDG_DATA_HOME: "/x" }, "linux", "/h", only("/x/parallax"))).toBe(
+    path.join("/x", "parallax"),
   );
+  // A relative XDG_DATA_HOME is ignored, as the XDG spec says.
+  expect(
+    dataDir({ XDG_DATA_HOME: "x" }, "linux", "/h", only(path.join("/h", ".local/share/parallax"))),
+  ).toBe(path.join("/h", ".local/share/parallax"));
+});
+
+test("the app's data is ~/.parallax/desktop, else its old folder if that exists", () => {
+  const only =
+    (...dirs: string[]) =>
+    (dir: string) =>
+      dirs.includes(dir);
+  const current = path.join("/h", ".parallax", "desktop");
+  expect(appDataDir("/h", "/old", only())).toBe(current);
+  expect(appDataDir("/h", "/old", only("/old"))).toBe("/old");
+  expect(appDataDir("/h", "/old", only("/old", current))).toBe(current);
 });
 
 /** A serve with pid 42 running `args`, which exits after `lives` liveness checks. */

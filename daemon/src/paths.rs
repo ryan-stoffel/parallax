@@ -1,8 +1,8 @@
 //! Where plxd keeps its files.
 //!
 //! Everything lives in one data folder (0009, 0023), which the editor shares:
-//! `~/Library/Application Support/parallax` on macOS, `$XDG_DATA_HOME/parallax` or
-//! `~/.local/share/parallax` on Linux, and `%LOCALAPPDATA%\parallax` on Windows. plxd's own entries are:
+//! `~/.parallax` (`%USERPROFILE%\.parallax` on Windows), or the older OS folder where one exists
+//! (see [`DataDir::default_location`]). plxd's own entries are:
 //!
 //! - `plxd.sock`: the socket, unless its path is too long (see [`DataDir::socket_path`]). Windows
 //!   listens on a named pipe instead, so there it isn't in the folder.
@@ -50,11 +50,32 @@ pub const MAX_SOCKET_PATH_BYTES: usize = 103;
 pub const MAX_SOCKET_PATH_BYTES: usize = 107;
 
 /// The data folder under the home folder.
-#[cfg(target_os = "macos")]
-const DEFAULT_DATA_DIR: &str = "Library/Application Support/parallax";
-/// The data folder under the home folder, when `XDG_DATA_HOME` doesn't name one.
-#[cfg(target_os = "linux")]
-const DEFAULT_DATA_DIR: &str = ".local/share/parallax";
+const DEFAULT_DATA_DIR: &str = ".parallax";
+
+/// `default`, unless it doesn't exist and the `legacy` folder does.
+fn pick_default(default: PathBuf, legacy: Option<PathBuf>) -> PathBuf {
+    match legacy {
+        Some(legacy) if !default.exists() && legacy.is_dir() => legacy,
+        _ => default,
+    }
+}
+
+/// Where versions before `~/.parallax` kept the data folder: `~/Library/Application Support/parallax`
+/// on macOS, `$XDG_DATA_HOME/parallax` (when absolute) or `~/.local/share/parallax` on Linux, and
+/// `%LOCALAPPDATA%\parallax` on Windows.
+fn legacy_location(home: &Path) -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        return Some(home.join("Library/Application Support/parallax"));
+    }
+    if cfg!(windows) {
+        return std::env::var_os("LOCALAPPDATA").map(|local| Path::new(&local).join("parallax"));
+    }
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| home.join(".local/share"));
+    Some(data_home.join("parallax"))
+}
 
 #[cfg(target_os = "macos")]
 const GETCONF: &str = "/usr/bin/getconf";
@@ -82,47 +103,22 @@ impl DataDir {
         })
     }
 
-    /// The OS's data folder for Parallax (0023): `~/Library/Application Support/parallax` on macOS. On
-    /// Linux, `$XDG_DATA_HOME/parallax`, or `~/.local/share/parallax` when `XDG_DATA_HOME` is unset or,
-    /// as the XDG spec says, not absolute. On Windows, `%LOCALAPPDATA%\parallax`.
+    /// The data folder for Parallax (0023): `~/.parallax`, with `%USERPROFILE%\.parallax` on Windows.
+    /// A computer that has no `~/.parallax` yet and has the folder older versions used keeps using
+    /// that one, since the store holds absolute worktree paths that a move would break: see
+    /// [`legacy_location`].
     ///
     /// # Errors
     ///
-    /// If the home folder, or on Windows `LOCALAPPDATA`, is needed and unknown.
-    #[cfg(windows)]
+    /// If the home folder is unknown.
     pub fn default_location() -> io::Result<Self> {
-        let local = std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "LOCALAPPDATA isn't set to an absolute path",
-                )
-            })?;
-        Self::new(local.join("parallax"))
-    }
-
-    /// The OS's data folder for Parallax (0023): `~/Library/Application Support/parallax` on macOS. On
-    /// Linux, `$XDG_DATA_HOME/parallax`, or `~/.local/share/parallax` when `XDG_DATA_HOME` is unset or,
-    /// as the XDG spec says, not absolute. On Windows, `%LOCALAPPDATA%\parallax`.
-    ///
-    /// # Errors
-    ///
-    /// If the home folder is needed and unknown.
-    #[cfg(unix)]
-    pub fn default_location() -> io::Result<Self> {
-        #[cfg(target_os = "linux")]
-        if let Some(data_home) = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-        {
-            return Self::new(data_home.join("parallax"));
-        }
         let home = std::env::home_dir()
             .filter(|home| home.is_absolute())
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "the home folder is unknown"))?;
-        Self::new(home.join(DEFAULT_DATA_DIR))
+        Self::new(pick_default(
+            home.join(DEFAULT_DATA_DIR),
+            legacy_location(&home),
+        ))
     }
 
     /// `path` if given, which is `--data-dir` or [`DATA_DIR_ENV`], else the default location.
@@ -434,7 +430,7 @@ fn plain_name(name: &OsStr) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::DataDir;
+    use super::{DataDir, pick_default};
 
     #[test]
     fn spellings_of_one_folder_resolve_the_same() {
@@ -649,13 +645,15 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
     #[test]
-    fn the_default_folder_is_parallax_in_local_app_data() {
-        let local = std::env::var_os("LOCALAPPDATA").unwrap();
-        assert_eq!(
-            DataDir::default_location().unwrap().root(),
-            std::path::Path::new(&local).join("parallax")
-        );
+    fn the_default_folder_gives_way_only_to_an_existing_legacy_one() {
+        let root = tempfile::tempdir().unwrap();
+        let default = root.path().join(".parallax");
+        let legacy = root.path().join("legacy");
+        assert_eq!(pick_default(default.clone(), Some(legacy.clone())), default);
+        std::fs::create_dir(&legacy).unwrap();
+        assert_eq!(pick_default(default.clone(), Some(legacy.clone())), legacy);
+        std::fs::create_dir(&default).unwrap();
+        assert_eq!(pick_default(default.clone(), Some(legacy)), default);
     }
 }
