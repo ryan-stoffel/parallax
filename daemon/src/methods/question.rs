@@ -4,10 +4,11 @@
 //! A child's `ask` records its question and returns at once; the child goes on with its
 //! assumption. The question wakes the Project's current coordinator through 0025's wake-ups, so
 //! it batches with them and counts toward their cap, or, with no coordinator or in Ask me
-//! (PLX-403), goes straight to Needs you. Only the coordinator answers or escalates with `from`,
-//! and only the user answers without it: a thread's MCP server passes its own run, never the
-//! model. In Ask me plxd refuses the coordinator's answer. An answer reaches the child as a
-//! queued message only when it differs from what the child was last told.
+//! (PLX-403), goes straight to Needs you, as do those still open when the Project switches to Ask
+//! me (PLX-474). Only the coordinator answers or escalates with `from`, and only the user answers
+//! without it: a thread's MCP server passes its own run, never the model. In Ask me plxd refuses
+//! the coordinator's answer. An answer reaches the child as a queued message only when it differs
+//! from what the child was last told.
 
 use std::sync::Arc;
 
@@ -30,6 +31,7 @@ use super::{Context, handle, inbox};
 use crate::agents::convert::NO_WRITE;
 use crate::agents::coordinator::coordinator_of;
 use crate::agents::{self, run_not_found, wake};
+use crate::event_log::EventLog;
 use crate::store::{project_autonomy, store_error};
 
 /// The longest question, assumption, or answer, in bytes. A wake-up quotes them whole.
@@ -308,13 +310,48 @@ async fn needs_you(
     ) else {
         return;
     };
-    let line = format!(
+    inbox::add(daemon, project, run, InboxKind::NeedsYou, asks(row, prompt)).await;
+}
+
+/// A Needs you item's line for `row`, asked by a child whose task is `prompt`.
+fn asks(row: &parallax_store::Question, prompt: &str) -> String {
+    format!(
         "{}: asks {}, went on assuming {}",
         wake::task(prompt),
         wake::quoted(&row.question),
         wake::quoted(&row.assumption)
-    );
-    inbox::add(daemon, project, run, InboxKind::NeedsYou, line).await;
+    )
+}
+
+/// Escalates `project`'s open questions to Needs you, in the caller's store job, for a Project
+/// that just switched to Ask me, whose coordinator no longer answers them (PLX-474).
+pub(crate) fn escalate_open(
+    db: &Store,
+    log: &EventLog,
+    project: ProjectId,
+) -> Result<(), ErrorObject> {
+    let questions = db.questions(project.into()).map_err(|e| store_error(&e))?;
+    for row in questions.iter().filter(|row| row.status == OPEN) {
+        let Ok(run) = RunId::try_from(row.run_id) else {
+            continue;
+        };
+        let prompt = db
+            .get_run(row.run_id)
+            .map_err(|e| store_error(&e))?
+            .map(|run| run.fields.prompt)
+            .unwrap_or_default();
+        db.set_question(row.id, ESCALATED, None)
+            .map_err(|e| store_error(&e))?;
+        inbox::record(
+            db,
+            log,
+            project,
+            run,
+            InboxKind::NeedsYou,
+            asks(row, &prompt),
+        )?;
+    }
+    Ok(())
 }
 
 /// The question `id`, and the prompt of the child that asked it. Refuses a question whose child

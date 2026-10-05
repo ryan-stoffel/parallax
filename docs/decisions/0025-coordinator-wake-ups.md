@@ -34,6 +34,7 @@ A project's coordinator is a run (0024), and the runs it starts through `plxd mc
 
 - When plxd starts, after marking runs it finds still running `interrupted` (0014), it wakes each project's current coordinator for what it missed: the runs it started that ended after its last turn began (its newest stored turn, or its creation). That covers the runs the stop interrupted and summaries that were waiting. They go to its actor together, so they make one turn, on the same path as above, cap and pause included. A run a wake-up already named ended before that wake-up's turn, so a later restart doesn't name it again.
 - If the coordinator's own turn was interrupted, the wake-up says so too, since nothing else would pick it back up.
+- The wake-up also names the project's open questions that no wake-up turn delivered to this coordinator (PLX-469), whenever they were asked. In Ask me it names none: switching to Ask me already moved them to Needs you (PLX-474), so a restart neither drops nor repeats them.
 - The coordinator decides what to do with an interrupted run: `message_agent` resumes it. plxd doesn't resume runs itself, which would spend on every one with nobody deciding.
 - A rebuilt summary comes from the run's row: its status, error, and branch, but not its last result or its failure's kind.
 

@@ -6,14 +6,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use parallax_protocol::methods::{
-    AgentCancel, AgentSend, AgentStart, ProjectStart, ProjectUpdate, QuestionAnswer, QuestionAsk,
-    QuestionEscalate, QuestionList, QueueList, ThreadStart,
+    AgentCancel, AgentSend, AgentStart, InboxList, ProjectStart, ProjectUpdate, QuestionAnswer,
+    QuestionAsk, QuestionEscalate, QuestionList, QueueList, ThreadStart,
 };
 use parallax_protocol::{
-    AgentCancelParams, AgentStatus, ErrorKind, InboxKind, ParallaxEvent, ProjectAutonomy,
-    ProjectId, ProjectUpdateParams, Question, QuestionAnswerParams, QuestionAskParams,
-    QuestionEscalateParams, QuestionListParams, QuestionStatus, QueueListParams, QueuedMessage,
-    RunId, TurnId,
+    AgentCancelParams, AgentStatus, ErrorKind, InboxKind, InboxListParams, ParallaxEvent,
+    ProjectAutonomy, ProjectId, ProjectUpdateParams, Question, QuestionAnswerParams,
+    QuestionAskParams, QuestionEscalateParams, QuestionId, QuestionListParams, QuestionStatus,
+    QueueListParams, QueuedMessage, RunId, TurnId,
 };
 use plxd::backend::fake::Step;
 use plxd::backend::{RunRequest, ToolPolicy};
@@ -621,8 +621,9 @@ async fn a_new_coordinator_gets_the_projects_open_questions() {
 }
 
 /// PLX-403 (0043): the coordinator is told the Project's autonomy level. In Ask me a question
-/// goes straight to Needs you without waking it, and plxd refuses its answer, even to a question
-/// asked before the change. The user still answers.
+/// goes straight to Needs you without waking it, one still open goes there on the switch
+/// (PLX-474), and plxd refuses the coordinator's answer. The user still answers. A restart
+/// afterwards neither drops nor repeats them.
 #[tokio::test]
 async fn ask_me_sends_questions_to_needs_you_and_refuses_the_coordinators_answer() {
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -680,6 +681,14 @@ async fn ask_me_sends_questions_to_needs_you_and_refuses_the_coordinators_answer
         .unwrap()
         .project;
     assert_eq!(updated.autonomy, Some(ProjectAutonomy::Ask));
+    let item = added(&mut client, project.id).await;
+    assert_eq!((item.kind, item.run), (InboxKind::NeedsYou, child));
+    assert!(
+        item.text
+            .ends_with("asks \"Keep Node 18?\", went on assuming \"Keep it\""),
+        "{}",
+        item.text
+    );
     let after = ask(&mut client, child, "Which port?", "8080")
         .await
         .unwrap();
@@ -696,7 +705,10 @@ async fn ask_me_sends_questions_to_needs_you_and_refuses_the_coordinators_answer
         })
         .await
         .unwrap_err();
-    assert!(refused.message.contains("Ask me"), "{refused:?}");
+    assert!(
+        refused.message.contains("escalated, not open"),
+        "{refused:?}"
+    );
     let users = answer(&mut client, &after, "9090", None).await;
     assert_eq!(users.status, QuestionStatus::Answered);
 
@@ -706,5 +718,42 @@ async fn ask_me_sends_questions_to_needs_you_and_refuses_the_coordinators_answer
         2,
         "only the question asked in Routine woke it"
     );
+    kept_after_restart(host, &seen, project.id, before.id).await;
+}
+
+/// Restarts `host`: the child's interrupted run wakes the coordinator without `before`, which
+/// stays escalated with its one Needs you item, beside the answered question's.
+async fn kept_after_restart(
+    host: Host,
+    seen: &Arc<Mutex<Vec<RunRequest>>>,
+    project: ProjectId,
+    before: QuestionId,
+) {
+    let turn = vec![init("coordinator-1"), end_turn("Caught up.")];
+    let host = host.restart(roles(hang(), vec![turn], seen)).await;
+    let mut client = host.client().await;
+    let wake = nth_launch(seen, 2).await;
+    assert!(
+        !wake.prompt.contains(&before.to_string()),
+        "{}",
+        wake.prompt
+    );
+    let listed = questions(&mut client, project).await;
+    let statuses: Vec<_> = listed.iter().map(|asked| asked.status).collect();
+    assert_eq!(
+        statuses,
+        [QuestionStatus::Escalated, QuestionStatus::Answered]
+    );
+    let items = client
+        .call::<InboxList>(InboxListParams { project })
+        .await
+        .unwrap()
+        .items;
+    let needs_you: Vec<_> = items
+        .iter()
+        .filter(|item| item.kind == InboxKind::NeedsYou)
+        .map(|item| item.text.contains("Keep Node 18?"))
+        .collect();
+    assert_eq!(needs_you, [true, false], "{items:?}");
     host.server.stop().await;
 }
