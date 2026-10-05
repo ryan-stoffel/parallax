@@ -427,7 +427,10 @@ impl Server {
     /// # Errors
     ///
     /// If the socket can't be registered with the runtime.
-    #[expect(clippy::too_many_lines, reason = "server startup and shutdown cleanup")]
+    #[cfg_attr(
+        unix,
+        expect(clippy::too_many_lines, reason = "server startup and shutdown cleanup")
+    )]
     pub async fn run(self, shutdown: Shutdown) -> io::Result<()> {
         let Self {
             config,
@@ -457,6 +460,7 @@ impl Server {
             }
         };
         if let Err(error) = crate::commands::purge_incomplete(&daemon).await {
+            #[cfg(unix)]
             socket.remove();
             daemon.store.stop().await;
             daemon.reader.stop().await;
