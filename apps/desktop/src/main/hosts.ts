@@ -48,6 +48,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "project/start": true,
   "project/update": true,
   "project/delete": true,
+  "project/fromThreads": true,
   "accounts/keys/add": true,
   "accounts/keys/list": true,
   "accounts/keys/remove": true,

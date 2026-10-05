@@ -268,8 +268,9 @@ pub struct AgentRun {
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
     /// True when it forwards its permission requests to the client, as the start method that
-    /// made it asked with `approvals` (PLX-222, decision 0031). It never changes. Absent means
-    /// false: its CLI denies what would prompt.
+    /// made it asked with `approvals` (PLX-222, decision 0031). It changes only when
+    /// `project/fromThreads` makes the run a Project's child, which sets it. Absent means false:
+    /// its CLI denies what would prompt.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub approvals: bool,
     /// True for a thread started with `checkout`: it works in its repository's own checkout, so it

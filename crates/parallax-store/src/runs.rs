@@ -29,7 +29,7 @@ pub struct RunFields {
     /// the parent is deleted.
     pub parent: Option<Uuid>,
     /// Whether the run wakes its `parent` when a CLI process of its ends (PLX-380, decision
-    /// 0025). Fixed when the run is created.
+    /// 0025). Fixed when the run is created, except that [`Store::join_project`] sets it.
     pub notify_parent: bool,
     /// The model, effort, and permission the run asked for (PLX-97), each `None` for the CLI's
     /// default. Effort and permission are their protocol names, such as `high` and `plan`.
@@ -41,7 +41,7 @@ pub struct RunFields {
     pub context_window: Option<u32>,
     pub fast: Option<bool>,
     /// Whether the run forwards its CLI's permission requests to the client (PLX-222, decision
-    /// 0031). Fixed when the run is created.
+    /// 0031). Fixed when the run is created, except that [`Store::join_project`] sets it.
     pub approvals: bool,
     /// Whether the run works in its repository's own checkout, on the branch the user has out,
     /// rather than in a worktree of its own. Such a run has no worktree row. Fixed when the run is
@@ -446,6 +446,32 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(run)
+    }
+
+    /// Moves run `id` into Project `project` as the child of its coordinator `parent` (decision
+    /// 0042): a thread made into a Project's child. Like a child the Project starts, it wakes
+    /// `parent` when a CLI process of its ends and asks through the inbox, so `notify_parent` and
+    /// `approvals` are set. Returns the updated row.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::NotFound`] if no run has `id`, or a database error.
+    pub fn join_project(&self, id: Uuid, project: Uuid, parent: Uuid) -> Result<Run, StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE runs SET project_id = ?2, parent = ?3, notify_parent = 1, approvals = 1,
+                             updated_at = ?4
+             WHERE id = ?1",
+            params![
+                id.to_string(),
+                project.to_string(),
+                parent.to_string(),
+                timestamp::now()
+            ],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::NotFound { id });
+        }
+        fetch(&self.conn, id)?.ok_or(StoreError::NotFound { id })
     }
 }
 

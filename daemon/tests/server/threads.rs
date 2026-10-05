@@ -35,6 +35,7 @@ use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
 mod context;
 mod files;
 mod fork;
+mod from_threads;
 mod project;
 
 fn git(dir: &Path, args: &[&str]) -> String {

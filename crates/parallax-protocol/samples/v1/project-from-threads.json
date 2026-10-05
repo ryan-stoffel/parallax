@@ -1,0 +1,73 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project/fromThreads",
+    "params": {
+      "id": "01a10700-1200-7a3b-8c4d-5e6f7a8b9c0d",
+      "runId": "01a10700-1300-7b4c-9d5e-6f7a8b9c0d1e",
+      "name": "Login fixes",
+      "permission": "auto",
+      "threads": [
+        "01a106f0-0100-7c5d-8e6f-7a8b9c0d1e2f",
+        "01a106f0-0200-7d6e-9f7a-8b9c0d1e2f3a"
+      ],
+      "account": { "kind": "subscription", "backend": "claude" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "project": {
+        "id": "01a10700-1200-7a3b-8c4d-5e6f7a8b9c0d",
+        "name": "Login fixes",
+        "repoPath": "/Users/me/src/app",
+        "branch": "main",
+        "coordinator": "01a10700-1300-7b4c-9d5e-6f7a8b9c0d1e",
+        "permission": "auto",
+        "autonomy": "routine",
+        "baseBranch": "main",
+        "integrationBranch": "parallax/login-fixes",
+        "createdAt": "2026-10-04T12:00:00Z",
+        "updatedAt": "2026-10-04T12:00:00Z"
+      },
+      "run": {
+        "id": "01a10700-1300-7b4c-9d5e-6f7a8b9c0d1e",
+        "project": "01a10700-1200-7a3b-8c4d-5e6f7a8b9c0d",
+        "prompt": "I made this Project from these threads, which are now your children:\n- 01a106f0-0100-7c5d-8e6f-7a8b9c0d1e2f\n- 01a106f0-0200-7d6e-9f7a-8b9c0d1e2f3a\n\nRead each with thread_read. Then draft the Project's brief: its goal, scope, and constraints, in a few lines, from what the threads were doing. Propose it with memory_propose (kind brief, project scope) for me to save or discard, and start no new work until I save it.",
+        "policy": "noWrite",
+        "status": "running",
+        "backend": "claude",
+        "accountId": "claude",
+        "coordinatorThread": "01a10700-1300-7b4c-9d5e-6f7a8b9c0d1e",
+        "permission": "auto",
+        "createdAt": "2026-10-04T12:00:00Z",
+        "updatedAt": "2026-10-04T12:00:01Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "project/fromThreads",
+    "params": {
+      "id": "01a10700-1400-7c5d-8e6f-7a8b9c0d1e2f",
+      "runId": "01a10700-1500-7d6e-9f7a-8b9c0d1e2f3a",
+      "name": "Mixed",
+      "permission": "bypass",
+      "threads": [
+        "01a106f0-0100-7c5d-8e6f-7a8b9c0d1e2f",
+        "01a106f0-0300-7e7f-8a8b-9c0d1e2f3a4b"
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "error": {
+      "code": -32602,
+      "message": "Invalid params: the threads are on two repositories, /Users/me/src/app and /Users/me/src/lib"
+    }
+  }
+]

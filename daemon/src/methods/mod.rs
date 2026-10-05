@@ -4,7 +4,7 @@
 //! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4
 //! `coordinator`: `project/start` in `project.rs`; #110 `threads`: `thread.rs`; PLX-227
 //! `projectEdit`: `project/update` in `project.rs`; PLX-338 `projectDelete`: `project/delete` in
-//! `project.rs`; PLX-318 `pullRequests`, PLX-328 `prDiff`, and PLX-373 `threadTools` (`pr/link`
+//! `project.rs`; 0042 `projectFromThreads`: `project/fromThreads` in `project.rs`; PLX-318 `pullRequests`, PLX-328 `prDiff`, and PLX-373 `threadTools` (`pr/link`
 //! and `pr/unlink`): `pr.rs`; PLX-359 `composerMenus`: `composer.rs`; PLX-336 `githubStatus`:
 //! `github/status` in `accounts.rs`; PLX-423 `githubSetup`: `github/install`, `github/signIn`, and
 //! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`; PLX-370 `queue`: `queue.rs`; PLX-402 `questions`: `question.rs`; PLX-405 `memory`: `memory.rs`; PLX-410 `landing`: `land.rs`), and `host.rs` advertises the
@@ -40,8 +40,8 @@ use parallax_protocol::methods::{
     EventsSubscribe, EventsUnsubscribe, GithubInstall, GithubSignInCancel, GithubSignInStart,
     GithubStatusGet, HostHealth, HostSettingsGet, HostSettingsSet, HostVersion, InboxList,
     InboxSeen, Initialize, PrAct, PrDiff, PrLink, PrUnlink, PrView, ProjectCreate, ProjectDelete,
-    ProjectList, ProjectStart, ProjectUpdate, ProvidersList, ProvidersRemove, ProvidersSave,
-    RequestMethod, UsageDaily, UsageGet, UsageHistory,
+    ProjectFromThreads, ProjectList, ProjectStart, ProjectUpdate, ProvidersList, ProvidersRemove,
+    ProvidersSave, RequestMethod, UsageDaily, UsageGet, UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -281,6 +281,9 @@ async fn project_method(
         }
         ProjectDelete::NAME => {
             handle::<ProjectDelete, _, _>(request, |p| project::delete(context, p)).await
+        }
+        ProjectFromThreads::NAME => {
+            handle::<ProjectFromThreads, _, _>(request, |p| project::from_threads(context, p)).await
         }
         InboxList::NAME => handle::<InboxList, _, _>(request, |p| inbox::list(context, p)).await,
         InboxSeen::NAME => handle::<InboxSeen, _, _>(request, |p| inbox::seen(context, p)).await,

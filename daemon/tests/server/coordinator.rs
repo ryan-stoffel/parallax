@@ -381,7 +381,7 @@ pub(crate) fn roles(
 }
 
 /// [`roles`], mapping only `permissions`.
-fn roles_mapping(
+pub(crate) fn roles_mapping(
     worker: Vec<Step>,
     coordinator: Vec<Vec<Step>>,
     seen: &Arc<Mutex<Vec<RunRequest>>>,

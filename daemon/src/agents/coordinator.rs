@@ -10,6 +10,7 @@
 //! the last one unless that one is still starting or running, and takes over the same worktree.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
@@ -163,6 +164,21 @@ fn newest(
         .into_iter()
         .rev()
         .find(|run| run.fields.policy == NO_WRITE))
+}
+
+/// The user's first message to the coordinator of a Project made from `threads`
+/// (`project/fromThreads`, 0042): read them and propose a brief for the user to save.
+pub(crate) fn from_threads_prompt(threads: &[RunId]) -> String {
+    let mut list = String::new();
+    for id in threads {
+        let _ = writeln!(list, "- {id}");
+    }
+    format!(
+        "I made this Project from these threads, which are now your children:\n{list}\nRead each \
+         with thread_read. Then draft the Project's brief: its goal, scope, and constraints, in a \
+         few lines, from what the threads were doing. Propose it with memory_propose (kind brief, \
+         project scope) for me to save or discard, and start no new work until I save it."
+    )
 }
 
 /// The coordinator's first message: its instructions, where it is, the Project's autonomy level

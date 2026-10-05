@@ -121,6 +121,8 @@ pub(crate) fn initialize(
 /// frees up.
 /// `projectTasks` (PLX-398, 0042): `thread/start` takes `project`, to start a Project's child
 /// under its coordinator, which an older plxd would silently ignore, starting a scratch thread.
+/// `projectFromThreads` (PLX-419, 0042): `project/fromThreads`, which makes a Project from
+/// threads on one repo entry, each with its own worktree.
 /// `threadAttention` (PLX-270, 0033): `thread/update`, `repo/update`, `repo.updated`, and
 /// `seenAt`, `snoozedUntil`, and `lastPromptAt` on `Thread` and `icon` on `Repo`.
 /// `threadLineage` (PLX-369, 0041): `parent`, `forkedFrom`, `title`, and `settled` on `Thread`,
@@ -212,6 +214,7 @@ fn capabilities_advertised() -> Capabilities {
         ("projectAutonomy".to_owned(), serde_json::Map::new()),
         ("projectDelete".to_owned(), serde_json::Map::new()),
         ("projectEdit".to_owned(), serde_json::Map::new()),
+        ("projectFromThreads".to_owned(), serde_json::Map::new()),
         ("projectPermission".to_owned(), serde_json::Map::new()),
         ("projectPlacement".to_owned(), serde_json::Map::new()),
         ("projectTasks".to_owned(), serde_json::Map::new()),
