@@ -177,7 +177,7 @@ const toMarkdown = (node: ProseMirrorNode) =>
 const hasText = (html: string) =>
   !!new DOMParser().parseFromString(html, "text/html").body.textContent?.trim();
 
-/** Manual's description where its requests are denied, by why (`ComposerProps.manualDenied`). */
+/** Supervised's description where its requests are denied, by why (`ComposerProps.manualDenied`). */
 const manualDenials = {
   host: "Asks before edits and commands. This host's plxd can't show those requests, so they're denied.",
   run: "Asks before edits and commands. This chat started before Parallax could show those requests, so they're denied.",
@@ -352,7 +352,7 @@ export interface ComposerProps {
   /** The host's image caps (`promptImages`). Absent: adding an image just says it can't take them. */
   imageCaps?: ImageCaps;
   /**
-   * Why Manual's requests are denied instead of coming to the chat (0031): the host's plxd lacks
+   * Why Supervised's requests are denied instead of coming to the chat (0031): the host's plxd lacks
    * `approvals`, or the open run started without them. Absent: they come as approval cards.
    */
   manualDenied?: keyof typeof manualDenials;
@@ -516,8 +516,9 @@ export function Composer({
   // Where the message goes: the run's backend, or the instance that runs the picked model.
   const target = run && model && model.provider !== run.id ? model.provider : backend;
   const targetBackend = instanceOf(target);
-  // A Project's mode isn't a choice here.
+  // Plan is legacy: listed only when Settings turns it on, or the thread already started in it.
   const legacyPlan = accessPrefs.use().legacyPlan;
+  // A Project's mode isn't a choice here.
   const permissions = projectMode
     ? []
     : (targetBackend?.permissions ?? []).filter(
