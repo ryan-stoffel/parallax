@@ -196,6 +196,7 @@ impl AcpBackend {
         spec.scrub = scrubbed(self.launcher.base(), &self.agent.scrub);
         spec.inject = self.agent.env.iter().cloned().collect();
         spec.stdin = StdinMode::Piped;
+        spec.record = Some("acp");
         spec
     }
 }

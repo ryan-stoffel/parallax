@@ -492,3 +492,22 @@ fn thread_mcp_joins_user_config_on_start_resume_and_fork() {
         assert_eq!(params["config"]["mcp_servers.plxd.command"], "/bin/plxd");
     }
 }
+
+/// A real session, recorded with `PLXD_RECORD_CLI` (PLX-493), replays to its snapshot: two shell
+/// commands that each ask first, and the reply.
+#[tokio::test]
+async fn a_recorded_session_replays_to_its_snapshot() {
+    let (_dir, backend) = fake(include_str!("../fixtures/recorded.jsonl"));
+    let request = RunRequest {
+        turn_id: Some("01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01".parse().unwrap()),
+        ..request(AgentPermission::Manual)
+    };
+    crate::backend::record::assert_replays(
+        backend.start(request).unwrap(),
+        std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/backend/codex/fixtures/recorded.events.jsonl"
+        )),
+    )
+    .await;
+}
