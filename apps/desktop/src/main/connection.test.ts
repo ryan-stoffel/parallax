@@ -204,6 +204,34 @@ test("resyncRequired ends the subscription with a resync", () => {
   expect(listener).toHaveBeenCalledWith({ type: "resync" });
 });
 
+test("events/resync ends only its subscription, and the connection stays up", () => {
+  const connection = connect();
+  expect(child().request("initialize").params).toMatchObject({
+    capabilities: { resyncNotice: {} },
+  });
+  child().handshake();
+  const lagging = vi.fn();
+  const other = vi.fn();
+  connection.subscribe({ after: 0, logId: "log-1" }, lagging);
+  const first = child().request("events/subscribe");
+  connection.subscribe({ after: 0, logId: "log-1" }, other);
+  const second = child().request("events/subscribe");
+  child().reply(
+    { id: first.id, result: { subscription: "sub-1" } },
+    { id: second.id, result: { subscription: "sub-2" } },
+    { method: "events/resync", params: { subscription: "sub-1" } },
+    {
+      method: "events/event",
+      params: { subscription: "sub-2", seq: 7, time: "2026-09-27T00:00:00Z", event: { kind: "x" } },
+    },
+  );
+  expect(lagging.mock.calls).toEqual([[{ type: "resync" }]]);
+  expect(other).toHaveBeenCalledWith(expect.objectContaining({ type: "event" }));
+  expect(other).not.toHaveBeenCalledWith({ type: "resync" });
+  expect(state()?.status).toBe("connected");
+  expect(children).toHaveLength(1);
+});
+
 test("a new logId after a reconnect ends every subscription with a resync", () => {
   const connection = connect();
   child().handshake("log-1");

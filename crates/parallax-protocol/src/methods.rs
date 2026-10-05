@@ -37,15 +37,15 @@ use crate::{
     AgentOpenPrParams, AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams,
     AgentResumeNowParams, AgentRunResult, AgentSendParams, AgentStartParams, AgentWaitParams,
     AgentWaitResult, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,
-    ContextWriteParams, ContextWriteResult, EventsEventParams, EventsSubscribeParams,
-    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus,
-    GithubInstallParams, GithubSignIn, GithubSignInCancelParams, GithubSignInCancelResult,
-    GithubSignInParams, GithubStatus, GithubStatusParams, HostHealthParams, HostHealthResult,
-    HostSettings, HostSettingsGetParams, HostSettingsSetParams, HostVersionParams,
-    HostVersionResult, InboxListParams, InboxListResult, InboxSeenParams, InboxSeenResult,
-    InitializeParams, InitializeResult, LandApproveParams, LandQueueParams, LandResult,
-    LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult, MemoryListParams, MemoryListResult,
-    MemoryProposeParams, MemoryProposeResult, MemoryReadParams, MemoryReadResult,
+    ContextWriteParams, ContextWriteResult, EventsEventParams, EventsResyncParams,
+    EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult,
+    GitStatus, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
+    GithubSignInCancelResult, GithubSignInParams, GithubStatus, GithubStatusParams,
+    HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
+    HostVersionParams, HostVersionResult, InboxListParams, InboxListResult, InboxSeenParams,
+    InboxSeenResult, InitializeParams, InitializeResult, LandApproveParams, LandQueueParams,
+    LandResult, LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult, MemoryListParams,
+    MemoryListResult, MemoryProposeParams, MemoryProposeResult, MemoryReadParams, MemoryReadResult,
     MemoryWriteParams, MemoryWriteResult, PrActParams, PrDiffResult, PrViewParams,
     ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
     ProjectListParams, ProjectListResult, ProjectStartParams, ProjectUpdateParams,
@@ -398,6 +398,9 @@ method_table! {
         CancelRequest = "$/cancelRequest": CancelRequestParams;
         /// `events/event`: one event for a subscription. plxd sends it.
         EventsEvent = "events/event": EventsEventParams;
+        /// `events/resync`: plxd ended a subscription that fell behind, and the connection
+        /// stays open. plxd sends it only to a client that declared `resyncNotice` (PLX-455).
+        EventsResync = "events/resync": EventsResyncParams;
     }
 }
 
@@ -518,6 +521,7 @@ mod tests {
                 "agent/wait",
                 "$/cancelRequest",
                 "events/event",
+                "events/resync",
             ]
         );
         assert_eq!(names.0.iter().collect::<BTreeSet<_>>().len(), names.0.len());

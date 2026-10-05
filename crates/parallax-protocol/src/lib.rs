@@ -97,8 +97,8 @@ pub use defaults::{
 };
 pub use error::{ErrorData, ErrorKind, IncompatibleProtocolDetail};
 pub use events::{
-    EventsEventParams, EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams,
-    EventsUnsubscribeResult, LogId, ParallaxEvent, SubscriptionId,
+    EventsEventParams, EventsResyncParams, EventsSubscribeParams, EventsSubscribeResult,
+    EventsUnsubscribeParams, EventsUnsubscribeResult, LogId, ParallaxEvent, SubscriptionId,
 };
 pub use git::{AgentCommitParams, AgentGitStatusParams, AgentPushParams, GitStatus};
 pub use handshake::{

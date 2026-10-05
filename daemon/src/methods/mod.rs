@@ -69,6 +69,11 @@ pub(crate) struct Context {
 #[derive(Debug)]
 pub(crate) enum Reply {
     Response(Response),
+    /// `initialize`'s answer, and whether a lagging subscription gets `events/resync`.
+    Initialized {
+        response: Response,
+        resync_notice: bool,
+    },
     /// Send the response, then start delivering the subscription's events.
     Subscribe {
         response: Response,

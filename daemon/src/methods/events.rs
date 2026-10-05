@@ -67,6 +67,10 @@ pub(crate) async fn subscribe(
     context: &Context,
     params: EventsSubscribeParams,
 ) -> Result<Cursor, ErrorObject> {
+    if params.project.is_none() && (params.run.is_some() || params.shell) {
+        // A run's events and approvals are never host-level, so this would deliver nothing.
+        return Err(ErrorObject::invalid_params("run and shell need a project"));
+    }
     if let Some(project) = params.project {
         let exists = context
             .daemon
@@ -138,15 +142,17 @@ impl Cursors {
     ///
     /// # Errors
     ///
-    /// The subscription whose next events the log no longer has.
+    /// The subscription whose next events the log no longer has, which this removes.
     pub fn next(&mut self, log: &EventLog) -> Result<Option<EventsEventParams>, SubscriptionId> {
         for _ in 0..self.cursors.len() {
             let index = self.turn % self.cursors.len();
             self.turn = self.turn.wrapping_add(1);
             let cursor = &mut self.cursors[index];
-            let (event, seq) = log
-                .next(cursor.after, cursor.project, |event| cursor.keeps(event))
-                .map_err(|_| cursor.subscription)?;
+            let Ok((event, seq)) =
+                log.next(cursor.after, cursor.project, |event| cursor.keeps(event))
+            else {
+                return Err(self.cursors.remove(index).subscription);
+            };
             cursor.after = seq;
             if let Some(event) = event {
                 return Ok(Some(EventsEventParams {
@@ -295,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn a_cursor_behind_the_retention_is_reported() {
+    fn a_cursor_behind_the_retention_is_reported_and_removed() {
         let log = EventLog::new(1);
         log.append_blocking(Timestamp::now(), None, ParallaxEvent::Unknown);
         log.append_blocking(Timestamp::now(), None, ParallaxEvent::Unknown);
@@ -304,5 +310,6 @@ mod tests {
         let mut cursors = Cursors::default();
         cursors.add(lagging);
         assert_eq!(cursors.next(&log).unwrap_err(), id);
+        assert_eq!(cursors.next(&log), Ok(None));
     }
 }

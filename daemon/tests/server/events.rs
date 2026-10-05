@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use parallax_protocol::jsonrpc::{Message, Notification};
+use parallax_protocol::jsonrpc::{INVALID_PARAMS, Message, Notification};
 use parallax_protocol::methods::{
     EventsSubscribe, EventsUnsubscribe, HostHealth, NotificationMethod, ProjectCreate, ProjectList,
     ProjectUpdate,
@@ -11,7 +11,7 @@ use parallax_protocol::methods::{
 use parallax_protocol::{
     ErrorKind, EventsEventParams, EventsSubscribeParams, EventsUnsubscribeParams, HostHealthParams,
     ImageMediaType, ParallaxEvent, Project, ProjectIcon, ProjectId, ProjectListParams,
-    ProjectUpdateParams, PromptImage, SubscriptionId,
+    ProjectUpdateParams, PromptImage, RunId, SubscriptionId,
 };
 use rustix::process::Signal;
 
@@ -202,6 +202,25 @@ async fn a_subscription_to_a_missing_project_is_refused() {
         .await
         .unwrap();
     client.stays_quiet(Duration::from_millis(200)).await;
+}
+
+#[tokio::test]
+async fn run_or_shell_without_a_project_is_invalid() {
+    let dir = temp_dir();
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
+    for (run, shell) in [(Some(RunId::generate()), false), (None, true)] {
+        let error = client
+            .call::<EventsSubscribe>(EventsSubscribeParams {
+                after: 0,
+                project: None,
+                run,
+                shell,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, INVALID_PARAMS, "{run:?} {shell}: {error:?}");
+    }
 }
 
 #[tokio::test]

@@ -469,6 +469,11 @@ export type ParallaxNotifications = {
 	 * `events/event`: one event for a subscription. plxd sends it.
 	 */
 	"events/event": EventsEventParams,
+	/**
+	 * `events/resync`: plxd ended a subscription that fell behind, and the connection
+	 * stays open. plxd sends it only to a client that declared `resyncNotice` (PLX-455).
+	 */
+	"events/resync": EventsResyncParams,
 };
 
 /**
@@ -487,7 +492,8 @@ export type InitializeParams = {
 	 */
 	client: ClientInfo,
 	/**
-	 * What the client supports.
+	 * What the client supports. `resyncNotice` (PLX-455): end a subscription that falls behind
+	 * with `events/resync` instead of closing the connection.
 	 */
 	capabilities: Capabilities,
 };
@@ -921,9 +927,10 @@ export type ProjectCreateResult = {
  * `resyncRequired`.
  *
  * `run` and `shell` narrow the `project` subscription, only for a plxd that advertises
- * `eventFilters` (PLX-453); an older one ignores them and sends everything. Like a scope, a
- * filter skips the `seq`s of the events it leaves out: `seq` only ever increases, and resuming
- * from the last one delivered is still exact.
+ * `eventFilters` (PLX-453); an older one ignores them and sends everything. Either one without
+ * `project` fails with `invalidParams` (PLX-455). Like a scope, a filter skips the `seq`s of the
+ * events it leaves out: `seq` only ever increases, and resuming from the last one delivered is
+ * still exact.
  */
 export type EventsSubscribeParams = {
 	/**
@@ -5283,6 +5290,19 @@ export type EventsEventParams = {
 	 * What happened.
 	 */
 	event: ParallaxEvent,
+};
+
+/**
+ * Params of `events/resync`: plxd ended a subscription that fell behind its event log's
+ * retention (PLX-455). Reload the snapshot it started from and subscribe again. plxd sends it
+ * only to a client that declared the `resyncNotice` capability; it closes any other client's
+ * connection instead.
+ */
+export type EventsResyncParams = {
+	/**
+	 * The subscription plxd ended.
+	 */
+	subscription: SubscriptionId,
 };
 
 /**

@@ -5,6 +5,7 @@ import {
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   type EventsEventParams,
+  type EventsResyncParams,
   type EventsSubscribeParams,
   type IncompatibleProtocolDetail,
   type InitializeResult,
@@ -220,7 +221,8 @@ export class Connection {
       {
         protocol: { min: PROTOCOL_VERSION, max: PROTOCOL_VERSION },
         client: { name: "parallax", version: this.options.clientVersion },
-        capabilities: {},
+        // A subscription that falls behind ends with `events/resync`, not the connection.
+        capabilities: { resyncNotice: {} },
       },
       HANDSHAKE_TIMEOUT_MS,
       (response) => {
@@ -270,6 +272,14 @@ export class Connection {
   }
 
   private onNotification(method: string, params: unknown): void {
+    if (method === "events/resync") {
+      // plxd already dropped it; its owner reloads its snapshot and subscribes again.
+      const { subscription: id } = params as EventsResyncParams;
+      for (const subscription of this.subscriptions) {
+        if (subscription.id === id) return this.endSubscription(subscription, { type: "resync" });
+      }
+      return;
+    }
     if (method !== "events/event") return;
     const event = params as EventsEventParams;
     for (const subscription of this.subscriptions) {
