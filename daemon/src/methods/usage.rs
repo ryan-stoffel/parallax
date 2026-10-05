@@ -127,7 +127,11 @@ pub(crate) async fn daily(
     // One ccusage at a time: two at once can fail on another agent's locked SQLite file.
     let ccusage = async {
         let days = ccusage::daily(launcher, params.since, &params.time_zone).await;
-        let sessions = ccusage::sessions(launcher, params.since, &params.time_zone, &zone).await;
+        // Sessions mean nothing without the days, and a failed ccusage may have timed out.
+        let sessions = match days {
+            Ok(_) => ccusage::sessions(launcher, params.since, &params.time_zone, &zone).await,
+            Err(_) => None,
+        };
         (days, sessions)
     };
     let sources = async { tokio::join!(ccusage, cursor::daily(launcher, params.since, &zone)) };

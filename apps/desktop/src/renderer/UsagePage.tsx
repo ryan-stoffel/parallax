@@ -701,7 +701,7 @@ function Dashboard({
           title="Claude Code and Codex sessions, each counted on the day it was last active. Cursor doesn't report sessions."
           note={
             !sessions
-              ? "Not counted on every host"
+              ? "Not counted"
               : `${Math.round(sessions.previous).toLocaleString()} ${words.previous}`
           }
         >
