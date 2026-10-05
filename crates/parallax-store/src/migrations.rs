@@ -476,6 +476,52 @@ const MIGRATIONS: &[Migration] = &[
         ALTER TABLE projects ADD COLUMN proposed_checks TEXT;
         ALTER TABLE landings ADD COLUMN failures INTEGER NOT NULL DEFAULT 0;",
     },
+    // `thread/search`'s full-text index (PLX-487): a run's messages, never tool calls or their
+    // output. The triggers on `runs` and `turns` index a prompt and each sent turn as they're
+    // stored, and `Store::index_run_text` adds the agent's `text` replies when a turn ends. A
+    // reply row's `seq` is the newest event it covers, where the next one starts; a message's
+    // row keeps the run's current one. `thread_text_fts` indexes `text` without a copy of it,
+    // the `thread_text` triggers keep it in step, and `delete_run_rows` deletes a run's rows.
+    // Existing runs get their prompt, their turns, and one row of all their replies.
+    Migration {
+        version: 36,
+        sql: "CREATE TABLE thread_text (
+            id INTEGER PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            text TEXT NOT NULL
+        );
+        CREATE INDEX thread_text_run ON thread_text (run_id, seq);
+        CREATE VIRTUAL TABLE thread_text_fts USING fts5(
+            text, content = 'thread_text', content_rowid = 'id',
+            tokenize = 'unicode61 remove_diacritics 2'
+        );
+        CREATE TRIGGER thread_text_insert AFTER INSERT ON thread_text BEGIN
+            INSERT INTO thread_text_fts (rowid, text) VALUES (new.id, new.text);
+        END;
+        CREATE TRIGGER thread_text_delete AFTER DELETE ON thread_text BEGIN
+            INSERT INTO thread_text_fts (thread_text_fts, rowid, text)
+            VALUES ('delete', old.id, old.text);
+        END;
+        INSERT INTO thread_text (run_id, seq, text) SELECT id, 0, prompt FROM runs;
+        INSERT INTO thread_text (run_id, seq, text) SELECT run_id, 0, text FROM turns;
+        INSERT INTO thread_text (run_id, seq, text)
+        SELECT events.run_id, MAX(events.seq),
+            group_concat(json_extract(item.value, '$.text'), char(10))
+        FROM events, json_each(events.payload, '$.items') AS item
+        WHERE events.kind = 'agent.output' AND events.run_id IS NOT NULL
+            AND json_extract(item.value, '$.kind') = 'text'
+            AND json_extract(item.value, '$.text') IS NOT NULL
+        GROUP BY events.run_id;
+        CREATE TRIGGER thread_text_prompt AFTER INSERT ON runs BEGIN
+            INSERT INTO thread_text (run_id, seq, text) VALUES (new.id, 0, new.prompt);
+        END;
+        CREATE TRIGGER thread_text_turn AFTER INSERT ON turns BEGIN
+            INSERT INTO thread_text (run_id, seq, text)
+            VALUES (new.run_id, COALESCE((SELECT MAX(seq) FROM thread_text
+                WHERE run_id = new.run_id), 0), new.text);
+        END;",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

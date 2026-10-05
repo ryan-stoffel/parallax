@@ -124,7 +124,16 @@ impl StoreHandle {
     /// Opens the store at `path` and starts its thread. If it can't be opened, plxd keeps
     /// running without it: `host/health` says so, and project methods fail.
     pub fn open(path: &Path) -> Self {
-        Self::start(path, Store::open(path), "plxd-store")
+        // Opening applies pending migrations first, which can take seconds on a large store:
+        // migration 36 indexes every message logged so far (PLX-487).
+        info!(path = %path.display(), "opening the project store and applying any migrations");
+        let started = Instant::now();
+        let store = Store::open(path);
+        info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            "applied the project store's migrations"
+        );
+        Self::start(path, store, "plxd-store")
     }
 
     /// Opens a read-only connection to this store's file at `path`, on a thread of its own: the

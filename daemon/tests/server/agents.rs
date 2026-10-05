@@ -976,20 +976,35 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
     .await;
     drop(client);
 
-    // A crash: the store still says `running` when plxd starts.
+    // A crash: the store still says `running` when plxd starts, and the turn that never ended
+    // left its replies unindexed (PLX-487).
     let Host { dir, server } = host;
     server.stop().await;
+    let replies = |dir: &std::path::Path| -> i64 {
+        rusqlite::Connection::open(dir.join("plxd.sqlite3"))
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM thread_text WHERE text LIKE '%Working%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
     {
         let db = rusqlite::Connection::open(dir.path().join("plxd.sqlite3")).unwrap();
         db.execute("UPDATE runs SET status = 'running'", [])
             .unwrap();
+        db.execute("DELETE FROM thread_text WHERE seq > 0", [])
+            .unwrap();
     }
+    assert_eq!(replies(dir.path()), 0);
     let host = Host::start(dir, fake(hang()));
     let mut client = host.client().await;
     let runs = list(&mut client).await;
     assert_eq!(runs[0].status, AgentStatus::Interrupted);
     assert_eq!(runs[0].session_id.as_deref(), Some("hang-1"));
     host.server.stop().await;
+    assert_eq!(replies(host.dir.path()), 1, "indexed at startup");
 }
 
 /// #190 N5: a fresh actor after a restart has no in-memory record of a turn it (or a plxd

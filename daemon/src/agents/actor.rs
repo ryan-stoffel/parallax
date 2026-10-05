@@ -2140,6 +2140,22 @@ impl Actor {
         }
     }
 
+    /// Logs the pending batch, then indexes what the run said since the last turn for
+    /// `thread/search` (PLX-487). Runs when a turn ends and when the CLI exits.
+    async fn index_text(&mut self) {
+        self.flush().await;
+        let id = self.id;
+        let run_id = self.row.id;
+        let indexed = store(&self.daemon, move |db| {
+            db.index_run_text(run_id)
+                .map_err(|error| store_error(&error))
+        })
+        .await;
+        if let Err(error) = indexed {
+            warn!(run = %id, error = %error.message, "could not index a turn's text");
+        }
+    }
+
     /// Stores the images of `turn_id`'s message, which its CLI has now taken, for its
     /// `TurnStarted` to list (PLX-191, decision 0026). If they can't be stored, the CLI still has
     /// them, and the transcript shows the message without them.
@@ -2497,6 +2513,7 @@ impl Actor {
                     let gone = ended(AgentApprovalDecision::Withdrawn, AgentApprovalBy::Agent);
                     self.resolve_approval(approval_id, gone).await;
                 }
+                self.index_text().await;
                 self.finish(&outcome).await;
             }
             _ => {
@@ -2510,6 +2527,9 @@ impl Actor {
                 }
                 for url in created {
                     self.link_pr(url).await;
+                }
+                if matches!(event, Event::TurnFinished { .. }) {
+                    self.index_text().await;
                 }
             }
         }
