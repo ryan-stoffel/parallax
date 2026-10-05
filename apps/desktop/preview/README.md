@@ -1,0 +1,7 @@
+# Renderer preview
+
+From `apps/desktop`, `pnpm exec vp dev -c preview/vite.config.ts` serves the real renderer (`src/renderer`) at http://localhost:5199/ in a plain browser, with no Electron or plxd. The app's build never includes it.
+
+`install.ts` sets `window.parallax` to `mockBridge.ts`, which answers every plxd method the renderer calls from the fixtures in `fixtures.ts` (the "macbook" host, the busy parallax Project with its coordinator and seven children, a quiet docs-site Project, and a few plain threads). The fixtures follow what plxd reports, so keep them in step with it. Writes such as sending a message, answering a question, or editing memory change the in-memory state and emit the events plxd would, until the page reloads. A method with no fake logs `preview: unhandled` to the console. A URL hash opens a view, such as `#project=parallax&panel=Knowledge`, `#project=parallax&agent=Scheduler`, or `#thread=Rework the updater` (`hash.ts`).
+
+`pnpm exec vp build -c preview/vite.config.ts && node preview/inline.mjs` builds it to `preview/dist`, then writes `preview/dist/single.html`: one self-contained HTML fragment (title, inlined CSS with its fonts, root element, and inlined module script) with no `<html>`, `<head>`, or `<body>`, for hosts that wrap it in a page of their own.

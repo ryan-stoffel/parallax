@@ -40,6 +40,8 @@ pnpm dev
 
 `pnpm check` formats, lints, and type-checks the app. `pnpm test` and `pnpm build` run the rest. `scripts/ci/check-rust` runs the same lint, build, and tests as CI for `plxd`.
 
+`pnpm exec vp dev -c preview/vite.config.ts` serves the renderer in a browser at http://localhost:5199/ with a fake `plxd` and no Electron ([apps/desktop/preview](apps/desktop/preview/README.md)).
+
 ## License
 
 [Apache-2.0](LICENSE)
