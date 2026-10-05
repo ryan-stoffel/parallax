@@ -93,13 +93,13 @@ impl Mcp {
         mcp
     }
 
-    async fn send(&mut self, message: &Value) {
+    pub(crate) async fn send(&mut self, message: &Value) {
         let mut line = message.to_string();
         line.push('\n');
         self.stdin.write_all(line.as_bytes()).await.unwrap();
     }
 
-    async fn read(&mut self) -> Option<Value> {
+    pub(crate) async fn read(&mut self) -> Option<Value> {
         let line = timeout(PATIENCE, self.stdout.next_line())
             .await
             .expect("a line from plxd mcp")

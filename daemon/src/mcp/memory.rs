@@ -63,7 +63,7 @@ impl Memory {
     /// `caller`'s memory: in `project` if it is a Project's run, as its `coordinator` or a
     /// child, or else in its own repository. `None` for a thread with no repository.
     pub(super) async fn of(
-        plxd: &mut Plxd,
+        plxd: &Plxd,
         caller: &AgentRun,
         project: Option<&Project>,
         coordinator: bool,
@@ -229,7 +229,7 @@ impl Memory {
     /// Runs memory tool `name`, one of [`Memory::names`], for run `caller`.
     pub(super) async fn call(
         &self,
-        socket: &Path,
+        plxd: &Plxd,
         caller: RunId,
         name: &str,
         arguments: Value,
@@ -238,7 +238,6 @@ impl Memory {
             "memory_read" => {
                 let ReadArgs { scope, path } = parse(arguments)?;
                 let scope = self.scope(scope.as_deref())?;
-                let mut plxd = Plxd::open(socket).await?;
                 let Some(path) = path else {
                     let files = plxd
                         .call::<MemoryList>(MemoryListParams { scope })
@@ -277,7 +276,6 @@ impl Memory {
                     "brief" => None,
                     other => Some(serde_json::from_value(json!(other)).map_err(|e| e.to_string())?),
                 };
-                let mut plxd = Plxd::open(socket).await?;
                 let proposed = plxd
                     .call::<MemoryPropose>(MemoryProposeParams {
                         from: caller,
@@ -308,7 +306,6 @@ impl Memory {
                 if content.len() > MAX_CONTEXT_BYTES {
                     return Err(format!("content must be at most {MAX_CONTEXT_BYTES} bytes"));
                 }
-                let mut plxd = Plxd::open(socket).await?;
                 let written = plxd
                     .call::<MemoryWrite>(MemoryWriteParams {
                         scope,

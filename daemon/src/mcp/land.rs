@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::thread::Binding;
-use super::{Plxd, parse, pretty};
+use super::{parse, pretty};
 
 /// The tools a coordinator gets from this module.
 pub const TOOLS: &[&str] = &["land", "checks_propose"];
@@ -82,7 +82,7 @@ pub(super) async fn propose(
     if command.trim().is_empty() {
         return Err("command must not be empty".to_owned());
     }
-    let mut plxd = Plxd::open(&binding.socket).await?;
+    let plxd = &binding.plxd;
     let project = plxd
         .call::<ProjectUpdate>(ProjectUpdateParams {
             project,
@@ -115,7 +115,7 @@ pub(super) async fn call(
 ) -> Result<String, String> {
     let project = project.ok_or("only a Project's coordinator lands its children")?;
     let LandArgs { run_id } = parse(arguments)?;
-    let mut plxd = Plxd::open(&binding.socket).await?;
+    let plxd = &binding.plxd;
     let runs = plxd
         .call::<AgentList>(AgentListParams {
             project: Some(project),
