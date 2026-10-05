@@ -46,28 +46,28 @@ import { lookOf, ThreadChip, type AttachThreads } from "./threadContext";
 import { draggedThread, threadDragType } from "./threadDrag";
 import { appShortcut, menuButton, menuItem, Picker, type PickerOption } from "./ui";
 
-// Claude Code's permission modes, under its own names (0027). A thread is full Claude Code in
-// every mode (0034), and a project's worker keeps its sandbox in every mode but Bypass (0013).
-// What would prompt comes to the chat as approval cards (PLX-196), unless the run can't send them
-// (`manualDenied`).
+// One set of access levels for every provider (0054), from most to least supervised. Each backend
+// maps the ones it can honor, and a thread is full Claude Code in every mode (0034). A project's
+// worker keeps its sandbox in every mode but Full access (0013). What would prompt comes to the
+// chat as approval cards (PLX-196), unless the run can't send them (`manualDenied`).
 const accessOptions: Record<AgentPermission, PickerOption> = {
+  manual: {
+    value: "manual",
+    label: "Supervised",
+    icon: <Hand />,
+    description: "Asks you before commands and file changes.",
+  },
+  edit: {
+    value: "edit",
+    label: "Auto-accept edits",
+    icon: <FilePen />,
+    description: "Accepts file edits, asks before other actions.",
+  },
   auto: {
     value: "auto",
     label: "Auto",
     icon: <Sparkles />,
-    description: "A classifier approves or blocks each action instead of asking you.",
-  },
-  manual: {
-    value: "manual",
-    label: "Manual",
-    icon: <Hand />,
-    description: "Asks you before edits and commands.",
-  },
-  edit: {
-    value: "edit",
-    label: "Accept Edits",
-    icon: <FilePen />,
-    description: "Accepts file edits without asking.",
+    description: "The provider approves routine actions for you and blocks the risky ones.",
   },
   plan: {
     value: "plan",
@@ -77,9 +77,9 @@ const accessOptions: Record<AgentPermission, PickerOption> = {
   },
   bypass: {
     value: "bypass",
-    label: "Bypass Permissions",
+    label: "Full access",
     icon: <ShieldOff />,
-    description: "Skips every permission check.",
+    description: "Runs commands and edits files without asking.",
   },
 };
 

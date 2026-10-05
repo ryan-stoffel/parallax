@@ -488,19 +488,19 @@ test("while a request waits, no loader muses under it; once answered, the work g
   expect(transcript().querySelector(".loader")).not.toBeNull();
 });
 
-test("an open chat's Manual says its requests are denied when its run started without approvals", async () => {
+test("an open chat's Supervised says its requests are denied when its run started without approvals", async () => {
   const manual = () =>
     [
       ...document.querySelectorAll('[role="menu"][aria-label="Access"] [role="menuitemradio"]'),
-    ].find((o) => o.textContent?.startsWith("Manual"))!.textContent;
+    ].find((o) => o.textContent?.startsWith("Supervised"))!.textContent;
   await renderChat();
-  expect(manual()).toBe("ManualAsks you before edits and commands.");
+  expect(manual()).toBe("SupervisedAsks you before commands and file changes.");
   act(() => unmount());
   log = [];
   append({ kind: "agent.started", runId, run: { ...run, approvals: undefined } });
   await renderChat();
   expect(manual()).toBe(
-    "ManualAsks before edits and commands. This chat started before Parallax could show those requests, so they're denied.",
+    "SupervisedAsks before edits and commands. This chat started before Parallax could show those requests, so they're denied.",
   );
 });
 

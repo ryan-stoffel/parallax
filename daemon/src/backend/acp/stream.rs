@@ -8,10 +8,10 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value, json};
 
-use crate::backend::ApprovalId;
 use crate::backend::event::{
     ApprovalRequest, Event, TodoItem, TodoStatus, ToolStatus, WarningKind,
 };
+use crate::backend::{AgentPermission, ApprovalId};
 
 /// The tool name a plan reaches the app under: Claude Code's, whose request the app already shows
 /// as a proposed plan with Approve and Keep planning (0031).
@@ -82,6 +82,9 @@ pub(super) struct Translator {
     pub asks: bool,
     /// The run has the injected `plxd mcp --thread` server, whose tools run without asking (0041).
     pub thread_tools: bool,
+    /// The run's permission. plxd answers requests by it for any agent (0054): Bypass allows
+    /// every one, Edit allows file edits, and the rest ask (or reject without `asks`).
+    pub permission: Option<AgentPermission>,
     calls: HashMap<String, Call>,
     /// Calls the user (or plxd, without `asks`) rejected, which end `completed` all the same.
     pub denied: HashSet<String>,
@@ -425,6 +428,18 @@ impl Translator {
         {
             let allow = option(&["allow_once", "allow_always"]);
             steps.push(Step::Reply(permission_answer(&id, allow.as_deref())));
+            return steps;
+        }
+        let allowed_by_mode = match self.permission {
+            Some(AgentPermission::Bypass) => true,
+            Some(AgentPermission::Edit) => call_id
+                .as_deref()
+                .and_then(|id| self.calls.get(id))
+                .is_some_and(|call| matches!(call.kind.as_str(), "edit" | "delete" | "move")),
+            _ => false,
+        };
+        if allowed_by_mode && let Some(allow) = option(&["allow_once", "allow_always"]) {
+            steps.push(Step::Reply(permission_answer(&id, Some(&allow))));
             return steps;
         }
         if !self.asks {

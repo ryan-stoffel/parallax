@@ -141,22 +141,24 @@ impl AcpAgent {
         }
     }
 
-    /// The permissions it maps, in Claude Code's picker order: Edit always, those with a mode,
-    /// and Bypass with a flag.
+    /// The permissions it maps, in the picker's order. Manual, Edit, and Bypass always,
+    /// since plxd answers the agent's permission requests by mode (0054). Plan and Auto only with
+    /// a mode of the agent's own.
     #[must_use]
     pub fn permissions(&self) -> Vec<AgentPermission> {
         [
-            AgentPermission::Auto,
             AgentPermission::Manual,
             AgentPermission::Edit,
+            AgentPermission::Auto,
             AgentPermission::Plan,
             AgentPermission::Bypass,
         ]
         .into_iter()
         .filter(|permission| {
-            *permission == AgentPermission::Edit
-                || (*permission == AgentPermission::Bypass && self.bypass_flag.is_some())
-                || self.modes.iter().any(|(mapped, _)| mapped == permission)
+            matches!(
+                permission,
+                AgentPermission::Manual | AgentPermission::Edit | AgentPermission::Bypass
+            ) || self.modes.iter().any(|(mapped, _)| mapped == permission)
         })
         .collect()
     }
@@ -423,6 +425,7 @@ impl Backend for AcpBackend {
         let mut translator = Translator::default();
         translator.asks = request.approvals;
         translator.thread_tools = !mcp_servers.is_empty();
+        translator.permission = Some(request.permission.unwrap_or(AgentPermission::Edit));
         translator.label.clone_from(&self.agent.label);
         let permission = request.permission.unwrap_or(AgentPermission::Edit);
         // The model goes over ACP unless a flag already picked it.

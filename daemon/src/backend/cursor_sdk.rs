@@ -28,11 +28,11 @@ use super::{
 };
 use parallax_protocol::ProviderModel;
 
-/// Edit, Plan, Auto, and Bypass. Auto is the SDK's classifier, which denies instead of asking.
+/// Edit, Auto, Plan, and Bypass. Auto is the SDK's classifier, which denies instead of asking.
 const PERMISSIONS: &[AgentPermission] = &[
     AgentPermission::Edit,
-    AgentPermission::Plan,
     AgentPermission::Auto,
+    AgentPermission::Plan,
     AgentPermission::Bypass,
 ];
 
