@@ -392,7 +392,7 @@ export function NewThread({
                     onGroupChange(noRepo);
                   }}
                   aria-keyshortcuts={noRepoBinding && ariaKeyshortcut(noRepoBinding)}
-                  className="group relative rounded-md text-[15px] text-muted-foreground underline underline-offset-4 hover:text-foreground focus-visible:text-foreground"
+                  className="group relative rounded-md text-[15px] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:text-foreground"
                 >
                   or start without a repo
                   {noRepoKeys && (
