@@ -939,7 +939,9 @@ fn pi_sign_in(launcher: &Launcher, instance: &ProviderInstance, found: &mut Foun
     found.login = detect::resolve(launcher, &pi_command(instance))
         .map(|path| vec![path.display().to_string()]);
     let env = launcher.environment(&detect::probe_spec("pi"));
-    if let Some(path) = env.get("PATH") {
+    // An instance's own PATH, which its runs use, stays.
+    let own_path = instance.env.iter().any(|var| var.name == "PATH");
+    if let Some(path) = env.get("PATH").filter(|_| !own_path) {
         found
             .login_env
             .get_or_insert_with(Vec::new)
