@@ -199,6 +199,29 @@ test("an open pull request is read again every POLL_MS, and a merged one isn't",
   expect(document.body.textContent).toContain("1 of 2 running");
 });
 
+test("a read sent before a merge doesn't overwrite the merge's answer", async () => {
+  read = { [url(42)]: prOf(42) };
+  actions = { merge: () => ({ result: prOf(42, { state: "merged" }) }) };
+  let prs!: ReturnType<typeof usePullRequests>;
+  await render([url(42)], (p) => {
+    prs = p;
+    return null;
+  });
+  let answer!: () => void;
+  request.mockImplementationOnce(
+    () => new Promise((resolve) => (answer = () => resolve({ logId: "l", result: prOf(42) }))),
+  );
+  const polled = prs.refresh(url(42));
+  vi.setSystemTime(now + 1000);
+  await act(() => prs.act(url(42), "merge"));
+  vi.setSystemTime(now + 2000);
+  await act(async () => {
+    answer();
+    await polled;
+  });
+  expect(prs.get(url(42))?.pr?.state).toBe("merged");
+});
+
 test("GitHub's images in the description and comments load, and others stay links", async () => {
   read = {
     [url(42)]: prOf(42, {

@@ -87,10 +87,14 @@ export function usePullRequests(
   const refresh = useCallback(
     async (url: string) => {
       if (!runId) return;
+      const sent = new Date().toISOString();
       const answer = await window.parallax.request(hostId, "pr/view", { runId, url });
       const at = new Date().toISOString();
-      if ("error" in answer) put(url, (prev) => ({ ...prev, error: answer.error }));
-      else put(url, () => ({ pr: answer.result, at }));
+      // A read kept after this one was sent, such as a merge's answer, is newer than this one.
+      const newer = (prev?: Linked) => !!prev?.at && prev.at > sent;
+      if ("error" in answer)
+        put(url, (prev) => (newer(prev) ? prev! : { ...prev, error: answer.error }));
+      else put(url, (prev) => (newer(prev) ? prev! : { pr: answer.result, at }));
     },
     [hostId, runId, put],
   );
