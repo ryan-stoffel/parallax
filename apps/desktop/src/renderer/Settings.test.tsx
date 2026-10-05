@@ -7,6 +7,7 @@ import type { ConnectionState, Profile, SshHost, ParallaxBridge } from "../prelo
 import type { ProviderInfo, ProviderInstance, ProviderKind } from "../protocol/generated/protocol";
 import type { SettingsSection } from "./App";
 import { models } from "./models";
+import { behaviorDefaults, behaviorPrefs, setBehaviorPrefs } from "./prefs";
 import { Settings } from "./Settings";
 import { accessDefaults, accessPrefs } from "./accessPrefs";
 import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
@@ -1021,6 +1022,21 @@ test("General's sidebar switches turn the Working section and archive pages off"
     pageArchived: false,
   });
   sidebarPrefs.set(sidebarDefaults);
+});
+
+test("General's New threads and Behavior settings are kept (PLX-538)", async () => {
+  window.parallax.openTargets = async () => [];
+  window.parallax.version = async () => "1.2.3";
+  await renderSettings("general");
+  const sw = (label: string) =>
+    document.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${label}"]`)!;
+  await click(sw("System notifications"));
+  expect(behaviorPrefs.get().systemNotifications).toBe(false);
+  const select = (label: string) =>
+    document.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
+  expect(select("Time format").value).toBe("system");
+  expect(section("New threads").textContent).toContain("Permissions");
+  setBehaviorPrefs(behaviorDefaults);
 });
 
 test("General's Legacy Plan mode switch lists Plan in the Access picker", async () => {

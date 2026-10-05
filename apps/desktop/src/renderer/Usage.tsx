@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type { AccountUsage, UsageLimitWindow, UsagePeriod } from "../protocol/generated/protocol";
+import { hourCycle } from "./prefs";
 
 /** The two periods `usage/get` reports: today, and this week from Monday, in the host's local time. */
 export type Period = "today" | "week";
@@ -172,7 +173,11 @@ function duration(ms: number): string {
 }
 
 const at = (iso: string) =>
-  new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  new Date(iso).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+    ...hourCycle(),
+  });
 
 /** When a limit resets and when plxd heard about it, for a tooltip. */
 export function limitDetails(limit: UsageLimitWindow): string {

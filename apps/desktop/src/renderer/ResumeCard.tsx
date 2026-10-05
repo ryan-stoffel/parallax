@@ -2,6 +2,7 @@ import { AlarmClock } from "lucide-react";
 import { useState } from "react";
 
 import type { AgentRun } from "../protocol/generated/protocol";
+import { clockOptions } from "./prefs";
 
 /**
  * When a waiting run resumes, in the user's locale: "3:40 PM", or "Oct 5, 3:40 PM" when it isn't
@@ -9,7 +10,7 @@ import type { AgentRun } from "../protocol/generated/protocol";
  */
 export function resumeTime(iso: string, now = Date.now()): string {
   const at = new Date(iso);
-  const time = at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const time = at.toLocaleTimeString(undefined, clockOptions());
   if (at.toDateString() === new Date(now).toDateString()) return time;
   return `${at.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${time}`;
 }

@@ -30,6 +30,7 @@ import type { JsonValue } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { ProposedPlan } from "./Plan";
 import type { Approval, ApprovalRequest, ApprovalResolution, Item } from "./transcript";
+import { clockOptions } from "./prefs";
 
 /** How the transcript names a tool (AgentChat's `describeTool`): its kind's icon, label, and target. */
 export interface ToolLook {
@@ -139,7 +140,7 @@ export function useAnswers(hostId: string) {
 /** A time on the clock, with the date unless it's today: "2:31 PM", "Sep 30, 2:31 PM". */
 export function clock(iso: string, now = Date.now()): string {
   const when = new Date(iso);
-  const time = when.toLocaleString("en", { hour: "numeric", minute: "2-digit" });
+  const time = when.toLocaleString("en", clockOptions());
   if (when.toDateString() === new Date(now).toDateString()) return time;
   return `${when.toLocaleString("en", { month: "short", day: "numeric" })}, ${time}`;
 }
