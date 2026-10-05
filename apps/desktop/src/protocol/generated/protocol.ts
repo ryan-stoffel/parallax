@@ -4934,6 +4934,12 @@ export type MemoryFile = {
 	 * `for_scope`, which saving it replaces.
 	 */
 	replaces?: string,
+	/**
+	 * An entry plxd marked for review because a path it names in backticks is missing from its
+	 * branch: the integration branch for a Project entry, the base branch for a repo entry
+	 * (0044, PLX-407). Rewriting the entry clears it.
+	 */
+	stale?: boolean,
 };
 
 /**

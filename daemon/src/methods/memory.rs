@@ -26,6 +26,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::{Context, handle};
+use crate::context::corrections::Change;
 use crate::context::{self, memory};
 use crate::store::store_error;
 
@@ -185,7 +186,22 @@ async fn write(
         _ => content,
     };
     let written_path = path.clone();
-    let file = run_blocking(move || save(&dir, &written_path, &text)).await?;
+    let (file, existed) = run_blocking(move || {
+        let existed = std::fs::symlink_metadata(dir.join(&written_path)).is_ok();
+        Ok((save(&dir, &written_path, &text)?, existed))
+    })
+    .await?;
+    // A new entry corrects nothing, so only a changed one is sent to running children. Saving a
+    // proposal that `replaces` an entry writes over it, so it counts as a change.
+    if existed {
+        context::corrections::tell(
+            &context.daemon,
+            scope,
+            &path,
+            title.as_deref(),
+            Change::Updated,
+        );
+    }
     if let Some((from, project)) = writer {
         let what = title.as_deref().unwrap_or(&path);
         let text = format!("Memory: {what} ({} scope)", scope_name(scope));
@@ -206,11 +222,14 @@ async fn delete(
     ];
     let path = checked(&params.path, &allowed, "delete")?.to_owned();
     let dir = scope_dir(context, params.scope).await?;
+    let deleted = path.clone();
     run_blocking(move || {
-        context::delete_file(&dir, &path).map_err(io_error(&path))?;
+        context::delete_file(&dir, &deleted).map_err(io_error(&deleted))?;
         Ok(MemoryDeleteResult {})
     })
-    .await
+    .await?;
+    context::corrections::tell(&context.daemon, params.scope, &path, None, Change::Deleted);
+    Ok(MemoryDeleteResult {})
 }
 
 async fn propose(
@@ -536,6 +555,7 @@ fn memory_file(path: &str, metadata: &std::fs::Metadata, header: memory::Header)
             _ => None,
         }),
         replaces: header.replaces,
+        stale: header.stale.is_some(),
     }
 }
 

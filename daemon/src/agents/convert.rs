@@ -69,7 +69,8 @@ pub(super) const WORKSPACE_WRITE: &str = "workspaceWrite";
 /// The store's text for a project coordinator's policy (0024).
 pub(crate) const NO_WRITE: &str = "noWrite";
 
-fn status(text: &str) -> AgentStatus {
+/// The protocol's status for a run row's stored `status`.
+pub(crate) fn status(text: &str) -> AgentStatus {
     match text {
         STARTING => AgentStatus::Starting,
         RUNNING => AgentStatus::Running,

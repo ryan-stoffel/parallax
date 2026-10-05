@@ -851,13 +851,16 @@ async fn agent_start_is_idempotent_on_its_run_id() {
     subscribe(&mut client, project.id, 0).await;
     let params = start_params(project.id, "Do it once");
     let first = client.call::<AgentStart>(params.clone()).await.unwrap().run;
-    // A run in a Project is a child, so its end also adds an inbox item (0043).
+    // A run in a Project is a child, so its end also adds an inbox item (0043) and writes its
+    // history (0044).
     let mut completed = updated_to(AgentStatus::Completed);
-    let (mut done, mut inboxed) = (false, false);
+    let (mut done, mut inboxed, mut history) = (false, false, false);
     until(&mut client, |event| {
         done |= completed(event);
         inboxed |= matches!(event.event, ParallaxEvent::InboxAdded { .. });
-        done && inboxed
+        history |= matches!(&event.event, ParallaxEvent::ContextChanged { file }
+            if file.path.starts_with("history/"));
+        done && inboxed && history
     })
     .await;
 

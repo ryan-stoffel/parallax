@@ -34,6 +34,8 @@ pub(crate) struct Header {
     pub scope: Option<String>,
     /// The entry a coordinator's proposal rewrites, `memory/<kind>/<name>.md`.
     pub replaces: Option<String>,
+    /// The paths plxd found missing when it marked the entry for review ([`super::stale`]).
+    pub stale: Option<String>,
 }
 
 /// The folder name of `kind`, or `None` for one this plxd doesn't know.
@@ -126,6 +128,7 @@ pub(crate) fn parse(content: &str) -> (Header, &str) {
             "Writer" => header.writer = value,
             "Scope" => header.scope = value,
             "Replaces" => header.replaces = value,
+            "Stale" => header.stale = value,
             _ => break,
         }
         rest = after;
@@ -213,16 +216,7 @@ pub(crate) async fn start(daemon: &Daemon, project: ProjectId) -> Result<Start, 
         .await?;
     let data_dir = daemon.data_dir.clone();
     let built = tokio::task::spawn_blocking(move || {
-        // Repo entries keep canonical paths; a Project keeps the one it was created with.
-        let repo_dir = repo_path
-            .map(|path| std::fs::canonicalize(&path).unwrap_or_else(|_| path.into()))
-            .and_then(|path| {
-                repos
-                    .iter()
-                    .find(|repo| !repo.fields.scratch && Path::new(&repo.fields.path) == path)
-            })
-            .and_then(|repo| ProjectId::try_from(repo.id).ok())
-            .map(|id| data_dir.context_dir(id));
+        let repo_dir = repo_path.and_then(|path| repo_dir(&data_dir, &path, &repos));
         let project_dir = data_dir.context_dir(project);
         let brief = super::read_file(&project_dir, "brief.md")
             .ok()
@@ -238,6 +232,21 @@ pub(crate) async fn start(daemon: &Daemon, project: ProjectId) -> Result<Start, 
     })
     .await;
     Ok(built.unwrap_or_default())
+}
+
+/// The context folder of the repo entry whose repository is at `repo_path`, if one has it. Repo
+/// entries keep canonical paths; a Project keeps the one it was created with.
+pub(crate) fn repo_dir(
+    data_dir: &crate::paths::DataDir,
+    repo_path: &str,
+    repos: &[parallax_store::Repo],
+) -> Option<std::path::PathBuf> {
+    let path = std::fs::canonicalize(repo_path).unwrap_or_else(|_| repo_path.into());
+    repos
+        .iter()
+        .find(|repo| !repo.fields.scratch && Path::new(&repo.fields.path) == path)
+        .and_then(|repo| ProjectId::try_from(repo.id).ok())
+        .map(|id| data_dir.context_dir(id))
 }
 
 /// The memory index of `scopes`, in order: one line per entry and knowledge file, from its
@@ -306,7 +315,7 @@ const TITLE_BYTES: usize = 200;
 /// `text` as one line, so an edited title can't add lines to a child's first message: each run
 /// of whitespace, control characters, and line separators becomes one space, and it is cut to
 /// at most `max` bytes on a character boundary.
-fn one_line(text: &str, max: usize) -> String {
+pub(crate) fn one_line(text: &str, max: usize) -> String {
     let line = text
         .split(|c: char| c.is_whitespace() || c.is_control())
         .filter(|word| !word.is_empty())
@@ -485,6 +494,7 @@ mod tests {
                 writer: Some("user".to_owned()),
                 scope: Some("repo".to_owned()),
                 replaces: Some("memory/decision/vitest.md".to_owned()),
+                stale: None,
             }
         );
         assert_eq!(body, "We moved off Jest.\n");
