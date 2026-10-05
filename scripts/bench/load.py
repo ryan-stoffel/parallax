@@ -10,10 +10,11 @@ script of about 400 text, tool call, and tool result emits with sleeps. It adds 
 subscribes the way the app does (one connection: a host-level subscription, one per repo scope for
 the sidebar, and one more on the first run's scope for an open transcript; with `--filtered`, the
 scope one is `shell` and the open one is `run`, as PLX-454 makes the app subscribe), starts N
-threads at the same moment, and waits for every turn to end. It writes JSON with delivery latency (receive
-time minus the event's `time`, which plxd sets at flush), bytes and events per connection and per
-subscription, `host/health.queues` samples when plxd reports them, plxd's CPU, peak RSS, and
-RSS growth after the first sample, and whether plxd made a subscriber resync. `--compare` charts any number of those files side by side.
+threads at the same moment, and waits for every turn to end. It writes JSON with delivery latency
+(receive time minus the event's `time`, which plxd sets at flush), bytes and events per connection
+and per subscription, `host/health.queues` samples when plxd reports them, plxd's CPU, peak RSS,
+and RSS growth after the first sample, and whether plxd made a subscriber resync. `--compare`
+charts any number of those files side by side.
 `--replay` plays a recorded session's events instead, from a backend's replay snapshot such as
 `daemon/src/backend/claude/fixtures/recorded.events.jsonl` (PLX-493), as fast as plxd takes them.
 """
