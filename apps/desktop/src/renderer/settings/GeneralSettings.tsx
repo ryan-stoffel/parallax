@@ -5,10 +5,15 @@ import { useConnection } from "../ConnectionStatus";
 import { localId, useHosts } from "../hosts";
 import { nameOf, OPEN_TARGET_KEY } from "../OpenMenu";
 import { archivePageSize, sidebarPrefs, type SidebarPrefs } from "../sidebarPrefs";
-import { HostPicker, PageTitle, Row, Section, Switch } from "./parts";
+import { notices } from "./licenses";
+import { HostPicker, PageTitle, quietButton, Row, Section, Switch } from "./parts";
 
-/** Settings > General: where Open sends a folder, usage limits on a host, and the app's version. */
+/**
+ * Settings > General: where Open sends a folder, usage limits on a host, and the app's version
+ * and bundled-font notices.
+ */
 export function GeneralSettings() {
+  const [showNotices, setShowNotices] = useState(false);
   const [targets, setTargets] = useState<OpenTarget[]>([]);
   const [chosen, setChosen] = useState(() => localStorage.getItem(OPEN_TARGET_KEY));
   const [version, setVersion] = useState<string>();
@@ -74,6 +79,33 @@ export function GeneralSettings() {
         <Row title="Version">
           <span className="font-mono text-[12px] text-muted-foreground">{version ?? "…"}</span>
         </Row>
+        <Row
+          title="Open source licenses"
+          description="Notices for the fonts bundled with Parallax."
+        >
+          <button
+            type="button"
+            aria-expanded={showNotices}
+            onClick={() => setShowNotices(!showNotices)}
+            className={quietButton}
+          >
+            {showNotices ? "Hide licenses" : "View licenses"}
+          </button>
+        </Row>
+        {showNotices &&
+          notices.map((n) => (
+            <details key={n.name} className="border-t border-border px-4 py-3">
+              <summary className="cursor-pointer text-[13px] font-medium">
+                {n.name}{" "}
+                <span className="font-mono text-[12px] font-normal text-muted-foreground">
+                  {n.license}
+                </span>
+              </summary>
+              <pre className="mt-2 max-h-64 overflow-auto font-mono text-[11.5px] whitespace-pre-wrap text-muted-foreground">
+                {n.text}
+              </pre>
+            </details>
+          ))}
       </Section>
     </>
   );

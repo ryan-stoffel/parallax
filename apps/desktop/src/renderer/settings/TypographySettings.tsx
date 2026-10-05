@@ -32,7 +32,7 @@ export function TypographySettings() {
             label="Interface font"
             value={appearance.uiFont}
             fonts={fonts.ui}
-            system="System"
+            system="Default (Anthropic Serif)"
             advanced={advanced}
             onChange={(uiFont) => setAppearance({ uiFont })}
           />
@@ -74,7 +74,7 @@ export function TypographySettings() {
             label="Monospace font"
             value={appearance.codeFont}
             fonts={fonts.code}
-            system="System monospace"
+            system="Default (JetBrains Mono Nerd Font)"
             advanced={advanced}
             onChange={(codeFont) => setAppearance({ codeFont })}
           />
