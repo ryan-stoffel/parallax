@@ -11,7 +11,7 @@
 //! concurrent calls on it, matched by id (PLX-488). When plxd restarts or the connection drops,
 //! the next call opens a new one and reads plxd's capabilities again. A call already sent fails
 //! with its connection, except `thread_wait`, which keeps trying until its deadline. The client
-//! stops using a connection it hasn't written to for a minute, so it needs no heartbeat to stay
+//! stops using a connection it hasn't written to for 75 s, so it needs no heartbeat to stay
 //! under plxd's idle timeout. It never starts plxd: the thread it serves is plxd's own child.
 
 use std::collections::HashMap;
@@ -279,12 +279,14 @@ async fn last_output(plxd: &Plxd, run_id: RunId) -> Result<Option<String>, Strin
 }
 
 /// The longest `plxd mcp` keeps using a connection it hasn't written to: under plxd's 90 s idle
-/// timeout, so plxd never closes a connection just as a call is sent on it.
-const IDLE: Duration = Duration::from_mins(1);
+/// timeout, so plxd never closes a connection just as a call is sent on it, and over the 60 s an
+/// `agent/wait` takes, so a waiting `thread_wait` keeps its connection.
+const IDLE: Duration = Duration::from_secs(75);
 
 /// `plxd mcp`'s client of plxd, shared by every tool call: one connection, opened by the first
 /// call, and again by the next call after it closes. Calls on it run concurrently, matched to
-/// their answers by id, up to plxd's limit of requests in flight on one connection.
+/// their answers by id. Past plxd's limit of requests in flight on one connection, plxd stops
+/// reading, and later calls wait.
 #[derive(Clone)]
 pub struct Plxd {
     socket: PathBuf,
