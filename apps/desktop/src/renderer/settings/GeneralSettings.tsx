@@ -4,6 +4,7 @@ import type { OpenTarget } from "../../preload/bridge";
 import { useConnection } from "../ConnectionStatus";
 import { localId, useHosts } from "../hosts";
 import { nameOf, OPEN_TARGET_KEY } from "../OpenMenu";
+import { accessPrefs } from "../accessPrefs";
 import { archivePageSize, sidebarPrefs, type SidebarPrefs } from "../sidebarPrefs";
 import { notices } from "./licenses";
 import { HostPicker, PageTitle, quietButton, Row, Section, Switch } from "./parts";
@@ -48,6 +49,18 @@ export function GeneralSettings() {
             label="Archive pages"
             checked={sidebar.pageArchived}
             onChange={(pageArchived) => setSidebar({ pageArchived })}
+          />
+        </Row>
+      </Section>
+      <Section title="Access">
+        <Row
+          title="Legacy Plan mode"
+          description="List Plan in the Access picker. A thread already in Plan keeps it either way."
+        >
+          <Switch
+            label="Legacy Plan mode"
+            checked={accessPrefs.use().legacyPlan}
+            onChange={(legacyPlan) => accessPrefs.set({ legacyPlan })}
           />
         </Row>
       </Section>

@@ -365,11 +365,11 @@ const CONTEXT_WINDOWS: &[u32] = &[200_000, 1_000_000];
 /// Set to `1` for a run that asks for a 200k context window.
 const DISABLE_1M_ENV: &str = "CLAUDE_CODE_DISABLE_1M_CONTEXT";
 
-/// Claude Code's permission modes, in the order its own picker lists them (0027).
+/// Claude Code's permission modes (0027), in the picker's order, most supervised first (0054).
 const PERMISSIONS: &[AgentPermission] = &[
-    AgentPermission::Auto,
     AgentPermission::Manual,
     AgentPermission::Edit,
+    AgentPermission::Auto,
     AgentPermission::Plan,
     AgentPermission::Bypass,
 ];

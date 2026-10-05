@@ -1390,7 +1390,7 @@ test("another provider's model moves an open thread there, with every option and
     m.textContent?.startsWith("GPT-6 Astra"),
   )!;
   await act(async () => astra.click());
-  // Codex has no Plan, so Plan becomes Accept Edits.
+  // Codex has no Plan, so Plan becomes Auto-accept edits.
   expect(control("Access: Plan")).toBeNull();
   type("Carry on");
   await act(async () =>
