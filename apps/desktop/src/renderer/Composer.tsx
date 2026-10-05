@@ -1369,7 +1369,9 @@ function RouteChip({ route, keys, onFlip }: { route: Route; keys?: string; onFli
       : route.tasks.length > 1
         ? `${route.tasks.length} threads`
         : "New thread";
-  const tooltip = keys ? `${label} · ${keys}` : label;
+  const badge =
+    "rounded border border-border bg-surface px-1 font-sans text-[11px] leading-4 text-muted-foreground";
+  const showKeys = modHeld && keys;
   return (
     <button
       type="button"
@@ -1377,23 +1379,32 @@ function RouteChip({ route, keys, onFlip }: { route: Route; keys?: string; onFli
       aria-label={`Sends to: ${label}. Switch`}
       className={`${menuButton} group relative gap-2`}
     >
-      <span
-        role="tooltip"
-        className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-30 whitespace-nowrap rounded-md border border-border bg-surface px-2.5 py-1 text-[12px] text-foreground shadow-composer transition-all duration-150 ease-out opacity-0 translate-y-1 scale-95 group-hover:opacity-100 group-hover:translate-y-0 group-hover:scale-100 group-focus-visible:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:scale-100"
-      >
-        {tooltip}
-      </span>
+      {keys && !showKeys && (
+        <span
+          role="tooltip"
+          className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 flex -translate-x-1/2 translate-y-1 items-center gap-2 rounded-lg border border-border bg-surface py-1 pr-1 pl-2.5 text-[12px] whitespace-nowrap text-foreground opacity-0 shadow-composer transition duration-150 ease-out group-hover:translate-y-0 group-hover:opacity-100 group-hover:delay-500 group-focus-visible:translate-y-0 group-focus-visible:opacity-100"
+        >
+          {route.kind === "ask" ? "Start a thread" : "Ask the chat"}
+          <kbd className={badge}>{keys}</kbd>
+        </span>
+      )}
       {route.kind === "ask" ? (
         <MessagesSquare aria-hidden />
       ) : (
         <PixelStack count={route.tasks.length} />
       )}
-      <span className="relative inline-flex items-center">
-        <span className={modHeld && keys ? "invisible" : "working-in"}>{label}</span>
-        {modHeld && keys && (
-          <span className="absolute inset-0 flex items-center justify-center font-medium text-foreground working-in">
+      {/* The label stays in place, invisible, so the chip keeps its width while the keys show. */}
+      <span className="grid items-center">
+        <span
+          key={label}
+          className={`col-start-1 row-start-1 ${showKeys ? "invisible" : "working-in"}`}
+        >
+          {label}
+        </span>
+        {showKeys && (
+          <kbd className={`${badge} col-start-1 row-start-1 justify-self-center working-in`}>
             {keys}
-          </span>
+          </kbd>
         )}
       </span>
       {route.kind === "task" && route.tasks.length > 1 && (
