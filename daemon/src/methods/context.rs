@@ -71,7 +71,7 @@ pub(crate) async fn read(
 /// retry with different params fails with `idConflict`. The last write to a path wins when two
 /// race, since each runs independently and the later one's atomic rename is simply the one that
 /// lands last (0005).
-fn write_context_file(
+pub(crate) fn write_context_file(
     daemon: &crate::server::Daemon,
     project: ProjectId,
     name: &str,
