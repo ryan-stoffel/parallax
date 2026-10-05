@@ -1,4 +1,4 @@
-import { ArrowUpRight, Plus, RefreshCw, X } from "lucide-react";
+import { ArrowUpRight, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import {
   lazy,
   Suspense,
@@ -138,7 +138,10 @@ const cliInfo: Record<string, { name: string; install: string; keyProvider?: Pro
     install: "https://learn.chatgpt.com/docs/codex/cli",
     keyProvider: "openai",
   },
-  cursor: { name: "Cursor", install: "https://cursor.com/docs/cli/installation" },
+  cursor: {
+    name: "Cursor",
+    install: "https://cursor.com/docs/cli/installation",
+  },
 };
 
 const providerNames: Record<string, string> = {
@@ -625,16 +628,31 @@ const capitalized = (text: string) =>
   text.includes("@") ? text : text.charAt(0).toUpperCase() + text.slice(1);
 
 /**
- * An instance's state, as its list row says it: "Authenticated · Max", or what it needs, from
- * plxd's note, such as "Not authenticated · Add your API key".
+ * An instance's state, as its list row says it: "Authenticated · Max", or "Authenticated" when the
+ * agent gives an email rather than a plan, or what it needs, from plxd's note, such as
+ * "Not authenticated · Add your API key".
  */
 function instanceStatus(info: ProviderInfo): string {
   const why = info.note ? ` · ${info.note}` : "";
-  if (!info.installed) return `Not installed${why}`;
+  // plxd's note only names the missing program, which the pane says.
+  if (!info.installed) return "Not installed";
   if (info.signedIn === false) return `Not authenticated${why}`;
   if (info.signedIn !== true) return info.note ?? "Ready";
-  return info.account ? `Authenticated · ${capitalized(info.account)}` : "Authenticated";
+  return info.account && !info.account.includes("@")
+    ? `Authenticated · ${capitalized(info.account)}`
+    : "Authenticated";
 }
+
+/** The kinds Install puts on a host, with the vendor's own script (main's terminal.ts). */
+const installable = new Set([
+  "claude",
+  "codex",
+  "pi",
+  "opencode",
+  "grokBuild",
+  "hermes",
+  "antigravity",
+]);
 
 /** The dot before a row's state: only when it needs the user. */
 const instanceTone = (info: ProviderInfo) =>
@@ -642,9 +660,9 @@ const instanceTone = (info: ProviderInfo) =>
 
 /**
  * One host's provider instances (`providers/list`), as T3 Code lays them out: under the host and a
- * Providers line with Refresh and +, one card with the instances on the left, each with a switch
- * that turns it on or off on the host, and the chosen one's pane on the right. Without instances,
- * it offers Add provider.
+ * Providers line with Refresh, +, and Remove for the chosen one (which asks first, in place), one
+ * card with the instances on the left, each with a switch that turns it on or off on the host, and
+ * the chosen one's pane on the right. Without instances, it offers Add provider.
  */
 function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
   const providers = useProviders(host.id);
@@ -655,6 +673,9 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
   // The one sign-in terminal: main runs one per window.
   const [signingIn, setSigningIn] = useState<string>();
   const [adding, setAdding] = useState(false);
+  // The instance Remove is asking about, until it's removed or Cancel.
+  const [confirming, setConfirming] = useState<string>();
+  const [removing, setRemoving] = useState(false);
   const [period, setPeriod] = useState<Period>("today");
   const { usage } = useUsage(host.id, true);
   const tabs = useId();
@@ -684,6 +705,15 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
 
   const list = providers?.providers;
   const current = list?.find((p) => p.instance.id === selected) ?? list?.[0];
+  const asking = confirming !== undefined && confirming === current?.instance.id;
+  const remove = async (id: string) => {
+    setRemoving(true);
+    const failed = await removeProvider(host.id, id);
+    // Gone from the list, its pane goes too, and the next one is chosen.
+    setRemoving(false);
+    setConfirming(undefined);
+    setError(failed);
+  };
   const on = list?.filter((p) => p.instance.enabled) ?? [];
   // Up and Down move between the tabs, wrapping at the ends, and choose the one they reach.
   const moveTab = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -700,21 +730,55 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
       <div className="mb-8 text-[15px]">{picker}</div>
       <div className="mb-2 flex min-h-7 items-center justify-between gap-4 px-1">
         <h1 className="text-[13px] font-medium text-muted-foreground">Providers</h1>
-        <div className="flex items-center gap-1 text-[12.5px] text-muted-foreground">
-          <button
-            type="button"
-            aria-label="Refresh"
-            disabled={checking}
-            onClick={() => void refresh()}
-            className="flex items-center gap-1.5 rounded-md px-1.5 py-1 hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
-          >
-            <RefreshCw aria-hidden className={checking ? "animate-spin" : undefined} />
-            {checking ? "Checking…" : providers && checkedLabel(providers.checkedAt)}
-          </button>
-          <IconButton label="Add provider" onClick={() => setAdding(true)}>
-            <Plus aria-hidden />
-          </IconButton>
-        </div>
+        {asking ? (
+          // Cancel takes the trash's place and focus, so a double click or a second Enter can't remove.
+          <div className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
+            <span>
+              Remove <span className="font-medium text-foreground">{current.instance.name}</span>?
+              Its settings and secrets leave this host; its threads keep their transcripts.
+            </span>
+            <button
+              type="button"
+              disabled={removing}
+              onClick={() => void remove(current.instance.id)}
+              className={dangerButton}
+            >
+              Remove
+            </button>
+            <button
+              type="button"
+              autoFocus
+              onClick={() => setConfirming(undefined)}
+              className={quietButton}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1 text-[12.5px] text-muted-foreground">
+            <button
+              type="button"
+              aria-label="Refresh"
+              disabled={checking}
+              onClick={() => void refresh()}
+              className="flex items-center gap-1.5 rounded-md px-1.5 py-1 hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+            >
+              <RefreshCw aria-hidden className={checking ? "animate-spin" : undefined} />
+              {checking ? "Checking…" : providers && checkedLabel(providers.checkedAt)}
+            </button>
+            <IconButton label="Add provider" onClick={() => setAdding(true)}>
+              <Plus aria-hidden />
+            </IconButton>
+            {current && (
+              <IconButton
+                label={`Remove ${current.instance.name}`}
+                onClick={() => setConfirming(current.instance.id)}
+              >
+                <Trash2 aria-hidden />
+              </IconButton>
+            )}
+          </div>
+        )}
       </div>
       {error && (
         <p role="alert" className="mb-3 px-1 text-[12.5px] text-danger">
@@ -852,7 +916,10 @@ function SavedField({
   value,
   onSave,
   ...props
-}: { value: string; onSave: (value: string) => void } & InputHTMLAttributes<HTMLInputElement>) {
+}: {
+  value: string;
+  onSave: (value: string) => void;
+} & InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       // A new value, once saved, is the field's again.
@@ -878,6 +945,9 @@ function SavedField({
 /** A field's words as arguments, split on spaces. ponytail: no quoting, so no argument has a space. */
 const argsOf = (text: string) => text.split(/\s+/).filter(Boolean);
 
+/** A secondary action on a row: quiet, with a border so it reads as a button. */
+const outlineButton = `${quietButton} border border-border`;
+
 /** A card of rows with no title over it, named `label`. */
 function Card({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -891,8 +961,10 @@ function Card({ label, children }: { label: string; children: ReactNode }) {
  * A provider instance's pane, `hidden` unless its tab is chosen: its display name with its
  * account, and Sign in (in a terminal under it, after which the instances are probed again with
  * `onSignedIn`); how it runs, with its version for a kind that has more than one; its variables;
- * its models; Claude's and Codex's usage and API keys; and Remove. Each change saves the instance
- * on the host.
+ * its models; and Claude's and Codex's usage and API keys. An agent Parallax knows how to install
+ * (Claude Code, Codex, Pi, OpenCode, Grok Build, Hermes, Antigravity) offers Install when it isn't
+ * installed, which runs in the same terminal. Each change saves the instance on the
+ * host.
  */
 function InstancePane({
   id,
@@ -935,13 +1007,74 @@ function InstancePane({
   const keyProvider = instance.id === instance.kind ? cliInfo[instance.id]?.keyProvider : undefined;
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string>();
+  // Whether the open terminal installs the CLI rather than signs in. Kept from when it opened, so
+  // an install that ends and finds the CLI doesn't turn into a sign-in.
+  const [installing, setInstalling] = useState(false);
+  // Pi's installer puts `pi` on the host, which a 0.x instance's PI_ACP_PI_COMMAND doesn't run.
+  const piCommand = instance.env.find((v) => v.name === "PI_ACP_PI_COMMAND")?.value ?? "pi";
+  const canInstall =
+    !info.installed &&
+    installable.has(instance.kind) &&
+    !instance.program &&
+    (instance.kind !== "pi" || piCommand === "pi");
   const save = async (change: Partial<ProviderInstance>) =>
     setError(await saveProvider(hostId, { ...instance, ...change }));
   const program = instance.program ?? kind.program ?? "the program";
+  // A Cursor instance with its own CURSOR_API_KEY runs on that key, with no browser sign-in (as T3 Code).
+  const cursorAccount =
+    instance.kind === "cursor" && !instance.env.some((v) => v.name === "CURSOR_API_KEY");
+  const [cursorWaiting, setCursorWaiting] = useState(false);
+  useEffect(() => {
+    if (!cursorWaiting) return;
+    const timer = setInterval(() => {
+      void loadProviders(hostId, true);
+    }, 2000);
+    const giveUp = setTimeout(() => setCursorWaiting(false), 5 * 60 * 1000);
+    return () => {
+      clearInterval(timer);
+      clearTimeout(giveUp);
+      void window.parallax.request(hostId, "cursor/signInCancel", {
+        instance: instance.id,
+      });
+    };
+  }, [cursorWaiting, hostId, instance.id]);
+  useEffect(() => {
+    if (cursorWaiting && info.signedIn === true) setCursorWaiting(false);
+  }, [cursorWaiting, info.signedIn]);
+  // plxd reports a login that failed in the browser or was rejected, as T3 Code's "failed" phase.
+  useEffect(() => {
+    if (cursorWaiting && info.signInError) {
+      setCursorWaiting(false);
+      setError(info.signInError);
+    }
+  }, [cursorWaiting, info.signInError]);
+  const signInCursor = async () => {
+    setError(undefined);
+    const answer = await window.parallax.request(hostId, "cursor/signIn", {
+      instance: instance.id,
+    });
+    if ("error" in answer) {
+      setError(describeError(answer.error));
+      return;
+    }
+    window.open(answer.result.url, "_blank");
+    setCursorWaiting(true);
+  };
+  const signOutCursor = async () => {
+    setError(undefined);
+    const answer = await window.parallax.request(hostId, "cursor/signOut", {
+      instance: instance.id,
+    });
+    if ("error" in answer) setError(describeError(answer.error));
+    else void loadProviders(hostId, true);
+  };
 
   let account = instanceStatus(info);
-  if (info.signedIn === true && info.account)
-    account = `Authenticated as ${capitalized(info.account)}`;
+  // The pane names the email the list leaves out; a plan reads as the list says it.
+  if (info.signedIn === true && info.account?.includes("@"))
+    account = `Authenticated as ${info.account}`;
+  // Such as "Pi isn't installed on this host": for Pi, the `pi` its adapter runs, not npx.
+  if (!info.installed && info.note) account = capitalized(info.note);
 
   return (
     <div
@@ -951,14 +1084,19 @@ function InstancePane({
       hidden={hidden}
       className="min-w-0 p-5 @3xl:overflow-y-auto"
     >
-      <div className="mb-4 flex items-center gap-2.5 px-1">
-        <KindLogo className="size-4 shrink-0" />
-        <h2 className="truncate text-[14px] font-medium">{instance.name}</h2>
-        {info.version && (
-          <span className="ml-auto truncate font-mono text-[12px] text-muted-foreground">
-            {info.version}
-          </span>
-        )}
+      <div className="mb-6 flex items-center gap-3 px-1">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface">
+          <KindLogo className="size-5" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="truncate text-[15px] font-semibold">{instance.name}</h2>
+          {/* What it is, unless its name says so, and its version. */}
+          <p className="truncate text-[12.5px] text-muted-foreground">
+            {kind.name !== instance.name && kind.name}
+            {kind.name !== instance.name && info.version && " · "}
+            {info.version && <span className="font-mono">{info.version}</span>}
+          </p>
+        </div>
       </div>
       {!instance.enabled && (
         <p className="mb-5 rounded-xl border border-border bg-surface px-4 py-3 text-[12.5px] text-muted-foreground">
@@ -971,17 +1109,7 @@ function InstancePane({
         </p>
       )}
       <Card label="Account">
-        <Row title="Display name" description={account}>
-          {info.login && info.installed && info.signedIn !== true && !signingIn && (
-            <button
-              type="button"
-              aria-label={`Sign in to ${instance.name}`}
-              onClick={() => onSignIn(true)}
-              className={quietButton}
-            >
-              Sign in
-            </button>
-          )}
+        <Row title="Display name" description="How threads and model menus name it.">
           <SavedField
             aria-label="Display name"
             required
@@ -990,11 +1118,68 @@ function InstancePane({
             onSave={(name) => void save({ name: name.trim() })}
           />
         </Row>
+        <Row
+          title="Account"
+          description={
+            <span className="flex items-center gap-1.5">
+              <StatusDot
+                tone={info.signedIn === true ? "on" : instanceTone(info) ? "error" : "off"}
+              />
+              <span className="min-w-0">{account}</span>
+            </span>
+          }
+        >
+          {canInstall && !signingIn && (
+            <button
+              type="button"
+              aria-label={`Install ${kind.name}`}
+              onClick={() => {
+                setInstalling(true);
+                onSignIn(true);
+              }}
+              className={primaryButton}
+            >
+              Install
+            </button>
+          )}
+          {cursorAccount && info.installed && info.signedIn === true && !cursorWaiting && (
+            <button type="button" onClick={() => void signOutCursor()} className={outlineButton}>
+              Sign out
+            </button>
+          )}
+          {((cursorAccount && info.installed && info.signedIn !== true && !cursorWaiting) ||
+            (info.login && info.installed && info.signedIn !== true && !signingIn)) && (
+            <button
+              type="button"
+              aria-label={`Sign in to ${instance.name}`}
+              onClick={() => {
+                if (cursorAccount) return void signInCursor();
+                setInstalling(false);
+                onSignIn(true);
+              }}
+              className={outlineButton}
+            >
+              Sign in
+            </button>
+          )}
+        </Row>
+        {cursorWaiting && (
+          <Row
+            title="Sign-in"
+            description="Approve the sign-in in your browser. This keeps waiting until you do."
+          >
+            <button type="button" onClick={() => setCursorWaiting(false)} className={quietButton}>
+              Cancel
+            </button>
+          </Row>
+        )}
         {signingIn && (
           <Suspense>
             <SignInTerminal
-              target={{ hostId, provider: instance.id }}
-              name={instance.name}
+              target={
+                installing ? { hostId, install: instance.kind } : { hostId, provider: instance.id }
+              }
+              name={installing ? kind.name : instance.name}
               onExit={onSignedIn}
               onClose={() => onSignIn(false)}
             />
@@ -1002,66 +1187,80 @@ function InstancePane({
         )}
       </Card>
       <Section title="Runtime">
-        {choices && version && (
-          <Row title="Version" description={`Which ${kind.name} this instance runs.`}>
-            <Segmented
-              label="Version"
-              options={choices.map((v) => ({ value: v.label, name: v.label }))}
-              value={version.label}
-              onChange={(label) =>
-                void save(
-                  withVersion(
-                    instance,
-                    choices.find((v) => v.label === label)!,
-                  ),
-                )
-              }
-            />
-          </Row>
-        )}
-        <Row
-          title="Binary path"
-          description={
-            info.path
-              ? `Path to the ${kind.name} binary this instance runs. Found at ${info.path}.`
-              : `Path to the ${kind.name} binary this instance runs. Not found on the host.`
-          }
-        >
-          <SavedField
-            aria-label="Binary path"
-            placeholder={kind.program}
-            required={instance.kind === "acp"}
-            value={instance.program ?? ""}
-            onSave={(next) => void save({ program: next.trim() || undefined })}
-          />
-        </Row>
-        {homeVar && (
+        {instance.kind === "cursor" ? (
           <Row
-            title={`${homeVar} path`}
-            description={`Custom ${kind.name} home and config directory, for a second account.`}
-          >
-            <SavedField
-              aria-label={`${homeVar} path`}
-              placeholder="Default"
-              value={instance.home ?? ""}
-              onSave={(home) => void save({ home: home.trim() || undefined })}
-            />
-          </Row>
-        )}
-        <Row
-          title={kind.wholeArgs ? "Arguments" : "Launch arguments"}
-          description={
-            kind.wholeArgs
-              ? `Every argument passed to ${program}, separated by spaces.`
-              : `Additional arguments passed to ${program} on session start, separated by spaces.`
-          }
-        >
-          <SavedField
-            aria-label={kind.wholeArgs ? "Arguments" : "Launch arguments"}
-            value={instance.args.join(" ")}
-            onSave={(args) => void save({ args: argsOf(args) })}
+            title="Cursor SDK"
+            description={
+              info.note ?? "Runs through the Cursor SDK on this host. Needs Node.js 22.13 or newer."
+            }
           />
-        </Row>
+        ) : (
+          <>
+            {choices && version && (
+              <Row title="Version" description={`Which ${kind.name} this instance runs.`}>
+                <Segmented
+                  label="Version"
+                  options={choices.map((v) => ({
+                    value: v.label,
+                    name: v.label,
+                  }))}
+                  value={version.label}
+                  onChange={(label) =>
+                    void save(
+                      withVersion(
+                        instance,
+                        choices.find((v) => v.label === label)!,
+                      ),
+                    )
+                  }
+                />
+              </Row>
+            )}
+            <Row
+              title="Binary path"
+              description={
+                info.path
+                  ? `Path to the ${kind.name} binary this instance runs. Found at ${info.path}.`
+                  : `Path to the ${kind.name} binary this instance runs. Not found on the host.`
+              }
+            >
+              <SavedField
+                aria-label="Binary path"
+                placeholder={kind.program}
+                required={instance.kind === "acp"}
+                value={instance.program ?? ""}
+                onSave={(next) => void save({ program: next.trim() || undefined })}
+              />
+            </Row>
+            {homeVar && (
+              <Row
+                title={`${homeVar} path`}
+                description={`Custom ${kind.name} home and config directory, for a second account.`}
+              >
+                <SavedField
+                  aria-label={`${homeVar} path`}
+                  placeholder="Default"
+                  value={instance.home ?? ""}
+                  onSave={(home) => void save({ home: home.trim() || undefined })}
+                />
+              </Row>
+            )}
+            <Row
+              title={kind.wholeArgs ? "Arguments" : "Launch arguments"}
+              description={
+                kind.wholeArgs
+                  ? `Every argument passed to ${program}, separated by spaces.`
+                  : `Additional arguments passed to ${program} on session start, separated by spaces.`
+              }
+            >
+              <SavedField
+                aria-label={kind.wholeArgs ? "Arguments" : "Launch arguments"}
+                value={instance.args.join(" ")}
+                onSave={(args) => void save({ args: argsOf(args) })}
+              />
+            </Row>
+          </>
+        )}
       </Section>
       <EnvSection env={instance.env} onSave={(env) => save({ env })} />
       <ProviderModels hostId={hostId} info={info} onSave={(models) => save({ models })} />
@@ -1113,7 +1312,6 @@ function InstancePane({
           )}
         </Section>
       )}
-      <RemoveProvider hostId={hostId} instance={instance} />
     </div>
   );
 }
@@ -1239,67 +1437,6 @@ function EnvSection({
         </form>
       )}
     </Section>
-  );
-}
-
-/** Remove provider. It asks first, in place, as KeyRow does. */
-function RemoveProvider({ hostId, instance }: { hostId: string; instance: ProviderInstance }) {
-  const [confirming, setConfirming] = useState(false);
-  const [removing, setRemoving] = useState(false);
-  const [error, setError] = useState<string>();
-  const remove = async () => {
-    setRemoving(true);
-    const failed = await removeProvider(hostId, instance.id);
-    // Gone from the list, this pane goes too.
-    setRemoving(false);
-    setError(failed);
-  };
-
-  return (
-    <Card label="Remove">
-      <div className={settingRow}>
-        <div className="min-w-0">
-          <span className="block text-[13px] font-medium">Remove provider</span>
-          <span className="block text-[12.5px] text-muted-foreground">
-            {confirming
-              ? `Remove ${instance.name}? Its settings and secrets leave this host.`
-              : "Its threads keep their transcripts."}
-          </span>
-          {error && (
-            <span role="alert" className="block text-[12.5px] text-danger">
-              {error}
-            </span>
-          )}
-        </div>
-        {/* Cancel takes Remove's place and focus, so a double click or a second Enter can't remove. */}
-        <div className="flex shrink-0 gap-1">
-          {confirming ? (
-            <>
-              <button
-                type="button"
-                disabled={removing}
-                onClick={() => void remove()}
-                className={dangerButton}
-              >
-                Remove
-              </button>
-              <button
-                type="button"
-                autoFocus
-                className={quietButton}
-                onClick={() => setConfirming(false)}
-              >
-                Cancel
-              </button>
-            </>
-          ) : (
-            <button type="button" className={quietButton} onClick={() => setConfirming(true)}>
-              Remove
-            </button>
-          )}
-        </div>
-      </div>
-    </Card>
   );
 }
 

@@ -25,30 +25,38 @@ use tokio::io::AsyncWriteExt;
 
 use super::process::{Output, Process};
 
-/// What one line of a CLI's output says: the list, an error, or `None` for a line to skip.
-pub type Parsed = Option<Result<Vec<AgentCommand>, String>>;
+/// What one line of a CLI's output says: the answer, an error, or `None` for a line to skip.
+pub type Parsed<T = Vec<AgentCommand>> = Option<Result<T, String>>;
 
-/// The CLI [`Backend::commands`](super::Backend::commands) started, and how to ask it.
+/// A CLI started to answer one question, and how to ask it: [`Backend::commands`]'s command
+/// list, or [`Backend::limits`]'s limit windows.
+///
+/// [`Backend::commands`]: super::Backend::commands
+/// [`Backend::limits`]: super::Backend::limits
 #[derive(Debug)]
-pub struct CommandsProbe {
+pub struct Probe<T> {
     /// The CLI. Dropping it kills its process group.
     pub process: Process,
     /// The JSON messages to write it, a line each, all at once.
     pub input: Vec<Value>,
     /// Reads one line of its output.
-    pub parse: fn(&Value) -> Parsed,
+    pub parse: fn(&Value) -> Parsed<T>,
 }
 
-/// The JSON-RPC id of the request whose answer holds the list, for Codex and Cursor.
+/// The CLI [`Backend::commands`](super::Backend::commands) started.
+pub type CommandsProbe = Probe<Vec<AgentCommand>>;
+
+/// The JSON-RPC id of the request whose answer holds the list, for Codex and Cursor, and of
+/// Codex's `account/rateLimits/read`.
 pub const LIST_ID: u64 = 2;
 
-/// Writes `probe`'s input and reads lines until one holds the list, for at most `limit`. The CLI
-/// is killed with its process group once this returns.
+/// Writes `probe`'s input and reads lines until one holds the answer, for at most `limit`. The
+/// CLI is killed with its process group once this returns.
 ///
 /// # Errors
 ///
 /// What the CLI answered instead, or that it exited or ran out of time first.
-pub async fn list(mut probe: CommandsProbe, limit: Duration) -> Result<Vec<AgentCommand>, String> {
+pub async fn list<T>(mut probe: Probe<T>, limit: Duration) -> Result<T, String> {
     // Held open until the list comes, so the CLI doesn't take a closed stdin as the end.
     let mut stdin = probe.process.take_stdin();
     let input: String = probe.input.iter().map(|m| m.to_string() + "\n").collect();
@@ -67,18 +75,15 @@ pub async fn list(mut probe: CommandsProbe, limit: Duration) -> Result<Vec<Agent
                 }
                 Some(Output::Oversized { .. }) => {}
                 Some(Output::Exited(exit)) => {
-                    return Err(format!(
-                        "it exited before listing them: {}",
-                        exit.stderr_tail
-                    ));
+                    return Err(format!("it exited before answering: {}", exit.stderr_tail));
                 }
-                None => return Err("it exited before listing them".to_owned()),
+                None => return Err("it exited before answering".to_owned()),
             }
         }
     };
     tokio::time::timeout(limit, read)
         .await
-        .unwrap_or_else(|_| Err(format!("it didn't list them within {limit:?}")))
+        .unwrap_or_else(|_| Err(format!("it didn't answer within {limit:?}")))
 }
 
 /// Claude Code's answer to `initialize`: every command [`shown`] keeps.
@@ -259,7 +264,7 @@ mod tests {
         assert_eq!(texts(&listed), ["/compact"]);
 
         let silent = list(fake("sleep 30"), Duration::from_millis(200)).await;
-        assert_eq!(silent, Err("it didn't list them within 200ms".to_owned()));
+        assert_eq!(silent, Err("it didn't answer within 200ms".to_owned()));
     }
 
     #[test]

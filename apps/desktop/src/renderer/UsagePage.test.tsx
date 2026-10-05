@@ -431,25 +431,23 @@ test("Today shows how the day splits, not one bar, and a source's problem beside
   ]);
 });
 
-test("Limits show each window as a meter, in amber and then red near its cap", async () => {
+test("Limits show what's left of each live window, in amber and then red near its cap", async () => {
   const limit = (window: string, usedPercent: number) => ({
     window,
     usedPercent,
     resetsAt: new Date(Date.now() + 2 * HOUR + 30_000).toISOString(),
     capturedAt: new Date().toISOString(),
   });
-  const none = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   await renderPage({
     "accounts/keys/list": () => ({ accounts: [] }),
     "usage/daily": daily([]),
-    "usage/get": () => ({
+    "usage/limits": () => ({
       accounts: [
         {
           accountId: "claude",
-          today: none,
-          week: none,
-          limits: [limit("five_hour", 37.4), limit("seven_day", 80), limit("seven_day_opus", 100)],
+          limits: [limit("five_hour", 37.4), limit("seven_day", 80), limit("seven_day_fable", 100)],
         },
+        { accountId: "codex", limits: [], problem: "it exited before answering" },
       ],
     }),
   });
@@ -459,17 +457,18 @@ test("Limits show each window as a meter, in amber and then red near its cap", a
   expect(
     meters.map((m) => [m.getAttribute("aria-label"), m.getAttribute("aria-valuenow")]),
   ).toEqual([
-    ["Session", "37"],
-    ["Weekly", "80"],
-    ["Weekly · Opus", "100"],
+    ["Session", "63"],
+    ["Weekly", "20"],
+    ["Weekly · Fable", "0"],
   ]);
-  // The accent, then amber from 75%, then red from 90%.
+  // Claude's tint, then amber from 75% used; a full window has no fill.
   const fill = (m: Element) =>
-    /\bbg-(accent|warning|danger)\b/.exec(m.firstElementChild!.className)?.[1];
-  expect(meters.map(fill)).toEqual(["accent", "warning", "danger"]);
-  const card = document.querySelector('section[aria-label="Claude Code"]')!.textContent;
-  expect(card).toContain("Session37%used");
-  expect(card).toContain("Near the limit80%used");
-  expect(card).toContain("Limit reached100%used");
-  expect(card).toContain("Resets in 2 h 1 min");
+    /(#D97757|--color-warning|--color-danger)\)?_/.exec(m.firstElementChild?.className ?? "")?.[1];
+  expect(meters.map(fill)).toEqual(["#D97757", "--color-warning", undefined]);
+  const claude = document.querySelector('section[aria-label="Claude Code"]')!.textContent;
+  expect(claude).toContain("Session63%left63%2h 1m");
+  expect(claude).toContain("Weekly · Fable0%left");
+  expect(document.querySelector('section[aria-label="Codex"]')!.textContent).toContain(
+    "Couldn't read its limits: it exited before answering",
+  );
 });

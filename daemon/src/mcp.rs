@@ -10,9 +10,11 @@
 //! call goes through one [`Plxd`] client, which keeps one connection to plxd's socket and sends
 //! concurrent calls on it, matched by id (PLX-488). When plxd restarts or the connection drops,
 //! the next call opens a new one and reads plxd's capabilities again. A call already sent fails
-//! with its connection, except `thread_wait`, which keeps trying until its deadline. The client
-//! stops using a connection it hasn't written to for 75 s, so it needs no heartbeat to stay
-//! under plxd's idle timeout. It never starts plxd: the thread it serves is plxd's own child.
+//! with its connection, except `thread_wait`, which keeps trying until its deadline. A call the
+//! MCP client cancels with `notifications/cancelled` stops, gets no answer, and cancels its plxd
+//! request with `$/cancelRequest` (PLX-524). The client stops using a connection it hasn't
+//! written to for 75 s, so it needs no heartbeat to stay under plxd's idle timeout. It never
+//! starts plxd: the thread it serves is plxd's own child.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,13 +22,15 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use futures_util::future::{AbortHandle, Abortable, Aborted};
 use futures_util::stream::FuturesUnordered;
 use futures_util::{SinkExt, StreamExt};
 use parallax_protocol::framing::{FrameCodec, FrameError};
 use parallax_protocol::jsonrpc::{
-    ErrorObject, INVALID_REQUEST, Message, Request, RequestId, Response,
+    CancelRequestParams, ErrorObject, INVALID_REQUEST, Message, Notification, Request, RequestId,
+    Response,
 };
-use parallax_protocol::methods::{AgentEvents, Initialize, RequestMethod};
+use parallax_protocol::methods::{AgentEvents, CancelRequest, Initialize, RequestMethod};
 use parallax_protocol::{
     AgentEventsParams, AgentOutcome, AgentOutputItem, Capabilities, ClientInfo, InitializeParams,
     InitializeResult, ParallaxEvent, ProtocolRange, RunId,
@@ -35,8 +39,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
-use tokio::sync::oneshot;
-use tokio::task::AbortHandle;
+use tokio::sync::{Semaphore, oneshot};
 use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::transport::{self, Stream};
@@ -91,13 +94,19 @@ async fn serve(
     let mut reader = FramedRead::new(input, FrameCodec::with_max_frame_bytes(MAX_MESSAGE_BYTES));
     let mut writer = FramedWrite::new(output, FrameCodec::new());
     // Requests are answered concurrently, each as it finishes, so a long `thread_wait` doesn't
-    // hold up the calls after it. At `MAX_CALLS` the server stops reading until one finishes.
-    // Once `input` ends, the ones read are still answered.
+    // hold up the calls after it. At most `MAX_CALLS` tool calls run at once and the rest wait
+    // their turn, while the server keeps reading so a `notifications/cancelled` still gets through
+    // (PLX-524). A cancelled request is dropped, which cancels its plxd request, and gets no
+    // answer, as MCP says. Once `input` ends, the ones read are still answered.
+    // ponytail: calls waiting for a slot queue without bound; cap the queue and stop reading
+    // past it if a client ever floods the server.
+    let slots = Semaphore::new(MAX_CALLS);
     let mut answering = FuturesUnordered::new();
+    let mut cancels = HashMap::new();
     let mut reading = true;
     loop {
         let response = tokio::select! {
-            frame = reader.next(), if reading && answering.len() < MAX_CALLS => {
+            frame = reader.next(), if reading => {
                 let frame = match frame {
                     None => {
                         reading = false;
@@ -114,19 +123,45 @@ async fn serve(
                 };
                 match Message::from_frame(&frame) {
                     Ok(Message::Request(request)) => {
-                        answering.push(async move {
+                        let id = request.id.clone();
+                        let (cancel, registration) = AbortHandle::new_pair();
+                        cancels.insert(id.clone(), cancel);
+                        let slots = &slots;
+                        let answered = async move {
+                            let _slot = match request.method.as_str() {
+                                "tools/call" => slots.acquire().await.ok(),
+                                _ => None,
+                            };
                             Response {
                                 id: Some(request.id.clone()),
                                 result: answer(binding, &request).await,
                             }
+                        };
+                        answering.push(async move {
+                            (id, Abortable::new(answered, registration).await)
                         });
                         continue;
                     }
-                    Ok(Message::Notification(_) | Message::Response(_)) => continue,
+                    Ok(Message::Notification(notification)) => {
+                        if notification.method == "notifications/cancelled"
+                            && let Ok(Cancelled { request_id }) = notification.params()
+                            && let Some(cancel) = cancels.get(&request_id)
+                        {
+                            cancel.abort();
+                        }
+                        continue;
+                    }
+                    Ok(Message::Response(_)) => continue,
                     Err(malformed) => malformed.into_response(),
                 }
             }
-            Some(response) = answering.next() => response,
+            Some((id, answered)) = answering.next() => {
+                cancels.remove(&id);
+                match answered {
+                    Ok(response) => response,
+                    Err(Aborted) => continue,
+                }
+            }
             else => return Ok(()),
         };
         writer
@@ -173,6 +208,13 @@ async fn answer(binding: &impl Tools, request: &Request) -> Result<Value, ErrorO
 struct InitializeRequest {
     #[serde(default)]
     protocol_version: Option<String>,
+}
+
+/// `notifications/cancelled`'s params: the request the client no longer wants answered.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Cancelled {
+    request_id: RequestId,
 }
 
 #[derive(Deserialize)]
@@ -304,7 +346,7 @@ pub struct Plxd {
 struct Connection {
     writer: tokio::sync::Mutex<FramedWrite<WriteHalf<Stream>, FrameCodec>>,
     state: Arc<Mutex<State>>,
-    reader: AbortHandle,
+    reader: tokio::task::AbortHandle,
     /// plxd has `agent/wait` (`agentWait`, PLX-451).
     agent_wait: bool,
 }
@@ -341,7 +383,8 @@ impl Plxd {
 
     /// Sends one request: plxd's answer, or `Err` when the connection fails first. A request
     /// that couldn't be written is sent once more, on a new connection; one that was written
-    /// fails with its connection.
+    /// fails with its connection. Dropped while plxd is answering, it cancels the request with
+    /// `$/cancelRequest` (PLX-524).
     async fn request<M: RequestMethod>(
         &self,
         params: M::Params,
@@ -353,7 +396,10 @@ impl Plxd {
             let connection = self.connect().await?;
             match connection.send(&request).await {
                 Ok(answer) => {
-                    let response = answer.await.map_err(|_| lost(&"plxd closed it"))?;
+                    let mut in_flight = InFlight(Some((connection, request.id.clone())));
+                    let answered = answer.await;
+                    in_flight.0 = None;
+                    let response = answered.map_err(|_| lost(&"plxd closed it"))?;
                     return Ok(response.into_result());
                 }
                 Err(error) if retried => return Err(lost(&error)),
@@ -455,6 +501,26 @@ impl Connection {
     /// Fails every call waiting on this connection, and keeps more from using it.
     fn close(&self) {
         lock(&self.state).waiting = None;
+    }
+}
+
+/// A request written on a connection, until its answer arrives. Dropped before then, because its
+/// tool call was cancelled, it sends plxd `$/cancelRequest`. plxd still answers it, and
+/// [`answer_callers`] drops that answer.
+struct InFlight(Option<(Arc<Connection>, RequestId)>);
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        let Some((connection, id)) = self.0.take() else {
+            return;
+        };
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        runtime.spawn(async move {
+            let cancel = Notification::new::<CancelRequest>(CancelRequestParams { id });
+            let _ = connection.writer.lock().await.send(&cancel).await;
+        });
     }
 }
 

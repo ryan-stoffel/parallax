@@ -74,7 +74,7 @@ export function TypographySettings() {
             label="Monospace font"
             value={appearance.codeFont}
             fonts={fonts.code}
-            system="System monospace"
+            system="Default (JetBrains Mono Nerd Font)"
             advanced={advanced}
             onChange={(codeFont) => setAppearance({ codeFont })}
           />

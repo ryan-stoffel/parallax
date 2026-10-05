@@ -8,15 +8,13 @@
 //! keeps the user's own text, and the message's `turnStarted` lists the threads.
 
 use std::fmt::Write as _;
-use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{ErrorKind, RunId};
 use uuid::Uuid;
 
-use super::handoff::{self, Budget, HandoffEvent};
+use super::handoff::{self, Budget};
 use super::{store, store_error};
-use crate::event_log::EventLog;
 use crate::server::Daemon;
 
 /// The most threads one message takes.
@@ -119,73 +117,16 @@ async fn summary(
             .map_err(|e| store_error(&e))
     })
     .await?;
-    let log = Arc::clone(&daemon.log);
-    tokio::task::spawn_blocking(move || match seen {
-        Some(seq) => load_since(&log, source, seq),
-        None => load_summary(&log, source),
-    })
-    .await
-    .map_err(ErrorObject::internal_error)?
-    .map_err(|error| store_error(&error))
-}
-
-fn load_summary(
-    log: &EventLog,
-    source: RunId,
-) -> Result<(String, u64), parallax_store::StoreError> {
-    let events = load_after(log, source, 0)?;
-    let cursor = events.last().map_or(0, |event| event.seq);
-    Ok((
-        handoff::handoff(&events, Budget::Summary { cap: SUMMARY_BYTES }),
-        cursor,
-    ))
-}
-
-fn load_since(
-    log: &EventLog,
-    source: RunId,
-    seq: u64,
-) -> Result<(String, u64), parallax_store::StoreError> {
-    let mut events = load_after(log, source, seq)?;
-    let start = events
-        .iter()
-        .filter_map(|event| {
-            let from = event.compacted_from?;
-            (from <= seq && seq < event.seq).then_some(from)
-        })
-        .min()
-        .map_or(seq, |from| from.saturating_sub(1));
-    if start < seq {
-        events = load_after(log, source, start)?;
-    }
-    let cursor = events.last().map_or(seq, |event| event.seq);
-    Ok((
-        handoff::handoff(
-            &events,
-            Budget::Since {
-                seq,
-                cap: SUMMARY_BYTES,
-            },
-        ),
-        cursor,
-    ))
-}
-
-fn load_after(
-    log: &EventLog,
-    source: RunId,
-    after: u64,
-) -> Result<Vec<HandoffEvent>, parallax_store::StoreError> {
-    let mut events = Vec::new();
-    let mut after = after;
-    loop {
-        let (page, more) = log.run_events(source, after, 1000, 4 * 1024 * 1024)?;
-        after = page.last().map_or(after, |entry| entry.seq);
-        events.extend(page.iter().map(|entry| HandoffEvent::from_entry(entry)));
-        if !more || page.is_empty() {
-            return Ok(events);
-        }
-    }
+    let events = super::actor::logged_events(daemon, source).await?;
+    let cursor = events.last().map_or(seen.unwrap_or(0), |event| event.seq);
+    let budget = match seen {
+        Some(seq) => Budget::Since {
+            seq,
+            cap: SUMMARY_BYTES,
+        },
+        None => Budget::Summary { cap: SUMMARY_BYTES },
+    };
+    Ok((handoff::handoff(&events, budget), cursor))
 }
 
 #[cfg(test)]
@@ -198,6 +139,69 @@ mod tests {
     use super::{SUMMARY_BYTES, summary};
     use crate::agents::handoff::LEFT_OUT;
     use crate::server::Daemon;
+
+    /// Recovery rows injected on older pages must not repeat an already read turn.
+    #[tokio::test]
+    async fn a_compacted_turn_spanning_summary_pages_is_included_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let id = RunId::generate();
+        let first = daemon
+            .store
+            .append(
+                Timestamp::now(),
+                None,
+                ParallaxEvent::AgentOutput {
+                    run_id: id,
+                    items: vec![],
+                    compacted: None,
+                },
+            )
+            .await;
+        for _ in 0..=1000 {
+            daemon
+                .store
+                .append(
+                    Timestamp::now(),
+                    None,
+                    ParallaxEvent::AgentWakeupsPaused { run_id: id },
+                )
+                .await;
+        }
+        daemon
+            .store
+            .append(
+                Timestamp::now(),
+                None,
+                ParallaxEvent::AgentOutput {
+                    run_id: id,
+                    items: vec![AgentOutputItem::Text {
+                        message_id: None,
+                        text: "Hello".to_owned(),
+                    }],
+                    compacted: Some(parallax_protocol::Compacted { from: first }),
+                },
+            )
+            .await;
+        assert_eq!(
+            summary(&daemon, RunId::generate(), id).await.unwrap().0,
+            "Agent:\nHello"
+        );
+        let events = crate::agents::actor::logged_events(&daemon, id)
+            .await
+            .unwrap();
+        assert_eq!(events.last().unwrap().compacted_from, Some(first));
+        assert_eq!(
+            crate::agents::handoff::handoff(
+                &events,
+                crate::agents::handoff::Budget::Since {
+                    seq: first + 500,
+                    cap: SUMMARY_BYTES,
+                },
+            ),
+            "Agent:\nHello"
+        );
+    }
 
     /// A thread longer than the cap keeps its first task and its latest messages.
     #[tokio::test]
@@ -212,6 +216,7 @@ mod tests {
                 message_id: None,
                 text,
             }],
+            compacted: None,
         };
         for i in 0..300 {
             let text = format!("{i:03}{}", "x".repeat(200));

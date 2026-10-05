@@ -7,7 +7,7 @@ import { MenuOption, menuButton, menuHeading, menuPanel, moveFocus, type PickerO
 /** Where a new thread works: a worktree of its own, or the repository's own checkout. */
 export type Workspace = "worktree" | "checkout";
 
-const workspaces: (PickerOption & { value: Workspace })[] = [
+export const workspaces: (PickerOption & { value: Workspace })[] = [
   {
     value: "worktree",
     label: "New worktree",
@@ -16,7 +16,7 @@ const workspaces: (PickerOption & { value: Workspace })[] = [
   },
   {
     value: "checkout",
-    label: "Current checkout",
+    label: "Local checkout",
     icon: <Folder />,
     description: "Right in the repository, on the branch you have out.",
   },
@@ -26,9 +26,9 @@ const workspaces: (PickerOption & { value: Workspace })[] = [
 export const hostIcon = (host: Host) => (host.destination ? <Server /> : <Laptop />);
 
 /**
- * Where a thread runs: which of Parallax's computers, and in a new worktree or the current checkout.
+ * Where a thread runs: which of Parallax's computers, and in a new worktree or the local checkout.
  * The menu stays open while you pick both. The workspace is the caller's, which sends it with the
- * thread; `checkoutUnavailable`, when set, says why Current checkout can't be picked. The computer
+ * thread; `checkoutUnavailable`, when set, says why Local checkout can't be picked. The computer
  * is a placeholder: nothing here sends it yet, and the thread starts on the computer that got the
  * request.
  */

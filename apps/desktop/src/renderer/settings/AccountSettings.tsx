@@ -35,6 +35,7 @@ import { instanceName, kinds } from "../providers";
 import { activityOf, Avatar, dayKey, rhythmOf, useProfile, type Activity } from "../profile";
 import { backendLogos } from "../Sidebar";
 import type { ThreadsView } from "../threads";
+import { hourCycle } from "../prefs";
 import { primaryButton, quietButton, Section, settingRow } from "./parts";
 
 /** How far back the Tokens chart looks, in days. */
@@ -51,7 +52,7 @@ const shortDay = new Intl.DateTimeFormat("en", {
 });
 const monthName = new Intl.DateTimeFormat("en", { month: "short" });
 const monthDay = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" });
-const hourName = new Intl.DateTimeFormat("en", { hour: "numeric" });
+const hourName = () => new Intl.DateTimeFormat("en", { hour: "numeric", ...hourCycle() });
 
 const card = "rounded-2xl border border-border bg-surface";
 const heading = "text-[12.5px] font-medium text-muted-foreground";
@@ -354,7 +355,7 @@ function Hours({ hours }: { hours: number[] }) {
   const max = Math.max(...hours);
   if (!max) return null;
   const busiest = hours.indexOf(max);
-  const at = (hour: number) => hourName.format(new Date(2000, 0, 1, hour));
+  const at = (hour: number) => hourName().format(new Date(2000, 0, 1, hour));
   const Icon = rhythmIcon(busiest);
   return (
     <section aria-label="When you build" className={`flex flex-col p-5 ${card}`}>

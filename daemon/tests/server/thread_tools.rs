@@ -739,8 +739,8 @@ async fn tool_calls_share_one_connection_while_a_wait_runs() {
     host.server.stop().await;
 }
 
-/// PLX-488: the server runs at most `MAX_CALLS` tool calls at once, and reads the next request
-/// only once one of them finishes.
+/// PLX-488: the server runs at most `MAX_CALLS` tool calls at once, and starts the next one only
+/// once one of them finishes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_server_runs_at_most_max_calls_at_once() {
     let host = Host::start(temp_dir(), fake(hang()));
@@ -765,6 +765,60 @@ async fn the_server_runs_at_most_max_calls_at_once() {
         first["id"].as_str().unwrap().starts_with("wait-"),
         "{first}"
     );
+    host.server.stop().await;
+}
+
+/// PLX-524: with every slot taken by a `thread_wait`, `notifications/cancelled` for one frees its
+/// slot at once, gets it no answer, and cancels its `agent/wait` on plxd. A cancel naming an
+/// unknown or finished request changes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_thread_wait_frees_its_slot_and_cancels_its_agent_wait() {
+    let host = Host::start(temp_dir(), fake(hang()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    let proxy = temp_dir();
+    let methods = record_requests(proxy.path(), host.server.socket.clone());
+    let me = me.to_string();
+    let mut mcp = Mcp::spawn(mcp_command(proxy.path(), &["--thread", &me])).await;
+    let launch = json!({"prompt": "Wait here.", "backend": "fake", "workspace": "none"});
+    let child = id(&mcp.ok("thread_launch", launch).await);
+    let count = |method: &str| {
+        methods
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| *m == method)
+            .count()
+    };
+    let cancel = |id: Value| json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": id}});
+
+    let wait = json!({"name": "thread_wait", "arguments": {"runId": child, "timeoutSeconds": 30}});
+    for n in 0..MAX_CALLS {
+        let id = format!("wait-{n}");
+        mcp.send(&json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": wait}))
+            .await;
+    }
+    let deadline = Instant::now() + PATIENCE;
+    while count("agent/wait") < MAX_CALLS {
+        assert!(Instant::now() < deadline, "the waits never reached plxd");
+        sleep(Duration::from_millis(20)).await;
+    }
+    mcp.send(&cancel(json!("unknown"))).await;
+    mcp.send(&cancel(json!(1))).await;
+    mcp.send(&cancel(json!("wait-0"))).await;
+    let started = Instant::now();
+    let listed = mcp.ok("thread_list", json!({})).await;
+    assert!(listed["threads"].is_array(), "{listed}");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the slot wasn't freed"
+    );
+    while count("$/cancelRequest") < 1 {
+        assert!(Instant::now() < deadline, "plxd never saw $/cancelRequest");
+        sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(count("$/cancelRequest"), 1);
     host.server.stop().await;
 }
 

@@ -22,7 +22,7 @@ Amended 2026-10-02 (PLX-340): Projects moved out of the one list into their own 
 - A Project is one row, one line: its icon and name, then its combined status (or its age). Its tooltip says how many agents it has run, and names its host when there are several. Its subagents never get rows of their own. Users can still start agents inside a Project directly (PLX-47's Agents view), and they share its context.
 - Search and the Repos filter apply to both sections. Mod+1 to Mod+9 count the shown Projects first, then threads, and a collapsed section's rows get no numbers.
 - The **Repos** filter is a searchable menu: All repos, No repo, then each host's repositories. The choice is kept in the browser's storage, per window. Each repo's gear opens the icon picker.
-- Snoozed and Archived threads sit in drawers under the list.
+- Snoozed and Archived threads sit in drawers under the list. Amended 2026-10-04: Threads collapses the same way Projects does, and that choice is kept in the browser's storage. A drawer's rows scroll under its summary, so the summary stays put. Archived threads list 25 at a time, with Show more for the next 25. While a top-level thread is working, it and its children sit in a Working drawer above the others, open, and return to Threads when it stops; a working child of a thread that isn't working stays nested there. Settings > General turns the Working section and the archive pages off, which is the earlier list.
 
 ### Attention
 

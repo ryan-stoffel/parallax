@@ -924,15 +924,15 @@ test("the composer tab shows the worktree and its branch", () => {
   expect(document.body.textContent).toBe("Worktreeparallax/1a2b3c4d");
 });
 
-test("the composer tab shows a thread in the current checkout, which has no branch of its own", () => {
+test("the composer tab names the host and local checkout, which has no branch of its own", () => {
   const started = samples.find((m) => "result" in m && m.id === 2)!;
   const {
     branch: _,
     worktreePath: __,
     ...run
   } = (started as unknown as { result: AgentRunResult }).result.run;
-  render(<RunTab run={{ ...run, checkout: true }} />);
-  expect(document.body.textContent).toBe("Current checkout");
+  render(<RunTab run={{ ...run, checkout: true }} host={{ id: "local", name: "This Mac" }} />);
+  expect(document.body.textContent).toBe("This Mac·Local checkout");
 });
 
 test("Enter sends with a fresh v7 turn id, but not while an IME is composing", async () => {
@@ -1072,7 +1072,11 @@ test("a pasted image goes with agent/send beside the text, and shows while it's 
   act(() => {
     composer().dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
   });
-  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  // FileReader completion can take longer on Windows CI. Wait for the image to be ready.
+  await vi.waitFor(async () => {
+    await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
+    expect(document.querySelector('img[src="data:image/png;base64,iVBORw=="]')).not.toBeNull();
+  });
   await act(async () => {
     composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   });
@@ -1390,7 +1394,7 @@ test("another provider's model moves an open thread there, with every option and
     m.textContent?.startsWith("GPT-6 Astra"),
   )!;
   await act(async () => astra.click());
-  // Codex has no Plan, so Plan becomes Accept Edits.
+  // Codex has no Plan, so Plan becomes Auto-accept edits.
   expect(control("Access: Plan")).toBeNull();
   type("Carry on");
   await act(async () =>

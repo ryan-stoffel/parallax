@@ -9,15 +9,14 @@
 //! - Runs the read-only status commands 0004 lists, through the same [`Launcher`] and
 //!   environment scrubbing the agent backends use, with a timeout.
 //!
-//! The exact shape of `claude auth status` and `agent status --format json` is undocumented, so
+//! The exact shape of `claude auth status` is undocumented, so
 //! [`apply_json_status`] reads the fields these sources show and tolerates everything else,
 //! mirroring 0007's forward-compatible parsing rule. A field plxd could not read is left `None`
 //! rather than guessed, and [`DetectedCli::note`] says why when that happens.
 //!
 //! Plan/tier is available for Codex only through its `app-server`'s `account/read`, a JSON-RPC
 //! server on stdio rather than a one-shot command. [`probe_codex_plan`] does the smallest useful
-//! thing: one request, one response, then the process is killed. A real Codex backend (#122)
-//! will want a proper client with its own handshake; this is not it.
+//! thing: the `initialize` handshake, one request, one response, then the process is killed.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -422,7 +421,8 @@ async fn probe_codex(launcher: &Launcher, timeout: Duration) -> DetectedCli {
 }
 
 /// Asks a running `codex app-server` for the signed-in account's plan, over one NDJSON
-/// request/response on stdio. Best-effort: any failure, including a malformed reply, is `None`
+/// request/response on stdio after its `initialize` handshake, without which it answers "Not
+/// initialized" (checked with 0.160.0). Best-effort: any failure, including a malformed reply, is `None`
 /// rather than an error, since a subscription's plan is metadata, not a fact plxd depends on.
 /// The process is killed once this returns, whether or not it answered in time.
 async fn probe_codex_plan(launcher: &Launcher, timeout: Duration) -> Option<String> {
@@ -433,10 +433,16 @@ async fn probe_codex_plan(launcher: &Launcher, timeout: Duration) -> Option<Stri
     let plan = tokio::time::timeout(timeout, async {
         let mut stdin = process.take_stdin()?;
         stdin
-            .write_all(br#"{"id":1,"method":"account/read","params":{}}"#)
+            .write_all(concat!(
+                r#"{"id":0,"method":"initialize","params":{"clientInfo":{"name":"plxd","version":"0"}}}"#,
+                "\n",
+                r#"{"method":"initialized"}"#,
+                "\n",
+                r#"{"id":1,"method":"account/read","params":{}}"#,
+                "\n",
+            ).as_bytes())
             .await
             .ok()?;
-        stdin.write_all(b"\n").await.ok()?;
         while let Some(output) = process.next().await {
             let Output::Line(bytes) = output else {
                 continue;
@@ -448,7 +454,7 @@ async fn probe_codex_plan(launcher: &Launcher, timeout: Duration) -> Option<Stri
                 continue;
             }
             return value
-                .pointer("/result/planType")
+                .pointer("/result/account/planType")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
         }
@@ -461,29 +467,20 @@ async fn probe_codex_plan(launcher: &Launcher, timeout: Duration) -> Option<Stri
     plan
 }
 
+/// Cursor's account, from the SDK sidecar (0053), not from `agent status`. The SDK reports an
+/// email and no subscription tier.
 async fn probe_cursor(launcher: &Launcher, timeout: Duration) -> DetectedCli {
-    let Some(path) = resolve(launcher, "agent") else {
-        return not_installed(CliKind::Cursor);
-    };
-    let mut detected = installed(CliKind::Cursor, &path);
-    match run(launcher, "agent", &["status", "--format", "json"], timeout).await {
-        Ok(ran) => apply_json_status(&mut detected, &ran),
-        Err(note) => detected.note = Some(note),
+    let report = crate::backend::cursor_sdk::inspect(launcher, "cursor", &[], timeout).await;
+    DetectedCli {
+        cli: CliKind::Cursor,
+        installed: report.installed,
+        path: report.path,
+        version: report.version,
+        signed_in: report.signed_in,
+        auth_kind: (report.signed_in == Some(true)).then_some(AuthKind::Subscription),
+        plan: None,
+        note: report.note,
     }
-    if detected.signed_in == Some(true)
-        && let Ok(ran) = run(launcher, "agent", &["about"], timeout).await
-    {
-        detected.plan = extract_subscription_tier(&ran.stdout).or(detected.plan);
-    }
-    detected
-}
-
-/// Reads a `Subscription Tier: <value>` line from `agent about`'s plain text (0004, undocumented).
-fn extract_subscription_tier(text: &str) -> Option<String> {
-    text.lines().find_map(|line| {
-        let tier = line.trim().strip_prefix("Subscription Tier:")?.trim();
-        (!tier.is_empty()).then(|| tier.to_owned())
-    })
 }
 
 /// Runs `gh --version` and `gh auth status --hostname github.com`, never with `--show-token`, so

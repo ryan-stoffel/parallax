@@ -240,6 +240,8 @@ pub(crate) struct Daemon {
     pub agents: Agents,
     /// Provider instances (0040), whose backends are in `agents`' registry.
     pub providers: Providers,
+    /// Cursor account login through the SDK sidecar (0053).
+    pub cursor: crate::backend::cursor_sdk::CursorAuth,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -357,7 +359,7 @@ impl Server {
             reader,
             os: methods::os_version(),
             github: Github::new(launcher.clone(), github::RELEASE_URL),
-            cli_detector: CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT),
+            cli_detector: CliDetector::new(launcher.clone(), crate::detect::PROBE_TIMEOUT),
             limits: Limits {
                 idle_timeout: config.idle_timeout,
                 max_requests_in_flight: config.max_requests_in_flight.max(1),
@@ -372,6 +374,7 @@ impl Server {
                     jitter: config.resume_jitter,
                     backoff: config.resume_backoff,
                 }),
+            cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher.clone()),
             providers,
         });
         // Best effort: a project's context folder is also ensured lazily on its first
@@ -452,6 +455,13 @@ impl Server {
         agents::recover(&daemon).await;
         agents::deliver_queued(&daemon).await;
         crate::methods::land::resume(&daemon).await;
+        let compact = {
+            let daemon = Arc::clone(&daemon);
+            let stop = shutdown.graceful.clone();
+            tokio::spawn(async move {
+                crate::agents::compact::run(daemon, stop).await;
+            })
+        };
         let connections = TaskTracker::new();
         let abort = CancellationToken::new();
         let period = config.socket_check_interval;
@@ -510,6 +520,7 @@ impl Server {
             connections.wait().await;
         }
         daemon.agents.shutdown().await;
+        let _ = compact.await;
         daemon.store.stop().await;
         daemon.reader.stop().await;
         lock.release();
@@ -641,7 +652,7 @@ impl Daemon {
             reader,
             os: "test".to_owned(),
             github: Github::new(launcher.clone(), github::RELEASE_URL),
-            cli_detector: CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT),
+            cli_detector: CliDetector::new(launcher.clone(), crate::detect::PROBE_TIMEOUT),
             limits: Limits {
                 idle_timeout,
                 max_requests_in_flight: 32,
@@ -652,6 +663,7 @@ impl Daemon {
             context: ContextIndex::default(),
             agents: Agents::new(backends, worktrees),
             providers,
+            cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher),
         })
     }
 }

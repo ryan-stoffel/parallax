@@ -49,7 +49,7 @@ struct Fake {
     backend: AcpBackend,
 }
 
-/// Cursor Agent as plxd's built-in `cursor` provider describes it (0036).
+/// The ACP shape Cursor used before the SDK sidecar (0036). The ACP driver still serves the other agents.
 fn cursor() -> AcpAgent {
     AcpAgent {
         scrub: vec!["CURSOR_".into()],
@@ -908,6 +908,38 @@ fn thread_mcp_autoapproval_is_scoped_to_the_injected_server_and_known_tools() {
             matches!(step, Step::Reply(value) if value["result"]["outcome"]["optionId"] == "yes")
         });
         assert_eq!(allowed_at_once, allowed);
+    }
+}
+
+/// plxd answers an agent's permission requests by the run's mode (0054), whatever the agent is.
+#[test]
+fn a_mode_allows_what_it_covers_and_asks_for_the_rest() {
+    use super::stream::{Step, Translator};
+    for (permission, kind, allowed) in [
+        (AgentPermission::Bypass, "execute", true),
+        (AgentPermission::Edit, "edit", true),
+        (AgentPermission::Edit, "execute", false),
+        (AgentPermission::Manual, "edit", false),
+        (AgentPermission::Plan, "edit", false),
+    ] {
+        let mut translator = Translator::default();
+        translator.asks = true;
+        translator.permission = Some(permission);
+        let update = json!({"method": "session/update", "params": {"update": {
+            "sessionUpdate": "tool_call", "toolCallId": "call", "kind": kind,
+            "title": "a call", "status": "pending",
+        }}});
+        translator.line(update.to_string().as_bytes());
+        let ask = json!({"id": 7, "method": "session/request_permission", "params": {
+            "toolCall": {"toolCallId": "call"},
+            "options": [{"optionId": "yes", "kind": "allow_once"}],
+        }});
+        let steps = translator.line(ask.to_string().as_bytes());
+        assert_eq!(
+            steps.iter().any(|step| matches!(step, Step::Ask(..))),
+            !allowed,
+            "{permission:?} {kind}"
+        );
     }
 }
 

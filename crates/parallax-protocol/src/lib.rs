@@ -97,7 +97,7 @@ pub use defaults::{
 };
 pub use error::{ErrorData, ErrorKind, IncompatibleProtocolDetail};
 pub use events::{
-    EventsEventParams, EventsResyncParams, EventsSubscribeParams, EventsSubscribeResult,
+    Compacted, EventsEventParams, EventsResyncParams, EventsSubscribeParams, EventsSubscribeResult,
     EventsUnsubscribeParams, EventsUnsubscribeResult, LogId, ParallaxEvent, SubscriptionId,
 };
 pub use git::{AgentCommitParams, AgentGitStatusParams, AgentPushParams, GitStatus};
@@ -128,8 +128,10 @@ pub use project::{
     ProjectUpdateParams, ProjectUpdateResult,
 };
 pub use provider::{
-    ProviderEnvVar, ProviderInfo, ProviderInstance, ProviderKind, ProviderModel,
-    ProvidersListParams, ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams,
+    CursorSignInCancelParams, CursorSignInCancelResult, CursorSignInParams, CursorSignInResult,
+    CursorSignOutParams, CursorSignOutResult, ProviderEnvVar, ProviderInfo, ProviderInstance,
+    ProviderKind, ProviderModel, ProvidersListParams, ProvidersListResult, ProvidersRemoveParams,
+    ProvidersSaveParams,
 };
 pub use pull_request::{
     PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrMergeMethod,
@@ -157,9 +159,9 @@ pub use thread::{
     ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
 };
 pub use usage::{
-    AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageDay, UsageGetParams,
-    UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageHour, UsageLimitWindow,
-    UsagePeriod, UsageProblem, UsageSource,
+    AccountLimits, AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageDay,
+    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageHour,
+    UsageLimitWindow, UsageLimitsParams, UsageLimitsResult, UsagePeriod, UsageProblem, UsageSource,
 };
 
 /// The newest protocol version this crate speaks. Versions start at 1.

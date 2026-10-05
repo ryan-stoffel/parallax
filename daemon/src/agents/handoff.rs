@@ -229,6 +229,7 @@ mod tests {
             ParallaxEvent::AgentOutput {
                 run_id: RunId::generate(),
                 items,
+                compacted: None,
             },
         )
     }
@@ -407,6 +408,7 @@ mod tests {
             event: ParallaxEvent::AgentOutput {
                 run_id,
                 items: vec![turn("the whole turn", false)],
+                compacted: Some(parallax_protocol::Compacted { from: 12 }),
             },
             compacted_from: Some(12),
         };

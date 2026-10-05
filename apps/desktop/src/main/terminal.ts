@@ -75,6 +75,93 @@ export function loginCommand(
 }
 
 /**
+ * Antigravity's ACP server, from the ACP Registry's archive for the host's platform: unzipped to
+ * `~/.local/opt/agy-acp-server`, with a wrapper on `~/.local/bin` (which plxd searches) that runs
+ * it from there, beside the `localharness_external` it ships with.
+ * ponytail: pinned to the registry's 1.3.0, as Pi's adapter is pinned; bump it with the registry.
+ */
+const antigravityPosix = `set -e
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) build=macos/agy-acp-server-1.3.0-darwin-arm64 ;;
+  Darwin-x86_64) build=macos/agy-acp-server-1.3.0-darwin-x86_64 ;;
+  Linux-x86_64) build=linux/agy-acp-server-1.3.0-linux-x86_64 ;;
+  Linux-aarch64|Linux-arm64) build=linux/agy-acp-server-1.3.0-linux-arm64 ;;
+  *) echo "Antigravity's ACP server has no build for $(uname -s) $(uname -m)."; exit 1 ;;
+esac
+dir="$HOME/.local/opt/agy-acp-server"
+zip="$(mktemp -d)/agy.zip"
+curl -fL "https://dl.google.com/agy-extensions/releases/$build.zip" -o "$zip"
+rm -rf "$dir" && mkdir -p "$dir" "$HOME/.local/bin"
+unzip -oq "$zip" -d "$dir"
+printf '#!/bin/sh\nexec "%s/agy_acp_server.par" "$@"\n' "$dir" > "$HOME/.local/bin/agy_acp_server.par"
+chmod +x "$HOME/.local/bin/agy_acp_server.par"
+echo "Installed Antigravity's ACP server in $dir."`;
+
+/**
+ * Each agent's own install, by provider kind, as its docs give it: for a POSIX shell, and for
+ * PowerShell where it has one.
+ */
+const installScripts: Record<string, { posix: string; windows?: string }> = {
+  claude: {
+    posix: "curl -fsSL https://claude.ai/install.sh | bash",
+    windows: "irm https://claude.ai/install.ps1 | iex",
+  },
+  codex: { posix: "npm install -g @openai/codex", windows: "npm install -g @openai/codex" },
+  pi: {
+    posix: "curl -fsSL https://pi.dev/install.sh | sh",
+    windows: "irm https://pi.dev/install.ps1 | iex",
+  },
+  opencode: {
+    posix: "curl -fsSL https://opencode.ai/install | bash",
+    windows: "npm install -g opencode-ai@latest",
+  },
+  grokBuild: {
+    posix: "curl -fsSL https://x.ai/cli/install.sh | bash",
+    windows: "npm install -g @xai-official/grok",
+  },
+  hermes: {
+    posix: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+    windows: "iex (irm https://hermes-agent.nousresearch.com/install.ps1)",
+  },
+  // Its Windows build is an .exe that an instance's binary path names instead.
+  antigravity: { posix: antigravityPosix },
+};
+
+export const isInstallable = (value: unknown): value is string =>
+  typeof value === "string" && Object.hasOwn(installScripts, value);
+
+/**
+ * The command that installs an agent of `kind` on a host: its install script in the user's login
+ * shell, so it finds `npm` where the user would, or PowerShell on Windows. An SSH host runs it over
+ * `ssh -t`, by `hostOs` as its plxd's `host/version` gives it (`windows` on Windows). Resolves to
+ * an error for people when it has no install for Windows.
+ */
+export function installCommand(
+  kind: string,
+  ssh?: SshTarget,
+  platform = process.platform,
+  env = process.env,
+  hostOs?: string,
+): Command | string {
+  const script = installScripts[kind]!;
+  const windows = ssh ? hostOs === "windows" : platform === "win32";
+  if (windows && !script.windows)
+    return "Parallax can't install this agent on Windows. Download it, then set its binary path.";
+  if (ssh)
+    return overSsh(
+      ssh,
+      windows
+        ? `powershell -NoLogo -NoProfile -Command "${script.windows}"`
+        : `exec "$SHELL" -lc ${quote(script.posix)}`,
+      [],
+      platform,
+    );
+  if (windows)
+    return { file: "powershell.exe", args: ["-NoLogo", "-NoProfile", "-Command", script.windows!] };
+  return { file: env["SHELL"] || "/bin/sh", args: ["-lc", script.posix] };
+}
+
+/**
  * The command that opens the user's login shell in `path`, a thread's folder: here, `$SHELL -l`
  * (PowerShell on Windows), or on an SSH host, the host's login shell after a `cd` to it over
  * `ssh -t`. A Windows host's path (`C:\...`) runs under its default shell, cmd.exe.

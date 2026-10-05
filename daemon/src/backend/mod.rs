@@ -21,9 +21,11 @@ pub mod acp;
 pub mod claude;
 pub mod codex;
 pub mod commands;
+pub mod cursor_sdk;
 pub mod event;
 pub mod fake;
 pub mod key_account;
+pub mod limits;
 pub mod process;
 pub mod record;
 pub mod run_temp;
@@ -51,6 +53,7 @@ pub use self::event::{
     LimitWindow, ModelUsage, Outcome, SubagentStatus, TodoItem, TodoStatus, ToolStatus, Usage,
     WarningKind,
 };
+pub use self::limits::LimitsProbe;
 use self::process::{CancelPolicy, Signals, SpawnError};
 pub use self::sandbox::WorkerSandbox;
 
@@ -126,6 +129,17 @@ pub trait Backend: Send + Sync {
     ///
     /// If the CLI can't be started.
     fn commands(&self, _cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
+        Ok(None)
+    }
+
+    /// Starts the CLI in `cwd` to read its subscription's limit windows (PLX-541), on the login
+    /// a thread on this backend gets, for [`commands::list`]. `None` for a backend whose CLI
+    /// reports none, the default.
+    ///
+    /// # Errors
+    ///
+    /// If the CLI can't be started.
+    fn limits(&self, _cwd: &Path) -> Result<Option<LimitsProbe>, StartError> {
         Ok(None)
     }
 }

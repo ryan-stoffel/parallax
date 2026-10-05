@@ -9,6 +9,13 @@ import type { AgentRun, PromptImage } from "../protocol/generated/protocol";
 import { Composer, type ComposerProps } from "./Composer";
 import type { ImageCaps } from "./images";
 import { setCliEnabled } from "./models";
+import {
+  behaviorDefaults,
+  newThreadDefaults,
+  newThreadPrefs,
+  setBehaviorPrefs,
+  setNewThreadPrefs,
+} from "./prefs";
 import type { AttachThreads } from "./threadContext";
 import { dragThread } from "./threadDrag";
 import { emptyThreads } from "./threads";
@@ -36,6 +43,8 @@ vi.mock(import("./images"), async (importOriginal) => {
 let unmount = () => {};
 afterEach(() => {
   act(() => unmount());
+  newThreadPrefs.set(newThreadDefaults);
+  setBehaviorPrefs(behaviorDefaults);
   vi.useRealTimers();
 });
 
@@ -102,11 +111,11 @@ const thumbnails = () =>
   [...document.querySelectorAll("form img")].map((img) => img.getAttribute("alt"));
 const alert = () => document.querySelector('[role="alert"]')?.textContent;
 
-test("Manual says its requests are denied when they can't come to the chat, and why (PLX-196)", () => {
+test("Supervised says its requests are denied when they can't come to the chat, and why (PLX-196)", () => {
   const manual = () =>
     [
       ...document.querySelectorAll('[role="menu"][aria-label="Access"] [role="menuitemradio"]'),
-    ].find((o) => o.textContent?.startsWith("Manual"))!.textContent;
+    ].find((o) => o.textContent?.startsWith("Supervised"))!.textContent;
   const shown = (manualDenied?: "host" | "run") => {
     const root = createRoot(document.body.appendChild(document.createElement("div")));
     act(() => root.render(<Composer backend="claude" manualDenied={manualDenied} />));
@@ -115,13 +124,56 @@ test("Manual says its requests are denied when they can't come to the chat, and 
     document.body.innerHTML = "";
     return text;
   };
-  expect(shown()).toBe("ManualAsks you before edits and commands.");
+  expect(shown()).toBe("SupervisedAsks you before commands and file changes.");
   expect(shown("host")).toBe(
-    "ManualAsks before edits and commands. This host's plxd can't show those requests, so they're denied.",
+    "SupervisedAsks before edits and commands. This host's plxd can't show those requests, so they're denied.",
   );
   expect(shown("run")).toBe(
-    "ManualAsks before edits and commands. This chat started before Parallax could show those requests, so they're denied.",
+    "SupervisedAsks before edits and commands. This chat started before Parallax could show those requests, so they're denied.",
   );
+});
+
+test("a new thread starts from Settings > General's defaults (PLX-538)", async () => {
+  setNewThreadPrefs({
+    model: { provider: "claude", id: "claude-sonnet-5" },
+    effort: "low",
+    permission: "manual",
+  });
+  const onSend = vi.fn(async () => undefined);
+  const { type, press } = render(onSend, caps, { newThread: true, backend: "claude" });
+  type("Hello");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(
+    "Hello",
+    { model: "claude-sonnet-5", effort: "low", permission: "manual" },
+    [],
+    [],
+  );
+});
+
+test("a coordinator chat ignores the new-thread defaults and stays on its backend (PLX-538)", async () => {
+  setNewThreadPrefs({ model: { provider: "codex", id: "gpt-5.5" }, effort: "low" });
+  const onSend = vi.fn(async () => undefined);
+  const { type, press } = render(onSend, caps, { backend: "claude" });
+  type("Hello");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(
+    "Hello",
+    { model: "claude-opus-5-5", effort: "high", permission: "edit" },
+    [],
+    [],
+  );
+});
+
+test("with the Cmd/Ctrl+Enter send shortcut, Enter is a new line and the chord sends (PLX-538)", async () => {
+  setBehaviorPrefs({ sendKey: "modEnter" });
+  const onSend = vi.fn(async () => undefined);
+  const { type, press } = render(onSend);
+  type("Hello");
+  await press("Enter");
+  expect(onSend).not.toHaveBeenCalled();
+  await press("Enter", { metaKey: true });
+  expect(onSend).toHaveBeenCalledOnce();
 });
 
 test("a new thread's Cursor model starts it on Cursor, which takes no effort (0036)", async () => {

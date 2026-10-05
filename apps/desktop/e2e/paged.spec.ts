@@ -35,7 +35,8 @@ async function connected(page: Page) {
 
 /** Appends `turns` turns to run `runId` in the stopped plxd's database under `dataDir`. */
 function seed(dataDir: string, runId: string) {
-  const db = new DatabaseSync(path.join(dataDir, "plxd.sqlite3"));
+  // close() signals plxd and returns at once. The file stays locked until that process exits.
+  const db = new DatabaseSync(path.join(dataDir, "plxd.sqlite3"), { timeout: 10_000 });
   const { project, head } = db
     .prepare(
       "SELECT (SELECT project_id FROM events WHERE run_id = ? LIMIT 1) AS project, MAX(seq) AS head FROM events",

@@ -48,7 +48,7 @@ Desk research and local runs on 2026-10-03 found:
 
 ### Cursor and Grok
 
-- **Cursor stays on `agent acp`.** `@cursor/sdk` 1.0.35 needs a Cursor API key or its own browser login that mints one, runs tools with no approval callback, is a Node library that would need a sidecar beside plxd, and has no Windows arm64 build. Whether to add it as a second Cursor kind is Ryan's call (PLX-366).
+- **Cursor runs through the SDK** since [0053](0053-cursor-sdk.md). This record had left it on `agent acp`: `@cursor/sdk` 1.0.35 needed a browser login that mints a key, ran tools with no approval callback, was a Node library, and had no Windows arm64 build. 0053 takes that path anyway, as a sidecar, with the login stored in plxd's data folder.
 - **Grok** runs two ways: Grok models through Cursor, and Grok Build as its own provider for a SuperGrok or X Premium+ login.
 
 ### The app

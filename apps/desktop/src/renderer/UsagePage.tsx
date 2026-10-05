@@ -1,12 +1,4 @@
-import {
-  ArrowDownRight,
-  ArrowUpRight,
-  Minus,
-  OctagonAlert,
-  RefreshCw,
-  RotateCw,
-  TriangleAlert,
-} from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Minus, RefreshCw, RotateCw } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -23,6 +15,7 @@ import {
 import type { RpcError } from "../preload/bridge";
 import {
   ErrorCodes,
+  type AccountLimits,
   type KeyAccount,
   type Provider,
   type UsageDailyResult,
@@ -34,7 +27,8 @@ import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { ClaudeLogo, CursorLogo, OpenAILogo } from "./logos";
 import { IconButton, Segmented } from "./ui";
-import { limitDetails, limitMeter, useUsage, type LimitTone } from "./Usage";
+import { limitDetails, limitMeter, type LimitTone } from "./Usage";
+import { clockOptions } from "./prefs";
 
 type View = "cost" | "tokens" | "limits";
 const views: { value: View; name: string }[] = [
@@ -373,7 +367,7 @@ const heading = "mb-2.5 text-[13px] font-medium text-muted-foreground";
 /**
  * Settings > Usage, also opened by the sidebar's Usage button. The header always has the view, the
  * range (disabled on Limits, which is always now), and Refresh. Cost and Tokens sum `usage/daily`
- * across every host; Limits shows each host's accounts' windows from `usage/get`.
+ * across every host; Limits shows each host's subscriptions' windows from `usage/limits`.
  */
 export function UsagePage({ hosts }: { hosts: Host[] }) {
   const [view, setView] = useState<View>("cost");
@@ -1313,23 +1307,59 @@ function DashboardSkeleton() {
   );
 }
 
+/** How often the Limits view asks each host's CLIs for their windows again. */
+const LIMITS_POLL_MS = 60_000;
+
 /**
- * One host's accounts' limit windows, under the host's name when there are several, asked again
- * in place when `refresh` changes.
+ * A host's `usage/limits`, asked again `LIMITS_POLL_MS` after each answer while `connected`, and
+ * at once whenever `refresh` changes. `limits` is undefined until it first answers; a later
+ * failure keeps the last answer.
+ */
+function useLimits(
+  hostId: string,
+  connected: boolean,
+  refresh: number,
+): { limits?: AccountLimits[]; error?: RpcError } {
+  const [limits, setLimits] = useState<AccountLimits[]>();
+  const [error, setError] = useState<RpcError>();
+  useEffect(() => {
+    if (!connected) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = async () => {
+      const answer = await window.parallax.request(hostId, "usage/limits", {});
+      if (stopped) return;
+      if ("result" in answer) {
+        setLimits(answer.result.accounts);
+        setError(undefined);
+      } else setError(answer.error);
+      timer = setTimeout(() => void load(), LIMITS_POLL_MS);
+    };
+    void load();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [hostId, connected, refresh]);
+  return { limits, error };
+}
+
+/**
+ * One host's subscriptions' limit windows, read live from their CLIs, under the host's name when
+ * there are several: a section per account, a row per window.
  */
 function HostLimits({ host, named, refresh }: { host: Host; named: boolean; refresh: number }) {
   const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
-  const { usage, error } = useUsage(host.id, connected, refresh);
+  const { limits, error } = useLimits(host.id, connected, refresh);
   const keys = useKeys(host.id, connected, refresh);
 
   // A host that isn't connected shows its status, not its last answer, whose resets are stale.
   const status = hostStatus(connection);
-  const accounts = [...((!status && usage?.values()) || [])].map((a) => {
-    const key = keys.find((k) => k.id === a.accountId);
+  const accounts = (!status && limits ? limits : []).map((a) => {
     const backend = backendOf(a.accountId, keys);
     const info = backend && backends[backend];
-    return { usage: a, name: key?.label ?? info?.name ?? a.accountId, Logo: info?.Logo };
+    return { ...a, backend, name: info?.name ?? a.accountId, Logo: info?.Logo };
   });
   accounts.sort((a, b) => a.name.localeCompare(b.name));
   const now = Date.now();
@@ -1339,30 +1369,30 @@ function HostLimits({ host, named, refresh }: { host: Host; named: boolean; refr
       {named && <h2 className="mb-4 text-[13px] font-medium text-muted-foreground">{host.name}</h2>}
       {/* Always there, so a screen reader hears its text change. */}
       <p role="status" className="sr-only">
-        {!status && !usage && !error ? "Loading…" : ""}
+        {!status && !limits && !error ? "Loading…" : ""}
       </p>
-      {status || (!usage && error) ? (
+      {status || (!limits && error) ? (
         <p className="text-[13px] text-muted-foreground">{status ?? usageError(error!)}</p>
-      ) : !usage ? (
+      ) : !limits ? (
         <LimitsSkeleton />
-      ) : usage.size === 0 ? (
-        <Empty title="No usage yet">It shows here once an agent runs.</Empty>
+      ) : accounts.length === 0 ? (
+        <Empty title="No subscriptions">Limits show here for Claude Code and Codex.</Empty>
       ) : (
-        <div className="flex flex-col gap-5">
-          {accounts.map(({ usage: a, name, Logo }) => (
-            <section key={a.accountId} aria-label={name} className={`${card} overflow-hidden`}>
-              <h3 className="flex items-center gap-2.5 px-6 pt-4 pb-3.5 text-[14px] font-medium">
+        <div className="flex flex-col gap-8">
+          {accounts.map(({ accountId, limits, problem, backend, name, Logo }) => (
+            <section key={accountId} aria-label={name}>
+              <h3 className="mb-3 flex items-center gap-2.5 px-1 text-[15px] font-medium">
                 {Logo && <Logo aria-hidden className="size-4.5 shrink-0" />}
                 {name}
               </h3>
-              {a.limits.length === 0 ? (
-                <p className="border-t border-border px-6 py-4 text-[13px] text-muted-foreground">
-                  No limits reported for this account.
+              {limits.length === 0 ? (
+                <p className={`${card} px-6 py-4 text-[13px] text-muted-foreground`}>
+                  {problem ? `Couldn't read its limits: ${problem}` : "No limits for this login."}
                 </p>
               ) : (
-                <div className="grid grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] gap-px border-t border-border bg-border">
-                  {a.limits.map((limit) => (
-                    <LimitMeter key={limit.window} limit={limit} now={now} />
+                <div className="flex flex-col gap-3">
+                  {limits.map((limit) => (
+                    <LimitMeter key={limit.window} limit={limit} backend={backend} now={now} />
                   ))}
                 </div>
               )}
@@ -1374,15 +1404,23 @@ function HostLimits({ host, named, refresh }: { host: Host; named: boolean; refr
   );
 }
 
-const meterTrack: Record<LimitTone, string> = {
-  normal: "bg-accent/15",
-  warning: "bg-warning/18",
-  danger: "bg-danger/18",
-};
+/**
+ * A meter's fill: the backend's own tint, amber and then red near the cap, mixed into the
+ * surface so it's opaque over the stripes.
+ */
 const meterFill: Record<LimitTone, string> = {
-  normal: "bg-accent",
-  warning: "bg-warning",
-  danger: "bg-danger",
+  normal: "bg-[color-mix(in_oklab,var(--color-foreground)_22%,var(--color-surface))]",
+  warning: "bg-[color-mix(in_oklab,var(--color-warning)_45%,var(--color-surface))]",
+  danger: "bg-[color-mix(in_oklab,var(--color-danger)_45%,var(--color-surface))]",
+};
+const backendFill: Partial<Record<Backend, string>> = {
+  claude: "bg-[color-mix(in_oklab,#D97757_40%,var(--color-surface))]",
+};
+
+/** The part of a meter that's used: thin diagonal stripes. */
+const stripes: CSSProperties = {
+  backgroundImage:
+    "repeating-linear-gradient(-45deg, var(--color-border) 0 1px, transparent 1px 7px)",
 };
 
 /**
@@ -1393,7 +1431,7 @@ export function resetTime(at: number, now: number): string {
   // By local calendar days; rounding absorbs a 23- or 25-hour day.
   const days = Math.round((dayStart(at) - dayStart(now)) / (24 * HOUR));
   const when = new Date(at);
-  const time = when.toLocaleString("en", { hour: "numeric", minute: "2-digit" });
+  const time = when.toLocaleString("en", clockOptions());
   if (days === 0) return time;
   if (days === 1) return `tomorrow ${time}`;
   if (days < 7) return `${when.toLocaleString("en", { weekday: "short" })} ${time}`;
@@ -1401,91 +1439,90 @@ export function resetTime(at: number, now: number): string {
 }
 
 /**
- * One limit window as a meter: how much is used, the bar in the accent (amber, then red, near
- * the cap, with a word and an icon to say so), and when it resets.
+ * One limit window as a row: its name and how much is left, then a bar filled to what's left,
+ * striped where it's used, with how long until it resets.
  */
-function LimitMeter({ limit, now }: { limit: UsageLimitWindow; now: number }) {
-  const { name, used, tone, resets } = limitMeter(limit, now);
+function LimitMeter({
+  limit,
+  backend,
+  now,
+}: {
+  limit: UsageLimitWindow;
+  backend?: Backend;
+  now: number;
+}) {
+  const { name, left, tone, resetsIn } = limitMeter(limit, now);
   const at = limit.resetsAt === undefined ? undefined : Date.parse(limit.resetsAt);
-  const Warning = tone === "danger" ? OctagonAlert : TriangleAlert;
+  const fill =
+    tone === "normal" ? (backend && backendFill[backend]) || meterFill.normal : meterFill[tone];
   return (
-    <div title={limitDetails(limit)} className="min-w-0 bg-surface px-6 pt-4 pb-5">
-      <div className="flex items-center gap-2 text-[13px]">
-        <span className="truncate font-medium">{name}</span>
-        {tone !== "normal" && (
-          <span className="ml-auto flex shrink-0 items-center gap-1 text-[12px] text-muted-foreground">
-            <Warning
-              aria-hidden
-              className={`size-3.5 ${tone === "danger" ? "text-danger" : "text-warning"}`}
-            />
-            {used === 100
-              ? "Limit reached"
-              : tone === "danger"
-                ? "Almost reached"
-                : "Near the limit"}
+    <div
+      title={limitDetails(limit)}
+      className={`${card} flex min-w-0 flex-col gap-4 px-6 py-5 @2xl:flex-row @2xl:items-center @2xl:gap-8`}
+    >
+      <div className="shrink-0 @2xl:w-56">
+        <p className="truncate text-[14px] font-medium">{name}</p>
+        <p className="mt-1.5 flex items-baseline gap-1.5">
+          <span
+            className={`text-[34px] leading-none font-semibold tracking-tight ${left === 0 ? "text-danger" : ""}`}
+          >
+            {left === undefined ? "—" : `${left}%`}
           </span>
-        )}
+          <span className="text-[13px] text-muted-foreground">
+            {left === undefined ? "use not reported" : "left"}
+          </span>
+        </p>
       </div>
-      <p className="mt-3 flex items-baseline gap-1.5">
-        <span
-          className={`text-[30px] leading-none font-semibold tracking-tight ${used === 100 ? "text-danger" : ""}`}
-        >
-          {used === undefined ? "—" : `${used}%`}
-        </span>
-        <span className="text-[13px] text-muted-foreground">
-          {used === undefined ? "use not reported" : "used"}
-        </span>
-      </p>
       <div
-        {...(used !== undefined && {
+        {...(left !== undefined && {
           role: "meter",
           "aria-label": name,
           "aria-valuemin": 0,
           "aria-valuemax": 100,
-          "aria-valuenow": used,
-          "aria-valuetext": `${used}% used`,
+          "aria-valuenow": left,
+          "aria-valuetext": `${left}% left`,
         })}
-        className={`mt-4 h-1.5 overflow-hidden rounded-full ${meterTrack[tone]}`}
+        style={stripes}
+        className="relative h-10 min-w-0 flex-1 overflow-hidden rounded-lg bg-selected/40"
       >
-        {!!used && (
-          <div
-            className={`usage-fill h-full min-w-1.5 rounded-full ${meterFill[tone]}`}
-            style={{ width: `${used}%` }}
-          />
+        {!!left && (
+          <div className={`usage-fill h-full rounded-lg ${fill}`} style={{ width: `${left}%` }} />
+        )}
+        <span className="absolute inset-y-0 left-3 flex items-center text-[12.5px] font-semibold">
+          {left === undefined ? "" : `${left}%`}
+        </span>
+        {resetsIn && (
+          <span
+            title={at === undefined ? undefined : `Resets ${resetTime(at, now)}`}
+            className="absolute inset-y-1.5 right-1.5 flex items-center gap-1 rounded-md bg-background/85 px-2 text-[12px] font-medium [&_svg]:size-3"
+          >
+            <RotateCw aria-hidden />
+            {resetsIn}
+          </span>
         )}
       </div>
-      <p className="mt-3 flex min-w-0 items-center gap-1.5 text-[12.5px] text-muted-foreground [&_svg]:size-3.5 [&_svg]:shrink-0">
-        <RotateCw aria-hidden />
-        <span className="truncate">
-          {resets}
-          {at !== undefined && at > now && (
-            <span className="text-faint-foreground"> · {resetTime(at, now)}</span>
-          )}
-        </span>
-      </p>
     </div>
   );
 }
 
-/** An account card's shape while its host's first answer is on its way. */
+/** An account's shape while its host's first answer is on its way. */
 function LimitsSkeleton() {
   const block = "rounded-md bg-selected";
   return (
-    <div aria-hidden className={`${card} overflow-hidden motion-safe:animate-pulse`}>
-      <div className="flex items-center gap-2.5 px-6 pt-4 pb-3.5">
-        <div className={`size-4.5 rounded-full bg-selected`} />
+    <div aria-hidden className="flex flex-col gap-3 motion-safe:animate-pulse">
+      <div className="mb-0 flex items-center gap-2.5 px-1">
+        <div className="size-4.5 rounded-full bg-selected" />
         <div className={`h-3.5 w-28 ${block}`} />
       </div>
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] gap-px border-t border-border bg-border">
-        {[0, 1, 2].map((i) => (
-          <div key={i} className="bg-surface px-6 pt-4 pb-5">
+      {[0, 1].map((i) => (
+        <div key={i} className={`${card} flex items-center gap-8 px-6 py-5`}>
+          <div className="w-56 shrink-0">
             <div className={`h-3 w-20 ${block}`} />
-            <div className={`mt-4 h-7 w-24 ${block}`} />
-            <div className="mt-4 h-1.5 rounded-full bg-selected" />
-            <div className={`mt-3.5 h-3 w-32 ${block}`} />
+            <div className={`mt-3 h-8 w-28 ${block}`} />
           </div>
-        ))}
-      </div>
+          <div className="h-10 flex-1 rounded-lg bg-selected" />
+        </div>
+      ))}
     </div>
   );
 }

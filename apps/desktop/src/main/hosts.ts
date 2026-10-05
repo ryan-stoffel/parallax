@@ -19,7 +19,9 @@ import { checkHost, readSettings, writeSettings, type Settings } from "./setting
 import {
   closeAllTerminals,
   closeTerminal,
+  installCommand,
   isCliKind,
+  isInstallable,
   loginCommand,
   openTerminal,
   resizeTerminal,
@@ -60,6 +62,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "usage/get": true,
   "usage/history": true,
   "usage/daily": true,
+  "usage/limits": true,
   "accounts/defaults/get": true,
   "accounts/defaults/set": true,
   "context/list": true,
@@ -106,6 +109,9 @@ const rendererMethods: Record<RendererMethod, true> = {
   "github/install": true,
   "github/signIn": true,
   "github/signInCancel": true,
+  "cursor/signIn": true,
+  "cursor/signInCancel": true,
+  "cursor/signOut": true,
   "inbox/list": true,
   "inbox/seen": true,
   "queue/list": true,
@@ -237,16 +243,31 @@ export function startHosts(): void {
   ipcMain.handle("parallax:retry", (_event, hostId: unknown) => connection(hostId).retry());
 
   // A window's terminals (terminal.ts), by an id it picks: a CLI's or a provider instance's
-  // sign-in, or a shell in a thread's folder. The renderer names the host and the CLI, instance,
-  // or folder; only main decides what runs.
+  // sign-in, an agent's install by its provider kind, or a shell in a thread's folder. The renderer
+  // names the host and the CLI, instance, kind, or folder; only main decides what runs.
   ipcMain.handle(
     "parallax:openTerminal",
     (event, id: unknown, target: unknown, cols: unknown, rows: unknown) => {
       if (!isTerminalId(id) || !isObject(target) || !isSize(cols) || !isSize(rows)) {
         return "invalid terminal";
       }
-      const { hostId, cli, provider, path } = target;
+      const { hostId, cli, provider, install, path } = target;
       if (typeof hostId !== "string") return "invalid terminal";
+      if (isInstallable(install)) {
+        const command = async () => {
+          // A host that's gone has no ssh target, and mustn't install here instead.
+          const host = connections.get(hostId);
+          if (!host) return "That host isn't in Parallax anymore.";
+          const ssh = sshOf(hostId);
+          // An SSH host's OS decides its shell; this computer's is known.
+          const version = ssh ? await host.request("host/version", {}) : undefined;
+          if (version && "error" in version)
+            return `Parallax couldn't ask the host which OS it runs: ${version.error.message}`;
+          const os = version && "result" in version ? version.result.os : undefined;
+          return installCommand(install, ssh, process.platform, process.env, os);
+        };
+        return openTerminal(event.sender, id, command, cols, rows);
+      }
       if (isCliKind(cli)) {
         return openTerminal(event.sender, id, () => signInCommand(hostId, cli), cols, rows);
       }
@@ -276,6 +297,12 @@ export function startHosts(): void {
     for (const each of connections.values()) each.dispose();
     closeAllTerminals();
   });
+}
+
+/** How a host is reached, if it's an SSH host. */
+function sshOf(hostId: string) {
+  const saved = settings.hosts.find((h) => h.id === hostId);
+  return saved && { destination: saved.destination, ssh: settings.ssh ?? "ssh" };
 }
 
 /**

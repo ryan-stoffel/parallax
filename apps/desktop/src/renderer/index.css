@@ -33,6 +33,36 @@
   src: url("./fonts/SymbolsNerdFontMono-Regular.woff2") format("woff2");
 }
 
+/*! JetBrains Mono Nerd Font (SIL Open Font License 1.1 / MIT). */
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url("./fonts/JetBrainsMonoNerdFont-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+  src: url("./fonts/JetBrainsMonoNerdFont-Italic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url("./fonts/JetBrainsMonoNerdFont-Bold.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+  src: url("./fonts/JetBrainsMonoNerdFont-BoldItalic.woff2") format("woff2");
+}
+
 /* Parallax Light and Parallax Dark. The `dark` class on <html> switches them
    (theme.ts). Components use only these tokens, never raw colors. Every
    *-foreground keeps at least 4.5:1 contrast on the background and sidebar.
@@ -217,7 +247,8 @@
   /* A font the user picked in Appearance comes first. */
   --font-sans: var(--ui-font, -apple-system), BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono:
-    var(--code-font, ui-monospace), SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    var(--code-font, "JetBrains Mono Nerd Font"), "JetBrainsMono Nerd Font", ui-monospace,
+    SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   /* The app's name in the sidebar. */
   --font-brand: "Sora Variable", var(--font-sans);
   --color-background: var(--background);

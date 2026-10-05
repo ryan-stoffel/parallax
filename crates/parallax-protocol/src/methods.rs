@@ -37,29 +37,30 @@ use crate::{
     AgentOpenPrParams, AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams,
     AgentResumeNowParams, AgentRunResult, AgentSendParams, AgentStartParams, AgentWaitParams,
     AgentWaitResult, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,
-    ContextWriteParams, ContextWriteResult, EventsEventParams, EventsResyncParams,
-    EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult,
-    GitStatus, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
-    GithubSignInCancelResult, GithubSignInParams, GithubStatus, GithubStatusParams,
-    HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
-    HostVersionParams, HostVersionResult, InboxListParams, InboxListResult, InboxSeenParams,
-    InboxSeenResult, InitializeParams, InitializeResult, LandApproveParams, LandQueueParams,
-    LandResult, LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult, MemoryListParams,
-    MemoryListResult, MemoryProposeParams, MemoryProposeResult, MemoryReadParams, MemoryReadResult,
-    MemoryWriteParams, MemoryWriteResult, PrActParams, PrDiffResult, PrViewParams,
-    ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
-    ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectListParams, ProjectListResult,
-    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
-    ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, PullRequest,
-    QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
-    QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
-    QueueReorderParams, QueueResult, QueueSteerParams, RepoAddParams, RepoAddResult,
-    RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
-    RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult, ThreadSearchParams,
-    ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
-    ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
-    UsageHistoryParams, UsageHistoryResult,
+    ContextWriteParams, ContextWriteResult, CursorSignInCancelParams, CursorSignInCancelResult,
+    CursorSignInParams, CursorSignInResult, CursorSignOutParams, CursorSignOutResult,
+    EventsEventParams, EventsResyncParams, EventsSubscribeParams, EventsSubscribeResult,
+    EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus, GithubInstallParams, GithubSignIn,
+    GithubSignInCancelParams, GithubSignInCancelResult, GithubSignInParams, GithubStatus,
+    GithubStatusParams, HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams,
+    HostSettingsSetParams, HostVersionParams, HostVersionResult, InboxListParams, InboxListResult,
+    InboxSeenParams, InboxSeenResult, InitializeParams, InitializeResult, LandApproveParams,
+    LandQueueParams, LandResult, LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult,
+    MemoryListParams, MemoryListResult, MemoryProposeParams, MemoryProposeResult, MemoryReadParams,
+    MemoryReadResult, MemoryWriteParams, MemoryWriteResult, PrActParams, PrDiffResult,
+    PrViewParams, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
+    ProjectDeleteResult, ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectListParams,
+    ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage,
+    ProvidersListParams, ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams,
+    PullRequest, QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams,
+    QuestionListParams, QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams,
+    QueueListParams, QueueReorderParams, QueueResult, QueueSteerParams, RepoAddParams,
+    RepoAddResult, RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult,
+    RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult,
+    ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult,
+    ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
+    ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams,
+    UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -185,6 +186,9 @@ method_table! {
         /// host since a local day, per local day, agent, and model (0039), and each source that
         /// failed.
         UsageDaily = "usage/daily": UsageDailyParams => UsageDailyResult;
+        /// `usage/limits`: every subscription account's limit windows, read live from its CLI,
+        /// and why a CLI didn't answer.
+        UsageLimits = "usage/limits": UsageLimitsParams => UsageLimitsResult;
         /// `accounts/defaults/get`: this host's default account for the coordinator role and for
         /// a worker role, absent where none is set (#119).
         AccountsDefaultsGet = "accounts/defaults/get": AccountsDefaultsGetParams => AccountsDefaultsGetResult;
@@ -397,6 +401,15 @@ method_table! {
         /// own worktree, starts its coordinator, and makes each thread its child (0042).
         /// Idempotent on its client-generated ids. Gated on the `projectFromThreads` capability.
         ProjectFromThreads = "project/fromThreads": ProjectFromThreadsParams => ProjectFromThreadsResult;
+        /// `cursor/signIn`: starts a Cursor account login in the browser and answers with its
+        /// URL (0053). The app opens it. `providers/list` reports the instance signed in once
+        /// the browser login finishes. Gated on the `providers` capability, like
+        /// `cursor/signInCancel` and `cursor/signOut`.
+        CursorSignIn = "cursor/signIn": CursorSignInParams => CursorSignInResult;
+        /// `cursor/signInCancel`: stops a Cursor login that is still waiting on the browser.
+        CursorSignInCancel = "cursor/signInCancel": CursorSignInCancelParams => CursorSignInCancelResult;
+        /// `cursor/signOut`: forgets the Cursor SDK login stored for the instance.
+        CursorSignOut = "cursor/signOut": CursorSignOutParams => CursorSignOutResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -432,6 +445,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::too_many_lines, reason = "one line per method")]
     fn the_table_has_every_method_once() {
         let mut names = Names::default();
         visit(&mut names);
@@ -456,6 +470,7 @@ mod tests {
                 "usage/get",
                 "usage/history",
                 "usage/daily",
+                "usage/limits",
                 "accounts/defaults/get",
                 "accounts/defaults/set",
                 "context/list",
@@ -526,6 +541,9 @@ mod tests {
                 "land/sendBack",
                 "agent/wait",
                 "project/fromThreads",
+                "cursor/signIn",
+                "cursor/signInCancel",
+                "cursor/signOut",
                 "$/cancelRequest",
                 "events/event",
                 "events/resync",

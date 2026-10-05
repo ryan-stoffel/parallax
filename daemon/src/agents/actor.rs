@@ -2866,7 +2866,11 @@ impl Actor {
                 db.stage(
                     now,
                     Some(project),
-                    ParallaxEvent::AgentOutput { run_id, items },
+                    ParallaxEvent::AgentOutput {
+                        run_id,
+                        items,
+                        compacted: None,
+                    },
                 );
             }
             job(db, now)
@@ -2961,26 +2965,55 @@ pub(crate) fn session_account(account_id: &str) -> AccountChoice {
 }
 
 /// Every event run `run` logged, oldest first: what a handoff (0014) and a fork (0050) read.
+/// Pages run inside one read transaction so a compact sweep cannot land between them (0052).
 pub(crate) async fn logged_events(
     daemon: &Daemon,
     run: RunId,
 ) -> Result<Vec<HandoffEvent>, ErrorObject> {
     let log = Arc::clone(&daemon.log);
     tokio::task::spawn_blocking(move || {
-        let mut events = Vec::new();
-        let mut after = 0;
-        loop {
-            let (page, more) = log.run_events(run, after, 1000, 4 * 1024 * 1024)?;
-            after = page.last().map_or(after, |entry| entry.seq);
-            events.extend(page.iter().map(|entry| HandoffEvent::from_entry(entry)));
-            if !more || page.is_empty() {
-                return Ok(events);
-            }
+        if let Some(events) = log.with_stored_read(|db| collect_run_events(db, run))? {
+            return Ok(events);
         }
+        let (page, _) = log.run_events(run, 0, usize::MAX, usize::MAX)?;
+        Ok(page
+            .iter()
+            .map(|entry| HandoffEvent::from_entry(entry))
+            .collect())
     })
     .await
     .map_err(ErrorObject::internal_error)?
     .map_err(|error| store_error(&error))
+}
+
+fn collect_run_events(
+    db: &parallax_store::Store,
+    run: RunId,
+) -> Result<Vec<HandoffEvent>, parallax_store::StoreError> {
+    let mut events = Vec::new();
+    let mut after = 0;
+    loop {
+        let (page, more) = db.run_events(run.into(), after, 1000, 4 * 1024 * 1024)?;
+        after = page.last().map_or(after, |entry| entry.seq);
+        events.extend(page.iter().map(|stored| {
+            let event = serde_json::from_str(&stored.payload).unwrap_or(ParallaxEvent::Unknown);
+            let compacted_from = match &event {
+                ParallaxEvent::AgentOutput {
+                    compacted: Some(compacted),
+                    ..
+                } => Some(compacted.from),
+                _ => None,
+            };
+            HandoffEvent {
+                seq: stored.seq,
+                event,
+                compacted_from,
+            }
+        }));
+        if !more || page.is_empty() {
+            return Ok(events);
+        }
+    }
 }
 
 /// The message a new session on another backend gets in place of the user's `message`: that it
@@ -3515,6 +3548,7 @@ mod tests {
             [ParallaxEvent::AgentOutput {
                 run_id: actor.id,
                 items: vec![text],
+                compacted: None,
             }]
         );
     }

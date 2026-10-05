@@ -112,6 +112,11 @@ export type ParallaxRequests = {
 	 */
 	"usage/daily": { params: UsageDailyParams, result: UsageDailyResult },
 	/**
+	 * `usage/limits`: every subscription account's limit windows, read live from its CLI,
+	 * and why a CLI didn't answer.
+	 */
+	"usage/limits": { params: UsageLimitsParams, result: UsageLimitsResult },
+	/**
 	 * `accounts/defaults/get`: this host's default account for the coordinator role and for
 	 * a worker role, absent where none is set (#119).
 	 */
@@ -463,6 +468,21 @@ export type ParallaxRequests = {
 	 * Idempotent on its client-generated ids. Gated on the `projectFromThreads` capability.
 	 */
 	"project/fromThreads": { params: ProjectFromThreadsParams, result: ProjectFromThreadsResult },
+	/**
+	 * `cursor/signIn`: starts a Cursor account login in the browser and answers with its
+	 * URL (0053). The app opens it. `providers/list` reports the instance signed in once
+	 * the browser login finishes. Gated on the `providers` capability, like
+	 * `cursor/signInCancel` and `cursor/signOut`.
+	 */
+	"cursor/signIn": { params: CursorSignInParams, result: CursorSignInResult },
+	/**
+	 * `cursor/signInCancel`: stops a Cursor login that is still waiting on the browser.
+	 */
+	"cursor/signInCancel": { params: CursorSignInParams, result: CursorSignInCancelResult },
+	/**
+	 * `cursor/signOut`: forgets the Cursor SDK login stored for the instance.
+	 */
+	"cursor/signOut": { params: CursorSignInParams, result: CursorSignOutResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -1292,6 +1312,10 @@ export type ProviderInfo = {
 	 * instance's, and for an ACP agent its home folder's.
 	 */
 	loginEnv?: Array<ProviderEnvVar>,
+	/**
+	 * Why the last Cursor browser sign-in failed (0053), until the next one starts.
+	 */
+	signInError?: string,
 };
 
 /**
@@ -1455,13 +1479,15 @@ export type AccountUsage = {
 };
 
 /**
- * One of an account's limit windows, as a vendor last reported it (0004's `rate_limit_event` and
- * Codex's `account/rateLimits/read`).
+ * One of an account's limit windows, as a vendor reported it (0004's `rate_limit_event` and
+ * Codex's `account/rateLimits/updated` in `usage/get`, Claude Code's `get_usage` and Codex's
+ * `account/rateLimits/read` in `usage/limits`).
  */
 export type UsageLimitWindow = {
 	/**
-	 * The vendor's name for the window, such as `five_hour`, `seven_day`, `primary`, or
-	 * `secondary`.
+	 * The vendor's name for the window, such as `five_hour`, `seven_day`, `seven_day_opus`,
+	 * `primary`, or `secondary`. `usage/limits` names Codex's five-hour and weekly windows
+	 * `five_hour` and `seven_day`, as Claude's are.
 	 */
 	window: string,
 	/**
@@ -1672,6 +1698,41 @@ export type UsageProblem = {
  * A newer plxd may send sources that are not listed here. Treat those as unknown.
  */
 export type UsageSource = "ccusage" | "cursor";
+
+/**
+ * Params of `usage/limits`.
+ */
+export type UsageLimitsParams = Record<symbol, never>;
+
+/**
+ * Result of `usage/limits`.
+ */
+export type UsageLimitsResult = {
+	/**
+	 * Every subscription account whose CLI reports limits and could be started, in no
+	 * particular order.
+	 */
+	accounts: Array<AccountLimits>,
+};
+
+/**
+ * One subscription account's limit windows, as its CLI reports them now.
+ */
+export type AccountLimits = {
+	/**
+	 * plxd's id for the account: its backend's name, such as `claude`.
+	 */
+	accountId: string,
+	/**
+	 * The windows. Empty when the account has none, such as an API key login, or when
+	 * `problem` says why the CLI didn't answer.
+	 */
+	limits: Array<UsageLimitWindow>,
+	/**
+	 * Why the CLI didn't report its windows, for people.
+	 */
+	problem?: string,
+};
 
 /**
  * Params of `accounts/defaults/get`.
@@ -2398,7 +2459,11 @@ export type ParallaxEvent = { "kind": "project.created",
 	/**
 	 * What happened, in order.
 	 */
-	items: Array<AgentOutputItem>, } | { "kind": "agent.accountFallback",
+	items: Array<AgentOutputItem>,
+	/**
+	 * Set when this row is a finished turn's batches rewritten as one (0052).
+	 */
+	compacted?: Compacted, } | { "kind": "agent.accountFallback",
 	/**
 	 * The run's id.
 	 */
@@ -2906,6 +2971,17 @@ export type AgentRunState = {
 	 * When it changed, in RFC 3339 UTC.
 	 */
 	updatedAt: string,
+};
+
+/**
+ * A finished turn rewritten in place as one `agent.output` row (0052).
+ */
+export type Compacted = {
+	/**
+	 * The turn's first `seq`. A reader that meets this row first drops any `agent.output` of
+	 * the same run with `seq` in [`from`, this row's `seq`), then takes the row.
+	 */
+	from: number,
 };
 
 /**
@@ -5344,6 +5420,36 @@ export type ProjectFromThreadsResult = {
 	 */
 	run: AgentRun,
 };
+
+/**
+ * Params of `cursor/signIn`, `cursor/signInCancel`, and `cursor/signOut` (0053).
+ */
+export type CursorSignInParams = {
+	/**
+	 * The instance, or the built-in `cursor` when omitted.
+	 */
+	instance?: string,
+};
+
+/**
+ * Result of `cursor/signIn`: the browser URL the app opens.
+ */
+export type CursorSignInResult = {
+	/**
+	 * The Cursor account login page.
+	 */
+	url: string,
+};
+
+/**
+ * Result of `cursor/signInCancel`.
+ */
+export type CursorSignInCancelResult = Record<symbol, never>;
+
+/**
+ * Result of `cursor/signOut`.
+ */
+export type CursorSignOutResult = Record<symbol, never>;
 
 /**
  * Params of `$/cancelRequest`.

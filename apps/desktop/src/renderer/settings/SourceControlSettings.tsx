@@ -18,6 +18,7 @@ import {
   settingRow,
   StatusDot,
 } from "./parts";
+import { clockOptions } from "../prefs";
 
 /** How often the status is read while plxd installs `gh` or waits on a sign-in. */
 const POLL_MS = 2000;
@@ -261,11 +262,7 @@ function GitHub({
           <div className="min-w-0">
             <span className="block text-[12.5px] text-muted-foreground">
               Enter this code at {pending.url.replace(/^https:\/\//, "")}. It expires at{" "}
-              {new Date(pending.expiresAt).toLocaleTimeString([], {
-                hour: "numeric",
-                minute: "2-digit",
-              })}
-              .
+              {new Date(pending.expiresAt).toLocaleTimeString([], clockOptions())}.
             </span>
             <span
               aria-label="One-time code"
