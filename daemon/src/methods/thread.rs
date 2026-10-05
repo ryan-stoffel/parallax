@@ -32,20 +32,35 @@ pub(crate) fn handles(method: &str) -> bool {
 /// Answers a `thread/*` or `repo/*` method.
 pub(crate) async fn dispatch(context: &Context, request: &Request) -> Result<Value, ErrorObject> {
     match request.method.as_str() {
-        ThreadList::NAME => handle::<ThreadList, _, _>(request, |p| list(context, p)).await,
-        RepoAdd::NAME => handle::<RepoAdd, _, _>(request, |p| add_repo(context, p)).await,
-        ThreadStart::NAME => handle::<ThreadStart, _, _>(request, |p| start(context, p)).await,
-        ThreadFork::NAME => handle::<ThreadFork, _, _>(request, |p| fork(context, p)).await,
-        ThreadArchive::NAME => {
-            handle::<ThreadArchive, _, _>(request, |p| archive(context, p)).await
+        ThreadList::NAME => {
+            handle::<ThreadList, _, _>(context, request, |p| list(context, p)).await
         }
-        ThreadUpdate::NAME => handle::<ThreadUpdate, _, _>(request, |p| update(context, p)).await,
-        RepoUpdate::NAME => handle::<RepoUpdate, _, _>(request, |p| update_repo(context, p)).await,
-        ThreadDelete::NAME => handle::<ThreadDelete, _, _>(request, |p| delete(context, p)).await,
-        RepoRefs::NAME => handle::<RepoRefs, _, _>(request, |p| refs(context, p)).await,
-        ThreadSearch::NAME => handle::<ThreadSearch, _, _>(request, |p| search(context, p)).await,
+        RepoAdd::NAME => handle::<RepoAdd, _, _>(context, request, |p| add_repo(context, p)).await,
+        ThreadStart::NAME => {
+            handle::<ThreadStart, _, _>(context, request, |p| start(context, p)).await
+        }
+        ThreadFork::NAME => {
+            handle::<ThreadFork, _, _>(context, request, |p| fork(context, p)).await
+        }
+        ThreadArchive::NAME => {
+            handle::<ThreadArchive, _, _>(context, request, |p| archive(context, p)).await
+        }
+        ThreadUpdate::NAME => {
+            handle::<ThreadUpdate, _, _>(context, request, |p| update(context, p)).await
+        }
+        RepoUpdate::NAME => {
+            handle::<RepoUpdate, _, _>(context, request, |p| update_repo(context, p)).await
+        }
+        ThreadDelete::NAME => {
+            handle::<ThreadDelete, _, _>(context, request, |p| delete(context, p)).await
+        }
+        RepoRefs::NAME => handle::<RepoRefs, _, _>(context, request, |p| refs(context, p)).await,
+        ThreadSearch::NAME => {
+            handle::<ThreadSearch, _, _>(context, request, |p| search(context, p)).await
+        }
         RepoFiles::NAME => {
-            handle::<RepoFiles, _, _>(request, |p| super::composer::files(context, p)).await
+            handle::<RepoFiles, _, _>(context, request, |p| super::composer::files(context, p))
+                .await
         }
         other => Err(ErrorObject::method_not_found(other)),
     }
@@ -125,9 +140,10 @@ async fn delete(
     params: ThreadDeleteParams,
 ) -> Result<ThreadDeleteResult, ErrorObject> {
     let daemon = Arc::clone(&context.daemon);
+    let command_id = context.command_id;
     context
         .daemon
         .agents
-        .detached(async move { threads::delete(&daemon, params.run_id).await })
+        .detached(async move { threads::delete(&daemon, params.run_id, command_id).await })
         .await
 }

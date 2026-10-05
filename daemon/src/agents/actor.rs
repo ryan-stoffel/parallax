@@ -159,6 +159,7 @@ pub(super) enum Command {
     /// `queue/*` (PLX-370).
     Queue {
         op: QueueOp,
+        command_id: Option<Uuid>,
         reply: oneshot::Sender<Result<QueueResult, ErrorObject>>,
     },
     /// `agent/cancel`.
@@ -199,6 +200,7 @@ pub(super) enum Command {
     /// exit, and deletes the run. A push or Open PR in flight refuses it, unless `wait`.
     Delete {
         wait: bool,
+        command_id: Option<Uuid>,
         reply: oneshot::Sender<Result<(), ErrorObject>>,
     },
     /// A child of this run finished, or a run started in this coordinator's Project, as
@@ -627,6 +629,7 @@ impl Actor {
             && self.resume_due().is_none()
     }
 
+    #[expect(clippy::too_many_lines, reason = "one arm per actor command")]
     async fn on_command(&mut self, command: Command) {
         match command {
             Command::Send {
@@ -671,8 +674,12 @@ impl Actor {
                 let answer = self.approve(params).await;
                 let _ = reply.send(answer);
             }
-            Command::Queue { op, reply } => {
-                let answer = self.queue_op(op).await;
+            Command::Queue {
+                op,
+                command_id,
+                reply,
+            } => {
+                let answer = self.queue_op(op, command_id).await;
                 let _ = reply.send(answer);
             }
             Command::Accept {
@@ -696,8 +703,12 @@ impl Actor {
                 let _ = reply.send(self.snapshot());
             }
             Command::Git { action, reply } => self.on_git(action, reply).await,
-            Command::Delete { wait, reply } => {
-                let answer = self.delete(wait).await;
+            Command::Delete {
+                wait,
+                command_id,
+                reply,
+            } => {
+                let answer = self.delete(wait, command_id).await;
                 if answer.is_ok() {
                     self.deleted = true;
                     self.stopping = true;
@@ -929,7 +940,7 @@ impl Actor {
     /// here, between commands, it never races a resume or an accept. A push or Open PR, which
     /// works in the run's folder, makes it wait for the effect to finish with `wait`, and
     /// otherwise refuses it (`gitRefused`).
-    async fn delete(&mut self, wait: bool) -> Result<(), ErrorObject> {
+    async fn delete(&mut self, wait: bool, command_id: Option<Uuid>) -> Result<(), ErrorObject> {
         if wait && let Some(effect) = &mut self.effect {
             let finished = effect.await;
             self.finish_effect(finished).await;
@@ -950,7 +961,7 @@ impl Actor {
         // Holds off a concurrent create/actor_for retry for this exact run id while its rows are
         // deleted and this actor is dropped (#110); an unrelated run's own lock is untouched.
         let _creating = self.daemon.agents.start_guard(self.id).await;
-        crate::threads::purge(&self.daemon, self.id, self.worktree.clone()).await?;
+        crate::threads::purge(&self.daemon, self.id, self.worktree.clone(), command_id).await?;
         self.worktree = None;
         self.daemon.agents.forget(self.id);
         Ok(())
@@ -1684,7 +1695,11 @@ impl Actor {
 
     /// `queue/*` (PLX-370): reads or changes the waiting messages, and answers with them as they
     /// are after.
-    async fn queue_op(&mut self, op: QueueOp) -> Result<QueueResult, ErrorObject> {
+    async fn queue_op(
+        &mut self,
+        op: QueueOp,
+        command_id: Option<Uuid>,
+    ) -> Result<QueueResult, ErrorObject> {
         match op {
             QueueOp::List => {}
             QueueOp::Edit { id, text } => {
@@ -1727,7 +1742,7 @@ impl Actor {
                 // Staged in the same job as the queue, so the two commit together.
                 self.push(AgentOutputItem::FollowUpDropped { turn_id: id })
                     .await;
-                self.store_queue_for(&remaining).await?;
+                self.store_queue_command(&remaining, command_id).await?;
                 self.queued = remaining;
                 self.senders.remove(&id);
             }
@@ -1745,7 +1760,25 @@ impl Actor {
                         self.queued.insert(at, queued);
                         return Err(error);
                     }
-                    self.save_queue().await;
+                    if let Err(error) = self
+                        .store_queue_command(&self.queued.clone(), command_id)
+                        .await
+                    {
+                        // Delivery already happened. Remove its durable queue entry without the
+                        // failing receipt update, and retain the error even if persistence fails.
+                        let reconciled = self.store_queue_for(&self.queued.clone()).await;
+                        let error = match reconciled {
+                            Ok(()) => error,
+                            Err(reconcile) => ErrorObject::internal_error(format!(
+                                "{}; could not reconcile the steered queue: {}",
+                                error.message, reconcile.message
+                            )),
+                        };
+                        if let Some(id) = command_id {
+                            self.daemon.commands.applied_error(id, error.clone());
+                        }
+                        return Err(error);
+                    }
                 }
             }
         }
@@ -1816,6 +1849,14 @@ impl Actor {
     /// Stores a proposed queue, before the actor applies it, and reports it as `queue.updated`,
     /// in one job after any transcript items waiting to be sent.
     async fn store_queue_for(&mut self, queued: &VecDeque<Queued>) -> Result<(), ErrorObject> {
+        self.store_queue_command(queued, None).await
+    }
+
+    async fn store_queue_command(
+        &mut self,
+        queued: &VecDeque<Queued>,
+        command_id: Option<Uuid>,
+    ) -> Result<(), ErrorObject> {
         let id = self.row.id;
         let (run_id, project) = (self.id, self.project);
         let rows: Vec<QueuedRow> = queued.iter().map(Queued::row).collect();
@@ -1823,6 +1864,13 @@ impl Actor {
         self.write(move |db, now| {
             db.set_queue(id, &rows)
                 .map_err(|error| store_error(&error))?;
+            crate::commands::complete(
+                db,
+                command_id,
+                &QueueResult {
+                    messages: messages.clone(),
+                },
+            )?;
             db.stage(
                 now,
                 Some(project),

@@ -30,6 +30,67 @@ export const LIVENESS_MS = 10_000;
 export const HANDSHAKE_TIMEOUT_MS = 20_000;
 export const REQUEST_TIMEOUT_MS = 30_000;
 
+/** Methods that keep a command receipt (0052). */
+const RECEIPTED_METHODS = new Set([
+  "agent/approve",
+  "agent/commit",
+  "agent/push",
+  "agent/openPr",
+  "agent/resumeNow",
+  "queue/cancel",
+  "queue/steer",
+  "question/ask",
+  "question/answer",
+  "question/escalate",
+  "land/queue",
+  "land/approve",
+  "land/sendBack",
+  "project/start",
+  "project/delete",
+  "thread/delete",
+]);
+
+/** Mutating methods get one commandId per logical request, including its transport retry. */
+const MUTATING_METHODS = new Set([
+  ...RECEIPTED_METHODS,
+  "agent/start",
+  "agent/send",
+  "agent/cancel",
+  "agent/accept",
+  "agent/requestChanges",
+  "agent/autoResume",
+  "thread/start",
+  "thread/fork",
+  "thread/archive",
+  "thread/update",
+  "thread/delete",
+  "project/create",
+  "project/update",
+  "project/fromThreads",
+  "inbox/seen",
+  "pr/link",
+  "pr/unlink",
+  "queue/edit",
+  "queue/reorder",
+  "accounts/defaults/set",
+  "accounts/keys/add",
+  "accounts/keys/remove",
+  "accounts/refresh",
+  "host/settings/set",
+  "repo/add",
+  "repo/update",
+  "context/write",
+  "memory/write",
+  "memory/delete",
+  "memory/propose",
+  "providers/save",
+  "providers/remove",
+  "github/install",
+  "github/signIn",
+  "github/signInCancel",
+  "pr/act",
+]);
+
 /** The wait before reconnect attempt `failures + 1`: 1 s, doubling, capped at 10 s. */
 export const backoffMs = (failures: number) => Math.min(1000 * 2 ** failures, 10_000);
 
@@ -84,6 +145,7 @@ export class Connection {
   private heartbeatTimer?: NodeJS.Timeout;
   private livenessTimer?: NodeJS.Timeout;
   private readonly subscriptions = new Set<Subscription>();
+  private readonly reconnectWaiters = new Set<() => void>();
 
   constructor(private readonly options: ConnectionOptions) {}
 
@@ -102,6 +164,7 @@ export class Connection {
   dispose(): void {
     this.subscriptions.clear();
     this.teardown();
+    for (const done of this.reconnectWaiters) done();
   }
 
   request<M extends keyof ParallaxRequests>(
@@ -114,10 +177,40 @@ export class Connection {
         error: { code: ErrorCodes.InternalError, message: "not connected" },
       });
     }
-    // Only this client answers, and a new log needs a new connection, so this is its log.
-    return client
-      .request(method, params, REQUEST_TIMEOUT_MS)
-      .then((response) => ("result" in response ? { ...response, logId } : response));
+    const outgoing = withCommandId(method, params);
+    // Keep each attempt's log id with its response.
+    return client.request(method, outgoing, REQUEST_TIMEOUT_MS).then(async (first) => {
+      let response = first;
+      let responseLogId = logId;
+      if (RECEIPTED_METHODS.has(method) && "error" in first) {
+        // Retry only transport failures, once, within this logical request.
+        const retryClient =
+          this.client !== client
+            ? await this.afterReconnect()
+            : first.error.code === ErrorCodes.RequestCancelled
+              ? client
+              : undefined;
+        if (retryClient && this.logId !== undefined) {
+          responseLogId = this.logId;
+          response = await retryClient.request(method, outgoing, REQUEST_TIMEOUT_MS);
+        }
+      }
+      return "result" in response ? { ...response, logId: responseLogId } : response;
+    });
+  }
+
+  private afterReconnect(): Promise<RpcClient | undefined> {
+    if (this.state.status === "connected") return Promise.resolve(this.client);
+    if (this.state.status === "failed" && !this.state.retrying) return Promise.resolve(undefined);
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.reconnectWaiters.delete(done);
+        resolve(this.state.status === "connected" ? this.client : undefined);
+      };
+      const timer = setTimeout(done, REQUEST_TIMEOUT_MS);
+      this.reconnectWaiters.add(done);
+    });
   }
 
   /**
@@ -244,6 +337,7 @@ export class Connection {
       protocol: result.protocol,
       capabilities: result.capabilities,
     });
+    for (const done of this.reconnectWaiters) done();
     for (const subscription of this.subscriptions) this.sendSubscribe(subscription);
   }
 
@@ -332,6 +426,14 @@ export class Connection {
     this.state = state;
     this.options.onState(state);
   }
+}
+
+function withCommandId<M extends keyof ParallaxRequests>(
+  method: M,
+  params: ParallaxRequests[M]["params"],
+): ParallaxRequests[M]["params"] {
+  if (!MUTATING_METHODS.has(method)) return params;
+  return { ...(params as object), commandId: crypto.randomUUID() } as ParallaxRequests[M]["params"];
 }
 
 function spawnAttach(file: string, args: string[]): ChildProcessWithoutNullStreams {

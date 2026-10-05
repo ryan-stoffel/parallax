@@ -240,6 +240,8 @@ pub(crate) struct Daemon {
     pub agents: Agents,
     /// Provider instances (0040), whose backends are in `agents`' registry.
     pub providers: Providers,
+    /// Detached listed-method tasks and in-memory command-id waiters (0052).
+    pub commands: crate::commands::Commands,
     /// Cursor account login through the SDK sidecar (0053).
     pub cursor: crate::backend::cursor_sdk::CursorAuth,
 }
@@ -376,6 +378,7 @@ impl Server {
                 }),
             cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher.clone()),
             providers,
+            commands: crate::commands::Commands::new(),
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for
@@ -424,6 +427,7 @@ impl Server {
     /// # Errors
     ///
     /// If the socket can't be registered with the runtime.
+    #[expect(clippy::too_many_lines, reason = "server startup and shutdown cleanup")]
     pub async fn run(self, shutdown: Shutdown) -> io::Result<()> {
         let Self {
             config,
@@ -452,6 +456,17 @@ impl Server {
                 return Err(error);
             }
         };
+        // An unavailable store has no claims to recover, and still serves read-only host state.
+        if daemon.store.state() != parallax_protocol::StoreState::Unavailable
+            && let Err(error) = crate::commands::purge_incomplete(&daemon).await
+        {
+            #[cfg(unix)]
+            socket.remove();
+            daemon.store.stop().await;
+            daemon.reader.stop().await;
+            lock.release();
+            return Err(io::Error::other(error.message));
+        }
         agents::recover(&daemon).await;
         agents::deliver_queued(&daemon).await;
         crate::methods::land::resume(&daemon).await;
@@ -504,8 +519,12 @@ impl Server {
         socket.remove();
         info!("shutting down");
         connections.close();
+        daemon.commands.close();
         let finished = tokio::select! {
-            () = connections.wait() => true,
+            () = async {
+                connections.wait().await;
+                daemon.commands.wait().await;
+            } => true,
             () = time::sleep(config.shutdown_grace) => {
                 warn!(grace = ?config.shutdown_grace, "requests are still running; cancelling them");
                 false
@@ -663,6 +682,7 @@ impl Daemon {
             context: ContextIndex::default(),
             agents: Agents::new(backends, worktrees),
             providers,
+            commands: crate::commands::Commands::new(),
             cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher),
         })
     }

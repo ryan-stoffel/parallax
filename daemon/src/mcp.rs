@@ -390,7 +390,11 @@ impl Plxd {
         params: M::Params,
     ) -> Result<Result<M::Result, ErrorObject>, String> {
         let id = RequestId::Number(self.next_id.fetch_add(1, Ordering::Relaxed) + 1);
-        let request = Request::new::<M>(id, params);
+        let request = Request {
+            id,
+            method: M::NAME.to_owned(),
+            params: Some(crate::commands::with_command_id(M::NAME, params)),
+        };
         let mut retried = false;
         loop {
             let connection = self.connect().await?;

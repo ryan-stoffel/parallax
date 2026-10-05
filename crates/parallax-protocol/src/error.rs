@@ -27,8 +27,9 @@ pub enum ErrorKind {
     /// The Keychain is locked, or access to an item was denied. Distinct from a bare internal
     /// error so the client can tell "locked" from "broken" (#117).
     KeychainUnavailable,
-    /// A create reused an existing id with different params, or `project/start` named a new run
-    /// while the project's coordinator is starting or running.
+    /// A create reused an existing id with different params, `project/start` named a new run
+    /// while the project's coordinator is starting or running, or a `commandId` was reused with a
+    /// different method or params (0052).
     IdConflict,
     /// No shared context file has the given path (#155).
     ContextNotFound,

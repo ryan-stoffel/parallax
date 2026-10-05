@@ -217,7 +217,7 @@ pub(crate) async fn from_threads(
                 Ok(run) => run,
                 Err(error) => {
                     // A retry would be refused the same way, so don't leave an empty Project.
-                    if !existed && let Err(error) = remove(Arc::clone(&daemon), id).await {
+                    if !existed && let Err(error) = remove(Arc::clone(&daemon), id, None).await {
                         warn!(project = %id, %error, "could not remove the project its coordinator didn't start in");
                     }
                     return Err(error);
@@ -436,7 +436,7 @@ pub(crate) async fn delete(
     context
         .daemon
         .agents
-        .detached(remove(daemon, params.project))
+        .detached(remove(daemon, params.project, context.command_id))
         .await
 }
 
@@ -453,6 +453,7 @@ pub(crate) async fn delete(
 async fn remove(
     daemon: Arc<Daemon>,
     project: ProjectId,
+    command_id: Option<Uuid>,
 ) -> Result<ProjectDeleteResult, ErrorObject> {
     let repo_path = loop {
         let (runs, repo_path) = daemon
@@ -479,6 +480,7 @@ async fn remove(
                         None,
                         ParallaxEvent::ProjectDeleted { project },
                     );
+                    crate::commands::complete(store, command_id, &ProjectDeleteResult {})?;
                     info!(%project, seq, "deleted a project");
                 }
                 // A coordinator's thread is its own run (0024).

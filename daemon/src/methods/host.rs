@@ -181,6 +181,8 @@ pub(crate) fn initialize(
 /// would silently ignore.
 /// `eventsBefore` (PLX-490): `agent/events` takes `before`, to page a run's events newest first,
 /// and answers it with the run and the log's `seq`; an older plxd would page from the start.
+/// `commandIds` (PLX-482, 0052): every request may carry `commandId` in its params. Listed
+/// methods keep a receipt so a retry returns the first result.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -197,6 +199,7 @@ fn capabilities_advertised() -> Capabilities {
         ("autoResume".to_owned(), serde_json::Map::new()),
         ("checks".to_owned(), serde_json::Map::new()),
         ("checkout".to_owned(), serde_json::Map::new()),
+        ("commandIds".to_owned(), serde_json::Map::new()),
         ("composerMenus".to_owned(), serde_json::Map::new()),
         ("contextAndFast".to_owned(), serde_json::Map::new()),
         ("coordinator".to_owned(), serde_json::Map::new()),

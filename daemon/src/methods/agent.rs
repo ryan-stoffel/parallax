@@ -485,6 +485,7 @@ mod tests {
             daemon: Arc::clone(&daemon),
             cancel: CancellationToken::new(),
             stopped_reading: CancellationToken::new(),
+            command_id: None,
         };
         let (run_id, project) = (RunId::generate(), ProjectId::generate());
         daemon

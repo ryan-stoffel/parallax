@@ -12,6 +12,7 @@ mod agents;
 mod approvals;
 mod auto_resume;
 mod checks;
+mod commands;
 mod context;
 mod coordinator;
 mod events;

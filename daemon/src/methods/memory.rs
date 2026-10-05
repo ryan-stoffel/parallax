@@ -39,12 +39,20 @@ pub(crate) const MAX_PROPOSAL_BYTES: usize = 4 * 1024;
 /// Answers a `memory/*` method.
 pub(crate) async fn dispatch(context: &Context, request: &Request) -> Result<Value, ErrorObject> {
     match request.method.as_str() {
-        MemoryList::NAME => handle::<MemoryList, _, _>(request, |p| list(context, p)).await,
-        MemoryRead::NAME => handle::<MemoryRead, _, _>(request, |p| read(context, p)).await,
-        MemoryWrite::NAME => handle::<MemoryWrite, _, _>(request, |p| write(context, p)).await,
-        MemoryDelete::NAME => handle::<MemoryDelete, _, _>(request, |p| delete(context, p)).await,
+        MemoryList::NAME => {
+            handle::<MemoryList, _, _>(context, request, |p| list(context, p)).await
+        }
+        MemoryRead::NAME => {
+            handle::<MemoryRead, _, _>(context, request, |p| read(context, p)).await
+        }
+        MemoryWrite::NAME => {
+            handle::<MemoryWrite, _, _>(context, request, |p| write(context, p)).await
+        }
+        MemoryDelete::NAME => {
+            handle::<MemoryDelete, _, _>(context, request, |p| delete(context, p)).await
+        }
         MemoryPropose::NAME => {
-            handle::<MemoryPropose, _, _>(request, |p| propose(context, p)).await
+            handle::<MemoryPropose, _, _>(context, request, |p| propose(context, p)).await
         }
         other => Err(ErrorObject::method_not_found(other)),
     }

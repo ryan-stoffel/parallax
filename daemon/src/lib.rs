@@ -45,6 +45,7 @@
 mod agents;
 pub mod attach;
 pub mod backend;
+mod commands;
 mod context;
 mod detect;
 mod event_log;
