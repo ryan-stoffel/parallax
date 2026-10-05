@@ -260,6 +260,8 @@ export function startHosts(): void {
           const ssh = sshOf(hostId);
           // An SSH host's OS decides its shell; this computer's is known.
           const version = ssh ? await host.request("host/version", {}) : undefined;
+          if (version && "error" in version)
+            return `Parallax couldn't ask the host which OS it runs: ${version.error.message}`;
           const os = version && "result" in version ? version.result.os : undefined;
           return installCommand(install, ssh, process.platform, process.env, os);
         };
