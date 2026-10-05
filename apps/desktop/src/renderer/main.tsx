@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "./App";
 import { applyTheme } from "./theme";
+import { Tooltips } from "./ui";
 import "./index.css";
 
 // index.css keys the title bar styles off this.
@@ -13,5 +14,6 @@ applyTheme();
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App />
+    <Tooltips />
   </StrictMode>,
 );

@@ -92,7 +92,7 @@ export function RowBadge({ index }: { index: number }) {
 
 /**
  * A square, icon-only toolbar button. `label` is its accessible name and tooltip, with
- * `command`'s current shortcut; `aria-pressed` shows it on.
+ * `command`'s current shortcut beside it in the tooltip; `aria-pressed` shows it on.
  */
 export function IconButton({
   label,
@@ -105,7 +105,8 @@ export function IconButton({
     <button
       type="button"
       aria-label={label}
-      title={keys ? `${label} (${keys})` : label}
+      title={label}
+      data-keys={keys}
       className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-4"
       {...props}
     >
@@ -487,6 +488,104 @@ export function TopBar({ className = "", children }: { className?: string; child
   return (
     <div className={`titlebar flex h-13 shrink-0 items-center gap-2 px-3 ${className}`}>
       {children}
+    </div>
+  );
+}
+
+/** What a tooltip shows: its element's text, and a shortcut in `data-keys`. */
+type Tip = { text: string; keys?: string; top: number; left: number; above: boolean };
+
+/**
+ * The app's one tooltip, mounted once. Hovering or keyboard-focusing an element with a `title`,
+ * or an icon-only button or link with an `aria-label`, shows that text in a small panel under it
+ * (above it when there's no room). The `title` is held aside while it shows, so the OS tooltip
+ * doesn't show too.
+ */
+export function Tooltips() {
+  const [tip, setTip] = useState<Tip>();
+  useEffect(() => {
+    let target: HTMLElement | undefined;
+    let title: string | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const hide = () => {
+      clearTimeout(timer);
+      // Unless React set a new title meanwhile.
+      if (target && title !== null && !target.hasAttribute("title"))
+        target.setAttribute("title", title);
+      target = undefined;
+      title = null;
+      setTip(undefined);
+    };
+    const show = (e: Event) => {
+      const el = (e.target as Element | null)?.closest?.<HTMLElement>(
+        '[title], :is(button, a, [role="button"])[aria-label]',
+      );
+      if (el === target) return;
+      hide();
+      if (!el) return;
+      const text = el.getAttribute("title") || el.getAttribute("aria-label");
+      // A button with its own visible text needs no tooltip.
+      if (!text || (!el.hasAttribute("title") && el.textContent?.trim())) return;
+      target = el;
+      title = el.getAttribute("title");
+      el.removeAttribute("title");
+      timer = setTimeout(
+        () => {
+          if (!el.isConnected) return;
+          const r = el.getBoundingClientRect();
+          const above = r.bottom + 40 > window.innerHeight;
+          setTip({
+            text,
+            keys: el.dataset["keys"],
+            top: above ? r.top - 6 : r.bottom + 6,
+            left: r.left + r.width / 2,
+            above,
+          });
+        },
+        e.type === "focusin" ? 0 : 400,
+      );
+    };
+    const focus = (e: FocusEvent) => {
+      if ((e.target as Element).matches?.(":focus-visible")) show(e);
+    };
+    const out = (e: PointerEvent) => {
+      if (target && !target.contains(e.relatedTarget as Node | null)) hide();
+    };
+    document.addEventListener("pointerover", show);
+    document.addEventListener("pointerout", out);
+    document.addEventListener("focusin", focus);
+    document.addEventListener("focusout", hide);
+    document.addEventListener("pointerdown", hide, true);
+    document.addEventListener("keydown", hide, true);
+    window.addEventListener("scroll", hide, true);
+    window.addEventListener("blur", hide);
+    return () => {
+      hide();
+      document.removeEventListener("pointerover", show);
+      document.removeEventListener("pointerout", out);
+      document.removeEventListener("focusin", focus);
+      document.removeEventListener("focusout", hide);
+      document.removeEventListener("pointerdown", hide, true);
+      document.removeEventListener("keydown", hide, true);
+      window.removeEventListener("scroll", hide, true);
+      window.removeEventListener("blur", hide);
+    };
+  }, []);
+  if (!tip) return null;
+  return (
+    <div
+      role="tooltip"
+      // Centered on its element, but kept 8px inside the window.
+      ref={(el) => {
+        if (!el) return;
+        const half = el.offsetWidth / 2;
+        el.style.left = `${Math.min(Math.max(tip.left - half, 8), window.innerWidth - 8 - 2 * half)}px`;
+      }}
+      style={{ top: tip.top, left: tip.left }}
+      className={`pointer-events-none fixed z-[1000] flex w-max max-w-80 items-center gap-2 rounded-md border border-border bg-surface px-2 py-1 text-[12px] text-foreground shadow-composer ${tip.above ? "-translate-y-full" : ""}`}
+    >
+      <span className="line-clamp-3 break-words">{tip.text}</span>
+      {tip.keys && <kbd className="font-sans text-muted-foreground">{tip.keys}</kbd>}
     </div>
   );
 }
