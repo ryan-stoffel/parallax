@@ -37,8 +37,8 @@ pub enum RunFolder<'a> {
 pub struct PushError(pub String);
 
 impl WorktreeManager {
-    /// The git state of `folder`: its branch, its uncommitted changes, and how far it is ahead of
-    /// its upstream. It takes no optional locks, so a turn's own git calls never trip over it.
+    /// The git state of `folder`: its branch, its uncommitted changes, untracked files included,
+    /// and how far it is ahead of its upstream. It takes no optional locks, so a turn's own git calls never trip over it.
     ///
     /// # Errors
     ///
@@ -52,6 +52,8 @@ impl WorktreeManager {
                     "status",
                     "--porcelain=v2",
                     "--branch",
+                    // Counted whatever the repository's `status.showUntrackedFiles` says.
+                    "--untracked-files=normal",
                 ],
             )
             .await?;

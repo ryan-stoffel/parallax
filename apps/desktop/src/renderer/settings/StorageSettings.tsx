@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { StorageItem } from "../../preload/bridge";
 import { useConnection } from "../ConnectionStatus";
@@ -105,7 +105,10 @@ function WorktreeCleanup() {
     connection?.status === "connected" && "worktreeCleanup" in connection.capabilities;
   const [on, setOn] = useState<boolean>();
   const [error, setError] = useState<string>();
+  // The host on screen, so a reply for one the picker has left is dropped.
+  const shown = useRef(hostId);
   useEffect(() => {
+    shown.current = hostId;
     setOn(undefined);
     setError(undefined);
     if (!supported) return;
@@ -121,7 +124,9 @@ function WorktreeCleanup() {
   }, [hostId, supported]);
   const set = async (cleanWorktrees: boolean) => {
     setOn(cleanWorktrees);
-    const answer = await window.parallax.request(hostId, "host/settings/set", { cleanWorktrees });
+    const host = hostId;
+    const answer = await window.parallax.request(host, "host/settings/set", { cleanWorktrees });
+    if (shown.current !== host) return;
     if ("error" in answer) {
       setOn(!cleanWorktrees);
       setError(describeError(answer.error));

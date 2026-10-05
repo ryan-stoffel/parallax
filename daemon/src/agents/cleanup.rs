@@ -74,12 +74,38 @@ async fn sweep(daemon: &Daemon, stop: &CancellationToken) {
         if worktree.git_dir.is_empty() || !Path::new(&worktree.path).is_dir() {
             continue;
         }
-        clean(daemon, &run, &worktree).await;
+        // Stopping cancels the checks, which can wait minutes on `gh`, but never a removal.
+        let removable = tokio::select! {
+            biased;
+            () = stop.cancelled() => return,
+            removable = removable(daemon, &run, &worktree) => removable,
+        };
+        if !removable {
+            continue;
+        }
+        match daemon
+            .agents
+            .worktrees
+            .remove(
+                Path::new(&worktree.repo_path),
+                Path::new(&worktree.path),
+                &worktree.branch,
+            )
+            .await
+        {
+            Ok(()) => {
+                info!(run = %run.id, path = %worktree.path, "removed a merged thread's worktree");
+            }
+            Err(error) => {
+                warn!(run = %run.id, %error, "could not remove a merged thread's worktree");
+            }
+        }
     }
 }
 
-/// Removes `run`'s `worktree` if its pull requests merged and it holds nothing else.
-async fn clean(daemon: &Daemon, run: &Run, worktree: &Worktree) {
+/// Whether `run`'s `worktree` can go: its pull requests merged, it is on its own branch, and it
+/// holds nothing they don't.
+async fn removable(daemon: &Daemon, run: &Run, worktree: &Worktree) -> bool {
     let worktrees = &daemon.agents.worktrees;
     let mut pulls = Vec::new();
     for url in &run.state.pull_requests {
@@ -87,12 +113,12 @@ async fn clean(daemon: &Daemon, run: &Run, worktree: &Worktree) {
             Ok(pull) => pulls.push((pull.state, commits(pull.commits))),
             Err(error) => {
                 warn!(run = %run.id, %url, %error, "could not read a pull request to clean up");
-                return;
+                return false;
             }
         }
     }
     if !merged(&pulls) {
-        return;
+        return false;
     }
     let folder = RunFolder::Worktree {
         path: Path::new(&worktree.path),
@@ -102,12 +128,17 @@ async fn clean(daemon: &Daemon, run: &Run, worktree: &Worktree) {
         (Ok(status), Ok(head)) => (status, head),
         (Err(error), _) | (_, Err(error)) => {
             warn!(run = %run.id, %error, "could not read a merged worktree's git state");
-            return;
+            return false;
         }
     };
-    if status.changes > 0 || (status.ahead > 0 && !in_merged(&pulls, &head)) {
+    // Removing deletes the stored branch, so `HEAD` must be that branch's tip: not detached, and
+    // not another branch the agent switched to.
+    if status.branch.as_deref() != Some(worktree.branch.as_str())
+        || status.changes > 0
+        || (status.ahead > 0 && !in_merged(&pulls, &head))
+    {
         info!(run = %run.id, "kept a merged worktree that has work its pull request doesn't");
-        return;
+        return false;
     }
     // ponytail: rechecks the run is idle right before removing, which narrows but doesn't close
     // the window for a message sent mid-sweep; route through the run's actor if that ever bites.
@@ -119,20 +150,7 @@ async fn clean(daemon: &Daemon, run: &Run, worktree: &Worktree) {
             .is_some_and(|run| idle(&run)))
     })
     .await;
-    if !still_idle.unwrap_or(false) {
-        return;
-    }
-    match worktrees
-        .remove(
-            Path::new(&worktree.repo_path),
-            Path::new(&worktree.path),
-            &worktree.branch,
-        )
-        .await
-    {
-        Ok(()) => info!(run = %run.id, path = %worktree.path, "removed a merged thread's worktree"),
-        Err(error) => warn!(run = %run.id, %error, "could not remove a merged thread's worktree"),
-    }
+    still_idle.unwrap_or(false)
 }
 
 /// A pull request's state and its commits' hashes.
