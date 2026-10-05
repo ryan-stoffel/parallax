@@ -1,7 +1,7 @@
 import { Plus, Terminal, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 
-import type { ThreadsState, ThreadsView } from "./threads";
+import { noRepo, type ThreadsState, type ThreadsView } from "./threads";
 import { IconButton } from "./ui";
 
 // xterm.js loads with the first terminal shown.
@@ -13,11 +13,15 @@ const TerminalView = lazy(() => import("./Terminal").then((m) => ({ default: m.T
  */
 export type ThreadFolder = { key: string; hostId: string; path: string; threadId?: string };
 
+/** The `path` of a host's home folder, which main resolves, since the app can't know it. */
+export const homePath = "~";
+
 /**
- * Thread `threadId`'s folder: its repository's checkout, shared with the repository's other
- * threads and New thread, never its worktree. A No Repo thread has its own scratch repository's,
- * once its run made one. Or with `repoId`, a repository's, for New thread. Undefined while there
- * is none yet, and for No Repo's New thread.
+ * Thread `threadId`'s folder: its own worktree, or a Current checkout thread's repository
+ * checkout, shared with the repository's New thread. A thread with no run yet gets its
+ * repository's checkout too. A No Repo thread has its scratch repository's, once its run made
+ * one. Or with `repoId`, a repository's checkout, for New thread, or the host's home folder for
+ * No Repo's. Undefined while a No Repo thread has none yet.
  */
 export function folderOf(
   hostId: string,
@@ -26,14 +30,15 @@ export function folderOf(
 ): ThreadFolder | undefined {
   if ("repoId" in open) {
     const repo = state.repos.find((r) => r.id === open.repoId && !r.scratch);
-    return repo && { key: `${hostId}/new/${repo.id}`, hostId, path: repo.path };
+    if (repo) return { key: `${hostId}/new/${repo.id}`, hostId, path: repo.path };
+    return open.repoId === noRepo ? { key: `${hostId}/home`, hostId, path: homePath } : undefined;
   }
   const { threadId } = open;
   const thread = state.threads.find((t) => t.id === threadId);
   const repo = state.repos.find((r) => r.id === thread?.repo && !r.scratch);
-  if (repo) return folderOf(hostId, state, { repoId: repo.id });
   const path = state.runs[threadId]?.worktreePath;
-  return path === undefined ? undefined : { key: `${hostId}/${threadId}`, hostId, path, threadId };
+  if (path !== undefined) return { key: `${hostId}/${threadId}`, hostId, path, threadId };
+  return repo && folderOf(hostId, state, { repoId: repo.id });
 }
 
 /** The terminal id of a folder's first drawer tab, to type or run a command in it with `terminalInput`. */

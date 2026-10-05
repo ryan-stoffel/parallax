@@ -206,6 +206,7 @@ export function terminalEnv(env = process.env): NodeJS.ProcessEnv {
 
 /** `path` as the host's shell reads it: bare if it can be, else quoted for cmd.exe or POSIX. */
 function quote(path: string): string {
+  if (path === "~") return path;
   if (/^[\w./\\:-]+$/.test(path)) return path;
   if (/^[a-z]:\\/i.test(path)) return `"${path}"`;
   return `'${path.replaceAll("'", `'\\''`)}'`;

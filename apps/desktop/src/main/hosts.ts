@@ -380,6 +380,8 @@ export const savedHost = (id: string): SshHost | undefined =>
  * ssh as the host's connection is. Resolves to an error for people.
  */
 async function folderCommand(hostId: string, folder: string): Promise<Command | string> {
+  // "~" is the host's home folder: here, the user's; over ssh, the login shell's start folder.
+  if (folder === "~" && !settings.hosts.some((h) => h.id === hostId)) folder = homedir();
   if (!connections.has(hostId)) return "That host isn't in Parallax anymore.";
   const saved = settings.hosts.find((h) => h.id === hostId);
   // A Windows path, which can't hold a `"`, goes to the host in double quotes.
