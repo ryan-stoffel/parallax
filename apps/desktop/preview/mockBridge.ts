@@ -594,7 +594,11 @@ const handlers: { [M in Method]?: Handler<M> } = {
       ],
     };
   },
-  "usage/daily": (p) => ({ days: db.usageDays.filter((d) => d.date >= p.since), problems: [] }),
+  "usage/daily": (p) => ({
+    days: db.usageDays.filter((d) => d.date >= p.since),
+    problems: [],
+    sessions: db.usageSessions.filter((d) => d.date >= p.since),
+  }),
 
   "context/list": (p) => ({ files: (db.context[p.project] ?? []).map((d) => d.file) }),
   "context/read": (p) => {
@@ -756,7 +760,8 @@ export const mockBridge: ParallaxBridge = {
     const response = isError(answer)
       ? { error: answer }
       : { result: structuredClone(answer), logId: LOG_ID };
-    return delay(response as HostResponse<Result<M>>);
+    // plxd runs ccusage and pages Cursor's API for usage/daily, which takes a second or two.
+    return delay(response as HostResponse<Result<M>>, method === "usage/daily" ? 1200 : 40);
   },
 
   subscribe(hostId: string, params: SubscribeParams, listener: (m: SubscriptionMessage) => void) {

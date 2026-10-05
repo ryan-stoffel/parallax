@@ -115,8 +115,9 @@ fn usage_history(
 }
 
 /// Every Claude Code and Codex session's usage from ccusage, and Cursor's from its API, since
-/// `params.since`, by local day in `params.time_zone`. A source that fails is a problem in the
-/// answer, beside the others' usage.
+/// `params.since`, by local day in `params.time_zone`, with Claude Code's and Codex's session
+/// counts. A source that fails is a problem in the answer, beside the others' usage; sessions
+/// that can't be counted are left out.
 pub(crate) async fn daily(
     context: &Context,
     params: UsageDailyParams,
@@ -126,15 +127,19 @@ pub(crate) async fn daily(
     let sources = async {
         tokio::join!(
             ccusage::daily(launcher, params.since, &params.time_zone),
+            ccusage::sessions(launcher, params.since, &params.time_zone, &zone),
             cursor::daily(launcher, params.since, &zone),
         )
     };
     // Dropping the sources kills whatever they're running.
-    let (claude_and_codex, cursor) = tokio::select! {
+    let (claude_and_codex, sessions, cursor) = tokio::select! {
         () = context.cancel.cancelled() => return Err(ErrorObject::request_cancelled()),
         answers = sources => answers,
     };
-    let mut result = UsageDailyResult::default();
+    let mut result = UsageDailyResult {
+        sessions,
+        ..UsageDailyResult::default()
+    };
     for (source, answer) in [
         (UsageSource::Ccusage, claude_and_codex),
         (UsageSource::Cursor, cursor),
