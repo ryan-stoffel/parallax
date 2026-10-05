@@ -30,7 +30,7 @@
         {
           "accountId": "codex",
           "limits": [],
-          "problem": "it exited before listing them: not signed in"
+          "problem": "not signed in"
         }
       ]
     }

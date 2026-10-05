@@ -16,7 +16,9 @@ use parallax_protocol::{
 use parallax_store::{LimitSnapshot, Store, StoreError};
 
 use super::Context;
+use crate::backend::StartError;
 use crate::backend::commands;
+use crate::backend::process::SpawnError;
 use crate::store::store_error;
 
 /// How long a CLI gets to report its limit windows.
@@ -146,8 +148,7 @@ pub(crate) async fn daily(
 }
 
 /// Every subscription's limit windows, each read from its CLI at once, in the home folder. A
-/// CLI that can't be started, such as one that isn't installed, is left out; one that fails
-/// after starting reports why.
+/// CLI that isn't installed is left out; one that fails to start or answer reports why.
 pub(crate) async fn limits(
     context: &Context,
     _: UsageLimitsParams,
@@ -161,9 +162,17 @@ pub(crate) async fn limits(
         .backends()
         .by_name()
         .into_iter()
-        .filter_map(|(name, backend)| Some((name, backend.limits(&home).ok()??)))
+        .filter_map(|(name, backend)| match backend.limits(&home) {
+            Ok(None) | Err(StartError::Spawn(SpawnError::NotFound { .. })) => None,
+            Ok(Some(probe)) => Some((name, Ok(probe))),
+            Err(error) => Some((name, Err(error.to_string()))),
+        })
         .map(|(account_id, probe)| async move {
-            match commands::list(probe, LIMITS_TIMEOUT).await {
+            let answer = match probe {
+                Ok(probe) => commands::list(probe, LIMITS_TIMEOUT).await,
+                Err(error) => Err(error),
+            };
+            match answer {
                 Ok(limits) => AccountLimits {
                     account_id,
                     limits,

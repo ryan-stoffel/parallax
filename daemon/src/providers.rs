@@ -913,7 +913,11 @@ impl Backend for WithSecrets {
         &self,
         cwd: &Path,
     ) -> Result<Option<crate::backend::LimitsProbe>, crate::backend::StartError> {
-        // Like the command list, so a page that polls limits never waits on the keychain.
+        // An instance whose credential is a secret would read another login's limits without
+        // it, and reading it on every poll could wait on the keychain, so it reports none.
+        if self.entry.instance.env.iter().any(|var| var.secret) {
+            return Ok(None);
+        }
         self.plain.limits(cwd)
     }
 }
