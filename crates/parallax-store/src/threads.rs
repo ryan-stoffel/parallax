@@ -1,5 +1,5 @@
 use jiff::Timestamp;
-use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
 use crate::error::StoreError;
@@ -234,9 +234,7 @@ impl Store {
     /// [`StoreError::IdConflict`] if `id` is taken by an entry with another path, or a database
     /// error.
     pub fn add_repo(&mut self, id: Uuid, fields: &RepoFields) -> Result<Repo, StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         if let Some(existing) = fetch_repo(&tx, "path = ?1", &fields.path)? {
             return Ok(existing);
         }
@@ -323,9 +321,7 @@ impl Store {
         worktree: Option<&WorktreeFields>,
         thread: &ThreadFields,
     ) -> Result<(Thread, Run, Option<Worktree>), StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         let worktree = worktree
             .map(|worktree| insert_worktree(&tx, id, worktree))
             .transpose()?;
@@ -529,9 +525,7 @@ impl Store {
     ///
     /// A database error.
     pub fn delete_thread(&mut self, id: Uuid) -> Result<bool, StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         let existed = tx.execute("DELETE FROM threads WHERE id = ?1", params![id.to_string()])? > 0;
         delete_run_rows(&tx, id)?;
         tx.commit()?;

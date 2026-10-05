@@ -341,18 +341,18 @@ impl Server {
             backends
         });
         let worktrees = WorktreeManager::new(launcher.clone(), data_dir.root());
-        let store = StoreHandle::open(&data_dir.store_file());
+        let store = StoreHandle::open(
+            &data_dir.store_file(),
+            config.event_retention,
+            config.event_retention_bytes,
+            config.host_event_retention,
+        );
         let reader = store.open_reader(&data_dir.store_file());
         let keys = keystore::system_store();
         let providers = Providers::load(data_dir.root(), keys.clone(), &launcher, &backends);
         let daemon = Arc::new(Daemon {
             started: Instant::now(),
-            log: Arc::new(EventLog::open(
-                &data_dir.store_file(),
-                config.event_retention,
-                config.event_retention_bytes,
-                config.host_event_retention,
-            )),
+            log: store.log(),
             store,
             reader,
             os: methods::os_version(),
@@ -624,19 +624,19 @@ impl Daemon {
             Environment::empty(),
         );
         let worktrees = WorktreeManager::new(launcher.clone(), dir);
-        let store = StoreHandle::open(&dir.join("plxd.sqlite3"));
+        let store = StoreHandle::open(
+            &dir.join("plxd.sqlite3"),
+            event_retention,
+            usize::MAX,
+            usize::MAX,
+        );
         let reader = store.open_reader(&dir.join("plxd.sqlite3"));
         let keys: Arc<dyn KeyStore> = Arc::new(crate::keystore::MemoryKeyStore::new());
         let backends = BackendRegistry::new();
         let providers = Providers::load(dir, Arc::clone(&keys), &launcher, &backends);
         Arc::new(Self {
             started: Instant::now(),
-            log: Arc::new(EventLog::open(
-                &dir.join("plxd.sqlite3"),
-                event_retention,
-                usize::MAX,
-                usize::MAX,
-            )),
+            log: store.log(),
             store,
             reader,
             os: "test".to_owned(),

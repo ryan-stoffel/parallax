@@ -477,16 +477,6 @@ fn deleting_a_run_removes_its_worktree_events_turns_images_and_wakes_only() {
 }
 
 #[test]
-fn resetting_the_log_id_makes_the_next_one_new() {
-    let (_dir, store) = open();
-    let first = store.event_log_id(Uuid::now_v7()).unwrap();
-    store.reset_event_log_id().unwrap();
-    let second = Uuid::now_v7();
-    assert_eq!(store.event_log_id(second).unwrap(), second);
-    assert_ne!(second, first);
-}
-
-#[test]
 fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("parallax.sqlite3");

@@ -100,7 +100,7 @@ fn observe(daemon: &Daemon, context_root: &Path, path: &Path) {
     }
     // An agent's write has no writer.
     let file = context_file(&name, &metadata, None);
-    let seq = daemon.log.append_blocking(
+    let seq = daemon.store.append_blocking(
         jiff::Timestamp::now(),
         Some(project),
         parallax_protocol::ParallaxEvent::ContextChanged { file },

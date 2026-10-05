@@ -1,19 +1,26 @@
 //! The project store, on a thread of its own, and the mapping between its rows and the
 //! protocol's types.
 //!
-//! SQLite calls block, so one thread owns [`parallax_store::Store`] and runs the jobs that requests
-//! send it, one at a time. It is the only writer.
+//! SQLite calls block, so one thread owns [`parallax_store::Store`]'s write connection and runs
+//! the jobs that requests send it, one at a time. It is the only writer, of rows and events alike
+//! (0052). Each job runs in one `BEGIN IMMEDIATE` … `COMMIT` and gets a [`Tx`], which reads and
+//! writes rows and stages events: [`Tx::stage`] gives an event the next `seq` and inserts its row.
+//! After `COMMIT`, the thread publishes the staged events to the event log's in-memory window, in
+//! `seq` order, and then replies. A job that returns an error, fails to stage, or panics rolls
+//! back: nothing is published, and the `seq` counter goes back to where it was. So a row and its
+//! event are stored together or not at all, and subscribers never see an event that didn't commit.
 //!
 //! Lists and search run on a second handle, the daemon's `reader` (PLX-457): its own thread and a
 //! `query_only` connection, which WAL lets read while the writer writes, so a slow search never
 //! holds up a write. A list that clients subscribe after reads the event log's head before its
-//! rows ([`StoreHandle::snapshot`]). Every write commits its row before its event is published, so
-//! a write the read misses has an event after that head, which `events/subscribe` replays. A write
+//! rows ([`StoreHandle::snapshot`]). A write's event is published only after its rows commit, so a
+//! write the read misses has an event after that head, which `events/subscribe` replays. A write
 //! the read already saw can be replayed too; the app's reducers are upserts, so that's harmless.
 //!
 //! A job whose request is cancelled is skipped if it hasn't started. Once it has started, it runs
 //! to the end and the request gets its real result, so -32800 always means nothing was done.
 
+use std::ops::{Deref, DerefMut};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -22,29 +29,31 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountChoice, AccountId, ErrorKind, ImageMediaType, KeyAccount, Project, ProjectAutonomy,
-    ProjectCreateParams, ProjectIcon, ProjectId, ProjectPermission, ProjectUpdateParams,
-    PromptImage, Provider, QueueStats, Role, RunId, StoreState,
+    AccountChoice, AccountId, ErrorKind, ImageMediaType, KeyAccount, ParallaxEvent, Project,
+    ProjectAutonomy, ProjectCreateParams, ProjectIcon, ProjectId, ProjectPermission,
+    ProjectUpdateParams, PromptImage, Provider, QueueStats, Role, RunId, StoreState,
 };
 use parallax_store::{
-    AccountFields, ProjectEdit, ProjectFields, RoleDefault, Store, StoreError, StoredImage,
+    AccountFields, ProjectEdit, ProjectFields, RoleDefault, Store, StoreError, StoredEvent,
+    StoredImage,
 };
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::agents::convert::{option_name, option_value};
-use crate::event_log::EventLog;
+use crate::event_log::{Entry, EventLog, kind_of, run_of};
 use crate::repo;
 
 const QUEUED: u8 = 0;
 const STARTED: u8 = 1;
 const CANCELLED: u8 = 2;
 
-type Job = Box<dyn FnOnce(&mut Store) + Send>;
+type Job = Box<dyn FnOnce(&mut Tx) + Send>;
 
 enum Message {
     /// A job and when it was sent.
@@ -53,7 +62,7 @@ enum Message {
 }
 
 /// Counts and times the jobs of a queue that one thread works through in order, for `host/health`
-/// (PLX-445). The store and the event log's writer each keep one.
+/// (PLX-445). The store and its reader each keep one.
 #[derive(Default)]
 pub(crate) struct QueueCounters {
     queued: AtomicU64,
@@ -107,9 +116,152 @@ fn micros(duration: Duration) -> u64 {
     u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }
 
+/// What a store job works with: the connection, through `Deref`, and [`Tx::stage`] for events.
+/// Owned by the store's thread, which keeps it between jobs.
+pub(crate) struct Tx {
+    store: Store,
+    /// The event log, on the writer. `None` on the reader, which never stages or opens a
+    /// transaction.
+    log: Option<Arc<EventLog>>,
+    /// The newest `seq` staged, committed or not. Only this thread changes it.
+    seq: u64,
+    /// The `seq` before the open transaction, to go back to on rollback; `None` when none is open.
+    begun: Option<u64>,
+    staged: Vec<Entry>,
+    /// Whether staging failed, which rolls the job back however it ends.
+    failed: bool,
+}
+
+impl Deref for Tx {
+    type Target = Store;
+
+    fn deref(&self) -> &Store {
+        &self.store
+    }
+}
+
+impl DerefMut for Tx {
+    fn deref_mut(&mut self) -> &mut Store {
+        &mut self.store
+    }
+}
+
+impl Tx {
+    fn new(store: Store, log: Option<Arc<EventLog>>) -> Self {
+        let seq = log.as_ref().map_or(0, |log| log.head());
+        Self {
+            store,
+            log,
+            seq,
+            begun: None,
+            staged: Vec::new(),
+            failed: false,
+        }
+    }
+
+    /// Stores `event` in this job's transaction with the next `seq`, and returns it. The event is
+    /// published once the job commits. If it can't be stored, the job rolls back and fails.
+    pub fn stage(
+        &mut self,
+        time: Timestamp,
+        project: Option<ProjectId>,
+        event: ParallaxEvent,
+    ) -> u64 {
+        let Some(log) = &self.log else {
+            error!("a job on the store's reader tried to stage an event");
+            self.failed = true;
+            return 0;
+        };
+        self.seq += 1;
+        let seq = self.seq;
+        let run_id = run_of(&event);
+        let payload = serde_json::to_string(&event).unwrap_or_default();
+        let stored = StoredEvent {
+            seq,
+            time,
+            project_id: project.map(Uuid::from),
+            run_id: run_id.map(Uuid::from),
+            kind: kind_of(&event),
+            payload,
+        };
+        let mut written = self.store.append_event(&stored);
+        // Only a host or project event can grow past the retention this way (#187).
+        if written.is_ok() && run_id.is_none() {
+            written = self.store.prune_host_events(log.host_retention()).map(drop);
+        }
+        if let Err(error) = written {
+            error!(seq, %error, "could not store an event; its job rolls back");
+            self.failed = true;
+        }
+        self.staged.push(Entry {
+            seq,
+            time,
+            project,
+            event,
+            bytes: stored.payload.len(),
+        });
+        seq
+    }
+
+    /// Runs `job` in one transaction on the writer, and publishes what it staged once that
+    /// commits. On the reader it just runs `job`.
+    fn write<T>(
+        &mut self,
+        job: impl FnOnce(&mut Self) -> Result<T, ErrorObject>,
+    ) -> Result<T, ErrorObject> {
+        if self.log.is_none() {
+            return job(self);
+        }
+        if let Err(error) = self.store.begin() {
+            return Err(failed(&error));
+        }
+        self.begun = Some(self.seq);
+        let result = match job(self) {
+            Ok(_) if self.failed => Err(ErrorObject::internal_error(
+                "the project store could not store an event",
+            )),
+            Ok(value) => match self.store.commit() {
+                Ok(()) => {
+                    self.begun = None;
+                    let staged = std::mem::take(&mut self.staged);
+                    if let Some(log) = &self.log {
+                        log.publish(staged);
+                    }
+                    return Ok(value);
+                }
+                Err(error) => Err(failed(&error)),
+            },
+            Err(error) => Err(error),
+        };
+        self.roll_back();
+        result
+    }
+
+    /// Rolls back a transaction a job left open, by an error or a panic: drops what it staged and
+    /// puts the `seq` counter back.
+    fn roll_back(&mut self) {
+        if let Some(seq) = self.begun.take() {
+            self.seq = seq;
+        }
+        self.staged.clear();
+        self.failed = false;
+        if let Err(error) = self.store.rollback() {
+            error!(%error, "could not roll back a store job");
+        }
+    }
+}
+
+fn failed(error: &StoreError) -> ErrorObject {
+    error!(%error, "the project store failed");
+    ErrorObject::internal_error(format!("the project store failed: {error}"))
+}
+
 pub(crate) struct StoreHandle {
     state: State,
     counters: Arc<QueueCounters>,
+    /// The event log the writer stages into, which lives in memory only when the store is
+    /// unavailable.
+    log: Arc<EventLog>,
 }
 
 enum State {
@@ -121,9 +273,10 @@ enum State {
 }
 
 impl StoreHandle {
-    /// Opens the store at `path` and starts its thread. If it can't be opened, plxd keeps
-    /// running without it: `host/health` says so, and project methods fail.
-    pub fn open(path: &Path) -> Self {
+    /// Opens the store at `path`, loads its event log (see [`EventLog::load`] for the bounds), and
+    /// starts its thread. If it can't be opened, plxd keeps running without it: `host/health` says
+    /// so, project methods fail, and the event log runs in memory only, with a new `logId`.
+    pub fn open(path: &Path, retention: usize, max_bytes: usize, host_retention: usize) -> Self {
         // Opening applies pending migrations first, which can take seconds on a large store:
         // migration 36 indexes every message logged so far (PLX-487).
         info!(path = %path.display(), "opening the project store and applying any migrations");
@@ -133,7 +286,24 @@ impl StoreHandle {
             elapsed_ms = started.elapsed().as_millis(),
             "applied the project store's migrations"
         );
-        Self::start(path, store, "plxd-store")
+        let opened = store.and_then(|store| {
+            let log = EventLog::load(&store, path, retention, max_bytes, host_retention)?;
+            Ok((store, Arc::new(log)))
+        });
+        let memory = || Arc::new(EventLog::new_bounded(retention, max_bytes));
+        match opened {
+            Ok((store, log)) => Self::start(
+                path,
+                Tx::new(store, Some(Arc::clone(&log))),
+                "plxd-store",
+                log,
+            )
+            .unwrap_or_else(|| Self::unavailable(memory())),
+            Err(error) => {
+                error!(path = %path.display(), %error, "could not open the project store; keeping events in memory only");
+                Self::unavailable(memory())
+            }
+        }
     }
 
     /// Opens a read-only connection to this store's file at `path`, on a thread of its own: the
@@ -141,49 +311,62 @@ impl StoreHandle {
     /// build can't migrate (a newer schema, say) is never read either.
     // ponytail: one read thread, so reads queue behind each other; a pool if that shows up.
     pub fn open_reader(&self, path: &Path) -> Self {
+        let log = Arc::clone(&self.log);
         if self.state() != StoreState::Ok {
-            return Self::unavailable();
+            return Self::unavailable(log);
         }
-        Self::start(path, Store::open_read_only(path), "plxd-store-read")
+        match Store::open_read_only(path) {
+            Ok(store) => Self::start(
+                path,
+                Tx::new(store, None),
+                "plxd-store-read",
+                Arc::clone(&log),
+            )
+            .unwrap_or_else(|| Self::unavailable(log)),
+            Err(error) => {
+                error!(path = %path.display(), %error, "could not open the project store's reader");
+                Self::unavailable(log)
+            }
+        }
     }
 
-    fn start(path: &Path, store: Result<Store, StoreError>, name: &str) -> Self {
-        let store = match store {
-            Ok(store) => store,
-            Err(error) => {
-                error!(path = %path.display(), %error, name, "could not open the project store");
-                return Self::unavailable();
-            }
-        };
+    fn start(path: &Path, tx: Tx, name: &str, log: Arc<EventLog>) -> Option<Self> {
         let (jobs, queue) = mpsc::channel();
         let counters = Arc::new(QueueCounters::default());
         let thread_counters = Arc::clone(&counters);
         let spawned = thread::Builder::new()
             .name(name.to_owned())
-            .spawn(move || run(store, &queue, &thread_counters));
+            .spawn(move || run(tx, &queue, &thread_counters));
         match spawned {
             Ok(thread) => {
                 info!(path = %path.display(), name, "opened the project store");
-                Self {
+                Some(Self {
                     state: State::Open {
                         jobs,
                         thread: Mutex::new(Some(thread)),
                     },
                     counters,
-                }
+                    log,
+                })
             }
             Err(error) => {
-                error!(%error, "could not start the project store's thread");
-                Self::unavailable()
+                error!(%error, name, "could not start the project store's thread");
+                None
             }
         }
     }
 
-    fn unavailable() -> Self {
+    fn unavailable(log: Arc<EventLog>) -> Self {
         Self {
             state: State::Unavailable,
             counters: Arc::default(),
+            log,
         }
+    }
+
+    /// The event log this store writes.
+    pub fn log(&self) -> Arc<EventLog> {
+        Arc::clone(&self.log)
     }
 
     /// The job queue's figures for `host/health`, all zero for a store that is unavailable.
@@ -207,12 +390,12 @@ impl StoreHandle {
         }
     }
 
-    /// Runs `job` on the store's thread and returns its result, or an error for a request that
-    /// was cancelled before the job started, or a store that is unavailable.
+    /// Runs `job` on the store's thread, in one transaction, and returns its result, or an error
+    /// for a request that was cancelled before the job started, or a store that is unavailable.
     pub async fn run<T: Send + 'static>(
         &self,
         cancel: &CancellationToken,
-        job: impl FnOnce(&mut Store) -> Result<T, ErrorObject> + Send + 'static,
+        job: impl FnOnce(&mut Tx) -> Result<T, ErrorObject> + Send + 'static,
     ) -> Result<T, ErrorObject> {
         let State::Open { jobs, .. } = &self.state else {
             return Err(unavailable());
@@ -223,7 +406,7 @@ impl StoreHandle {
         let job_cancel = cancel.clone();
         // The job checks the token itself too, so it is skipped even when the request's task
         // was aborted and nobody is waiting for it.
-        let job: Job = Box::new(move |store| {
+        let job: Job = Box::new(move |tx| {
             if job_cancel.is_cancelled() {
                 job_status.store(CANCELLED, Ordering::Release);
                 return;
@@ -232,7 +415,7 @@ impl StoreHandle {
                 .compare_exchange(QUEUED, STARTED, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
             {
-                let _ = reply.send(job(store));
+                let _ = reply.send(tx.write(job));
             }
         });
         self.counters.sending();
@@ -259,16 +442,71 @@ impl StoreHandle {
         })
     }
 
+    /// Stores and publishes one event in a job of its own, and returns its `seq`. With the store
+    /// unavailable, the event goes to the in-memory log. An event that can't be stored is logged
+    /// and dropped, and the head is returned.
+    pub async fn append(
+        &self,
+        time: Timestamp,
+        project: Option<ProjectId>,
+        event: ParallaxEvent,
+    ) -> u64 {
+        if matches!(self.state, State::Unavailable) {
+            return self.log.append_in_memory(time, project, event);
+        }
+        let appended = self
+            .run(&CancellationToken::new(), move |tx| {
+                Ok(tx.stage(time, project, event))
+            })
+            .await;
+        appended.unwrap_or_else(|error| {
+            warn!(error = %error.message, "could not append an event; it was dropped");
+            self.log.head()
+        })
+    }
+
+    /// [`StoreHandle::append`], for a caller with no tokio runtime context: the shared-context
+    /// `notify` watcher's callback thread, and `context/write`'s blocking task. Blocks the
+    /// calling thread until the job finishes.
+    pub fn append_blocking(
+        &self,
+        time: Timestamp,
+        project: Option<ProjectId>,
+        event: ParallaxEvent,
+    ) -> u64 {
+        let State::Open { jobs, .. } = &self.state else {
+            return self.log.append_in_memory(time, project, event);
+        };
+        let (reply, result) = oneshot::channel();
+        let job: Job = Box::new(move |tx| {
+            let _ = reply.send(tx.write(|tx| Ok(tx.stage(time, project, event))));
+        });
+        self.counters.sending();
+        if jobs.send(Message::Job(Instant::now(), job)).is_err() {
+            self.counters.unsent();
+        }
+        match result.blocking_recv() {
+            Ok(Ok(seq)) => seq,
+            Ok(Err(error)) => {
+                warn!(error = %error.message, "could not append an event; it was dropped");
+                self.log.head()
+            }
+            Err(_) => {
+                warn!("could not append an event: the project store is unavailable");
+                self.log.head()
+            }
+        }
+    }
+
     /// [`StoreHandle::run`] for a list that clients subscribe after: returns `job`'s rows with the
     /// event log's head, read before the rows. A write that lands during the read then has its
     /// event after that `seq`, so a subscriber replays it.
     pub async fn snapshot<T: Send + 'static>(
         &self,
         cancel: &CancellationToken,
-        log: &Arc<EventLog>,
-        job: impl FnOnce(&mut Store) -> Result<T, ErrorObject> + Send + 'static,
+        job: impl FnOnce(&mut Tx) -> Result<T, ErrorObject> + Send + 'static,
     ) -> Result<(T, u64), ErrorObject> {
-        let log = Arc::clone(log);
+        let log = Arc::clone(&self.log);
         self.run(cancel, move |store| {
             let seq = log.head();
             Ok((job(store)?, seq))
@@ -289,12 +527,15 @@ impl StoreHandle {
     }
 }
 
-fn run(mut store: Store, queue: &mpsc::Receiver<Message>, counters: &QueueCounters) {
+fn run(mut tx: Tx, queue: &mpsc::Receiver<Message>, counters: &QueueCounters) {
     while let Ok(Message::Job(sent, job)) = queue.recv() {
-        // A panicking job drops its reply, which fails only its own request.
-        let ran = counters.run(sent, || catch_unwind(AssertUnwindSafe(|| job(&mut store))));
+        // A panicking job drops its reply, which fails only its own request, and rolls back.
+        let ran = counters.run(sent, || catch_unwind(AssertUnwindSafe(|| job(&mut tx))));
         if ran.is_err() {
-            error!("a project store job panicked");
+            error!("a project store job panicked; rolling it back");
+            if tx.log.is_some() {
+                tx.roll_back();
+            }
         }
     }
 }
@@ -593,7 +834,7 @@ pub(crate) fn key_account(row: parallax_store::Account) -> Result<KeyAccount, Er
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use parallax_protocol::jsonrpc::ErrorObject;
     use std::time::Duration;
 
     use jiff::Timestamp;
@@ -608,9 +849,123 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        EventLog, StoreHandle, account_fields, account_store_error, edit, fields, key_account,
-        project, store_error,
+        StoreHandle, account_fields, account_store_error, edit, fields, key_account, project,
+        store_error,
     };
+
+    fn open(path: &std::path::Path) -> StoreHandle {
+        StoreHandle::open(path, 10, usize::MAX, usize::MAX)
+    }
+
+    fn new_project() -> ProjectCreateParams {
+        ProjectCreateParams {
+            id: ProjectId::generate(),
+            name: "n".to_owned(),
+            repo_path: "/r".to_owned(),
+            icon: None,
+            permission: None,
+            autonomy: None,
+            base_branch: None,
+        }
+    }
+
+    /// How many projects the database has, and its events' `seq`s, read on a connection of their
+    /// own.
+    fn stored(path: &std::path::Path) -> (i64, Vec<i64>) {
+        let raw = rusqlite::Connection::open(path).unwrap();
+        let projects = raw
+            .query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0))
+            .unwrap();
+        let seqs = raw
+            .prepare("SELECT seq FROM events ORDER BY seq")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        (projects, seqs)
+    }
+
+    /// A job writes a row and stages its event in one transaction (0052): one that fails after
+    /// staging, or panics between the row and the event, as a crash would cut it, leaves neither
+    /// row nor event, publishes nothing, and gives the next event the `seq` it would have had.
+    #[tokio::test]
+    async fn a_job_that_fails_or_panics_leaves_neither_its_row_nor_its_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        let store = open(&path);
+        let log = store.log();
+        let cancel = CancellationToken::new();
+        let watch = log.watch();
+
+        let failed = store
+            .run(&cancel, |db| {
+                let (id, fields) = fields(new_project());
+                db.create_project(id, &fields)
+                    .map_err(|error| store_error(&error))?;
+                db.stage(Timestamp::now(), None, ParallaxEvent::Unknown);
+                Err::<(), _>(ErrorObject::internal_error("injected"))
+            })
+            .await;
+        assert_eq!(failed.unwrap_err().message, "Internal error: injected");
+        let panicked = store
+            .run(&cancel, |db| {
+                let (id, fields) = fields(new_project());
+                db.create_project(id, &fields)
+                    .map_err(|error| store_error(&error))?;
+                assert!(id.is_nil(), "injected between the row and its event");
+                Ok(db.stage(Timestamp::now(), None, ParallaxEvent::Unknown))
+            })
+            .await;
+        assert_eq!(panicked.unwrap_err().code, INTERNAL_ERROR);
+        assert_eq!(stored(&path), (0, vec![]), "neither the rows nor the event");
+        assert_eq!(log.head(), 0, "nothing was published");
+        assert!(!watch.has_changed().unwrap());
+
+        let seq = store
+            .run(&cancel, |db| {
+                let (id, fields) = fields(new_project());
+                db.create_project(id, &fields)
+                    .map_err(|error| store_error(&error))?;
+                Ok(db.stage(Timestamp::now(), None, ParallaxEvent::Unknown))
+            })
+            .await
+            .unwrap();
+        assert_eq!(seq, 1, "the rolled-back event gave its seq back");
+        assert_eq!(stored(&path), (1, vec![1]));
+        assert_eq!(log.head(), 1);
+        assert!(watch.has_changed().unwrap());
+        store.stop().await;
+    }
+
+    /// An event that can't be stored fails its job: the row written before it rolls back too.
+    #[tokio::test]
+    async fn an_event_that_cannot_be_stored_rolls_back_its_job() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        let store = open(&path);
+        // A row already holding the next `seq` makes the insert fail.
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute(
+                "INSERT INTO events (seq, time, kind, payload) \
+                 VALUES (1, '2026-09-25T12:00:00Z', 'x', '{}')",
+                [],
+            )
+            .unwrap();
+        let failed = store
+            .run(&CancellationToken::new(), |db| {
+                let (id, fields) = fields(new_project());
+                db.create_project(id, &fields)
+                    .map_err(|error| store_error(&error))?;
+                Ok(db.stage(Timestamp::now(), None, ParallaxEvent::Unknown))
+            })
+            .await;
+        assert_eq!(failed.unwrap_err().code, INTERNAL_ERROR);
+        assert_eq!(stored(&path), (0, vec![1]), "only the event that was there");
+        assert_eq!(store.log().head(), 0);
+        store.stop().await;
+    }
 
     fn row(id: Uuid) -> parallax_store::Project {
         parallax_store::Project {
@@ -805,7 +1160,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("file");
         std::fs::write(&file, "").unwrap();
-        let store = StoreHandle::open(&file.join("nested.sqlite3"));
+        let store = open(&file.join("nested.sqlite3"));
         assert_eq!(store.state(), StoreState::Unavailable);
         let error = store
             .run(&CancellationToken::new(), |_| Ok(()))
@@ -821,7 +1176,7 @@ mod tests {
     #[tokio::test]
     async fn a_queued_job_is_skipped_when_cancelled_and_a_started_one_finishes() {
         let dir = tempfile::tempdir().unwrap();
-        let store = StoreHandle::open(&dir.path().join("plxd.sqlite3"));
+        let store = open(&dir.path().join("plxd.sqlite3"));
         assert_eq!(store.state(), StoreState::Ok);
 
         let (started_tx, started_rx) = std::sync::mpsc::channel();
@@ -853,7 +1208,7 @@ mod tests {
     #[tokio::test]
     async fn a_job_queued_behind_a_blocked_one_raises_the_wait_figures() {
         let dir = tempfile::tempdir().unwrap();
-        let store = StoreHandle::open(&dir.path().join("plxd.sqlite3"));
+        let store = open(&dir.path().join("plxd.sqlite3"));
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
         let cancel = CancellationToken::new();
@@ -889,18 +1244,16 @@ mod tests {
     async fn a_write_during_a_snapshot_has_its_event_after_the_snapshots_seq() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("plxd.sqlite3");
-        let store = StoreHandle::open(&path);
+        let store = open(&path);
         let reader = store.open_reader(&path);
-        let log = Arc::new(EventLog::new(10));
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
         let cancel = CancellationToken::new();
-        let snapshot = reader.snapshot(&cancel, &log, move |db| {
+        let snapshot = reader.snapshot(&cancel, move |db| {
             started_tx.send(()).unwrap();
             release_rx.recv().unwrap();
             db.list_projects().map_err(|error| store_error(&error))
         });
-        let write_log = Arc::clone(&log);
         let write = async {
             tokio::task::spawn_blocking(move || started_rx.recv().unwrap())
                 .await
@@ -918,7 +1271,7 @@ mod tests {
                     });
                     db.create_project(id, &fields)
                         .map_err(|error| store_error(&error))?;
-                    Ok(write_log.append_blocking(Timestamp::now(), None, ParallaxEvent::Unknown))
+                    Ok(db.stage(Timestamp::now(), None, ParallaxEvent::Unknown))
                 })
                 .await
                 .unwrap();
@@ -942,7 +1295,7 @@ mod tests {
     async fn the_reader_is_unavailable_when_the_writer_is() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("plxd.sqlite3");
-        let first = StoreHandle::open(&path);
+        let first = open(&path);
         first.stop().await;
         rusqlite::Connection::open(&path)
             .unwrap()
@@ -952,7 +1305,7 @@ mod tests {
             )
             .unwrap();
 
-        let store = StoreHandle::open(&path);
+        let store = open(&path);
         let reader = store.open_reader(&path);
         assert_eq!(store.state(), StoreState::Unavailable);
         assert_eq!(reader.state(), StoreState::Unavailable);
@@ -972,7 +1325,7 @@ mod tests {
     async fn the_reader_refuses_writes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("plxd.sqlite3");
-        let store = StoreHandle::open(&path);
+        let store = open(&path);
         let reader = store.open_reader(&path);
         let (id, fields) = fields(ProjectCreateParams {
             id: ProjectId::generate(),

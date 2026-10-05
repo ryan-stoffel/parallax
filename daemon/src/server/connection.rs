@@ -586,7 +586,7 @@ mod tests {
                 proposed_checks: None,
             };
             daemon
-                .log
+                .store
                 .append(
                     Timestamp::now(),
                     None,

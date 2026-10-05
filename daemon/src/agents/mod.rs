@@ -323,7 +323,7 @@ impl Agents {
 /// a run's bookkeeping has to happen whether or not anyone is still waiting for it.
 async fn store<T: Send + 'static>(
     daemon: &Daemon,
-    job: impl FnOnce(&mut parallax_store::Store) -> Result<T, ErrorObject> + Send + 'static,
+    job: impl FnOnce(&mut crate::store::Tx) -> Result<T, ErrorObject> + Send + 'static,
 ) -> Result<T, ErrorObject> {
     daemon.store.run(&CancellationToken::new(), job).await
 }
@@ -724,7 +724,7 @@ pub(super) async fn checkout_paths(
 }
 
 /// Records a new run and its worktree, with its thread row for a normal thread (`thread` is
-/// `Some`), in one transaction. If that fails, removes the worktree again. A thread in the
+/// `Some`), and their `agent.started` and `thread.started`, in one transaction. If that fails, removes the worktree again. A thread in the
 /// current checkout has no worktree (`created` is `None`); any other run must have one.
 async fn record(
     daemon: &Arc<Daemon>,
@@ -764,7 +764,7 @@ async fn record(
                 format!("no project has id {scope}"),
             ));
         }
-        if let Some(thread) = &thread {
+        let (run, worktree, thread) = if let Some(thread) = &thread {
             db.create_thread_run(
                 run_id.into(),
                 scope,
@@ -782,7 +782,12 @@ async fn record(
             db.create_run_with_worktree(run_id.into(), &fields, &state, &worktree_fields)
                 .map(|(run, worktree)| (run, Some(worktree), None))
                 .map_err(|e| store_error(&e))
+        }?;
+        stage_started(db, &run, worktree.as_ref())?;
+        if let Some(thread) = &thread {
+            crate::threads::stage_started(db, thread)?;
         }
+        Ok((run, worktree, thread))
     })
     .await;
     if recorded.is_err()
@@ -917,16 +922,22 @@ pub(crate) fn fits_mode(
     }
 }
 
-/// Logs `run`'s `agent.started` on `project`'s events.
-async fn log_started(daemon: &Daemon, project: ProjectId, run: AgentRun) {
-    let event = ParallaxEvent::AgentStarted {
-        run_id: run.id,
-        run: Some(run.clone()),
-    };
-    daemon
-        .log
-        .append(run.created_at, Some(project), event)
-        .await;
+/// Stages `row`'s `agent.started` on its project's events, in the job that records it.
+fn stage_started(
+    db: &mut crate::store::Tx,
+    row: &parallax_store::Run,
+    worktree: Option<&parallax_store::Worktree>,
+) -> Result<(), ErrorObject> {
+    let run = agent_run(row, worktree)?;
+    db.stage(
+        run.created_at,
+        Some(run.project),
+        ParallaxEvent::AgentStarted {
+            run_id: run.id,
+            run: Some(run),
+        },
+    );
+    Ok(())
 }
 
 /// `agent/start`: see the module documentation. Idempotent on the run id.
@@ -1063,7 +1074,7 @@ async fn fork_created(
     for items in fork.transcript {
         let event = ParallaxEvent::AgentOutput { run_id, items };
         daemon
-            .log
+            .store
             .append(row.created_at, Some(project), event)
             .await;
     }
@@ -1229,10 +1240,6 @@ pub(crate) async fn create_started(
     .await?;
     // It counts as starting or waiting now.
     drop(placing);
-    log_started(&daemon, project, agent_run(&row, worktree.as_ref())?).await;
-    if let Some(thread) = &thread_row {
-        crate::threads::log_started(&daemon, thread).await;
-    }
     info!(run = %run_id, project = %project, backend = %row.fields.backend, thread = is_thread, checkout = row.fields.checkout, "created an agent run");
     if let Some(fork) = fork {
         return fork_created(&daemon, project, run_id, fork, &row, worktree, thread_row).await;
@@ -1780,7 +1787,40 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
                 warn!(run = %row.id, %error, "could not index an interrupted run's text");
             }
             let worktree = db.get_worktree(row.id).map_err(|e| store_error(&e))?;
-            recovered.push(agent_run(&row, worktree.as_ref())?);
+            let run = agent_run(&row, worktree.as_ref())?;
+            db.stage(
+                run.updated_at,
+                Some(run.project),
+                ParallaxEvent::AgentFinished {
+                    run_id: run.id,
+                    outcome: AgentOutcome::Interrupted,
+                },
+            );
+            recovered.push(run.id);
+            db.stage(
+                run.updated_at,
+                Some(run.project),
+                ParallaxEvent::AgentUpdated {
+                    run_id: run.id,
+                    state: AgentRunState {
+                        status: run.status,
+                        account_id: run.account_id,
+                        backend: Some(run.backend),
+                        session_id: run.session_id,
+                        error: run.error,
+                        diff: run.diff,
+                        model: run.model,
+                        effort: run.effort,
+                        permission: run.permission,
+                        context_window: run.context_window,
+                        fast: run.fast,
+                        pull_requests: run.pull_requests,
+                        resume_at: run.resume_at,
+                        auto_resume: run.auto_resume,
+                        updated_at: run.updated_at,
+                    },
+                },
+            );
         }
         Ok(recovered)
     })
@@ -1788,45 +1828,7 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
     match recovered {
         Ok(runs) => {
             for run in runs {
-                info!(run = %run.id, "an agent run was interrupted when plxd last stopped");
-                daemon
-                    .log
-                    .append(
-                        run.updated_at,
-                        Some(run.project),
-                        ParallaxEvent::AgentFinished {
-                            run_id: run.id,
-                            outcome: AgentOutcome::Interrupted,
-                        },
-                    )
-                    .await;
-                daemon
-                    .log
-                    .append(
-                        run.updated_at,
-                        Some(run.project),
-                        ParallaxEvent::AgentUpdated {
-                            run_id: run.id,
-                            state: AgentRunState {
-                                status: run.status,
-                                account_id: run.account_id,
-                                backend: Some(run.backend),
-                                session_id: run.session_id,
-                                error: run.error,
-                                diff: run.diff,
-                                model: run.model,
-                                effort: run.effort,
-                                permission: run.permission,
-                                context_window: run.context_window,
-                                fast: run.fast,
-                                pull_requests: run.pull_requests,
-                                resume_at: run.resume_at,
-                                auto_resume: run.auto_resume,
-                                updated_at: run.updated_at,
-                            },
-                        },
-                    )
-                    .await;
+                info!(run = %run, "an agent run was interrupted when plxd last stopped");
             }
         }
         Err(error) => warn!(error = %error.message, "could not recover interrupted agent runs"),

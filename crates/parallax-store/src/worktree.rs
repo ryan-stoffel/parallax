@@ -1,5 +1,5 @@
 use jiff::Timestamp;
-use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
 use crate::Store;
@@ -131,9 +131,7 @@ impl Store {
 
         let now = timestamp::now();
 
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = self.conn.savepoint()?;
         tx.execute(
             "INSERT INTO worktrees (id, repo_path, path, branch, base, git_dir, base_dirty, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)

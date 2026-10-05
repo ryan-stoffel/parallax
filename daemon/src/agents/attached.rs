@@ -151,12 +151,12 @@ mod tests {
         for i in 0..PAGE_EVENTS * 3 {
             let text = format!("{i:03}{}", "x".repeat(200));
             daemon
-                .log
+                .store
                 .append(Timestamp::now(), None, said(long, text))
                 .await;
         }
         daemon
-            .log
+            .store
             .append(Timestamp::now(), None, said(short, "Hi".to_owned()))
             .await;
 

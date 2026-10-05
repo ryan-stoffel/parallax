@@ -78,6 +78,7 @@ use crate::backend::{
 };
 use crate::routing;
 use crate::server::Daemon;
+use crate::store::Tx;
 use crate::worktree::github_pr_urls;
 
 mod git;
@@ -727,9 +728,13 @@ impl Actor {
         if self.project != project {
             let id = self.row.id;
             // Only its fields: its state may be newer here than in the store.
+            // Its new parent is reported as `thread.updated` in the same job.
             self.row.fields = store(&self.daemon, move |db| {
-                db.join_project(id, project.into(), parent.into())
-                    .map_err(|error| store_error(&error))
+                let row = db
+                    .join_project(id, project.into(), parent.into())
+                    .map_err(|error| store_error(&error))?;
+                crate::threads::prompted(db, id)?;
+                Ok(row)
             })
             .await?
             .fields;
@@ -855,9 +860,23 @@ impl Actor {
     async fn pause_wakes(&mut self, notify: bool) {
         if self.wakes.pause() {
             info!(run = %self.id, "pausing a run's wake-ups until the user writes");
-            self.save_wakes().await;
-            self.append(ParallaxEvent::AgentWakeupsPaused { run_id: self.id })
+            let (id, state) = (self.row.id, self.wakes.state());
+            let (run_id, project) = (self.id, self.project);
+            let saved = self
+                .write(move |db, now| {
+                    db.set_wake_state(id, state)
+                        .map_err(|error| store_error(&error))?;
+                    db.stage(
+                        now,
+                        Some(project),
+                        ParallaxEvent::AgentWakeupsPaused { run_id },
+                    );
+                    Ok(())
+                })
                 .await;
+            if let Err(error) = saved {
+                warn!(run = %self.id, error = %error.message, "could not store a run's wake-ups");
+            }
             if notify && self.is_coordinator() {
                 self.inbox(InboxKind::NeedsYou, WAKEUPS_PAUSED.to_owned())
                     .await;
@@ -996,11 +1015,31 @@ impl Actor {
         self.row.state.resume_at = None;
         self.row.state.accept = Some(accept.clone());
         let (row_id, state) = (self.row.id, self.row.state.clone());
-        let saved = store(&self.daemon, move |db| {
-            db.accept_run(row_id, &state)
-                .map_err(|error| store_error(&error))
-        })
-        .await;
+        let (run_id, project) = (self.id, self.project);
+        let merge = convert::merge(&accept);
+        let accepted_merge = merge.clone();
+        let saved = self
+            .write(move |db, now| {
+                let row = db
+                    .accept_run(row_id, &state)
+                    .map_err(|error| store_error(&error))?;
+                db.stage(
+                    now,
+                    Some(project),
+                    ParallaxEvent::AgentAccepted {
+                        run_id,
+                        merge: accepted_merge,
+                    },
+                );
+                let state = convert::run_state(&row);
+                db.stage(
+                    now,
+                    Some(project),
+                    ParallaxEvent::AgentUpdated { run_id, state },
+                );
+                Ok(row)
+            })
+            .await;
         match saved {
             Ok(row) => self.row = row,
             Err(error) => {
@@ -1008,18 +1047,6 @@ impl Actor {
             }
         }
         self.worktree = None;
-        let merge = convert::merge(&accept);
-        self.flush().await;
-        self.append(ParallaxEvent::AgentAccepted {
-            run_id: self.id,
-            merge: merge.clone(),
-        })
-        .await;
-        self.append(ParallaxEvent::AgentUpdated {
-            run_id: self.id,
-            state: convert::run_state(&self.row),
-        })
-        .await;
         Ok((self.snapshot()?, merge))
     }
 
@@ -1516,7 +1543,6 @@ impl Actor {
             self.queued.pop_back();
             return Err(error);
         }
-        self.report_queue().await;
         self.snapshot()
     }
 
@@ -1657,7 +1683,6 @@ impl Actor {
                 edited[at].text = text;
                 self.store_queue_for(&edited).await?;
                 self.queued = edited;
-                self.report_queue().await;
             }
             QueueOp::Reorder { ids } => {
                 let mut rest = self.queued.clone();
@@ -1680,19 +1705,18 @@ impl Actor {
                 }
                 self.store_queue_for(&reordered).await?;
                 self.queued = reordered;
-                self.report_queue().await;
             }
             QueueOp::Cancel { id } => {
                 let at = self.position(id)?;
                 let mut remaining = self.queued.clone();
                 remaining.remove(at);
-                self.store_queue_for(&remaining).await?;
-                self.queued = remaining;
                 info!(run = %self.id, turn = %id, "cancelling a waiting message");
-                self.senders.remove(&id);
+                // Staged in the same job as the queue, so the two commit together.
                 self.push(AgentOutputItem::FollowUpDropped { turn_id: id })
                     .await;
-                self.report_queue().await;
+                self.store_queue_for(&remaining).await?;
+                self.queued = remaining;
+                self.senders.remove(&id);
             }
             QueueOp::Steer { id } => {
                 let at = self.position(id)?;
@@ -1769,32 +1793,31 @@ impl Actor {
         if let Err(error) = self.store_queue().await {
             warn!(run = %self.id, error = %error.message, "could not store a run's waiting messages");
         }
-        self.report_queue().await;
     }
 
-    /// Stores the waiting messages as they are now.
-    async fn store_queue(&self) -> Result<(), ErrorObject> {
-        self.store_queue_for(&self.queued).await
+    /// Stores the waiting messages as they are now, and reports them as `queue.updated`.
+    async fn store_queue(&mut self) -> Result<(), ErrorObject> {
+        self.store_queue_for(&self.queued.clone()).await
     }
 
-    /// Persists a proposed queue before its mutation is applied to the actor.
-    async fn store_queue_for(&self, queued: &VecDeque<Queued>) -> Result<(), ErrorObject> {
+    /// Stores a proposed queue, before the actor applies it, and reports it as `queue.updated`,
+    /// in one job after any transcript items waiting to be sent.
+    async fn store_queue_for(&mut self, queued: &VecDeque<Queued>) -> Result<(), ErrorObject> {
         let id = self.row.id;
+        let (run_id, project) = (self.id, self.project);
         let rows: Vec<QueuedRow> = queued.iter().map(Queued::row).collect();
-        store(&self.daemon, move |db| {
-            db.set_queue(id, &rows).map_err(|error| store_error(&error))
+        let messages: Vec<QueuedMessage> = queued.iter().map(Queued::message).collect();
+        self.write(move |db, now| {
+            db.set_queue(id, &rows)
+                .map_err(|error| store_error(&error))?;
+            db.stage(
+                now,
+                Some(project),
+                ParallaxEvent::QueueUpdated { run_id, messages },
+            );
+            Ok(())
         })
         .await
-    }
-
-    /// Reports the waiting messages as they are now as `queue.updated`.
-    async fn report_queue(&mut self) {
-        self.flush().await;
-        self.append(ParallaxEvent::QueueUpdated {
-            run_id: self.id,
-            messages: self.messages(),
-        })
-        .await;
     }
 
     /// Starts a new CLI process for the run with `text`, after the summaries of `threads`, and
@@ -2157,11 +2180,10 @@ impl Actor {
     async fn record_turn(&mut self, turn_id: TurnId, text: String) {
         self.turns.insert(turn_id, text.clone());
         let (run_id, id) = (self.row.id, self.id);
-        let log = Arc::clone(&self.daemon.log);
         let stored = store(&self.daemon, move |db| {
             db.record_turn(run_id, turn_id.into(), &text)
                 .map_err(|error| store_error(&error))?;
-            crate::threads::prompted(db, &log, run_id)
+            crate::threads::prompted(db, run_id)
         })
         .await;
         if let Err(error) = stored {
@@ -2768,47 +2790,78 @@ impl Actor {
         }
     }
 
+    /// Sends the transcript items waiting to be sent, as one `agent.output` in a store job.
     async fn flush(&mut self) {
-        let batch = std::mem::take(&mut self.batch);
-        if !batch.items.is_empty() {
-            self.append(ParallaxEvent::AgentOutput {
-                run_id: self.id,
-                items: batch.items,
-            })
-            .await;
+        if self.batch.items.is_empty() {
+            self.batch = Batch::default();
+            return;
+        }
+        if let Err(error) = self.write(|_, _| Ok(())).await {
+            warn!(run = %self.id, error = %error.message, "could not store a run's output; it was dropped");
         }
     }
 
-    /// From a tokio task: the event log's own writer thread does the SQLite work, so awaiting it
-    /// here yields this actor's worker thread to other work instead of blocking it (#190).
-    async fn append(&self, event: ParallaxEvent) -> u64 {
-        self.daemon
-            .log
-            .append(jiff::Timestamp::now(), Some(self.project), event)
-            .await
+    /// Runs `job` as one store job, after staging the transcript items waiting to be sent, so
+    /// they, the rows `job` writes, and the events it stages commit together or not at all
+    /// (0052). `job` gets the time to stage its events at. A job that fails drops the items too.
+    async fn write<T: Send + 'static>(
+        &mut self,
+        job: impl FnOnce(&mut Tx, jiff::Timestamp) -> Result<T, ErrorObject> + Send + 'static,
+    ) -> Result<T, ErrorObject> {
+        let items = std::mem::take(&mut self.batch).items;
+        let (run_id, project, now) = (self.id, self.project, jiff::Timestamp::now());
+        store(&self.daemon, move |db| {
+            if !items.is_empty() {
+                db.stage(
+                    now,
+                    Some(project),
+                    ParallaxEvent::AgentOutput { run_id, items },
+                );
+            }
+            job(db, now)
+        })
+        .await
     }
 
-    /// Stores the run's state and reports it as `agent.updated`, after any transcript items
-    /// waiting to be sent.
+    /// Stores `event` on the run's project, after any transcript items waiting to be sent.
+    async fn append(&mut self, event: ParallaxEvent) {
+        let project = self.project;
+        let appended = self
+            .write(move |db, now| {
+                db.stage(now, Some(project), event);
+                Ok(())
+            })
+            .await;
+        if let Err(error) = appended {
+            warn!(run = %self.id, error = %error.message, "could not store a run's event; it was dropped");
+        }
+    }
+
+    /// Stores the run's state and reports it as `agent.updated`, in one job after any transcript
+    /// items waiting to be sent.
     async fn save(&mut self) {
-        self.flush().await;
         let (id, state) = (self.row.id, self.row.state.clone());
-        let saved = store(&self.daemon, move |db| {
-            db.update_run(id, &state)
-                .map_err(|error| store_error(&error))
-        })
-        .await;
+        let (run_id, project) = (self.id, self.project);
+        let saved = self
+            .write(move |db, now| {
+                let row = db
+                    .update_run(id, &state)
+                    .map_err(|error| store_error(&error))?;
+                let state = convert::run_state(&row);
+                db.stage(
+                    now,
+                    Some(project),
+                    ParallaxEvent::AgentUpdated { run_id, state },
+                );
+                Ok(row)
+            })
+            .await;
         match saved {
             Ok(row) => self.row = row,
             Err(error) => {
                 warn!(run = %self.id, error = %error.message, "could not store an agent run's state");
             }
         }
-        self.append(ParallaxEvent::AgentUpdated {
-            run_id: self.id,
-            state: convert::run_state(&self.row),
-        })
-        .await;
     }
 }
 

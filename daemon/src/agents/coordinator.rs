@@ -22,8 +22,8 @@ use tracing::info;
 use uuid::Uuid;
 
 use super::actor::Actor;
-use super::convert::{NO_WRITE, RUNNING, STARTING, agent_run, option_name};
-use super::{RunOptions, existing, log_started, prepare, requested_account, store, store_error};
+use super::convert::{NO_WRITE, RUNNING, STARTING, option_name};
+use super::{RunOptions, existing, prepare, requested_account, stage_started, store, store_error};
 use crate::methods::question::level;
 use crate::server::Daemon;
 
@@ -119,10 +119,10 @@ pub(crate) async fn start(
         let row = db
             .create_run(run_id.into(), &fields, &state)
             .map_err(|e| store_error(&e))?;
+        stage_started(db, &row, None)?;
         Ok((row, crate::store::project_autonomy(&project_row.autonomy)))
     })
     .await?;
-    log_started(&daemon, project, agent_run(&row, None)?).await;
     info!(run = %run_id, project = %project, backend = %row.fields.backend, "created a project's coordinator");
 
     let mut actor = Actor::new(Arc::clone(&daemon), row, None, HashMap::new());
