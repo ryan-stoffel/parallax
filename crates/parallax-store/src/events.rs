@@ -63,6 +63,17 @@ impl RawEvent {
 
 const COLUMNS: &str = "seq, time, project_id, run_id, kind, payload";
 
+/// A finished turn whose last `agent.output` is older than the in-memory window (0052).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactableTurn {
+    /// The run the turn belongs to.
+    pub run_id: Uuid,
+    /// The turn's first `agent.output` `seq`.
+    pub from: u64,
+    /// The last batch's `seq`, reused by the rewritten row.
+    pub last: u64,
+}
+
 impl Store {
     /// The event log's id: the stored one, or `new_id`, stored now, for a log that has none yet.
     ///
@@ -198,7 +209,8 @@ impl Store {
     /// Run `run_id`'s events before `before`, newest first: at most `limit` of them and about
     /// `max_bytes` of payload, but always at least one when any exists, as [`Store::run_events`]
     /// pages. The flag says whether older ones remain (PLX-372, PLX-490). Rows are read one at a
-    /// time, so a reader that only wants the latest few never loads the rest.
+    /// time, so a reader that only wants the latest few never loads the rest. A page whose
+    /// `before` sits inside a compacted turn also carries that turn's rewritten row (0052).
     ///
     /// # Errors
     ///
@@ -210,24 +222,188 @@ impl Store {
         limit: usize,
         max_bytes: usize,
     ) -> Result<(Vec<StoredEvent>, bool), StoreError> {
-        let mut stmt = self.conn.prepare(&format!(
-            "SELECT {COLUMNS} FROM events WHERE run_id = ?1 AND seq < ?2 ORDER BY seq DESC"
-        ))?;
-        let before = i64::try_from(before).unwrap_or(i64::MAX);
-        let rows = stmt.query_map(params![run_id.to_string(), before], RawEvent::from_row)?;
-        let mut events = Vec::new();
-        let mut bytes = 0_usize;
-        for row in rows {
-            let event = row?.into_event()?;
-            let full = events.len() >= limit.max(1)
-                || (!events.is_empty() && bytes + event.payload.len() > max_bytes);
-            if full {
-                return Ok((events, true));
+        let (mut events, more) = {
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT {COLUMNS} FROM events WHERE run_id = ?1 AND seq < ?2 ORDER BY seq DESC"
+            ))?;
+            let cursor = i64::try_from(before).unwrap_or(i64::MAX);
+            let rows = stmt.query_map(params![run_id.to_string(), cursor], RawEvent::from_row)?;
+            let mut events = Vec::new();
+            let mut bytes = 0_usize;
+            let mut more = false;
+            for row in rows {
+                let event = row?.into_event()?;
+                let full = events.len() >= limit.max(1)
+                    || (!events.is_empty() && bytes + event.payload.len() > max_bytes);
+                if full {
+                    more = true;
+                    break;
+                }
+                bytes += event.payload.len();
+                events.push(event);
             }
-            bytes += event.payload.len();
-            events.push(event);
+            (events, more)
+        };
+        if let Some(compacted) = self.compacted_covering(run_id, before)? {
+            events.insert(0, compacted);
         }
-        Ok((events, false))
+        Ok((events, more))
+    }
+
+    /// The run's compacted `agent.output` whose `from` is before `before` and whose `seq` is at
+    /// or after it, if there is one (0052): a newest-first page whose cursor sits inside that
+    /// turn still needs the rewritten row.
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored id or timestamp is corrupt.
+    pub fn compacted_covering(
+        &self,
+        run_id: Uuid,
+        before: u64,
+    ) -> Result<Option<StoredEvent>, StoreError> {
+        let before = i64::try_from(before).unwrap_or(i64::MAX);
+        let event = self
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT {COLUMNS} FROM events
+                     WHERE run_id = ?1
+                       AND kind = 'agent.output'
+                       AND seq >= ?2
+                       AND json_valid(payload)
+                       AND json_extract(payload, '$.compacted.from') IS NOT NULL
+                       AND json_extract(payload, '$.compacted.from') < ?2
+                     ORDER BY seq ASC
+                     LIMIT 1"
+                ),
+                params![run_id.to_string(), before],
+                RawEvent::from_row,
+            )
+            .optional()?
+            .map(RawEvent::into_event)
+            .transpose()?;
+        Ok(event)
+    }
+
+    /// The oldest finished turn whose last `agent.output` is older than `floor` and has not been
+    /// rewritten yet (0052).
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored id is corrupt.
+    pub fn find_compactable_turn(&self, floor: u64) -> Result<Option<CompactableTurn>, StoreError> {
+        let floor = i64::try_from(floor).unwrap_or(i64::MAX);
+        let Some((last, run)) = self
+            .conn
+            .query_row(
+                "SELECT seq, run_id FROM events
+                 WHERE kind = 'agent.output'
+                   AND seq < ?1
+                   AND run_id IS NOT NULL
+                   AND json_valid(payload)
+                   AND json_extract(payload, '$.compacted') IS NULL
+                   AND EXISTS (
+                       SELECT 1 FROM json_each(events.payload, '$.items') AS item
+                       WHERE json_extract(item.value, '$.kind') = 'turnFinished'
+                   )
+                 ORDER BY seq ASC
+                 LIMIT 1",
+                params![floor],
+                |row| {
+                    let seq: u64 = row.get(0)?;
+                    let run_id: String = row.get(1)?;
+                    Ok((seq, run_id))
+                },
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        let run_id = Uuid::parse_str(&run)?;
+        let prev: Option<u64> = self
+            .conn
+            .query_row(
+                "SELECT MAX(seq) FROM events
+                 WHERE run_id = ?1
+                   AND kind = 'agent.output'
+                   AND seq < ?2
+                   AND json_valid(payload)
+                   AND EXISTS (
+                       SELECT 1 FROM json_each(payload, '$.items') AS item
+                       WHERE json_extract(item.value, '$.kind') = 'turnFinished'
+                   )",
+                params![run_id.to_string(), last],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        let from: u64 = self.conn.query_row(
+            "SELECT MIN(seq) FROM events
+             WHERE run_id = ?1 AND kind = 'agent.output' AND seq > ?2 AND seq <= ?3",
+            params![run_id.to_string(), prev.unwrap_or(0), last],
+            |row| row.get(0),
+        )?;
+        Ok(Some(CompactableTurn { run_id, from, last }))
+    }
+
+    /// `run_id`'s `agent.output` rows from `from` through `last`, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored id or timestamp is corrupt.
+    pub fn output_events_in(
+        &self,
+        run_id: Uuid,
+        from: u64,
+        last: u64,
+    ) -> Result<Vec<StoredEvent>, StoreError> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {COLUMNS} FROM events
+             WHERE run_id = ?1 AND kind = 'agent.output' AND seq >= ?2 AND seq <= ?3
+             ORDER BY seq ASC"
+        ))?;
+        let rows = stmt.query_map(params![run_id.to_string(), from, last], RawEvent::from_row)?;
+        let mut events = Vec::new();
+        for row in rows {
+            events.push(row?.into_event()?);
+        }
+        Ok(events)
+    }
+
+    /// Replaces the payload of the event at `seq`.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn update_event_payload(&self, seq: u64, payload: &str) -> Result<(), StoreError> {
+        self.conn.execute(
+            "UPDATE events SET payload = ?2 WHERE seq = ?1",
+            params![seq, payload],
+        )?;
+        Ok(())
+    }
+
+    /// Deletes the events at `seqs`.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn delete_events(&self, seqs: &[u64]) -> Result<usize, StoreError> {
+        if seqs.is_empty() {
+            return Ok(0);
+        }
+        // A long streamed turn can exceed SQLite's bound-variable limit.
+        let mut deleted = 0;
+        for chunk in seqs.chunks(900) {
+            let marks = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+            let mut stmt = self
+                .conn
+                .prepare(&format!("DELETE FROM events WHERE seq IN ({marks})"))?;
+            let params = rusqlite::params_from_iter(chunk.iter().copied());
+            deleted += stmt.execute(params)?;
+        }
+        Ok(deleted)
     }
 
     /// Deletes host and project events (those with no `run_id`, such as `project.created` and

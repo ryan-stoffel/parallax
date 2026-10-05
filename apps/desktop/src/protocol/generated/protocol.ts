@@ -2459,7 +2459,11 @@ export type ParallaxEvent = { "kind": "project.created",
 	/**
 	 * What happened, in order.
 	 */
-	items: Array<AgentOutputItem>, } | { "kind": "agent.accountFallback",
+	items: Array<AgentOutputItem>,
+	/**
+	 * Set when this row is a finished turn's batches rewritten as one (0052).
+	 */
+	compacted?: Compacted, } | { "kind": "agent.accountFallback",
 	/**
 	 * The run's id.
 	 */
@@ -2967,6 +2971,17 @@ export type AgentRunState = {
 	 * When it changed, in RFC 3339 UTC.
 	 */
 	updatedAt: string,
+};
+
+/**
+ * A finished turn rewritten in place as one `agent.output` row (0052).
+ */
+export type Compacted = {
+	/**
+	 * The turn's first `seq`. A reader that meets this row first drops any `agent.output` of
+	 * the same run with `seq` in [`from`, this row's `seq`), then takes the row.
+	 */
+	from: number,
 };
 
 /**

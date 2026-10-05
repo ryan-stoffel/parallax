@@ -37,16 +37,19 @@ impl Cursor {
     /// `event` as this subscription delivers it.
     fn view(&self, event: &ParallaxEvent) -> ParallaxEvent {
         match event {
-            ParallaxEvent::AgentOutput { run_id, items } if self.shell => {
-                ParallaxEvent::AgentOutput {
-                    run_id: *run_id,
-                    items: items
-                        .iter()
-                        .filter(|item| is_approval(item))
-                        .cloned()
-                        .collect(),
-                }
-            }
+            ParallaxEvent::AgentOutput {
+                run_id,
+                items,
+                compacted,
+            } if self.shell => ParallaxEvent::AgentOutput {
+                run_id: *run_id,
+                items: items
+                    .iter()
+                    .filter(|item| is_approval(item))
+                    .cloned()
+                    .collect(),
+                compacted: compacted.clone(),
+            },
             event => event.clone(),
         }
     }
@@ -246,8 +249,11 @@ mod tests {
             always: false,
             message: None,
         };
-        let output =
-            |run_id, items: Vec<AgentOutputItem>| ParallaxEvent::AgentOutput { run_id, items };
+        let output = |run_id, items: Vec<AgentOutputItem>| ParallaxEvent::AgentOutput {
+            run_id,
+            items,
+            compacted: None,
+        };
         for event in [
             output(open, vec![text.clone()]),                      // 1
             output(sibling, vec![text.clone(), approval.clone()]), // 2

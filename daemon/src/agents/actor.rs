@@ -2858,7 +2858,11 @@ impl Actor {
                 db.stage(
                     now,
                     Some(project),
-                    ParallaxEvent::AgentOutput { run_id, items },
+                    ParallaxEvent::AgentOutput {
+                        run_id,
+                        items,
+                        compacted: None,
+                    },
                 );
             }
             job(db, now)
@@ -2959,26 +2963,42 @@ const HISTORY_BYTES: usize = 64 * 1024;
 pub(super) const LEFT_OUT: &str = "(Earlier messages are left out.)\n\n";
 
 /// Every event run `run` logged, oldest first: what a handoff (0014) and a fork (0050) read.
+/// Pages run inside one read transaction so a compact sweep cannot land between them (0052).
 pub(crate) async fn logged_events(
     daemon: &Daemon,
     run: RunId,
 ) -> Result<Vec<ParallaxEvent>, ErrorObject> {
     let log = Arc::clone(&daemon.log);
     tokio::task::spawn_blocking(move || {
-        let mut events = Vec::new();
-        let mut after = 0;
-        loop {
-            let (page, more) = log.run_events(run, after, 1000, 4 * 1024 * 1024)?;
-            after = page.last().map_or(after, |entry| entry.seq);
-            events.extend(page.iter().map(|entry| entry.event.clone()));
-            if !more || page.is_empty() {
-                return Ok(events);
-            }
+        if let Some(events) = log.with_stored_read(|db| collect_run_events(db, run))? {
+            return Ok(events);
         }
+        let (page, _) = log.run_events(run, 0, usize::MAX, usize::MAX)?;
+        Ok(page.iter().map(|entry| entry.event.clone()).collect())
     })
     .await
     .map_err(ErrorObject::internal_error)?
     .map_err(|error| store_error(&error))
+}
+
+fn collect_run_events(
+    db: &parallax_store::Store,
+    run: RunId,
+) -> Result<Vec<ParallaxEvent>, parallax_store::StoreError> {
+    let mut events = Vec::new();
+    let mut after = 0;
+    loop {
+        let (page, more) = db.run_events(run.into(), after, 1000, 4 * 1024 * 1024)?;
+        after = page.last().map_or(after, |entry| entry.seq);
+        events.extend(
+            page.iter().map(|stored| {
+                serde_json::from_str(&stored.payload).unwrap_or(ParallaxEvent::Unknown)
+            }),
+        );
+        if !more || page.is_empty() {
+            return Ok(events);
+        }
+    }
 }
 
 /// A run's conversation as `events` logged it, for a new session to take over (0014) or a
@@ -3424,6 +3444,7 @@ mod tests {
         let output = |items| ParallaxEvent::AgentOutput {
             run_id: run.id,
             items,
+            compacted: None,
         };
         let turn = |text: &str, wake| AgentOutputItem::TurnStarted {
             turn_id: Some(TurnId::generate()),
@@ -3660,6 +3681,7 @@ mod tests {
             [ParallaxEvent::AgentOutput {
                 run_id: actor.id,
                 items: vec![text],
+                compacted: None,
             }]
         );
     }

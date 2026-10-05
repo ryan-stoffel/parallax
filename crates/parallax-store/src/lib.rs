@@ -41,7 +41,7 @@ use rusqlite::{Connection, Error as SqliteError, ErrorCode};
 pub use accounts::{Account, AccountFields};
 pub use defaults::RoleDefault;
 pub use error::StoreError;
-pub use events::StoredEvent;
+pub use events::{CompactableTurn, StoredEvent};
 pub use images::StoredImage;
 pub use inbox::InboxItem;
 pub use landings::Landing;
@@ -100,6 +100,17 @@ impl Store {
         conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.pragma_update(None, "query_only", "ON")?;
         Ok(Self { conn })
+    }
+
+    /// Starts a read transaction (`BEGIN`), so several reads see one snapshot. The event log's
+    /// own paged readers use it so a compact sweep cannot land between their pages (0052).
+    ///
+    /// # Errors
+    ///
+    /// A database error, such as one already open.
+    pub fn begin_read(&self) -> Result<(), StoreError> {
+        self.conn.execute_batch("BEGIN")?;
+        Ok(())
     }
 
     /// Starts a write transaction, taking the write lock now (`BEGIN IMMEDIATE`). Methods that

@@ -46,6 +46,7 @@
 mod actor;
 mod approvals;
 pub(crate) mod attached;
+pub(crate) mod compact;
 pub(crate) mod convert;
 pub(crate) mod coordinator;
 mod placement;
@@ -1078,7 +1079,11 @@ async fn fork_created(
             db.stage(
                 at,
                 Some(project),
-                ParallaxEvent::AgentOutput { run_id, items },
+                ParallaxEvent::AgentOutput {
+                    run_id,
+                    items,
+                    compacted: None,
+                },
             );
         }
         Ok(())
