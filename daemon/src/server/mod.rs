@@ -427,10 +427,7 @@ impl Server {
     /// # Errors
     ///
     /// If the socket can't be registered with the runtime.
-    #[cfg_attr(
-        unix,
-        expect(clippy::too_many_lines, reason = "server startup and shutdown cleanup")
-    )]
+    #[expect(clippy::too_many_lines, reason = "server startup and shutdown cleanup")]
     pub async fn run(self, shutdown: Shutdown) -> io::Result<()> {
         let Self {
             config,
@@ -459,7 +456,10 @@ impl Server {
                 return Err(error);
             }
         };
-        if let Err(error) = crate::commands::purge_incomplete(&daemon).await {
+        // An unavailable store has no claims to recover, and still serves read-only host state.
+        if daemon.store.state() != parallax_protocol::StoreState::Unavailable
+            && let Err(error) = crate::commands::purge_incomplete(&daemon).await
+        {
             #[cfg(unix)]
             socket.remove();
             daemon.store.stop().await;
