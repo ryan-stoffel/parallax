@@ -1325,11 +1325,12 @@ impl Agents {
     /// keeps the actor running. Whether it was dropped, so the actor stops.
     fn retire(&self, id: RunId, commands: &mpsc::Receiver<Command>) -> bool {
         let mut actors = self.actors.lock().unwrap_or_else(PoisonError::into_inner);
-        let alone = commands.is_empty()
-            && commands.sender_strong_count() == 1
-            && actors
-                .get(&id)
-                .is_some_and(|actor| actor.strong_count() == 1);
+        // The count first: a holder sends and drops its sender without this lock, as
+        // `wake::notify` does, so a channel seen empty before the count could fill before it.
+        // Once the map's is the only sender, under this lock, every earlier send has landed and
+        // no new one can come, so the emptiness check after it is final.
+        let alone =
+            commands.sender_strong_count() == 1 && actors.contains_key(&id) && commands.is_empty();
         if alone {
             actors.remove(&id);
         }
