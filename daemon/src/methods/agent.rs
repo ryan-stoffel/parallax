@@ -485,6 +485,7 @@ mod tests {
             daemon: Arc::clone(&daemon),
             cancel: CancellationToken::new(),
             stopped_reading: CancellationToken::new(),
+            command_id: None,
         };
         let (run_id, project) = (RunId::generate(), ProjectId::generate());
         daemon
@@ -591,12 +592,12 @@ mod tests {
             let at = jiff::Timestamp::now();
             appended.push(
                 daemon
-                    .log
+                    .store
                     .append(at, Some(project), text(run_id, i.to_string()))
                     .await,
             );
             daemon
-                .log
+                .store
                 .append(at, Some(project), text(other, i.to_string()))
                 .await;
         }

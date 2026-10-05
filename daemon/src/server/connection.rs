@@ -235,10 +235,21 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
         };
         let cancel = CancellationToken::new();
         lock(&self.in_flight).insert(request.id.clone(), cancel.clone());
+        let listed = crate::commands::keeps_receipt(&request.method);
+        // A listed method runs on a task the connection never cancels or aborts (0052).
         let context = Context {
             daemon: Arc::clone(&self.daemon),
-            cancel,
-            stopped_reading: self.stopped_reading.clone(),
+            cancel: if listed {
+                CancellationToken::new()
+            } else {
+                cancel
+            },
+            stopped_reading: if listed {
+                CancellationToken::new()
+            } else {
+                self.stopped_reading.clone()
+            },
+            command_id: None,
         };
         let in_flight = Arc::clone(&self.in_flight);
         let replies = self.replies.clone();
@@ -247,26 +258,33 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             id = ?untrusted_id(&request.id),
             method = ?untrusted(&request.method)
         );
-        self.handlers.spawn(
-            async move {
-                let id = request.id.clone();
-                let dispatched = AssertUnwindSafe(methods::dispatch(context, request))
-                    .catch_unwind()
-                    .await;
-                let reply = dispatched.unwrap_or_else(|_| {
-                    error!("the request's handler panicked");
-                    let error = ErrorObject::internal_error("the request failed unexpectedly");
-                    Reply::Response(Response::error(Some(id.clone()), error))
-                });
-                // Out of the map before the answer is queued, so a late cancel can't produce a
-                // second answer.
-                lock(&in_flight).remove(&id);
-                debug!("answered");
-                let _ = replies.send(reply).await;
-                drop(permit);
-            }
-            .instrument(span),
-        );
+        let id = request.id.clone();
+        if listed {
+            let work = self.daemon.commands.spawn(async move {
+                let _permit = permit;
+                dispatch_reply(context, request).await
+            });
+            self.handlers.spawn(
+                async move {
+                    let reply = work.await.unwrap_or_else(|_| panic_reply(&id));
+                    lock(&in_flight).remove(&id);
+                    debug!("answered");
+                    let _ = replies.send(reply).await;
+                }
+                .instrument(span),
+            );
+        } else {
+            self.handlers.spawn(
+                async move {
+                    let reply = dispatch_reply(context, request).await;
+                    lock(&in_flight).remove(&id);
+                    debug!("answered");
+                    let _ = replies.send(reply).await;
+                    drop(permit);
+                }
+                .instrument(span),
+            );
+        }
         true
     }
 
@@ -329,6 +347,22 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             sent = self.replies.send(reply) => sent.is_ok(),
         }
     }
+}
+
+async fn dispatch_reply(context: Context, request: Request) -> Reply {
+    let id = request.id.clone();
+    AssertUnwindSafe(methods::dispatch(context, request))
+        .catch_unwind()
+        .await
+        .unwrap_or_else(|_| panic_reply(&id))
+}
+
+fn panic_reply(id: &RequestId) -> Reply {
+    error!("the request's handler panicked");
+    Reply::Response(Response::error(
+        Some(id.clone()),
+        ErrorObject::internal_error("the request failed unexpectedly"),
+    ))
 }
 
 fn log_join(joined: Result<(), JoinError>) {

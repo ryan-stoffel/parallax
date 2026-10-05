@@ -22,11 +22,17 @@ use crate::agents::{self, QueueOp};
 /// Answers a `queue/*` method.
 pub(crate) async fn dispatch(context: &Context, request: &Request) -> Result<Value, ErrorObject> {
     match request.method.as_str() {
-        QueueList::NAME => handle::<QueueList, _, _>(request, |p| list(context, p)).await,
-        QueueEdit::NAME => handle::<QueueEdit, _, _>(request, |p| edit(context, p)).await,
-        QueueReorder::NAME => handle::<QueueReorder, _, _>(request, |p| reorder(context, p)).await,
-        QueueCancel::NAME => handle::<QueueCancel, _, _>(request, |p| cancel(context, p)).await,
-        QueueSteer::NAME => handle::<QueueSteer, _, _>(request, |p| steer(context, p)).await,
+        QueueList::NAME => handle::<QueueList, _, _>(context, request, |p| list(context, p)).await,
+        QueueEdit::NAME => handle::<QueueEdit, _, _>(context, request, |p| edit(context, p)).await,
+        QueueReorder::NAME => {
+            handle::<QueueReorder, _, _>(context, request, |p| reorder(context, p)).await
+        }
+        QueueCancel::NAME => {
+            handle::<QueueCancel, _, _>(context, request, |p| cancel(context, p)).await
+        }
+        QueueSteer::NAME => {
+            handle::<QueueSteer, _, _>(context, request, |p| steer(context, p)).await
+        }
         other => Err(ErrorObject::method_not_found(other)),
     }
 }

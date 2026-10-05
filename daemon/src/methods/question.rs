@@ -46,14 +46,18 @@ const ANSWERED: &str = "answered";
 /// Answers a `question/*` method.
 pub(crate) async fn dispatch(context: &Context, request: &Request) -> Result<Value, ErrorObject> {
     match request.method.as_str() {
-        QuestionAsk::NAME => handle::<QuestionAsk, _, _>(request, |p| ask(context, p)).await,
+        QuestionAsk::NAME => {
+            handle::<QuestionAsk, _, _>(context, request, |p| ask(context, p)).await
+        }
         QuestionAnswer::NAME => {
-            handle::<QuestionAnswer, _, _>(request, |p| answer(context, p)).await
+            handle::<QuestionAnswer, _, _>(context, request, |p| answer(context, p)).await
         }
         QuestionEscalate::NAME => {
-            handle::<QuestionEscalate, _, _>(request, |p| escalate(context, p)).await
+            handle::<QuestionEscalate, _, _>(context, request, |p| escalate(context, p)).await
         }
-        QuestionList::NAME => handle::<QuestionList, _, _>(request, |p| list(context, p)).await,
+        QuestionList::NAME => {
+            handle::<QuestionList, _, _>(context, request, |p| list(context, p)).await
+        }
         other => Err(ErrorObject::method_not_found(other)),
     }
 }

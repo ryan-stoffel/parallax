@@ -526,6 +526,7 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
              DROP TABLE landings;
              DROP TABLE placements;
              DROP TABLE thread_text_fts; DROP TABLE thread_text;
+             DROP TABLE command_receipts;
              ALTER TABLE worktrees DROP COLUMN git_dir;
              ALTER TABLE worktrees DROP COLUMN base_dirty;
              ALTER TABLE projects DROP COLUMN icon_name;

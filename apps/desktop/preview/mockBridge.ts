@@ -39,6 +39,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "autoResume",
     "checks",
     "checkout",
+    "commandIds",
     "composerMenus",
     "contextAndFast",
     "coordinator",

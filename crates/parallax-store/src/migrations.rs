@@ -522,6 +522,23 @@ const MIGRATIONS: &[Migration] = &[
                 WHERE run_id = new.run_id), 0), new.text);
         END;",
     },
+    // Command receipts (0052, PLX-482): a client-chosen commandId claims a row before a listed
+    // method runs. `result` stays null until the command ends; `effect_id` is for PLX-483.
+    Migration {
+        version: 37,
+        sql: "CREATE TABLE command_receipts (
+            command_id TEXT NOT NULL PRIMARY KEY,
+            method TEXT NOT NULL,
+            params_hash TEXT NOT NULL,
+            run_id TEXT,
+            effect_id INTEGER,
+            result TEXT,
+            created_at TEXT NOT NULL,
+            finished_at TEXT
+        );
+        CREATE INDEX command_receipts_run ON command_receipts (run_id, created_at);
+        CREATE INDEX command_receipts_age ON command_receipts (created_at);",
+    },
 ];
 
 /// Bootstraps the `schema_version` table and applies every migration whose

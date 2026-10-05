@@ -63,10 +63,12 @@ static PROJECT_LOCKS: LazyLock<Mutex<HashMap<ProjectId, Arc<tokio::sync::Mutex<(
 /// Answers a `land/*` method.
 pub(crate) async fn dispatch(context: &Context, request: &Request) -> Result<Value, ErrorObject> {
     match request.method.as_str() {
-        LandQueue::NAME => handle::<LandQueue, _, _>(request, |p| queue(context, p)).await,
-        LandApprove::NAME => handle::<LandApprove, _, _>(request, |p| approve(context, p)).await,
+        LandQueue::NAME => handle::<LandQueue, _, _>(context, request, |p| queue(context, p)).await,
+        LandApprove::NAME => {
+            handle::<LandApprove, _, _>(context, request, |p| approve(context, p)).await
+        }
         LandSendBack::NAME => {
-            handle::<LandSendBack, _, _>(request, |p| send_back(context, p)).await
+            handle::<LandSendBack, _, _>(context, request, |p| send_back(context, p)).await
         }
         other => Err(ErrorObject::method_not_found(other)),
     }

@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="340" viewBox="0 0 720 340" role="img" aria-labelledby="title desc">
+  <title id="title">How a command id works</title>
+  <desc id="desc">A retried request with the same command id returns the first result instead of running again.</desc>
+  <rect width="720" height="340" fill="#f7f4ef"/>
+  <text x="24" y="36" font-family="ui-sans-serif, system-ui, sans-serif" font-size="20" font-weight="700" fill="#1f1a14">Same click, one result</text>
+  <text x="24" y="60" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" fill="#5c5348">If the reply is lost, the app sends the same command id again.</text>
+
+  <rect x="24" y="84" width="200" height="72" rx="10" fill="#fff" stroke="#c4b8a5"/>
+  <text x="124" y="114" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" fill="#1f1a14">App</text>
+  <text x="124" y="136" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" fill="#5c5348">commandId: A1</text>
+
+  <path d="M232 120 H300" stroke="#1f1a14" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="308" y="84" width="200" height="72" rx="10" fill="#fff" stroke="#c4b8a5"/>
+  <text x="408" y="114" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" fill="#1f1a14">plxd</text>
+  <text x="408" y="136" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" fill="#5c5348">claim, then run</text>
+
+  <path d="M516 120 H584" stroke="#1f1a14" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="592" y="84" width="104" height="72" rx="10" fill="#2f6f4e"/>
+  <text x="644" y="126" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" fill="#fff">Done</text>
+
+  <rect x="24" y="188" width="672" height="128" rx="12" fill="#fff" stroke="#c4b8a5"/>
+  <text x="40" y="216" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700" fill="#1f1a14">Receipt</text>
+  <text x="40" y="244" font-family="ui-monospace, monospace" font-size="12" fill="#1f1a14">command_id   A1</text>
+  <text x="40" y="264" font-family="ui-monospace, monospace" font-size="12" fill="#1f1a14">method       project/delete</text>
+  <text x="40" y="284" font-family="ui-monospace, monospace" font-size="12" fill="#1f1a14">params_hash  same request</text>
+  <text x="40" y="304" font-family="ui-monospace, monospace" font-size="12" fill="#1f1a14">result       first answer</text>
+  <text x="400" y="256" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" fill="#5c5348">Retry with A1 ’ return that result.</text>
+  <text x="400" y="280" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" fill="#5c5348">Same id, different params ’ idConflict.</text>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1f1a14"/>
+    </marker>
+  </defs>
+</svg>
