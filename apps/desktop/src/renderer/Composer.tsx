@@ -494,8 +494,10 @@ export function Composer({
   const [pickedPermission, setPermission] = useState<AgentPermission>();
   const [pickedContext, setContext] = useState<number>();
   const [pickedFast, setFast] = useState<boolean>();
-  // A composer with no open run starts from Settings > General's new-thread defaults.
+  // A new thread's composer, and a Project's New task, start from Settings > General's defaults.
+  // A Project's coordinator chat keeps its coordinator's backend, so it doesn't.
   const defaults = newThreadPrefs.use();
+  const fresh = !started && (!!newThread || (task && !!newTask));
   const { sendKey } = behaviorPrefs.use();
   // What `backend` can honor: another backend's pick falls back to its first model and `edit`.
   const catalog = useCatalog(host);
@@ -520,7 +522,7 @@ export function Composer({
       contexts: [],
     });
   // A pick is kept by its instance and id, since the catalog's models are made again as it changes.
-  const defaultModel = started
+  const defaultModel = !fresh
     ? undefined
     : choices.find((m) => m.provider === defaults.model?.provider && m.id === defaults.model.id);
   const model =
@@ -536,8 +538,8 @@ export function Composer({
   const permissions = projectMode ? [] : (targetBackend?.permissions ?? []);
   // A backend that maps no efforts (Cursor) gets none, and shows no effort menu.
   const efforts = targetBackend?.efforts !== false;
-  const startedEffort = started?.effort ?? (started ? "high" : defaults.effort);
-  const startedPermission = started?.permission ?? (started ? "edit" : defaults.permission);
+  const startedEffort = started?.effort ?? (fresh ? defaults.effort : "high");
+  const startedPermission = started?.permission ?? (fresh ? defaults.permission : "edit");
   const effort = pickedEffort ?? startedEffort;
   const wanted = pickedPermission ?? startedPermission;
   const permission = permissions.includes(wanted) ? wanted : "edit";
@@ -545,12 +547,12 @@ export function Composer({
   // offer falls back to its default, and fast mode to off.
   const contexts = (contextAndFast && model?.contexts) || [];
   const startedContext =
-    started?.contextWindow ?? (started ? startedModel?.contexts[0] : defaults.context);
+    started?.contextWindow ?? (fresh ? defaults.context : startedModel?.contexts[0]);
   const wantedContext = pickedContext ?? startedContext;
   const context =
     wantedContext !== undefined && contexts.includes(wantedContext) ? wantedContext : contexts[0];
   const hasFast = !!contextAndFast && !!model?.fast;
-  const startedFast = started?.fast ?? (started ? false : defaults.fast);
+  const startedFast = started?.fast ?? (fresh ? defaults.fast : false);
   const fast = hasFast && (pickedFast ?? startedFast);
   const speed = {
     ...(context !== undefined && { contextWindow: context }),

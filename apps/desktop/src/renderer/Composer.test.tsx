@@ -151,6 +151,20 @@ test("a new thread starts from Settings > General's defaults (PLX-538)", async (
   );
 });
 
+test("a coordinator chat ignores the new-thread defaults and stays on its backend (PLX-538)", async () => {
+  setNewThreadPrefs({ model: { provider: "codex", id: "gpt-5.5" }, effort: "low" });
+  const onSend = vi.fn(async () => undefined);
+  const { type, press } = render(onSend, caps, { backend: "claude" });
+  type("Hello");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(
+    "Hello",
+    { model: "claude-opus-5-5", effort: "high", permission: "edit" },
+    [],
+    [],
+  );
+});
+
 test("with the Cmd/Ctrl+Enter send shortcut, Enter is a new line and the chord sends (PLX-538)", async () => {
   setBehaviorPrefs({ sendKey: "modEnter" });
   const onSend = vi.fn(async () => undefined);
