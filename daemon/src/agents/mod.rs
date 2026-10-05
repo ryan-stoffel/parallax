@@ -1318,6 +1318,25 @@ impl Agents {
             .remove(&id);
     }
 
+    /// Drops run `id`'s idle actor from the map, if no command can still reach it (PLX-459):
+    /// none waits in its channel `commands`, and the map's sender is the only one. Every other
+    /// sender is cloned from the map under this lock, so once it's removed none can appear, and
+    /// a command that already holds one, as [`ask`] does between [`actor_for`] and its send,
+    /// keeps the actor running. Whether it was dropped, so the actor stops.
+    fn retire(&self, id: RunId, commands: &mpsc::Receiver<Command>) -> bool {
+        let mut actors = self.actors.lock().unwrap_or_else(PoisonError::into_inner);
+        // The count first: a holder sends and drops its sender without this lock, as
+        // `wake::notify` does, so a channel seen empty before the count could fill before it.
+        // Once the map's is the only sender, under this lock, every earlier send has landed and
+        // no new one can come, so the emptiness check after it is final.
+        let alone =
+            commands.sender_strong_count() == 1 && actors.contains_key(&id) && commands.is_empty();
+        if alone {
+            actors.remove(&id);
+        }
+        alone
+    }
+
     /// The worktrees every run is created in.
     pub(crate) fn worktrees(&self) -> &WorktreeManager {
         &self.worktrees
@@ -1330,7 +1349,7 @@ impl Agents {
 }
 
 /// The command channel of `id`'s actor, spawning one for a run created before this plxd
-/// started.
+/// started, or whose idle actor stopped (PLX-459).
 async fn actor_for(daemon: &Arc<Daemon>, id: RunId) -> Result<mpsc::Sender<Command>, ErrorObject> {
     let agents = &daemon.agents;
     if let Some(actor) = agents.actor(id) {
@@ -1826,9 +1845,11 @@ mod tests {
 
     use parallax_protocol::{ErrorKind, RunId};
     use parallax_store::{ProjectFields, RunFields, RunState};
+    use tokio::sync::{mpsc, oneshot};
     use uuid::Uuid;
 
-    use super::{StartLocks, child_header, in_mode, record, store, store_error};
+    use super::actor::{Command, IDLE, QueueOp};
+    use super::{StartLocks, child_header, in_mode, queue, record, store, store_error};
     use crate::context::memory::Start;
     use crate::server::Daemon;
 
@@ -2141,5 +2162,109 @@ mod tests {
             "the swept lock is still kept alive somewhere"
         );
         drop(after);
+    }
+
+    /// PLX-459: an idle actor leaves the map only once no command can reach it: not while one
+    /// holds its sender, as `ask` does between `actor_for` and its send, nor while one waits in
+    /// its channel.
+    #[tokio::test]
+    async fn an_actor_retires_only_once_no_command_can_reach_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
+        let agents = &daemon.agents;
+        let id = RunId::generate();
+        let (sender, mut commands) = mpsc::channel(1);
+        agents.actors.lock().unwrap().insert(id, sender);
+
+        let racing = agents.actor(id).unwrap();
+        assert!(!agents.retire(id, &commands), "a command holds a sender");
+        assert!(
+            racing
+                .try_send(Command::Wake(String::new(), Vec::new()))
+                .is_ok()
+        );
+        drop(racing);
+        assert!(!agents.retire(id, &commands), "a command waits");
+        assert!(commands.try_recv().is_ok());
+        assert!(agents.retire(id, &commands));
+        assert!(agents.actor(id).is_none());
+        assert!(commands.recv().await.is_none(), "no sender is left");
+    }
+
+    /// PLX-459, on a paused clock: a run's actor stops after `IDLE` with nothing to do, but not
+    /// while a command that found it before then can still send, and the next command starts a
+    /// fresh one.
+    #[tokio::test(start_paused = true)]
+    async fn an_idle_actor_stops_and_the_next_command_starts_another() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
+        let project = Uuid::now_v7();
+        let fields = ProjectFields {
+            name: "app".to_owned(),
+            repo_path: "/src/app".to_owned(),
+            icon: None,
+            permission: "auto".to_owned(),
+            autonomy: "routine".to_owned(),
+            base_branch: None,
+        };
+        // A checkout thread that finished: no worktree, and nothing left to do.
+        let id = RunId::generate();
+        let run = RunFields {
+            project_id: project,
+            prompt: "Build it.".to_owned(),
+            requested_account: None,
+            policy: super::WORKSPACE_WRITE.to_owned(),
+            backend: "fake".to_owned(),
+            coordinator_thread: None,
+            parent: None,
+            notify_parent: false,
+            model: None,
+            effort: None,
+            permission: None,
+            context_window: None,
+            fast: None,
+            approvals: false,
+            checkout: true,
+            explore: false,
+        };
+        let state = RunState {
+            status: super::convert::COMPLETED.to_owned(),
+            ..RunState::default()
+        };
+        store(&daemon, move |db| {
+            db.create_project(project, &fields)
+                .map_err(|e| store_error(&e))?;
+            db.create_run(id.into(), &run, &state)
+                .map_err(|e| store_error(&e))
+        })
+        .await
+        .unwrap();
+        let list = || queue(Arc::clone(&daemon), id, QueueOp::List);
+
+        list().await.unwrap();
+        let racing = daemon
+            .agents
+            .actor(id)
+            .expect("the command started an actor");
+        tokio::time::sleep(IDLE * 2).await;
+        let (reply, answer) = oneshot::channel();
+        let command = Command::Queue {
+            op: QueueOp::List,
+            reply,
+        };
+        assert!(racing.send(command).await.is_ok(), "the actor kept running");
+        answer.await.unwrap().unwrap();
+        drop(racing);
+
+        tokio::time::sleep(IDLE.saturating_sub(Duration::from_secs(1))).await;
+        assert!(
+            daemon.agents.actor(id).is_some(),
+            "idle, but not for long enough"
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert!(daemon.agents.actor(id).is_none(), "an idle actor stops");
+
+        list().await.unwrap();
+        assert!(daemon.agents.actor(id).is_some(), "a fresh actor");
     }
 }

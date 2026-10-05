@@ -59,7 +59,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinError, JoinHandle};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use super::approvals::{self, Approvals, Lookup, ended};
@@ -87,6 +87,10 @@ pub(crate) use git::GitAction;
 
 /// How long transcript items wait to be sent together as one `agent.output` (0007).
 const COALESCE: Duration = Duration::from_millis(50);
+
+/// How long an actor with nothing only it holds waits for a command before it stops (PLX-459).
+/// The next command starts a fresh one from the store.
+pub(super) const IDLE: Duration = Duration::from_mins(10);
 
 /// An `agent.output` is sent early once its items reach about this many bytes.
 const MAX_BATCH_BYTES: usize = 256 * 1024;
@@ -525,6 +529,7 @@ impl Actor {
     pub async fn run(mut self, mut commands: mpsc::Receiver<Command>, shutdown: CancellationToken) {
         self.load_wakes().await;
         self.load_queue().await;
+        let mut active = Instant::now();
         loop {
             self.deliver().await;
             let deadline = self.batch.since.map(|since| since + COALESCE);
@@ -536,6 +541,7 @@ impl Actor {
                 .filter(|_| self.live.is_none() && self.effect.is_none());
             let expire_at = self.approvals.due();
             let resume_at = self.resume_due();
+            let idle_at = (!self.stopping && self.idle()).then_some(active + IDLE);
             tokio::select! {
                 // Shutdown, then a command, then the due flush, and only then another backend
                 // event (#190 N6): while a CLI keeps its stream busy, that event branch is
@@ -571,6 +577,13 @@ impl Actor {
                 () = sleep_until(resume_at.unwrap_or_else(Instant::now)), if resume_at.is_some() => {
                     self.check_resume().await;
                 }
+                // Stopping frees what the actor holds, its `turns` above all (PLX-459).
+                () = sleep_until(idle_at.unwrap_or_else(Instant::now)), if idle_at.is_some() => {
+                    if self.daemon.agents.retire(self.id, &commands) {
+                        debug!(run = %self.id, "stopped an idle run's actor");
+                        return;
+                    }
+                }
                 finished = effect_done(&mut self.effect) => self.finish_effect(finished).await,
                 event = next_event(&mut self.live) => self.on_event(event).await,
             }
@@ -579,6 +592,7 @@ impl Actor {
                 self.flush().await;
                 break;
             }
+            active = Instant::now();
         }
         if self.deleted {
             commands.close();
@@ -586,6 +600,21 @@ impl Actor {
                 command.refuse(super::run_not_found(self.id));
             }
         }
+    }
+
+    /// Whether the actor holds nothing that only memory keeps (PLX-459): no CLI, push or Open
+    /// PR, unsent output, waiting message, wake-up, permission request, or resume timer. A fresh
+    /// actor reloads `turns`, the wake-up count, and the run from the store, and what the rest
+    /// keep for a CLI's messages until their turns start has no CLI left to start them.
+    fn idle(&self) -> bool {
+        self.live.is_none()
+            && self.effect.is_none()
+            && self.batch.items.is_empty()
+            && self.queued.is_empty()
+            && self.handed.is_empty()
+            && self.wakes.is_empty()
+            && self.approvals.due().is_none()
+            && self.resume_due().is_none()
     }
 
     async fn on_command(&mut self, command: Command) {
