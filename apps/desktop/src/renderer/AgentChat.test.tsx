@@ -924,15 +924,15 @@ test("the composer tab shows the worktree and its branch", () => {
   expect(document.body.textContent).toBe("Worktreeparallax/1a2b3c4d");
 });
 
-test("the composer tab shows a thread in the current checkout, which has no branch of its own", () => {
+test("the composer tab names the host and local checkout, which has no branch of its own", () => {
   const started = samples.find((m) => "result" in m && m.id === 2)!;
   const {
     branch: _,
     worktreePath: __,
     ...run
   } = (started as unknown as { result: AgentRunResult }).result.run;
-  render(<RunTab run={{ ...run, checkout: true }} />);
-  expect(document.body.textContent).toBe("Current checkout");
+  render(<RunTab run={{ ...run, checkout: true }} host={{ id: "local", name: "This Mac" }} />);
+  expect(document.body.textContent).toBe("This Mac·Local checkout");
 });
 
 test("Enter sends with a fresh v7 turn id, but not while an IME is composing", async () => {

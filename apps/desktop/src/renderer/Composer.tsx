@@ -1165,12 +1165,7 @@ export function Composer({
         <div className="flex items-center gap-0.5 px-3 pt-1 pb-3">
           {newTask && route && (
             <>
-              <RouteChip
-                route={route}
-                pinned={newTask.asking !== undefined}
-                keys={targetKeys}
-                onFlip={() => flip.current?.()}
-              />
+              <RouteChip route={route} keys={targetKeys} onFlip={() => flip.current?.()} />
               {run && divider}
             </>
           )}
@@ -1334,33 +1329,22 @@ function listItems(markdown: string): string[] | undefined {
 
 /**
  * Says where Enter sends a Project's message, and flips it. The label changes as the text does,
- * with the tasks a list makes counted.
+ * with the threads a list starts counted.
  */
-function RouteChip({
-  route,
-  pinned,
-  keys,
-  onFlip,
-}: {
-  route: Route;
-  /** Whether the user flipped it, rather than the text choosing. */
-  pinned: boolean;
-  keys?: string;
-  onFlip: () => void;
-}) {
+function RouteChip({ route, keys, onFlip }: { route: Route; keys?: string; onFlip: () => void }) {
   const label =
     route.kind === "ask"
-      ? "Coordinator"
+      ? "Chat"
       : route.tasks.length > 1
-        ? `${route.tasks.length} tasks`
-        : "New task";
+        ? `${route.tasks.length} threads`
+        : "New thread";
   return (
     <button
       type="button"
       onClick={onFlip}
-      title={`Questions go to the coordinator and anything else starts a task. Click${keys ? ` or press ${keys}` : ""} to switch.`}
+      title={`Questions go to the chat and anything else starts a thread. Click${keys ? ` or press ${keys}` : ""} to switch.`}
       aria-label={`Sends to: ${label}. Switch`}
-      className={`${menuButton} group gap-2 font-mono text-[12px] tracking-tight`}
+      className={`${menuButton} group gap-2`}
     >
       {route.kind === "ask" ? (
         <MessagesSquare aria-hidden />
@@ -1370,7 +1354,6 @@ function RouteChip({
       <span key={label} className="working-in">
         {label}
       </span>
-      {pinned && <span aria-hidden className="size-1 rounded-full bg-muted-foreground" />}
       {route.kind === "task" && route.tasks.length > 1 && (
         <kbd className="rounded bg-selected px-1 font-mono text-[10.5px] text-faint-foreground">
           {window.parallax.platform === "darwin" ? "⌘⏎" : "Ctrl⏎"}

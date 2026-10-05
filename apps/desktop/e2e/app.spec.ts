@@ -323,8 +323,8 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
   const message = page.getByRole("textbox", { name: "Message" });
   const toCoordinator = async (text: string) => {
     await message.fill(text);
-    await page.getByRole("button", { name: "Sends to: New task. Switch" }).click();
-    await expect(page.getByRole("button", { name: "Sends to: Coordinator. Switch" })).toBeVisible();
+    await page.getByRole("button", { name: "Sends to: New thread. Switch" }).click();
+    await expect(page.getByRole("button", { name: "Sends to: Chat. Switch" })).toBeVisible();
     await page.getByRole("button", { name: "Send", exact: true }).click();
   };
   await toCoordinator("Plan the ember release");
@@ -367,7 +367,7 @@ test("starts the project's tasks from its composer, shows them over it and on it
   // A task starts a child, on the worker default the thread test set.
   const message = page.getByRole("textbox", { name: "Message" });
   await message.fill("Write the changelog");
-  await expect(page.getByRole("button", { name: "Sends to: New task. Switch" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sends to: New thread. Switch" })).toBeVisible();
   await page.getByRole("button", { name: "Send", exact: true }).click();
   const bar = page.getByRole("region", { name: "Agents" });
   await expect(bar).toContainText("Write the changelog");
@@ -408,7 +408,7 @@ test("starts the project's tasks from its composer, shows them over it and on it
   // The child's strip goes back to the coordinator.
   await page
     .getByRole("region", { name: "Child thread" })
-    .getByRole("button", { name: /^Coordinator/ })
+    .getByRole("button", { name: /^Open parent/ })
     .click();
   await expect(crumbs).not.toContainText("Tag the release");
   await expect(bar).toContainText("1 working");
@@ -477,7 +477,7 @@ test("starts a thread in the repository's current checkout, on its branch, with 
   expect(added).not.toHaveProperty("error");
 
   // New thread, then quill from the heading's repository menu.
-  await page.getByRole("button", { name: "New thread" }).click();
+  await page.getByRole("button", { name: "New thread", exact: true }).click();
   await page.getByRole("heading", { level: 1 }).getByRole("button").click();
   await page.getByRole("menuitemradio", { name: "quill" }).click();
   // The heading's accessible name spaces out the repository button inside it, so match its text.
@@ -485,8 +485,8 @@ test("starts a thread in the repository's current checkout, on its branch, with 
     "What should we build in quill?",
   );
   await page.getByRole("button", { name: /^Runs on: .*, New worktree$/ }).click();
-  await page.getByRole("menuitemradio", { name: /^Current checkout/ }).click();
-  await expect(page.getByRole("button", { name: /^Runs on: .*, Current checkout$/ })).toBeVisible();
+  await page.getByRole("menuitemradio", { name: /^Local checkout/ }).click();
+  await expect(page.getByRole("button", { name: /^Runs on: .*, Local checkout$/ })).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("current-checkout-picked.png") });
   await page.keyboard.press("Escape");
 
@@ -494,7 +494,7 @@ test("starts a thread in the repository's current checkout, on its branch, with 
   await page.getByRole("button", { name: "Send", exact: true }).click();
   const transcript = page.getByRole("log", { name: "Transcript" });
   await expect(transcript.getByText("The fake agent is on it.")).toBeVisible();
-  await expect(page.getByText("Current checkout", { exact: true })).toBeVisible();
+  await expect(page.getByText(/·Local checkout/)).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("current-checkout-thread.png") });
 
   const listed = (await page.evaluate(
