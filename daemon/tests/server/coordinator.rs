@@ -1036,6 +1036,8 @@ fn subscribe_host(after: u64) -> EventsSubscribeParams {
     EventsSubscribeParams {
         after,
         project: None,
+        run: None,
+        shell: false,
     }
 }
 

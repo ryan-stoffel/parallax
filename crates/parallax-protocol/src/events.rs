@@ -24,6 +24,11 @@ uuid_v7_id! {
 /// plxd replays the events after `after`, then sends new ones as they happen, each as an
 /// `events/event` notification. If those events are gone or too many to replay, it fails with
 /// `resyncRequired`.
+///
+/// `run` and `shell` narrow the `project` subscription, only for a plxd that advertises
+/// `eventFilters` (PLX-453); an older one ignores them and sends everything. Like a scope, a
+/// filter skips the `seq`s of the events it leaves out: `seq` only ever increases, and resuming
+/// from the last one delivered is still exact.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct EventsSubscribeParams {
@@ -35,6 +40,14 @@ pub struct EventsSubscribeParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub project: Option<ProjectId>,
+    /// Only this run's events, for an open transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub run: Option<RunId>,
+    /// Every event, but each `agent.output` cut down to its `approvalRequested` and
+    /// `approvalResolved` items, for a sidebar. A batch with neither is left out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shell: bool,
 }
 
 /// Result of `events/subscribe`.
@@ -269,6 +282,8 @@ mod tests {
         let params = EventsSubscribeParams {
             after: 0,
             project: None,
+            run: None,
+            shell: false,
         };
         assert_eq!(serde_json::to_value(params).unwrap(), json!({"after": 0}));
     }

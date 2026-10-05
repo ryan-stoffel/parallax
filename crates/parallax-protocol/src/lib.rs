@@ -266,7 +266,12 @@ mod tests {
         // `project_edit_types_round_trip_and_omit_what_is_absent` covers `ProjectCreateParams`.
         round_trip(&ProjectCreateResult { project: project() });
         for project in [None, Some(ProjectId::generate())] {
-            round_trip(&EventsSubscribeParams { after: 7, project });
+            round_trip(&EventsSubscribeParams {
+                after: 7,
+                project,
+                run: project.map(|_| RunId::generate()),
+                shell: project.is_some(),
+            });
             round_trip(&EventsEventParams {
                 subscription: SubscriptionId::generate(),
                 seq: 8,

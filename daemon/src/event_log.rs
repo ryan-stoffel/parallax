@@ -233,7 +233,7 @@ impl Drop for Writer {
     }
 }
 
-/// The run an event belongs to, for `agent/events`.
+/// The run an event belongs to, for `agent/events` and `events/subscribe`'s `run`.
 pub(crate) fn run_of(event: &ParallaxEvent) -> Option<RunId> {
     match event {
         ParallaxEvent::AgentStarted { run_id, .. }
@@ -706,7 +706,7 @@ impl EventLog {
     }
 
     /// The first event after `after` that belongs to `project`, where `None` means host-level
-    /// events.
+    /// events, and that `keep` accepts.
     ///
     /// The `seq` returned with it is where to continue from: the event's own, or the head's when
     /// no such event exists yet.
@@ -714,13 +714,14 @@ impl EventLog {
         &self,
         after: u64,
         project: Option<ProjectId>,
+        keep: impl Fn(&ParallaxEvent) -> bool,
     ) -> Result<(Option<Arc<Entry>>, u64), Gone> {
         let inner = self.inner();
         let index = start(&inner, after)?;
         match inner
             .events
             .range(index..)
-            .find(|event| event.project == project)
+            .find(|event| event.project == project && keep(&event.event))
         {
             Some(event) => Ok((Some(Arc::clone(event)), event.seq)),
             None => Ok((None, inner.head)),
@@ -802,15 +803,21 @@ mod tests {
         append(&log, None);
         append(&log, Some(project));
 
-        let (event, seq) = log.next(0, None).unwrap();
+        let (event, seq) = log.next(0, None, |_| true).unwrap();
         assert_eq!(event.unwrap().seq, 2);
         assert_eq!(seq, 2);
-        assert_eq!(log.next(2, None).unwrap().0.map(|event| event.seq), None);
-        assert_eq!(log.next(2, None).unwrap().1, 3);
+        assert_eq!(
+            log.next(2, None, |_| true)
+                .unwrap()
+                .0
+                .map(|event| event.seq),
+            None
+        );
+        assert_eq!(log.next(2, None, |_| true).unwrap().1, 3);
 
-        let (event, _) = log.next(1, Some(project)).unwrap();
+        let (event, _) = log.next(1, Some(project), |_| true).unwrap();
         assert_eq!(event.unwrap().seq, 3);
-        assert_eq!(log.next(3, Some(project)).unwrap().1, 3);
+        assert_eq!(log.next(3, Some(project), |_| true).unwrap().1, 3);
     }
 
     #[test]
@@ -825,9 +832,9 @@ mod tests {
         log.purge_run(gone);
 
         assert_eq!(log.check(0), Ok(()));
-        let (event, seq) = log.next(0, Some(project)).unwrap();
+        let (event, seq) = log.next(0, Some(project), |_| true).unwrap();
         assert_eq!((event.unwrap().seq, seq), (2, 2));
-        let (event, seq) = log.next(2, Some(project)).unwrap();
+        let (event, seq) = log.next(2, Some(project), |_| true).unwrap();
         assert!(event.is_none());
         assert_eq!(seq, 3);
     }
@@ -839,9 +846,9 @@ mod tests {
             append(&log, None);
         }
         assert_eq!(log.check(1), Err(Gone::Dropped));
-        assert_eq!(log.next(1, None).unwrap_err(), Gone::Dropped);
+        assert_eq!(log.next(1, None, |_| true).unwrap_err(), Gone::Dropped);
         assert_eq!(log.check(2), Ok(()));
-        assert_eq!(log.next(2, None).unwrap().0.unwrap().seq, 3);
+        assert_eq!(log.next(2, None, |_| true).unwrap().0.unwrap().seq, 3);
         assert_eq!(log.check(4), Ok(()));
     }
 
@@ -894,7 +901,7 @@ mod tests {
             Err(Gone::Dropped),
             "only 2 are in memory"
         );
-        let (event, _) = reopened.next(1, Some(project)).unwrap();
+        let (event, _) = reopened.next(1, Some(project), |_| true).unwrap();
         assert_eq!(event.unwrap().event, finished(run));
         assert_eq!(append(&reopened, None), 4);
         let (entries, more) = reopened.run_events(run, 0, 10, usize::MAX).unwrap();
@@ -948,12 +955,12 @@ mod tests {
         assert_eq!(reopened.id(), id);
         let mut delivered = Vec::new();
         let mut after = 0;
-        while let (Some(entry), seq) = reopened.next(after, None).unwrap() {
+        while let (Some(entry), seq) = reopened.next(after, None, |_| true).unwrap() {
             delivered.push(entry.seq);
             after = seq;
         }
         assert_eq!(delivered, [1, 3, 4]);
-        assert_eq!(reopened.next(2, None).unwrap().0.unwrap().seq, 3);
+        assert_eq!(reopened.next(2, None, |_| true).unwrap().0.unwrap().seq, 3);
     }
 
     #[test]
@@ -1027,7 +1034,7 @@ mod tests {
             "the byte bound evicted seq 1 well before the count bound would"
         );
         assert_eq!(log.check(2), Ok(()));
-        assert_eq!(log.next(2, None).unwrap().0.unwrap().seq, 3);
+        assert_eq!(log.next(2, None, |_| true).unwrap().0.unwrap().seq, 3);
     }
 
     #[test]
@@ -1060,7 +1067,7 @@ mod tests {
         );
         let mut seqs = Vec::new();
         let mut after = 2;
-        while let (Some(entry), seq) = reopened.next(after, None).unwrap() {
+        while let (Some(entry), seq) = reopened.next(after, None, |_| true).unwrap() {
             seqs.push(entry.seq);
             after = seq;
         }
@@ -1106,7 +1113,7 @@ mod tests {
             "the byte bound trimmed what was reloaded, not just what a later append would evict"
         );
         assert_eq!(reopened.check(2), Ok(()));
-        assert_eq!(reopened.next(2, None).unwrap().0.unwrap().seq, 3);
+        assert_eq!(reopened.next(2, None, |_| true).unwrap().0.unwrap().seq, 3);
     }
 
     /// #190 N2: `run_events` reads through its own connection, so a page held open doesn't wait
