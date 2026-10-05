@@ -393,12 +393,17 @@ impl Store {
         if seqs.is_empty() {
             return Ok(0);
         }
-        let marks = seqs.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-        let mut stmt = self
-            .conn
-            .prepare(&format!("DELETE FROM events WHERE seq IN ({marks})"))?;
-        let params = rusqlite::params_from_iter(seqs.iter().copied());
-        Ok(stmt.execute(params)?)
+        // A long streamed turn can exceed SQLite's bound-variable limit.
+        let mut deleted = 0;
+        for chunk in seqs.chunks(900) {
+            let marks = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+            let mut stmt = self
+                .conn
+                .prepare(&format!("DELETE FROM events WHERE seq IN ({marks})"))?;
+            let params = rusqlite::params_from_iter(chunk.iter().copied());
+            deleted += stmt.execute(params)?;
+        }
+        Ok(deleted)
     }
 
     /// Deletes host and project events (those with no `run_id`, such as `project.created` and

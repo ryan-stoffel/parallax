@@ -130,15 +130,16 @@ fn drop_repeated_deltas(items: Vec<AgentOutputItem>) -> Vec<AgentOutputItem> {
     let mut out = Vec::new();
     for item in items {
         if let AgentOutputItem::Text { message_id, text } = &item {
-            out.retain(|held| {
-                !matches!(
-                    held,
-                    AgentOutputItem::TextDelta {
-                        message_id: delta_id,
-                        text: delta,
-                    } if delta_id == message_id && text.starts_with(delta.as_str())
-                )
-            });
+            // Keep identified deltas to preserve the message position across intervening tools.
+            // Without a message id, the renderer only replaces the immediately preceding
+            // partial message. Earlier deltas separated by tools are distinct messages.
+            if message_id.is_none()
+                && matches!(out.last(), Some(AgentOutputItem::TextDelta {
+                    message_id: None, text: delta,
+                }) if text.starts_with(delta.as_str()))
+            {
+                out.pop();
+            }
         }
         out.push(item);
     }
@@ -224,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_calls_and_results_stay() {
+    fn anonymous_messages_separated_by_tools_and_results_stay() {
         let call = AgentOutputItem::ToolCall {
             call_id: "c1".to_owned(),
             name: "Bash".to_owned(),
@@ -244,7 +245,28 @@ mod tests {
                 text("Hi"),
                 end.clone(),
             ]),
-            [call, result, text("Hi"), end]
+            [delta("Hi"), call, result, text("Hi"), end]
+        );
+    }
+
+    #[test]
+    fn identified_text_keeps_its_position_before_intervening_tools() {
+        let delta = AgentOutputItem::TextDelta {
+            message_id: Some("m1".to_owned()),
+            text: "Hi".to_owned(),
+        };
+        let whole = AgentOutputItem::Text {
+            message_id: Some("m1".to_owned()),
+            text: "Hi".to_owned(),
+        };
+        let call = AgentOutputItem::ToolCall {
+            call_id: "c1".to_owned(),
+            name: "Bash".to_owned(),
+            input: serde_json::json!({}),
+        };
+        assert_eq!(
+            compact_items(vec![delta.clone(), call.clone(), whole.clone()]),
+            [delta, call, whole]
         );
     }
 
@@ -350,11 +372,9 @@ mod tests {
                 .iter()
                 .any(|item| matches!(item, AgentOutputItem::TurnFinished { .. }))
         );
-        assert!(
-            !items
-                .iter()
-                .any(|item| matches!(item, AgentOutputItem::TextDelta { .. }))
-        );
+        assert!(items.iter().any(
+            |item| matches!(item, AgentOutputItem::TextDelta { text, .. } if text == "Hello")
+        ));
         assert!(
             daemon
                 .log

@@ -1072,7 +1072,11 @@ test("a pasted image goes with agent/send beside the text, and shows while it's 
   act(() => {
     composer().dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
   });
-  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  // FileReader completion can take longer on Windows CI. Wait for the image to be ready.
+  await vi.waitFor(async () => {
+    await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
+    expect(document.querySelector('img[src="data:image/png;base64,iVBORw=="]')).not.toBeNull();
+  });
   await act(async () => {
     composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   });

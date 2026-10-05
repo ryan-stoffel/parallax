@@ -578,3 +578,20 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     store.append_event(&event(1, None)).unwrap();
     assert_eq!(store.event_head().unwrap(), 1);
 }
+
+#[test]
+fn deleting_a_long_turn_does_not_exceed_sqlite_variable_limit() {
+    let (_dir, store) = open();
+    let run = Uuid::now_v7();
+    store.begin().unwrap();
+    for seq in 1..=33_000 {
+        store.append_event(&event(seq, Some(run))).unwrap();
+    }
+    store.commit().unwrap();
+    let seqs: Vec<u64> = (1..33_000).collect();
+    assert_eq!(store.delete_events(&seqs).unwrap(), seqs.len());
+    let (rows, more) = store.run_events(run, 0, 100, usize::MAX).unwrap();
+    assert!(!more);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].seq, 33_000);
+}

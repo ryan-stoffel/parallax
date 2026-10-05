@@ -226,6 +226,24 @@ test("a compacted row replaces raw batches of that turn and builds the same item
   expect(of(t.items, "assistant")).toHaveLength(1);
 });
 
+test("compaction preserves messages on either side of a tool (PLX-491)", () => {
+  const items: AgentOutputItem[] = [
+    { kind: "textDelta", text: "Hi" },
+    { kind: "toolCall", callId: "c1", name: "Bash", input: {} },
+    { kind: "toolResult", callId: "c1", status: "ok", output: "ok" },
+    { kind: "text", text: "Hi" },
+  ];
+  const raw = items.map((item) => output(item));
+  const folded: LoggedEvent = {
+    ...raw.at(-1)!,
+    event: { kind: "agent.output", runId, items, compacted: { from: raw[0]!.seq } },
+  };
+  const content = (t: ReturnType<typeof build>) =>
+    t.items.map(({ key: _key, at: _at, ...item }) => item);
+  expect(content(build(folded))).toEqual(content(build(...raw)));
+  expect(of(build(folded).items, "assistant").map((item) => item.text)).toEqual(["Hi", "Hi"]);
+});
+
 test("a turn's result that repeats its last message isn't shown twice", () => {
   const t = build(
     ...upTo(1),
