@@ -62,6 +62,13 @@ rm -rf target/package-resources
 mkdir -p target/package-resources
 cp "$plxd" "target/package-resources/plxd$exe"
 printf '%s\n' "$version" > target/package-resources/plxd.version
+# The Cursor SDK sidecar (0053) sits beside plxd. electron-builder copies this folder into resources.
+if [ -f sidecar/cursor/package-lock.json ]; then
+  npm ci --omit=dev --prefix sidecar/cursor
+  mkdir -p target/package-resources/cursor-sdk
+  cp sidecar/cursor/src/*.mjs target/package-resources/cursor-sdk/
+  cp -R sidecar/cursor/node_modules target/package-resources/cursor-sdk/node_modules
+fi
 
 cd apps/desktop
 node --version

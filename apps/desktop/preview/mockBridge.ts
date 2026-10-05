@@ -572,6 +572,16 @@ const handlers: { [M in Method]?: Handler<M> } = {
     db.providers = db.providers.filter((x) => x.instance.id !== p.id);
     return { providers: db.providers, checkedAt: now() };
   },
+  // Cursor's browser sign-in (0053): the account is signed in a few seconds after the URL.
+  "cursor/signIn": (p) => {
+    setTimeout(() => setCursor(p.instance ?? "cursor", true), 3000);
+    return { url: "https://cursor.com/loginDeepControl?preview=1" };
+  },
+  "cursor/signInCancel": () => ({}),
+  "cursor/signOut": (p) => {
+    setCursor(p.instance ?? "cursor", false);
+    return {};
+  },
   "usage/get": () => ({ accounts: db.usage }),
   "usage/history": (p) => {
     const hours = db.usageHours.filter((h) => h.hour >= p.since);
@@ -684,6 +694,14 @@ const localNameListeners = new Set<(name: string) => void>();
 const connectionListeners = new Set<(hostId: string, state: ConnectionState) => void>();
 
 const updateState: UpdateState = {};
+
+function setCursor(id: string, signedIn: boolean) {
+  db.providers = db.providers.map((x) =>
+    x.instance.id === id
+      ? { ...x, signedIn, account: signedIn ? "ryan@example.com" : undefined }
+      : x,
+  );
+}
 
 export const mockBridge: ParallaxBridge = {
   platform: "darwin",

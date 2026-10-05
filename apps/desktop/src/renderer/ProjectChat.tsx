@@ -1,17 +1,19 @@
-import { Folder, GitBranch } from "lucide-react";
+import { GitBranch } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import type { Project, PromptImage } from "../protocol/generated/protocol";
-import { AgentChat, PinnedApprovals } from "./AgentChat";
+import { AgentChat, CheckoutLabel, PinnedApprovals } from "./AgentChat";
 import { AgentsBar } from "./AgentsBar";
 import { queueOf, useAnswers, type Asked } from "./Approval";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
+import type { Host } from "./hosts";
 import { describeError } from "./errors";
 import { imageCaps } from "./images";
 import type { RunOptions } from "./models";
 import { accountOptions, defaultBackend } from "./NewThread";
 import type { ProjectAgentsView } from "./ProjectAgents";
+import { RefMenu } from "./RefMenu";
 import { ProjectIcon } from "./Sidebar";
 import type { ThreadsView } from "./threads";
 import { uuidv7 } from "./uuidv7";
@@ -26,10 +28,13 @@ import { uuidv7 } from "./uuidv7";
  */
 export function ProjectChat({
   hostId,
+  host,
+  repo,
   project,
   prompt,
   startCoordinator,
   startTask,
+  updateProject,
   others,
   agents,
   titles,
@@ -37,11 +42,15 @@ export function ProjectChat({
   onOpenRun,
 }: {
   hostId: string;
+  host?: Host;
+  /** The repo entry at the Project's repository, whose branches its picker lists. */
+  repo?: string;
   project: Project;
   /** The coordinator's first message, shown until its transcript loads. */
   prompt?: string;
   startCoordinator: ThreadsView["startCoordinator"];
   startTask: ThreadsView["startTask"];
+  updateProject: ThreadsView["updateProject"];
   /** Permission requests the Project's subagents wait on, pinned over the composer (PLX-196). */
   others?: readonly Asked[];
   /** The Project's runs, whose children show over the composer. */
@@ -81,18 +90,44 @@ export function ProjectChat({
     };
   }, [hostId, connected, tasks]);
 
-  // The Project's repository and branch, which the coordinator runs in (0027).
+  // Why the base branch couldn't change.
+  const [branchError, setBranchError] = useState<string>();
+  // On a plxd with an integration branch, the picker sets the base branch new children's work is
+  // cut from (0045). The coordinator's checkout keeps its branch: nothing switches it yet.
+  const pickBase =
+    repo !== undefined &&
+    connected &&
+    "integrationBranch" in connection.capabilities &&
+    "repoRefs" in connection.capabilities;
+  const branch = pickBase ? (project.baseBranch ?? project.branch) : project.branch;
+  // The coordinator runs in the Project's repository, on its checkout (0027).
   const tab = (
     <>
-      <span className={tabItem} title={project.repoPath}>
-        <Folder aria-hidden />
-        <span className="truncate">{project.repoPath}</span>
-      </span>
-      {project.branch && (
-        <span className={tabItem} title={project.branch}>
-          <GitBranch aria-hidden />
-          <span className="truncate">{project.branch}</span>
-        </span>
+      <CheckoutLabel host={host} checkout />
+      {pickBase ? (
+        <>
+          <RefMenu
+            hostId={hostId}
+            repo={repo}
+            checkout
+            value={branch}
+            onChange={(baseBranch) =>
+              void updateProject(project.id, { baseBranch }).then(setBranchError)
+            }
+          />
+          {branchError && (
+            <span role="alert" className="truncate text-[12px] text-danger">
+              {branchError}
+            </span>
+          )}
+        </>
+      ) : (
+        branch && (
+          <span className={tabItem} title={branch}>
+            <GitBranch aria-hidden />
+            <span className="truncate">{branch}</span>
+          </span>
+        )
       )}
     </>
   );

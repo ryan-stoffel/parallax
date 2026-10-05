@@ -73,6 +73,7 @@ import { Composer, tabItem, type ComposerProps, type Unanswered } from "./Compos
 import { useConnection } from "./ConnectionStatus";
 import { describeError, githubProblem } from "./errors";
 import { ForkButton, ForkContext, type ForkTarget } from "./Fork";
+import type { Host } from "./hosts";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { Loader, type LoaderStyle } from "./Loader";
 import { GitHubLogo, LinearLogo } from "./logos";
@@ -92,6 +93,7 @@ import { plainText, PromptRail, ScrollToEnd, type Prompt } from "./PromptRail";
 import { attachThreads, SentThread, ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { QueueStrip } from "./QueueStrip";
 import { ResumeCard } from "./ResumeCard";
+import { hostIcon } from "./RunTargetMenu";
 import {
   knownModel,
   modelName,
@@ -162,6 +164,7 @@ export function PinnedApprovals(
  */
 export function AgentChat({
   hostId,
+  host,
   runId,
   title,
   notice,
@@ -201,6 +204,8 @@ export function AgentChat({
   going?: boolean;
   /** A thread with no repo: its scratch repository has no origin, so it gets no Open PR. */
   noRepo?: boolean;
+  /** The host the run is on, named in the composer's tab. */
+  host?: Host;
   /** The composer's tab in place of the run's worktree, such as a coordinator's repository. */
   tab?: ReactNode;
   /** A strip tucked over the composer, above the plan's, such as a Project's agents. */
@@ -628,7 +633,7 @@ export function AgentChat({
           tab={
             tab ??
             (run && (
-              <RunTab run={run}>
+              <RunTab run={run} host={host}>
                 {pullRequests ||
                   (canOpenPr && (
                     <OpenPr
@@ -1979,23 +1984,42 @@ function DiffLines({ text }: { text: string }) {
 }
 
 /**
- * An open run in the composer's tab: that it runs in a worktree, and the worktree's branch, or in
- * the repository's own checkout, with `children`, such as Open PR, before the branch.
+ * Where a run works in the composer's tab: `{host} · Local checkout` or `{host} · Worktree`, as
+ * New Thread's `RunTargetMenu` reads. A Project's composer shows it too.
  */
-export function RunTab({ run, children }: { run: AgentRun; children?: ReactNode }) {
+export function CheckoutLabel({ host, checkout }: { host?: Host; checkout: boolean }) {
+  return (
+    <span className={`${tabItem} shrink-0`}>
+      {host ? hostIcon(host) : checkout ? <Folder aria-hidden /> : <FolderGit2 aria-hidden />}
+      {host && (
+        <>
+          {host.name}
+          <span aria-hidden className="text-faint-foreground">
+            ·
+          </span>
+        </>
+      )}
+      {checkout ? "Local checkout" : "Worktree"}
+    </span>
+  );
+}
+
+/**
+ * An open run in the composer's tab: its host and checkout, then `children`, such as Open PR,
+ * and the worktree's branch.
+ */
+export function RunTab({
+  run,
+  host,
+  children,
+}: {
+  run: AgentRun;
+  host?: Host;
+  children?: ReactNode;
+}) {
   return (
     <>
-      {run.checkout ? (
-        <span className={`${tabItem} shrink-0`}>
-          <Folder aria-hidden />
-          Current checkout
-        </span>
-      ) : (
-        <span className={`${tabItem} shrink-0`}>
-          <FolderGit2 aria-hidden />
-          Worktree
-        </span>
-      )}
+      <CheckoutLabel host={host} checkout={!!run.checkout} />
       <span className="flex min-w-0 items-center">
         {children}
         {run.branch && (

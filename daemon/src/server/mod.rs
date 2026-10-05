@@ -242,6 +242,8 @@ pub(crate) struct Daemon {
     pub providers: Providers,
     /// Detached listed-method tasks and in-memory command-id waiters (0052).
     pub commands: crate::commands::Commands,
+    /// Cursor account login through the SDK sidecar (0053).
+    pub cursor: crate::backend::cursor_sdk::CursorAuth,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -359,7 +361,7 @@ impl Server {
             reader,
             os: methods::os_version(),
             github: Github::new(launcher.clone(), github::RELEASE_URL),
-            cli_detector: CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT),
+            cli_detector: CliDetector::new(launcher.clone(), crate::detect::PROBE_TIMEOUT),
             limits: Limits {
                 idle_timeout: config.idle_timeout,
                 max_requests_in_flight: config.max_requests_in_flight.max(1),
@@ -374,6 +376,7 @@ impl Server {
                     jitter: config.resume_jitter,
                     backoff: config.resume_backoff,
                 }),
+            cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher.clone()),
             providers,
             commands: crate::commands::Commands::new(),
         });
@@ -649,7 +652,7 @@ impl Daemon {
             reader,
             os: "test".to_owned(),
             github: Github::new(launcher.clone(), github::RELEASE_URL),
-            cli_detector: CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT),
+            cli_detector: CliDetector::new(launcher.clone(), crate::detect::PROBE_TIMEOUT),
             limits: Limits {
                 idle_timeout,
                 max_requests_in_flight: 32,
@@ -661,6 +664,7 @@ impl Daemon {
             agents: Agents::new(backends, worktrees),
             providers,
             commands: crate::commands::Commands::new(),
+            cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher),
         })
     }
 }

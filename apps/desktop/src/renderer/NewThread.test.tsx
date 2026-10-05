@@ -542,7 +542,7 @@ test("a thread starts on the branch its prompt was named for, and takes the name
   expect(crumbs()).toEqual(["This Mac", "parallax", "Fix flaky test"]);
 });
 
-test("Current checkout starts a thread in the repository itself, with no branch of its own", async () => {
+test("Local checkout starts a thread in the repository itself, with no branch of its own", async () => {
   capabilities = { checkout: {} };
   nameThread.mockResolvedValue({ title: "Fix flaky test", slug: "fix-flaky-test" });
   answers["thread/start"] = (p) => ({
@@ -553,8 +553,8 @@ test("Current checkout starts a thread in the repository itself, with no branch 
   });
   await renderApp();
   expect(control("Runs on: This Mac, New worktree")).not.toBeNull();
-  await choose("Runs on", "Current checkoutRight in the repository, on the branch you have out.");
-  expect(control("Runs on: This Mac, Current checkout")).not.toBeNull();
+  await choose("Runs on", "Local checkoutRight in the repository, on the branch you have out.");
+  expect(control("Runs on: This Mac, Local checkout")).not.toBeNull();
   await send("Fix it");
   expect(calls("thread/start")).toEqual([
     { runId: expect.any(String), prompt: "Fix it", repo: parallax.id, checkout: true },
@@ -592,10 +592,10 @@ describe("the ref picker", () => {
     ]);
   });
 
-  test("the current checkout switches to the ref picked first", async () => {
+  test("the local checkout switches to the ref picked first", async () => {
     capabilities = { checkout: {}, repoRefs: {} };
     await renderApp();
-    await choose("Runs on", "Current checkoutRight in the repository, on the branch you have out.");
+    await choose("Runs on", "Local checkoutRight in the repository, on the branch you have out.");
     expect(button("Select ref")).toBeDefined();
     await choose("Ref", "featureworktree");
     expect(button("feature")).toBeDefined();
@@ -615,7 +615,7 @@ describe("the ref picker", () => {
     capabilities = { checkout: {}, repoRefs: {} };
     await renderApp();
     await choose("Ref", "origin/develop");
-    await choose("Runs on", "Current checkoutRight in the repository, on the branch you have out.");
+    await choose("Runs on", "Local checkoutRight in the repository, on the branch you have out.");
     expect(button("Select ref")).toBeDefined();
     await send("Fix it");
     expect(calls("thread/start")).toEqual([
@@ -630,13 +630,13 @@ describe("the ref picker", () => {
   });
 });
 
-test("Current checkout can't be picked without a repo, or from a plxd that would make a worktree anyway", async () => {
+test("Local checkout can't be picked without a repo, or from a plxd that would make a worktree anyway", async () => {
   const checkoutOption = () =>
     [
       ...document.querySelectorAll<HTMLButtonElement>(
         'main [role="menu"][aria-label="Runs on"] [role="menuitemradio"]',
       ),
-    ].find((b) => b.textContent?.startsWith("Current checkout"))!;
+    ].find((b) => b.textContent?.startsWith("Local checkout"))!;
   await renderApp();
   expect(checkoutOption().disabled).toBe(true);
   expect(checkoutOption().textContent).toContain("needs a newer plxd");
@@ -706,14 +706,22 @@ test("the row menu archives into Archived, and unarchives back", async () => {
     result: { thread: { ...thread, archived: p["archived"] } },
   });
   await renderApp();
+  const drawer = (name: string) =>
+    [...document.querySelectorAll("#sidebar details")].find((d) =>
+      d.querySelector("summary")?.textContent?.startsWith(name),
+    );
+  // The run is still going, so the thread sits in Working until it's archived.
+  expect(drawer("Working")?.textContent).toContain("Fix the flaky test");
+
   await act(async () => button("Archive")!.click());
   expect(calls("thread/archive")).toEqual([{ runId: thread.id, archived: true }]);
-  const archived = document.querySelector("details")!;
-  expect(archived.textContent).toContain("Fix the flaky test");
+  expect(drawer("Archived")?.textContent).toContain("Fix the flaky test");
+  expect(drawer("Working")).toBeUndefined();
 
   await act(async () => button("Unarchive")!.click());
   expect(calls("thread/archive").at(-1)).toEqual({ runId: thread.id, archived: false });
-  expect(document.querySelector("details")).toBeNull();
+  expect(drawer("Archived")).toBeUndefined();
+  expect(drawer("Working")?.textContent).toContain("Fix the flaky test");
 });
 
 test("Delete asks first, and only deletes once confirmed", async () => {

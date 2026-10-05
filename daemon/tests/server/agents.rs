@@ -1170,8 +1170,9 @@ async fn a_child_learns_its_project_and_a_fallback_moves_its_usage_to_the_new_ac
 }
 
 /// An in-process plxd whose Claude Code, Codex, and Cursor backends are plxd's real ones,
-/// running `scripts`, stand-ins for `claude`, `codex`, and `agent`, from a folder in `dir` that is
-/// the agents' whole `PATH` besides the system's.
+/// running `scripts`, stand-ins for `claude`, `codex`, and the Cursor SDK sidecar (`cursor-sdk`,
+/// through `PLXD_CURSOR_SDK`), from a folder in `dir` that is the agents' whole `PATH` besides the
+/// system's.
 fn built_in_kinds(dir: &Path, scripts: [(&str, String); 3]) -> InProcess {
     let bin = dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -1182,6 +1183,7 @@ fn built_in_kinds(dir: &Path, scripts: [(&str, String); 3]) -> InProcess {
     }
     let mut environment = Environment::empty();
     environment.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
+    environment.set("PLXD_CURSOR_SDK", bin.join("cursor-sdk"));
     let mut config = InProcess::config(dir);
     config.agent_environment = Some(environment.clone());
     let mut backends = BackendRegistry::new();
@@ -1206,7 +1208,7 @@ fn built_in_kinds(dir: &Path, scripts: [(&str, String); 3]) -> InProcess {
 async fn runs_plxd_cannot_start_are_refused() {
     let dir = temp_dir();
     // A `claude` older than the sandbox needs, found where agents' CLIs are looked up. Codex and
-    // Cursor installed too, so the host lists them (0040).
+    // Cursor's sidecar installed too, so the host lists them (0040).
     let claude = "#!/bin/sh\n\
          if [ \"$1\" = --version ]; then echo '2.1.100 (Claude Code)'; exit 0; fi\n\
          printf '%s' '{\"loggedIn\":true}'\n";
@@ -1216,7 +1218,7 @@ async fn runs_plxd_cannot_start_are_refused() {
         [
             ("claude", claude.to_owned()),
             ("codex", empty()),
-            ("agent", empty()),
+            ("cursor-sdk", empty()),
         ],
     );
     let mut client = Conn::ready(&server.socket).await;
@@ -1234,18 +1236,6 @@ async fn runs_plxd_cannot_start_are_refused() {
     assert_eq!(kind(&old), ErrorKind::WorkerUnavailable);
     assert!(old.message.contains("2.1.100"), "{}", old.message);
     assert!(old.message.contains("2.1.248"), "{}", old.message);
-
-    // Cursor has only Bypass, and the Project runs in Auto (0042).
-    let cursor = client
-        .call::<AgentStart>(AgentStartParams {
-            account: Some(AccountChoice::Subscription {
-                backend: "cursor".to_owned(),
-            }),
-            ..start_params(project.id, "Fix it")
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&cursor), ErrorKind::UnsupportedOption);
 
     // A Codex run `agent/start` makes on a repo entry isn't a thread, so it is refused: Codex
     // runs only threads (0035).
@@ -1301,11 +1291,12 @@ async fn recorded(out: &Path, program: &str, file: &str, wanted: &str) -> String
 
 /// PLX-396 (0042): a Project's child starts on each built-in kind as a thread the user starts
 /// would, through plxd's real backends: Claude Code as full Claude Code with plxd's thread tools,
-/// Codex on `codex app-server`, and Cursor on its ACP agent, each in the Project's mode and
+/// Codex on `codex app-server`, and Cursor on its SDK sidecar (0053), each in the Project's mode and
 /// asking through the inbox. Auto is where a worker would have kept the sandbox's flags. Each
 /// stand-in CLI records its arguments and what plxd writes it.
 #[cfg(target_os = "macos")]
 #[tokio::test]
+#[expect(clippy::too_many_lines, reason = "one case per built-in kind")]
 async fn a_projects_child_starts_as_a_thread_on_each_built_in_kind() {
     use parallax_protocol::{AgentPermission, ProjectPermission};
 
@@ -1331,7 +1322,7 @@ async fn a_projects_child_starts_as_a_thread_on_each_built_in_kind() {
         [
             script("claude", "2.1.300 (Claude Code)"),
             script("codex", "codex-cli 0.160.0"),
-            script("agent", "2026.10.01"),
+            script("cursor-sdk", "1.0.35"),
         ],
     );
     let mut client = Conn::ready(&server.socket).await;
@@ -1350,9 +1341,10 @@ async fn a_projects_child_starts_as_a_thread_on_each_built_in_kind() {
     for (project, mode, backend, program) in [
         (auto, auto_mode, "claude", "claude"),
         (auto, auto_mode, "codex", "codex"),
+        (auto, auto_mode, "cursor", "cursor-sdk"),
         (bypass, bypass_mode, "claude", "claude"),
         (bypass, bypass_mode, "codex", "codex"),
-        (bypass, bypass_mode, "cursor", "agent"),
+        (bypass, bypass_mode, "cursor", "cursor-sdk"),
     ] {
         for file in ["argv", "stdin"] {
             let _ = std::fs::remove_file(out.join(format!("{program}.{file}")));
@@ -1400,10 +1392,17 @@ async fn a_projects_child_starts_as_a_thread_on_each_built_in_kind() {
                 );
             }
             "codex" => assert_eq!(argv, ["app-server"]),
-            _ => assert!(
-                argv.contains(&"acp") && argv.contains(&"--force"),
-                "{argv:?}"
-            ),
+            _ => {
+                assert_eq!(argv.first(), Some(&"run"), "{argv:?}");
+                let permission = if mode == auto_mode { "auto" } else { "bypass" };
+                recorded(
+                    &out,
+                    program,
+                    "stdin",
+                    &format!("\"permission\":\"{permission}\""),
+                )
+                .await;
+            }
         }
     }
     server.stop().await;

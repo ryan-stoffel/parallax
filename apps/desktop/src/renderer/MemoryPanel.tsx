@@ -455,7 +455,7 @@ function MemoryRow({
             <>
               {content !== undefined &&
                 (plain ? (
-                  <p className="text-[13px] whitespace-pre-wrap">{content}</p>
+                  <p className="font-mono text-[12px] whitespace-pre-wrap">{content}</p>
                 ) : (
                   <div className="context-doc text-[13px]">
                     <MarkdownText text={content} />
@@ -593,7 +593,7 @@ function Editor({
         value={text}
         disabled={busy}
         onChange={(e) => setText(e.target.value)}
-        className={field}
+        className={`${field} font-mono text-[12px]`}
       />
       <div className="mt-1 flex justify-end gap-1.5">
         <button type="button" disabled={busy} onClick={onCancel} className={quietButton}>

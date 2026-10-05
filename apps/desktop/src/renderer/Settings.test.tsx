@@ -8,6 +8,7 @@ import type { ProviderInfo, ProviderInstance, ProviderKind } from "../protocol/g
 import type { SettingsSection } from "./App";
 import { models } from "./models";
 import { Settings } from "./Settings";
+import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
 import { appShortcut } from "./ui";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -895,4 +896,128 @@ describe("on a plxd with providers", () => {
     expect(withVersion({ ...fields, program: "opencode2" }, v1!).program).toBeUndefined();
     expect(withVersion({ ...fields, program: "/opt/oc" }, v2!).program).toBe("opencode2");
   });
+
+  test("a Cursor instance signs in through the browser", async () => {
+    listed = [
+      {
+        instance: instance("cursor", "cursor", "Cursor"),
+        installed: true,
+        signedIn: false,
+        models: [],
+        permissions: ["edit", "plan", "auto", "bypass"],
+        efforts: false,
+        coordinator: false,
+      },
+    ];
+    answers["cursor/signIn"] = () => ({
+      result: { url: "https://cursor.com/loginDeepControl?challenge=example" },
+    });
+    answers["cursor/signInCancel"] = () => ({ result: {} });
+    answers["cursor/signOut"] = () => ({ result: {} });
+    const open = vi.fn();
+    window.open = open;
+
+    await renderSettings();
+    expect(pane().textContent).toContain("Cursor SDK");
+    expect(pane().textContent).not.toContain("Binary path");
+    await click(button(section("Account"), "Sign in"));
+    expect(open).toHaveBeenCalledWith(
+      "https://cursor.com/loginDeepControl?challenge=example",
+      "_blank",
+    );
+    expect(calls("cursor/signIn")[0]!.params).toEqual({ instance: "cursor" });
+    expect(section("Account").textContent).toContain("Approve the sign-in in your browser");
+
+    await click(button(section("Account"), "Cancel"));
+    expect(calls("cursor/signInCancel")).toHaveLength(1);
+  });
+
+  test("a signed-in Cursor instance can sign out", async () => {
+    listed = [
+      {
+        instance: instance("cursor", "cursor", "Cursor"),
+        installed: true,
+        signedIn: true,
+        account: "ryan@example.com",
+        models: [],
+        permissions: ["edit", "plan", "auto", "bypass"],
+        efforts: false,
+        coordinator: false,
+      },
+    ];
+    answers["cursor/signOut"] = () => ({ result: {} });
+    await renderSettings();
+    expect(section("Account").textContent).toContain("Authenticated as ryan@example.com");
+    await click(button(section("Account"), "Sign out"));
+    expect(calls("cursor/signOut")[0]!.params).toEqual({ instance: "cursor" });
+  });
+
+  test("a Cursor sign-in that fails in the browser stops waiting and says so", async () => {
+    const cursor = {
+      instance: instance("cursor", "cursor", "Cursor"),
+      installed: true,
+      signedIn: false,
+      models: [],
+      permissions: ["edit", "plan", "auto", "bypass"],
+      efforts: false,
+      coordinator: true,
+    } satisfies (typeof listed)[number];
+    listed = [cursor];
+    answers["cursor/signIn"] = () => ({ result: { url: "https://cursor.com/loginDeepControl" } });
+    answers["cursor/signInCancel"] = () => ({ result: {} });
+    window.open = vi.fn();
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+
+    await renderSettings();
+    await click(button(section("Account"), "Sign in"));
+    expect(section("Account").textContent).toContain("Approve the sign-in in your browser");
+    listed = [{ ...cursor, signInError: "Cursor sign-in failed or expired. Start sign-in again." }];
+    await act(() => vi.advanceTimersByTimeAsync(2100));
+    expect(pane().textContent).toContain("Cursor sign-in failed or expired");
+    expect(section("Account").textContent).not.toContain("Approve the sign-in in your browser");
+  });
+
+  test("a Cursor instance with its own CURSOR_API_KEY has no browser sign-in", async () => {
+    listed = [
+      {
+        instance: {
+          ...instance("cursor", "cursor", "Cursor"),
+          env: [{ name: "CURSOR_API_KEY", secret: true }],
+        },
+        installed: true,
+        signedIn: true,
+        models: [],
+        permissions: ["edit", "plan", "auto", "bypass"],
+        efforts: false,
+        coordinator: true,
+      },
+    ];
+    await renderSettings();
+    expect(section("Account").textContent).not.toContain("Sign in");
+    expect(section("Account").textContent).not.toContain("Sign out");
+    expect(pane().textContent).toContain("CURSOR_API_KEY");
+  });
+});
+
+test("General's sidebar switches turn the Working section and archive pages off", async () => {
+  sidebarPrefs.set(sidebarDefaults);
+  window.parallax.openTargets = async () => [];
+  window.parallax.version = async () => "1.2.3";
+  await renderSettings("general");
+  const working = document.querySelector<HTMLButtonElement>(
+    '[role="switch"][aria-label="Working section"]',
+  )!;
+  const pages = document.querySelector<HTMLButtonElement>(
+    '[role="switch"][aria-label="Archive pages"]',
+  )!;
+  expect(working.getAttribute("aria-checked")).toBe("true");
+  expect(pages.getAttribute("aria-checked")).toBe("true");
+  await click(working);
+  await click(pages);
+  expect(sidebarPrefs.get()).toEqual({ workingSection: false, pageArchived: false });
+  expect(JSON.parse(localStorage.getItem("parallax.sidebar")!)).toEqual({
+    workingSection: false,
+    pageArchived: false,
+  });
+  sidebarPrefs.set(sidebarDefaults);
 });

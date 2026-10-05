@@ -4,10 +4,16 @@ import type { OpenTarget } from "../../preload/bridge";
 import { useConnection } from "../ConnectionStatus";
 import { localId, useHosts } from "../hosts";
 import { nameOf, OPEN_TARGET_KEY } from "../OpenMenu";
-import { HostPicker, PageTitle, Row, Section, Switch } from "./parts";
+import { archivePageSize, sidebarPrefs, type SidebarPrefs } from "../sidebarPrefs";
+import { notices } from "./licenses";
+import { HostPicker, PageTitle, quietButton, Row, Section, Switch } from "./parts";
 
-/** Settings > General: where Open sends a folder, usage limits on a host, and the app's version. */
+/**
+ * Settings > General: where Open sends a folder, usage limits on a host, and the app's version
+ * and bundled-font notices.
+ */
 export function GeneralSettings() {
+  const [showNotices, setShowNotices] = useState(false);
   const [targets, setTargets] = useState<OpenTarget[]>([]);
   const [chosen, setChosen] = useState(() => localStorage.getItem(OPEN_TARGET_KEY));
   const [version, setVersion] = useState<string>();
@@ -16,10 +22,35 @@ export function GeneralSettings() {
     void window.parallax.version().then(setVersion);
   }, []);
   const current = targets.find((t) => t === chosen) ?? targets[0];
+  const sidebar = sidebarPrefs.use();
+  const setSidebar = (patch: Partial<SidebarPrefs>) =>
+    sidebarPrefs.set({ ...sidebarPrefs.get(), ...patch });
 
   return (
     <>
       <PageTitle title="General" />
+      <Section title="Sidebar">
+        <Row
+          title="Working section"
+          description="While a thread is working, list it under Working, above Archived. Off keeps it in Threads."
+        >
+          <Switch
+            label="Working section"
+            checked={sidebar.workingSection}
+            onChange={(workingSection) => setSidebar({ workingSection })}
+          />
+        </Row>
+        <Row
+          title="Archive pages"
+          description={`Show ${archivePageSize} archived threads at a time, with Show more for the rest. Off lists them all.`}
+        >
+          <Switch
+            label="Archive pages"
+            checked={sidebar.pageArchived}
+            onChange={(pageArchived) => setSidebar({ pageArchived })}
+          />
+        </Row>
+      </Section>
       <Section title="Open">
         <Row
           title="Open folders in"
@@ -48,6 +79,33 @@ export function GeneralSettings() {
         <Row title="Version">
           <span className="font-mono text-[12px] text-muted-foreground">{version ?? "…"}</span>
         </Row>
+        <Row
+          title="Open source licenses"
+          description="Notices for the fonts bundled with Parallax."
+        >
+          <button
+            type="button"
+            aria-expanded={showNotices}
+            onClick={() => setShowNotices(!showNotices)}
+            className={quietButton}
+          >
+            {showNotices ? "Hide licenses" : "View licenses"}
+          </button>
+        </Row>
+        {showNotices &&
+          notices.map((n) => (
+            <details key={n.name} className="border-t border-border px-4 py-3">
+              <summary className="cursor-pointer text-[13px] font-medium">
+                {n.name}{" "}
+                <span className="font-mono text-[12px] font-normal text-muted-foreground">
+                  {n.license}
+                </span>
+              </summary>
+              <pre className="mt-2 max-h-64 overflow-auto font-mono text-[11.5px] whitespace-pre-wrap text-muted-foreground">
+                {n.text}
+              </pre>
+            </details>
+          ))}
       </Section>
     </>
   );

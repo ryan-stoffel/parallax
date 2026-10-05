@@ -24,6 +24,7 @@ import type {
   Thread,
 } from "../protocol/generated/protocol";
 import { App } from "./App";
+import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The Workspace menu's items are in the DOM either way. Showing one
@@ -88,6 +89,7 @@ beforeEach(() => {
   vi.useFakeTimers({ now, toFake: ["Date"] });
   request.mockClear();
   localStorage.clear();
+  sidebarPrefs.set(sidebarDefaults);
   popoverSources = [];
   listeners = new Set();
   capabilities = {};
@@ -279,8 +281,10 @@ test("a Project is one row that opens its chat: its repository and branch, with 
   const welcome = main.querySelector("h2")!.parentElement!.parentElement!;
   for (const name of ["min-h-0", "flex-wrap", "overflow-hidden"])
     expect(welcome.classList.contains(name)).toBe(true);
-  expect(main.textContent).toContain("/src/ember");
+  expect(main.textContent).toContain("This Mac");
+  expect(main.textContent).toContain("Local checkout");
   expect(main.textContent).toContain("main");
+  expect(main.textContent).not.toContain("/src/ember");
   expect(composer()!.getAttribute("aria-placeholder")).toBe(
     "This host's plxd can't run a Project's coordinator yet",
   );
@@ -1078,10 +1082,12 @@ test("a Project's first message starts its coordinator; later ones and Stop go t
   ]);
   expect(transcript()).toContain("Add a dark mode");
   expect(transcript()).toContain("I'll plan it.");
-  // The tab is the Project's repository, not a thread's worktree.
+  // The tab is the host and checkout, not a thread's worktree or the full path.
   const main = document.querySelector("main")!;
-  expect(main.textContent).toContain("/src/ember");
+  expect(main.textContent).toContain("This Mac");
+  expect(main.textContent).toContain("Local checkout");
   expect(main.textContent).not.toContain("Worktree");
+  expect(main.textContent).not.toContain("/src/ember");
 
   type("Start with the settings page");
   await click(button("Send"));
@@ -1547,7 +1553,7 @@ test("the agents bar over a Project's composer shows its first three providers, 
   expect(bar()).toBeNull();
 });
 
-test("a child's chat says whose it is, and its Coordinator button, the top bar's back arrow, and Go to parent return to the coordinator", async () => {
+test("a child's chat says whose it is, and its Open parent button, the top bar's back arrow, and Go to parent return to the coordinator", async () => {
   await openEmberAgents(login);
   const strip = () => document.querySelector('main section[aria-label="Child thread"]');
   const back = async () => {
@@ -1556,11 +1562,14 @@ test("a child's chat says whose it is, and its Coordinator button, the top bar's
   };
   expect(strip()).toBeNull();
   await back();
-  expect(strip()!.textContent).toBe(
-    "A child thread of ember, started by its coordinatorCoordinator⌥⌘↑",
-  );
+  expect(strip()!.textContent).toBe("A child thread of emberOpen parent⌥⌘↑");
+  await click(strip()!.querySelector("button")!);
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
+  expect(strip()).toBeNull();
+
+  await back();
   await click(
-    [...strip()!.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Coordinator")),
+    [...strip()!.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Open parent")),
   );
   expect(crumbs()).toEqual(["This Mac", "ember"]);
   expect(strip()).toBeNull();
@@ -1707,7 +1716,7 @@ test("with projectTasks, a task is the default: Send starts a child through thre
   };
   await renderApp();
   await openEmber();
-  expect(route()).toBe("New task");
+  expect(route()).toBe("New thread");
   expect(composer()!.getAttribute("aria-placeholder")).toBe(
     "Describe a task, list a few, or ask the coordinator",
   );
@@ -1742,9 +1751,9 @@ test("a question goes to the coordinator, anything else starts a task, and the s
   await openEmber();
   // A question mark, or a question word without one.
   type("How should we split this");
-  expect(route()).toBe("Coordinator");
+  expect(route()).toBe("Chat");
   type("Split it by area?");
-  expect(route()).toBe("Coordinator");
+  expect(route()).toBe("Chat");
   await click(button("Send"));
   expect(calls("project/start")).toEqual([
     expect.objectContaining({ project: "p-ember", prompt: "Split it by area?" }),
@@ -1758,7 +1767,7 @@ test("a question goes to the coordinator, anything else starts a task, and the s
     { runId: coordinator()!.id, turnId: expect.any(String), text: "Which is riskier?" },
   ]);
   type("Add a dark mode");
-  expect(route()).toBe("New task");
+  expect(route()).toBe("New thread");
   await click(button("Send"));
   expect(calls("thread/start")).toEqual([
     expect.objectContaining({ project: "p-ember", prompt: "Add a dark mode" }),
@@ -1767,16 +1776,16 @@ test("a question goes to the coordinator, anything else starts a task, and the s
   // The shortcut, or the chip, sends this one message the other way.
   type("Add a light mode");
   flipTarget();
-  expect(route()).toBe("Coordinator");
+  expect(route()).toBe("Chat");
   await click(button("Send"));
   expect(calls("agent/send")).toHaveLength(2);
   expect(calls("agent/send")[1]).toMatchObject({ text: "Add a light mode" });
   type("Add a blue mode");
-  expect(route()).toBe("New task");
+  expect(route()).toBe("New thread");
   await click(document.querySelector('main button[aria-label^="Sends to: "]'));
-  expect(route()).toBe("Coordinator");
+  expect(route()).toBe("Chat");
   await click(document.querySelector('main button[aria-label^="Sends to: "]'));
-  expect(route()).toBe("New task");
+  expect(route()).toBe("New thread");
   expect(calls("project/start")).toHaveLength(1);
 });
 
@@ -1790,16 +1799,16 @@ test("a list starts one task per item, a question among them too: Enter adds an 
         "<ul><li><p>Add a dark mode</p></li><li><p>Add a light mode</p></li></ul>",
       ),
   );
-  expect(route()).toBe("2 tasks");
+  expect(route()).toBe("2 threads");
   act(() => void composer()!.editor!.commands.focus("end"));
   await enter();
   expect(calls("thread/start")).toEqual([]);
   // An item that asks is still a task.
   act(() => void composer()!.editor!.commands.insertContent("Can it be blue?"));
-  expect(route()).toBe("3 tasks");
+  expect(route()).toBe("3 threads");
   // Enter on the last item leaves an empty one, which starts nothing.
   await enter();
-  expect(route()).toBe("3 tasks");
+  expect(route()).toBe("3 threads");
   await enter(true);
   await settle();
   expect(calls("thread/start").map((p) => p["prompt"])).toEqual([
@@ -1999,10 +2008,180 @@ test("Projects sit in a collapsible section above Threads, with New project besi
   expect(projectsSection().hidden).toBe(false);
 });
 
-test("with no Projects, there's no section, and the toolbar's one menu creates a Project or adds a repository", async () => {
+const sectionToggle = (name: string) =>
+  [...document.querySelectorAll<HTMLButtonElement>("#sidebar h2 button[aria-expanded]")].find((b) =>
+    b.textContent?.startsWith(name),
+  )!;
+const sectionOf = (name: string) =>
+  document.getElementById(sectionToggle(name).getAttribute("aria-controls")!)!;
+const drawer = (name: string) =>
+  [...document.querySelectorAll<HTMLDetailsElement>("#sidebar details")].find((d) =>
+    d.querySelector("summary")?.textContent?.startsWith(name),
+  );
+const drawerTitles = (name: string) =>
+  [...(drawer(name)?.querySelectorAll("[data-title]") ?? [])].map((t) => t.textContent);
+const threadTitles = () =>
+  [...document.querySelectorAll('#sidebar [aria-label="Threads"] [data-title]')].map(
+    (t) => t.textContent,
+  );
+
+test("Threads collapses like Projects and stays collapsed after a reload", async () => {
+  withThread();
+  await renderApp();
+  expect(sectionToggle("Threads").getAttribute("aria-expanded")).toBe("true");
+  expect(threadTitles()).toEqual(["Fix the flaky test"]);
+
+  await click(sectionToggle("Threads"));
+  expect(sectionOf("Threads").hidden).toBe(true);
+  await keyDown({ key: "Meta", metaKey: true });
+  expect(["photon", "ember"].map(statusOf)).toEqual(["⌘1", "⌘2"]);
+  expect(statusOf("Fix the flaky test")).toBe("Done");
+
+  act(() => unmount());
+  await renderApp();
+  expect(sectionOf("Threads").hidden).toBe(true);
+  await click(sectionToggle("Threads"));
+  expect(threadTitles()).toEqual(["Fix the flaky test"]);
+});
+
+test("a working thread moves to Working with its children, then back to Threads when it finishes", async () => {
+  const running: Thread = {
+    id: "t-run",
+    repo: parallax.id,
+    title: "Ship the sidebar",
+    createdAt: "2026-09-29T11:30:00Z",
+  };
+  const child: Thread = {
+    id: "t-child",
+    repo: parallax.id,
+    parent: running.id,
+    title: "Write the notes",
+    createdAt: "2026-09-29T11:40:00Z",
+  };
+  const idle: Thread = {
+    id: "t-idle",
+    repo: parallax.id,
+    title: "Read the docs",
+    createdAt: "2026-09-29T11:00:00Z",
+    seenAt: "2026-09-29T12:00:00Z",
+  };
+  answers["thread/list"] = () => ({
+    result: { repos: [parallax], threads: [running, child, idle], seq: 7 },
+  });
+  answers["agent/list"] = () => ({
+    result: {
+      runs: [
+        // Not a Project's run, so the sidebar lists the thread instead of folding it into one.
+        { ...coordinatorRun(running.id, "Ship the sidebar"), project: parallax.id },
+        {
+          ...coordinatorRun(child.id, "Write the notes"),
+          project: parallax.id,
+          status: "completed",
+        },
+        {
+          ...coordinatorRun(idle.id, "Read the docs"),
+          project: parallax.id,
+          status: "completed",
+          updatedAt: "2026-09-29T11:00:00Z",
+        },
+      ],
+      seq: 7,
+    },
+  });
+  capabilities = { threadLineage: {} };
+  await renderApp();
+  expect(drawer("Working")!.open).toBe(true);
+  expect(drawerTitles("Working")).toEqual(["Ship the sidebar"]);
+  expect(threadTitles()).toEqual(["Read the docs"]);
+  expect(document.querySelector("#sidebar")!.textContent).not.toContain("No threads yet");
+
+  await click(
+    [...drawer("Working")!.querySelectorAll("button")].find((b) =>
+      b.textContent?.startsWith("1 thread"),
+    ),
+  );
+  expect(drawerTitles("Working")).toEqual(["Ship the sidebar", "Write the notes"]);
+
+  await act(async () =>
+    deliver({
+      type: "event",
+      event: {
+        subscription: "s-1",
+        seq: 8,
+        time: "2026-09-29T12:10:00Z",
+        event: {
+          kind: "agent.updated",
+          runId: running.id,
+          state: {
+            status: "completed",
+            accountId: "claude",
+            updatedAt: "2026-09-29T12:10:00Z",
+          },
+        },
+      },
+    }),
+  );
+  await settle();
+  expect(drawer("Working")).toBeUndefined();
+  // The group stays open, so the child comes back with its parent.
+  expect(threadTitles()).toEqual(["Ship the sidebar", "Write the notes", "Read the docs"]);
+
+  sidebarPrefs.set({ ...sidebarDefaults, workingSection: false });
+  act(() => unmount());
+  await renderApp();
+  expect(drawer("Working")).toBeUndefined();
+  expect(threadTitles()).toEqual(["Ship the sidebar", "Read the docs"]);
+  // Finishing the run notifies, and the app keeps that notice for the next test.
+  const closeToast = () =>
+    document.querySelector<HTMLButtonElement>('[aria-label="Notifications"] [aria-label="Close"]');
+  while (closeToast()) act(() => closeToast()!.click());
+});
+
+test("Archived lists 25 threads, Show more reveals the next page, and the summary stays out of the scroller", async () => {
+  const threads = Array.from({ length: 60 }, (_, n) => ({
+    id: `t-arch-${n}`,
+    repo: parallax.id,
+    title: `Archived ${String(n).padStart(2, "0")}`,
+    archived: true,
+    createdAt: new Date(Date.parse("2026-09-01T00:00:00Z") + n * 60_000).toISOString(),
+  }));
+  answers["thread/list"] = () => ({ result: { repos: [parallax], threads, seq: 7 } });
+  answers["agent/list"] = () => ({ result: { runs: [], seq: 7 } });
+  await renderApp();
+  const archived = drawer("Archived")!;
+  expect(archived.querySelector("summary")!.textContent).toContain("(60)");
+  // The drawer itself scrolls, and its summary sticks to the top of that scroll.
+  expect(archived.className).toContain("overflow-y-auto");
+  expect(archived.querySelector("summary")!.className).toContain("sticky");
+  expect(drawerTitles("Archived")).toEqual(
+    Array.from({ length: 25 }, (_, n) => `Archived ${String(59 - n).padStart(2, "0")}`),
+  );
+  const more = () =>
+    [...archived.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Show"));
+  expect(more()!.textContent).toBe("Show 25 more");
+
+  await click(more());
+  expect(drawerTitles("Archived")).toHaveLength(50);
+  expect(more()!.textContent).toBe("Show 10 more");
+  await click(more());
+  expect(drawerTitles("Archived")).toHaveLength(60);
+  expect(more()).toBeUndefined();
+
+  sidebarPrefs.set({ ...sidebarDefaults, pageArchived: false });
+  act(() => unmount());
+  await renderApp();
+  expect(drawerTitles("Archived")).toHaveLength(60);
+  expect(
+    [...drawer("Archived")!.querySelectorAll("button")].some((b) =>
+      b.textContent?.startsWith("Show"),
+    ),
+  ).toBe(false);
+});
+
+test("with no Projects, Threads is the only section, and the toolbar's one menu creates a Project or adds a repository", async () => {
   answers["project/list"] = () => ({ result: { projects: [], seq: 7 } });
   await renderApp();
-  expect(sectionHeadings()).toEqual([]);
+  expect(sectionHeadings()).toEqual(["Threads"]);
   expect(newProjectButtons()).toHaveLength(0);
   expect(addMenuItems().map((b) => b.textContent)).toEqual(["New project…", "Add repository…"]);
   await click(addMenuItems()[1]);

@@ -1,0 +1,41 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "cursor/signIn",
+    "params": {
+      "instance": "cursor"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "url": "https://cursor.com/loginDeepControl?challenge=example"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "cursor/signInCancel",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "cursor/signOut",
+    "params": {
+      "instance": "cursor"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {}
+  }
+]

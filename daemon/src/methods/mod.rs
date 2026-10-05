@@ -14,6 +14,7 @@ mod accounts;
 mod agent;
 mod composer;
 mod context;
+mod cursor;
 mod defaults;
 mod events;
 mod host;
@@ -37,11 +38,12 @@ use parallax_protocol::methods::{
     AgentCancel, AgentCommands, AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFiles,
     AgentGitStatus, AgentImage, AgentList, AgentOpenPr, AgentPush, AgentRequestChanges,
     AgentResumeNow, AgentSend, AgentStart, AgentWait, ContextList, ContextRead, ContextWrite,
-    EventsSubscribe, EventsUnsubscribe, GithubInstall, GithubSignInCancel, GithubSignInStart,
-    GithubStatusGet, HostHealth, HostSettingsGet, HostSettingsSet, HostVersion, InboxList,
-    InboxSeen, Initialize, PrAct, PrDiff, PrLink, PrUnlink, PrView, ProjectCreate, ProjectDelete,
-    ProjectFromThreads, ProjectList, ProjectStart, ProjectUpdate, ProvidersList, ProvidersRemove,
-    ProvidersSave, RequestMethod, UsageDaily, UsageGet, UsageHistory,
+    CursorSignIn, CursorSignInCancel, CursorSignOut, EventsSubscribe, EventsUnsubscribe,
+    GithubInstall, GithubSignInCancel, GithubSignInStart, GithubStatusGet, HostHealth,
+    HostSettingsGet, HostSettingsSet, HostVersion, InboxList, InboxSeen, Initialize, PrAct, PrDiff,
+    PrLink, PrUnlink, PrView, ProjectCreate, ProjectDelete, ProjectFromThreads, ProjectList,
+    ProjectStart, ProjectUpdate, ProvidersList, ProvidersRemove, ProvidersSave, RequestMethod,
+    UsageDaily, UsageGet, UsageHistory,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -159,6 +161,9 @@ pub(crate) async fn dispatch(mut context: Context, mut request: Request) -> Repl
         }
         name if name.starts_with("agent/") => found(name, agent_method(&context, &request).await),
         name if name.starts_with("pr/") => found(name, pr_method(&context, &request).await),
+        name if name.starts_with("cursor/") => cursor_method(&context, &request)
+            .await
+            .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
         name if name.starts_with("github/") => github_method(&context, &request)
             .await
             .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
@@ -261,6 +266,24 @@ async fn usage_method(context: &Context, request: &Request) -> Option<Result<Val
 }
 
 /// Answers a `github/*` method (PLX-336, PLX-423), or `None` if there is no such method.
+async fn cursor_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
+    Some(match request.method.as_str() {
+        CursorSignIn::NAME => {
+            handle::<CursorSignIn, _, _>(request, |p| cursor::sign_in(context, p)).await
+        }
+        CursorSignInCancel::NAME => {
+            handle::<CursorSignInCancel, _, _>(request, |p| {
+                ready(Ok(cursor::sign_in_cancel(context, p)))
+            })
+            .await
+        }
+        CursorSignOut::NAME => {
+            handle::<CursorSignOut, _, _>(request, |p| cursor::sign_out(context, p)).await
+        }
+        _ => return None,
+    })
+}
+
 async fn github_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
     Some(match request.method.as_str() {
         GithubStatusGet::NAME => {
@@ -339,7 +362,15 @@ async fn providers_method(
     request: &Request,
 ) -> Option<Result<Value, ErrorObject>> {
     let daemon = &context.daemon;
-    let list = |refresh| daemon.providers.list(&daemon.cli_detector, refresh);
+    let list = |refresh| async move {
+        let mut listed = daemon.providers.list(&daemon.cli_detector, refresh).await;
+        for info in &mut listed.providers {
+            if info.instance.kind == parallax_protocol::ProviderKind::Cursor {
+                info.sign_in_error = daemon.cursor.failure(&info.instance.id);
+            }
+        }
+        listed
+    };
     Some(match request.method.as_str() {
         ProvidersList::NAME => {
             handle::<ProvidersList, _, _>(
