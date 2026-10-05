@@ -60,7 +60,7 @@ use crate::{
     ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult,
     ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
     ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams,
-    UsageGetResult, UsageHistoryParams, UsageHistoryResult,
+    UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -186,6 +186,9 @@ method_table! {
         /// host since a local day, per local day, agent, and model (0039), and each source that
         /// failed.
         UsageDaily = "usage/daily": UsageDailyParams => UsageDailyResult;
+        /// `usage/limits`: every subscription account's limit windows, read live from its CLI,
+        /// and why a CLI didn't answer.
+        UsageLimits = "usage/limits": UsageLimitsParams => UsageLimitsResult;
         /// `accounts/defaults/get`: this host's default account for the coordinator role and for
         /// a worker role, absent where none is set (#119).
         AccountsDefaultsGet = "accounts/defaults/get": AccountsDefaultsGetParams => AccountsDefaultsGetResult;
@@ -467,6 +470,7 @@ mod tests {
                 "usage/get",
                 "usage/history",
                 "usage/daily",
+                "usage/limits",
                 "accounts/defaults/get",
                 "accounts/defaults/set",
                 "context/list",

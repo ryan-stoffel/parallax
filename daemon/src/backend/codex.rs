@@ -30,6 +30,7 @@ use tempfile::TempDir;
 
 use super::commands::{self, CommandsProbe};
 use super::event::FailureKind;
+use super::limits::{self, LimitsProbe};
 use super::process::{Environment, Launcher};
 use super::{
     AgentEffort, AgentPermission, Backend, Capabilities, ImageMediaType, Overrides, PromptImage,
@@ -249,6 +250,22 @@ impl Backend for CodexBackend {
                 commands::request(commands::LIST_ID, "skills/list", &json!({"cwds": [cwd]})),
             ],
             parse: commands::codex,
+        }))
+    }
+
+    /// `codex app-server` on this backend's login, asked for `account/rateLimits/read`
+    /// ([`limits::codex`]).
+    fn limits(&self, cwd: &Path) -> Result<Option<LimitsProbe>, StartError> {
+        let home = self.overrides.home.as_deref();
+        let spec = app_server::spec(&self.launcher, &self.overrides, cwd, home);
+        Ok(Some(LimitsProbe {
+            process: self.launcher.spawn(&spec)?,
+            input: vec![
+                commands::request(1, "initialize", &app_server::initialize_params()),
+                json!({"jsonrpc": "2.0", "method": "initialized"}),
+                commands::request(commands::LIST_ID, "account/rateLimits/read", &json!(null)),
+            ],
+            parse: limits::codex,
         }))
     }
 

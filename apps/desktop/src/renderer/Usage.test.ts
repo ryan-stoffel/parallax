@@ -56,7 +56,7 @@ test("vendor window names read as plain words", () => {
   expect(limitName("primary")).toBe("Primary limit");
 });
 
-test("a limit meter says how much is used, warns near the cap, and says when it resets", () => {
+test("a limit meter says how much is left, warns near the cap, and says when it resets", () => {
   const limit = (window: string, usedPercent?: number, resetsAt?: string) => ({
     window,
     ...(usedPercent !== undefined && { usedPercent }),
@@ -66,11 +66,11 @@ test("a limit meter says how much is used, warns near the cap, and says when it 
   const inFourDays = "2026-10-02T17:00:00Z";
   expect(limitMeter(limit("five_hour", 37.6, inFourDays), now)).toEqual({
     name: "Session",
-    used: 37,
+    left: 63,
     tone: "normal",
-    resets: "Resets in 4 d 5 h",
+    resetsIn: "4d 5h",
   });
-  // Amber from 75% used and red from 90%, by the rounded-down percent shown.
+  // Amber from 75% used and red from 90%, by the rounded-down percent used.
   const tone = (used: number) => limitMeter(limit("seven_day", used, inFourDays), now).tone;
   expect([74.9, 75, 89.9, 90, 100].map(tone)).toEqual([
     "normal",
@@ -79,22 +79,16 @@ test("a limit meter says how much is used, warns near the cap, and says when it 
     "danger",
     "danger",
   ]);
-  expect(limitMeter(limit("seven_day_opus", 140), now)).toEqual({
-    name: "Weekly · Opus",
-    used: 100,
+  expect(limitMeter(limit("seven_day_fable", 140), now)).toEqual({
+    name: "Weekly · Fable",
+    left: 0,
     tone: "danger",
-    resets: "Reset time unknown",
   });
-  // Past its reset, the percent is stale and none of the window is used.
+  // Past its reset, the percent is stale and all of the window is left.
   expect(limitMeter(limit("seven_day", 95, "2026-09-28T11:59:00Z"), now)).toEqual({
     name: "Weekly",
-    used: 0,
+    left: 100,
     tone: "normal",
-    resets: "Has reset",
   });
-  expect(limitMeter(limit("primary"), now)).toEqual({
-    name: "Primary",
-    tone: "normal",
-    resets: "Reset time unknown",
-  });
+  expect(limitMeter(limit("primary"), now)).toEqual({ name: "Primary", tone: "normal" });
 });

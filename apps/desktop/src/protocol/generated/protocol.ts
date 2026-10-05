@@ -112,6 +112,11 @@ export type ParallaxRequests = {
 	 */
 	"usage/daily": { params: UsageDailyParams, result: UsageDailyResult },
 	/**
+	 * `usage/limits`: every subscription account's limit windows, read live from its CLI,
+	 * and why a CLI didn't answer.
+	 */
+	"usage/limits": { params: UsageLimitsParams, result: UsageLimitsResult },
+	/**
 	 * `accounts/defaults/get`: this host's default account for the coordinator role and for
 	 * a worker role, absent where none is set (#119).
 	 */
@@ -1474,13 +1479,15 @@ export type AccountUsage = {
 };
 
 /**
- * One of an account's limit windows, as a vendor last reported it (0004's `rate_limit_event` and
- * Codex's `account/rateLimits/read`).
+ * One of an account's limit windows, as a vendor reported it (0004's `rate_limit_event` and
+ * Codex's `account/rateLimits/updated` in `usage/get`, Claude Code's `get_usage` and Codex's
+ * `account/rateLimits/read` in `usage/limits`).
  */
 export type UsageLimitWindow = {
 	/**
-	 * The vendor's name for the window, such as `five_hour`, `seven_day`, `primary`, or
-	 * `secondary`.
+	 * The vendor's name for the window, such as `five_hour`, `seven_day`, `seven_day_opus`,
+	 * `primary`, or `secondary`. `usage/limits` names Codex's five-hour and weekly windows
+	 * `five_hour` and `seven_day`, as Claude's are.
 	 */
 	window: string,
 	/**
@@ -1691,6 +1698,41 @@ export type UsageProblem = {
  * A newer plxd may send sources that are not listed here. Treat those as unknown.
  */
 export type UsageSource = "ccusage" | "cursor";
+
+/**
+ * Params of `usage/limits`.
+ */
+export type UsageLimitsParams = Record<symbol, never>;
+
+/**
+ * Result of `usage/limits`.
+ */
+export type UsageLimitsResult = {
+	/**
+	 * Every subscription account whose CLI reports limits and could be started, in no
+	 * particular order.
+	 */
+	accounts: Array<AccountLimits>,
+};
+
+/**
+ * One subscription account's limit windows, as its CLI reports them now.
+ */
+export type AccountLimits = {
+	/**
+	 * plxd's id for the account: its backend's name, such as `claude`.
+	 */
+	accountId: string,
+	/**
+	 * The windows. Empty when the account has none, such as an API key login, or when
+	 * `problem` says why the CLI didn't answer.
+	 */
+	limits: Array<UsageLimitWindow>,
+	/**
+	 * Why the CLI didn't report its windows, for people.
+	 */
+	problem?: string,
+};
 
 /**
  * Params of `accounts/defaults/get`.

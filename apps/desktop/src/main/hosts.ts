@@ -60,6 +60,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "usage/get": true,
   "usage/history": true,
   "usage/daily": true,
+  "usage/limits": true,
   "accounts/defaults/get": true,
   "accounts/defaults/set": true,
   "context/list": true,

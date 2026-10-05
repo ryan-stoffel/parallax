@@ -174,6 +174,7 @@ pub(crate) use self::stream::version as parse_version;
 use self::stream::{Ask, Step, Translator, TurnDone};
 use super::commands::{self, CommandsProbe};
 use super::event::{Event, Failure, FailureKind, Outcome, WarningKind};
+use super::limits::{self, LimitsProbe};
 use super::process::{
     CancelPolicy, Environment, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, Signal,
     SpawnError, StdinMode, StdinPipe,
@@ -1013,6 +1014,38 @@ impl Backend for ClaudeBackend {
                 "request": {"subtype": "initialize"},
             })],
             parse: commands::claude,
+        }))
+    }
+
+    /// `claude -p` in stream-json on this backend's login, with hooks and MCP servers off,
+    /// asked for `get_usage` ([`limits::claude`]).
+    fn limits(&self, cwd: &Path) -> Result<Option<LimitsProbe>, StartError> {
+        let (mut spec, _) = self.spec(cwd, &Credential::Subscription { config_home: None })?;
+        spec.args = BASE_ARGS.iter().map(OsString::from).collect();
+        spec.args.extend(self.overrides.args.iter().cloned());
+        spec.args.extend(
+            [
+                "--strict-mcp-config",
+                "--settings",
+                r#"{"disableAllHooks":true}"#,
+            ]
+            .map(OsString::from),
+        );
+        Ok(Some(LimitsProbe {
+            process: self.launcher.spawn(&spec)?,
+            input: vec![
+                json!({
+                    "type": "control_request",
+                    "request_id": "initialize",
+                    "request": {"subtype": "initialize"},
+                }),
+                json!({
+                    "type": "control_request",
+                    "request_id": limits::CLAUDE_REQUEST_ID,
+                    "request": {"subtype": "get_usage", "skip_behaviors": true},
+                }),
+            ],
+            parse: limits::claude,
         }))
     }
 

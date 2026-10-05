@@ -1,0 +1,38 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "usage/limits",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "accounts": [
+        {
+          "accountId": "claude",
+          "limits": [
+            {
+              "window": "five_hour",
+              "usedPercent": 5.0,
+              "resetsAt": "2026-10-05T19:10:00Z",
+              "capturedAt": "2026-10-05T14:40:00Z"
+            },
+            {
+              "window": "seven_day_fable",
+              "usedPercent": 0.0,
+              "resetsAt": "2026-10-11T19:00:00Z",
+              "capturedAt": "2026-10-05T14:40:00Z"
+            }
+          ]
+        },
+        {
+          "accountId": "codex",
+          "limits": [],
+          "problem": "it exited before listing them: not signed in"
+        }
+      ]
+    }
+  }
+]

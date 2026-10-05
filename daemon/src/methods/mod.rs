@@ -43,7 +43,7 @@ use parallax_protocol::methods::{
     HostSettingsGet, HostSettingsSet, HostVersion, InboxList, InboxSeen, Initialize, PrAct, PrDiff,
     PrLink, PrUnlink, PrView, ProjectCreate, ProjectDelete, ProjectFromThreads, ProjectList,
     ProjectStart, ProjectUpdate, ProvidersList, ProvidersRemove, ProvidersSave, RequestMethod,
-    UsageDaily, UsageGet, UsageHistory,
+    UsageDaily, UsageGet, UsageHistory, UsageLimits,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -234,6 +234,9 @@ async fn usage_method(context: &Context, request: &Request) -> Option<Result<Val
             handle::<UsageHistory, _, _>(request, |p| usage::history(context, p)).await
         }
         UsageDaily::NAME => handle::<UsageDaily, _, _>(request, |p| usage::daily(context, p)).await,
+        UsageLimits::NAME => {
+            handle::<UsageLimits, _, _>(request, |p| usage::limits(context, p)).await
+        }
         _ => return None,
     })
 }
