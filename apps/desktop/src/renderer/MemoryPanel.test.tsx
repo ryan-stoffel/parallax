@@ -77,15 +77,18 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
   return { logId: "log-1", result: {} };
 });
 
+const subscribe = vi.fn<ParallaxBridge["subscribe"]>(() => () => {});
+
 beforeEach(() => {
   request.mockClear();
+  subscribe.mockClear();
   lists = {};
   bodies = {};
   failing = new Set();
   window.parallax = {
     platform: "darwin",
     request,
-    subscribe: () => () => {},
+    subscribe,
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
@@ -112,6 +115,14 @@ const click = async (text: string) => {
 };
 const calls = (method: string) =>
   request.mock.calls.filter(([, m]) => m === method).map(([, , params]) => params);
+
+test("watches the Repo and Project folders for context.changed, without their runs' output", async () => {
+  await render();
+  expect(subscribe.mock.calls.map(([, params]) => params)).toEqual([
+    { after: 1, project: "r-1", shell: true, logId: "log-1" },
+    { after: 1, project: "p-1", shell: true, logId: "log-1" },
+  ]);
+});
 
 test("a proposal saves as an entry at its folder's scope, keeping its title and source", async () => {
   lists = {

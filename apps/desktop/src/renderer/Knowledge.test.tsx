@@ -192,6 +192,19 @@ test("Where it stands is the status board as checklists: a lead and a detail per
   expect(section("Where it stands").textContent).not.toContain("Older items");
 });
 
+test("context and memory follow their folders' events without the runs' output", async () => {
+  const subscribe = vi.spyOn(window.parallax, "subscribe");
+  await render("h-shell");
+  // The Project's context, and memory's Repo and Project folders, in any order.
+  const params = subscribe.mock.calls.map(([, p]) => p);
+  expect(params.map((p) => p.project ?? "").sort((a, b) => a.localeCompare(b))).toEqual([
+    "p-1",
+    "p-1",
+    "r-1",
+  ]);
+  expect(params.every((p) => p.shell === true && p.after === 1)).toBe(true);
+});
+
 test("idle agents leave Now as open circles", async () => {
   await render("h-idle");
   expect(section("Now").querySelector("li svg")!.classList).toContain("lucide-circle");
