@@ -55,7 +55,7 @@ export function TerminalView({
       const family = style.getPropertyValue("--code-font").trim();
       return {
         // Last, the bundled Nerd Font icons (index.css), for the glyphs no system font has.
-        fontFamily: `${family && `${family}, `}ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace, "Symbols Nerd Font Mono"`,
+        fontFamily: `${family && `${family}, `}"JetBrains Mono Nerd Font", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace, "Symbols Nerd Font Mono"`,
         fontSize: Number(style.getPropertyValue("--code-size")) || 12,
       };
     };
@@ -107,7 +107,7 @@ export function TerminalView({
     // The shell starts once the Nerd Font icons have loaded: xterm.js measures a glyph's width
     // once, so an icon drawn before its font arrives would stay a cell off.
     void document.fonts
-      .load('12px "Symbols Nerd Font Mono"', "\ue0a0")
+      .load('12px "JetBrains Mono Nerd Font"', "\ue0a0")
       .catch(() => {})
       .then(() =>
         live ? window.parallax.openTerminal(id, opened.current, term.cols, term.rows) : undefined,
