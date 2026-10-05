@@ -318,7 +318,7 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
  * events never change it.
  */
 export function rebuild(t: Transcript, events: LoggedEvent[], runId: string): Transcript {
-  const all = applyCompacted(events);
+  const all = mergeHeld([], events);
   const built = applyEventsInner({ ...emptyTranscript, run: t.run }, all, runId);
   return { ...built, run: t.run, seq: Math.max(t.seq, built.seq), events: all };
 }

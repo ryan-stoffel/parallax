@@ -226,6 +226,28 @@ test("a compacted row replaces raw batches of that turn and builds the same item
   expect(of(t.items, "assistant")).toHaveLength(1);
 });
 
+test("an overlapping compacted older page keeps notices in sequence (PLX-491)", () => {
+  const started = { kind: "turnStarted" as const, turnId: uuidv7(), text: "Hi" };
+  const first = output(started);
+  const notice = at({ kind: "agent.wakeupsPaused", runId });
+  const raw = output({ kind: "textDelta", text: "Hel" });
+  const last = output({ kind: "text", text: "Hello" });
+  const folded: LoggedEvent = {
+    ...last,
+    event: {
+      kind: "agent.output",
+      runId,
+      items: [started, { kind: "text", text: "Hello" }],
+      compacted: { from: first.seq },
+    },
+  };
+  const held = build(notice, raw, last);
+  const rebuilt = rebuild(held, [first, folded, notice, raw, last, notice], runId);
+  expect(of(rebuilt.items, "notice")).toHaveLength(1);
+  expect(rebuilt.events).toEqual([notice, folded]);
+  expect(of(rebuilt.items, "assistant").map((item) => item.text)).toEqual(["Hello"]);
+});
+
 test("compaction preserves messages on either side of a tool (PLX-491)", () => {
   const items: AgentOutputItem[] = [
     { kind: "textDelta", text: "Hi" },

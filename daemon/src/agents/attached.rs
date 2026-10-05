@@ -121,10 +121,12 @@ fn summary_from(db: &Store, id: RunId) -> Result<String, StoreError> {
     let mut before = u64::MAX;
     loop {
         let (page, more) = db.run_events_before(id.into(), before, PAGE_EVENTS, usize::MAX)?;
+        let page_before = before;
         if let Some(oldest) = page.iter().rfind(|event| event.seq < before) {
             before = oldest.seq;
         }
-        for stored in page {
+        // Older pages may inject a covering compacted row already read on a newer page.
+        for stored in page.into_iter().filter(|event| event.seq < page_before) {
             events.push_front(
                 serde_json::from_str(&stored.payload).unwrap_or(ParallaxEvent::Unknown),
             );
@@ -141,10 +143,11 @@ fn summary_from_log(log: &EventLog, id: RunId) -> Result<String, StoreError> {
     let mut before = u64::MAX;
     loop {
         let (page, more) = log.run_events_before(id, before, PAGE_EVENTS, usize::MAX)?;
+        let page_before = before;
         if let Some(oldest) = page.iter().rfind(|entry| entry.seq < before) {
             before = oldest.seq;
         }
-        for entry in page {
+        for entry in page.into_iter().filter(|event| event.seq < page_before) {
             events.push_front(entry.event.clone());
         }
         let summary = conversation(events.make_contiguous(), SUMMARY_BYTES);
@@ -163,6 +166,52 @@ mod tests {
 
     use super::{LEFT_OUT, PAGE_EVENTS, SUMMARY_BYTES, summary};
     use crate::server::Daemon;
+
+    /// Recovery rows injected on older pages must not repeat an already read turn.
+    #[tokio::test]
+    async fn a_compacted_turn_spanning_summary_pages_is_included_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let id = RunId::generate();
+        let first = daemon
+            .store
+            .append(
+                Timestamp::now(),
+                None,
+                ParallaxEvent::AgentOutput {
+                    run_id: id,
+                    items: vec![],
+                    compacted: None,
+                },
+            )
+            .await;
+        for _ in 0..=PAGE_EVENTS {
+            daemon
+                .store
+                .append(
+                    Timestamp::now(),
+                    None,
+                    ParallaxEvent::AgentWakeupsPaused { run_id: id },
+                )
+                .await;
+        }
+        daemon
+            .store
+            .append(
+                Timestamp::now(),
+                None,
+                ParallaxEvent::AgentOutput {
+                    run_id: id,
+                    items: vec![AgentOutputItem::Text {
+                        message_id: None,
+                        text: "Hello".to_owned(),
+                    }],
+                    compacted: Some(parallax_protocol::Compacted { from: first }),
+                },
+            )
+            .await;
+        assert_eq!(summary(&daemon, id).await.unwrap(), "Agent:\nHello");
+    }
 
     /// A thread longer than the cap is read newest first, here two pages of its three, and keeps
     /// its latest messages. A short one is read whole.
