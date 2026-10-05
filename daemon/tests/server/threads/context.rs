@@ -188,10 +188,9 @@ async fn a_summary_is_capped_and_an_unknown_thread_is_refused() {
     host.server.stop().await;
 }
 
-/// `thread/search` finds threads by their messages once a turn ends, the best match first, up
-/// to its limit.
+/// `thread/search` finds threads by their messages, the newest first, up to its limit.
 #[tokio::test]
-async fn thread_search_finds_threads_by_their_messages_best_match_first() {
+async fn thread_search_finds_threads_by_their_messages_newest_first() {
     let (host, _) = recording();
     let mut client = host.client().await;
     let flaky = client
@@ -215,16 +214,12 @@ async fn thread_search_finds_threads_by_their_messages_best_match_first() {
         .call::<ThreadSearch>(search("flaky", None))
         .await
         .unwrap();
-    assert_eq!(
-        ids(found.threads),
-        [flaky, sidebar],
-        "the shorter message ranks higher"
-    );
+    assert_eq!(ids(found.threads), [sidebar, flaky], "newest first");
     let found = client
         .call::<ThreadSearch>(search("flaky", Some(1)))
         .await
         .unwrap();
-    assert_eq!(ids(found.threads), [flaky]);
+    assert_eq!(ids(found.threads), [sidebar]);
     let empty = client
         .call::<ThreadSearch>(search("  ", None))
         .await

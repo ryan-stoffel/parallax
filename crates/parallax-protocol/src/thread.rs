@@ -324,8 +324,9 @@ pub struct ThreadStartParams {
 ///
 /// Matches a thread whose title contains `query`, or whose messages hold every word of it: the
 /// user's, Parallax's wake-ups, and the agent's replies, but not its tool calls. A word matches
-/// any word it starts, ignoring case, accents, and punctuation (PLX-487). A message is
-/// searchable once its turn ends. An empty query fails with `invalidParams`.
+/// any word it starts, ignoring case, accents, and punctuation (PLX-487). The user's message is
+/// searchable once it's sent, and the agent's replies once their turn ends. An empty query
+/// fails with `invalidParams`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSearchParams {
@@ -341,8 +342,7 @@ pub struct ThreadSearchParams {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSearchResult {
-    /// The matching threads: title matches first, then the best match by `bm25`, then the one
-    /// with the newest message.
+    /// The matching threads: title matches first, then the one with the newest message.
     pub threads: Vec<Thread>,
 }
 

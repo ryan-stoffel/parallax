@@ -1035,7 +1035,7 @@ fn remove_scratch(daemon: &Daemon, run_id: RunId, dir: &Path) {
 }
 
 /// `thread/search` (PLX-372, PLX-487): the threads whose title or messages match the query,
-/// trimmed, the best match first.
+/// trimmed, title matches first, then the one with the newest message.
 pub(crate) async fn search(
     daemon: &Arc<Daemon>,
     params: ThreadSearchParams,

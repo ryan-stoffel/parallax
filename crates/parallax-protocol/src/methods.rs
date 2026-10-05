@@ -319,8 +319,9 @@ method_table! {
         /// github.com, and as whom (PLX-336). Read-only and never prompts. Gated on the
         /// `githubStatus` capability.
         GithubStatusGet = "github/status": GithubStatusParams => GithubStatus;
-        /// `thread/search`: the host's threads whose title or messages match a query, the best
-        /// match first (PLX-372, PLX-487). Gated on the `threadContext` capability.
+        /// `thread/search`: the host's threads whose title or messages match a query, title
+        /// matches first, then the one with the newest message (PLX-372, PLX-487). Gated on the
+        /// `threadContext` capability.
         ThreadSearch = "thread/search": ThreadSearchParams => ThreadSearchResult;
         /// `agent/resumeNow`: resumes a run waiting for its usage limit to reset now (PLX-371,
         /// decision 0049). Gated on the `autoResume` capability, like `agent/autoResume` and

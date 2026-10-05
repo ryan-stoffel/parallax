@@ -268,7 +268,6 @@ fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
             data: "iVBORw0KGgo=".to_owned(),
         };
         store.add_images(run, &[(image, stored)]).unwrap();
-        store.index_run_text(run).unwrap();
     }
 
     assert!(store.delete_thread(gone).unwrap());
@@ -373,11 +372,9 @@ fn search_matches_titles_prompts_turns_and_replies_but_not_tool_calls() {
     let mut threads = Threads::new(&mut store);
     let prompted = threads.thread(&mut store, "Fix the flaky attach test.");
     let followed_up = threads.thread(&mut store, "Rename the sidebar");
-    threads.output(
-        &store,
-        followed_up,
-        r#"[{"kind":"turnStarted","text":"Also the 50% case"}]"#,
-    );
+    store
+        .record_turn(followed_up, Uuid::now_v7(), "Also the 50% case")
+        .unwrap();
     let replied = threads.thread(&mut store, "Look into CI");
     threads.output(
         &store,
@@ -397,58 +394,40 @@ fn search_matches_titles_prompts_turns_and_replies_but_not_tool_calls() {
         ..ThreadUpdate::default()
     };
     store.update_thread(titled, &title).unwrap();
-    assert!(
-        found(&store, "flaky", 10).is_empty(),
-        "a run's text is indexed when its turn ends"
+    assert_eq!(
+        found(&store, "flaky", 10),
+        [prompted],
+        "a prompt is searchable as it's stored, a reply when its turn ends"
     );
-    for run in [prompted, followed_up, replied, tool_only, titled] {
+    assert_eq!(found(&store, "50%", 10), [followed_up], "a sent turn, too");
+    for run in [replied, tool_only] {
         store.index_run_text(run).unwrap();
     }
 
     assert_eq!(
         found(&store, "FLAKY", 10),
-        [prompted, replied],
-        "case-insensitive, the shorter message first, and a tool call's text doesn't count"
+        [replied, prompted],
+        "case-insensitive, newest message first, and a tool call's text doesn't count"
     );
     assert_eq!(
         found(&store, "fla", 10),
-        [prompted, replied],
+        [replied, prompted],
         "a word prefix"
     );
-    assert_eq!(
-        found(&store, "50%", 10),
-        [followed_up],
-        "a follow-up matches"
-    );
-    assert_eq!(found(&store, "flaky", 1), [prompted], "the limit holds");
+    assert_eq!(found(&store, "flaky", 1), [replied], "the limit holds");
     assert_eq!(
         found(&store, "attach test", 10),
-        [titled, prompted, replied],
+        [titled, replied, prompted],
         "a title matches, first"
     );
 }
 
-#[test]
-fn search_ranks_by_bm25_then_newest() {
-    let (_dir, mut store) = open();
-    let threads = Threads::new(&mut store);
-    let long = "Look at the flaky test and then rename the sidebar and the menu";
-    let often = threads.thread(&mut store, "The flaky test is flaky again, so flaky");
-    let once = threads.thread(&mut store, long);
-    let same = threads.thread(&mut store, long);
-    for run in [often, once, same] {
-        store.index_run_text(run).unwrap();
-    }
-    assert_eq!(found(&store, "flaky", 10), [often, same, once]);
-}
-
-/// Quotes and FTS5 operators in a query are plain text: they never fail a search.
+/// Quotes, FTS5 operators, and a NUL in a query are plain text: they never fail a search.
 #[test]
 fn search_takes_quotes_and_operators_as_text() {
     let (_dir, mut store) = open();
     let threads = Threads::new(&mut store);
     let run = threads.thread(&mut store, "Fix the \"flaky\" attach test (again)");
-    store.index_run_text(run).unwrap();
 
     for query in [
         "\"flaky\"",
@@ -460,25 +439,25 @@ fn search_takes_quotes_and_operators_as_text() {
         "'flaky'",
         "flaky !",
         "\"flaky attach\"",
+        "flaky\0",
+        "\0flaky\0attach",
     ] {
         assert_eq!(found(&store, query, 10), [run], "{query}");
     }
     for query in [
-        "\"", "*", "(", "%", "\"\" OR", "AND", "NEAR(x", "text:x", "x NOT",
+        "\"", "*", "(", "%", "\"\" OR", "AND", "NEAR(x", "text:x", "x NOT", "\0",
     ] {
         assert!(found(&store, query, 10).is_empty(), "{query}");
     }
 }
 
-/// A turn's text becomes searchable when the turn ends, once however often it's indexed.
+/// A turn's replies become searchable when the turn ends, once however often it's indexed.
 #[test]
 fn a_new_turn_becomes_searchable_when_it_ends() {
     let (dir, mut store) = open();
     let path = dir.path().join("parallax.sqlite3");
     let mut threads = Threads::new(&mut store);
     let run = threads.thread(&mut store, "Look into CI");
-    store.index_run_text(run).unwrap();
-    assert_eq!(found(&store, "CI", 10), [run], "the prompt alone");
 
     threads.output(
         &store,
@@ -494,14 +473,18 @@ fn a_new_turn_becomes_searchable_when_it_ends() {
     store.index_run_text(run).unwrap();
     assert_eq!(found(&store, "stale", 10), [run]);
     store.index_run_text(run).unwrap();
+    store
+        .record_turn(run, Uuid::now_v7(), "Now the sidebar")
+        .unwrap();
+    store.index_run_text(run).unwrap();
     assert_eq!(
         indexed_rows(&path),
-        2,
-        "the prompt, then the turn, and nothing again"
+        3,
+        "the prompt, the turn's replies, and the follow-up, each once"
     );
 }
 
-/// Migration 36 indexes a store's existing runs from their events.
+/// Migration 36 indexes a store's existing runs from their prompts, turns, and events.
 #[test]
 fn the_search_index_is_backfilled_from_existing_events() {
     let dir = tempfile::tempdir().unwrap();
@@ -514,6 +497,9 @@ fn the_search_index_is_backfilled_from_existing_events() {
         run,
         r#"[{"kind":"text","text":"The cache was stale"}]"#,
     );
+    store
+        .record_turn(run, Uuid::now_v7(), "Now the sidebar")
+        .unwrap();
     threads.output(
         &store,
         run,
@@ -526,6 +512,7 @@ fn the_search_index_is_backfilled_from_existing_events() {
         .unwrap()
         .execute_batch(
             "DROP TABLE thread_text_fts; DROP TABLE thread_text;
+             DROP TRIGGER thread_text_prompt; DROP TRIGGER thread_text_turn;
              DELETE FROM schema_version WHERE version = 36;",
         )
         .unwrap();
@@ -539,8 +526,8 @@ fn the_search_index_is_backfilled_from_existing_events() {
     store.index_run_text(run).unwrap();
     assert_eq!(
         indexed_rows(&path),
-        2,
-        "the backfill covers the events it read"
+        4,
+        "two prompts, the turn, and the replies, which the backfill covered"
     );
 }
 

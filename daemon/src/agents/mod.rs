@@ -1727,6 +1727,8 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
                 ..row.state.clone()
             };
             let row = db.update_run(row.id, &state).map_err(|e| store_error(&e))?;
+            // Its last turn never ended, so its replies aren't searchable yet (PLX-487).
+            db.index_run_text(row.id).map_err(|e| store_error(&e))?;
             let worktree = db.get_worktree(row.id).map_err(|e| store_error(&e))?;
             recovered.push(agent_run(&row, worktree.as_ref())?);
         }
