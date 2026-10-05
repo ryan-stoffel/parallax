@@ -1060,7 +1060,7 @@ test("a Project's first message starts its coordinator; later ones and Stop go t
   await openEmber();
   // Claude's models and permission modes: a coordinator runs in the mode it's given (0027).
   expect(button("Model: Claude Opus 5.5")).not.toBeNull();
-  expect(button("Access: Accept Edits")).not.toBeNull();
+  expect(button("Access: Auto-accept edits")).not.toBeNull();
   // Without projectTasks every message goes to the coordinator, with no New task.
   expect(document.querySelector('main fieldset[aria-label="Send as"]')).toBeNull();
 

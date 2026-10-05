@@ -9,6 +9,7 @@ import type { SettingsSection } from "./App";
 import { models } from "./models";
 import { behaviorDefaults, behaviorPrefs, setBehaviorPrefs } from "./prefs";
 import { Settings } from "./Settings";
+import { accessDefaults, accessPrefs } from "./accessPrefs";
 import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
 import { appShortcut } from "./ui";
 
@@ -1036,4 +1037,18 @@ test("General's New threads and Behavior settings are kept (PLX-538)", async () 
   expect(select("Time format").value).toBe("system");
   expect(section("New threads").textContent).toContain("Permissions");
   setBehaviorPrefs(behaviorDefaults);
+});
+
+test("General's Legacy Plan mode switch lists Plan in the Access picker", async () => {
+  accessPrefs.set(accessDefaults);
+  window.parallax.openTargets = async () => [];
+  window.parallax.version = async () => "1.2.3";
+  await renderSettings("general");
+  const legacy = document.querySelector<HTMLButtonElement>(
+    '[role="switch"][aria-label="Legacy Plan mode"]',
+  )!;
+  expect(legacy.getAttribute("aria-checked")).toBe("false");
+  await click(legacy);
+  expect(accessPrefs.get()).toEqual({ legacyPlan: true });
+  accessPrefs.set(accessDefaults);
 });

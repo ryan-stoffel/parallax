@@ -17,6 +17,7 @@ import {
   type BehaviorPrefs,
 } from "../prefs";
 import { workspaces } from "../RunTargetMenu";
+import { accessPrefs } from "../accessPrefs";
 import { archivePageSize, sidebarPrefs, type SidebarPrefs } from "../sidebarPrefs";
 import { Picker } from "../ui";
 import { notices } from "./licenses";
@@ -68,6 +69,18 @@ export function GeneralSettings() {
             label="Archive pages"
             checked={sidebar.pageArchived}
             onChange={(pageArchived) => setSidebar({ pageArchived })}
+          />
+        </Row>
+      </Section>
+      <Section title="Access">
+        <Row
+          title="Legacy Plan mode"
+          description="List Plan in the Access picker. A thread already in Plan keeps it either way."
+        >
+          <Switch
+            label="Legacy Plan mode"
+            checked={accessPrefs.use().legacyPlan}
+            onChange={(legacyPlan) => accessPrefs.set({ legacyPlan })}
           />
         </Row>
       </Section>
@@ -148,7 +161,9 @@ function NewThreads() {
     choices.find((m) => m.provider === prefs.model?.provider && m.id === prefs.model.id) ??
     choices[0];
   const instance = catalog.instances.find((i) => i.id === model?.provider);
-  const permissions = instance?.permissions ?? [];
+  // Plan is legacy: listed only while Legacy Plan mode is on (accessPrefs).
+  const legacyPlan = accessPrefs.use().legacyPlan;
+  const permissions = (instance?.permissions ?? []).filter((p) => p !== "plan" || legacyPlan);
   const permission = permissions.includes(prefs.permission) ? prefs.permission : "edit";
   const contexts = model?.contexts ?? [];
   const context =

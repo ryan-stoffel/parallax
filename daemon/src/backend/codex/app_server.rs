@@ -71,12 +71,12 @@ use crate::backend::{
     check_argument,
 };
 
-/// The permissions a thread maps, in Claude Code's picker order (0027): Codex's own presets
+/// The permissions a thread maps, in the picker's order (0027, 0054): Codex's own presets
 /// ([`mode`]). Plan is Codex's experimental collaboration mode, which plxd doesn't run (0035).
 pub const PERMISSIONS: &[AgentPermission] = &[
-    AgentPermission::Auto,
     AgentPermission::Manual,
     AgentPermission::Edit,
+    AgentPermission::Auto,
     AgentPermission::Bypass,
 ];
 

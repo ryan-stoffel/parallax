@@ -4,10 +4,10 @@ import {
   FilePen,
   Hand,
   ListChecks,
+  LockOpen,
   LoaderCircle,
   MessagesSquare,
   Paperclip,
-  ShieldOff,
   Sparkles,
   Square,
   X,
@@ -37,6 +37,7 @@ import type {
 } from "../protocol/generated/protocol";
 import { lastPrompt } from "./attention";
 import { EffortMenu } from "./EffortMenu";
+import { accessPrefs } from "./accessPrefs";
 import { imageUrl, readImage, type ImageCaps } from "./images";
 import { useShortcutLabel } from "./keybindings";
 import { ModelMenu } from "./ModelMenu";
@@ -47,28 +48,28 @@ import { lookOf, ThreadChip, type AttachThreads } from "./threadContext";
 import { draggedThread, threadDragType } from "./threadDrag";
 import { appShortcut, menuButton, menuItem, Picker, type PickerOption } from "./ui";
 
-// Claude Code's permission modes, under its own names (0027). A thread is full Claude Code in
-// every mode (0034), and a project's worker keeps its sandbox in every mode but Bypass (0013).
-// What would prompt comes to the chat as approval cards (PLX-196), unless the run can't send them
-// (`manualDenied`).
+// One set of access levels for every provider (0054), from most to least supervised. Each backend
+// maps the ones it can honor, and a thread is full Claude Code in every mode (0034). A project's
+// worker keeps its sandbox in every mode but Full access (0013). What would prompt comes to the
+// chat as approval cards (PLX-196), unless the run can't send them (`manualDenied`).
 export const accessOptions: Record<AgentPermission, PickerOption> = {
+  manual: {
+    value: "manual",
+    label: "Supervised",
+    icon: <Hand />,
+    description: "Asks you before commands and file changes.",
+  },
+  edit: {
+    value: "edit",
+    label: "Auto-accept edits",
+    icon: <FilePen />,
+    description: "Accepts file edits, asks before other actions.",
+  },
   auto: {
     value: "auto",
     label: "Auto",
     icon: <Sparkles />,
-    description: "A classifier approves or blocks each action instead of asking you.",
-  },
-  manual: {
-    value: "manual",
-    label: "Manual",
-    icon: <Hand />,
-    description: "Asks you before edits and commands.",
-  },
-  edit: {
-    value: "edit",
-    label: "Accept Edits",
-    icon: <FilePen />,
-    description: "Accepts file edits without asking.",
+    description: "The provider approves routine actions for you and blocks the risky ones.",
   },
   plan: {
     value: "plan",
@@ -78,9 +79,9 @@ export const accessOptions: Record<AgentPermission, PickerOption> = {
   },
   bypass: {
     value: "bypass",
-    label: "Bypass Permissions",
-    icon: <ShieldOff />,
-    description: "Skips every permission check.",
+    label: "Full access",
+    icon: <LockOpen />,
+    description: "Runs commands and edits files without asking.",
   },
 };
 
@@ -177,7 +178,7 @@ const toMarkdown = (node: ProseMirrorNode) =>
 const hasText = (html: string) =>
   !!new DOMParser().parseFromString(html, "text/html").body.textContent?.trim();
 
-/** Manual's description where its requests are denied, by why (`ComposerProps.manualDenied`). */
+/** Supervised's description where its requests are denied, by why (`ComposerProps.manualDenied`). */
 const manualDenials = {
   host: "Asks before edits and commands. This host's plxd can't show those requests, so they're denied.",
   run: "Asks before edits and commands. This chat started before Parallax could show those requests, so they're denied.",
@@ -359,7 +360,7 @@ export interface ComposerProps {
   /** The host's image caps (`promptImages`). Absent: adding an image just says it can't take them. */
   imageCaps?: ImageCaps;
   /**
-   * Why Manual's requests are denied instead of coming to the chat (0031): the host's plxd lacks
+   * Why Supervised's requests are denied instead of coming to the chat (0031): the host's plxd lacks
    * `approvals`, or the open run started without them. Absent: they come as approval cards.
    */
   manualDenied?: keyof typeof manualDenials;
@@ -534,8 +535,14 @@ export function Composer({
   // Where the message goes: the run's backend, or the instance that runs the picked model.
   const target = run && model && model.provider !== run.id ? model.provider : backend;
   const targetBackend = instanceOf(target);
+  // Plan is legacy: listed only when Settings turns it on, or the thread already started in it.
+  const legacyPlan = accessPrefs.use().legacyPlan;
   // A Project's mode isn't a choice here.
-  const permissions = projectMode ? [] : (targetBackend?.permissions ?? []);
+  const permissions = projectMode
+    ? []
+    : (targetBackend?.permissions ?? []).filter(
+        (p) => p !== "plan" || legacyPlan || started?.permission === "plan",
+      );
   // A backend that maps no efforts (Cursor) gets none, and shows no effort menu.
   const efforts = targetBackend?.efforts !== false;
   const startedEffort = started?.effort ?? (fresh ? defaults.effort : "high");
