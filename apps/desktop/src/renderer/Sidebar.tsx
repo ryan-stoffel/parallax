@@ -1292,9 +1292,10 @@ function ProjectRow({
         >
           <p className="text-[13px] font-medium">Full access</p>
           <p className="mt-1 text-[12.5px] text-muted-foreground">
-            Agents in this Project run commands and edit files without asking, as in new Projects.
-            Agents on Cursor, Grok Build, Hermes Agent, Ollama Cloud, OpenRouter, and local models
-            need it. You can't switch back.
+            New agents in this Project run commands and edit files without asking, as in new
+            Projects. Agents running now keep asking until they next start. Agents on Cursor, Grok
+            Build, Hermes Agent, Ollama Cloud, OpenRouter, and local models need it. You can't
+            switch back.
           </p>
         </SettingDialog>
       )}

@@ -975,12 +975,12 @@ test("with projectPermission, a Project not in Bypass offers Full access…, a o
   });
   await renderApp();
   expect(menuItem("photon", "Full access…")).toBeUndefined();
-  expect(menuItem("photon", "Permissions…")).toBeUndefined();
   const access = projectRow("ember").querySelector<HTMLDialogElement>(
     'dialog[aria-label="ember full access"]',
   )!;
   await click(menuItem("ember", "Full access…"));
   expect(access.open).toBe(true);
+  expect(access.textContent).toContain("Agents running now keep asking until they next start.");
   expect(access.textContent).toContain("You can't switch back.");
   expect(modeChoice(access)).toEqual([]);
   await click(
@@ -991,10 +991,10 @@ test("with projectPermission, a Project not in Bypass offers Full access…, a o
   expect(menuItem("ember", "Full access…")).toBeUndefined();
 });
 
-test("without projectPermission, Create Project shows no mode and sends none, and a row has no Permissions…", async () => {
+test("without projectPermission, Create Project shows no mode and sends none, and a row has no Full access…", async () => {
   capabilities = { projectEdit: {} };
   await renderApp();
-  expect(menuItem("ember", "Permissions…")).toBeUndefined();
+  expect(menuItem("ember", "Full access…")).toBeUndefined();
   expect(menuItem("ember", "Autonomy…")).toBeUndefined();
   await openNewProject();
   expect(modeChoice(dialog())).toEqual([]);
@@ -2133,10 +2133,12 @@ test("without projectDelete there's no Delete…, and another client's project.d
 });
 
 test("Autonomy… opens on the Project's level, one line on each, and Save sends the new one", async () => {
-  capabilities = { projectAutonomy: {} };
+  capabilities = { projectAutonomy: {}, projectPermission: {} };
   answers["project/list"] = () => ({
     result: {
-      projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), autonomy: "full" }],
+      projects: [
+        { ...project("ember", "2026-09-26T12:00:00Z"), autonomy: "full", permission: "bypass" },
+      ],
       seq: 7,
     },
   });
@@ -2144,7 +2146,8 @@ test("Autonomy… opens on the Project's level, one line on each, and Save sends
     result: { project: { ...project("ember", "2026-09-26T12:00:00Z"), autonomy: p["autonomy"] } },
   });
   await renderApp();
-  expect(menuItem("ember", "Permissions…")).toBeUndefined();
+  // A Project in Bypass offers no mode.
+  expect(menuItem("ember", "Full access…")).toBeUndefined();
   const settings = projectRow("ember").querySelector<HTMLDialogElement>(
     'dialog[aria-label="ember autonomy"]',
   )!;
