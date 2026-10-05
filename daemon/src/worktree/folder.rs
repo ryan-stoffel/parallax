@@ -38,7 +38,8 @@ pub struct PushError(pub String);
 
 impl WorktreeManager {
     /// The git state of `folder`: its branch, its uncommitted changes, untracked files included,
-    /// and how far it is ahead of its upstream. It takes no optional locks, so a turn's own git calls never trip over it.
+    /// and how far it is ahead of its upstream. It takes no optional locks, so a turn's own git
+    /// calls never trip over it.
     ///
     /// # Errors
     ///
