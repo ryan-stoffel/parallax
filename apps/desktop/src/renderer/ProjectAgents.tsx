@@ -86,7 +86,9 @@ export function useProjectAgents(
       const backlog = await waitingSince(hostId, list.result.runs, () => stopped);
       if (stopped) return;
       setAsked(trackApprovals({}, backlog));
-      const since = { after: list.result.seq, project, logId: list.logId };
+      // `shell`: of the runs' output, only their permission requests (PLX-453). An older plxd
+      // ignores it and sends it all.
+      const since = { after: list.result.seq, project, shell: true, logId: list.logId };
       unsubscribe = window.parallax.subscribe(hostId, since, (message) => {
         if (stopped) return;
         if (message.type === "resync") return void load();

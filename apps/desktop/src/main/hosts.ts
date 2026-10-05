@@ -187,20 +187,28 @@ export function startHosts(): void {
 
   ipcMain.handle("parallax:subscribe", (event, hostId: unknown, key: unknown, params: unknown) => {
     if (!isObject(params)) throw new Error("params must be an object");
-    const { after, project, logId } = params;
+    const { after, project, logId, run, shell } = params;
     if (typeof key !== "string") throw new Error("invalid subscription key");
     if (typeof logId !== "string") throw new Error("logId must be a string");
     if (typeof after !== "number" || !Number.isSafeInteger(after) || after < 0) {
       throw new Error("after must be a non-negative integer");
     }
     if (project !== undefined && typeof project !== "string") throw new Error("invalid project");
+    if (run !== undefined && typeof run !== "string") throw new Error("invalid run");
+    if (shell !== undefined && typeof shell !== "boolean") throw new Error("invalid shell");
     const host = connection(hostId);
     const sender = event.sender;
     // A reused key replaces its subscription instead of leaking the old one.
     windowSubscriptions(sender).get(key)?.();
     let ended = false;
     const unsubscribe = host.subscribe(
-      { after, logId, ...(project !== undefined && { project }) } satisfies SubscribeParams,
+      {
+        after,
+        logId,
+        ...(project !== undefined && { project }),
+        ...(run !== undefined && { run }),
+        ...(shell !== undefined && { shell }),
+      } satisfies SubscribeParams,
       (message) => {
         if (message.type !== "event") {
           ended = true;

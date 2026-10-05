@@ -55,9 +55,11 @@ export type SendOptions = Pick<
 
 /**
  * One run's transcript, kept live: pages through `agent/events`, then subscribes
- * to its scope's events from a fresh snapshot `seq`, and starts over on `resync`.
- * Loads only while `connected`; a reconnect loads again. Key the caller by host
- * and run, so another run starts from an empty transcript.
+ * to its own events in its scope from a fresh snapshot `seq` (an older plxd, without
+ * `eventFilters`, sends the whole scope's), and starts over on `resync`. Loads only
+ * while `connected`; a reconnect loads again, from a new snapshot, so a quiet run's
+ * old `seq` is never resubscribed from. Key the caller by host and run, so another
+ * run starts from an empty transcript.
  */
 export function useAgentRun(
   hostId: string,
@@ -134,7 +136,7 @@ export function useAgentRun(
       setError(undefined);
       unsubscribe = window.parallax.subscribe(
         hostId,
-        { after: Math.max(t.seq, snapshot), project: t.run.project, logId },
+        { after: Math.max(t.seq, snapshot), project: t.run.project, run: runId, logId },
         (message) => {
           if (stopped) return;
           if (message.type === "event") {
