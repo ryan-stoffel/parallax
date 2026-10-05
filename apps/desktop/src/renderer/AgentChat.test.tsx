@@ -138,8 +138,14 @@ test("in a fork, the history it copied is muted and offers no Fork, and the late
   // A copied message's logged time is the fork's, so it shows none.
   expect(document.querySelector("[data-copied] time")).toBeNull();
   const forks = () => [...document.querySelectorAll('button[aria-label="Fork from here"]')];
-  expect(forks()).toHaveLength(1);
-  expect(forks()[0]!.closest(".group\\/prompt")!.textContent).toContain("Build it");
+  // The prompt and the last reply of the turn that ended offer it, at that turn.
+  expect(forks().map((b) => b.closest(".group\\/prompt")!.textContent)).toEqual([
+    expect.stringContaining("Build it"),
+    expect.stringContaining("Built"),
+  ]);
+  expect(
+    forks()[1]!.closest(".group\\/prompt")!.querySelector('[aria-label="Copy message"]'),
+  ).not.toBeNull();
   const keep = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) =>
     b.textContent?.startsWith("Keep"),
   )!;

@@ -779,6 +779,17 @@ export function TranscriptView({
   };
   // A turn forks once it ends (0050), so the latest message offers no Fork while the run goes.
   const latest = view.findLastIndex((r) => r.kind === "user" || r.kind === "pending");
+  // The last reply of each turn, by row index, with the turn's id: where Fork and Copy sit.
+  const replies = useMemo(() => {
+    const byTurn = new Map<string | undefined, number>();
+    let turn: string | undefined;
+    view.forEach((row, i) => {
+      if (row.kind === "user" || row.kind === "pending")
+        turn = row.kind === "user" ? row.turnId : undefined;
+      else if (row.kind === "assistant") byTurn.set(turn, i);
+    });
+    return new Map([...byTurn].map(([id, i]) => [i, id]));
+  }, [view]);
 
   const virtualizer = useVirtualizer({
     count: view.length,
@@ -896,7 +907,8 @@ export function TranscriptView({
                     loadImage={loadImage}
                     sender={"from" in row && row.from ? titles?.[row.from] : undefined}
                     copied={muted}
-                    forkable={!muted && !(live && v.index === latest)}
+                    forkable={!muted && !(live && v.index >= latest)}
+                    reply={replies.has(v.index) ? { turnId: replies.get(v.index) } : undefined}
                   />
                 </div>
               </div>
@@ -984,6 +996,8 @@ interface RowProps {
   copied?: boolean;
   /** For a user's message: whether its turn can fork, where the chat offers Fork. */
   forkable?: boolean;
+  /** For an assistant message: set on a turn's last, which offers Copy and Fork at `turnId`. */
+  reply?: { turnId?: string };
 }
 
 /** A message Parallax or another thread sent, not the user (0025, 0041). */
@@ -1003,6 +1017,7 @@ export const RowView = memo(function RowView({
   sender,
   copied,
   forkable,
+  reply,
 }: RowProps) {
   switch (row.kind) {
     case "work":
@@ -1093,13 +1108,22 @@ export const RowView = memo(function RowView({
         </div>
       );
     }
-    case "assistant":
+    case "assistant": {
       // A long streaming message renders block by block. A short one renders whole, as when finished.
-      return row.partial && row.text.length >= SPLIT_FROM ? (
-        <StreamingMarkdown text={row.text} />
-      ) : (
-        <MarkdownText text={row.text} />
+      const body =
+        row.partial && row.text.length >= SPLIT_FROM ? (
+          <StreamingMarkdown text={row.text} />
+        ) : (
+          <MarkdownText text={row.text} />
+        );
+      if (!reply || row.partial) return body;
+      return (
+        <div className="group/prompt flex flex-col gap-1.5">
+          {body}
+          <PromptMeta text={row.text} fork={forkable && <ForkButton turnId={reply.turnId} />} />
+        </div>
       );
+    }
     case "reasoning":
       return (
         <Disclosure
