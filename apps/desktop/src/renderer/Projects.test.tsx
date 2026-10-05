@@ -73,6 +73,9 @@ const request = vi.fn(async (host: string, method: string, params: Record<string
     : { error: { code: -32601, message: `${method} isn't faked` } };
 });
 const pickFolder = vi.fn<() => Promise<string | null>>();
+const listFolders = vi.fn<ParallaxBridge["listFolders"]>();
+const createRepo = vi.fn<ParallaxBridge["createRepo"]>();
+const cloneRepo = vi.fn<ParallaxBridge["cloneRepo"]>();
 // Every subscription gets every event; each keeps what's its own.
 let listeners: Set<(message: SubscriptionMessage) => void>;
 const deliver = (message: SubscriptionMessage) => listeners.forEach((l) => l(message));
@@ -125,6 +128,9 @@ beforeEach(() => {
     },
     request,
     pickFolder,
+    listFolders,
+    createRepo,
+    cloneRepo,
     hosts: async () => sshHosts,
     onHosts: () => () => {},
     onLocalName: (listener: (name: string) => void) => {
@@ -170,7 +176,7 @@ const projectRows = () =>
 const crumbs = () =>
   [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
 const dialog = () =>
-  document.querySelector<HTMLDialogElement>('[aria-labelledby="new-project-title"]')!;
+  document.querySelector<HTMLDialogElement>('dialog[aria-label="New project or repository"]')!;
 const inDialog = (name: string) =>
   [...dialog().querySelectorAll("button")].find(
     (b) => b.textContent === name || b.getAttribute("aria-label") === name,
@@ -194,13 +200,18 @@ const press = (key: string) =>
     document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
   });
 
-/** The toolbar's New project or repository menu's items, by label. */
-const addMenuItems = () => [
-  ...document.querySelectorAll<HTMLButtonElement>(
-    '#sidebar [role="menu"][aria-label="New project or repository"] [role="menuitem"]',
-  ),
+/** The add palette's options, or the folders of its folder step, by name. */
+const paletteOptions = () => [
+  ...dialog().querySelectorAll<HTMLButtonElement>('[role="listbox"] [role="option"]'),
 ];
-const openNewProject = () => click(addMenuItems().find((b) => b.textContent === "New project…"));
+const paletteOption = (name: string) =>
+  paletteOptions().find((b) => b.textContent?.startsWith(name));
+const openPalette = () =>
+  click(document.querySelector('#sidebar button[aria-label="New project or repository"]'));
+const openNewProject = async () => {
+  await openPalette();
+  await click(paletteOption("New Project"));
+};
 const workspaceButton = () =>
   dialog().querySelector('button[aria-haspopup="menu"]')!.getAttribute("aria-label");
 const workspaceMenu = () =>
@@ -335,27 +346,153 @@ test("Create Project names it after its repository, shows plxd's error, retries 
   expect(projectRows()[0]).toBe("parallaxnow");
 });
 
-test("Choose folder… in the Workspace menu adds a folder on this computer and names the project after it until one is typed", async () => {
-  pickFolder.mockResolvedValue("/src/other");
+/** A folder listing for `listFolders`, under /Users/me. */
+const folders = (dir: string, names: string[]) => ({
+  path: dir,
+  folders: names.map((name) => ({ name, path: `${dir}/${name}` })),
+});
+const tree: Record<string, string[]> = {
+  "/Users/me": ["Desktop", "Developer", "Documents", ".config"],
+  "/Users/me/Developer": ["parallax", "photon"],
+};
+const listTree = async (input: string) => {
+  const dir = input.replace(/^~/, "/Users/me").replace(/\/$/, "");
+  return folders(dir, tree[dir] ?? []);
+};
+const field = () => dialog().querySelector<HTMLInputElement>("input")!;
+const action = (label: string) =>
+  [...dialog().querySelectorAll("button")].find((b) => b.textContent?.startsWith(label));
+const pressKey = (key: string, init: KeyboardEventInit = {}) =>
+  act(() => {
+    document.activeElement!.dispatchEvent(
+      new KeyboardEvent("keydown", { key, bubbles: true, ...init }),
+    );
+  });
+
+test("Local folder browses from ~/, filters as you type, opens with Enter, goes up with Backspace, and adds with Mod+Enter", async () => {
+  listFolders.mockImplementation(listTree);
   answers["repo/add"] = (p) => ({
-    result: { repo: { ...parallax, id: p["id"], name: "other", path: "/src/other" } },
+    result: { repo: { ...parallax, id: p["id"], name: "photon", path: p["path"] } },
+  });
+  await renderApp();
+  await openPalette();
+  expect(paletteOptions().map((o) => o.textContent)).toEqual([
+    "New repositoryStart an empty repository in ~/.parallax/projects",
+    "Local folderAdd a repository that's already on this computer",
+    "Clone from GitHubClone a repository by its owner/name",
+    "New ProjectA focused chat where agents coordinate work",
+  ]);
+  await click(paletteOption("Local folder"));
+  expect(field().value).toBe("~/");
+  expect(listFolders).toHaveBeenLastCalledWith("~/");
+  // Hidden folders show only once a "." is typed.
+  expect(paletteOptions().map((o) => o.textContent)).toEqual(["Desktop", "Developer", "Documents"]);
+
+  typeInto(field(), "~/dev");
+  expect(paletteOptions().map((o) => o.textContent)).toEqual(["Developer"]);
+  pressKey("Enter");
+  await settle();
+  expect(field().value).toBe("~/Developer/");
+  expect(listFolders).toHaveBeenLastCalledWith("~/Developer/");
+  expect(paletteOptions().map((o) => o.textContent)).toEqual(["parallax", "photon"]);
+
+  pressKey("Backspace");
+  await settle();
+  expect(field().value).toBe("~/");
+  typeInto(field(), "~/Developer/");
+  await settle();
+  pressKey("ArrowDown");
+  expect(paletteOption("photon")!.getAttribute("aria-selected")).toBe("true");
+  pressKey("Enter");
+  await settle();
+  expect(field().value).toBe("~/Developer/photon/");
+  // Enter only opens a folder; Mod+Enter adds the open one.
+  expect(calls("repo/add")).toEqual([]);
+  pressKey("Enter", { metaKey: true });
+  await settle();
+  expect(calls("repo/add")).toEqual([
+    { id: expect.any(String), path: "/Users/me/Developer/photon" },
+  ]);
+  expect(hostsOf("repo/add")).toEqual(["local"]);
+  expect(dialog().open).toBe(false);
+});
+
+test("New repository creates it in ~/.parallax/projects and registers it, and a failed repo/add retries only the registering", async () => {
+  createRepo.mockResolvedValue({ path: "/Users/me/.parallax/projects/photon" });
+  let fail = true;
+  answers["repo/add"] = (p) =>
+    fail
+      ? { error: { code: -32000, message: "plxd is busy" } }
+      : { result: { repo: { ...parallax, id: p["id"], name: "photon", path: p["path"] } } };
+  await renderApp();
+  const before = crumbs();
+  await openPalette();
+  await click(paletteOption("New repository"));
+  typeInto(field(), "bad name");
+  expect(dialog().textContent).toContain("Use letters, digits, ., _, and - only.");
+  expect(action("Create")!.disabled).toBe(true);
+  typeInto(field(), "photon");
+  expect(dialog().textContent).toContain("Creates ~/.parallax/projects/photon as a git repository");
+
+  pressKey("Enter");
+  await settle();
+  expect(dialog().querySelector('[role="alert"]')?.textContent).toBe("plxd is busy");
+  fail = false;
+  pressKey("Enter");
+  await settle();
+  expect(createRepo.mock.calls).toEqual([["photon"]]);
+  expect(calls("repo/add")).toEqual([
+    { id: expect.any(String), path: "/Users/me/.parallax/projects/photon" },
+    { id: expect.any(String), path: "/Users/me/.parallax/projects/photon" },
+  ]);
+  // It opens nothing: no Project, no thread.
+  expect(dialog().open).toBe(false);
+  expect(crumbs()).toEqual(before);
+});
+
+test("Create Project's Workspace can be cloned from GitHub in the palette, which comes back to the form with it chosen", async () => {
+  listFolders.mockImplementation(listTree);
+  cloneRepo.mockResolvedValue({ path: "/Users/me/Developer/photon" });
+  answers["repo/add"] = (p) => ({
+    result: { repo: { ...parallax, id: "r-photon", name: "photon", path: p["path"] } },
   });
   answers["project/create"] = (p) => ({
-    result: { project: { ...project("Other work", "2026-09-29T12:00:00Z"), id: p["id"] } },
+    result: { project: { ...project("Photon", "2026-09-29T12:00:00Z"), id: p["id"] } },
   });
   await renderApp();
   await openNewProject();
+  typeInto(nameBox(), "Photon");
   await openWorkspaces();
-  await click(workspaceItem("Choose folder…"));
-  expect(calls("repo/add")).toEqual([{ id: expect.any(String), path: "/src/other" }]);
-  expect(hostsOf("repo/add")).toEqual(["local"]);
-  expect(workspaceButton()).toBe("Workspace: other on This Mac");
-  expect(nameBox().value).toBe("other");
+  await click(workspaceItem("Clone a repository…"));
 
-  typeInto(nameBox(), "Other work");
+  expect(action("Next")!.disabled).toBe(true);
+  typeInto(field(), "https://github.com/ryan-stoffel/photon.git");
+  expect(dialog().textContent).toContain("https://github.com/ryan-stoffel/photon");
+  pressKey("Enter");
+  await settle();
+  expect(field().value).toBe("~/photon");
+  expect(dialog().textContent).toContain("Select where to clone");
+  await click(paletteOption("Developer"));
+  expect(field().value).toBe("~/Developer/photon");
+  // Backspace on the untouched name goes up a folder, keeping the name.
+  pressKey("Backspace");
+  await settle();
+  expect(field().value).toBe("~/photon");
+  typeInto(field(), "~/Developer/photon");
+  await settle();
+  await click(action("Clone"));
+  expect(cloneRepo.mock.calls).toEqual([["ryan-stoffel/photon", "~/Developer/photon"]]);
+  expect(calls("repo/add")).toEqual([
+    { id: expect.any(String), path: "/Users/me/Developer/photon" },
+  ]);
+
+  // Back on the form, with what was typed kept.
+  expect(dialog().open).toBe(true);
+  expect(workspaceButton()).toBe("Workspace: photon on This Mac");
+  expect(nameBox().value).toBe("Photon");
   await click(inDialog("Create Project"));
   expect(calls("project/create")).toEqual([
-    { id: expect.any(String), name: "Other work", repoPath: "/src/other" },
+    { id: expect.any(String), name: "Photon", repoPath: "/Users/me/Developer/photon" },
   ]);
 });
 
@@ -384,16 +521,15 @@ test("a repository on another host creates the Project there, then opens that ho
   await openNewProject();
   await openWorkspaces();
   // This computer, then each SSH host, then GitHub, each host listing its own repositories with
-  // no scratch entry. Browsing a host and cloning aren't available yet (PLX-32, PLX-33).
+  // no scratch entry. Browsing an SSH host isn't available yet (PLX-32).
   expect(workspaceGroups()).toEqual([
-    ["This Mac", "parallax", "Choose folder…"],
+    ["This Mac", "parallax", "New repository…", "Choose folder…"],
     ["Mac mini", "api", "Browse foldersNot available yet"],
-    ["GitHub", "Clone a repositoryNot available yet"],
+    ["GitHub", "Clone a repository…"],
   ]);
   expect(hostsOf("thread/list")).toContain(mini.id);
   expect(workspaceItem("parallax")!.getAttribute("aria-checked")).toBe("true");
   expect(workspaceItem("Browse foldersNot available yet")!.disabled).toBe(true);
-  expect(workspaceItem("Clone a repositoryNot available yet")!.disabled).toBe(true);
 
   await click(workspaceItem("api"));
   expect(workspaceButton()).toBe("Workspace: api on Mac mini");
@@ -431,10 +567,10 @@ test("a host that is connecting or can't be reached says so in its group, and li
   await openNewProject();
   await openWorkspaces();
   expect(workspaceGroups()).toEqual([
-    ["This Mac", "parallax", "Choose folder…"],
+    ["This Mac", "parallax", "New repository…", "Choose folder…"],
     ["Mac mini", "Browse foldersNot available yet"],
     ["Studio", "Browse foldersNot available yet"],
-    ["GitHub", "Clone a repositoryNot available yet"],
+    ["GitHub", "Clone a repository…"],
   ]);
   expect(hostNote("Mac mini")).toBe("Can't connect: ssh couldn't reach mini: no route to host.");
   expect(hostNote("Studio")).toBe("Connecting…");
@@ -477,9 +613,13 @@ test("the Workspace menu searches every host's repositories, Enter picks the fir
   typeInto(searchBox(), "");
   press("ArrowDown");
   expect(document.activeElement?.textContent).toBe("parallax");
-  // From the top, Up wraps past GitHub's and Mac mini's unavailable entries to Mac mini's last.
+  // From the top, Up wraps to GitHub's Clone a repository….
+  press("ArrowUp");
+  expect(document.activeElement?.textContent).toBe("Clone a repository…");
   press("ArrowUp");
   expect(document.activeElement?.textContent).toBe("web");
+  press("ArrowDown");
+  expect(document.activeElement?.textContent).toBe("Clone a repository…");
   press("ArrowDown");
   expect(document.activeElement?.textContent).toBe("parallax");
 });
@@ -933,8 +1073,8 @@ const modeChoice = (within: Element) =>
     ["auto", "bypass"].includes(r.value),
   );
 
-test("with projectPermission, Create Project has no mode choice, says it gives full access, and sends Bypass, the same on a retry", async () => {
-  capabilities = { projectPermission: {} };
+test("with projectPermission and projectAutonomy, Create Project asks for full access, on by default, and autonomy, the same on a retry", async () => {
+  capabilities = { projectPermission: {}, projectAutonomy: {} };
   let fails = 1;
   answers["project/create"] = (p) =>
     fails-- > 0
@@ -943,21 +1083,31 @@ test("with projectPermission, Create Project has no mode choice, says it gives f
   await renderApp();
   await openNewProject();
   expect(modeChoice(dialog())).toEqual([]);
-  expect(dialog().textContent).toContain("Full access");
   expect(dialog().textContent).toContain(
     "Agents in this Project run commands and edit files without asking.",
   );
+  const fullAccess = dialog().querySelector<HTMLInputElement>('input[role="switch"]')!;
+  expect(fullAccess.checked).toBe(true);
+  const autonomy = (value: string) =>
+    dialog().querySelector<HTMLInputElement>(
+      `fieldset[aria-label="Autonomy"] input[value="${value}"]`,
+    )!;
+  expect(autonomy("routine").checked).toBe(true);
 
   await click(inDialog("Create Project"));
+  await click(fullAccess);
+  await click(autonomy("ask"));
   await click(inDialog("Create Project"));
-  const [first, retry] = calls("project/create");
+  const [first, second] = calls("project/create");
   expect(first).toEqual({
     id: expect.any(String),
     name: "parallax",
     repoPath: "/src/parallax",
     permission: "bypass",
+    autonomy: "routine",
   });
-  expect(retry).toEqual(first);
+  expect(second).toEqual({ ...first, id: expect.any(String), permission: "auto", autonomy: "ask" });
+  expect(second!["id"]).not.toBe(first!["id"]);
   expect(dialog().open).toBe(false);
 });
 
@@ -2241,16 +2391,15 @@ test("Archived lists 25 threads, Show more reveals the next page, and the summar
   ).toBe(false);
 });
 
-test("with no Projects, Threads is the only section, and the toolbar's one menu creates a Project or adds a repository", async () => {
+test("with no Projects, Threads is the only section, and the toolbar's one button opens the add palette", async () => {
   answers["project/list"] = () => ({ result: { projects: [], seq: 7 } });
   await renderApp();
   expect(sectionHeadings()).toEqual(["Threads"]);
   expect(newProjectButtons()).toHaveLength(0);
-  expect(addMenuItems().map((b) => b.textContent)).toEqual(["New project…", "Add repository…"]);
-  await click(addMenuItems()[1]);
-  expect(
-    document.querySelector<HTMLDialogElement>('dialog[aria-label="Add repository"]')!.open,
-  ).toBe(true);
+  await openPalette();
+  expect(dialog().open).toBe(true);
+  expect(paletteOptions()).toHaveLength(4);
+  await act(async () => dialog().close());
 
   await act(async () =>
     deliver({

@@ -1,4 +1,4 @@
-import { ChevronDown, Folder, FolderPlus, FolderSearch, Search } from "lucide-react";
+import { ChevronDown, Folder, FolderGit2, FolderPlus, FolderSearch, Search } from "lucide-react";
 import {
   Fragment,
   useEffect,
@@ -27,6 +27,9 @@ import {
 
 /** A repository on one of Parallax's hosts: where a Project works. */
 export type Workspace = { hostId: string; repo: Repo };
+
+/** A way the add palette makes a repository on this computer (AddDialog). */
+export type WorkspaceSource = "create" | "browse" | "clone";
 
 /** What the menu knows of a host's repositories, or why it can't list them. */
 type Listing =
@@ -85,19 +88,20 @@ function useListings(hosts: Host[], open: boolean): Readonly<Record<string, List
  * Create Project's Workspace picker. Its button shows the chosen repository and its host's icon.
  * Its menu searches the repositories of every host at once, and groups them by host: this
  * computer, then the SSH hosts, then GitHub. A host that is connecting or can't be reached says
- * so in its own group. This computer's group ends with "Choose folder…", which calls
- * `onChooseFolder`; browsing an SSH host and cloning from GitHub aren't available yet.
+ * so in its own group. This computer's group ends with "New repository…" and "Choose folder…",
+ * and GitHub's is "Clone a repository…", each calling `onAdd`. Browsing an SSH host isn't
+ * available yet.
  */
 export function WorkspaceMenu({
   hosts,
   value,
   onChange,
-  onChooseFolder,
+  onAdd,
 }: {
   hosts: Host[];
   value?: Workspace;
   onChange: (workspace: Workspace) => void;
-  onChooseFolder: () => void;
+  onAdd: (source: WorkspaceSource) => void;
 }) {
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
@@ -120,6 +124,20 @@ export function WorkspaceMenu({
     menu.current?.hidePopover();
     onChange(workspace);
   };
+  const add = (source: WorkspaceSource, icon: ReactNode, label: string) => (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={() => {
+        menu.current?.hidePopover();
+        onAdd(source);
+      }}
+      className={menuItem}
+    >
+      {icon}
+      <span className="leading-5">{label}</span>
+    </button>
+  );
 
   return (
     <>
@@ -190,18 +208,10 @@ export function WorkspaceMenu({
                 {!q && <ListingNote listing={g.listing} />}
                 {!q &&
                   (g.host.id === localId ? (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        menu.current?.hidePopover();
-                        onChooseFolder();
-                      }}
-                      className={menuItem}
-                    >
-                      <FolderPlus aria-hidden />
-                      <span className="leading-5">Choose folder…</span>
-                    </button>
+                    <>
+                      {add("create", <FolderGit2 aria-hidden />, "New repository…")}
+                      {add("browse", <FolderPlus aria-hidden />, "Choose folder…")}
+                    </>
                   ) : (
                     <Unavailable icon={<FolderSearch aria-hidden />} label="Browse folders" />
                   ))}
@@ -215,7 +225,7 @@ export function WorkspaceMenu({
                 <p aria-hidden className={menuHeading}>
                   GitHub
                 </p>
-                <Unavailable icon={<GitHubLogo />} label="Clone a repository" />
+                {add("clone", <GitHubLogo />, "Clone a repository…")}
               </div>
             </>
           )}

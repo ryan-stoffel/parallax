@@ -36,6 +36,7 @@ import { savedHost, startHosts } from "./hosts";
 import { isBrowsable, isOpenableExternally, mayNavigate } from "./links";
 import { createNamer } from "./namer";
 import { fallbackName } from "./naming";
+import { startRepos } from "./repos";
 import { startStorage } from "./storage";
 import { isNightly, startUpdater } from "./updater";
 
@@ -177,7 +178,8 @@ ipcMain.handle("parallax:nameThread", (_event, prompt: unknown) =>
   typeof prompt === "string" ? namer.name(prompt) : fallbackName(""),
 );
 
-// New Thread's "Add repository…": a folder on this Mac, sheet-attached to the asking window.
+// New Thread's "Add repository…" and the add palette's "Choose in Finder": a folder on this Mac,
+// sheet-attached to the asking window.
 ipcMain.handle("parallax:pickFolder", async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   const options = { properties: ["openDirectory" as const] };
@@ -342,6 +344,7 @@ void app.whenReady().then(() => {
   browserSession.setPermissionCheckHandler(() => false);
   startHosts();
   startStorage();
+  startRepos();
   // Under `pnpm dev`, Update follows main (scripts/channels.mjs). Nightly and stable are tags on it.
   if (!updater) process.send?.({ channel: "nightly" });
   startAccount();

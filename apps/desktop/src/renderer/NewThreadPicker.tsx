@@ -2,7 +2,7 @@ import { ArrowDown, ArrowLeft, ArrowUp, Search } from "lucide-react";
 import { useId, useState, type Ref } from "react";
 
 import type { Repo } from "../protocol/generated/protocol";
-import { kbd } from "./AddRepositoryDialog";
+import { kbd } from "./AddDialog";
 import { RepoIcon } from "./Sidebar";
 import { noRepo, type ThreadGroup } from "./threads";
 import { RowBadge, rowShortcut } from "./ui";

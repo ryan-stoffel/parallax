@@ -4,7 +4,8 @@ import type { ProjectAutonomy } from "../protocol/generated/protocol";
 
 type Option<T> = { value: T; name: string; detail: string };
 
-const levels: Option<ProjectAutonomy>[] = [
+/** Each autonomy level (0043), with a line on who answers. */
+export const autonomyLevels: Option<ProjectAutonomy>[] = [
   {
     value: "ask",
     name: "Ask me",
@@ -29,7 +30,7 @@ export function AutonomyChoice(props: {
   onChange: (value: ProjectAutonomy) => void;
 }) {
   return (
-    <Choice legend="Autonomy" options={levels} {...props}>
+    <Choice legend="Autonomy" options={autonomyLevels} {...props}>
       A child never waits on a question: it goes on with what it assumed. This decides who answers
       it. Every answer shows on the Project tab.
     </Choice>
