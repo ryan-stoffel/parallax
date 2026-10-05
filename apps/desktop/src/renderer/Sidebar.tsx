@@ -76,6 +76,7 @@ import { imageUrl } from "./images";
 import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { iconColors, iconLook } from "./projectIcons";
+import { archivePageSize, sidebarPrefs } from "./sidebarPrefs";
 import { dragThread } from "./threadDrag";
 import { asksOf, type ProjectChange, type ThreadsView } from "./threads";
 import { accountLabel, isRunning, statusLabel as runStatusLabel } from "./transcript";
@@ -231,8 +232,9 @@ const cardDelay = 450;
 /** The Repos filter's choice: every repo, No Repo's threads, or one repo by host and id. */
 type RepoFilter = "all" | "none" | `${string}/${string}`;
 const filterKey = "parallax:repoFilter";
-// "true" while the Projects section is collapsed.
+// "true" while the Projects or Threads section is collapsed.
 const collapsedKey = "parallax:projectsCollapsed";
+const threadsCollapsedKey = "parallax:threadsCollapsed";
 
 /** A sidebar setting kept in localStorage, or null while there is none or storage is off. */
 function readStored(key: string): string | null {
@@ -267,10 +269,12 @@ type Item = (
 
 /**
  * Search, the Repos filter, a menu to create a Project or add a repository, and New thread, then
- * every host's Projects in a collapsible section, then their threads, each the most recently active first (0033). A thread row shows its repo, how long ago
- * it was prompted or what it asks of the user, its title, branch, and provider. A thread's children
- * (0041) nest under it, collapsed behind their count and most urgent status. Snoozed and
- * Archived threads sit under the list. Resting on a thread shows a card with where and how it runs.
+ * every host's Projects and threads, each in a collapsible section, most recently active first
+ * (0033). A thread row shows its repo, how long ago it was prompted or what it asks of the user,
+ * its title, branch, and provider. A thread's children (0041) nest under it, collapsed behind
+ * their count and most urgent status. While a top-level thread is working, it and its children
+ * sit in a Working drawer above Snoozed and Archived, until it finishes. Archived threads list a
+ * page at a time. Both are settings (sidebarPrefs). Resting on a thread shows a card.
  */
 export function ThreadList({
   hosts,
@@ -288,6 +292,7 @@ export function ThreadList({
   const addRepositoryDialog = useRef<HTMLDialogElement>(null);
   const deleteDialog = useRef<HTMLDialogElement>(null);
   const projectsId = useId();
+  const threadsId = useId();
   // The thread or Project the delete dialog asks about.
   const [toDelete, setToDelete] = useState<Item>();
   const [deleting, setDeleting] = useState(false);
@@ -306,6 +311,16 @@ export function ThreadList({
     setCollapsedState(next);
     saveStored(collapsedKey, String(next));
   };
+  const [threadsCollapsed, setThreadsCollapsedState] = useState(
+    () => readStored(threadsCollapsedKey) === "true",
+  );
+  const setThreadsCollapsed = (next: boolean) => {
+    setThreadsCollapsedState(next);
+    saveStored(threadsCollapsedKey, String(next));
+  };
+  const { workingSection, pageArchived } = sidebarPrefs.use();
+  // The Working drawer starts open, so a thread that just left the list stays in view.
+  const [workingOpen, setWorkingOpen] = useState(true);
   // The threads whose children show, by key, and the open thread whose groups were last opened.
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [revealed, setRevealed] = useState<string>();
@@ -366,7 +381,7 @@ export function ThreadList({
   const isSnoozed = (i: Item) => i.kind === "thread" && snoozed(i.thread, i.attention, now);
   const isArchived = (i: Item) => i.kind === "thread" && !!i.thread.archived;
   const projects = shown.filter((i) => i.kind === "project");
-  const threads = shown.filter((i) => i.kind === "thread" && !isArchived(i) && !isSnoozed(i));
+  const pool = shown.filter((i) => i.kind === "thread" && !isArchived(i) && !isSnoozed(i));
   const snoozedItems = shown.filter((i) => !isArchived(i) && isSnoozed(i));
   const archived = shown.filter(isArchived);
   // The Projects section shows once any host has a Project, even while search or the filter hides
@@ -379,19 +394,22 @@ export function ThreadList({
     i.kind === "thread" && i.view.lineage && i.thread.parent
       ? `${i.host.id}/${i.thread.parent}`
       : undefined;
-  const inList = new Set(threads.map((i) => i.key));
+  const inList = new Set(pool.map((i) => i.key));
   const children = new Map<string, Item[]>();
   const created = (i: Item) => (i.kind === "thread" ? i.thread.createdAt : "");
-  for (const i of [...threads].sort((a, b) => created(a).localeCompare(created(b)))) {
+  for (const i of [...pool].sort((a, b) => created(a).localeCompare(created(b)))) {
     const key = parentKey(i);
     if (key && inList.has(key)) children.set(key, [...(children.get(key) ?? []), i]);
   }
-  const topThreads = threads.filter((i) => !inList.has(parentKey(i) ?? ""));
+  const tops = pool.filter((i) => !inList.has(parentKey(i) ?? ""));
+  // A working top-level thread takes its children with it, so a family isn't split across sections.
+  const workingTops = workingSection ? tops.filter((i) => i.attention === "working") : [];
+  const topThreads = tops.filter((i) => !workingTops.includes(i));
   const selectedKey = selection.kind === "thread" ? `${host.id}/${selection.threadId}` : undefined;
   if (selectedKey !== revealed) {
     setRevealed(selectedKey);
     // Opens the groups the open thread is in, so its row shows. A loop of parents stops.
-    const byKey = new Map(threads.map((i) => [i.key, i]));
+    const byKey = new Map(pool.map((i) => [i.key, i]));
     const opened = new Set(expanded);
     const chosen = selectedKey === undefined ? undefined : byKey.get(selectedKey);
     let up = chosen && parentKey(chosen);
@@ -406,11 +424,13 @@ export function ThreadList({
     i,
     ...(expanded.has(i.key) ? (children.get(i.key) ?? []).flatMap(flat) : []),
   ];
-  const threadRows = topThreads.flatMap(flat);
+  const threadRows = threadsCollapsed ? [] : topThreads.flatMap(flat);
+  const workingRows = workingOpen ? workingTops.flatMap(flat) : [];
 
   // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held: the
-  // Projects section's, unless it's collapsed, then the threads'.
-  const listed = [...(collapsed ? [] : projects), ...threadRows];
+  // Projects section's, unless it's collapsed, then the threads', then Working while that drawer
+  // is open. A collapsed section's rows get no numbers.
+  const listed = [...(collapsed ? [] : projects), ...threadRows, ...workingRows];
   const modHeld = useModHeld();
   const openItem = (item: Item) =>
     onSelect(
@@ -647,21 +667,12 @@ export function ThreadList({
           <>
             {/* The heading holds only its toggle, so its name is just "Projects". */}
             <div className={`${sectionHeading} pr-0`}>
-              <h2 className="flex flex-1 self-stretch">
-                <button
-                  type="button"
-                  aria-expanded={!collapsed}
-                  aria-controls={projectsId}
-                  onClick={() => setCollapsed(!collapsed)}
-                  className="flex flex-1 items-center gap-1 text-left hover:text-foreground"
-                >
-                  Projects
-                  <ChevronRight
-                    aria-hidden
-                    className={`size-3.5 transition-transform ${collapsed ? "" : "rotate-90"}`}
-                  />
-                </button>
-              </h2>
+              <SectionToggle
+                label="Projects"
+                collapsed={collapsed}
+                controls={projectsId}
+                onToggle={() => setCollapsed(!collapsed)}
+              />
               <IconButton label="New project" onClick={() => newProject.current?.showModal()}>
                 <Plus />
               </IconButton>
@@ -672,20 +683,41 @@ export function ThreadList({
               </ul>
               {projects.length === 0 && <p className={emptyNote}>Nothing matches</p>}
             </div>
-            <h2 className={`${sectionHeading} mt-2`}>Threads</h2>
           </>
         )}
-        <ul aria-label="Threads" className="flex flex-col gap-0.5">
-          {topThreads.map((i) => tree(i, false))}
-        </ul>
-        {threads.length === 0 && (
-          <p className={emptyNote}>
-            {q || filter !== "all" ? "Nothing matches" : "No threads yet"}
-          </p>
-        )}
+        <div className={`${sectionHeading} ${hasProjects ? "mt-2" : ""}`}>
+          <SectionToggle
+            label="Threads"
+            collapsed={threadsCollapsed}
+            controls={threadsId}
+            onToggle={() => setThreadsCollapsed(!threadsCollapsed)}
+          />
+        </div>
+        <div id={threadsId} hidden={threadsCollapsed}>
+          <ul aria-label="Threads" className="flex flex-col gap-0.5">
+            {topThreads.map((i) => tree(i, false))}
+          </ul>
+          {topThreads.length === 0 && workingTops.length === 0 && (
+            <p className={emptyNote}>
+              {q || filter !== "all" ? "Nothing matches" : "No threads yet"}
+            </p>
+          )}
+        </div>
       </div>
+      <Drawer
+        label="Working"
+        items={workingTops}
+        row={(item) => tree(item, false)}
+        defaultOpen
+        onOpenChange={setWorkingOpen}
+      />
       <Drawer label="Snoozed" items={snoozedItems} row={row} />
-      <Drawer label="Archived" items={archived} row={row} />
+      <Drawer
+        label="Archived"
+        items={archived}
+        row={row}
+        pageSize={pageArchived ? archivePageSize : undefined}
+      />
       {card && (
         <ThreadCard
           title={titleOf(card.item)}
@@ -783,20 +815,80 @@ function useMinute() {
   return now;
 }
 
-/** A drawer pinned under the list, such as Snoozed or Archived, shown while it holds any rows. */
+/** A section's heading: its name and a chevron, which collapse the section `controls` names. */
+function SectionToggle({
+  label,
+  collapsed,
+  controls,
+  onToggle,
+}: {
+  label: string;
+  collapsed: boolean;
+  controls: string;
+  onToggle: () => void;
+}) {
+  return (
+    <h2 className="flex flex-1 self-stretch">
+      <button
+        type="button"
+        aria-expanded={!collapsed}
+        aria-controls={controls}
+        onClick={onToggle}
+        className="flex flex-1 items-center gap-1 text-left hover:text-foreground"
+      >
+        {label}
+        <ChevronRight
+          aria-hidden
+          className={`size-3.5 transition-transform ${collapsed ? "" : "rotate-90"}`}
+        />
+      </button>
+    </h2>
+  );
+}
+
+/**
+ * A drawer pinned under the list, such as Working, Snoozed, or Archived, shown while it holds any
+ * rows. It scrolls under a cap, and its summary sticks to the top, so collapsing stays reachable.
+ * With `pageSize`, the first page shows and each click reveals that many more.
+ */
 function Drawer<T>({
   label,
   items,
   row,
+  pageSize,
+  defaultOpen = false,
+  onOpenChange,
 }: {
   label: string;
   items: T[];
   row: (item: T) => ReactNode;
+  pageSize?: number;
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  if (items.length === 0) return null;
+  const details = useRef<HTMLDetailsElement>(null);
+  const [pages, setPages] = useState(1);
+  const shown = items.length > 0;
+  // Uncontrolled after this: a controlled `open` fights the summary's own toggle.
+  useEffect(() => {
+    const el = details.current;
+    if (!el) return;
+    if (defaultOpen) el.open = true;
+    const onToggle = () => onOpenChange?.(el.open);
+    el.addEventListener("toggle", onToggle);
+    onOpenChange?.(el.open);
+    return () => el.removeEventListener("toggle", onToggle);
+  }, [shown, defaultOpen, onOpenChange]);
+  if (!shown) return null;
+  const visible = pageSize ? items.slice(0, pageSize * pages) : items;
+  const remaining = items.length - visible.length;
+  const more = pageSize && remaining > 0 ? Math.min(pageSize, remaining) : 0;
   return (
-    <details className="group/drawer max-h-[40%] shrink-0 overflow-y-auto px-2 pb-1">
-      <summary className="flex cursor-default list-none items-center gap-3 rounded-md px-2 py-1.5 text-[12.5px] text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+    <details
+      ref={details}
+      className="group/drawer max-h-[40%] min-h-0 shrink-0 overflow-y-auto px-2 pb-1"
+    >
+      <summary className="sticky top-0 z-10 flex cursor-default list-none items-center gap-3 rounded-md bg-sidebar px-2 py-1.5 text-[12.5px] text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
         <span>
           {label} <span className="text-faint-foreground">({items.length})</span>
         </span>
@@ -806,7 +898,17 @@ function Drawer<T>({
           className="size-4 shrink-0 transition-transform group-open/drawer:rotate-180"
         />
       </summary>
-      <ul className="flex flex-col gap-0.5">{items.map(row)}</ul>
+      <ul className="flex flex-col gap-0.5">{visible.map(row)}</ul>
+      {more > 0 && (
+        <button
+          type="button"
+          onClick={() => setPages((n) => n + 1)}
+          className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground"
+        >
+          <Plus aria-hidden className="size-3.5 shrink-0" />
+          Show {more} more
+        </button>
+      )}
     </details>
   );
 }

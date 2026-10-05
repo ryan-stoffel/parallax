@@ -21,6 +21,7 @@ import type {
   Thread,
 } from "../protocol/generated/protocol";
 import { App } from "./App";
+import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The Workspace menu's items are in the DOM either way. Showing one
@@ -85,6 +86,7 @@ beforeEach(() => {
   vi.useFakeTimers({ now, toFake: ["Date"] });
   request.mockClear();
   localStorage.clear();
+  sidebarPrefs.set(sidebarDefaults);
   popoverSources = [];
   listeners = new Set();
   capabilities = {};
@@ -1600,10 +1602,170 @@ test("Projects sit in a collapsible section above Threads, with New project besi
   expect(projectsSection().hidden).toBe(false);
 });
 
-test("with no Projects, there's no section, and the toolbar's one menu creates a Project or adds a repository", async () => {
+const sectionToggle = (name: string) =>
+  [...document.querySelectorAll<HTMLButtonElement>("#sidebar h2 button[aria-expanded]")].find((b) =>
+    b.textContent?.startsWith(name),
+  )!;
+const sectionOf = (name: string) =>
+  document.getElementById(sectionToggle(name).getAttribute("aria-controls")!)!;
+const drawer = (name: string) =>
+  [...document.querySelectorAll<HTMLDetailsElement>("#sidebar details")].find((d) =>
+    d.querySelector("summary")?.textContent?.startsWith(name),
+  );
+const drawerTitles = (name: string) =>
+  [...(drawer(name)?.querySelectorAll("[data-title]") ?? [])].map((t) => t.textContent);
+const threadTitles = () =>
+  [...document.querySelectorAll('#sidebar [aria-label="Threads"] [data-title]')].map(
+    (t) => t.textContent,
+  );
+
+test("Threads collapses like Projects and stays collapsed after a reload", async () => {
+  withThread();
+  await renderApp();
+  expect(sectionToggle("Threads").getAttribute("aria-expanded")).toBe("true");
+  expect(threadTitles()).toEqual(["Fix the flaky test"]);
+
+  await click(sectionToggle("Threads"));
+  expect(sectionOf("Threads").hidden).toBe(true);
+  await keyDown({ key: "Meta", metaKey: true });
+  expect(["photon", "ember"].map(statusOf)).toEqual(["⌘1", "⌘2"]);
+  expect(statusOf("Fix the flaky test")).toBe("Done");
+
+  act(() => unmount());
+  await renderApp();
+  expect(sectionOf("Threads").hidden).toBe(true);
+  await click(sectionToggle("Threads"));
+  expect(threadTitles()).toEqual(["Fix the flaky test"]);
+});
+
+test("a working thread moves to Working with its children, then back to Threads when it finishes", async () => {
+  const running: Thread = {
+    id: "t-run",
+    repo: parallax.id,
+    title: "Ship the sidebar",
+    createdAt: "2026-09-29T11:30:00Z",
+  };
+  const child: Thread = {
+    id: "t-child",
+    repo: parallax.id,
+    parent: running.id,
+    title: "Write the notes",
+    createdAt: "2026-09-29T11:40:00Z",
+  };
+  const idle: Thread = {
+    id: "t-idle",
+    repo: parallax.id,
+    title: "Read the docs",
+    createdAt: "2026-09-29T11:00:00Z",
+    seenAt: "2026-09-29T12:00:00Z",
+  };
+  answers["thread/list"] = () => ({
+    result: { repos: [parallax], threads: [running, child, idle], seq: 7 },
+  });
+  answers["agent/list"] = () => ({
+    result: {
+      runs: [
+        coordinatorRun(running.id, "Ship the sidebar"),
+        { ...coordinatorRun(child.id, "Write the notes"), status: "completed" },
+        {
+          ...coordinatorRun(idle.id, "Read the docs"),
+          status: "completed",
+          updatedAt: "2026-09-29T11:00:00Z",
+        },
+      ],
+      seq: 7,
+    },
+  });
+  capabilities = { threadLineage: {} };
+  await renderApp();
+  expect(drawer("Working")!.open).toBe(true);
+  expect(drawerTitles("Working")).toEqual(["Ship the sidebar"]);
+  expect(threadTitles()).toEqual(["Read the docs"]);
+  expect(document.querySelector("#sidebar")!.textContent).not.toContain("No threads yet");
+
+  await click(
+    [...drawer("Working")!.querySelectorAll("button")].find((b) =>
+      b.textContent?.startsWith("1 thread"),
+    ),
+  );
+  expect(drawerTitles("Working")).toEqual(["Ship the sidebar", "Write the notes"]);
+
+  await act(async () =>
+    deliver({
+      type: "event",
+      event: {
+        subscription: "s-1",
+        seq: 8,
+        time: "2026-09-29T12:10:00Z",
+        event: {
+          kind: "agent.updated",
+          runId: running.id,
+          state: {
+            status: "completed",
+            accountId: "claude",
+            updatedAt: "2026-09-29T12:10:00Z",
+          },
+        },
+      },
+    }),
+  );
+  await settle();
+  expect(drawer("Working")).toBeUndefined();
+  // The group stays open, so the child comes back with its parent.
+  expect(threadTitles()).toEqual(["Ship the sidebar", "Write the notes", "Read the docs"]);
+
+  sidebarPrefs.set({ ...sidebarDefaults, workingSection: false });
+  act(() => unmount());
+  await renderApp();
+  expect(drawer("Working")).toBeUndefined();
+  expect(threadTitles()).toEqual(["Ship the sidebar", "Read the docs"]);
+});
+
+test("Archived lists 25 threads, Show more reveals the next page, and the summary stays out of the scroller", async () => {
+  const threads = Array.from({ length: 60 }, (_, n) => ({
+    id: `t-arch-${n}`,
+    repo: parallax.id,
+    title: `Archived ${String(n).padStart(2, "0")}`,
+    archived: true,
+    createdAt: new Date(Date.parse("2026-09-01T00:00:00Z") + n * 60_000).toISOString(),
+  }));
+  answers["thread/list"] = () => ({ result: { repos: [parallax], threads, seq: 7 } });
+  answers["agent/list"] = () => ({ result: { runs: [], seq: 7 } });
+  await renderApp();
+  const archived = drawer("Archived")!;
+  expect(archived.querySelector("summary")!.textContent).toContain("(60)");
+  // The drawer itself scrolls, and its summary sticks to the top of that scroll.
+  expect(archived.className).toContain("overflow-y-auto");
+  expect(archived.querySelector("summary")!.className).toContain("sticky");
+  expect(drawerTitles("Archived")).toEqual(
+    Array.from({ length: 25 }, (_, n) => `Archived ${String(59 - n).padStart(2, "0")}`),
+  );
+  const more = () =>
+    [...archived.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Show"));
+  expect(more()!.textContent).toBe("Show 25 more");
+
+  await click(more());
+  expect(drawerTitles("Archived")).toHaveLength(50);
+  expect(more()!.textContent).toBe("Show 10 more");
+  await click(more());
+  expect(drawerTitles("Archived")).toHaveLength(60);
+  expect(more()).toBeUndefined();
+
+  sidebarPrefs.set({ ...sidebarDefaults, pageArchived: false });
+  act(() => unmount());
+  await renderApp();
+  expect(drawerTitles("Archived")).toHaveLength(60);
+  expect(
+    [...drawer("Archived")!.querySelectorAll("button")].some((b) =>
+      b.textContent?.startsWith("Show"),
+    ),
+  ).toBe(false);
+});
+
+test("with no Projects, Threads is the only section, and the toolbar's one menu creates a Project or adds a repository", async () => {
   answers["project/list"] = () => ({ result: { projects: [], seq: 7 } });
   await renderApp();
-  expect(sectionHeadings()).toEqual([]);
+  expect(sectionHeadings()).toEqual(["Threads"]);
   expect(newProjectButtons()).toHaveLength(0);
   expect(addMenuItems().map((b) => b.textContent)).toEqual(["New project…", "Add repository…"]);
   await click(addMenuItems()[1]);
