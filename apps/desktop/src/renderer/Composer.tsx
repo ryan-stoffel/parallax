@@ -1369,8 +1369,6 @@ function RouteChip({ route, keys, onFlip }: { route: Route; keys?: string; onFli
       : route.tasks.length > 1
         ? `${route.tasks.length} threads`
         : "New thread";
-  const badge =
-    "rounded border border-border bg-surface px-1 font-sans text-[11px] leading-4 text-muted-foreground";
   const showKeys = modHeld && keys;
   return (
     <button
@@ -1382,10 +1380,9 @@ function RouteChip({ route, keys, onFlip }: { route: Route; keys?: string; onFli
       {keys && !showKeys && (
         <span
           role="tooltip"
-          className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 flex -translate-x-1/2 translate-y-1 items-center gap-2 rounded-lg border border-border bg-surface py-1 pr-1 pl-2.5 text-[12px] whitespace-nowrap text-foreground opacity-0 shadow-composer transition duration-150 ease-out group-hover:translate-y-0 group-hover:opacity-100 group-hover:delay-500 group-focus-visible:translate-y-0 group-focus-visible:opacity-100"
+          className="pointer-events-none absolute bottom-full left-0 z-30 mb-1.5 translate-y-0.5 rounded-lg border border-border bg-surface px-2.5 py-1 text-[13px] whitespace-nowrap text-foreground opacity-0 shadow-composer transition duration-150 ease-out group-hover:translate-y-0 group-hover:opacity-100 group-hover:delay-300"
         >
-          {route.kind === "ask" ? "Start a thread" : "Ask the chat"}
-          <kbd className={badge}>{keys}</kbd>
+          {label} · {keys}
         </span>
       )}
       {route.kind === "ask" ? (
@@ -1394,18 +1391,14 @@ function RouteChip({ route, keys, onFlip }: { route: Route; keys?: string; onFli
         <PixelStack count={route.tasks.length} />
       )}
       {/* The label stays in place, invisible, so the chip keeps its width while the keys show. */}
-      <span className="grid items-center">
+      <span className="grid">
         <span
           key={label}
           className={`col-start-1 row-start-1 ${showKeys ? "invisible" : "working-in"}`}
         >
           {label}
         </span>
-        {showKeys && (
-          <kbd className={`${badge} col-start-1 row-start-1 justify-self-center working-in`}>
-            {keys}
-          </kbd>
-        )}
+        {showKeys && <span className="col-start-1 row-start-1 text-left text-foreground">{keys}</span>}
       </span>
       {route.kind === "task" && route.tasks.length > 1 && (
         <kbd className="rounded bg-selected px-1 font-mono text-[10.5px] text-faint-foreground">

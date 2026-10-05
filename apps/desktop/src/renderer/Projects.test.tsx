@@ -1783,7 +1783,7 @@ test("a question goes to the coordinator, anything else starts a task, and the s
   type("Add a blue mode");
   expect(route()).toBe("New thread");
   const chip = () => document.querySelector('main button[aria-label^="Sends to: "]');
-  expect(chip()?.querySelector('[role="tooltip"]')?.textContent).toBe("Ask the chat⌘.");
+  expect(chip()?.querySelector('[role="tooltip"]')?.textContent).toBe("New thread · ⌘.");
   act(() => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Meta" }));
   });
@@ -1794,7 +1794,7 @@ test("a question goes to the coordinator, anything else starts a task, and the s
   expect(chip()?.textContent).toContain("New thread");
   await click(chip());
   expect(route()).toBe("Chat");
-  expect(chip()?.querySelector('[role="tooltip"]')?.textContent).toBe("Start a thread⌘.");
+  expect(chip()?.querySelector('[role="tooltip"]')?.textContent).toBe("Chat · ⌘.");
   await click(chip());
   expect(route()).toBe("New thread");
   expect(calls("project/start")).toHaveLength(1);
