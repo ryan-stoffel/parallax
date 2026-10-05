@@ -6,9 +6,12 @@ test("panel widths protect chat space and enforce panel limits", () => {
   for (const viewport of [1280, 1000, 800, 600, 320]) {
     const [left, right] = panelWidths(viewport, 400, 640);
     expect(left + right).toBeLessThanOrEqual(viewport - Math.min(400, viewport / 2) + 0.001);
-    expect(left).toBeGreaterThanOrEqual(Math.min(200, viewport / 4));
+    expect(left).toBeGreaterThanOrEqual(Math.min(240, viewport / 4));
     expect(right).toBeGreaterThanOrEqual(Math.min(200, viewport / 4));
   }
+});
+test("sidebar never narrows below the header width", () => {
+  expect(panelWidths(1600, 100, 0)).toEqual([240, 0]);
 });
 test("hidden panels consume no width", () => {
   expect(panelWidths(1000, 256, 0)).toEqual([256, 0]);
