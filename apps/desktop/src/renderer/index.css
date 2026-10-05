@@ -331,9 +331,10 @@ body {
 }
 
 /* Glass edges: every fully bordered box catches a faint light along its top edge and a sheen
-   that fades down, so it lifts a little off the background. Filled buttons get a brighter one.
-   In the components layer, so a utility still wins; the edge is also --tw-inset-shadow, which
-   Tailwind's shadow and ring utilities add to their own shadow rather than replace. */
+   that fades down, so it lifts a little off the background. Filled buttons and switches get a
+   brighter one. In the components layer, so a utility still wins; the edge is also
+   --tw-inset-shadow, which Tailwind's shadow and ring utilities add to their own shadow rather
+   than replace. */
 @layer components {
   :root {
     --glass-edge: inset 0 1px 0 rgb(255 255 255 / 90%), 0 1px 2px rgb(0 0 0 / 5%);
@@ -348,7 +349,7 @@ body {
     box-shadow: var(--glass-edge);
     background-image: var(--glass-sheen);
   }
-  button:is(.bg-send, .bg-accent) {
+  button:is(.bg-send, .bg-accent, .bg-primary, .bg-red-600, [role="switch"]) {
     --tw-inset-shadow: inset 0 1px 0 rgb(255 255 255 / 22%);
     box-shadow: var(--tw-inset-shadow);
     background-image: linear-gradient(rgb(255 255 255 / 14%), rgb(255 255 255 / 0%));
