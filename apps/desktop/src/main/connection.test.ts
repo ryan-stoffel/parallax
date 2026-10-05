@@ -250,7 +250,7 @@ test("a mutating request sends commandId and a failed retry reuses it", async ()
   const params = { project: "01901234-5678-7abc-89ab-cdef01234567" };
   const first = connection.request("project/delete", params);
   const sent = child().request("project/delete");
-  expect(sent.params?.commandId).toMatch(
+  expect(sent.params?.["commandId"]).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
   );
   child().reply({ id: sent.id, error: { code: -32603, message: "lost" } });
@@ -258,13 +258,13 @@ test("a mutating request sends commandId and a failed retry reuses it", async ()
 
   const retry = connection.request("project/delete", params);
   const again = child().request("project/delete");
-  expect(again.params?.commandId).toBe(sent.params?.commandId);
+  expect(again.params?.["commandId"]).toBe(sent.params?.["commandId"]);
   child().reply({ id: again.id, result: {} });
   await retry;
 
   const next = connection.request("project/delete", params);
   const third = child().request("project/delete");
-  expect(third.params?.commandId).not.toBe(sent.params?.commandId);
+  expect(third.params?.["commandId"]).not.toBe(sent.params?.["commandId"]);
   child().reply({ id: third.id, result: {} });
   await next;
 });

@@ -180,12 +180,10 @@ export class Connection {
     }
     const outgoing = withCommandId(this.commandRetries, method, params);
     // Only this client answers, and a new log needs a new connection, so this is its log.
-    return client
-      .request(method, outgoing, REQUEST_TIMEOUT_MS)
-      .then((response) => {
-        settleCommand(this.commandRetries, method, params, !("error" in response));
-        return "result" in response ? { ...response, logId } : response;
-      });
+    return client.request(method, outgoing, REQUEST_TIMEOUT_MS).then((response) => {
+      settleCommand(this.commandRetries, method, params, !("error" in response));
+      return "result" in response ? { ...response, logId } : response;
+    });
   }
 
   /**
