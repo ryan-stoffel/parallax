@@ -12,8 +12,8 @@ the sidebar, and one more on the first run's scope for an open transcript; with 
 scope one is `shell` and the open one is `run`, as PLX-454 makes the app subscribe), starts N
 threads at the same moment, and waits for every turn to end. It writes JSON with delivery latency (receive
 time minus the event's `time`, which plxd sets at flush), bytes and events per connection and per
-subscription, `host/health.queues` samples when plxd reports them, plxd's CPU and peak RSS, and
-whether plxd made a subscriber resync. `--compare` charts any number of those files side by side.
+subscription, `host/health.queues` samples when plxd reports them, plxd's CPU, peak RSS, and
+RSS growth after the first sample, and whether plxd made a subscriber resync. `--compare` charts any number of those files side by side.
 `--replay` plays a recorded session's events instead, from a backend's replay snapshot such as
 `daemon/src/backend/claude/fixtures/recorded.events.jsonl` (PLX-493), as fast as plxd takes them.
 """
@@ -34,8 +34,10 @@ from threads import Client, connect, pct, uuid7
 
 EMITS = 400
 SLEEP_MS = 100  # After every group of four emits, so a run streams for about 10 s.
-TEXT = "The fake agent is reading the code and explaining what it found, line by line. " * 3
-OUTPUT = "fn main() {\n    println!(\"hello from a file the fake agent read\");\n}\n" * 14
+# The fake backend passes its whole compiled script as one `sh -c` argument, and Linux caps one
+# argument at 128 KiB (MAX_ARG_STRLEN), so these sizes keep the script at about 85 KB.
+TEXT = "The fake agent is reading the code and explaining what it found, line by line. "
+OUTPUT = "fn main() {\n    println!(\"hello from a file the fake agent read\");\n}\n" * 5
 
 
 def script() -> list:
@@ -93,10 +95,15 @@ class LoadClient(Client):
 
 
 def ps(pid: int) -> tuple[int, float]:
-    """plxd's RSS in KiB and its CPU time in seconds, from `ps`."""
+    """plxd's RSS in KiB and its CPU time in seconds, from `ps`. On Linux the CPU time comes from
+    /proc/<pid>/stat instead, since Linux's `ps` reports it in whole seconds."""
     rss, cpu = subprocess.run(
         ["ps", "-o", "rss=,time=", "-p", str(pid)], capture_output=True, text=True
     ).stdout.split()
+    if sys.platform == "linux":
+        # utime and stime, in clock ticks, are fields 14 and 15; the name before them is in ().
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return int(rss), (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
     seconds = 0.0
     for part in cpu.replace("-", ":").split(":"):  # [[dd-]hh:]mm:ss[.ss]
         seconds = seconds * 60 + float(part)
@@ -205,7 +212,10 @@ async def run(plxd: str, count: int, steps: list, filtered: bool) -> dict:
             "subscriptions": {name: {"events": s["events"], "bytes": s["bytes"],
                                      "latencyMs": stats(s["latency"])} for name, s in subs.items()},
             "plxd": {"cpuS": round(cpu1 - cpu0, 2), "cpuPct": round(100 * (cpu1 - cpu0) / wall, 1),
-                     "rssPeakMiB": round(max(s["rssKiB"] for s in samples) / 1024, 1)},
+                     "rssPeakMiB": round(max(s["rssKiB"] for s in samples) / 1024, 1),
+                     # Over the first sample, taken before any thread starts.
+                     "rssGrowthMiB": round(
+                         (max(s["rssKiB"] for s in samples) - samples[0]["rssKiB"]) / 1024, 1)},
             "queues": queues or None,
             "resync": resync,
             "samples": samples,
