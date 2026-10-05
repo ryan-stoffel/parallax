@@ -4,6 +4,12 @@
 //! `agent/openPr`, the Git menu's in `git`, `thread/delete`) and the run's backend events in one
 //! loop, so nothing about a run needs a lock, and events are logged in the order they happened.
 //!
+//! A push or Open PR, whose network steps can each take minutes, is the run's effect (PLX-458):
+//! it runs in a task of its own, one at a time, and its result comes back into the loop, which
+//! keeps taking commands meanwhile. While it runs, the run starts no CLI: a message waits in the
+//! queue until it ends, and commit, push, Open PR, Accept, and delete refuse the run as busy. A
+//! cancel lets it finish, since a push stopped halfway leaves `origin` in a state nobody knows.
+//!
 //! It also keeps the permission requests its CLI waits on (PLX-222, decision 0031): it logs each
 //! one with when it expires, passes `agent/approve`'s answer to the CLI, denies one nobody
 //! answered in time, and logs how each one ended, including when a cancel, a stop, or the CLI's
@@ -50,6 +56,7 @@ use parallax_store::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::{JoinError, JoinHandle};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -183,8 +190,9 @@ pub(super) enum Command {
         reply: oneshot::Sender<Result<GitStatus, ErrorObject>>,
     },
     /// `thread/delete` (#110) and `project/delete` (PLX-338): stops the run's CLI, waits for it to
-    /// exit, and deletes the run.
+    /// exit, and deletes the run. A push or Open PR in flight refuses it, unless `wait`.
     Delete {
+        wait: bool,
         reply: oneshot::Sender<Result<(), ErrorObject>>,
     },
     /// A child of this run finished, or a run started in this coordinator's Project, as
@@ -235,7 +243,7 @@ impl Command {
             Self::Git { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
-            Self::Delete { reply } => {
+            Self::Delete { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
             Self::Wake(..) => {}
@@ -330,6 +338,16 @@ impl Queued {
     }
 }
 
+/// Where a request's answer goes.
+type Reply<T> = oneshot::Sender<Result<T, ErrorObject>>;
+
+/// What a run's effect returns to its actor (PLX-458): its result, with the reply of the request
+/// that started it.
+enum Finished {
+    Push(Result<GitStatus, ErrorObject>, Reply<GitStatus>),
+    OpenPr(Result<String, ErrorObject>, Reply<String>),
+}
+
 struct Live {
     run: Arc<dyn Run>,
     events: EventStream,
@@ -369,6 +387,8 @@ pub(super) struct Actor {
     /// The run's worktree, until `agent/accept` removes it.
     worktree: Option<Worktree>,
     live: Option<Live>,
+    /// The push or Open PR running for the run, off this loop (PLX-458).
+    effect: Option<JoinHandle<Finished>>,
     batch: Batch,
     /// Messages sent to the run, by turn id, reloaded from the store after a restart. They make
     /// `agent/send` idempotent across CLI processes and fill in the logged `TurnStarted.text`.
@@ -433,6 +453,7 @@ impl Actor {
             row,
             worktree,
             live: None,
+            effect: None,
             batch: Batch::default(),
             turns,
             images: HashMap::new(),
@@ -500,8 +521,12 @@ impl Actor {
         loop {
             self.deliver().await;
             let deadline = self.batch.since.map(|since| since + COALESCE);
-            // A turn in progress gets its wake-ups next, once its CLI has exited.
-            let wake_at = self.wakes.due().filter(|_| self.live.is_none());
+            // A turn in progress gets its wake-ups next, once its CLI has exited, and a push or
+            // Open PR once it's done.
+            let wake_at = self
+                .wakes
+                .due()
+                .filter(|_| self.live.is_none() && self.effect.is_none());
             let expire_at = self.approvals.due();
             let resume_at = self.resume_due();
             tokio::select! {
@@ -539,9 +564,11 @@ impl Actor {
                 () = sleep_until(resume_at.unwrap_or_else(Instant::now)), if resume_at.is_some() => {
                     self.check_resume().await;
                 }
+                finished = effect_done(&mut self.effect) => self.finish_effect(finished).await,
                 event = next_event(&mut self.live) => self.on_event(event).await,
             }
-            if self.stopping && self.live.is_none() {
+            // A stop waits for a push or Open PR too, so its request gets its answer.
+            if self.stopping && self.live.is_none() && self.effect.is_none() {
                 self.flush().await;
                 break;
             }
@@ -611,11 +638,8 @@ impl Actor {
                 let _ = reply.send(answer);
             }
             Command::OpenPr { title, body, reply } => {
-                let answer = self.open_pr(&title, &body).await;
-                if let Ok(url) = &answer {
-                    self.link_pr(url.clone()).await;
-                }
-                let _ = reply.send(answer);
+                let effect = self.open_pr(title, body).await;
+                self.start_effect(effect, reply, Finished::OpenPr);
             }
             Command::LinkPr { url, linked, reply } => {
                 if linked {
@@ -625,12 +649,9 @@ impl Actor {
                 }
                 let _ = reply.send(self.snapshot());
             }
-            Command::Git { action, reply } => {
-                let answer = self.git(action).await;
-                let _ = reply.send(answer);
-            }
-            Command::Delete { reply } => {
-                let answer = self.delete().await;
+            Command::Git { action, reply } => self.on_git(action, reply).await,
+            Command::Delete { wait, reply } => {
+                let answer = self.delete(wait).await;
                 if answer.is_ok() {
                     self.deleted = true;
                     self.stopping = true;
@@ -656,7 +677,8 @@ impl Actor {
         }
     }
 
-    /// `agent/cancel`, by the user or by thread `from` through its Parallax tools (0041).
+    /// `agent/cancel`, by the user or by thread `from` through its Parallax tools (0041). A push
+    /// or Open PR still running finishes.
     async fn cancel(&mut self, from: Option<RunId>) {
         if self.live.is_some() {
             info!(run = %self.id, ?from, "cancelling an agent run");
@@ -814,8 +836,15 @@ impl Actor {
     /// `thread/delete` and `project/delete`: cancels a running CLI and waits for it to exit and
     /// its changes to be committed, then deletes the run's rows, events, worktree, and a thread's
     /// scratch folders ([`crate::threads::purge`]), and drops this actor from the map. Running
-    /// here, between commands, it never races a resume or an accept.
-    async fn delete(&mut self) -> Result<(), ErrorObject> {
+    /// here, between commands, it never races a resume or an accept. A push or Open PR, which
+    /// works in the run's folder, makes it wait for the effect to finish with `wait`, and
+    /// otherwise refuses it (`gitRefused`).
+    async fn delete(&mut self, wait: bool) -> Result<(), ErrorObject> {
+        if wait && let Some(effect) = &mut self.effect {
+            let finished = effect.await;
+            self.finish_effect(finished).await;
+        }
+        self.effect_busy(ErrorKind::GitRefused)?;
         if self.live.is_some() {
             self.stop_approvals(AgentApprovalBy::Cancel).await;
         }
@@ -857,6 +886,7 @@ impl Actor {
                 self.id
             )));
         }
+        self.effect_busy(ErrorKind::MergeRefused)?;
         let Some(commit) = self.row.state.commit_sha.clone() else {
             return Err(refused(format!(
                 "run {} has no committed changes to accept",
@@ -931,10 +961,16 @@ impl Actor {
         Ok((self.snapshot()?, merge))
     }
 
-    /// `agent/openPr`: pushes the run's branch to its repository's `origin` and returns the URL
-    /// of its pull request, opening one if none is open (PLX-168). Running here, between commands,
-    /// it never races a turn or its commit.
-    async fn open_pr(&self, title: &str, body: &str) -> Result<String, ErrorObject> {
+    /// `agent/openPr`: checks the run can open a pull request, and returns the actor's effect
+    /// that pushes its branch to its repository's `origin` and returns the URL of its pull
+    /// request, opening one if none is open (PLX-168). Checked here, between commands, and run
+    /// while no CLI does, it never races a turn or its commit.
+    async fn open_pr(
+        &self,
+        title: String,
+        body: String,
+    ) -> Result<impl Future<Output = Result<String, ErrorObject>> + Send + 'static, ErrorObject>
+    {
         if self.accepted() {
             return Err(super::run_accepted(self.id));
         }
@@ -945,8 +981,9 @@ impl Actor {
                 self.id
             )));
         }
+        self.effect_busy(ErrorKind::PrRefused)?;
         // A Current checkout thread pushes the branch its checkout has out (PLX-298).
-        if self.row.fields.checkout {
+        let (repo, branch) = if self.row.fields.checkout {
             let repo = self.checkout_path().await?;
             let worktrees = &self.daemon.agents.worktrees;
             let branch = worktrees
@@ -960,57 +997,98 @@ impl Actor {
                         self.id
                     ))
                 })?;
-            return self.pull_request(&repo, &branch, title, body).await;
-        }
-        if self.row.state.commit_sha.is_none() {
-            return Err(refused(format!(
-                "run {} has no committed changes to open a pull request for",
-                self.id
-            )));
-        }
-        let project = self.project;
-        if store(&self.daemon, move |db| {
-            crate::threads::is_scratch(db, project)
-        })
-        .await?
-        {
-            return Err(refused(format!(
-                "run {} is a thread with no repository, so it has no origin to push to",
-                self.id
-            )));
-        }
-        let Some(worktree) = &self.worktree else {
-            return Err(ErrorObject::internal_error(format!(
-                "run {} has no recorded worktree",
-                self.id
-            )));
+            (repo, branch)
+        } else {
+            if self.row.state.commit_sha.is_none() {
+                return Err(refused(format!(
+                    "run {} has no committed changes to open a pull request for",
+                    self.id
+                )));
+            }
+            let project = self.project;
+            if store(&self.daemon, move |db| {
+                crate::threads::is_scratch(db, project)
+            })
+            .await?
+            {
+                return Err(refused(format!(
+                    "run {} is a thread with no repository, so it has no origin to push to",
+                    self.id
+                )));
+            }
+            let Some(worktree) = &self.worktree else {
+                return Err(ErrorObject::internal_error(format!(
+                    "run {} has no recorded worktree",
+                    self.id
+                )));
+            };
+            (PathBuf::from(&worktree.repo_path), worktree.branch.clone())
         };
-        self.pull_request(
-            Path::new(&worktree.repo_path),
-            &worktree.branch,
-            title,
-            body,
-        )
-        .await
+        let (daemon, run) = (Arc::clone(&self.daemon), self.id);
+        Ok(async move {
+            let url = daemon
+                .agents
+                .worktrees
+                .open_pr(&repo, &branch, &title, &body)
+                .await
+                .map_err(|error| super::pr_error(&error))?;
+            info!(%run, %url, "opened a pull request for an agent run");
+            Ok(url)
+        })
     }
 
-    /// Pushes `branch` from `repo` and returns its pull request's URL, for `agent/openPr`.
-    async fn pull_request(
-        &self,
-        repo: &Path,
-        branch: &str,
-        title: &str,
-        body: &str,
-    ) -> Result<String, ErrorObject> {
-        let url = self
-            .daemon
-            .agents
-            .worktrees
-            .open_pr(repo, branch, title, body)
-            .await
-            .map_err(|error| super::pr_error(&error))?;
-        info!(run = %self.id, %url, "opened a pull request for an agent run");
-        Ok(url)
+    /// Runs `effect` in a task on the runs' tracker, off this loop, which gets its result back,
+    /// wrapped by `finished` with `reply`, in [`Self::finish_effect`] (PLX-458). A request its
+    /// checks refused is answered now.
+    fn start_effect<T: Send + 'static>(
+        &mut self,
+        effect: Result<impl Future<Output = Result<T, ErrorObject>> + Send + 'static, ErrorObject>,
+        reply: Reply<T>,
+        finished: fn(Result<T, ErrorObject>, Reply<T>) -> Finished,
+    ) {
+        match effect {
+            Ok(effect) => {
+                let task = async move { finished(effect.await, reply) };
+                self.effect = Some(self.daemon.agents.tracker.spawn(task));
+            }
+            Err(error) => {
+                let _ = reply.send(Err(error));
+            }
+        }
+    }
+
+    /// The run's push or Open PR ended: links the pull request it opened, and answers its
+    /// request.
+    async fn finish_effect(&mut self, finished: Result<Finished, JoinError>) {
+        self.effect = None;
+        match finished {
+            Ok(Finished::Push(answer, reply)) => {
+                let _ = reply.send(answer);
+            }
+            Ok(Finished::OpenPr(answer, reply)) => {
+                if let Ok(url) = &answer {
+                    self.link_pr(url.clone()).await;
+                }
+                let _ = reply.send(answer);
+            }
+            // Its reply went with it, so its request fails as for an actor that's gone.
+            Err(error) => warn!(run = %self.id, %error, "a push or Open PR failed"),
+        }
+    }
+
+    /// Refuses, as `kind`, what can't run beside the run's push or Open PR (PLX-458).
+    fn effect_busy(&self, kind: ErrorKind) -> Result<(), ErrorObject> {
+        if self.effect.is_none() {
+            return Ok(());
+        }
+        Err(ErrorObject::parallax(
+            kind,
+            format!(
+                "run {} is pushing its branch or opening a pull request; try again once that's \
+                 done",
+                self.id
+            ),
+        ))
     }
 
     /// Links pull request `url` to the run, unless it already is, and reports it as
@@ -1227,6 +1305,11 @@ impl Actor {
                 Err(id_conflict(turn_id))
             };
         }
+        // No CLI starts while a push or Open PR runs (PLX-458). A steer waits too: no turn runs
+        // for it to go into.
+        if self.effect.is_some() {
+            return self.queue(queued).await;
+        }
         if steer {
             return self.steer(queued).await;
         }
@@ -1295,7 +1378,7 @@ impl Actor {
                 self.drain().await;
             }
             Some(Err(SendError::Finished)) => self.drain().await,
-            None => {}
+            None => self.effect_busy(ErrorKind::RunNotResumable)?,
         }
         let Queued {
             turn_id,
@@ -1376,13 +1459,14 @@ impl Actor {
     }
 
     /// Sends what waits as far as the run can take it now: while no CLI runs, the next message
-    /// to a new CLI process; while the live CLI has no turn in progress, the next message that
-    /// doesn't change what it runs with, as its next turn. Holds the CLI open while that waits.
+    /// to a new CLI process, once no push or Open PR runs either; while the live CLI has no turn
+    /// in progress, the next message that doesn't change what it runs with, as its next turn.
+    /// Holds the CLI open while that waits.
     async fn deliver(&mut self) {
         if self.stopping {
             return;
         }
-        if self.live.is_none() {
+        if self.live.is_none() && self.effect.is_none() {
             self.send_queued().await;
         }
         while self.in_flight == 0 && self.live.is_some() {
@@ -2806,6 +2890,14 @@ pub(super) fn backend_name(backend: &str) -> &str {
 async fn next_event(live: &mut Option<Live>) -> Option<Event> {
     match live {
         Some(live) => live.events.next().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// The run's push or Open PR, once it ends; never while there is none.
+async fn effect_done(effect: &mut Option<JoinHandle<Finished>>) -> Result<Finished, JoinError> {
+    match effect {
+        Some(task) => task.await,
         None => std::future::pending().await,
     }
 }

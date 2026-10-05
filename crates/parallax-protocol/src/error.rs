@@ -40,7 +40,8 @@ pub enum ErrorKind {
     /// No agent run has the given id (#156).
     RunNotFound,
     /// `agent/send` can't resume the run: it ended before its CLI reported a session, or it is
-    /// still starting.
+    /// still starting. `agent/resumeNow` and `queue/steer` fail with it while the run's push or
+    /// Open PR runs (PLX-458).
     RunNotResumable,
     /// plxd won't start a worker as asked: its backend doesn't implement the worker sandbox
     /// (0013), the CLI is missing or older than the version the sandbox needs, or a path it would
@@ -54,10 +55,11 @@ pub enum ErrorKind {
     /// The run was accepted (#157): its worktree and branch are gone, so there is nothing left to
     /// review, and it takes no more messages.
     RunAccepted,
-    /// `agent/accept` refused before changing anything: the run is still running or has no
-    /// commit, the repository's HEAD is detached or a merge or rebase is in progress there,
-    /// uncommitted changes in the user's checkout touch files the merge would change, or the run
-    /// has committed since the reviewed commit. The message says which.
+    /// `agent/accept` refused before changing anything: the run, or its push or Open PR
+    /// (PLX-458), is still running, or it has no commit, the repository's HEAD is detached or a
+    /// merge or rebase is in progress there, uncommitted changes in the user's checkout touch
+    /// files the merge would change, or the run has committed since the reviewed commit. The
+    /// message says which.
     MergeRefused,
     /// `agent/accept` refused because the run's commit conflicts with the project's branch, which
     /// has moved on since the run started. The message names the conflicting files. Nothing was
@@ -75,8 +77,9 @@ pub enum ErrorKind {
     /// to its CLI (PLX-97). Nothing was created. The message names the option, the value, and the
     /// backend.
     UnsupportedOption,
-    /// `agent/openPr` refused before pushing anything: the run is still running, it has no commit
-    /// beyond its base, or it is a thread with no repo, which has no `origin` (PLX-168).
+    /// `agent/openPr` refused before pushing anything: the run is still running, its push or Open
+    /// PR is (PLX-458), it has no commit beyond its base, or it is a thread with no repo, which
+    /// has no `origin` (PLX-168).
     PrRefused,
     /// `agent/openPr` could not push the run's branch: the repository has no `origin`, or git
     /// failed. The message carries git's stderr.
@@ -99,8 +102,9 @@ pub enum ErrorKind {
     /// `approvals` never has, or none this plxd has seen since it started (PLX-222).
     ApprovalNotFound,
     /// `agent/commit` or `agent/push` refused with nothing changed (PLX-298): the run is still
-    /// running, there is nothing to commit, or its folder has a detached HEAD, with no branch to
-    /// push. The message says which.
+    /// running, its push or Open PR is (PLX-458), there is nothing to commit, or its folder has a
+    /// detached HEAD, with no branch to push. The message says which. `thread/delete` fails with
+    /// it too while the thread's push or Open PR runs; `project/delete` waits for its runs' instead.
     GitRefused,
     /// `agent/commit`'s git failed, such as for a missing `user.name`. The message carries git's
     /// stderr.

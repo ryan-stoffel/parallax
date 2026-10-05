@@ -346,9 +346,10 @@ pub struct ProjectStartParams {
 /// stored events, sent turns, images, worktrees, and branches, and its shared context folder,
 /// behind the `projectDelete` capability (PLX-338).
 ///
-/// Running CLIs are cancelled first, and the delete answers once they have exited and the
-/// project is gone, after appending `project.deleted`. Deleting a project that doesn't exist, or
-/// a repo entry's id, fails with `projectNotFound`.
+/// Running CLIs are cancelled first, and the delete answers once they have exited, the runs'
+/// pushes and Open PRs in flight have finished (PLX-458), and the project is gone, after
+/// appending `project.deleted`. Deleting a project that doesn't exist, or a repo entry's id,
+/// fails with `projectNotFound`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectDeleteParams {

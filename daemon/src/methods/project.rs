@@ -326,7 +326,7 @@ async fn remove(
             break repo_path;
         }
         for run in runs {
-            match agents::delete(&daemon, run).await {
+            match agents::delete(&daemon, run, true).await {
                 Ok(()) => {}
                 // Another `project/delete` got to it first.
                 Err(error)

@@ -461,7 +461,8 @@ pub struct ThreadArchiveResult {
 /// no repo's scratch repository, and its stored events.
 ///
 /// A running CLI is cancelled first, and the delete answers once it has exited and its changes
-/// were committed. Deleting a thread that doesn't exist fails with `threadNotFound`.
+/// were committed. Deleting a thread that doesn't exist fails with `threadNotFound`, and one
+/// whose push or Open PR is running with `gitRefused` (PLX-458).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDeleteParams {

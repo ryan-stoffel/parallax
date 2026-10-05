@@ -21,9 +21,9 @@ const CHECK_EVERY: Duration = Duration::from_secs(60);
 
 impl Actor {
     /// When the actor next checks the stored timer: `resumeAt`, or [`CHECK_EVERY`] from now if
-    /// that is sooner, while the run waits and no CLI runs.
+    /// that is sooner, while the run waits and no CLI, push, or Open PR runs.
     pub(super) fn resume_due(&self) -> Option<Instant> {
-        if self.row.state.status != WAITING || self.live.is_some() {
+        if self.row.state.status != WAITING || self.live.is_some() || self.effect.is_some() {
             return None;
         }
         let at = self.row.state.resume_at?;
@@ -97,6 +97,7 @@ impl Actor {
                 format!("run {} isn't waiting for a usage limit to reset", self.id),
             ));
         }
+        self.effect_busy(ErrorKind::RunNotResumable)?;
         if let Some(pending) = crate::agents::placement::take(&self.daemon, self.id).await? {
             let account = super::session_account(&self.row.state.account_id);
             return self.place(account, pending).await;

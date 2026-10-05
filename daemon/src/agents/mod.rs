@@ -1579,9 +1579,11 @@ pub(super) fn approval_not_found(run: RunId, approval: ApprovalId) -> ErrorObjec
 }
 
 /// `thread/delete`'s and `project/delete`'s part in the runner: deletes a run through its actor,
-/// which stops a running CLI first and never races the run's own resume, commit, or accept.
-pub(crate) async fn delete(daemon: &Arc<Daemon>, id: RunId) -> Result<(), ErrorObject> {
-    ask(daemon, id, |reply| Command::Delete { reply }).await
+/// which stops a running CLI first and never races the run's own resume, commit, or accept. A
+/// push or Open PR in flight refuses it (`gitRefused`), unless `wait`, which waits for it to
+/// finish first, as `project/delete` does so it never stops with half its runs deleted (PLX-458).
+pub(crate) async fn delete(daemon: &Arc<Daemon>, id: RunId, wait: bool) -> Result<(), ErrorObject> {
+    ask(daemon, id, |reply| Command::Delete { wait, reply }).await
 }
 
 /// `agent/accept`: through the run's actor, so it never races the run's own CLI or commit.

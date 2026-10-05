@@ -3821,7 +3821,8 @@ export type RepoUpdateResult = {
  * no repo's scratch repository, and its stored events.
  *
  * A running CLI is cancelled first, and the delete answers once it has exited and its changes
- * were committed. Deleting a thread that doesn't exist fails with `threadNotFound`.
+ * were committed. Deleting a thread that doesn't exist fails with `threadNotFound`, and one
+ * whose push or Open PR is running with `gitRefused` (PLX-458).
  */
 export type ThreadDeleteParams = {
 	/**
@@ -4304,9 +4305,10 @@ export type PrDiffResult = {
  * stored events, sent turns, images, worktrees, and branches, and its shared context folder,
  * behind the `projectDelete` capability (PLX-338).
  *
- * Running CLIs are cancelled first, and the delete answers once they have exited and the
- * project is gone, after appending `project.deleted`. Deleting a project that doesn't exist, or
- * a repo entry's id, fails with `projectNotFound`.
+ * Running CLIs are cancelled first, and the delete answers once they have exited, the runs'
+ * pushes and Open PRs in flight have finished (PLX-458), and the project is gone, after
+ * appending `project.deleted`. Deleting a project that doesn't exist, or a repo entry's id,
+ * fails with `projectNotFound`.
  */
 export type ProjectDeleteParams = {
 	/**
