@@ -452,6 +452,30 @@ test("New repository creates it in ~/.parallax/projects and registers it, and a 
   expect(crumbs()).toEqual(before);
 });
 
+test("a clone that finishes after its palette closed is registered but leaves a palette opened since alone", async () => {
+  listFolders.mockImplementation(listTree);
+  const clone = Promise.withResolvers<{ path: string }>();
+  cloneRepo.mockReturnValue(clone.promise);
+  answers["repo/add"] = (p) => ({
+    result: { repo: { ...parallax, id: "r-photon", name: "photon", path: p["path"] } },
+  });
+  await renderApp();
+  await openPalette();
+  await click(paletteOption("Clone from GitHub"));
+  typeInto(field(), "ryan-stoffel/photon");
+  pressKey("Enter");
+  await settle();
+  await click(action("Clone"));
+  await act(async () => dialog().close());
+
+  await openNewProject();
+  await act(async () => clone.resolve({ path: "/Users/me/photon" }));
+  await settle();
+  expect(calls("repo/add")).toEqual([{ id: expect.any(String), path: "/Users/me/photon" }]);
+  expect(dialog().open).toBe(true);
+  expect(workspaceButton()).toBe("Workspace: parallax on This Mac");
+});
+
 test("Create Project's Workspace can be cloned from GitHub in the palette, which comes back to the form with it chosen", async () => {
   listFolders.mockImplementation(listTree);
   cloneRepo.mockResolvedValue({ path: "/Users/me/Developer/photon" });

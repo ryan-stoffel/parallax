@@ -88,8 +88,6 @@ export function AddDialog({
   const back = () =>
     stack.length > 1 ? setStack((all) => all.slice(0, -1)) : dialog.current?.close();
   const added = (repo: Repo) => {
-    // Closed while it was being made, as with Escape: drop the late answer.
-    if (!dialog.current?.open) return;
     const project = stack.findIndex((s) => s.kind === "project");
     if (project < 0) return dialog.current?.close();
     setWorkspace({ hostId: localId, repo });
@@ -455,6 +453,15 @@ function useAdd(onAdded: (repo: Repo) => void) {
   const [error, setError] = useState<string>();
   // A ref, so a second Enter before the first re-renders is dropped too.
   const running = useRef(false);
+  // Whether the step is still open. One closed, as with Escape, registers what it made but
+  // doesn't move a palette opened since.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const run = async (key: string, make: () => Promise<{ path: string } | { error: string }>) => {
     if (running.current) return;
     running.current = true;
@@ -472,7 +479,7 @@ function useAdd(onAdded: (repo: Repo) => void) {
         path: made.current.path,
       });
       if ("error" in answer) setError(describeError(answer.error));
-      else onAdded(answer.result.repo);
+      else if (mounted.current) onAdded(answer.result.repo);
     } catch (error) {
       setError(String(error));
     } finally {
