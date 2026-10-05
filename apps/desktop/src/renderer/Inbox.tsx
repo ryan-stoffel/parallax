@@ -57,7 +57,8 @@ export function useInbox(
       if (stopped || "error" in list) return;
       setItems(list.result.items);
       void loadQuestions();
-      const since = { after: list.result.seq, project, logId: list.logId };
+      // `shell` leaves out the runs' output, which only the transcript reads (PLX-453).
+      const since = { after: list.result.seq, project, shell: true, logId: list.logId };
       unsubscribe = window.parallax.subscribe(hostId, since, (message) => {
         if (stopped) return;
         if (message.type === "resync") return void load();

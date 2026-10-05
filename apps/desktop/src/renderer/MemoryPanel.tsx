@@ -170,7 +170,13 @@ function useMemory(hostId: string, project: string | undefined, repo: string | u
     const watch = async (folder: string) => {
       const position = await window.parallax.request(hostId, "agent/list", { project: folder });
       if (stopped || "error" in position) return;
-      const since = { after: position.result.seq, project: folder, logId: position.logId };
+      // `shell` leaves out the runs' output, which only the transcript reads (PLX-453).
+      const since = {
+        after: position.result.seq,
+        project: folder,
+        shell: true,
+        logId: position.logId,
+      };
       unsubscribes.push(
         window.parallax.subscribe(hostId, since, (message) => {
           if (stopped) return;

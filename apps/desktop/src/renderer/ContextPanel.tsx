@@ -41,7 +41,8 @@ export function useProjectContext(hostId: string, project: string, connected: bo
       if ("error" in list) return setError(list.error.message);
       setFiles(list.result.files);
       setError(undefined);
-      const since = { after: position.result.seq, project, logId: position.logId };
+      // `shell` leaves out the runs' output, which only the transcript reads (PLX-453).
+      const since = { after: position.result.seq, project, shell: true, logId: position.logId };
       unsubscribe = window.parallax.subscribe(hostId, since, (message) => {
         if (stopped) return;
         if (message.type === "resync") return void load();

@@ -2223,7 +2223,7 @@ const serveInbox = () => {
     result: { runs: p["project"] === "p-ember" ? runs : [], seq: 7 },
   });
   answers["agent/events"] = serveEvents(() => runs);
-  answers["inbox/list"] = () => ({ result: { items: inboxItems, seq: 7 } });
+  answers["inbox/list"] = () => ({ result: { items: inboxItems, seq: 8 } });
   answers["question/list"] = () => ({ result: { questions: [escalated] } });
   answers["inbox/seen"] = (p) => ({
     result: {
@@ -2251,8 +2251,15 @@ const childButton = (title: string) =>
 test("a Project opens its side panel on the Project tab: its children once each in Waiting on you, Working, Done, and Resolved, folded, with the header's count on the tab", async () => {
   capabilities = { coordinator: {}, inbox: {} };
   serveInbox();
+  const subscribe = vi.spyOn(window.parallax, "subscribe");
   await renderApp();
   await openEmber();
+  // The inbox follows its events after `inbox/list`'s seq, without the runs' output.
+  expect(subscribe).toHaveBeenCalledWith(
+    "local",
+    { after: 8, project: "p-ember", shell: true, logId: "log-1" },
+    expect.any(Function),
+  );
   expect(projectTab()!.getAttribute("aria-current")).toBe("true");
   expect(projectTab()!.textContent).toBe("Project2");
   expect(home().querySelector("h2")!.textContent).toBe("ember");
