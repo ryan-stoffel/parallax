@@ -4,8 +4,6 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { ipcMain } from "electron";
-
 import { githubSlug, isFolderName, type FolderListing } from "../preload/bridge";
 
 const run = promisify(execFile);
@@ -120,15 +118,4 @@ export async function cloneRepo(
   } catch (error) {
     return { error: gitError(error) ?? "git clone failed" };
   }
-}
-
-/** Serves the add palette's folder browser, New Repository, and Clone from GitHub. */
-export function startRepos(): void {
-  ipcMain.handle("parallax:listFolders", (_event, input: unknown) =>
-    listFolders(typeof input === "string" ? input : "~"),
-  );
-  ipcMain.handle("parallax:createRepo", (_event, name: unknown) => createRepo(String(name)));
-  ipcMain.handle("parallax:cloneRepo", (_event, slug: unknown, dest: unknown) =>
-    typeof dest === "string" ? cloneRepo(String(slug), dest) : { error: "No folder to clone into" },
-  );
 }

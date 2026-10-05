@@ -36,7 +36,7 @@ import { savedHost, startHosts } from "./hosts";
 import { isBrowsable, isOpenableExternally, mayNavigate } from "./links";
 import { createNamer } from "./namer";
 import { fallbackName } from "./naming";
-import { startRepos } from "./repos";
+import { cloneRepo, createRepo, listFolders } from "./repos";
 import { startStorage } from "./storage";
 import { isNightly, startUpdater } from "./updater";
 
@@ -188,6 +188,15 @@ ipcMain.handle("parallax:pickFolder", async (event) => {
     : dialog.showOpenDialog(options));
   return canceled ? null : (filePaths[0] ?? null);
 });
+
+// The add palette's folder browser, New repository, and Clone from GitHub (repos.ts).
+ipcMain.handle("parallax:listFolders", (_event, input: unknown) =>
+  listFolders(typeof input === "string" ? input : "~"),
+);
+ipcMain.handle("parallax:createRepo", (_event, name: unknown) => createRepo(String(name)));
+ipcMain.handle("parallax:cloneRepo", (_event, slug: unknown, dest: unknown) =>
+  typeof dest === "string" ? cloneRepo(String(slug), dest) : { error: "No folder to clone into" },
+);
 
 // Settings > Account's Share: a picture of part of the asking window, onto the clipboard.
 ipcMain.handle("parallax:copyPicture", async (event, rect: unknown) => {
@@ -344,7 +353,6 @@ void app.whenReady().then(() => {
   browserSession.setPermissionCheckHandler(() => false);
   startHosts();
   startStorage();
-  startRepos();
   // Under `pnpm dev`, Update follows main (scripts/channels.mjs). Nightly and stable are tags on it.
   if (!updater) process.send?.({ channel: "nightly" });
   startAccount();
