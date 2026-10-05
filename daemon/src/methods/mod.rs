@@ -13,7 +13,7 @@
 mod accounts;
 mod agent;
 mod composer;
-mod context;
+pub(crate) mod context;
 mod cursor;
 mod defaults;
 mod events;
