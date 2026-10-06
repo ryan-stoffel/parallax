@@ -126,7 +126,7 @@ test("any host's thread notifies with Open thread, except the one open in the fo
   ];
   const onOpen = vi.fn();
   function Alarms({ list, openKey }: { list: HostThreads[]; openKey?: string }) {
-    useThreadAlarms(list, onOpen, openKey);
+    useThreadAlarms(list, onOpen, openKey ? [openKey] : []);
     return <Notifications />;
   }
   // Already finished when first listed: not news.
@@ -185,7 +185,7 @@ test("a thread waiting on the user as its host's list loads, or reloads, is not 
     },
   ];
   function Alarms({ list }: { list: HostThreads[] }) {
-    useThreadAlarms(list, () => {}, undefined);
+    useThreadAlarms(list, () => {}, []);
     return <Notifications />;
   }
   const rerender = render(<Alarms list={hosts(0, true)} />);

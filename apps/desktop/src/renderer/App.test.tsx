@@ -285,3 +285,15 @@ test("in a terminal off macOS, plain Ctrl+letter shortcuts stay the shell's", ()
   bridge.platform = "darwin";
   expect(press({ code: "KeyN", metaKey: true })).toBe(true);
 });
+
+test("Ctrl+1 and Ctrl+2 focus the split's sides on macOS, and Ctrl+Shift+1 and 2 elsewhere", () => {
+  const press = (init: KeyboardEventInit) => appShortcut(new KeyboardEvent("keydown", init));
+  expect(press({ code: "Digit1", ctrlKey: true })).toBe("leftThread");
+  expect(press({ code: "Digit2", ctrlKey: true })).toBe("rightThread");
+  // Off macOS, Ctrl+1 opens the first sidebar row.
+  bridge.platform = "linux";
+  expect(press({ code: "Digit1", ctrlKey: true })).toBe("row");
+  expect(press({ code: "Digit1", ctrlKey: true, shiftKey: true })).toBe("leftThread");
+  expect(press({ code: "Digit2", ctrlKey: true, shiftKey: true })).toBe("rightThread");
+  bridge.platform = "darwin";
+});
