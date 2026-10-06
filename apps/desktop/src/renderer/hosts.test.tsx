@@ -55,6 +55,7 @@ beforeEach(() => {
     version: async () => "1.0.0",
     openTargets: async () => [],
     openTargetIcons: async () => ({}),
+    terminalApp: async () => null,
     saveHost,
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });

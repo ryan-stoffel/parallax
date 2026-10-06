@@ -15,8 +15,11 @@ import type {
 export const THEME_PREFERENCES = ["system", "dark", "light"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
-/** Where the top bar's Open button opens a folder: an editor, or the OS's file manager. */
-export const OPEN_TARGETS = ["cursor", "vscode", "files"] as const;
+/**
+ * Where the top bar's Open button opens a folder: an editor, the OS's file manager, or the
+ * terminal app chosen in Settings.
+ */
+export const OPEN_TARGETS = ["cursor", "vscode", "files", "terminal"] as const;
 export type OpenTarget = (typeof OPEN_TARGETS)[number];
 
 /**
@@ -232,13 +235,20 @@ export interface ParallaxBridge {
 
   /**
    * Where `openFolder` can open a folder on a host: the editors this computer has, and the file
-   * manager for this computer's own folders. Empty for an unknown host.
+   * manager and chosen terminal for this computer's own folders. Empty for an unknown host.
    */
   openTargets(hostId: string): Promise<OpenTarget[]>;
   /** The Open targets' own app icons as data URLs: macOS only, and only those it could read. */
   openTargetIcons(): Promise<Partial<Record<OpenTarget, string>>>;
   /** Opens a host's folder with `target`. Main shows a dialog when it can't. */
   openFolder(hostId: string, target: OpenTarget, folder: string): Promise<void>;
+  /** The name of the terminal app Open uses, or null until one is chosen. */
+  terminalApp(): Promise<string | null>;
+  /**
+   * Asks for the terminal app in a file dialog that starts in Applications, and keeps it. Resolves
+   * to its name, or null if canceled.
+   */
+  chooseTerminalApp(): Promise<string | null>;
 
   /**
    * Calls `listener` with the signed-in Parallax account (0037), or null, now and on every

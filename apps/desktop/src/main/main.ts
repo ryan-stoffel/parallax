@@ -38,6 +38,7 @@ import { createNamer } from "./namer";
 import { fallbackName } from "./naming";
 import { appDataDir } from "./plxd";
 import { cloneRepo, createRepo, listFolders } from "./repos";
+import { readTerminalApp, terminalCommand, terminalName, writeTerminalApp } from "./terminalApp";
 import { startStorage } from "./storage";
 import { isNightly, startUpdater } from "./updater";
 
@@ -224,20 +225,56 @@ ipcMain.handle("parallax:copyPicture", async (event, rect: unknown) => {
 // checks each and runs only a program it found, never through a shell. Editors are found once.
 let editors: Partial<Record<Editor, string>> | undefined;
 const installedEditors = () => (editors ??= detectEditors(process.platform, process.env));
-// Every editor opens an SSH host's folder over its Remote SSH. The file manager is this computer's.
+// The terminal app chosen in Settings > General (terminalApp.ts), read once.
+const terminalFile = () => path.join(app.getPath("userData"), "terminal.json");
+let terminal = readTerminalApp(terminalFile());
+// Every editor opens an SSH host's folder over its Remote SSH. The file manager and terminal are
+// this computer's.
 function openTargets(hostId: unknown): OpenTarget[] {
   const local = hostId === "local";
   if (!local && (typeof hostId !== "string" || !savedHost(hostId))) return [];
   const found = Object.keys(installedEditors()) as Editor[];
-  return local ? [...found, "files"] : found;
+  if (!local) return found;
+  return terminal ? [...found, "files", "terminal"] : [...found, "files"];
 }
 ipcMain.handle("parallax:openTargets", (_event, hostId: unknown) => openTargets(hostId));
+ipcMain.handle("parallax:terminalApp", () => (terminal ? terminalName(terminal) : null));
+// A file dialog in Applications, or the OS's equivalent, sheet-attached to the asking window.
+ipcMain.handle("parallax:chooseTerminalApp", async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const options: Electron.OpenDialogOptions = {
+    title: "Choose your terminal",
+    buttonLabel: "Choose",
+    properties: ["openFile"],
+    ...(process.platform === "darwin"
+      ? { defaultPath: "/Applications", filters: [{ name: "Applications", extensions: ["app"] }] }
+      : process.platform === "win32"
+        ? {
+            defaultPath: process.env["ProgramFiles"],
+            filters: [{ name: "Programs", extensions: ["exe"] }],
+          }
+        : { defaultPath: "/usr/bin" }),
+  };
+  const { canceled, filePaths } = await (win
+    ? dialog.showOpenDialog(win, options)
+    : dialog.showOpenDialog(options));
+  const chosen = filePaths[0];
+  if (canceled || !chosen) return null;
+  writeTerminalApp(terminalFile(), chosen);
+  terminal = chosen;
+  targetIcons = undefined;
+  return terminalName(chosen);
+});
 // The Open targets' own app icons on macOS, as data URLs, found once. Quick Look, since
 // `app.getFileIcon` gives a `.app` bundle a placeholder icon. A target without one keeps its mark.
 let targetIcons: Promise<Partial<Record<OpenTarget, string>>> | undefined;
 async function openTargetIcons(): Promise<Partial<Record<OpenTarget, string>>> {
   if (process.platform !== "darwin") return {};
-  const apps = { ...installedEditors(), files: "/System/Library/CoreServices/Finder.app" };
+  const apps = {
+    ...installedEditors(),
+    files: "/System/Library/CoreServices/Finder.app",
+    ...(terminal ? { terminal: terminal } : {}),
+  };
   const icons = await Promise.all(
     Object.entries(apps).map(async ([target, program]) => {
       try {
@@ -262,6 +299,8 @@ ipcMain.handle(
     // A local folder must be one: `shell.openPath` would run an executable file.
     if (!destination && !isDirectory(folder)) error = "That folder isn't there anymore.";
     else if (target === "files") error = (await shell.openPath(folder)) || undefined;
+    else if (target === "terminal")
+      error = await launch(terminalCommand(process.platform, terminal!, folder));
     else {
       const program = installedEditors()[target as Editor]!;
       error = await launch(editorCommand(program, folder, destination));

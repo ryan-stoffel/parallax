@@ -71,6 +71,7 @@ beforeEach(() => {
   };
   window.parallax = {
     platform: "darwin",
+    terminalApp: async () => null,
     connectionState: async (hostId) => states[hostId]!,
     onConnectionState: () => () => {},
     hosts: async () => [mini],
@@ -1192,4 +1193,22 @@ test("General's Legacy Plan mode switch lists Plan in the Access picker", async 
   await click(legacy);
   expect(accessPrefs.get()).toEqual({ legacyPlan: true });
   accessPrefs.set(accessDefaults);
+});
+
+test("General's Terminal row chooses a terminal app, and Open folders in lists it (PLX-585)", async () => {
+  let chosen = false;
+  window.parallax.openTargets = async () => (chosen ? ["files", "terminal"] : ["files"]);
+  window.parallax.chooseTerminalApp = async () => {
+    chosen = true;
+    return "Ghostty";
+  };
+  window.parallax.version = async () => "1.2.3";
+  await renderSettings("general");
+  const choose = [...section("Open").querySelectorAll("button")].find(
+    (b) => b.textContent === "Choose…",
+  )!;
+  await click(choose);
+  expect(section("Open").textContent).toContain("Open lists Ghostty");
+  const options = document.querySelectorAll('select[aria-label="Open folders in"] option');
+  expect([...options].map((o) => o.textContent)).toEqual(["Finder", "Ghostty"]);
 });

@@ -8,7 +8,7 @@ import { EffortMenu } from "../EffortMenu";
 import { localId, useHosts } from "../hosts";
 import { ModelMenu } from "../ModelMenu";
 import { useCatalog, type Provider } from "../models";
-import { nameOf, OPEN_TARGET_KEY } from "../OpenMenu";
+import { nameOf, OPEN_TARGET_KEY, TERMINAL_CHOSEN } from "../OpenMenu";
 import {
   behaviorPrefs,
   newThreadPrefs,
@@ -36,11 +36,20 @@ export function GeneralSettings() {
   const [showNotices, setShowNotices] = useState(false);
   const [targets, setTargets] = useState<OpenTarget[]>([]);
   const [chosen, setChosen] = useState(() => localStorage.getItem(OPEN_TARGET_KEY));
+  const [terminal, setTerminal] = useState<string | null>(null);
   const [version, setVersion] = useState<string>();
   useEffect(() => {
     void window.parallax.openTargets(localId).then(setTargets);
+    void window.parallax.terminalApp().then(setTerminal);
     void window.parallax.version().then(setVersion);
   }, []);
+  const chooseTerminal = async () => {
+    const name = await window.parallax.chooseTerminalApp();
+    if (!name) return;
+    setTerminal(name);
+    setTargets(await window.parallax.openTargets(localId));
+    window.dispatchEvent(new Event(TERMINAL_CHOSEN));
+  };
   const current = targets.find((t) => t === chosen) ?? targets[0];
   const sidebar = sidebarPrefs.use();
   const setSidebar = (patch: Partial<SidebarPrefs>) =>
@@ -101,10 +110,22 @@ export function GeneralSettings() {
           >
             {targets.map((t) => (
               <option key={t} value={t}>
-                {nameOf(t)}
+                {nameOf(t, terminal)}
               </option>
             ))}
           </select>
+        </Row>
+        <Row
+          title="Terminal"
+          description={
+            terminal
+              ? `Open lists ${terminal} for this computer's threads.`
+              : "Choose the terminal app Open can open a thread's folder in."
+          }
+        >
+          <button type="button" onClick={() => void chooseTerminal()} className={quietButton}>
+            {terminal ? "Change…" : "Choose…"}
+          </button>
         </Row>
       </Section>
       <Behavior />

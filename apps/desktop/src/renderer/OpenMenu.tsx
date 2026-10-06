@@ -1,4 +1,4 @@
-import { ChevronDown, FolderOpen } from "lucide-react";
+import { ChevronDown, FolderOpen, SquareTerminal } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode, type ToggleEvent } from "react";
 
 import type { OpenTarget } from "../preload/bridge";
@@ -8,17 +8,22 @@ import { appShortcut, menuButton, menuItem, menuPanel, moveFocus } from "./ui";
 
 /** Where the last target chosen is kept; Settings > General sets it too. */
 export const OPEN_TARGET_KEY = "parallax.openTarget";
+/** The window event Settings fires after choosing a terminal app, so Open lists it. */
+export const TERMINAL_CHOSEN = "parallax:terminalChosen";
 
 // Each target's mark, shown where main has no app icon for it (anywhere but macOS).
 const marks: Record<OpenTarget, ReactNode> = {
   cursor: <CursorLogo />,
   vscode: <VSCodeLogo />,
   files: <FolderOpen />,
+  terminal: <SquareTerminal />,
 };
 
-export const nameOf = (target: OpenTarget) => {
+/** A target's name for people; the terminal's is the chosen app's, `terminal`. */
+export const nameOf = (target: OpenTarget, terminal?: string | null) => {
   if (target === "cursor") return "Cursor";
   if (target === "vscode") return "VS Code";
+  if (target === "terminal") return terminal ?? "Terminal";
   const platform = window.parallax.platform;
   return platform === "darwin" ? "Finder" : platform === "win32" ? "File Explorer" : "Files";
 };
@@ -34,20 +39,33 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
   const [targets, setTargets] = useState<OpenTarget[]>([]);
   const [chosen, setChosen] = useState(() => localStorage.getItem(OPEN_TARGET_KEY));
   const [appIcons, setAppIcons] = useState<Partial<Record<OpenTarget, string>>>({});
+  const [terminal, setTerminal] = useState<string | null>(null);
+  // Bumped when Settings chooses a terminal app, to list it and fetch its name and icon.
+  const [terminalChosen, setTerminalChosen] = useState(0);
+  useEffect(() => {
+    const onChosen = () => setTerminalChosen((n) => n + 1);
+    window.addEventListener(TERMINAL_CHOSEN, onChosen);
+    return () => window.removeEventListener(TERMINAL_CHOSEN, onChosen);
+  }, []);
   useEffect(() => {
     void window.parallax.openTargetIcons().then(setAppIcons);
-  }, []);
+  }, [terminalChosen]);
   const icon = (target: OpenTarget) => {
     const src = appIcons[target];
     return src ? <img src={src} alt="" className="size-4 shrink-0" /> : marks[target];
   };
   useEffect(() => {
     let live = true;
-    void window.parallax.openTargets(hostId).then((found) => live && setTargets(found));
+    void window.parallax.openTargets(hostId).then((found) => {
+      if (!live) return;
+      setTargets(found);
+      if (found.includes("terminal"))
+        void window.parallax.terminalApp().then((name) => live && setTerminal(name));
+    });
     return () => {
       live = false;
     };
-  }, [hostId]);
+  }, [hostId, terminalChosen]);
   const current = targets.find((t) => t === chosen) ?? targets[0];
   const keys = useShortcutLabel("open");
 
@@ -81,9 +99,11 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
           type="button"
           disabled={!folder}
           onClick={() => open(current)}
-          aria-label={`Open in ${nameOf(current)}`}
+          aria-label={`Open in ${nameOf(current, terminal)}`}
           // Unset without a folder, so the wrapper's tooltip says why it's disabled.
-          title={folder ? `Open in ${nameOf(current)}${keys ? ` (${keys})` : ""}` : undefined}
+          title={
+            folder ? `Open in ${nameOf(current, terminal)}${keys ? ` (${keys})` : ""}` : undefined
+          }
           className={`${menuButton} rounded-r-none pr-2.5`}
         >
           {icon(current)}
@@ -121,7 +141,7 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
             className={`${menuItem} [&_svg]:size-4`}
           >
             {icon(t)}
-            <span className="flex-1">{nameOf(t)}</span>
+            <span className="flex-1">{nameOf(t, terminal)}</span>
             {t === current && keys && (
               <span className="text-[11.5px] text-faint-foreground">{keys}</span>
             )}
