@@ -139,7 +139,10 @@ fi
  * %LOCALAPPDATA%\Programs), finds the folder holding `<app name>.exe` and plxd.exe, and allows
  * plxd through Windows Firewall on TCP 7340, warning when that needs an administrator. Windows has
  * no `plxd service` yet (0023's logon task, PLX-22), so plxd is started with `attach`, which runs
- * `serve` outside the SSH session's job.
+ * `serve` outside the SSH session's job. It waits for `attach` alone with `WaitForExit`:
+ * `Start-Process -Wait` also waits for its descendants, so the `serve` it leaves running would
+ * hang it. Reading `Handle` first keeps `ExitCode`, which is otherwise lost when the process
+ * exits before PowerShell opens it.
  * @param {Installer} installer
  * @param {Channel} channel
  */
@@ -177,7 +180,9 @@ if ($LASTEXITCODE -ne 0) { throw 'plxd connect on failed.' }
 "Starting plxd"
 $in = New-TemporaryFile
 $out = New-TemporaryFile
-$attach = Start-Process -FilePath $plxd -ArgumentList 'attach' -RedirectStandardInput $in.FullName -RedirectStandardOutput $out.FullName -NoNewWindow -Wait -PassThru
+$attach = Start-Process -FilePath $plxd -ArgumentList 'attach' -RedirectStandardInput $in.FullName -RedirectStandardOutput $out.FullName -NoNewWindow -PassThru
+$null = $attach.Handle
+$attach.WaitForExit()
 Remove-Item -Force $in.FullName, $out.FullName
 if ($attach.ExitCode -ne 0) { throw "plxd attach exited with $($attach.ExitCode)." }
 "warning: Windows has no plxd login service yet, so plxd runs until you sign out. Opening Parallax starts it again."

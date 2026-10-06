@@ -1,6 +1,7 @@
 //! Tailscale, as Parallax Connect sees it (decision 0056): this node and its peers from
 //! `tailscale status --json`, who is behind an address from `tailscale whois --json`, and which
-//! peers [`admit`] lets reach plxd.
+//! peers [`admit`] lets reach plxd: untagged nodes of this node's own user, while this node is
+//! untagged too.
 //!
 //! [`Tailnet`] puts both commands behind a trait, so tests use a fake. [`TailscaleCli`] runs the
 //! real CLI, found on the agent environment's `PATH` or in the folders each OS installs it in.
@@ -74,6 +75,8 @@ pub struct Node {
     pub os: String,
     /// The node's user. Tagged nodes all belong to one user of their own.
     pub user_id: u64,
+    /// The node's ACL tags, such as `tag:k3s`. Empty for a node a person owns.
+    pub tags: Vec<String>,
     /// The node's Tailscale addresses, IPv4 first.
     pub ips: Vec<IpAddr>,
     /// Whether Tailscale sees it online.
@@ -93,15 +96,20 @@ impl Node {
 pub struct Whois {
     /// The user the node belongs to.
     pub user_id: u64,
+    /// The node's ACL tags.
+    pub tags: Vec<String>,
     /// The node's `MagicDNS` name, for the log.
     pub node: String,
 }
 
-/// The peers this node lets in: its own user's, from any address but its own.
+/// The peers this node lets in: its own user's untagged nodes, from any address but its own.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Owner {
     /// This node's user.
     pub user_id: u64,
+    /// Whether this node has tags. Every tagged node shares one user, so a tagged node lets
+    /// nobody in.
+    pub tagged: bool,
     /// This node's Tailscale addresses.
     pub own_ips: Vec<IpAddr>,
 }
@@ -112,19 +120,30 @@ impl Owner {
     pub fn of(status: &Status) -> Self {
         Self {
             user_id: status.this.user_id,
+            tagged: !status.this.tags.is_empty(),
             own_ips: status.this.ips.clone(),
         }
     }
 }
 
-/// Whether a connection from `peer`, whom `whois` names, may reach plxd: only from another node
-/// of the owner's user. `Err` says why not.
+/// Whether a connection from `peer`, whom `whois` names, may reach plxd: only from another
+/// untagged node of the owner's user, and only while the owner is untagged. `Err` says why not.
 ///
 /// # Errors
 ///
 /// The reason the peer is refused.
 pub fn admit(owner: &Owner, peer: IpAddr, whois: Result<Whois, String>) -> Result<Whois, String> {
+    if owner.tagged {
+        return Err("this node is tagged".to_owned());
+    }
     let whois = whois.map_err(|error| format!("whois failed: {error}"))?;
+    if !whois.tags.is_empty() {
+        return Err(format!(
+            "{} is tagged {}",
+            whois.node,
+            whois.tags.join(", ")
+        ));
+    }
     if owner.own_ips.contains(&peer.to_canonical()) {
         return Err(format!(
             "it comes from {}, this node's own address",
@@ -245,6 +264,7 @@ struct RawNode {
     os: String,
     #[serde(rename = "UserID")]
     user_id: u64,
+    tags: Option<Vec<String>>,
     #[serde(rename = "TailscaleIPs")]
     tailscale_ips: Option<Vec<IpAddr>>,
     online: bool,
@@ -260,6 +280,7 @@ impl From<RawNode> for Node {
             dns_name: raw.dns_name.trim_end_matches('.').to_owned(),
             os: raw.os,
             user_id: raw.user_id,
+            tags: raw.tags.unwrap_or_default(),
             ips,
             online: raw.online,
         }
@@ -302,6 +323,8 @@ struct RawWhois {
 struct RawWhoisNode {
     #[serde(default)]
     name: String,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -316,6 +339,7 @@ fn parse_whois(json: &str) -> Result<Whois, String> {
         serde_json::from_str(json).map_err(|error| format!("unreadable whois: {error}"))?;
     Ok(Whois {
         user_id: raw.user_profile.id,
+        tags: raw.node.tags.unwrap_or_default(),
         node: raw.node.name.trim_end_matches('.').to_owned(),
     })
 }
@@ -374,6 +398,8 @@ mod tests {
         peers.sort_by(|a, b| a.host_name.cmp(&b.host_name));
         assert_eq!(peers.len(), 2);
         assert_eq!(peers[0].user_id, TAGGED);
+        assert_eq!(peers[0].tags, ["tag:k3s"]);
+        assert!(peers[1].tags.is_empty());
         assert_eq!(peers[1].host_name, "macbook");
         assert_eq!(peers[1].os, "macOS");
         assert!(!peers[1].online);
@@ -407,28 +433,49 @@ mod tests {
             parse_whois(json).unwrap(),
             Whois {
                 user_id: ME,
+                tags: Vec::new(),
                 node: "ryans-macbook.tail53cf78.ts.net".to_owned()
             }
         );
         assert!(parse_whois("peer not found").is_err());
+        // Trimmed from a real `tailscale whois --json 100.66.59.107`.
+        let tagged = r#"{
+          "Node": {"Name": "hv-worker-1.tail470a31.ts.net.", "User": 662125110488743,
+                   "Tags": ["tag:k3s"]},
+          "UserProfile": {"ID": 662125110488743, "LoginName": "tagged-devices"}
+        }"#;
+        assert_eq!(parse_whois(tagged).unwrap().tags, ["tag:k3s"]);
     }
 
     #[test]
     fn only_another_node_of_the_same_user_is_admitted() {
         let owner = Owner {
             user_id: ME,
+            tagged: false,
             own_ips: vec!["100.74.190.83".parse().unwrap()],
         };
         let peer: IpAddr = "100.87.92.42".parse().unwrap();
         let whois = |user_id| {
             Ok(Whois {
                 user_id,
+                tags: Vec::new(),
+                node: "node".to_owned(),
+            })
+        };
+        let tagged_whois = |user_id| {
+            Ok(Whois {
+                user_id,
+                tags: vec!["tag:k3s".to_owned()],
                 node: "node".to_owned(),
             })
         };
         assert!(admit(&owner, peer, whois(ME)).is_ok(), "same user");
         assert!(admit(&owner, peer, whois(7)).is_err(), "another user");
         assert!(admit(&owner, peer, whois(TAGGED)).is_err(), "a tagged node");
+        assert!(
+            admit(&owner, peer, tagged_whois(ME)).is_err(),
+            "a tagged node, even with this node's user"
+        );
         assert!(
             admit(&owner, peer, Err("peer not found".to_owned())).is_err(),
             "whois failed"
@@ -443,5 +490,15 @@ mod tests {
             admit(&owner, mapped, whois(ME)).is_err(),
             "its own address, IPv4-mapped"
         );
+
+        let tagged_owner = Owner {
+            tagged: true,
+            ..owner
+        };
+        assert!(
+            admit(&tagged_owner, peer, whois(ME)).is_err(),
+            "a tagged node lets nobody in"
+        );
+        assert!(admit(&tagged_owner, peer, tagged_whois(TAGGED)).is_err());
     }
 }

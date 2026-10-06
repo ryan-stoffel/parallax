@@ -15,11 +15,13 @@ Ryan's computers are all on one Tailscale tailnet. Tailscale already encrypts tr
 ### Transport
 
 - A host setting, `connect`, off by default. While it is on, plxd listens on TCP port 7340 on its own Tailscale IPv4, and nowhere else. It checks every 10 s, and at once when `host/settings/set` changes `connect`, so a Tailscale that starts late, a new address, or the setting turning off binds or closes the listener.
-- Each accepted connection is checked before plxd reads from it. plxd runs `tailscale whois --json <peer ip:port>` and serves the connection only when the peer's user is this node's own user (`UserProfile.ID` equals `Self.UserID`) and the peer isn't this node's own address. Anything else is closed, and logged. A tagged node is another user, so it is refused.
+- Each accepted connection is checked before plxd reads from it. plxd runs `tailscale whois --json <peer ip:port>` and serves the connection only when the peer's user is this node's own user (`UserProfile.ID` equals `Self.UserID`), the peer has no tags, this node has no tags, and the peer isn't this node's own address. Every tagged node shares one user, `tagged-devices`, so the user check alone would let one tagged node into another. Anything else is closed, and logged.
+- At most 8 connections wait on `whois` at once. Any more are closed at once, so a refused node can't make plxd start processes without limit.
+- When the listener stops (`connect` turned off, a new address, Tailscale stopped), every connection it accepted closes too. Local connections stay.
 - An accepted connection speaks 0007's protocol as a local socket connection does, with the same limits.
 - `plxd dial <addr>` connects to `addr` (an IP, with port 7340 unless one is given) and bridges stdio to it, byte for byte, as `attach` bridges the socket. It exits 4 when it never connects, like attach. The app runs it as a host's connection command, so `Connection` is the same for every transport.
 - `plxd connect on|off` sets the setting in the store, for an install script with no connection to plxd. A running plxd sees it within 10 s.
-- `connect/devices` lists the tailnet's nodes of this node's user, and this node, with whether each answers on port 7340.
+- `connect/devices` lists the tailnet's untagged nodes of this node's user, and this node, with whether each answers on port 7340. A tagged node lists only itself.
 
 ### Device names and icons
 

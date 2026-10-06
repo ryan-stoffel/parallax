@@ -4786,7 +4786,8 @@ export type ConnectDevicesResult = {
 	 */
 	self?: TailnetDevice,
 	/**
-	 * The other nodes of this node's user, by host name. Tagged and shared nodes are left out.
+	 * The other untagged nodes of this node's user, by host name. Tagged and shared nodes are
+	 * left out, and a tagged node lists none.
 	 */
 	devices: Array<TailnetDevice>,
 };

@@ -30,7 +30,8 @@ pub struct ConnectDevicesResult {
     #[serde(rename = "self", default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub self_device: Option<TailnetDevice>,
-    /// The other nodes of this node's user, by host name. Tagged and shared nodes are left out.
+    /// The other untagged nodes of this node's user, by host name. Tagged and shared nodes are
+    /// left out, and a tagged node lists none.
     pub devices: Vec<TailnetDevice>,
 }
 

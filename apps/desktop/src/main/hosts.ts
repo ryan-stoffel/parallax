@@ -45,6 +45,7 @@ import {
   shellCommand,
   writeTerminal,
   type Command,
+  type SshTarget,
 } from "./terminal";
 import { dataDir, findPlxd, replaceServe, plxdVersion } from "./plxd";
 import { isNightly } from "./updater";
@@ -351,10 +352,19 @@ export function startHosts(): void {
   });
 }
 
-/** How a host is reached, if it's an SSH host. */
-function sshOf(hostId: string) {
+/**
+ * How a host's terminals reach it, unless it's this computer: an SSH host by its destination, a
+ * Connect device (0056) by ssh to its Tailscale IP, as `plx-connect add` did. Undefined only for
+ * `local`, so a remote host's command can never run here.
+ */
+function sshOf(hostId: string): SshTarget | undefined {
+  const ssh = settings.ssh ?? "ssh";
   const saved = settings.hosts.find((h) => h.id === hostId);
-  return saved && { destination: saved.destination, ssh: settings.ssh ?? "ssh" };
+  if (saved) return { destination: saved.destination, ssh };
+  if (!hostId.startsWith("tailnet:")) return undefined;
+  const device = savedDevices().find((d) => deviceHostId(d.id) === hostId);
+  // An unknown device has no address; a bare `-` never reaches ssh as one.
+  return { destination: device?.ip ?? "-", ssh };
 }
 
 /**
@@ -382,8 +392,7 @@ async function signInCommand(hostId: string, cli: CliKind): Promise<Command | st
   const host = connections.get(hostId);
   if (!host) return "That host isn't in Parallax anymore.";
   // Decided before asking, so a remote host's path can never run on this computer.
-  const saved = settings.hosts.find((h) => h.id === hostId);
-  const ssh = saved && { destination: saved.destination, ssh: settings.ssh ?? "ssh" };
+  const ssh = sshOf(hostId);
   const answer = await host.request("accounts/list", {});
   if ("error" in answer)
     return `Parallax couldn't ask the host where the CLI is: ${answer.error.message}`;
@@ -401,8 +410,7 @@ async function signInCommand(hostId: string, cli: CliKind): Promise<Command | st
 async function providerSignInCommand(hostId: string, id: string): Promise<Command | string> {
   const host = connections.get(hostId);
   if (!host) return "That host isn't in Parallax anymore.";
-  const saved = settings.hosts.find((h) => h.id === hostId);
-  const ssh = saved && { destination: saved.destination, ssh: settings.ssh ?? "ssh" };
+  const ssh = sshOf(hostId);
   const answer = await host.request("providers/list", { refresh: false });
   if ("error" in answer)
     return `Parallax couldn't ask the host how to sign in: ${answer.error.message}`;
@@ -450,14 +458,12 @@ export const savedHost = (id: string): SshHost | undefined =>
  */
 async function folderCommand(hostId: string, folder: string): Promise<Command | string> {
   // "~" is the host's home folder: here, the user's; over ssh, the login shell's start folder.
-  if (folder === "~" && !settings.hosts.some((h) => h.id === hostId)) folder = homedir();
+  const ssh = sshOf(hostId);
+  if (folder === "~" && !ssh) folder = homedir();
   if (!connections.has(hostId)) return "That host isn't in Parallax anymore.";
-  const saved = settings.hosts.find((h) => h.id === hostId);
   // A Windows path, which can't hold a `"`, goes to the host in double quotes.
-  if (saved && /^[a-z]:\\/i.test(folder) && folder.includes('"'))
-    return `${folder} isn't a folder.`;
-  if (saved)
-    return shellCommand(folder, { destination: saved.destination, ssh: settings.ssh ?? "ssh" });
+  if (ssh && /^[a-z]:\\/i.test(folder) && folder.includes('"')) return `${folder} isn't a folder.`;
+  if (ssh) return shellCommand(folder, ssh);
   const isFolder =
     path.isAbsolute(folder) && (await stat(folder).catch(() => undefined))?.isDirectory();
   return isFolder ? shellCommand(folder) : `${folder} isn't a folder on this computer anymore.`;

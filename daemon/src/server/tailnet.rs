@@ -3,9 +3,11 @@
 //!
 //! [`run`] checks every [`Config::connect_check_interval`](super::Config) and at once when
 //! `host/settings/set` changes `connect`, and binds, rebinds on a new address, or drops the
-//! listener. Dropping it leaves open connections alone. Each accepted connection is served as a
-//! local one only after [`admit`] lets its peer in, which runs `tailscale whois` before plxd reads
-//! anything from it.
+//! listener. A listener that stops, for any reason but shutdown, closes every connection it
+//! accepted; local connections stay. Each accepted connection is served as a local one only after
+//! [`admit`] lets its peer in, which runs `tailscale whois` before plxd reads anything from it. At
+//! most [`MAX_PENDING_CHECKS`] of those checks run at once, and a connection over the cap is
+//! closed at once.
 
 use std::io;
 use std::net::{IpAddr, SocketAddr};
@@ -14,15 +16,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
 use tokio::time::{self, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
-use tracing::{Instrument, info, info_span, warn};
+use tracing::{Instrument, debug, info, info_span, warn};
 
 use super::{ACCEPT_BACKOFF, Daemon, connection};
 use crate::agents::store_error;
 use crate::tailnet::{Owner, Tailnet, admit};
+
+/// How many accepted connections may wait on `tailscale whois` at once.
+pub(crate) const MAX_PENDING_CHECKS: usize = 8;
 
 /// Parallax Connect's state, shared by the listener and `connect/devices`.
 #[derive(Debug)]
@@ -61,6 +66,16 @@ struct Bound {
     address: SocketAddr,
     listener: TcpListener,
     owner: Arc<Owner>,
+    /// Closes every connection this listener accepted, checked or served. A child of the
+    /// server's abort token.
+    closing: CancellationToken,
+}
+
+impl Bound {
+    /// Stops listening and closes this listener's connections.
+    fn close(self) {
+        self.closing.cancel();
+    }
 }
 
 /// Where the listener should be, or why it shouldn't.
@@ -77,6 +92,7 @@ pub(super) async fn run(serving: Serving, period: Duration, stop: CancellationTo
     let mut check = time::interval(period);
     check.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut connection_id = 0_u64;
+    let checks = Arc::new(Semaphore::new(MAX_PENDING_CHECKS));
     loop {
         tokio::select! {
             biased;
@@ -87,8 +103,19 @@ pub(super) async fn run(serving: Serving, period: Duration, stop: CancellationTo
                 match accepted {
                     Ok((stream, peer)) => {
                         connection_id += 1;
-                        let owner = Arc::clone(&bound.as_ref().expect("accepted").owner);
-                        serving.admit(stream, peer, owner, connection_id);
+                        let Ok(check) = Arc::clone(&checks).try_acquire_owned() else {
+                            debug!(%peer, "closed a tailnet connection: too many checks are pending");
+                            continue;
+                        };
+                        let bound = bound.as_ref().expect("accepted");
+                        let accepted = Accepted {
+                            stream,
+                            peer,
+                            owner: Arc::clone(&bound.owner),
+                            closing: bound.closing.child_token(),
+                            id: connection_id,
+                        };
+                        serving.admit(accepted, check);
                     }
                     Err(error) => {
                         warn!(%error, "could not accept a tailnet connection");
@@ -108,6 +135,10 @@ pub(super) async fn run(serving: Serving, period: Duration, stop: CancellationTo
                     current.owner = Arc::new(owner);
                     continue;
                 }
+                if let Some(old) = bound.take() {
+                    info!(address = %old.address, "stopped listening on the tailnet: its address changed");
+                    old.close();
+                }
                 match TcpListener::bind(address).await {
                     Ok(listener) => {
                         info!(%address, "listening on the tailnet");
@@ -115,11 +146,11 @@ pub(super) async fn run(serving: Serving, period: Duration, stop: CancellationTo
                             address,
                             listener,
                             owner: Arc::new(owner),
+                            closing: serving.abort.child_token(),
                         });
                         problem = None;
                     }
                     Err(error) => {
-                        bound = None;
                         let now = format!("could not listen on {address}: {error}");
                         if problem.as_ref() != Some(&now) {
                             warn!("{now}");
@@ -131,12 +162,14 @@ pub(super) async fn run(serving: Serving, period: Duration, stop: CancellationTo
             Want::Not(why) => {
                 if let Some(old) = bound.take() {
                     info!(address = %old.address, reason = %why, "stopped listening on the tailnet");
+                    old.close();
                 }
                 problem = Some(why);
             }
         }
         connect.listening.store(bound.is_some(), Ordering::Relaxed);
     }
+    // Shutdown drains the listener's connections like local ones, so it doesn't close them.
     connect.listening.store(false, Ordering::Relaxed);
 }
 
@@ -175,18 +208,38 @@ async fn want(daemon: &Daemon) -> Want {
     }
 }
 
+/// A connection the listener accepted, not yet checked.
+struct Accepted {
+    stream: TcpStream,
+    peer: SocketAddr,
+    owner: Arc<Owner>,
+    /// Its listener's `closing`.
+    closing: CancellationToken,
+    id: u64,
+}
+
 impl Serving {
-    /// Serves `stream` once `tailscale whois` shows `peer` is another node of `owner`'s user, and
-    /// closes it otherwise. The check runs as one of the server's connections, so shutdown waits
-    /// for it.
-    fn admit(&self, stream: TcpStream, peer: SocketAddr, owner: Arc<Owner>, id: u64) {
+    /// Serves the connection once `tailscale whois` shows its peer is a node [`admit`] lets in,
+    /// and closes it otherwise. `check` is held until whois answers. The check runs as one of the
+    /// server's connections, so shutdown waits for it.
+    fn admit(&self, accepted: Accepted, check: tokio::sync::OwnedSemaphorePermit) {
+        let Accepted {
+            stream,
+            peer,
+            owner,
+            closing,
+            id,
+        } = accepted;
         let daemon = Arc::clone(&self.daemon);
         let stop_reading = self.stop_reading.clone();
-        let closing = self.abort.child_token();
         let span = info_span!("tailnet", id);
         self.connections.spawn(
             async move {
-                let whois = daemon.connect.tailnet.whois(peer).await;
+                let whois = tokio::select! {
+                    whois = daemon.connect.tailnet.whois(peer) => whois,
+                    () = closing.cancelled() => return,
+                };
+                drop(check);
                 match admit(&owner, peer.ip(), whois) {
                     Ok(whois) => {
                         info!(%peer, node = %whois.node, "accepted a tailnet connection");

@@ -7,7 +7,7 @@ import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 
 import { add, setup } from "../src/connect.mjs";
-import { listDevices } from "../src/tailscale.mjs";
+import { listDevices, TAGGED } from "../src/tailscale.mjs";
 
 const HELP = `plx-connect: set up Parallax and Parallax Connect on your Tailscale devices.
 
@@ -117,6 +117,7 @@ async function devices(json) {
   ];
   const widths = rows[0]?.map((_, column) => Math.max(...rows.map((row) => row[column]?.length ?? 0))) ?? [];
   for (const row of rows) console.log(row.map((cell, column) => cell.padEnd(widths[column] ?? 0)).join("  ").trimEnd());
+  if (tailnet.self.tagged) console.log(`\n${TAGGED}`);
   return 0;
 }
 
@@ -125,7 +126,9 @@ async function devices(json) {
  * @param {import("../src/connect.mjs").Options} options
  */
 async function pick(options) {
-  const candidates = (await listDevices()).devices.filter((d) => d.online && !d.parallax);
+  const tailnet = await listDevices();
+  if (tailnet.self.tagged) return print(TAGGED);
+  const candidates = tailnet.devices.filter((d) => d.online && !d.parallax);
   if (candidates.length === 0) return print("Every online device on your tailnet is already on Parallax.");
   console.log("Online devices not on Parallax yet:");
   candidates.forEach((d, index) => console.log(`  ${index + 1}. ${d.name} (${d.os}, ${d.ip ?? d.dnsName})`));

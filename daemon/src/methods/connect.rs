@@ -38,11 +38,13 @@ pub(crate) async fn devices(
         Err(NotRunning::Missing) => return Ok(empty(TailscaleState::Missing)),
         Err(NotRunning::Stopped(_)) => return Ok(empty(TailscaleState::Stopped)),
     };
+    // A tagged node shares its user with every other tagged node, so it lists only itself.
     let user = status.this.user_id;
+    let tagged = !status.this.tags.is_empty();
     let mut mine: Vec<Node> = status
         .peers
         .into_iter()
-        .filter(|peer| peer.user_id == user)
+        .filter(|peer| !tagged && peer.user_id == user && peer.tags.is_empty())
         .collect();
     mine.sort_by(|a, b| {
         (a.host_name.to_lowercase(), &a.id).cmp(&(b.host_name.to_lowercase(), &b.id))

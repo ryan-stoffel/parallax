@@ -49,12 +49,15 @@ test("plx-connect add runs in the login shell, or PowerShell, with checked argum
   const mac = { platform: "darwin" as const, env: { SHELL: "/bin/zsh" } };
   expect(addCommand("100.74.190.83", "ryan", "nightly", mac)).toEqual({
     file: "/bin/zsh",
-    args: ["-lc", "exec plx-connect add 100.74.190.83 --channel nightly --user ryan"],
+    args: [
+      "-lc",
+      'PATH="$HOME/.local/bin:$PATH" exec plx-connect add 100.74.190.83 --channel nightly --user ryan',
+    ],
   });
   const dev = { platform: "darwin" as const, env: { PLX_CONNECT_PATH: "/x/y z/plx-connect.mjs" } };
   expect(addCommand("mac-mini", undefined, "stable", dev).args).toEqual([
     "-lc",
-    "exec node '/x/y z/plx-connect.mjs' add mac-mini --channel stable",
+    `PATH="$HOME/.local/bin:$PATH" exec node '/x/y z/plx-connect.mjs' add mac-mini --channel stable`,
   ]);
   expect(addCommand("100.1.2.3", undefined, "nightly", { platform: "win32", env: {} })).toEqual({
     file: "powershell.exe",

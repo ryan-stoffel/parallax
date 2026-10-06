@@ -56,7 +56,10 @@ test("Windows installs silently, opens the firewall for plxd, and starts it", ()
   assert.match(windows, /Join-Path \$_\.FullName "\$name\.exe"/);
   assert.match(windows, /New-NetFirewallRule .*-Protocol TCP -LocalPort 7340 -Program \$plxd/);
   assert.match(windows, /^& \$plxd connect on$/m);
-  assert.match(windows, /Start-Process -FilePath \$plxd -ArgumentList 'attach'/);
+  assert.match(windows, /\$attach = Start-Process -FilePath \$plxd -ArgumentList 'attach' .*-PassThru$/m);
+  assert.doesNotMatch(windows, /'attach' .*-Wait/);
+  assert.match(windows, /^\$attach\.WaitForExit\(\)$/m);
+  assert.match(windows, /if \(\$attach\.ExitCode -ne 0\)/);
   assert.match(windows, /npm\.cmd/);
 });
 

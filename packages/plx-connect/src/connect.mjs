@@ -8,7 +8,7 @@ import { parseDetails, parseUname, POSIX_DETAILS, UNAME_COMMAND, WINDOWS_DETAILS
 import { appName, fetchReleases, pickAsset, pickRelease } from "./releases.mjs";
 import { localRunner, sshArgs, sshRunner } from "./run.mjs";
 import { installScript } from "./scripts.mjs";
-import { findDevice, parseStatus, PLXD_PORT, probe, readStatus } from "./tailscale.mjs";
+import { findDevice, parseStatus, PLXD_PORT, probe, readStatus, TAGGED } from "./tailscale.mjs";
 
 /** @typedef {import("./releases.mjs").Channel} Channel */
 /** @typedef {import("./releases.mjs").Os} Os */
@@ -122,6 +122,7 @@ export async function resolveTarget(query) {
   const device = tailnet && findDevice(tailnet.devices, query);
   if (device?.ip) return { name: device.name, ip: device.ip, online: device.online };
   if (tailnet && findDevice([tailnet.self], query)) throw new Error("That's this computer. Run plx-connect setup instead.");
+  if (tailnet?.self.tagged) throw new Error(TAGGED);
   if (net.isIP(query)) return { name: query, ip: query, online: true };
   throw new Error(`No device named ${query} in your tailnet. Run plx-connect devices to see them.`);
 }

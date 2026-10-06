@@ -62,7 +62,8 @@ export const isSshUser = (value: unknown): value is string =>
 /**
  * How main runs plx-connect: `PLX_CONNECT_PATH`, a checkout's `bin/plx-connect.mjs` run with
  * node, else `plx-connect` as npm installed it, found by the login shell (or PowerShell), so it
- * finds `node` where the user would.
+ * finds `node` where the user would. On POSIX npm installs it in `~/.local/bin`
+ * (`npmInstallLine`), which a stock macOS login shell doesn't have on PATH, so it goes first.
  */
 export type ConnectProgram = { platform: NodeJS.Platform; env: NodeJS.ProcessEnv };
 
@@ -91,7 +92,10 @@ export function addCommand(
 ): Command {
   const userArg = user ? ` --user ${user}` : "";
   const line = `${program(where)} add ${device} --channel ${channel}${userArg}`;
-  return shell(where.platform === "win32" ? line : `exec ${line}`, where);
+  return shell(
+    where.platform === "win32" ? line : `PATH="$HOME/.local/bin:$PATH" exec ${line}`,
+    where,
+  );
 }
 
 /** Whether plx-connect is installed here: `PLX_CONNECT_PATH`, npm's `~/.local/bin`, or on the shell's PATH. */
