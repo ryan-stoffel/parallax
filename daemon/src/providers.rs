@@ -31,6 +31,7 @@ use tokio::time::Instant;
 use crate::backend::acp::{self, AcpAgent, AcpBackend};
 use crate::backend::claude::ClaudeBackend;
 use crate::backend::codex::CodexBackend;
+use crate::backend::opencode::{self, Opencode, OpencodeBackend};
 use crate::backend::process::{Launcher, Output, ProcessSpec, StdinMode};
 use crate::backend::{Backend, Overrides, check_argument};
 use crate::detect::{self, CliDetector};
@@ -58,6 +59,8 @@ enum Driver {
     CursorSdk,
     /// An ACP agent.
     Acp(Box<AcpAgent>),
+    /// `OpenCode`'s HTTP server, at the instance's `OPENCODE_SERVER_URL` or one a run starts.
+    Opencode,
 }
 
 /// A kind's defaults.
@@ -79,7 +82,6 @@ fn acp_agent(label: &str, program: &str, args: &[&str]) -> AcpAgent {
 }
 
 /// The defaults of `kind`. `None` for a kind this plxd doesn't know.
-#[expect(clippy::too_many_lines, reason = "one table of every kind's defaults")]
 fn preset(kind: ProviderKind) -> Option<Preset> {
     let base = |program, driver| Preset {
         program,
@@ -87,12 +89,6 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
         login: &[],
         home_env: None,
         models_url: None,
-    };
-    let plan = |edit: &str| {
-        (
-            vec![(AgentPermission::Plan, "plan".to_owned())],
-            Some(edit.to_owned()),
-        )
     };
     Some(match kind {
         ProviderKind::Claude => Preset {
@@ -109,21 +105,11 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
             login: &[],
             ..base("node", Driver::CursorSdk)
         },
-        ProviderKind::Opencode => {
-            let (modes, edit_mode) = plan("build");
-            Preset {
-                login: &["opencode", "auth", "login"],
-                home_env: Some("OPENCODE_CONFIG_DIR"),
-                ..base(
-                    "opencode",
-                    Driver::Acp(Box::new(AcpAgent {
-                        modes,
-                        edit_mode,
-                        ..acp_agent("OpenCode", "opencode", &["acp"])
-                    })),
-                )
-            }
-        }
+        ProviderKind::Opencode => Preset {
+            login: &["opencode", "auth", "login"],
+            home_env: Some("OPENCODE_CONFIG_DIR"),
+            ..base("opencode", Driver::Opencode)
+        },
         // Pi has no ACP of its own: `pi-acp` runs `pi --mode rpc`. Pi before 0.81 needs
         // `pi-acp@0.0.27`, which an instance's arguments pick. It signs in in that `pi`, which
         // the probe finds.
@@ -190,6 +176,25 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
         ProviderKind::Acp => base("", Driver::Acp(Box::new(acp_agent("", "", &[])))),
         ProviderKind::Unknown => return None,
     })
+}
+
+/// `instance`'s defaults: its kind's, except that `OpenCode` 2 (`opencode2`) stays on
+/// `opencode2 acp`, since its HTTP API isn't 1.x's (0055, PLX-566).
+fn preset_for(instance: &ProviderInstance) -> Option<Preset> {
+    let mut preset = preset(instance.kind)?;
+    let opencode2 = instance
+        .program
+        .as_deref()
+        .and_then(|program| Path::new(program).file_stem())
+        .is_some_and(|stem| stem == "opencode2");
+    if instance.kind == ProviderKind::Opencode && opencode2 {
+        preset.driver = Driver::Acp(Box::new(AcpAgent {
+            modes: vec![(AgentPermission::Plan, "plan".to_owned())],
+            edit_mode: Some("build".to_owned()),
+            ..acp_agent("OpenCode", "opencode2", &["acp"])
+        }));
+    }
+    Some(preset)
 }
 
 /// The built-in instances: what a first run lists when their CLI is installed, and the ids whose
@@ -581,19 +586,26 @@ impl Providers {
         found
     }
 
+    #[expect(clippy::too_many_lines, reason = "one probe, with each kind's steps")]
     async fn probe(&self, detector: &CliDetector, entry: &Stored, refresh: bool) -> Found {
         let instance = &entry.instance;
         if instance.kind == ProviderKind::Cursor {
             return probe_cursor(&self.launcher, entry).await;
         }
-        let Some(preset) = preset(instance.kind) else {
+        let Some(preset) = preset_for(instance) else {
             return Found {
                 note: Some("this plxd doesn't know this kind of provider; update plxd".into()),
                 ..Found::default()
             };
         };
         let default_program = detected_cli(&instance.id).filter(|_| instance.program.is_none());
-        let mut found = if let Some(cli) = default_program {
+        // An `OpenCode` server at a URL needs no `opencode` on this host.
+        let mut found = if matches!(preset.driver, Driver::Opencode) && opencode_at_url(instance) {
+            Found {
+                installed: true,
+                ..Found::default()
+            }
+        } else if let Some(cli) = default_program {
             let detected = if refresh {
                 detector.refresh_one(cli).await
             } else {
@@ -676,6 +688,9 @@ impl Providers {
                     pi_sign_in(&self.launcher, instance, &mut found);
                 }
             }
+            (Driver::Opencode, _) => {
+                probe_opencode(&self.launcher, entry, &preset, &mut found).await;
+            }
             _ => {}
         }
         found
@@ -722,6 +737,34 @@ async fn probe_service(
     if found.signed_in == Some(false) {
         found.note = Some("Add the service's API key".into());
     }
+}
+
+/// Whether `instance` is an `OpenCode` whose server is at a URL, which needs no `opencode` on this
+/// host.
+fn opencode_at_url(instance: &ProviderInstance) -> bool {
+    instance.kind == ProviderKind::Opencode
+        && instance.env.iter().any(|var| {
+            var.name == opencode::URL_VAR
+                && !var.secret
+                && var.value.as_deref().is_some_and(|url| !url.is_empty())
+        })
+}
+
+/// `entry`'s `OpenCode` server: its version, its models, and whether it was reachable, in `note`. A
+/// password kept as a secret isn't read: the keychain can ask the user first (0040).
+async fn probe_opencode(launcher: &Launcher, entry: &Stored, preset: &Preset, found: &mut Found) {
+    let instance = &entry.instance;
+    let opencode = opencode_for(instance, preset, overrides(entry, plain_env(entry)));
+    let secret = instance
+        .env
+        .iter()
+        .any(|var| var.secret && var.name == opencode::PASSWORD_VAR);
+    let inspected = opencode::inspect(launcher, &opencode, secret).await;
+    found.version = inspected.version.or(found.version.take());
+    found.models = inspected.models;
+    found.signed_in = inspected.signed_in;
+    found.note = inspected.note;
+    found.login_env = Some(opencode.env);
 }
 
 /// Cursor's state from its SDK sidecar (0053), with the instance's plain `CURSOR_API_KEY`.
@@ -814,7 +857,7 @@ fn build(
     env: Vec<(OsString, OsString)>,
 ) -> Option<Arc<dyn Backend>> {
     let instance = &entry.instance;
-    let preset = preset(instance.kind)?;
+    let preset = preset_for(instance)?;
     let launcher = launcher.clone();
     let mut overrides = overrides(entry, env);
     Some(match &preset.driver {
@@ -837,6 +880,10 @@ fn build(
         Driver::Acp(agent) => Arc::new(AcpBackend::new(
             launcher,
             acp_for(instance, &preset, (**agent).clone(), overrides),
+        )),
+        Driver::Opencode => Arc::new(OpencodeBackend::new(
+            launcher,
+            opencode_for(instance, &preset, overrides),
         )),
     })
 }
@@ -1010,6 +1057,16 @@ fn acp_for(
             .push(("ANTIGRAVITY_HARNESS_PATH".into(), harness.into()));
     }
     agent
+}
+
+/// `instance`'s `OpenCode`, with the variables in `overrides` and its home folder.
+fn opencode_for(instance: &ProviderInstance, preset: &Preset, overrides: Overrides) -> Opencode {
+    let mut env = overrides.env;
+    if let (Some(name), Some(home)) = (preset.home_env, &instance.home) {
+        env.push((name.into(), home.into()));
+    }
+    let program = program_of(instance, preset);
+    Opencode::new(&instance.id, "OpenCode", program, overrides.args, env)
 }
 
 /// The first version-looking word of `text`, such as `1.0.39` from `grok 1.0.39` or `18.5.0`
@@ -1288,7 +1345,7 @@ fn check(instance: &ProviderInstance) -> Result<(), ErrorObject> {
 
 /// What `providers/list` says about one instance.
 fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
-    let preset = preset(instance.kind);
+    let preset = preset_for(&instance);
     let (permissions, efforts) = match preset.as_ref().map(|p| &p.driver) {
         Some(Driver::Claude) => (
             vec![
@@ -1319,6 +1376,7 @@ fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
             false,
         ),
         Some(Driver::Acp(agent)) => (agent.permissions(), false),
+        Some(Driver::Opencode) => (opencode::PERMISSIONS.to_vec(), false),
         None => (vec![AgentPermission::Edit], false),
     };
     // A kind with Auto or Bypass can run a Project's coordinator (0042). A model service's Auto
@@ -1675,6 +1733,16 @@ read b; echo '{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"Authenti
             Some(bin.into_os_string()),
             "with plxd's PATH, for its node"
         );
+    }
+
+    #[test]
+    fn opencode_2_stays_on_acp() {
+        let mut instance = ollama();
+        instance.kind = ProviderKind::Opencode;
+        let driver = |instance: &ProviderInstance| super::preset_for(instance).unwrap().driver;
+        assert!(matches!(driver(&instance), super::Driver::Opencode));
+        instance.program = Some("/opt/homebrew/bin/opencode2".into());
+        assert!(matches!(driver(&instance), super::Driver::Acp(agent) if agent.args == ["acp"]));
     }
 
     #[tokio::test]

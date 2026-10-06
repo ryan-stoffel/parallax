@@ -26,6 +26,7 @@ pub mod event;
 pub mod fake;
 pub mod key_account;
 pub mod limits;
+pub mod opencode;
 pub mod process;
 pub mod record;
 pub mod run_temp;

@@ -13,7 +13,7 @@
 //! - **Codex**: `codex app-server`, `initialize`, `initialized`, and `skills/list` for the folder:
 //!   the enabled skills, which a `$name` in a message loads. Codex's own slash commands belong
 //!   to its TUI, which app-server doesn't take.
-//! - **ACP agents** (Cursor Agent's `agent acp`, `OpenCode`, and the rest of 0040): `initialize`
+//! - **ACP agents** (Cursor Agent's `agent acp` and the rest of 0040): `initialize`
 //!   and `session/new`, after which the agent sends an `available_commands_update` with its
 //!   commands and skills.
 

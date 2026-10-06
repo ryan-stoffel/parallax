@@ -1,7 +1,7 @@
 //! The ACP backend: runs any agent that speaks the Agent Client Protocol (ACP) as a thread's
 //! full agent, the way Claude threads run full Claude Code (0034, 0036, 0040). Cursor Agent
-//! (`agent acp`) was the first; `OpenCode`, Pi, Hermes Agent, Grok Build, and the agents in the
-//! ACP registry run the same way, each described by an [`AcpAgent`].
+//! (`agent acp`) was the first; Pi, Hermes Agent, Grok Build, and the agents in the ACP registry
+//! run the same way, each described by an [`AcpAgent`].
 //!
 //! # The command
 //!
@@ -50,8 +50,8 @@
 //!
 //! Message chunks are text deltas; thinking chunks join into one `Reasoning`; tool calls are named
 //! for the Claude Code tools the app draws (`Bash`, `Read`, `Edit`, `Grep`, `WebFetch`); todo and
-//! plan updates are todo lists. A turn's tokens are its `session/prompt` answer's `usage`, which
-//! `OpenCode` sends and Cursor doesn't.
+//! plan updates are todo lists. A turn's tokens are its `session/prompt` answer's `usage`, when the
+//! agent sends one.
 //!
 //! # Cancel
 //!

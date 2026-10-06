@@ -1,6 +1,6 @@
 # 0040: Providers are instances a host keeps, and any ACP agent can run a thread
 
-- Status: accepted; extends [0004](0004-subscription-providers.md) (which agents run threads) and [0012](0012-account-routing.md) (a subscription `AccountChoice` names an instance), and generalizes [0036](0036-cursor-threads.md)'s ACP driver
+- Status: accepted; extends [0004](0004-subscription-providers.md) (which agents run threads) and [0012](0012-account-routing.md) (a subscription `AccountChoice` names an instance), and generalizes [0036](0036-cursor-threads.md)'s ACP driver; [0053](0053-cursor-sdk.md) supersedes its Cursor parts and [0055](0055-opencode-http.md) its OpenCode row
 - Date: 2026-10-03
 - Issue: PLX-366
 
@@ -46,9 +46,10 @@ Desk research and local runs on 2026-10-03 found:
 - **Sign-in.** A kind with a login command runs it in the app's sign-in terminal. Another ACP agent's comes from its `initialize` answer: a `terminal` method's arguments after the agent's own command, or else `plxd acp-login --method <id> -- <command>`, which sends `initialize` and `authenticate` and waits for the agent's own browser flow. Its variables, none secret, come as `loginEnv` for the app to set. plxd's `initialize` says it can run terminal sign-ins (`auth.terminal`).
 - **Probing.** An ACP agent is probed by starting it with a browser that opens nothing and without its secrets, sending `initialize` and `session/new` in the user's home folder, and reading its sign-in methods, version, whether the session opened, and its models; it is killed once it answers, or after 20 s. The app lists a host's instances once per connection and again in Settings, so probes don't follow every opened thread.
 
-### Cursor and Grok
+### Cursor, OpenCode, and Grok
 
 - **Cursor runs through the SDK** since [0053](0053-cursor-sdk.md). This record had left it on `agent acp`: `@cursor/sdk` 1.0.35 needed a browser login that mints a key, ran tools with no approval callback, was a Node library, and had no Windows arm64 build. 0053 takes that path anyway, as a sidecar, with the login stored in plxd's data folder.
+- **OpenCode 1.x runs through its HTTP server** since [0055](0055-opencode-http.md), at a URL the user gives or one `opencode serve` per run, since `opencode acp` can't use a server the user runs. OpenCode 2 (`opencode2`) stays on `opencode2 acp`.
 - **Grok** runs two ways: Grok models through Cursor, and Grok Build as its own provider for a SuperGrok or X Premium+ login.
 
 ### The app

@@ -27,7 +27,7 @@ pub enum ProviderKind {
     Cursor,
     /// Google Antigravity, `agy`.
     Antigravity,
-    /// `OpenCode`, `opencode acp`.
+    /// `OpenCode`, through `opencode serve`'s HTTP API (0055).
     Opencode,
     /// Pi, through its ACP adapter.
     Pi,
