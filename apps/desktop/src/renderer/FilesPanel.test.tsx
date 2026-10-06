@@ -66,14 +66,17 @@ const click = async (element: Element | null | undefined) => {
   await settle();
 };
 // Each row of the tree, indented by depth, its folders marked open or closed.
+const rowButtons = () =>
+  [...document.querySelectorAll<HTMLElement>('[role="treeitem"] > div > button')].filter(
+    (b) => !b.hasAttribute("data-actions"),
+  );
 const rows = () =>
-  [...document.querySelectorAll<HTMLElement>('[role="treeitem"] > button')].map((b) => {
+  rowButtons().map((b) => {
     const depth = (parseInt(b.style.paddingLeft) - 10) / 14;
-    const state = b.parentElement!.getAttribute("aria-expanded");
+    const state = b.closest('[role="treeitem"]')!.getAttribute("aria-expanded");
     return `${"  ".repeat(depth)}${b.textContent}${state === null ? "" : state === "true" ? " v" : " >"}`;
   });
-const row = (name: string) =>
-  [...document.querySelectorAll('[role="treeitem"] > button')].find((b) => b.textContent === name);
+const row = (name: string) => rowButtons().find((b) => b.textContent === name);
 const back = () => document.querySelector<HTMLElement>("button:has(.lucide-chevron-left)");
 const shown = () => document.body.textContent;
 
@@ -227,4 +230,46 @@ test("without fileEdit, the tree has no New buttons or entry menus", async () =>
   await render(<FilesPanel hostId="local" runId="run-1" />);
   expect(button("New file")).toBeNull();
   expect(button("Actions for src")).toBeNull();
+});
+
+test("Enter then leaving the field saves once, and a blank name closes it without asking plxd", async () => {
+  await render(<FilesPanel hostId="local" runId="run-1" editable />);
+  await click(button("New file"));
+  request.mockClear();
+  // plxd answers only after the field loses focus.
+  let answer = () => {};
+  request.mockImplementationOnce(
+    () => new Promise((done) => (answer = () => done({ logId: "log-1", result: {} }))),
+  );
+  const input = document.activeElement as HTMLInputElement;
+  await type("notes.md", "Enter");
+  await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  await act(async () => answer());
+  await settle();
+  expect(request.mock.calls.filter(([, m]) => m === "agent/fileCreate")).toHaveLength(1);
+  expect(document.querySelector("input")).toBeNull();
+
+  await click(button("New folder"));
+  request.mockClear();
+  await type("  ", "Enter");
+  expect(document.querySelector("input")).toBeNull();
+  expect(request).not.toHaveBeenCalled();
+});
+
+test("a failed rename keeps its field open with the reason", async () => {
+  await render(<FilesPanel hostId="local" runId="run-1" editable />);
+  await act(async () =>
+    row("README.md")!.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", bubbles: true })),
+  );
+  editError = '"src" already exists';
+  await type("src", "Enter");
+  expect(request).toHaveBeenLastCalledWith("local", "agent/fileRename", {
+    runId: "run-1",
+    from: "README.md",
+    to: "src",
+  });
+  expect(
+    document.querySelector<HTMLInputElement>('input[aria-label="Rename README.md"]'),
+  ).not.toBeNull();
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe('"src" already exists');
 });

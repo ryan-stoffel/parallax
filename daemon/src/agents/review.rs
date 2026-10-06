@@ -6,8 +6,8 @@
 //! `agent/files` and `agent/file`'s `working` side (PLX-296) read the run's folder on disk
 //! instead: its worktree, or a Current checkout thread's checkout. `agent/fileCreate`,
 //! `agent/fileRename`, and `agent/fileDelete` (PLX-590) change entries there, for the Files view.
-//! None of them follows a symlink, so nothing the agent writes there can point them outside the
-//! folder.
+//! Each checks every folder on the way with `lstat`, so a symlink the agent leaves there can't
+//! point them outside the folder.
 
 use std::io::ErrorKind as IoErrorKind;
 use std::path::{Path, PathBuf};
@@ -248,12 +248,18 @@ pub(crate) async fn run_folder(
 /// `path`, already checked by [`validate_repo_path`], under `root`, with every folder on the way
 /// checked with `lstat` to be a real folder, so no symlink is followed, and whether one of them
 /// holds a `.git`, as a submodule or a nested repository does. `None` when one is missing or isn't
-/// a folder. The last component is left unchecked.
+/// a folder. The last component is left unchecked. On Windows, each component must also be one
+/// plain name there ([`plain_on_windows`]).
 async fn under(root: &Path, path: &str) -> Result<Option<(PathBuf, bool)>, ErrorObject> {
     let mut at = root.to_path_buf();
     let mut nested = false;
     let mut components = path.split('/').peekable();
     while let Some(component) = components.next() {
+        if cfg!(windows) && !plain_on_windows(component) {
+            return Err(ErrorObject::invalid_params(format!(
+                "path {path:?} has a name Windows reads as something else"
+            )));
+        }
         at.push(component);
         if components.peek().is_none() {
             break;
@@ -273,6 +279,13 @@ async fn under(root: &Path, path: &str) -> Result<Option<(PathBuf, bool)>, Error
         }
     }
     Ok(Some((at, nested)))
+}
+
+/// Whether Windows reads `component` as the name it spells. A drive prefix such as `D:` or `C:x`
+/// would replace the whole path when pushed, `:` also names an alternate data stream, and Windows
+/// drops trailing dots and spaces, so `.git.` would reach `.git`.
+fn plain_on_windows(component: &str) -> bool {
+    !component.contains(':') && !component.ends_with(['.', ' '])
 }
 
 fn io_failed(path: &Path, error: &std::io::Error) -> ErrorObject {
@@ -512,7 +525,7 @@ pub(crate) async fn rename_entry(
         .await
         .map_err(|error| edit_failed(&from, &error))?;
     // ponytail: checked, then renamed, so an entry the agent makes at `to` in between is
-    // replaced; `renameat2`'s `RENAME_NOREPLACE` would close that where the OS has it.
+    // replaced; PLX-594 moves this and `under`'s checks to opened folders.
     match tokio::fs::symlink_metadata(&target).await {
         Ok(meta) if !same_entry(&source_meta, &meta, &from, &to) => {
             return Err(ErrorObject::invalid_params(format!(
@@ -585,7 +598,26 @@ fn base64(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::base64;
+    use super::{base64, plain_on_windows};
+
+    #[test]
+    fn windows_refuses_drives_streams_and_trailing_dots_or_spaces() {
+        for name in [
+            "D:",
+            "C:x",
+            "a:b",
+            "file.txt:stream",
+            ".git.",
+            ".git ",
+            "x.",
+            "x ",
+        ] {
+            assert!(!plain_on_windows(name), "{name:?}");
+        }
+        for name in [".gitignore", "src", "a.b", ".env", "notes.md"] {
+            assert!(plain_on_windows(name), "{name:?}");
+        }
+    }
 
     #[test]
     fn base64_matches_rfc_4648_vectors() {

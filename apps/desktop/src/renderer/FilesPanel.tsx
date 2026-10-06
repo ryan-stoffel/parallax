@@ -78,8 +78,9 @@ export function FilesPanel({
   const [openPath, setOpenPath] = useState<string>();
   const [draft, setDraft] = useState<Draft>();
   const [draftError, setDraftError] = useState<string>();
-  // The draft a save may still take: cleared while one is saving, so Enter and the blur after it
-  // save once.
+  // The draft on screen, and the one being saved, so Enter and the blur after it save once and a
+  // save that ends after another draft opened leaves that one alone.
+  const active = useRef<Draft>(undefined);
   const saving = useRef<Draft>(undefined);
   const [target, setTarget] = useState<Target>();
   const [toDelete, setToDelete] = useState<Target>();
@@ -105,23 +106,23 @@ export function FilesPanel({
 
   const startDraft = (next: Draft) => {
     if ("folder" in next && next.folder && !expanded.has(next.folder)) toggle(next.folder);
-    saving.current = next;
+    active.current = next;
     setDraft(next);
     setDraftError(undefined);
   };
   const cancelDraft = () => {
-    saving.current = undefined;
+    active.current = undefined;
     setDraft(undefined);
   };
   /** Creates or renames `d`'s entry as `value`; a blank or unchanged name just closes it. */
   const save = async (d: Draft, value: string) => {
-    if (saving.current !== d) return;
+    if (active.current !== d || saving.current === d) return;
     const name = value.trim();
     const from = "path" in d ? d.path : undefined;
     const folder = from === undefined ? (d as { folder: string }).folder : parentOf(from);
     if (!name || (from !== undefined && name === nameOf(from))) return cancelDraft();
     const path = join(folder, name);
-    saving.current = undefined;
+    saving.current = d;
     const answer =
       from === undefined
         ? await window.parallax.request(hostId, "agent/fileCreate", {
@@ -130,11 +131,12 @@ export function FilesPanel({
             folder: "isFolder" in d && d.isFolder,
           })
         : await window.parallax.request(hostId, "agent/fileRename", { runId, from, to: path });
+    saving.current = undefined;
     if ("error" in answer) {
-      saving.current = d;
-      return setDraftError(reason(answer.error));
+      if (active.current === d) setDraftError(reason(answer.error));
+      return;
     }
-    setDraft(undefined);
+    if (active.current === d) cancelDraft();
     if (from !== undefined) {
       setExpanded((prev) => new Set([...prev].map((p) => moved(p, from, path))));
       setListings((prev) =>
@@ -260,55 +262,54 @@ export function FilesPanel({
               : File;
           const renaming = draft && "path" in draft && draft.path === path;
           return (
-            <li
-              key={entry.name}
-              role="treeitem"
-              aria-expanded={isFolder ? open : undefined}
-              className="group/row relative"
-            >
+            <li key={entry.name} role="treeitem" aria-expanded={isFolder ? open : undefined}>
               {renaming ? (
                 nameField(draft, depth, isFolder, entry.name)
               ) : (
-                <button
-                  type="button"
-                  style={indent}
-                  onClick={() => (isFolder ? toggle(path) : setOpenPath(path))}
-                  onKeyDown={(e) => onRowKey(e, { path, isFolder })}
-                  onContextMenu={
-                    editable
-                      ? (e) =>
-                          openOnContextMenu(
-                            e,
-                            e.currentTarget.parentElement!.querySelector("[data-actions]"),
-                          )
-                      : undefined
-                  }
-                  className={`flex w-full items-center gap-1.5 rounded-lg py-1 pr-2 text-left text-[13px] hover:bg-hover ${target?.path === path ? "bg-hover" : ""} ${editable ? "group-has-[:focus-visible]/row:pr-8 group-hover/row:pr-8" : ""}`}
-                >
-                  <ChevronRight
-                    aria-hidden
-                    className={`size-3.5 shrink-0 text-faint-foreground ${isFolder ? "" : "invisible"} ${open ? "rotate-90" : ""}`}
-                  />
-                  <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 truncate">{entry.name}</span>
-                </button>
-              )}
-              {editable && !renaming && (
-                <span className="absolute top-0.5 right-1 opacity-0 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100">
+                // The row and its actions, apart from the folder's entries below it, so hovering
+                // a nested row shows only its own actions.
+                <div className="group/row relative">
                   <button
-                    data-actions
                     type="button"
-                    aria-label={`Actions for ${entry.name}`}
-                    title="Actions"
-                    onClick={(e) => {
-                      setTarget({ path, isFolder });
-                      menu.current?.showPopover({ source: e.currentTarget });
-                    }}
-                    className="grid size-5.5 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
+                    style={indent}
+                    onClick={() => (isFolder ? toggle(path) : setOpenPath(path))}
+                    onKeyDown={(e) => onRowKey(e, { path, isFolder })}
+                    onContextMenu={
+                      editable
+                        ? (e) =>
+                            openOnContextMenu(
+                              e,
+                              e.currentTarget.parentElement!.querySelector("[data-actions]"),
+                            )
+                        : undefined
+                    }
+                    className={`flex w-full items-center gap-1.5 rounded-lg py-1 pr-2 text-left text-[13px] hover:bg-hover ${target?.path === path ? "bg-hover" : ""} ${editable ? "group-has-[:focus-visible]/row:pr-8 group-hover/row:pr-8" : ""}`}
                   >
-                    <Ellipsis />
+                    <ChevronRight
+                      aria-hidden
+                      className={`size-3.5 shrink-0 text-faint-foreground ${isFolder ? "" : "invisible"} ${open ? "rotate-90" : ""}`}
+                    />
+                    <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 truncate">{entry.name}</span>
                   </button>
-                </span>
+                  {editable && (
+                    <span className="absolute top-0.5 right-1 opacity-0 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100">
+                      <button
+                        data-actions
+                        type="button"
+                        aria-label={`Actions for ${entry.name}`}
+                        title="Actions"
+                        onClick={(e) => {
+                          setTarget({ path, isFolder });
+                          menu.current?.showPopover({ source: e.currentTarget });
+                        }}
+                        className="grid size-5.5 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
+                      >
+                        <Ellipsis />
+                      </button>
+                    </span>
+                  )}
+                </div>
               )}
               {open && tree(path, depth + 1)}
             </li>
