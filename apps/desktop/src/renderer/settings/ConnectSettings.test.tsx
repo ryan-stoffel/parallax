@@ -260,6 +260,28 @@ test("Devices show their health; the menu renames, changes the icon, and removes
   expect(bridge.removeDevice).toHaveBeenCalledWith("tailnet:n-mini");
 });
 
+test("A device turned off can't be renamed or re-iconed, and reads Off", async () => {
+  connect = { installed: true, on: true, icon: "laptop", channel: "nightly" };
+  devices = [
+    {
+      id: "tailnet:n-pc",
+      name: "Gaming PC",
+      icon: "desktop",
+      detected: "desktop",
+      hostName: "ryans-gaming-pc",
+      ip: "100.101.12.7",
+      os: "windows",
+      enabled: false,
+    },
+  ];
+  await render();
+  const row = document.querySelector('[data-device="tailnet:n-pc"]')!;
+  expect(row.textContent).toContain("100.101.12.7 · Off");
+  const items = [...row.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+  expect(items.filter((b) => b.disabled).map((b) => b.textContent)).toEqual(["Icon", "Rename"]);
+  expect(items[0]!.title).toBe("Turn Gaming PC on to change it.");
+});
+
 test("uptime reads in days, hours, or minutes", () => {
   expect(uptime(59)).toBe("0m");
   expect(uptime(7260)).toBe("2h 1m");

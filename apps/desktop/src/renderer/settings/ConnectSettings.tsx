@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState } from "react";
 
 import {
   DEVICE_ICONS,
+  iconFor,
   type ConnectState,
   type DeviceHost,
   type DeviceIcon as DeviceIconName,
@@ -78,7 +79,7 @@ export function ConnectSettings() {
           <ul className="flex flex-col gap-2">
             <DeviceCard
               device={{ id: localId, name: local.name, icon: connect.icon }}
-              detected={connect.icon}
+              detected={iconFor(local.name)}
               local
             />
             {devices.map((d) => (
@@ -236,6 +237,12 @@ function DeviceCard({
     menu.current?.hidePopover();
     action();
   };
+  // A name or icon is saved on the device's own plxd, so it needs a connection. This computer's
+  // name is the app's own, and its plxd is always local.
+  const editable = local || connected;
+  const unreachable = enabled
+    ? `Parallax can't reach ${device.name} right now.`
+    : `Turn ${device.name} on to change it.`;
   const status = !enabled
     ? "Off"
     : state
@@ -339,7 +346,9 @@ function DeviceCard({
           type="button"
           role="menuitem"
           popoverTarget={iconsId}
-          className={`${menuItem} [&_svg]:size-4`}
+          disabled={!editable}
+          title={editable ? undefined : unreachable}
+          className={`${menuItem} disabled:opacity-50 [&_svg]:size-4`}
         >
           <DeviceIcon icon={device.icon} />
           <span className="flex-1">Icon</span>
@@ -348,7 +357,9 @@ function DeviceCard({
         <button
           type="button"
           role="menuitem"
-          className={`${menuItem} [&_svg]:size-4`}
+          disabled={!editable}
+          title={editable ? undefined : unreachable}
+          className={`${menuItem} disabled:opacity-50 [&_svg]:size-4`}
           onClick={choose(() => setRenaming(true))}
         >
           <Pencil aria-hidden />

@@ -48,8 +48,8 @@ type Step =
  * Add computer (0056), a modal dialog open while it's mounted: the user's devices on the tailnet,
  * from the local plxd's `connect/devices`; then, for one, what `plx-connect add` will do there;
  * then that command in a terminal, where ssh can ask for a password; then whether it worked, with
- * Add another computer and Done. A device that already runs Connect but isn't in `devices`, such
- * as one removed here, gets Add instead of Set up.
+ * Add another computer and Done. A device that already runs Connect but this app doesn't use,
+ * because it was turned off or removed here, gets Add instead of Set up.
  */
 export function ConnectWizard({
   channel,
@@ -302,7 +302,7 @@ function Plan({ icon, title, children }: { icon: ReactNode; title: string; child
 
 /**
  * The tailnet's devices: online ones Parallax can run on first, each with Set up, or Connected
- * when this app lists it, or Add when it runs Connect but isn't listed here.
+ * when this app uses it, or Add when it runs Connect but this app doesn't use it.
  */
 function DeviceList({
   found,
@@ -330,7 +330,8 @@ function DeviceList({
     return note("Tailscale isn't running on this computer. Open it and sign in, then come back.");
   const rank = (d: TailnetDevice) => (d.online && installable.has(d.os) ? 0 : d.online ? 1 : 2);
   const sorted = [...found.devices].sort((a, b) => rank(a) - rank(b));
-  const listed = (d: TailnetDevice) => devices.some((h) => h.id === `tailnet:${d.id}`);
+  // Connected only when this app uses it; one turned off or removed here gets Add.
+  const listed = (d: TailnetDevice) => devices.some((h) => h.id === `tailnet:${d.id}` && h.enabled);
   return (
     <>
       <ul
