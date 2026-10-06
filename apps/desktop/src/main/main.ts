@@ -12,6 +12,7 @@ import {
   session,
   shell,
 } from "electron";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -260,7 +261,18 @@ ipcMain.handle("parallax:chooseTerminalApp", async (event) => {
     : dialog.showOpenDialog(options));
   const chosen = filePaths[0];
   if (canceled || !chosen) return null;
-  writeTerminalApp(terminalFile(), chosen);
+  try {
+    writeTerminalApp(terminalFile(), chosen);
+  } catch (error) {
+    const detail = (error as Error).message;
+    if (win)
+      await dialog.showMessageBox(win, {
+        type: "warning",
+        message: "Parallax couldn't save your terminal.",
+        detail,
+      });
+    return null;
+  }
   terminal = chosen;
   targetIcons = undefined;
   return terminalName(chosen);
@@ -299,8 +311,11 @@ ipcMain.handle(
     // A local folder must be one: `shell.openPath` would run an executable file.
     if (!destination && !isDirectory(folder)) error = "That folder isn't there anymore.";
     else if (target === "files") error = (await shell.openPath(folder)) || undefined;
+    // `open -a` starts without complaint when the app is gone, so check it's still there.
     else if (target === "terminal")
-      error = await launch(terminalCommand(process.platform, terminal!, folder));
+      error = existsSync(terminal!)
+        ? await launch(terminalCommand(process.platform, terminal!, folder))
+        : `${terminalName(terminal!)} isn't there anymore. Choose your terminal again in Settings.`;
     else {
       const program = installedEditors()[target as Editor]!;
       error = await launch(editorCommand(program, folder, destination));
