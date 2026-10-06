@@ -811,10 +811,36 @@ describe("on a plxd with providers", () => {
       signedIn: undefined,
       note: "pi isn't installed on this host",
     };
+    const install = vi.fn(async () => {
+      // Installed, Pi has no model to use until it logs in, in its own `pi`.
+      listed[1] = {
+        ...listed[1]!,
+        installed: true,
+        signedIn: false,
+        note: "Pi has no usable models. Run `pi` and use /login, or configure an API key in ~/.pi/agent.",
+        login: ["pi"],
+      };
+      return undefined;
+    });
+    window.parallax.install = install;
     await renderSettings();
     expect(tabs()[1]!.trim()).toBe("PiNot installed");
     await click(tab("Pi"));
-    expect(rows("Account")[1]).toBe("AccountPi isn't installed on this hostInstall");
+    // Install takes the account's place, and says what it runs.
+    expect(rows("Account")[1]).toBe(
+      'InstallPi isn\'t installed on this hostInstallRuns npm install -g --prefix "$HOME/.local" @earendil-works/pi-coding-agent',
+    );
+    const installButton = visible('[aria-label="Install Pi"]') as HTMLButtonElement;
+    expect(
+      document.getElementById(installButton.getAttribute("aria-describedby")!)!.textContent,
+    ).toBe('Runs npm install -g --prefix "$HOME/.local" @earendil-works/pi-coding-agent');
+    await click(installButton);
+    expect(install).toHaveBeenCalledWith("local", "pi");
+    expect(calls("providers/list").at(-1)!.params).toEqual({ refresh: true });
+    expect(rows("Account")[1]).toBe(
+      "AccountNot authenticated · Pi has no usable models. Run `pi` and use /login, or configure an API key in ~/.pi/agent.Login",
+    );
+    listed[1] = { ...listed[1]!, installed: false, note: "pi isn't installed on this host" };
 
     listed[1] = { ...listed[1]!, instance: { ...listed[1]!.instance, program: "/opt/npx" } };
     unmount();
@@ -923,6 +949,55 @@ describe("on a plxd with providers", () => {
       args: ["-y", "pi-acp@0.0.34"],
       env: [{ name: "PI_ACP_PI_COMMAND", value: "pi", secret: false }],
       models: [],
+    });
+  });
+
+  test("Pi and OpenCode ask only for their binary, and OpenCode for its server", async () => {
+    const labels = () =>
+      [...dialog().querySelectorAll("form > div:nth-child(3) label")].map(
+        (l) => l.childNodes[0]!.textContent,
+      );
+    const type = async (label: string, value: string) => {
+      const input = [...dialog().querySelectorAll("label")]
+        .find((l) => l.childNodes[0]!.textContent === label)!
+        .querySelector("input")!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+          input,
+          value,
+        );
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    };
+    await renderSettings();
+    await click(document.querySelector<HTMLElement>('[aria-label="Add provider"]')!);
+    const card = (blurb: string) =>
+      [...dialog().querySelectorAll("button")].find((b) => b.textContent!.endsWith(blurb))!;
+    await click(card("A minimal agent"));
+    await next();
+    expect(labels()).toEqual(["Binary path"]);
+    await type("Binary path", "/opt/pi/bin/pi");
+    await next();
+    expect(saved()).toMatchObject({
+      kind: "pi",
+      args: ["-y", "pi-acp@0.0.34"],
+      env: [{ name: "PI_ACP_PI_COMMAND", value: "/opt/pi/bin/pi", secret: false }],
+    });
+
+    await click(document.querySelector<HTMLElement>('[aria-label="Add provider"]')!);
+    await click(card("Any model"));
+    await next();
+    expect(labels()).toEqual(["Binary path", "Server URL", "Server password"]);
+    await type("Server URL", "http://127.0.0.1:4096");
+    await type("Server password", "hunter2");
+    await next();
+    expect(saved()).toMatchObject({
+      kind: "opencode",
+      args: [],
+      env: [
+        { name: "OPENCODE_SERVER_URL", value: "http://127.0.0.1:4096", secret: false },
+        { name: "OPENCODE_SERVER_PASSWORD", value: "hunter2", secret: true },
+      ],
     });
   });
 

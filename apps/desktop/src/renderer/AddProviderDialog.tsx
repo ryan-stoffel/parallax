@@ -128,9 +128,11 @@ export function AddProviderDialog({
     : ids.includes(id)
       ? "Another provider on this host has it."
       : undefined;
-  const homeVar = draft && HOME_VARS[draft.kind];
+  // Pi and OpenCode ask only what T3 Code asks; Settings has the rest once they're installed.
+  const short = draft?.kind === "pi" || draft?.kind === "opencode";
+  const homeVar = draft && !short && HOME_VARS[draft.kind];
   // A kind with versions: the one the fields run, which a choice rewrites.
-  const choices = draft && versions[draft.kind];
+  const choices = draft && !short && versions[draft.kind];
   const command = program.trim();
   const fields = {
     kind: draft?.kind ?? "acp",
@@ -140,6 +142,11 @@ export function AddProviderDialog({
     env,
   };
   const version = versionOf(fields);
+  /** The value of the variable `name`, which a field edits. */
+  const valueOf = (name: string) => env.find((v) => v.name === name)?.value ?? "";
+  /** Sets the variable `name`, or leaves it out when `value` is empty. */
+  const setVar = (name: string, value: string, secret = false) =>
+    setEnv([...env.filter((v) => v.name !== name), ...(value ? [{ name, value, secret }] : [])]);
 
   const choose = (next: Draft, to = 1) => {
     setDraft(next);
@@ -268,7 +275,85 @@ export function AddProviderDialog({
               </label>
             </div>
           )}
-          {step === 2 && draft && (
+          {step === 2 && draft?.kind === "pi" && (
+            <div className="flex flex-col gap-4">
+              <label className="text-[12.5px] text-muted-foreground">
+                Binary path
+                <input
+                  autoFocus
+                  placeholder="pi"
+                  value={valueOf("PI_ACP_PI_COMMAND")}
+                  // The `pi` Pi's ACP adapter runs.
+                  onChange={(e) => setVar("PI_ACP_PI_COMMAND", e.target.value)}
+                  spellCheck={false}
+                  autoComplete="off"
+                  className={`${field} font-mono`}
+                />
+                <span className="mt-1 block text-faint-foreground">
+                  Path to the Pi coding agent binary.
+                </span>
+              </label>
+              {error && (
+                <p role="alert" className="text-[12.5px] text-danger">
+                  {error}
+                </p>
+              )}
+            </div>
+          )}
+          {step === 2 && draft?.kind === "opencode" && (
+            <div className="flex flex-col gap-4">
+              <label className="text-[12.5px] text-muted-foreground">
+                Binary path
+                <input
+                  autoFocus
+                  placeholder="opencode"
+                  value={program}
+                  onChange={(e) => setProgram(e.target.value)}
+                  spellCheck={false}
+                  autoComplete="off"
+                  className={`${field} font-mono`}
+                />
+                <span className="mt-1 block text-faint-foreground">
+                  Path to the OpenCode binary.
+                </span>
+              </label>
+              <label className="text-[12.5px] text-muted-foreground">
+                Server URL
+                <input
+                  type="url"
+                  placeholder="http://127.0.0.1:4096"
+                  value={valueOf("OPENCODE_SERVER_URL")}
+                  onChange={(e) => setVar("OPENCODE_SERVER_URL", e.target.value)}
+                  spellCheck={false}
+                  autoComplete="off"
+                  className={`${field} font-mono`}
+                />
+                <span className="mt-1 block text-faint-foreground">
+                  Leave blank to let Parallax start the server when needed.
+                </span>
+              </label>
+              <label className="text-[12.5px] text-muted-foreground">
+                Server password
+                <input
+                  type="password"
+                  placeholder="Optional"
+                  value={valueOf("OPENCODE_SERVER_PASSWORD")}
+                  onChange={(e) => setVar("OPENCODE_SERVER_PASSWORD", e.target.value, true)}
+                  autoComplete="off"
+                  className={field}
+                />
+                <span className="mt-1 block text-faint-foreground">
+                  Kept in the host's keychain.
+                </span>
+              </label>
+              {error && (
+                <p role="alert" className="text-[12.5px] text-danger">
+                  {error}
+                </p>
+              )}
+            </div>
+          )}
+          {step === 2 && draft && !short && (
             <div className="flex flex-col gap-4">
               {choices && (
                 <div className="flex items-center justify-between gap-4 text-[12.5px] text-muted-foreground">

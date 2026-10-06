@@ -43,6 +43,10 @@ const CACHE_TTL: Duration = Duration::from_secs(30);
 /// How long one probe step may take: a version, a status command, or an ACP session.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// What a Pi instance with no model it can use says.
+const PI_NO_MODELS: &str = "Pi has no usable models. Run `pi` and use /login, or configure an API \
+                            key in ~/.pi/agent.";
+
 /// What runs a kind, and how.
 #[derive(Clone, Debug)]
 enum Driver {
@@ -121,14 +125,12 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
             }
         }
         // Pi has no ACP of its own: `pi-acp` runs `pi --mode rpc`. Pi before 0.81 needs
-        // `pi-acp@0.0.27`, which an instance's arguments pick.
-        ProviderKind::Pi => Preset {
-            login: &["pi"],
-            ..base(
-                "npx",
-                Driver::Acp(Box::new(acp_agent("Pi", "npx", &["-y", "pi-acp@0.0.34"]))),
-            )
-        },
+        // `pi-acp@0.0.27`, which an instance's arguments pick. It signs in in that `pi`, which
+        // the probe finds.
+        ProviderKind::Pi => base(
+            "npx",
+            Driver::Acp(Box::new(acp_agent("Pi", "npx", &["-y", "pi-acp@0.0.34"]))),
+        ),
         ProviderKind::GrokBuild => Preset {
             login: &["grok", "login"],
             ..base(
@@ -616,12 +618,7 @@ impl Providers {
             };
             // Pi runs through `npx pi-acp`, so its version is the `pi` the adapter runs.
             let versioned = match instance.kind {
-                ProviderKind::Pi => instance
-                    .env
-                    .iter()
-                    .find(|var| var.name == "PI_ACP_PI_COMMAND")
-                    .and_then(|var| var.value.clone())
-                    .unwrap_or_else(|| "pi".to_owned()),
+                ProviderKind::Pi => pi_command(instance),
                 _ => program.clone(),
             };
             // `npx` alone can't run Pi: the adapter needs the `pi` it runs.
@@ -675,6 +672,9 @@ impl Providers {
                     overrides(entry, env.clone()),
                 );
                 acp_probe(&self.launcher, &agent, &mut found).await;
+                if instance.kind == ProviderKind::Pi {
+                    pi_sign_in(&self.launcher, instance, &mut found);
+                }
             }
             _ => {}
         }
@@ -930,6 +930,39 @@ impl Backend for WithSecrets {
         }
         self.plain.limits(cwd)
     }
+}
+
+/// How Pi signs in, from what its adapter's probe found: in the `pi` the adapter runs, where plxd
+/// found it, with plxd's PATH, since the app's own may have neither it nor the `node` an npm install
+/// of it runs on. With no model it can use, it says how (PLX-558).
+fn pi_sign_in(launcher: &Launcher, instance: &ProviderInstance, found: &mut Found) {
+    found.login = detect::resolve(launcher, &pi_command(instance))
+        .map(|path| vec![path.display().to_string()]);
+    let env = launcher.environment(&detect::probe_spec("pi"));
+    // An instance's own PATH, which its runs use, stays.
+    let own_path = instance.env.iter().any(|var| var.name == "PATH");
+    if let Some(path) = env.get("PATH").filter(|_| !own_path) {
+        found
+            .login_env
+            .get_or_insert_with(Vec::new)
+            .push(("PATH".into(), path.to_owned()));
+    }
+    // pi-acp says only that it needs a sign-in.
+    if found.signed_in == Some(false) || (found.signed_in == Some(true) && found.models.is_empty())
+    {
+        found.signed_in = Some(false);
+        found.note = Some(PI_NO_MODELS.into());
+    }
+}
+
+/// The `pi` a Pi instance's adapter runs: its `PI_ACP_PI_COMMAND`, or `pi`.
+fn pi_command(instance: &ProviderInstance) -> String {
+    instance
+        .env
+        .iter()
+        .find(|var| var.name == "PI_ACP_PI_COMMAND")
+        .and_then(|var| var.value.clone())
+        .unwrap_or_else(|| "pi".to_owned())
 }
 
 /// The program `instance` runs: its own, or its kind's.
@@ -1606,6 +1639,41 @@ mod tests {
         assert_eq!(
             found.note.as_deref(),
             Some("pi isn't installed on this host")
+        );
+
+        // With its `pi`, an adapter that wants a sign-in is Pi with no models, which logs in in
+        // that `pi`, where plxd found it.
+        let script = |name: &str, body: &str| {
+            std::fs::write(bin.join(name), format!("#!/bin/sh\n{body}")).unwrap();
+            std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        };
+        script("pi", "echo 1.0.3\n");
+        script(
+            "npx",
+            r#"read a; echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read b; echo '{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"Authentication required"}}'
+"#,
+        );
+        let found = providers.probe(&detector, &entry, true).await;
+        assert!(found.installed);
+        assert_eq!(found.version.as_deref(), Some("1.0.3"));
+        assert_eq!(found.signed_in, Some(false));
+        assert_eq!(found.note.as_deref(), Some(super::PI_NO_MODELS));
+        assert_eq!(
+            found.login,
+            Some(vec![bin.join("pi").display().to_string()])
+        );
+        let path = found
+            .login_env
+            .unwrap()
+            .into_iter()
+            .find(|(name, _)| name == "PATH")
+            .map(|(_, value)| value);
+        assert_eq!(
+            path,
+            Some(bin.into_os_string()),
+            "with plxd's PATH, for its node"
         );
     }
 

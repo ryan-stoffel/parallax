@@ -53,6 +53,22 @@ export type FolderListing =
   | { path: string; folders: { name: string; path: string }[] }
   | { error: string };
 
+/**
+ * The kinds Install puts on a host with npm, in the background rather than in a terminal
+ * (PLX-558), by their npm package.
+ */
+export const NPM_INSTALLS: Partial<Record<ProviderKind, string>> = {
+  pi: "@earendil-works/pi-coding-agent",
+  opencode: "opencode-ai",
+};
+
+/**
+ * The npm command that installs `pkg`: on POSIX into `~/.local`, whose `bin` plxd searches, since
+ * npm's own global prefix may be read-only (a Nix store); on Windows into npm's global prefix.
+ */
+export const npmInstallLine = (pkg: string, windows: boolean) =>
+  windows ? `npm install -g ${pkg}` : `npm install -g --prefix "$HOME/.local" ${pkg}`;
+
 export interface ParallaxBridge {
   /** Node's `process.platform`, e.g. "darwin", "win32", "linux". */
   platform: string;
@@ -173,6 +189,11 @@ export interface ParallaxBridge {
     cols: number,
     rows: number,
   ): Promise<string | undefined>;
+  /**
+   * Installs an agent of `kind` (one of `NPM_INSTALLS`) on a host with npm, in the background.
+   * Resolves to an error for people, with the end of npm's output, or undefined once it's done.
+   */
+  install(hostId: string, kind: ProviderKind): Promise<string | undefined>;
   /** Types into terminal `id`, or runs a command in it with a trailing "\r". */
   terminalInput(id: string, data: string): void;
   /** Resizes terminal `id`, in character cells. */
