@@ -26,6 +26,8 @@ interface NewThreadProps {
   hostId: string;
   /** The computers a thread can run on. */
   hosts: Host[];
+  /** Called when the user picks another computer to run the thread on. */
+  onHostChange: (hostId: string) => void;
   /** Repositories and No Repo, as the sidebar groups them. */
   groups: ThreadGroup[];
   groupId: string;
@@ -138,6 +140,7 @@ const noAccounts =
 export function NewThread({
   hostId,
   hosts,
+  onHostChange,
   groups,
   groupId,
   onGroupChange,
@@ -179,6 +182,15 @@ export function NewThread({
     threads: string[];
   }>();
   const failed = useRef<Attempt>(undefined);
+  // The screen stays mounted when another computer is picked, so the Composer keeps its draft.
+  // What belongs to the old host goes: its failed start, account chooser, and default backend.
+  useEffect(() => {
+    failed.current = undefined;
+    setBackend(undefined);
+    setChoices(undefined);
+    setChooseError(undefined);
+    setRepoError(undefined);
+  }, [hostId]);
   const group = groups.find((g) => g.id === groupId) ?? groups.at(-1)!;
   // Starts as Settings > General says; picking one here is for this thread only.
   const [workspace, setWorkspace] = useState<Workspace>(() => newThreadPrefs.get().workspace);
@@ -477,6 +489,7 @@ export function NewThread({
                 <RunTargetMenu
                   hosts={hosts}
                   hostId={hostId}
+                  onHostChange={onHostChange}
                   workspace={checkout ? "checkout" : "worktree"}
                   onWorkspaceChange={setWorkspace}
                   checkoutUnavailable={checkoutUnavailable}
