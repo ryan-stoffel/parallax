@@ -182,6 +182,15 @@ export function NewThread({
     threads: string[];
   }>();
   const failed = useRef<Attempt>(undefined);
+  // The screen stays mounted when another computer is picked, so the Composer keeps its draft.
+  // What belongs to the old host goes: its failed start, account chooser, and default backend.
+  useEffect(() => {
+    failed.current = undefined;
+    setBackend(undefined);
+    setChoices(undefined);
+    setChooseError(undefined);
+    setRepoError(undefined);
+  }, [hostId]);
   const group = groups.find((g) => g.id === groupId) ?? groups.at(-1)!;
   // Starts as Settings > General says; picking one here is for this thread only.
   const [workspace, setWorkspace] = useState<Workspace>(() => newThreadPrefs.get().workspace);

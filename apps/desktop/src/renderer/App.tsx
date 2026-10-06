@@ -481,11 +481,13 @@ export function App() {
   };
 
   // Runs New Thread on another computer: opens that host, keeping the repository if it lists one
-  // of the same name (each host's entries have their own ids), else New Thread's first repository.
+  // of the same name (each host's entries have their own ids), else New Thread's first repository,
+  // which is also what a host whose list hasn't loaded yet gets.
   const pickHost = (id: string) => {
     if (id === host.id) return;
     const { groups: there } = groupThreads((views[id] ?? idleThreads).state);
     setHostId(id);
+    setOpening(undefined);
     setSelection({ kind: "new", groupId: there.find((g) => g.name === group.name)?.id });
   };
 
@@ -933,7 +935,6 @@ export function App() {
               </div>
             ) : selection.kind === "new" ? (
               <NewThread
-                key={host.id}
                 hostId={host.id}
                 hosts={hosts}
                 onHostChange={pickHost}
