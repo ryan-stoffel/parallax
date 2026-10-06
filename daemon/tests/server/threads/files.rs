@@ -1,9 +1,13 @@
 //! `agent/files` and `agent/file`'s `working` side (PLX-296): browsing a thread's folder on disk,
-//! for a thread in a worktree and one in the user's own checkout.
+//! for a thread in a worktree and one in the user's own checkout; and `agent/fileCreate`,
+//! `agent/fileRename`, and `agent/fileDelete` (PLX-590) changing it.
 
-use parallax_protocol::methods::{AgentFile, AgentFiles};
+use parallax_protocol::methods::{
+    AgentFile, AgentFileCreate, AgentFileDelete, AgentFileRename, AgentFiles,
+};
 use parallax_protocol::{
-    AgentEntry, AgentEntryKind, AgentFileParams, AgentFileResult, AgentFileSide, AgentFilesParams,
+    AgentEntry, AgentEntryKind, AgentFileCreateParams, AgentFileDeleteParams, AgentFileParams,
+    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFilesParams,
 };
 
 use super::*;
@@ -242,4 +246,120 @@ async fn a_checkout_threads_files_are_its_repositorys_checkout() {
     );
     let error = list(&mut client, run_id, Some("etc")).await.unwrap_err();
     assert_eq!(error.code, INVALID_PARAMS);
+}
+
+async fn create(
+    client: &mut Conn,
+    run_id: RunId,
+    path: &str,
+    folder: bool,
+) -> Result<(), ErrorObject> {
+    let params = AgentFileCreateParams {
+        run_id,
+        path: path.to_owned(),
+        folder,
+    };
+    client.call::<AgentFileCreate>(params).await.map(drop)
+}
+
+async fn rename(client: &mut Conn, run_id: RunId, from: &str, to: &str) -> Result<(), ErrorObject> {
+    let params = AgentFileRenameParams {
+        run_id,
+        from: from.to_owned(),
+        to: to.to_owned(),
+    };
+    client.call::<AgentFileRename>(params).await.map(drop)
+}
+
+async fn delete(client: &mut Conn, run_id: RunId, path: &str) -> Result<(), ErrorObject> {
+    let params = AgentFileDeleteParams {
+        run_id,
+        path: path.to_owned(),
+    };
+    client.call::<AgentFileDelete>(params).await.map(drop)
+}
+
+#[tokio::test]
+async fn files_and_folders_are_created_renamed_and_deleted_inside_the_threads_folder() {
+    let host = Host::start(fake(editing()));
+    let path = repo_with_ignores(host.work.path());
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    client.subscribe(0, Some(scope(repo.id))).await;
+    let started = client
+        .call::<ThreadStart>(start_params(Some(repo.id), "Write some notes"))
+        .await
+        .unwrap();
+    let run_id = started.run.id;
+    client.until(updated_to(AgentStatus::Completed)).await;
+    let worktree = PathBuf::from(started.run.worktree_path.unwrap());
+    add_ignored_and_links(&worktree);
+
+    create(&mut client, run_id, "src/util", true).await.unwrap();
+    create(&mut client, run_id, "src/util/mod.rs", false)
+        .await
+        .unwrap();
+    assert_eq!(
+        names(&list(&mut client, run_id, Some("src/util")).await.unwrap()),
+        [("mod.rs", AgentEntryKind::File)]
+    );
+    assert_eq!(text(&mut client, run_id, "src/util/mod.rs").await, "");
+
+    // A folder moves with its contents; a change of case alone is allowed.
+    rename(&mut client, run_id, "src/util", "src/helpers")
+        .await
+        .unwrap();
+    assert!(worktree.join("src/helpers/mod.rs").is_file());
+    rename(
+        &mut client,
+        run_id,
+        "src/helpers/mod.rs",
+        "src/helpers/Mod.rs",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        names(
+            &list(&mut client, run_id, Some("src/helpers"))
+                .await
+                .unwrap()
+        ),
+        [("Mod.rs", AgentEntryKind::File)]
+    );
+
+    // Nothing is overwritten, and nothing moves into itself.
+    for error in [
+        create(&mut client, run_id, "README.md", false).await,
+        create(&mut client, run_id, "src", true).await,
+        create(&mut client, run_id, "hosts", false).await,
+        create(&mut client, run_id, "nope/new.md", false).await,
+        rename(&mut client, run_id, "README.md", "NOTES.md").await,
+        rename(&mut client, run_id, "src", "src/helpers/src").await,
+        rename(&mut client, run_id, "nope", "nope2").await,
+        delete(&mut client, run_id, "nope").await,
+    ] {
+        assert_eq!(error.unwrap_err().code, INVALID_PARAMS);
+    }
+    assert_eq!(text(&mut client, run_id, "README.md").await, "hello\n");
+
+    // A symlink goes, never what it points to; a folder goes with everything in it.
+    delete(&mut client, run_id, "hosts").await.unwrap();
+    assert!(std::path::Path::new("/etc/hosts").exists());
+    delete(&mut client, run_id, "src").await.unwrap();
+    assert!(!worktree.join("src").exists());
+
+    // Nothing outside the folder, through a symlink, or inside .git.
+    for escape in ["../x", "/tmp/x", ".git/x", ".GIT", "etc/x", "a\\..\\b", ""] {
+        let error = create(&mut client, run_id, escape, false)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, INVALID_PARAMS, "{escape:?}: {error:?}");
+        let error = rename(&mut client, run_id, "README.md", escape)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, INVALID_PARAMS, "{escape:?}: {error:?}");
+        let error = delete(&mut client, run_id, escape).await.unwrap_err();
+        assert_eq!(error.code, INVALID_PARAMS, "{escape:?}: {error:?}");
+    }
+    assert!(worktree.join(".git").exists());
 }

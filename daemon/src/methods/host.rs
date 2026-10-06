@@ -140,6 +140,8 @@ pub(crate) fn initialize(
 /// Current checkout thread.
 /// `files` (PLX-296): `agent/files`, and `agent/file`'s `working` side, which an older plxd
 /// would refuse, to browse a run's folder.
+/// `fileEdit` (PLX-590): `agent/fileCreate`, `agent/fileRename`, and `agent/fileDelete`, to change
+/// a run's folder from the Files view.
 /// `pullRequests` (PLX-318): `pr/view` and `pr/act`, and `pullRequests` on `AgentRun` and
 /// `agent.updated`, which an older plxd never fills.
 /// `prDiff` (PLX-328): `pr/diff`, and `createdAt`, `closedAt`, `mergedAt`, `mergedBy`, `commits`,
@@ -210,6 +212,7 @@ fn capabilities_advertised() -> Capabilities {
         ("coordinator".to_owned(), serde_json::Map::new()),
         ("eventFilters".to_owned(), serde_json::Map::new()),
         ("eventsBefore".to_owned(), serde_json::Map::new()),
+        ("fileEdit".to_owned(), serde_json::Map::new()),
         ("files".to_owned(), serde_json::Map::new()),
         ("git".to_owned(), serde_json::Map::new()),
         (

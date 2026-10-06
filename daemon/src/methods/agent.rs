@@ -1,8 +1,9 @@
 //! `agent/start`, `agent/send`, `agent/cancel`, `agent/list`, and `agent/events` (#156), behind
 //! the `agents` capability; the review methods (#157) behind `agentReview`; `agent/openPr`
 //! (PLX-168) behind `openPr`; `agent/image` (PLX-191) behind `promptImages`; `agent/approve`
-//! (PLX-222) behind `approvals`; and `agent/gitStatus`, `agent/commit`, and `agent/push`
-//! (PLX-298) behind `git`. The runner itself is [`crate::agents`].
+//! (PLX-222) behind `approvals`; `agent/gitStatus`, `agent/commit`, and `agent/push` (PLX-298)
+//! behind `git`; and `agent/fileCreate`, `agent/fileRename`, and `agent/fileDelete` (PLX-590)
+//! behind `fileEdit`. The runner itself is [`crate::agents`].
 
 use std::sync::Arc;
 
@@ -10,7 +11,8 @@ use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentAcceptParams, AgentAcceptResult, AgentApprovalAnswer, AgentApproveParams,
     AgentApproveResult, AgentAutoResumeParams, AgentCancelParams, AgentCommitParams,
-    AgentDiffParams, AgentDiffResult, AgentEventsParams, AgentEventsResult, AgentFileParams,
+    AgentDiffParams, AgentDiffResult, AgentEventsParams, AgentEventsResult, AgentFileCreateParams,
+    AgentFileDeleteParams, AgentFileEditResult, AgentFileParams, AgentFileRenameParams,
     AgentFileResult, AgentFilesParams, AgentFilesResult, AgentGitStatusParams, AgentImageParams,
     AgentListParams, AgentListResult, AgentOpenPrParams, AgentOpenPrResult, AgentPolicy,
     AgentPushParams, AgentRequestChangesParams, AgentResumeNowParams, AgentRunResult,
@@ -243,6 +245,30 @@ pub(crate) async fn files(
     params: AgentFilesParams,
 ) -> Result<AgentFilesResult, ErrorObject> {
     agents::review::files(&context.daemon, params).await
+}
+
+pub(crate) async fn create_entry(
+    context: &Context,
+    params: AgentFileCreateParams,
+) -> Result<AgentFileEditResult, ErrorObject> {
+    agents::review::create_entry(&context.daemon, params).await?;
+    Ok(AgentFileEditResult {})
+}
+
+pub(crate) async fn rename_entry(
+    context: &Context,
+    params: AgentFileRenameParams,
+) -> Result<AgentFileEditResult, ErrorObject> {
+    agents::review::rename_entry(&context.daemon, params).await?;
+    Ok(AgentFileEditResult {})
+}
+
+pub(crate) async fn delete_entry(
+    context: &Context,
+    params: AgentFileDeleteParams,
+) -> Result<AgentFileEditResult, ErrorObject> {
+    agents::review::delete_entry(&context.daemon, params).await?;
+    Ok(AgentFileEditResult {})
 }
 
 pub(crate) async fn accept(

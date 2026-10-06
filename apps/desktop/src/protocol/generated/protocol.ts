@@ -190,6 +190,19 @@ export type ParallaxRequests = {
 	 */
 	"agent/files": { params: AgentFilesParams, result: AgentFilesResult },
 	/**
+	 * `agent/fileCreate`: a new empty file or folder in a run's folder (PLX-590). Gated on
+	 * the `fileEdit` capability, like `agent/fileRename` and `agent/fileDelete`.
+	 */
+	"agent/fileCreate": { params: AgentFileCreateParams, result: AgentFileEditResult },
+	/**
+	 * `agent/fileRename`: moves an entry of a run's folder, never over another.
+	 */
+	"agent/fileRename": { params: AgentFileRenameParams, result: AgentFileEditResult },
+	/**
+	 * `agent/fileDelete`: removes an entry of a run's folder, a folder with its contents.
+	 */
+	"agent/fileDelete": { params: AgentFileDeleteParams, result: AgentFileEditResult },
+	/**
 	 * `agent/accept`: merges a run's commit into the project repository's current branch on
 	 * the host, fast-forward when possible, then removes its worktree and branch. Never
 	 * pushes. Idempotent on its client-generated id.
@@ -3425,6 +3438,64 @@ export type AgentEntry = {
  * A newer plxd may send a kind this version does not know; treat it as a file.
  */
 export type AgentEntryKind = "file" | "dir" | "symlink";
+
+/**
+ * Params of `agent/fileCreate` (PLX-590): a new empty file or folder in a run's folder, by
+ * `agent/file`'s path rules. Fails if anything is already at `path` or its folder is missing.
+ */
+export type AgentFileCreateParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The new entry, relative to the run's folder.
+	 */
+	path: string,
+	/**
+	 * A folder rather than a file.
+	 */
+	folder: boolean,
+};
+
+/**
+ * Result of `agent/fileCreate`, `agent/fileRename`, and `agent/fileDelete`.
+ */
+export type AgentFileEditResult = Record<symbol, never>;
+
+/**
+ * Params of `agent/fileRename` (PLX-590): moves a file, folder, or symlink in a run's folder.
+ * Fails if anything is already at `to`, or `to` is inside `from`.
+ */
+export type AgentFileRenameParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The entry, relative to the run's folder.
+	 */
+	from: string,
+	/**
+	 * Its new path, relative to the run's folder.
+	 */
+	to: string,
+};
+
+/**
+ * Params of `agent/fileDelete` (PLX-590): removes a file, a symlink (never its target), or a
+ * folder with everything in it, from a run's folder.
+ */
+export type AgentFileDeleteParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The entry, relative to the run's folder.
+	 */
+	path: string,
+};
 
 /**
  * Params of `agent/accept`.

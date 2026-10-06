@@ -4,8 +4,10 @@
 //! touch the worktree's index or files while its agent runs.
 //!
 //! `agent/files` and `agent/file`'s `working` side (PLX-296) read the run's folder on disk
-//! instead: its worktree, or a Current checkout thread's checkout. They only read, and never
-//! follow a symlink, so nothing the agent writes there can point them outside the folder.
+//! instead: its worktree, or a Current checkout thread's checkout. `agent/fileCreate`,
+//! `agent/fileRename`, and `agent/fileDelete` (PLX-590) change entries there, for the Files view.
+//! Each checks every folder on the way with `lstat`, so a symlink the agent leaves there can't
+//! point them outside the folder.
 
 use std::io::ErrorKind as IoErrorKind;
 use std::path::{Path, PathBuf};
@@ -13,7 +15,8 @@ use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AgentDiffFile, AgentDiffResult, AgentDiffStats, AgentEntry, AgentEntryKind, AgentFileParams,
+    AgentDiffFile, AgentDiffResult, AgentDiffStats, AgentEntry, AgentEntryKind,
+    AgentFileCreateParams, AgentFileDeleteParams, AgentFileParams, AgentFileRenameParams,
     AgentFileResult, AgentFileSide, AgentFileStatus, AgentFilesParams, AgentFilesResult, ErrorKind,
     RunId,
 };
@@ -245,12 +248,18 @@ pub(crate) async fn run_folder(
 /// `path`, already checked by [`validate_repo_path`], under `root`, with every folder on the way
 /// checked with `lstat` to be a real folder, so no symlink is followed, and whether one of them
 /// holds a `.git`, as a submodule or a nested repository does. `None` when one is missing or isn't
-/// a folder. The last component is left unchecked.
+/// a folder. The last component is left unchecked. On Windows, each component must also be one
+/// plain name there ([`plain_on_windows`]).
 async fn under(root: &Path, path: &str) -> Result<Option<(PathBuf, bool)>, ErrorObject> {
     let mut at = root.to_path_buf();
     let mut nested = false;
     let mut components = path.split('/').peekable();
     while let Some(component) = components.next() {
+        if cfg!(windows) && !plain_on_windows(component) {
+            return Err(ErrorObject::invalid_params(format!(
+                "path {path:?} has a name Windows reads as something else"
+            )));
+        }
         at.push(component);
         if components.peek().is_none() {
             break;
@@ -270,6 +279,18 @@ async fn under(root: &Path, path: &str) -> Result<Option<(PathBuf, bool)>, Error
         }
     }
     Ok(Some((at, nested)))
+}
+
+/// Whether Windows reads `component` as the name it spells. A drive prefix such as `D:` or `C:x`
+/// would replace the whole path when pushed, `:` also names an alternate data stream, and Windows
+/// drops trailing dots and spaces, so `.git.` would reach `.git`, and a short name such as `GIT~1`
+/// can name `.git` too.
+fn plain_on_windows(component: &str) -> bool {
+    let short_name = component
+        .split('~')
+        .skip(1)
+        .any(|after| after.starts_with(|c: char| c.is_ascii_digit()));
+    !component.contains(':') && !component.ends_with(['.', ' ']) && !short_name
 }
 
 fn io_failed(path: &Path, error: &std::io::Error) -> ErrorObject {
@@ -443,6 +464,121 @@ pub(crate) async fn files(
     Ok(AgentFilesResult { entries, truncated })
 }
 
+/// `path` under `root`, for a change: checked by [`validate_repo_path`] and reached through real
+/// folders only. The entry itself may be missing; its folder may not.
+async fn editable(root: &Path, path: &str) -> Result<PathBuf, ErrorObject> {
+    validate_repo_path(path).map_err(ErrorObject::invalid_params)?;
+    Ok(under(root, path)
+        .await?
+        .ok_or_else(|| ErrorObject::invalid_params(format!("path {path:?}'s folder is missing")))?
+        .0)
+}
+
+/// What a failed change of `path` tells the user.
+fn edit_failed(path: &str, error: &std::io::Error) -> ErrorObject {
+    match error.kind() {
+        IoErrorKind::AlreadyExists => {
+            ErrorObject::invalid_params(format!("{path:?} already exists"))
+        }
+        IoErrorKind::NotFound => ErrorObject::invalid_params(format!("{path:?} isn't there")),
+        _ => ErrorObject::internal_error(format!("could not change {path:?}: {error}")),
+    }
+}
+
+/// `agent/fileCreate`: an empty file or folder, never over an existing entry.
+pub(crate) async fn create_entry(
+    daemon: &Arc<Daemon>,
+    params: AgentFileCreateParams,
+) -> Result<(), ErrorObject> {
+    let AgentFileCreateParams {
+        run_id,
+        path,
+        folder,
+    } = params;
+    let (root, _) = run_folder(daemon, run_id).await?;
+    let at = editable(&root, &path).await?;
+    let created = if folder {
+        tokio::fs::create_dir(&at).await
+    } else {
+        // `create_new` fails on any existing entry, a symlink included, rather than following it.
+        tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&at)
+            .await
+            .map(drop)
+    };
+    created.map_err(|error| edit_failed(&path, &error))
+}
+
+/// `agent/fileRename`: moves an entry, a symlink itself rather than its target, never over
+/// another entry or into itself.
+pub(crate) async fn rename_entry(
+    daemon: &Arc<Daemon>,
+    params: AgentFileRenameParams,
+) -> Result<(), ErrorObject> {
+    let AgentFileRenameParams { run_id, from, to } = params;
+    if to == from || to.starts_with(&format!("{from}/")) {
+        return Err(ErrorObject::invalid_params(format!(
+            "{from:?} can't move into itself"
+        )));
+    }
+    let (root, _) = run_folder(daemon, run_id).await?;
+    let source = editable(&root, &from).await?;
+    let target = editable(&root, &to).await?;
+    let source_meta = tokio::fs::symlink_metadata(&source)
+        .await
+        .map_err(|error| edit_failed(&from, &error))?;
+    // ponytail: checked, then renamed, so an entry the agent makes at `to` in between is
+    // replaced; PLX-594 moves this and `under`'s checks to opened folders.
+    match tokio::fs::symlink_metadata(&target).await {
+        Ok(meta) if !same_entry(&source_meta, &meta, &from, &to) => {
+            return Err(ErrorObject::invalid_params(format!(
+                "{to:?} already exists"
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == IoErrorKind::NotFound => {}
+        Err(error) => return Err(edit_failed(&to, &error)),
+    }
+    tokio::fs::rename(&source, &target)
+        .await
+        .map_err(|error| edit_failed(&from, &error))
+}
+
+/// Whether `to` names the entry `from` does, as a change of case does on a case-insensitive file
+/// system, so a rename that only changes case isn't refused.
+#[cfg(unix)]
+fn same_entry(a: &std::fs::Metadata, b: &std::fs::Metadata, _: &str, _: &str) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    (a.dev(), a.ino()) == (b.dev(), b.ino())
+}
+
+#[cfg(not(unix))]
+fn same_entry(_: &std::fs::Metadata, _: &std::fs::Metadata, from: &str, to: &str) -> bool {
+    from.eq_ignore_ascii_case(to)
+}
+
+/// `agent/fileDelete`: removes a file, a symlink itself, or a folder with everything in it.
+pub(crate) async fn delete_entry(
+    daemon: &Arc<Daemon>,
+    params: AgentFileDeleteParams,
+) -> Result<(), ErrorObject> {
+    let AgentFileDeleteParams { run_id, path } = params;
+    let (root, _) = run_folder(daemon, run_id).await?;
+    let at = editable(&root, &path).await?;
+    let meta = tokio::fs::symlink_metadata(&at)
+        .await
+        .map_err(|error| edit_failed(&path, &error))?;
+    // `remove_dir_all` removes symlinks inside the folder without following them.
+    let removed = if meta.is_dir() {
+        tokio::fs::remove_dir_all(&at).await
+    } else {
+        tokio::fs::remove_file(&at).await
+    };
+    removed.map_err(|error| edit_failed(&path, &error))
+}
+
 /// Standard base64, with padding.
 fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -467,7 +603,36 @@ fn base64(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::base64;
+    use super::{base64, plain_on_windows};
+
+    #[test]
+    fn windows_refuses_drives_streams_short_names_and_trailing_dots_or_spaces() {
+        for name in [
+            "D:",
+            "C:x",
+            "a:b",
+            "file.txt:stream",
+            ".git.",
+            ".git ",
+            "x.",
+            "x ",
+            "GIT~1",
+            "PROGRA~2.TXT",
+        ] {
+            assert!(!plain_on_windows(name), "{name:?}");
+        }
+        for name in [
+            ".gitignore",
+            "src",
+            "a.b",
+            ".env",
+            "notes.md",
+            "~backup",
+            "a~b",
+        ] {
+            assert!(plain_on_windows(name), "{name:?}");
+        }
+    }
 
     #[test]
     fn base64_matches_rfc_4648_vectors() {

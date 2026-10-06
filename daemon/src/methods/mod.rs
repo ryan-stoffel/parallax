@@ -36,15 +36,15 @@ use parallax_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestI
 use parallax_protocol::methods::{
     AccountsDefaultsGet, AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysList,
     AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentApprove, AgentAutoResume,
-    AgentCancel, AgentCommands, AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFiles,
-    AgentGitStatus, AgentImage, AgentList, AgentOpenPr, AgentPush, AgentRequestChanges,
-    AgentResumeNow, AgentSend, AgentStart, AgentWait, ConnectDevices, ContextList, ContextRead,
-    ContextWrite, CursorSignIn, CursorSignInCancel, CursorSignOut, EventsSubscribe,
-    EventsUnsubscribe, GithubInstall, GithubSignInCancel, GithubSignInStart, GithubStatusGet,
-    HostHealth, HostSettingsGet, HostSettingsSet, HostVersion, InboxList, InboxSeen, Initialize,
-    PrAct, PrDiff, PrLink, PrUnlink, PrView, ProjectCreate, ProjectDelete, ProjectFromThreads,
-    ProjectList, ProjectStart, ProjectUpdate, ProvidersList, ProvidersRemove, ProvidersSave,
-    RequestMethod, UsageDaily, UsageGet, UsageHistory, UsageLimits,
+    AgentCancel, AgentCommands, AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFileCreate,
+    AgentFileDelete, AgentFileRename, AgentFiles, AgentGitStatus, AgentImage, AgentList,
+    AgentOpenPr, AgentPush, AgentRequestChanges, AgentResumeNow, AgentSend, AgentStart, AgentWait,
+    ConnectDevices, ContextList, ContextRead, ContextWrite, CursorSignIn, CursorSignInCancel,
+    CursorSignOut, EventsSubscribe, EventsUnsubscribe, GithubInstall, GithubSignInCancel,
+    GithubSignInStart, GithubStatusGet, HostHealth, HostSettingsGet, HostSettingsSet, HostVersion,
+    InboxList, InboxSeen, Initialize, PrAct, PrDiff, PrLink, PrUnlink, PrView, ProjectCreate,
+    ProjectDelete, ProjectFromThreads, ProjectList, ProjectStart, ProjectUpdate, ProvidersList,
+    ProvidersRemove, ProvidersSave, RequestMethod, UsageDaily, UsageGet, UsageHistory, UsageLimits,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -438,6 +438,18 @@ async fn agent_method(context: &Context, request: &Request) -> Option<Result<Val
         }
         AgentFiles::NAME => {
             handle::<AgentFiles, _, _>(context, request, |p| agent::files(context, p)).await
+        }
+        AgentFileCreate::NAME => {
+            handle::<AgentFileCreate, _, _>(context, request, |p| agent::create_entry(context, p))
+                .await
+        }
+        AgentFileRename::NAME => {
+            handle::<AgentFileRename, _, _>(context, request, |p| agent::rename_entry(context, p))
+                .await
+        }
+        AgentFileDelete::NAME => {
+            handle::<AgentFileDelete, _, _>(context, request, |p| agent::delete_entry(context, p))
+                .await
         }
         AgentAccept::NAME => {
             handle::<AgentAccept, _, _>(context, request, |p| agent::accept(context, p)).await
