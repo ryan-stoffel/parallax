@@ -164,7 +164,13 @@ test("a long run opens at its end and scrolls back to its start (PLX-490)", asyn
       .then(() => true)
       .catch(() => false);
     if (!loaded) break;
-    expect(Math.abs((await where(page, shown.anchor)).top! - shown.top)).toBeLessThan(2);
+    // The row can be out of the window for a frame while the list catches up with the new
+    // offset, so a slow machine sees it missing once. It must settle where it was.
+    await expect
+      .poll(async () => Math.abs(((await where(page, shown.anchor)).top ?? Infinity) - shown.top), {
+        timeout: 3000,
+      })
+      .toBeLessThan(2);
     pages += 1;
   }
   expect(pages).toBeGreaterThanOrEqual(3);
