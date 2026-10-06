@@ -455,6 +455,35 @@ test("a coordinator's plxd tool that names a subagent gets its prompt's first li
   ]);
 });
 
+test("a thread tool that names a child gets its prompt's first line from thread_list or thread_wait", () => {
+  const t = build(
+    output(
+      { kind: "toolCall", callId: "1", name: "mcp__plxd__thread_list", input: {} },
+      {
+        kind: "toolResult",
+        callId: "1",
+        status: "ok",
+        output: JSON.stringify({ threads: [{ runId: "r-0", prompt: "Write the plan" }] }),
+      },
+      { kind: "toolCall", callId: "2", name: "mcp__plxd__thread_wait", input: { runId: "r-2" } },
+      {
+        kind: "toolResult",
+        callId: "2",
+        status: "ok",
+        output: JSON.stringify({ thread: { runId: "r-2", prompt: "Fix the login bug" } }),
+      },
+      { kind: "toolCall", callId: "3", name: "mcp__plxd__thread_send", input: { runId: "r-0" } },
+      { kind: "toolCall", callId: "4", name: "mcp__plxd__thread_read", input: { runId: "r-2" } },
+    ),
+  );
+  expect(of(t.items, "tool").map((i) => i.subagent)).toEqual([
+    undefined,
+    undefined,
+    "Write the plan",
+    "Fix the login bug",
+  ]);
+});
+
 // PLX-196: permission requests (0031).
 const asked = (approvalId: string, more: Partial<AgentOutputItem> = {}): AgentOutputItem =>
   ({

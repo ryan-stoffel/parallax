@@ -655,21 +655,28 @@ export function trackApprovals(
   return next;
 }
 
-/** The prefix of a coordinator's plxd tools as Claude Code names them (0019), `mcp__plxd__spawn_agent`. */
+/** The prefix of a thread's plxd tools as Claude Code names them (0041), `mcp__plxd__thread_launch`. */
 export const plxdTools = "mcp__plxd__";
 
 /**
- * The first line of subagent `runId`'s prompt, from the newest earlier plxd tool answer that
- * lists it: spawn_agent's, message_agent's, or cancel_agent's run, agent_status's `run`, or
- * list_agents' `runs`.
+ * The first line of thread `runId`'s prompt, from the newest earlier plxd tool answer that
+ * lists it: thread_launch's run, thread_wait's `thread`, or thread_list's `threads`, and in older
+ * transcripts the 0019 tools' run, `run`, or `runs`.
  */
 function subagentTitle(items: Item[], runId: string): string | undefined {
   type Summary = { runId?: unknown; prompt?: unknown };
   for (const x of items.toReversed()) {
     if (x.kind !== "tool" || !x.name?.startsWith(plxdTools) || !x.output?.includes(runId)) continue;
     try {
-      const answer = JSON.parse(x.output) as Summary & { run?: Summary; runs?: Summary[] };
-      const run = [answer, answer.run, ...(answer.runs ?? [])].find((r) => r?.runId === runId);
+      type Answer = Summary & { run?: Summary; runs?: Summary[]; thread?: Summary };
+      const answer = JSON.parse(x.output) as Answer & { threads?: Summary[] };
+      const run = [
+        answer,
+        answer.run,
+        answer.thread,
+        ...(answer.runs ?? []),
+        ...(answer.threads ?? []),
+      ].find((r) => r?.runId === runId);
       if (typeof run?.prompt === "string") return run.prompt.trim().split("\n")[0];
     } catch {
       // Not JSON, or cut short: an older answer may still have it.

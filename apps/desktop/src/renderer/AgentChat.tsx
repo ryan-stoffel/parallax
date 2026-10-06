@@ -2106,14 +2106,14 @@ const plxdLabels: Partial<Record<string, string>> = {
 
 /**
  * A plxd tool call as a short line: what it did, and what it did it to (the new thread's task,
- * the thread it named, the search, or the file). Undefined for any other tool.
+ * the thread it named, the search, the file, or the pull request). Undefined for any other tool.
  */
 function plxdCall(item: Extract<Item, { kind: "tool" }>) {
   const label = item.name?.startsWith(plxdTools)
     ? plxdLabels[item.name.slice(plxdTools.length)]
     : undefined;
   return label
-    ? { label, detail: item.subagent ?? toolHint(item.input, ["prompt", "path", "query"]) }
+    ? { label, detail: item.subagent ?? toolHint(item.input, ["prompt", "path", "query", "url"]) }
     : undefined;
 }
 
