@@ -289,6 +289,8 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
         if (event.run) push({ kind: "user", key: key(), text: event.run.prompt });
         break;
       case "agent.accountFallback":
+        // The failed attempt's CLI ended, with its turns, without an agent.finished.
+        openTurns = 0;
         push({
           kind: "notice",
           key: key(),

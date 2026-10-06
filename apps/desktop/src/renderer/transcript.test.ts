@@ -759,4 +759,19 @@ test("a compaction shows under way, then done in its place, and a finished turn 
     output({ kind: "turnFinished" }),
   );
   expect(resumed.turnDone).toBe(true);
+
+  // So does a failed attempt's, when routing retries the run on another account.
+  const retried = build(
+    output({ kind: "turnStarted" }),
+    at({
+      kind: "agent.accountFallback",
+      runId,
+      fromAccount: "claude",
+      toAccount: "codex",
+      reason: "rateLimited",
+    }),
+    output({ kind: "turnStarted" }),
+    output({ kind: "turnFinished" }),
+  );
+  expect(retried.turnDone).toBe(true);
 });
