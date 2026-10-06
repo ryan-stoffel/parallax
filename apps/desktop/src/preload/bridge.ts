@@ -314,10 +314,12 @@ export type UpdateState = {
 };
 
 /**
- * What a terminal runs: a CLI's sign-in on a host, a provider instance's sign-in by its id, the
- * install of an agent of a provider kind, or a shell in a folder on a host.
+ * What a terminal runs: an SSH host's login, for a password or 2FA (`login`), a CLI's sign-in on a
+ * host, a provider instance's sign-in by its id, the install of an agent of a provider kind, or a
+ * shell in a folder on a host.
  */
 export type TerminalTarget =
+  | { hostId: string; login: true }
   | { hostId: string; cli: CliKind }
   | { hostId: string; provider: string }
   | { hostId: string; install: ProviderKind }

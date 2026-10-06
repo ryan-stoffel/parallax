@@ -1,7 +1,7 @@
 import { Pencil, Plus, Server } from "lucide-react";
-import { useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
-import type { ConnectionState } from "../../preload/bridge";
+import type { ConnectionError, ConnectionState } from "../../preload/bridge";
 import { statusLabel, useConnection } from "../ConnectionStatus";
 import { DeviceIcon } from "../DeviceIcon";
 import { localId, useHosts, type Host } from "../hosts";
@@ -17,6 +17,22 @@ import {
   settingRow,
   StatusDot,
 } from "./parts";
+
+// xterm.js is large, so it loads when a sign-in first opens.
+const SignInTerminal = lazy(() =>
+  import("../SignInTerminal").then((m) => ({ default: m.SignInTerminal })),
+);
+
+/**
+ * Whether a master can fix `error`: ssh was refused for lack of a login, or doesn't trust the
+ * host's key yet, which the master's terminal asks about. Not a changed host key, which needs
+ * known_hosts edited, or the other `sshSetup` failures.
+ */
+const signInFixes = ({ reason, exitCode, stderr = "" }: ConnectionError) =>
+  reason === "sshSetup" &&
+  exitCode === 255 &&
+  !stderr.includes("REMOTE HOST IDENTIFICATION HAS CHANGED") &&
+  /Permission denied|Host key verification failed/.test(stderr);
 
 const tone = (state?: ConnectionState) =>
   state?.status === "connected" ? "on" : state?.status === "failed" ? "warn" : "off";
@@ -162,7 +178,12 @@ function LocalHost({ host }: { host: Host }) {
   );
 }
 
-/** A saved SSH host: its connection, destination, and Edit and Remove. */
+/**
+ * A saved SSH host: its connection, destination, and Edit and Remove. A host that failed for want
+ * of a login or a trusted host key (`signInFixes`) has Sign in, which opens the terminal where ssh
+ * asks for a password or the key (0007), then connects it. Windows' OpenSSH can't share a login,
+ * so it has none.
+ */
 function RemoteHost({
   host,
   onEdit,
@@ -173,27 +194,50 @@ function RemoteHost({
   onRemove: () => void;
 }) {
   const state = useConnection(host.id);
+  const [signingIn, setSigningIn] = useState(false);
+  const canSignIn =
+    window.parallax.platform !== "win32" && state?.status === "failed" && signInFixes(state.error);
+  useEffect(() => {
+    if (state?.status === "connected") setSigningIn(false);
+  }, [state?.status]);
   return (
-    <div className={settingRow}>
-      <div className="min-w-0">
-        <span className="flex items-center gap-2 text-[13px] font-medium">
-          <StatusDot tone={tone(state)} />
-          <span className="truncate">{host.name}</span>
-        </span>
-        <span className="block truncate text-[12.5px] text-muted-foreground">
-          <span className="font-mono">{host.destination}</span>
-          {state && ` · ${statusLabel(state)}`}
-          {state?.status === "connected" && ` · plxd ${state.plxd}`}
-        </span>
+    <>
+      <div className={settingRow}>
+        <div className="min-w-0">
+          <span className="flex items-center gap-2 text-[13px] font-medium">
+            <StatusDot tone={tone(state)} />
+            <span className="truncate">{host.name}</span>
+          </span>
+          <span className="block truncate text-[12.5px] text-muted-foreground">
+            <span className="font-mono">{host.destination}</span>
+            {state && ` · ${statusLabel(state)}`}
+            {state?.status === "connected" && ` · plxd ${state.plxd}`}
+          </span>
+        </div>
+        <div className="flex shrink-0 gap-1">
+          {canSignIn && !signingIn && (
+            <button type="button" className={quietButton} onClick={() => setSigningIn(true)}>
+              Sign in
+            </button>
+          )}
+          <button type="button" className={quietButton} onClick={onEdit}>
+            Edit
+          </button>
+          <button type="button" className={quietButton} onClick={onRemove}>
+            Remove
+          </button>
+        </div>
       </div>
-      <div className="flex shrink-0 gap-1">
-        <button type="button" className={quietButton} onClick={onEdit}>
-          Edit
-        </button>
-        <button type="button" className={quietButton} onClick={onRemove}>
-          Remove
-        </button>
-      </div>
-    </div>
+      {signingIn && (
+        <Suspense>
+          <SignInTerminal
+            target={{ hostId: host.id, login: true }}
+            name={host.name}
+            onExit={() => void window.parallax.retry(host.id)}
+            onClose={() => setSigningIn(false)}
+          />
+        </Suspense>
+      )}
+    </>
   );
 }

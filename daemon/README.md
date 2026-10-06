@@ -52,8 +52,10 @@ If plxd isn't running, `attach` starts it through the service (the LaunchAgent o
 A client on your laptop runs this command, where `<host>` is anything `ssh` accepts:
 
 ```sh
-ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlPath=none -- <host> plxd attach
+ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlMaster=no -o ControlPath=~/.ssh/parallax-%C -- <host> plxd attach
 ```
+
+On Windows it is `-o ControlPath=none` instead of the two `Control` options, since its OpenSSH has no ControlMaster (0007).
 
 It uses your own ssh config, keys, and agent (0007). For that command to work, the host needs:
 
@@ -144,7 +146,7 @@ Then run this from the repo root:
 cargo build -p plxd
 dir=$(mktemp -d /tmp/plxd-ssh.XXXXXX)
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol":{"min":1,"max":1},"client":{"name":"ssh-test","version":"0"},"capabilities":{}}}' |
-  ssh -T -o BatchMode=yes -o ControlPath=none -- localhost "PLXD_DATA_DIR=$dir $PWD/target/debug/plxd attach"
+  ssh -T -o BatchMode=yes -o ControlMaster=no -o ControlPath=~/.ssh/parallax-%C -- localhost "PLXD_DATA_DIR=$dir $PWD/target/debug/plxd attach"
 echo "exit: $?"
 ```
 

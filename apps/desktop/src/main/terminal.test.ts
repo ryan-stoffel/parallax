@@ -4,6 +4,8 @@ import type { CliKind } from "../protocol/generated/protocol";
 import {
   installCommand,
   loginCommand,
+  hostLogin,
+  masterCommand,
   runInstall,
   shellCommand,
   terminalEnv,
@@ -172,3 +174,23 @@ test.skipIf(process.platform === "win32")(
     expect(await runInstall("Parallax can't install this agent on Windows.")).toMatch(/can't/);
   },
 );
+
+test("an SSH host's sign-in is ssh as the control master its connections share", () => {
+  const { file, args } = masterCommand({ destination: "me@mini", ssh: "/usr/bin/ssh" });
+  expect(file).toBe("/usr/bin/ssh");
+  expect([args].flat().join(" ")).toBe(
+    "-o ControlMaster=auto -o ControlPersist=yes -o ControlPath=~/.ssh/parallax-%C " +
+      "-o ServerAliveInterval=15 -o ServerAliveCountMax=3 -N -f -- me@mini",
+  );
+});
+
+test("only a saved SSH host has a login, and not on Windows", () => {
+  const saved = [{ id: "h-mini", destination: "me@mini" }];
+  expect(hostLogin("h-mini", saved, "ssh", "darwin")).toEqual(
+    masterCommand({ destination: "me@mini", ssh: "ssh" }),
+  );
+  for (const id of ["h-gone", "local", "tailnet:abc"]) {
+    expect(hostLogin(id, saved, "ssh", "darwin")).toBeUndefined();
+  }
+  expect(hostLogin("h-mini", saved, "ssh", "win32")).toBeUndefined();
+});
