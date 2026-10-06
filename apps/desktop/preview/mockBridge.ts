@@ -855,7 +855,7 @@ export const mockBridge: ParallaxBridge = {
       {
         id: "history",
         name: "Thread history",
-        folder: `${HOME}/Library/Application Support/Parallax/plxd`,
+        folder: `${HOME}/.parallax`,
         bytes: 48_211_000,
       },
       {
@@ -864,11 +864,11 @@ export const mockBridge: ParallaxBridge = {
         folder: `${HOME}/.parallax/worktrees`,
         bytes: 1_204_000_000,
       },
-      { id: "logs", name: "Logs", folder: `${HOME}/Library/Logs/Parallax`, bytes: 9_820_000 },
+      { id: "logs", name: "Logs", folder: `${HOME}/.parallax/logs`, bytes: 9_820_000 },
       {
         id: "app",
         name: "App data",
-        folder: `${HOME}/Library/Application Support/Parallax`,
+        folder: `${HOME}/.parallax/desktop`,
         bytes: 31_400_000,
       },
       { id: "cache", name: "Cache", folder: `${HOME}/Library/Caches/Parallax`, bytes: 112_000_000 },

@@ -58,8 +58,7 @@ struct AcpLoginArgs {
 
 #[derive(Debug, Args)]
 struct McpArgs {
-    /// The data folder [default: ~/Library/Application Support/parallax on macOS, ~/.local/share/parallax
-    /// on Linux, %LOCALAPPDATA%\parallax on Windows]
+    /// The data folder [default: ~/.parallax]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
@@ -71,8 +70,7 @@ struct McpArgs {
 
 #[derive(Debug, Args)]
 struct ServeArgs {
-    /// The data folder [default: ~/Library/Application Support/parallax on macOS, ~/.local/share/parallax
-    /// on Linux, %LOCALAPPDATA%\parallax on Windows]
+    /// The data folder [default: ~/.parallax]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
@@ -83,8 +81,7 @@ struct ServeArgs {
 
 #[derive(Debug, Args)]
 struct AttachArgs {
-    /// The data folder [default: ~/Library/Application Support/parallax on macOS, ~/.local/share/parallax
-    /// on Linux, %LOCALAPPDATA%\parallax on Windows]
+    /// The data folder [default: ~/.parallax]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
@@ -128,8 +125,7 @@ enum ServiceCommand {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Args)]
 struct ServiceOptions {
-    /// The data folder [default: ~/Library/Application Support/parallax on macOS, ~/.local/share/parallax
-    /// on Linux, %LOCALAPPDATA%\parallax on Windows]
+    /// The data folder [default: ~/.parallax]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 

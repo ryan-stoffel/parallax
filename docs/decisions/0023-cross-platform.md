@@ -9,7 +9,7 @@
 `docs/PLAN.md` lists Windows and Linux as non-goals, and `plxd` builds only on macOS. The desktop app (0022) targets all three OSes, and a host can be any of them. These parts of `daemon/` are macOS-only today:
 
 - **Transport:** a Unix socket with `getpeereid`, and a `getconf DARWIN_USER_TEMP_DIR` fallback for long paths (0007).
-- **Data folder:** `~/Library/Application Support/parallax`, with a lock file that is removed at shutdown and checked by inode (0009).
+- **Data folder:** `~/.parallax`, with a lock file that is removed at shutdown and checked by inode (0009).
 - **Starting `serve`:** `posix_spawn` with `POSIX_SPAWN_SETSID` and `POSIX_SPAWN_CLOEXEC_DEFAULT`, the second of which only Apple has (0010).
 - **Service:** a LaunchAgent, driven with `launchctl` (0010).
 - **Agent CLIs:** cancel sends signals to the CLI's process group (0014). Missing `PATH` entries are filled in with `/opt/homebrew/bin` and friends.
@@ -27,7 +27,7 @@ Windows and Linux are supported, for the app and for `plxd`. This supersedes PLA
 
 | | macOS | Linux | Windows |
 | --- | --- | --- | --- |
-| Data folder | `~/Library/Application Support/parallax` | `$XDG_DATA_HOME/parallax`, or `~/.local/share/parallax` | `%LOCALAPPDATA%\parallax` |
+| Data folder | `~/.parallax` | `~/.parallax` | `%USERPROFILE%\.parallax` |
 | `serve` listens on | `plxd.sock` in the data folder. Past 103 bytes: `$(getconf DARWIN_USER_TEMP_DIR)plxd-<hash>.sock` | `plxd.sock` in the data folder. Past 107 bytes: `$XDG_RUNTIME_DIR/plxd-<hash>.sock` | The named pipe `\\.\pipe\plxd-<hash>` |
 | Only this user connects | 0700 folder, 0600 socket, `peer_cred` | Same as macOS | The pipe's DACL grants only the user's SID. Both ends check the other's SID |
 | One `serve` per folder | `plxd.lock`, locked with std's `File::try_lock` (`flock`), removed at shutdown | Same as macOS | `plxd.lock`, locked with std's `File::try_lock` (`LockFileEx`), never removed |
@@ -44,9 +44,9 @@ Windows and Linux are supported, for the app and for `plxd`. This supersedes PLA
 
 ### Paths
 
-- plxd reads the data folder's location from the environment, with no crate. `XDG_DATA_HOME` counts only when it is absolute, as the XDG spec says. A missing `HOME` or `LOCALAPPDATA` is a startup error.
+- plxd reads the data folder's location from the environment, with no crate. The folder is `~/.parallax` on every OS, so everything Parallax keeps on a computer is in one place that is easy to find. A computer with no `~/.parallax` that has the older folder (`~/Library/Application Support/parallax`, `$XDG_DATA_HOME/parallax` or `~/.local/share/parallax`, `%LOCALAPPDATA%\parallax`) keeps using it, because the store holds absolute worktree paths that moving the folder would break. The desktop app keeps its own data in `~/.parallax/desktop` the same way. A missing `HOME` is a startup error.
 - **Linux socket.** The socket stays in the data folder, as on macOS. The runtime folder is only the fallback for long paths, because `logind` deletes it at the last logout, while a `serve` that attach started keeps running. 0007's check that rebinds a missing socket every minute covers that folder too. Without `XDG_RUNTIME_DIR`, a path that is too long is an error.
-- **Windows data folder.** plxd checks that the folder isn't a reparse point. It doesn't rewrite the ACL, because `%LOCALAPPDATA%` already grants only the user, SYSTEM, and Administrators.
+- **Windows data folder.** plxd checks that the folder isn't a reparse point. It doesn't rewrite the ACL, because `%USERPROFILE%` already grants only the user, SYSTEM, and Administrators.
 
 ### Windows transport
 

@@ -125,7 +125,7 @@ export function createFixtures(now = Date.now()): Fixtures {
     {
       id: ids.repoScratch,
       name: "No Repo",
-      path: `${HOME}/Library/Application Support/Parallax/scratch`,
+      path: `${HOME}/.parallax/scratch`,
       scratch: true,
       createdAt: ago(60 * 24 * 40),
     },

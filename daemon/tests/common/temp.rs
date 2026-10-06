@@ -9,7 +9,7 @@ use plxd::paths::MAX_SOCKET_PATH_BYTES;
 use tempfile::TempDir;
 
 /// Room for the longest socket path a test builds inside the folder,
-/// `/.local/share/parallax/plxd.sock` (29 bytes).
+/// `/.parallax/plxd.sock` (19 bytes).
 const HEADROOM: usize = 32;
 
 /// A fresh folder, removed when dropped: under `$TMPDIR` when a socket inside it fits the OS

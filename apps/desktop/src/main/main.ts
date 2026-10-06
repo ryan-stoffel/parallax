@@ -12,6 +12,7 @@ import {
   session,
   shell,
 } from "electron";
+import { homedir } from "node:os";
 import path from "node:path";
 
 import {
@@ -35,15 +36,17 @@ import { savedHost, startHosts } from "./hosts";
 import { isBrowsable, isOpenableExternally, mayNavigate } from "./links";
 import { createNamer } from "./namer";
 import { fallbackName } from "./naming";
+import { appDataDir } from "./plxd";
 import { cloneRepo, createRepo, listFolders } from "./repos";
 import { startStorage } from "./storage";
 import { isNightly, startUpdater } from "./updater";
 
 // The app menu's About, Hide, and Quit items show the app's name, which says a nightly build is
-// one, as its bundle's name does (scripts/ci/package-app). userData stays in the package-named
-// folder, because `Parallax` would share plxd's `parallax` data folder on a case-insensitive disk,
-// and so both builds share it.
-app.setPath("userData", app.getPath("userData"));
+// one, as its bundle's name does (scripts/ci/package-app). userData is `desktop` in plxd's
+// `~/.parallax`, which both builds share, unless `--user-data-dir` (the end-to-end tests) sets it.
+if (!app.commandLine.hasSwitch("user-data-dir")) {
+  app.setPath("userData", appDataDir(homedir(), app.getPath("userData")));
+}
 app.setName(isNightly(app.getVersion()) ? "Parallax (Nightly)" : "Parallax");
 
 // Set by scripts/dev.mjs. Ignored in a packaged app, which only loads its own files.

@@ -226,14 +226,19 @@ const errorLine = (text) => {
 // Asks the running `plxd serve` to shut down, by the pid in its lock file (daemon/src/paths.rs).
 // ponytail: stops runs in flight, so it's only called when Rust changed.
 function stopPlxd() {
+  // ponytail: macOS and Linux only; the data folder is ~/.parallax, or the older OS folder when
+  // that doesn't exist (daemon/src/paths.rs).
+  const home = path.join(homedir(), ".parallax");
   const dataDir =
     process.env["PLXD_DATA_DIR"] ??
-    (process.platform === "darwin"
-      ? path.join(homedir(), "Library/Application Support/parallax")
-      : path.join(
-          process.env["XDG_DATA_HOME"] || path.join(homedir(), ".local/share"),
-          "parallax",
-        ));
+    (existsSync(home)
+      ? home
+      : process.platform === "darwin"
+        ? path.join(homedir(), "Library/Application Support/parallax")
+        : path.join(
+            process.env["XDG_DATA_HOME"] || path.join(homedir(), ".local/share"),
+            "parallax",
+          ));
   try {
     const pid = Number.parseInt(readFileSync(path.join(dataDir, "plxd.lock"), "utf8"));
     // A crashed serve leaves its pid behind, which another process may have by now.
