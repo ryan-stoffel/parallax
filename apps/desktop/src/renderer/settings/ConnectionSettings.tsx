@@ -7,8 +7,8 @@ import { DeviceIcon } from "../DeviceIcon";
 import { localId, useHosts, type Host } from "../hosts";
 import { IconButton } from "../ui";
 import { ConnectSettings } from "./ConnectSettings";
+import { SshHostDialog } from "./SshHostDialog";
 import {
-  field,
   PageTitle,
   primaryButton,
   quietButton,
@@ -30,7 +30,7 @@ export function ConnectionSettings() {
   const hosts = useHosts();
   const local = hosts.find((h) => h.id === localId)!;
   const remote = hosts.filter((h) => h.destination);
-  // The host whose form is open: its id, "new", or none.
+  // The host whose Add host dialog is open: its id, "new", or none.
   const [editing, setEditing] = useState<string>();
   const [removeError, setRemoveError] = useState<string>();
   const remove = async (id: string) => setRemoveError(await window.parallax.removeHost(id));
@@ -47,16 +47,14 @@ export function ConnectionSettings() {
       <Section
         title="SSH hosts"
         action={
-          editing !== "new" && (
-            <button
-              type="button"
-              onClick={() => setEditing("new")}
-              className={`${quietButton} flex items-center gap-1 [&_svg]:size-3.5`}
-            >
-              <Plus aria-hidden />
-              Add host
-            </button>
-          )
+          <button
+            type="button"
+            onClick={() => setEditing("new")}
+            className={`${quietButton} flex items-center gap-1 [&_svg]:size-3.5`}
+          >
+            <Plus aria-hidden />
+            Add host
+          </button>
         }
       >
         {removeError && (
@@ -64,20 +62,21 @@ export function ConnectionSettings() {
             {removeError}
           </p>
         )}
-        {remote.map((h) =>
-          editing === h.id ? (
-            <HostForm key={h.id} host={h} onDone={() => setEditing(undefined)} />
-          ) : (
-            <RemoteHost
-              key={h.id}
-              host={h}
-              onEdit={() => setEditing(h.id)}
-              onRemove={() => void remove(h.id)}
-            />
-          ),
+        {remote.map((h) => (
+          <RemoteHost
+            key={h.id}
+            host={h}
+            onEdit={() => setEditing(h.id)}
+            onRemove={() => void remove(h.id)}
+          />
+        ))}
+        {editing && (
+          <SshHostDialog
+            {...(editing !== "new" && { host: remote.find((h) => h.id === editing) })}
+            onDone={() => setEditing(undefined)}
+          />
         )}
-        {editing === "new" && <HostForm onDone={() => setEditing(undefined)} />}
-        {!remote.length && editing !== "new" && (
+        {!remote.length && (
           <div className="flex flex-col items-center gap-2 px-6 py-10 text-center">
             <Server aria-hidden className="size-6 text-faint-foreground" />
             <p className="text-[13px] font-medium">No SSH hosts yet</p>
@@ -196,69 +195,5 @@ function RemoteHost({
         </button>
       </div>
     </div>
-  );
-}
-
-/** Adds a host, or edits `host`. `onDone` runs once it's saved or cancelled. */
-function HostForm({ host, onDone }: { host?: Host; onDone: () => void }) {
-  const [error, setError] = useState<string>();
-  const [saving, setSaving] = useState(false);
-  const save = async (form: HTMLFormElement) => {
-    // Text inputs' values are strings.
-    const data = new FormData(form);
-    setSaving(true);
-    const input = {
-      name: data.get("name") as string,
-      destination: data.get("destination") as string,
-    };
-    const failed = await window.parallax.saveHost(input, host?.id);
-    setSaving(false);
-    if (failed) setError(failed);
-    else onDone();
-  };
-
-  return (
-    <form
-      aria-label={host ? `Edit ${host.name}` : "Add host"}
-      onSubmit={(e) => {
-        e.preventDefault();
-        void save(e.currentTarget);
-      }}
-      className="flex flex-col gap-3 border-border px-4 py-3.5 not-last:border-b"
-    >
-      <label className="text-[12.5px] text-muted-foreground">
-        Name
-        <input name="name" defaultValue={host?.name} placeholder="Mac mini" className={field} />
-      </label>
-      <label className="text-[12.5px] text-muted-foreground">
-        SSH destination
-        <input
-          name="destination"
-          required
-          defaultValue={host?.destination}
-          placeholder="mac-mini, or me@192.168.1.20"
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-          className={field}
-        />
-        <span className="mt-1 block text-faint-foreground">
-          Anything ssh accepts. Parallax uses your ssh config and keys.
-        </span>
-      </label>
-      {error && (
-        <p role="alert" className="text-[12.5px] text-danger">
-          {error}
-        </p>
-      )}
-      <div className="flex justify-end gap-2">
-        <button type="button" onClick={onDone} className={quietButton}>
-          Cancel
-        </button>
-        <button type="submit" disabled={saving} className={primaryButton}>
-          {host ? "Save" : "Add host"}
-        </button>
-      </div>
-    </form>
   );
 }

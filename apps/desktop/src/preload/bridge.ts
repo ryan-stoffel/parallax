@@ -154,6 +154,11 @@ export interface ParallaxBridge {
   /** Every later change to the saved hosts. Returns the unsubscribe function. */
   onHosts(listener: (hosts: SshHost[]) => void): () => void;
   /**
+   * The hosts ssh already knows here, to suggest in Add host (PLX-580): the aliases in the user's
+   * ssh config, then the plain names in known_hosts.
+   */
+  sshSuggestions(): Promise<string[]>;
+  /**
    * This computer's name in Parallax: the one the user gave it, else the computer's own, such as
    * "macbook". Calls `listener` now and on every change. Returns the unsubscribe function.
    */

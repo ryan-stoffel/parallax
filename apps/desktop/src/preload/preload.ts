@@ -75,6 +75,7 @@ const bridge: ParallaxBridge = {
   retry: (hostId) => ipcRenderer.invoke("parallax:retry", hostId),
 
   hosts: () => ipcRenderer.invoke("parallax:hosts"),
+  sshSuggestions: () => ipcRenderer.invoke("parallax:sshSuggestions"),
   onHosts(listener) {
     const forward = (_event: unknown, hosts: SshHost[]) => listener(hosts);
     ipcRenderer.on("parallax:hosts", forward);

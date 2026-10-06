@@ -57,6 +57,7 @@ beforeEach(() => {
     openTargetIcons: async () => ({}),
     terminalApp: async () => null,
     saveHost,
+    sshSuggestions: async () => [],
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
@@ -135,7 +136,7 @@ test("a host that can't connect adds nothing to the list, and Connections shows 
   expect(document.querySelector("main")!.textContent).toContain("Mac mini");
 });
 
-test("Connections' Add host opens the form, which shows the main process's error", async () => {
+test("Connections' Add host opens the dialog, which shows the main process's error", async () => {
   await renderApp();
   await act(async () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", code: "Comma", metaKey: true }));
@@ -151,14 +152,20 @@ test("Connections' Add host opens the form, which shows the main process's error
   expect(document.querySelector("h1")!.textContent).toBe("Connections");
 
   const form = document.querySelector<HTMLFormElement>('form[aria-label="Add host"]')!;
-  form.querySelector<HTMLInputElement>('[name="name"]')!.value = "Studio";
-  form.querySelector<HTMLInputElement>('[name="destination"]')!.value = "-oProxyCommand=x";
+  const host = form.querySelector<HTMLInputElement>('[name="host"]')!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+      host,
+      "-oProxyCommand=x",
+    );
+    host.dispatchEvent(new Event("input", { bubbles: true }));
+  });
   saveHost.mockResolvedValue("An ssh destination can't start with “-” or contain spaces.");
   await act(async () => form.requestSubmit());
   await settle();
 
   expect(saveHost).toHaveBeenCalledWith(
-    { name: "Studio", destination: "-oProxyCommand=x" },
+    { name: "-oProxyCommand=x", destination: "-oProxyCommand=x" },
     undefined,
   );
   expect(form.querySelector('[role="alert"]')!.textContent).toContain("can't start with “-”");
