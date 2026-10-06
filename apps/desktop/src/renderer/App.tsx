@@ -480,6 +480,15 @@ export function App() {
     setOpening({ hostId, projectId });
   };
 
+  // Runs New Thread on another computer: opens that host, keeping the repository if it lists one
+  // of the same name (each host's entries have their own ids), else New Thread's first repository.
+  const pickHost = (id: string) => {
+    if (id === host.id) return;
+    const { groups: there } = groupThreads((views[id] ?? idleThreads).state);
+    setHostId(id);
+    setSelection({ kind: "new", groupId: there.find((g) => g.name === group.name)?.id });
+  };
+
   const newThread = (groupId = selection.kind === "project" ? undefined : group.id) => {
     setSettings(null);
     setSelection({ kind: "new", groupId });
@@ -927,6 +936,7 @@ export function App() {
                 key={host.id}
                 hostId={host.id}
                 hosts={hosts}
+                onHostChange={pickHost}
                 groups={groups}
                 groupId={group.id}
                 onGroupChange={(groupId) => setSelection({ kind: "new", groupId })}

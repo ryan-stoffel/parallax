@@ -557,6 +557,40 @@ test("a thread starts on the branch its prompt was named for, and takes the name
   expect(crumbs()).toEqual(["This Mac", "parallax", "Fix flaky test"]);
 });
 
+test("Picking another computer in Runs on starts the thread there, in its repository of the same name", async () => {
+  window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
+  nameThread.mockResolvedValue({ title: "Fix flaky test", slug: "fix-flaky-test" });
+  const mini: Repo = { ...parallax, id: "r-mini-parallax", path: "/Users/me/parallax" };
+  answers["thread/list"] = (p) => ({
+    result: { repos: [parallax], threads: [thread], seq: 7, ...p },
+  });
+  request.mockImplementation(async (host, method, params) => {
+    if (host === "ssh-mini" && method === "thread/list")
+      return { result: { repos: [mini], threads: [], seq: 1 } };
+    const answer = answers[method];
+    return answer ? answer(params) : { error: { code: -32601, message: `${method} isn't faked` } };
+  });
+  answers["thread/start"] = (p) => ({
+    result: {
+      thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
+      run: run(p["runId"] as string, "Fix it"),
+    },
+  });
+  await renderApp();
+  await choose("Runs on", "mac mini");
+  expect(control("Runs on: mac mini, New worktree")).not.toBeNull();
+  expect(heading()).toBe("What should we build in parallax?");
+  await send("Fix it");
+  expect(request).toHaveBeenCalledWith(
+    "ssh-mini",
+    "thread/start",
+    expect.objectContaining({ repo: mini.id }),
+  );
+  expect(request.mock.calls.some(([host, m]) => host === "local" && m === "thread/start")).toBe(
+    false,
+  );
+});
+
 test("Local checkout starts a thread in the repository itself, with no branch of its own", async () => {
   capabilities = { checkout: {} };
   nameThread.mockResolvedValue({ title: "Fix flaky test", slug: "fix-flaky-test" });

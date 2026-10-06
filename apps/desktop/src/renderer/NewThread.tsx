@@ -26,6 +26,8 @@ interface NewThreadProps {
   hostId: string;
   /** The computers a thread can run on. */
   hosts: Host[];
+  /** Called when the user picks another computer to run the thread on. */
+  onHostChange: (hostId: string) => void;
   /** Repositories and No Repo, as the sidebar groups them. */
   groups: ThreadGroup[];
   groupId: string;
@@ -138,6 +140,7 @@ const noAccounts =
 export function NewThread({
   hostId,
   hosts,
+  onHostChange,
   groups,
   groupId,
   onGroupChange,
@@ -477,6 +480,7 @@ export function NewThread({
                 <RunTargetMenu
                   hosts={hosts}
                   hostId={hostId}
+                  onHostChange={onHostChange}
                   workspace={checkout ? "checkout" : "worktree"}
                   onWorkspaceChange={setWorkspace}
                   checkoutUnavailable={checkoutUnavailable}
