@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import type { ParallaxBridge, RpcResponse } from "../preload/bridge";
 import type { AgentRun, Repo, Thread } from "../protocol/generated/protocol";
 import { App } from "./App";
+import { dragThread } from "./threadDrag";
 
 // Two threads side by side (PLX-587).
 
@@ -43,11 +44,15 @@ const answers: Record<string, Answer> = {
   "thread/list": () => ({
     result: {
       repos: [parallax],
-      threads: [thread("a", 1, "Write the parser"), thread("b", 2, "Fix the README")],
+      threads: [
+        thread("a", 1, "Write the parser"),
+        thread("b", 2, "Fix the README"),
+        thread("c", 3, "Rename the flags"),
+      ],
       seq: 7,
     },
   }),
-  "agent/list": () => ({ result: { runs: [run("a"), run("b")], seq: 7 } }),
+  "agent/list": () => ({ result: { runs: [run("a"), run("b"), run("c")], seq: 7 } }),
   "project/list": () => ({ result: { projects: [], seq: 7 } }),
 };
 const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
@@ -213,4 +218,38 @@ test("opening another thread hides the split until one of its threads opens agai
 
   await click(group()!.querySelector("button"));
   expect(panes()).toEqual(["Write the parser*", "Fix the README"]);
+});
+
+test("a sidebar thread dropped on the open thread opens beside it, and in a split replaces the side", async () => {
+  await renderApp();
+  await click(threadRow("Write the parser").querySelector("button"));
+  const drag = async (type: "dragover" | "drop", runId: string) => {
+    const data = new DataTransfer();
+    dragThread(data, "local", runId);
+    await act(async () => {
+      document.querySelector('main [role="log"]')!.dispatchEvent(
+        Object.defineProperty(
+          new Event(type, { bubbles: true, cancelable: true }),
+          "dataTransfer",
+          {
+            value: data,
+          },
+        ),
+      );
+    });
+    await settle();
+  };
+  const hint = () => document.querySelector("main [aria-hidden].border-dashed")?.textContent;
+
+  await drag("dragover", "b");
+  expect(hint()).toBe("Open side by side");
+  await drag("drop", "b");
+  expect(hint()).toBeUndefined();
+  expect(panes()).toEqual(["Write the parser", "Fix the README*"]);
+
+  // The pointer is over the right side, which the dropped thread takes.
+  await drag("dragover", "c");
+  expect(hint()).toBe("Open here");
+  await drag("drop", "c");
+  expect(panes()).toEqual(["Write the parser", "Rename the flags*"]);
 });

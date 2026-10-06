@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   Bot,
+  Columns2,
   GitFork,
   X,
   PanelBottom,
@@ -8,7 +9,7 @@ import {
   PanelRight,
   Workflow,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 
 import type { InboxItem, Repo, Thread } from "../protocol/generated/protocol";
 import { Actions, type RepoAction } from "./Actions";
@@ -67,6 +68,7 @@ import { isRunning } from "./transcript";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { useUpdateAlarms } from "./Update";
 import { useShortcutLabel } from "./keybindings";
+import { draggedThread, threadDragType } from "./threadDrag";
 
 /**
  * The main pane: a Project's coordinator chat, or with `agentId` one of its subagents' chats, a
@@ -493,11 +495,28 @@ export function App() {
       setSelection({ kind: "new", groupId: groupOf(view.state, thread) });
     return undefined;
   };
-  // Opens `threadId` beside the open thread, in place of the split's other side.
-  const openBeside = (threadId: string) => {
+  // Opens `threadId` beside the open thread on `side`: by default the right, or in a split the side
+  // that isn't focused, which it replaces.
+  const openBeside = (threadId: string, side?: 0 | 1) => {
     if (selection.kind !== "thread" || selection.threadId === threadId) return;
-    setSplit({ hostId: host.id, threadIds: [selection.threadId, threadId] });
+    const ids: [string, string] = paired
+      ? [...split.threadIds]
+      : [selection.threadId, selection.threadId];
+    const at = side ?? (paired ? (ids[0] === selection.threadId ? 1 : 0) : 1);
+    ids[at] = threadId;
+    // The other side's thread, dropped on this one.
+    if (ids[0] === ids[1]) return;
+    setSplit({ hostId: host.id, threadIds: ids });
     setSelection({ kind: "thread", threadId });
+  };
+  // The side a sidebar thread dragged over the open thread would open on: the right, or in a
+  // split the side under the pointer. Not over a composer, which takes it to attach (PLX-378).
+  const [dropSide, setDropSide] = useState<0 | 1>();
+  const dropSideOf = (e: DragEvent<HTMLElement>): 0 | 1 | undefined => {
+    if (e.defaultPrevented || !e.dataTransfer.types.includes(threadDragType)) return undefined;
+    if (!paired) return 1;
+    const box = e.currentTarget.getBoundingClientRect();
+    return e.clientX < box.left + box.width / 2 ? 0 : 1;
   };
   // Focuses a side of the split, reopening it if another view is open, and its composer.
   const focusPane = (side: 0 | 1) => {
@@ -794,7 +813,40 @@ export function App() {
               </div>
             </TopBar>
             {selection.kind === "thread" ? (
-              <div className="flex min-h-0 flex-1">
+              <div
+                className="relative flex min-h-0 flex-1"
+                onDragOver={(e) => {
+                  const side = dropSideOf(e);
+                  setDropSide(side);
+                  if (side === undefined) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "copy";
+                }}
+                onDragLeave={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node | null))
+                    setDropSide(undefined);
+                }}
+                onDrop={(e) => {
+                  const side = dropSideOf(e);
+                  setDropSide(undefined);
+                  const thread = draggedThread(e.dataTransfer);
+                  if (side === undefined || !thread) return;
+                  e.preventDefault();
+                  // A split's threads are one computer's.
+                  if (thread.hostId === host.id) openBeside(thread.runId, side);
+                }}
+              >
+                {dropSide !== undefined && (
+                  <div
+                    aria-hidden
+                    className={`pointer-events-none absolute inset-y-2 z-20 grid w-[calc(50%-1rem)] place-items-center rounded-xl border-2 border-dashed border-accent bg-background/85 backdrop-blur-sm ${dropSide === 0 ? "left-2" : "right-2"}`}
+                  >
+                    <span className="flex items-center gap-1.5 rounded-full bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-foreground [&_svg]:size-4">
+                      <Columns2 />
+                      {paired ? "Open here" : "Open side by side"}
+                    </span>
+                  </div>
+                )}
                 {panes.map((threadId, side) => {
                   const focused = threadId === selection.threadId;
                   const paneThread = threads.state.threads.find((t) => t.id === threadId);
