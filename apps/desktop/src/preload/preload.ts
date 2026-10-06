@@ -30,7 +30,6 @@ const bridge: ParallaxBridge = {
   platform: process.platform,
   version: () => ipcRenderer.invoke("parallax:version") as Promise<string>,
   setThemeSource: (preference) => ipcRenderer.send("parallax:theme", preference),
-  setAppIcon: (png) => ipcRenderer.send("parallax:appIcon", png),
   setZoom: (factor) => webFrame.setZoomFactor(factor),
   pickFolder: () => ipcRenderer.invoke("parallax:pickFolder") as Promise<string | null>,
   listFolders: (path) => ipcRenderer.invoke("parallax:listFolders", path),

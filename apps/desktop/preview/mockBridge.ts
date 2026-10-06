@@ -730,7 +730,6 @@ export const mockBridge: ParallaxBridge = {
   platform: "darwin",
   version: () => delay("0.0.0-preview"),
   setThemeSource: noop,
-  setAppIcon: noop,
   setZoom: (factor) => {
     document.documentElement.style.zoom = String(factor);
   },

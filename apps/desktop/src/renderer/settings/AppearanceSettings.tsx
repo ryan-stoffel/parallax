@@ -1,18 +1,14 @@
-import { useId, type CSSProperties } from "react";
+import { useId } from "react";
 
 import type { ThemePreference } from "../../preload/bridge";
-import {
-  presetOf,
-  presets,
-  setAppearance,
-  useAppearance,
-  type Appearance,
-  type Preset,
-} from "../appearance";
-import { ParallaxMark } from "../logos";
+import { setAppearance, useAppearance, type Appearance } from "../appearance";
 import { Segmented } from "../ui";
 import { PageTitle, Row, Section, Switch } from "./parts";
 import { TypographySettings } from "./TypographySettings";
+
+// The app's two marks and its accent in each mode (index.css).
+const marks = ["#2b5cff", "#ff4a1f"];
+const accents = { light: "#2563eb", dark: "#3b82f6" };
 
 // A preview's colors, fixed, so each card shows its mode whatever the app is in.
 const swatches = {
@@ -21,7 +17,7 @@ const swatches = {
 };
 
 /** A small drawing of the app in `mode`: the sidebar, a few lines, a card, and the composer. */
-function SchemePreview({ mode, preset }: { mode: "light" | "dark"; preset: Preset }) {
+function SchemePreview({ mode }: { mode: "light" | "dark" }) {
   const c = swatches[mode];
   const bar = (width: string, color = c.line) => (
     <span className="block h-1.5 rounded-full" style={{ width, background: color }} />
@@ -43,7 +39,7 @@ function SchemePreview({ mode, preset }: { mode: "light" | "dark"; preset: Prese
             className="flex w-1/3 flex-col gap-1 rounded-md border p-1.5"
             style={{ background: c.card, borderColor: c.edge }}
           >
-            {preset.marks.map((m) => (
+            {marks.map((m) => (
               <span key={m} className="flex items-center gap-1">
                 <span className="size-1 rounded-full" style={{ background: m }} />
                 {bar("70%")}
@@ -56,17 +52,11 @@ function SchemePreview({ mode, preset }: { mode: "light" | "dark"; preset: Prese
           style={{ background: c.card, borderColor: c.edge }}
         >
           {bar("40%")}
-          <span className="size-2.5 rounded-full" style={{ background: preset.accent[mode] }} />
+          <span className="size-2.5 rounded-full" style={{ background: accents[mode] }} />
         </span>
       </span>
     </span>
   );
-}
-
-/** The app's mark in `preset`'s colors, its overlap as the sidebar's is in this scheme. */
-function PresetMark({ preset }: { preset: Preset }) {
-  const colors = { "--mark-blue": preset.marks[0], "--mark-coral": preset.marks[1] };
-  return <ParallaxMark className="size-11" style={colors as CSSProperties} />;
 }
 
 const schemes: { value: ThemePreference; name: string }[] = [
@@ -79,7 +69,7 @@ const card =
   "flex cursor-pointer flex-col gap-2 rounded-xl border border-border bg-surface p-2 text-center text-[12.5px] text-muted-foreground hover:bg-hover has-checked:border-accent has-checked:text-foreground has-checked:outline-1 has-checked:outline-accent has-focus-visible:outline-2 has-focus-visible:outline-ring";
 
 /**
- * Settings > Appearance: the color scheme, the color preset, and how the interface reads:
+ * Settings > Appearance: the color scheme and how the interface reads:
  * contrast, motion, the colors for added and removed, and typography.
  */
 export function AppearanceSettings({
@@ -90,10 +80,8 @@ export function AppearanceSettings({
   onThemeChange: (theme: ThemePreference) => void;
 }) {
   const appearance = useAppearance();
-  const preset = presetOf(appearance.preset);
   const set = (change: Partial<Appearance>) => setAppearance(change);
   const scheme = useId();
-  const presetName = useId();
 
   return (
     <>
@@ -113,43 +101,20 @@ export function AppearanceSettings({
               <span className="relative block aspect-[16/10] overflow-hidden rounded-lg border border-border">
                 {s.value === "system" ? (
                   <>
-                    <SchemePreview mode="dark" preset={preset} />
+                    <SchemePreview mode="dark" />
                     {/* Light on the left half, over the dark one. */}
                     <span className="absolute inset-0 [clip-path:inset(0_50%_0_0)]">
-                      <SchemePreview mode="light" preset={preset} />
+                      <SchemePreview mode="light" />
                     </span>
                   </>
                 ) : (
-                  <SchemePreview mode={s.value} preset={preset} />
+                  <SchemePreview mode={s.value} />
                 )}
               </span>
               {s.name}
             </label>
           ))}
         </fieldset>
-      </Section>
-
-      <Section title="Colors">
-        <fieldset aria-label="Colors" className="grid grid-cols-2 gap-3 p-3 sm:grid-cols-3">
-          {presets.map((p) => (
-            <label key={p.id} className={`${card} items-center py-4`}>
-              <input
-                type="radio"
-                name={presetName}
-                value={p.id}
-                checked={preset.id === p.id}
-                onChange={() => set({ preset: p.id })}
-                className="sr-only"
-              />
-              <PresetMark preset={p} />
-              {p.name}
-            </label>
-          ))}
-        </fieldset>
-        <p className="border-t border-border px-4 py-3 text-[12.5px] text-muted-foreground">
-          Recolors the app icon, highlights, focus rings, and the marks on working threads. Every
-          preset keeps text readable in both schemes.
-        </p>
       </Section>
 
       <Section title="Interface">

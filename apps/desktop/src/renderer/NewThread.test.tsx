@@ -87,7 +87,6 @@ beforeEach(() => {
       return () => {};
     },
     setZoom: () => {},
-    setAppIcon: () => {},
     openTargets: async () => [],
     openTargetIcons: async () => ({}),
   } as Partial<ParallaxBridge> as ParallaxBridge;

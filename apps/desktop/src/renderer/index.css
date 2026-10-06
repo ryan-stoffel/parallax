@@ -67,12 +67,10 @@
    (theme.ts). Components use only these tokens, never raw colors. Every
    *-foreground keeps at least 4.5:1 contrast on the background and sidebar.
 
-   --accent is the color Settings > Appearance's preset changes (appearance.ts,
-   which sets --preset-accent-light and -dark): the send button, focus rings
-   (--ring), selected states, highlights, links, and the working loaders
-   (--working) all derive from it. Text and icons on it are black or white,
-   whichever reads better, so they keep at least 4.5:1 on any accent. The
-   preset's --mark-blue and --mark-coral are the logo's two circles.
+   --accent: the send button, focus rings (--ring), selected states, highlights,
+   links, and the working loaders (--working) all derive from it. Text and icons
+   on it are black or white, whichever reads better, so they keep at least 4.5:1
+   on any accent. --mark-blue and --mark-coral are the logo's two circles.
 
    Classes on <html> from the same settings: .contrast-more strengthens text and
    borders, .reduce-motion stops animations (it's also set when the OS asks),
@@ -88,7 +86,7 @@
   --border: rgb(0 0 0 / 9%);
   --hover: rgb(0 0 0 / 4.5%);
   --selected: rgb(0 0 0 / 7%);
-  --accent: var(--preset-accent-light, #2563eb);
+  --accent: #2563eb;
   /* Black or white, whichever reads better on a fill, as a channel of
      color(from <fill> srgb-linear ...): white while the fill's WCAG luminance (from its linear
      r, g, and b, clipped as the screen clips them) is under 0.1791, where the two tie at 4.58:1. */
@@ -157,7 +155,7 @@
   --border: rgb(255 255 255 / 8%);
   --hover: rgb(255 255 255 / 4.5%);
   --selected: rgb(255 255 255 / 8%);
-  --accent: var(--preset-accent-dark, #3b82f6);
+  --accent: #3b82f6;
   /* The accent, darkened: mixed toward a black with no chroma or hue, so it keeps the accent's. */
   --send: color-mix(in oklch, var(--accent) 68%, oklch(0 none none));
   --primary: #ececec;

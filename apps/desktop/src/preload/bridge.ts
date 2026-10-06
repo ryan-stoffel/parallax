@@ -76,11 +76,6 @@ export interface ParallaxBridge {
   version(): Promise<string>;
   /** Sets Electron's `nativeTheme.themeSource`, so native UI matches the app's theme. */
   setThemeSource(preference: ThemePreference): void;
-  /**
-   * Sets the Dock icon on macOS, or the windows' icon elsewhere, to a PNG data: URL drawn in the
-   * Appearance preset's colors.
-   */
-  setAppIcon(png: string): void;
   /** Zooms this window's page, 1 being 100%: Settings > Appearance's text size. */
   setZoom(factor: number): void;
   /** Opens the OS folder picker over this window. Resolves to the folder's path, or null if cancelled. */
