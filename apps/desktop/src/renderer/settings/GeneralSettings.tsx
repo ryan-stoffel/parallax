@@ -35,7 +35,8 @@ const pickerBox = "rounded-md border border-border bg-background";
  */
 export function GeneralSettings() {
   const [showNotices, setShowNotices] = useState(false);
-  const [targets, setTargets] = useState<OpenTarget[]>([]);
+  // Undefined until main answers, so the row doesn't flash "No apps found".
+  const [targets, setTargets] = useState<OpenTarget[]>();
   const [chosen, setChosen] = useState(() => localStorage.getItem(OPEN_TARGET_KEY));
   const [terminal, setTerminal] = useState<string | null>(null);
   const [icons, setIcons] = useState<Partial<Record<OpenTarget, string>>>({});
@@ -54,7 +55,7 @@ export function GeneralSettings() {
     setTargets(await window.parallax.openTargets(localId));
     window.dispatchEvent(new Event(TERMINAL_CHOSEN));
   };
-  const current = targets.find((t) => t === chosen) ?? targets[0];
+  const current = targets?.find((t) => t === chosen) ?? targets?.[0];
   const sidebar = sidebarPrefs.use();
   const setSidebar = (patch: Partial<SidebarPrefs>) =>
     sidebarPrefs.set({ ...sidebarPrefs.get(), ...patch });
@@ -111,7 +112,7 @@ export function GeneralSettings() {
                   localStorage.setItem(OPEN_TARGET_KEY, value);
                   setChosen(value);
                 }}
-                options={targets.map((t) => ({
+                options={(targets ?? []).map((t) => ({
                   value: t,
                   label: nameOf(t, terminal),
                   icon: targetIcon(t, icons),
@@ -120,7 +121,7 @@ export function GeneralSettings() {
               />
             </span>
           ) : (
-            <span className="text-[13px] text-muted-foreground">No apps found</span>
+            targets && <span className="text-[13px] text-muted-foreground">No apps found</span>
           )}
         </Row>
         <Row title="Terminal" description="The terminal Open lists for this computer's threads.">
