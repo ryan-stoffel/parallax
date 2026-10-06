@@ -4,8 +4,10 @@
 //! touch the worktree's index or files while its agent runs.
 //!
 //! `agent/files` and `agent/file`'s `working` side (PLX-296) read the run's folder on disk
-//! instead: its worktree, or a Current checkout thread's checkout. They only read, and never
-//! follow a symlink, so nothing the agent writes there can point them outside the folder.
+//! instead: its worktree, or a Current checkout thread's checkout. `agent/fileCreate`,
+//! `agent/fileRename`, and `agent/fileDelete` (PLX-590) change entries there, for the Files view.
+//! None of them follows a symlink, so nothing the agent writes there can point them outside the
+//! folder.
 
 use std::io::ErrorKind as IoErrorKind;
 use std::path::{Path, PathBuf};
@@ -13,7 +15,8 @@ use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AgentDiffFile, AgentDiffResult, AgentDiffStats, AgentEntry, AgentEntryKind, AgentFileParams,
+    AgentDiffFile, AgentDiffResult, AgentDiffStats, AgentEntry, AgentEntryKind,
+    AgentFileCreateParams, AgentFileDeleteParams, AgentFileParams, AgentFileRenameParams,
     AgentFileResult, AgentFileSide, AgentFileStatus, AgentFilesParams, AgentFilesResult, ErrorKind,
     RunId,
 };
@@ -441,6 +444,121 @@ pub(crate) async fn files(
     let truncated = entries.len() > MAX_ENTRIES;
     entries.truncate(MAX_ENTRIES);
     Ok(AgentFilesResult { entries, truncated })
+}
+
+/// `path` under `root`, for a change: checked by [`validate_repo_path`] and reached through real
+/// folders only. The entry itself may be missing; its folder may not.
+async fn editable(root: &Path, path: &str) -> Result<PathBuf, ErrorObject> {
+    validate_repo_path(path).map_err(ErrorObject::invalid_params)?;
+    Ok(under(root, path)
+        .await?
+        .ok_or_else(|| ErrorObject::invalid_params(format!("path {path:?}'s folder is missing")))?
+        .0)
+}
+
+/// What a failed change of `path` tells the user.
+fn edit_failed(path: &str, error: &std::io::Error) -> ErrorObject {
+    match error.kind() {
+        IoErrorKind::AlreadyExists => {
+            ErrorObject::invalid_params(format!("{path:?} already exists"))
+        }
+        IoErrorKind::NotFound => ErrorObject::invalid_params(format!("{path:?} isn't there")),
+        _ => ErrorObject::internal_error(format!("could not change {path:?}: {error}")),
+    }
+}
+
+/// `agent/fileCreate`: an empty file or folder, never over an existing entry.
+pub(crate) async fn create_entry(
+    daemon: &Arc<Daemon>,
+    params: AgentFileCreateParams,
+) -> Result<(), ErrorObject> {
+    let AgentFileCreateParams {
+        run_id,
+        path,
+        folder,
+    } = params;
+    let (root, _) = run_folder(daemon, run_id).await?;
+    let at = editable(&root, &path).await?;
+    let created = if folder {
+        tokio::fs::create_dir(&at).await
+    } else {
+        // `create_new` fails on any existing entry, a symlink included, rather than following it.
+        tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&at)
+            .await
+            .map(drop)
+    };
+    created.map_err(|error| edit_failed(&path, &error))
+}
+
+/// `agent/fileRename`: moves an entry, a symlink itself rather than its target, never over
+/// another entry or into itself.
+pub(crate) async fn rename_entry(
+    daemon: &Arc<Daemon>,
+    params: AgentFileRenameParams,
+) -> Result<(), ErrorObject> {
+    let AgentFileRenameParams { run_id, from, to } = params;
+    if to == from || to.starts_with(&format!("{from}/")) {
+        return Err(ErrorObject::invalid_params(format!(
+            "{from:?} can't move into itself"
+        )));
+    }
+    let (root, _) = run_folder(daemon, run_id).await?;
+    let source = editable(&root, &from).await?;
+    let target = editable(&root, &to).await?;
+    let source_meta = tokio::fs::symlink_metadata(&source)
+        .await
+        .map_err(|error| edit_failed(&from, &error))?;
+    // ponytail: checked, then renamed, so an entry the agent makes at `to` in between is
+    // replaced; `renameat2`'s `RENAME_NOREPLACE` would close that where the OS has it.
+    match tokio::fs::symlink_metadata(&target).await {
+        Ok(meta) if !same_entry(&source_meta, &meta, &from, &to) => {
+            return Err(ErrorObject::invalid_params(format!(
+                "{to:?} already exists"
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == IoErrorKind::NotFound => {}
+        Err(error) => return Err(edit_failed(&to, &error)),
+    }
+    tokio::fs::rename(&source, &target)
+        .await
+        .map_err(|error| edit_failed(&from, &error))
+}
+
+/// Whether `to` names the entry `from` does, as a change of case does on a case-insensitive file
+/// system, so a rename that only changes case isn't refused.
+#[cfg(unix)]
+fn same_entry(a: &std::fs::Metadata, b: &std::fs::Metadata, _: &str, _: &str) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    (a.dev(), a.ino()) == (b.dev(), b.ino())
+}
+
+#[cfg(not(unix))]
+fn same_entry(_: &std::fs::Metadata, _: &std::fs::Metadata, from: &str, to: &str) -> bool {
+    from.eq_ignore_ascii_case(to)
+}
+
+/// `agent/fileDelete`: removes a file, a symlink itself, or a folder with everything in it.
+pub(crate) async fn delete_entry(
+    daemon: &Arc<Daemon>,
+    params: AgentFileDeleteParams,
+) -> Result<(), ErrorObject> {
+    let AgentFileDeleteParams { run_id, path } = params;
+    let (root, _) = run_folder(daemon, run_id).await?;
+    let at = editable(&root, &path).await?;
+    let meta = tokio::fs::symlink_metadata(&at)
+        .await
+        .map_err(|error| edit_failed(&path, &error))?;
+    // `remove_dir_all` removes symlinks inside the folder without following them.
+    let removed = if meta.is_dir() {
+        tokio::fs::remove_dir_all(&at).await
+    } else {
+        tokio::fs::remove_file(&at).await
+    };
+    removed.map_err(|error| edit_failed(&path, &error))
 }
 
 /// Standard base64, with padding.

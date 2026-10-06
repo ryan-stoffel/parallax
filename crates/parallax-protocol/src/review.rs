@@ -236,6 +236,48 @@ pub struct AgentFilesResult {
     pub truncated: bool,
 }
 
+/// Params of `agent/fileCreate` (PLX-590): a new empty file or folder in a run's folder, by
+/// `agent/file`'s path rules. Fails if anything is already at `path` or its folder is missing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFileCreateParams {
+    /// The run.
+    pub run_id: RunId,
+    /// The new entry, relative to the run's folder.
+    pub path: String,
+    /// A folder rather than a file.
+    pub folder: bool,
+}
+
+/// Params of `agent/fileRename` (PLX-590): moves a file, folder, or symlink in a run's folder.
+/// Fails if anything is already at `to`, or `to` is inside `from`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFileRenameParams {
+    /// The run.
+    pub run_id: RunId,
+    /// The entry, relative to the run's folder.
+    pub from: String,
+    /// Its new path, relative to the run's folder.
+    pub to: String,
+}
+
+/// Params of `agent/fileDelete` (PLX-590): removes a file, a symlink (never its target), or a
+/// folder with everything in it, from a run's folder.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFileDeleteParams {
+    /// The run.
+    pub run_id: RunId,
+    /// The entry, relative to the run's folder.
+    pub path: String,
+}
+
+/// Result of `agent/fileCreate`, `agent/fileRename`, and `agent/fileDelete`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFileEditResult {}
+
 /// How `agent/accept` brought a run's commit into the project's branch.
 ///
 /// A newer plxd may send a value this version does not know; treat it as unknown.

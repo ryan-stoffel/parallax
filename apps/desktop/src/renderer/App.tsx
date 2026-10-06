@@ -883,6 +883,7 @@ export function App() {
                   ? undefined
                   : "Update Parallax on this host to browse a thread's files.")
               }
+              editable={connected && "fileEdit" in connection.capabilities}
             />
           )
         }

@@ -1,0 +1,63 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "agent/fileCreate",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "path": "src/util",
+      "folder": true
+    }
+  },
+  { "jsonrpc": "2.0", "id": 1, "result": {} },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "agent/fileCreate",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "path": "src/util/mod.rs",
+      "folder": false
+    }
+  },
+  { "jsonrpc": "2.0", "id": 2, "result": {} },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "agent/fileRename",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "from": "src/util",
+      "to": "src/helpers"
+    }
+  },
+  { "jsonrpc": "2.0", "id": 3, "result": {} },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "agent/fileRename",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "from": "README.md",
+      "to": "src/main.rs"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "error": {
+      "code": -32602,
+      "message": "Invalid params: \"src/main.rs\" already exists"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "agent/fileDelete",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "path": "src/helpers"
+    }
+  },
+  { "jsonrpc": "2.0", "id": 5, "result": {} }
+]

@@ -32,7 +32,8 @@ use crate::{
     AccountsRefreshParams, AccountsRefreshResult, AgentAcceptParams, AgentAcceptResult,
     AgentApproveParams, AgentApproveResult, AgentAutoResumeParams, AgentCancelParams,
     AgentCommandsParams, AgentCommandsResult, AgentCommitParams, AgentDiffParams, AgentDiffResult,
-    AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentFilesParams,
+    AgentEventsParams, AgentEventsResult, AgentFileCreateParams, AgentFileDeleteParams,
+    AgentFileEditResult, AgentFileParams, AgentFileRenameParams, AgentFileResult, AgentFilesParams,
     AgentFilesResult, AgentGitStatusParams, AgentImageParams, AgentListParams, AgentListResult,
     AgentOpenPrParams, AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams,
     AgentResumeNowParams, AgentRunResult, AgentSendParams, AgentStartParams, AgentWaitParams,
@@ -235,6 +236,13 @@ method_table! {
         /// checkout, without `.git` or what git ignores, for browsing (PLX-296). Gated on the
         /// `files` capability.
         AgentFiles = "agent/files": AgentFilesParams => AgentFilesResult;
+        /// `agent/fileCreate`: a new empty file or folder in a run's folder (PLX-590). Gated on
+        /// the `fileEdit` capability, like `agent/fileRename` and `agent/fileDelete`.
+        AgentFileCreate = "agent/fileCreate": AgentFileCreateParams => AgentFileEditResult;
+        /// `agent/fileRename`: moves an entry of a run's folder, never over another.
+        AgentFileRename = "agent/fileRename": AgentFileRenameParams => AgentFileEditResult;
+        /// `agent/fileDelete`: removes an entry of a run's folder, a folder with its contents.
+        AgentFileDelete = "agent/fileDelete": AgentFileDeleteParams => AgentFileEditResult;
         /// `agent/accept`: merges a run's commit into the project repository's current branch on
         /// the host, fast-forward when possible, then removes its worktree and branch. Never
         /// pushes. Idempotent on its client-generated id.
@@ -489,6 +497,9 @@ mod tests {
                 "agent/diff",
                 "agent/file",
                 "agent/files",
+                "agent/fileCreate",
+                "agent/fileRename",
+                "agent/fileDelete",
                 "agent/accept",
                 "agent/requestChanges",
                 "agent/openPr",
