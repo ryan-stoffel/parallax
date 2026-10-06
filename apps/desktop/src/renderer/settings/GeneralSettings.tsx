@@ -299,6 +299,20 @@ function Behavior() {
           <option value="modEnter">{mac ? "⌘ Enter" : "Ctrl+Enter"}</option>
         </select>
       </Row>
+      <Row
+        title="Open pull requests in"
+        description="Where Open on GitHub goes: your system browser, or the Browser in the side panel."
+      >
+        <select
+          aria-label="Open pull requests in"
+          value={prefs.openPrsIn}
+          onChange={(e) => set({ openPrsIn: e.target.value as BehaviorPrefs["openPrsIn"] })}
+          className={selectClass}
+        >
+          <option value="external">System browser</option>
+          <option value="browser">Side panel browser</option>
+        </select>
+      </Row>
     </Section>
   );
 }

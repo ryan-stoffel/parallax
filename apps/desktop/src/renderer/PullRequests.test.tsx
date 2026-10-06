@@ -15,6 +15,7 @@ import {
   PullRequestView,
   usePullRequests,
 } from "./PullRequests";
+import { setBehaviorPrefs } from "./prefs";
 import { SidePanel } from "./SidePanel";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -523,4 +524,28 @@ test("parseDiff numbers each side, and keeps renames and binary files", () => {
       ].join("\n"),
     ).map((f) => f.path),
   ).toEqual(["x b/y.bin", "caf\\303\\251.md"]);
+});
+
+test("Open on GitHub goes to the side panel's Browser when Settings says so", async () => {
+  read = { [url(42)]: prOf(42) };
+  const onBrowse = vi.fn();
+  const open = vi.spyOn(window, "open").mockImplementation(() => null);
+  const view = (prs: Parameters<typeof PullRequestView>[0]["prs"]) => (
+    <PullRequestView url={url(42)} prs={prs} onCompose={vi.fn()} onBrowse={onBrowse} />
+  );
+  const link = () => document.querySelector<HTMLAnchorElement>('a[title="Open on GitHub"]')!;
+  try {
+    await render([url(42)], view);
+    await click(link());
+    expect(onBrowse).not.toHaveBeenCalled();
+
+    await act(async () => setBehaviorPrefs({ openPrsIn: "browser" }));
+    await click(link());
+    await click(item("Open on GitHub"));
+    expect(onBrowse.mock.calls).toEqual([[url(42)], [url(42)]]);
+    expect(open).not.toHaveBeenCalled();
+  } finally {
+    setBehaviorPrefs({ openPrsIn: "external" });
+    open.mockRestore();
+  }
 });

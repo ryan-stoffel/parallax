@@ -42,6 +42,7 @@ import { MarkdownText } from "./AgentChat";
 import { diffBand, diffLook } from "./Approval";
 import { tabItem } from "./Composer";
 import { describeError, githubProblem } from "./errors";
+import { behaviorPrefs } from "./prefs";
 import { age } from "./Sidebar";
 import { menuItem, menuPanel, moveFocus, SetUpGithub } from "./ui";
 
@@ -627,10 +628,13 @@ export function PullRequestView({
   prs,
   onCompose,
   onSetUpGithub,
+  onBrowse,
 }: {
   url: string;
   prs: PullRequests;
   onCompose: (text: string, send: boolean) => void;
+  /** Opens a page in the side panel's Browser, for Open on GitHub when Settings sends it there. */
+  onBrowse?: (url: string) => void;
   /** Offered when a read or action fails because `gh` is missing or signed out (PLX-423). */
   onSetUpGithub?: () => void;
 }) {
@@ -650,6 +654,8 @@ export function PullRequestView({
   const [viewed, setViewed] = useState<ReadonlySet<string>>(new Set());
   const linked = prs.get(url);
   const pr = linked?.pr;
+  const inBrowser = behaviorPrefs.use().openPrsIn === "browser" && !!onBrowse;
+  const openOnGithub = (to: string) => (inBrowser ? onBrowse?.(to) : window.open(to, "_blank"));
   const readDiff = prs.diff;
   const updatedAt = pr?.updatedAt;
   useEffect(() => {
@@ -868,6 +874,11 @@ export function PullRequestView({
             target="_blank"
             rel="noreferrer"
             title="Open on GitHub"
+            onClick={(e) => {
+              if (!inBrowser) return;
+              e.preventDefault();
+              openOnGithub(pr.url);
+            }}
             className="flex min-w-0 items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground"
           >
             <span className="truncate">{pr.repo}</span>
@@ -1233,7 +1244,7 @@ export function PullRequestView({
           label="Open on GitHub"
           onClick={() => {
             menu.current?.hidePopover();
-            window.open(pr.url, "_blank");
+            openOnGithub(pr.url);
           }}
         />
         <Item Icon={Link} label="Copy link" onClick={() => copy(pr.url)} />

@@ -39,6 +39,8 @@ export type BehaviorPrefs = {
   timeFormat: "system" | "12" | "24";
   /** What sends a prompt. With `modEnter`, Enter starts a new line. */
   sendKey: "enter" | "modEnter";
+  /** Where a pull request's Open on GitHub goes: the system browser, or the side panel's Browser. */
+  openPrsIn: "external" | "browser";
 };
 
 export const behaviorDefaults: BehaviorPrefs = {
@@ -46,6 +48,7 @@ export const behaviorDefaults: BehaviorPrefs = {
   inAppNotifications: true,
   timeFormat: "system",
   sendKey: "enter",
+  openPrsIn: "external",
 };
 
 export const behaviorPrefs = stored("parallax.behavior", behaviorDefaults, merged);
