@@ -459,24 +459,29 @@ test("a tool call with an oversized input says so", () => {
   expect(document.querySelector("details")!.textContent).toContain("Too large to show (89 KB)");
 });
 
-test("a coordinator's plxd tool calls read as what they did, and to what", () => {
+test("a thread's plxd tool calls read as what they did, and to what", () => {
   const summary = (name: string, input: Record<string, string>, subagent?: string) => {
     row({ kind: "tool", key: "t", callId: "1", name, input, ...(subagent && { subagent }) });
     const text = shown();
     act(() => unmount());
     return text;
   };
-  expect(summary("mcp__plxd__spawn_agent", { prompt: "Fix the login bug\nwith a test" })).toBe(
-    "Started a subagent: Fix the login bug",
+  expect(summary("mcp__plxd__thread_launch", { prompt: "Fix the login bug\nwith a test" })).toBe(
+    "Started a child thread: Fix the login bug",
   );
-  expect(summary("mcp__plxd__agent_status", { runId: "r-1" }, "Fix the login bug")).toBe(
-    "Checked on a subagent: Fix the login bug",
+  expect(
+    summary("mcp__plxd__thread_send", { runId: "r-1", text: "Rebase" }, "Fix the login bug"),
+  ).toBe("Messaged a thread: Fix the login bug");
+  expect(summary("mcp__plxd__thread_search", { query: "login" })).toBe("Searched threads: login");
+  // An older transcript's 0019 tool still reads as what it did.
+  expect(summary("mcp__plxd__spawn_agent", { prompt: "Fix the login bug" })).toBe(
+    "Started a subagent: Fix the login bug",
   );
   expect(summary("mcp__plxd__write_context", { path: "plan.md", content: "# Plan" })).toBe(
     "Wrote shared context: plan.md",
   );
   // A plxd tool this app doesn't know reads as any MCP server's tool does.
-  expect(summary("mcp__plxd__plan_approve", {})).toBe("plxd: plan approve");
+  expect(summary("mcp__plxd__plan_approve", {})).toBe("Parallax: plan approve");
 });
 
 test("another MCP server's tool reads as the server and the tool, and a skill by its name", () => {
@@ -536,14 +541,14 @@ test("each kind of work has its own loader, and MCP tools and skills read by nam
     detail: "save issue",
     loader: loader("beacon", "balance"),
   });
-  expect(activity(tool("mcp__plxd__spawn_agent", { prompt: "Fix the login bug" }))).toEqual({
-    label: "Started a subagent",
+  expect(activity(tool("mcp__plxd__thread_launch", { prompt: "Fix the login bug" }))).toEqual({
+    label: "Started a child thread",
     detail: "Fix the login bug",
     loader: loader("cells", "spread"),
   });
   // A plxd tool this app doesn't know reads as any MCP server's tool does, with plxd's loader.
   expect(activity(tool("mcp__plxd__plan_approve"))).toEqual({
-    label: "Using plxd",
+    label: "Using Parallax",
     detail: "plan approve",
     loader: loader("cells", "spread"),
   });
@@ -608,7 +613,7 @@ test("each kind of tool has its icon once it's done, as its loader matches it wh
         "WebFetch",
         "mcp__linear__save_issue",
         "Skill",
-        "mcp__plxd__spawn_agent",
+        "mcp__plxd__thread_launch",
         "mcp__plxd__plan_approve",
         "TodoWrite",
         "TaskCreate",
@@ -636,9 +641,10 @@ test("each kind of tool has its icon once it's done, as its loader matches it wh
     WebFetch: "lucide-globe",
     mcp__linear__save_issue: "lucide-plug",
     Skill: "lucide-sparkles",
-    mcp__plxd__spawn_agent: "lucide-workflow",
+    // Parallax's own tools wear a wrench (PLX-598).
+    mcp__plxd__thread_launch: "lucide-wrench",
     // A plxd tool this app doesn't know is still plxd's.
-    mcp__plxd__plan_approve: "lucide-workflow",
+    mcp__plxd__plan_approve: "lucide-wrench",
     TodoWrite: "lucide-list-checks",
     // Claude Code's task tools plan as TodoWrite did (PLX-248).
     TaskCreate: "lucide-list-checks",

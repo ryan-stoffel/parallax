@@ -29,6 +29,7 @@ import {
   SquareTerminal,
   TriangleAlert,
   Workflow,
+  Wrench,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -1700,7 +1701,7 @@ const icons = {
   agent: Bot,
   skill: Sparkles,
   mcp: Plug,
-  plxd: Workflow,
+  plxd: Wrench,
   planning: ListChecks,
   working: Hammer,
   compacting: FoldVertical,
@@ -2071,41 +2072,61 @@ function list(parts: string[]): string {
   return `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1)}`;
 }
 
-// A coordinator's plxd tools (0019), by what they did.
+// A thread's plxd tools (0041), by what they did, then the 0019 coordinator tools older
+// transcripts hold.
 const plxdLabels: Partial<Record<string, string>> = {
+  thread_launch: "Started a child thread",
+  thread_fork: "Forked a thread",
+  thread_list: "Listed threads",
+  thread_read: "Read a thread",
+  thread_search: "Searched threads",
+  thread_send: "Messaged a thread",
+  thread_wait: "Waited on a thread",
+  thread_interrupt: "Interrupted a thread",
+  thread_update: "Updated a thread",
+  pr_link: "Linked a pull request",
+  pr_unlink: "Unlinked a pull request",
+  ask: "Asked the coordinator",
+  answer: "Answered a question",
+  escalate: "Passed a question to you",
+  memory_read: "Read memory",
+  memory_propose: "Proposed a memory",
+  memory_write: "Wrote memory",
+  land: "Queued a thread to land",
+  checks_propose: "Proposed checks",
+  read_context: "Read shared context",
+  write_context: "Wrote shared context",
   spawn_agent: "Started a subagent",
   list_agents: "Listed subagents",
   agent_status: "Checked on a subagent",
   message_agent: "Messaged a subagent",
   cancel_agent: "Stopped a subagent",
   agent_diff: "Read a subagent's diff",
-  read_context: "Read shared context",
-  write_context: "Wrote shared context",
 };
 
 /**
- * A plxd tool call as a short line: what it did, and what it did it to (the new subagent's task,
- * the subagent it named, or the context file). Undefined for any other tool.
+ * A plxd tool call as a short line: what it did, and what it did it to (the new thread's task,
+ * the thread it named, the search, or the file). Undefined for any other tool.
  */
 function plxdCall(item: Extract<Item, { kind: "tool" }>) {
   const label = item.name?.startsWith(plxdTools)
     ? plxdLabels[item.name.slice(plxdTools.length)]
     : undefined;
   return label
-    ? { label, detail: item.subagent ?? toolHint(item.input, ["prompt", "path"]) }
+    ? { label, detail: item.subagent ?? toolHint(item.input, ["prompt", "path", "query"]) }
     : undefined;
 }
 
 /**
  * An MCP server's tool as Claude Code names it, `mcp__<server>__<tool>`, readably: the server's
- * name, capitalized unless it's plxd's, and the tool's. Undefined for any other tool.
+ * name, capitalized, or Parallax for plxd's, and the tool's. Undefined for any other tool.
  */
 function mcpTool(name: string | null) {
   const [, server, tool] = /^mcp__(.+?)__(.+)$/.exec(name ?? "") ?? [];
   if (!server || !tool) return undefined;
   const words = server.replace(/[_-]/g, " ");
   return {
-    server: server === "plxd" ? server : words.charAt(0).toUpperCase() + words.slice(1),
+    server: server === "plxd" ? "Parallax" : words.charAt(0).toUpperCase() + words.slice(1),
     tool: tool.replaceAll("_", " "),
   };
 }
