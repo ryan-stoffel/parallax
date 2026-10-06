@@ -54,7 +54,7 @@ export function PromptRail({
         aria-label="Prompts"
         onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setShown(undefined)}
         onScroll={() => setShown(undefined)}
-        className="flex flex-col overflow-y-auto [scrollbar-width:none]"
+        className="flex flex-col overflow-y-auto"
       >
         {prompts.map((p, at) => (
           <button
