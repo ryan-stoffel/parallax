@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   Bot,
   GitFork,
+  X,
   PanelBottom,
   PanelLeftOpen,
   PanelRight,
@@ -65,6 +66,7 @@ import {
 import { isRunning } from "./transcript";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { useUpdateAlarms } from "./Update";
+import { useShortcutLabel } from "./keybindings";
 
 /**
  * The main pane: a Project's coordinator chat, or with `agentId` one of its subagents' chats, a
@@ -76,6 +78,12 @@ export type Selection =
   | { kind: "project"; projectId: string; agentId?: string }
   | { kind: "thread"; threadId: string; started?: boolean; subagent?: string }
   | { kind: "new"; groupId?: string };
+
+/** Two threads on one host open side by side (PLX-587), left then right. */
+export interface Split {
+  hostId: string;
+  threadIds: [string, string];
+}
 
 export type SettingsSection =
   | "account"
@@ -100,6 +108,8 @@ export function App() {
   // The open host, or this computer once the open one is removed.
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
   const [selection, setSelection] = useState<Selection>({ kind: "new" });
+  // Shown while the selection is one of its threads, which is the focused one.
+  const [split, setSplit] = useState<Split>();
   // A Project just created on another host, opened once that host is open and lists it: the
   // check below drops a Project selection the open host's list doesn't have.
   const [opening, setOpening] = useState<{ hostId: string; projectId: string }>();
@@ -179,12 +189,32 @@ export function App() {
   const known = useRef(new Set<string>());
   for (const t of threads.state.threads) known.current.add(t.id);
   for (const p of threads.state.projects) known.current.add(p.id);
+  // Closes one side of the split, leaving the other open alone if the split was showing.
+  const closePane = (threadId: string) => {
+    if (!split) return;
+    const other = split.threadIds.find((id) => id !== threadId)!;
+    setSplit(undefined);
+    if (
+      split.hostId === host.id &&
+      selection.kind === "thread" &&
+      split.threadIds.includes(selection.threadId)
+    )
+      setSelection({ kind: "thread", threadId: other });
+  };
+  // A thread in the split that's deleted, maybe by another client, closes its side.
+  const splitGone =
+    split?.hostId === host.id
+      ? split.threadIds.find(
+          (id) => known.current.has(id) && !threads.state.threads.some((t) => t.id === id),
+        )
+      : undefined;
+  if (splitGone) closePane(splitGone);
   // The open thread's group (No Repo's until plxd lists it), or the new thread's.
   let group = groups[0]!;
   if (selection.kind === "thread") {
     const open = threads.state.threads.find((t) => t.id === selection.threadId);
     // Deleted, maybe by another client: leave it rather than show a stale transcript.
-    if (!open && known.current.has(selection.threadId)) setSelection({ kind: "new" });
+    if (!open && known.current.has(selection.threadId) && !splitGone) setSelection({ kind: "new" });
     const id = open ? groupOf(threads.state, open) : noRepo;
     group = groups.find((g) => g.id === id)!;
   } else if (selection.kind === "new")
@@ -341,15 +371,14 @@ export function App() {
 
   // The open thread's parent and children or siblings, on a plxd that keeps them (0041).
   const lineage = threads.lineage && openThread ? lineageOf(threads.state, openThread) : undefined;
-  const parentId = lineage?.parent?.id;
-  // The open thread's agent's own subagents, as its chat reports them (PLX-382).
-  const [native, setNative] = useState<{ threadId: string; list: NativeSubagent[] }>();
+  // Each open thread's agent's own subagents, as its chat reports them (PLX-382).
+  const [native, setNative] = useState<Readonly<Record<string, NativeSubagent[]>>>({});
   const reportNative = useCallback(
-    (threadId: string, list: NativeSubagent[]) => setNative({ threadId, list }),
+    (threadId: string, list: NativeSubagent[]) =>
+      setNative((prev) => ({ ...prev, [threadId]: list })),
     [],
   );
-  const subagents =
-    openThread && native?.threadId === openThread.id ? native.list : ([] as NativeSubagent[]);
+  const subagents = (openThread && native[openThread.id]) || ([] as NativeSubagent[]);
   const openSubagent = useCallback(
     (threadId: string, callId?: string) =>
       setSelection({ kind: "thread", threadId, subagent: callId }),
@@ -454,9 +483,32 @@ export function App() {
   const deleteThread = async (hostId: string, thread: Thread) => {
     const view = views[hostId] ?? idleThreads;
     const error = await view.remove(thread);
-    if (!error && selection.kind === "thread" && selection.threadId === thread.id)
+    if (error) return error;
+    if (split?.hostId === hostId && split.threadIds.includes(thread.id)) closePane(thread.id);
+    else if (selection.kind === "thread" && selection.threadId === thread.id)
       setSelection({ kind: "new", groupId: groupOf(view.state, thread) });
-    return error;
+    return undefined;
+  };
+  // Opens `threadId` beside the open thread, in place of the split's other side.
+  const openBeside = (threadId: string) => {
+    if (selection.kind !== "thread" || selection.threadId === threadId) return;
+    setSplit({ hostId: host.id, threadIds: [selection.threadId, threadId] });
+    setSelection({ kind: "thread", threadId });
+  };
+  // The threads the main pane shows: the split's while one of them is open.
+  const paired =
+    !settings &&
+    selection.kind === "thread" &&
+    split?.hostId === host.id &&
+    split.threadIds.includes(selection.threadId);
+  const panes = selection.kind !== "thread" ? [] : paired ? split.threadIds : [selection.threadId];
+  // Focuses a side of the split, reopening it if another view is open, and its composer.
+  const focusPane = (side: 0 | 1) => {
+    if (!split) return;
+    openOnHost(split.hostId, { kind: "thread", threadId: split.threadIds[side] });
+    requestAnimationFrame(() =>
+      document.querySelector<HTMLElement>(`[data-pane="${side}"] .composer-input`)?.focus(),
+    );
   };
 
   const offline =
@@ -508,6 +560,9 @@ export function App() {
         if (!dialog) picker.current?.showModal();
       } else if (command === "noRepoThread") {
         if (!dialog) newThread(noRepo);
+      } else if (command === "leftThread" || command === "rightThread") {
+        if (dialog || !split) return;
+        focusPane(command === "leftThread" ? 0 : 1);
       } else if (command === "settings") openSettings("general");
       else if (command === "usage") openSettings("usage");
       else if (command === "openPr") {
@@ -622,6 +677,9 @@ export function App() {
             }}
             onDelete={deleteThread}
             onNewThread={() => newThread()}
+            split={split}
+            onOpenBeside={openBeside}
+            onClosePane={closePane}
           />
         )}
       </Sidebar>
@@ -739,43 +797,79 @@ export function App() {
               </div>
             </TopBar>
             {selection.kind === "thread" ? (
-              // Keyed, so another run starts from an empty transcript.
-              <AgentChat
-                key={`${host.id}/${selection.threadId}`}
-                hostId={host.id}
-                host={host}
-                runId={selection.threadId}
-                title={threads.state.titles[selection.threadId]}
-                notice={notice?.threadId === selection.threadId ? notice.text : undefined}
-                prompt={threads.state.runs[selection.threadId]?.prompt}
-                // The list's status goes stale once the run moves on, so only a start says so.
-                going={selection.started}
-                noRepo={group.id === noRepo}
-                pullRequests={prs.urls.length > 0 && <PullRequestChip prs={prs} onOpen={openPr} />}
-                onPrOpened={linksPrs ? openPr : undefined}
-                onSetUpGithub={setUpGithub}
-                compose={compose}
-                onComposed={composed}
-                threadLinks={threadLinks}
-                subagent={selection.subagent}
-                onOpenSubagent={openSubagent}
-                onSubagents={reportNative}
-                strip={
-                  parentId && (
-                    <ChildStrip
-                      name={threads.state.titles[parentId] ?? "Thread"}
-                      onOpenName={() => openThreadId(parentId)}
-                      onBack={() => openThreadId(parentId)}
-                    />
-                  )
-                }
-                forked={!!openThread?.forkedFrom}
-                onFork={
-                  threads.forkable
-                    ? (turnId, choice) => forkThread(selection.threadId, turnId, choice)
-                    : undefined
-                }
-              />
+              <div className="flex min-h-0 flex-1">
+                {panes.map((threadId, side) => {
+                  const focused = threadId === selection.threadId;
+                  const paneThread = threads.state.threads.find((t) => t.id === threadId);
+                  const paneParent =
+                    threads.lineage && paneThread
+                      ? lineageOf(threads.state, paneThread)?.parent?.id
+                      : undefined;
+                  const title = threads.state.titles[threadId];
+                  // Keyed, so another run starts from an empty transcript.
+                  return (
+                    <section
+                      key={`${host.id}/${threadId}`}
+                      data-pane={paired ? side : undefined}
+                      data-focused={paired && focused ? "" : undefined}
+                      aria-label={paired ? (title ?? "Thread") : undefined}
+                      // Clicking or tabbing into a side focuses it.
+                      onPointerDownCapture={() => !focused && openThreadId(threadId)}
+                      onFocusCapture={() => !focused && openThreadId(threadId)}
+                      className={`flex min-w-0 flex-1 flex-col ${side > 0 ? "border-l border-border" : ""}`}
+                    >
+                      {paired && (
+                        <PaneHeader
+                          side={side as 0 | 1}
+                          title={title ?? "Thread"}
+                          focused={focused}
+                          onClose={() => closePane(threadId)}
+                        />
+                      )}
+                      <AgentChat
+                        hostId={host.id}
+                        host={host}
+                        runId={threadId}
+                        title={title}
+                        notice={notice?.threadId === threadId ? notice.text : undefined}
+                        prompt={threads.state.runs[threadId]?.prompt}
+                        // The list's status goes stale once the run moves on, so only a start says so.
+                        going={focused && selection.started}
+                        noRepo={
+                          (paneThread ? groupOf(threads.state, paneThread) : noRepo) === noRepo
+                        }
+                        pullRequests={
+                          focused &&
+                          prs.urls.length > 0 && <PullRequestChip prs={prs} onOpen={openPr} />
+                        }
+                        onPrOpened={linksPrs ? openPr : undefined}
+                        onSetUpGithub={setUpGithub}
+                        compose={focused ? compose : undefined}
+                        onComposed={composed}
+                        threadLinks={threadLinks}
+                        subagent={focused ? selection.subagent : undefined}
+                        onOpenSubagent={openSubagent}
+                        onSubagents={reportNative}
+                        strip={
+                          paneParent && (
+                            <ChildStrip
+                              name={threads.state.titles[paneParent] ?? "Thread"}
+                              onOpenName={() => openThreadId(paneParent)}
+                              onBack={() => openThreadId(paneParent)}
+                            />
+                          )
+                        }
+                        forked={!!paneThread?.forkedFrom}
+                        onFork={
+                          threads.forkable
+                            ? (turnId, choice) => forkThread(threadId, turnId, choice)
+                            : undefined
+                        }
+                      />
+                    </section>
+                  );
+                })}
+              </div>
             ) : selection.kind === "new" ? (
               <NewThread
                 key={host.id}
@@ -963,6 +1057,43 @@ export function App() {
           />
         )}
       />
+    </div>
+  );
+}
+
+/**
+ * A side of the split's header: its Focus left or right thread key, its title, and a close
+ * button. The focused side's is marked.
+ */
+function PaneHeader({
+  side,
+  title,
+  focused,
+  onClose,
+}: {
+  side: 0 | 1;
+  title: string;
+  focused: boolean;
+  onClose: () => void;
+}) {
+  const keys = useShortcutLabel(side === 0 ? "leftThread" : "rightThread");
+  return (
+    <div
+      className={`flex h-9 shrink-0 items-center gap-2 border-y border-border px-3 text-[12.5px] ${focused ? "bg-selected text-foreground shadow-[inset_0_2px_0_var(--accent)]" : "text-muted-foreground"}`}
+    >
+      <span
+        aria-hidden
+        className={`size-1.5 shrink-0 rounded-full ${focused ? "bg-accent" : "bg-border"}`}
+      />
+      <span className="min-w-0 flex-1 truncate">{title}</span>
+      {keys && (
+        <kbd className="shrink-0 rounded border border-border bg-surface px-1 font-sans text-[11px] leading-4 text-muted-foreground">
+          {keys}
+        </kbd>
+      )}
+      <IconButton label="Close this side" onClick={onClose}>
+        <X />
+      </IconButton>
     </div>
   );
 }

@@ -7,6 +7,7 @@ import {
   ChartNoAxesColumn,
   Check,
   ChevronDown,
+  Columns2,
   ChevronRight,
   CircleAlert,
   CircleCheck,
@@ -32,6 +33,7 @@ import {
   Settings,
   SquareDashed,
   SquarePen,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -57,7 +59,7 @@ import type {
   Thread,
 } from "../protocol/generated/protocol";
 import type { RpcError } from "../preload/bridge";
-import type { Selection, SettingsSection } from "./App";
+import type { Selection, SettingsSection, Split } from "./App";
 import { clock } from "./Approval";
 import { AddDialog, type AddDialogHandle } from "./AddDialog";
 import {
@@ -109,6 +111,7 @@ import { PanelResize } from "./PanelResize";
 import { instanceLogo, instanceName } from "./providers";
 import { UpdateButton } from "./Update";
 import { clockOptions } from "./prefs";
+import { useShortcutLabel } from "./keybindings";
 
 const row =
   "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] hover:bg-hover";
@@ -194,6 +197,12 @@ interface ThreadListProps {
   /** Deletes a thread. Resolves to an error message, or undefined. */
   onDelete: (hostId: string, thread: Thread) => Promise<string | undefined>;
   onNewThread: () => void;
+  /** The two threads open side by side (PLX-587), shown together above the list. */
+  split?: Split;
+  /** Opens a thread of the open host beside the open thread. */
+  onOpenBeside: (threadId: string) => void;
+  /** Closes a thread's side of the split. */
+  onClosePane: (threadId: string) => void;
 }
 
 /**
@@ -316,6 +325,9 @@ export function ThreadList({
   onOpenPullRequests,
   onDelete,
   onNewThread,
+  split,
+  onOpenBeside,
+  onClosePane,
 }: ThreadListProps) {
   const addDialog = useRef<AddDialogHandle>(null);
   const deleteDialog = useRef<HTMLDialogElement>(null);
@@ -557,6 +569,11 @@ export function ThreadList({
           setActionError(await view.update(t.id, { snoozedUntil: until.toISOString() }))
         }
         onDelete={() => askDelete(item)}
+        onOpenBeside={
+          item.host.id === host.id && selection.kind === "thread" && !selected
+            ? () => onOpenBeside(t.id)
+            : undefined
+        }
         onFork={
           view.forkable
             ? async (choice) => {
@@ -674,6 +691,16 @@ export function ThreadList({
             {e}
           </p>
         ))}
+        {split && (
+          <SplitGroup
+            split={split}
+            hosts={hosts}
+            selection={selection}
+            hostId={host.id}
+            onOpen={(threadId) => onSelect(split.hostId, { kind: "thread", threadId })}
+            onClose={onClosePane}
+          />
+        )}
         {hasProjects && (
           <>
             {/* The heading holds only its toggle, so its name is just "Projects". */}
@@ -1482,6 +1509,7 @@ function ThreadRow({
   onArchive,
   onSnooze,
   onDelete,
+  onOpenBeside,
   onFork,
   onAutoResume,
   onRest,
@@ -1509,6 +1537,8 @@ function ThreadRow({
   onArchive: () => void;
   onSnooze: (until: Date) => void;
   onDelete: () => void;
+  /** Opens it beside the open thread (PLX-587), while another thread of its host is open. */
+  onOpenBeside?: () => void;
   /** Forks it at its latest turn and opens the fork (0050), where its plxd forks threads. */
   onFork?: (choice: ForkChoice) => Promise<RpcError | undefined>;
   /** Sets its run's auto-resume override, or clears it with undefined. */
@@ -1736,6 +1766,11 @@ function ThreadRow({
         onKeyDown={moveFocus}
         className={`${menuPanel("end")} min-w-36 p-1`}
       >
+        {onOpenBeside && (
+          <button type="button" role="menuitem" className={menuItem} onClick={choose(onOpenBeside)}>
+            Open side by side
+          </button>
+        )}
         <button type="button" role="menuitem" className={menuItem} onClick={choose(onArchive)}>
           {thread.archived ? "Unarchive" : "Archive"}
         </button>
@@ -1787,6 +1822,72 @@ function ThreadRow({
         />
       )}
     </li>
+  );
+}
+
+/**
+ * The two threads open side by side (PLX-587), joined in one box above the list: each with its
+ * Focus left or right thread key and a button that closes its side. Choosing one focuses it.
+ */
+function SplitGroup({
+  split,
+  hosts,
+  selection,
+  hostId,
+  onOpen,
+  onClose,
+}: {
+  split: Split;
+  hosts: HostThreads[];
+  selection: Selection;
+  hostId: string;
+  onOpen: (threadId: string) => void;
+  onClose: (threadId: string) => void;
+}) {
+  const left = useShortcutLabel("leftThread");
+  const right = useShortcutLabel("rightThread");
+  const titles = hosts.find((h) => h.host.id === split.hostId)?.view.state.titles ?? {};
+  return (
+    <div className="mb-2">
+      <div className={sectionHeading}>
+        <Columns2 aria-hidden className="size-3.5" />
+        Side by side
+      </div>
+      <ul
+        aria-label="Side by side"
+        className="flex flex-col gap-0.5 rounded-lg border border-border p-0.5"
+      >
+        {split.threadIds.map((id, side) => {
+          const title = titles[id] ?? "Thread";
+          const focused =
+            hostId === split.hostId && selection.kind === "thread" && selection.threadId === id;
+          return (
+            <li key={id} className="group/pane relative">
+              <button
+                type="button"
+                aria-current={focused ? "page" : undefined}
+                onClick={() => onOpen(id)}
+                className={`${row} pr-8 ${focused ? current : ""}`}
+              >
+                <kbd className="shrink-0 rounded border border-border bg-surface px-1 font-sans text-[11px] leading-4 text-muted-foreground">
+                  {side === 0 ? left : right}
+                </kbd>
+                <span className="min-w-0 flex-1 truncate">{title}</span>
+              </button>
+              <button
+                type="button"
+                aria-label={`Close ${title}`}
+                title="Close this side"
+                onClick={() => onClose(id)}
+                className="absolute top-1/2 right-1 grid size-5.5 -translate-y-1/2 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+              >
+                <X />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 

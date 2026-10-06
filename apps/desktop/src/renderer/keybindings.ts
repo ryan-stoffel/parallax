@@ -15,14 +15,16 @@ export type Command =
   | "openPr"
   | "parentThread"
   | "nextThread"
-  | "previousThread";
+  | "previousThread"
+  | "leftThread"
+  | "rightThread";
 
 /**
  * Every rebindable command, in Settings > Keybinds' order, with its default bindings. "Mod" is
  * Cmd on macOS and Ctrl elsewhere. Ctrl+Shift+` is Ctrl on macOS too, so the terminal's toggle
- * is the same press everywhere.
+ * is the same press everywhere. `elsewhere` replaces the defaults off macOS.
  */
-export const commands: { id: Command; name: string; defaults: string[] }[] = [
+export const commands: { id: Command; name: string; defaults: string[]; elsewhere?: string[] }[] = [
   { id: "newThread", name: "New thread", defaults: ["Mod+KeyN"] },
   { id: "noRepoThread", name: "New thread without a repository", defaults: ["Mod+Shift+KeyN"] },
   { id: "sidebar", name: "Toggle sidebar", defaults: ["Mod+KeyS"] },
@@ -37,6 +39,19 @@ export const commands: { id: Command; name: string; defaults: string[] }[] = [
   { id: "parentThread", name: "Go to parent thread", defaults: ["Mod+Alt+ArrowUp"] },
   { id: "nextThread", name: "Next sibling thread", defaults: ["Mod+Alt+ArrowRight"] },
   { id: "previousThread", name: "Previous sibling thread", defaults: ["Mod+Alt+ArrowLeft"] },
+  // Two threads side by side (PLX-587). Off macOS, Ctrl+1 and Ctrl+2 open sidebar rows.
+  {
+    id: "leftThread",
+    name: "Focus left thread",
+    defaults: ["Ctrl+Digit1"],
+    elsewhere: ["Ctrl+Shift+Digit1"],
+  },
+  {
+    id: "rightThread",
+    name: "Focus right thread",
+    defaults: ["Ctrl+Digit2"],
+    elsewhere: ["Ctrl+Shift+Digit2"],
+  },
 ];
 
 const order = ["Ctrl", "Alt", "Shift", "Meta"];
@@ -96,7 +111,9 @@ const overrides = stored<Overrides>("parallax.keybindings", {}, merged);
 
 /** The bindings `command` runs on, this OS's: the user's, or else its defaults. */
 export function bindingsOf(command: Command): string[] {
-  return overrides.get()[command] ?? commands.find((c) => c.id === command)!.defaults.map(resolve);
+  const c = commands.find((c) => c.id === command)!;
+  const defaults = window.parallax.platform !== "darwin" && c.elsewhere ? c.elsewhere : c.defaults;
+  return overrides.get()[command] ?? defaults.map(resolve);
 }
 
 /**

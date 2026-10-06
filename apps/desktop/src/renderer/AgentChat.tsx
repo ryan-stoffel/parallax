@@ -154,8 +154,15 @@ type ViewRow =
 /** The run's worktree, which a tool row's paths read relative to. */
 const RootContext = createContext<string | undefined>(undefined);
 
-/** Focuses the composer's editor (Composer.tsx), as when the plan strip goes with focus in it. */
-const focusComposer = () => document.getElementById("composer-input")?.focus();
+/**
+ * Focuses the composer's editor (Composer.tsx), as when the plan strip goes with focus in it: the
+ * focused side's, while two threads are side by side.
+ */
+const focusComposer = () =>
+  (
+    document.querySelector<HTMLElement>("[data-focused] .composer-input") ??
+    document.getElementById("composer-input")
+  )?.focus();
 /** A pinned plan's Markdown, rendered as the transcript renders the agent's. */
 const markdown = (text: string) => <MarkdownText text={text} />;
 
