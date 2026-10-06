@@ -1,7 +1,7 @@
 import { Pencil, Plus, Server } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 
-import type { ConnectionState } from "../../preload/bridge";
+import type { ConnectionError, ConnectionState } from "../../preload/bridge";
 import { statusLabel, useConnection } from "../ConnectionStatus";
 import { DeviceIcon } from "../DeviceIcon";
 import { localId, useHosts, type Host } from "../hosts";
@@ -22,6 +22,17 @@ import {
 const SignInTerminal = lazy(() =>
   import("../SignInTerminal").then((m) => ({ default: m.SignInTerminal })),
 );
+
+/**
+ * Whether a master can fix `error`: ssh was refused for lack of a login, or doesn't trust the
+ * host's key yet, which the master's terminal asks about. Not a changed host key, which needs
+ * known_hosts edited, or the other `sshSetup` failures.
+ */
+const signInFixes = ({ reason, exitCode, stderr = "" }: ConnectionError) =>
+  reason === "sshSetup" &&
+  exitCode === 255 &&
+  !stderr.includes("REMOTE HOST IDENTIFICATION HAS CHANGED") &&
+  /Permission denied|Host key verification failed/.test(stderr);
 
 const tone = (state?: ConnectionState) =>
   state?.status === "connected" ? "on" : state?.status === "failed" ? "warn" : "off";
@@ -168,9 +179,10 @@ function LocalHost({ host }: { host: Host }) {
 }
 
 /**
- * A saved SSH host: its connection, destination, and Edit and Remove. A host that needs the user
- * to log in has Sign in, which opens the terminal where ssh asks for a password (0007), then
- * connects it. Windows' OpenSSH can't share a login, so it has none.
+ * A saved SSH host: its connection, destination, and Edit and Remove. A host that failed for want
+ * of a login or a trusted host key (`signInFixes`) has Sign in, which opens the terminal where ssh
+ * asks for a password or the key (0007), then connects it. Windows' OpenSSH can't share a login,
+ * so it has none.
  */
 function RemoteHost({
   host,
@@ -184,9 +196,7 @@ function RemoteHost({
   const state = useConnection(host.id);
   const [signingIn, setSigningIn] = useState(false);
   const canSignIn =
-    window.parallax.platform !== "win32" &&
-    state?.status === "failed" &&
-    state.error.reason === "sshSetup";
+    window.parallax.platform !== "win32" && state?.status === "failed" && signInFixes(state.error);
   useEffect(() => {
     if (state?.status === "connected") setSigningIn(false);
   }, [state?.status]);

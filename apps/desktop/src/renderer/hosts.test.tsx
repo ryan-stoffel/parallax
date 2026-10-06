@@ -28,7 +28,12 @@ const connected: ConnectionState = {
 const untrusted: ConnectionState = {
   status: "failed",
   retrying: false,
-  error: { reason: "sshSetup", message: "mini's host key isn't trusted yet." },
+  error: {
+    reason: "sshSetup",
+    message: "mini's host key isn't trusted yet.",
+    exitCode: 255,
+    stderr: "Host key verification failed.",
+  },
 };
 
 let states: Record<string, ConnectionState>;
@@ -223,6 +228,20 @@ test.each([
   [
     "another failure",
     { status: "failed", retrying: true, error: { reason: "exited", message: "x" } },
+  ],
+  [
+    "a changed host key",
+    {
+      status: "failed",
+      retrying: false,
+      error: {
+        reason: "sshSetup",
+        message: "mini's host key has changed.",
+        exitCode: 255,
+        stderr:
+          "@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\nHost key verification failed.",
+      },
+    },
   ],
   ["a connected host", connected],
 ] as [string, ConnectionState][])("Sign in isn't offered for %s", async (_name, state) => {

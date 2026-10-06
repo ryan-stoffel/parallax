@@ -40,7 +40,7 @@ import {
   isCliKind,
   isInstallable,
   loginCommand,
-  masterCommand,
+  hostLogin,
   openTerminal,
   resizeTerminal,
   runInstall,
@@ -308,16 +308,9 @@ export function startHosts(): void {
       const { hostId, cli, provider, install, path, connect, login } = target;
       if (typeof hostId !== "string") return "invalid terminal";
       if (login === true) {
-        // Only a saved SSH host has a login to share, and not on Windows (`masterCommand`).
-        const ssh = settings.hosts.some((h) => h.id === hostId) ? sshOf(hostId) : undefined;
-        if (!ssh || process.platform === "win32") return "invalid terminal";
-        return openTerminal(
-          event.sender,
-          id,
-          () => Promise.resolve(masterCommand(ssh)),
-          cols,
-          rows,
-        );
+        const command = hostLogin(hostId, settings.hosts, settings.ssh);
+        if (!command) return "invalid terminal";
+        return openTerminal(event.sender, id, () => Promise.resolve(command), cols, rows);
       }
       if (isObject(connect)) {
         const { device, user } = connect;

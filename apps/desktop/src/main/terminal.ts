@@ -229,6 +229,23 @@ export function masterCommand(ssh: SshTarget): Command {
 }
 
 /**
+ * The Sign in command for the window's `hostId`: only a saved SSH host has a login to share, and
+ * not on Windows (`masterCommand`). `ssh` is the program the settings name, if any. Undefined
+ * for anything else, such as "local" or a tailnet device.
+ */
+export function hostLogin(
+  hostId: string,
+  saved: { id: string; destination: string }[],
+  ssh = "ssh",
+  platform = process.platform,
+): Command | undefined {
+  const host = saved.find((h) => h.id === hostId);
+  return host && platform !== "win32"
+    ? masterCommand({ destination: host.destination, ssh })
+    : undefined;
+}
+
+/**
  * `remote` run on an SSH host with `ssh -t`. `-e none` turns off ssh's escape character, so
  * what's typed only ever reaches the host. node-pty looks a bare name up on PATH without PATHEXT
  * on Windows, so `ssh` becomes `ssh.exe` there.
