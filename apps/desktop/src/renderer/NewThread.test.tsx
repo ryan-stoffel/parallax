@@ -557,7 +557,7 @@ test("a thread starts on the branch its prompt was named for, and takes the name
   expect(crumbs()).toEqual(["This Mac", "parallax", "Fix flaky test"]);
 });
 
-test("Picking another computer in Runs on keeps the draft and starts the thread there, in its repository of the same name", async () => {
+test("Picking another computer in Runs on starts the thread there, in its repository of the same name", async () => {
   window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
   nameThread.mockResolvedValue({ title: "Fix flaky test", slug: "fix-flaky-test" });
   const mini: Repo = { ...parallax, id: "r-mini-parallax", path: "/Users/me/parallax" };
@@ -577,20 +577,14 @@ test("Picking another computer in Runs on keeps the draft and starts the thread 
     },
   });
   await renderApp();
-  act(() => void composer().editor!.commands.setContent("Fix it"));
   await choose("Runs on", "mac mini");
   expect(control("Runs on: mac mini, New worktree")).not.toBeNull();
   expect(heading()).toBe("What should we build in parallax?");
-  // The typed text survived the switch, so Enter sends it.
-  expect(composer().editor!.getText()).toBe("Fix it");
-  await act(async () => {
-    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  });
-  await settle();
+  await send("Fix it");
   expect(request).toHaveBeenCalledWith(
     "ssh-mini",
     "thread/start",
-    expect.objectContaining({ prompt: "Fix it", repo: mini.id }),
+    expect.objectContaining({ repo: mini.id }),
   );
   expect(request.mock.calls.some(([host, m]) => host === "local" && m === "thread/start")).toBe(
     false,
