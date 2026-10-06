@@ -111,8 +111,6 @@ export function useFind({
         setOpen(true);
         input.current?.focus();
         input.current?.select();
-      } else if (open && e.key === "Escape") {
-        close();
       } else if (
         open &&
         e.code === "KeyG" &&
@@ -197,7 +195,9 @@ export function useFind({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter") step(e.shiftKey ? -1 : 1);
+          // Esc here only, since elsewhere it stops a run or closes other things.
+          if (e.key === "Escape") close();
+          else if (e.key === "Enter") step(e.shiftKey ? -1 : 1);
           else return;
           e.preventDefault();
         }}

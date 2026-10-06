@@ -75,7 +75,7 @@ test("Cmd+F opens a find box that counts matches, steps through them, wraps, and
   press({ key: "g", code: "KeyG", metaKey: true });
   expect(status()).toBe("1/4");
 
-  // Escape closes it from anywhere, and a lone match can be stepped to again.
+  // A lone match can be stepped to again.
   type("warm");
   expect(status()).toBe("1/1");
   press({ key: "Enter", code: "Enter" }, box()!);
@@ -84,6 +84,9 @@ test("Cmd+F opens a find box that counts matches, steps through them, wraps, and
   type("nothing like this");
   expect(status()).toBe("No results");
 
+  // Esc elsewhere is left to what it stops or closes.
   press({ key: "Escape", code: "Escape" });
+  expect(box()).not.toBeNull();
+  press({ key: "Escape", code: "Escape" }, box()!);
   expect(box()).toBeNull();
 });
