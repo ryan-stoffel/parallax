@@ -6,6 +6,7 @@
 //   #project=parallax&agent=Scheduler     and a child's chat, by the start of its Overview row
 //   #thread=Rework the updater            a plain thread, by its title
 //   #settings                             Settings; #usage, the Usage page
+//   #connect                              with Parallax Connect set up on three computers
 
 /** An element to click, `true` when there is nothing to do, or nothing while it isn't there yet. */
 type Step = () => HTMLElement | true | null | undefined;

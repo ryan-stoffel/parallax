@@ -1,10 +1,12 @@
-import { Laptop, Pencil, Plus, Server } from "lucide-react";
+import { Pencil, Plus, Server } from "lucide-react";
 import { useState } from "react";
 
 import type { ConnectionState } from "../../preload/bridge";
 import { statusLabel, useConnection } from "../ConnectionStatus";
+import { DeviceIcon } from "../DeviceIcon";
 import { localId, useHosts, type Host } from "../hosts";
 import { IconButton } from "../ui";
+import { ConnectSettings } from "./ConnectSettings";
 import {
   field,
   PageTitle,
@@ -21,7 +23,8 @@ const tone = (state?: ConnectionState) =>
 
 /**
  * Settings > Connections: this computer, renamable, with its plxd and the app's version; then
- * the SSH hosts, which can be added, edited, and removed.
+ * Parallax Connect and its devices (0056); then the SSH hosts, which can be added, edited, and
+ * removed.
  */
 export function ConnectionSettings() {
   const hosts = useHosts();
@@ -35,9 +38,11 @@ export function ConnectionSettings() {
   return (
     <>
       <PageTitle title="Connections">
-        Where your agents run: this computer, and machines you reach over SSH with plxd installed.
+        Where your agents run: this computer, your other computers through Parallax Connect, and
+        machines you reach over SSH with plxd installed.
       </PageTitle>
       <LocalHost host={local} />
+      <ConnectSettings />
 
       <Section
         title="SSH hosts"
@@ -101,7 +106,7 @@ function LocalHost({ host }: { host: Host }) {
   return (
     <section aria-label="This computer" className="mb-8">
       <div className="mb-2 flex min-h-7 items-center gap-2 text-[13px] text-muted-foreground [&_svg]:size-4">
-        <Laptop aria-hidden />
+        <DeviceIcon icon={host.icon ?? "laptop"} />
         {renaming ? (
           <form
             className="flex items-center gap-2"

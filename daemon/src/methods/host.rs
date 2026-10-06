@@ -6,10 +6,10 @@ use std::fs;
 use parallax_protocol::framing::MAX_FRAME_BYTES;
 use parallax_protocol::jsonrpc::{ErrorObject, Request};
 use parallax_protocol::{
-    Capabilities, ClientInfo, HostHealthParams, HostHealthResult, HostQueues, HostSettings,
-    HostSettingsGetParams, HostSettingsSetParams, HostVersionParams, HostVersionResult,
-    IncompatibleProtocolDetail, InitializeParams, InitializeProtocol, InitializeResult,
-    ProtocolRange, QueueStats, StoreState,
+    Capabilities, ClientInfo, DEVICE_ICONS, HostHealthParams, HostHealthResult, HostQueues,
+    HostSettings, HostSettingsGetParams, HostSettingsSetParams, HostVersionParams,
+    HostVersionResult, IncompatibleProtocolDetail, InitializeParams, InitializeProtocol,
+    InitializeResult, MAX_DEVICE_NAME_CHARS, ProtocolRange, QueueStats, StoreState,
 };
 use tracing::info;
 
@@ -185,6 +185,8 @@ pub(crate) fn initialize(
 /// methods keep a receipt so a retry returns the first result.
 /// `worktreeCleanup` (PLX-555): `cleanWorktrees` in `host/settings`, which an older plxd would
 /// silently ignore, and the sweep that removes a settled thread's merged worktree.
+/// `connect` (PLX-574, 0056): `connect`, `deviceName`, and `deviceIcon` in `host/settings`, which
+/// an older plxd would silently ignore, `connect/devices`, and the tailnet listener.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -203,6 +205,7 @@ fn capabilities_advertised() -> Capabilities {
         ("checkout".to_owned(), serde_json::Map::new()),
         ("commandIds".to_owned(), serde_json::Map::new()),
         ("composerMenus".to_owned(), serde_json::Map::new()),
+        ("connect".to_owned(), serde_json::Map::new()),
         ("contextAndFast".to_owned(), serde_json::Map::new()),
         ("coordinator".to_owned(), serde_json::Map::new()),
         ("eventFilters".to_owned(), serde_json::Map::new()),
@@ -293,7 +296,8 @@ pub(crate) async fn settings(
         .await
 }
 
-/// `host/settings/set`: stores the settings it names, then answers with them all.
+/// `host/settings/set`: stores the settings it names, then answers with them all. A change to
+/// `connect` wakes the tailnet listener.
 pub(crate) async fn set_settings(
     context: &Context,
     params: HostSettingsSetParams,
@@ -301,8 +305,15 @@ pub(crate) async fn set_settings(
     let HostSettingsSetParams {
         auto_resume,
         clean_worktrees,
+        connect,
+        device_name,
+        device_icon,
     } = params;
-    context
+    let device_name = device_name.as_deref().map(clean_device_name);
+    let device_icon = device_icon
+        .map(|icon| check_device_icon(&icon))
+        .transpose()?;
+    let settings = context
         .daemon
         .store
         .run(&context.cancel, move |db| {
@@ -317,15 +328,56 @@ pub(crate) async fn set_settings(
                     "changed the host's worktree cleanup setting"
                 );
             }
+            if let Some(on) = connect {
+                db.set_connect(on).map_err(|e| store_error(&e))?;
+                info!(connect = on, "changed the host's Parallax Connect setting");
+            }
+            if let Some(name) = device_name {
+                db.set_device_name(name.as_deref())
+                    .map_err(|e| store_error(&e))?;
+            }
+            if let Some(icon) = device_icon {
+                db.set_device_icon(icon.as_deref())
+                    .map_err(|e| store_error(&e))?;
+            }
             read_settings(db)
         })
-        .await
+        .await?;
+    if connect.is_some() {
+        context.daemon.connect.changed.notify_one();
+    }
+    Ok(settings)
+}
+
+/// `deviceName` as stored: without control characters, trimmed, and at most
+/// [`MAX_DEVICE_NAME_CHARS`] characters. `None` clears it, as `""` does.
+fn clean_device_name(name: &str) -> Option<String> {
+    let name: String = name.chars().filter(|c| !c.is_control()).collect();
+    let name: String = name.trim().chars().take(MAX_DEVICE_NAME_CHARS).collect();
+    let name = name.trim_end();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+/// `deviceIcon` as stored: one of [`DEVICE_ICONS`], or `None` for `""`, which clears it.
+fn check_device_icon(icon: &str) -> Result<Option<String>, ErrorObject> {
+    if icon.is_empty() {
+        Ok(None)
+    } else if DEVICE_ICONS.contains(&icon) {
+        Ok(Some(icon.to_owned()))
+    } else {
+        Err(ErrorObject::invalid_params(
+            "deviceIcon must be laptop, desktop, mini, or server",
+        ))
+    }
 }
 
 fn read_settings(db: &parallax_store::Store) -> Result<HostSettings, ErrorObject> {
     Ok(HostSettings {
         auto_resume: db.auto_resume().map_err(|e| store_error(&e))?,
         clean_worktrees: Some(db.clean_worktrees().map_err(|e| store_error(&e))?),
+        connect: Some(db.connect().map_err(|e| store_error(&e))?),
+        device_name: db.device_name().map_err(|e| store_error(&e))?,
+        device_icon: db.device_icon().map_err(|e| store_error(&e))?,
     })
 }
 
@@ -351,7 +403,23 @@ fn plist_string<'a>(plist: &'a str, key: &str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
-    use super::plist_string;
+    use super::{check_device_icon, clean_device_name, plist_string};
+
+    #[test]
+    fn device_names_are_cleaned_and_icons_checked() {
+        assert_eq!(
+            clean_device_name("  Studio\n\u{7}  ").as_deref(),
+            Some("Studio")
+        );
+        assert_eq!(clean_device_name(""), None);
+        assert_eq!(clean_device_name(" \t "), None);
+        let long = "é".repeat(70);
+        assert_eq!(clean_device_name(&long).unwrap().chars().count(), 64);
+
+        assert_eq!(check_device_icon("mini").unwrap().as_deref(), Some("mini"));
+        assert_eq!(check_device_icon("").unwrap(), None);
+        assert_eq!(check_device_icon("phone").unwrap_err().code, -32602);
+    }
 
     #[test]
     fn reads_strings_from_a_property_list() {

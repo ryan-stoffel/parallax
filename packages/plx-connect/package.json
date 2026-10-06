@@ -1,0 +1,30 @@
+{
+  "name": "plx-connect",
+  "version": "0.1.0",
+  "description": "Set up Parallax and Parallax Connect on your computers over Tailscale.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "plx-connect": "bin/plx-connect.mjs"
+  },
+  "files": [
+    "bin",
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ryan-stoffel/parallax.git",
+    "directory": "packages/plx-connect"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "tsc -p .",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^5.9.3"
+  }
+}

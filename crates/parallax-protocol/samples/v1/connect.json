@@ -1,0 +1,79 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "host/settings/get",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": { "autoResume": true, "cleanWorktrees": true, "connect": false }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "host/settings/set",
+    "params": { "connect": true, "deviceName": "Studio", "deviceIcon": "mini" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "autoResume": true,
+      "cleanWorktrees": true,
+      "connect": true,
+      "deviceName": "Studio",
+      "deviceIcon": "mini"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "connect/devices",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "tailscale": "running",
+      "port": 7340,
+      "listening": true,
+      "self": {
+        "id": "nZi1Lj6Rrb11CNTRL",
+        "hostName": "Ryan's Mac Mini",
+        "dnsName": "ryans-mac-mini.tail53cf78.ts.net",
+        "os": "macOS",
+        "ip": "100.74.190.83",
+        "online": true,
+        "parallax": true
+      },
+      "devices": [
+        {
+          "id": "ntpwoKNMLJ11CNTRL",
+          "hostName": "macbook",
+          "dnsName": "ryans-macbook.tail53cf78.ts.net",
+          "os": "macOS",
+          "ip": "100.87.92.42",
+          "online": true,
+          "parallax": false
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "host/settings/set",
+    "params": { "deviceIcon": "phone" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "error": {
+      "code": -32602,
+      "message": "Invalid params: deviceIcon must be laptop, desktop, mini, or server"
+    }
+  }
+]

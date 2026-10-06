@@ -113,6 +113,8 @@ export type ConnectionOptions = {
   command: () => string[] | undefined;
   /** An SSH host's destination, which its errors name. Undefined for this computer. */
   destination?: string;
+  /** A Parallax Connect device's name, reached with `plxd dial` (0056), which its errors name. */
+  device?: string;
   /** The app's version, sent in `initialize`. */
   clientVersion: string;
   onState: (state: ConnectionState) => void;
@@ -306,7 +308,10 @@ export class Connection {
       this.end({ reason: missing ? "notFound" : "exited", message });
     });
     child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
-      if (child === this.child) this.end(exitError(code, signal, stderr, destination));
+      if (child === this.child)
+        this.end(
+          exitError(code, signal, stderr, destination, process.platform, this.options.device),
+        );
     });
 
     client.send(
@@ -443,9 +448,10 @@ function spawnAttach(file: string, args: string[]): ChildProcessWithoutNullStrea
 const ignore = () => {};
 
 /**
- * Why `plxd attach` exited (0010), or ssh for the host at `destination` (0022), in words that
- * say what to do. ssh exits 255 for its own errors, and the remote shell 127 for a missing
- * command. The raw stderr rides along for the tooltip.
+ * Why `plxd attach` exited (0010), ssh for the host at `destination` (0022), or `plxd dial` for
+ * the Connect device named `device` (0056), in words that say what to do. ssh exits 255 for its
+ * own errors, and the remote shell 127 for a missing command. The raw stderr rides along for the
+ * tooltip.
  */
 export function exitError(
   code: number | null,
@@ -453,6 +459,7 @@ export function exitError(
   stderr: string,
   destination?: string,
   platform = process.platform,
+  device?: string,
 ): ConnectionError {
   const details = { exitCode: code, ...(stderr.trim() && { stderr: stderr.trim() }) };
   const error = (reason: ConnectionError["reason"], message: string): ConnectionError => ({
@@ -498,6 +505,17 @@ export function exitError(
     }
     if (code === 4) return error("exited", `plxd couldn't be reached or started on ${destination}`);
   }
+  if (device !== undefined && code === 4)
+    return error(
+      "exited",
+      `Couldn't reach ${device} over Tailscale. Check that it's on, and that Parallax Connect is on there.`,
+    );
+  // plxd closes a connection from another Tailscale user before it answers.
+  if (device !== undefined && code === 0)
+    return error(
+      "exited",
+      `${device} closed the connection. If it keeps happening, check that it's signed in to your Tailscale account.`,
+    );
   if (code === 127) return error("notFound", "plxd isn't installed");
   const message =
     code === 4

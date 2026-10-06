@@ -3,6 +3,8 @@ import { contextBridge, ipcRenderer, webFrame } from "electron";
 import { ErrorCodes } from "../protocol/generated/protocol";
 import type {
   ConnectionState,
+  ConnectState,
+  DeviceHost,
   Profile,
   SshHost,
   SubscriptionMessage,
@@ -87,6 +89,23 @@ const bridge: ParallaxBridge = {
   renameLocal: (name) => ipcRenderer.invoke("parallax:renameLocal", name),
   saveHost: (host, id) => ipcRenderer.invoke("parallax:saveHost", host, id),
   removeHost: (id) => ipcRenderer.invoke("parallax:removeHost", id),
+
+  onConnect(listener) {
+    const forward = (_event: unknown, state: ConnectState) => listener(state);
+    ipcRenderer.on("parallax:connect", forward);
+    void (ipcRenderer.invoke("parallax:connect") as Promise<ConnectState>).then(listener);
+    return () => ipcRenderer.removeListener("parallax:connect", forward);
+  },
+  installConnect: () => ipcRenderer.invoke("parallax:installConnect"),
+  setConnect: (on) => ipcRenderer.invoke("parallax:setConnect", on),
+  onDevices(listener) {
+    const forward = (_event: unknown, devices: DeviceHost[]) => listener(devices);
+    ipcRenderer.on("parallax:devices", forward);
+    void (ipcRenderer.invoke("parallax:devices") as Promise<DeviceHost[]>).then(listener);
+    return () => ipcRenderer.removeListener("parallax:devices", forward);
+  },
+  saveDevice: (hostId, look) => ipcRenderer.invoke("parallax:saveDevice", hostId, look),
+  forgetDevice: (hostId) => ipcRenderer.invoke("parallax:forgetDevice", hostId),
 
   acpRegistry: () => ipcRenderer.invoke("parallax:acpRegistry"),
 

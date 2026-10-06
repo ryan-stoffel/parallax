@@ -10,6 +10,7 @@ The decisions behind it:
 - [0009](../docs/decisions/0009-plxd-data-folder-and-project-host.md): the data folder and `serve`.
 - [0010](../docs/decisions/0010-plxd-attach.md): `attach`.
 - [0023](../docs/decisions/0023-cross-platform.md): what differs on each OS.
+- [0056](../docs/decisions/0056-parallax-connect.md): Parallax Connect, `dial`, and `connect`.
 
 ## Commands
 
@@ -17,9 +18,11 @@ The decisions behind it:
 | --- | --- |
 | `plxd serve` | Serves the protocol on this user's Unix socket, or named pipe on Windows, until SIGTERM or SIGINT (Ctrl-C or Ctrl-Break on Windows) |
 | `plxd attach` | Connects stdin and stdout to that socket or pipe, and starts plxd first if nothing is listening |
+| `plxd dial <ADDR>` | Connects stdin and stdout to another device's plxd over Tailscale: `ADDR` is its Tailscale IP, with port 7340 unless one is given |
+| `plxd connect on`, `off` | Turns Parallax Connect on or off in the data folder's settings. A running `serve` follows within 10 seconds |
 | `plxd service install`, `uninstall`, `status` | macOS and Linux: manage the service that keeps `serve` running, a LaunchAgent (#61) or a systemd user unit (PLX-18) |
 
-Both commands take `--data-dir` (or `PLXD_DATA_DIR`) to use a data folder other than the default: `~/.parallax` (`%USERPROFILE%\.parallax` on Windows), or the older OS folder (`~/Library/Application Support/parallax`, `$XDG_DATA_HOME/parallax` or `~/.local/share/parallax`, `%LOCALAPPDATA%\parallax`) when `~/.parallax` doesn't exist and that one does. The socket is `plxd.sock` in that folder. When that path is too long for a Unix socket, it moves to a per-user folder: the one `getconf DARWIN_USER_TEMP_DIR` prints on macOS, and `$XDG_RUNTIME_DIR` on Linux. On Windows, `serve` listens on the named pipe `\\.\pipe\plxd-<hash>` instead, where `<hash>` is the first 16 hex digits of the SHA-256 of the data folder's path. Its ACL admits only your user, and each end checks that the other runs as your user. `attach` also takes `--connect-timeout <seconds>`, which defaults to 10 and can be at most 86400, a day.
+`serve`, `attach`, and `connect` take `--data-dir` (or `PLXD_DATA_DIR`) to use a data folder other than the default: `~/.parallax` (`%USERPROFILE%\.parallax` on Windows), or the older OS folder (`~/Library/Application Support/parallax`, `$XDG_DATA_HOME/parallax` or `~/.local/share/parallax`, `%LOCALAPPDATA%\parallax`) when `~/.parallax` doesn't exist and that one does. The socket is `plxd.sock` in that folder. When that path is too long for a Unix socket, it moves to a per-user folder: the one `getconf DARWIN_USER_TEMP_DIR` prints on macOS, and `$XDG_RUNTIME_DIR` on Linux. On Windows, `serve` listens on the named pipe `\\.\pipe\plxd-<hash>` instead, where `<hash>` is the first 16 hex digits of the SHA-256 of the data folder's path. Its ACL admits only your user, and each end checks that the other runs as your user. `attach` also takes `--connect-timeout <seconds>`, which defaults to 10 and can be at most 86400, a day.
 
 `attach` passes bytes through unchanged and prints nothing else on stdout. You can send a request by hand:
 
@@ -34,7 +37,7 @@ If plxd isn't running, `attach` starts it through the service (the LaunchAgent o
 
 ### Exit codes
 
-| Code | `serve` | `attach` |
+| Code | `serve` | `attach` and `dial` |
 | --- | --- | --- |
 | 0 | Stopped cleanly | The connection ended |
 | 1 | Couldn't start, or failed | Failed after connecting |
@@ -121,7 +124,11 @@ The client runs the same `ssh ... <host> plxd attach` command against Windows' o
 
 Windows has no service yet (a scheduled task is PLX-22), so `attach` always starts `serve` itself, with no console and broken away from the SSH session's job, which Windows' sshd kills when the session ends. If the job doesn't allow that, `attach` warns that `serve` will stop with the session. `plxd.lock` stays in the data folder after `serve` stops, and a second `serve`'s exit-3 error can't name the running one's pid, because Windows' lock keeps other processes from reading the file. A Windows host can't store API keys yet (PLX-23), and Claude Code has no sandbox on native Windows, so workers are refused with `workerUnavailable`; run `plxd` in WSL2 for those (PLX-24). Subscriptions and no-write runs work. Agent CLIs run in a job object, so cancelling one closes its stdin and, after a grace period, ends everything it started.
 
-plxd listens only on its Unix socket or named pipe, never on a network port. SSH, with your own keys and config, is the only way in from another machine.
+plxd listens on its Unix socket or named pipe, and on a network port only while Parallax Connect is on (below). Otherwise SSH, with your own keys and config, is the only way in from another machine.
+
+## Parallax Connect
+
+While the host setting `connect` is on (`plxd connect on`, or `host/settings/set` from the app), `serve` listens on TCP port 7340 of this node's Tailscale IPv4, and nowhere else ([0056](../docs/decisions/0056-parallax-connect.md)). It checks the setting and Tailscale every 10 seconds, so a Tailscale that starts late or a new address binds or closes the listener. It finds the `tailscale` CLI on `PATH`, or where Tailscale's installer puts it. Before reading from a connection, it runs `tailscale whois` on the peer and serves only another node of this node's Tailscale user; anything else, including tagged nodes, shared nodes, and this node's own address, is closed and logged. Another device reaches it with `plxd dial <its Tailscale IP>`, which exits 4 like `attach` when it never connects.
 
 ## Testing `attach` over ssh on your machine
 

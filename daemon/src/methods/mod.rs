@@ -7,12 +7,13 @@
 //! `project.rs`; 0042 `projectFromThreads`: `project/fromThreads` in `project.rs`; PLX-318 `pullRequests`, PLX-328 `prDiff`, and PLX-373 `threadTools` (`pr/link`
 //! and `pr/unlink`): `pr.rs`; PLX-359 `composerMenus`: `composer.rs`; PLX-336 `githubStatus`:
 //! `github/status` in `accounts.rs`; PLX-423 `githubSetup`: `github/install`, `github/signIn`, and
-//! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`; PLX-370 `queue`: `queue.rs`; PLX-402 `questions`: `question.rs`; PLX-405 `memory`: `memory.rs`; PLX-410 `landing`: `land.rs`), and `host.rs` advertises the
+//! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`; PLX-370 `queue`: `queue.rs`; PLX-402 `questions`: `question.rs`; PLX-405 `memory`: `memory.rs`; PLX-410 `landing`: `land.rs`; PLX-574 `connect`: `connect/devices` in `connect.rs`), and `host.rs` advertises the
 //! capability in `initialize`.
 
 mod accounts;
 mod agent;
 mod composer;
+mod connect;
 pub(crate) mod context;
 mod cursor;
 mod defaults;
@@ -37,13 +38,13 @@ use parallax_protocol::methods::{
     AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentApprove, AgentAutoResume,
     AgentCancel, AgentCommands, AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFiles,
     AgentGitStatus, AgentImage, AgentList, AgentOpenPr, AgentPush, AgentRequestChanges,
-    AgentResumeNow, AgentSend, AgentStart, AgentWait, ContextList, ContextRead, ContextWrite,
-    CursorSignIn, CursorSignInCancel, CursorSignOut, EventsSubscribe, EventsUnsubscribe,
-    GithubInstall, GithubSignInCancel, GithubSignInStart, GithubStatusGet, HostHealth,
-    HostSettingsGet, HostSettingsSet, HostVersion, InboxList, InboxSeen, Initialize, PrAct, PrDiff,
-    PrLink, PrUnlink, PrView, ProjectCreate, ProjectDelete, ProjectFromThreads, ProjectList,
-    ProjectStart, ProjectUpdate, ProvidersList, ProvidersRemove, ProvidersSave, RequestMethod,
-    UsageDaily, UsageGet, UsageHistory, UsageLimits,
+    AgentResumeNow, AgentSend, AgentStart, AgentWait, ConnectDevices, ContextList, ContextRead,
+    ContextWrite, CursorSignIn, CursorSignInCancel, CursorSignOut, EventsSubscribe,
+    EventsUnsubscribe, GithubInstall, GithubSignInCancel, GithubSignInStart, GithubStatusGet,
+    HostHealth, HostSettingsGet, HostSettingsSet, HostVersion, InboxList, InboxSeen, Initialize,
+    PrAct, PrDiff, PrLink, PrUnlink, PrView, ProjectCreate, ProjectDelete, ProjectFromThreads,
+    ProjectList, ProjectStart, ProjectUpdate, ProvidersList, ProvidersRemove, ProvidersSave,
+    RequestMethod, UsageDaily, UsageGet, UsageHistory, UsageLimits,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -111,6 +112,10 @@ pub(crate) async fn dispatch(mut context: Context, mut request: Request) -> Repl
         }
         name if name.starts_with("host/settings/") => {
             found(name, host_settings_method(&context, &request).await)
+        }
+        ConnectDevices::NAME => {
+            handle::<ConnectDevices, _, _>(&context, &request, |p| connect::devices(&context, p))
+                .await
         }
         name if project_scoped(name) => found(name, project_method(&context, &request).await),
         AccountsList::NAME => {

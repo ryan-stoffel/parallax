@@ -36,11 +36,12 @@ use crate::{
     AgentFilesResult, AgentGitStatusParams, AgentImageParams, AgentListParams, AgentListResult,
     AgentOpenPrParams, AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams,
     AgentResumeNowParams, AgentRunResult, AgentSendParams, AgentStartParams, AgentWaitParams,
-    AgentWaitResult, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,
-    ContextWriteParams, ContextWriteResult, CursorSignInCancelParams, CursorSignInCancelResult,
-    CursorSignInParams, CursorSignInResult, CursorSignOutParams, CursorSignOutResult,
-    EventsEventParams, EventsResyncParams, EventsSubscribeParams, EventsSubscribeResult,
-    EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus, GithubInstallParams, GithubSignIn,
+    AgentWaitResult, ConnectDevicesParams, ConnectDevicesResult, ContextListParams,
+    ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
+    ContextWriteResult, CursorSignInCancelParams, CursorSignInCancelResult, CursorSignInParams,
+    CursorSignInResult, CursorSignOutParams, CursorSignOutResult, EventsEventParams,
+    EventsResyncParams, EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams,
+    EventsUnsubscribeResult, GitStatus, GithubInstallParams, GithubSignIn,
     GithubSignInCancelParams, GithubSignInCancelResult, GithubSignInParams, GithubStatus,
     GithubStatusParams, HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams,
     HostSettingsSetParams, HostVersionParams, HostVersionResult, InboxListParams, InboxListResult,
@@ -338,6 +339,9 @@ method_table! {
         HostSettingsGet = "host/settings/get": HostSettingsGetParams => HostSettings;
         /// `host/settings/set`: changes this host's settings and returns them.
         HostSettingsSet = "host/settings/set": HostSettingsSetParams => HostSettings;
+        /// `connect/devices`: this node and the tailnet's other nodes of its Tailscale user, and
+        /// whether plxd answers on each (decision 0056). Gated on the `connect` capability.
+        ConnectDevices = "connect/devices": ConnectDevicesParams => ConnectDevicesResult;
         /// `inbox/list`: a Project's inbox, oldest first, and the event log's `seq` from before the
         /// read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
         InboxList = "inbox/list": InboxListParams => InboxListResult;
@@ -517,6 +521,7 @@ mod tests {
                 "agent/autoResume",
                 "host/settings/get",
                 "host/settings/set",
+                "connect/devices",
                 "inbox/list",
                 "inbox/seen",
                 "github/install",

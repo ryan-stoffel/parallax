@@ -165,6 +165,29 @@ export interface ParallaxBridge {
    */
   removeHost(id: string): Promise<string | undefined>;
 
+  /** Parallax Connect here (0056). Calls `listener` now and on every change. Returns the unsubscribe function. */
+  onConnect(listener: (state: ConnectState) => void): () => void;
+  /** Installs `plx-connect` on this computer with npm. Resolves to an error for people, or undefined. */
+  installConnect(): Promise<string | undefined>;
+  /**
+   * Turns Parallax Connect on or off: the local plxd's `connect`, which makes it listen on its
+   * Tailscale address, and this app's connections to the other devices. Resolves to an error for
+   * people, or undefined.
+   */
+  setConnect(on: boolean): Promise<string | undefined>;
+  /** The Connect devices, by name. Calls `listener` now and on every change. Returns the unsubscribe function. */
+  onDevices(listener: (devices: DeviceHost[]) => void): () => void;
+  /**
+   * Renames a device or changes its icon on its own plxd, so every computer shows the same; an
+   * empty name puts its host name back. `local` is this computer. Resolves to an error for people.
+   */
+  saveDevice(
+    hostId: string,
+    look: { name?: string; icon?: DeviceIcon },
+  ): Promise<string | undefined>;
+  /** Disconnects from a device and forgets it until it's found again. Nothing on it changes. */
+  forgetDevice(hostId: string): Promise<void>;
+
   /**
    * The agents in the ACP Registry, fetched once while the app runs. Resolves to an error for
    * people when it can't be read.
@@ -274,7 +297,11 @@ export type TerminalTarget =
   | { hostId: string; cli: CliKind }
   | { hostId: string; provider: string }
   | { hostId: string; install: ProviderKind }
-  | { hostId: string; path: string };
+  | { hostId: string; path: string }
+  | { hostId: string; connect: ConnectAdd };
+
+/** What Add computer sets up with `plx-connect add` (0056): a Tailscale IP, and an ssh user. */
+export type ConnectAdd = { device: string; user?: string };
 
 /** How an ACP Registry agent is run with `npx` or `uvx`: a package, pinned to its version. */
 export type RegistryPackage = { package: string; args?: string[]; env?: Record<string, string> };
@@ -309,6 +336,50 @@ export type SshHost = { id: string; name: string; destination: string };
 
 /** What the Hosts settings edit. The main process checks it and picks the id. */
 export type HostInput = { name: string; destination: string };
+
+/** A Parallax Connect device's icon (0056), as its plxd's `deviceIcon` names it. */
+export const DEVICE_ICONS = ["laptop", "desktop", "mini", "server"] as const;
+export type DeviceIcon = (typeof DEVICE_ICONS)[number];
+
+/**
+ * The icon a host name suggests (0056): a mini PC for `mini`, a server for `server`, a PC for
+ * `desktop`, `pc`, `tower`, or `gaming` (Windows names a new PC `DESKTOP-…`), else a laptop.
+ */
+export function iconFor(hostName: string): DeviceIcon {
+  const name = hostName.toLowerCase();
+  if (name.includes("mini")) return "mini";
+  if (name.includes("server")) return "server";
+  if (/desktop|tower|gaming|(^|[^a-z])pc([^a-z]|$)/.test(name)) return "desktop";
+  return "laptop";
+}
+
+/**
+ * A computer Parallax Connect reaches over Tailscale with `plxd dial <ip>` (0056), by host id
+ * `tailnet:<node id>`. Its name and icon are its plxd's, else what its host name suggests.
+ */
+export type DeviceHost = {
+  id: string;
+  name: string;
+  icon: DeviceIcon;
+  /** Its Tailscale host name, such as "mac-mini". */
+  hostName: string;
+  /** Its Tailscale IPv4. */
+  ip: string;
+  /** Its OS as Tailscale names it: "macOS", "windows", or "linux". */
+  os: string;
+};
+
+/** Parallax Connect on this computer (0056). */
+export type ConnectState = {
+  /** Whether `plx-connect` is installed here; undefined until main has looked. */
+  installed?: boolean;
+  /** The local plxd's `connect`; undefined while it isn't connected, or doesn't have Connect. */
+  on?: boolean;
+  /** This computer's icon. */
+  icon: DeviceIcon;
+  /** The channel `plx-connect add` installs: this app's own (0028). */
+  channel: "stable" | "nightly";
+};
 
 /** The methods the renderer may call. Main owns the handshake and event subscriptions. */
 export type RendererMethod = Exclude<

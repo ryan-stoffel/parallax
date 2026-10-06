@@ -16,6 +16,8 @@ const bridge: Partial<ParallaxBridge> = {
   onConnectionState: () => () => {},
   hosts: async () => [],
   onHosts: () => () => {},
+  onConnect: () => () => {},
+  onDevices: () => () => {},
   onLocalName: (listener: (name: string) => void) => {
     listener("This Mac");
     return () => {};

@@ -1,10 +1,11 @@
 use std::io::{self, Write as _};
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use clap::{Args, Parser, Subcommand};
-use parallax_protocol::RunId;
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use parallax_protocol::{CONNECT_PORT, RunId};
 use plxd::attach::{
     self, DEFAULT_CONNECT_TIMEOUT, EXIT_UNAVAILABLE, MAX_CONNECT_TIMEOUT, Options, report,
 };
@@ -31,6 +32,10 @@ enum Command {
     Serve(ServeArgs),
     /// Connect stdin and stdout to plxd's socket or pipe, starting plxd if it isn't running.
     Attach(AttachArgs),
+    /// Connect stdin and stdout to another device's plxd over Tailscale, for Parallax Connect.
+    Dial(DialArgs),
+    /// Turn Parallax Connect on or off. A running plxd follows within 10 seconds.
+    Connect(ConnectArgs),
     /// Manage the per-user service that keeps plxd running: a `LaunchAgent` on macOS, a systemd
     /// user unit on Linux.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -90,6 +95,45 @@ struct AttachArgs {
     connect_timeout: Option<Duration>,
 }
 
+#[derive(Debug, Args)]
+struct DialArgs {
+    /// The device's Tailscale IP, with port 7340 unless one is given, such as `100.87.92.42` or
+    /// `[fd7a:115c:a1e0::1]:7340`
+    #[arg(value_name = "ADDR", value_parser = parse_dial_address)]
+    address: SocketAddr,
+}
+
+/// `dial`'s address: an IP and port, or an IP, in brackets or not, with [`CONNECT_PORT`].
+fn parse_dial_address(text: &str) -> Result<SocketAddr, String> {
+    if let Ok(address) = text.parse::<SocketAddr>() {
+        return Ok(address);
+    }
+    let bare = text
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(text);
+    bare.parse::<IpAddr>()
+        .map(|ip| SocketAddr::new(ip, CONNECT_PORT))
+        .map_err(|_| format!("{text:?} is not an IP address, or an IP address and port"))
+}
+
+#[derive(Debug, Args)]
+struct ConnectArgs {
+    /// Whether plxd listens for this user's other devices on its Tailscale address
+    #[arg(value_enum)]
+    state: OnOff,
+
+    /// The data folder [default: ~/.parallax]
+    #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
+    data_dir: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum OnOff {
+    On,
+    Off,
+}
+
 fn parse_seconds(text: &str) -> Result<Duration, String> {
     text.parse::<f64>()
         .ok()
@@ -141,6 +185,8 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Serve(args) => serve(&args),
         Command::Attach(args) => attach(&args),
+        Command::Dial(args) => dial(&args),
+        Command::Connect(args) => connect(&args),
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         Command::Service(args) => service_command(args.command),
         Command::Mcp(args) => mcp(&args),
@@ -273,6 +319,71 @@ fn attach(args: &AttachArgs) -> ! {
         bridged.await
     });
     std::process::exit(code)
+}
+
+/// How long `dial` waits for the device to accept the connection.
+const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Runs `dial` and exits with `std::process::exit`, for the same reason as [`attach`].
+fn dial(args: &DialArgs) -> ! {
+    let report = |message: &dyn std::fmt::Display| {
+        let _ = writeln!(io::stderr(), "plxd dial: {message}");
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            report(&format!("could not start the runtime: {error}"));
+            std::process::exit(1);
+        }
+    };
+    let address = args.address;
+    let code = runtime.block_on(async {
+        let connecting = tokio::net::TcpStream::connect(address);
+        let stream = match tokio::time::timeout(DIAL_TIMEOUT, connecting).await {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(error)) => {
+                report(&format!("could not connect to {address}: {error}"));
+                return EXIT_UNAVAILABLE.into();
+            }
+            Err(_) => {
+                report(&format!(
+                    "nothing accepted a connection at {address} within {DIAL_TIMEOUT:?}"
+                ));
+                return EXIT_UNAVAILABLE.into();
+            }
+        };
+        let _ = stream.set_nodelay(true);
+        match attach::bridge_socket(tokio::io::stdin(), tokio::io::stdout(), stream).await {
+            Ok(()) => 0,
+            Err(error) => {
+                report(&format!("the connection failed: {error}"));
+                1
+            }
+        }
+    });
+    std::process::exit(code)
+}
+
+/// Stores the `connect` setting in the data folder's store, for an install script (0056).
+fn connect(args: &ConnectArgs) -> ExitCode {
+    let data_dir = match DataDir::resolve(args.data_dir.as_deref()) {
+        Ok(data_dir) => data_dir,
+        Err(error) => return fail(&format!("could not find the data folder: {error}")),
+    };
+    if let Err(error) = server::prepare_data_dir(data_dir.root()) {
+        return fail(&error.to_string());
+    }
+    let on = args.state == OnOff::On;
+    let stored =
+        parallax_store::Store::open(data_dir.store_file()).and_then(|store| store.set_connect(on));
+    if let Err(error) = stored {
+        return fail(&format!("could not change the setting: {error}"));
+    }
+    println!("Parallax Connect is {}.", if on { "on" } else { "off" });
+    ExitCode::SUCCESS
 }
 
 fn unavailable(message: &dyn std::fmt::Display) -> ! {
@@ -477,7 +588,7 @@ mod tests {
 
     use clap::{CommandFactory, Parser};
 
-    use super::{AttachArgs, Cli, Command};
+    use super::{AttachArgs, Cli, Command, OnOff};
 
     #[test]
     fn the_command_line_definition_is_valid() {
@@ -546,6 +657,40 @@ mod tests {
             assert!(attach_args(&["--connect-timeout", bad]).is_err(), "{bad}");
         }
         assert!(attach_args(&["extra"]).is_err());
+    }
+
+    #[test]
+    fn dial_takes_an_ip_with_the_connect_port_unless_one_is_given() {
+        let address = |text: &str| {
+            let cli = Cli::try_parse_from(["plxd", "dial", text])?;
+            let Command::Dial(args) = cli.command else {
+                panic!("expected dial, got {:?}", cli.command);
+            };
+            Ok::<_, clap::Error>(args.address.to_string())
+        };
+        assert_eq!(address("100.87.92.42").unwrap(), "100.87.92.42:7340");
+        assert_eq!(address("100.87.92.42:9").unwrap(), "100.87.92.42:9");
+        assert_eq!(address("fd7a::1").unwrap(), "[fd7a::1]:7340");
+        assert_eq!(address("[fd7a::1]").unwrap(), "[fd7a::1]:7340");
+        assert_eq!(address("[fd7a::1]:9").unwrap(), "[fd7a::1]:9");
+        for bad in ["macbook", "100.87.92.42:x", ""] {
+            assert!(address(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn connect_takes_on_or_off_and_a_data_folder() {
+        let cli = Cli::try_parse_from(["plxd", "connect", "on", "--data-dir", "/tmp/d"]).unwrap();
+        let Command::Connect(args) = cli.command else {
+            panic!("expected connect, got {:?}", cli.command);
+        };
+        assert_eq!(args.state, OnOff::On);
+        assert_eq!(
+            args.data_dir.as_deref(),
+            Some(std::path::Path::new("/tmp/d"))
+        );
+        assert!(Cli::try_parse_from(["plxd", "connect", "maybe"]).is_err());
+        assert!(Cli::try_parse_from(["plxd", "connect"]).is_err());
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
