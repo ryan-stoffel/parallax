@@ -1393,3 +1393,13 @@ body {
 .panel-divider:focus-visible::before {
   opacity: 1;
 }
+
+/* Find in thread's matches (Find.tsx): all of them, and the one stepped to. */
+::highlight(find) {
+  background-color: color-mix(in srgb, var(--warning) 35%, transparent);
+  color: inherit;
+}
+::highlight(find-current) {
+  background-color: var(--warning);
+  color: #000;
+}

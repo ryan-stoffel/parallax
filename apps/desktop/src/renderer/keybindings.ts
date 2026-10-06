@@ -11,6 +11,7 @@ export type Command =
   | "open"
   | "settings"
   | "usage"
+  | "find"
   | "parentThread"
   | "nextThread"
   | "previousThread";
@@ -29,6 +30,7 @@ export const commands: { id: Command; name: string; defaults: string[] }[] = [
   { id: "open", name: "Open folder in default app", defaults: ["Mod+Alt+KeyO"] },
   { id: "settings", name: "Open Settings", defaults: ["Mod+Comma"] },
   { id: "usage", name: "Open Usage", defaults: ["Mod+Alt+KeyU"] },
+  { id: "find", name: "Find in thread", defaults: ["Mod+KeyF"] },
   // A thread's lineage (0041): from a parent, next and previous open its first and last child.
   { id: "parentThread", name: "Go to parent thread", defaults: ["Mod+Alt+ArrowUp"] },
   { id: "nextThread", name: "Next sibling thread", defaults: ["Mod+Alt+ArrowRight"] },
