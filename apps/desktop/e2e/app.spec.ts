@@ -533,7 +533,10 @@ test("saves a repository action and runs it in the drawer, opening its preview (
   await page.getByRole("button", { name: "Git version" }).click();
   const terminal = page.getByRole("group", { name: "Terminal", exact: true });
   await expect(terminal).toContainText("git version ");
-  await expect(page.getByRole("textbox", { name: "Address" })).toHaveValue(preview.slice("http://".length, -1));
+  await expect(page.getByRole("textbox", { name: "Address" })).toHaveValue(
+    // Short while unfocused, full while focused.
+    new RegExp(`^(http://)?${preview.slice("http://".length, -1).replaceAll(".", "\\.")}/?$`),
+  );
   await page.screenshot({ path: test.info().outputPath("action-running.png") });
 
   // Its keybinding runs it again.

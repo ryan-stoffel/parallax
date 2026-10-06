@@ -20,14 +20,19 @@ export function browserUrl(address: string): string | undefined {
   if (/^[a-z][a-z\d+.-]*:(?!\d)/i.test(text)) {
     const url = URL.parse(text);
     if (url?.protocol === "http:" || url?.protocol === "https:") return url.href;
-    return undefined;
+    // Words after a colon, such as a pasted `error: cannot borrow`, are a search.
+    return /\s/.test(text) ? searchUrl(text) : undefined;
   }
   if (/\s/.test(text)) return searchUrl(text);
   const url = URL.parse(`http://${text}`);
   if (!url) return searchUrl(text);
   const host = url.hostname;
   const local =
-    host === "localhost" || /^[\d.]+$/.test(host) || host.startsWith("[") || url.port !== "";
+    host === "localhost" ||
+    // Four dotted numbers in the text itself, since the parser reads `1.5` as 1.0.0.5.
+    /^\d{1,3}(\.\d{1,3}){3}(?![\d.])/.test(text) ||
+    host.startsWith("[") ||
+    url.port !== "";
   if (local) return url.href;
   // A domain ends in a letters-only top-level name, as in example.com.
   if (/\.[a-z]{2,}$/i.test(host)) return url.href.replace(/^http:/, "https:");

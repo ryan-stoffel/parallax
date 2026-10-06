@@ -37,6 +37,9 @@ test("anything that isn't an address searches Google", () => {
     "what is 1.5",
     "c++ templates",
     "node.js vs deno",
+    "error: cannot borrow",
+    "1.5",
+    "42",
   ]) {
     expect(browserUrl(query), query).toBe(searchUrl(query));
   }
