@@ -45,7 +45,13 @@ const highlights = typeof CSS !== "undefined" ? CSS.highlights : undefined;
 function domRanges(el: HTMLElement, query: string): Range[] {
   const nodes: { node: Text; start: number }[] = [];
   let text = "";
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  // Buttons and times are the row's controls, not what it says.
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) =>
+      n.parentElement?.closest("button, time, [aria-hidden=true]")
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT,
+  });
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
     nodes.push({ node: n as Text, start: text.length });
     text += n.textContent;
@@ -91,8 +97,11 @@ export function useFind({
   const at = hits.length ? Math.min(current, hits.length - 1) : -1;
   const step = (by: number) => {
     if (!hits.length) return;
+    const next = (at + by + hits.length) % hits.length;
     pending.current = true;
-    setCurrent((at + by + hits.length) % hits.length);
+    // With one match the index doesn't change, so scroll back to it here.
+    scrollToRow(hits[next]!.row);
+    setCurrent(next);
   };
   const close = () => setOpen(false);
 
@@ -102,7 +111,16 @@ export function useFind({
         setOpen(true);
         input.current?.focus();
         input.current?.select();
-      } else if (open && e.code === "KeyG" && (e.metaKey || e.ctrlKey) && !e.altKey) {
+      } else if (open && e.key === "Escape") {
+        close();
+      } else if (
+        open &&
+        e.code === "KeyG" &&
+        (e.metaKey || e.ctrlKey) &&
+        !e.altKey &&
+        // Ctrl+G is the shell's in a terminal.
+        !(e.target as Element | null)?.closest?.(".xterm")
+      ) {
         step(e.shiftKey ? -1 : 1);
       } else return;
       e.preventDefault();
@@ -133,18 +151,21 @@ export function useFind({
     if (!highlights || !root || !open || !query) return;
     const others: Range[] = [];
     let chosen: Range | undefined;
+    let settled = false;
     for (const el of root.querySelectorAll<HTMLElement>("[data-index]")) {
       const ranges = domRanges(el, query);
       const hit = hits[at];
+      if (hit && hit.row === Number(el.dataset["index"])) settled = true;
       const pick =
         hit && hit.row === Number(el.dataset["index"]) ? Math.min(hit.nth, ranges.length - 1) : -1;
       ranges.forEach((r, i) => (i === pick ? (chosen = r) : others.push(r)));
     }
     highlights.set("find", new Highlight(...others));
     highlights.set("find-current", new Highlight(...(chosen ? [chosen] : [])));
-    if (chosen && pending.current) {
+    // The jump is done once the match's row is rendered, whether or not its text matched.
+    if (settled && pending.current) {
       pending.current = false;
-      chosen.startContainer.parentElement?.scrollIntoView({ block: "center" });
+      chosen?.startContainer.parentElement?.scrollIntoView({ block: "center" });
     }
   });
   useEffect(() => {
@@ -176,8 +197,7 @@ export function useFind({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Escape") close();
-          else if (e.key === "Enter") step(e.shiftKey ? -1 : 1);
+          if (e.key === "Enter") step(e.shiftKey ? -1 : 1);
           else return;
           e.preventDefault();
         }}

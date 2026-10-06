@@ -11,16 +11,22 @@ import type { Item } from "./transcript";
 let unmount = () => {};
 afterEach(() => act(() => unmount()));
 
-test("a search ignores case and Markdown syntax, and counts each match once", () => {
+test("a search ignores case and counts each match once", () => {
   expect(occurrences("Aa aA aaa", "aa")).toEqual([
     [0, 2],
     [3, 5],
     [6, 8],
   ]);
   expect(occurrences("anything", "")).toEqual([]);
+});
+
+test("a message is searched as it reads rendered", () => {
   expect(searchText("## Fix **the** [build](https://x.dev) in `main`\n- done")).toBe(
     "Fix the build in main\ndone",
   );
+});
+
+test("hits are in row order, with each one's place in its row", () => {
   expect(findHits(["a b a", "", "a"], "a")).toEqual([
     { row: 0, nth: 0 },
     { row: 0, nth: 1 },
@@ -69,9 +75,15 @@ test("Cmd+F opens a find box that counts matches, steps through them, wraps, and
   press({ key: "g", code: "KeyG", metaKey: true });
   expect(status()).toBe("1/4");
 
+  // Escape closes it from anywhere, and a lone match can be stepped to again.
+  type("warm");
+  expect(status()).toBe("1/1");
+  press({ key: "Enter", code: "Enter" }, box()!);
+  expect(status()).toBe("1/1");
+
   type("nothing like this");
   expect(status()).toBe("No results");
 
-  press({ key: "Escape", code: "Escape" }, box()!);
+  press({ key: "Escape", code: "Escape" });
   expect(box()).toBeNull();
 });
