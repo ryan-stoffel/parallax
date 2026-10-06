@@ -316,6 +316,8 @@ export function AgentChat({
   }, [compose, send, onComposed]);
   // Queued messages the user cancelled from here, whose followUpDropped notice is left out.
   const [cancelled, setCancelled] = useState<ReadonlySet<string>>(new Set());
+  // The sent message being edited in place, with its row, which it hides.
+  const [editing, setEditing] = useState<Editing>();
   const unsent = useMemo(
     () => new Map([...sent].filter(([turnId]) => !resent.has(turnId))),
     [sent, resent],
@@ -397,13 +399,22 @@ export function AgentChat({
       (i) => !(i.kind === "notice" && i.turnId && cancelled.has(i.turnId)),
     );
     const all = [...shown, ...pending];
-    if (all.length > 0 || !prompt) return all;
-    return [
-      going
-        ? { kind: "pending", key: "pending:prompt", text: prompt }
-        : { kind: "user", key: "prompt", text: prompt },
-    ];
-  }, [items, sent, prompt, going, queue, cancelled]);
+    const listed: Row[] =
+      all.length > 0 || !prompt
+        ? all
+        : [
+            going
+              ? { kind: "pending", key: "pending:prompt", text: prompt }
+              : { kind: "user", key: "prompt", text: prompt },
+          ];
+    // The message being edited shows as its editor instead.
+    return listed.filter(
+      (r) =>
+        !editing ||
+        (r.key !== editing.row.key &&
+          !(editing.row.turnId && "turnId" in r && r.turnId === editing.row.turnId)),
+    );
+  }, [items, sent, prompt, going, queue, cancelled, editing]);
   // The user's prompts, for the composer's Up: not Parallax's wake-ups or other threads' messages.
   const history = useMemo(
     () =>
@@ -418,7 +429,10 @@ export function AgentChat({
   // The latest prompt while nothing from the agent follows it, which Stop puts back in the box:
   // its text, its attached threads, and its images: at hand when sent from here, or fetched from
   // plxd by id on Stop.
-  const unanswered = useMemo<(Unanswered & { turnId?: string }) | undefined>(() => {
+  // `row` is the message's row, which the pencil edits; a queued one has its own edit.
+  const unanswered = useMemo<
+    (Unanswered & { turnId?: string; row?: { key: string; turnId?: string } }) | undefined
+  >(() => {
     // The last message queued from here comes after every row.
     const queued = queue.findLast((m) => sent.has(m.id));
     if (queued) {
@@ -451,7 +465,13 @@ export function AgentChat({
     };
     const threads = row.threads ?? mine?.threads;
     // Only one still on its way can be dropped, and so offer Send again.
-    return { text, images, threads, turnId: row.kind === "pending" ? row.turnId : undefined };
+    return {
+      text,
+      images,
+      threads,
+      turnId: row.kind === "pending" ? row.turnId : undefined,
+      row: { key: row.key, turnId: row.turnId },
+    };
   }, [rows, sent, queue, hostId, runId]);
   // A stopped prompt goes back in the box, so if plxd drops it, it offers no Send again too.
   const stop = async () => {
@@ -460,6 +480,28 @@ export function AgentChat({
     if (!failed && back?.turnId) setResent((prev) => new Set(prev).add(back.turnId!));
     return failed;
   };
+  // The pencil: stops the run before the agent answers, and edits the message in place. Its
+  // dropped notice, if plxd drops it, is left out while editing.
+  const edit = async () => {
+    const back = unanswered;
+    if (!back?.row) return;
+    const images = back.images();
+    const failed = await stop();
+    if (failed) return setResendError(failed);
+    setResendError(undefined);
+    if (back.row.turnId) setCancelled((prev) => new Set(prev).add(back.row!.turnId!));
+    setEditing({ row: back.row, text: back.text, images: await images, threads: back.threads });
+  };
+  // A sent edit goes once the run has stopped, so it starts a turn rather than queueing.
+  const stopped = !!run && !isRunning(run.status);
+  useEffect(() => {
+    if (!editing?.ready || !stopped) return;
+    const was = editing;
+    setEditing(undefined);
+    void sendText(was.text, {}, was.images, [...(was.threads ?? [])]).then((failed) => {
+      if (failed !== undefined) setEditing({ ...was, ready: false, error: failed || undefined });
+    });
+  }, [editing, stopped]);
 
   // One that couldn't load, stopped updating, or lost plxd shows nothing in progress.
   const stalled = error !== undefined || (connection !== undefined && !connected);
@@ -548,7 +590,7 @@ export function AgentChat({
 
   return (
     <SubagentsContext value={subagents}>
-      {rows.length > 0 ? (
+      {rows.length > 0 || editing ? (
         <ThreadLinksContext value={threadLinks}>
           <ForkContext value={forkTarget}>
             <TranscriptView
@@ -563,9 +605,24 @@ export function AgentChat({
               onResend={resend}
               loadImage={showImage}
               onNearTop={older ? loadOlder : undefined}
+              onEdit={
+                live && !editing && unanswered?.row
+                  ? { key: unanswered.row.key, edit: () => void edit() }
+                  : undefined
+              }
               end={
-                run?.status === "waiting" && (
-                  <ResumeCard hostId={hostId} run={run} disabledReason={disabledReason} />
+                editing ? (
+                  <EditMessage
+                    editing={editing}
+                    loadImage={showImage}
+                    disabledReason={disabledReason}
+                    onSend={(text, images) => setEditing({ ...editing, text, images, ready: true })}
+                    onCancel={() => setEditing(undefined)}
+                  />
+                ) : (
+                  run?.status === "waiting" && (
+                    <ResumeCard hostId={hostId} run={run} disabledReason={disabledReason} />
+                  )
                 )
               }
             />
@@ -733,6 +790,7 @@ export function TranscriptView({
   copiedAt,
   turnDone = false,
   root,
+  onEdit,
 }: {
   rows: Row[];
   sent: ReadonlyMap<string, SentMessage>;
@@ -752,6 +810,8 @@ export function TranscriptView({
   end?: ReactNode;
   /** In a fork, when its history copied from the original was logged: rows up to it show muted. */
   copiedAt?: string;
+  /** The row, by key, whose message the pencil edits, and what it does. */
+  onEdit?: { key: string; edit: () => void };
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   // Threads' titles, to name the thread that sent a message or stopped this one (0041).
@@ -967,6 +1027,7 @@ export function TranscriptView({
                       copied={muted}
                       forkable={!muted && !(live && v.index >= latest)}
                       reply={replies.has(v.index) ? { turnId: replies.get(v.index) } : undefined}
+                      onEdit={onEdit?.key === row.key ? onEdit.edit : undefined}
                     />
                   </div>
                 </div>
@@ -1061,6 +1122,8 @@ interface RowProps {
   forkable?: boolean;
   /** For an assistant message: set on a turn's last, which offers Copy and Fork at `turnId`. */
   reply?: { turnId?: string };
+  /** For a user's message the agent hasn't started on: the pencil, which edits it. */
+  onEdit?: () => void;
 }
 
 /** A message Parallax or another thread sent, not the user (0025, 0041). */
@@ -1081,6 +1144,7 @@ export const RowView = memo(function RowView({
   copied,
   forkable,
   reply,
+  onEdit,
 }: RowProps) {
   switch (row.kind) {
     case "work":
@@ -1198,6 +1262,7 @@ export const RowView = memo(function RowView({
             at={row.kind === "user" && !copied ? row.at : undefined}
             text={text}
             fork={forkable && row.kind === "user" && <ForkButton turnId={row.turnId} />}
+            onEdit={onEdit}
           />
         </div>
       );
@@ -2276,8 +2341,18 @@ export function useCopy() {
   return [copied, copy] as const;
 }
 
-/** Under a prompt, on hover or focus: when it was sent, Copy for its text, and `fork`. */
-function PromptMeta({ at, text, fork }: { at?: string; text?: string | null; fork?: ReactNode }) {
+/** Under a prompt, on hover or focus: when it was sent, Copy for its text, Edit, and `fork`. */
+function PromptMeta({
+  at,
+  text,
+  fork,
+  onEdit,
+}: {
+  at?: string;
+  text?: string | null;
+  fork?: ReactNode;
+  onEdit?: () => void;
+}) {
   const [copied, copy] = useCopy();
   return (
     <div className="flex h-6 items-center gap-1 text-[12px] text-faint-foreground opacity-0 group-focus-within/prompt:opacity-100 group-hover/prompt:opacity-100">
@@ -2292,8 +2367,116 @@ function PromptMeta({ at, text, fork }: { at?: string; text?: string | null; for
           {copied ? <Check /> : <Copy />}
         </button>
       )}
+      {onEdit && (
+        <button
+          type="button"
+          aria-label="Edit message"
+          title="Edit message"
+          onClick={onEdit}
+          className="grid size-6 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+        >
+          <Pencil />
+        </button>
+      )}
       {fork}
     </div>
+  );
+}
+
+/** A sent message being edited in place: its row, text, images, threads, and why a send failed. */
+interface Editing {
+  row: { key: string; turnId?: string };
+  text: string;
+  images: PromptImage[];
+  threads?: readonly string[];
+  error?: string;
+  /** Sent, and waiting for the run to stop. */
+  ready?: boolean;
+}
+
+/**
+ * A stopped message as an editor where it was: its text, and its images, which can be removed.
+ * Enter sends and Shift+Enter is a new line. Esc or Cancel leaves the run stopped.
+ */
+function EditMessage({
+  editing,
+  loadImage,
+  disabledReason,
+  onSend,
+  onCancel,
+}: {
+  editing: Editing;
+  loadImage?: (imageId: ImageId) => Promise<string | undefined>;
+  disabledReason?: string;
+  onSend: (text: string, images: PromptImage[]) => void;
+  onCancel: () => void;
+}) {
+  const [text, setText] = useState(editing.text);
+  const [images, setImages] = useState(editing.images);
+  const canSend = !disabledReason && (text.trim() !== "" || images.length > 0);
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (canSend) onSend(text, images);
+      }}
+      className="ml-auto flex w-[85%] flex-col items-end gap-1.5 py-2"
+    >
+      {images.length > 0 && (
+        <div className="flex flex-wrap justify-end gap-1.5">
+          {images.map((image, i) => (
+            <div key={i} className="relative">
+              <MessageImage image={image} loadImage={loadImage} />
+              <button
+                type="button"
+                aria-label="Remove image"
+                onClick={() => setImages((all) => all.filter((_, j) => j !== i))}
+                className="absolute top-1 right-1 grid size-5 place-items-center rounded-full bg-background/90 text-muted-foreground hover:text-foreground [&_svg]:size-3"
+              >
+                <X />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <textarea
+        autoFocus
+        aria-label="Edit message"
+        value={text}
+        rows={Math.min(12, Math.max(2, text.split("\n").length))}
+        onChange={(e) => setText(e.target.value)}
+        onFocus={(e) => e.currentTarget.setSelectionRange(text.length, text.length)}
+        onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing) return;
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          } else if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            e.currentTarget.form?.requestSubmit();
+          }
+        }}
+        className="w-full resize-none rounded-2xl border border-border bg-selected px-3.5 py-2 text-[14px] leading-relaxed outline-none focus:border-accent"
+      />
+      {editing.error && (
+        <p role="alert" className="text-[12.5px] text-danger">
+          {editing.error}
+        </p>
+      )}
+      <div className="flex items-center gap-3 text-[12.5px]">
+        <button type="button" onClick={onCancel} className="text-muted-foreground">
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={!canSend || editing.ready}
+          title={disabledReason}
+          className="rounded-md bg-foreground px-2.5 py-1 font-medium text-background disabled:opacity-40"
+        >
+          {editing.ready ? "Stopping…" : "Send"}
+        </button>
+      </div>
+    </form>
   );
 }
 

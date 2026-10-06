@@ -1186,6 +1186,49 @@ test("Stop or Esc before the agent answers puts the prompt back in the box, but 
   expect(composer().textContent).toBe("");
 });
 
+test("the pencil before the agent answers stops the run and sends the message as edited", async () => {
+  const pencil = () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Edit message"]');
+  fakeBridge(4); // the agent has replied: no pencil
+  await renderChat();
+  expect(pencil()).toBeNull();
+  act(() => unmount());
+
+  const { request, emit } = fakeBridge(2);
+  await renderChat();
+  await act(async () => pencil()!.click());
+  expect(request).toHaveBeenCalledWith("local", "agent/cancel", { runId });
+  // Send waits for the run to stop, so the edit starts a turn rather than queueing.
+  emit({
+    type: "event",
+    event: {
+      subscription: "s",
+      seq: 50,
+      time: "",
+      event: {
+        kind: "agent.updated",
+        runId,
+        state: { status: "cancelled", accountId: "a", updatedAt: "" },
+      },
+    },
+  });
+  const box = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Edit message"]')!;
+  expect(box.value).toBe("Add a README that explains how to build the app.");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+      box,
+      "Add a CONTRIBUTING guide.",
+    );
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  const send = request.mock.calls.find(([, method]) => method === "agent/send")!;
+  expect(send[2]).toMatchObject({ runId, text: "Add a CONTRIBUTING guide." });
+  expect(document.querySelector('textarea[aria-label="Edit message"]')).toBeNull();
+});
+
 test("a finished run opens a pull request titled like its thread, then links to it", async () => {
   const openPr = () =>
     [...document.querySelectorAll("button")].find((b) => b.textContent === "Open PR");
