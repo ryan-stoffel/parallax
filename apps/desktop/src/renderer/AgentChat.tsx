@@ -89,6 +89,7 @@ import {
   type PlanRow,
   type ProposedPlanRow,
 } from "./Plan";
+import { searchText, useFind } from "./Find";
 import { plainText, PromptRail, ScrollToEnd, type Prompt } from "./PromptRail";
 import { attachThreads, SentThread, ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { QueueStrip } from "./QueueStrip";
@@ -851,6 +852,25 @@ export function TranscriptView({
     ending.current = false;
     virtualizer.scrollToIndex(prompt.index, { align: "start" });
   };
+  // What each row says, for Find: the messages, as they read rendered.
+  const texts = useMemo(
+    () =>
+      view.map((row) => {
+        if (row.kind === "user")
+          return searchText(row.text ?? (row.turnId && sent.get(row.turnId)?.text) ?? "");
+        if (row.kind === "pending" || row.kind === "assistant") return searchText(row.text);
+        return row.kind === "proposedPlan" ? searchText(row.plan) : "";
+      }),
+    [view, sent],
+  );
+  const { bar: findBar } = useFind({
+    texts,
+    list: scrollRef,
+    scrollToRow: (row) => {
+      ending.current = false;
+      virtualizer.scrollToIndex(row, { align: "center" });
+    },
+  });
 
   return (
     // Bounds the rail and Scroll to end, which stay put while the list scrolls under them.
@@ -916,6 +936,7 @@ export function TranscriptView({
       {/* One prompt is no choice of where to go, so there's no rail for it. */}
       {prompts.length > 1 && <PromptRail prompts={prompts} current={reading} onJump={jump} />}
       {scrolledUp && <ScrollToEnd onClick={scrollToEnd} />}
+      {findBar}
     </div>
   );
 }
