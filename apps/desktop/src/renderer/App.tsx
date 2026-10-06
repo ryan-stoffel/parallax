@@ -493,7 +493,12 @@ export function App() {
         if (!dialog) newThread(noRepo);
       } else if (command === "settings") openSettings("general");
       else if (command === "usage") openSettings("usage");
-      else if (
+      else if (command === "openPr") {
+        // The open thread's latest linked pull request.
+        const latest = prs.urls.at(-1);
+        if (!latest) return;
+        window.open(latest, "_blank");
+      } else if (
         !dialog &&
         (command === "parentThread" || command === "nextThread" || command === "previousThread")
       ) {

@@ -2250,6 +2250,51 @@ test("Archived lists 25 threads, Show more reveals the next page, and the summar
   ).toBe(false);
 });
 
+test("Pull requests lists each linked pull request, and a row opens its thread", async () => {
+  const withPrs = (id: string, title: string, pullRequests?: string[]) => ({
+    ...coordinatorRun(id, title),
+    project: parallax.id,
+    status: "completed" as const,
+    pullRequests,
+  });
+  answers["thread/list"] = () => ({
+    result: {
+      repos: [parallax],
+      threads: [
+        {
+          id: "t-a",
+          repo: parallax.id,
+          title: "Fix the flaky test",
+          createdAt: "2026-09-29T11:00:00Z",
+        },
+        { id: "t-b", repo: parallax.id, title: "Read the docs", createdAt: "2026-09-29T11:10:00Z" },
+      ],
+      seq: 7,
+    },
+  });
+  answers["agent/list"] = () => ({
+    result: {
+      runs: [
+        withPrs("t-a", "Fix the flaky test", [
+          "https://github.com/ryan-stoffel/parallax/pull/7",
+          "https://github.com/ryan-stoffel/parallax/pull/9",
+        ]),
+        withPrs("t-b", "Read the docs"),
+      ],
+      seq: 7,
+    },
+  });
+  await renderApp();
+  const rows = () => [...(drawer("Pull requests")?.querySelectorAll("li button") ?? [])];
+  expect(drawer("Pull requests")!.querySelector("summary")!.textContent).toContain("(2)");
+  expect(rows().map((b) => b.textContent)).toEqual([
+    "#7 Fix the flaky test",
+    "#9 Fix the flaky test",
+  ]);
+  await click(rows()[0]);
+  expect(rows()[0]!.getAttribute("aria-current")).toBe("true");
+});
+
 test("with no Projects, Threads is the only section, and the toolbar's one button opens the add palette", async () => {
   answers["project/list"] = () => ({ result: { projects: [], seq: 7 } });
   await renderApp();
