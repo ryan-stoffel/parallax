@@ -523,6 +523,12 @@ body {
   font-style: italic;
 }
 
+/* Two threads side by side (App.tsx): no scrollbar between them. The prompt rail shows where a
+   transcript is. */
+[data-pane] [role="log"] {
+  scrollbar-width: none;
+}
+
 /* The composer's editor (Composer.tsx): the transcript's Markdown at the box's size, lines (its
    paragraphs) with no gap, and code blocks drawn as the transcript's CodeBlock draws them. */
 .composer-input.markdown {

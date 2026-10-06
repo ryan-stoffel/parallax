@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { InboxItem, Thread } from "../protocol/generated/protocol";
+import type { InboxItem, Repo, Thread } from "../protocol/generated/protocol";
 import { Actions, type RepoAction } from "./Actions";
 import { AgentChat } from "./AgentChat";
 import { ChildStrip } from "./ChildStrip";
@@ -822,6 +822,7 @@ export function App() {
                         <PaneHeader
                           side={side as 0 | 1}
                           title={title ?? "Thread"}
+                          repo={threads.state.repos.find((r) => r.id === paneThread?.repo)}
                           focused={focused}
                           onClose={() => closePane(threadId)}
                         />
@@ -1062,38 +1063,46 @@ export function App() {
 }
 
 /**
- * A side of the split's header: its Focus left or right thread key, its title, and a close
- * button. The focused side's is marked.
+ * A side of the split's header, like a tab: its repository's icon, its title, its Focus left or
+ * right thread key, and a close button. The focused side's is underlined in the accent.
  */
 function PaneHeader({
   side,
   title,
+  repo,
   focused,
   onClose,
 }: {
   side: 0 | 1;
   title: string;
+  repo?: Repo;
   focused: boolean;
   onClose: () => void;
 }) {
   const keys = useShortcutLabel(side === 0 ? "leftThread" : "rightThread");
   return (
     <div
-      className={`flex h-9 shrink-0 items-center gap-2 border-y border-border px-3 text-[12.5px] ${focused ? "bg-selected text-foreground shadow-[inset_0_2px_0_var(--accent)]" : "text-muted-foreground"}`}
+      className={`relative flex h-9 shrink-0 items-center gap-2 border-b border-border pr-1.5 pl-4 text-[12.5px] transition-colors ${focused ? "text-foreground" : "text-faint-foreground"}`}
     >
-      <span
-        aria-hidden
-        className={`size-1.5 shrink-0 rounded-full ${focused ? "bg-accent" : "bg-border"}`}
-      />
-      <span className="min-w-0 flex-1 truncate">{title}</span>
+      {focused && <span aria-hidden className="absolute inset-x-0 -bottom-px h-0.5 bg-accent" />}
+      <span className={`flex shrink-0 ${focused ? "" : "opacity-60"}`}>
+        <RepoIcon repo={repo} />
+      </span>
+      <span className="min-w-0 flex-1 truncate font-medium">{title}</span>
       {keys && (
-        <kbd className="shrink-0 rounded border border-border bg-surface px-1 font-sans text-[11px] leading-4 text-muted-foreground">
+        <kbd className="shrink-0 font-sans text-[11px] text-faint-foreground tabular-nums">
           {keys}
         </kbd>
       )}
-      <IconButton label="Close this side" onClick={onClose}>
+      <button
+        type="button"
+        aria-label="Close this side"
+        title="Close this side"
+        onClick={onClose}
+        className="grid size-6 shrink-0 place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+      >
         <X />
-      </IconButton>
+      </button>
     </div>
   );
 }
