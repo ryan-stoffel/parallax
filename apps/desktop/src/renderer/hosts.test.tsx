@@ -45,6 +45,8 @@ beforeEach(() => {
     request: request as unknown as ParallaxBridge["request"],
     hosts: async () => [mini],
     onHosts: () => () => {},
+    onConnect: () => () => {},
+    onDevices: () => () => {},
     onLocalName: (listener: (name: string) => void) => {
       listener("This Mac");
       return () => {};

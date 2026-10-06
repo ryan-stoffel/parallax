@@ -30,11 +30,12 @@ export function TerminalView({
   label: string;
   background?: string;
   onStart?: () => void;
-  onEnd?: (error?: string) => void;
+  /** Called with an error for people if it couldn't start, else with how it exited. */
+  onEnd?: (error?: string, exitCode?: number) => void;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const began = useEffectEvent(() => onStart?.());
-  const ended = useEffectEvent((error?: string) => onEnd?.(error));
+  const ended = useEffectEvent((error?: string, exitCode?: number) => onEnd?.(error, exitCode));
   // The target when it mounted. Another target is another terminal: key it by its target.
   const opened = useRef(target);
 
@@ -86,7 +87,7 @@ export function TerminalView({
 
     const stop = window.parallax.onTerminal(id, (message) => {
       if (message.type === "data") return term.write(message.data);
-      ended();
+      ended(undefined, message.exitCode);
     });
     term.onData((data) => window.parallax.terminalInput(id, data));
     term.onResize(({ cols, rows }) => window.parallax.resizeTerminal(id, cols, rows));

@@ -2,12 +2,15 @@
 //!
 //! [`Server::start`] runs the startup checks in order: the data folder, the instance lock, the old
 //! socket, the new socket, and the store. [`Server::run`] then accepts connections until
-//! [`Shutdown::trigger`] is called, and shuts down gracefully.
+//! [`Shutdown::trigger`] is called, and shuts down gracefully. While the host's `connect` setting
+//! is on, it also accepts this user's other devices over Tailscale ([`tailnet`], 0056).
 
 mod connection;
 pub(crate) mod setup;
+pub(crate) mod tailnet;
 
 use std::io;
+use std::net::IpAddr;
 #[cfg(unix)]
 use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::{Path, PathBuf};
@@ -46,6 +49,7 @@ use crate::paths::DataDir;
 use crate::providers::Providers;
 use crate::routing::BackendRegistry;
 use crate::store::StoreHandle;
+use crate::tailnet::{Tailnet, TailscaleCli};
 use crate::worktree::WorktreeManager;
 
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
@@ -111,6 +115,17 @@ pub struct Config {
     /// How long such a run first waits when no reset time is known, doubling with each resume
     /// in a row that finds the limit still on, up to 16 times this. 15 minutes by default.
     pub resume_backoff: Duration,
+    /// Parallax Connect's tailnet (0056). `None`, the default, runs the `tailscale` CLI; tests
+    /// use a fake.
+    pub tailnet: Option<Arc<dyn Tailnet>>,
+    /// The address the Connect listener binds instead of this node's Tailscale IPv4. `None` by
+    /// default; tests bind loopback.
+    pub connect_address: Option<IpAddr>,
+    /// The Connect listener's port. 7340 by default.
+    pub connect_port: u16,
+    /// How often plxd checks the `connect` setting and Tailscale, to bind or drop the Connect
+    /// listener. 10 s by default.
+    pub connect_check_interval: Duration,
 }
 
 impl Config {
@@ -132,6 +147,10 @@ impl Config {
             approval_timeout: agents::APPROVAL_TIMEOUT,
             resume_jitter: agents::ResumeTiming::default().jitter,
             resume_backoff: agents::ResumeTiming::default().backoff,
+            tailnet: None,
+            connect_address: None,
+            connect_port: parallax_protocol::CONNECT_PORT,
+            connect_check_interval: Duration::from_secs(10),
         }
     }
 }
@@ -244,6 +263,8 @@ pub(crate) struct Daemon {
     pub commands: crate::commands::Commands,
     /// Cursor account login through the SDK sidecar (0053).
     pub cursor: crate::backend::cursor_sdk::CursorAuth,
+    /// Parallax Connect's tailnet and listener state (0056).
+    pub connect: tailnet::Connect,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -354,6 +375,10 @@ impl Server {
         let reader = store.open_reader(&data_dir.store_file());
         let keys = keystore::system_store();
         let providers = Providers::load(data_dir.root(), keys.clone(), &launcher, &backends);
+        let tailnet = config
+            .tailnet
+            .clone()
+            .unwrap_or_else(|| Arc::new(TailscaleCli::new(launcher.clone())));
         let daemon = Arc::new(Daemon {
             started: Instant::now(),
             log: store.log(),
@@ -379,6 +404,7 @@ impl Server {
             cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher.clone()),
             providers,
             commands: crate::commands::Commands::new(),
+            connect: tailnet::Connect::new(tailnet, config.connect_port, config.connect_address),
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for
@@ -486,6 +512,16 @@ impl Server {
         };
         let connections = TaskTracker::new();
         let abort = CancellationToken::new();
+        let tailnet = tokio::spawn(tailnet::run(
+            tailnet::Serving {
+                daemon: Arc::clone(&daemon),
+                connections: connections.clone(),
+                stop_reading: shutdown.graceful.clone(),
+                abort: abort.clone(),
+            },
+            config.connect_check_interval,
+            shutdown.graceful.clone(),
+        ));
         let period = config.socket_check_interval;
         let mut check = time::interval_at(time::Instant::now() + period, period);
         check.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -524,6 +560,8 @@ impl Server {
         drop(listener);
         #[cfg(unix)]
         socket.remove();
+        // Its listener goes with it, before `connections` closes to new ones.
+        let _ = tailnet.await;
         info!("shutting down");
         connections.close();
         daemon.commands.close();
@@ -692,6 +730,11 @@ impl Daemon {
             providers,
             commands: crate::commands::Commands::new(),
             cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher),
+            connect: tailnet::Connect::new(
+                Arc::new(crate::tailnet::Absent),
+                parallax_protocol::CONNECT_PORT,
+                None,
+            ),
         })
     }
 }

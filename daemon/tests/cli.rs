@@ -253,3 +253,65 @@ fn service_installs_reports_and_uninstalls_a_systemd_user_unit() {
         )
     );
 }
+
+/// `plxd dial` bridges stdin and stdout to a TCP peer, half-closing when stdin ends, and exits 0
+/// once the peer closes (0056).
+#[test]
+fn dial_bridges_stdio_to_the_address_and_half_closes() {
+    use std::io::{Read as _, Write as _};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    let echo = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut received = Vec::new();
+        stream.read_to_end(&mut received).unwrap();
+        stream.write_all(&received).unwrap();
+    });
+    let mut child = Command::new(env!("CARGO_BIN_EXE_plxd"))
+        .args(["dial", &address])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("plxd should run");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"jsonrpc\":\"2.0\"}\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    echo.join().unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"{\"jsonrpc\":\"2.0\"}\n");
+}
+
+#[test]
+fn dial_exits_4_when_nothing_accepts() {
+    let address = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .to_string();
+    let output = plxd(&["dial", &address]);
+
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).starts_with("plxd dial: could not connect"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn connect_on_stores_the_setting_in_the_data_folder() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let data_dir = dir.path().join("data");
+    let output = plxd(&["connect", "on", "--data-dir", data_dir.to_str().unwrap()]);
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"Parallax Connect is on.\n");
+    let store = parallax_store::Store::open(data_dir.join("plxd.sqlite3")).unwrap();
+    assert!(store.connect().unwrap());
+}

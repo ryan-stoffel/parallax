@@ -13,6 +13,7 @@ mod approvals;
 mod auto_resume;
 mod checks;
 mod commands;
+mod connect;
 mod context;
 mod coordinator;
 mod events;

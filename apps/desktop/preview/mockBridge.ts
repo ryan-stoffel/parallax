@@ -1,15 +1,20 @@
 // A `window.parallax` for the browser preview: every ParallaxBridge member, answering plxd methods
 // from fixtures.ts held in memory. Writes that are cheap to fake change that state and emit the
 // events plxd would, so a sent message or an answered question shows up as it does in the app.
-import type {
-  ConnectionState,
-  HostResponse,
-  ParallaxBridge,
-  RendererMethod,
-  RpcError,
-  SubscribeParams,
-  SubscriptionMessage,
-  UpdateState,
+import {
+  iconFor,
+  type ConnectionState,
+  type ConnectState,
+  type DeviceHost,
+  type DeviceIcon,
+  type HostResponse,
+  type ParallaxBridge,
+  type RendererMethod,
+  type RpcError,
+  type SubscribeParams,
+  type SubscriptionMessage,
+  type TerminalMessage,
+  type UpdateState,
 } from "../src/preload/bridge";
 import {
   PROTOCOL_VERSION,
@@ -20,6 +25,7 @@ import {
   type MemoryScope,
   type ParallaxEvent,
   type ParallaxRequests,
+  type TailnetDevice,
   type Thread,
 } from "../src/protocol/generated/protocol";
 import { createFixtures, HOME, PARALLAX_PATH, type RunEvent } from "./fixtures";
@@ -114,6 +120,8 @@ for (const run of [...db.runs].sort((a, b) => a.createdAt.localeCompare(b.create
 
 type Listener = {
   id: string;
+  /** The host it subscribed on: a run's events go to its own host's listeners. */
+  host: string;
   project?: string;
   after: number;
   listener: (m: SubscriptionMessage) => void;
@@ -134,8 +142,10 @@ function emit(event: ParallaxEvent, project?: string) {
     list.push(logged);
     logs.set(event.runId, list);
   }
+  const host =
+    "runId" in event ? hostOf(event.runId) : "thread" in event ? hostOf(event.thread.id) : LOCAL;
   for (const l of listeners)
-    if (l.project === project && logged.seq > l.after)
+    if (l.host === host && l.project === project && logged.seq > l.after)
       setTimeout(() => l.listener({ type: "event", event: { subscription: l.id, ...logged } }), 0);
   return logged;
 }
@@ -248,8 +258,33 @@ const threadResult = (runId: string, change: Partial<Thread> = {}) => {
 };
 
 const handlers: { [M in Method]?: Handler<M> } = {
-  "host/settings/get": () => ({ autoResume: true }),
-  "host/settings/set": (p) => ({ autoResume: p.autoResume ?? true }),
+  "host/settings/get": () => ({
+    autoResume: true,
+    connect: !!connect.on,
+    deviceIcon: connect.icon,
+  }),
+  "host/settings/set": (p) => ({
+    autoResume: p.autoResume ?? true,
+    connect: p.connect ?? !!connect.on,
+    deviceIcon: connect.icon,
+  }),
+  "connect/devices": () => ({
+    tailscale: "running",
+    port: 7340,
+    listening: !!connect.on,
+    self: {
+      id: "nBook3Vd8",
+      hostName: "macbook",
+      dnsName: "macbook.tail1a2b3.ts.net",
+      os: "macOS",
+      ip: "100.87.92.42",
+      online: true,
+      parallax: !!connect.on,
+    },
+    devices: tailnet.map(
+      ({ name: _n, icon: _i, threads: _t, off: _o, removed: _r, ...device }) => device,
+    ),
+  }),
 
   "project/list": () => ({ projects: db.projects, seq }),
   "project/create": (p) => {
@@ -688,6 +723,228 @@ function retarget(event: ParallaxEvent, run: AgentRun): ParallaxEvent {
   return "runId" in event ? ({ ...event, runId: run.id } as ParallaxEvent) : event;
 }
 
+// ---- Parallax Connect (0056) ---------------------------------------------------------------------
+
+// Ryan's computers on the tailnet. Three of the fixtures' plain threads run on them, so the
+// sidebar shows threads from every computer. `#connect` in the URL starts with Connect set up;
+// otherwise plx-connect isn't installed yet, and Add computer's fake install sets each one up.
+const tailnet: (TailnetDevice & {
+  name?: string;
+  icon?: DeviceIcon;
+  threads?: string[];
+  off?: boolean;
+  removed?: boolean;
+})[] = [
+  {
+    id: "nMini7Q2kX",
+    hostName: "mac-mini",
+    dnsName: "mac-mini.tail1a2b3.ts.net",
+    os: "macOS",
+    ip: "100.74.190.83",
+    online: true,
+    parallax: false,
+    name: "Mac mini",
+    threads: ["Tahoe icon variants"],
+  },
+  {
+    id: "nPc4HfR9a",
+    hostName: "ryans-gaming-pc",
+    dnsName: "ryans-gaming-pc.tail1a2b3.ts.net",
+    os: "windows",
+    ip: "100.101.12.7",
+    online: true,
+    parallax: false,
+    name: "Gaming PC",
+    threads: ["Compare SSE vs WebSocket for plxd attach"],
+  },
+  {
+    id: "nTpad8Lw3",
+    hostName: "thinkpad-server",
+    dnsName: "thinkpad-server.tail1a2b3.ts.net",
+    os: "linux",
+    ip: "100.88.40.21",
+    online: true,
+    parallax: false,
+    name: "ThinkPad",
+    threads: ["Onboarding copy pass"],
+  },
+  {
+    id: "nPhone2Zt",
+    hostName: "ryans-iphone",
+    dnsName: "ryans-iphone.tail1a2b3.ts.net",
+    os: "iOS",
+    ip: "100.92.3.55",
+    online: true,
+    parallax: false,
+  },
+  {
+    id: "nOld5Kc1",
+    hostName: "old-macbook-air",
+    dnsName: "old-macbook-air.tail1a2b3.ts.net",
+    os: "macOS",
+    ip: "100.70.8.14",
+    online: false,
+    parallax: false,
+  },
+];
+const connectSetUp = location.hash.includes("connect");
+const connect: ConnectState = connectSetUp
+  ? { installed: true, on: true, icon: "laptop", channel: "nightly" }
+  : { installed: false, on: false, icon: "laptop", channel: "nightly" };
+// Set up, they carry the names given on them; new, they're known by their host names.
+if (connectSetUp) for (const d of tailnet.slice(0, 3)) d.parallax = true;
+else for (const d of tailnet) delete d.name;
+const deviceId = (d: TailnetDevice) => `tailnet:${d.id}`;
+const deviceOf = (hostId: string) => tailnet.find((d) => deviceId(d) === hostId);
+const connectListeners = new Set<(state: ConnectState) => void>();
+const deviceListeners = new Set<(devices: DeviceHost[]) => void>();
+
+/** Threads started on a device from the console (`previewState.startOnDevice`), by run id. */
+const deviceRuns = new Map<string, string>();
+
+/** The host a run is on: a device's, for the fixture threads it runs. */
+function hostOf(runId: string): string {
+  const started = deviceRuns.get(runId);
+  if (started) return started;
+  const title = db.threads.find((t) => t.id === runId)?.title;
+  const device = tailnet.find((d) => d.parallax && title && d.threads?.includes(title));
+  return device ? deviceId(device) : LOCAL;
+}
+
+function deviceHosts(): DeviceHost[] {
+  if (!connect.on) return [];
+  return tailnet
+    .filter((d) => d.parallax && !d.removed)
+    .map((d) => ({
+      id: deviceId(d),
+      name: d.name ?? d.hostName,
+      icon: d.icon ?? iconFor(d.hostName),
+      detected: iconFor(d.hostName),
+      hostName: d.hostName,
+      ip: d.ip,
+      os: d.os,
+      enabled: !d.off,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function connectChanged() {
+  for (const l of connectListeners) l({ ...connect });
+  const devices = deviceHosts();
+  for (const l of deviceListeners) l(devices);
+  for (const d of devices) if (d.enabled) for (const l of connectionListeners) l(d.id, connected);
+}
+
+/** What a device's plxd answers itself; the rest of a device's calls share the fixtures. */
+function deviceRequest(hostId: string, method: string, params: Record<string, unknown>) {
+  const device = deviceOf(hostId)!;
+  const own = (id: string) => hostOf(id) === hostId;
+  switch (method) {
+    case "thread/list":
+      return { repos: db.repos, threads: db.threads.filter((t) => own(t.id)), seq };
+    case "agent/list":
+      return { runs: db.runs.filter((r) => own(r.id)), seq };
+    case "project/list":
+      return { projects: [], seq };
+    case "host/settings/get":
+      return { autoResume: true, connect: true, deviceName: device.name, deviceIcon: device.icon };
+    case "host/version":
+      return {
+        plxd: "0.0.0-preview",
+        protocol: { min: PROTOCOL_VERSION, max: PROTOCOL_VERSION },
+        os: (
+          {
+            macOS: "macOS 26.0",
+            windows: "Windows 11 Pro 24H2",
+            linux: "Ubuntu 24.04.3 LTS",
+          } as Record<string, string>
+        )[device.os]!,
+        arch: device.os === "windows" ? "x86_64" : device.os === "macOS" ? "aarch64" : "x86_64",
+      };
+    case "host/health":
+      return {
+        uptimeSeconds: (
+          { macOS: 93_780, windows: 12_420, linux: 1_204_300 } as Record<string, number>
+        )[device.os]!,
+        store: "ok",
+        runningAgents: db.runs.filter((r) => own(r.id) && r.status === "running").length,
+      };
+    case "host/settings/set": {
+      if (typeof params["deviceName"] === "string") device.name = params["deviceName"] || undefined;
+      if (typeof params["deviceIcon"] === "string")
+        device.icon = (params["deviceIcon"] || undefined) as DeviceIcon | undefined;
+      setTimeout(connectChanged, 0);
+      return { autoResume: true, connect: true, deviceName: device.name, deviceIcon: device.icon };
+    }
+  }
+  return undefined;
+}
+
+/** What `plx-connect add` prints, a line at a time with a pause after each. */
+function fakeAdd(device: TailnetDevice, user: string | undefined): [string, number][] {
+  const who = `${user ?? "ryan"}@${device.ip}`;
+  const name = device.hostName;
+  const version = "2610.10522.11930-nightly";
+  const app = "Parallax (Nightly)";
+  const os = (
+    {
+      macOS: [
+        "Mac mini: macOS 26.0 (arm64)",
+        "mac-arm64.dmg",
+        `  Installed ${app}.app ${version} in /Applications`,
+      ],
+      windows: [
+        "DESKTOP-RYAN: Windows 11 Pro 24H2 (x64)",
+        "win-x64.exe",
+        `  Installed ${app} in C:\\Users\\ryan\\AppData\\Local\\Programs\\parallax-desktop`,
+      ],
+      linux: [
+        "thinkpad-server: Ubuntu 24.04.3 LTS (x86_64)",
+        "linux-x86_64.AppImage",
+        "  Installed ~/Applications/Parallax-Nightly.AppImage and ~/.local/bin/plxd",
+      ],
+    } as Record<string, string[]>
+  )[device.os]!;
+  const lines: [string, number][] = [
+    [`→ Connecting to ${name} (${who}) over SSH`, 500],
+    [`${who}'s password: `, 1500],
+    [`✓ Connected to ${name}`, 300],
+    [`→ Finding ${name}'s OS`, 600],
+    [`✓ ${os[0]}`, 300],
+    [`→ Finding the newest nightly release`, 700],
+    [`✓ ${app} ${version}: parallax-${version}-${os[1]}`, 300],
+    [`→ Installing ${app} on ${name}`, 300],
+    [
+      `  Downloading https://github.com/ryan-stoffel/parallax/releases/download/v${version}/parallax-${version}-${os[1]}`,
+      1600,
+    ],
+    [os[2]!, 300],
+    [`  Turning on Parallax Connect`, 300],
+    [`  Parallax Connect is on.`, 300],
+    ...((device.os === "windows"
+      ? [
+          [`  Allowed plxd through Windows Firewall on TCP 7340`, 400],
+          [`  Starting plxd`, 400],
+          [
+            `  warning: Windows has no plxd login service yet, so plxd runs until you sign out. Opening Parallax starts it again.`,
+            300,
+          ],
+        ]
+      : [[`  Installing plxd's login service`, 500]]) as [string, number][]),
+    [`  Installed plx-connect in ~/.local`, 600],
+    [`✓ Installed ${app} ${version} and turned on Parallax Connect`, 300],
+    [`→ Waiting for ${name} to answer on port 7340`, 900],
+    [`✓ ${name} is connected to Parallax.`, 300],
+  ];
+  // The password prompt waits on its line, and the typed password isn't echoed.
+  return lines.map(([line, ms], i) => [
+    line.endsWith(": ") ? line : `${lines[i - 1]?.[0].endsWith(": ") ? "\r\n" : ""}${line}\r\n`,
+    ms,
+  ]);
+}
+
+const terminalListeners = new Map<string, (message: TerminalMessage) => void>();
+
 // ---- The bridge --------------------------------------------------------------------------------
 
 const delay = <T>(value: T, ms = 40) =>
@@ -767,8 +1024,26 @@ export const mockBridge: ParallaxBridge = {
     method: M,
     params: ParallaxRequests[M]["params"],
   ): Promise<HostResponse<ParallaxRequests[M]["result"]>> {
-    if (hostId !== LOCAL)
+    if (hostId !== LOCAL && !deviceOf(hostId)?.parallax)
       return delay({ error: fail(`no host has id ${hostId}`) } as HostResponse<Result<M>>);
+    if (hostId !== LOCAL) {
+      const own = deviceRequest(hostId, method, params as Record<string, unknown>);
+      if (own)
+        return delay({ result: structuredClone(own), logId: LOG_ID } as HostResponse<Result<M>>);
+    } else if (method === "thread/list" || method === "agent/list") {
+      // This computer's own threads: the fixtures', less the ones the devices run.
+      const all = handlers[method]!(params as never) as { threads?: Thread[]; runs?: AgentRun[] };
+      const mine = <T extends { id: string }>(list?: T[]) =>
+        list?.filter((x) => hostOf(x.id) === LOCAL);
+      return delay({
+        result: structuredClone({
+          ...all,
+          ...(all.threads && { threads: mine(all.threads) }),
+          ...(all.runs && { runs: mine(all.runs) }),
+        }),
+        logId: LOG_ID,
+      } as HostResponse<Result<M>>);
+    }
     const handler = handlers[method] as Handler<M> | undefined;
     if (!handler) {
       console.warn("preview: unhandled", method, params);
@@ -792,9 +1067,10 @@ export const mockBridge: ParallaxBridge = {
   },
 
   subscribe(hostId: string, params: SubscribeParams, listener: (m: SubscriptionMessage) => void) {
-    if (hostId !== LOCAL) return noop;
+    if (hostId !== LOCAL && !deviceOf(hostId)) return noop;
     const entry: Listener = {
       id: `sub-${++subscriptions}`,
+      host: hostId,
       project: params.project,
       after: params.after,
       listener,
@@ -803,7 +1079,9 @@ export const mockBridge: ParallaxBridge = {
     return () => listeners.delete(entry);
   },
   connectionState: (hostId) =>
-    hostId === LOCAL ? delay(connected, 10) : Promise.reject(new Error(`no host ${hostId}`)),
+    hostId === LOCAL || deviceOf(hostId)
+      ? delay(connected, 10)
+      : Promise.reject(new Error(`no host ${hostId}`)),
   onConnectionState: (listener) => {
     connectionListeners.add(listener);
     return () => connectionListeners.delete(listener);
@@ -824,14 +1102,78 @@ export const mockBridge: ParallaxBridge = {
   },
   saveHost: () => delay("Hosts can't be added in the preview."),
   removeHost: () => delay(undefined),
+
+  onConnect: (listener) => {
+    listener({ ...connect });
+    connectListeners.add(listener);
+    return () => connectListeners.delete(listener);
+  },
+  installConnect: async () => {
+    await delay(undefined, 1800);
+    connect.installed = true;
+    connectChanged();
+    return undefined;
+  },
+  setConnect: async (on) => {
+    await delay(undefined, 300);
+    connect.on = on;
+    connectChanged();
+    return undefined;
+  },
+  onDevices: (listener) => {
+    listener(deviceHosts());
+    deviceListeners.add(listener);
+    return () => deviceListeners.delete(listener);
+  },
+  saveDevice: (hostId, look) => {
+    if (hostId === LOCAL) {
+      if (look.icon) connect.icon = look.icon;
+    } else
+      void mockBridge.request(hostId, "host/settings/set", {
+        deviceName: look.name,
+        deviceIcon: look.icon,
+      });
+    connectChanged();
+    return delay(undefined);
+  },
+  setDeviceEnabled: (hostId, enabled) => {
+    const device = deviceOf(hostId);
+    if (device) Object.assign(device, { off: !enabled, removed: false });
+    connectChanged();
+    return delay(undefined);
+  },
+  removeDevice: (hostId) => {
+    const device = deviceOf(hostId);
+    if (device) device.removed = true;
+    connectChanged();
+    return delay(undefined);
+  },
+
   acpRegistry: () => delay([]),
 
-  openTerminal: () => delay("Terminals don't run in the preview."),
+  openTerminal: (id, target) => {
+    if (!("connect" in target)) return delay("Terminals don't run in the preview.");
+    const device = tailnet.find((d) => d.ip === target.connect.device)!;
+    let wait = 0;
+    for (const [data, ms] of fakeAdd(device, target.connect.user)) {
+      wait += ms;
+      later(wait, () => terminalListeners.get(id)?.({ type: "data", data }));
+    }
+    later(wait + 300, () => {
+      device.parallax = true;
+      connectChanged();
+      terminalListeners.get(id)?.({ type: "exit", exitCode: 0 });
+    });
+    return delay(undefined);
+  },
   install: () => delay("Installs don't run in the preview."),
   terminalInput: noop,
   resizeTerminal: noop,
   closeTerminal: noop,
-  onTerminal: () => noop,
+  onTerminal: (id, listener) => {
+    terminalListeners.set(id, listener);
+    return () => terminalListeners.delete(id);
+  },
 
   openTargets: (hostId) => delay(hostId === LOCAL ? ["cursor", "vscode", "files"] : []),
   openTargetIcons: () => delay({}),
@@ -878,4 +1220,21 @@ export const mockBridge: ParallaxBridge = {
 };
 
 /** For the console: the mock's state, to poke at while looking at the preview. */
-export const previewState = { db, logs, repoPath: PARALLAX_PATH };
+export const previewState = {
+  db,
+  logs,
+  repoPath: PARALLAX_PATH,
+  /** Starts a thread on a Connect device, as if someone started it there. */
+  startOnDevice(hostName: string, title: string, prompt: string, backend = "codex") {
+    const device = tailnet.find((d) => d.hostName === hostName)!;
+    const runId = crypto.randomUUID();
+    deviceRuns.set(runId, deviceId(device));
+    handlers["thread/start"]!({
+      runId,
+      prompt,
+      title,
+      repo: db.repos.find((r) => !r.scratch)!.id,
+      account: { kind: "subscription", backend },
+    } as never);
+  },
+};

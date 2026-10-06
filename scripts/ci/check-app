@@ -10,3 +10,9 @@ pnpm install --frozen-lockfile
 pnpm check
 pnpm test
 pnpm build
+
+# plx-connect, the npm package that sets up Parallax Connect on a device (0056).
+cd ../../packages/plx-connect
+npm ci
+npm run check
+npm test

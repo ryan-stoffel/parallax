@@ -36,6 +36,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("checkout".to_owned(), serde_json::Map::new()),
             ("commandIds".to_owned(), serde_json::Map::new()),
             ("composerMenus".to_owned(), serde_json::Map::new()),
+            ("connect".to_owned(), serde_json::Map::new()),
             ("contextAndFast".to_owned(), serde_json::Map::new()),
             ("coordinator".to_owned(), serde_json::Map::new()),
             ("eventFilters".to_owned(), serde_json::Map::new()),

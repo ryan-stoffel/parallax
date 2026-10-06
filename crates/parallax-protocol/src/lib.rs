@@ -34,6 +34,7 @@ mod agent;
 mod approval;
 mod cli_account;
 mod composer;
+mod connect;
 mod context;
 mod defaults;
 mod error;
@@ -86,6 +87,10 @@ pub use cli_account::{
 };
 pub use composer::{
     AgentCommand, AgentCommandsParams, AgentCommandsResult, RepoFilesParams, RepoFilesResult,
+};
+pub use connect::{
+    CONNECT_PORT, ConnectDevicesParams, ConnectDevicesResult, DEVICE_ICONS, MAX_DEVICE_NAME_CHARS,
+    TailnetDevice, TailscaleState,
 };
 pub use context::{
     ContextFile, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,

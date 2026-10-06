@@ -75,6 +75,8 @@ beforeEach(() => {
     onConnectionState: () => () => {},
     hosts: async () => [mini],
     onHosts: () => () => {},
+    onConnect: () => () => {},
+    onDevices: () => () => {},
     onLocalName: (listener: (name: string) => void) => {
       listener("This Mac");
       return () => {};

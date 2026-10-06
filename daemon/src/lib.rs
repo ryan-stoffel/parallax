@@ -37,6 +37,8 @@
 //! - `threads`: normal threads behind `thread/*` and `repo/*` (#110): runs with no coordinator
 //!   that belong to a repo entry, or to a scratch repository for a thread with no repo.
 //! - `images`: the caps and checks for images sent with a prompt or message (PLX-191).
+//! - [`tailnet`]: Tailscale's view of this node and its peers, and which peers Parallax Connect
+//!   lets in (0056).
 //! - [`windows`]: every Win32 call plxd makes, and the only module with `unsafe` code. Windows
 //!   only.
 
@@ -67,6 +69,7 @@ pub mod service;
 #[cfg(unix)]
 mod spawn;
 mod store;
+pub mod tailnet;
 mod threads;
 pub mod transport;
 pub mod usage;

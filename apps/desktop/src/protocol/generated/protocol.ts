@@ -358,6 +358,11 @@ export type ParallaxRequests = {
 	 */
 	"host/settings/set": { params: HostSettingsSetParams, result: HostSettings },
 	/**
+	 * `connect/devices`: this node and the tailnet's other nodes of its Tailscale user, and
+	 * whether plxd answers on each (decision 0056). Gated on the `connect` capability.
+	 */
+	"connect/devices": { params: ConnectDevicesParams, result: ConnectDevicesResult },
+	/**
 	 * `inbox/list`: a Project's inbox, oldest first, and the event log's `seq` from before the
 	 * read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
 	 */
@@ -4710,6 +4715,20 @@ export type HostSettings = {
 	 * older plxd, without the `worktreeCleanup` capability, leaves it out.
 	 */
 	cleanWorktrees?: boolean,
+	/**
+	 * Whether plxd listens for this user's other devices on its Tailscale address (decision
+	 * 0056). Off by default. An older plxd, without the `connect` capability, leaves it out.
+	 */
+	connect?: boolean,
+	/**
+	 * This device's nickname for Parallax Connect, when one is set.
+	 */
+	deviceName?: string,
+	/**
+	 * This device's icon for Parallax Connect, when one is set: `laptop`, `desktop`, `mini`, or
+	 * `server`.
+	 */
+	deviceIcon?: string,
 };
 
 /**
@@ -4724,7 +4743,95 @@ export type HostSettingsSetParams = {
 	 * The new `cleanWorktrees`, behind the `worktreeCleanup` capability. Absent leaves it.
 	 */
 	cleanWorktrees?: boolean,
+	/**
+	 * The new `connect`, behind the `connect` capability. Absent leaves it.
+	 */
+	connect?: boolean,
+	/**
+	 * The new `deviceName`, behind the `connect` capability. `""` clears it. Control characters
+	 * are dropped and the rest trimmed to at most 64 characters.
+	 */
+	deviceName?: string,
+	/**
+	 * The new `deviceIcon`, behind the `connect` capability: `laptop`, `desktop`, `mini`, or
+	 * `server`, and `""` clears it. Anything else is invalid params.
+	 */
+	deviceIcon?: string,
 };
+
+/**
+ * Params of `connect/devices`.
+ */
+export type ConnectDevicesParams = Record<symbol, never>;
+
+/**
+ * Result of `connect/devices`: this node and the tailnet's other nodes of this node's
+ * Tailscale user (0056).
+ */
+export type ConnectDevicesResult = {
+	/**
+	 * Whether Tailscale runs on this host.
+	 */
+	tailscale: TailscaleState,
+	/**
+	 * The port plxd listens on while `connect` is on.
+	 */
+	port: number,
+	/**
+	 * Whether this plxd's tailnet listener is bound now.
+	 */
+	listening: boolean,
+	/**
+	 * This node. Absent unless Tailscale is running.
+	 */
+	self?: TailnetDevice,
+	/**
+	 * The other untagged nodes of this node's user, by host name. Tagged and shared nodes are
+	 * left out, and a tagged node lists none.
+	 */
+	devices: Array<TailnetDevice>,
+};
+
+/**
+ * A node on the tailnet.
+ */
+export type TailnetDevice = {
+	/**
+	 * The node's stable ID, such as `nZi1Lj6Rrb11CNTRL`.
+	 */
+	id: string,
+	/**
+	 * The node's host name.
+	 */
+	hostName: string,
+	/**
+	 * The node's `MagicDNS` name, without the trailing dot.
+	 */
+	dnsName: string,
+	/**
+	 * The OS as Tailscale reports it, such as `macOS`, `windows`, `linux`, or `iOS`.
+	 */
+	os: string,
+	/**
+	 * The node's first Tailscale IPv4 address.
+	 */
+	ip: string,
+	/**
+	 * Whether Tailscale sees the node online.
+	 */
+	online: boolean,
+	/**
+	 * Whether plxd answered on the node's port. Only checked when it is online.
+	 */
+	parallax: boolean,
+};
+
+/**
+ * Whether Tailscale runs on a host.
+ *
+ * A newer plxd may send states that are not listed here. Treat those as unknown.
+ */
+export type TailscaleState = "running" | "stopped" | "missing";
 
 /**
  * Params of `inbox/list`. Fails with `projectNotFound` for an unknown project.

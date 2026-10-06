@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { HostInput, SshHost } from "../preload/bridge";
+import { isDeviceIcon, type SavedDevice } from "./connect";
 
 /** `settings.json` in the app's userData folder. Only the main process reads or writes it (0022). */
 export type Settings = {
@@ -13,6 +14,8 @@ export type Settings = {
   ssh?: string;
   /** This computer's name in Parallax, when the user renamed it. */
   localName?: string;
+  /** The Parallax Connect devices found so far (0056), oldest first. */
+  devices?: SavedDevice[];
 };
 
 /**
@@ -32,7 +35,7 @@ export function readSettings(file: string): Settings {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new Error("it isn't a JSON object");
   }
-  const { hosts = [], ssh, localName } = raw as Record<string, unknown>;
+  const { hosts = [], ssh, localName, devices = [] } = raw as Record<string, unknown>;
   if (!Array.isArray(hosts)) throw new Error("`hosts` isn't a list");
   if (ssh !== undefined && typeof ssh !== "string") throw new Error("`ssh` isn't a string");
   if (localName !== undefined && typeof localName !== "string")
@@ -49,6 +52,24 @@ export function readSettings(file: string): Settings {
     const checked = checkHost({ name, destination });
     if (typeof checked === "string") throw new Error(`${where}: ${checked}`);
     if (checked.destination !== destination) throw new Error(`${where} has spaces around it`);
+  }
+  if (!Array.isArray(devices)) throw new Error("`devices` isn't a list");
+  for (const entry of devices as unknown[]) {
+    const { id, hostName, ip, os, name, icon, off, removed } = (entry ?? {}) as Record<
+      string,
+      unknown
+    >;
+    const fields = [id, hostName, ip, os];
+    if (!fields.every((f) => typeof f === "string" && f) || ids.has(`tailnet:${String(id)}`))
+      throw new Error(`device ${JSON.stringify(entry)} needs an id, host name, ip, and os`);
+    ids.add(`tailnet:${String(id)}`);
+    if (
+      (name !== undefined && typeof name !== "string") ||
+      (icon !== undefined && !isDeviceIcon(icon))
+    )
+      throw new Error(`device ${JSON.stringify(entry)} has a bad name or icon`);
+    if ((off !== undefined && off !== true) || (removed !== undefined && removed !== true))
+      throw new Error(`device ${JSON.stringify(entry)} has a bad off or removed`);
   }
   return { ...raw, hosts } as Settings;
 }

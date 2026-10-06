@@ -131,7 +131,7 @@ async fn answers_handshake(socket: &Path) -> bool {
     matches!(Message::from_frame(&frame), Ok(Message::Response(response)) if response.result.is_ok())
 }
 
-fn initialize_params(protocol: ProtocolRange) -> InitializeParams {
+pub fn initialize_params(protocol: ProtocolRange) -> InitializeParams {
     InitializeParams {
         protocol,
         client: ClientInfo {

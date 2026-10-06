@@ -438,7 +438,38 @@ fn last_line(path: &Path, start: u64) -> Option<String> {
 /// # Errors
 ///
 /// Any other I/O error.
-pub async fn bridge<I, O, S>(mut input: I, mut output: O, connection: S) -> io::Result<()>
+pub async fn bridge<I, O, S>(input: I, output: O, connection: S) -> io::Result<()>
+where
+    I: AsyncRead + Unpin,
+    O: AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite,
+{
+    copy_both_ways(input, output, connection, cfg!(windows)).await
+}
+
+/// [`bridge`] for a TCP connection, `plxd dial`'s (0056): the end of `input` shuts down the
+/// connection's write side on every OS.
+///
+/// # Errors
+///
+/// As [`bridge`].
+pub async fn bridge_socket<I, O, S>(input: I, output: O, connection: S) -> io::Result<()>
+where
+    I: AsyncRead + Unpin,
+    O: AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite,
+{
+    copy_both_ways(input, output, connection, false).await
+}
+
+/// The copying behind [`bridge`]. `empty_message` ends the input with a zero-byte write, for
+/// Windows' message pipe, instead of a shutdown.
+async fn copy_both_ways<I, O, S>(
+    mut input: I,
+    mut output: O,
+    connection: S,
+    empty_message: bool,
+) -> io::Result<()>
 where
     I: AsyncRead + Unpin,
     O: AsyncWrite + Unpin,
@@ -447,10 +478,11 @@ where
     let (mut from_plxd, mut to_plxd) = tokio::io::split(connection);
     let upstream = async {
         let copied = tokio::io::copy(&mut input, &mut to_plxd).await;
-        #[cfg(unix)]
-        let shut_down = to_plxd.shutdown().await;
-        #[cfg(windows)]
-        let shut_down = to_plxd.write(&[]).await.map(drop);
+        let shut_down = if empty_message {
+            to_plxd.write(&[]).await.map(drop)
+        } else {
+            to_plxd.shutdown().await
+        };
         copied.and(shut_down)
     };
     let downstream = tokio::io::copy(&mut from_plxd, &mut output);

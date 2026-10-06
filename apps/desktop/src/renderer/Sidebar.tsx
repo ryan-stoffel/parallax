@@ -21,7 +21,6 @@ import {
   GitMerge,
   HardDrive,
   Keyboard,
-  Laptop,
   ListFilter,
   LoaderCircle,
   Palette,
@@ -74,6 +73,8 @@ import { AttentionBadge } from "./AttentionMark";
 import { AutonomyChoice } from "./ProjectPermission";
 import { resumeTime } from "./ResumeCard";
 import { ConnectionStatus } from "./ConnectionStatus";
+import { DeviceIcon } from "./DeviceIcon";
+import { hostIcon } from "./RunTargetMenu";
 import { Avatar, useProfile } from "./profile";
 import { type Host } from "./hosts";
 import { IconPicker } from "./IconPicker";
@@ -536,6 +537,7 @@ export function ThreadList({
         key={item.key}
         thread={t}
         hostId={item.host.id}
+        device={many && item.host.icon ? item.host : undefined}
         title={titleOf(item)}
         run={view.state.runs[t.id]}
         repo={item.repo}
@@ -1456,6 +1458,7 @@ function RowHead({ repo, status }: { repo?: Repo; status: ReactNode }) {
 function ThreadRow({
   thread,
   hostId,
+  device,
   title,
   run,
   repo,
@@ -1477,6 +1480,8 @@ function ThreadRow({
   thread: Thread;
   /** Its host, which a drag onto the composer names (PLX-378). */
   hostId: string;
+  /** Its computer, whose icon shows beside the provider's while there are several (0056). */
+  device?: Host;
   title: string;
   run?: AgentRun;
   repo?: Repo;
@@ -1519,7 +1524,7 @@ function ThreadRow({
     action();
   };
   const Logo = run?.backend ? (backendLogos[run.backend] ?? instanceLogo(run.backend)) : undefined;
-  const hasDetails = !!(run?.branch || run?.diff || Logo);
+  const hasDetails = !!(run?.branch || run?.diff || Logo || device);
   const snoozedNow = !!thread.snoozedUntil && Date.parse(thread.snoozedUntil) > Date.now();
   const mainLabel = (
     <>
@@ -1590,6 +1595,16 @@ function ThreadRow({
               <span className="shrink-0 tabular-nums">
                 <span className="text-added">+{run.diff.insertions}</span>{" "}
                 <span className="text-danger">−{run.diff.deletions}</span>
+              </span>
+            )}
+            {device?.icon && (
+              <span
+                title={device.name}
+                role="img"
+                aria-label={device.name}
+                className="flex shrink-0"
+              >
+                <DeviceIcon icon={device.icon} className="size-3.5" />
               </span>
             )}
             {Logo && <Logo className="size-3.5 shrink-0" />}
@@ -1818,7 +1833,7 @@ function ThreadCard({
           <span className="truncate">{repo.name}</span>
         </li>
         <li>
-          {host.destination ? <Server /> : <Laptop />}
+          {hostIcon(host)}
           <span className="truncate">{host.name}</span>
         </li>
         {run?.branch && (

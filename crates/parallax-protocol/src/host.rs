@@ -106,6 +106,20 @@ pub struct HostSettingsSetParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub clean_worktrees: Option<bool>,
+    /// The new `connect`, behind the `connect` capability. Absent leaves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub connect: Option<bool>,
+    /// The new `deviceName`, behind the `connect` capability. `""` clears it. Control characters
+    /// are dropped and the rest trimmed to at most 64 characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub device_name: Option<String>,
+    /// The new `deviceIcon`, behind the `connect` capability: `laptop`, `desktop`, `mini`, or
+    /// `server`, and `""` clears it. Anything else is invalid params.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub device_icon: Option<String>,
 }
 
 /// This host's settings, the result of `host/settings/get` and `host/settings/set`.
@@ -122,6 +136,20 @@ pub struct HostSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub clean_worktrees: Option<bool>,
+    /// Whether plxd listens for this user's other devices on its Tailscale address (decision
+    /// 0056). Off by default. An older plxd, without the `connect` capability, leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub connect: Option<bool>,
+    /// This device's nickname for Parallax Connect, when one is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub device_name: Option<String>,
+    /// This device's icon for Parallax Connect, when one is set: `laptop`, `desktop`, `mini`, or
+    /// `server`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub device_icon: Option<String>,
 }
 
 #[cfg(test)]

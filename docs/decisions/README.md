@@ -58,6 +58,7 @@ A decision that affects more than one issue gets a record here. Records supersed
 | [0053](0053-cursor-sdk.md) | Cursor threads run through `@cursor/sdk` in a Node sidecar, and sign-in is a Cursor account login in the browser. Supersedes the Cursor parts of [0036](0036-cursor-threads.md) and [0040](0040-provider-instances.md) |
 | [0054](0054-provider-neutral-access-levels.md) | The Access picker offers one ladder for every provider: Supervised, Auto-accept edits, Auto, Full access, and legacy Plan behind a setting. plxd enforces it for ACP agents. Supersedes in part [0027](0027-claude-permission-modes.md) |
 | [0055](0055-opencode-http.md) | OpenCode 1.x threads run through its HTTP server, at the instance's `OPENCODE_SERVER_URL` with `OPENCODE_SERVER_PASSWORD` or one `opencode serve` per run, with `curl` as the client and each access level as session rules; OpenCode 2 stays on ACP. Supersedes the OpenCode row of [0040](0040-provider-instances.md) |
+| [0056](0056-parallax-connect.md) | Parallax Connect: with the `connect` host setting on, plxd listens on its Tailscale IPv4, port 7340, for connections from its own Tailscale user only (`tailscale whois`); the app reaches it with `plxd dial` and connects to every device `connect/devices` finds; `plx-connect` installs Parallax on a device over SSH once |
 
 Numbers are assigned in order. Take the next free number when you start the record, add a row to this table in the same PR, and link the record from its issue.
 

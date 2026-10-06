@@ -133,6 +133,8 @@ beforeEach(() => {
     cloneRepo,
     hosts: async () => sshHosts,
     onHosts: () => () => {},
+    onConnect: () => () => {},
+    onDevices: () => () => {},
     onLocalName: (listener: (name: string) => void) => {
       listener("This Mac");
       return () => {};

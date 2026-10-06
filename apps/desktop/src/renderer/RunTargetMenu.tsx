@@ -1,6 +1,8 @@
 import { ChevronDown, Folder, FolderGit2, Laptop, Server } from "lucide-react";
+
 import { useId, useState, type ToggleEvent } from "react";
 
+import { DeviceIcon } from "./DeviceIcon";
 import { localId, type Host } from "./hosts";
 import { MenuOption, menuButton, menuHeading, menuPanel, moveFocus, type PickerOption } from "./ui";
 
@@ -22,8 +24,12 @@ export const workspaces: (PickerOption & { value: Workspace })[] = [
   },
 ];
 
-/** A host's icon: a laptop for this computer, a server for an SSH host. */
-export const hostIcon = (host: Host) => (host.destination ? <Server /> : <Laptop />);
+/**
+ * A host's icon: its Parallax Connect icon (0056), else a laptop for this computer and a server
+ * for an SSH host.
+ */
+export const hostIcon = (host: Host) =>
+  host.icon ? <DeviceIcon icon={host.icon} /> : host.destination ? <Server /> : <Laptop />;
 
 /**
  * Where a thread runs: which of Parallax's computers, and in a new worktree or the local checkout.

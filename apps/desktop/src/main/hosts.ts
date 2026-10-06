@@ -9,12 +9,27 @@ import { ErrorCodes, type CliKind } from "../protocol/generated/protocol";
 import {
   HOME_VARS,
   NPM_INSTALLS,
+  type ConnectState,
   type ConnectionState,
+  type DeviceHost,
+  type DeviceIcon,
+  iconFor,
   type RendererMethod,
   type RpcResponse,
   type SshHost,
   type SubscribeParams,
 } from "../preload/bridge";
+import {
+  addCommand,
+  deviceHostId,
+  findConnect,
+  installConnectCommand,
+  isDeviceAddress,
+  isDeviceIcon,
+  isSshUser,
+  mergeFound,
+  type SavedDevice,
+} from "./connect";
 import { Connection, sshCommand } from "./connection";
 import { checkHost, readSettings, writeSettings, type Settings } from "./settings";
 import {
@@ -30,8 +45,10 @@ import {
   shellCommand,
   writeTerminal,
   type Command,
+  type SshTarget,
 } from "./terminal";
 import { dataDir, findPlxd, replaceServe, plxdVersion } from "./plxd";
+import { isNightly } from "./updater";
 
 // With PLX_IPC_STATS set, the subscription messages sent to renderers and their JSON bytes, for
 // the load test (PLX-447), which reads `globalThis.ipcStats` through Playwright's `app.evaluate`.
@@ -134,6 +151,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "land/approve": true,
   "land/sendBack": true,
   "agent/wait": true,
+  "connect/devices": true,
 };
 
 /** Every host's connection, by host id: `local`, then each saved SSH host. */
@@ -162,6 +180,29 @@ export function startHosts(): void {
     console.error(settingsError);
   }
   for (const host of settings.hosts) addSshConnection(host);
+  void findConnect(connectProgram(), homedir()).then((found) => {
+    connectInstalled = found;
+    broadcast("parallax:connect", connectState());
+  });
+
+  ipcMain.handle("parallax:connect", () => connectState());
+  ipcMain.handle("parallax:installConnect", async () => {
+    const failed = await runInstall(installConnectCommand(connectProgram()));
+    connectInstalled = failed ? connectInstalled : await findConnect(connectProgram(), homedir());
+    broadcast("parallax:connect", connectState());
+    return failed;
+  });
+  ipcMain.handle("parallax:setConnect", (_event, on: unknown) =>
+    typeof on === "boolean" ? setConnect(on) : "invalid setting",
+  );
+  ipcMain.handle("parallax:devices", () => deviceHosts());
+  ipcMain.handle("parallax:saveDevice", (_event, hostId: unknown, look: unknown) =>
+    saveDevice(hostId, look),
+  );
+  ipcMain.handle("parallax:setDeviceEnabled", (_event, hostId: unknown, enabled: unknown) =>
+    typeof enabled === "boolean" ? setDeviceEnabled(hostId, enabled) : undefined,
+  );
+  ipcMain.handle("parallax:removeDevice", (_event, hostId: unknown) => removeDevice(hostId));
 
   ipcMain.handle("parallax:hosts", () => settings.hosts);
   ipcMain.handle("parallax:saveHost", (_event, input: unknown, id: unknown) => saveHost(input, id));
@@ -175,8 +216,12 @@ export function startHosts(): void {
       .slice(0, 64);
     const { localName: _old, ...rest } = settings;
     const error = saveSettings(label ? { ...rest, localName: label } : rest);
-    if (!error) broadcast("parallax:localName", localName());
-    return error;
+    if (error) return error;
+    broadcast("parallax:localName", localName());
+    // Other Connect devices show this computer by its plxd's name (0056).
+    if (connectOn !== undefined)
+      void connections.get("local")?.request("host/settings/set", { deviceName: label });
+    return undefined;
   });
 
   // Answers `{error}` rather than throwing, so a bad call reads like any failed request.
@@ -253,8 +298,19 @@ export function startHosts(): void {
       if (!isTerminalId(id) || !isObject(target) || !isSize(cols) || !isSize(rows)) {
         return "invalid terminal";
       }
-      const { hostId, cli, provider, install, path } = target;
+      const { hostId, cli, provider, install, path, connect } = target;
       if (typeof hostId !== "string") return "invalid terminal";
+      if (isObject(connect)) {
+        const { device, user } = connect;
+        if (
+          hostId !== "local" ||
+          !isDeviceAddress(device) ||
+          (user !== undefined && !isSshUser(user))
+        )
+          return "invalid terminal";
+        const command = addCommand(device, user, channel(), connectProgram());
+        return openTerminal(event.sender, id, () => Promise.resolve(command), cols, rows);
+      }
       if (isInstallable(install)) {
         return openTerminal(event.sender, id, () => installOn(hostId, install), cols, rows);
       }
@@ -299,10 +355,19 @@ export function startHosts(): void {
   });
 }
 
-/** How a host is reached, if it's an SSH host. */
-function sshOf(hostId: string) {
+/**
+ * How a host's terminals reach it, unless it's this computer: an SSH host by its destination, a
+ * Connect device (0056) by ssh to its Tailscale IP, as `plx-connect add` did. Undefined only for
+ * `local`, so a remote host's command can never run here.
+ */
+function sshOf(hostId: string): SshTarget | undefined {
+  const ssh = settings.ssh ?? "ssh";
   const saved = settings.hosts.find((h) => h.id === hostId);
-  return saved && { destination: saved.destination, ssh: settings.ssh ?? "ssh" };
+  if (saved) return { destination: saved.destination, ssh };
+  if (!hostId.startsWith("tailnet:")) return undefined;
+  const device = savedDevices().find((d) => deviceHostId(d.id) === hostId);
+  // An unknown device has no address; a bare `-` never reaches ssh as one.
+  return { destination: device?.ip ?? "-", ssh };
 }
 
 /**
@@ -330,8 +395,7 @@ async function signInCommand(hostId: string, cli: CliKind): Promise<Command | st
   const host = connections.get(hostId);
   if (!host) return "That host isn't in Parallax anymore.";
   // Decided before asking, so a remote host's path can never run on this computer.
-  const saved = settings.hosts.find((h) => h.id === hostId);
-  const ssh = saved && { destination: saved.destination, ssh: settings.ssh ?? "ssh" };
+  const ssh = sshOf(hostId);
   const answer = await host.request("accounts/list", {});
   if ("error" in answer)
     return `Parallax couldn't ask the host where the CLI is: ${answer.error.message}`;
@@ -349,8 +413,7 @@ async function signInCommand(hostId: string, cli: CliKind): Promise<Command | st
 async function providerSignInCommand(hostId: string, id: string): Promise<Command | string> {
   const host = connections.get(hostId);
   if (!host) return "That host isn't in Parallax anymore.";
-  const saved = settings.hosts.find((h) => h.id === hostId);
-  const ssh = saved && { destination: saved.destination, ssh: settings.ssh ?? "ssh" };
+  const ssh = sshOf(hostId);
   const answer = await host.request("providers/list", { refresh: false });
   if ("error" in answer)
     return `Parallax couldn't ask the host how to sign in: ${answer.error.message}`;
@@ -398,14 +461,12 @@ export const savedHost = (id: string): SshHost | undefined =>
  */
 async function folderCommand(hostId: string, folder: string): Promise<Command | string> {
   // "~" is the host's home folder: here, the user's; over ssh, the login shell's start folder.
-  if (folder === "~" && !settings.hosts.some((h) => h.id === hostId)) folder = homedir();
+  const ssh = sshOf(hostId);
+  if (folder === "~" && !ssh) folder = homedir();
   if (!connections.has(hostId)) return "That host isn't in Parallax anymore.";
-  const saved = settings.hosts.find((h) => h.id === hostId);
   // A Windows path, which can't hold a `"`, goes to the host in double quotes.
-  if (saved && /^[a-z]:\\/i.test(folder) && folder.includes('"'))
-    return `${folder} isn't a folder.`;
-  if (saved)
-    return shellCommand(folder, { destination: saved.destination, ssh: settings.ssh ?? "ssh" });
+  if (ssh && /^[a-z]:\\/i.test(folder) && folder.includes('"')) return `${folder} isn't a folder.`;
+  if (ssh) return shellCommand(folder, ssh);
   const isFolder =
     path.isAbsolute(folder) && (await stat(folder).catch(() => undefined))?.isDirectory();
   return isFolder ? shellCommand(folder) : `${folder} isn't a folder on this computer anymore.`;
@@ -456,18 +517,29 @@ async function replaceOtherServe(state: ConnectionState): Promise<void> {
   if (stopped) connections.get("local")?.retry();
 }
 
-/** Starts a host's connection, replacing any it had. */
-function addConnection(hostId: string, command: () => string[] | undefined, destination?: string) {
+/**
+ * Starts a host's connection, replacing any it had. `destination` names an SSH host and `device`
+ * a Connect device in its errors.
+ */
+function addConnection(
+  hostId: string,
+  command: () => string[] | undefined,
+  { destination, device }: { destination?: string; device?: string } = {},
+) {
   connections.get(hostId)?.dispose();
   const created = new Connection({
     command,
     ...(destination !== undefined && { destination }),
+    ...(device !== undefined && { device }),
     clientVersion: app.getVersion(),
     onState: (state) => {
       // A replaced or removed connection has nothing more to say.
       if (connections.get(hostId) !== created) return;
       broadcast("parallax:state", hostId, state);
       if (hostId === "local") void replaceOtherServe(state);
+      if (state.status !== "connected") return;
+      if (hostId === "local") void refreshConnect();
+      else if (hostId.startsWith("tailnet:")) void readLook(hostId);
     },
   });
   connections.set(hostId, created);
@@ -475,7 +547,7 @@ function addConnection(hostId: string, command: () => string[] | undefined, dest
 }
 
 function addSshConnection({ id, destination }: SshHost): void {
-  addConnection(id, () => sshCommand(destination, settings.ssh), destination);
+  addConnection(id, () => sshCommand(destination, settings.ssh), { destination });
 }
 
 /** `window.parallax.saveHost`. Its input comes from the renderer, so it's checked here. */
@@ -516,6 +588,210 @@ function saveSettings(next: Settings): string | undefined {
   settings = next;
   broadcast("parallax:hosts", next.hosts);
   return undefined;
+}
+
+// Parallax Connect (0056): while the local plxd's `connect` is on, this app keeps a connection to
+// every device `connect/devices` finds answering on the tailnet, as host `tailnet:<node id>`.
+
+/** Whether plx-connect is installed here, undefined until looked for. */
+let connectInstalled: boolean | undefined;
+/** The local plxd's `connect`, undefined while unknown. */
+let connectOn: boolean | undefined;
+/** This computer's icon, from its plxd, when the user picked one. */
+let localIcon: DeviceIcon | undefined;
+let discovery: NodeJS.Timeout | undefined;
+const DISCOVERY_MS = 15_000;
+
+const connectProgram = () => ({ platform: process.platform, env: process.env });
+
+/**
+ * The channel `plx-connect add` installs: this app's own (0028). A development build follows
+ * nightly, the channel with releases.
+ */
+const channel = () => (isNightly(app.getVersion()) || !app.isPackaged ? "nightly" : "stable");
+
+function connectState(): ConnectState {
+  return {
+    ...(connectInstalled !== undefined && { installed: connectInstalled }),
+    ...(connectOn !== undefined && { on: connectOn }),
+    icon: localIcon ?? iconFor(localName()),
+    channel: channel(),
+  };
+}
+
+const savedDevices = () => settings.devices ?? [];
+
+/** The devices as the renderer lists them, by name, less removed ones. None while Connect is off. */
+function deviceHosts(): DeviceHost[] {
+  if (!connectOn) return [];
+  return savedDevices()
+    .filter((d) => !d.removed)
+    .map((d) => ({
+      id: deviceHostId(d.id),
+      name: d.name || d.hostName,
+      icon: d.icon ?? iconFor(d.hostName),
+      detected: iconFor(d.hostName),
+      hostName: d.hostName,
+      ip: d.ip,
+      os: d.os,
+      enabled: !d.off,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Keeps `devices`, in memory even when settings.json can't be written. */
+function keepDevices(devices: SavedDevice[]): void {
+  if (saveSettings({ ...settings, devices })) settings = { ...settings, devices };
+}
+
+/** Reads the local plxd's `connect` and this computer's icon, then follows them. */
+async function refreshConnect(): Promise<void> {
+  const answer = await connections.get("local")?.request("host/settings/get", {});
+  const result = answer && "result" in answer ? answer.result : undefined;
+  followConnect(result?.connect, result?.deviceIcon);
+}
+
+/** Connects to the devices and looks for more while `on`; drops their connections otherwise. */
+function followConnect(on: boolean | undefined, icon?: string): void {
+  connectOn = on;
+  localIcon = isDeviceIcon(icon) ? icon : undefined;
+  if (on) {
+    for (const device of savedDevices()) addDeviceConnection(device);
+    if (!discovery) {
+      discovery = setInterval(() => void discover(), DISCOVERY_MS);
+      void discover();
+    }
+  } else {
+    clearInterval(discovery);
+    discovery = undefined;
+    for (const [id, each] of connections) {
+      if (!id.startsWith("tailnet:")) continue;
+      each.dispose();
+      connections.delete(id);
+    }
+  }
+  broadcast("parallax:connect", connectState());
+  broadcast("parallax:devices", deviceHosts());
+}
+
+/** A device's connection, `plxd dial` to its current address, unless it has one or is off. */
+function addDeviceConnection(device: SavedDevice): void {
+  const id = deviceHostId(device.id);
+  if (connections.has(id) || device.off || device.removed) return;
+  addConnection(
+    id,
+    () => {
+      const plxd = localPlxd();
+      const ip = savedDevices().find((d) => d.id === device.id)?.ip;
+      return plxd === undefined || !ip ? undefined : [plxd, "dial", ip];
+    },
+    { device: device.name || device.hostName },
+  );
+}
+
+/** Asks the local plxd for the tailnet's devices, and connects to any new one. */
+async function discover(): Promise<void> {
+  const answer = await connections.get("local")?.request("connect/devices", {});
+  if (!connectOn || !answer || "error" in answer) return;
+  const { devices, changed } = mergeFound(savedDevices(), answer.result.devices);
+  if (changed) keepDevices(devices);
+  for (const device of devices) addDeviceConnection(device);
+  // Names and icons given on other computers.
+  await Promise.all(devices.map((d) => readLook(deviceHostId(d.id), false)));
+  broadcast("parallax:devices", deviceHosts());
+}
+
+/** Reads a connected device's name and icon from its plxd, and keeps them. */
+async function readLook(hostId: string, announce = true): Promise<void> {
+  const host = connections.get(hostId);
+  if (host?.state.status !== "connected") return;
+  const answer = await host.request("host/settings/get", {});
+  if ("error" in answer) return;
+  const nodeId = hostId.slice("tailnet:".length);
+  const old = savedDevices().find((d) => d.id === nodeId);
+  const name = answer.result.deviceName || undefined;
+  const icon = isDeviceIcon(answer.result.deviceIcon) ? answer.result.deviceIcon : undefined;
+  if (!old || (old.name === name && old.icon === icon)) return;
+  const { name: _name, icon: _icon, ...rest } = old;
+  const next = { ...rest, ...(name && { name }), ...(icon && { icon }) };
+  keepDevices(savedDevices().map((d) => (d === old ? next : d)));
+  if (announce) broadcast("parallax:devices", deviceHosts());
+}
+
+/** `window.parallax.setConnect`. Resolves to an error for people. */
+async function setConnect(on: boolean): Promise<string | undefined> {
+  const answer = await connections.get("local")?.request("host/settings/set", { connect: on });
+  if (!answer || "error" in answer) {
+    const why = answer && "error" in answer ? answer.error.message : "plxd isn't connected";
+    return `Parallax couldn't turn Connect ${on ? "on" : "off"}: ${why}`;
+  }
+  if (answer.result.connect === undefined)
+    return "This computer's plxd doesn't have Parallax Connect yet. Update Parallax.";
+  followConnect(answer.result.connect, answer.result.deviceIcon);
+  return undefined;
+}
+
+/** `window.parallax.saveDevice`: a name or icon, saved on the device's own plxd. */
+async function saveDevice(hostId: unknown, look: unknown): Promise<string | undefined> {
+  if (typeof hostId !== "string" || !isObject(look)) return "invalid device";
+  const { name, icon } = look;
+  if (name !== undefined && typeof name !== "string") return "invalid device";
+  if (icon !== undefined && !isDeviceIcon(icon)) return "invalid device";
+  const host = connections.get(hostId);
+  if (!host || (hostId !== "local" && !hostId.startsWith("tailnet:")))
+    return "That device isn't in Parallax anymore.";
+  const answer = await host.request("host/settings/set", {
+    ...(name !== undefined && { deviceName: name }),
+    ...(icon !== undefined && { deviceIcon: icon }),
+  });
+  if ("error" in answer) return `Parallax couldn't save it on that device: ${answer.error.message}`;
+  if (hostId !== "local") {
+    await readLook(hostId);
+    return undefined;
+  }
+  localIcon = isDeviceIcon(answer.result.deviceIcon) ? answer.result.deviceIcon : undefined;
+  broadcast("parallax:connect", connectState());
+  return undefined;
+}
+
+/** Drops a device's connection, if it has one. */
+function dropDeviceConnection(hostId: string): void {
+  connections.get(hostId)?.dispose();
+  connections.delete(hostId);
+}
+
+/** A saved device by host id. */
+const deviceOf = (hostId: unknown) =>
+  typeof hostId === "string"
+    ? savedDevices().find((d) => deviceHostId(d.id) === hostId)
+    : undefined;
+
+/**
+ * `window.parallax.setDeviceEnabled`. On also clears `removed`; for a device not found yet, it
+ * looks now, and `discover` adds it.
+ */
+async function setDeviceEnabled(hostId: unknown, enabled: boolean): Promise<void> {
+  const device = deviceOf(hostId);
+  if (!device) {
+    if (enabled && connectOn) await discover();
+    return;
+  }
+  const { off: _off, removed: _removed, ...rest } = device;
+  const next: SavedDevice = enabled ? rest : { ...rest, off: true };
+  keepDevices(savedDevices().map((d) => (d === device ? next : d)));
+  if (enabled) addDeviceConnection(next);
+  else dropDeviceConnection(deviceHostId(device.id));
+  broadcast("parallax:devices", deviceHosts());
+}
+
+/** `window.parallax.removeDevice`. The device stays saved as removed, so discovery skips it. */
+function removeDevice(hostId: unknown): void {
+  const device = deviceOf(hostId);
+  if (!device) return;
+  const { off: _off, ...rest } = device;
+  keepDevices(savedDevices().map((d) => (d === device ? { ...rest, removed: true as const } : d)));
+  dropDeviceConnection(deviceHostId(device.id));
+  broadcast("parallax:devices", deviceHosts());
 }
 
 function connection(hostId: unknown): Connection {
