@@ -14,6 +14,7 @@ import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
 import { appShortcut } from "./ui";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+HTMLElement.prototype.hidePopover = () => {};
 
 // xterm.js needs a real canvas; the stand-in only marks where the terminal is.
 vi.mock("./SignInTerminal", () => ({
@@ -71,6 +72,8 @@ beforeEach(() => {
   };
   window.parallax = {
     platform: "darwin",
+    terminalApp: async () => null,
+    openTargetIcons: async () => ({}),
     connectionState: async (hostId) => states[hostId]!,
     onConnectionState: () => () => {},
     hosts: async () => [mini],
@@ -1192,4 +1195,25 @@ test("General's Legacy Plan mode switch lists Plan in the Access picker", async 
   await click(legacy);
   expect(accessPrefs.get()).toEqual({ legacyPlan: true });
   accessPrefs.set(accessDefaults);
+});
+
+test("General's Terminal row chooses a terminal app, and Open folders in lists it (PLX-585)", async () => {
+  let chosen = false;
+  window.parallax.openTargets = async () => (chosen ? ["files", "terminal"] : ["files"]);
+  window.parallax.chooseTerminalApp = async () => {
+    chosen = true;
+    return "Ghostty";
+  };
+  window.parallax.version = async () => "1.2.3";
+  await renderSettings("general");
+  const choose = document.querySelector<HTMLButtonElement>(
+    '[role="menu"][aria-label="Terminal"] [role="menuitemradio"]:last-child',
+  )!;
+  expect(choose.textContent).toContain("Choose an app…");
+  await click(choose);
+  expect(document.querySelector('[aria-label="Terminal: Ghostty"]')).not.toBeNull();
+  const options = document.querySelectorAll(
+    '[role="menu"][aria-label="Open folders in"] [role="menuitemradio"]',
+  );
+  expect([...options].map((o) => o.textContent)).toEqual(["Finder", "Ghostty"]);
 });

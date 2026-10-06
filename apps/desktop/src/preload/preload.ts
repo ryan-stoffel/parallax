@@ -128,6 +128,8 @@ const bridge: ParallaxBridge = {
   openTargetIcons: () => ipcRenderer.invoke("parallax:openTargetIcons"),
   openFolder: (hostId, target, folder) =>
     ipcRenderer.invoke("parallax:openFolder", hostId, target, folder),
+  terminalApp: () => ipcRenderer.invoke("parallax:terminalApp"),
+  chooseTerminalApp: () => ipcRenderer.invoke("parallax:chooseTerminalApp"),
 
   onProfile(listener) {
     const forward = (_event: unknown, profile: Profile | null) => listener(profile);

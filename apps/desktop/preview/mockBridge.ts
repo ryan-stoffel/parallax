@@ -983,6 +983,9 @@ const folderTree: Record<string, string[]> = {
 };
 const expand = (p: string) => p.replace(/^~(?=\/|$)/, HOME).replace(/\/+$/, "") || "/";
 
+// The terminal app Settings > General chose, once Choose… is clicked.
+let mockTerminal: string | null = null;
+
 export const mockBridge: ParallaxBridge = {
   platform: "darwin",
   version: () => delay("0.0.0-preview"),
@@ -1175,9 +1178,18 @@ export const mockBridge: ParallaxBridge = {
     return () => terminalListeners.delete(id);
   },
 
-  openTargets: (hostId) => delay(hostId === LOCAL ? ["cursor", "vscode", "files"] : []),
+  openTargets: (hostId) =>
+    delay(
+      hostId !== LOCAL
+        ? []
+        : mockTerminal
+          ? ["cursor", "vscode", "files", "terminal"]
+          : ["cursor", "vscode", "files"],
+    ),
   openTargetIcons: () => delay({}),
   openFolder: () => delay(undefined),
+  terminalApp: () => delay(mockTerminal),
+  chooseTerminalApp: () => delay((mockTerminal = "Ghostty")),
 
   onProfile: (listener) => {
     listener({

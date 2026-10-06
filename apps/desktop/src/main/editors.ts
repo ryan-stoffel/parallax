@@ -4,7 +4,7 @@ import path from "node:path";
 
 import type { OpenTarget } from "../preload/bridge";
 
-export type Editor = Exclude<OpenTarget, "files">;
+export type Editor = Exclude<OpenTarget, "files" | "terminal">;
 
 /**
  * Where each editor is: its CLI's name on PATH, the CLI inside its macOS app bundle, and on
@@ -84,17 +84,22 @@ export const isFolderPath = (value: unknown): value is string =>
 export const isDirectory = (folder: string): boolean =>
   statSync(folder, { throwIfNoEntry: false })?.isDirectory() ?? false;
 
-/** Starts `command` on its own, without a shell. Resolves to an error for people, or undefined. */
+/**
+ * Starts `command` on its own, in `cwd` if given, without a shell. Resolves to an error for
+ * people, or undefined.
+ */
 export function launch({
   file,
   args,
+  cwd,
 }: {
   file: string;
   args: string[];
+  cwd?: string;
 }): Promise<string | undefined> {
   return new Promise((resolve) => {
-    const child = spawn(file, args, { detached: true, stdio: "ignore", shell: false });
-    child.once("error", (error) => resolve(`The editor didn't start: ${error.message}`));
+    const child = spawn(file, args, { cwd, detached: true, stdio: "ignore", shell: false });
+    child.once("error", (error) => resolve(`The app didn't start: ${error.message}`));
     child.once("spawn", () => {
       child.unref();
       resolve(undefined);

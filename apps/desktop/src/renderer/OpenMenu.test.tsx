@@ -36,3 +36,19 @@ test("draws a target's app icon where main has one, and its mark where it doesn'
     ["Finder", "svg"],
   ]);
 });
+
+test("lists the chosen terminal app by its name (PLX-585)", async () => {
+  localStorage.clear();
+  window.parallax = {
+    platform: "darwin",
+    openTargets: async () => ["files", "terminal"],
+    openTargetIcons: async () => ({}),
+    terminalApp: async () => "Ghostty",
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  unmount = () => root.unmount();
+  await act(async () => root.render(<OpenMenu hostId="local" folder="/repo" />));
+
+  const items = [...document.querySelectorAll('[role="menuitem"] span.flex-1')];
+  expect(items.map((item) => item.textContent)).toEqual(["Finder", "Ghostty"]);
+});

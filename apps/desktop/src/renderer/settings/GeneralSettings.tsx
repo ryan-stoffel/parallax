@@ -1,3 +1,4 @@
+import { Plus, SquareTerminal } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { OpenTarget } from "../../preload/bridge";
@@ -8,7 +9,7 @@ import { EffortMenu } from "../EffortMenu";
 import { localId, useHosts } from "../hosts";
 import { ModelMenu } from "../ModelMenu";
 import { useCatalog, type Provider } from "../models";
-import { nameOf, OPEN_TARGET_KEY } from "../OpenMenu";
+import { nameOf, OPEN_TARGET_KEY, TERMINAL_CHOSEN, targetIcon } from "../OpenMenu";
 import {
   behaviorPrefs,
   newThreadPrefs,
@@ -34,14 +35,27 @@ const pickerBox = "rounded-md border border-border bg-background";
  */
 export function GeneralSettings() {
   const [showNotices, setShowNotices] = useState(false);
-  const [targets, setTargets] = useState<OpenTarget[]>([]);
+  // Undefined until main answers, so the row doesn't flash "No apps found".
+  const [targets, setTargets] = useState<OpenTarget[]>();
   const [chosen, setChosen] = useState(() => localStorage.getItem(OPEN_TARGET_KEY));
+  const [terminal, setTerminal] = useState<string | null>(null);
+  const [icons, setIcons] = useState<Partial<Record<OpenTarget, string>>>({});
   const [version, setVersion] = useState<string>();
   useEffect(() => {
     void window.parallax.openTargets(localId).then(setTargets);
+    void window.parallax.terminalApp().then(setTerminal);
+    void window.parallax.openTargetIcons().then(setIcons);
     void window.parallax.version().then(setVersion);
   }, []);
-  const current = targets.find((t) => t === chosen) ?? targets[0];
+  const chooseTerminal = async () => {
+    const name = await window.parallax.chooseTerminalApp();
+    if (!name) return;
+    setTerminal(name);
+    setIcons(await window.parallax.openTargetIcons());
+    setTargets(await window.parallax.openTargets(localId));
+    window.dispatchEvent(new Event(TERMINAL_CHOSEN));
+  };
+  const current = targets?.find((t) => t === chosen) ?? targets?.[0];
   const sidebar = sidebarPrefs.use();
   const setSidebar = (patch: Partial<SidebarPrefs>) =>
     sidebarPrefs.set({ ...sidebarPrefs.get(), ...patch });
@@ -89,22 +103,49 @@ export function GeneralSettings() {
           title="Open folders in"
           description="What Open and its shortcut use, until you pick another from its menu."
         >
-          <select
-            aria-label="Open folders in"
-            value={current ?? ""}
-            disabled={!targets.length}
-            onChange={(e) => {
-              localStorage.setItem(OPEN_TARGET_KEY, e.target.value);
-              setChosen(e.target.value);
-            }}
-            className={selectClass}
-          >
-            {targets.map((t) => (
-              <option key={t} value={t}>
-                {nameOf(t)}
-              </option>
-            ))}
-          </select>
+          {current ? (
+            <span className={pickerBox}>
+              <Picker
+                label="Open folders in"
+                value={current}
+                onChange={(value) => {
+                  localStorage.setItem(OPEN_TARGET_KEY, value);
+                  setChosen(value);
+                }}
+                options={(targets ?? []).map((t) => ({
+                  value: t,
+                  label: nameOf(t, terminal),
+                  icon: targetIcon(t, icons),
+                }))}
+                align="end"
+              />
+            </span>
+          ) : (
+            targets && <span className="text-[13px] text-muted-foreground">No apps found</span>
+          )}
+        </Row>
+        <Row title="Terminal" description="The terminal Open lists for this computer's threads.">
+          <span className={pickerBox}>
+            <Picker
+              label="Terminal"
+              value={terminal ? "terminal" : "none"}
+              onChange={(value) => {
+                if (value === "choose") void chooseTerminal();
+              }}
+              options={[
+                terminal
+                  ? { value: "terminal", label: terminal, icon: targetIcon("terminal", icons) }
+                  : { value: "none", label: "None", icon: <SquareTerminal /> },
+                {
+                  value: "choose",
+                  label: terminal ? "Choose another app…" : "Choose an app…",
+                  icon: <Plus />,
+                  divider: true,
+                },
+              ]}
+              align="end"
+            />
+          </span>
         </Row>
       </Section>
       <Behavior />
