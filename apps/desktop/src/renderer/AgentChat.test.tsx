@@ -1229,6 +1229,36 @@ test("the pencil before the agent answers stops the run and sends the message as
   expect(document.querySelector('textarea[aria-label="Edit message"]')).toBeNull();
 });
 
+test("Cancel on an edited follow-up plxd dropped offers it again", async () => {
+  const { request, emit } = fakeBridge(4);
+  await renderChat();
+  type("Also mention the tests.");
+  await act(async () => {
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  const send = request.mock.calls.find(([, method]) => method === "agent/send")!;
+  const { turnId } = send[2] as { turnId: string };
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Edit message"]')!.click(),
+  );
+  emit({
+    type: "event",
+    event: {
+      subscription: "s",
+      seq: 50,
+      time: "",
+      event: { kind: "agent.output", runId, items: [{ kind: "followUpDropped", turnId }] },
+    },
+  });
+  const sendAgain = () =>
+    [...document.querySelectorAll("button")].find((b) => b.textContent === "Send again");
+  expect(sendAgain()).toBeUndefined();
+  await act(async () =>
+    [...document.querySelectorAll("button")].find((b) => b.textContent === "Cancel")!.click(),
+  );
+  expect(sendAgain()).toBeDefined();
+});
+
 test("a finished run opens a pull request titled like its thread, then links to it", async () => {
   const openPr = () =>
     [...document.querySelectorAll("button")].find((b) => b.textContent === "Open PR");

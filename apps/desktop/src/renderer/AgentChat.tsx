@@ -407,13 +407,12 @@ export function AgentChat({
               ? { kind: "pending", key: "pending:prompt", text: prompt }
               : { kind: "user", key: "prompt", text: prompt },
           ];
-    // The message being edited shows as its editor instead.
-    return listed.filter(
-      (r) =>
-        !editing ||
-        (r.key !== editing.row.key &&
-          !(editing.row.turnId && "turnId" in r && r.turnId === editing.row.turnId)),
-    );
+    if (!editing) return listed;
+    // The message being edited shows as its editor instead: by its turn, or with none (a first
+    // prompt shown before plxd logs it, under another key once it does), the latest message.
+    const { turnId } = editing.row;
+    const at = turnId ? -1 : listed.findLastIndex((r) => r.kind === "user" || r.kind === "pending");
+    return listed.filter((r, i) => i !== at && !(turnId && "turnId" in r && r.turnId === turnId));
   }, [items, sent, prompt, going, queue, cancelled, editing]);
   // The user's prompts, for the composer's Up: not Parallax's wake-ups or other threads' messages.
   const history = useMemo(
@@ -491,6 +490,15 @@ export function AgentChat({
     setResendError(undefined);
     if (back.row.turnId) setCancelled((prev) => new Set(prev).add(back.row!.turnId!));
     setEditing({ row: back.row, text: back.text, images: await images, threads: back.threads });
+  };
+  // Cancel leaves the run stopped. A message plxd dropped gets its notice and Send again back.
+  const cancelEdit = () => {
+    const turnId = editing?.row.turnId;
+    setEditing(undefined);
+    if (!turnId) return;
+    const without = (prev: ReadonlySet<string>) => new Set([...prev].filter((t) => t !== turnId));
+    setCancelled(without);
+    setResent(without);
   };
   // A sent edit goes once the run has stopped, so it starts a turn rather than queueing.
   const stopped = !!run && !isRunning(run.status);
@@ -617,7 +625,7 @@ export function AgentChat({
                     loadImage={showImage}
                     disabledReason={disabledReason}
                     onSend={(text, images) => setEditing({ ...editing, text, images, ready: true })}
-                    onCancel={() => setEditing(undefined)}
+                    onCancel={cancelEdit}
                   />
                 ) : (
                   run?.status === "waiting" && (
