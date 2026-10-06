@@ -328,6 +328,15 @@ body {
   }
 }
 
+/* No scrollbars anywhere. Panes still scroll by wheel, trackpad, and keys. The
+   terminal draws its own scrollbar as an element, so that's hidden too. */
+* {
+  scrollbar-width: none;
+}
+.xterm .xterm-scrollable-element > .scrollbar {
+  display: none;
+}
+
 /* Glass edges: every fully bordered box catches a faint light along its top edge and a sheen
    that fades down, so it lifts a little off the background. Filled buttons and switches get a
    brighter one. In the components layer, so a utility still wins; the edge is also
