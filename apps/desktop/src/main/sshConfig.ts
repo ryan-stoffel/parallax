@@ -4,10 +4,14 @@ import path from "node:path";
 // What Add host suggests (PLX-580): the hosts ssh already knows, from the user's ssh config and
 // known_hosts. Only names leave main; nothing here is ever written.
 
+/** A config line without a trailing ` # comment`, which OpenSSH 8.7 and later ignore. */
+const uncommented = (line: string) => line.replace(/\s#.*$/, "");
+
 /** The `Host` names in one ssh config file's text, without wildcard or negated patterns. */
 export function configHosts(text: string): string[] {
   const hosts: string[] = [];
-  for (const line of text.split(/\r?\n/)) {
+  for (const raw of text.split(/\r?\n/)) {
+    const line = uncommented(raw);
     const match = /^\s*Host\s+(.+?)\s*$/i.exec(line);
     if (!match) continue;
     for (const name of match[1]!.split(/\s+/)) {
@@ -21,7 +25,8 @@ export function configHosts(text: string): string[] {
 /** The `Include` patterns in one ssh config file's text. */
 export function configIncludes(text: string): string[] {
   const includes: string[] = [];
-  for (const line of text.split(/\r?\n/)) {
+  for (const raw of text.split(/\r?\n/)) {
+    const line = uncommented(raw);
     const match = /^\s*Include\s+(.+?)\s*$/i.exec(line);
     if (match) includes.push(...match[1]!.split(/\s+/).map((p) => p.replace(/^"|"$/g, "")));
   }

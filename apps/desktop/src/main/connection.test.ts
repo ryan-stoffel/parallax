@@ -419,8 +419,10 @@ test("ssh failures read as what to do", () => {
 test("an SSH host without plxd on PATH is reached through plxd where Parallax installs it", () => {
   expect(sshCommand("mini").slice(-3)).toEqual(["mini", "plxd", "attach"]);
   expect(sshCommand("mini", "ssh", true).slice(-2)).toEqual(["mini", LOCATE_PLXD]);
-  // One argument, which the host's login shell hands to sh: the app in either channel and
-  // place, then plx-connect's ~/.local/bin, and 127 when none is there.
+  // One argument, which the host's login shell hands to sh: PATH first, so a Retry after adding
+  // plxd to it works, then plx-connect's ~/.local/bin, then the app in either channel and
+  // place, and 127 when none is there.
+  expect(LOCATE_PLXD).toMatch(/^sh -c 'command -v plxd >\/dev\/null && exec plxd attach; /);
   for (const path of [
     '"$HOME/.local/bin/plxd"',
     '"/Applications/Parallax.app/Contents/Resources/plxd"',

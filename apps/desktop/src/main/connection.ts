@@ -95,12 +95,12 @@ const MUTATING_METHODS = new Set([
 export const backoffMs = (failures: number) => Math.min(1000 * 2 ** failures, 10_000);
 
 /**
- * Runs `plxd attach` from where Parallax and plx-connect put plxd on a macOS or Linux host
- * (PLX-580): `~/.local/bin`, or inside the app in `/Applications` or `~/Applications`, either
- * channel. A computer with Parallax from the dmg has no plxd on PATH. Exits 127 when none is
+ * Runs `plxd attach` on a macOS or Linux host from PATH, where it may have been added since, else
+ * from where Parallax and plx-connect put plxd (PLX-580): `~/.local/bin`, or inside the app in
+ * `/Applications` or `~/Applications`, either channel. A computer with Parallax from the dmg has no plxd on PATH. Exits 127 when none is
  * there. It's one argument to ssh, which the host's login shell runs.
  */
-export const LOCATE_PLXD = `sh -c 'for p in "$HOME/.local/bin/plxd" "/Applications/Parallax.app/Contents/Resources/plxd" "/Applications/Parallax (Nightly).app/Contents/Resources/plxd" "$HOME/Applications/Parallax.app/Contents/Resources/plxd" "$HOME/Applications/Parallax (Nightly).app/Contents/Resources/plxd"; do [ -x "$p" ] && exec "$p" attach; done; exit 127'`;
+export const LOCATE_PLXD = `sh -c 'command -v plxd >/dev/null && exec plxd attach; for p in "$HOME/.local/bin/plxd" "/Applications/Parallax.app/Contents/Resources/plxd" "/Applications/Parallax (Nightly).app/Contents/Resources/plxd" "$HOME/Applications/Parallax.app/Contents/Resources/plxd" "$HOME/Applications/Parallax (Nightly).app/Contents/Resources/plxd"; do [ -x "$p" ] && exec "$p" attach; done; exit 127'`;
 
 /**
  * The command that reaches an SSH host's plxd (0007, 0022): `plxd attach` on its PATH, or with

@@ -12,11 +12,12 @@ test("an ssh config's Host names, without patterns", () => {
     "Host github-1password",
     "    HostName github.com",
     "host mini devbox  ",
+    "Host office # the Mac at work",
     'Host "quoted"',
     "Host * !bastion web-?",
     "  Host *.example.com",
   ].join("\n");
-  expect(configHosts(text)).toEqual(["github-1password", "mini", "devbox", "quoted"]);
+  expect(configHosts(text)).toEqual(["github-1password", "mini", "devbox", "office", "quoted"]);
 });
 
 test("known_hosts' plain names, skipping hashed, marked, and commented lines", () => {
@@ -36,7 +37,7 @@ test("suggestions follow Include, with globs, then known_hosts, each once", () =
   const home = mkdtempSync(path.join(tmpdir(), "parallax-ssh-"));
   mkdirSync(path.join(home, ".ssh/conf.d"), { recursive: true });
   const write = (file: string, text: string) => writeFileSync(path.join(home, ".ssh", file), text);
-  write("config", "Include config.local conf.d/*.conf\nHost github.com\n");
+  write("config", "Include config.local conf.d/*.conf # mine\nHost github.com\n");
   write("config.local", "Host mac-mini\n  HostName 100.74.190.83\nInclude config\n");
   write("conf.d/a.conf", "Host devbox\n");
   write("conf.d/b.txt", "Host ignored\n");
