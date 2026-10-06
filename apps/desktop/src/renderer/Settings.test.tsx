@@ -72,6 +72,7 @@ beforeEach(() => {
   window.parallax = {
     platform: "darwin",
     terminalApp: async () => null,
+    openTargetIcons: async () => ({}),
     connectionState: async (hostId) => states[hostId]!,
     onConnectionState: () => () => {},
     hosts: async () => [mini],

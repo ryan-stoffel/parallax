@@ -37,16 +37,19 @@ export function GeneralSettings() {
   const [targets, setTargets] = useState<OpenTarget[]>([]);
   const [chosen, setChosen] = useState(() => localStorage.getItem(OPEN_TARGET_KEY));
   const [terminal, setTerminal] = useState<string | null>(null);
+  const [terminalIcon, setTerminalIcon] = useState<string>();
   const [version, setVersion] = useState<string>();
   useEffect(() => {
     void window.parallax.openTargets(localId).then(setTargets);
     void window.parallax.terminalApp().then(setTerminal);
+    void window.parallax.openTargetIcons().then((icons) => setTerminalIcon(icons.terminal));
     void window.parallax.version().then(setVersion);
   }, []);
   const chooseTerminal = async () => {
     const name = await window.parallax.chooseTerminalApp();
     if (!name) return;
     setTerminal(name);
+    setTerminalIcon((await window.parallax.openTargetIcons()).terminal);
     setTargets(await window.parallax.openTargets(localId));
     window.dispatchEvent(new Event(TERMINAL_CHOSEN));
   };
@@ -123,6 +126,12 @@ export function GeneralSettings() {
               : "Choose the terminal app Open can open a thread's folder in."
           }
         >
+          {terminal && (
+            <span className="flex items-center gap-1.5 text-[13px]">
+              {terminalIcon && <img src={terminalIcon} alt="" className="size-4 shrink-0" />}
+              {terminal}
+            </span>
+          )}
           <button type="button" onClick={() => void chooseTerminal()} className={quietButton}>
             {terminal ? "Change…" : "Choose…"}
           </button>
