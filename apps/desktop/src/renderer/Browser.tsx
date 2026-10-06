@@ -1,23 +1,46 @@
 import type { DidFailLoadEvent, WebviewTag } from "electron";
-import { ArrowLeft, ArrowRight, Globe, RotateCw, TriangleAlert } from "lucide-react";
+import { ArrowLeft, ArrowRight, Globe, RotateCw, TriangleAlert, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { IconButton } from "./ui";
 
+/** Google's results page for `query`. */
+export const searchUrl = (query: string) =>
+  `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+
 /**
- * The page an address names, or undefined unless it's http or https. An address without a
- * scheme, such as `localhost:5173`, is http.
+ * The page the address bar's text opens, or undefined for nothing or a scheme other than http or
+ * https. A host without a scheme is https, except localhost, an IP address, or a host with a port,
+ * which are http. Anything else, such as words or a single word, searches Google.
  */
 export function browserUrl(address: string): string | undefined {
   const text = address.trim();
   if (!text) return undefined;
   // A scheme is letters then a colon, which a port's digits don't follow.
-  const url = URL.parse(/^[a-z][a-z\d+.-]*:(?!\d)/i.test(text) ? text : `http://${text}`);
-  return url?.protocol === "http:" || url?.protocol === "https:" ? url.href : undefined;
+  if (/^[a-z][a-z\d+.-]*:(?!\d)/i.test(text)) {
+    const url = URL.parse(text);
+    if (url?.protocol === "http:" || url?.protocol === "https:") return url.href;
+    return undefined;
+  }
+  if (/\s/.test(text)) return searchUrl(text);
+  const url = URL.parse(`http://${text}`);
+  if (!url) return searchUrl(text);
+  const host = url.hostname;
+  const local =
+    host === "localhost" || /^[\d.]+$/.test(host) || host.startsWith("[") || url.port !== "";
+  if (local) return url.href;
+  // A domain ends in a letters-only top-level name, as in example.com.
+  if (/\.[a-z]{2,}$/i.test(host)) return url.href.replace(/^http:/, "https:");
+  return searchUrl(text);
 }
 
+/** A url as the address bar shows it while unfocused: without its scheme or a lone trailing slash. */
+export const shortUrl = (url: string) =>
+  url.replace(/^https?:\/\//, "").replace(/^([^/?#]*)\/$/, "$1");
+
 /**
- * The side panel's browser: back, forward, reload, and an address bar over a webview, which main
+ * The side panel's browser: back, forward, reload or stop, a loading bar, and an address bar that
+ * opens a page or searches Google, over a webview, which main
  * keeps in its own session with no preload or Node (main.ts). Each new `page` loads its url, even
  * the one already shown. `remoteHost`, the open host's name when it's an SSH host, notes that
  * localhost is this computer.
@@ -29,10 +52,15 @@ export function Browser({ page, remoteHost }: { page?: { url: string }; remoteHo
   const [address, setAddress] = useState("");
   const [history, setHistory] = useState({ back: false, forward: false });
   const [error, setError] = useState<{ url: string; description: string }>();
+  const [loading, setLoading] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   const open = (text: string) => {
     const next = browserUrl(text);
-    if (!next) return setError({ url: text, description: "Only http and https pages open here." });
+    if (!next) {
+      if (text.trim()) setError({ url: text, description: "Only http and https pages open here." });
+      return;
+    }
     setError(undefined);
     setAddress(next);
     // The view shows a load's error, so the rejection needs no handling here.
@@ -50,7 +78,11 @@ export function Browser({ page, remoteHost }: { page?: { url: string }; remoteHo
       setAddress(el.getURL());
       setHistory({ back: el.canGoBack(), forward: el.canGoForward() });
     };
-    const started = () => setError(undefined);
+    const started = () => {
+      setError(undefined);
+      setLoading(true);
+    };
+    const stopped = () => setLoading(false);
     // -3 is a load another one replaced.
     const failed = (e: DidFailLoadEvent) => {
       if (e.isMainFrame && e.errorCode !== -3)
@@ -60,7 +92,9 @@ export function Browser({ page, remoteHost }: { page?: { url: string }; remoteHo
     el.addEventListener("did-navigate-in-page", navigated);
     el.addEventListener("did-start-loading", started);
     el.addEventListener("did-fail-load", failed);
+    el.addEventListener("did-stop-loading", stopped);
     return () => {
+      el.removeEventListener("did-stop-loading", stopped);
       el.removeEventListener("did-navigate", navigated);
       el.removeEventListener("did-navigate-in-page", navigated);
       el.removeEventListener("did-start-loading", started);
@@ -87,17 +121,29 @@ export function Browser({ page, remoteHost }: { page?: { url: string }; remoteHo
         >
           <ArrowRight />
         </IconButton>
-        <IconButton label="Reload" disabled={!src} onClick={() => view.current?.reload()}>
-          <RotateCw />
-        </IconButton>
+        {loading ? (
+          <IconButton label="Stop" onClick={() => view.current?.stop()}>
+            <X />
+          </IconButton>
+        ) : (
+          <IconButton label="Reload" disabled={!src} onClick={() => view.current?.reload()}>
+            <RotateCw />
+          </IconButton>
+        )}
         <input
           autoFocus
           aria-label="Address"
-          placeholder="localhost:5173"
+          placeholder="Search Google or type a URL"
           spellCheck={false}
-          value={address}
+          value={editing ? address : shortUrl(address)}
           onChange={(e) => setAddress(e.target.value)}
-          onFocus={(e) => e.target.select()}
+          onFocus={(e) => {
+            setEditing(true);
+            // The full url replaces the short one first, so select it once it renders.
+            const input = e.target;
+            requestAnimationFrame(() => input.select());
+          }}
+          onBlur={() => setEditing(false)}
           className="ml-1 min-w-0 flex-1 rounded-md bg-selected px-2 py-1 text-[12.5px] placeholder:text-faint-foreground focus-visible:outline-2 focus-visible:outline-ring"
         />
       </form>
@@ -108,6 +154,13 @@ export function Browser({ page, remoteHost }: { page?: { url: string }; remoteHo
         </p>
       )}
       <div className="relative flex min-h-0 flex-1 flex-col">
+        {loading && (
+          <div
+            role="progressbar"
+            aria-label="Loading"
+            className="absolute inset-x-0 top-0 z-10 h-0.5 animate-pulse bg-ring"
+          />
+        )}
         {src && (
           // React drops a `true` attribute it doesn't know, so allowpopups is the empty string.
           // Main loads the windows its pages open in it.
@@ -133,7 +186,7 @@ export function Browser({ page, remoteHost }: { page?: { url: string }; remoteHo
                 <Globe aria-hidden className="mb-1 size-5 text-faint-foreground" />
                 <p className="text-[13px] font-medium text-foreground">Open a page</p>
                 <p className="text-[12.5px] text-muted-foreground">
-                  Type an address, such as a dev server's localhost:5173.
+                  Search Google, or type an address such as a dev server's localhost:5173.
                 </p>
               </>
             )}
