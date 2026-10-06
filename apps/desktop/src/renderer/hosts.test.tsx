@@ -8,6 +8,15 @@ import { App } from "./App";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
+// xterm.js needs a real canvas, so the terminal is a stub that records what it runs.
+const signInTarget = vi.fn();
+vi.mock("./SignInTerminal", () => ({
+  SignInTerminal: ({ target, name }: { target: unknown; name: string }) => {
+    signInTarget(target);
+    return <p>Signing in to {name}…</p>;
+  },
+}));
+
 const mini: SshHost = { id: "h-mini", name: "Mac mini", destination: "mini" };
 const [t0, t1, t2] = ["2026-10-01T09:00:00Z", "2026-10-01T10:00:00Z", "2026-10-01T11:00:00Z"];
 const connected: ConnectionState = {
@@ -185,4 +194,45 @@ test("a failed remove shows the main process's message", async () => {
   await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Remove")!);
   const alert = document.querySelector('[role="alert"]')!.textContent;
   expect(alert).toBe("Parallax couldn't save its settings: EACCES");
+});
+
+const openConnections = async () => {
+  await renderApp();
+  const mac = window.parallax.platform === "darwin";
+  await act(async () => {
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: ",", code: "Comma", metaKey: mac, ctrlKey: !mac }),
+    );
+  });
+  await click(
+    [...document.querySelectorAll("button")].find((b) => b.textContent === "Connections")!,
+  );
+};
+const signIn = () =>
+  [...document.querySelectorAll("button")].find((b) => b.textContent === "Sign in");
+
+test("a host that needs the user has Sign in, which opens a terminal for that host", async () => {
+  await openConnections();
+  await click(signIn()!);
+  expect(document.body.textContent).toContain("Signing in to Mac mini");
+  expect(signIn()).toBeUndefined();
+  expect(signInTarget).toHaveBeenCalledWith({ hostId: mini.id, login: true });
+});
+
+test.each([
+  [
+    "another failure",
+    { status: "failed", retrying: true, error: { reason: "exited", message: "x" } },
+  ],
+  ["a connected host", connected],
+] as [string, ConnectionState][])("Sign in isn't offered for %s", async (_name, state) => {
+  states[mini.id] = state;
+  await openConnections();
+  expect(signIn()).toBeUndefined();
+});
+
+test("Sign in isn't offered on Windows, which can't share a login", async () => {
+  window.parallax.platform = "win32";
+  await openConnections();
+  expect(signIn()).toBeUndefined();
 });

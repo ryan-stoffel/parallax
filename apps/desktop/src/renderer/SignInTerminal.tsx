@@ -5,8 +5,9 @@ import { TerminalView } from "./Terminal";
 
 /**
  * A terminal running a sign-in on a host, in the main process's pty, as the window's terminal
- * `sign-in`: a CLI's own (0004), a provider instance's `login`, or a CLI's install. `onExit` runs
- * when it ends; closing the pane (`onClose`, or unmounting) ends it if it's still running.
+ * `sign-in`: a CLI's own (0004), a provider instance's `login`, a CLI's install, or an SSH host's
+ * login (0007). `onExit` runs when it ends; closing the pane (`onClose`, or unmounting) ends it if
+ * it's still running.
  */
 export function SignInTerminal({
   target,
@@ -14,7 +15,7 @@ export function SignInTerminal({
   onExit,
   onClose,
 }: {
-  /** A CLI's or a provider instance's sign-in, or a CLI's install. */
+  /** A CLI's, a provider instance's, or an SSH host's sign-in, or a CLI's install. */
   target: Exclude<TerminalTarget, { path: string }>;
   /** What signs in, as people know it, such as "Claude Code". */
   name: string;

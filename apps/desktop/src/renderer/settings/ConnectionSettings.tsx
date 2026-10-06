@@ -1,5 +1,5 @@
 import { Pencil, Plus, Server } from "lucide-react";
-import { useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import type { ConnectionState } from "../../preload/bridge";
 import { statusLabel, useConnection } from "../ConnectionStatus";
@@ -17,6 +17,11 @@ import {
   settingRow,
   StatusDot,
 } from "./parts";
+
+// xterm.js is large, so it loads when a sign-in first opens.
+const SignInTerminal = lazy(() =>
+  import("../SignInTerminal").then((m) => ({ default: m.SignInTerminal })),
+);
 
 const tone = (state?: ConnectionState) =>
   state?.status === "connected" ? "on" : state?.status === "failed" ? "warn" : "off";
@@ -162,7 +167,11 @@ function LocalHost({ host }: { host: Host }) {
   );
 }
 
-/** A saved SSH host: its connection, destination, and Edit and Remove. */
+/**
+ * A saved SSH host: its connection, destination, and Edit and Remove. A host that needs the user
+ * to log in has Sign in, which opens the terminal where ssh asks for a password (0007), then
+ * connects it. Windows' OpenSSH can't share a login, so it has none.
+ */
 function RemoteHost({
   host,
   onEdit,
@@ -173,27 +182,52 @@ function RemoteHost({
   onRemove: () => void;
 }) {
   const state = useConnection(host.id);
+  const [signingIn, setSigningIn] = useState(false);
+  const canSignIn =
+    window.parallax.platform !== "win32" &&
+    state?.status === "failed" &&
+    state.error.reason === "sshSetup";
+  useEffect(() => {
+    if (state?.status === "connected") setSigningIn(false);
+  }, [state?.status]);
   return (
-    <div className={settingRow}>
-      <div className="min-w-0">
-        <span className="flex items-center gap-2 text-[13px] font-medium">
-          <StatusDot tone={tone(state)} />
-          <span className="truncate">{host.name}</span>
-        </span>
-        <span className="block truncate text-[12.5px] text-muted-foreground">
-          <span className="font-mono">{host.destination}</span>
-          {state && ` · ${statusLabel(state)}`}
-          {state?.status === "connected" && ` · plxd ${state.plxd}`}
-        </span>
+    <>
+      <div className={settingRow}>
+        <div className="min-w-0">
+          <span className="flex items-center gap-2 text-[13px] font-medium">
+            <StatusDot tone={tone(state)} />
+            <span className="truncate">{host.name}</span>
+          </span>
+          <span className="block truncate text-[12.5px] text-muted-foreground">
+            <span className="font-mono">{host.destination}</span>
+            {state && ` · ${statusLabel(state)}`}
+            {state?.status === "connected" && ` · plxd ${state.plxd}`}
+          </span>
+        </div>
+        <div className="flex shrink-0 gap-1">
+          {canSignIn && !signingIn && (
+            <button type="button" className={quietButton} onClick={() => setSigningIn(true)}>
+              Sign in
+            </button>
+          )}
+          <button type="button" className={quietButton} onClick={onEdit}>
+            Edit
+          </button>
+          <button type="button" className={quietButton} onClick={onRemove}>
+            Remove
+          </button>
+        </div>
       </div>
-      <div className="flex shrink-0 gap-1">
-        <button type="button" className={quietButton} onClick={onEdit}>
-          Edit
-        </button>
-        <button type="button" className={quietButton} onClick={onRemove}>
-          Remove
-        </button>
-      </div>
-    </div>
+      {signingIn && (
+        <Suspense>
+          <SignInTerminal
+            target={{ hostId: host.id, login: true }}
+            name={host.name}
+            onExit={() => void window.parallax.retry(host.id)}
+            onClose={() => setSigningIn(false)}
+          />
+        </Suspense>
+      )}
+    </>
   );
 }

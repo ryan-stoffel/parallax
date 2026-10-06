@@ -39,7 +39,7 @@ PLX-9 scaffolds the app, PLX-10 generates the protocol types, PLX-12 and PLX-26 
 
 - **Main owns every process.** The main process spawns the child and speaks JSON-RPC over its stdio:
   - Locally, the bundled `plxd attach`. In development, the path comes from `PLXD_PATH`, defaulting to the Cargo debug build.
-  - For a host, `ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlPath=none -- <destination> plxd attach`.
+  - For a host, `ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlMaster=no -o ControlPath=~/.ssh/parallax-%C -- <destination> plxd attach`, with `ControlPath=none` on Windows (0007). A host that needs a password or 2FA gets a **Sign in** button in Settings > Connections, which opens a terminal running ssh as that host's control master; the host then connects through it (PLX-601). After the master dies, such as in sleep, the user signs in again.
   - It keeps one child per host in use, and 0007's rules hold for each: destination checks, the `initialize` handshake, `host/health` every 30 s with a 10 s liveness window, reconnect with 1 s to 10 s backoff, resubscribing from the last `seq`, and caller-generated ids for creates and starts.
   - Exit status 4 means plxd can't be reached on that machine (0010), 127 means `plxd` isn't installed there, and 255 is an ssh error. The app shows the child's stderr in each case.
 - **Client:** a small hand-written NDJSON JSON-RPC 2.0 client in `src/main/`, with no RPC dependency. It splits lines on `\n`, enforces `maxFrameBytes`, matches responses by id, sends `$/cancelRequest`, and routes `events/event` notifications. 0007's plan to reuse Code - OSS's `JsonRpcProtocol` went away with the fork.

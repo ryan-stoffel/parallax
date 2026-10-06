@@ -22,16 +22,18 @@ The editor and `plxd` need one protocol, whether `plxd` runs on this Mac or on a
   - There is no TCP port, no token, and no system-wide daemon. Each macOS user runs their own plxd, so users of a shared Mac stay isolated.
   - The trust boundary is the user. Any process running as that user can connect and call any method, including the agents plxd starts, which run shell commands. #11's plan approval is a UX step, not a boundary against a compromised agent.
 - **Editor:** it always talks over a child process's stdio.
-  - Locally it runs the bundled `plxd attach` (#62). For a host it runs `ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlPath=none -- <destination> plxd attach`.
+  - Locally it runs the bundled `plxd attach` (#62). For a host it runs `ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlMaster=no -o ControlPath=~/.ssh/parallax-%C -- <destination> plxd attach` (on Windows, `-o ControlPath=none` instead, since its OpenSSH has no ControlMaster).
   - The editor rejects a destination that starts with `-` or contains whitespace or control characters, and `--` keeps ssh from reading it as an option. `parallax.host` is application-scoped, so a workspace's `.vscode/settings.json` can't set it.
-  - `ControlPath=none` keeps a reconnect after sleep from reusing a stale shared connection. The cost is that hosts needing interactive 2FA are out of scope, because `BatchMode` could only reach them through a shared connection.
+  - `ControlMaster=no` makes it a client of a shared connection only if one is there. `parallax-%C` is a Parallax-owned socket in `~/.ssh`, one per host (`%C` hashes host, port, and user), short because a Unix socket path can't pass about 104 bytes on macOS. With no socket, or a dead one, ssh connects directly, so key-based hosts behave as they did with `ControlPath=none`.
+  - Hosts that need a password or 2FA are in scope through Sign in (PLX-601). The app runs `ssh -o ControlMaster=auto -o ControlPersist=yes -o ControlPath=~/.ssh/parallax-%C -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -N -f -- <destination>` in a terminal, where the user answers ssh's prompts. `-f` backgrounds ssh once it has authenticated, so the terminal ends and the master stays; `BatchMode` connections then reach the host through it. `ControlMaster=auto` lets ssh clear a stale socket that a crashed master left. Not on Windows.
+  - A master can't go stale and hang a reconnect for long: `ServerAlive` ends one whose network went away (about 45 s), and the heartbeat below kills a connection through a dead one. The host then fails with Permission denied until the user signs in again, so after sleep or a network drop a password host needs Sign in again.
   - `attach` (#60) bridges stdio to the socket byte for byte. If plxd isn't running, `attach` starts it through the LaunchAgent when #61 installed one.
     - Otherwise it starts `serve` in a new session (`setsid`), with stdio going to its log, so the ssh session can close.
     - #60's "no orphaned processes" applies to `attach`, not to that `serve`, so a disconnect never stops agents.
     - On a host, the LaunchAgent is the recommended setup, since a process started from SSH may not reach the Keychain (0004).
 - **Credentials:** Parallax stores none and never sees any.
   - The user's `ssh` applies their config, keys, agent, `known_hosts`, and jump hosts.
-  - `BatchMode=yes` turns prompts into errors. The user accepts a new host key or unlocks a key once, with `ssh <destination>` in the integrated terminal.
+  - `BatchMode=yes` turns prompts into errors. The user accepts a new host key or unlocks a key once, with `ssh <destination>` in the integrated terminal, or enters a password with the app's Sign in.
 - **Reconnect:**
   - The editor sends `host/health` every 30 s and on wake. If 10 s then pass with no bytes received, it kills the child and reconnects, backing off from 1 s to 10 s (#11). This covers both sleep and network changes.
   - Any received bytes, such as a replay in progress, reset that timer.

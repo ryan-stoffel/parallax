@@ -5,6 +5,7 @@ import os from "node:os";
 
 import { NPM_INSTALLS, npmInstallLine, type TerminalMessage } from "../preload/bridge";
 import type { CliKind } from "../protocol/generated/protocol";
+import { SSH_CONTROL_PATH } from "./connection";
 
 /** Each vendor CLI's own sign-in (0004), as its `--help` gives it. */
 const loginArgs: Record<CliKind, string[]> = {
@@ -204,6 +205,27 @@ export function shellCommand(
     ? `cd /d ${quote(path)} && cmd`
     : `cd ${quote(path)} && exec "$SHELL" -l`;
   return overSsh(ssh, remote, [], platform);
+}
+
+/**
+ * Sign in to an SSH host that needs a password or 2FA (0007): ssh as the control master that the
+ * host's connections then share (`sshCommand`), run here, where the user answers its prompts.
+ * `-f` sends ssh to the background once it has authenticated, so this ends and the master stays,
+ * with ControlPersist keeping it after its last client. ServerAlive ends a master whose network
+ * went away, such as in sleep, so it can't leave its clients hanging; the user then signs in again.
+ * `auto`, not `yes`, so ssh clears a stale socket that a crashed master left, as `yes` would keep
+ * it and silently start with no master. Not for Windows, whose OpenSSH has no ControlMaster.
+ */
+export function masterCommand(ssh: SshTarget): Command {
+  return {
+    file: ssh.ssh,
+    // prettier-ignore
+    args: [
+      "-o", "ControlMaster=auto", "-o", "ControlPersist=yes", "-o", `ControlPath=${SSH_CONTROL_PATH}`,
+      "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
+      "-N", "-f", "--", ssh.destination,
+    ],
+  };
 }
 
 /**
