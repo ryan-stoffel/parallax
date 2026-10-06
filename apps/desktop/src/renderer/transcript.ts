@@ -83,7 +83,9 @@ type ItemBody =
    */
   | { kind: "session"; key: string; sessionId: string; model?: string }
   /** A session on another model than the last one that named its own (PLX-495). */
-  | { kind: "modelSwitch"; key: string; from: string; to: string };
+  | { kind: "modelSwitch"; key: string; from: string; to: string }
+  /** The agent compacting its context: under way, then `done` (PLX-584). */
+  | { kind: "compaction"; key: string; done: boolean };
 
 /** A permission request as `approvalRequested` carries it. */
 export type ApprovalRequest = Omit<Extract<AgentOutputItem, { kind: "approvalRequested" }>, "kind">;
@@ -109,6 +111,16 @@ export interface Transcript {
   seq: number;
   /** Events applied so far, after the compacted-row rule, so a later rewrite can replace them. */
   events?: LoggedEvent[];
+  /**
+   * Whether every turn the agent started has finished, with no work since, so a run still
+   * `running` is only winding down (PLX-584).
+   */
+  turnDone?: boolean;
+  /**
+   * The turns the live CLI started and hasn't finished, as a follow-up sent mid-turn starts before
+   * the turn it follows finishes.
+   */
+  openTurns?: number;
 }
 
 /**
@@ -258,7 +270,7 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
 }
 
 function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): Transcript {
-  let { run, seq } = t;
+  let { run, seq, turnDone, openTurns = 0 } = t;
   const items = [...t.items];
   const subagents = { ...t.subagents };
   const push = (item: Item) => items.push(item);
@@ -273,9 +285,12 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
     run = updateRun(run, event);
     switch (event.kind) {
       case "agent.started":
+        turnDone = false;
         if (event.run) push({ kind: "user", key: key(), text: event.run.prompt });
         break;
       case "agent.accountFallback":
+        // The failed attempt's CLI ended, with its turns, without an agent.finished.
+        openTurns = 0;
         push({
           kind: "notice",
           key: key(),
@@ -284,6 +299,8 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
         });
         break;
       case "agent.finished":
+        // Every turn of the CLI ends with it, including a stopped one that logged no turnFinished.
+        openTurns = 0;
         // A request still waiting ends with the run, as when plxd stopped without resolving it.
         items.forEach((item, i) => {
           if (item.kind === "approval" && !item.resolved)
@@ -300,15 +317,44 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
         });
         break;
       case "agent.output":
-        event.items.forEach((item, i) => applyOutput(items, item, key(i), time, subagents));
+        event.items.forEach((item, i) => {
+          if (item.kind === "turnStarted") openTurns++;
+          // A dropped follow-up never had a turnStarted, so it doesn't count.
+          if (item.kind === "turnFinished") {
+            // A page that starts mid-run may hold a turn's end without its start.
+            openTurns = Math.max(0, openTurns - 1);
+            turnDone = openTurns === 0;
+          } else if (activityKinds.has(item.kind)) turnDone = false;
+          applyOutput(items, item, key(i), time, subagents);
+        });
         break;
     }
     // A row moved down by one put in before it keeps its own time.
     for (let i = before; i < items.length; i++)
       if (items[i]!.at === undefined) items[i] = { ...items[i]!, at: time };
   }
-  return { run, items, subagents, seq };
+  return {
+    run,
+    items,
+    subagents,
+    seq,
+    ...(turnDone !== undefined && { turnDone, openTurns }),
+  };
 }
+
+/** The output items that mean the agent is at work on a turn. */
+const activityKinds = new Set<string>([
+  "turnStarted",
+  "textDelta",
+  "text",
+  "reasoning",
+  "toolCall",
+  "toolResult",
+  "todoList",
+  "subagent",
+  "approvalRequested",
+  "contextCompaction",
+]);
 
 /**
  * `t` built again from `events`, every event of its run loaded so far, oldest first, as when a
@@ -497,6 +543,15 @@ function applyOutput(
     case "notice":
       items.push({ kind: "notice", key, tone: "info", text: item.detail });
       break;
+    case "contextCompaction": {
+      // Its end takes the place of its start.
+      const i = items.findLastIndex((x) => x.kind === "compaction");
+      const started = items[i];
+      if (item.done && started?.kind === "compaction" && !started.done)
+        items[i] = { ...started, done: true, at: time };
+      else items.push({ kind: "compaction", key, done: item.done });
+      break;
+    }
     case "warning":
       items.push({ kind: "notice", key, tone: "warning", text: item.detail });
       break;
@@ -628,6 +683,8 @@ export interface Work {
   kind: "work";
   key: string;
   items: Item[];
+  /** Whether an `end` closed its turn, so it folds under "Worked for …" (PLX-326). */
+  done?: boolean;
   /** When the work began, and when what followed it (the answer, or the end) did. */
   startedAt?: string;
   endedAt?: string;
@@ -635,12 +692,19 @@ export interface Work {
 
 /**
  * The rows of each turn an `end` row closes that fold into its work, as T3 Code shows a finished
- * turn (PLX-326): its messages before the last, and its answered permission requests. One CLI
+ * turn (PLX-326): its messages before the last, its answered permission requests, and its context
+ * compactions; and every row of those turns, `ended`. One CLI
  * process can run several turns, as follow-ups arrive, so its `end` closes them all. A turn still
  * going has no `end`, so its messages stream in place and its requests stay in view.
  */
-function finishedTurnRows(rows: readonly { kind: string }[]): Set<number> {
+function finishedTurnRows(rows: readonly { kind: string }[]): {
+  folds: Set<number>;
+  ended: Set<number>;
+} {
   const folds = new Set<number>();
+  // Every row of a turn an `end` closed.
+  const ended = new Set<number>();
+  let since = 0;
   // The current turn's messages and answered requests, and the earlier turns' that would fold.
   let turn: number[] = [];
   let closed: number[] = [];
@@ -651,15 +715,21 @@ function finishedTurnRows(rows: readonly { kind: string }[]): Set<number> {
   };
   rows.forEach((row, i) => {
     if (row.kind === "user" || row.kind === "pending") close();
-    else if (row.kind === "assistant" || (row.kind === "approval" && (row as Approval).resolved))
+    else if (
+      row.kind === "assistant" ||
+      (row.kind === "approval" && (row as Approval).resolved) ||
+      (row.kind === "compaction" && (row as Extract<Item, { kind: "compaction" }>).done)
+    )
       turn.push(i);
     else if (row.kind === "end") {
       close();
       for (const j of closed) folds.add(j);
       closed = [];
+      for (let j = since; j < i; j++) ended.add(j);
+      since = i + 1;
     }
   });
-  return folds;
+  return { folds, ended };
 }
 
 /**
@@ -667,14 +737,16 @@ function finishedTurnRows(rows: readonly { kind: string }[]): Set<number> {
  * the agent's messages split runs and pass through, so they stay in order and stream in place;
  * once it ends, all but its last fold too (`finishedTurnRows`). A dropped follow-up's notice,
  * another thread's stop, and other rows (user, end, and whatever the caller adds) pass through. Other notices fold, except
- * those after a run's last activity.
+ * those after a run's last activity. A run in an ended turn is `done`.
  */
 export function groupWork<R extends { kind: string; at?: string }>(
   rows: readonly (Item | R)[],
 ): (Item | R | Work)[] {
-  const folds = finishedTurnRows(rows);
+  const { folds, ended } = finishedTurnRows(rows);
   const out: (Item | R | Work)[] = [];
   let run: Item[] = [];
+  // Whether the run's first row is in a turn an `end` closed.
+  let done = false;
   const flush = (next?: { kind: string; at?: string }) => {
     const last = run.findLastIndex((i) => i.kind !== "notice");
     if (last >= 0) {
@@ -683,6 +755,7 @@ export function groupWork<R extends { kind: string; at?: string }>(
         kind: "work",
         key: `work:${items[0]!.key}`,
         items,
+        ...(done && { done }),
         startedAt: items[0]!.at,
         // A later follow-up's time would count the wait between turns as work.
         endedAt:
@@ -698,9 +771,10 @@ export function groupWork<R extends { kind: string; at?: string }>(
       folds.has(i) ||
       ["reasoning", "tool", "todo"].includes(row.kind) ||
       (row.kind === "notice" && !(row as Item & { turnId?: string }).turnId && !("from" in row))
-    )
+    ) {
+      if (run.length === 0) done = ended.has(i);
       run.push(row as Item);
-    else {
+    } else {
       flush(row);
       out.push(row);
     }

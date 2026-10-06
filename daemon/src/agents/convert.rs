@@ -403,6 +403,7 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
         Event::Notice { detail } => AgentOutputItem::Notice {
             detail: truncate(detail, MAX_TEXT_ITEM_BYTES),
         },
+        Event::ContextCompaction { done } => AgentOutputItem::ContextCompaction { done: *done },
         Event::Usage(delta) => AgentOutputItem::Usage {
             model: delta.model.clone(),
             input_tokens: delta.usage.input_tokens,

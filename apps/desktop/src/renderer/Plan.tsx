@@ -515,8 +515,8 @@ export function PlanLine({ item }: { item: PlanRow | PlanUpdate }) {
       ? planChanges(item.previous, item.items)
       : "";
   return (
-    // Indented past a tool call's chevron, so its icon lines up with theirs.
-    <p className="flex min-w-0 items-center gap-2 py-0.5 pl-5.5 text-[13px]">
+    // A step row, so its icon lines up with a tool call's.
+    <p className="flex min-h-6 min-w-0 items-center gap-2 text-[13px]">
       <ListChecks aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
       <span className="shrink-0 font-medium">
         {made ? "Made a plan" : item.items.length === 0 ? "Cleared the plan" : "Updated the plan"}

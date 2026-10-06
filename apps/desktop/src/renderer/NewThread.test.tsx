@@ -210,7 +210,10 @@ test("New Thread adds a picked folder, starts there, and reuses its run id on a 
 // The transcript's message bubble, and the musing under it until the agent does anything.
 const bubble = () => document.querySelector('[role="log"] .bg-selected')?.textContent;
 const musing = () =>
-  document.querySelector('[role="log"] button[aria-expanded] .sr-only')?.textContent;
+  document
+    .querySelector('[role="log"] [data-loader="orbit"][data-variant="chase"]')
+    ?.closest("[data-index]")
+    ?.querySelector(".sr-only")?.textContent;
 
 test("Send shows the prompt at once while plxd starts the thread, and a failure puts it back", async () => {
   let answer: (response: RpcResponse<unknown>) => void = () => {};

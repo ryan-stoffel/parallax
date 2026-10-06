@@ -40,7 +40,7 @@ export function DoneMark({ animate, className = "" }: { animate: boolean; classN
 }
 
 /** Whole seconds since `from`, ticking every second. */
-function useSeconds(from: string) {
+export function useSeconds(from: string) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);

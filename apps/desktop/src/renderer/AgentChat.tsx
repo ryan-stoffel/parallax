@@ -11,6 +11,7 @@ import {
   Ellipsis,
   FilePlus,
   FileText,
+  FoldVertical,
   Folder,
   FolderGit2,
   GitBranch,
@@ -32,6 +33,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  createContext,
   memo,
   useCallback,
   useContext,
@@ -69,6 +71,7 @@ import {
   type Asked,
   type ToolLook,
 } from "./Approval";
+import { duration, useSeconds } from "./AttentionMark";
 import { Composer, tabItem, type ComposerProps, type Unanswered } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { describeError, githubProblem } from "./errors";
@@ -135,8 +138,21 @@ type Row =
       threads?: string[];
       turnId?: string;
     };
-/** What the list shows: a turn's activity is folded into one `Work` row, its plan apart. */
-type ViewRow = Row | Work | PlanRow | ProposedPlanRow;
+/**
+ * What the list shows: a turn's activity is folded into one `Work` row, its plan apart. While a
+ * turn goes, a `working` row under its prompt says how long it has gone, and a `musing` row stands
+ * for what the agent does next when nothing is in flight (PLX-584).
+ */
+type ViewRow =
+  | Row
+  | Work
+  | PlanRow
+  | ProposedPlanRow
+  | { kind: "working"; key: string; since?: string }
+  | { kind: "musing"; key: string };
+
+/** The run's worktree, which a tool row's paths read relative to. */
+const RootContext = createContext<string | undefined>(undefined);
 
 /** Focuses the composer's editor (Composer.tsx), as when the plan strip goes with focus in it. */
 const focusComposer = () => document.getElementById("composer-input")?.focus();
@@ -540,6 +556,8 @@ export function AgentChat({
               sent={unsent}
               live={isRunning(run?.status)}
               stalled={stalled}
+              turnDone={transcript.turnDone}
+              root={run?.worktreePath}
               // plxd logs a fork's copied history with its agent.started, at its creation (0050).
               copiedAt={forked ? run?.createdAt : undefined}
               onResend={resend}
@@ -713,12 +731,18 @@ export function TranscriptView({
   onNearTop,
   end,
   copiedAt,
+  turnDone = false,
+  root,
 }: {
   rows: Row[];
   sent: ReadonlyMap<string, SentMessage>;
   live: boolean;
   /** Whether the transcript is out of date, so nothing in it shows as in progress. */
   stalled?: boolean;
+  /** Whether the agent's last turn finished while the run winds down, so it shows no work going. */
+  turnDone?: boolean;
+  /** The run's worktree, which tool rows' paths read relative to. */
+  root?: string;
   onResend?: (turnId: string, message: SentMessage) => void;
   /** Fetches a message's image by id, as a data URL. */
   loadImage?: (imageId: ImageId) => Promise<string | undefined>;
@@ -748,28 +772,40 @@ export function TranscriptView({
     [],
   );
 
-  const going = live && !stalled;
-  // A work row with nothing in it follows a message on its way to the agent, or one it has but
-  // hasn't answered while the run goes, standing for what the agent is doing before it does
-  // anything. It goes before any notices after the message, where the work it stands for will be.
+  const going = live && !stalled && !turnDone;
+  // While a turn goes, as T3 Code shows one (PLX-584): a working line under its prompt with how
+  // long it has gone, its work as steps, and a musing row at the end whenever the agent has
+  // nothing in flight, as after a message or a call that finished. A message on its way to the
+  // agent gets both too, even before the run goes again. The musing goes before any notices
+  // after the last row, where the work it stands for will be.
   const view = useMemo(() => {
-    const grouped = groupWork(withPlanApprovals(withPlans(rows)));
-    const at = grouped.findLastIndex((r) => r.kind !== "notice");
-    const last = grouped[at];
-    // A plan stands apart from the work around it, so work goes on after it as after a message,
-    // and so does an answered request. One still waiting holds the agent until it's answered.
-    const waits =
-      ["user", "plan", "proposedPlan"].includes(last?.kind ?? "") ||
-      (last?.kind === "approval" && !!last.resolved);
-    if (!stalled && (last?.kind === "pending" || (live && waits)))
-      grouped.splice(at + 1, 0, { kind: "work", key: "work:pending", items: [] });
-    return grouped;
-  }, [rows, live, stalled]);
-  // The agent's text streams in its own row, so a work row is only live while it is the last
-  // (a notice after it doesn't count). The empty one is, even before the run goes again.
-  const tail = view.findLastIndex((r) => r.kind !== "notice");
+    const grouped: ViewRow[] = groupWork(withPlanApprovals(withPlans(rows)));
+    const tail = grouped.findLastIndex((r) => r.kind !== "notice");
+    // A compaction under way shows only while it's what the agent is doing.
+    const shown = grouped.filter(
+      (r, i) => r.kind !== "compaction" || r.done || (going && i === tail),
+    );
+    const at = shown.findLastIndex((r) => r.kind !== "notice");
+    const last = shown[at];
+    const pending = last?.kind === "pending";
+    const busy =
+      (last?.kind === "work" && !last.done && inFlight(last)) ||
+      (last?.kind === "assistant" && !!last.partial) ||
+      (last?.kind === "approval" && !last.resolved) ||
+      (last?.kind === "compaction" && !last.done) ||
+      last?.kind === "end";
+    if (stalled || !(pending || going)) return shown;
+    if (pending || !busy) shown.splice(at + 1, 0, { kind: "musing", key: "musing" });
+    const prompt = shown.findLastIndex((r) => r.kind === "user" || r.kind === "pending");
+    const since = shown[prompt]?.kind === "user" ? (shown[prompt] as Item).at : undefined;
+    if (prompt >= 0) shown.splice(prompt + 1, 0, { kind: "working", key: "working", since });
+    return shown;
+  }, [rows, going, stalled]);
+  // The work the agent is doing now: the last row's, while a call in it runs.
+  const tail = view.findLastIndex((r) => r.kind !== "notice" && r.kind !== "musing");
+  const tailRow = view[tail];
   const activeIndex =
-    view[tail]?.kind === "work" && (going || view[tail].key === "work:pending") ? tail : -1;
+    going && tailRow?.kind === "work" && !tailRow.done && inFlight(tailRow) ? tail : -1;
   const copied = (row: ViewRow) => {
     const at = row.kind === "work" ? row.startedAt : "at" in row ? row.at : undefined;
     return !!copiedAt && !!at && Date.parse(at) <= Date.parse(copiedAt);
@@ -874,72 +910,77 @@ export function TranscriptView({
 
   return (
     // Bounds the rail and Scroll to end, which stay put while the list scrolls under them.
-    <div className="relative flex min-h-0 flex-1 flex-col">
-      <div
-        ref={scrollRef}
-        role="log"
-        aria-label="Transcript"
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-          if (atBottom.current) ending.current = false;
-          // Scroll to end's smooth scroll passes through the middle, where it stays hidden.
-          if (!ending.current) setScrolledUp(!atBottom.current);
-          above.current.fromEnd = el.scrollHeight - el.scrollTop;
-          if (onNearTop && el.scrollTop < el.clientHeight) onNearTop();
-          follow();
-        }}
-        // Scrolling by hand cuts Scroll to end's scroll short.
-        onWheel={() => (ending.current = false)}
-        onPointerDown={() => (ending.current = false)}
-        onKeyDown={() => (ending.current = false)}
-        className="min-h-0 flex-1 overflow-y-auto select-text"
-      >
-        <div className="relative w-full" style={{ height: total }}>
-          {virtualizer.getVirtualItems().map((v) => {
-            const row = view[v.index]!;
-            const muted = copied(row);
-            return (
-              <div
-                key={v.key}
-                data-index={v.index}
-                ref={virtualizer.measureElement}
-                className="absolute top-0 left-0 w-full"
-                style={{ transform: `translateY(${v.start}px)` }}
-              >
+    <RootContext value={root}>
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div
+          ref={scrollRef}
+          role="log"
+          aria-label="Transcript"
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+            if (atBottom.current) ending.current = false;
+            // Scroll to end's smooth scroll passes through the middle, where it stays hidden.
+            if (!ending.current) setScrolledUp(!atBottom.current);
+            above.current.fromEnd = el.scrollHeight - el.scrollTop;
+            if (onNearTop && el.scrollTop < el.clientHeight) onNearTop();
+            follow();
+          }}
+          // Scrolling by hand cuts Scroll to end's scroll short.
+          onWheel={() => (ending.current = false)}
+          onPointerDown={() => (ending.current = false)}
+          onKeyDown={() => (ending.current = false)}
+          className="min-h-0 flex-1 overflow-y-auto select-text"
+        >
+          <div className="relative w-full" style={{ height: total }}>
+            {virtualizer.getVirtualItems().map((v) => {
+              const row = view[v.index]!;
+              const muted = copied(row);
+              return (
                 <div
-                  data-copied={muted || undefined}
-                  className={`mx-auto max-w-3xl px-6 py-2 ${muted ? "opacity-60" : ""}`}
+                  key={v.key}
+                  data-index={v.index}
+                  ref={virtualizer.measureElement}
+                  className="absolute top-0 left-0 w-full"
+                  style={{ transform: `translateY(${v.start}px)` }}
                 >
-                  <RowView
-                    row={row}
-                    sent={"turnId" in row && row.turnId ? sent.get(row.turnId) : undefined}
-                    live={going}
-                    open={open.has(row.key)}
-                    openKeys={row.kind === "work" ? open : undefined}
-                    active={v.index === activeIndex}
-                    onToggle={toggle}
-                    onResend={onResend}
-                    loadImage={loadImage}
-                    sender={"from" in row && row.from ? titles?.[row.from] : undefined}
-                    copied={muted}
-                    forkable={!muted && !(live && v.index >= latest)}
-                    reply={replies.has(v.index) ? { turnId: replies.get(v.index) } : undefined}
-                  />
+                  <div
+                    data-copied={muted || undefined}
+                    className={`mx-auto max-w-3xl px-6 ${listKinds.has(row.kind) && listKinds.has(view[v.index - 1]?.kind ?? "") ? "pb-2" : "py-2"} ${muted ? "opacity-60" : ""}`}
+                  >
+                    <RowView
+                      row={row}
+                      sent={"turnId" in row && row.turnId ? sent.get(row.turnId) : undefined}
+                      live={going}
+                      open={open.has(row.key)}
+                      openKeys={row.kind === "work" ? open : undefined}
+                      active={v.index === activeIndex}
+                      onToggle={toggle}
+                      onResend={onResend}
+                      loadImage={loadImage}
+                      sender={"from" in row && row.from ? titles?.[row.from] : undefined}
+                      copied={muted}
+                      forkable={!muted && !(live && v.index >= latest)}
+                      reply={replies.has(v.index) ? { turnId: replies.get(v.index) } : undefined}
+                    />
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
+          {end && <div className="mx-auto max-w-3xl px-6 pb-6">{end}</div>}
         </div>
-        {end && <div className="mx-auto max-w-3xl px-6 pb-6">{end}</div>}
+        {/* One prompt is no choice of where to go, so there's no rail for it. */}
+        {prompts.length > 1 && <PromptRail prompts={prompts} current={reading} onJump={jump} />}
+        {scrolledUp && <ScrollToEnd onClick={scrollToEnd} />}
+        {findBar}
       </div>
-      {/* One prompt is no choice of where to go, so there's no rail for it. */}
-      {prompts.length > 1 && <PromptRail prompts={prompts} current={reading} onJump={jump} />}
-      {scrolledUp && <ScrollToEnd onClick={scrollToEnd} />}
-      {findBar}
-    </div>
+    </RootContext>
   );
 }
+
+// Rows of the agent's work, which sit closer after one another, as one list (PLX-584).
+const listKinds = new Set(["work", "plan", "todo", "musing", "compaction"]);
 
 /**
  * The user's prompts among `view`'s rows, for the rail: a follow-up's text from `sent` when the
@@ -1038,16 +1079,47 @@ export const RowView = memo(function RowView({
 }: RowProps) {
   switch (row.kind) {
     case "work":
-      return (
+      return row.done ? (
         <WorkGroup
           work={row}
-          active={active ?? false}
           live={live}
           open={open}
           openKeys={openKeys ?? new Set()}
           onToggle={onToggle}
           copied={copied}
         />
+      ) : (
+        <Steps
+          work={row}
+          active={active ?? false}
+          live={live}
+          open={open}
+          openKeys={openKeys ?? new Set()}
+          onToggle={onToggle}
+        />
+      );
+    case "working":
+      return <WorkingFor since={row.since} />;
+    case "musing":
+      return (
+        <div className="flex h-6 items-center gap-2 text-[13px]">
+          <Musing />
+        </div>
+      );
+    case "compaction":
+      // Under way, it's the live row; done, a divider where the earlier conversation became a summary.
+      return row.done ? (
+        <div className="flex items-center gap-2 text-[12px] text-faint-foreground">
+          <span className="h-px flex-1 bg-border" />
+          <FoldVertical aria-hidden className="size-3.5" />
+          <span>Context compacted</span>
+          <span className="h-px flex-1 bg-border" />
+        </div>
+      ) : (
+        <div className="flex h-6 items-center gap-2 text-[13px]">
+          <Loader {...loaders.compacting} />
+          <Shimmer>Compacting context</Shimmer>
+        </div>
       );
     case "user":
     case "pending": {
@@ -1142,6 +1214,7 @@ export const RowView = memo(function RowView({
       );
     }
     case "reasoning":
+      // The thought itself, on one line, as T3 Code shows it.
       return (
         <Disclosure
           id={row.key}
@@ -1149,8 +1222,8 @@ export const RowView = memo(function RowView({
           onToggle={onToggle}
           summary={
             <>
-              <icons.thinking aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-              <span className="text-muted-foreground">Thinking</span>
+              <icons.thinking aria-hidden className="size-3.5 shrink-0" />
+              <span className="truncate">{plainText(row.text) || "Thought"}</span>
             </>
           }
         >
@@ -1322,14 +1395,12 @@ function MessageImage({
 }
 
 /**
- * A run of thinking, tool calls, and checklists under one dropdown. While the agent works its
- * header says what it's doing now, with a loader for that; afterward it says how long it worked,
- * and hides the rest. Before the agent does anything, it's empty and muses. A fork's `copied`
- * work says only "Worked", since its logged times are all the fork's creation (0050).
+ * A finished turn's work under one dropdown (PLX-326): how long it worked, opening to its steps
+ * and the messages it folded, as T3 Code's turn fold does. A fork's `copied` work says only
+ * "Worked", since its logged times are all the fork's creation (0050).
  */
 function WorkGroup({
   work,
-  active,
   live,
   open,
   openKeys,
@@ -1337,48 +1408,154 @@ function WorkGroup({
   copied,
 }: {
   work: Work;
-  active: boolean;
   live: boolean;
   open: boolean;
   openKeys: ReadonlySet<string>;
   onToggle: (key: string, open: boolean) => void;
   copied?: boolean;
 }) {
-  const now = active ? activity(work.items.at(-1)) : undefined;
   return (
     <div>
       <button
         type="button"
         aria-expanded={open}
-        disabled={work.items.length === 0}
         onClick={() => onToggle(work.key, !open)}
-        className="group/work flex max-w-full cursor-default items-center gap-1.5 rounded-md py-0.5 text-[13px] hover:text-foreground"
+        className={`${stepRow} text-muted-foreground`}
       >
-        {now && work.items.length === 0 ? (
-          <Musing />
-        ) : now ? (
-          <>
-            <Loader {...now.loader} />
-            {/* Keyed, so a new label fades in. */}
-            <span key={now.label} className="working-in shrink-0">
-              <Shimmer>{now.label}</Shimmer>
-            </span>
-            {now.detail && <span className="truncate text-muted-foreground">{now.detail}</span>}
-          </>
-        ) : (
-          <span className="text-muted-foreground">
-            {copied ? "Worked" : workedFor(work.startedAt, work.endedAt)}
-          </span>
-        )}
-        {work.items.length > 0 && (
-          <ChevronRight
-            aria-hidden
-            className={`size-3.5 shrink-0 text-faint-foreground transition-transform ${open ? "rotate-90" : ""}`}
-          />
-        )}
+        <span className="truncate">
+          {copied ? "Worked" : workedFor(work.startedAt, work.endedAt)}
+        </span>
+        <Chevron open={open} />
       </button>
       {open && (
-        <div className="mt-2 ml-1 space-y-2.5 border-l border-border pl-4">
+        <div className="mt-1 flex flex-col gap-1">
+          {stepRuns(work.items).map((item) => (
+            <RowView
+              key={item.key}
+              row={item}
+              live={live}
+              open={openKeys.has(item.key)}
+              openKeys={item.kind === "work" ? openKeys : undefined}
+              onToggle={onToggle}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The kinds of rows that are steps of the agent's work, as opposed to its messages. */
+const stepKinds = new Set(["reasoning", "tool", "todo", "notice"]);
+
+/** A finished turn's items, with each run of steps between its messages as one open `Work`. */
+function stepRuns(items: readonly Item[]): (Item | Work)[] {
+  const out: (Item | Work)[] = [];
+  let run: Item[] = [];
+  const flush = () => {
+    if (run.some((i) => i.kind !== "notice"))
+      out.push({ kind: "work", key: `steps:${run[0]!.key}`, items: run });
+    else out.push(...run);
+    run = [];
+  };
+  for (const item of items)
+    if (stepKinds.has(item.kind)) run.push(item);
+    else {
+      flush();
+      out.push(item);
+    }
+  flush();
+  return out;
+}
+
+/** Whether a run of steps has a call still running: its last step, a tool with no result yet. */
+const inFlight = (work: Work) => {
+  const last = work.items.findLast((i) => i.kind !== "notice");
+  return last?.kind === "tool" && last.status === undefined;
+};
+
+/** A compact step row's geometry, as T3 Code's work log draws one: an icon, a line, a chevron. */
+const stepRow =
+  "flex min-h-6 w-full max-w-full min-w-0 cursor-default items-center gap-2 rounded-md text-left text-[13px] hover:text-foreground";
+
+/** The chevron at a step row's end, turned down while it's open. */
+function Chevron({ open }: { open?: boolean }) {
+  return (
+    <ChevronRight
+      aria-hidden
+      className={`ml-auto size-3.5 shrink-0 text-faint-foreground transition-transform group-open/disclosure:rotate-90 ${open ? "rotate-90" : ""}`}
+    />
+  );
+}
+
+/**
+ * A run of steps between the agent's messages in a turn still going (PLX-584): one call or thought
+ * alone as its own row, or several as one line saying what they did, such as "Ran 3 commands and
+ * read 2 files", opening to a row each. While a call in it runs, the line says what the agent is
+ * doing instead, with that work's loader.
+ */
+function Steps({
+  work,
+  active,
+  live,
+  open,
+  openKeys,
+  onToggle,
+}: {
+  work: Work;
+  active: boolean;
+  live: boolean;
+  open: boolean;
+  openKeys: ReadonlySet<string>;
+  onToggle: (key: string, open: boolean) => void;
+}) {
+  const root = useContext(RootContext);
+  const only = work.items.length === 1 ? work.items[0]! : undefined;
+  if (only && !active)
+    return <RowView row={only} live={live} open={openKeys.has(only.key)} onToggle={onToggle} />;
+  const doing = active ? activity(work.items.findLast((i) => i.kind !== "notice")) : undefined;
+  // Its path relative to the run's worktree, as the row reads once the call is done.
+  const now = doing && { ...doing, detail: doing.detail && relative(doing.detail, root) };
+  const summary = summarize(work.items);
+  return (
+    <div>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => onToggle(work.key, !open)}
+        className={`${stepRow} text-muted-foreground`}
+      >
+        {now ? (
+          <>
+            <Loader {...now.loader} size={14} />
+            {/* Keyed, so a new label fades in. */}
+            <span key={now.label} className="working-in shrink-0 text-foreground">
+              <Shimmer>{now.label}</Shimmer>
+            </span>
+            {now.detail && <span className="truncate">{now.detail}</span>}
+          </>
+        ) : (
+          <>
+            <span
+              aria-hidden
+              className={`relative shrink-0 ${summary.failed ? "text-danger" : ""}`}
+            >
+              <summary.Icon className="size-3.5" />
+              {summary.failed && (
+                <X
+                  strokeWidth={3}
+                  className="absolute -right-1.5 -bottom-1.5 size-2.5 rounded-full bg-background"
+                />
+              )}
+            </span>
+            <span className="truncate">{summary.label}</span>
+            {summary.failed && <span className="sr-only">, one failed</span>}
+          </>
+        )}
+        <Chevron open={open} />
+      </button>
+      {open && (
+        <div className="flex flex-col">
           {work.items.map((item) => (
             <RowView
               key={item.key}
@@ -1391,6 +1568,17 @@ function WorkGroup({
         </div>
       )}
     </div>
+  );
+}
+
+/** The line under a going turn's prompt: how long it has worked so far, ticking each second. */
+function WorkingFor({ since }: { since?: string }) {
+  // A message still on its way has no time logged yet: from when this row first showed.
+  const [from] = useState(() => since ?? new Date().toISOString());
+  return (
+    <p className="border-b border-border/60 pb-2 text-[13px] text-muted-foreground tabular-nums">
+      Working for {duration(useSeconds(since ?? from))}
+    </p>
   );
 }
 
@@ -1490,6 +1678,7 @@ const loaders = {
   plxd: { kind: "cells", variant: "spread" },
   planning: { kind: "lift", variant: "breathe" },
   working: { kind: "orbit", variant: "chase" },
+  compacting: { kind: "bands", variant: "descend" },
 } as const satisfies Record<string, LoaderStyle>;
 
 type Kind = keyof typeof loaders;
@@ -1509,6 +1698,7 @@ const icons = {
   plxd: Workflow,
   planning: ListChecks,
   working: Hammer,
+  compacting: FoldVertical,
 } as const satisfies Record<Kind, LucideIcon>;
 
 // The kind of work a tool does, by the names common tools use.
@@ -1593,9 +1783,9 @@ function ToolCall({
 }) {
   // A call that started one of the agent's own subagents opens it (PLX-382).
   const subagents = useContext(SubagentsContext);
+  const root = useContext(RootContext);
   if (isSubagentTool(item.name) && subagents?.subagents[item.callId])
     return <SubagentCall item={item} />;
-  const named = plxdCall(item) ?? namedTool(item);
   const kind = toolKind(item);
   const status = item.status ?? (live ? "running" : "none");
   // A status newer than this app reads as no result.
@@ -1622,14 +1812,7 @@ function ToolCall({
               />
             )}
           </span>
-          <span className="shrink-0 font-medium">{named?.label ?? item.name ?? "Tool"}</span>
-          {named ? (
-            <span className="truncate text-muted-foreground">{named.detail}</span>
-          ) : (
-            <span className="truncate font-mono text-[12px] text-muted-foreground">
-              {toolHint(item.input)}
-            </span>
-          )}
+          <span className="truncate">{stepLabel(item, root)}</span>
           <span className="sr-only">{look.said}</span>
         </>
       }
@@ -1668,7 +1851,7 @@ const statuses = {
   none: { color: "text-faint-foreground", mark: Ellipsis, faded: true, said: "No result" },
 } satisfies Record<"running" | AgentToolStatus | "none", Look>;
 
-/** A collapsed-by-default row, open state kept by the transcript. */
+/** A collapsed-by-default step row, its chevron at its end, open state kept by the transcript. */
 function Disclosure({
   id,
   open,
@@ -1688,14 +1871,14 @@ function Disclosure({
       onToggle={(e) => e.currentTarget.open !== open && onToggle(id, e.currentTarget.open)}
       className="group/disclosure"
     >
-      <summary className="flex cursor-default list-none items-center gap-2 rounded-md py-0.5 text-[13px] hover:text-foreground [&::-webkit-details-marker]:hidden">
-        <ChevronRight
-          aria-hidden
-          className="size-3.5 shrink-0 text-faint-foreground transition-transform group-open/disclosure:rotate-90"
-        />
+      <summary
+        className={`${stepRow} list-none text-muted-foreground [&::-webkit-details-marker]:hidden`}
+      >
         {summary}
+        <Chevron />
       </summary>
-      <div className="mt-1.5 ml-5.5">{children}</div>
+      {/* Rendered once open, so a closed row doesn't hold its tool's output. */}
+      {open && <div className="mt-1.5 ml-5.5">{children}</div>}
     </details>
   );
 }
@@ -1718,6 +1901,169 @@ function toolHint(input?: JsonValue, fields = hintFields): string {
   if (!input || typeof input !== "object" || Array.isArray(input)) return "";
   const value = fields.map((f) => input[f]).find((v) => typeof v === "string");
   return typeof value === "string" ? (value.split("\n")[0] ?? "") : "";
+}
+
+/** A path relative to the run's worktree, when it's inside it. */
+function relative(path: string, root?: string) {
+  if (!root) return path;
+  const base = root.replace(/[\\/]+$/, "");
+  return path.startsWith(`${base}/`) || path.startsWith(`${base}\\`)
+    ? path.slice(base.length + 1)
+    : path;
+}
+
+/** The file a call acts on, relative to the run's worktree. */
+const filePath = (input?: JsonValue, root?: string) =>
+  relative(toolHint(input, ["file_path", "notebook_path", "path"]), root);
+
+/**
+ * A tool call's step row as a line, as T3 Code words one (PLX-584): the command it ran, or what it
+ * did and to what. A plxd or other MCP server's tool reads by its server and tool.
+ */
+export function stepLabel(item: Extract<Item, { kind: "tool" }>, root?: string): string {
+  const plxd = plxdCall(item);
+  if (plxd) return plxd.detail ? `${plxd.label}: ${plxd.detail}` : plxd.label;
+  const mcp = mcpTool(item.name);
+  if (mcp) return `${mcp.server}: ${mcp.tool}`;
+  const { input } = item;
+  const path = filePath(input, root);
+  const about = (verb: string, what: string, fallback: string) =>
+    what ? `${verb} ${what}` : fallback;
+  switch (item.name) {
+    case "Bash":
+      return toolHint(input, ["command"]) || "Ran a command";
+    case "Read":
+    case "NotebookRead":
+      return about("Read", path, "Read a file");
+    case "LS":
+      return about("Listed", path, "Listed a folder");
+    case "Edit":
+    case "MultiEdit":
+    case "NotebookEdit":
+      return about("Edited", path, "Edited a file");
+    case "Write":
+      return about("Wrote", path, "Wrote a file");
+    case "Grep": {
+      const pattern = toolHint(input, ["pattern"]);
+      return pattern ? `Searched ${pattern}${path ? ` in ${path}` : ""}` : "Searched code";
+    }
+    case "Glob":
+      return about("Searched files", toolHint(input, ["pattern"]), "Searched files");
+    case "WebSearch":
+      return about("Searched the web for", toolHint(input, ["query"]), "Searched the web");
+    case "WebFetch":
+      return about("Fetched", toolHint(input, ["url"]), "Fetched a page");
+    case "Skill":
+      return about("Used skill", skillName(input), "Used a skill");
+    case "Task":
+    case "Agent":
+      return about("Ran agent", toolHint(input, ["description"]), "Ran an agent");
+  }
+  const hint = toolHint(input);
+  const name = item.name ?? "Tool";
+  return hint ? `${name} ${hint}` : name;
+}
+
+/** What a run of steps did, in a line, and the icon for it. */
+export interface StepsSummary {
+  label: string;
+  Icon: LucideIcon;
+  /** Whether a call in it failed or was denied. */
+  failed: boolean;
+}
+
+/**
+ * What a run of steps did, as T3 Code sums one up (PLX-584): the MCP servers it used, then its two
+ * main kinds of call with counts, commands and edits first, then how many others, as in "Used
+ * Linear, ran 3 commands, and changed 2 files". Thoughts and notices aren't counted, unless
+ * they're all there is.
+ */
+export function summarize(items: readonly Item[]): StepsSummary {
+  const steps = items.filter((i) => i.kind !== "notice");
+  const failed = steps.some(
+    (i) => i.kind === "tool" && (i.status === "error" || i.status === "denied"),
+  );
+  const calls = steps.filter((i) => i.kind === "tool" || i.kind === "todo");
+  if (calls.length === 0) {
+    const n = steps.length;
+    return { label: n === 1 ? "Thought" : `Thought ${n} times`, Icon: icons.thinking, failed };
+  }
+  const servers: string[] = [];
+  const kinds = new Set<Kind>();
+  // By kind of call, in the order each first came: its calls, and the files of edits.
+  const counts = new Map<string, { calls: number; files: Set<string> }>();
+  for (const call of calls) {
+    const kind = call.kind === "todo" ? "planning" : toolKind(call);
+    kinds.add(kind);
+    if (call.kind === "tool" && (kind === "mcp" || kind === "plxd")) {
+      const server = kind === "plxd" ? "Parallax" : mcpTool(call.name)!.server;
+      if (!servers.includes(server)) servers.push(server);
+      continue;
+    }
+    const group = call.kind === "tool" && call.name === "WebSearch" ? "web" : kind;
+    const count = counts.get(group) ?? { calls: 0, files: new Set() };
+    count.calls++;
+    count.files.add(call.kind === "tool" ? filePath(call.input) || call.callId : call.key);
+    counts.set(group, count);
+  }
+  const ranked = [...counts]
+    .map(([group, count], order) => ({ group, count, order, rank: callRanks[group] ?? 1 }))
+    .sort((a, b) => a.rank - b.rank || a.order - b.order)
+    .slice(0, 2)
+    .sort((a, b) => a.order - b.order);
+  const parts = ranked.map(({ group, count }) => callLabel(group, count.calls, count.files.size));
+  if (servers.length > 0) parts.unshift(`Used ${list(servers)}`);
+  const others =
+    calls.length -
+    calls.filter((c) => c.kind === "tool" && ["mcp", "plxd"].includes(toolKind(c))).length -
+    ranked.reduce((n, { count }) => n + count.calls, 0);
+  if (others > 0) parts.push(`performed ${others} other ${others === 1 ? "action" : "actions"}`);
+  const label = list(parts.map((p, i) => (i === 0 ? p : p.charAt(0).toLowerCase() + p.slice(1))));
+  const [only] = kinds;
+  return {
+    label: label.charAt(0).toUpperCase() + label.slice(1),
+    Icon: kinds.size === 1 ? icons[only!] : icons.working,
+    failed,
+  };
+}
+
+// Commands and edits lead a summary, and calls of tools this app doesn't know come last.
+const callRanks: Partial<Record<string, number>> = { shell: 0, editing: 0, writing: 0, working: 2 };
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+const times = (n: number) => (n === 1 ? "once" : `${n} times`);
+
+/** A kind of call in a summary, by how many there were and how many files they changed. */
+function callLabel(group: string, calls: number, files: number): string {
+  switch (group) {
+    case "shell":
+      return `Ran ${plural(calls, "command", "commands")}`;
+    case "editing":
+    case "writing":
+      return `Changed ${plural(files, "file", "files")}`;
+    case "reading":
+      return `Read ${plural(calls, "file", "files")}`;
+    case "searching":
+      return `Searched code ${times(calls)}`;
+    case "web":
+      return `Searched the web ${times(calls)}`;
+    case "fetching":
+      return `Fetched ${plural(calls, "page", "pages")}`;
+    case "agent":
+      return `Ran ${plural(calls, "agent", "agents")}`;
+    case "skill":
+      return `Used ${plural(calls, "skill", "skills")}`;
+    case "planning":
+      return "Updated the plan";
+    default:
+      return `Used ${plural(calls, "tool", "tools")}`;
+  }
+}
+
+/** "a", "a and b", or "a, b, and c". */
+function list(parts: string[]): string {
+  if (parts.length < 3) return parts.join(" and ");
+  return `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1)}`;
 }
 
 // A coordinator's plxd tools (0019), by what they did.

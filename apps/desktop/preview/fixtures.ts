@@ -913,15 +913,43 @@ export function createFixtures(now = Date.now()): Fixtures {
         { text: "Check at 32 and 128 px", status: "pending" },
       ],
     },
+    {
+      kind: "reasoning",
+      text: "Icon Composer wants each layer as its own SVG, so first check whether design/icon already splits the glyph from the background.",
+    },
     ...tool(
       "Bash",
       { command: "ls design/icon", description: "List the icon sources" },
       "glyph.svg\nbackground.svg\nparallax.icns\nREADME.md",
     ),
     ...tool("Read", { file_path: "design/icon/README.md" }, "…"),
+    ...tool("Grep", { pattern: "icns|AppIcon", path: "apps/desktop" }, "electron-builder.yml:14"),
+    ...tool("Read", { file_path: "apps/desktop/electron-builder.yml" }, "…"),
     {
       kind: "text",
       text: "The glyph and background are already separate layers, which is what Icon Composer wants. Building the bundle now.",
+    },
+    { kind: "contextCompaction", done: false },
+    { kind: "contextCompaction", done: true },
+    ...tool(
+      "Write",
+      { file_path: "design/icon/Parallax.icon/icon.json", content: "{}" },
+      "File created successfully.",
+    ),
+    ...tool(
+      "Bash",
+      { command: "xcrun actool design/icon/Parallax.icon --compile build/icon --platform macosx" },
+      "/* com.apple.actool.compilation-results */",
+    ),
+    {
+      kind: "reasoning",
+      text: "**Checking the Dock sizes.** The 32 px render loses the glyph's inner ring, so the tinted variant needs a heavier stroke there.",
+    },
+    {
+      kind: "toolCall",
+      callId: callId(),
+      name: "Bash",
+      input: { command: "pnpm exec icon-preview --sizes 32,128 build/icon/Assets.car" },
     },
   );
 

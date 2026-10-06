@@ -307,6 +307,10 @@ impl Translator {
                         .map(str::to_owned),
                 })]
             }
+            Some("status") if text(message, "status") == Some("compacting") => {
+                vec![Step::Emit(Event::ContextCompaction { done: false })]
+            }
+            Some("compact_boundary") => vec![Step::Emit(Event::ContextCompaction { done: true })],
             Some("api_retry") => {
                 let error = text(message, "error").unwrap_or("unknown");
                 self.turn_error = Some(api_error_kind(error));
