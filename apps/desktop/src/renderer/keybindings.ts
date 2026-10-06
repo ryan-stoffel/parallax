@@ -13,8 +13,7 @@ export type Command =
   | "usage"
   | "parentThread"
   | "nextThread"
-  | "previousThread"
-  | "projectTarget";
+  | "previousThread";
 
 /**
  * Every rebindable command, in Settings > Keybinds' order, with its default bindings. "Mod" is
@@ -34,8 +33,6 @@ export const commands: { id: Command; name: string; defaults: string[] }[] = [
   { id: "parentThread", name: "Go to parent thread", defaults: ["Mod+Alt+ArrowUp"] },
   { id: "nextThread", name: "Next sibling thread", defaults: ["Mod+Alt+ArrowRight"] },
   { id: "previousThread", name: "Previous sibling thread", defaults: ["Mod+Alt+ArrowLeft"] },
-  // A Project composer's target (0042), which ProjectChat flips.
-  { id: "projectTarget", name: "Switch New thread and Chat", defaults: ["Mod+Period"] },
 ];
 
 const order = ["Ctrl", "Alt", "Shift", "Meta"];

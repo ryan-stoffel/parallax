@@ -1,8 +1,8 @@
 import { GitBranch } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { Project, PromptImage } from "../protocol/generated/protocol";
-import { AgentChat, CheckoutLabel, PinnedApprovals } from "./AgentChat";
+import { AgentChat, CheckoutLabel, PinnedApprovals, TranscriptView } from "./AgentChat";
 import { AgentsBar } from "./AgentsBar";
 import { queueOf, useAnswers, type Asked } from "./Approval";
 import { Composer, tabItem } from "./Composer";
@@ -20,11 +20,11 @@ import { uuidv7 } from "./uuidv7";
 
 /**
  * A Project's coordinator chat (0024). Until its first message the Project introduces itself, and
- * sending starts the coordinator. From then on it is the coordinator run's `AgentChat`, so replies,
- * Stop, and the transcript work as a thread's do. Either way its children ride over the composer
- * (`AgentsBar`), and its inbox is the side panel's. On a plxd with `projectTasks`, the composer
- * starts a child for a task, or one each for a list of them, and sends a question to the
- * coordinator (0042). Key it by host and Project.
+ * sending starts the coordinator, showing the message with the transcript's loader at once. From
+ * then on it is the coordinator run's `AgentChat`, so replies, Stop, and the transcript work as a
+ * thread's do. Every message goes to the coordinator, which starts the Project's children (0042).
+ * Either way its children ride over the composer (`AgentsBar`), and its inbox is the side panel's.
+ * Key it by host and Project.
  */
 export function ProjectChat({
   hostId,
@@ -33,7 +33,6 @@ export function ProjectChat({
   project,
   prompt,
   startCoordinator,
-  startTask,
   updateProject,
   others,
   agents,
@@ -49,7 +48,6 @@ export function ProjectChat({
   /** The coordinator's first message, shown until its transcript loads. */
   prompt?: string;
   startCoordinator: ThreadsView["startCoordinator"];
-  startTask: ThreadsView["startTask"];
   updateProject: ThreadsView["updateProject"];
   /** Permission requests the Project's subagents wait on, pinned over the composer (PLX-196). */
   others?: readonly Asked[];
@@ -65,18 +63,16 @@ export function ProjectChat({
   const connected = connection?.status === "connected";
   // The first message's run id, reused when it's sent again after failing (0007).
   const [runId] = useState(uuidv7);
-  const [starting, setStarting] = useState(false);
+  // The messages sent while the coordinator starts, the first one first, shown as on their way.
+  const [starting, setStarting] = useState<{ text: string; images: PromptImage[] }[]>();
+  // The first message's start, which messages sent meanwhile wait on.
+  const starts = useRef<Promise<string | undefined>>(undefined);
+  // Why a message sent while it started didn't reach the coordinator.
+  const [heldError, setHeldError] = useState<string>();
   // The coordinator run this chat last started, set before it does so its chat opens as starting.
   const [started, setStarted] = useState<string>();
-  // Which account the coordinator got, when the host had no coordinator account.
-  const [notice, setNotice] = useState<string>();
   // The coordinator default's backend, whose models and efforts the first message offers.
   const [backend, setBackend] = useState<string>();
-  const tasks = connected && "projectTasks" in connection.capabilities;
-  // The worker default's backend, a New task's, as New Thread's.
-  const [taskBackend, setTaskBackend] = useState<string>();
-  // Where the user pointed the composer, over what its text suggests, until it sends.
-  const [asking, setAsking] = useState<boolean>();
   // Before there's a coordinator, subagents started by hand still ask here (PLX-196).
   const { answers, answer, dismiss } = useAnswers(hostId);
   const asked = useMemo(() => queueOf(others ?? [], answers), [others, answers]);
@@ -84,11 +80,10 @@ export function ProjectChat({
     if (!connected) return;
     let live = true;
     void defaultBackend(hostId, "coordinator").then((b) => live && setBackend(b));
-    if (tasks) void defaultBackend(hostId, "worker").then((b) => live && setTaskBackend(b));
     return () => {
       live = false;
     };
-  }, [hostId, connected, tasks]);
+  }, [hostId, connected]);
 
   // Why the base branch couldn't change.
   const [branchError, setBranchError] = useState<string>();
@@ -133,8 +128,8 @@ export function ProjectChat({
   );
 
   // Starts the coordinator as run `id`. With no coordinator account on the host, the run gets the
-  // host's first Claude account, its login before its keys (0004), and the chat says so. A Project
-  // with a mode runs in it (0042), so it gets no permission.
+  // host's first Claude account, its login before its keys (0004). A Project with a mode runs in
+  // it (0042), so it gets no permission.
   const start = async (
     id: string,
     text: string,
@@ -155,7 +150,6 @@ export function ProjectChat({
         ...options,
         account: first.account,
       });
-      if (!error) setNotice(`Using ${first.label} for this Project's coordinator.`);
     }
     return error && describeError(error);
   };
@@ -170,24 +164,6 @@ export function ProjectChat({
     />
   );
 
-  // A New task never waits on the coordinator, so the box is free for the next one at once.
-  const newTask = tasks
-    ? {
-        backend: taskBackend,
-        asking,
-        onAsking: setAsking,
-        onSend: async (
-          text: string,
-          options: RunOptions,
-          images: PromptImage[],
-          threads: string[],
-        ) => {
-          const error = await startTask(project.id, uuidv7(), text, images, options, threads);
-          return error && describeError(error);
-        },
-      }
-    : undefined;
-
   if (project.coordinator)
     return (
       <>
@@ -197,50 +173,77 @@ export function ProjectChat({
           runId={project.coordinator}
           prompt={prompt}
           going={started === project.coordinator}
-          notice={notice}
+          notice={heldError}
           tab={tab}
           strip={bar}
           // A new coordinator replaces one that can't take messages (0024).
           startOver={(text, options, images) => start(uuidv7(), text, options, images)}
           others={others}
           projectMode={project.permission}
-          newTask={newTask}
         />
       </>
     );
 
+  // The first message starts the coordinator. One sent while it starts waits for it, then goes
+  // to its queue, so messages can be sent back to back from the first.
   const send = async (text: string, options: RunOptions, images: PromptImage[]) => {
-    setStarting(true);
-    const failed = await start(runId, text, options, images);
-    setStarting(false);
-    return failed;
+    const message = { text, images };
+    setStarting((sent) => [...(sent ?? []), message]);
+    if (!starts.current) {
+      starts.current = start(runId, text, options, images);
+      const failed = await starts.current;
+      if (failed) {
+        starts.current = undefined;
+        setStarting(undefined);
+      }
+      return failed;
+    }
+    const failed = await starts.current;
+    if (failed) return failed;
+    // The new run keeps the first message's model and effort.
+    const sent = await window.parallax.request(hostId, "agent/send", {
+      runId,
+      turnId: uuidv7(),
+      text,
+      ...(images.length > 0 && { images }),
+      ...(connected && "queue" in connection.capabilities && { delivery: "queue" as const }),
+    });
+    if ("error" in sent) setHeldError(`"${text}" wasn't sent: ${describeError(sent.error)}`);
+    return undefined;
   };
 
   let disabledReason: string | undefined;
-  if (starting) disabledReason = "Starting the coordinator…";
-  else if (connection?.status === "failed") disabledReason = "Disconnected from plxd";
+  if (connection?.status === "failed") disabledReason = "Disconnected from plxd";
   else if (!connected) disabledReason = "Connecting to plxd…";
   else if (!("coordinator" in connection.capabilities))
     disabledReason = "This host's plxd can't run a Project's coordinator yet";
 
   return (
     <>
-      {/* It gives way first in a short window, so a pinned card and the composer keep their room,
-          and whole: once it doesn't fit, it wraps into a second column, out of view, rather than
-          show cut in two (PLX-259). */}
-      <div className="flex min-h-0 flex-1 flex-col flex-wrap content-start justify-center overflow-hidden text-center">
-        {/* The first column's width, so the second starts past the edge. */}
-        <span aria-hidden className="w-full" />
-        <div className="flex w-full flex-col items-center px-8 pb-[8vh]">
-          <ProjectIcon icon={project.icon} className="size-10" />
-          <h2 className="mt-5 text-[18px] font-medium tracking-tight">{project.name}</h2>
-          <p className="mt-2 max-w-sm text-[14px] text-muted-foreground">
-            {tasks
-              ? "Describe a task and an agent starts on it, or list a few to start them together. Ask a question and the coordinator answers."
-              : `Agents working on ${project.name} report back and coordinate here.`}
-          </p>
+      {starting ? (
+        // Laid out as AgentChat is, so opening the coordinator's chat doesn't move anything.
+        <TranscriptView
+          rows={starting.map((m, i) => ({ kind: "pending", key: `pending:${i}`, ...m }))}
+          sent={new Map()}
+          live={false}
+        />
+      ) : (
+        // It gives way first in a short window, so a pinned card and the composer keep their
+        // room, and whole: once it doesn't fit, it wraps into a second column, out of view,
+        // rather than show cut in two (PLX-259).
+        <div className="flex min-h-0 flex-1 flex-col flex-wrap content-start justify-center overflow-hidden text-center">
+          {/* The first column's width, so the second starts past the edge. */}
+          <span aria-hidden className="w-full" />
+          <div className="flex w-full flex-col items-center px-8 pb-[8vh]">
+            <ProjectIcon icon={project.icon} className="size-10" />
+            <h2 className="mt-5 text-[18px] font-medium tracking-tight">{project.name}</h2>
+            <p className="mt-2 max-w-sm text-[14px] text-muted-foreground">
+              Describe a feature or a bug and the coordinator starts an agent on it. Send several
+              back to back to run them together.
+            </p>
+          </div>
         </div>
-      </div>
+      )}
       {/* As in AgentChat: bounded, so a pinned card's preview gives way to a grown composer. */}
       <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 pb-5">
         <PinnedApprovals
@@ -251,10 +254,12 @@ export function ProjectChat({
           disabledReason={connected ? undefined : "Connecting to plxd…"}
         />
         {bar}
+        {/* In the same place while it starts, so a failed start puts the message back. */}
         <Composer
-          newThread
+          newThread={!starting}
           onSend={send}
-          backend={backend}
+          // Hidden while it starts, as the coordinator's chat keeps its run's.
+          backend={starting ? undefined : backend}
           hostId={hostId}
           disabledReason={disabledReason}
           tab={tab}
@@ -263,7 +268,6 @@ export function ProjectChat({
           // The coordinator asks only through a plxd that sends its requests.
           manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
           projectMode={project.permission}
-          newTask={newTask}
         />
       </div>
     </>

@@ -316,13 +316,10 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Back to app" }).click();
 
-  // The last test left the ember project open. A message that isn't a question starts a task, so
-  // the route chip sends this one to the coordinator instead (0042).
+  // The last test left the ember project open. Every message goes to its coordinator.
   const message = page.getByRole("textbox", { name: "Message" });
   const toCoordinator = async (text: string) => {
     await message.fill(text);
-    await page.getByRole("button", { name: "Sends to: New thread. Switch" }).click();
-    await expect(page.getByRole("button", { name: "Sends to: Chat. Switch" })).toBeVisible();
     await page.getByRole("button", { name: "Send", exact: true }).click();
   };
   await toCoordinator("Plan the ember release");
@@ -352,7 +349,7 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
   await expect(transcript.getByText("Start with the changelog")).toBeVisible();
 });
 
-test("starts the project's tasks from its composer, shows them over it and on its Project tab, opens their chats, and marks the coordinator's wake-up (PLX-47)", async () => {
+test("shows the project's tasks over its composer and on its Project tab, opens their chats, and marks the coordinator's wake-up (PLX-47)", async () => {
   // The last test left ember's coordinator open, interrupted by the restart, with its side panel
   // on the Project tab.
   const panel = page.getByRole("complementary", { name: "Side panel" });
@@ -362,11 +359,19 @@ test("starts the project's tasks from its composer, shows them over it and on it
   );
   await expect(panel).toContainText("Nothing is waiting on you.");
 
-  // A task starts a child, on the worker default the thread test set.
-  const message = page.getByRole("textbox", { name: "Message" });
-  await message.fill("Write the changelog");
-  await expect(page.getByRole("button", { name: "Sends to: New thread. Switch" })).toBeVisible();
-  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const listed = (await page.evaluate(`window.parallax.request("local", "project/list", {})`)) as {
+    result: { projects: { id: string; coordinator: string }[] };
+  };
+  const ember = listed.result.projects[0]!;
+  // A task the Project starts, on the worker default the thread test set (0042).
+  const task = await page.evaluate(
+    `window.parallax.request("local", "thread/start", ${JSON.stringify({
+      runId: uuidv7(),
+      project: ember.id,
+      prompt: "Write the changelog",
+    })})`,
+  );
+  expect(task).not.toHaveProperty("error");
   const bar = page.getByRole("region", { name: "Agents" });
   await expect(bar).toContainText("Write the changelog");
   await expect(bar).toContainText("1 working");
@@ -374,10 +379,6 @@ test("starts the project's tasks from its composer, shows them over it and on it
   await expect(working.getByRole("button", { name: /^Write the changelog/ })).toBeVisible();
 
   // One the coordinator started, as `plxd mcp`'s spawn_agent does (0019): it arrives by event.
-  const listed = (await page.evaluate(`window.parallax.request("local", "project/list", {})`)) as {
-    result: { projects: { id: string; coordinator: string }[] };
-  };
-  const ember = listed.result.projects[0]!;
   const params = {
     runId: uuidv7(),
     project: ember.id,
@@ -411,7 +412,7 @@ test("starts the project's tasks from its composer, shows them over it and on it
   await expect(crumbs).not.toContainText("Tag the release");
   await expect(bar).toContainText("1 working");
   await expect(transcript.getByText("Plan the ember release")).toBeVisible();
-  // Two wake-ups: one for the task started from the composer (0043), and one for the stop.
+  // Two wake-ups: one for the task's start (0043), and one for the stop.
   await expect(transcript.getByText("From Parallax: subagents finished").first()).toBeVisible();
 });
 
