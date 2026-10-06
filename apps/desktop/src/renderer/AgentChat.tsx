@@ -827,8 +827,13 @@ export function TranscriptView({
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    if (first !== above.current.first && !atBottom.current)
+    if (first !== above.current.first && !atBottom.current) {
       el.scrollTop = el.scrollHeight - above.current.fromEnd;
+      // The virtualizer keeps the offset it last saw in a scroll event, which a busy machine
+      // delivers late. Until then it takes the new rows above the view for rows below it and
+      // skips correcting their measured heights, which shifts what's in view.
+      virtualizer.scrollOffset = el.scrollTop;
+    }
     above.current = { first, fromEnd: el.scrollHeight - el.scrollTop };
     if (onNearTop && el.scrollTop < el.clientHeight) onNearTop();
   });

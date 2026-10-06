@@ -148,15 +148,23 @@ test("a long run opens at its end and scrolls back to its start (PLX-490)", asyn
     await page.waitForTimeout(300);
     // Then up into the last screen in one go, which loads the page before. The rows rendered
     // above the old view are in the new one, and none has moved for the load yet.
-    const shown = await page.evaluate<{ anchor: string; top: number; scrollTop: number }>(`(() => {
+    // The rows around the new offset render a frame later, so it waits for one in view.
+    const shown = await page.evaluate<{
+      anchor: string;
+      top: number;
+      scrollTop: number;
+    }>(`(async () => {
       const log = document.querySelector('[role="log"]');
       log.scrollTop = log.clientHeight - 1;
-      const { top, bottom } = log.getBoundingClientRect();
-      const row = [...log.querySelectorAll("div")].find((d) => {
-        const at = d.getBoundingClientRect().top;
-        return d.childElementCount === 0 && /^Message \\d+$/.test(d.textContent) && at >= top && at < bottom;
-      });
-      return { anchor: row.textContent, top: row.getBoundingClientRect().top, scrollTop: log.scrollTop };
+      for (;;) {
+        const { top, bottom } = log.getBoundingClientRect();
+        const row = [...log.querySelectorAll("div")].find((d) => {
+          const at = d.getBoundingClientRect().top;
+          return d.childElementCount === 0 && /^Message \\d+$/.test(d.textContent) && at >= top && at < bottom;
+        });
+        if (row) return { anchor: row.textContent, top: row.getBoundingClientRect().top, scrollTop: log.scrollTop };
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
     })()`);
     const loaded = await expect
       .poll(async () => (await where(page, shown.anchor)).scrollTop, { timeout: 3000 })
