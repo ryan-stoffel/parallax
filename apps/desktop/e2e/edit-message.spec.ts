@@ -4,9 +4,7 @@ import { close, launch, printFailure, type Launched } from "./launch";
 
 let launched: Launched;
 test.beforeAll(async () => {
-  launched = await launch("edit-message.json", undefined, {
-    dir: test.info().outputPath("video"),
-  });
+  launched = await launch("edit-message.json");
 });
 test.afterEach(async () => {
   if (test.info().status !== test.info().expectedStatus) await printFailure(launched);
