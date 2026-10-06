@@ -283,9 +283,14 @@ async fn under(root: &Path, path: &str) -> Result<Option<(PathBuf, bool)>, Error
 
 /// Whether Windows reads `component` as the name it spells. A drive prefix such as `D:` or `C:x`
 /// would replace the whole path when pushed, `:` also names an alternate data stream, and Windows
-/// drops trailing dots and spaces, so `.git.` would reach `.git`.
+/// drops trailing dots and spaces, so `.git.` would reach `.git`, and a short name such as `GIT~1`
+/// can name `.git` too.
 fn plain_on_windows(component: &str) -> bool {
-    !component.contains(':') && !component.ends_with(['.', ' '])
+    let short_name = component
+        .split('~')
+        .skip(1)
+        .any(|after| after.starts_with(|c: char| c.is_ascii_digit()));
+    !component.contains(':') && !component.ends_with(['.', ' ']) && !short_name
 }
 
 fn io_failed(path: &Path, error: &std::io::Error) -> ErrorObject {
@@ -601,7 +606,7 @@ mod tests {
     use super::{base64, plain_on_windows};
 
     #[test]
-    fn windows_refuses_drives_streams_and_trailing_dots_or_spaces() {
+    fn windows_refuses_drives_streams_short_names_and_trailing_dots_or_spaces() {
         for name in [
             "D:",
             "C:x",
@@ -611,10 +616,20 @@ mod tests {
             ".git ",
             "x.",
             "x ",
+            "GIT~1",
+            "PROGRA~2.TXT",
         ] {
             assert!(!plain_on_windows(name), "{name:?}");
         }
-        for name in [".gitignore", "src", "a.b", ".env", "notes.md"] {
+        for name in [
+            ".gitignore",
+            "src",
+            "a.b",
+            ".env",
+            "notes.md",
+            "~backup",
+            "a~b",
+        ] {
             assert!(plain_on_windows(name), "{name:?}");
         }
     }
