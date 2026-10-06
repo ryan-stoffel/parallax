@@ -1509,10 +1509,13 @@ function Steps({
   openKeys: ReadonlySet<string>;
   onToggle: (key: string, open: boolean) => void;
 }) {
+  const root = useContext(RootContext);
   const only = work.items.length === 1 ? work.items[0]! : undefined;
   if (only && !active)
     return <RowView row={only} live={live} open={openKeys.has(only.key)} onToggle={onToggle} />;
-  const now = active ? activity(work.items.findLast((i) => i.kind !== "notice")) : undefined;
+  const doing = active ? activity(work.items.findLast((i) => i.kind !== "notice")) : undefined;
+  // Its path relative to the run's worktree, as the row reads once the call is done.
+  const now = doing && { ...doing, detail: doing.detail && relative(doing.detail, root) };
   const summary = summarize(work.items);
   return (
     <div>

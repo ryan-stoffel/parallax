@@ -734,4 +734,13 @@ test("a compaction shows under way, then done in its place, and a finished turn 
   expect(applyEvents(finished, [output({ kind: "text", text: "More." })], runId).turnDone).toBe(
     false,
   );
+
+  // A follow-up sent mid-turn starts before the turn it follows finishes, and still goes.
+  const steered = build(
+    output({ kind: "turnStarted" }),
+    output({ kind: "turnStarted", turnId: uuidv7(), text: "And the tests" }),
+    output({ kind: "turnFinished" }),
+  );
+  expect(steered.turnDone).toBe(false);
+  expect(applyEvents(steered, [output({ kind: "turnFinished" })], runId).turnDone).toBe(true);
 });

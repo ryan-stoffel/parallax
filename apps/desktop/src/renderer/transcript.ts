@@ -112,10 +112,15 @@ export interface Transcript {
   /** Events applied so far, after the compacted-row rule, so a later rewrite can replace them. */
   events?: LoggedEvent[];
   /**
-   * Whether the agent's last turn finished and nothing came after it, so a run still `running`
-   * is only winding down (PLX-584).
+   * Whether every turn the agent started has finished, with no work since, so a run still
+   * `running` is only winding down (PLX-584).
    */
   turnDone?: boolean;
+  /**
+   * The turns started and not yet finished or dropped, as a follow-up sent mid-turn starts before
+   * the turn it follows finishes.
+   */
+  openTurns?: number;
 }
 
 /**
@@ -265,7 +270,7 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
 }
 
 function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): Transcript {
-  let { run, seq, turnDone } = t;
+  let { run, seq, turnDone, openTurns = 0 } = t;
   const items = [...t.items];
   const subagents = { ...t.subagents };
   const push = (item: Item) => items.push(item);
@@ -309,8 +314,12 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
         break;
       case "agent.output":
         event.items.forEach((item, i) => {
-          if (item.kind === "turnFinished") turnDone = true;
-          else if (activityKinds.has(item.kind)) turnDone = false;
+          if (item.kind === "turnStarted") openTurns++;
+          if (item.kind === "turnFinished" || item.kind === "followUpDropped") {
+            // A page that starts mid-run may hold a turn's end without its start.
+            openTurns = Math.max(0, openTurns - 1);
+            turnDone = openTurns === 0;
+          } else if (activityKinds.has(item.kind)) turnDone = false;
           applyOutput(items, item, key(i), time, subagents);
         });
         break;
@@ -319,7 +328,13 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
     for (let i = before; i < items.length; i++)
       if (items[i]!.at === undefined) items[i] = { ...items[i]!, at: time };
   }
-  return { run, items, subagents, seq, ...(turnDone !== undefined && { turnDone }) };
+  return {
+    run,
+    items,
+    subagents,
+    seq,
+    ...(turnDone !== undefined && { turnDone, openTurns }),
+  };
 }
 
 /** The output items that mean the agent is at work on a turn. */

@@ -1524,7 +1524,17 @@ test("while a run goes, its work shows as steps, the call in flight live, under 
   expect(rows()).toEqual([expect.stringContaining("go"), "Working for 0s", "Hi"]);
   act(() => unmount());
 
-  // The call in flight: its work's loader, what it's doing, and to what.
+  // The call in flight: its work's loader, what it's doing, and to what, relative to the worktree.
+  render(
+    <TranscriptView
+      rows={[user, { ...read, status: undefined }]}
+      sent={new Map()}
+      live
+      root="/w"
+    />,
+  );
+  expect(header()!.textContent).toBe("Readingsrc/main.rs");
+  act(() => unmount());
   transcript([user, { ...tool, at: "2026-01-01T00:00:00Z" }, read, tool]);
   expect(header()!.textContent).toBe("Runningls");
   expect(header()!.querySelector('[data-loader="register"][data-variant="shift"]')).not.toBeNull();
