@@ -51,7 +51,7 @@ test("the data folder is PLXD_DATA_DIR, else ~/.parallax, else an older folder t
   expect(dataDir({}, "darwin", "/h", only())).toBe(home);
   expect(dataDir({}, "darwin", "/h", only(old))).toBe(old);
   expect(dataDir({}, "darwin", "/h", only(old, home))).toBe(home);
-  expect(dataDir({ XDG_DATA_HOME: "/x" }, "linux", "/h", only("/x/parallax"))).toBe(
+  expect(dataDir({ XDG_DATA_HOME: "/x" }, "linux", "/h", only(path.join("/x", "parallax")))).toBe(
     path.join("/x", "parallax"),
   );
   // A relative XDG_DATA_HOME is ignored, as the XDG spec says.

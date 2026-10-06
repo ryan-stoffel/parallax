@@ -130,26 +130,27 @@ fn darwin_user_temp_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim_end())
 }
 
-/// With no `--data-dir`, Linux's data folder is `$XDG_DATA_HOME/parallax` when that is absolute, and
-/// `~/.local/share/parallax` otherwise (0023).
-#[cfg(target_os = "linux")]
+/// With no `--data-dir`, the data folder is `~/.parallax`, unless that doesn't exist and an older
+/// folder does: on Linux, `$XDG_DATA_HOME/parallax` when that is absolute (0023).
+#[cfg(unix)]
 #[tokio::test]
-async fn the_default_linux_data_folder_follows_xdg_data_home() {
+async fn the_default_data_folder_is_parallax_in_home_unless_an_older_one_exists() {
     use rustix::process::{Pid, kill_process};
 
     let home = temp_dir();
     let data_home = temp_dir();
-    let in_home = home.path().join(".local/share/parallax");
-    let cases = [
-        (
-            Some(data_home.path().to_str().unwrap()),
-            data_home.path().join("parallax"),
-        ),
-        (Some("relative/data"), in_home.clone()),
-        (Some(""), in_home.clone()),
-        (None, in_home),
-    ];
-    for (xdg_data_home, expected) in cases {
+    let new = home.path().join(".parallax");
+    let mut cases = vec![(None, new.clone(), false)];
+    if cfg!(target_os = "linux") {
+        let old = data_home.path().join("parallax");
+        cases.push((Some(data_home.path().to_str().unwrap()), old.clone(), true));
+        // A relative XDG_DATA_HOME is ignored, so there is no older folder to keep.
+        cases.push((Some("relative/data"), new.clone(), false));
+    }
+    for (xdg_data_home, expected, exists_already) in cases {
+        if exists_already {
+            fs::create_dir_all(&expected).unwrap();
+        }
         let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_plxd"));
         command
             .arg("serve")
