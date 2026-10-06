@@ -848,6 +848,10 @@ export function App() {
                     url={url}
                     prs={prs}
                     onSetUpGithub={setUpGithub}
+                    onBrowse={(page) => {
+                      setPanelOpen(true);
+                      setBrowse({ url: page });
+                    }}
                     onCompose={(text, send) => {
                       // The chat is under an expanded panel.
                       setPanelExpanded(false);
