@@ -548,6 +548,35 @@ const handlers: { [M in Method]?: Handler<M> } = {
     });
     return run ? { run } : fail("no such run", "runNotFound");
   },
+  // A made-up read of a linked pull request, for the Pull requests page.
+  "pr/view": (p) => {
+    const number = Number(p.url.split("/").pop());
+    const titles: Record<number, string> = {
+      588: "Follow nightlies from a nightly build",
+      591: "Plainer copy on the first-run screens",
+    };
+    return {
+      number,
+      title: titles[number] ?? `Pull request ${number}`,
+      url: p.url,
+      repo: "ryan-stoffel/parallax",
+      state: number === 591 ? "merged" : "open",
+      draft: false,
+      author: "ryan-stoffel",
+      updatedAt: new Date(Date.now() - number * 60_000).toISOString(),
+      baseBranch: "develop",
+      headBranch: `feature/${number}`,
+      changedFiles: 6,
+      additions: 211,
+      deletions: 88,
+      body: "",
+      comments: [],
+      reviewRequests: [],
+      labels: number === 591 ? ["docs"] : ["feature", "app"],
+      checks: [],
+      checksState: number === 591 ? "passed" : "pending",
+    };
+  },
   "agent/approve": (p) => {
     const decision = p.decision === "allow" ? "allowed" : "denied";
     output(p.runId, {

@@ -12,6 +12,7 @@ export type Command =
   | "settings"
   | "usage"
   | "find"
+  | "openPr"
   | "parentThread"
   | "nextThread"
   | "previousThread";
@@ -31,6 +32,7 @@ export const commands: { id: Command; name: string; defaults: string[] }[] = [
   { id: "settings", name: "Open Settings", defaults: ["Mod+Comma"] },
   { id: "usage", name: "Open Usage", defaults: ["Mod+Alt+KeyU"] },
   { id: "find", name: "Find in thread", defaults: ["Mod+KeyF"] },
+  { id: "openPr", name: "Open pull request on GitHub", defaults: ["Mod+Shift+KeyP"] },
   // A thread's lineage (0041): from a parent, next and previous open its first and last child.
   { id: "parentThread", name: "Go to parent thread", defaults: ["Mod+Alt+ArrowUp"] },
   { id: "nextThread", name: "Next sibling thread", defaults: ["Mod+Alt+ArrowRight"] },

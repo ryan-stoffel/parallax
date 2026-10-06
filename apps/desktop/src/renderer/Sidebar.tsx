@@ -19,6 +19,7 @@ import {
   FolderPlus,
   GitBranch,
   GitMerge,
+  GitPullRequest,
   HardDrive,
   Keyboard,
   ListFilter,
@@ -188,6 +189,8 @@ interface ThreadListProps {
   /** Opens a Project, on another host by opening that host first. */
   onOpenProject: (hostId: string, projectId: string) => void;
   onOpenSettings: (section: SettingsSection) => void;
+  /** Opens the Pull requests page, in place of the main pane. */
+  onOpenPullRequests: () => void;
   /** Deletes a thread. Resolves to an error message, or undefined. */
   onDelete: (hostId: string, thread: Thread) => Promise<string | undefined>;
   onNewThread: () => void;
@@ -310,6 +313,7 @@ export function ThreadList({
   onSelect,
   onOpenProject,
   onOpenSettings,
+  onOpenPullRequests,
   onDelete,
   onNewThread,
 }: ThreadListProps) {
@@ -790,7 +794,7 @@ export function ThreadList({
       </dialog>
       <div className="border-t border-border p-2">
         <ConnectionStatus hostId={host.id} />
-        <Footer onOpenSettings={onOpenSettings} />
+        <Footer onOpenSettings={onOpenSettings} onOpenPullRequests={onOpenPullRequests} />
       </div>
     </>
   );
@@ -1066,9 +1070,12 @@ function RepoFilterMenu({
 
 /**
  * The footer's buttons: Profile, which opens Settings > Account and shows the account's picture or
- * initials (0037), Settings, Usage, and Update when `updatable` (Update.tsx).
+ * initials (0037), Settings, Pull requests, Usage, and Update when `updatable` (Update.tsx).
  */
-function Footer({ onOpenSettings }: Pick<ThreadListProps, "onOpenSettings">) {
+function Footer({
+  onOpenSettings,
+  onOpenPullRequests,
+}: Pick<ThreadListProps, "onOpenSettings" | "onOpenPullRequests">) {
   const profile = useProfile();
   return (
     <div className="flex items-center gap-1">
@@ -1080,6 +1087,9 @@ function Footer({ onOpenSettings }: Pick<ThreadListProps, "onOpenSettings">) {
       </IconButton>
       <IconButton label="Settings" command="settings" onClick={() => onOpenSettings("general")}>
         <Settings />
+      </IconButton>
+      <IconButton label="Pull requests" onClick={onOpenPullRequests}>
+        <GitPullRequest />
       </IconButton>
       <IconButton label="Usage" onClick={() => onOpenSettings("usage")}>
         <ChartNoAxesColumn />

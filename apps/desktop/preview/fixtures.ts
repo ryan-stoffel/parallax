@@ -770,6 +770,7 @@ export function createFixtures(now = Date.now()): Fixtures {
     seen?: number;
     slug: string;
     diff?: { files: number; insertions: number; deletions: number };
+    pullRequests?: string[];
   }) => {
     const run: AgentRun = {
       id: t.id,
@@ -787,6 +788,7 @@ export function createFixtures(now = Date.now()): Fixtures {
       contextWindow: 1_000_000,
       permission: "edit",
       approvals: true,
+      ...(t.pullRequests && { pullRequests: t.pullRequests }),
       ...(t.diff && { diff: { commit: "9c1d07a2f53e8b6c4d190a7f2e3b5c8d1f0e4b9c", ...t.diff } }),
       createdAt: ago(t.started),
       updatedAt: ago(t.updated),
@@ -814,6 +816,7 @@ export function createFixtures(now = Date.now()): Fixtures {
     started: 60 * 5,
     updated: 18,
     diff: { files: 6, insertions: 211, deletions: 88 },
+    pullRequests: ["https://github.com/ryan-stoffel/parallax/pull/588"],
   });
   log(updater)
     .out(
@@ -868,6 +871,7 @@ export function createFixtures(now = Date.now()): Fixtures {
     updated: 60 * 25,
     seen: 60 * 24,
     diff: { files: 2, insertions: 31, deletions: 44 },
+    pullRequests: ["https://github.com/ryan-stoffel/parallax/pull/591"],
   });
   log(onboarding)
     .out(
