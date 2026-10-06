@@ -2250,7 +2250,32 @@ test("Archived lists 25 threads, Show more reveals the next page, and the summar
   ).toBe(false);
 });
 
-test("Pull requests lists each linked pull request, and a row opens its thread", async () => {
+test("the footer's Pull requests button opens a page of every linked pull request, and a row opens its thread", async () => {
+  const sample = {
+    state: "open",
+    draft: false,
+    author: "ryan",
+    updatedAt: "2026-09-29T12:00:00Z",
+    baseBranch: "develop",
+    headBranch: "feature/x",
+    changedFiles: 1,
+    additions: 1,
+    deletions: 0,
+    body: "",
+    comments: [],
+    reviewRequests: [],
+    checks: [],
+    repo: "ryan-stoffel/parallax",
+  };
+  answers["pr/view"] = (params) => ({
+    result: {
+      ...sample,
+      number: Number(String(params["url"]).split("/").pop()),
+      url: params["url"],
+      title: `Title of ${String(params["url"]).split("/").pop()}`,
+      labels: [],
+    },
+  });
   const withPrs = (id: string, title: string, pullRequests?: string[]) => ({
     ...coordinatorRun(id, title),
     project: parallax.id,
@@ -2285,14 +2310,18 @@ test("Pull requests lists each linked pull request, and a row opens its thread",
     },
   });
   await renderApp();
-  const rows = () => [...(drawer("Pull requests")?.querySelectorAll("li button") ?? [])];
-  expect(drawer("Pull requests")!.querySelector("summary")!.textContent).toContain("(2)");
-  expect(rows().map((b) => b.textContent)).toEqual([
-    "#7 Fix the flaky test",
-    "#9 Fix the flaky test",
+  await click(document.querySelector('#sidebar [aria-label="Pull requests"]'));
+  expect(crumbs()).toEqual(["Pull Requests"]);
+  const rows = () => [...document.querySelectorAll('ul[aria-label="Pull requests"] > li')];
+  // Each ends with its age, which follows the clock.
+  expect(
+    rows().map((r) => r.querySelector("button")!.textContent!.replace(/(now|\d+\w)$/, "")),
+  ).toEqual([
+    "#7Title of 7ryan-stoffel/parallaxFix the flaky test",
+    "#9Title of 9ryan-stoffel/parallaxFix the flaky test",
   ]);
-  await click(rows()[0]);
-  expect(rows()[0]!.getAttribute("aria-current")).toBe("true");
+  await click(rows()[0]!.querySelector("button"));
+  expect(crumbs().at(-1)).toBe("Fix the flaky test");
 });
 
 test("with no Projects, Threads is the only section, and the toolbar's one button opens the add palette", async () => {

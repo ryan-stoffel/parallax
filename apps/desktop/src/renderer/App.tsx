@@ -31,6 +31,7 @@ import { AgentsPanel, useProjectAgents, withProjectThreads } from "./ProjectAgen
 import { ProjectChat } from "./ProjectChat";
 import { ProjectHome, waitingCount } from "./ProjectHome";
 import { PullRequestChip, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
+import { PullRequestsPage, type PrEntry } from "./PullRequestsPage";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
 import type { NativeSubagent } from "./Subagents";
@@ -105,7 +106,12 @@ export function App() {
   const [settings, setSettings] = useState<SettingsSection | null>(null);
   // The host Set up GitHub opened Source control on (PLX-423).
   const [settingsHost, setSettingsHost] = useState<string>();
+  // The Pull requests page shows in place of the chat; opening a thread or Settings closes it.
+  const [prsOpen, setPrsOpen] = useState(false);
+
+  useEffect(() => setPrsOpen(false), [selection]);
   const openSettings = (section: SettingsSection, hostId?: string) => {
+    setPrsOpen(false);
     setSettings(section);
     setSettingsHost(hostId);
   };
@@ -259,6 +265,17 @@ export function App() {
     connected && "githubSetup" in connection.capabilities
       ? () => openSettings("sourceControl", host.id)
       : undefined;
+  // Every pull request linked to a thread on any host, for the Pull requests page.
+  const prEntries: PrEntry[] = listed.flatMap(({ host: h, view }) =>
+    view.state.threads.flatMap((t) =>
+      (view.state.runs[t.id]?.pullRequests ?? []).map((url) => ({
+        hostId: h.id,
+        runId: t.id,
+        threadTitle: view.state.titles[t.id] ?? "Thread",
+        url,
+      })),
+    ),
+  );
   const openPr = (url?: string) => {
     setPanelOpen(true);
     setShowPr({ url });
@@ -599,6 +616,10 @@ export function App() {
             onSelect={openOnHost}
             onOpenProject={openProject}
             onOpenSettings={openSettings}
+            onOpenPullRequests={() => {
+              setSettings(null);
+              setPrsOpen(true);
+            }}
             onDelete={deleteThread}
             onNewThread={() => newThread()}
           />
@@ -619,6 +640,20 @@ export function App() {
               theme={theme}
               onThemeChange={setTheme}
               sourceControlHost={settingsHost}
+            />
+          </>
+        ) : prsOpen ? (
+          <>
+            <TopBar className={topBarInset}>
+              {showSidebar}
+              <Breadcrumb items={[{ label: "Pull Requests" }]} />
+            </TopBar>
+            <PullRequestsPage
+              entries={prEntries}
+              onOpenThread={(e) => {
+                setPrsOpen(false);
+                openOnHost(e.hostId, { kind: "thread", threadId: e.runId });
+              }}
             />
           </>
         ) : (

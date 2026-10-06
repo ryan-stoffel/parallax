@@ -105,7 +105,6 @@ import {
   TopBar,
   useModHeld,
 } from "./ui";
-import { numberOf } from "./PullRequests";
 import { PanelResize } from "./PanelResize";
 import { instanceLogo, instanceName } from "./providers";
 import { UpdateButton } from "./Update";
@@ -190,6 +189,8 @@ interface ThreadListProps {
   /** Opens a Project, on another host by opening that host first. */
   onOpenProject: (hostId: string, projectId: string) => void;
   onOpenSettings: (section: SettingsSection) => void;
+  /** Opens the Pull requests page, in place of the main pane. */
+  onOpenPullRequests: () => void;
   /** Deletes a thread. Resolves to an error message, or undefined. */
   onDelete: (hostId: string, thread: Thread) => Promise<string | undefined>;
   onNewThread: () => void;
@@ -312,6 +313,7 @@ export function ThreadList({
   onSelect,
   onOpenProject,
   onOpenSettings,
+  onOpenPullRequests,
   onDelete,
   onNewThread,
 }: ThreadListProps) {
@@ -414,18 +416,6 @@ export function ThreadList({
   const pool = shown.filter((i) => i.kind === "thread" && !isArchived(i) && !isSnoozed(i));
   const snoozedItems = shown.filter((i) => !isArchived(i) && isSnoozed(i));
   const archived = shown.filter(isArchived);
-  // One row per pull request linked to a live thread, in the threads' order.
-  const prRows: PrRow[] = shown
-    .filter((i) => i.kind === "thread" && !isArchived(i))
-    .flatMap((i) =>
-      i.kind === "thread"
-        ? (i.view.state.runs[i.thread.id]?.pullRequests ?? []).map((url) => ({
-            item: i,
-            threadId: i.thread.id,
-            url,
-          }))
-        : [],
-    );
   // The Projects section shows once any host has a Project, even while search or the filter hides
   // them all.
   const hasProjects = items.some((i) => i.kind === "project");
@@ -732,23 +722,6 @@ export function ThreadList({
         defaultOpen
         onOpenChange={setWorkingOpen}
       />
-      <Drawer
-        label="Pull requests"
-        items={prRows}
-        row={({ item, threadId, url }) => (
-          <PullRequestRow
-            key={`${item.key} ${url}`}
-            url={url}
-            title={titleOf(item)}
-            selected={
-              item.host.id === host.id &&
-              selection.kind === "thread" &&
-              selection.threadId === threadId
-            }
-            onOpen={() => openItem(item)}
-          />
-        )}
-      />
       <Drawer label="Snoozed" items={snoozedItems} row={row} />
       <Drawer
         label="Archived"
@@ -821,7 +794,7 @@ export function ThreadList({
       </dialog>
       <div className="border-t border-border p-2">
         <ConnectionStatus hostId={host.id} />
-        <Footer onOpenSettings={onOpenSettings} />
+        <Footer onOpenSettings={onOpenSettings} onOpenPullRequests={onOpenPullRequests} />
       </div>
     </>
   );
@@ -843,43 +816,6 @@ function useMinute() {
     return () => window.clearInterval(timer);
   }, []);
   return now;
-}
-
-/** A pull request linked to a thread, for the Pull requests drawer. */
-interface PrRow {
-  item: Item;
-  threadId: string;
-  url: string;
-}
-
-/** A pull request's row: its number and its thread's title, opening that thread. */
-function PullRequestRow({
-  url,
-  title,
-  selected,
-  onOpen,
-}: {
-  url: string;
-  title: string;
-  selected: boolean;
-  onOpen: () => void;
-}) {
-  return (
-    <li>
-      <button
-        type="button"
-        title={url}
-        aria-current={selected || undefined}
-        onClick={onOpen}
-        className={`${row} ${selected ? current : "text-muted-foreground hover:text-foreground"}`}
-      >
-        <GitPullRequest aria-hidden className="size-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 truncate">
-          #{numberOf(url)} {title}
-        </span>
-      </button>
-    </li>
-  );
 }
 
 /** A section's heading: its name and a chevron, which collapse the section `controls` names. */
@@ -1134,9 +1070,12 @@ function RepoFilterMenu({
 
 /**
  * The footer's buttons: Profile, which opens Settings > Account and shows the account's picture or
- * initials (0037), Settings, Usage, and Update when `updatable` (Update.tsx).
+ * initials (0037), Settings, Pull requests, Usage, and Update when `updatable` (Update.tsx).
  */
-function Footer({ onOpenSettings }: Pick<ThreadListProps, "onOpenSettings">) {
+function Footer({
+  onOpenSettings,
+  onOpenPullRequests,
+}: Pick<ThreadListProps, "onOpenSettings" | "onOpenPullRequests">) {
   const profile = useProfile();
   return (
     <div className="flex items-center gap-1">
@@ -1148,6 +1087,9 @@ function Footer({ onOpenSettings }: Pick<ThreadListProps, "onOpenSettings">) {
       </IconButton>
       <IconButton label="Settings" command="settings" onClick={() => onOpenSettings("general")}>
         <Settings />
+      </IconButton>
+      <IconButton label="Pull requests" onClick={onOpenPullRequests}>
+        <GitPullRequest />
       </IconButton>
       <IconButton label="Usage" onClick={() => onOpenSettings("usage")}>
         <ChartNoAxesColumn />

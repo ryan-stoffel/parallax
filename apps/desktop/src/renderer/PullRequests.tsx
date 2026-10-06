@@ -150,7 +150,7 @@ export const numberOf = (url: string) => /\/pull\/(\d+)/.exec(url)?.[1] ?? "?";
 const repoOf = (url: string) => /github\.com\/([^/]+\/[^/]+)\/pull\//.exec(url)?.[1] ?? "";
 
 /** How a pull request's state looks: open green, draft gray, merged purple, closed red. */
-function lookOf(pr?: PullRequest): { Icon: LucideIcon; color: string; label?: string } {
+export function lookOf(pr?: PullRequest): { Icon: LucideIcon; color: string; label?: string } {
   if (pr?.state === "merged")
     return { Icon: GitMerge, color: "text-project-violet", label: "Merged" };
   if (pr?.state === "closed")
