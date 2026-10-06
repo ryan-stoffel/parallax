@@ -14,6 +14,7 @@ import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
 import { appShortcut } from "./ui";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+HTMLElement.prototype.hidePopover = () => {};
 
 // xterm.js needs a real canvas; the stand-in only marks where the terminal is.
 vi.mock("./SignInTerminal", () => ({
@@ -1205,11 +1206,14 @@ test("General's Terminal row chooses a terminal app, and Open folders in lists i
   };
   window.parallax.version = async () => "1.2.3";
   await renderSettings("general");
-  const choose = [...section("Open").querySelectorAll("button")].find(
-    (b) => b.textContent === "Choose…",
+  const choose = document.querySelector<HTMLButtonElement>(
+    '[role="menu"][aria-label="Terminal"] [role="menuitemradio"]:last-child',
   )!;
+  expect(choose.textContent).toContain("Choose an app…");
   await click(choose);
-  expect(section("Open").textContent).toContain("Open lists Ghostty");
-  const options = document.querySelectorAll('select[aria-label="Open folders in"] option');
+  expect(document.querySelector('[aria-label="Terminal: Ghostty"]')).not.toBeNull();
+  const options = document.querySelectorAll(
+    '[role="menu"][aria-label="Open folders in"] [role="menuitemradio"]',
+  );
   expect([...options].map((o) => o.textContent)).toEqual(["Finder", "Ghostty"]);
 });

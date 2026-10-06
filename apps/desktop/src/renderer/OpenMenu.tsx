@@ -19,6 +19,12 @@ const marks: Record<OpenTarget, ReactNode> = {
   terminal: <SquareTerminal />,
 };
 
+/** A target's app icon from main (`openTargetIcons`), else its mark. */
+export const targetIcon = (target: OpenTarget, appIcons: Partial<Record<OpenTarget, string>>) => {
+  const src = appIcons[target];
+  return src ? <img src={src} alt="" className="size-4 shrink-0" /> : marks[target];
+};
+
 /** A target's name for people; the terminal's is the chosen app's, `terminal`. */
 export const nameOf = (target: OpenTarget, terminal?: string | null) => {
   if (target === "cursor") return "Cursor";
@@ -50,10 +56,7 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
   useEffect(() => {
     void window.parallax.openTargetIcons().then(setAppIcons);
   }, [terminalChosen]);
-  const icon = (target: OpenTarget) => {
-    const src = appIcons[target];
-    return src ? <img src={src} alt="" className="size-4 shrink-0" /> : marks[target];
-  };
+  const icon = (target: OpenTarget) => targetIcon(target, appIcons);
   useEffect(() => {
     let live = true;
     void window.parallax.openTargets(hostId).then((found) => {
