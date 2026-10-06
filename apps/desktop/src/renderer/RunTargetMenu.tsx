@@ -1,6 +1,6 @@
 import { ChevronDown, Folder, FolderGit2, Laptop, Server } from "lucide-react";
 
-import { useId, type ToggleEvent } from "react";
+import { useId, useState, type ToggleEvent } from "react";
 
 import { DeviceIcon } from "./DeviceIcon";
 import { localId, type Host } from "./hosts";
@@ -33,27 +33,27 @@ export const hostIcon = (host: Host) =>
 
 /**
  * Where a thread runs: which of Parallax's computers, and in a new worktree or the local checkout.
- * The menu stays open while you pick both. The computer and the workspace are the caller's, which
- * starts the thread on that computer with that workspace; `checkoutUnavailable`, when set, says why
- * Local checkout can't be picked.
+ * The menu stays open while you pick both. The workspace is the caller's, which sends it with the
+ * thread; `checkoutUnavailable`, when set, says why Local checkout can't be picked. The computer
+ * is a placeholder: nothing here sends it yet, and the thread starts on the computer that got the
+ * request.
  */
 export function RunTargetMenu({
   hosts,
   hostId,
-  onHostChange,
   workspace: workspaceChoice,
   onWorkspaceChange,
   checkoutUnavailable,
 }: {
   hosts: Host[];
   hostId: string;
-  onHostChange: (hostId: string) => void;
   workspace: Workspace;
   onWorkspaceChange: (workspace: Workspace) => void;
   checkoutUnavailable?: string;
 }) {
   const id = useId();
-  const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
+  const [hostChoice, setHostChoice] = useState(hostId);
+  const host = hosts.find((h) => h.id === hostChoice) ?? hosts[0]!;
   const workspace = workspaces.find((w) => w.value === workspaceChoice)!;
   return (
     <>
@@ -98,7 +98,7 @@ export function RunTargetMenu({
                 hint: h.id === localId ? "this one" : undefined,
               }}
               checked={h === host}
-              onClick={() => onHostChange(h.id)}
+              onClick={() => setHostChoice(h.id)}
             />
           ))}
           {hosts.length === 1 && (

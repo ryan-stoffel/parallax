@@ -1087,8 +1087,6 @@ export const mockBridge: ParallaxBridge = {
       const own = deviceRequest(hostId, method, params as Record<string, unknown>);
       if (own)
         return delay({ result: structuredClone(own), logId: LOG_ID } as HostResponse<Result<M>>);
-      // A thread started on a device runs there, as plxd would have it.
-      if (method === "thread/start") deviceRuns.set((params as { runId: string }).runId, hostId);
     } else if (method === "thread/list" || method === "agent/list") {
       // This computer's own threads: the fixtures', less the ones the devices run.
       const all = handlers[method]!(params as never) as { threads?: Thread[]; runs?: AgentRun[] };
