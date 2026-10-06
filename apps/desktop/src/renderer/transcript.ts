@@ -117,7 +117,7 @@ export interface Transcript {
    */
   turnDone?: boolean;
   /**
-   * The turns started and not yet finished or dropped, as a follow-up sent mid-turn starts before
+   * The turns the live CLI started and hasn't finished, as a follow-up sent mid-turn starts before
    * the turn it follows finishes.
    */
   openTurns?: number;
@@ -297,6 +297,8 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
         });
         break;
       case "agent.finished":
+        // Every turn of the CLI ends with it, including a stopped one that logged no turnFinished.
+        openTurns = 0;
         // A request still waiting ends with the run, as when plxd stopped without resolving it.
         items.forEach((item, i) => {
           if (item.kind === "approval" && !item.resolved)
@@ -315,7 +317,8 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
       case "agent.output":
         event.items.forEach((item, i) => {
           if (item.kind === "turnStarted") openTurns++;
-          if (item.kind === "turnFinished" || item.kind === "followUpDropped") {
+          // A dropped follow-up never had a turnStarted, so it doesn't count.
+          if (item.kind === "turnFinished") {
             // A page that starts mid-run may hold a turn's end without its start.
             openTurns = Math.max(0, openTurns - 1);
             turnDone = openTurns === 0;

@@ -743,4 +743,20 @@ test("a compaction shows under way, then done in its place, and a finished turn 
   );
   expect(steered.turnDone).toBe(false);
   expect(applyEvents(steered, [output({ kind: "turnFinished" })], runId).turnDone).toBe(true);
+
+  // A queued message cancelled mid-turn was never a turn: the turn still goes.
+  const dropped = build(
+    output({ kind: "turnStarted" }, { kind: "toolCall", callId: "1", name: "Bash", input: {} }),
+    output({ kind: "followUpDropped", turnId: uuidv7() }),
+  );
+  expect(dropped.turnDone).toBe(false);
+
+  // A stopped turn logs no turnFinished, but its CLI's end closes it: a later turn's end is the end.
+  const resumed = build(
+    output({ kind: "turnStarted" }),
+    at({ kind: "agent.finished", runId, outcome: { status: "cancelled" } }),
+    output({ kind: "turnStarted", turnId: uuidv7(), text: "Go on" }),
+    output({ kind: "turnFinished" }),
+  );
+  expect(resumed.turnDone).toBe(true);
 });
