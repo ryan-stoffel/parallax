@@ -32,6 +32,7 @@ import {
 } from "./connect";
 import { Connection, sshCommand } from "./connection";
 import { checkHost, readSettings, writeSettings, type Settings } from "./settings";
+import { sshSuggestions } from "./sshConfig";
 import {
   closeAllTerminals,
   closeTerminal,
@@ -208,6 +209,7 @@ export function startHosts(): void {
   ipcMain.handle("parallax:removeDevice", (_event, hostId: unknown) => removeDevice(hostId));
 
   ipcMain.handle("parallax:hosts", () => settings.hosts);
+  ipcMain.handle("parallax:sshSuggestions", () => sshSuggestions(homedir()));
   ipcMain.handle("parallax:saveHost", (_event, input: unknown, id: unknown) => saveHost(input, id));
   ipcMain.handle("parallax:removeHost", (_event, id: unknown) => removeHost(id));
   ipcMain.handle("parallax:localName", () => localName());
@@ -538,6 +540,17 @@ function addConnection(
     onState: (state) => {
       // A replaced or removed connection has nothing more to say.
       if (connections.get(hostId) !== created) return;
+      // An SSH host without plxd on PATH gets one more try, from where Parallax installs it.
+      if (
+        destination !== undefined &&
+        state.status === "failed" &&
+        state.error.exitCode === 127 &&
+        !locating.has(hostId)
+      ) {
+        locating.add(hostId);
+        // After `fail` returns, so the new attempt starts from a settled state.
+        return queueMicrotask(() => created.retry());
+      }
       broadcast("parallax:state", hostId, state);
       if (hostId === "local") void replaceOtherServe(state);
       if (state.status !== "connected") return;
@@ -549,8 +562,17 @@ function addConnection(
   created.start();
 }
 
+/**
+ * SSH hosts whose `plxd attach` wasn't found, which run `LOCATE_PLXD` instead until the app
+ * quits or the host's destination changes.
+ */
+const locating = new Set<string>();
+
 function addSshConnection({ id, destination }: SshHost): void {
-  addConnection(id, () => sshCommand(destination, settings.ssh), { destination });
+  locating.delete(id);
+  addConnection(id, () => sshCommand(destination, settings.ssh, locating.has(id)), {
+    destination,
+  });
 }
 
 /** `window.parallax.saveHost`. Its input comes from the renderer, so it's checked here. */

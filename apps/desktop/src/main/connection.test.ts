@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import { PROTOCOL_VERSION } from "../protocol/generated/protocol";
 import type { ConnectionState, SubscriptionMessage } from "../preload/bridge";
-import { backoffMs, Connection, exitError, sshCommand } from "./connection";
+import { backoffMs, Connection, exitError, LOCATE_PLXD, sshCommand } from "./connection";
 
 type Message = Record<string, unknown> & {
   id?: number;
@@ -394,7 +394,7 @@ test("ssh failures read as what to do", () => {
   });
   expect(ssh(255, denied, "win32").message).toContain("start the ssh-agent service");
 
-  const notOnPath = "plxd isn't on mini's PATH for ssh commands.";
+  const notOnPath = "Parallax couldn't find plxd on mini: it isn't on PATH for ssh commands";
   expect(ssh(127, "zsh:1: command not found: plxd")).toMatchObject({
     reason: "notFound",
     message: expect.stringContaining(notOnPath),
@@ -414,4 +414,19 @@ test("ssh failures read as what to do", () => {
   expect(ssh(4, "plxd attach: timed out").message).toBe(
     "plxd couldn't be reached or started on mini",
   );
+});
+
+test("an SSH host without plxd on PATH is reached through plxd where Parallax installs it", () => {
+  expect(sshCommand("mini").slice(-3)).toEqual(["mini", "plxd", "attach"]);
+  expect(sshCommand("mini", "ssh", true).slice(-2)).toEqual(["mini", LOCATE_PLXD]);
+  // One argument, which the host's login shell hands to sh: the app in either channel and
+  // place, then plx-connect's ~/.local/bin, and 127 when none is there.
+  for (const path of [
+    '"$HOME/.local/bin/plxd"',
+    '"/Applications/Parallax.app/Contents/Resources/plxd"',
+    '"/Applications/Parallax (Nightly).app/Contents/Resources/plxd"',
+    '"$HOME/Applications/Parallax (Nightly).app/Contents/Resources/plxd"',
+  ])
+    expect(LOCATE_PLXD).toContain(path);
+  expect(LOCATE_PLXD).toMatch(/^sh -c '[^']*exit 127'$/);
 });

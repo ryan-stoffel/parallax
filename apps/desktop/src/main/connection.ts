@@ -95,14 +95,23 @@ const MUTATING_METHODS = new Set([
 export const backoffMs = (failures: number) => Math.min(1000 * 2 ** failures, 10_000);
 
 /**
- * The command that reaches an SSH host's plxd (0007, 0022). The destination was checked when it
- * was saved (`checkHost`), and `--` keeps ssh from reading it as an option. `ssh` is the program,
- * which a setting can override (0023).
+ * Runs `plxd attach` from where Parallax and plx-connect put plxd on a macOS or Linux host
+ * (PLX-580): `~/.local/bin`, or inside the app in `/Applications` or `~/Applications`, either
+ * channel. A computer with Parallax from the dmg has no plxd on PATH. Exits 127 when none is
+ * there. It's one argument to ssh, which the host's login shell runs.
+ */
+export const LOCATE_PLXD = `sh -c 'for p in "$HOME/.local/bin/plxd" "/Applications/Parallax.app/Contents/Resources/plxd" "/Applications/Parallax (Nightly).app/Contents/Resources/plxd" "$HOME/Applications/Parallax.app/Contents/Resources/plxd" "$HOME/Applications/Parallax (Nightly).app/Contents/Resources/plxd"; do [ -x "$p" ] && exec "$p" attach; done; exit 127'`;
+
+/**
+ * The command that reaches an SSH host's plxd (0007, 0022): `plxd attach` on its PATH, or with
+ * `locate`, `LOCATE_PLXD`. The destination was checked when it was saved (`checkHost`), and `--`
+ * keeps ssh from reading it as an option. `ssh` is the program, which a setting can override
+ * (0023).
  */
 // prettier-ignore
-export const sshCommand = (destination: string, ssh = "ssh") => [
+export const sshCommand = (destination: string, ssh = "ssh", locate = false) => [
   ssh, "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ControlPath=none",
-  "--", destination, "plxd", "attach",
+  "--", destination, ...(locate ? [LOCATE_PLXD] : ["plxd", "attach"]),
 ];
 
 export type ConnectionOptions = {
@@ -494,7 +503,7 @@ export function exitError(
     if (code === 127 || /not recognized as an internal or external command/.test(stderr)) {
       return error(
         "notFound",
-        `plxd isn't on ${destination}'s PATH for ssh commands. Install it there, or add its folder to PATH in the shell file that ssh commands read.`,
+        `Parallax couldn't find plxd on ${destination}: it isn't on PATH for ssh commands, in ~/.local/bin, or in a Parallax app in Applications. Install Parallax there, or add plxd's folder to PATH in the shell file that ssh commands read.`,
       );
     }
     if (code === 255 && stderr.includes("Could not resolve hostname")) {
