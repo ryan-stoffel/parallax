@@ -201,6 +201,8 @@ export function App() {
     )
       setSelection({ kind: "thread", threadId: other });
   };
+  // A split whose computer is removed goes with it.
+  if (split && !hosts.some((h) => h.id === split.hostId)) setSplit(undefined);
   // A thread in the split that's deleted, maybe by another client, closes its side.
   const splitGone =
     split?.hostId === host.id
@@ -209,6 +211,13 @@ export function App() {
         )
       : undefined;
   if (splitGone) closePane(splitGone);
+  // The threads the main pane shows: the split's while one of them is open.
+  const paired =
+    !settings &&
+    selection.kind === "thread" &&
+    split?.hostId === host.id &&
+    split.threadIds.includes(selection.threadId);
+  const panes = selection.kind !== "thread" ? [] : paired ? split.threadIds : [selection.threadId];
   // The open thread's group (No Repo's until plxd lists it), or the new thread's.
   let group = groups[0]!;
   if (selection.kind === "thread") {
@@ -329,24 +338,23 @@ export function App() {
       return (agents.waiting[run.id] ?? []).map((approval) => ({ runId: run.id, approval, from }));
     });
 
-  // An open thread that has news is seen now, including one that finishes while it is open.
   const openThread =
     selection.kind === "thread"
       ? threads.state.threads.find((t) => t.id === selection.threadId)
       : undefined;
-  const openNews =
-    openThread &&
-    threads.attention &&
-    ["done", "failed"].includes(
-      attentionOf(
-        openThread,
-        threads.state.runs[openThread.id],
-        asksOf(threads.state, openThread.id),
-      ),
-    );
+  // Each thread on screen that has news is seen now, including one that finishes while it's open.
+  const news = threads.attention
+    ? panes
+        .filter((id) => {
+          const t = threads.state.threads.find((t) => t.id === id);
+          const attention = t && attentionOf(t, threads.state.runs[id], asksOf(threads.state, id));
+          return attention === "done" || attention === "failed";
+        })
+        .join(" ")
+    : "";
   useEffect(() => {
-    if (openNews && openThread) void threads.update(openThread.id, { seen: true });
-  }, [openNews, openThread, threads]);
+    for (const id of news.split(" ").filter(Boolean)) void threads.update(id, { seen: true });
+  }, [news, threads]);
 
   const openOnHost = (hostId: string, next: Selection) => {
     setSettings(null);
@@ -357,11 +365,7 @@ export function App() {
   const openHostThread = (hostId: string, threadId: string) =>
     openOnHost(hostId, { kind: "thread", threadId });
   useSnoozeAlarms(listed, openHostThread);
-  useThreadAlarms(
-    listed,
-    openHostThread,
-    selection.kind === "thread" && !settings ? `${host.id}/${selection.threadId}` : undefined,
-  );
+  useThreadAlarms(listed, openHostThread, settings ? [] : panes.map((id) => `${host.id}/${id}`));
   useConnectionAlarms(hosts);
   useAccountAlarms();
   useUpdateAlarms();
@@ -495,13 +499,6 @@ export function App() {
     setSplit({ hostId: host.id, threadIds: [selection.threadId, threadId] });
     setSelection({ kind: "thread", threadId });
   };
-  // The threads the main pane shows: the split's while one of them is open.
-  const paired =
-    !settings &&
-    selection.kind === "thread" &&
-    split?.hostId === host.id &&
-    split.threadIds.includes(selection.threadId);
-  const panes = selection.kind !== "thread" ? [] : paired ? split.threadIds : [selection.threadId];
   // Focuses a side of the split, reopening it if another view is open, and its composer.
   const focusPane = (side: 0 | 1) => {
     if (!split) return;
@@ -815,7 +812,9 @@ export function App() {
                       aria-label={paired ? (title ?? "Thread") : undefined}
                       // Clicking or tabbing into a side focuses it.
                       onPointerDownCapture={() => !focused && openThreadId(threadId)}
-                      onFocusCapture={() => !focused && openThreadId(threadId)}
+                      // Not focus the window or the app gives with nothing focused before, such as a
+                      // notification's click or an approval card's.
+                      onFocusCapture={(e) => !focused && e.relatedTarget && openThreadId(threadId)}
                       className={`flex min-w-0 flex-1 flex-col ${side > 0 ? "border-l border-border" : ""}`}
                     >
                       {paired && (

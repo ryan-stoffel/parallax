@@ -135,19 +135,19 @@ export function threadNotice(
 /**
  * A notification when any host's thread finishes, fails, needs the user, or hits a usage limit,
  * with Open thread. A thread's state when it's first listed is never news, nor is any change
- * while its host's list loads. The thread `openKey`
- * names (`hostId/threadId`) is skipped while the window is focused, as are snoozed and archived
- * threads: the snooze alarm covers those.
+ * while its host's list loads. The threads `openKeys`
+ * names (`hostId/threadId`), the ones on screen, are skipped while the window is focused, as are
+ * snoozed and archived threads: the snooze alarm covers those.
  */
 export function useThreadAlarms(
   hosts: HostThreads[],
   onOpen: (hostId: string, threadId: string) => void,
-  openKey: string | undefined,
+  openKeys: readonly string[],
 ) {
   const marks = useRef(new Map<string, ThreadMark>());
-  const latest = useRef({ onOpen, openKey });
+  const latest = useRef({ onOpen, openKeys });
   useEffect(() => {
-    latest.current = { onOpen, openKey };
+    latest.current = { onOpen, openKeys };
   });
 
   useEffect(() => {
@@ -163,7 +163,7 @@ export function useThreadAlarms(
         marks.current.set(key, mark);
         if (before === undefined || t.archived) continue;
         if (t.snoozedUntil && Date.parse(t.snoozedUntil) > now) continue;
-        if (key === latest.current.openKey && document.hasFocus()) continue;
+        if (latest.current.openKeys.includes(key) && document.hasFocus()) continue;
         const notice = threadNotice(before, mark, view.state.titles[t.id] ?? "Thread", run);
         if (!notice) continue;
         notify({

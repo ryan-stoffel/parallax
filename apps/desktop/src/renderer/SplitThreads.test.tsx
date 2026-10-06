@@ -160,6 +160,23 @@ test("a thread opens beside the open one, and Ctrl+1 and Ctrl+2 move focus betwe
   });
   await settle();
   expect(panes()).toEqual(["Write the parser*", "Fix the README"]);
+
+  // Focus the window or the app gives with nothing focused before, such as when the window comes
+  // back to the front, leaves the focused side alone. Tabbing in from the other side moves it.
+  const message = (side: number) =>
+    document.querySelector(`main section[data-pane='${side}'] [aria-label="Message"]`)!;
+  const focusIn = async (side: number, from: Element | null) => {
+    await act(async () => {
+      message(side).dispatchEvent(
+        new FocusEvent("focusin", { bubbles: true, relatedTarget: from }),
+      );
+    });
+    await settle();
+  };
+  await focusIn(1, null);
+  expect(panes()).toEqual(["Write the parser*", "Fix the README"]);
+  await focusIn(1, message(0));
+  expect(panes()).toEqual(["Write the parser", "Fix the README*"]);
 });
 
 test("closing a side, in its pane or the sidebar, leaves the other open alone", async () => {
