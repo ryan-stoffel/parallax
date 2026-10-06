@@ -2745,7 +2745,11 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
 	 * The message.
 	 */
-	detail: string, } | { "kind": "turnFinished",
+	detail: string, } | { "kind": "contextCompaction",
+	/**
+	 * Whether it's finished.
+	 */
+	done: boolean, } | { "kind": "turnFinished",
 	/**
 	 * The turn's id, as its `turnStarted` had it.
 	 */

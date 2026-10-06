@@ -102,6 +102,12 @@ pub enum Event {
         /// The message.
         detail: String,
     },
+    /// The CLI compacts its context: Claude's `status` `compacting` as it starts, then its
+    /// `compact_boundary`, `done`.
+    ContextCompaction {
+        /// Whether it's finished.
+        done: bool,
+    },
     /// Tokens and cost the run used since its previous `Usage` event.
     Usage(ModelUsage),
     /// The latest state of one of the account's limit windows.

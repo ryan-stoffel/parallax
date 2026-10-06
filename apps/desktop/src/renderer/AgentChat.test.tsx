@@ -15,7 +15,15 @@ import type {
   LoggedEvent,
   ParallaxEvent,
 } from "../protocol/generated/protocol";
-import { activity, AgentChat, linkIcon, RowView, RunTab, TranscriptView } from "./AgentChat";
+import {
+  activity,
+  AgentChat,
+  linkIcon,
+  RowView,
+  RunTab,
+  summarize,
+  TranscriptView,
+} from "./AgentChat";
 import { Composer } from "./Composer";
 import { ForkContext } from "./Fork";
 import { GitHubLogo, LinearLogo } from "./logos";
@@ -68,8 +76,8 @@ const composer = () =>
   document.querySelector<TiptapEditorHTMLElement>('[role="textbox"][aria-label="Message"]')!;
 const type = (text: string) => act(() => void composer().editor!.commands.setContent(text));
 
-const row = (item: Item) =>
-  render(<RowView row={item} live={false} open={false} onToggle={() => {}} />);
+const row = (item: Item, open = false) =>
+  render(<RowView row={item} live={false} open={open} onToggle={() => {}} />);
 // A row's summary as it shows, without what only screen readers hear.
 const shown = () => {
   const summary = document.querySelector("summary")!.cloneNode(true) as Element;
@@ -115,6 +123,7 @@ test("in a fork, the history it copied is muted and offers no Fork, and the late
     { kind: "user", key: "p", text: "Plan it", at: copiedAt },
     { kind: "tool", key: "t1", callId: "1", name: "Bash", status: "ok", at: copiedAt },
     { kind: "assistant", key: "a1", text: "Planned", at: copiedAt },
+    { kind: "end", key: "e1", outcome: { status: "completed" }, at: copiedAt },
     { kind: "user", key: "f", text: "Build it", turnId: "turn-2", at: "2026-10-04T10:05:00Z" },
     { kind: "assistant", key: "a2", text: "Built", at: "2026-10-04T10:06:00Z" },
     { kind: "user", key: "g", text: "Ship it", turnId: "turn-3", at: "2026-10-04T10:07:00Z" },
@@ -127,7 +136,12 @@ test("in a fork, the history it copied is muted and offers no Fork, and the late
     </ForkContext>,
   );
   const copied = [...document.querySelectorAll("[data-copied]")].map((e) => e.textContent);
-  expect(copied).toEqual([expect.stringContaining("Plan it"), expect.anything(), "Planned"]);
+  expect(copied).toEqual([
+    expect.stringContaining("Plan it"),
+    expect.anything(),
+    "Planned",
+    "Done",
+  ]);
   // Its copied work's times are all the fork's creation, so it says neither how long nor "briefly".
   const work = document
     .querySelectorAll("[data-copied]")[1]!
@@ -384,14 +398,17 @@ test("a diff code block shows added and removed lines, and copies the diff", asy
 });
 
 test("an edit's tool call shows its change as a diff, not JSON", () => {
-  row({
-    kind: "tool",
-    key: "t",
-    callId: "toolu_3",
-    name: "Edit",
-    input: { file_path: "/a.ts", old_string: "let a = 1;", new_string: "let a = 2;" },
-    status: "ok",
-  });
+  row(
+    {
+      kind: "tool",
+      key: "t",
+      callId: "toolu_3",
+      name: "Edit",
+      input: { file_path: "/a.ts", old_string: "let a = 1;", new_string: "let a = 2;" },
+      status: "ok",
+    },
+    true,
+  );
   const diff = document.querySelector('[role="group"]')!;
   expect(diff.getAttribute("aria-label")).toBe("Diff: 1 line added, 1 removed");
   expect(diff.textContent).toBe("−Removed: let a = 1;+Added: let a = 2;");
@@ -412,26 +429,33 @@ test("a tool call collapses its input and output under its name", () => {
   render(<RowView row={tool} live={false} open={false} onToggle={toggled} />);
   const details = document.querySelector("details")!;
   expect(details.open).toBe(false);
-  expect(shown()).toBe("Bashcargo test");
+  expect(shown()).toBe("cargo test");
   expect(said()).toBe("Failed");
+  // Closed, it holds none of the call's output.
+  expect(details.textContent).not.toContain("1 failed");
 
   act(() => {
     details.open = true;
     details.dispatchEvent(new Event("toggle"));
   });
   expect(toggled).toHaveBeenCalledWith("t", true);
-  expect(details.textContent).toContain("1 failed");
+  act(() => unmount());
+  render(<RowView row={tool} live={false} open onToggle={toggled} />);
+  expect(document.querySelector("details")!.textContent).toContain("1 failed");
 });
 
 test("a tool call with an oversized input says so", () => {
-  row({
-    kind: "tool",
-    key: "t",
-    callId: "toolu_2",
-    name: "Bash",
-    input: { truncated: true, bytes: 90210 },
-    status: "denied",
-  });
+  row(
+    {
+      kind: "tool",
+      key: "t",
+      callId: "toolu_2",
+      name: "Bash",
+      input: { truncated: true, bytes: 90210 },
+      status: "denied",
+    },
+    true,
+  );
   expect(document.querySelector("details")!.textContent).toContain("Too large to show (89 KB)");
 });
 
@@ -443,16 +467,16 @@ test("a coordinator's plxd tool calls read as what they did, and to what", () =>
     return text;
   };
   expect(summary("mcp__plxd__spawn_agent", { prompt: "Fix the login bug\nwith a test" })).toBe(
-    "Started a subagentFix the login bug",
+    "Started a subagent: Fix the login bug",
   );
   expect(summary("mcp__plxd__agent_status", { runId: "r-1" }, "Fix the login bug")).toBe(
-    "Checked on a subagentFix the login bug",
+    "Checked on a subagent: Fix the login bug",
   );
   expect(summary("mcp__plxd__write_context", { path: "plan.md", content: "# Plan" })).toBe(
-    "Wrote shared contextplan.md",
+    "Wrote shared context: plan.md",
   );
   // A plxd tool this app doesn't know reads as any MCP server's tool does.
-  expect(summary("mcp__plxd__plan_approve", {})).toBe("plxdplan approve");
+  expect(summary("mcp__plxd__plan_approve", {})).toBe("plxd: plan approve");
 });
 
 test("another MCP server's tool reads as the server and the tool, and a skill by its name", () => {
@@ -462,11 +486,11 @@ test("another MCP server's tool reads as the server and the tool, and a skill by
     act(() => unmount());
     return text;
   };
-  expect(summary("mcp__linear__save_issue", { title: "Fix it" })).toBe("Linearsave issue");
-  expect(summary("mcp__claude-code-remote__list_repos", {})).toBe("Claude code remotelist repos");
-  expect(summary("Skill", { skill: "code-review" })).toBe("Skillcode-review");
+  expect(summary("mcp__linear__save_issue", { title: "Fix it" })).toBe("Linear: save issue");
+  expect(summary("mcp__claude-code-remote__list_repos", {})).toBe("Claude code remote: list repos");
+  expect(summary("Skill", { skill: "code-review" })).toBe("Used skill code-review");
   // Older Claude Code versions name it `command`.
-  expect(summary("Skill", { command: "simplify" })).toBe("Skillsimplify");
+  expect(summary("Skill", { command: "simplify" })).toBe("Used skill simplify");
 });
 
 test("each kind of work has its own loader, and MCP tools and skills read by name", () => {
@@ -715,8 +739,9 @@ test("a coordinator's no-write stop lists the files it changed", () => {
 });
 
 test("reasoning, plan updates, and notices render quietly", () => {
-  row({ kind: "reasoning", key: "r", text: "The build uses cargo." });
-  expect(shown()).toBe("Thinking");
+  // A thought shows itself, on one line, without its Markdown.
+  row({ kind: "reasoning", key: "r", text: "**The build** uses\ncargo." });
+  expect(shown()).toBe("The build uses cargo.");
   act(() => unmount());
 
   // A checklist in the work is an update to the turn's plan: one line, not the list again.
@@ -1463,8 +1488,15 @@ test("a thread's options change while it runs, and other providers are offered, 
   }
 });
 
-test("while a run goes, only the last work row shows what the agent is doing", () => {
-  const transcript = (rows: Item[]) => render(<TranscriptView rows={rows} sent={new Map()} live />);
+// The musing row: what stands for the agent's next step while nothing is in flight.
+const musingRow = () =>
+  document
+    .querySelector('[role="log"] [data-loader="orbit"][data-variant="chase"]')
+    ?.closest("[data-index]") ?? undefined;
+
+test("while a run goes, its work shows as steps, the call in flight live, under how long it has gone", () => {
+  const transcript = (rows: Item[], turnDone = false) =>
+    render(<TranscriptView rows={rows} sent={new Map()} live turnDone={turnDone} />);
   const user: Item = { kind: "user", key: "u", text: "go" };
   const tool: Item = {
     kind: "tool",
@@ -1473,24 +1505,117 @@ test("while a run goes, only the last work row shows what the agent is doing", (
     name: "Bash",
     input: { command: "ls" },
   };
+  const read: Item = {
+    kind: "tool",
+    key: "r",
+    callId: "2",
+    name: "Read",
+    input: { file_path: "/w/src/main.rs" },
+    status: "ok",
+  };
   const reply: Item = { kind: "assistant", key: "a", text: "Hi", partial: true };
   const header = () => document.querySelector("button[aria-expanded]");
+  const rows = () => [...document.querySelectorAll("[data-index]")].map((r) => r.textContent);
 
-  // A reply with no tools needs no placeholder above it.
+  // A streaming reply is what the agent is doing: no steps, and no musing.
   transcript([user, reply]);
   expect(header()).toBeNull();
+  expect(musingRow()).toBeUndefined();
+  expect(rows()).toEqual([expect.stringContaining("go"), "Working for 0s", "Hi"]);
   act(() => unmount());
 
-  // The loader for what it's doing, its label, and what it's doing it to.
-  transcript([user, tool]);
+  // The call in flight: its work's loader, what it's doing, and to what.
+  transcript([user, { ...tool, at: "2026-01-01T00:00:00Z" }, read, tool]);
   expect(header()!.textContent).toBe("Runningls");
   expect(header()!.querySelector('[data-loader="register"][data-variant="shift"]')).not.toBeNull();
+  expect(musingRow()).toBeUndefined();
   act(() => unmount());
 
-  // Once its text streams, the work before it is done.
-  transcript([user, { ...tool, at: "2026-01-01T00:00:00Z" }, reply]);
-  expect(header()!.textContent).toBe("Worked briefly");
-  expect(document.querySelector(".loader")).toBeNull();
+  // Finished calls say what they did, and the agent muses at the end while it works on.
+  transcript([user, { ...tool, status: "ok" }, read, { ...reply, partial: false }]);
+  expect(header()!.textContent).toBe("Ran 1 command and read 1 file");
+  expect(document.body.textContent).not.toContain("Worked");
+  expect(musingRow()).toBeDefined();
+  act(() => unmount());
+
+  // Once its last turn finished, nothing shows as going while the run winds down.
+  transcript([user, { ...tool, status: "ok" }, { ...reply, partial: false }], true);
+  expect(musingRow()).toBeUndefined();
+  expect(document.body.textContent).not.toContain("Working for");
+});
+
+test("one call or thought alone is its own row, opening to what it did", () => {
+  render(
+    <TranscriptView
+      rows={[
+        { kind: "user", key: "u", text: "go" },
+        {
+          kind: "tool",
+          key: "t",
+          callId: "1",
+          name: "Read",
+          input: { file_path: "/w/src/main.rs" },
+          status: "ok",
+          output: "fn main() {}",
+        },
+      ]}
+      sent={new Map()}
+      live={false}
+      root="/w"
+    />,
+  );
+  // Its path reads relative to the run's worktree.
+  expect(shown()).toBe("Read src/main.rs");
+  const details = document.querySelector("details")!;
+  act(() => {
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
+  });
+  expect(document.querySelector("details")!.textContent).toContain("fn main() {}");
+});
+
+test("a run of steps sums up what it did, as T3 Code does", () => {
+  const tool = (name: string, input: Record<string, string> = {}, status?: AgentToolStatus) =>
+    ({ kind: "tool", key: name, callId: name, name, input, status: status ?? "ok" }) as Item;
+  const label = (items: Item[]) => summarize(items).label;
+  expect(label([tool("Bash"), tool("Bash"), tool("Read")])).toBe("Ran 2 commands and read 1 file");
+  // Edits count the files they changed; commands and edits come first, then how many others.
+  expect(
+    label([
+      tool("Read"),
+      tool("Grep"),
+      tool("Edit", { file_path: "a.ts" }),
+      tool("Edit", { file_path: "a.ts" }),
+      tool("Bash"),
+    ]),
+  ).toBe("Changed 1 file, ran 1 command, and performed 2 other actions");
+  // MCP servers lead, by name.
+  expect(label([tool("mcp__linear__save_issue"), tool("Bash")])).toBe(
+    "Used Linear and ran 1 command",
+  );
+  expect(label([tool("WebSearch"), tool("WebSearch")])).toBe("Searched the web 2 times");
+  // Thoughts alone, and how a failure shows.
+  const thought: Item = { kind: "reasoning", key: "r", text: "Hm" };
+  expect(label([thought, { ...thought, key: "r2" }])).toBe("Thought 2 times");
+  expect(summarize([tool("Bash", {}, "error"), tool("Bash")]).failed).toBe(true);
+});
+
+test("a context compaction shows while it runs, then as a divider", () => {
+  const user: Item = { kind: "user", key: "u", text: "go" };
+  const compaction: Item = { kind: "compaction", key: "c", done: false };
+  render(<TranscriptView rows={[user, compaction]} sent={new Map()} live />);
+  expect(document.querySelectorAll("[data-index]")[2]!.textContent).toBe("Compacting context");
+  expect(musingRow()).toBeUndefined();
+  act(() => unmount());
+
+  render(<TranscriptView rows={[user, { ...compaction, done: true }]} sent={new Map()} live />);
+  expect(document.body.textContent).toContain("Context compacted");
+  expect(musingRow()).toBeDefined();
+  act(() => unmount());
+
+  // One that never finished, in a run that stopped, leaves nothing.
+  render(<TranscriptView rows={[user, compaction]} sent={new Map()} live={false} />);
+  expect(document.body.textContent).not.toContain("Compacting");
 });
 
 test("until the agent does anything, a loader muses under the message on its way to it", () => {
@@ -1501,18 +1626,16 @@ test("until the agent does anything, a loader muses under the message on its way
   const fallback: Item = { kind: "notice", key: "n", tone: "info", text: "Switched accounts." };
   const transcript = (rows: Parameters<typeof TranscriptView>[0]["rows"], live: boolean) =>
     render(<TranscriptView rows={rows} sent={new Map()} live={live} />);
-  // The empty work row's header: the loader and a word, which screen readers hear as Working.
+  // The musing row: the loader and a word, which screen readers hear as Working.
   const musing = () => {
-    const header = document.querySelector<HTMLButtonElement>("button[aria-expanded]");
-    if (!header) return undefined;
-    expect(header.disabled).toBe(true);
-    expect(header.querySelector('[data-loader="orbit"][data-variant="chase"]')).not.toBeNull();
-    expect(header.querySelector('[aria-hidden="true"]:not(.loader)')!.textContent).toMatch(
+    const row = musingRow();
+    if (!row) return undefined;
+    expect(row.querySelector('[aria-hidden="true"]:not(.loader)')!.textContent).toMatch(
       /^[A-Z][a-z]+$/,
     );
-    return header.querySelector(".sr-only")?.textContent;
+    return row.querySelector(".sr-only")?.textContent;
   };
-  // What follows the message, by row: a musing is a work row with nothing in it.
+  // What follows the message, by row, under its working line.
   const after = (text: string) => {
     const rows = [...document.querySelectorAll("[data-index]")];
     const i = rows.findIndex((r) => r.textContent === text);
@@ -1527,7 +1650,8 @@ test("until the agent does anything, a loader muses under the message on its way
   // A message on its way to the agent, even before the run goes again, as a finished one resumes.
   transcript([user, reply, end, pending], false);
   expect(musing()).toBe("Working");
-  expect(after("And the tests?")).toHaveLength(1);
+  // Its working line, then the musing.
+  expect(after("And the tests?")).toHaveLength(2);
   act(() => unmount());
 
   // The musing goes where the work will be, before a notice after the message.
@@ -1536,8 +1660,8 @@ test("until the agent does anything, a loader muses under the message on its way
   expect(after("go").at(-1)).toBe("Switched accounts.");
   act(() => unmount());
 
-  // Not once the agent answered, nor for a message of a run that has stopped.
-  transcript([user, reply], true);
+  // Not while its reply streams, nor for a message of a run that has stopped.
+  transcript([user, { ...reply, partial: true }], true);
   expect(musing()).toBeUndefined();
   act(() => unmount());
   transcript([user], false);
@@ -1554,7 +1678,7 @@ test("the musing changes its word on the wall clock, while screen readers keep h
   // On a word's boundary: the first word is Picturing.
   vi.useFakeTimers({ now: 2400 * 8000 });
   render(<TranscriptView rows={[{ kind: "user", key: "u", text: "go" }]} sent={new Map()} live />);
-  const header = () => document.querySelector("button[aria-expanded]")!;
+  const header = () => musingRow()!;
   // Each word shown, and whether it fades in or out.
   const words = () =>
     [...header().querySelectorAll('[aria-hidden="true"]:not(.loader) > span')].map((w) => [
@@ -1583,9 +1707,10 @@ test("under reduced motion, the musing keeps its word", () => {
   // appearance.ts sets it under the OS's Reduce motion or the app's own.
   document.documentElement.classList.add("reduce-motion");
   render(<TranscriptView rows={[{ kind: "user", key: "u", text: "go" }]} sent={new Map()} live />);
-  expect(vi.getTimerCount()).toBe(0);
+  // The working line's clock still ticks.
+  expect(vi.getTimerCount()).toBe(1);
   act(() => void vi.advanceTimersByTime(4800));
-  expect(document.querySelector("button[aria-expanded]")!.textContent).toBe("WorkingPicturing");
+  expect(musingRow()!.textContent).toBe("WorkingPicturing");
   document.documentElement.classList.remove("reduce-motion");
 });
 
@@ -1618,9 +1743,7 @@ test("until its transcript loads, a chat shows its first message, with the loade
   render(<AgentChat hostId="local" runId={runId} prompt="Add a README" going />);
   await settle();
   expect(document.querySelector('[role="log"] .bg-selected')!.textContent).toBe("Add a README");
-  expect(document.querySelector('[role="log"] button[aria-expanded] .sr-only')!.textContent).toBe(
-    "Working",
-  );
+  expect(musingRow()!.querySelector(".sr-only")!.textContent).toBe("Working");
 });
 
 test("a chat that couldn't load shows its first message, with no loader", async () => {
@@ -1670,10 +1793,10 @@ test("a turn's plan is one line where it began, its updates lines in the work, i
   const text = (r: Element) => r.textContent!.replace(/\s+/g, "");
   expect([...document.querySelectorAll("[data-index]")].map(text)).toEqual([
     "go",
-    "Workedbriefly",
+    "Aplanfirst.",
     "ProposedplanShipitReadBuild",
     "Madeaplan2of2done",
-    "Workedbriefly",
+    "Ran1commandandupdatedtheplan",
     "Done.",
   ]);
   // The work after the plan holds its updates, one line each, and no TodoWrite calls.
@@ -1730,9 +1853,9 @@ test("Claude Code's task tools make the same lines as TodoWrite, and their rows 
   const text = (r: Element) => r.textContent!.replace(/\s+/g, "");
   expect([...document.querySelectorAll("[data-index]")].map(text)).toEqual([
     "go",
-    "Workedbriefly",
+    "Aplanfirst.",
     "Madeaplan2of2done",
-    "Workedbriefly",
+    "Updatedtheplanandran1command",
     "Done.",
   ]);
   act(() => rowAt(3).querySelector("button")!.click());
@@ -1757,9 +1880,9 @@ test("while a run goes, the work after a plan muses until it starts", () => {
     ...todoWrite(2, 1),
   ];
   render(<TranscriptView rows={rows} sent={new Map()} live />);
-  // After the plan, a work row for what comes next.
+  // After the plan, the musing for what comes next.
   const last = [...document.querySelectorAll("[data-index]")].at(-1)!;
-  expect(last.querySelector("button[aria-expanded] .sr-only")!.textContent).toBe("Working");
+  expect(last.contains(musingRow()!)).toBe(true);
 });
 
 test("while the run works on a plan, a strip over the composer shows it, until a turn without one or the end", async () => {

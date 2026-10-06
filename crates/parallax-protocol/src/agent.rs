@@ -587,6 +587,12 @@ pub enum AgentOutputItem {
         /// The message.
         detail: String,
     },
+    /// The agent compacts its context to make room: once as it starts, then once more, `done`, when
+    /// the earlier conversation is a summary.
+    ContextCompaction {
+        /// Whether it's finished.
+        done: bool,
+    },
     /// A turn ended.
     TurnFinished {
         /// The turn's id, as its `turnStarted` had it.

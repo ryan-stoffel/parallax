@@ -21,6 +21,7 @@ import {
   type AgentOutputItem,
   type AgentRun,
   type Capabilities,
+  type JsonValue,
   type LoggedEvent,
   type MemoryScope,
   type ParallaxEvent,
@@ -205,11 +206,35 @@ function output(runId: string, ...items: AgentOutputItem[]) {
 const previewReply =
   "This is the Parallax preview: there's no plxd behind it, so nothing was sent to an agent. Everything you see is fixture data.";
 
-/** Runs a faked turn on `runId`: its message, a short reply, and its end. */
+let fakeCall = 0;
+
+/**
+ * Runs a faked turn on `runId`: its message, then a few seconds of work as an agent's would come
+ * in (a thought, calls and their results, a message between them), a short reply, and its end.
+ */
 function fakeTurn(runId: string, turnId: string | undefined, text: string | undefined) {
   patchRun(runId, { status: "running" });
   output(runId, { kind: "turnStarted", ...(turnId && { turnId }), ...(text && { text }) });
-  later(900, () => {
+  const call = (at: number, ms: number, name: string, input: JsonValue) => {
+    const callId = `toolu_preview_${++fakeCall}`;
+    later(at, () => output(runId, { kind: "toolCall", callId, name, input }));
+    later(at + ms, () => output(runId, { kind: "toolResult", callId, status: "ok", output: "…" }));
+  };
+  later(600, () =>
+    output(runId, {
+      kind: "reasoning",
+      text: "Start with what changed on the branch, then read the file the message names.",
+    }),
+  );
+  call(1100, 900, "Bash", { command: "git status --short" });
+  call(2100, 600, "Read", { file_path: "apps/desktop/src/renderer/AgentChat.tsx" });
+  call(2800, 500, "Grep", { pattern: "groupWork", path: "apps/desktop/src" });
+  later(3500, () =>
+    output(runId, { kind: "text", text: "Found where the work rows are built. Editing it now." }),
+  );
+  call(4200, 900, "Edit", { file_path: "apps/desktop/src/renderer/transcript.ts" });
+  call(5300, 1800, "Bash", { command: "pnpm exec vp test run src/renderer" });
+  later(7600, () => {
     output(runId, { kind: "text", text: previewReply }, { kind: "turnFinished" });
     const run = patchRun(runId, { status: "completed" });
     if (run) emit({ kind: "agent.finished", runId, outcome: { status: "completed" } }, run.project);
@@ -1247,6 +1272,6 @@ export const previewState = {
       title,
       repo: db.repos.find((r) => !r.scratch)!.id,
       account: { kind: "subscription", backend },
-    } as never);
+    });
   },
 };

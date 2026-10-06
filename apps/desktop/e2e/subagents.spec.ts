@@ -48,8 +48,7 @@ test("an agent's own subagents show their status and open read-only, without a c
   );
   await expect(transcript.getByText("The README says to build with")).toBeVisible();
   await expect(box).toHaveCount(0);
-  // Its history: what it did, folded as a finished turn's work is.
-  await transcript.getByRole("button", { name: /^Worked/ }).click();
-  await expect(transcript.getByText("README.md", { exact: true })).toBeVisible();
+  // Its history: what it did, a row a step (PLX-584).
+  await expect(transcript.getByText("Read README.md", { exact: true })).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("subagents-opened.png") });
 });

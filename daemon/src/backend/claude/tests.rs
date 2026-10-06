@@ -3381,3 +3381,21 @@ async fn a_recorded_session_replays_to_its_snapshot() {
     )
     .await;
 }
+
+#[test]
+fn compaction_reports_its_start_and_its_boundary() {
+    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
+    translator.line(&init_line(r#"["Read"]"#));
+    let started = br#"{"type":"system","subtype":"status","status":"compacting"}"#;
+    assert_eq!(
+        translator.line(started),
+        vec![Step::Emit(Event::ContextCompaction { done: false })]
+    );
+    let boundary = br#"{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":167000}}"#;
+    assert_eq!(
+        translator.line(boundary),
+        vec![Step::Emit(Event::ContextCompaction { done: true })]
+    );
+    let cleared = br#"{"type":"system","subtype":"status","status":null}"#;
+    assert_eq!(translator.line(cleared), Vec::new());
+}

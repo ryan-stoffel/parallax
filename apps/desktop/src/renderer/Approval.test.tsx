@@ -151,6 +151,16 @@ const lines = () =>
   [...transcript().querySelectorAll("summary")]
     .map((s) => s.textContent ?? "")
     .filter((t) => /approv|allowed|Denied|Timed out|Withdrawn|No longer|Kept planning/i.test(t));
+// Opens each of the transcript's lines, which render what they open to only once open.
+const openLines = () =>
+  act(() =>
+    transcript()
+      .querySelectorAll("details")
+      .forEach((d) => {
+        d.open = true;
+        d.dispatchEvent(new Event("toggle"));
+      }),
+  );
 const approveCalls = () =>
   request.mock.calls.filter(([, m]) => m === "agent/approve").map(([, , params]) => params);
 const typeNote = (text: string) =>
@@ -300,6 +310,7 @@ test("Deny asks for an optional note, which goes as the message; Escape goes bac
     expect.stringMatching(/^DeniedBash: pnpm test/),
   ]);
   // Its line opens to who decided, and the note.
+  openLines();
   const details = transcript().querySelector("details")!;
   expect(details.textContent).toContain("Denied by you at");
   expect(details.textContent).toContain("Your note: Use the CI logs instead.");
@@ -360,6 +371,7 @@ test("a request that times out, is withdrawn, is stopped, or outlives its run le
     expect.stringMatching(/^DeniedBash/),
     expect.stringMatching(/^WithdrawnBash/),
   ]);
+  openLines();
   const details = [...transcript().querySelectorAll("details")].map((d) => d.textContent);
   expect(details[0]).toContain("Nobody answered in time, so plxd denied it");
   expect(details[2]).toContain("Denied when the run was stopped");

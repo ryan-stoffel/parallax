@@ -397,11 +397,13 @@ test("a finished turn folds its interim messages and answered requests, leaving 
 
   const done = groupWork([...turn, end]);
   expect(done.map((r) => r.key)).toEqual(["u", "work:a1", "a2", "e"]);
-  expect(done[1]).toMatchObject({ startedAt: at(1), endedAt: at(9) });
+  expect(done[1]).toMatchObject({ startedAt: at(1), endedAt: at(9), done: true });
   expect((done[1] as Work).items.map((i) => i.key)).toEqual(["a1", "p", "t"]);
 
-  // Still going: messages and requests split the work, as before.
-  expect(groupWork(turn).map((r) => r.key)).toEqual(["u", "a1", "p", "work:t", "a2"]);
+  // Still going: messages and requests split the work, which isn't done (PLX-584).
+  const going = groupWork(turn);
+  expect(going.map((r) => r.key)).toEqual(["u", "a1", "p", "work:t", "a2"]);
+  expect((going[3] as Work).done).toBeUndefined();
 
   // A follow-up runs in the same process, whose one end closes both turns.
   const followUp = [
@@ -701,4 +703,35 @@ test("marks a session on another model above the message sent with it (PLX-495)"
     },
   ]);
   expect(of(t.items, "user").map((i) => i.at)).toEqual(["2", "4"]);
+});
+
+test("a compaction shows under way, then done in its place, and a finished turn says so (PLX-584)", () => {
+  const t = build(
+    output({ kind: "turnStarted" }, { kind: "contextCompaction", done: false }),
+    output({ kind: "contextCompaction", done: true }),
+  );
+  expect(of(t.items, "compaction")).toMatchObject([{ done: true }]);
+  expect(t.turnDone).toBe(false);
+
+  // The turn's end, and nothing after: the run only winds down. Its next turn works again.
+  const finished = applyEvents(t, [output({ kind: "turnFinished" })], runId);
+  expect(finished.turnDone).toBe(true);
+  expect(
+    applyEvents(
+      finished,
+      [
+        output({
+          kind: "usage",
+          inputTokens: 1,
+          outputTokens: 1,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        }),
+      ],
+      runId,
+    ).turnDone,
+  ).toBe(true);
+  expect(applyEvents(finished, [output({ kind: "text", text: "More." })], runId).turnDone).toBe(
+    false,
+  );
 });
