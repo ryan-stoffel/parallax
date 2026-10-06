@@ -105,7 +105,9 @@ const bridge: ParallaxBridge = {
     return () => ipcRenderer.removeListener("parallax:devices", forward);
   },
   saveDevice: (hostId, look) => ipcRenderer.invoke("parallax:saveDevice", hostId, look),
-  forgetDevice: (hostId) => ipcRenderer.invoke("parallax:forgetDevice", hostId),
+  setDeviceEnabled: (hostId, enabled) =>
+    ipcRenderer.invoke("parallax:setDeviceEnabled", hostId, enabled),
+  removeDevice: (hostId) => ipcRenderer.invoke("parallax:removeDevice", hostId),
 
   acpRegistry: () => ipcRenderer.invoke("parallax:acpRegistry"),
 

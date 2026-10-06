@@ -199,7 +199,10 @@ export function startHosts(): void {
   ipcMain.handle("parallax:saveDevice", (_event, hostId: unknown, look: unknown) =>
     saveDevice(hostId, look),
   );
-  ipcMain.handle("parallax:forgetDevice", (_event, hostId: unknown) => forgetDevice(hostId));
+  ipcMain.handle("parallax:setDeviceEnabled", (_event, hostId: unknown, enabled: unknown) =>
+    typeof enabled === "boolean" ? setDeviceEnabled(hostId, enabled) : undefined,
+  );
+  ipcMain.handle("parallax:removeDevice", (_event, hostId: unknown) => removeDevice(hostId));
 
   ipcMain.handle("parallax:hosts", () => settings.hosts);
   ipcMain.handle("parallax:saveHost", (_event, input: unknown, id: unknown) => saveHost(input, id));
@@ -618,17 +621,20 @@ function connectState(): ConnectState {
 
 const savedDevices = () => settings.devices ?? [];
 
-/** The devices as the renderer lists them, by name. None while Connect is off. */
+/** The devices as the renderer lists them, by name, less removed ones. None while Connect is off. */
 function deviceHosts(): DeviceHost[] {
   if (!connectOn) return [];
   return savedDevices()
+    .filter((d) => !d.removed)
     .map((d) => ({
       id: deviceHostId(d.id),
       name: d.name || d.hostName,
       icon: d.icon ?? iconFor(d.hostName),
+      detected: iconFor(d.hostName),
       hostName: d.hostName,
       ip: d.ip,
       os: d.os,
+      enabled: !d.off,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -668,10 +674,10 @@ function followConnect(on: boolean | undefined, icon?: string): void {
   broadcast("parallax:devices", deviceHosts());
 }
 
-/** A device's connection, `plxd dial` to its current address, unless it has one. */
+/** A device's connection, `plxd dial` to its current address, unless it has one or is off. */
 function addDeviceConnection(device: SavedDevice): void {
   const id = deviceHostId(device.id);
-  if (connections.has(id)) return;
+  if (connections.has(id) || device.off || device.removed) return;
   addConnection(
     id,
     () => {
@@ -748,13 +754,43 @@ async function saveDevice(hostId: unknown, look: unknown): Promise<string | unde
   return undefined;
 }
 
-/** `window.parallax.forgetDevice`. A device that still answers comes back on the next look. */
-function forgetDevice(hostId: unknown): void {
-  if (typeof hostId !== "string" || !hostId.startsWith("tailnet:")) return;
-  const nodeId = hostId.slice("tailnet:".length);
-  keepDevices(savedDevices().filter((d) => d.id !== nodeId));
+/** Drops a device's connection, if it has one. */
+function dropDeviceConnection(hostId: string): void {
   connections.get(hostId)?.dispose();
   connections.delete(hostId);
+}
+
+/** A saved device by host id. */
+const deviceOf = (hostId: unknown) =>
+  typeof hostId === "string"
+    ? savedDevices().find((d) => deviceHostId(d.id) === hostId)
+    : undefined;
+
+/**
+ * `window.parallax.setDeviceEnabled`. On also clears `removed`; for a device not found yet, it
+ * looks now, and `discover` adds it.
+ */
+async function setDeviceEnabled(hostId: unknown, enabled: boolean): Promise<void> {
+  const device = deviceOf(hostId);
+  if (!device) {
+    if (enabled && connectOn) await discover();
+    return;
+  }
+  const { off: _off, removed: _removed, ...rest } = device;
+  const next: SavedDevice = enabled ? rest : { ...rest, off: true };
+  keepDevices(savedDevices().map((d) => (d === device ? next : d)));
+  if (enabled) addDeviceConnection(next);
+  else dropDeviceConnection(deviceHostId(device.id));
+  broadcast("parallax:devices", deviceHosts());
+}
+
+/** `window.parallax.removeDevice`. The device stays saved as removed, so discovery skips it. */
+function removeDevice(hostId: unknown): void {
+  const device = deviceOf(hostId);
+  if (!device) return;
+  const { off: _off, ...rest } = device;
+  keepDevices(savedDevices().map((d) => (d === device ? { ...rest, removed: true as const } : d)));
+  dropDeviceConnection(deviceHostId(device.id));
   broadcast("parallax:devices", deviceHosts());
 }
 

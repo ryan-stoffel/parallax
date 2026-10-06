@@ -1,31 +1,34 @@
-import { Check, Network, Pencil, Plus } from "lucide-react";
+import { Check, ChevronRight, Ellipsis, Network, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import {
   DEVICE_ICONS,
   type ConnectState,
+  type DeviceHost,
   type DeviceIcon as DeviceIconName,
 } from "../../preload/bridge";
 import { statusLabel, useConnection } from "../ConnectionStatus";
 import { ConnectWizard } from "../ConnectWizard";
 import { DeviceIcon, deviceIconNames } from "../DeviceIcon";
-import { localId, useConnect, useHosts, type Host } from "../hosts";
-import { IconButton, menuItem, menuPanel } from "../ui";
-import { primaryButton, quietButton, Row, Section, settingRow, StatusDot, Switch } from "./parts";
+import { localId, useConnect, useHosts } from "../hosts";
+import { menuItem, menuPanel } from "../ui";
+import { primaryButton, quietButton, Row, Section, settingRow, Switch } from "./parts";
 
 /**
  * Settings > Connections' Parallax Connect section (0056): Install puts plx-connect on this
  * computer, then a switch turns Connect on, which opens Add computer. While it's on, this
- * computer and every device found on the tailnet are listed with their health, and each one's
- * name and icon can be changed, on that device's own plxd.
+ * computer and every device found on the tailnet are listed as cards with their health. A
+ * device's switch says whether this app uses it, and its menu changes its icon, renames it on
+ * the device's own plxd, or removes it from this app's list.
  */
 export function ConnectSettings() {
   const connect = useConnect();
   const hosts = useHosts();
+  const [devices, setDevices] = useState<DeviceHost[]>([]);
   const [adding, setAdding] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState<string>();
-  const devices = hosts.filter((h) => h.device);
+  useEffect(() => window.parallax.onDevices(setDevices), []);
   const local = hosts.find((h) => h.id === localId)!;
 
   const install = async () => {
@@ -40,45 +43,50 @@ export function ConnectSettings() {
   };
 
   return (
-    <Section
-      title="Parallax Connect"
-      action={
-        connect?.on && (
-          <button
-            type="button"
-            onClick={() => setAdding(true)}
-            className={`${quietButton} flex items-center gap-1 [&_svg]:size-3.5`}
-          >
-            <Plus aria-hidden />
-            Add computer
-          </button>
-        )
-      }
-    >
-      <Row
-        title="Parallax Connect"
-        description="Set up your other computers over Tailscale, and see every computer's threads live from any of them."
-      >
-        <ConnectControl
-          connect={connect}
-          installing={installing}
-          onInstall={() => void install()}
-          onToggle={(on) => void toggle(on)}
-        />
-      </Row>
-      {error && (
-        <p role="alert" className={`${settingRow} text-[12.5px] text-danger`}>
-          {error}
-        </p>
-      )}
+    <>
+      <Section title="Parallax Connect">
+        <Row
+          title="Connect your computers"
+          description="Set up your other computers over Tailscale, and see every computer's threads live from any of them."
+        >
+          <ConnectControl
+            connect={connect}
+            installing={installing}
+            onInstall={() => void install()}
+            onToggle={(on) => void toggle(on)}
+          />
+        </Row>
+        {error && (
+          <p role="alert" className={`${settingRow} text-[12.5px] text-danger`}>
+            {error}
+          </p>
+        )}
+      </Section>
       {connect?.on && (
-        <>
-          <DeviceRow host={{ ...local, icon: connect.icon }} local />
-          {devices.map((h) => (
-            <DeviceRow key={h.id} host={h} />
-          ))}
+        <section aria-label="Computers" className="mb-8">
+          <div className="mb-2 flex min-h-7 items-center justify-between gap-4">
+            <h2 className="text-[12.5px] font-medium text-muted-foreground">Computers</h2>
+            <button
+              type="button"
+              onClick={() => setAdding(true)}
+              className={`${quietButton} flex items-center gap-1 [&_svg]:size-3.5`}
+            >
+              <Plus aria-hidden />
+              Add computer
+            </button>
+          </div>
+          <ul className="flex flex-col gap-2">
+            <DeviceCard
+              device={{ id: localId, name: local.name, icon: connect.icon }}
+              detected={connect.icon}
+              local
+            />
+            {devices.map((d) => (
+              <DeviceCard key={d.id} device={d} detected={d.detected} enabled={d.enabled} />
+            ))}
+          </ul>
           {!devices.length && (
-            <div className="flex flex-col items-center gap-2 px-6 py-8 text-center">
+            <div className="mt-2 flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-6 py-8 text-center">
               <Network aria-hidden className="size-6 text-faint-foreground" />
               <p className="text-[13px] font-medium">No other computers yet</p>
               <p className="max-w-sm text-[12.5px] text-muted-foreground">
@@ -89,12 +97,16 @@ export function ConnectSettings() {
               </button>
             </div>
           )}
-        </>
+        </section>
       )}
       {adding && connect && (
-        <ConnectWizard channel={connect.channel} onClose={() => setAdding(false)} />
+        <ConnectWizard
+          channel={connect.channel}
+          devices={devices}
+          onClose={() => setAdding(false)}
+        />
       )}
-    </Section>
+    </>
   );
 }
 
@@ -185,143 +197,232 @@ export function uptime(seconds: number): string {
 }
 
 /**
- * A Connect device, or this computer with `local`: its icon, which a menu changes, its name,
- * which Rename edits in place, and its health.
+ * A Connect device's card, or this computer's with `local`: its icon, name, details, and health;
+ * then, for a device, whether this app uses it; then its menu.
  */
-function DeviceRow({ host, local }: { host: Host; local?: boolean }) {
-  const state = useConnection(host.id);
-  const connected = state?.status === "connected";
-  const health = useHealth(host.id, connected);
+function DeviceCard({
+  device,
+  detected,
+  enabled = true,
+  local,
+}: {
+  device: Pick<DeviceHost, "id" | "name" | "icon"> & Partial<Pick<DeviceHost, "ip" | "os">>;
+  /** The icon its host name suggests, marked in the Icon menu. */
+  detected: DeviceIconName;
+  enabled?: boolean;
+  local?: boolean;
+}) {
+  const state = useConnection(device.id);
+  const connected = enabled && state?.status === "connected";
+  const health = useHealth(device.id, connected);
   const [renaming, setRenaming] = useState(false);
   const [error, setError] = useState<string>();
   const menuId = useId();
+  const iconsId = useId();
   const menu = useRef<HTMLDivElement>(null);
+  const icons = useRef<HTMLDivElement>(null);
+  const removeDialog = useRef<HTMLDialogElement>(null);
 
   const save = async (look: { name?: string; icon?: DeviceIconName }) => {
     const failed =
       local && look.name !== undefined
         ? await window.parallax.renameLocal(look.name)
-        : await window.parallax.saveDevice(host.id, look);
+        : await window.parallax.saveDevice(device.id, look);
     setError(failed);
     if (!failed) setRenaming(false);
   };
-  const icon = host.icon ?? "laptop";
+  const choose = (action: () => void) => () => {
+    icons.current?.hidePopover();
+    menu.current?.hidePopover();
+    action();
+  };
+  const status = !enabled
+    ? "Off"
+    : state
+      ? connected
+        ? "Connected"
+        : statusLabel(state)
+      : "Connecting…";
   const details = [
-    health?.os ?? host.device?.os,
+    health?.os ?? device.os,
     health?.arch,
-    host.device?.ip,
+    device.ip,
+    status,
     connected && state.plxd && `plxd ${state.plxd}`,
   ].filter(Boolean);
 
   return (
-    <div className={`${settingRow} items-start`} data-device={host.id}>
-      <div className="flex min-w-0 items-start gap-3">
-        <button
-          type="button"
-          popoverTarget={menuId}
-          aria-label={`Icon: ${deviceIconNames[icon]}`}
-          title="Change icon"
-          className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-background text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4.5"
-        >
-          <DeviceIcon icon={icon} />
-        </button>
-        <div
-          ref={menu}
-          id={menuId}
-          popover="auto"
-          role="menu"
-          aria-label={`${host.name}'s icon`}
-          className={menuPanel()}
-        >
-          {DEVICE_ICONS.map((each) => (
-            <button
-              key={each}
-              type="button"
-              role="menuitemradio"
-              aria-checked={each === icon}
-              className={`${menuItem} [&_svg]:size-4`}
-              onClick={() => {
-                menu.current?.hidePopover();
-                void save({ icon: each });
-              }}
-            >
-              <DeviceIcon icon={each} />
-              <span className="flex-1">{deviceIconNames[each]}</span>
-              {each === icon && <Check aria-hidden />}
-            </button>
-          ))}
-        </div>
-        <div className="min-w-0">
-          {renaming ? (
-            <form
-              className="flex items-center gap-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void save({ name: new FormData(e.currentTarget).get("name") as string });
-              }}
-            >
-              <input
-                name="name"
-                aria-label="Device name"
-                defaultValue={host.name}
-                autoFocus
-                maxLength={64}
-                onKeyDown={(e) => e.key === "Escape" && setRenaming(false)}
-                className="w-48 rounded-md border border-border bg-background px-2 py-0.5 text-[13px]"
-              />
-              <button type="submit" className={primaryButton}>
-                Save
-              </button>
-              <button type="button" className={quietButton} onClick={() => setRenaming(false)}>
-                Cancel
-              </button>
-            </form>
-          ) : (
-            <span className="flex items-center gap-1.5 text-[13px] font-medium">
-              <span className="truncate">{host.name}</span>
-              {local && <span className="font-normal text-faint-foreground">This computer</span>}
-              <IconButton label={`Rename ${host.name}`} onClick={() => setRenaming(true)}>
-                <Pencil aria-hidden />
-              </IconButton>
-            </span>
-          )}
-          <span className="block truncate text-[12.5px] text-muted-foreground">
-            {details.join(" · ")}
-          </span>
-          {health && (
-            <span className="block text-[12px] text-faint-foreground">
-              {health.latency} ms · up {uptime(health.uptimeSeconds)} ·{" "}
-              {health.runningAgents === 1 ? "1 agent" : `${health.runningAgents} agents`} running
-              {health.store !== "ok" && ` · store ${health.store}`}
-            </span>
-          )}
-          {state?.status === "failed" && (
-            <span title={state.error.stderr} className="block text-[12px] text-faint-foreground">
-              {state.error.message}
-            </span>
-          )}
-          {error && (
-            <span role="alert" className="block text-[12.5px] text-danger">
-              {error}
-            </span>
-          )}
-        </div>
-      </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <span className="flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
-          <StatusDot tone={connected ? "on" : state?.status === "failed" ? "warn" : "off"} />
-          {state ? (connected ? "Connected" : statusLabel(state)) : "Connecting…"}
-        </span>
-        {!local && !connected && (
-          <button
-            type="button"
-            className={quietButton}
-            onClick={() => void window.parallax.forgetDevice(host.id)}
+    <li
+      data-device={device.id}
+      className={`flex items-center gap-4 rounded-xl border border-border bg-surface px-4 py-3 ${enabled ? "" : "opacity-60"}`}
+    >
+      <DeviceIcon icon={device.icon} className="size-5 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1">
+        {renaming ? (
+          <form
+            className="flex items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void save({ name: new FormData(e.currentTarget).get("name") as string });
+            }}
           >
-            Forget
-          </button>
+            <input
+              name="name"
+              aria-label="Device name"
+              defaultValue={device.name}
+              autoFocus
+              maxLength={64}
+              onKeyDown={(e) => e.key === "Escape" && setRenaming(false)}
+              className="w-48 rounded-md border border-border bg-background px-2 py-0.5 text-[13px]"
+            />
+            <button type="submit" className={primaryButton}>
+              Save
+            </button>
+            <button type="button" className={quietButton} onClick={() => setRenaming(false)}>
+              Cancel
+            </button>
+          </form>
+        ) : (
+          <p className="flex items-baseline gap-2 truncate text-[14px] font-medium">
+            {device.name}
+            {local && (
+              <span className="text-[12.5px] font-normal text-faint-foreground">This computer</span>
+            )}
+          </p>
+        )}
+        <p
+          title={state?.status === "failed" ? state.error.message : undefined}
+          className="truncate text-[12.5px] text-muted-foreground"
+        >
+          {details.join(" · ")}
+        </p>
+        {health && (
+          <p className="text-[12px] text-faint-foreground">
+            {health.latency} ms · up {uptime(health.uptimeSeconds)} ·{" "}
+            {health.runningAgents === 1 ? "1 agent" : `${health.runningAgents} agents`} running
+            {health.store !== "ok" && ` · store ${health.store}`}
+          </p>
+        )}
+        {enabled && state?.status === "failed" && (
+          <p className="text-[12px] text-faint-foreground">{state.error.message}</p>
+        )}
+        {error && (
+          <p role="alert" className="text-[12.5px] text-danger">
+            {error}
+          </p>
         )}
       </div>
-    </div>
+      {!local && (
+        <Switch
+          label={`Use ${device.name} in Parallax`}
+          checked={enabled}
+          onChange={(on) => void window.parallax.setDeviceEnabled(device.id, on)}
+        />
+      )}
+      <button
+        type="button"
+        popoverTarget={menuId}
+        aria-label={`${device.name} options`}
+        className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
+      >
+        <Ellipsis aria-hidden />
+      </button>
+      <div
+        ref={menu}
+        id={menuId}
+        popover="auto"
+        role="menu"
+        aria-label={`${device.name} options`}
+        className={`${menuPanel("end")} min-w-52 p-1`}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          popoverTarget={iconsId}
+          className={`${menuItem} [&_svg]:size-4`}
+        >
+          <DeviceIcon icon={device.icon} />
+          <span className="flex-1">Icon</span>
+          <ChevronRight aria-hidden className="text-faint-foreground" />
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          className={`${menuItem} [&_svg]:size-4`}
+          onClick={choose(() => setRenaming(true))}
+        >
+          <Pencil aria-hidden />
+          Rename
+        </button>
+        {!local && (
+          <>
+            <div role="separator" className="my-1 border-t border-border" />
+            <button
+              type="button"
+              role="menuitem"
+              className={`${menuItem} text-danger [&_svg]:size-4`}
+              onClick={choose(() => removeDialog.current?.showModal())}
+            >
+              <Trash2 aria-hidden />
+              Remove from this device…
+            </button>
+          </>
+        )}
+      </div>
+      <div
+        ref={icons}
+        id={iconsId}
+        popover="auto"
+        role="menu"
+        aria-label={`${device.name}'s icon`}
+        className="inset-auto m-0 ml-1 min-w-48 rounded-lg border border-border bg-surface p-1 text-foreground shadow-composer [position-area:right_span-bottom] [position-try-fallbacks:flip-inline,flip-block]"
+      >
+        {DEVICE_ICONS.map((each) => (
+          <button
+            key={each}
+            type="button"
+            role="menuitemradio"
+            aria-checked={each === device.icon}
+            className={`${menuItem} [&_svg]:size-4 ${each === device.icon ? "bg-hover" : ""}`}
+            onClick={choose(() => void save({ icon: each }))}
+          >
+            <DeviceIcon icon={each} />
+            <span className="flex-1">{deviceIconNames[each]}</span>
+            {each === detected && (
+              <span className="text-[12px] text-faint-foreground">detected</span>
+            )}
+            {each === device.icon && <Check aria-hidden />}
+          </button>
+        ))}
+      </div>
+      {!local && (
+        <dialog
+          ref={removeDialog}
+          aria-label={`Remove ${device.name}`}
+          className="m-auto w-[24rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+        >
+          <form method="dialog" className="px-5 pt-4 pb-4">
+            <h2 className="text-[15px] font-semibold">Remove {device.name} from this device?</h2>
+            <p className="mt-1.5 text-[13px] text-muted-foreground">
+              Parallax here stops connecting to it, and its threads leave this sidebar. Nothing on{" "}
+              {device.name} changes, and your other computers still reach it. Add it again from Add
+              computer.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="submit" className={quietButton}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="rounded-md bg-red-600 px-3 py-1 text-[12.5px] font-medium text-white hover:opacity-90"
+                onClick={() => void window.parallax.removeDevice(device.id)}
+              >
+                Remove
+              </button>
+            </div>
+          </form>
+        </dialog>
+      )}
+    </li>
   );
 }

@@ -185,8 +185,17 @@ export interface ParallaxBridge {
     hostId: string,
     look: { name?: string; icon?: DeviceIcon },
   ): Promise<string | undefined>;
-  /** Disconnects from a device and forgets it until it's found again. Nothing on it changes. */
-  forgetDevice(hostId: string): Promise<void>;
+  /**
+   * Turns a device on or off in this app: off drops its connection and its threads here, and
+   * nothing on the device changes. On also brings back a removed device, or looks for one that
+   * hasn't been found yet.
+   */
+  setDeviceEnabled(hostId: string, enabled: boolean): Promise<void>;
+  /**
+   * Removes a device from this app's list until it's added again from Add computer. Nothing on
+   * the device changes, and other computers still reach it.
+   */
+  removeDevice(hostId: string): Promise<void>;
 
   /**
    * The agents in the ACP Registry, fetched once while the app runs. Resolves to an error for
@@ -367,6 +376,10 @@ export type DeviceHost = {
   ip: string;
   /** Its OS as Tailscale names it: "macOS", "windows", or "linux". */
   os: string;
+  /** The icon its host name suggests, which a chosen one replaces. */
+  detected: DeviceIcon;
+  /** Whether this app uses it. Off, it's still listed here, with no connection or threads. */
+  enabled: boolean;
 };
 
 /** Parallax Connect on this computer (0056). */

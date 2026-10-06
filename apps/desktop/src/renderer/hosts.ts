@@ -11,7 +11,7 @@ export type Host = {
   name: string;
   destination?: string;
   icon?: DeviceIcon;
-  device?: Omit<DeviceHost, "id" | "name" | "icon">;
+  device?: Pick<DeviceHost, "hostName" | "ip" | "os">;
 };
 
 /** This computer's host id, which is always there. */
@@ -26,7 +26,7 @@ export function useConnect(): ConnectState | undefined {
 
 /**
  * Every host, kept current: this computer first, named as Settings > Connections names it, then
- * the saved SSH hosts, oldest first, then the Connect devices, by name.
+ * the saved SSH hosts, oldest first, then the Connect devices turned on here, by name.
  */
 export function useHosts(): Host[] {
   const [saved, setSaved] = useState<SshHost[]>([]);
@@ -46,7 +46,15 @@ export function useHosts(): Host[] {
     () => [
       { id: localId, name: localName, ...(icon && { icon }) },
       ...saved,
-      ...devices.map(({ id, name, icon, ...device }) => ({ id, name, icon, device })),
+      // A device turned off in Settings has no connection here, so it's left out.
+      ...devices
+        .filter((d) => d.enabled)
+        .map(({ id, name, icon, hostName, ip, os }) => ({
+          id,
+          name,
+          icon,
+          device: { hostName, ip, os },
+        })),
     ],
     [saved, devices, localName, icon],
   );

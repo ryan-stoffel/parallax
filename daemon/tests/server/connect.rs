@@ -3,6 +3,7 @@
 
 use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -33,6 +34,8 @@ struct FakeTailnet {
     tags: Vec<String>,
     /// `whois` never answers.
     hang: bool,
+    /// This node is signed in as `SOMEONE_ELSE` instead of `ME`.
+    switched_user: AtomicBool,
 }
 
 fn node(id: &str, host_name: &str, user_id: u64, ip: IpAddr, online: bool) -> Node {
@@ -58,7 +61,12 @@ impl Tailnet for FakeTailnet {
         let own = IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1));
         let elsewhere = IpAddr::V4(Ipv4Addr::new(100, 64, 0, 9));
         Box::pin(async move {
-            let mut this = node("self", "this", ME, own, true);
+            let user = if self.switched_user.load(Ordering::Relaxed) {
+                SOMEONE_ELSE
+            } else {
+                ME
+            };
+            let mut this = node("self", "this", user, own, true);
             this.tags.clone_from(&self.tags);
             Ok(Status {
                 this,
@@ -92,10 +100,10 @@ fn whois(user_id: u64) -> Whois {
 
 /// A server on a temporary folder with `tailnet`, its Connect listener on loopback at `port`,
 /// and a local client that has turned `connect` on.
-async fn start(tailnet: FakeTailnet, port: u16) -> (tempfile::TempDir, InProcess, Client) {
+async fn start(tailnet: Arc<FakeTailnet>, port: u16) -> (tempfile::TempDir, InProcess, Client) {
     let dir = temp_dir();
     let mut config = InProcess::config(dir.path());
-    config.tailnet = Some(Arc::new(tailnet));
+    config.tailnet = Some(tailnet);
     config.connect_address = Some(LOOPBACK);
     config.connect_port = port;
     // Only the setting's change can bind it in time.
@@ -173,7 +181,7 @@ async fn only_another_device_of_the_same_user_is_served() {
         ])),
         ..FakeTailnet::default()
     };
-    let (_dir, server, mut client) = start(tailnet, port).await;
+    let (_dir, server, mut client) = start(Arc::new(tailnet), port).await;
 
     let mut allowed = dial(port).await;
     match initialize(&mut allowed).await {
@@ -226,7 +234,7 @@ async fn a_tagged_host_lists_and_serves_nobody() {
         tags: vec!["tag:server".to_owned()],
         ..FakeTailnet::default()
     };
-    let (_dir, server, mut client) = start(tailnet, port).await;
+    let (_dir, server, mut client) = start(Arc::new(tailnet), port).await;
 
     let mut connection = dial(port).await;
     assert!(initialize(&mut connection).await.is_none(), "refused");
@@ -240,16 +248,17 @@ async fn a_tagged_host_lists_and_serves_nobody() {
 }
 
 #[tokio::test]
-async fn connections_over_the_pending_check_cap_close_at_once() {
+async fn connections_over_one_peers_pending_check_cap_close_at_once() {
     let port = free_port();
     let tailnet = FakeTailnet {
         hang: true,
         ..FakeTailnet::default()
     };
-    let (_dir, server, mut client) = start(tailnet, port).await;
+    let (_dir, server, mut client) = start(Arc::new(tailnet), port).await;
 
+    // Every connection here comes from loopback, one peer address, whose cap is 2.
     let mut pending = Vec::new();
-    for _ in 0..8 {
+    for _ in 0..2 {
         pending.push(dial(port).await);
     }
     let mut over = dial(port).await;
@@ -266,5 +275,35 @@ async fn connections_over_the_pending_check_cap_close_at_once() {
             "turning it off closes connections whose check is pending"
         );
     }
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_new_user_at_the_same_address_closes_the_tailnets_connections() {
+    let port = free_port();
+    let tailnet = Arc::new(FakeTailnet {
+        whois: Mutex::new(VecDeque::from([Ok(whois(ME))])),
+        ..FakeTailnet::default()
+    });
+    let (_dir, server, mut client) = start(Arc::clone(&tailnet), port).await;
+    let mut admitted = dial(port).await;
+    assert!(matches!(
+        initialize(&mut admitted).await,
+        Some(Message::Response(_))
+    ));
+
+    tailnet.switched_user.store(true, Ordering::Relaxed);
+    // Setting `connect` wakes the check at once.
+    set_connect(&mut client, true).await;
+    assert!(
+        closes_within(&mut admitted, PATIENCE).await,
+        "admitted under the old user, so closed"
+    );
+    // It listens again, at the same address, for the new user.
+    let mut again = dial(port).await;
+    assert!(
+        initialize(&mut again).await.is_none(),
+        "whois has nobody left"
+    );
     server.stop().await;
 }

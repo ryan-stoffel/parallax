@@ -80,6 +80,8 @@ const bridge = {
     return undefined;
   }),
   saveDevice: vi.fn(async () => undefined),
+  setDeviceEnabled: vi.fn(async () => undefined),
+  removeDevice: vi.fn(async () => undefined),
   renameLocal: vi.fn(async () => undefined),
 };
 const connected: ConnectionState = {
@@ -179,12 +181,14 @@ test("Add computer lists the tailnet, sets one up in a terminal, and confirms", 
     "ryans-iphone",
     "old-air",
   ]);
-  expect(rows[1]!.textContent).toContain("Connected");
+  // It runs Connect but this app doesn't list it, so it's added rather than set up.
+  await click(rows[1]!.querySelector("button")!);
+  expect(bridge.setDeviceEnabled).toHaveBeenCalledWith("tailnet:n-thinkpad-server", true);
   expect(rows[2]!.textContent).toContain("Can't run Parallax");
   expect(rows[3]!.querySelector("button")?.disabled).toBe(true);
 
   await click(rows[0]!.querySelector("button")!);
-  expect(document.querySelector("dialog")!.textContent).toContain("mac-mini needs plx-connect");
+  expect(document.querySelector("dialog")!.textContent).toContain("Signs in over SSH");
   const user = document.querySelector<HTMLInputElement>('input[name="user"]')!;
   act(() => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(user, "ryan");
@@ -203,30 +207,38 @@ test("Add computer lists the tailnet, sets one up in a terminal, and confirms", 
   exitCode = 0;
   await click(button("Try again"));
   await click(button("Finish"));
-  expect(document.querySelector("dialog")!.textContent).toContain("mac-mini is connected");
+  expect(document.querySelector("dialog h2")!.textContent).toBe("mac-mini is set up");
   expect(button("Add another computer")).toBeTruthy();
 });
 
-test("Devices show their health, and rename and change icon on the device", async () => {
+test("Devices show their health; the menu renames, changes the icon, and removes", async () => {
   connect = { installed: true, on: true, icon: "laptop", channel: "nightly" };
   devices = [
     {
       id: "tailnet:n-mini",
       name: "Mac mini",
       icon: "mini",
+      detected: "mini",
       hostName: "mac-mini",
       ip: "100.74.190.83",
       os: "macOS",
+      enabled: true,
     },
   ];
   await render();
   const row = document.querySelector('[data-device="tailnet:n-mini"]')!;
   expect(row.textContent).toContain("Mac mini");
-  expect(row.textContent).toContain("macOS 26.0 · aarch64 · 100.74.190.83 · plxd 0.4.0");
+  expect(row.textContent).toContain(
+    "macOS 26.0 · aarch64 · 100.74.190.83 · Connected · plxd 0.4.0",
+  );
   expect(row.textContent).toContain("up 2h 1m · 2 agents running");
   expect(document.querySelector('[data-device="local"]')?.textContent).toContain("This computer");
 
-  await click(row.querySelector('[aria-label="Rename Mac mini"]')!);
+  const item = (name: string) =>
+    [...row.querySelectorAll<HTMLElement>('[role^="menuitem"]')].find((b) =>
+      b.textContent?.startsWith(name),
+    )!;
+  await click(item("Rename"));
   const name = row.querySelector<HTMLInputElement>('input[name="name"]')!;
   act(() => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "Studio");
@@ -235,11 +247,17 @@ test("Devices show their health, and rename and change icon on the device", asyn
   await click(button("Save"));
   expect(bridge.saveDevice).toHaveBeenCalledWith("tailnet:n-mini", { name: "Studio" });
 
-  const pc = [...row.querySelectorAll('[role="menuitemradio"]')].find(
-    (b) => b.textContent === "PC",
-  )!;
-  await click(pc);
+  // The icon its host name suggests is marked.
+  expect(item("Mini PC").textContent).toContain("detected");
+  await click(item("PC"));
   expect(bridge.saveDevice).toHaveBeenCalledWith("tailnet:n-mini", { icon: "desktop" });
+
+  await click(row.querySelector('[role="switch"]')!);
+  expect(bridge.setDeviceEnabled).toHaveBeenCalledWith("tailnet:n-mini", false);
+
+  await click(item("Remove from this device"));
+  await click(button("Remove"));
+  expect(bridge.removeDevice).toHaveBeenCalledWith("tailnet:n-mini");
 });
 
 test("uptime reads in days, hours, or minutes", () => {

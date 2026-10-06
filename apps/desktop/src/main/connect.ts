@@ -19,6 +19,10 @@ export type SavedDevice = {
   /** Its plxd's `deviceName` and `deviceIcon`, last read, for while it's offline. */
   name?: string;
   icon?: DeviceIcon;
+  /** Turned off in this app: listed, with no connection. */
+  off?: true;
+  /** Removed from this app's list. Kept, so finding it again doesn't add it back. */
+  removed?: true;
 };
 
 /** A device's host id, by its Tailscale node ID. */

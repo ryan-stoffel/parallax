@@ -2,21 +2,23 @@
 //! Tailscale runs, plxd listens on TCP port 7340 of its own Tailscale IPv4, and nowhere else.
 //!
 //! [`run`] checks every [`Config::connect_check_interval`](super::Config) and at once when
-//! `host/settings/set` changes `connect`, and binds, rebinds on a new address, or drops the
-//! listener. A listener that stops, for any reason but shutdown, closes every connection it
-//! accepted; local connections stay. Each accepted connection is served as a local one only after
-//! [`admit`] lets its peer in, which runs `tailscale whois` before plxd reads anything from it. At
-//! most [`MAX_PENDING_CHECKS`] of those checks run at once, and a connection over the cap is
-//! closed at once.
+//! `host/settings/set` changes `connect`, and binds, rebinds when this node's address, user, or
+//! tagged state changes, or drops the listener. A listener that stops, for any reason but
+//! shutdown, closes every connection it accepted; local connections stay. Each accepted
+//! connection is served as a local one only after [`admit`] lets its peer in, which runs
+//! `tailscale whois` before plxd reads anything from it. At most [`MAX_PENDING_CHECKS`] of those
+//! checks run at once, and [`MAX_PENDING_CHECKS_PER_IP`] for one peer address; a connection over
+//! either cap is closed at once.
 
+use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{self, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -28,6 +30,9 @@ use crate::tailnet::{Owner, Tailnet, admit};
 
 /// How many accepted connections may wait on `tailscale whois` at once.
 pub(crate) const MAX_PENDING_CHECKS: usize = 8;
+
+/// How many of those may come from one peer address, so one peer can't hold every slot.
+pub(crate) const MAX_PENDING_CHECKS_PER_IP: usize = 2;
 
 /// Parallax Connect's state, shared by the listener and `connect/devices`.
 #[derive(Debug)]
@@ -92,7 +97,7 @@ pub(super) async fn run(serving: Serving, period: Duration, stop: CancellationTo
     let mut check = time::interval(period);
     check.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut connection_id = 0_u64;
-    let checks = Arc::new(Semaphore::new(MAX_PENDING_CHECKS));
+    let checks = Checks::default();
     loop {
         tokio::select! {
             biased;
@@ -103,7 +108,7 @@ pub(super) async fn run(serving: Serving, period: Duration, stop: CancellationTo
                 match accepted {
                     Ok((stream, peer)) => {
                         connection_id += 1;
-                        let Ok(check) = Arc::clone(&checks).try_acquire_owned() else {
+                        let Some(check) = checks.start(peer.ip()) else {
                             debug!(%peer, "closed a tailnet connection: too many checks are pending");
                             continue;
                         };
@@ -131,12 +136,20 @@ pub(super) async fn run(serving: Serving, period: Duration, stop: CancellationTo
         };
         match want {
             Want::Listen { address, owner } => {
-                if let Some(current) = bound.as_mut().filter(|b| b.address == address) {
+                // A new user or tag would admit different peers, so it rebinds like a new address.
+                if let Some(current) = bound.as_mut().filter(|b| {
+                    b.address == address
+                        && b.owner.user_id == owner.user_id
+                        && b.owner.tagged == owner.tagged
+                }) {
                     current.owner = Arc::new(owner);
                     continue;
                 }
                 if let Some(old) = bound.take() {
-                    info!(address = %old.address, "stopped listening on the tailnet: its address changed");
+                    info!(
+                        address = %old.address,
+                        "stopped listening on the tailnet: this node's address, user, or tags changed"
+                    );
                     old.close();
                 }
                 match TcpListener::bind(address).await {
@@ -208,6 +221,58 @@ async fn want(daemon: &Daemon) -> Want {
     }
 }
 
+/// The whois checks pending, overall and per peer address.
+#[derive(Clone)]
+struct Checks {
+    all: Arc<Semaphore>,
+    per_ip: Arc<Mutex<HashMap<IpAddr, usize>>>,
+}
+
+impl Default for Checks {
+    fn default() -> Self {
+        Self {
+            all: Arc::new(Semaphore::new(MAX_PENDING_CHECKS)),
+            per_ip: Arc::default(),
+        }
+    }
+}
+
+impl Checks {
+    /// A slot for a check of a connection from `ip`, or `None` when either cap is reached.
+    fn start(&self, ip: IpAddr) -> Option<Check> {
+        let mut per_ip = self.per_ip.lock().unwrap_or_else(PoisonError::into_inner);
+        if per_ip.get(&ip).copied().unwrap_or(0) >= MAX_PENDING_CHECKS_PER_IP {
+            return None;
+        }
+        let permit = Arc::clone(&self.all).try_acquire_owned().ok()?;
+        *per_ip.entry(ip).or_default() += 1;
+        Some(Check {
+            _permit: permit,
+            per_ip: Arc::clone(&self.per_ip),
+            ip,
+        })
+    }
+}
+
+/// A pending check's slot, given back when it drops.
+struct Check {
+    _permit: OwnedSemaphorePermit,
+    per_ip: Arc<Mutex<HashMap<IpAddr, usize>>>,
+    ip: IpAddr,
+}
+
+impl Drop for Check {
+    fn drop(&mut self) {
+        let mut per_ip = self.per_ip.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(count) = per_ip.get_mut(&self.ip) {
+            *count -= 1;
+            if *count == 0 {
+                per_ip.remove(&self.ip);
+            }
+        }
+    }
+}
+
 /// A connection the listener accepted, not yet checked.
 struct Accepted {
     stream: TcpStream,
@@ -222,7 +287,7 @@ impl Serving {
     /// Serves the connection once `tailscale whois` shows its peer is a node [`admit`] lets in,
     /// and closes it otherwise. `check` is held until whois answers. The check runs as one of the
     /// server's connections, so shutdown waits for it.
-    fn admit(&self, accepted: Accepted, check: tokio::sync::OwnedSemaphorePermit) {
+    fn admit(&self, accepted: Accepted, check: Check) {
         let Accepted {
             stream,
             peer,
@@ -252,5 +317,40 @@ impl Serving {
             }
             .instrument(span),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::IpAddr;
+
+    use super::{Checks, MAX_PENDING_CHECKS, MAX_PENDING_CHECKS_PER_IP};
+
+    #[test]
+    fn checks_are_capped_overall_and_per_peer_address() {
+        let checks = Checks::default();
+        let one: IpAddr = "100.64.0.1".parse().unwrap();
+        let held: Vec<_> = (0..MAX_PENDING_CHECKS_PER_IP)
+            .map(|_| checks.start(one).expect("under the per-address cap"))
+            .collect();
+        assert!(checks.start(one).is_none(), "over the per-address cap");
+        drop(held);
+        assert!(
+            checks.start(one).is_some(),
+            "a finished check frees its slot"
+        );
+
+        let many: Vec<_> = (0..MAX_PENDING_CHECKS)
+            .map(|n| {
+                let ip = IpAddr::from([100, 64, 1, u8::try_from(n).unwrap()]);
+                checks.start(ip).expect("under the overall cap")
+            })
+            .collect();
+        assert!(
+            checks.start("100.64.2.1".parse().unwrap()).is_none(),
+            "over the overall cap"
+        );
+        drop(many);
+        assert!(checks.per_ip.lock().unwrap().is_empty());
     }
 }

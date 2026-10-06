@@ -55,7 +55,10 @@ export function readSettings(file: string): Settings {
   }
   if (!Array.isArray(devices)) throw new Error("`devices` isn't a list");
   for (const entry of devices as unknown[]) {
-    const { id, hostName, ip, os, name, icon } = (entry ?? {}) as Record<string, unknown>;
+    const { id, hostName, ip, os, name, icon, off, removed } = (entry ?? {}) as Record<
+      string,
+      unknown
+    >;
     const fields = [id, hostName, ip, os];
     if (!fields.every((f) => typeof f === "string" && f) || ids.has(`tailnet:${String(id)}`))
       throw new Error(`device ${JSON.stringify(entry)} needs an id, host name, ip, and os`);
@@ -65,6 +68,8 @@ export function readSettings(file: string): Settings {
       (icon !== undefined && !isDeviceIcon(icon))
     )
       throw new Error(`device ${JSON.stringify(entry)} has a bad name or icon`);
+    if ((off !== undefined && off !== true) || (removed !== undefined && removed !== true))
+      throw new Error(`device ${JSON.stringify(entry)} has a bad off or removed`);
   }
   return { ...raw, hosts } as Settings;
 }

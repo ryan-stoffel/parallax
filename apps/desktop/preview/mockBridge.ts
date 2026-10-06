@@ -281,7 +281,9 @@ const handlers: { [M in Method]?: Handler<M> } = {
       online: true,
       parallax: !!connect.on,
     },
-    devices: tailnet.map(({ name: _n, icon: _i, threads: _t, ...device }) => device),
+    devices: tailnet.map(
+      ({ name: _n, icon: _i, threads: _t, off: _o, removed: _r, ...device }) => device,
+    ),
   }),
 
   "project/list": () => ({ projects: db.projects, seq }),
@@ -726,7 +728,13 @@ function retarget(event: ParallaxEvent, run: AgentRun): ParallaxEvent {
 // Ryan's computers on the tailnet. Three of the fixtures' plain threads run on them, so the
 // sidebar shows threads from every computer. `#connect` in the URL starts with Connect set up;
 // otherwise plx-connect isn't installed yet, and Add computer's fake install sets each one up.
-const tailnet: (TailnetDevice & { name?: string; icon?: DeviceIcon; threads?: string[] })[] = [
+const tailnet: (TailnetDevice & {
+  name?: string;
+  icon?: DeviceIcon;
+  threads?: string[];
+  off?: boolean;
+  removed?: boolean;
+})[] = [
   {
     id: "nMini7Q2kX",
     hostName: "mac-mini",
@@ -806,14 +814,16 @@ function hostOf(runId: string): string {
 function deviceHosts(): DeviceHost[] {
   if (!connect.on) return [];
   return tailnet
-    .filter((d) => d.parallax)
+    .filter((d) => d.parallax && !d.removed)
     .map((d) => ({
       id: deviceId(d),
       name: d.name ?? d.hostName,
       icon: d.icon ?? iconFor(d.hostName),
+      detected: iconFor(d.hostName),
       hostName: d.hostName,
       ip: d.ip,
       os: d.os,
+      enabled: !d.off,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -822,7 +832,7 @@ function connectChanged() {
   for (const l of connectListeners) l({ ...connect });
   const devices = deviceHosts();
   for (const l of deviceListeners) l(devices);
-  for (const d of devices) for (const l of connectionListeners) l(d.id, connected);
+  for (const d of devices) if (d.enabled) for (const l of connectionListeners) l(d.id, connected);
 }
 
 /** What a device's plxd answers itself; the rest of a device's calls share the fixtures. */
@@ -1126,9 +1136,15 @@ export const mockBridge: ParallaxBridge = {
     connectChanged();
     return delay(undefined);
   },
-  forgetDevice: (hostId) => {
+  setDeviceEnabled: (hostId, enabled) => {
     const device = deviceOf(hostId);
-    if (device) device.parallax = false;
+    if (device) Object.assign(device, { off: !enabled, removed: false });
+    connectChanged();
+    return delay(undefined);
+  },
+  removeDevice: (hostId) => {
+    const device = deviceOf(hostId);
+    if (device) device.removed = true;
     connectChanged();
     return delay(undefined);
   },
