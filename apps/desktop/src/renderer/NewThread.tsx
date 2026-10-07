@@ -48,11 +48,8 @@ interface NewThreadProps {
   ) => Promise<RpcError | undefined>;
   /** Whether the host's plxd takes a thread's model, effort, and permission (`runOptions`). */
   runOptions: boolean;
-  /**
-   * Called once plxd has the thread, with a note for it, such as which account it picked.
-   * `background` when Cmd/Ctrl+Enter started it, so New Thread stays open.
-   */
-  onStarted: (runId: string, notice: string | undefined, background: boolean) => void;
+  /** Called once plxd has the thread. `background` when Cmd/Ctrl+Enter started it, so New Thread stays open. */
+  onStarted: (runId: string, background: boolean) => void;
   disabledReason?: string;
   /** The host's threads, which the composer attaches where plxd takes them (PLX-378). */
   threadLinks?: ThreadLinks;
@@ -225,11 +222,9 @@ export function NewThread({
   }, [choices]);
 
   // Starts `attempt`. Resolves to an error message, or "" when the account chooser opened.
-  // `notice` goes to the thread once it starts.
   const attemptStart = async (
     attempt: Attempt,
     askForAccount = true,
-    notice?: string,
   ): Promise<string | undefined> => {
     const error = await start(
       attempt.runId,
@@ -244,7 +239,7 @@ export function NewThread({
     );
     failed.current = error ? attempt : undefined;
     if (!error) {
-      onStarted(attempt.runId, notice, attempt.background);
+      onStarted(attempt.runId, attempt.background);
       return undefined;
     }
     // No default, or one naming a removed key account: both need an account picked. Asks once
@@ -255,12 +250,7 @@ export function NewThread({
     const options = await accountOptions(hostId);
     if (typeof options === "string") return options;
     if (options.length === 0) return noAccounts;
-    if (options.length === 1)
-      return runOn(
-        attempt,
-        options[0]!,
-        `Using ${options[0]!.label} for new threads on this host.`,
-      );
+    if (options.length === 1) return runOn(attempt, options[0]!);
     setPicked(0);
     setChooseError(undefined);
     setChoices(options);
@@ -268,17 +258,13 @@ export function NewThread({
   };
 
   // Makes `option` the worker default, then retries `attempt` with its run id.
-  const runOn = async (
-    attempt: Attempt,
-    option: AccountOption,
-    notice?: string,
-  ): Promise<string | undefined> => {
+  const runOn = async (attempt: Attempt, option: AccountOption): Promise<string | undefined> => {
     const set = await window.parallax.request(hostId, "accounts/defaults/set", {
       role: "worker",
       account: option.account,
     });
     if ("error" in set) return describeError(set.error);
-    return attemptStart(attempt, false, notice);
+    return attemptStart(attempt, false);
   };
 
   const send = async (
