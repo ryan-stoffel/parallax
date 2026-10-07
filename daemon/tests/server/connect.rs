@@ -22,20 +22,20 @@ use tokio_util::codec::Framed;
 
 use crate::support::{Client, InProcess, PATIENCE, initialize_params, temp_dir};
 
-const ME: u64 = 1;
-const SOMEONE_ELSE: u64 = 2;
+pub(crate) const ME: u64 = 1;
+pub(crate) const SOMEONE_ELSE: u64 = 2;
 const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
 /// A tailnet whose `whois` answers come from a queue, one per connection.
 #[derive(Debug, Default)]
-struct FakeTailnet {
-    whois: Mutex<VecDeque<Result<Whois, String>>>,
+pub(crate) struct FakeTailnet {
+    pub(crate) whois: Mutex<VecDeque<Result<Whois, String>>>,
     /// This node's tags.
-    tags: Vec<String>,
+    pub(crate) tags: Vec<String>,
     /// `whois` never answers.
-    hang: bool,
+    pub(crate) hang: bool,
     /// This node is signed in as `SOMEONE_ELSE` instead of `ME`.
-    switched_user: AtomicBool,
+    pub(crate) switched_user: AtomicBool,
 }
 
 fn node(id: &str, host_name: &str, user_id: u64, ip: IpAddr, online: bool) -> Node {
@@ -90,7 +90,7 @@ impl Tailnet for FakeTailnet {
     }
 }
 
-fn whois(user_id: u64) -> Whois {
+pub(crate) fn whois(user_id: u64) -> Whois {
     Whois {
         user_id,
         tags: Vec::new(),
@@ -100,9 +100,22 @@ fn whois(user_id: u64) -> Whois {
 
 /// A server on a temporary folder with `tailnet`, its Connect listener on loopback at `port`,
 /// and a local client that has turned `connect` on.
-async fn start(tailnet: Arc<FakeTailnet>, port: u16) -> (tempfile::TempDir, InProcess, Client) {
+pub(crate) async fn start(
+    tailnet: Arc<FakeTailnet>,
+    port: u16,
+) -> (tempfile::TempDir, InProcess, Client) {
+    start_with(tailnet, port, |_| {}).await
+}
+
+/// [`start`], with `adjust` changing the server's config first.
+pub(crate) async fn start_with(
+    tailnet: Arc<FakeTailnet>,
+    port: u16,
+    adjust: impl FnOnce(&mut plxd::server::Config),
+) -> (tempfile::TempDir, InProcess, Client) {
     let dir = temp_dir();
     let mut config = InProcess::config(dir.path());
+    adjust(&mut config);
     config.tailnet = Some(tailnet);
     config.connect_address = Some(LOOPBACK);
     config.connect_port = port;
@@ -123,7 +136,7 @@ async fn closes_within(framed: &mut Framed<TcpStream, FrameCodec>, within: Durat
     }
 }
 
-fn free_port() -> u16 {
+pub(crate) fn free_port() -> u16 {
     std::net::TcpListener::bind((LOOPBACK, 0))
         .unwrap()
         .local_addr()
@@ -131,7 +144,7 @@ fn free_port() -> u16 {
         .port()
 }
 
-async fn set_connect(client: &mut Client, on: bool) {
+pub(crate) async fn set_connect(client: &mut Client, on: bool) {
     let settings = client
         .call::<HostSettingsSet>(HostSettingsSetParams {
             connect: Some(on),

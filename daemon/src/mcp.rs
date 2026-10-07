@@ -8,41 +8,29 @@
 //! MCP's stdio transport is JSON-RPC 2.0 as newline-delimited JSON, the same framing as plxd's
 //! own protocol (0007), so both sides use `parallax_protocol`'s codec and envelope. Every tool
 //! call goes through one [`Plxd`] client, which keeps one connection to plxd's socket and sends
-//! concurrent calls on it, matched by id (PLX-488). When plxd restarts or the connection drops,
-//! the next call opens a new one and reads plxd's capabilities again. A call already sent fails
-//! with its connection, except `thread_wait`, which keeps trying until its deadline. A call the
-//! MCP client cancels with `notifications/cancelled` stops, gets no answer, and cancels its plxd
-//! request with `$/cancelRequest` (PLX-524). The client stops using a connection it hasn't
-//! written to for 75 s, so it needs no heartbeat to stay under plxd's idle timeout. It never
-//! starts plxd: the thread it serves is plxd's own child.
+//! concurrent calls on it (PLX-488). It never starts plxd: the thread it serves is plxd's own
+//! child. A call the MCP client cancels with `notifications/cancelled` stops, gets no answer, and
+//! cancels its plxd request with `$/cancelRequest` (PLX-524).
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
 
 use futures_util::future::{AbortHandle, Abortable, Aborted};
 use futures_util::stream::FuturesUnordered;
 use futures_util::{SinkExt, StreamExt};
 use parallax_protocol::framing::{FrameCodec, FrameError};
 use parallax_protocol::jsonrpc::{
-    CancelRequestParams, ErrorObject, INVALID_REQUEST, Message, Notification, Request, RequestId,
-    Response,
+    ErrorObject, INVALID_REQUEST, Message, Request, RequestId, Response,
 };
-use parallax_protocol::methods::{AgentEvents, CancelRequest, Initialize, RequestMethod};
-use parallax_protocol::{
-    AgentEventsParams, AgentOutcome, AgentOutputItem, Capabilities, ClientInfo, InitializeParams,
-    InitializeResult, ParallaxEvent, ProtocolRange, RunId,
-};
+use parallax_protocol::methods::AgentEvents;
+use parallax_protocol::{AgentEventsParams, AgentOutcome, AgentOutputItem, ParallaxEvent, RunId};
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
-use tokio::sync::{Semaphore, oneshot};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::Semaphore;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
-use crate::transport::{self, Stream};
+use crate::peer::Plxd;
 
 pub mod land;
 pub mod memory;
@@ -324,246 +312,6 @@ async fn last_output(plxd: &Plxd, run_id: RunId) -> Result<Option<String>, Strin
             _ => return Ok(last),
         }
     }
-}
-
-/// The longest `plxd mcp` keeps using a connection it hasn't written to: under plxd's 90 s idle
-/// timeout, so plxd never closes a connection just as a call is sent on it, and over the 60 s an
-/// `agent/wait` takes, so a waiting `thread_wait` keeps its connection.
-const IDLE: Duration = Duration::from_secs(75);
-
-/// `plxd mcp`'s client of plxd, shared by every tool call: one connection, opened by the first
-/// call, and again by the next call after it closes. Calls on it run concurrently, matched to
-/// their answers by id. Past plxd's limit of requests in flight on one connection, plxd stops
-/// reading, and later calls wait.
-#[derive(Clone)]
-pub struct Plxd {
-    socket: PathBuf,
-    connection: Arc<tokio::sync::Mutex<Option<Arc<Connection>>>>,
-    next_id: Arc<AtomicI64>,
-}
-
-/// One `initialize`d connection to plxd. Its reader task hands each answer to its caller.
-struct Connection {
-    writer: tokio::sync::Mutex<FramedWrite<WriteHalf<Stream>, FrameCodec>>,
-    state: Arc<Mutex<State>>,
-    reader: tokio::task::AbortHandle,
-    /// plxd has `agent/wait` (`agentWait`, PLX-451).
-    agent_wait: bool,
-}
-
-struct State {
-    /// Each request's caller, by id, until its answer arrives. `None` once the connection is lost.
-    waiting: Option<HashMap<RequestId, oneshot::Sender<Response>>>,
-    /// When a request was last written.
-    written: Instant,
-}
-
-/// Errors from plxd are its message: the model reads them, and nothing matches on them.
-impl Plxd {
-    /// A client of the plxd at `socket`. It connects on its first call.
-    #[must_use]
-    pub fn new(socket: PathBuf) -> Self {
-        Self {
-            socket,
-            connection: Arc::default(),
-            next_id: Arc::default(),
-        }
-    }
-
-    /// Whether plxd has `agent/wait`, as it said when the connection opened.
-    async fn agent_wait(&self) -> Result<bool, String> {
-        Ok(self.connect().await?.agent_wait)
-    }
-
-    async fn call<M: RequestMethod>(&self, params: M::Params) -> Result<M::Result, String> {
-        self.request::<M>(params)
-            .await?
-            .map_err(|error| error.message)
-    }
-
-    /// Sends one request: plxd's answer, or `Err` when the connection fails first. A request
-    /// that couldn't be written is sent once more, on a new connection; one that was written
-    /// fails with its connection. Dropped while plxd is answering, it cancels the request with
-    /// `$/cancelRequest` (PLX-524).
-    async fn request<M: RequestMethod>(
-        &self,
-        params: M::Params,
-    ) -> Result<Result<M::Result, ErrorObject>, String> {
-        let id = RequestId::Number(self.next_id.fetch_add(1, Ordering::Relaxed) + 1);
-        let request = Request {
-            id,
-            method: M::NAME.to_owned(),
-            params: Some(crate::commands::with_command_id(M::NAME, params)),
-        };
-        let mut retried = false;
-        loop {
-            let connection = self.connect().await?;
-            match connection.send(&request).await {
-                Ok(answer) => {
-                    let mut in_flight = InFlight(Some((connection, request.id.clone())));
-                    let answered = answer.await;
-                    in_flight.0 = None;
-                    let response = answered.map_err(|_| lost(&"plxd closed it"))?;
-                    return Ok(response.into_result());
-                }
-                Err(error) if retried => return Err(lost(&error)),
-                Err(_) => {
-                    connection.close();
-                    retried = true;
-                }
-            }
-        }
-    }
-
-    /// The open connection, or a new one when it closed or has been idle for [`IDLE`].
-    async fn connect(&self) -> Result<Arc<Connection>, String> {
-        let mut current = self.connection.lock().await;
-        if let Some(connection) = current.as_ref()
-            && connection.usable()
-        {
-            return Ok(Arc::clone(connection));
-        }
-        let connection = Arc::new(Connection::open(&self.socket).await?);
-        *current = Some(Arc::clone(&connection));
-        Ok(connection)
-    }
-}
-
-impl Connection {
-    async fn open(socket: &Path) -> Result<Self, String> {
-        let stream = transport::connect(socket)
-            .await
-            .map_err(|error| format!("could not reach plxd at {}: {error}", socket.display()))?;
-        let (read, write) = tokio::io::split(stream);
-        let state = Arc::new(Mutex::new(State {
-            waiting: Some(HashMap::new()),
-            written: Instant::now(),
-        }));
-        let reader = tokio::spawn(answer_callers(
-            FramedRead::new(read, FrameCodec::new()),
-            Arc::clone(&state),
-        ));
-        let mut connection = Self {
-            writer: tokio::sync::Mutex::new(FramedWrite::new(write, FrameCodec::new())),
-            state,
-            reader: reader.abort_handle(),
-            agent_wait: false,
-        };
-        let request = Request::new::<Initialize>(
-            0,
-            InitializeParams {
-                protocol: ProtocolRange::SUPPORTED,
-                client: ClientInfo {
-                    name: "plxd mcp".to_owned(),
-                    version: crate::version().to_owned(),
-                    machine_id: None,
-                },
-                capabilities: Capabilities::default(),
-            },
-        );
-        let answer = connection
-            .send(&request)
-            .await
-            .map_err(|error| lost(&error))?;
-        let initialized: InitializeResult = answer
-            .await
-            .map_err(|_| lost(&"plxd closed it"))?
-            .into_result()
-            .map_err(|error| error.message)?;
-        connection.agent_wait = initialized.capabilities.0.contains_key("agentWait");
-        Ok(connection)
-    }
-
-    /// Writes `request`: a receiver for its answer, or `Err` when it wasn't written.
-    async fn send<P: Serialize>(
-        &self,
-        request: &Request<P>,
-    ) -> Result<oneshot::Receiver<Response>, String> {
-        let (answer, answered) = oneshot::channel();
-        lock(&self.state)
-            .waiting
-            .as_mut()
-            .ok_or("plxd closed it")?
-            .insert(request.id.clone(), answer);
-        let sent = self.writer.lock().await.send(request).await;
-        let mut state = lock(&self.state);
-        if let Err(error) = sent {
-            if let Some(waiting) = state.waiting.as_mut() {
-                waiting.remove(&request.id);
-            }
-            return Err(error.to_string());
-        }
-        state.written = Instant::now();
-        Ok(answered)
-    }
-
-    fn usable(&self) -> bool {
-        let state = lock(&self.state);
-        state.waiting.is_some() && state.written.elapsed() < IDLE
-    }
-
-    /// Fails every call waiting on this connection, and keeps more from using it.
-    fn close(&self) {
-        lock(&self.state).waiting = None;
-    }
-}
-
-/// A request written on a connection, until its answer arrives. Dropped before then, because its
-/// tool call was cancelled, it sends plxd `$/cancelRequest`. plxd still answers it, and
-/// [`answer_callers`] drops that answer.
-struct InFlight(Option<(Arc<Connection>, RequestId)>);
-
-impl Drop for InFlight {
-    fn drop(&mut self) {
-        let Some((connection, id)) = self.0.take() else {
-            return;
-        };
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        runtime.spawn(async move {
-            let cancel = Notification::new::<CancelRequest>(CancelRequestParams { id });
-            let _ = connection.writer.lock().await.send(&cancel).await;
-        });
-    }
-}
-
-impl Drop for Connection {
-    fn drop(&mut self) {
-        self.reader.abort();
-    }
-}
-
-/// Reads `frames` until the connection ends, giving each answer to its caller, then fails the
-/// calls still waiting.
-async fn answer_callers(
-    mut frames: FramedRead<ReadHalf<Stream>, FrameCodec>,
-    state: Arc<Mutex<State>>,
-) {
-    while let Some(Ok(frame)) = frames.next().await {
-        match Message::from_frame(&frame) {
-            Ok(Message::Response(response)) => {
-                let caller = response
-                    .id
-                    .as_ref()
-                    .and_then(|id| lock(&state).waiting.as_mut()?.remove(id));
-                if let Some(caller) = caller {
-                    let _ = caller.send(response);
-                }
-            }
-            Ok(_) => {}
-            Err(_) => break,
-        }
-    }
-    lock(&state).waiting = None;
-}
-
-fn lost(error: &dyn std::fmt::Display) -> String {
-    format!("the connection to plxd failed: {error}")
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

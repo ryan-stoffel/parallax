@@ -62,6 +62,24 @@ pub struct Status {
     pub peers: Vec<Node>,
 }
 
+impl Status {
+    /// The peers Parallax Connect offers: untagged nodes of this node's own user. A tagged node
+    /// shares its user with every other tagged node, so it has none.
+    pub fn own_peers(&self) -> impl Iterator<Item = &Node> {
+        let user = self.this.user_id;
+        let tagged = !self.this.tags.is_empty();
+        self.peers
+            .iter()
+            .filter(move |peer| !tagged && peer.user_id == user && peer.tags.is_empty())
+    }
+
+    /// The one of [`Status::own_peers`] with node ID `id`.
+    #[must_use]
+    pub fn own_peer(&self, id: &str) -> Option<&Node> {
+        self.own_peers().find(|peer| peer.id == id)
+    }
+}
+
 /// A node on the tailnet.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Node {
