@@ -218,7 +218,7 @@ export function AgentChat({
   runId: string;
   /** The thread's title, which Open PR names the pull request after. Else, its run's. */
   title?: string;
-  /** A quiet note shown over the composer, such as which account a new thread got. */
+  /** A quiet note shown over the composer. */
   notice?: string;
   /** The run's first prompt, shown until the transcript loads, so a new thread opens on it. */
   prompt?: string;
