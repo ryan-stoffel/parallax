@@ -14,13 +14,15 @@ import { newThreadPrefs } from "./prefs";
 import { RefMenu } from "./RefMenu";
 import { RunTargetMenu, type Workspace } from "./RunTargetMenu";
 import { attachThreads, ThreadLinksContext, type ThreadLinks } from "./threadContext";
-import { noRepo, type ThreadGroup } from "./threads";
+import { noRepo, type OtherRepo, type ThreadGroup } from "./threads";
 import { ariaKeyshortcut, bindingsOf, useShortcutLabel } from "./keybindings";
 import { Picker } from "./ui";
 import { uuidv7 } from "./uuidv7";
 
 // The picker's value that opens the folder picker instead of choosing a group.
 const addRepository = "add-repository";
+// The picker's value for another computer's repository: entry ids are only unique per computer.
+const elsewhereValue = (o: OtherRepo) => `${o.host.id}/${o.repo.id}`;
 
 interface NewThreadProps {
   hostId: string;
@@ -32,6 +34,12 @@ interface NewThreadProps {
   groups: ThreadGroup[];
   groupId: string;
   onGroupChange: (groupId: string) => void;
+  /** The other computers' repositories, which the repository menu lists after the host's own. */
+  elsewhere: OtherRepo[];
+  /** Called when the user picks one of `elsewhere`: New Thread opens on its computer with it. */
+  onPickElsewhere: (hostId: string, groupId: string) => void;
+  /** The computers, by id, that lack the picked repository, for the Computer menu. */
+  missing?: ReadonlySet<string>;
   /** Whether the host is this computer, so its folders can be picked. */
   local: boolean;
   addRepo: (path: string) => Promise<Repo | string>;
@@ -144,6 +152,9 @@ export function NewThread({
   groups,
   groupId,
   onGroupChange,
+  elsewhere,
+  onPickElsewhere,
+  missing,
   local,
   addRepo,
   start,
@@ -428,13 +439,22 @@ export function NewThread({
                 if (value === addRepository) return void pickRepository();
                 setRepoError(undefined);
                 setChoices(undefined);
-                onGroupChange(value);
+                const other = elsewhere.find((o) => elsewhereValue(o) === value);
+                if (other) onPickElsewhere(other.host.id, other.repo.id);
+                else onGroupChange(value);
               }}
               options={[
                 ...groups.map((g) => ({
                   value: g.id,
                   label: g.name,
                   icon: g.id === noRepo ? <House /> : <Folder />,
+                })),
+                ...elsewhere.map((o, i) => ({
+                  value: elsewhereValue(o),
+                  label: o.repo.name,
+                  icon: <Folder />,
+                  hint: o.host.name,
+                  divider: i === 0,
                 })),
                 ...(local
                   ? [
@@ -493,6 +513,11 @@ export function NewThread({
                   workspace={checkout ? "checkout" : "worktree"}
                   onWorkspaceChange={setWorkspace}
                   checkoutUnavailable={checkoutUnavailable}
+                  missing={
+                    missing && group.id !== noRepo
+                      ? { repo: group.name, hostIds: missing }
+                      : undefined
+                  }
                 />
                 {refsAvailable && (
                   <RefMenu

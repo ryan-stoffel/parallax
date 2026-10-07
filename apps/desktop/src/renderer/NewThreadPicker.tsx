@@ -4,20 +4,23 @@ import { useId, useState, type Ref } from "react";
 import type { Repo } from "../protocol/generated/protocol";
 import { kbd } from "./AddDialog";
 import { RepoIcon } from "./Sidebar";
-import { noRepo, type ThreadGroup } from "./threads";
+import { noRepo, type OtherRepo, type ThreadGroup } from "./threads";
 import { RowBadge, rowShortcut } from "./ui";
 
 /**
  * Mod+N's picker: which repository, or No Repo, a new thread goes in, laid out as Add Repository
  * is. Up and Down move, Enter picks, Mod+1 to Mod+9 pick that row, Escape closes. Open it with
- * `ref.current.showModal()`; picking closes it and calls `onPick` with the group's id.
+ * `ref.current.showModal()`; picking closes it and calls `onPick` with the group's id, or for one
+ * of the other computers' repositories, `onPickElsewhere` with its computer and entry.
  */
 export function NewThreadPicker({
   ref,
   groups,
   repos,
   hostName,
+  elsewhere,
   onPick,
+  onPickElsewhere,
 }: {
   ref: Ref<HTMLDialogElement>;
   /** Repositories and No Repo, as the sidebar groups them. */
@@ -25,14 +28,35 @@ export function NewThreadPicker({
   /** The host's repo entries, for each group's icon and path. */
   repos: Repo[];
   hostName: string;
+  /** The other computers' repositories, listed after the host's own. */
+  elsewhere: OtherRepo[];
   onPick: (groupId: string) => void;
+  onPickElsewhere: (hostId: string, groupId: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const listId = useId();
 
   const q = query.trim().toLowerCase();
-  const shown = groups.filter((g) => g.name.toLowerCase().includes(q));
+  // Each row's value is its group id, or for another computer's repository, `host/entry`, since
+  // entry ids are only unique per computer.
+  const rows = [
+    ...groups.map((g) => ({
+      value: g.id,
+      name: g.id === noRepo ? "No repo" : g.name,
+      repo: repos.find((r) => r.id === g.id),
+      hostName,
+      pick: () => onPick(g.id),
+    })),
+    ...elsewhere.map((o) => ({
+      value: `${o.host.id}/${o.repo.id}`,
+      name: o.repo.name,
+      repo: o.repo,
+      hostName: o.host.name,
+      pick: () => onPickElsewhere(o.host.id, o.repo.id),
+    })),
+  ];
+  const shown = rows.filter((row) => row.name.toLowerCase().includes(q));
   const current = shown[Math.min(active, shown.length - 1)];
 
   return (
@@ -50,7 +74,7 @@ export function NewThreadPicker({
         // The dialog closes itself on submit; the button that submitted says what was picked.
         onSubmit={(e) => {
           const value = (e.nativeEvent as SubmitEvent).submitter?.getAttribute("value");
-          if (value) onPick(value);
+          rows.find((row) => row.value === value)?.pick();
         }}
         onKeyDown={(e) => {
           const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
@@ -59,15 +83,16 @@ export function NewThreadPicker({
             // Not the sidebar's row too.
             e.preventDefault();
             e.stopPropagation();
-            const group = shown[n];
-            if (group) e.currentTarget.requestSubmit(submitterFor(e.currentTarget, group.id));
+            const row = shown[n];
+            if (row) e.currentTarget.requestSubmit(submitterFor(e.currentTarget, row.value));
           } else if (step && shown.length > 0) {
             e.preventDefault();
             const i = current ? shown.indexOf(current) : 0;
             setActive((i + step + shown.length) % shown.length);
           } else if (e.key === "Enter" && e.target instanceof HTMLInputElement) {
             e.preventDefault();
-            if (current) e.currentTarget.requestSubmit(submitterFor(e.currentTarget, current.id));
+            if (current)
+              e.currentTarget.requestSubmit(submitterFor(e.currentTarget, current.value));
           }
         }}
       >
@@ -87,7 +112,7 @@ export function NewThreadPicker({
             role="combobox"
             aria-expanded
             aria-controls={listId}
-            aria-activedescendant={current && `${listId}-${current.id}`}
+            aria-activedescendant={current && `${listId}-${current.value}`}
             aria-label="Search repositories"
             placeholder="Search…"
             value={query}
@@ -106,36 +131,31 @@ export function NewThreadPicker({
             Repositories
           </p>
           <div id={listId} role="listbox" aria-labelledby={`${listId}-heading`}>
-            {shown.map((g, i) => {
-              const repo = repos.find((r) => r.id === g.id);
-              return (
-                <button
-                  key={g.id}
-                  id={`${listId}-${g.id}`}
-                  type="submit"
-                  role="option"
-                  aria-selected={g === current}
-                  name="group"
-                  value={g.id}
-                  data-active={g === current || undefined}
-                  onMouseMove={() => setActive(i)}
-                  className="flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left data-active:bg-hover"
-                >
-                  <RepoIcon repo={repo} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[14px]">
-                      {g.id === noRepo ? "No repo" : g.name}
+            {shown.map((row, i) => (
+              <button
+                key={row.value}
+                id={`${listId}-${row.value}`}
+                type="submit"
+                role="option"
+                aria-selected={row === current}
+                name="group"
+                value={row.value}
+                data-active={row === current || undefined}
+                onMouseMove={() => setActive(i)}
+                className="flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left data-active:bg-hover"
+              >
+                <RepoIcon repo={row.repo} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px]">{row.name}</span>
+                  {row.repo && row.value !== noRepo && (
+                    <span className="block truncate text-[12.5px] text-muted-foreground">
+                      {row.hostName} · {row.repo.path}
                     </span>
-                    {repo && g.id !== noRepo && (
-                      <span className="block truncate text-[12.5px] text-muted-foreground">
-                        {hostName} · {repo.path}
-                      </span>
-                    )}
-                  </span>
-                  {i < 9 && <RowBadge index={i} />}
-                </button>
-              );
-            })}
+                  )}
+                </span>
+                {i < 9 && <RowBadge index={i} />}
+              </button>
+            ))}
           </div>
           {shown.length === 0 && (
             <p className="px-2.5 py-2 text-[13px] text-faint-foreground">No repositories match</p>

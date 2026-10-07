@@ -18,6 +18,7 @@ import type {
   ParallaxEvent,
 } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
+import type { Host } from "./hosts";
 import type { RunOptions } from "./models";
 import { isRunning, trackApprovals, updateRun, type ApprovalsByRun } from "./transcript";
 import { uuidv7 } from "./uuidv7";
@@ -238,6 +239,47 @@ export function groupThreads({ repos, threads }: ThreadsState): {
     (groups.find((g) => g.id === t.repo) ?? groups.at(-1)!).threads.push(t);
   return { groups, archived: newestFirst.filter((t) => t.archived) };
 }
+
+/** A repository on a computer other than the open one. */
+export interface OtherRepo {
+  host: Host;
+  repo: Repo;
+}
+
+/**
+ * The repositories on computers other than `openId` whose name the open one doesn't list, each
+ * name once, from the first of `hosts` that lists it. Matched by name, since each computer's
+ * entries have their own ids.
+ */
+export function otherRepos(
+  hosts: Host[],
+  views: Readonly<Record<string, ThreadsView>>,
+  openId: string,
+): OtherRepo[] {
+  const named = (id: string) => views[id]?.state.repos.filter((r) => !r.scratch) ?? [];
+  const seen = new Set(named(openId).map((r) => r.name));
+  const found: OtherRepo[] = [];
+  for (const host of hosts) {
+    if (host.id === openId) continue;
+    for (const repo of named(host.id)) {
+      if (seen.has(repo.name)) continue;
+      seen.add(repo.name);
+      found.push({ host, repo });
+    }
+  }
+  return found;
+}
+
+/**
+ * Whether `view`'s computer has no repository named `name`. False until its first list is in (a
+ * computer that never connected still has `emptyThreads`), since that can't be told yet.
+ */
+export const lacksRepo = (view: ThreadsView | undefined, name: string) =>
+  !!view &&
+  view.state !== emptyThreads &&
+  !view.loading &&
+  !view.error &&
+  !view.state.repos.some((r) => !r.scratch && r.name === name);
 
 /** A thread's group id: its repository's, or `noRepo`. */
 export const groupOf = (state: ThreadsState, thread: Thread) =>
