@@ -22,6 +22,7 @@
 //!   credentials (#114).
 //! - [`mcp`]: `plxd mcp`, the coordinator's Parallax tools as an MCP server on stdio, bound to one
 //!   project and one coordinator thread (#195, 0019).
+//! - [`peer`]: the client of a plxd, over the local socket or a tailnet device's TCP port (0057).
 //! - [`launch_agent`]: the service that `attach` starts plxd through, when it is installed. On
 //!   Windows there is none yet, so `attach` starts `serve` itself (0023).
 //! - [`service`]: installs, removes, and reports on the per-user service that keeps `serve`
@@ -60,6 +61,7 @@ pub mod logging;
 pub mod mcp;
 mod methods;
 pub mod paths;
+pub mod peer;
 pub mod providers;
 mod repo;
 pub mod routing;

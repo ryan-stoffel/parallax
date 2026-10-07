@@ -27,6 +27,7 @@ mod mcp;
 mod memory;
 mod memory_upkeep;
 mod open_pr;
+mod peer;
 mod projects;
 mod pull_requests;
 mod questions;
