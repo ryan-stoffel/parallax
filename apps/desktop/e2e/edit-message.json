@@ -1,1 +1,1 @@
-[{ "init": { "sessionId": "e2e-edit", "model": "fake-model" } }, "hang"]
+[{ "init": { "sessionId": "e2e-edit", "model": "fake-model" } }, "ignoreInterrupt", "hang"]
