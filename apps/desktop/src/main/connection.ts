@@ -103,15 +103,40 @@ export const backoffMs = (failures: number) => Math.min(1000 * 2 ** failures, 10
 export const LOCATE_PLXD = `sh -c 'command -v plxd >/dev/null && exec plxd attach; for p in "$HOME/.local/bin/plxd" "/Applications/Parallax.app/Contents/Resources/plxd" "/Applications/Parallax (Nightly).app/Contents/Resources/plxd" "$HOME/Applications/Parallax.app/Contents/Resources/plxd" "$HOME/Applications/Parallax (Nightly).app/Contents/Resources/plxd"; do [ -x "$p" ] && exec "$p" attach; done; exit 127'`;
 
 /**
+ * Where a host's Sign in (0007) leaves its ssh master: a Unix socket named by ssh's `%C`, a hash of
+ * the connection's host, port, and user, so each host gets its own. A socket path can't pass about
+ * 104 bytes on macOS, and ssh adds 17 while binding, so it stays in `~/.ssh` with a short name
+ * rather than the temp folder, which is longer on macOS.
+ */
+export const SSH_CONTROL_PATH = "~/.ssh/parallax-%C";
+
+/**
  * The command that reaches an SSH host's plxd (0007, 0022): `plxd attach` on its PATH, or with
  * `locate`, `LOCATE_PLXD`. The destination was checked when it was saved (`checkHost`), and `--`
  * keeps ssh from reading it as an option. `ssh` is the program, which a setting can override
  * (0023).
+ * - Never prompts (`BatchMode`), so a password or 2FA host connects only through the master its
+ *   Sign in left at `SSH_CONTROL_PATH`. With no master, or a dead one, ssh connects directly.
+ * - Windows' OpenSSH has no ControlMaster, so it never shares a connection.
  */
-// prettier-ignore
-export const sshCommand = (destination: string, ssh = "ssh", locate = false) => [
-  ssh, "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ControlPath=none",
-  "--", destination, ...(locate ? [LOCATE_PLXD] : ["plxd", "attach"]),
+export const sshCommand = (
+  destination: string,
+  ssh = "ssh",
+  locate = false,
+  platform = process.platform,
+) => [
+  ssh,
+  "-T",
+  "-o",
+  "BatchMode=yes",
+  "-o",
+  "ConnectTimeout=10",
+  ...(platform === "win32"
+    ? ["-o", "ControlPath=none"]
+    : ["-o", "ControlMaster=no", "-o", `ControlPath=${SSH_CONTROL_PATH}`]),
+  "--",
+  destination,
+  ...(locate ? [LOCATE_PLXD] : ["plxd", "attach"]),
 ];
 
 export type ConnectionOptions = {
@@ -492,11 +517,15 @@ export function exitError(
     }
     if (code === 255 && stderr.includes("Permission denied")) {
       // With BatchMode, a key whose passphrase isn't in an agent is skipped without a word.
-      const agent =
-        platform === "win32" ? "start the ssh-agent service, then run `ssh-add`" : "run `ssh-add`";
+      if (platform === "win32") {
+        return error(
+          "sshSetup",
+          `ssh couldn't log in to ${destination} without a prompt. If your key has a passphrase, start the ssh-agent service, then run \`ssh-add\`. Otherwise, ${inTerminal}.`,
+        );
+      }
       return error(
         "sshSetup",
-        `ssh couldn't log in to ${destination} without a prompt. If your key has a passphrase, ${agent}. Otherwise, ${inTerminal}.`,
+        `ssh couldn't log in to ${destination} without a prompt. If it needs a password, press Sign in. If your key has a passphrase, run \`ssh-add\`.`,
       );
     }
     // cmd.exe, on a Windows host, exits 1.

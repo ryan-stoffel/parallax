@@ -320,8 +320,12 @@ test("a subscribe after a new logId, with a seq from the old log, resyncs", asyn
 
 test("an SSH host runs attach through ssh with 0022's options", () => {
   connect("mini");
+  const control =
+    process.platform === "win32"
+      ? "ControlPath=none"
+      : "ControlMaster=no -o ControlPath=~/.ssh/parallax-%C";
   expect(spawned.map((argv) => argv.join(" "))).toEqual([
-    "ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlPath=none -- mini plxd attach",
+    `ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ${control} -- mini plxd attach`,
   ]);
   child().handshake();
   expect(state()).toMatchObject({ status: "connected" });
@@ -390,7 +394,7 @@ test("ssh failures read as what to do", () => {
   const denied = "me@mini: Permission denied (publickey,password,keyboard-interactive).";
   expect(ssh(255, denied)).toMatchObject({
     reason: "sshSetup",
-    message: expect.stringContaining("If your key has a passphrase, run `ssh-add`."),
+    message: expect.stringContaining("If it needs a password, press Sign in."),
   });
   expect(ssh(255, denied, "win32").message).toContain("start the ssh-agent service");
 
@@ -414,6 +418,15 @@ test("ssh failures read as what to do", () => {
   expect(ssh(4, "plxd attach: timed out").message).toBe(
     "plxd couldn't be reached or started on mini",
   );
+});
+
+test("an SSH host's command uses its Sign in master, except on Windows", () => {
+  const options = (platform: NodeJS.Platform) =>
+    sshCommand("mini", "ssh", false, platform).join(" ");
+  expect(options("darwin")).toContain("-o ControlMaster=no -o ControlPath=~/.ssh/parallax-%C");
+  expect(options("darwin")).not.toContain("ControlPath=none");
+  expect(options("win32")).toContain("-o ControlPath=none");
+  expect(options("win32")).not.toContain("ControlMaster");
 });
 
 test("an SSH host without plxd on PATH is reached through plxd where Parallax installs it", () => {

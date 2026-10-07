@@ -40,6 +40,7 @@ import {
   isCliKind,
   isInstallable,
   loginCommand,
+  hostLogin,
   openTerminal,
   resizeTerminal,
   runInstall,
@@ -294,17 +295,23 @@ export function startHosts(): void {
   ipcMain.handle("parallax:connectionState", (_event, hostId: unknown) => connection(hostId).state);
   ipcMain.handle("parallax:retry", (_event, hostId: unknown) => connection(hostId).retry());
 
-  // A window's terminals (terminal.ts), by an id it picks: a CLI's or a provider instance's
-  // sign-in, an agent's install by its provider kind, or a shell in a thread's folder. The renderer
-  // names the host and the CLI, instance, kind, or folder; only main decides what runs.
+  // A window's terminals (terminal.ts), by an id it picks: an SSH host's login, a CLI's or a
+  // provider instance's sign-in, an agent's install by its provider kind, or a shell in a thread's
+  // folder. The renderer names the host and the CLI, instance, kind, or folder; only main decides
+  // what runs.
   ipcMain.handle(
     "parallax:openTerminal",
     (event, id: unknown, target: unknown, cols: unknown, rows: unknown) => {
       if (!isTerminalId(id) || !isObject(target) || !isSize(cols) || !isSize(rows)) {
         return "invalid terminal";
       }
-      const { hostId, cli, provider, install, path, connect } = target;
+      const { hostId, cli, provider, install, path, connect, login } = target;
       if (typeof hostId !== "string") return "invalid terminal";
+      if (login === true) {
+        const command = hostLogin(hostId, settings.hosts, settings.ssh);
+        if (!command) return "invalid terminal";
+        return openTerminal(event.sender, id, () => Promise.resolve(command), cols, rows);
+      }
       if (isObject(connect)) {
         const { device, user } = connect;
         if (
