@@ -50,6 +50,10 @@ use crate::transport;
 /// How long a tailnet device's port has to accept a connection.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long plxd has to answer `initialize`. A plxd that accepts a connection and never answers
+/// would otherwise hold up every call, which waits on the connection being opened.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// A byte stream to a plxd: the local socket, or a TCP connection.
 trait Io: AsyncRead + AsyncWrite + Send + Unpin {}
 
@@ -78,6 +82,12 @@ pub enum Incoming {
     Event(Box<EventsEventParams>),
     /// A connection opened after an earlier one was lost. The old connection's subscriptions
     /// ended with it, so the caller subscribes again.
+    ///
+    /// Only the next call opens a connection, so nothing signals a drop before then: a caller
+    /// that waits on the channel makes a periodic call, such as `host/health`.
+    // PR 5, the watcher, settles three things this client leaves open: the drop signal above, a
+    // live subscribed connection is not checked against the device filter again until it drops,
+    // and only subscribed connections get a heartbeat.
     Reconnected,
 }
 
@@ -327,13 +337,16 @@ impl Connection {
                 capabilities: Capabilities::default(),
             },
         );
-        let answer = connection
-            .send(&request)
+        let handshake = async {
+            let answer = connection
+                .send(&request)
+                .await
+                .map_err(|error| lost(&error))?;
+            answer.await.map_err(|_| lost(&"plxd closed it"))
+        };
+        let initialized: InitializeResult = tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake)
             .await
-            .map_err(|error| lost(&error))?;
-        let initialized: InitializeResult = answer
-            .await
-            .map_err(|_| lost(&"plxd closed it"))?
+            .map_err(|_| format!("plxd didn't answer within {HANDSHAKE_TIMEOUT:?}"))??
             .into_result()
             .map_err(|error| error.message)?;
         connection.agent_wait = initialized.capabilities.0.contains_key("agentWait");
@@ -369,9 +382,12 @@ impl Connection {
             && (self.subscribed.load(Ordering::Relaxed) || state.written.elapsed() < self.idle)
     }
 
-    /// Fails every call waiting on this connection, and keeps more from using it.
+    /// Fails every call waiting on this connection, keeps more from using it, and stops reading,
+    /// so nothing from it reaches the notification channel after its replacement's
+    /// [`Incoming::Reconnected`].
     fn close(&self) {
         lock(&self.state).waiting = None;
+        self.reader.abort();
     }
 }
 

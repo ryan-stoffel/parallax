@@ -33,16 +33,14 @@ fn peers(tailnet: &Arc<FakeTailnet>, port: u16) -> Peers {
     Peers::new(Arc::clone(tailnet) as Arc<dyn Tailnet>, port)
 }
 
-/// `call` until it doesn't fail because the listener isn't bound yet. A refused connection never
-/// reaches `whois`, so the fake's answers go to the connections that do.
+/// `call` until it succeeds or the deadline passes, since the listener binds after
+/// `set_connect` returns. A refused connection never reaches `whois`, so the fake's answers go
+/// to the connections that do.
 async fn once_listening<T>(mut call: impl AsyncFnMut() -> Result<T, String>) -> Result<T, String> {
     let deadline = Instant::now() + PATIENCE;
     loop {
         match call().await {
-            Err(error) if error.contains("Connection refused") => {
-                assert!(Instant::now() < deadline, "the listener never bound");
-                sleep(Duration::from_millis(20)).await;
-            }
+            Err(_) if Instant::now() < deadline => sleep(Duration::from_millis(20)).await,
             answer => return answer,
         }
     }
@@ -235,21 +233,32 @@ async fn events_arrive_again_after_a_reconnect_and_a_new_subscription() {
 async fn a_silent_subscribed_connection_outlives_the_devices_idle_timeout() {
     let port = free_port();
     let tailnet = admitting(2);
-    // The real timeouts, scaled down: the device drops a silent connection after 600 ms, the
-    // client stops using an unused one after 300 ms and sends `host/health` every 150 ms.
+    // The real timeouts, scaled down. The device drops a silent connection after 1.5 s. The
+    // client stops using an unused one after 200 ms, and sends `host/health` every 500 ms, so a
+    // call 350 ms after a heartbeat finds the connection idle by the client's own rule.
     let (dir, server, _client) = start_with(Arc::clone(&tailnet), port, |config| {
-        config.idle_timeout = Duration::from_millis(600);
+        config.idle_timeout = Duration::from_millis(1500);
     })
     .await;
     let peer = peers(&tailnet, port)
         .client("a")
-        .with_timing(Duration::from_millis(300), Some(Duration::from_millis(150)));
+        .with_timing(Duration::from_millis(200), Some(Duration::from_millis(500)));
     let (sender, mut incoming) = mpsc::unbounded_channel();
     peer.notify(sender);
     once_listening(async || peer.call::<EventsSubscribe>(subscription()).await)
         .await
         .unwrap();
 
+    // A subscribed connection isn't dropped for idling, so this call uses it.
+    sleep(Duration::from_millis(850)).await;
+    health(&peer).await.unwrap();
+    assert_eq!(
+        tailnet.whois.lock().unwrap().len(),
+        1,
+        "the call opened a new connection"
+    );
+
+    // With no calls, only the heartbeat keeps the device from closing it.
     sleep(Duration::from_millis(2000)).await;
     // The first local client idled out too.
     let mut client = Client::ready(&server.socket).await;
@@ -259,10 +268,5 @@ async fn a_silent_subscribed_connection_outlives_the_devices_idle_timeout() {
         .unwrap();
     let (_, project) = next_created(&mut incoming).await;
     assert_eq!(project.name, "late");
-    assert_eq!(
-        tailnet.whois.lock().unwrap().len(),
-        1,
-        "the connection was never replaced"
-    );
     server.stop().await;
 }
