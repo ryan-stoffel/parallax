@@ -441,6 +441,13 @@ export function Composer({
   const [images, setImages] = useState<PromptImage[]>([]);
   // Attached threads' run ids, shown as chips beside the images.
   const [threads, setThreads] = useState<string[]>([]);
+  // Run ids are the host's own, so they don't follow a New Thread draft to another computer.
+  // Reset while rendering, not in an effect, so a Composer that never changes host does no extra work.
+  const [threadsHost, setThreadsHost] = useState(host);
+  if (threadsHost !== host) {
+    setThreadsHost(host);
+    setThreads([]);
+  }
   // Why an image or thread wasn't added, shown by the thumbnails.
   const [attachError, setAttachError] = useState<string>();
   // Whether a sidebar row is dragged over the box, which outlines it.
