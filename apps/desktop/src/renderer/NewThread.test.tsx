@@ -882,7 +882,7 @@ describe("a host with no usable default account for threads", () => {
     expect(chooserLabels()).toEqual(["Claude Code", "Work (API key)"]);
   });
 
-  test("uses the only account there is, and says so", async () => {
+  test("uses the only account there is", async () => {
     accounts([cli("claude", true), cli("codex", true)], [key("Other", "openai")]);
     await renderApp();
     await send("Hi");
@@ -893,9 +893,6 @@ describe("a host with no usable default account for threads", () => {
     const [first, retry] = calls("thread/start");
     expect(retry).toEqual(first);
     expect(crumbs()).toEqual(["This Mac", "parallax", "Hi"]);
-    expect(document.querySelector("main")!.textContent).toContain(
-      "Using Claude Code for new threads on this host.",
-    );
   });
 
   test("shows plxd's error when it can't list accounts", async () => {

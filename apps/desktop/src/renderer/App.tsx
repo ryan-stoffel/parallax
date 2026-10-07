@@ -152,8 +152,6 @@ export function App() {
   const [drawers, setDrawers] = useState<ReadonlySet<string>>(new Set());
   // The page a repository action last opened in the side panel's Browser view.
   const [browse, setBrowse] = useState<{ url: string }>();
-  // A quiet note for the thread New Thread just started, such as the account it picked.
-  const [notice, setNotice] = useState<{ threadId: string; text: string }>();
   // The pull request the side panel last opened, or with no URL its Pull requests view.
   const [showPr, setShowPr] = useState<{ url?: string }>();
   // A message the PR view handed the open thread's chat, until the chat takes it.
@@ -894,7 +892,6 @@ export function App() {
                         host={host}
                         runId={threadId}
                         title={title}
-                        notice={notice?.threadId === threadId ? notice.text : undefined}
                         prompt={threads.state.runs[threadId]?.prompt}
                         // The list's status goes stale once the run moves on, so only a start says so.
                         going={focused && selection.started}
@@ -947,8 +944,7 @@ export function App() {
                 runOptions={
                   connection?.status === "connected" && "runOptions" in connection.capabilities
                 }
-                onStarted={(threadId, text, background) => {
-                  setNotice(text ? { threadId, text } : undefined);
+                onStarted={(threadId, background) => {
                   if (!background) setSelection({ kind: "thread", threadId, started: true });
                 }}
                 disabledReason={offline}
