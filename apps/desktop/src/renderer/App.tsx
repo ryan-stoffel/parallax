@@ -496,12 +496,8 @@ export function App() {
   };
 
   // Opens New Thread on another computer with one of its repositories.
-  const pickRepoOn = (hostId: string, groupId: string) => {
-    setHostId(hostId);
-    setOpening(undefined);
-    setSettings(null);
-    setSelection({ kind: "new", groupId });
-  };
+  const pickRepoOn = (hostId: string, groupId: string) =>
+    openOnHost(hostId, { kind: "new", groupId });
 
   const newThread = (groupId = selection.kind === "project" ? undefined : group.id) => {
     setSettings(null);

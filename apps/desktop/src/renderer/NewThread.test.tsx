@@ -598,7 +598,10 @@ test("Picking another computer in Runs on keeps the draft and starts the thread 
 });
 
 test("New Thread lists another computer's repositories, and picking one opens it there (PLX-606)", async () => {
-  window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
+  window.parallax.hosts = async () => [
+    { id: "ssh-mini", name: "mac mini", destination: "mini" },
+    { id: "ssh-off", name: "devbox", destination: "devbox" },
+  ];
   const mini: Repo = { ...parallax, id: "r-mini-parallax", path: "/Users/me/parallax" };
   const dotfiles: Repo = { ...parallax, id: "r-dotfiles", name: "dotfiles", path: "/Users/me/dot" };
   request.mockImplementation(async (host, method, params) => {
@@ -607,6 +610,11 @@ test("New Thread lists another computer's repositories, and picking one opens it
     const answer = answers[method];
     return answer ? answer(params) : { error: { code: -32601, message: `${method} isn't faked` } };
   });
+  // devbox never connects, so its list never comes in and it's never marked as lacking one.
+  window.parallax.connectionState = async (host) =>
+    host === "ssh-off"
+      ? { status: "connecting" }
+      : { status: "connected", plxd: "0.1.0", protocol: 1, capabilities };
   const options = (menu: string) =>
     [...document.querySelectorAll(`main [aria-label="${menu}"] [role="menuitemradio"]`)].map(
       (b) => b.textContent,
@@ -620,11 +628,11 @@ test("New Thread lists another computer's repositories, and picking one opens it
     "Add repository…",
   ]);
   // Both computers have parallax, so neither is marked.
-  expect(options("Computer")).toEqual(["This Macthis one", "mac mini"]);
+  expect(options("Computer")).toEqual(["This Macthis one", "mac mini", "devbox"]);
   await choose("Repository", "dotfilesmac mini");
   expect(heading()).toBe("What should we build in dotfiles?");
   expect(control("Runs on: mac mini, New worktree")).not.toBeNull();
-  expect(options("Computer")).toEqual(["This Macno dotfiles", "mac mini"]);
+  expect(options("Computer")).toEqual(["This Macno dotfiles", "mac mini", "devbox"]);
   // On mac mini, this computer has no repository it lacks.
   expect(options("Repository")).toEqual(["parallax", "dotfiles", "No Repo"]);
 });

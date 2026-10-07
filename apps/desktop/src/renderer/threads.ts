@@ -271,11 +271,12 @@ export function otherRepos(
 }
 
 /**
- * Whether `view`'s computer has no repository named `name`. False while its list isn't in, since
- * that can't be told yet.
+ * Whether `view`'s computer has no repository named `name`. False until its first list is in (a
+ * computer that never connected still has `emptyThreads`), since that can't be told yet.
  */
 export const lacksRepo = (view: ThreadsView | undefined, name: string) =>
   !!view &&
+  view.state !== emptyThreads &&
   !view.loading &&
   !view.error &&
   !view.state.repos.some((r) => !r.scratch && r.name === name);

@@ -308,7 +308,7 @@ const handlers: { [M in Method]?: Handler<M> } = {
       parallax: !!connect.on,
     },
     devices: tailnet.map(
-      ({ name: _n, icon: _i, threads: _t, off: _o, removed: _r, ...device }) => device,
+      ({ name: _n, icon: _i, threads: _t, repos: _p, off: _o, removed: _r, ...device }) => device,
     ),
   }),
 
