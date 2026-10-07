@@ -597,6 +597,38 @@ test("Picking another computer in Runs on keeps the draft and starts the thread 
   );
 });
 
+test("New Thread lists another computer's repositories, and picking one opens it there (PLX-606)", async () => {
+  window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
+  const mini: Repo = { ...parallax, id: "r-mini-parallax", path: "/Users/me/parallax" };
+  const dotfiles: Repo = { ...parallax, id: "r-dotfiles", name: "dotfiles", path: "/Users/me/dot" };
+  request.mockImplementation(async (host, method, params) => {
+    if (host === "ssh-mini" && method === "thread/list")
+      return { result: { repos: [mini, dotfiles], threads: [], seq: 1 } };
+    const answer = answers[method];
+    return answer ? answer(params) : { error: { code: -32601, message: `${method} isn't faked` } };
+  });
+  const options = (menu: string) =>
+    [...document.querySelectorAll(`main [aria-label="${menu}"] [role="menuitemradio"]`)].map(
+      (b) => b.textContent,
+    );
+  await renderApp();
+  // The same name on both is listed once, as this computer's; dotfiles names its computer.
+  expect(options("Repository")).toEqual([
+    "parallax",
+    "No Repo",
+    "dotfilesmac mini",
+    "Add repository…",
+  ]);
+  // Both computers have parallax, so neither is marked.
+  expect(options("Computer")).toEqual(["This Macthis one", "mac mini"]);
+  await choose("Repository", "dotfilesmac mini");
+  expect(heading()).toBe("What should we build in dotfiles?");
+  expect(control("Runs on: mac mini, New worktree")).not.toBeNull();
+  expect(options("Computer")).toEqual(["This Macno dotfiles", "mac mini"]);
+  // On mac mini, this computer has no repository it lacks.
+  expect(options("Repository")).toEqual(["parallax", "dotfiles", "No Repo"]);
+});
+
 test("Local checkout starts a thread in the repository itself, with no branch of its own", async () => {
   capabilities = { checkout: {} };
   nameThread.mockResolvedValue({ title: "Fix flaky test", slug: "fix-flaky-test" });

@@ -35,7 +35,8 @@ export const hostIcon = (host: Host) =>
  * Where a thread runs: which of Parallax's computers, and in a new worktree or the local checkout.
  * The menu stays open while you pick both. The computer and the workspace are the caller's, which
  * starts the thread on that computer with that workspace; `checkoutUnavailable`, when set, says why
- * Local checkout can't be picked.
+ * Local checkout can't be picked. `missing` names the computers, by id, that lack the picked
+ * repository, which say so.
  */
 export function RunTargetMenu({
   hosts,
@@ -44,6 +45,7 @@ export function RunTargetMenu({
   workspace: workspaceChoice,
   onWorkspaceChange,
   checkoutUnavailable,
+  missing,
 }: {
   hosts: Host[];
   hostId: string;
@@ -51,6 +53,7 @@ export function RunTargetMenu({
   workspace: Workspace;
   onWorkspaceChange: (workspace: Workspace) => void;
   checkoutUnavailable?: string;
+  missing?: { repo: string; hostIds: ReadonlySet<string> };
 }) {
   const id = useId();
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
@@ -95,7 +98,11 @@ export function RunTargetMenu({
                 value: h.id,
                 label: h.name,
                 icon: hostIcon(h),
-                hint: h.id === localId ? "this one" : undefined,
+                hint: missing?.hostIds.has(h.id)
+                  ? `no ${missing.repo}`
+                  : h.id === localId
+                    ? "this one"
+                    : undefined,
               }}
               checked={h === host}
               onClick={() => onHostChange(h.id)}

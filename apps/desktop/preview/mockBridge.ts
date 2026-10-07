@@ -26,6 +26,7 @@ import {
   type MemoryScope,
   type ParallaxEvent,
   type ParallaxRequests,
+  type Repo,
   type TailnetDevice,
   type Thread,
 } from "../src/protocol/generated/protocol";
@@ -786,6 +787,8 @@ const tailnet: (TailnetDevice & {
   name?: string;
   icon?: DeviceIcon;
   threads?: string[];
+  /** Its repositories, from this computer's; absent means the same ones. */
+  repos?: (here: Repo[]) => Repo[];
   off?: boolean;
   removed?: boolean;
 })[] = [
@@ -799,6 +802,16 @@ const tailnet: (TailnetDevice & {
     parallax: false,
     name: "Mac mini",
     threads: ["Tahoe icon variants"],
+    // A repository only the Mac mini has, so New Thread lists it under the Mac mini.
+    repos: (here) => [
+      ...here,
+      {
+        id: "0199a6f0-0000-7000-8000-mini0homelab",
+        name: "homelab",
+        path: "/Users/ryan/src/homelab",
+        createdAt: here[0]!.createdAt,
+      },
+    ],
   },
   {
     id: "nPc4HfR9a",
@@ -810,6 +823,8 @@ const tailnet: (TailnetDevice & {
     parallax: false,
     name: "Gaming PC",
     threads: ["Compare SSE vs WebSocket for plxd attach"],
+    // No docs-site, so the Computer menu says so with docs-site picked.
+    repos: (here) => here.filter((r) => r.name !== "docs-site"),
   },
   {
     id: "nTpad8Lw3",
@@ -895,7 +910,11 @@ function deviceRequest(hostId: string, method: string, params: Record<string, un
   const own = (id: string) => hostOf(id) === hostId;
   switch (method) {
     case "thread/list":
-      return { repos: db.repos, threads: db.threads.filter((t) => own(t.id)), seq };
+      return {
+        repos: device.repos?.(db.repos) ?? db.repos,
+        threads: db.threads.filter((t) => own(t.id)),
+        seq,
+      };
     case "agent/list":
       return { runs: db.runs.filter((r) => own(r.id)), seq };
     case "project/list":
