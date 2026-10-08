@@ -89,6 +89,7 @@ import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
 import { iconColors, iconLook } from "./projectIcons";
 import { ForkMenu } from "./Fork";
 import { archivePageSize, sidebarPrefs } from "./sidebarPrefs";
+import { stored } from "./stored";
 import { dragThread } from "./threadDrag";
 import {
   asksOf,
@@ -275,9 +276,10 @@ const cardDelay = 450;
 /** The Repos filter's choice: every repo, No Repo's threads, or one repo by host and id. */
 type RepoFilter = "all" | "none" | `${string}/${string}`;
 const filterKey = "parallax:repoFilter";
-// "true" while the Projects or Threads section is collapsed.
-const collapsedKey = "parallax:projectsCollapsed";
-const threadsCollapsedKey = "parallax:threadsCollapsed";
+/** Whether the Projects section is collapsed. */
+export const collapsedProjects = stored("parallax:projectsCollapsed", false, (raw) => raw === true);
+/** Whether the Threads section is collapsed. */
+export const collapsedThreads = stored("parallax:threadsCollapsed", false, (raw) => raw === true);
 
 /** A sidebar setting kept in localStorage, or null while there is none or storage is off. */
 function readStored(key: string): string | null {
@@ -351,18 +353,8 @@ export function ThreadList({
     setFilterState(next);
     saveStored(filterKey, next);
   };
-  const [collapsed, setCollapsedState] = useState(() => readStored(collapsedKey) === "true");
-  const setCollapsed = (next: boolean) => {
-    setCollapsedState(next);
-    saveStored(collapsedKey, String(next));
-  };
-  const [threadsCollapsed, setThreadsCollapsedState] = useState(
-    () => readStored(threadsCollapsedKey) === "true",
-  );
-  const setThreadsCollapsed = (next: boolean) => {
-    setThreadsCollapsedState(next);
-    saveStored(threadsCollapsedKey, String(next));
-  };
+  const collapsed = collapsedProjects.use();
+  const threadsCollapsed = collapsedThreads.use();
   const { workingSection, pageArchived } = sidebarPrefs.use();
   // The Working drawer starts open, so a thread that just left the list stays in view.
   const [workingOpen, setWorkingOpen] = useState(true);
@@ -710,7 +702,7 @@ export function ThreadList({
                 label="Projects"
                 collapsed={collapsed}
                 controls={projectsId}
-                onToggle={() => setCollapsed(!collapsed)}
+                onToggle={() => collapsedProjects.set(!collapsed)}
               />
               <IconButton label="New project" onClick={() => addDialog.current?.open("project")}>
                 <Plus />
@@ -729,7 +721,7 @@ export function ThreadList({
             label="Threads"
             collapsed={threadsCollapsed}
             controls={threadsId}
-            onToggle={() => setThreadsCollapsed(!threadsCollapsed)}
+            onToggle={() => collapsedThreads.set(!threadsCollapsed)}
           />
         </div>
         <div id={threadsId} hidden={threadsCollapsed}>

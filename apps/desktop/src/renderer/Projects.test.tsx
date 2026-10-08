@@ -24,6 +24,7 @@ import type {
   Thread,
 } from "../protocol/generated/protocol";
 import { App } from "./App";
+import { collapsedProjects, collapsedThreads } from "./Sidebar";
 import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -93,6 +94,8 @@ beforeEach(() => {
   request.mockClear();
   localStorage.clear();
   sidebarPrefs.set(sidebarDefaults);
+  collapsedProjects.set(false);
+  collapsedThreads.set(false);
   popoverSources = [];
   listeners = new Set();
   capabilities = {};
