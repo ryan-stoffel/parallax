@@ -23,12 +23,11 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type ToggleEvent,
 } from "react";
 
 import { browserUrl } from "./Browser";
 import { editingKeys, formatKeybinding, keybindingOf, modifiers } from "./keybindings";
-import { appShortcut, IconButton, menuButton, menuItem, menuPanel, moveFocus } from "./ui";
+import { appShortcut, IconButton, menuButton, Menu, menuItem, menuPanel } from "./ui";
 import { uuidv7 } from "./uuidv7";
 
 /** A saved command for a repository, run from the top bar in the thread's terminal drawer. */
@@ -188,18 +187,7 @@ export function Actions({
           </button>
         </div>
       )}
-      <div
-        ref={menu}
-        id={menuId}
-        popover="auto"
-        role="menu"
-        aria-label="Actions"
-        onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-          if (e.newState === "open") e.currentTarget.querySelector<HTMLElement>("button")?.focus();
-        }}
-        onKeyDown={moveFocus}
-        className={`${menuPanel("end")} w-64 p-1`}
-      >
+      <Menu ref={menu} id={menuId} label="Actions" align="end" className="w-64 p-1" focus="button">
         {actions.map((a) => {
           const Icon = IconOf(a.icon);
           return (
@@ -239,7 +227,7 @@ export function Actions({
           <Plus aria-hidden />
           Add action
         </button>
-      </div>
+      </Menu>
       {editing && (
         <ActionDialog
           action={editing === "new" ? undefined : editing}

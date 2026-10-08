@@ -1,10 +1,10 @@
 import { ChevronDown, Folder, FolderGit2, Laptop, Server } from "lucide-react";
 
-import { useId, type ToggleEvent } from "react";
+import { useId } from "react";
 
 import { DeviceIcon } from "./DeviceIcon";
 import { localId, type Host } from "./hosts";
-import { MenuOption, menuButton, menuHeading, menuPanel, moveFocus, type PickerOption } from "./ui";
+import { Menu, MenuOption, menuButton, menuHeading, type PickerOption } from "./ui";
 
 /** Where a new thread works: a worktree of its own, or the repository's own checkout. */
 export type Workspace = "worktree" | "checkout";
@@ -72,18 +72,7 @@ export function RunTargetMenu({
         {workspace.label}
         <ChevronDown aria-hidden className="opacity-70" />
       </button>
-      <div
-        id={id}
-        popover="auto"
-        role="menu"
-        aria-label="Runs on"
-        onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-          if (e.newState === "open")
-            e.currentTarget.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
-        }}
-        onKeyDown={moveFocus}
-        className={`${menuPanel()} w-[26rem] p-1`}
-      >
+      <Menu id={id} label="Runs on" className="w-[26rem] p-1" focus='[aria-checked="true"]'>
         <div role="group" aria-label="Computer">
           <p aria-hidden className={menuHeading}>
             Computer
@@ -125,7 +114,7 @@ export function RunTargetMenu({
             );
           })}
         </div>
-      </div>
+      </Menu>
     </>
   );
 }

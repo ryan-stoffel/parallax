@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type ButtonHTMLAttributes,
+  type ComponentProps,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -235,6 +236,43 @@ export function moveFocus(e: KeyboardEvent<HTMLElement>) {
   const i = items.indexOf(document.activeElement as HTMLElement);
   // From outside the items (a search box), Down starts at the top and Up at the bottom.
   items.at(i === -1 ? (step === 1 ? 0 : -1) : (i + step) % items.length)?.focus();
+}
+
+/**
+ * A popover menu: opening it focuses its first item matching `focus`, then runs `onOpen`, and Up
+ * and Down move between its items (moveFocus). `onClose` runs when it closes.
+ */
+export function Menu({
+  label,
+  align,
+  className,
+  focus = '[role="menuitem"]',
+  onOpen,
+  onClose,
+  ...props
+}: {
+  label: string;
+  align?: "start" | "end";
+  className: string;
+  focus?: string;
+  onOpen?: () => void;
+  onClose?: () => void;
+} & Pick<ComponentProps<"div">, "ref" | "id" | "onBeforeToggle" | "children">) {
+  return (
+    <div
+      {...props}
+      popover="auto"
+      role="menu"
+      aria-label={label}
+      onToggle={(e: ToggleEvent<HTMLDivElement>) => {
+        if (e.newState !== "open") return onClose?.();
+        e.currentTarget.querySelector<HTMLElement>(focus)?.focus();
+        onOpen?.();
+      }}
+      onKeyDown={moveFocus}
+      className={`${menuPanel(align)} ${className}`}
+    />
+  );
 }
 
 export interface PickerOption {

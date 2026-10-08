@@ -101,6 +101,7 @@ import {
 import { accountLabel, isRunning, statusLabel as runStatusLabel } from "./transcript";
 import {
   IconButton,
+  Menu,
   menuItem,
   menuPanel,
   moveFocus,
@@ -1293,19 +1294,7 @@ function ProjectRow({
               <Ellipsis />
             </button>
           </div>
-          <div
-            ref={menu}
-            id={menuId}
-            popover="auto"
-            role="menu"
-            aria-label="Project actions"
-            onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-              if (e.newState === "open")
-                e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-            }}
-            onKeyDown={moveFocus}
-            className={`${menuPanel("end")} min-w-36 p-1`}
-          >
+          <Menu ref={menu} id={menuId} label="Project actions" align="end" className="min-w-36 p-1">
             {editable && (
               <>
                 <button
@@ -1361,7 +1350,7 @@ function ProjectRow({
                 Delete…
               </button>
             )}
-          </div>
+          </Menu>
         </>
       )}
       {/* Each pick saves at once; the picker stays open for the next. */}
@@ -1684,20 +1673,14 @@ function ThreadRow({
         </button>
       </div>
       {snoozable && (
-        <div
+        <Menu
           ref={snoozeMenu}
           id={snoozeId}
-          popover="auto"
-          role="menu"
-          aria-label="Snooze"
+          label="Snooze"
+          align="end"
+          className="min-w-56 p-1"
           onBeforeToggle={(e) => e.newState === "open" && setSnoozeOpen(true)}
-          onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-            if (e.newState === "open")
-              e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-            else setSnoozeOpen(false);
-          }}
-          onKeyDown={moveFocus}
-          className={`${menuPanel("end")} min-w-56 p-1`}
+          onClose={() => setSnoozeOpen(false)}
         >
           {snoozeOpen && (
             <>
@@ -1751,28 +1734,22 @@ function ThreadRow({
               )}
             </>
           )}
-        </div>
+        </Menu>
       )}
-      <div
+      <Menu
         ref={menu}
         id={menuId}
-        popover="auto"
-        role="menu"
-        aria-label="Thread actions"
+        label="Thread actions"
+        align="end"
+        className="min-w-36 p-1"
         onBeforeToggle={(e) => e.newState === "open" && setMenuOpen(true)}
-        onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-          if (e.newState !== "open") {
-            setMenuOpen(false);
-            return;
-          }
-          e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+        onClose={() => setMenuOpen(false)}
+        onOpen={() => {
           if (autoResumable && run)
             void window.parallax.request(hostId, "host/settings/get", {}).then((answer) => {
               if ("result" in answer) setHostResumes(answer.result.autoResume);
             });
         }}
-        onKeyDown={moveFocus}
-        className={`${menuPanel("end")} min-w-36 p-1`}
       >
         {menuOpen && (
           <>
@@ -1829,7 +1806,7 @@ function ThreadRow({
             </button>
           </>
         )}
-      </div>
+      </Menu>
       {onFork && run && (
         <ForkMenu
           ref={forkMenu}

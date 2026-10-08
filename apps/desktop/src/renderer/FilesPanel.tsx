@@ -9,12 +9,12 @@ import {
   FolderOpen,
   FolderPlus,
 } from "lucide-react";
-import { type KeyboardEvent, type ToggleEvent, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type { AgentEntry, AgentFileResult } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
-import { IconButton, menuItem, menuPanel, moveFocus, openOnContextMenu } from "./ui";
+import { IconButton, Menu, menuItem, openOnContextMenu } from "./ui";
 
 /** A folder's entries once listed, or why they couldn't be. */
 type Listing = { entries: AgentEntry[]; truncated: boolean } | { error: string };
@@ -351,18 +351,12 @@ export function FilesPanel({
       )}
       {editable && (
         <>
-          <div
+          <Menu
             ref={menu}
-            popover="auto"
-            role="menu"
-            aria-label={target ? `Actions for ${nameOf(target.path)}` : "File actions"}
-            onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-              if (e.newState === "open")
-                e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-              else setTarget(undefined);
-            }}
-            onKeyDown={moveFocus}
-            className={`${menuPanel("end")} min-w-36 p-1`}
+            label={target ? `Actions for ${nameOf(target.path)}` : "File actions"}
+            align="end"
+            className="min-w-36 p-1"
+            onClose={() => setTarget(undefined)}
           >
             {target && targetFolder !== undefined && (
               <>
@@ -404,7 +398,7 @@ export function FilesPanel({
                 </button>
               </>
             )}
-          </div>
+          </Menu>
           <dialog
             ref={deleteDialog}
             aria-labelledby="delete-entry-title"
