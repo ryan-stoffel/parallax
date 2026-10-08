@@ -1,7 +1,9 @@
 //! Rewrites a finished turn's `agent.output` batches as one row (0052).
 //!
-//! A sweep runs at start and hourly. Each job compactes one turn whose last batch is older than
-//! the in-memory window, so a live subscriber never sees the rewrite.
+//! A sweep runs at start and hourly. Each job compacts one turn whose last batch is older than
+//! the in-memory window, so a live subscriber never sees the rewrite. Each sweep looks only past
+//! what earlier ones covered: seqs only grow and only compaction rewrites a row, so nothing
+//! before that point can become compactable.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,25 +23,31 @@ pub(crate) const SWEEP_PERIOD: Duration = Duration::from_hours(1);
 
 /// Compacts every finished turn that has left the window, then one more each hour until `stop`.
 pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
-    sweep(&daemon).await;
+    let mut done = 0;
+    sweep(&daemon, &stop, &mut done).await;
     let mut interval = time::interval_at(time::Instant::now() + SWEEP_PERIOD, SWEEP_PERIOD);
     interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             biased;
             () = stop.cancelled() => break,
-            _ = interval.tick() => sweep(&daemon).await,
+            _ = interval.tick() => sweep(&daemon, &stop, &mut done).await,
         }
     }
 }
 
-/// Compacts eligible turns one job at a time, so no job holds the writer for a long turn's
-/// rewrite.
-pub(crate) async fn sweep(daemon: &Daemon) {
-    loop {
-        match compact_one(daemon).await {
-            Ok(true) => {}
-            Ok(false) => break,
+/// Compacts eligible turns after seq `done` one job at a time, so no job holds the writer for a
+/// long turn's rewrite, and moves `done` past what it covered. Stops between jobs once `stop` is
+/// cancelled.
+pub(crate) async fn sweep(daemon: &Daemon, stop: &CancellationToken, done: &mut u64) {
+    while !stop.is_cancelled() {
+        let floor = daemon.log.floor();
+        match compact_one(daemon, floor, *done).await {
+            Ok(Some(last)) => *done = last,
+            Ok(None) => {
+                *done = floor.saturating_sub(1);
+                break;
+            }
             Err(error) => {
                 warn!(error = %error.message, "could not compact a finished turn");
                 break;
@@ -48,23 +56,27 @@ pub(crate) async fn sweep(daemon: &Daemon) {
     }
 }
 
-/// Rewrites one finished turn older than the window. Returns whether it did.
-pub(crate) async fn compact_one(daemon: &Daemon) -> Result<bool, ErrorObject> {
-    let floor = daemon.log.floor();
+/// Rewrites the oldest finished turn that ends after seq `after` and before `floor`. Returns the
+/// turn's last seq, or `None` if there was none.
+pub(crate) async fn compact_one(
+    daemon: &Daemon,
+    floor: u64,
+    after: u64,
+) -> Result<Option<u64>, ErrorObject> {
     daemon
         .store
         .run(&CancellationToken::new(), move |tx| {
-            compact_one_job(tx, floor)
+            compact_one_job(tx, floor, after)
         })
         .await
 }
 
-fn compact_one_job(tx: &mut Tx, floor: u64) -> Result<bool, ErrorObject> {
+fn compact_one_job(tx: &mut Tx, floor: u64, after: u64) -> Result<Option<u64>, ErrorObject> {
     let Some(turn) = tx
-        .find_compactable_turn(floor)
+        .find_compactable_turn(floor, after)
         .map_err(|error| store_error(&error))?
     else {
-        return Ok(false);
+        return Ok(None);
     };
     let outputs = tx
         .output_events_in(turn.run_id, turn.from, turn.last)
@@ -96,7 +108,7 @@ fn compact_one_job(tx: &mut Tx, floor: u64) -> Result<bool, ErrorObject> {
     tx.delete_events(&others)
         .map_err(|error| store_error(&error))?;
     info!(run = %run_id, from = turn.from, seq = turn.last, "compacted a finished turn");
-    Ok(true)
+    Ok(Some(turn.last))
 }
 
 /// Merges consecutive text deltas and drops deltas that a whole `text` repeats. Tool calls and
@@ -185,6 +197,7 @@ mod tests {
     use jiff::Timestamp;
     use parallax_protocol::{AgentOutputItem, Compacted, ParallaxEvent, ProjectId, RunId, TurnId};
     use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
 
     fn delta(text: &str) -> AgentOutputItem {
         AgentOutputItem::TextDelta {
@@ -270,6 +283,11 @@ mod tests {
         );
     }
 
+    /// Compacts the oldest eligible turn, looking at every row.
+    async fn compact(daemon: &Daemon) -> Option<u64> {
+        compact_one(daemon, daemon.log.floor(), 0).await.unwrap()
+    }
+
     async fn put(store: &StoreHandle, project: ProjectId, event: ParallaxEvent) -> u64 {
         store.append(Timestamp::now(), Some(project), event).await
     }
@@ -334,7 +352,7 @@ mod tests {
         put(&daemon.store, project, ParallaxEvent::Unknown).await;
         put(&daemon.store, project, ParallaxEvent::Unknown).await;
         assert_eq!(daemon.log.floor(), last + 1);
-        assert!(compact_one(&daemon).await.unwrap());
+        assert!(compact(&daemon).await.is_some());
 
         let (entries, _) = daemon.log.run_events(run, 0, 100, usize::MAX).unwrap();
         let outputs: Vec<_> = entries
@@ -392,7 +410,7 @@ mod tests {
         let (from, _mid, last) = finished_turn(&daemon.store, project, run).await;
         put(&daemon.store, project, ParallaxEvent::Unknown).await;
         put(&daemon.store, project, ParallaxEvent::Unknown).await;
-        assert!(compact_one(&daemon).await.unwrap());
+        assert!(compact(&daemon).await.is_some());
 
         let before = from + 1;
         let (page, _) = daemon
@@ -431,7 +449,7 @@ mod tests {
             last >= daemon.log.floor(),
             "the turn is still in the window"
         );
-        assert!(!compact_one(&daemon).await.unwrap());
+        assert!(compact(&daemon).await.is_none());
         assert_eq!(daemon.log.head(), head);
 
         let (entries, _) = daemon.log.run_events(run, 0, 100, usize::MAX).unwrap();
@@ -455,14 +473,15 @@ mod tests {
     #[tokio::test]
     async fn sweep_skips_a_turn_in_the_window_and_rewrites_one_that_has_left() {
         let (_dir, daemon, project, run) = daemon(2);
+        let (stop, mut done) = (CancellationToken::new(), 0);
         finished_turn(&daemon.store, project, run).await;
-        sweep(&daemon).await;
+        sweep(&daemon, &stop, &mut done).await;
         let (before, _) = daemon.log.run_events(run, 0, 100, usize::MAX).unwrap();
         assert_eq!(before.len(), 3, "still in the window");
 
         put(&daemon.store, project, ParallaxEvent::Unknown).await;
         put(&daemon.store, project, ParallaxEvent::Unknown).await;
-        sweep(&daemon).await;
+        sweep(&daemon, &stop, &mut done).await;
         let (after, _) = daemon.log.run_events(run, 0, 100, usize::MAX).unwrap();
         let outputs: Vec<_> = after
             .iter()
@@ -490,7 +509,7 @@ mod tests {
         .await;
         put(&daemon.store, project, ParallaxEvent::Unknown).await;
         put(&daemon.store, project, ParallaxEvent::Unknown).await;
-        assert!(compact_one(&daemon).await.unwrap());
+        assert!(compact(&daemon).await.is_some());
 
         let (entries, _) = daemon.log.run_events(run, 0, 100, usize::MAX).unwrap();
         let seqs: Vec<u64> = entries.iter().map(|entry| entry.seq).collect();

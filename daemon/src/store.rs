@@ -313,7 +313,7 @@ impl StoreHandle {
     }
 
     /// Opens a read-only connection to this store's file at `path`, on a thread of its own: the
-    /// daemon's `reader`, for lists and search. Unavailable when this store is, so a database this
+    /// daemon's `reader`, for lists, search, and other pure reads. Unavailable when this store is, so a database this
     /// build can't migrate (a newer schema, say) is never read either.
     // ponytail: one read thread, so reads queue behind each other; a pool if that shows up.
     pub fn open_reader(&self, path: &Path) -> Self {

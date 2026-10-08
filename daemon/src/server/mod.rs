@@ -237,8 +237,8 @@ pub(crate) struct Daemon {
     pub started: Instant,
     pub log: Arc<EventLog>,
     pub store: StoreHandle,
-    /// A read-only connection to the same store on a thread of its own, for lists and search
-    /// (PLX-457), so they never queue a write behind them.
+    /// A read-only connection to the same store on a thread of its own, for lists, search, and
+    /// other pure reads (PLX-457), so they never queue behind a write.
     pub reader: StoreHandle,
     /// The operating system and version, for `host/version`.
     pub os: String,
@@ -340,12 +340,19 @@ impl Server {
         let (socket, listener) = Socket::bind(&socket_path.path)?;
         #[cfg(windows)]
         let socket = Pipe::create(&socket_path.path)?;
-        let environment = config
-            .agent_environment
-            .clone()
-            .unwrap_or_else(agents::worker::agent_environment);
-        let environment = github::with_tools_on_path(environment, data_dir);
-        let launcher = Launcher::new(data_dir.clone(), environment);
+        // The login shell's `PATH` takes 0.1 to 5 s to read, so it's read on its own thread
+        // while the server starts answering; the first process to start waits for it.
+        let given = config.agent_environment.clone();
+        let probe = given
+            .is_none()
+            .then(|| std::thread::spawn(agents::worker::agent_environment));
+        let dir = data_dir.clone();
+        let launcher = Launcher::lazy(data_dir.clone(), move || {
+            let environment = given
+                .or_else(|| probe?.join().ok())
+                .unwrap_or_else(|| agents::worker::allowlisted(&Environment::inherited()));
+            github::with_tools_on_path(environment, &dir)
+        });
         let fake = FakeBackend::from_env(&launcher)
             .map_err(|error| StartError::io("setting up the fake backend", error))?;
         let backends = config.backends.clone().unwrap_or_else(|| {

@@ -35,7 +35,7 @@ pub(crate) async fn get(
     let until = now.timestamp();
     context
         .daemon
-        .store
+        .reader
         .run(&context.cancel, move |store| {
             usage_report(store, day_start, week_start, until).map_err(|error| store_error(&error))
         })

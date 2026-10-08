@@ -414,7 +414,7 @@ pub(crate) async fn events(
     }
     let exists = context
         .daemon
-        .store
+        .reader
         .run(&context.cancel, move |db| {
             db.get_run(run_id.into())
                 .map(|row| row.is_some())
