@@ -55,8 +55,7 @@ export function TerminalView({
       const style = getComputedStyle(document.documentElement);
       const family = style.getPropertyValue("--code-font").trim();
       return {
-        // Last, the bundled Nerd Font icons (index.css), for the glyphs no system font has.
-        fontFamily: `${family && `${family}, `}"JetBrains Mono Nerd Font", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace, "Symbols Nerd Font Mono"`,
+        fontFamily: `${family && `${family}, `}"JetBrains Mono Nerd Font", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace`,
         fontSize: Number(style.getPropertyValue("--code-size")) || 12,
       };
     };

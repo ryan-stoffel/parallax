@@ -1,9 +1,8 @@
 @import "tailwindcss";
 @import "@fontsource-variable/sora";
 
-/*! Symbols Nerd Font Mono is Nerd Fonts' icons alone (v3.4.0, https://www.nerdfonts.com), the
-   terminal's last font (Terminal.tsx): prompts' icons draw from it, and everything else from the
-   system's monospace font. Its icon sets keep their own licenses, listed at
+/*! JetBrains Mono Nerd Font is JetBrains Mono (SIL Open Font License 1.1) with Nerd Fonts' icons
+   (v3.5.1, https://www.nerdfonts.com). Its icon sets keep their own licenses, listed at
    https://github.com/ryanoasis/nerd-fonts/blob/master/license-audit.md. Nerd Fonts is under the
    MIT License:
 
@@ -28,12 +27,15 @@
    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
    SOFTWARE. */
-@font-face {
-  font-family: "Symbols Nerd Font Mono";
-  src: url("./fonts/SymbolsNerdFontMono-Regular.woff2") format("woff2");
-}
 
-/*! JetBrains Mono Nerd Font (SIL Open Font License 1.1 / MIT). */
+/* Bold, Italic, and BoldItalic hold only the text glyphs. Their icons are Regular's, so each style
+   takes the icon ranges from the Regular file. They were cut from the full faces added in 7d0551a4,
+   from apps/desktop/src/renderer/fonts:
+   for s in Bold Italic BoldItalic; do f=JetBrainsMonoNerdFont-$s.woff2
+     git show 7d0551a4:apps/desktop/src/renderer/fonts/$f > /tmp/$f
+     uv run --with fonttools==4.60.1 --with brotli==1.2.0 pyftsubset /tmp/$f \
+       --unicodes=U+0000-DFFF,U+F900-EFFFF --layout-features='*' --name-IDs='*' --notdef-outline \
+       --flavor=woff2 --output-file=$f; done */
 @font-face {
   font-family: "JetBrains Mono Nerd Font";
   font-weight: 400;
@@ -47,6 +49,15 @@
   font-style: italic;
   font-display: swap;
   src: url("./fonts/JetBrainsMonoNerdFont-Italic.woff2") format("woff2");
+  unicode-range: U+0000-DFFF, U+F900-EFFFF;
+}
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+  src: url("./fonts/JetBrainsMonoNerdFont-Regular.woff2") format("woff2");
+  unicode-range: U+E000-F8FF, U+F0000-10FFFF;
 }
 @font-face {
   font-family: "JetBrains Mono Nerd Font";
@@ -54,6 +65,15 @@
   font-style: normal;
   font-display: swap;
   src: url("./fonts/JetBrainsMonoNerdFont-Bold.woff2") format("woff2");
+  unicode-range: U+0000-DFFF, U+F900-EFFFF;
+}
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url("./fonts/JetBrainsMonoNerdFont-Regular.woff2") format("woff2");
+  unicode-range: U+E000-F8FF, U+F0000-10FFFF;
 }
 @font-face {
   font-family: "JetBrains Mono Nerd Font";
@@ -61,6 +81,15 @@
   font-style: italic;
   font-display: swap;
   src: url("./fonts/JetBrainsMonoNerdFont-BoldItalic.woff2") format("woff2");
+  unicode-range: U+0000-DFFF, U+F900-EFFFF;
+}
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+  src: url("./fonts/JetBrainsMonoNerdFont-Regular.woff2") format("woff2");
+  unicode-range: U+E000-F8FF, U+F0000-10FFFF;
 }
 
 /* Parallax Light and Parallax Dark. The `dark` class on <html> switches them
