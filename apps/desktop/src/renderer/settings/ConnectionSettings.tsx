@@ -8,15 +8,7 @@ import { localId, useHosts, type Host } from "../hosts";
 import { IconButton } from "../ui";
 import { ConnectSettings } from "./ConnectSettings";
 import { SshHostDialog } from "./SshHostDialog";
-import {
-  PageTitle,
-  primaryButton,
-  quietButton,
-  Row,
-  Section,
-  settingRow,
-  StatusDot,
-} from "./parts";
+import { PageTitle, quietButton, RenameForm, Row, Section, settingRow, StatusDot } from "./parts";
 
 // xterm.js is large, so it loads when a sign-in first opens.
 const SignInTerminal = lazy(() =>
@@ -123,29 +115,12 @@ function LocalHost({ host }: { host: Host }) {
       <div className="mb-2 flex min-h-7 items-center gap-2 text-[13px] text-muted-foreground [&_svg]:size-4">
         <DeviceIcon icon={host.icon ?? "laptop"} />
         {renaming ? (
-          <form
-            className="flex items-center gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void rename(new FormData(e.currentTarget).get("name") as string);
-            }}
-          >
-            <input
-              name="name"
-              aria-label="Computer name"
-              defaultValue={host.name}
-              autoFocus
-              maxLength={64}
-              onKeyDown={(e) => e.key === "Escape" && setRenaming(false)}
-              className="w-48 rounded-md border border-border bg-background px-2 py-0.5 text-[13px] text-foreground"
-            />
-            <button type="submit" className={primaryButton}>
-              Save
-            </button>
-            <button type="button" className={quietButton} onClick={() => setRenaming(false)}>
-              Cancel
-            </button>
-          </form>
+          <RenameForm
+            label="Computer name"
+            value={host.name}
+            onSave={(name) => void rename(name)}
+            onCancel={() => setRenaming(false)}
+          />
         ) : (
           <>
             <span className="font-medium text-foreground">{host.name}</span>
