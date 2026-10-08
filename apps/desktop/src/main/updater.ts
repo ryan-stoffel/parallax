@@ -70,7 +70,7 @@ export function updateError(error: Error & { code?: string; statusCode?: number 
  * through the `app-update.yml` electron-builder packs. A newer release shows on the Update button
  * with its notes; `update` downloads it, publishing the progress, and once it's downloaded
  * installs it, which also happens when Parallax quits. `publish` gets what the Update button
- * shows on every change. It checks at start, every 20 s, and on `checkSoon` at most every 10 s,
+ * shows on every change. It checks at start, every 30 min, and on `checkSoon` at most every 10 s,
  * until a download starts. The checks read github.com's releases feed and download URLs, not the
  * REST API, so they spend no API quota (PLX-211).
  */
@@ -138,7 +138,7 @@ export function startUpdater(publish: (state: UpdateState) => void) {
   });
   if (unsupported) publish({ note: unsupported });
   void app.whenReady().then(check);
-  setInterval(check, 20_000);
+  setInterval(check, 30 * 60_000);
 
   return {
     /** A window came to the front. */
