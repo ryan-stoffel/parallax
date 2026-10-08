@@ -8,6 +8,7 @@ import type { RpcResponse, SubscriptionMessage, ParallaxBridge } from "../preloa
 import type { Capabilities, ErrorKind, Repo, Thread } from "../protocol/generated/protocol";
 import { accessDefaults, accessPrefs } from "./accessPrefs";
 import { App } from "./App";
+import { dragThread } from "./threadDrag";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. `openRowMenus` sends the rows' menus the event a browser sends as one
@@ -353,7 +354,8 @@ test("the link under the heading switches New Thread to No Repo, showing its sho
   expect(button("or start without a repo⇧⌘N")).toBeUndefined();
 });
 
-test("No Repo starts a thread with no repo", async () => {
+test("No Repo starts a thread with no repo, with a thread dropped on the box attached", async () => {
+  capabilities = { threadContext: { maxThreads: 8 } };
   answers["thread/start"] = (p) => ({
     result: {
       thread: { id: p["runId"], repo: "scratch", createdAt: "2026-09-26T12:05:00Z" },
@@ -363,9 +365,18 @@ test("No Repo starts a thread with no repo", async () => {
   await renderApp();
   await choose("Repository", "No Repo");
   expect(heading()).toBe("What should we work on without a repo?");
+  const data = new DataTransfer();
+  dragThread(data, "local", thread.id);
+  act(() => {
+    document.querySelector("main form")!.dispatchEvent(
+      Object.defineProperty(new Event("drop", { bubbles: true }), "dataTransfer", {
+        value: data,
+      }),
+    );
+  });
   await send("Hi");
   expect(calls("thread/start")).toEqual([
-    { runId: expect.any(String), prompt: "Hi", branchSlug: "hi" },
+    { runId: expect.any(String), prompt: "Hi", threads: [thread.id], branchSlug: "hi" },
   ]);
   expect(crumbs()).toEqual(["This Mac", "No Repo", "Hi"]);
 });
