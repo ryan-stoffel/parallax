@@ -115,23 +115,24 @@ impl Store {
     }
 
     /// Starts a write transaction, taking the write lock now (`BEGIN IMMEDIATE`). Methods that
-    /// write several rows use savepoints, so they nest inside it.
+    /// write several rows use savepoints, so they nest inside it. The statement is cached, since
+    /// the writer runs one per job.
     ///
     /// # Errors
     ///
     /// A database error, such as one already open.
     pub fn begin(&self) -> Result<(), StoreError> {
-        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        self.conn.prepare_cached("BEGIN IMMEDIATE")?.execute([])?;
         Ok(())
     }
 
-    /// Commits the transaction [`Store::begin`] started.
+    /// Commits the transaction [`Store::begin`] started, from a cached statement as `begin` does.
     ///
     /// # Errors
     ///
     /// A database error. The transaction may still be open then, so roll it back.
     pub fn commit(&self) -> Result<(), StoreError> {
-        self.conn.execute_batch("COMMIT")?;
+        self.conn.prepare_cached("COMMIT")?.execute([])?;
         Ok(())
     }
 

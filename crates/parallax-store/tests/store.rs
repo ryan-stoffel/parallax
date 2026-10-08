@@ -1298,7 +1298,9 @@ fn pruning_host_events_keeps_the_newest_and_leaves_run_events_alone() {
     let deleted = store.prune_host_events(1).expect("prune");
     assert_eq!(deleted, 2, "keeps only the newest of the 3 host events");
 
-    let remaining = store.latest_events(usize::MAX, usize::MAX).expect("latest");
+    let remaining = store
+        .latest_events(usize::MAX, usize::MAX, |event| event)
+        .expect("latest");
     let seqs: Vec<u64> = remaining.iter().map(|event| event.seq).collect();
     assert_eq!(
         seqs,

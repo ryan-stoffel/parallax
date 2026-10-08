@@ -181,7 +181,7 @@ impl Tx {
             time,
             project_id: project.map(Uuid::from),
             run_id: run_id.map(Uuid::from),
-            kind: kind_of(&event),
+            kind: kind_of(&payload).to_owned(),
             payload,
         };
         match self.store.append_event(&stored) {

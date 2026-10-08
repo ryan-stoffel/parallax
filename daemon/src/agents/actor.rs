@@ -3630,7 +3630,10 @@ mod tests {
         let (logged, _) = daemon.log.run_events(run, 0, 100, usize::MAX).unwrap();
         logged
             .iter()
-            .map(|entry| crate::event_log::kind_of(&entry.event))
+            .map(|entry| {
+                let payload = serde_json::to_string(&entry.event).unwrap();
+                crate::event_log::kind_of(&payload).to_owned()
+            })
             .collect()
     }
 

@@ -105,24 +105,26 @@ impl Store {
         Ok(())
     }
 
-    /// Appends `event` to the log.
+    /// Appends `event` to the log. The statement is cached, since the writer runs it for every
+    /// event.
     ///
     /// # Errors
     ///
     /// A database error, including a constraint error if its `seq` is taken.
     pub fn append_event(&self, event: &StoredEvent) -> Result<(), StoreError> {
-        self.conn.execute(
-            "INSERT INTO events (seq, time, project_id, run_id, kind, payload)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
+        self.conn
+            .prepare_cached(
+                "INSERT INTO events (seq, time, project_id, run_id, kind, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?
+            .execute(params![
                 event.seq,
                 timestamp::format(event.time),
                 event.project_id.map(|id| id.to_string()),
                 event.run_id.map(|id| id.to_string()),
                 event.kind,
                 event.payload,
-            ],
-        )?;
+            ])?;
         Ok(())
     }
 
@@ -140,18 +142,20 @@ impl Store {
         Ok(head.unwrap_or(0))
     }
 
-    /// The newest events, oldest first: at most `limit` of them, and no more than `max_bytes` of
-    /// payload, but always at least one when any exist. Rows come back newest first and are read
-    /// one at a time, so this never reads past the row that puts it over budget.
+    /// The newest events, oldest first, each passed through `map` as it is read: at most `limit`
+    /// of them, and no more than `max_bytes` of payload, but always at least one when any exist.
+    /// Rows come back newest first and are read one at a time, so this never reads past the row
+    /// that puts it over budget, and a `map` that drops the payload never holds all of them.
     ///
     /// # Errors
     ///
     /// A database error, or an error if a stored id or timestamp is corrupt.
-    pub fn latest_events(
+    pub fn latest_events<T>(
         &self,
         limit: usize,
         max_bytes: usize,
-    ) -> Result<Vec<StoredEvent>, StoreError> {
+        mut map: impl FnMut(StoredEvent) -> T,
+    ) -> Result<Vec<T>, StoreError> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {COLUMNS} FROM events ORDER BY seq DESC LIMIT ?1"
         ))?;
@@ -165,7 +169,7 @@ impl Store {
                 break;
             }
             bytes += event.payload.len();
-            events.push(event);
+            events.push(map(event));
         }
         events.reverse();
         Ok(events)
@@ -252,7 +256,8 @@ impl Store {
 
     /// The run's compacted `agent.output` whose `from` is before `before` and whose `seq` is at
     /// or after it, if there is one (0052): a newest-first page whose cursor sits inside that
-    /// turn still needs the rewritten row.
+    /// turn still needs the rewritten row. Compaction deletes the turn's other batches, so only
+    /// the run's first `agent.output` at or after `before` can be that row, and only it is parsed.
     ///
     /// # Errors
     ///
@@ -268,14 +273,12 @@ impl Store {
             .query_row(
                 &format!(
                     "SELECT {COLUMNS} FROM events
-                     WHERE run_id = ?1
-                       AND kind = 'agent.output'
-                       AND seq >= ?2
+                     WHERE seq = (
+                         SELECT MIN(seq) FROM events
+                         WHERE run_id = ?1 AND kind = 'agent.output' AND seq >= ?2
+                     )
                        AND json_valid(payload)
-                       AND json_extract(payload, '$.compacted.from') IS NOT NULL
-                       AND json_extract(payload, '$.compacted.from') < ?2
-                     ORDER BY seq ASC
-                     LIMIT 1"
+                       AND json_extract(payload, '$.compacted.from') < ?2"
                 ),
                 params![run_id.to_string(), before],
                 RawEvent::from_row,
@@ -421,14 +424,16 @@ impl Store {
         // events mixed in, this measures at about a tenth of the cost. With fewer than `keep`
         // host events, the subquery has no row, its `seq` reads as `NULL`, and `seq <= NULL` is
         // never true, so nothing is deleted.
-        let deleted = self.conn.execute(
-            "DELETE FROM events
-             WHERE run_id IS NULL
-               AND seq <= (
-                   SELECT seq FROM events WHERE run_id IS NULL ORDER BY seq DESC LIMIT 1 OFFSET ?1
-               )",
-            params![keep],
-        )?;
+        let deleted = self
+            .conn
+            .prepare_cached(
+                "DELETE FROM events
+                 WHERE run_id IS NULL
+                   AND seq <= (
+                       SELECT seq FROM events WHERE run_id IS NULL ORDER BY seq DESC LIMIT 1 OFFSET ?1
+                   )",
+            )?
+            .execute(params![keep])?;
         Ok(deleted)
     }
 }
