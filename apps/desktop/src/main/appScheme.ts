@@ -20,8 +20,12 @@ export function registerAppScheme(): void {
 
 /** The file in `dir` an app:// URL names, or undefined when it names one outside it. */
 export function rendererFile(url: string, dir = rendererDir): string | undefined {
-  const file = path.join(dir, decodeURIComponent(new URL(url).pathname));
-  return file.startsWith(dir + path.sep) ? file : undefined;
+  try {
+    const file = path.join(dir, decodeURIComponent(new URL(url).pathname));
+    return file.startsWith(dir + path.sep) ? file : undefined;
+  } catch {
+    return undefined; // A malformed escape, such as %zz.
+  }
 }
 
 const notFound = () => new Response(null, { status: 404 });
@@ -42,9 +46,9 @@ export async function serveAppScheme(): Promise<void> {
   });
   if (done) return;
   try {
-    // A new install has none to copy.
-    if (hasStorage) await copyFileStorage();
-    await writeFile(copied, "");
+    // A new install has none to copy. Otherwise the marker waits for a launch that finds the copy
+    // in app:// storage, since a kill before Chromium writes it to disk would lose it.
+    if (!hasStorage || (await copyFileStorage())) await writeFile(copied, "");
   } catch (error) {
     console.warn("could not copy localStorage:", error);
   }
@@ -55,22 +59,30 @@ export async function serveAppScheme(): Promise<void> {
  * titles) into app://renderer, before the first app:// page reads it, since localStorage is kept
  * per origin. The file:// copy stays, so a build still on file:// (Stable shares userData with
  * Nightly) keeps working on it. Neither page runs the app's scripts: the file:// one is
- * package.json as text, the app:// one a 404.
+ * package.json as text, the app:// one a 404. Returns true, copying nothing, when an earlier
+ * launch's copy is already in app:// storage.
  *
  * Remove, with its call, once every install has launched an app:// build, a few Stable releases
  * after the first.
  */
-async function copyFileStorage(): Promise<void> {
+async function copyFileStorage(): Promise<boolean> {
   // Used through `view` each time: a view that is garbage collected mid-load fails its loads.
   const view = new WebContentsView();
-  await view.webContents.loadURL(pathToFileURL(path.join(app.getAppPath(), "package.json")).href);
-  const items = (await view.webContents.executeJavaScript(
-    "JSON.stringify(Array.from({ length: localStorage.length }, (_, i) => [localStorage.key(i), localStorage.getItem(localStorage.key(i))]))",
-  )) as string;
+  const run = (code: string) => view.webContents.executeJavaScript(code) as Promise<unknown>;
+  const copiedKey = JSON.stringify("parallax:copiedFromFile");
   await view.webContents.loadURL("app://renderer/storage-copy");
-  await view.webContents.executeJavaScript(
-    `for (const [k, v] of ${items}) localStorage.setItem(k, v)`,
-  );
+  const done = (await run(`localStorage.getItem(${copiedKey})`)) !== null;
+  if (!done) {
+    await view.webContents.loadURL(pathToFileURL(path.join(app.getAppPath(), "package.json")).href);
+    const items = (await run(
+      "JSON.stringify(Array.from({ length: localStorage.length }, (_, i) => [localStorage.key(i), localStorage.getItem(localStorage.key(i))]))",
+    )) as string;
+    await view.webContents.loadURL("app://renderer/storage-copy");
+    // The key goes last: storage commits in order, so with it on disk the rest is too.
+    await run(`for (const [k, v] of ${items}) localStorage.setItem(k, v);
+      localStorage.setItem(${copiedKey}, "1")`);
+    session.defaultSession.flushStorageData();
+  }
   view.webContents.close();
-  session.defaultSession.flushStorageData();
+  return done;
 }

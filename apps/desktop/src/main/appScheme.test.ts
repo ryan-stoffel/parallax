@@ -11,4 +11,5 @@ test("rendererFile serves only files inside the renderer's folder", () => {
     path.join(dir, "main/main.cjs"),
   );
   expect(rendererFile("app://renderer/..%2fmain%2fmain.cjs", dir)).toBeUndefined();
+  expect(rendererFile("app://renderer/%zz", dir)).toBeUndefined();
 });
