@@ -280,10 +280,6 @@ impl Backend for FakeBackend {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            follow_ups: self.follow_ups,
-            resume: true,
-            reports_cost: true,
-            rate_limits: true,
             worker_sandbox: true,
             fork: true,
         }
@@ -736,12 +732,10 @@ impl State {
             return Outcome::Cancelled;
         }
         let Some(exit) = exit else {
-            return Outcome::Failed(Failure {
-                failure: FailureKind::Internal,
-                message: "lost track of the process".into(),
-                exit: None,
-                stderr_tail: None,
-            });
+            return Outcome::Failed(Failure::new(
+                FailureKind::Internal,
+                "lost track of the process".into(),
+            ));
         };
         if exit.info.success() {
             return Outcome::Completed {

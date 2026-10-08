@@ -17,7 +17,6 @@ use tokio::sync::mpsc;
 
 use crate::detect;
 
-use super::acp::scrubbed;
 use super::process::{
     CancelPolicy, Exit, Launcher, Output, Process, ProcessSpec, Signals, StdinMode, StdinPipe,
 };
@@ -80,14 +79,7 @@ impl Backend for CursorSdkBackend {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities {
-            follow_ups: true,
-            resume: true,
-            reports_cost: false,
-            rate_limits: false,
-            worker_sandbox: false,
-            fork: false,
-        }
+        Capabilities::default()
     }
 
     fn permissions(&self) -> &[AgentPermission] {
@@ -626,7 +618,7 @@ impl Driver {
                             Some("inProgress") => TodoStatus::InProgress,
                             Some("completed") => TodoStatus::Completed,
                             Some("pending") => TodoStatus::Pending,
-                            _ => TodoStatus::Other,
+                            _ => TodoStatus::Unknown,
                         },
                     })
                     .collect()
@@ -669,21 +661,11 @@ impl Driver {
         let message = message_of(value);
         match str_of(value, "failure") {
             Some("notSignedIn") => {
-                self.failure = Some(Failure {
-                    failure: FailureKind::NotSignedIn,
-                    message,
-                    exit: None,
-                    stderr_tail: None,
-                });
+                self.failure = Some(Failure::new(FailureKind::NotSignedIn, message));
                 Ok(())
             }
             Some("rateLimited") => {
-                self.failure = Some(Failure {
-                    failure: FailureKind::RateLimited,
-                    message,
-                    exit: None,
-                    stderr_tail: None,
-                });
+                self.failure = Some(Failure::new(FailureKind::RateLimited, message));
                 Ok(())
             }
             _ => self.sink.emit(Event::Notice { detail: message }).await,
@@ -809,7 +791,7 @@ fn command(
     ]);
     let mut spec = ProcessSpec::new(program, cwd);
     spec.args = args;
-    spec.scrub = scrubbed(launcher.base(), &["CURSOR_".into()]);
+    spec.scrub = launcher.base().starting_with(&["CURSOR_"]);
     for (name, value) in env {
         spec.inject.set(name, value);
     }

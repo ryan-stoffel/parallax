@@ -173,7 +173,7 @@ pub(crate) use self::stream::micros as usd_micros;
 pub(crate) use self::stream::version as parse_version;
 use self::stream::{Ask, Step, Translator, TurnDone};
 use super::commands::{self, CommandsProbe};
-use super::event::{Event, Failure, FailureKind, Outcome, WarningKind};
+use super::event::{Event, Failure, FailureKind, Outcome, WarningKind, exit_outcome};
 use super::limits::{self, LimitsProbe};
 use super::namer::{self, NameProbe};
 use super::process::{
@@ -944,33 +944,15 @@ fn namer_arguments(model: &str, effort: Option<AgentEffort>) -> Result<Vec<OsStr
 
 /// `--effort`'s value for `effort`.
 fn effort_level(effort: AgentEffort) -> Result<&'static str, StartError> {
-    Ok(match effort {
-        AgentEffort::Low => "low",
-        AgentEffort::Medium => "medium",
-        AgentEffort::High => "high",
-        AgentEffort::Xhigh => "xhigh",
-        AgentEffort::Max => "max",
-        AgentEffort::Unknown => {
-            return Err(StartError::Unsupported(
-                "Claude Code has no such effort level".into(),
-            ));
-        }
-    })
+    super::effort_level(effort, "Claude Code has no such effort level")
 }
 
 /// The variables of `base` that no run gets: [`SCRUBBED_PREFIXES`] and [`SCRUBBED_VARS`].
 #[must_use]
 pub fn scrubbed(base: &Environment) -> Vec<OsString> {
-    base.names()
-        .filter(|name| {
-            let bytes = name.as_encoded_bytes();
-            SCRUBBED_PREFIXES
-                .iter()
-                .any(|prefix| bytes.starts_with(prefix.as_bytes()))
-                || SCRUBBED_VARS.iter().any(|var| var.as_bytes() == bytes)
-        })
-        .map(OsStr::to_owned)
-        .collect()
+    let mut names = base.starting_with(SCRUBBED_PREFIXES);
+    names.extend(SCRUBBED_VARS.iter().map(OsString::from));
+    names
 }
 
 /// Injects what `credential` needs into `spec`, after [`scrubbed`] removed every inherited
@@ -1009,10 +991,6 @@ impl Backend for ClaudeBackend {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            follow_ups: true,
-            resume: true,
-            reports_cost: true,
-            rate_limits: true,
             worker_sandbox: cfg!(any(target_os = "macos", target_os = "linux")),
             fork: true,
         }
@@ -1691,19 +1669,17 @@ impl Driver {
 
     fn outcome(&mut self, exit: Option<Exit>) -> Outcome {
         if let Some(violation) = self.violation.take() {
-            return failed(violation, exit.as_ref());
+            return violation.ended(exit.as_ref());
         }
         if self.switch.is_cancelled() {
             return Outcome::Cancelled;
         }
         if let Some(failure) = self.translator.last_failure.take() {
-            return failed(failure, exit.as_ref());
+            return failure.ended(exit.as_ref());
         }
         let Some(exit) = exit else {
-            return failed(
-                failure(FailureKind::Internal, "lost track of the process".into()),
-                None,
-            );
+            return Failure::new(FailureKind::Internal, "lost track of the process".into())
+                .ended(None);
         };
         if exit.info.success() && self.translator.results > 0 {
             return Outcome::Completed {
@@ -1711,42 +1687,7 @@ impl Driver {
             };
         }
         let lower = exit.stderr_tail.to_ascii_lowercase();
-        let failure = if lower.contains("not logged in") || lower.contains("/login") {
-            failure(
-                FailureKind::NotSignedIn,
-                "Claude Code is not signed in".into(),
-            )
-        } else if exit.info.success() {
-            failure(
-                FailureKind::VendorError,
-                "Claude Code exited without finishing its turn".into(),
-            )
-        } else {
-            let message = match (exit.info.code, exit.info.signal) {
-                (_, Some(signal)) => format!("Claude Code was killed by signal {signal}"),
-                (Some(code), None) => format!("Claude Code exited with code {code}"),
-                (None, None) => "Claude Code ended in an unknown way".to_owned(),
-            };
-            failure(FailureKind::Crashed, message)
-        };
-        failed(failure, Some(&exit))
+        let signed_out = lower.contains("not logged in") || lower.contains("/login");
+        exit_outcome("Claude Code", signed_out, &exit)
     }
-}
-
-fn failure(failure: FailureKind, message: String) -> Failure {
-    Failure {
-        failure,
-        message,
-        exit: None,
-        stderr_tail: None,
-    }
-}
-
-/// A failed outcome, with how the process ended when it did.
-fn failed(mut failure: Failure, exit: Option<&Exit>) -> Outcome {
-    if let Some(exit) = exit {
-        failure.exit = Some(exit.info);
-        failure.stderr_tail = (!exit.stderr_tail.is_empty()).then(|| exit.stderr_tail.clone());
-    }
-    Outcome::Failed(failure)
 }

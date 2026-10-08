@@ -655,11 +655,7 @@ impl Backend for OpencodeBackend {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities {
-            follow_ups: true,
-            resume: true,
-            ..Capabilities::default()
-        }
+        Capabilities::default()
     }
 
     fn permissions(&self) -> &[AgentPermission] {
@@ -862,7 +858,7 @@ impl Driver {
             Ok(()) => self.turns().await,
             Err(message) => {
                 if self.failure.is_none() {
-                    self.failure = Some(failure(classify(&message), message));
+                    self.failure = Some(Failure::new(classify(&message), message));
                 }
             }
         }
@@ -980,22 +976,22 @@ impl Driver {
                             "lost the OpenCode server's events: {}",
                             exit.stderr_tail
                         );
-                        self.failure = Some(failure(FailureKind::Crashed, message));
+                        self.failure = Some(Failure::new(FailureKind::Crashed, message));
                     }
                     None => {
                         let message = "lost the OpenCode server's events".to_owned();
-                        self.failure = Some(failure(FailureKind::Crashed, message));
+                        self.failure = Some(Failure::new(FailureKind::Crashed, message));
                     }
                 },
                 output = next(&mut self.serve) => match output {
                     Some(Output::Line(_) | Output::Oversized { .. }) => {}
                     Some(Output::Exited(exit)) => {
                         let message = format!("opencode serve exited: {}", exit.stderr_tail);
-                        self.failure = Some(failure(FailureKind::Crashed, message));
+                        self.failure = Some(Failure::new(FailureKind::Crashed, message));
                     }
                     None => {
                         let message = "opencode serve exited".to_owned();
-                        self.failure = Some(failure(FailureKind::Crashed, message));
+                        self.failure = Some(Failure::new(FailureKind::Crashed, message));
                     }
                 },
                 answer = self.answers.recv(), if answers_open => match answer {
@@ -1062,7 +1058,7 @@ impl Driver {
                 }
                 Step::Idle => self.finish_turn(None).await,
                 Step::Failed(message) if self.in_flight.is_some() => {
-                    self.failure = Some(failure(classify(&message), message.clone()));
+                    self.failure = Some(Failure::new(classify(&message), message.clone()));
                     self.finish_turn(Some(message)).await;
                 }
                 Step::Failed(detail) => self.emit(Event::Notice { detail }).await,
@@ -1112,7 +1108,7 @@ impl Driver {
         .await;
         let path = self.path(&format!("/session/{}/prompt_async", self.session));
         if let Err(message) = self.call("POST", &path, &body).await {
-            self.failure = Some(failure(classify(&message), message.clone()));
+            self.failure = Some(Failure::new(classify(&message), message.clone()));
             self.finish_turn(Some(message)).await;
         }
     }
@@ -1229,7 +1225,7 @@ impl Driver {
                 result: self.last_result.take(),
             };
         }
-        Outcome::Failed(failure(
+        Outcome::Failed(Failure::new(
             FailureKind::Internal,
             format!("{} ended without finishing a turn", self.opencode.label),
         ))
@@ -1249,14 +1245,5 @@ fn classify(message: &str) -> FailureKind {
         FailureKind::RateLimited
     } else {
         FailureKind::VendorError
-    }
-}
-
-fn failure(failure: FailureKind, message: String) -> Failure {
-    Failure {
-        failure,
-        message,
-        exit: None,
-        stderr_tail: None,
     }
 }

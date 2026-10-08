@@ -41,7 +41,7 @@ pub fn record_event(
         // `usage_totals` is empty only when the vendor's own totals are genuinely empty (a
         // fresh session that used nothing, in which case there is no baseline to lose), or when
         // `EventStream` synthesizes this event because the backend task died without ever
-        // calling `EventSink::finish` (`backend/mod.rs`'s `poll_next`). In the second case the
+        // calling `EventSink::finish` (`EventStream::next` in `backend/mod.rs`). In the second case the
         // session may already have a real baseline recorded from before the crash, and replacing
         // it with nothing would make the next resume start from zero and double-count every
         // delta the vendor's cumulative total already carries. Skipping the write leaves the
@@ -248,7 +248,7 @@ mod tests {
     }
 
     /// A run that dies without ever reaching `EventSink::finish` (a panic, or the backend task
-    /// vanishing outright) never produces a real `Event::Finished`. Instead `EventStream::poll_next`
+    /// vanishing outright) never produces a real `Event::Finished`. Instead `EventStream::next`
     /// synthesizes one, with an empty `usage_totals` (`backend/mod.rs`). Recording that must not
     /// wipe a baseline a previous, successful run of the same session already established, or the
     /// next resume would treat the vendor's full cumulative total as entirely new and double-count
@@ -289,7 +289,7 @@ mod tests {
         .unwrap();
 
         // Second run: the backend task vanishes before it ever finishes. This drives the exact
-        // production path (`backend/mod.rs`'s `EventStream::poll_next`), not a hand-built event,
+        // production path (`backend/mod.rs`'s `EventStream::next`), not a hand-built event,
         // by dropping the sink and reading the synthesized `Finished` back out of the stream.
         let (sink, mut stream) = EventSink::channel(8, Vec::new());
         drop(sink);

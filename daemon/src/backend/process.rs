@@ -59,7 +59,7 @@ pub type StdinPipe = tokio::process::ChildStdin;
 
 /// What [`Signals`] can send. Windows has no signals, so there `INT` and `TERM` send nothing (the
 /// backend closes stdin instead) and `KILL` terminates the process's job (0023). The numbers are
-/// POSIX's, for [`ExitInfo`].
+/// POSIX's.
 #[cfg(windows)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Signal(i32);
@@ -72,12 +72,6 @@ impl Signal {
     pub const TERM: Self = Self(15);
     /// Kills the process's job.
     pub const KILL: Self = Self(9);
-
-    /// The POSIX number.
-    #[must_use]
-    pub const fn as_raw(self) -> i32 {
-        self.0
-    }
 }
 
 /// Variables no process plxd starts inherits: the SSH session that may have started it (#96).
@@ -166,6 +160,20 @@ impl Environment {
     /// The variables' names.
     pub fn names(&self) -> impl Iterator<Item = &OsStr> {
         self.vars.keys().map(OsString::as_os_str)
+    }
+
+    /// The names that start with one of `prefixes`, for [`ProcessSpec::scrub`].
+    #[must_use]
+    pub fn starting_with(&self, prefixes: &[impl AsRef<str>]) -> Vec<OsString> {
+        self.names()
+            .filter(|name| {
+                let name = name.as_encoded_bytes();
+                prefixes
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix.as_ref().as_bytes()))
+            })
+            .map(OsStr::to_owned)
+            .collect()
     }
 
     fn extend(&mut self, other: &Self) {
@@ -573,7 +581,6 @@ fn start(
     }
     let (stdin, stdout, stderr) = (child.stdin.take(), child.stdout.take(), child.stderr.take());
     let shared = Arc::new(Shared {
-        pid: child.id().unwrap_or(0),
         job,
         reaped: Mutex::new(false),
     });
@@ -715,16 +722,9 @@ impl Drop for Process {
 
 impl Process {
     /// The process's id, which is also its process group's.
-    #[cfg(unix)]
+    #[cfg(all(test, unix))]
     #[must_use]
     pub fn pid(&self) -> rustix::process::Pid {
-        self.signals.shared.pid
-    }
-
-    /// The process's id.
-    #[cfg(windows)]
-    #[must_use]
-    pub fn pid(&self) -> u32 {
         self.signals.shared.pid
     }
 
@@ -778,8 +778,6 @@ pub struct Signals {
 struct Shared {
     #[cfg(unix)]
     pid: rustix::process::Pid,
-    #[cfg(windows)]
-    pid: u32,
     /// The job the process runs in, which stands in for its process group.
     #[cfg(windows)]
     job: crate::windows::Job,
@@ -828,6 +826,7 @@ impl Signals {
     }
 
     /// Whether the process has exited and been reaped.
+    #[cfg(test)]
     #[must_use]
     pub fn reaped(&self) -> bool {
         *self.shared.lock()
