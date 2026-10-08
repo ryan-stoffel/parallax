@@ -423,9 +423,9 @@ method_table! {
         CursorSignInCancel = "cursor/signInCancel": CursorSignInCancelParams => CursorSignInCancelResult;
         /// `cursor/signOut`: forgets the Cursor SDK login stored for the instance.
         CursorSignOut = "cursor/signOut": CursorSignOutParams => CursorSignOutResult;
-        /// `cursor/install`: installs the Cursor SDK the sidecar pins into plxd's data folder
-        /// with npm, and answers once it's done (0053). Until then `providers/list` reports
-        /// Cursor not installed.
+        /// `cursor/install`: starts installing the Cursor SDK the sidecar pins into plxd's data
+        /// folder with npm, and answers at once (0053). `providers/list` reports Cursor
+        /// `installing` until it's done, then installed, or why it failed in its `note`.
         CursorInstall = "cursor/install": CursorInstallParams => CursorInstallResult;
     }
     notifications {

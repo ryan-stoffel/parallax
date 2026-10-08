@@ -62,8 +62,8 @@ pub(crate) async fn sign_out(
     Ok(CursorSignOutResult {})
 }
 
-/// Installs the Cursor SDK into plxd's data folder, once the user asks for it.
-pub(crate) async fn install(
+/// Starts installing the Cursor SDK into plxd's data folder, once the user asks for it.
+pub(crate) fn install(
     context: &Context,
     _: CursorInstallParams,
 ) -> Result<CursorInstallResult, ErrorObject> {
@@ -71,7 +71,6 @@ pub(crate) async fn install(
         .daemon
         .cursor
         .install()
-        .await
         .map_err(ErrorObject::internal_error)?;
     Ok(CursorInstallResult {})
 }

@@ -239,6 +239,8 @@ struct Stored {
 #[derive(Clone, Debug, Default)]
 struct Found {
     installed: bool,
+    /// Whether Cursor's SDK is installing in the background. Never cached, so a list sees it end.
+    installing: bool,
     path: Option<String>,
     version: Option<String>,
     signed_in: Option<bool>,
@@ -589,10 +591,12 @@ impl Providers {
             return found.clone();
         }
         let found = self.probe(detector, entry, refresh).await;
-        self.cache
-            .lock()
-            .await
-            .insert(id.clone(), (Instant::now(), found.clone()));
+        let mut cache = self.cache.lock().await;
+        if found.installing {
+            cache.remove(id);
+        } else {
+            cache.insert(id.clone(), (Instant::now(), found.clone()));
+        }
         found
     }
 
@@ -793,17 +797,21 @@ async fn probe_cursor(launcher: &Launcher, entry: &Stored) -> Found {
             .iter()
             .any(|var| var.secret && var.name == api_key);
     let report = if secret_key {
-        crate::backend::cursor_sdk::Report {
-            installed: crate::backend::cursor_sdk::installed(launcher).is_some(),
-            signed_in: Some(true),
-            note: Some("Uses CURSOR_API_KEY from this provider's settings".into()),
-            ..Default::default()
-        }
+        // A key means the user chose Cursor: an SDK not installed yet installs in the background.
+        crate::backend::cursor_sdk::unready(launcher, true).unwrap_or_else(|| {
+            crate::backend::cursor_sdk::Report {
+                installed: true,
+                signed_in: Some(true),
+                note: Some("Uses CURSOR_API_KEY from this provider's settings".into()),
+                ..Default::default()
+            }
+        })
     } else {
         crate::backend::cursor_sdk::inspect(launcher, &instance.id, &env, PROBE_TIMEOUT).await
     };
     Found {
         installed: report.installed,
+        installing: report.installing,
         path: report.path,
         version: report.version,
         signed_in: report.signed_in,
@@ -1444,6 +1452,7 @@ fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
     ProviderInfo {
         instance,
         installed: found.installed,
+        installing: found.installing,
         path: found.path,
         version: found.version,
         signed_in: found.signed_in,

@@ -861,7 +861,7 @@ describe("on a plxd with providers", () => {
     expect(rows("Account")[1]).toBe("AccountPi isn't installed on this host");
   });
 
-  test("Cursor's Install asks plxd to install its SDK, and shows why it couldn't", async () => {
+  test("Cursor's Install starts plxd's install of its SDK, and shows it installing, then why it failed", async () => {
     listed[1] = {
       ...listed[1]!,
       instance: instance("cursor", "cursor", "Cursor"),
@@ -869,22 +869,32 @@ describe("on a plxd with providers", () => {
       signedIn: undefined,
       note: undefined,
     };
-    answers["cursor/install"] = () => ({ error: { code: -32603, message: "npm is required" } });
+    answers["cursor/install"] = () => {
+      listed[1] = { ...listed[1]!, installing: true, note: "Installing the Cursor SDK…" };
+      return { result: {} };
+    };
     await renderSettings();
     expect(tabs()[1]!.trim()).toBe("CursorNot installed");
     await click(tab("Cursor"));
     expect(rows("Account")[1]).toBe("InstallNot installedInstall");
     await click(visible('[aria-label="Install Cursor"]')!);
     expect(calls("cursor/install")).toHaveLength(1);
-    expect(document.querySelector('[role="alert"]')!.textContent).toContain("npm is required");
-
-    answers["cursor/install"] = () => {
-      listed[1] = { ...listed[1]!, installed: true, signedIn: false };
-      return { result: {} };
-    };
-    await click(visible('[aria-label="Install Cursor"]')!);
     expect(calls("providers/list").at(-1)!.params).toEqual({ refresh: true });
-    expect(rows("Account")[1]).toBe("AccountNot authenticatedSign in");
+    expect(rows("Account")[1]).toBe("InstallInstalling Cursor…Installing…");
+    expect((visible('[aria-label="Install Cursor"]') as HTMLButtonElement).disabled).toBe(true);
+
+    // The install failed in the background: its note says why, and Install is offered again.
+    listed[1] = {
+      ...listed[1]!,
+      installing: false,
+      note: "Couldn't install the Cursor SDK: npm error network offline",
+    };
+    unmount();
+    await renderSettings();
+    await click(tab("Cursor"));
+    expect(rows("Account")[1]).toBe(
+      "InstallCouldn't install the Cursor SDK: npm error network offlineInstall",
+    );
   });
 
   const dialog = () => document.querySelector("dialog")!;

@@ -26,6 +26,7 @@ import {
   type MemoryScope,
   type ParallaxEvent,
   type ParallaxRequests,
+  type ProviderInfo,
   type TailnetDevice,
   type Thread,
 } from "../src/protocol/generated/protocol";
@@ -688,12 +689,25 @@ const handlers: { [M in Method]?: Handler<M> } = {
     return { url: "https://cursor.com/loginDeepControl?preview=1" };
   },
   "cursor/signInCancel": () => ({}),
-  // plxd's npm install of the SDK (0053): every Cursor instance is installed and signed out.
+  // plxd's npm install of the SDK in the background (0053): installing for a few seconds, then
+  // every Cursor instance is installed and signed out.
   "cursor/install": () => {
-    db.providers = db.providers.map((x) =>
-      x.instance.kind === "cursor"
-        ? { ...x, installed: true, path: "/usr/local/bin/node", version: "1.0.35", signedIn: false }
-        : x,
+    const set = (change: Partial<ProviderInfo>) =>
+      (db.providers = db.providers.map((x) =>
+        x.instance.kind === "cursor" ? { ...x, ...change } : x,
+      ));
+    set({ installing: true, note: "Installing the Cursor SDK…" });
+    setTimeout(
+      () =>
+        set({
+          installing: false,
+          note: undefined,
+          installed: true,
+          path: "/usr/local/bin/node",
+          version: "1.0.35",
+          signedIn: false,
+        }),
+      3000,
     );
     return {};
   },

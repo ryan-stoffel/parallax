@@ -187,16 +187,71 @@ pub(crate) fn script_present() -> bool {
 
 const NODE_REQUIRED: &str = "Node.js 22.13 or newer is required";
 
-/// One SDK install at a time.
-static INSTALLING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+const INSTALLING_NOTE: &str = "Installing the Cursor SDK…";
+
+/// An install in the background, per SDK folder: whether one is running, and why the last failed.
+#[derive(Default)]
+struct InstallState {
+    installing: bool,
+    failure: Option<String>,
+}
+
+static INSTALLS: std::sync::LazyLock<Mutex<HashMap<PathBuf, InstallState>>> =
+    std::sync::LazyLock::new(Mutex::default);
+
+/// Starts [`install`] in the background unless the SDK is installed or installing. With `retry`
+/// false it doesn't start again after a failure, so a probe while offline doesn't run npm each
+/// time; Install retries.
+///
+/// # Errors
+///
+/// When this plxd has no sidecar to install.
+pub(crate) fn start_install(launcher: &Launcher, retry: bool) -> Result<(), String> {
+    if pin(&source_dir()).is_none() {
+        return Err(NO_SIDECAR.into());
+    }
+    let key = installs_dir(launcher);
+    {
+        let mut installs = INSTALLS.lock().unwrap_or_else(PoisonError::into_inner);
+        let state = installs.entry(key.clone()).or_default();
+        if state.installing || installed(launcher).is_some() || (!retry && state.failure.is_some())
+        {
+            return Ok(());
+        }
+        state.installing = true;
+        state.failure = None;
+    }
+    let launcher = launcher.clone();
+    tokio::spawn(async move {
+        let failure = install(&launcher).await.err();
+        let mut installs = INSTALLS.lock().unwrap_or_else(PoisonError::into_inner);
+        *installs.entry(key).or_default() = InstallState {
+            installing: false,
+            failure,
+        };
+    });
+    Ok(())
+}
+
+/// Whether an install is running, and why the last one failed.
+fn install_state(launcher: &Launcher) -> (bool, Option<String>) {
+    INSTALLS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&installs_dir(launcher))
+        .map_or((false, None), |state| {
+            (state.installing, state.failure.clone())
+        })
+}
+
+const NO_SIDECAR: &str = "This plxd doesn't include the Cursor SDK sidecar.";
 
 /// Installs the SDK version the sidecar pins into `<data>/tools/cursor-sdk/<version>/` with
 /// `npm ci --omit=dev`, unless it's there, then removes every other version. Returns what went
-/// wrong, for people.
+/// wrong, for people. [`start_install`] runs it one at a time.
 pub(crate) async fn install(launcher: &Launcher) -> Result<(), String> {
-    let _one = INSTALLING.lock().await;
     let source = source_dir();
-    let pin = pin(&source).ok_or("The Cursor SDK sidecar isn't part of this plxd.")?;
+    let pin = pin(&source).ok_or(NO_SIDECAR)?;
     let root = installs_dir(launcher);
     let target = root.join(&pin);
     if !target.is_dir() {
@@ -255,13 +310,14 @@ pub(crate) fn installed(launcher: &Launcher) -> Option<PathBuf> {
     dir.is_dir().then_some(dir)
 }
 
-/// Whether some SDK version was installed before, which means the user chose Cursor.
-fn installed_before(launcher: &Launcher) -> bool {
-    std::fs::read_dir(installs_dir(launcher))
-        .into_iter()
-        .flatten()
-        .flatten()
+/// Whether the user chose Cursor before: some SDK version is installed, or an instance signed in
+/// (`cursor-sdk/<instance>/auth.json`), as with the SDK the app shipped before PLX-626.
+fn chose_cursor(launcher: &Launcher) -> bool {
+    let entries = |dir: PathBuf| std::fs::read_dir(dir).into_iter().flatten().flatten();
+    entries(installs_dir(launcher))
         .any(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        || entries(launcher.data_dir().root().join("cursor-sdk"))
+            .any(|entry| entry.path().join("auth.json").is_file())
 }
 
 fn installs_dir(launcher: &Launcher) -> PathBuf {
@@ -302,6 +358,8 @@ fn sync_sources(source: &Path, dir: &Path) -> std::io::Result<()> {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Report {
     pub installed: bool,
+    /// Whether the SDK is installing in the background.
+    pub installing: bool,
     pub path: Option<String>,
     pub version: Option<String>,
     pub signed_in: Option<bool>,
@@ -317,8 +375,9 @@ pub(crate) async fn inspect(
     env: &[(OsString, OsString)],
     timeout: Duration,
 ) -> Report {
+    let has_key = env.iter().any(|(name, _)| name == API_KEY);
     if override_program(launcher).is_none()
-        && let Some(report) = not_runnable(launcher).await
+        && let Some(report) = unready(launcher, has_key)
     {
         return report;
     }
@@ -357,6 +416,7 @@ pub(crate) async fn inspect(
     let note = str_of(&value, "message").map(str::to_owned);
     let mut report = Report {
         installed: true,
+        installing: false,
         path: Some(path),
         version: value
             .get("version")
@@ -399,24 +459,32 @@ pub(crate) async fn inspect(
 
 /// Why the sidecar can't run yet, if it can't: no sidecar, no SDK, or no Node. The SDK isn't
 /// installed until the user installs Cursor, so detection never runs npm for someone who doesn't
-/// use it. Someone who did gets a new version here, on the next probe.
-async fn not_runnable(launcher: &Launcher) -> Option<Report> {
+/// use it. For someone who chose Cursor before (or `chose` now, with an API key), this starts the
+/// install in the background and reports it installing: after an update that changes the pin, or
+/// from the SDK the app used to ship.
+pub(crate) fn unready(launcher: &Launcher, chose: bool) -> Option<Report> {
     if !script_present() {
-        return Some(Report::default());
+        return Some(Report {
+            note: Some(NO_SIDECAR.into()),
+            ..Report::default()
+        });
     }
     let has_node = detect::resolve(launcher, "node").is_some();
     if installed(launcher).is_none() {
-        let note = if installed_before(launcher) {
-            install(launcher).await.err()
-        } else {
-            (!has_node).then(|| NODE_REQUIRED.to_owned())
-        };
-        if installed(launcher).is_none() {
-            return Some(Report {
-                note,
-                ..Report::default()
-            });
+        if chose || chose_cursor(launcher) {
+            let _ = start_install(launcher, false);
         }
+        let (installing, failure) = install_state(launcher);
+        let note = if installing {
+            Some(INSTALLING_NOTE.to_owned())
+        } else {
+            failure.or_else(|| (!has_node).then(|| NODE_REQUIRED.to_owned()))
+        };
+        return Some(Report {
+            installing,
+            note,
+            ..Report::default()
+        });
     }
     (!has_node).then(|| Report {
         installed: true,
@@ -551,13 +619,14 @@ impl CursorAuth {
         }
     }
 
-    /// Installs the SDK (see [`install`]).
+    /// Starts installing the SDK in the background; `providers/list` reports it installing, then
+    /// installed or why it failed.
     ///
     /// # Errors
     ///
-    /// Why it couldn't, for people.
-    pub async fn install(&self) -> Result<(), String> {
-        install(&self.launcher).await
+    /// When this plxd has no sidecar to install.
+    pub fn install(&self) -> Result<(), String> {
+        start_install(&self.launcher, true)
     }
 
     /// Forgets the stored login for `instance`.
@@ -924,7 +993,7 @@ fn command(
     let (program, mut args) = if let Some(program) = override_program(launcher) {
         (program, Vec::new())
     } else {
-        let (node, script) = sidecar(launcher)?;
+        let (node, script) = sidecar(launcher, env.iter().any(|(name, _)| name == API_KEY))?;
         (node, vec![script.into()])
     };
     args.extend([
@@ -1029,11 +1098,16 @@ fn str_of<'a>(value: &'a Value, name: &str) -> Option<&'a str> {
     value.get(name).and_then(Value::as_str)
 }
 
-/// `node` and the installed sidecar's `main.mjs`, its files brought up to date.
-fn sidecar(launcher: &Launcher) -> Result<(PathBuf, PathBuf), StartError> {
-    let dir = installed(launcher).ok_or_else(|| {
-        StartError::Unsupported("Install Cursor in Settings > Providers first".into())
-    })?;
+/// `node` and the installed sidecar's `main.mjs`, its files brought up to date. Without the SDK,
+/// it starts installing it for someone who chose Cursor (see [`unready`]).
+fn sidecar(launcher: &Launcher, chose: bool) -> Result<(PathBuf, PathBuf), StartError> {
+    let Some(dir) = installed(launcher) else {
+        let why = unready(launcher, chose)
+            .and_then(|report| report.note)
+            .filter(|note| note != NODE_REQUIRED)
+            .unwrap_or_else(|| "Install Cursor in Settings > Providers first".into());
+        return Err(StartError::Unsupported(why));
+    };
     let node = detect::resolve(launcher, "node")
         .ok_or_else(|| StartError::Unsupported(format!("{NODE_REQUIRED} to run Cursor")))?;
     sync_sources(&source_dir(), &dir).map_err(|error| {
@@ -1308,12 +1382,12 @@ wait
         );
     }
 
-    /// A `PATH` with a `node` and an `npm` that notes it ran and makes `node_modules`.
-    fn npm_launcher(root: &std::path::Path) -> Launcher {
+    /// A `PATH` with a `node`, and an `npm` that adds a line to `npm-ran` and then runs `npm`.
+    fn npm_launcher(root: &std::path::Path, npm: &str) -> Launcher {
         let bin = root.join("bin");
         fs::create_dir_all(&bin).unwrap();
         let npm = format!(
-            "#!/bin/sh\ntouch '{}'\nmkdir node_modules\n",
+            "#!/bin/sh\necho ran >> '{}'\n{npm}\n",
             root.join("npm-ran").display()
         );
         for (name, script) in [("node", "#!/bin/sh\n"), ("npm", npm.as_str())] {
@@ -1325,35 +1399,59 @@ wait
         Launcher::new(DataDir::new(root.join("data")).unwrap(), env)
     }
 
+    fn npm_runs(root: &std::path::Path) -> usize {
+        fs::read_to_string(root.join("npm-ran"))
+            .unwrap_or_default()
+            .lines()
+            .count()
+    }
+
+    /// Probes until the background install ends.
+    async fn settled(launcher: &Launcher) -> super::Report {
+        for _ in 0..100 {
+            let report = super::inspect(launcher, "cursor", &[], Duration::from_secs(5)).await;
+            if !report.installing {
+                return report;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("the install never ended");
+    }
+
     /// A probe on a data folder that never had the SDK says not installed and runs no npm.
-    /// `cursor/install` installs it, and then it's installed.
+    /// Install starts it in the background, and then it's installed.
     #[tokio::test]
     async fn the_sdk_installs_only_when_asked() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
-        let launcher = npm_launcher(&root);
+        let launcher = npm_launcher(&root, "mkdir node_modules");
         let report = super::inspect(&launcher, "cursor", &[], Duration::from_secs(5)).await;
-        assert!(!report.installed);
-        assert!(!root.join("npm-ran").exists(), "a probe ran npm");
+        assert!(!report.installed && !report.installing);
+        assert_eq!(npm_runs(&root), 0, "a probe ran npm");
 
-        super::install(&launcher).await.unwrap();
+        super::start_install(&launcher, true).unwrap();
+        settled(&launcher).await;
         let installed = super::installed(&launcher).unwrap();
         assert!(installed.join("node_modules").is_dir());
         assert!(installed.join("package-lock.json").is_file());
     }
 
-    /// After an update changes the pin, the next probe installs the new version, since an older
-    /// one means the user chose Cursor, and removes the old one and a stopped install's leftovers.
+    /// After an update changes the pin, a probe reports the new version installing in the
+    /// background, since an older one means the user chose Cursor, and the old one and a stopped
+    /// install's leftovers go.
     #[tokio::test]
-    async fn a_new_pin_installs_on_the_next_probe_and_old_versions_go() {
+    async fn a_new_pin_installs_in_the_background_and_old_versions_go() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
-        let launcher = npm_launcher(&root);
+        let launcher = npm_launcher(&root, "sleep 0.3; mkdir node_modules");
         let installs = super::installs_dir(&launcher);
         fs::create_dir_all(installs.join("0.0.1").join("node_modules")).unwrap();
         fs::create_dir_all(installs.join(".install-stopped")).unwrap();
-        let _ = super::inspect(&launcher, "cursor", &[], Duration::from_secs(5)).await;
-        assert!(root.join("npm-ran").exists());
+        let report = super::inspect(&launcher, "cursor", &[], Duration::from_secs(5)).await;
+        assert!(report.installing, "{report:?}");
+        assert_eq!(report.note.as_deref(), Some(super::INSTALLING_NOTE));
+        settled(&launcher).await;
+        assert_eq!(npm_runs(&root), 1);
         let left: Vec<_> = fs::read_dir(&installs)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
@@ -1363,6 +1461,32 @@ wait
             [super::pin(&super::source_dir()).unwrap()],
             "only the pinned version is left"
         );
+    }
+
+    /// Someone signed in to Cursor with the SDK the app used to ship gets it installed on their
+    /// next probe. A failed install shows as the note and isn't retried by each probe, only by
+    /// Install.
+    #[tokio::test]
+    async fn a_sign_in_from_before_installs_it_and_a_failure_waits_for_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let launcher = npm_launcher(&root, "echo 'npm error network offline' >&2; exit 1");
+        let signed_in = launcher.data_dir().root().join("cursor-sdk").join("cursor");
+        fs::create_dir_all(&signed_in).unwrap();
+        fs::write(signed_in.join("auth.json"), "{}").unwrap();
+
+        let report = settled(&launcher).await;
+        assert!(!report.installed);
+        assert!(
+            report.note.as_deref().unwrap().contains("offline"),
+            "{report:?}"
+        );
+        let _ = super::inspect(&launcher, "cursor", &[], Duration::from_secs(5)).await;
+        assert_eq!(npm_runs(&root), 1, "a probe retried npm");
+
+        super::start_install(&launcher, true).unwrap();
+        settled(&launcher).await;
+        assert_eq!(npm_runs(&root), 2, "Install retries");
     }
 
     /// As in T3 Code, the instance's own `CURSOR_API_KEY` reaches the SDK. The ambient one and

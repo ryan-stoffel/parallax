@@ -1031,6 +1031,7 @@ function InstancePane({
     }
     setError(undefined);
     setNpmInstalling(true);
+    // plxd installs Cursor's SDK in the background and reports it `installing` until it's done.
     let failed: string | undefined;
     if (cursor) {
       const answer = await window.parallax.request(hostId, "cursor/install", {});
@@ -1040,6 +1041,13 @@ function InstancePane({
     if (failed) setError(failed);
     else onSignedIn();
   };
+  // While it installs, plxd probes it again on each list, so the list shows when it ends.
+  useEffect(() => {
+    if (!info.installing) return;
+    const timer = setInterval(() => void loadProviders(hostId), 2000);
+    return () => clearInterval(timer);
+  }, [info.installing, hostId]);
+  const busy = npmInstalling || info.installing === true;
   // Pi's installer puts `pi` on the host, which a 0.x instance's PI_ACP_PI_COMMAND doesn't run.
   const piCommand = instance.env.find((v) => v.name === "PI_ACP_PI_COMMAND")?.value ?? "pi";
   const canInstall =
@@ -1154,9 +1162,7 @@ function InstancePane({
             description={
               <span className="flex items-center gap-1.5">
                 <StatusDot tone="error" />
-                <span className="min-w-0">
-                  {npmInstalling ? `Installing ${kind.name}…` : account}
-                </span>
+                <span className="min-w-0">{busy ? `Installing ${kind.name}…` : account}</span>
               </span>
             }
           >
@@ -1167,11 +1173,11 @@ function InstancePane({
                   type="button"
                   aria-label={`Install ${kind.name}`}
                   aria-describedby={npmLine ? `${id}-install` : undefined}
-                  disabled={npmInstalling}
+                  disabled={busy}
                   onClick={() => void install()}
                   className={primaryButton}
                 >
-                  {npmInstalling ? "Installing…" : "Install"}
+                  {busy ? "Installing…" : "Install"}
                 </button>
                 {npmLine && (
                   <span

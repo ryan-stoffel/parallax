@@ -290,7 +290,8 @@ async fn cursor_method(context: &Context, request: &Request) -> Option<Result<Va
             handle::<CursorSignOut, _, _>(context, request, |p| cursor::sign_out(context, p)).await
         }
         CursorInstall::NAME => {
-            handle::<CursorInstall, _, _>(context, request, |p| cursor::install(context, p)).await
+            handle::<CursorInstall, _, _>(context, request, |p| ready(cursor::install(context, p)))
+                .await
         }
         _ => return None,
     })
