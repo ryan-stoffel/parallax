@@ -1857,14 +1857,8 @@ pub(crate) async fn git(
 /// Called once at startup, before any connection is accepted.
 pub(crate) async fn recover(daemon: &Arc<Daemon>) {
     let open = store(daemon, |db| {
-        let runs = db.list_runs(None).map_err(|e| store_error(&e))?;
-        Ok(runs
-            .into_iter()
-            .filter(|row| {
-                row.state.status == convert::STARTING || row.state.status == convert::RUNNING
-            })
-            .map(|row| row.id)
-            .collect::<Vec<_>>())
+        db.run_ids_with_status(&[convert::STARTING, convert::RUNNING])
+            .map_err(|e| store_error(&e))
     })
     .await;
     let open = open.unwrap_or_else(|error| {

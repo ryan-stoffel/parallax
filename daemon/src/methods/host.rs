@@ -298,7 +298,7 @@ pub(crate) async fn settings(
 ) -> Result<HostSettings, ErrorObject> {
     context
         .daemon
-        .store
+        .reader
         .run(&context.cancel, |db| read_settings(db))
         .await
 }

@@ -46,7 +46,8 @@ use super::worker::StoredKeyAccounts;
 use super::{ask, in_mode, project_mode, store, store_error, wake};
 use crate::server::Daemon;
 
-/// How often the dispatcher looks at the queue when nothing woke it, for limits that reset.
+/// How often the dispatcher looks at a queue with children in it when nothing woke it, for limits
+/// that reset.
 const EVERY: Duration = Duration::from_secs(30);
 
 /// One instance as the rules see it.
@@ -370,6 +371,8 @@ pub(super) async fn queue(
         db.add_placement(&row).map_err(|e| store_error(&e))
     })
     .await?;
+    // Arms the dispatcher's timer, which stays off while the queue is empty.
+    daemon.agents.placement.notify_one();
     let reason = run.error.clone().unwrap_or_default();
     info!(run = %run.id, %reason, "a Project's child waits to be placed");
     let text = format!("{}: {reason}", wake::task(&run.prompt));
@@ -415,32 +418,35 @@ pub(super) fn start(daemon: &Arc<Daemon>) {
     daemon.agents.tracker.spawn(async move {
         let daemon = owned;
         loop {
-            dispatch(&daemon).await;
+            let waiting = dispatch(&daemon).await;
             tokio::select! {
                 () = stop.cancelled() => break,
                 () = daemon.agents.placement.notified() => {}
-                () = tokio::time::sleep(EVERY) => {}
+                () = tokio::time::sleep(EVERY), if waiting => {}
             }
         }
     });
 }
 
 /// Starts every waiting child that now has room, oldest first, and drops from the queue those
-/// that no longer wait.
-async fn dispatch(daemon: &Arc<Daemon>) {
+/// that no longer wait. Returns whether a child may still wait, which it assumes when the queue
+/// can't be read.
+async fn dispatch(daemon: &Arc<Daemon>) -> bool {
     let rows = store(daemon, |db| db.placements().map_err(|e| store_error(&e))).await;
     let rows = match rows {
         Ok(rows) => rows,
         Err(error) => {
             warn!(error = %error.message, "could not read the children waiting to be placed");
-            return;
+            return true;
         }
     };
+    let waiting = !rows.is_empty();
     for row in rows {
         if let Err(error) = dispatch_one(daemon, row).await {
             warn!(error = %error.message, "could not place a waiting child");
         }
     }
+    waiting
 }
 
 /// Starts waiting child `row` if it now has room.

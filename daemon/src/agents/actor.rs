@@ -859,10 +859,8 @@ impl Actor {
     async fn has_children(&self) -> bool {
         let id = self.row.id;
         let found = store(&self.daemon, move |db| {
-            let runs = db.list_runs(None).map_err(|error| store_error(&error))?;
-            Ok(runs
-                .iter()
-                .any(|run| run.fields.parent == Some(id) && run.fields.notify_parent))
+            db.has_notifying_children(id)
+                .map_err(|error| store_error(&error))
         })
         .await;
         // A store that can't answer pauses them anyway, as a failed wake-up check does.

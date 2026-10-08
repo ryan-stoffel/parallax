@@ -142,11 +142,12 @@ pub(super) async fn enabled(daemon: &Daemon, own: Option<bool>) -> bool {
 /// whose time passed while plxd was stopped resumes at once. Called once at startup.
 pub(super) async fn restore(daemon: &Arc<Daemon>) {
     let waiting = store(daemon, |db| {
-        let runs = db.list_runs(None).map_err(|e| store_error(&e))?;
+        let runs = db
+            .run_ids_with_status(&[WAITING])
+            .map_err(|e| store_error(&e))?;
         Ok(runs
             .into_iter()
-            .filter(|run| run.state.status == WAITING)
-            .filter_map(|run| RunId::try_from(run.id).ok())
+            .filter_map(|id| RunId::try_from(id).ok())
             .collect::<Vec<_>>())
     })
     .await;

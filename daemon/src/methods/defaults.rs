@@ -18,7 +18,7 @@ pub(crate) async fn get(
 ) -> Result<AccountsDefaultsGetResult, ErrorObject> {
     context
         .daemon
-        .store
+        .reader
         .run(&context.cancel, move |db_store| read_defaults(db_store))
         .await
 }

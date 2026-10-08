@@ -6,8 +6,10 @@
 //! merged or closed with at least one merged. The worktree must hold nothing the merge didn't
 //! keep: no uncommitted changes, and a `HEAD` that is on `origin` or is one of a merged pull
 //! request's commits. The thread, its transcript, and its worktree row stay, so a later message
-//! fails to find the folder rather than running anywhere else.
+//! fails to find the folder rather than running anywhere else. A merged pull request never
+//! changes, so each is read from GitHub once per plxd run.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,17 +31,19 @@ const SWEEP_PERIOD: Duration = Duration::from_mins(15);
 pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
     let mut interval = time::interval(SWEEP_PERIOD);
     interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut known = HashMap::new();
     loop {
         tokio::select! {
             biased;
             () = stop.cancelled() => break,
-            _ = interval.tick() => sweep(&daemon, &stop).await,
+            _ = interval.tick() => sweep(&daemon, &stop, &mut known).await,
         }
     }
 }
 
 /// Removes every merged worktree, when the host's setting is on, stopping early for `stop`.
-async fn sweep(daemon: &Daemon, stop: &CancellationToken) {
+/// `known` holds the merged pull requests read so far, by URL.
+async fn sweep(daemon: &Daemon, stop: &CancellationToken, known: &mut HashMap<String, Pull>) {
     let candidates = store(daemon, |db| {
         if !db.clean_worktrees().map_err(|e| store_error(&e))? {
             return Ok(Vec::new());
@@ -78,7 +82,7 @@ async fn sweep(daemon: &Daemon, stop: &CancellationToken) {
         let removable = tokio::select! {
             biased;
             () = stop.cancelled() => return,
-            removable = removable(daemon, &run, &worktree) => removable,
+            removable = removable(daemon, &run, &worktree, known) => removable,
         };
         if !removable {
             continue;
@@ -104,13 +108,28 @@ async fn sweep(daemon: &Daemon, stop: &CancellationToken) {
 }
 
 /// Whether `run`'s `worktree` can go: its pull requests merged, it is on its own branch, and it
-/// holds nothing they don't.
-async fn removable(daemon: &Daemon, run: &Run, worktree: &Worktree) -> bool {
+/// holds nothing they don't. Reads only the pull requests not in `known`, and adds the merged ones.
+async fn removable(
+    daemon: &Daemon,
+    run: &Run,
+    worktree: &Worktree,
+    known: &mut HashMap<String, Pull>,
+) -> bool {
     let worktrees = &daemon.agents.worktrees;
     let mut pulls = Vec::new();
     for url in &run.state.pull_requests {
+        if let Some(pull) = known.get(url) {
+            pulls.push(pull.clone());
+            continue;
+        }
         match worktrees.view_pr(url).await {
-            Ok(pull) => pulls.push((pull.state, commits(pull.commits))),
+            Ok(pull) => {
+                let pull = (pull.state, commits(pull.commits));
+                if pull.0 == PrState::Merged {
+                    known.insert(url.clone(), pull.clone());
+                }
+                pulls.push(pull);
+            }
             Err(error) => {
                 warn!(run = %run.id, %url, %error, "could not read a pull request to clean up");
                 return false;

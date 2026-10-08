@@ -77,7 +77,7 @@ pub(crate) async fn subscribe(
     if let Some(project) = params.project {
         let exists = context
             .daemon
-            .store
+            .reader
             .run(&context.cancel, move |store| {
                 // A normal thread's events go to its repo entry's id (#110).
                 let is_project = store

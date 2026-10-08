@@ -36,7 +36,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -331,21 +331,36 @@ fn display_dirs(dirs: &[PathBuf]) -> String {
         .join(", ")
 }
 
+/// Builds a [`Launcher`]'s base environment the first time it is needed.
+type MakeBase = Box<dyn FnOnce() -> Environment + Send>;
+
 /// Starts processes for backends, with plxd's data folder and a base environment.
 #[derive(Clone, Debug)]
 pub struct Launcher {
     data_dir: DataDir,
-    base: Environment,
+    base: Arc<LazyLock<Environment, MakeBase>>,
 }
 
 impl Launcher {
     /// A launcher whose processes start from `base` and reach the plxd that owns `data_dir`.
     #[must_use]
     pub fn new(data_dir: DataDir, base: Environment) -> Self {
-        Self { data_dir, base }
+        Self::lazy(data_dir, move || base)
     }
 
-    /// The environment processes start from, before scrubbing and injection.
+    /// Like [`Launcher::new`], with the base built by `make` on first use. `serve` uses it to
+    /// answer clients while the login shell's `PATH` is still being read; whatever needs the
+    /// environment first waits for it.
+    #[must_use]
+    pub fn lazy(data_dir: DataDir, make: impl FnOnce() -> Environment + Send + 'static) -> Self {
+        Self {
+            data_dir,
+            base: Arc::new(LazyLock::new(Box::new(make))),
+        }
+    }
+
+    /// The environment processes start from, before scrubbing and injection. Blocks until a
+    /// [`Launcher::lazy`] base is built.
     #[must_use]
     pub fn base(&self) -> &Environment {
         &self.base
@@ -360,7 +375,7 @@ impl Launcher {
     /// The environment `spec`'s process gets.
     #[must_use]
     pub fn environment(&self, spec: &ProcessSpec) -> Environment {
-        let mut env = self.base.clone();
+        let mut env = self.base().clone();
         for name in ALWAYS_SCRUBBED {
             env.remove(name);
         }

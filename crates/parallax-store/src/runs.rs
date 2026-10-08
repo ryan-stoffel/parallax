@@ -1,5 +1,5 @@
 use jiff::Timestamp;
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 use uuid::Uuid;
 
 use crate::error::StoreError;
@@ -347,6 +347,38 @@ impl Store {
             runs.push(row?.into_run()?);
         }
         Ok(runs)
+    }
+
+    /// The ids of runs whose status is one of `statuses`, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored id is corrupt.
+    pub fn run_ids_with_status(&self, statuses: &[&str]) -> Result<Vec<Uuid>, StoreError> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT id FROM runs WHERE status IN ({})
+             ORDER BY created_at ASC, id ASC",
+            vec!["?"; statuses.len()].join(", ")
+        ))?;
+        let ids = stmt.query_map(params_from_iter(statuses), |row| row.get::<_, String>(0))?;
+        let mut runs = Vec::new();
+        for id in ids {
+            runs.push(Uuid::parse_str(&id?)?);
+        }
+        Ok(runs)
+    }
+
+    /// Whether any run wakes `parent` when it finishes (PLX-380).
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn has_notifying_children(&self, parent: Uuid) -> Result<bool, StoreError> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE parent = ?1 AND notify_parent = 1)",
+            params![parent.to_string()],
+            |row| row.get(0),
+        )?)
     }
 
     /// [`Store::list_runs`] with each run's worktree, `None` for a run without one, in one query

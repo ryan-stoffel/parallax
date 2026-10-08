@@ -286,20 +286,26 @@ impl Store {
         Ok(event)
     }
 
-    /// The oldest finished turn whose last `agent.output` is older than `floor` and has not been
-    /// rewritten yet (0052).
+    /// The oldest finished turn whose last `agent.output` is after `after`, older than `floor`, and
+    /// not rewritten yet (0052).
     ///
     /// # Errors
     ///
     /// A database error, or an error if a stored id is corrupt.
-    pub fn find_compactable_turn(&self, floor: u64) -> Result<Option<CompactableTurn>, StoreError> {
+    pub fn find_compactable_turn(
+        &self,
+        floor: u64,
+        after: u64,
+    ) -> Result<Option<CompactableTurn>, StoreError> {
         let floor = i64::try_from(floor).unwrap_or(i64::MAX);
+        let after = i64::try_from(after).unwrap_or(i64::MAX);
         let Some((last, run)) = self
             .conn
             .query_row(
                 "SELECT seq, run_id FROM events
                  WHERE kind = 'agent.output'
                    AND seq < ?1
+                   AND seq > ?2
                    AND run_id IS NOT NULL
                    AND json_valid(payload)
                    AND json_extract(payload, '$.compacted') IS NULL
@@ -309,7 +315,7 @@ impl Store {
                    )
                  ORDER BY seq ASC
                  LIMIT 1",
-                params![floor],
+                params![floor, after],
                 |row| {
                     let seq: u64 = row.get(0)?;
                     let run_id: String = row.get(1)?;
