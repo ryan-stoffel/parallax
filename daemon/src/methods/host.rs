@@ -9,7 +9,7 @@ use parallax_protocol::{
     Capabilities, ClientInfo, DEVICE_ICONS, HostHealthParams, HostHealthResult, HostQueues,
     HostSettings, HostSettingsGetParams, HostSettingsSetParams, HostVersionParams,
     HostVersionResult, IncompatibleProtocolDetail, InitializeParams, InitializeProtocol,
-    InitializeResult, MAX_DEVICE_NAME_CHARS, ProtocolRange, QueueStats, StoreState,
+    InitializeResult, MAX_DEVICE_NAME_CHARS, ProtocolRange, StoreState,
 };
 use tracing::info;
 
@@ -276,8 +276,6 @@ pub(crate) fn health(context: &Context, _: HostHealthParams) -> HostHealthResult
         running_agents: daemon.agents.running(),
         queues: Some(HostQueues {
             store: daemon.store.queue_stats(),
-            // Events are written by the store's own jobs since PLX-481.
-            events: QueueStats::default(),
         }),
     }
 }

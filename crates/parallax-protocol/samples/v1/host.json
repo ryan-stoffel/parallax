@@ -20,14 +20,6 @@
           "totalWaitMicros": 905000,
           "maxRunMicros": 38900,
           "totalRunMicros": 612000
-        },
-        "events": {
-          "queued": 0,
-          "jobs": 9310,
-          "maxWaitMicros": 2100,
-          "totalWaitMicros": 88000,
-          "maxRunMicros": 1900,
-          "totalRunMicros": 410000
         }
       }
     }

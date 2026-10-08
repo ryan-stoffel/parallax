@@ -30,9 +30,6 @@ pub struct HostHealthResult {
 pub struct HostQueues {
     /// The project store's thread, which writes rows and their events (0052).
     pub store: QueueStats,
-    /// The event log's writer thread, which a plxd before PLX-481 had. Its events are now written
-    /// by the store's jobs, so this is always zero.
-    pub events: QueueStats,
 }
 
 /// Counts and times for one job queue since plxd started. Divide a total by `jobs` for the average.

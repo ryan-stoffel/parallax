@@ -22,6 +22,7 @@ use parallax_protocol::{
 use uuid::Uuid;
 
 use super::Context;
+use super::context::{io_error, run_blocking};
 use crate::context::corrections::Change;
 use crate::context::{self, memory};
 use crate::store::store_error;
@@ -562,23 +563,4 @@ fn today() -> String {
 
 fn corrupt(id: impl std::fmt::Display) -> ErrorObject {
     ErrorObject::internal_error(format!("the stored id {id} is invalid"))
-}
-
-/// Runs `job` on tokio's blocking pool, as `context/*` does.
-async fn run_blocking<T, F>(job: F) -> Result<T, ErrorObject>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T, ErrorObject> + Send + 'static,
-{
-    match tokio::task::spawn_blocking(job).await {
-        Ok(result) => result,
-        Err(error) => Err(ErrorObject::internal_error(format!(
-            "memory task failed: {error}"
-        ))),
-    }
-}
-
-fn io_error(path: &str) -> impl Fn(std::io::Error) -> ErrorObject {
-    let path = path.to_owned();
-    move |error| context::io_error(&path, &error)
 }
