@@ -100,6 +100,7 @@ import {
 } from "./threads";
 import { accountLabel, isRunning, statusLabel as runStatusLabel } from "./transcript";
 import {
+  ConfirmDialog,
   IconButton,
   Menu,
   menuItem,
@@ -765,45 +766,19 @@ export function ThreadList({
         create={open?.createProject ?? (async () => "Not connected")}
         onCreated={(hostId, project) => onOpenProject(hostId, project.id)}
       />
-      <dialog
+      <ConfirmDialog
         ref={deleteDialog}
-        aria-labelledby="delete-title"
-        className="m-auto w-[24rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+        title={toDelete?.kind === "project" ? "Delete this Project?" : "Delete this thread?"}
+        action="Delete"
+        busy={deleting ? "Deleting…" : undefined}
+        error={deleteError}
+        onConfirm={() => void confirmDelete()}
       >
-        <form method="dialog" className="px-5 pt-4 pb-4">
-          <h2 id="delete-title" className="text-[15px] font-semibold">
-            {toDelete?.kind === "project" ? "Delete this Project?" : "Delete this thread?"}
-          </h2>
-          <p className="mt-1.5 text-[13px] text-muted-foreground">
-            “{toDelete && titleOf(toDelete)}” goes for good
-            {toDelete?.kind === "project"
-              ? projectLoss(toDelete.runs.length)
-              : ", with its transcript, worktree, and branch."}
-          </p>
-          {deleteError && (
-            <p role="alert" className="mt-2 text-[12.5px] text-danger">
-              {deleteError}
-            </p>
-          )}
-          <div className="mt-4 flex justify-end gap-2">
-            <button
-              type="submit"
-              value="cancel"
-              className="rounded-md px-3 py-1.5 text-[13px] hover:bg-hover"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={deleting}
-              onClick={() => void confirmDelete()}
-              className="rounded-md bg-red-600 px-3 py-1.5 text-[13px] font-medium text-white enabled:hover:opacity-90 disabled:opacity-50"
-            >
-              {deleting ? "Deleting…" : "Delete"}
-            </button>
-          </div>
-        </form>
-      </dialog>
+        “{toDelete && titleOf(toDelete)}” goes for good
+        {toDelete?.kind === "project"
+          ? projectLoss(toDelete.runs.length)
+          : ", with its transcript, worktree, and branch."}
+      </ConfirmDialog>
       <div className="border-t border-border p-2">
         <ConnectionStatus hostId={host.id} />
         <Footer onOpenSettings={onOpenSettings} onOpenPullRequests={onOpenPullRequests} />

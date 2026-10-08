@@ -45,7 +45,7 @@ import { describeError, githubProblem } from "./errors";
 import { locale } from "./locale";
 import { behaviorPrefs } from "./prefs";
 import { age } from "./Sidebar";
-import { menuItem, menuPanel, moveFocus, SetUpGithub } from "./ui";
+import { ConfirmDialog, menuItem, menuPanel, moveFocus, SetUpGithub } from "./ui";
 
 /** A linked pull request as last read: GitHub's view of it, when, and why a read or action failed. */
 export interface Linked {
@@ -1265,39 +1265,17 @@ export function PullRequestView({
         />
       </div>
 
-      <dialog
+      <ConfirmDialog
         ref={closeDialog}
-        aria-labelledby={`${id}-close`}
-        className="m-auto w-[24rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+        title={`Close pull request #${pr.number}?`}
+        action="Close pull request"
+        onConfirm={() => {
+          closeDialog.current?.close();
+          act("close");
+        }}
       >
-        <form method="dialog" className="px-5 pt-4 pb-4">
-          <h2 id={`${id}-close`} className="text-[15px] font-semibold">
-            Close pull request #{pr.number}?
-          </h2>
-          <p className="mt-1.5 text-[13px] text-muted-foreground">
-            “{pr.title}” closes without merging. It can be reopened on GitHub.
-          </p>
-          <div className="mt-4 flex justify-end gap-2">
-            <button
-              type="submit"
-              value="cancel"
-              className="rounded-md px-3 py-1.5 text-[13px] hover:bg-hover"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                closeDialog.current?.close();
-                act("close");
-              }}
-              className="rounded-md bg-red-600 px-3 py-1.5 text-[13px] font-medium text-white hover:opacity-90"
-            >
-              Close pull request
-            </button>
-          </div>
-        </form>
-      </dialog>
+        “{pr.title}” closes without merging. It can be reopened on GitHub.
+      </ConfirmDialog>
     </div>
   );
 }

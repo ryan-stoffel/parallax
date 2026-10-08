@@ -800,7 +800,9 @@ test("Delete asks first, and only deletes once confirmed", async () => {
   await act(async () => button("Thread actions")!.click());
   openRowMenus();
   await act(async () => button("Delete…")!.click());
-  const dialog = document.querySelector<HTMLDialogElement>('[aria-labelledby="delete-title"]')!;
+  const dialog = [...document.querySelectorAll("dialog")].find((d) =>
+    d.querySelector("h2")?.textContent?.startsWith("Delete this"),
+  )!;
   expect(dialog.open).toBe(true);
   expect(dialog.textContent).toContain("Fix the flaky test");
 

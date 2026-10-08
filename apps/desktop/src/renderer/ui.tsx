@@ -10,6 +10,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
+  type Ref,
   type ToggleEvent,
 } from "react";
 
@@ -272,6 +273,68 @@ export function Menu({
       onKeyDown={moveFocus}
       className={`${menuPanel(align)} ${className}`}
     />
+  );
+}
+
+/**
+ * A modal asking to confirm `action`, such as deleting a thread. Cancel closes it, and the red
+ * button runs `onConfirm`. While `busy`, that button is disabled and reads `busy`, as "Deleting…".
+ */
+export function ConfirmDialog({
+  ref,
+  title,
+  titleClass = "",
+  action,
+  busy,
+  error,
+  onConfirm,
+  children,
+}: {
+  ref: Ref<HTMLDialogElement>;
+  title: ReactNode;
+  titleClass?: string;
+  action: string;
+  busy?: string;
+  error?: string;
+  onConfirm: () => void;
+  children: ReactNode;
+}) {
+  const titleId = useId();
+  return (
+    <dialog
+      ref={ref}
+      aria-labelledby={titleId}
+      className="m-auto w-[24rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+    >
+      <form method="dialog" className="px-5 pt-4 pb-4">
+        <h2 id={titleId} className={`text-[15px] font-semibold ${titleClass}`}>
+          {title}
+        </h2>
+        <p className="mt-1.5 text-[13px] text-muted-foreground">{children}</p>
+        {error && (
+          <p role="alert" className="mt-2 text-[12.5px] text-danger">
+            {error}
+          </p>
+        )}
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="submit"
+            value="cancel"
+            className="rounded-md px-3 py-1.5 text-[13px] hover:bg-hover"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={onConfirm}
+            className="rounded-md bg-red-600 px-3 py-1.5 text-[13px] font-medium text-white enabled:hover:opacity-90 disabled:opacity-50"
+          >
+            {busy || action}
+          </button>
+        </div>
+      </form>
+    </dialog>
   );
 }
 
