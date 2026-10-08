@@ -275,148 +275,140 @@ export function AddProviderDialog({
               </label>
             </div>
           )}
-          {step === 2 && draft?.kind === "pi" && (
+          {step === 2 && draft && (
             <div className="flex flex-col gap-4">
-              <label className="text-[12.5px] text-muted-foreground">
-                Binary path
-                <input
-                  autoFocus
-                  placeholder="pi"
-                  value={valueOf("PI_ACP_PI_COMMAND")}
-                  // The `pi` Pi's ACP adapter runs.
-                  onChange={(e) => setVar("PI_ACP_PI_COMMAND", e.target.value)}
-                  spellCheck={false}
-                  autoComplete="off"
-                  className={`${field} font-mono`}
-                />
-                <span className="mt-1 block text-faint-foreground">
-                  Path to the Pi coding agent binary.
-                </span>
-              </label>
-              {error && (
-                <p role="alert" className="text-[12.5px] text-danger">
-                  {error}
-                </p>
+              {draft.kind === "pi" ? (
+                <>
+                  <label className="text-[12.5px] text-muted-foreground">
+                    Binary path
+                    <input
+                      autoFocus
+                      placeholder="pi"
+                      value={valueOf("PI_ACP_PI_COMMAND")}
+                      // The `pi` Pi's ACP adapter runs.
+                      onChange={(e) => setVar("PI_ACP_PI_COMMAND", e.target.value)}
+                      spellCheck={false}
+                      autoComplete="off"
+                      className={`${field} font-mono`}
+                    />
+                    <span className="mt-1 block text-faint-foreground">
+                      Path to the Pi coding agent binary.
+                    </span>
+                  </label>
+                </>
+              ) : draft.kind === "opencode" ? (
+                <>
+                  <label className="text-[12.5px] text-muted-foreground">
+                    Binary path
+                    <input
+                      autoFocus
+                      placeholder="opencode"
+                      value={program}
+                      onChange={(e) => setProgram(e.target.value)}
+                      spellCheck={false}
+                      autoComplete="off"
+                      className={`${field} font-mono`}
+                    />
+                    <span className="mt-1 block text-faint-foreground">
+                      Path to the OpenCode binary.
+                    </span>
+                  </label>
+                  <label className="text-[12.5px] text-muted-foreground">
+                    Server URL
+                    <input
+                      type="url"
+                      placeholder="http://127.0.0.1:4096"
+                      value={valueOf("OPENCODE_SERVER_URL")}
+                      onChange={(e) => setVar("OPENCODE_SERVER_URL", e.target.value)}
+                      spellCheck={false}
+                      autoComplete="off"
+                      className={`${field} font-mono`}
+                    />
+                    <span className="mt-1 block text-faint-foreground">
+                      Leave blank to let Parallax start the server when needed.
+                    </span>
+                  </label>
+                  <label className="text-[12.5px] text-muted-foreground">
+                    Server password
+                    <input
+                      type="password"
+                      placeholder="Optional"
+                      value={valueOf("OPENCODE_SERVER_PASSWORD")}
+                      onChange={(e) => setVar("OPENCODE_SERVER_PASSWORD", e.target.value, true)}
+                      autoComplete="off"
+                      className={field}
+                    />
+                    <span className="mt-1 block text-faint-foreground">
+                      Kept in the host's keychain.
+                    </span>
+                  </label>
+                </>
+              ) : (
+                <>
+                  {choices && (
+                    <div className="flex items-center justify-between gap-4 text-[12.5px] text-muted-foreground">
+                      Version
+                      <Segmented
+                        label="Version"
+                        options={choices.map((v) => ({ value: v.label, name: v.label }))}
+                        value={version!.label}
+                        onChange={(label) => {
+                          const next = withVersion(
+                            fields,
+                            choices.find((v) => v.label === label)!,
+                          );
+                          setProgram(next.program ?? kindOf(draft.kind).program ?? "");
+                          setArgs(next.args.join(" "));
+                          setEnv(next.env);
+                        }}
+                      />
+                    </div>
+                  )}
+                  <label className="text-[12.5px] text-muted-foreground">
+                    Binary path
+                    <input
+                      autoFocus
+                      required={!!draft.programHint || draft.kind === "acp"}
+                      placeholder={kindOf(draft.kind).program}
+                      value={program}
+                      onChange={(e) => setProgram(e.target.value)}
+                      spellCheck={false}
+                      autoComplete="off"
+                      className={`${field} font-mono`}
+                    />
+                    {draft.programHint && (
+                      <span className="mt-1 block text-faint-foreground">{draft.programHint}</span>
+                    )}
+                  </label>
+                  {homeVar && (
+                    <label className="text-[12.5px] text-muted-foreground">
+                      {homeVar} path
+                      <input
+                        placeholder="Default"
+                        value={home}
+                        onChange={(e) => setHome(e.target.value)}
+                        spellCheck={false}
+                        autoComplete="off"
+                        className={`${field} font-mono`}
+                      />
+                      <span className="mt-1 block text-faint-foreground">
+                        Its own home, for a second account.
+                      </span>
+                    </label>
+                  )}
+                  <label className="text-[12.5px] text-muted-foreground">
+                    {kindOf(draft.kind).wholeArgs ? "Arguments" : "Launch arguments"}
+                    <input
+                      value={args}
+                      onChange={(e) => setArgs(e.target.value)}
+                      spellCheck={false}
+                      autoComplete="off"
+                      className={`${field} font-mono`}
+                    />
+                  </label>
+                  <EnvEditor env={env} onChange={setEnv} />
+                </>
               )}
-            </div>
-          )}
-          {step === 2 && draft?.kind === "opencode" && (
-            <div className="flex flex-col gap-4">
-              <label className="text-[12.5px] text-muted-foreground">
-                Binary path
-                <input
-                  autoFocus
-                  placeholder="opencode"
-                  value={program}
-                  onChange={(e) => setProgram(e.target.value)}
-                  spellCheck={false}
-                  autoComplete="off"
-                  className={`${field} font-mono`}
-                />
-                <span className="mt-1 block text-faint-foreground">
-                  Path to the OpenCode binary.
-                </span>
-              </label>
-              <label className="text-[12.5px] text-muted-foreground">
-                Server URL
-                <input
-                  type="url"
-                  placeholder="http://127.0.0.1:4096"
-                  value={valueOf("OPENCODE_SERVER_URL")}
-                  onChange={(e) => setVar("OPENCODE_SERVER_URL", e.target.value)}
-                  spellCheck={false}
-                  autoComplete="off"
-                  className={`${field} font-mono`}
-                />
-                <span className="mt-1 block text-faint-foreground">
-                  Leave blank to let Parallax start the server when needed.
-                </span>
-              </label>
-              <label className="text-[12.5px] text-muted-foreground">
-                Server password
-                <input
-                  type="password"
-                  placeholder="Optional"
-                  value={valueOf("OPENCODE_SERVER_PASSWORD")}
-                  onChange={(e) => setVar("OPENCODE_SERVER_PASSWORD", e.target.value, true)}
-                  autoComplete="off"
-                  className={field}
-                />
-                <span className="mt-1 block text-faint-foreground">
-                  Kept in the host's keychain.
-                </span>
-              </label>
-              {error && (
-                <p role="alert" className="text-[12.5px] text-danger">
-                  {error}
-                </p>
-              )}
-            </div>
-          )}
-          {step === 2 && draft && !short && (
-            <div className="flex flex-col gap-4">
-              {choices && (
-                <div className="flex items-center justify-between gap-4 text-[12.5px] text-muted-foreground">
-                  Version
-                  <Segmented
-                    label="Version"
-                    options={choices.map((v) => ({ value: v.label, name: v.label }))}
-                    value={version!.label}
-                    onChange={(label) => {
-                      const next = withVersion(
-                        fields,
-                        choices.find((v) => v.label === label)!,
-                      );
-                      setProgram(next.program ?? kindOf(draft.kind).program ?? "");
-                      setArgs(next.args.join(" "));
-                      setEnv(next.env);
-                    }}
-                  />
-                </div>
-              )}
-              <label className="text-[12.5px] text-muted-foreground">
-                Binary path
-                <input
-                  autoFocus
-                  required={!!draft.programHint || draft.kind === "acp"}
-                  placeholder={kindOf(draft.kind).program}
-                  value={program}
-                  onChange={(e) => setProgram(e.target.value)}
-                  spellCheck={false}
-                  autoComplete="off"
-                  className={`${field} font-mono`}
-                />
-                {draft.programHint && (
-                  <span className="mt-1 block text-faint-foreground">{draft.programHint}</span>
-                )}
-              </label>
-              {homeVar && (
-                <label className="text-[12.5px] text-muted-foreground">
-                  {homeVar} path
-                  <input
-                    placeholder="Default"
-                    value={home}
-                    onChange={(e) => setHome(e.target.value)}
-                    spellCheck={false}
-                    autoComplete="off"
-                    className={`${field} font-mono`}
-                  />
-                  <span className="mt-1 block text-faint-foreground">
-                    Its own home, for a second account.
-                  </span>
-                </label>
-              )}
-              <label className="text-[12.5px] text-muted-foreground">
-                {kindOf(draft.kind).wholeArgs ? "Arguments" : "Launch arguments"}
-                <input
-                  value={args}
-                  onChange={(e) => setArgs(e.target.value)}
-                  spellCheck={false}
-                  autoComplete="off"
-                  className={`${field} font-mono`}
-                />
-              </label>
-              <EnvEditor env={env} onChange={setEnv} />
               {error && (
                 <p role="alert" className="text-[12.5px] text-danger">
                   {error}
