@@ -16,6 +16,14 @@ export function useConnection(hostId: string): ConnectionState | undefined {
   return known?.hostId === hostId ? known.state : undefined;
 }
 
+/** Why a host's chat is off while it isn't connected, or undefined once it is. */
+export const offlineReason = (state?: ConnectionState) =>
+  state?.status === "connected"
+    ? undefined
+    : state?.status === "failed"
+      ? "Disconnected from plxd"
+      : "Connecting to plxd…";
+
 /** A small dot in the state's color: green, pulsing amber, or red. */
 export function StatusDot({ state }: { state: ConnectionState | undefined }) {
   const color = {

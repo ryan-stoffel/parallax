@@ -20,7 +20,7 @@ import type {
   JsonValue,
 } from "../protocol/generated/protocol";
 import { Loader, type LoaderStyle } from "./Loader";
-import type { Item } from "./transcript";
+import { field, isObject, type Item } from "./transcript";
 
 type Todo = Extract<Item, { kind: "todo" }>;
 type Tool = Extract<Item, { kind: "tool" }>;
@@ -49,9 +49,6 @@ export interface ProposedPlanRow {
   status?: AgentToolStatus;
 }
 
-const isObject = (v?: JsonValue): v is Record<string, JsonValue> =>
-  !!v && typeof v === "object" && !Array.isArray(v);
-
 /** The plan `ExitPlanMode` proposes, when its input carries one. */
 function proposedPlan(item: Item): string | undefined {
   if (item.kind !== "tool" || item.name !== "ExitPlanMode" || !isObject(item.input)) return;
@@ -78,10 +75,6 @@ interface Task {
 }
 
 const failed = (item: Tool) => item.status === "error" || item.status === "denied";
-const field = (input: JsonValue | undefined, name: string) => {
-  const value = isObject(input) ? input[name] : undefined;
-  return typeof value === "string" ? value : undefined;
-};
 /** The first of `names` that `input` has as a non-empty string, as Claude Code reads its aliases. */
 const aliased = (input: JsonValue | undefined, ...names: string[]) =>
   names.map((name) => field(input, name)).find((value) => value?.trim());
@@ -339,6 +332,11 @@ export function planChanges(
 const stateOf = (status: string) =>
   status === "completed" ? "done" : status === "inProgress" ? "now" : "todo";
 const stateLabels = { done: "Done", now: "In progress", todo: "To do" };
+const stateColors = {
+  done: "text-faint-foreground",
+  now: "text-foreground",
+  todo: "text-muted-foreground",
+};
 const doneCount = (items: readonly AgentTodoItem[]) =>
   items.filter((s) => s.status === "completed").length;
 /** Each step's key: its text, counted when repeated, so it keeps its key as steps come and go. */
@@ -373,19 +371,11 @@ function ProgressBar({
 
 /**
  * A checklist as a plan: "Plan", how many steps are done, a progress bar, and each step in its
- * state. A step under way shows `loader` while the run goes (`live`). A step the card showed
+ * state. A step under way shows the planning loader. A step the card showed
  * unfinished draws its check as it finishes; one done before then, as on opening it, or that
  * comes done, as a renamed one, just shows it.
  */
-export const PlanCard = memo(function PlanCard({
-  items,
-  live,
-  loader,
-}: {
-  items: readonly AgentTodoItem[];
-  live: boolean;
-  loader: LoaderStyle;
-}) {
+export const PlanCard = memo(function PlanCard({ items }: { items: readonly AgentTodoItem[] }) {
   const id = useId();
   const keys = stepKeys(items);
   const unfinished = keys.filter((_, i) => items[i]!.status !== "completed");
@@ -411,38 +401,22 @@ export const PlanCard = memo(function PlanCard({
       <ProgressBar done={done} total={items.length} className="mt-2.5 h-[3px]" />
       <ol className="mt-2.5">
         {items.map((step, i) => (
-          <Step key={keys[i]} step={step} live={live} loader={loader} draw={shown.has(keys[i]!)} />
+          <Step key={keys[i]} step={step} draw={shown.has(keys[i]!)} />
         ))}
       </ol>
     </div>
   );
 });
 
-function Step({
-  step,
-  live,
-  loader,
-  draw,
-}: {
-  step: AgentTodoItem;
-  live: boolean;
-  loader: LoaderStyle;
-  draw: boolean;
-}) {
+function Step({ step, draw }: { step: AgentTodoItem; draw: boolean }) {
   const state = stateOf(step.status);
   return (
     <li className="plan-step relative flex gap-2.5 py-1">
       <span className="grid h-5 w-4 shrink-0 place-items-center">
-        <Marker state={state} live={live} loader={loader} draw={draw} />
+        <Marker state={state} draw={draw} />
       </span>
       <span
-        className={`min-w-0 text-[13px] leading-5 transition-colors duration-300 motion-reduce:transition-none ${
-          state === "done"
-            ? "text-faint-foreground"
-            : state === "now"
-              ? "text-foreground"
-              : "text-muted-foreground"
-        }`}
+        className={`min-w-0 text-[13px] leading-5 transition-colors duration-300 motion-reduce:transition-none ${stateColors[state]}`}
       >
         <span className="sr-only">{stateLabels[state]}: </span>
         {step.text}
@@ -451,31 +425,17 @@ function Step({
   );
 }
 
-/**
- * A step's mark: a check when done, the loader in a soft accent disc while under way (a still dot
- * once the run stops), or a hollow dot.
- */
-function Marker({
-  state,
-  live,
-  loader,
-  draw = false,
-}: {
-  state: "done" | "now" | "todo";
-  live: boolean;
-  loader: LoaderStyle;
-  draw?: boolean;
-}) {
+/** What a plan's step under way shows, in the strip and the card. */
+export const planLoader = { kind: "lift", variant: "breathe" } as const satisfies LoaderStyle;
+
+/** A step's mark: a check when done, the loader in a soft accent disc while under way, or a hollow dot. */
+function Marker({ state, draw = false }: { state: "done" | "now" | "todo"; draw?: boolean }) {
   if (state === "done") return <Check draw={draw} />;
   if (state === "todo")
     return <span className="size-[9px] rounded-full border-[1.5px] border-faint-foreground/70" />;
   return (
     <span className="grid size-4 place-items-center rounded-full bg-accent/15">
-      {live ? (
-        <Loader {...loader} size={14} />
-      ) : (
-        <span className="size-1.5 rounded-full bg-accent" />
-      )}
+      <Loader {...planLoader} size={14} />
     </span>
   );
 }
@@ -538,12 +498,10 @@ export function PlanLine({ item }: { item: PlanRow | PlanUpdate }) {
 export function PlanStrip({
   items,
   active,
-  loader,
   returnFocus,
 }: {
   items: readonly AgentTodoItem[];
   active?: string;
-  loader: LoaderStyle;
   /** Moves focus on, such as to the composer, when the strip goes with focus in it. Read once. */
   returnFocus?: () => void;
 }) {
@@ -575,7 +533,7 @@ export function PlanStrip({
         className="flex w-full min-w-0 items-center gap-2.5 rounded-t-3xl py-2 pr-3.5 pl-4 text-left text-[13px] hover:bg-hover"
       >
         <span className="grid size-4 shrink-0 place-items-center">
-          <Marker state={now ? "now" : next ? "todo" : "done"} live loader={loader} />
+          <Marker state={now ? "now" : next ? "todo" : "done"} />
         </span>
         <span className="min-w-0 flex-1 truncate">
           {next ? (
@@ -605,7 +563,7 @@ export function PlanStrip({
         className="inset-auto m-0 mb-2 max-h-[min(60vh,32rem)] w-[anchor-size(width)] overflow-y-auto rounded-xl border-0 bg-transparent p-0 text-foreground shadow-composer [position-area:top_span-right] [position-try-fallbacks:flip-block]"
       >
         {/* Only while open, so it mounts with the steps done so far drawn, not drawing. */}
-        {open && <PlanCard items={items} live loader={loader} />}
+        {open && <PlanCard items={items} />}
       </div>
     </section>
   );

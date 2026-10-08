@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type {
   AccountChoice,
+  Capabilities,
   AgentRun,
   LoggedEvent,
   Project,
@@ -433,65 +434,28 @@ export type CoordinatorOptions = Pick<
  * A host's threads and projects, kept live: `thread/list`, `agent/list` (for titles and runs), and
  * `project/list`, then host-level events after the thread list's `seq`, and each repo's and
  * Project's own events for its runs and their permission requests (0033), starting over on
- * `resync`. Loads only while `connected`. The flags are what the host's plxd advertises: with
+ * `resync`. Loads only while connected, which is when plxd's `capabilities` are known. With
  * `approvals`, the threads and coordinators started here forward their permission requests
- * (PLX-196, 0031); with `lineage`, titles kept in this app move to plxd once (0041); with
- * `naming`, plxd names new threads and their branches (0058); `attention`, `editable`,
- * `deletable`, `iconImageBytes`,
- * `lineage`, `autoResume`, and `forkable` are passed through for the sidebar and top bar. A
- * Project's new Needs you inbox item (0043) goes to `onNeedsYou`.
+ * (PLX-196, 0031); with `threadLineage`, titles kept in this app move to plxd once (0041); with
+ * `threadNaming`, plxd names new threads and their branches (0058). The rest become the view's
+ * flags for the sidebar and top bar. A Project's new Needs you inbox item (0043) goes to
+ * `onNeedsYou`.
  */
 export function useThreads(
   hostId: string,
-  connected: boolean,
-  {
-    approvals = false,
-    attention = false,
-    editable = false,
-    deletable = false,
-    moded = false,
-    autonomous = false,
-    iconImageBytes,
-    lineage = false,
-    autoResume = false,
-    onNeedsYou,
-    forkable = false,
-    naming = false,
-  }: Partial<
-    Pick<
-      ThreadsView,
-      | "attention"
-      | "editable"
-      | "deletable"
-      | "moded"
-      | "autonomous"
-      | "iconImageBytes"
-      | "lineage"
-      | "autoResume"
-      | "forkable"
-    >
-  > & {
-    approvals?: boolean;
-    naming?: boolean;
-    /** Called for each new Needs you item in one of the host's Projects' inboxes (0043). */
-    onNeedsYou?: (project: string, item: InboxItem) => void;
-  } = {},
+  capabilities: Capabilities | undefined,
+  iconImageBytes: number | undefined,
+  /** Called for each new Needs you item in one of the host's Projects' inboxes (0043). */
+  onNeedsYou: (project: string, item: InboxItem) => void,
 ): ThreadsView {
+  const has = (key: string) => !!capabilities && key in capabilities;
+  const connected = !!capabilities;
+  const approvals = has("approvals");
+  const lineage = has("threadLineage");
+  const naming = has("threadNaming");
   const [state, dispatch] = useReducer(threadsReducer, emptyThreads);
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
-  // Another host starts empty, rather than showing this one's threads until its list loads.
-  const [shownHost, setShownHost] = useState(hostId);
-  if (shownHost !== hostId) {
-    setShownHost(hostId);
-    dispatch({ type: "snapshot", projects: [], repos: [], threads: [], runs: [] });
-    setError(undefined);
-  }
-  // The host shown now, so an answer from one the user has left is dropped.
-  const shown = useRef(hostId);
-  useEffect(() => {
-    shown.current = hostId;
-  }, [hostId]);
   const needsYou = useRef(onNeedsYou);
   useEffect(() => {
     needsYou.current = onNeedsYou;
@@ -607,192 +571,172 @@ export function useThreads(
   }, [hostId, connected, lineage]);
 
   // Each applies its own answer at once; the matching event repeats it harmlessly.
-  const addRepo = useCallback(
-    async (path: string) => {
-      // A fresh id is safe to retry with: plxd returns the entry a path already has.
-      const answer = await window.parallax.request(hostId, "repo/add", { id: uuidv7(), path });
-      if ("error" in answer) return describeError(answer.error);
-      dispatch({ type: "event", event: { kind: "repo.added", repo: answer.result.repo } });
-      return answer.result.repo;
-    },
-    [hostId],
-  );
+  const actions = useMemo(
+    () => ({
+      async addRepo(path: string) {
+        // A fresh id is safe to retry with: plxd returns the entry a path already has.
+        const answer = await window.parallax.request(hostId, "repo/add", { id: uuidv7(), path });
+        if ("error" in answer) return describeError(answer.error);
+        dispatch({ type: "event", event: { kind: "repo.added", repo: answer.result.repo } });
+        return answer.result.repo;
+      },
 
-  const start = useCallback(
-    async (
-      runId: string,
-      groupId: string,
-      prompt: string,
-      images: PromptImage[],
-      options: RunOptions,
-      checkout: boolean,
-      gitRef: string | undefined,
-      attached: string[] = [],
-    ) => {
-      const branchSlug = slugify(prompt);
-      const { naming: model, namingEffort } = newThreadPrefs.get();
-      const answer = await window.parallax.request(hostId, "thread/start", {
-        runId,
-        prompt,
-        ...(images.length > 0 && { images }),
-        ...(attached.length > 0 && { threads: attached }),
-        ...(groupId !== noRepo && { repo: groupId }),
-        ...options,
-        // The checkout keeps its own branch, so a name gives it none.
-        ...(checkout ? { checkout } : branchSlug && { branchSlug }),
-        ...(gitRef && (checkout ? { checkoutRef: gitRef } : { base: gitRef })),
-        ...(approvals && { approvals }),
-        ...(naming &&
-          prompt.trim() && {
-            naming: { backend: model.provider, model: model.id, effort: namingEffort },
-          }),
-      });
-      if ("error" in answer) return answer.error;
-      dispatch({ type: "runs", runs: [answer.result.run] });
-      dispatch({ type: "event", event: { kind: "thread.started", thread: answer.result.thread } });
-      return undefined;
-    },
-    [hostId, approvals, naming],
-  );
+      async start(
+        runId: string,
+        groupId: string,
+        prompt: string,
+        images: PromptImage[],
+        options: RunOptions,
+        checkout: boolean,
+        gitRef: string | undefined,
+        attached: string[] = [],
+      ) {
+        const branchSlug = slugify(prompt);
+        const { naming: model, namingEffort } = newThreadPrefs.get();
+        const answer = await window.parallax.request(hostId, "thread/start", {
+          runId,
+          prompt,
+          ...(images.length > 0 && { images }),
+          ...(attached.length > 0 && { threads: attached }),
+          ...(groupId !== noRepo && { repo: groupId }),
+          ...options,
+          // The checkout keeps its own branch, so a name gives it none.
+          ...(checkout ? { checkout } : branchSlug && { branchSlug }),
+          ...(gitRef && (checkout ? { checkoutRef: gitRef } : { base: gitRef })),
+          ...(approvals && { approvals }),
+          ...(naming &&
+            prompt.trim() && {
+              naming: { backend: model.provider, model: model.id, effort: namingEffort },
+            }),
+        });
+        if ("error" in answer) return answer.error;
+        dispatch({ type: "runs", runs: [answer.result.run] });
+        dispatch({
+          type: "event",
+          event: { kind: "thread.started", thread: answer.result.thread },
+        });
+        return undefined;
+      },
 
-  const fork = useCallback(
-    async (runId: string, turnId: string | undefined, choice: ForkChoice) => {
-      const newRunId = uuidv7();
-      const answer = await window.parallax.request(hostId, "thread/fork", {
-        runId,
-        newRunId,
-        ...(turnId && { turnId }),
-        ...choice,
-      });
-      if ("error" in answer) return answer.error;
-      dispatch({ type: "runs", runs: [answer.result.run] });
-      dispatch({ type: "event", event: { kind: "thread.started", thread: answer.result.thread } });
-      return newRunId;
-    },
-    [hostId],
-  );
+      async fork(runId: string, turnId: string | undefined, choice: ForkChoice) {
+        const newRunId = uuidv7();
+        const answer = await window.parallax.request(hostId, "thread/fork", {
+          runId,
+          newRunId,
+          ...(turnId && { turnId }),
+          ...choice,
+        });
+        if ("error" in answer) return answer.error;
+        dispatch({ type: "runs", runs: [answer.result.run] });
+        dispatch({
+          type: "event",
+          event: { kind: "thread.started", thread: answer.result.thread },
+        });
+        return newRunId;
+      },
 
-  const archive = useCallback(
-    async (runId: string, archived: boolean) => {
-      const answer = await window.parallax.request(hostId, "thread/archive", { runId, archived });
-      if ("error" in answer) return answer.error.message;
-      dispatch({ type: "event", event: { kind: "thread.updated", thread: answer.result.thread } });
-      return undefined;
-    },
-    [hostId],
-  );
+      async archive(runId: string, archived: boolean) {
+        const answer = await window.parallax.request(hostId, "thread/archive", { runId, archived });
+        if ("error" in answer) return answer.error.message;
+        dispatch({
+          type: "event",
+          event: { kind: "thread.updated", thread: answer.result.thread },
+        });
+        return undefined;
+      },
 
-  const remove = useCallback(
-    async (thread: Thread) => {
-      const answer = await window.parallax.request(hostId, "thread/delete", { runId: thread.id });
-      if ("error" in answer) return answer.error.message;
-      dispatch({
-        type: "event",
-        event: { kind: "thread.deleted", runId: thread.id, repo: thread.repo },
-      });
-      return undefined;
-    },
-    [hostId],
-  );
+      async remove(thread: Thread) {
+        const answer = await window.parallax.request(hostId, "thread/delete", { runId: thread.id });
+        if ("error" in answer) return answer.error.message;
+        dispatch({
+          type: "event",
+          event: { kind: "thread.deleted", runId: thread.id, repo: thread.repo },
+        });
+        return undefined;
+      },
 
-  const createProject = useCallback(
-    async (
-      id: string,
-      name: string,
-      repoPath: string,
-      icon?: ProjectIconValue,
-      permission?: ProjectPermission,
-      autonomy?: ProjectAutonomy,
-    ) => {
-      const answer = await window.parallax.request(hostId, "project/create", {
-        id,
-        name,
-        repoPath,
-        ...(icon && { icon }),
-        ...(permission && { permission }),
-        ...(autonomy && { autonomy }),
-      });
-      if ("error" in answer) return describeError(answer.error);
-      // Not into another host's list, if the user has left this one.
-      if (shown.current === hostId)
+      async createProject(
+        id: string,
+        name: string,
+        repoPath: string,
+        icon?: ProjectIconValue,
+        permission?: ProjectPermission,
+        autonomy?: ProjectAutonomy,
+      ) {
+        const answer = await window.parallax.request(hostId, "project/create", {
+          id,
+          name,
+          repoPath,
+          ...(icon && { icon }),
+          ...(permission && { permission }),
+          ...(autonomy && { autonomy }),
+        });
+        if ("error" in answer) return describeError(answer.error);
         dispatch({
           type: "event",
           event: { kind: "project.created", project: answer.result.project },
         });
-      return answer.result.project;
-    },
-    [hostId],
-  );
+        return answer.result.project;
+      },
 
-  const updateProject = useCallback(
-    async (project: string, change: ProjectChange) => {
-      const answer = await window.parallax.request(hostId, "project/update", {
-        project,
-        ...change,
-      });
-      if ("error" in answer) return describeError(answer.error);
-      if (shown.current === hostId)
+      async updateProject(project: string, change: ProjectChange) {
+        const answer = await window.parallax.request(hostId, "project/update", {
+          project,
+          ...change,
+        });
+        if ("error" in answer) return describeError(answer.error);
         dispatch({
           type: "event",
           event: { kind: "project.updated", project: answer.result.project },
         });
-      return undefined;
-    },
-    [hostId],
-  );
+        return undefined;
+      },
 
-  const removeProject = useCallback(
-    async (project: string) => {
-      const answer = await window.parallax.request(hostId, "project/delete", { project });
-      if ("error" in answer) return describeError(answer.error);
-      if (shown.current === hostId)
+      async removeProject(project: string) {
+        const answer = await window.parallax.request(hostId, "project/delete", { project });
+        if ("error" in answer) return describeError(answer.error);
         dispatch({ type: "event", event: { kind: "project.deleted", project } });
-      return undefined;
-    },
-    [hostId],
-  );
+        return undefined;
+      },
 
-  const startCoordinator = useCallback(
-    async (
-      project: string,
-      runId: string,
-      prompt: string,
-      images: PromptImage[],
-      options: CoordinatorOptions,
-    ) => {
-      const answer = await window.parallax.request(hostId, "project/start", {
-        project,
-        runId,
-        prompt,
-        ...(images.length > 0 && { images }),
-        ...options,
-        ...(approvals && { approvals }),
-      });
-      if ("error" in answer) return answer.error;
-      if (shown.current === hostId) dispatch({ type: "coordinator", run: answer.result.run });
-      return undefined;
-    },
-    [hostId, approvals],
-  );
+      async startCoordinator(
+        project: string,
+        runId: string,
+        prompt: string,
+        images: PromptImage[],
+        options: CoordinatorOptions,
+      ) {
+        const answer = await window.parallax.request(hostId, "project/start", {
+          project,
+          runId,
+          prompt,
+          ...(images.length > 0 && { images }),
+          ...options,
+          ...(approvals && { approvals }),
+        });
+        if ("error" in answer) return answer.error;
+        dispatch({ type: "coordinator", run: answer.result.run });
+        return undefined;
+      },
 
-  const update = useCallback(
-    async (runId: string, change: ThreadChange) => {
-      const answer = await window.parallax.request(hostId, "thread/update", { runId, ...change });
-      if ("error" in answer) return describeError(answer.error);
-      dispatch({ type: "event", event: { kind: "thread.updated", thread: answer.result.thread } });
-      return undefined;
-    },
-    [hostId],
-  );
+      async update(runId: string, change: ThreadChange) {
+        const answer = await window.parallax.request(hostId, "thread/update", { runId, ...change });
+        if ("error" in answer) return describeError(answer.error);
+        dispatch({
+          type: "event",
+          event: { kind: "thread.updated", thread: answer.result.thread },
+        });
+        return undefined;
+      },
 
-  const updateRepo = useCallback(
-    async (repo: string, icon: ProjectIconValue) => {
-      const answer = await window.parallax.request(hostId, "repo/update", { repo, icon });
-      if ("error" in answer) return describeError(answer.error);
-      dispatch({ type: "event", event: { kind: "repo.updated", repo: answer.result.repo } });
-      return undefined;
-    },
-    [hostId],
+      async updateRepo(repo: string, icon: ProjectIconValue) {
+        const answer = await window.parallax.request(hostId, "repo/update", { repo, icon });
+        if ("error" in answer) return describeError(answer.error);
+        dispatch({ type: "event", event: { kind: "repo.updated", repo: answer.result.repo } });
+        return undefined;
+      },
+    }),
+    [hostId, approvals, naming],
   );
 
   // One object per change, so a parent can keep it and compare.
@@ -801,52 +745,18 @@ export function useThreads(
       state,
       error,
       loading,
-      attention,
-      editable,
-      deletable,
-      moded,
-      autonomous,
+      attention: has("threadAttention"),
+      editable: has("projectEdit"),
+      deletable: has("projectDelete"),
+      moded: has("projectPermission"),
+      autonomous: has("projectAutonomy"),
       iconImageBytes,
       lineage,
-      autoResume,
-      forkable,
-      update,
-      updateRepo,
-      addRepo,
-      start,
-      fork,
-      archive,
-      remove,
-      createProject,
-      updateProject,
-      removeProject,
-      startCoordinator,
+      autoResume: has("autoResume"),
+      forkable: has("threadFork"),
+      ...actions,
     }),
-    [
-      state,
-      error,
-      loading,
-      attention,
-      editable,
-      deletable,
-      moded,
-      autonomous,
-      iconImageBytes,
-      lineage,
-      autoResume,
-      forkable,
-      update,
-      updateRepo,
-      addRepo,
-      start,
-      fork,
-      archive,
-      remove,
-      createProject,
-      updateProject,
-      removeProject,
-      startCoordinator,
-    ],
+    [state, error, loading, capabilities, iconImageBytes, actions],
   );
 }
 

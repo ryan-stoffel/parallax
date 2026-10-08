@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import {
   Fragment,
-  useCallback,
   useId,
   useLayoutEffect,
   useRef,
@@ -29,7 +28,14 @@ import {
 import type { JsonValue } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { ProposedPlan } from "./Plan";
-import type { Approval, ApprovalRequest, ApprovalResolution, Item } from "./transcript";
+import {
+  field,
+  isObject,
+  type Approval,
+  type ApprovalRequest,
+  type ApprovalResolution,
+  type Item,
+} from "./transcript";
 import { clockOptions } from "./prefs";
 
 /** How the transcript names a tool (AgentChat's `describeTool`): its kind's icon, label, and target. */
@@ -57,13 +63,6 @@ export type AnswerState =
   /** `agent/approve` found no such request: it timed out or was withdrawn meanwhile. */
   | { state: "gone" }
   | { state: "answered"; resolved: ApprovalResolution };
-
-const isObject = (v?: JsonValue): v is Record<string, JsonValue> =>
-  !!v && typeof v === "object" && !Array.isArray(v);
-const field = (input: JsonValue | undefined, name: string) => {
-  const value = isObject(input) ? input[name] : undefined;
-  return typeof value === "string" ? value : undefined;
-};
 
 /** Whether a request is Claude Code's plan, which `ExitPlanMode` hands over for approval. */
 export const isPlan = (request: ApprovalRequest) => request.toolName === "ExitPlanMode";
@@ -103,29 +102,26 @@ const put = (approvalId: string, state: AnswerState) => (prev: ReadonlyMap<strin
  */
 export function useAnswers(hostId: string) {
   const [answers, setAnswers] = useState<ReadonlyMap<string, AnswerState>>(new Map());
-  const answer = useCallback(
-    async (asked: Asked, choice: Choice, message?: string) => {
-      const { approvalId } = asked.approval.request;
-      setAnswers(put(approvalId, { state: "answering", choice }));
-      const decision =
-        choice === "deny"
-          ? { decision: "deny" as const, ...(message && { message }) }
-          : { decision: "allow" as const, ...(choice === "always" && { always: true }) };
-      const reply = await window.parallax.request(hostId, "agent/approve", {
-        runId: asked.runId,
-        approvalId,
-        ...decision,
-      });
-      let next: AnswerState;
-      if ("result" in reply)
-        next = { state: "answered", resolved: { ...reply.result, at: new Date().toISOString() } };
-      else if (reply.error.data?.kind === "approvalNotFound") next = { state: "gone" };
-      else next = { state: "failed", choice, error: describeError(reply.error) };
-      setAnswers(put(approvalId, next));
-    },
-    [hostId],
-  );
-  const dismiss = useCallback((asked: Asked) => {
+  async function answer(asked: Asked, choice: Choice, message?: string) {
+    const { approvalId } = asked.approval.request;
+    setAnswers(put(approvalId, { state: "answering", choice }));
+    const decision =
+      choice === "deny"
+        ? { decision: "deny" as const, ...(message && { message }) }
+        : { decision: "allow" as const, ...(choice === "always" && { always: true }) };
+    const reply = await window.parallax.request(hostId, "agent/approve", {
+      runId: asked.runId,
+      approvalId,
+      ...decision,
+    });
+    let next: AnswerState;
+    if ("result" in reply)
+      next = { state: "answered", resolved: { ...reply.result, at: new Date().toISOString() } };
+    else if (reply.error.data?.kind === "approvalNotFound") next = { state: "gone" };
+    else next = { state: "failed", choice, error: describeError(reply.error) };
+    setAnswers(put(approvalId, next));
+  }
+  function dismiss(asked: Asked) {
     const resolved = {
       decision: "withdrawn",
       by: "agent",
@@ -133,7 +129,7 @@ export function useAnswers(hostId: string) {
       at: new Date().toISOString(),
     } as const;
     setAnswers(put(asked.approval.request.approvalId, { state: "answered", resolved }));
-  }, []);
+  }
   return { answers, answer, dismiss };
 }
 
@@ -153,6 +149,13 @@ interface Outcome {
   Icon: LucideIcon;
   color: string;
 }
+
+/** Who denied a request; anyone else reads as "Denied". */
+const deniedBy: Partial<Record<string, string>> = {
+  user: "Denied by you",
+  cancel: "Denied when the run was stopped",
+  stop: "Denied when plxd stopped",
+};
 
 /** A request's outcome, by its resolution. A decision newer than this app reads as ended. */
 export function outcomeOf({ request, resolved }: Approval, now = Date.now()): Outcome {
@@ -182,14 +185,7 @@ export function outcomeOf({ request, resolved }: Approval, now = Date.now()): Ou
     };
   if (decision === "denied") {
     const stopped = by === "cancel" || by === "stop";
-    const who =
-      by === "user"
-        ? `Denied by you${at}.`
-        : by === "cancel"
-          ? `Denied when the run was stopped${at}.`
-          : by === "stop"
-            ? `Denied when plxd stopped${at}.`
-            : `Denied${at}.`;
+    const who = `${deniedBy[by] ?? "Denied"}${at}.`;
     if (plan && by === "user")
       return { verb: "Kept planning", who, Icon: ListRestart, color: "text-muted-foreground" };
     return {
@@ -344,29 +340,22 @@ function ShowAll({ all, onToggle, lines }: { all: boolean; onToggle: () => void;
   );
 }
 
-/** Text in monospace, as a command or a URL, cut short with Show all. */
-function Code({ text }: { text: string }) {
+/** Text cut short with Show all: monospace, as a command or a URL, or `prose`, as a subagent's task. */
+function Cut({ text, prose = false }: { text: string; prose?: boolean }) {
   const [all, setAll] = useState(false);
   const shown = cut(text, all);
+  const Tag = prose ? "p" : "pre";
   return (
     <div>
-      <pre className={`${codeBox} whitespace-pre-wrap break-words`}>{shown.shown}</pre>
-      {(shown.cut || all) && (
-        <ShowAll all={all} lines={shown.lines} onToggle={() => setAll(!all)} />
-      )}
-    </div>
-  );
-}
-
-/** Prose, as a subagent's task, cut short with Show all. */
-function Prose({ text }: { text: string }) {
-  const [all, setAll] = useState(false);
-  const shown = cut(text, all);
-  return (
-    <div>
-      <p className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
+      <Tag
+        className={
+          prose
+            ? "text-[12.5px] leading-relaxed whitespace-pre-wrap text-muted-foreground"
+            : `${codeBox} whitespace-pre-wrap break-words`
+        }
+      >
         {shown.shown}
-      </p>
+      </Tag>
       {(shown.cut || all) && (
         <ShowAll all={all} lines={shown.lines} onToggle={() => setAll(!all)} />
       )}
@@ -509,7 +498,7 @@ export function RequestPreview({
   const text = (name: string) => field(input, name);
   switch (toolName) {
     case "Bash":
-      return text("command") !== undefined ? <Code text={text("command")!} /> : null;
+      return text("command") !== undefined ? <Cut text={text("command")!} /> : null;
     case "Edit":
       return (
         <div className="space-y-1.5">
@@ -550,29 +539,29 @@ export function RequestPreview({
     case "WebFetch":
       return (
         <div className="space-y-1.5">
-          {text("url") !== undefined && <Code text={text("url")!} />}
-          {text("prompt") && <Prose text={text("prompt")!} />}
+          {text("url") !== undefined && <Cut text={text("url")!} />}
+          {text("prompt") && <Cut prose text={text("prompt")!} />}
         </div>
       );
     case "WebSearch":
-      return text("query") !== undefined ? <Code text={text("query")!} /> : null;
+      return text("query") !== undefined ? <Cut text={text("query")!} /> : null;
     case "Grep":
     case "Glob":
-      return text("pattern") !== undefined ? <Code text={text("pattern")!} /> : null;
+      return text("pattern") !== undefined ? <Cut text={text("pattern")!} /> : null;
     case "Read":
     case "NotebookRead":
     case "LS":
       return null;
     case "Task":
     case "Agent":
-      return text("prompt") ? <Prose text={text("prompt")!} /> : null;
+      return text("prompt") ? <Cut prose text={text("prompt")!} /> : null;
   }
   // A question for the user, rather than one action, shows whole (0031).
   if (isObject(input))
     return Object.keys(input).length > 0 ? (
       <Fields input={input} whole={!!request.interactive} />
     ) : null;
-  return <Code text={valueText(input)} />;
+  return <Cut text={valueText(input)} />;
 }
 
 /** Why the CLI asks, the path that made it, and whether one of the agent's own subagents asks. */
@@ -608,20 +597,14 @@ const approveButton =
   "h-7 shrink-0 rounded-md bg-send px-3 text-[12.5px] font-medium text-send-foreground enabled:hover:opacity-90 disabled:opacity-50";
 
 /** What a button says while its answer is on the way. */
+const pendingLabels = { allow: "Approving…", always: "Allowing…", deny: "Denying…" };
 const pendingLabel = (choice: Choice, plan: boolean) =>
-  choice === "allow"
-    ? "Approving…"
-    : choice === "always"
-      ? "Allowing…"
-      : plan
-        ? "Sending…"
-        : "Denying…";
+  plan && choice === "deny" ? "Sending…" : pendingLabels[choice];
 
 interface CardProps {
   asked: Asked;
   tool: ToolLook;
-  /** Its place in the queue, from 1, and how many wait. */
-  position: number;
+  /** How many requests wait, this one first. */
   count: number;
   state?: AnswerState;
   onAnswer: (choice: Choice, message?: string) => void;
@@ -751,10 +734,10 @@ function Answers({
 }
 
 /** The card's status in words: waiting, its place in the queue, answering, or gone. */
-function statusText(state: AnswerState | undefined, position: number, count: number, plan = false) {
+function statusText(state: AnswerState | undefined, count: number, plan = false) {
   if (state?.state === "answering") return pendingLabel(state.choice, plan);
   if (state?.state === "gone") return "No longer waiting";
-  return count > 1 ? `Needs approval · ${position} of ${count}` : "Needs approval";
+  return count > 1 ? `Needs approval · 1 of ${count}` : "Needs approval";
 }
 
 /** Why an answer didn't go, or what became of a request that's gone. */
@@ -783,7 +766,6 @@ function Problem({ state }: { state?: AnswerState }) {
 function ApprovalCard({
   asked,
   tool,
-  position,
   count,
   state,
   onAnswer,
@@ -827,7 +809,7 @@ function ApprovalCard({
           id={statusId}
           className="ml-auto shrink-0 pl-2 text-[12px] text-muted-foreground tabular-nums"
         >
-          {statusText(state, position, count)}
+          {statusText(state, count)}
         </span>
       </div>
       {/* The preview scrolls past its bound; the header, a problem, and the buttons stay put. */}
@@ -879,7 +861,6 @@ const pinnedPlanHeight = 184;
  */
 function PlanApprovalCard({
   asked,
-  position,
   count,
   state,
   onAnswer,
@@ -918,7 +899,7 @@ function PlanApprovalCard({
               ) : state?.state === "gone" ? (
                 "No longer waiting: it timed out or was withdrawn."
               ) : (
-                <span className="tabular-nums">{statusText(state, position, count, true)}</span>
+                <span className="tabular-nums">{statusText(state, count, true)}</span>
               )}
             </span>
             <Answers
@@ -1088,7 +1069,6 @@ export function ApprovalQueue({
   const props = head && {
     asked: head,
     tool: describe(head.approval.request.toolName, head.approval.request.input),
-    position: 1,
     count: queue.length,
     state,
     onAnswer: (choice: Choice, message?: string) => onAnswer(head, choice, message),

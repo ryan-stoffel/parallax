@@ -12,7 +12,6 @@ import type {
   ParallaxEvent,
 } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
-import type { LoaderStyle } from "./Loader";
 import {
   latestPlan,
   PlanCard,
@@ -41,7 +40,6 @@ function render(node: ReactNode) {
   act(() => root!.render(node));
 }
 
-const planning: LoaderStyle = { kind: "lift", variant: "breathe" };
 const step = (text: string, status: string) => ({ text, status }) as AgentTodoItem;
 const steps = (...states: string[]) => states.map((s, i) => step(`Step ${i + 1}`, s));
 
@@ -670,7 +668,7 @@ test("the plan card: its progress, then each step in its state, as text for scre
     ...steps("completed", "completed", "inProgress", "pending"),
     step("New", "unknown"),
   ];
-  render(<PlanCard items={items} live loader={planning} />);
+  render(<PlanCard items={items} />);
   const card = document.querySelector('[role="group"]')!;
   expect(card.getAttribute("aria-labelledby")).toBe(card.querySelector("span[id]")!.id);
   expect(card.querySelector("span[id]")!.textContent).toBe("Plan");
@@ -688,31 +686,26 @@ test("the plan card: its progress, then each step in its state, as text for scre
   expect(
     card.querySelector('li:nth-child(3) [data-loader="lift"][data-variant="breathe"]'),
   ).not.toBeNull();
-
-  // Once the run stops, nothing moves.
-  render(<PlanCard items={items} live={false} loader={planning} />);
-  expect(document.querySelector(".loader")).toBeNull();
 });
 
 test("a step that finishes while the card shows draws its check; one done before, as on scrolling back, doesn't", () => {
   const drawn = () => document.querySelectorAll(".plan-check-draw").length;
-  render(<PlanCard items={steps("completed", "inProgress", "pending")} live loader={planning} />);
+  render(<PlanCard items={steps("completed", "inProgress", "pending")} />);
   expect(document.querySelectorAll(".plan-check")).toHaveLength(1);
   expect(drawn()).toBe(0);
-  render(<PlanCard items={steps("completed", "completed", "inProgress")} live loader={planning} />);
+  render(<PlanCard items={steps("completed", "completed", "inProgress")} />);
   expect(drawn()).toBe(1);
   expect(document.querySelector<HTMLElement>(".plan-bar")!.style.width).toBe(`${(2 / 3) * 100}%`);
   // A fresh card, as a virtualized row remounts.
   act(() => root!.unmount());
   root = undefined;
-  render(<PlanCard items={steps("completed", "completed", "inProgress")} live loader={planning} />);
+  render(<PlanCard items={steps("completed", "completed", "inProgress")} />);
   expect(drawn()).toBe(0);
 });
 
 test("a done step keeps its check as steps come and go around it, or as it's renamed", () => {
   const checks = () => [...document.querySelectorAll(".plan-check")];
-  const card = (...items: AgentTodoItem[]) =>
-    render(<PlanCard items={items} live loader={planning} />);
+  const card = (...items: AgentTodoItem[]) => render(<PlanCard items={items} />);
   card(step("Read", "completed"), step("Build", "inProgress"));
   const read = checks()[0];
   // A step inserted above it: the same check, not drawn again.
@@ -732,7 +725,7 @@ test("a done step keeps its check as steps come and go around it, or as it's ren
 
 test("the strip is a labeled region: the step under way, progress, and a toggle for the whole plan", () => {
   const items = steps("completed", "completed", "inProgress", "pending", "pending");
-  render(<PlanStrip items={items} active="Doing step 3" loader={planning} />);
+  render(<PlanStrip items={items} active="Doing step 3" />);
   const region = document.querySelector('section[aria-label="Plan"]')!;
   const toggle = region.querySelector("button")!;
   expect(toggle.textContent).toBe("In progress: Doing step 32 of 5 done");
@@ -752,18 +745,18 @@ test("the strip is a labeled region: the step under way, progress, and a toggle 
 
   // Going with focus in it, it hands focus on.
   const returnFocus = vi.fn();
-  render(<PlanStrip items={items} loader={planning} returnFocus={returnFocus} />);
+  render(<PlanStrip items={items} returnFocus={returnFocus} />);
   render(<p />);
   expect(returnFocus).not.toHaveBeenCalled();
-  render(<PlanStrip items={items} loader={planning} returnFocus={returnFocus} />);
+  render(<PlanStrip items={items} returnFocus={returnFocus} />);
   act(() => document.querySelector("button")!.focus());
   render(<p />);
   expect(returnFocus).toHaveBeenCalledOnce();
 
   // With nothing under way, the next step; with everything done, says so.
-  render(<PlanStrip items={steps("completed", "pending")} loader={planning} />);
+  render(<PlanStrip items={steps("completed", "pending")} />);
   expect(document.querySelector("button")!.textContent).toBe("Next: Step 21 of 2 done");
-  render(<PlanStrip items={steps("completed")} loader={planning} />);
+  render(<PlanStrip items={steps("completed")} />);
   expect(document.querySelector("button")!.textContent).toBe("All steps done1 of 1 done");
   expect(document.querySelector(".loader")).toBeNull();
 });

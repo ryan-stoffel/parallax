@@ -6,7 +6,7 @@ import { AgentChat, CheckoutLabel, PinnedApprovals, TranscriptView } from "./Age
 import { AgentsBar } from "./AgentsBar";
 import { queueOf, useAnswers, type Asked } from "./Approval";
 import { Composer, tabItem } from "./Composer";
-import { useConnection } from "./ConnectionStatus";
+import { offlineReason, useConnection } from "./ConnectionStatus";
 import type { Host } from "./hosts";
 import { describeError } from "./errors";
 import { imageCaps } from "./images";
@@ -212,10 +212,8 @@ export function ProjectChat({
     return undefined;
   };
 
-  let disabledReason: string | undefined;
-  if (connection?.status === "failed") disabledReason = "Disconnected from plxd";
-  else if (!connected) disabledReason = "Connecting to plxd…";
-  else if (!("coordinator" in connection.capabilities))
+  let disabledReason = offlineReason(connection);
+  if (connected && !("coordinator" in connection.capabilities))
     disabledReason = "This host's plxd can't run a Project's coordinator yet";
 
   return (

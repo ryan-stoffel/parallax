@@ -7,9 +7,9 @@ import type { Attention } from "./attention";
  * Parallax's two circles, swapping places while an agent works: each slides through the other,
  * the blue one growing as it passes in front. Only transform moves (index.css).
  */
-export function WorkingMark({ className = "" }: { className?: string }) {
+export function WorkingMark() {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden className={`mark-working ${className}`}>
+    <svg viewBox="0 0 24 24" aria-hidden className="mark-working">
       <circle className="mark-coral" cx="14.5" cy="14.5" r="6.5" />
       <circle className="mark-blue" cx="9.5" cy="9.5" r="6.5" />
     </svg>
@@ -20,12 +20,12 @@ export function WorkingMark({ className = "" }: { className?: string }) {
  * A check in a disc. With `animate`, the logo's circles meet in the middle and become it, once;
  * otherwise it is drawn still, so a reload never replays it.
  */
-export function DoneMark({ animate, className = "" }: { animate: boolean; className?: string }) {
+export function DoneMark({ animate }: { animate: boolean }) {
   return (
     <svg
       viewBox="0 0 24 24"
       aria-hidden
-      className={`mark-done ${animate ? "mark-done-animate" : ""} ${className}`}
+      className={`mark-done ${animate ? "mark-done-animate" : ""}`}
     >
       {animate && (
         <>

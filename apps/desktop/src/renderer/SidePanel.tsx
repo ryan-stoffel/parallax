@@ -26,7 +26,7 @@ interface Surface {
   icon: LucideIcon;
   /** The letter that opens it from the list; a pull request's tab has its URL. */
   key: string;
-  /** Its empty state, or absent while it isn't built or has a view of its own. */
+  /** Its empty state, or absent while it has a view of its own. */
   empty?: { title: string; hint: string };
   /** A pull request's tab: the URL it shows. */
   url?: string;
@@ -34,8 +34,6 @@ interface Surface {
 
 // A Project's own views, pinned first in its panel.
 const overview: Surface = { name: "Project", icon: SquareKanban, key: "O" };
-
-const isBuilt = (s: Surface) => !!s.empty || s.name === "Browser";
 
 const surfaces: Surface[] = [
   {
@@ -85,16 +83,16 @@ const knowledgeSurface = surfaces.find((s) => s.name === "Knowledge")!;
 /**
  * The collapsible right column. Each view opens as a tab in its top bar, VS Code style; the + after
  * the tabs, or closing the last one, shows the list of views, where each view's letter opens it
- * while focus is in the panel and the ones not built yet are dimmed. Open tabs stay mounted, so
- * a view keeps its state behind another. The top bar keeps the hide button where the main pane
- * shows it while the panel is closed. Expanded, it fills everything right of the sidebar, and
- * `leading` and `topBarClassName` stand in for the hidden main pane's top-left corner. `agents`,
- * `knowledge`, and `files` are those views, such as a Project's, in place of their empty states.
- * `remoteHost` is the open host's name when it's an SSH host. `terminal` draws the Terminal view,
- * told whether it's shown and given its empty state. Each new `browse` opens the Browser
- * view at its url. `pullRequests` are the open thread's linked pull requests (PLX-319): its URLs,
- * the Pull requests view, and each one's view, shown in a `#n` tab only while the thread links it.
- * Each new `pullRequest` opens that URL's tab, or without one the Pull requests view.
+ * while focus is in the panel. Open tabs stay mounted, so a view keeps its state behind another.
+ * The top bar keeps the hide button where the main pane shows it while the panel is closed.
+ * Expanded, it fills everything right of the sidebar, and `leading` and `topBarClassName` stand in
+ * for the hidden main pane's top-left corner. `agents`, `knowledge`, and `files` are those views,
+ * such as a Project's, in place of their empty states. `remoteHost` is the open host's name when
+ * it's an SSH host. `terminal` draws the Terminal view, told whether it's shown and given its empty
+ * state. Each new `browse` opens the Browser view at its url. `pullRequests` are the open thread's
+ * linked pull requests (PLX-319): its URLs, the Pull requests view, and each one's view, shown in a
+ * `#n` tab only while the thread links it. Each new `pullRequest` opens that URL's tab, or without
+ * one the Pull requests view.
  */
 export function SidePanel({
   width = 416,
@@ -228,7 +226,7 @@ export function SidePanel({
       // From the list, a view's letter opens it while focus is in the panel.
       onKeyDown={(e) => {
         if (current || e.metaKey || e.ctrlKey || e.altKey) return;
-        const next = available.find((s) => isBuilt(s) && s.key === e.key.toUpperCase());
+        const next = available.find((s) => s.key === e.key.toUpperCase());
         if (!next) return;
         e.preventDefault();
         openView(next);
@@ -320,15 +318,13 @@ export function SidePanel({
               <li key={s.name}>
                 <button
                   type="button"
-                  disabled={!isBuilt(s)}
-                  title={isBuilt(s) ? undefined : "Not built yet"}
-                  aria-keyshortcuts={isBuilt(s) ? s.key : undefined}
+                  aria-keyshortcuts={s.key}
                   onClick={() => openView(s)}
-                  className="group flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[13.5px] enabled:hover:bg-hover disabled:text-faint-foreground"
+                  className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[13.5px] hover:bg-hover"
                 >
                   <s.icon aria-hidden className="size-4 shrink-0" />
                   <span className="flex-1">{nameOf(s)}</span>
-                  <kbd className="grid size-6 place-items-center rounded-md bg-selected font-sans text-[11.5px] text-muted-foreground group-disabled:opacity-50">
+                  <kbd className="grid size-6 place-items-center rounded-md bg-selected font-sans text-[11.5px] text-muted-foreground">
                     {s.key}
                   </kbd>
                 </button>

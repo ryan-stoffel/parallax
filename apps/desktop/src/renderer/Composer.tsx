@@ -382,8 +382,6 @@ export interface ComposerProps {
    * it, so it shows in place of Access, and no permission is sent.
    */
   projectMode?: ProjectPermission;
-  /** The empty box's placeholder, in place of the one for a new thread or a reply. */
-  hint?: string;
   /**
    * Text to add at the end of the box, which takes focus, such as a pull request's URL. Each new
    * value is added once.
@@ -442,7 +440,6 @@ export function Composer({
   imageCaps,
   manualDenied,
   projectMode,
-  hint,
   insert,
   history = [],
   menus,
@@ -542,21 +539,10 @@ export function Composer({
   const hasFast = !!contextAndFast && !!model?.fast;
   const startedFast = started?.fast ?? (fresh ? defaults.fast : false);
   const fast = hasFast && (pickedFast ?? startedFast);
-  const speed = {
-    ...(context !== undefined && { contextWindow: context }),
-    ...(hasFast && { fast }),
-  };
   const account = { kind: "subscription", backend: target! } as const;
   let options: RunOptions = {};
-  if (run && started && model && target !== backend)
-    options = {
-      ...(model.id && { model: model.id }),
-      ...(efforts && { effort }),
-      permission,
-      ...speed,
-      account,
-    };
-  else if (run && started)
+  // A started run sends only what changed, unless the message goes to another instance.
+  if (run && started && target === backend)
     options = {
       ...(model?.id && model !== startedModel && { model: model.id }),
       ...(efforts && effort !== startedEffort && { effort }),
@@ -569,7 +555,8 @@ export function Composer({
       ...(model?.id && { model: model.id }),
       ...(efforts && { effort }),
       permission,
-      ...speed,
+      ...(context !== undefined && { contextWindow: context }),
+      ...(hasFast && { fast }),
       ...(target !== backend && { account }),
     };
   if (projectMode) delete options.permission;
@@ -829,7 +816,6 @@ export function Composer({
 
   const placeholder =
     disabledReason ??
-    hint ??
     (newThread
       ? "Build a feature, fix a bug, paste an image, use /skills, @files or threads"
       : "Reply, add detail, or steer what it does next");

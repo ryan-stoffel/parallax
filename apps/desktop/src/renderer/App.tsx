@@ -16,7 +16,7 @@ import { Actions, type RepoAction } from "./Actions";
 import { AgentChat } from "./AgentChat";
 import { ChildStrip } from "./ChildStrip";
 import type { Asked } from "./Approval";
-import { useConnection } from "./ConnectionStatus";
+import { offlineReason, useConnection } from "./ConnectionStatus";
 import { FilesPanel } from "./FilesPanel";
 import { useInbox } from "./Inbox";
 import { GitMenu } from "./GitMenu";
@@ -137,9 +137,7 @@ export function App() {
       ? selection.threadId
       : selection.kind === "project"
         ? selection.projectId
-        : selection.kind === "new"
-          ? selection.groupId
-          : undefined,
+        : selection.groupId,
   ]);
   const panelOpen = openPanels[panelKey] ?? false;
   const setPanelOpen = (next: boolean | ((open: boolean) => boolean)) =>
@@ -538,12 +536,7 @@ export function App() {
     );
   };
 
-  const offline =
-    connection?.status === "failed"
-      ? "Disconnected from plxd"
-      : connected
-        ? undefined
-        : "Connecting to plxd…";
+  const offline = offlineReason(connection);
 
   // Where the open thread's or New thread's terminals open (folderOf).
   const folder =
@@ -1181,20 +1174,9 @@ function HostLoader({
 }) {
   const connection = useConnection(hostId);
   const capabilities = connection?.status === "connected" ? connection.capabilities : undefined;
-  const view = useThreads(hostId, !!capabilities, {
-    approvals: !!capabilities && "approvals" in capabilities,
-    attention: !!capabilities && "threadAttention" in capabilities,
-    editable: !!capabilities && "projectEdit" in capabilities,
-    deletable: !!capabilities && "projectDelete" in capabilities,
-    moded: !!capabilities && "projectPermission" in capabilities,
-    autonomous: !!capabilities && "projectAutonomy" in capabilities,
-    iconImageBytes: iconImageBytes(connection),
-    lineage: !!capabilities && "threadLineage" in capabilities,
-    autoResume: !!capabilities && "autoResume" in capabilities,
-    onNeedsYou: (projectId, item) => onNeedsYou(hostId, projectId, item),
-    forkable: !!capabilities && "threadFork" in capabilities,
-    naming: !!capabilities && "threadNaming" in capabilities,
-  });
+  const view = useThreads(hostId, capabilities, iconImageBytes(connection), (projectId, item) =>
+    onNeedsYou(hostId, projectId, item),
+  );
   useEffect(() => onView(hostId, view), [hostId, view, onView]);
   return null;
 }

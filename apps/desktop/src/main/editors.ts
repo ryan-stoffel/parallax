@@ -23,9 +23,6 @@ const editors: Record<Editor, { cli: string; mac: string; windows: string }> = {
   },
 };
 
-export const isEditor = (value: unknown): value is Editor =>
-  typeof value === "string" && Object.hasOwn(editors, value);
-
 /**
  * The program that opens a folder in each installed editor. macOS looks in the app bundle first:
  * a Finder-launched app gets launchd's short PATH, and `cursor` on PATH may be Cursor Agent's
