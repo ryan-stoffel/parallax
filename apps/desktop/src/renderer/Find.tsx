@@ -72,16 +72,17 @@ function domRanges(el: HTMLElement, query: string): Range[] {
 /**
  * Find in a thread's transcript, as a browser's: Mod+F opens a box that counts the matches of
  * what's typed, highlights them, and steps through them with Enter and Shift+Enter (or Mod+G and
- * Mod+Shift+G), scrolling to each. The list is virtualized, so matches are counted in `texts`, one
- * per row, and `scrollToRow` brings a match's row into the DOM, where `list`'s rendered rows are
- * highlighted. Returns the box, to render over the transcript.
+ * Mod+Shift+G), scrolling to each. The list is virtualized, so matches are counted in `texts()`,
+ * one per row, read only while the box is open, and `scrollToRow` brings a match's row into the
+ * DOM, where `list`'s rendered rows are highlighted. Returns the box, to render over the
+ * transcript.
  */
 export function useFind({
   texts,
   list,
   scrollToRow,
 }: {
-  texts: readonly string[];
+  texts: () => readonly string[];
   /** The element the rows render in, each marked with its `data-index`. */
   list: RefObject<HTMLElement | null>;
   scrollToRow: (row: number) => void;
@@ -93,7 +94,7 @@ export function useFind({
   // Set by a jump, until the match's row is rendered and scrolled into view.
   const pending = useRef(false);
 
-  const hits = useMemo(() => (open ? findHits(texts, query) : []), [open, texts, query]);
+  const hits = useMemo(() => (open ? findHits(texts(), query) : []), [open, texts, query]);
   const at = hits.length ? Math.min(current, hits.length - 1) : -1;
   const step = (by: number) => {
     if (!hits.length) return;

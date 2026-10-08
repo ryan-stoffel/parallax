@@ -6,8 +6,8 @@ export interface Prompt {
   /** Its row's index in the transcript's list. */
   index: number;
   text: string;
-  /** The start of the agent's last reply to it, as plain text. */
-  reply?: string;
+  /** The agent's replies to it, as Markdown, oldest first. */
+  replies?: string[];
 }
 
 /** Text for one line of a card: Markdown's marks, links, and list markers left out. */
@@ -19,6 +19,12 @@ export function plainText(markdown: string): string {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+/** The start of the agent's last reply to `prompt` that has one, as plain text. */
+const replyOf = (prompt: Prompt) =>
+  prompt.replies
+    ?.map((text) => plainText(text.split(/\n\s*\n/).find((p) => p.trim()) ?? ""))
+    .findLast(Boolean);
 
 /**
  * A bar for each of the user's prompts, down the transcript's left edge. Hovering or focusing a bar
@@ -44,6 +50,7 @@ export function PromptRail({
     setShown({ at, middle: box.top - top + box.height / 2 });
   };
   const prompt = shown && prompts[shown.at];
+  const reply = prompt && replyOf(prompt);
   return (
     <div
       ref={rail}
@@ -78,9 +85,9 @@ export function PromptRail({
           className="pointer-events-none absolute left-full ml-2 w-80 -translate-y-1/2 rounded-xl border border-border bg-surface px-4 py-3 shadow-composer"
         >
           <p className="line-clamp-3 text-[14px] break-words text-foreground">{prompt.text}</p>
-          {prompt.reply && (
+          {reply && (
             <p className="mt-1 line-clamp-3 text-[13px] leading-relaxed break-words text-muted-foreground">
-              {prompt.reply}
+              {reply}
             </p>
           )}
         </div>

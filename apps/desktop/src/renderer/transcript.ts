@@ -244,6 +244,15 @@ const isText = (v?: JsonValue) => (typeof v === "string" ? v : undefined);
  * skipped, and kinds this version doesn't know still count their `seq`.
  */
 function mergeHeld(held: LoggedEvent[], incoming: LoggedEvent[]): LoggedEvent[] {
+  // `held` is already merged, so newer events in order with no compacted row just append: the
+  // live case, which then skips sorting the whole log again.
+  let last = held.at(-1)?.seq ?? -Infinity;
+  const appends = incoming.every((event) => {
+    const newer = event.seq > last && compactedFrom(event.event) === undefined;
+    last = event.seq;
+    return newer;
+  });
+  if (appends) return held.concat(incoming);
   const all = applyCompacted([...held, ...incoming]);
   const bySeq = new Map<number, LoggedEvent>();
   for (const event of all) bySeq.set(event.seq, event);
@@ -333,10 +342,15 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
     for (let i = before; i < items.length; i++)
       if (items[i]!.at === undefined) items[i] = { ...items[i]!, at: time };
   }
+  // Unchanged subagents keep their object, so what reads them doesn't render again.
+  const had = t.subagents ?? {};
+  const changed =
+    Object.keys(subagents).length !== Object.keys(had).length ||
+    Object.entries(subagents).some(([callId, sub]) => had[callId] !== sub);
   return {
     run,
     items,
-    subagents,
+    subagents: changed ? subagents : t.subagents,
     seq,
     ...(turnDone !== undefined && { turnDone, openTurns }),
   };

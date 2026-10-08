@@ -11,11 +11,20 @@ import {
   Square,
   X,
 } from "lucide-react";
+import Blockquote from "@tiptap/extension-blockquote";
 import Bold from "@tiptap/extension-bold";
+import Code from "@tiptap/extension-code";
+import CodeBlock from "@tiptap/extension-code-block";
+import Document from "@tiptap/extension-document";
+import HardBreak from "@tiptap/extension-hard-break";
+import Heading from "@tiptap/extension-heading";
 import Italic from "@tiptap/extension-italic";
+import { BulletList, ListItem, ListKeymap, OrderedList } from "@tiptap/extension-list";
+import Paragraph from "@tiptap/extension-paragraph";
+import Text from "@tiptap/extension-text";
+import { Dropcursor, Gapcursor, UndoRedo } from "@tiptap/extensions";
 import { Fragment, Slice, type Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { EditorContent, markInputRule, useEditor, type Editor } from "@tiptap/react";
-import StarterKit from "@tiptap/starter-kit";
 import { defaultMarkdownSerializer, MarkdownSerializer } from "prosemirror-markdown";
 import {
   Fragment as ReactFragment,
@@ -89,17 +98,24 @@ const divider = <span aria-hidden className="mx-1 h-5 w-px bg-border" />;
 // `**` and `*` only, with no space just inside them (as in CommonMark), so `__init__`, `_private_`,
 // and `a * b * c` stay as they are, and there's no strikethrough or `---` rule. Links and
 // underline have no place in a prompt, and a trailing empty line after a list or code block would
-// only add height.
+// only add height. These are StarterKit's extensions in its order, listed one by one because
+// StarterKit bundles the ones it disables too, Link and linkifyjs among them.
 const extensions = [
-  StarterKit.configure({
-    bold: false,
-    italic: false,
-    strike: false,
-    horizontalRule: false,
-    link: false,
-    underline: false,
-    trailingNode: false,
-  }),
+  Blockquote,
+  BulletList,
+  Code,
+  CodeBlock,
+  Document,
+  Dropcursor,
+  Gapcursor,
+  HardBreak,
+  Heading,
+  UndoRedo,
+  ListItem,
+  ListKeymap,
+  OrderedList,
+  Paragraph,
+  Text,
   Bold.extend({
     addInputRules() {
       return [

@@ -683,6 +683,16 @@ test("a subagent's items stay out of the agent's flow, in its own transcript und
   expect(subagentRows(quiet).at(-1)).toMatchObject({ kind: "assistant", text: "No tests." });
 });
 
+test("a live event appends to the log and keeps the subagents' object until one changes", () => {
+  const t = build(output(agentCall("a", "Read the docs")));
+  const delta = output({ kind: "textDelta", text: "Reading." });
+  const next = applyEvents(t, [delta], runId);
+  expect(next.events).toEqual([...t.events!, delta]);
+  expect(next.subagents).toBe(t.subagents);
+  const read = applyEvents(next, [output(inSub("a", { kind: "text", text: "Read." }))], runId);
+  expect(read.subagents).not.toBe(next.subagents);
+});
+
 test("a subagent works until it says how it ended, whatever its call's result", () => {
   const sub = { callId: "a", items: [] };
   // A subagent in the background has its call succeed at once.
