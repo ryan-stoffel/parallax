@@ -41,13 +41,11 @@ test("a resume time is in the OS's locale, which the bridge gives, not Chromium'
   expect(tomorrow()).toBe("4 Oct, 15:40");
 });
 
-test("a waiting run says when it resumes, and a run that isn't waiting shows nothing", () => {
+test("a waiting run says when it resumes", () => {
   render(run());
   expect(document.body.textContent).toContain(`Usage limit reached. Resumes at ${resumeTime(at)}`);
   render(run({ resumeAt: undefined }));
   expect(document.body.textContent).toContain("Usage limit reached. It resumes once it resets.");
-  render(run({ status: "running", resumeAt: undefined }));
-  expect(document.body.textContent).toBe("");
 });
 
 test("Resume now and Cancel send their requests, and stay disabled while one is out", async () => {

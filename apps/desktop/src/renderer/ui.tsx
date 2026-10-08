@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Search } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import {
   Fragment,
   useEffect,
@@ -303,48 +303,37 @@ export const unavailableBadge =
 
 /**
  * A dropdown showing the chosen option, with a check beside it in the menu. The chosen option's
- * icon leads, else `icon`. Pass `value` to control it, or leave it to keep its own choice,
- * starting at `defaultValue`. `search` adds a filter box with that placeholder. Other buttons
- * can open the same menu with `popoverTarget={id}`; it anchors to whichever opened it, and
+ * icon leads. Pass `value` to control it, or leave it to keep its own choice. Other buttons can
+ * open the same menu with `popoverTarget={id}`; it anchors to whichever opened it, and
  * `button={false}` leaves them as its only way in.
  */
 export function Picker({
   id,
   label,
-  icon,
   options,
   value,
-  defaultValue,
   onChange,
   align,
-  search,
   panelClassName = "min-w-44",
   button = true,
 }: {
   id?: string;
   button?: boolean;
   label: string;
-  icon?: ReactNode;
   options: PickerOption[];
   value?: string;
-  defaultValue?: string;
   onChange?: (value: string) => void;
   align?: "start" | "end";
-  search?: string;
   panelClassName?: string;
 }) {
   const ownId = useId();
   const menuId = id ?? ownId;
   const menu = useRef<HTMLDivElement>(null);
-  const searchBox = useRef<HTMLInputElement>(null);
-  const [own, setOwn] = useState(defaultValue);
-  const [query, setQuery] = useState("");
+  const [own, setOwn] = useState<string>();
   // Uncontrolled, it shows the first option until one is picked, even if options arrive later.
   const current =
     options.find((o) => o.value === (value ?? own)) ??
     (value === undefined ? options[0] : undefined);
-  const q = query.trim().toLowerCase();
-  const shown = q ? options.filter((o) => o.label.toLowerCase().includes(q)) : options;
 
   const choose = (o: PickerOption) => {
     menu.current?.hidePopover();
@@ -364,7 +353,7 @@ export function Picker({
           // It can shrink, cutting a long choice (a branch name) short rather than widening its row.
           className={`${menuButton} min-w-0`}
         >
-          {current?.icon ?? icon}
+          {current?.icon}
           <span className="truncate">{current?.label}</span>
           <ChevronDown aria-hidden className="opacity-70" />
         </button>
@@ -376,38 +365,20 @@ export function Picker({
         role="menu"
         aria-label={label}
         onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-          if (e.newState === "closed") return setQuery("");
-          if (search) searchBox.current?.focus();
-          else menu.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
+          if (e.newState === "open")
+            menu.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
         }}
         onKeyDown={moveFocus}
         className={`${menuPanel(align)} overflow-hidden p-0 ${panelClassName}`}
       >
-        {search && (
-          <label className="flex items-center gap-2 border-b border-border px-3 py-2.5 focus-within:border-ring">
-            <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
-            <input
-              ref={searchBox}
-              type="search"
-              aria-label={search}
-              placeholder={search}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && shown[0]) choose(shown[0]);
-              }}
-              className="min-w-0 flex-1 bg-transparent text-[13.5px] placeholder:text-faint-foreground focus-visible:outline-none"
-            />
-          </label>
-        )}
         <div className="max-h-80 overflow-y-auto p-1">
-          {shown.map((o) => (
+          {options.map((o) => (
             <Fragment key={o.value}>
               {o.divider && <div role="separator" className="-mx-1 my-1 h-px bg-border" />}
               <MenuOption option={o} checked={o === current} onClick={() => choose(o)} />
             </Fragment>
           ))}
-          {shown.length === 0 && (
+          {options.length === 0 && (
             <p className="px-2 py-1.5 text-[12.5px] text-faint-foreground">No matches</p>
           )}
         </div>
@@ -466,7 +437,7 @@ export function Breadcrumb({ items, trail }: { items: Crumb[]; trail?: ReactNode
                 className={`flex min-w-0 items-center gap-1.5 [&_svg]:size-3.5 [&_svg]:shrink-0 ${current ? "font-medium text-foreground" : "text-muted-foreground"} ${onClick ? "rounded-md hover:text-foreground" : ""}`}
               >
                 {icon}
-                <span className="truncate" title={typeof label === "string" ? label : undefined}>
+                <span className="truncate" title={label}>
                   {label}
                 </span>
               </Tag>

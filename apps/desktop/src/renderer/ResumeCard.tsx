@@ -18,7 +18,7 @@ export function resumeTime(iso: string, now = Date.now()): string {
 
 /**
  * The end of a run's transcript while it waits for its usage limit to reset (decision 0049): when
- * plxd resumes it, with Resume now and Cancel. Shown only for a `waiting` run.
+ * plxd resumes it, with Resume now and Cancel. For a `waiting` run only.
  */
 export function ResumeCard({
   hostId,
@@ -32,7 +32,6 @@ export function ResumeCard({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  if (run.status !== "waiting") return null;
 
   // The run's next agent.updated takes the card away, so only a failure needs handling here.
   const act = async (method: "agent/resumeNow" | "agent/cancel") => {

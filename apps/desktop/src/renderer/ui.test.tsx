@@ -37,23 +37,6 @@ test("a Picker left to itself shows its first option, even when options arrive a
   expect(items()[0]!.getAttribute("aria-checked")).toBe("true");
 });
 
-test("search narrows the options, and Enter picks the first one left", () => {
-  root = createRoot(document.body.appendChild(document.createElement("div")));
-  const onChange = vi.fn();
-  render(<Picker label="Branch" search="Search branches…" options={options} onChange={onChange} />);
-  const box = document.querySelector("input")!;
-  act(() => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, "PH");
-    box.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  expect(items().map((b) => b.textContent)).toEqual(["photon"]);
-  act(() => {
-    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  });
-  expect(onChange).toHaveBeenCalledWith("photon");
-  expect(trigger()).toBe("Branch: photon");
-});
-
 test("Up and Down move between a menu's items, wrapping at the ends", () => {
   root = createRoot(document.body.appendChild(document.createElement("div")));
   render(<Picker label="Workspace" options={options} />);

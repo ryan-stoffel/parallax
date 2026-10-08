@@ -74,7 +74,7 @@ import {
 } from "./Approval";
 import { duration, useSeconds } from "./AttentionMark";
 import { Composer, tabItem, type ComposerProps, type Unanswered } from "./Composer";
-import { useConnection } from "./ConnectionStatus";
+import { offlineReason, useConnection } from "./ConnectionStatus";
 import { describeError, githubProblem } from "./errors";
 import { ForkButton, ForkContext, type ForkTarget } from "./Fork";
 import type { Host } from "./hosts";
@@ -87,6 +87,7 @@ import { useCatalog, type Provider, type RunOptions } from "./models";
 import { kinds } from "./providers";
 import {
   latestPlan,
+  planLoader,
   PlanStrip,
   PlanLine,
   ProposedPlan,
@@ -112,6 +113,7 @@ import { titleOf, type ForkChoice } from "./threads";
 import {
   failureText,
   groupWork,
+  isObject,
   isRunning,
   isSubagentTool,
   subagentLabels,
@@ -542,10 +544,8 @@ export function AgentChat({
   );
   const shown = subagent ? transcript.subagents?.[subagent] : undefined;
 
-  let disabledReason: string | undefined;
-  if (connection?.status === "failed") disabledReason = "Disconnected from plxd";
-  else if (!connected) disabledReason = "Connecting to plxd…";
-  else if (!run) disabledReason = error ? "This chat couldn't load" : "Loading…";
+  let disabledReason = offlineReason(connection);
+  if (connected && !run) disabledReason = error ? "This chat couldn't load" : "Loading…";
   let optionsDisabled: string | undefined;
   // `sendModel` is `sendOptions`' successor, which also takes the model (PLX-163). With
   // `sendAccount`, a message that changes them while the run works waits for it to finish.
@@ -587,7 +587,7 @@ export function AgentChat({
       answers={answers}
       onAnswer={(a, choice, message) => void answer(a, choice, message)}
       onDismiss={dismiss}
-      disabledReason={connected ? undefined : (disabledReason ?? "Connecting to plxd…")}
+      disabledReason={offlineReason(connection)}
     />
   );
 
@@ -689,12 +689,7 @@ export function AgentChat({
         {strip}
         {/* The latest turn's plan, while the run works on it. */}
         {plan && isRunning(run?.status) && !stalled && (
-          <PlanStrip
-            items={plan.items}
-            active={plan.active}
-            loader={loaders.planning}
-            returnFocus={focusComposer}
-          />
+          <PlanStrip items={plan.items} active={plan.active} returnFocus={focusComposer} />
         )}
         {queueEnabled && (
           <QueueStrip
@@ -1165,15 +1160,23 @@ export const RowView = memo(function RowView({
 }: RowProps) {
   switch (row.kind) {
     case "work":
+      // A finished turn's work under one dropdown (PLX-326): how long it worked, opening to its
+      // steps and the messages it folded, as T3 Code's turn fold does. A fork's `copied` work says
+      // only "Worked", since its logged times are all the fork's creation (0050).
       return row.done ? (
-        <WorkGroup
-          work={row}
+        <Fold
+          id={row.key}
+          items={stepRuns(row.items)}
+          gap
           live={live}
           open={open}
           openKeys={openKeys ?? new Set()}
           onToggle={onToggle}
-          copied={copied}
-        />
+        >
+          <span className="truncate">
+            {copied ? "Worked" : workedFor(row.startedAt, row.endedAt)}
+          </span>
+        </Fold>
       ) : (
         <Steps
           work={row}
@@ -1209,8 +1212,9 @@ export const RowView = memo(function RowView({
       );
     case "user":
     case "pending": {
-      // A wake-up is Parallax's message to the coordinator, not the user's (0025).
-      if (row.kind === "user" && row.wake)
+      // A wake-up is Parallax's message to the coordinator, not the user's (0025), and another
+      // thread's message is sent with its Parallax tools (0041).
+      if (row.kind === "user" && notTheUsers(row))
         return (
           <Disclosure
             id={row.key}
@@ -1219,31 +1223,14 @@ export const RowView = memo(function RowView({
             summary={
               <span className="flex items-center gap-1.5 text-muted-foreground">
                 <Workflow aria-hidden className="size-3.5" />
-                From Parallax: subagents finished
+                {row.wake
+                  ? "From Parallax: subagents finished"
+                  : `From another thread${sender ? `: ${sender}` : ""}`}
               </span>
             }
           >
             <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
-              {row.text}
-            </p>
-          </Disclosure>
-        );
-      // Another thread's message, sent with its Parallax tools (0041).
-      if (row.kind === "user" && row.from)
-        return (
-          <Disclosure
-            id={row.key}
-            open={open}
-            onToggle={onToggle}
-            summary={
-              <span className="flex items-center gap-1.5 text-muted-foreground">
-                <Workflow aria-hidden className="size-3.5" />
-                {sender ? `From another thread: ${sender}` : "From another thread"}
-              </span>
-            }
-          >
-            <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
-              {row.text ?? "Follow-up message"}
+              {row.text ?? (row.wake ? null : "Follow-up message")}
             </p>
           </Disclosure>
         );
@@ -1408,14 +1395,7 @@ export const RowView = memo(function RowView({
           </div>
         );
       }
-      const label =
-        outcome.status === "completed"
-          ? "Done"
-          : outcome.status === "cancelled"
-            ? "Stopped"
-            : outcome.status === "interrupted"
-              ? "Interrupted when plxd stopped. Send a message to pick up where it left off."
-              : "Ended";
+      const label = endLabels[outcome.status] ?? "Ended";
       return (
         <div className="flex items-center gap-3 text-[12px] text-faint-foreground">
           <span className="h-px flex-1 bg-border" />
@@ -1426,6 +1406,13 @@ export const RowView = memo(function RowView({
     }
   }
 });
+
+/** What an end row says, by how the process ended. A status newer than this app says "Ended". */
+const endLabels: Partial<Record<string, string>> = {
+  completed: "Done",
+  cancelled: "Stopped",
+  interrupted: "Interrupted when plxd stopped. Send a message to pick up where it left off.",
+};
 
 /** A model's name after its provider's logo, when this app knows the model. */
 function ModelLabel({ model }: { model: string }) {
@@ -1481,42 +1468,41 @@ function MessageImage({
   );
 }
 
-/**
- * A finished turn's work under one dropdown (PLX-326): how long it worked, opening to its steps
- * and the messages it folded, as T3 Code's turn fold does. A fork's `copied` work says only
- * "Worked", since its logged times are all the fork's creation (0050).
- */
-function WorkGroup({
-  work,
+/** A dropdown of steps: `children` on its line, opening to a row for each of `items`. */
+function Fold({
+  id,
+  items,
+  gap,
   live,
   open,
   openKeys,
   onToggle,
-  copied,
+  children,
 }: {
-  work: Work;
+  id: string;
+  items: readonly (Item | Work)[];
+  /** Spaces the rows apart, as a finished turn's fold does. */
+  gap?: boolean;
   live: boolean;
   open: boolean;
   openKeys: ReadonlySet<string>;
   onToggle: (key: string, open: boolean) => void;
-  copied?: boolean;
+  children: ReactNode;
 }) {
   return (
     <div>
       <button
         type="button"
         aria-expanded={open}
-        onClick={() => onToggle(work.key, !open)}
+        onClick={() => onToggle(id, !open)}
         className={`${stepRow} text-muted-foreground`}
       >
-        <span className="truncate">
-          {copied ? "Worked" : workedFor(work.startedAt, work.endedAt)}
-        </span>
+        {children}
         <Chevron open={open} />
       </button>
       {open && (
-        <div className="mt-1 flex flex-col gap-1">
-          {stepRuns(work.items).map((item) => (
+        <div className={gap ? "mt-1 flex flex-col gap-1" : "flex flex-col"}>
+          {items.map((item) => (
             <RowView
               key={item.key}
               row={item}
@@ -1605,56 +1591,39 @@ function Steps({
   const now = doing && { ...doing, detail: doing.detail && relative(doing.detail, root) };
   const summary = summarize(work.items);
   return (
-    <div>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => onToggle(work.key, !open)}
-        className={`${stepRow} text-muted-foreground`}
-      >
-        {now ? (
-          <>
-            <Loader {...now.loader} size={14} />
-            {/* Keyed, so a new label fades in. */}
-            <span key={now.label} className="working-in shrink-0 text-foreground">
-              <Shimmer>{now.label}</Shimmer>
-            </span>
-            {now.detail && <span className="truncate">{now.detail}</span>}
-          </>
-        ) : (
-          <>
-            <span
-              aria-hidden
-              className={`relative shrink-0 ${summary.failed ? "text-danger" : ""}`}
-            >
-              <summary.Icon className="size-3.5" />
-              {summary.failed && (
-                <X
-                  strokeWidth={3}
-                  className="absolute -right-1.5 -bottom-1.5 size-2.5 rounded-full bg-background"
-                />
-              )}
-            </span>
-            <span className="truncate">{summary.label}</span>
-            {summary.failed && <span className="sr-only">, one failed</span>}
-          </>
-        )}
-        <Chevron open={open} />
-      </button>
-      {open && (
-        <div className="flex flex-col">
-          {work.items.map((item) => (
-            <RowView
-              key={item.key}
-              row={item}
-              live={live}
-              open={openKeys.has(item.key)}
-              onToggle={onToggle}
-            />
-          ))}
-        </div>
+    <Fold
+      id={work.key}
+      items={work.items}
+      live={live}
+      open={open}
+      openKeys={openKeys}
+      onToggle={onToggle}
+    >
+      {now ? (
+        <>
+          <Loader {...now.loader} size={14} />
+          {/* Keyed, so a new label fades in. */}
+          <span key={now.label} className="working-in shrink-0 text-foreground">
+            <Shimmer>{now.label}</Shimmer>
+          </span>
+          {now.detail && <span className="truncate">{now.detail}</span>}
+        </>
+      ) : (
+        <>
+          <span aria-hidden className={`relative shrink-0 ${summary.failed ? "text-danger" : ""}`}>
+            <summary.Icon className="size-3.5" />
+            {summary.failed && (
+              <X
+                strokeWidth={3}
+                className="absolute -right-1.5 -bottom-1.5 size-2.5 rounded-full bg-background"
+              />
+            )}
+          </span>
+          <span className="truncate">{summary.label}</span>
+          {summary.failed && <span className="sr-only">, one failed</span>}
+        </>
       )}
-    </div>
+    </Fold>
   );
 }
 
@@ -1763,7 +1732,7 @@ const loaders = {
   skill: { kind: "lift", variant: "rise" },
   mcp: { kind: "beacon", variant: "balance" },
   plxd: { kind: "cells", variant: "spread" },
-  planning: { kind: "lift", variant: "breathe" },
+  planning: planLoader,
   working: { kind: "orbit", variant: "chase" },
   compacting: { kind: "bands", variant: "descend" },
 } as const satisfies Record<string, LoaderStyle>;
@@ -1815,12 +1784,11 @@ const toolKinds: Partial<Record<string, Kind>> = {
 };
 
 /** The kind of work a tool call does: a plxd or other MCP server's tool, or by its name. */
-function toolKind(item: Extract<Item, { kind: "tool" }>): Kind {
-  if (item.name?.startsWith(plxdTools)) return "plxd";
-  if (mcpTool(item.name)) return "mcp";
+function toolKind(name: string | null): Kind {
+  if (name?.startsWith(plxdTools)) return "plxd";
+  if (mcpTool(name)) return "mcp";
   // The table's own names only, so "constructor" or "toString" is any other tool.
-  const name = item.name ?? "";
-  return (Object.hasOwn(toolKinds, name) && toolKinds[name]) || "working";
+  return (name !== null && Object.hasOwn(toolKinds, name) && toolKinds[name]) || "working";
 }
 
 /** What the agent is doing: a label, what it's doing it to, and the loader drawn beside them. */
@@ -1836,7 +1804,7 @@ export function activity(item?: Item): Activity {
     case "reasoning":
       return { label: "Thinking", loader: loaders.thinking };
     case "tool": {
-      const loader = loaders[toolKind(item)];
+      const loader = loaders[toolKind(item.name)];
       const plxd = plxdCall(item);
       if (plxd) return { ...plxd, loader };
       // Including a plxd tool this app doesn't know.
@@ -1873,7 +1841,7 @@ function ToolCall({
   const root = useContext(RootContext);
   if (isSubagentTool(item.name) && subagents?.subagents[item.callId])
     return <SubagentCall item={item} />;
-  const kind = toolKind(item);
+  const kind = toolKind(item.name);
   const status = item.status ?? (live ? "running" : "none");
   // A status newer than this app reads as no result.
   const look = (statuses as Partial<Record<string, Look>>)[status] ?? statuses.none;
@@ -1985,7 +1953,7 @@ function Block({ label, children }: { label: string; children: string }) {
 const hintFields = ["command", "file_path", "path", "pattern", "url", "query", "description"];
 
 function toolHint(input?: JsonValue, fields = hintFields): string {
-  if (!input || typeof input !== "object" || Array.isArray(input)) return "";
+  if (!isObject(input)) return "";
   const value = fields.map((f) => input[f]).find((v) => typeof v === "string");
   return typeof value === "string" ? (value.split("\n")[0] ?? "") : "";
 }
@@ -2080,7 +2048,7 @@ export function summarize(items: readonly Item[]): StepsSummary {
   // By kind of call, in the order each first came: its calls, and the files of edits.
   const counts = new Map<string, { calls: number; files: Set<string> }>();
   for (const call of calls) {
-    const kind = call.kind === "todo" ? "planning" : toolKind(call);
+    const kind = call.kind === "todo" ? "planning" : toolKind(call.name);
     kinds.add(kind);
     if (call.kind === "tool" && (kind === "mcp" || kind === "plxd")) {
       const server = kind === "plxd" ? "Parallax" : mcpTool(call.name)!.server;
@@ -2099,13 +2067,15 @@ export function summarize(items: readonly Item[]): StepsSummary {
     .slice(0, 2)
     .sort((a, b) => a.order - b.order);
   const parts = ranked.map(({ group, count }) => callLabel(group, count.calls, count.files.size));
-  if (servers.length > 0) parts.unshift(`Used ${list(servers)}`);
+  if (servers.length > 0) parts.unshift(`Used ${list.format(servers)}`);
   const others =
     calls.length -
-    calls.filter((c) => c.kind === "tool" && ["mcp", "plxd"].includes(toolKind(c))).length -
+    calls.filter((c) => c.kind === "tool" && ["mcp", "plxd"].includes(toolKind(c.name))).length -
     ranked.reduce((n, { count }) => n + count.calls, 0);
   if (others > 0) parts.push(`performed ${others} other ${others === 1 ? "action" : "actions"}`);
-  const label = list(parts.map((p, i) => (i === 0 ? p : p.charAt(0).toLowerCase() + p.slice(1))));
+  const label = list.format(
+    parts.map((p, i) => (i === 0 ? p : p.charAt(0).toLowerCase() + p.slice(1))),
+  );
   const [only] = kinds;
   return {
     label: label.charAt(0).toUpperCase() + label.slice(1),
@@ -2147,11 +2117,8 @@ function callLabel(group: string, calls: number, files: number): string {
   }
 }
 
-/** "a", "a and b", or "a, b, and c". */
-function list(parts: string[]): string {
-  if (parts.length < 3) return parts.join(" and ");
-  return `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1)}`;
-}
+/** Joins English parts: "a", "a and b", or "a, b, and c". */
+const list = new Intl.ListFormat("en", { type: "conjunction" });
 
 // A thread's plxd tools (0041), by what they did, then the 0019 coordinator tools older
 // transcripts hold.
@@ -2221,24 +2188,11 @@ const skillName = (input?: JsonValue) => toolHint(input, ["skill", "command"]);
  * yet, so a plxd tool isn't named by what it did.
  */
 export function describeTool(name: string, input?: JsonValue): ToolLook {
-  const item = { kind: "tool", key: "", callId: "", name, input } as const;
-  const named = namedTool(item);
-  return {
-    Icon: icons[toolKind(item)],
-    label: named?.label ?? name,
-    detail: named ? named.detail : toolHint(input),
-  };
-}
-
-/**
- * A tool call its row names readably: an MCP server's tool by the server, including a plxd tool
- * this app doesn't know, or a skill.
- */
-function namedTool(item: Extract<Item, { kind: "tool" }>) {
-  const mcp = mcpTool(item.name);
-  if (mcp) return { label: mcp.server, detail: mcp.tool };
-  if (item.name === "Skill") return { label: "Skill", detail: skillName(item.input) };
-  return undefined;
+  const Icon = icons[toolKind(name)];
+  const mcp = mcpTool(name);
+  if (mcp) return { Icon, label: mcp.server, detail: mcp.tool };
+  if (name === "Skill") return { Icon, label: "Skill", detail: skillName(input) };
+  return { Icon, label: name, detail: toolHint(input) };
 }
 
 // Tools whose input reads better as a permission request shows it: an edit's diff.
@@ -2246,11 +2200,10 @@ const previewed = new Set(["Edit", "MultiEdit", "Write"]);
 
 /** Whether a tool's input arrived whole, not cut for size. */
 const isWhole = (input?: JsonValue): input is JsonValue =>
-  input !== undefined &&
-  !(input && typeof input === "object" && !Array.isArray(input) && input["truncated"] === true);
+  input !== undefined && !(isObject(input) && input["truncated"] === true);
 
 function inputText(input: JsonValue): string {
-  if (input && typeof input === "object" && !Array.isArray(input) && input["truncated"] === true) {
+  if (isObject(input) && input["truncated"] === true) {
     const bytes = typeof input["bytes"] === "number" ? input["bytes"] : 0;
     return `Too large to show (${Math.ceil(bytes / 1024)} KB)`;
   }

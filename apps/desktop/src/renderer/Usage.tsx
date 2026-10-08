@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 
-import type { RpcError } from "../preload/bridge";
 import type { AccountUsage, UsageLimitWindow, UsagePeriod } from "../protocol/generated/protocol";
 import { locale } from "./locale";
 import { hourCycle } from "./prefs";
@@ -23,18 +22,15 @@ export const periods: { value: Period; name: string }[] = [
 const USAGE_POLL_MS = 5000;
 
 /**
- * A host's `usage/get`, by account id, asked again every `USAGE_POLL_MS` while `connected`, and
- * at once whenever `refresh` changes.
- * `usage` is undefined until it first answers, so a plxd without `usage/get` shows no usage at
- * all; a later failure keeps the last answer. `error` is the latest answer's, until one succeeds.
+ * A host's `usage/get`, by account id, asked again every `USAGE_POLL_MS` while `connected`.
+ * Undefined until it first answers, so a plxd without `usage/get` shows no usage at all; a later
+ * failure keeps the last answer.
  */
 export function useUsage(
   hostId: string,
   connected: boolean,
-  refresh?: number,
-): { usage?: ReadonlyMap<string, AccountUsage>; error?: RpcError } {
+): ReadonlyMap<string, AccountUsage> | undefined {
   const [usage, setUsage] = useState<ReadonlyMap<string, AccountUsage>>();
-  const [error, setError] = useState<RpcError>();
   useEffect(() => {
     if (!connected) return;
     let stopped = false;
@@ -43,10 +39,8 @@ export function useUsage(
     const load = async () => {
       const answer = await window.parallax.request(hostId, "usage/get", {});
       if (stopped) return;
-      if ("result" in answer) {
+      if ("result" in answer)
         setUsage(new Map(answer.result.accounts.map((a) => [a.accountId, a])));
-        setError(undefined);
-      } else setError(answer.error);
       timer = setTimeout(() => void load(), USAGE_POLL_MS);
     };
     void load();
@@ -54,8 +48,8 @@ export function useUsage(
       stopped = true;
       clearTimeout(timer);
     };
-  }, [hostId, connected, refresh]);
-  return { usage, error };
+  }, [hostId, connected]);
+  return usage;
 }
 
 /**

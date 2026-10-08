@@ -1346,13 +1346,10 @@ function Breakdown({
   );
 }
 
-/** Seven quiet rounded bars, standing in for a chart: still when there's nothing, pulsing while it loads. */
-function GhostBars({ pulse = false }: { pulse?: boolean }) {
+/** Seven quiet rounded bars, standing in for a chart when there's nothing. */
+function GhostBars() {
   return (
-    <div
-      aria-hidden
-      className={`flex h-20 items-end justify-center gap-2 ${pulse ? "motion-safe:animate-pulse" : ""}`}
-    >
+    <div aria-hidden className="flex h-20 items-end justify-center gap-2">
       {[34, 58, 42, 76, 50, 66, 28].map((h, i) => (
         <div key={i} className="w-4 rounded-[5px] bg-selected" style={{ height: `${h}%` }} />
       ))}

@@ -627,8 +627,15 @@ function applyOutput(
   }
 }
 
-const isObject = (v?: JsonValue): v is Record<string, JsonValue> =>
+/** Whether a JSON value is an object, not an array or null. */
+export const isObject = (v?: JsonValue): v is Record<string, JsonValue> =>
   !!v && typeof v === "object" && !Array.isArray(v);
+
+/** `input`'s `name` field, when it's a string. */
+export const field = (input: JsonValue | undefined, name: string) => {
+  const value = isObject(input) ? input[name] : undefined;
+  return typeof value === "string" ? value : undefined;
+};
 
 /** The permission requests still waiting, oldest first. */
 export const waitingApprovals = (items: readonly Item[]): Approval[] =>

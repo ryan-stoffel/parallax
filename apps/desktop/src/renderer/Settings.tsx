@@ -229,7 +229,7 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
   const [signingIn, setSigningIn] = useState<CliKind>();
   const [period, setPeriod] = useState<Period>("today");
   // By account id: a subscription's is its CLI's kind, the backend that runs it (0012).
-  const { usage } = useUsage(host.id, connected);
+  const usage = useUsage(host.id, connected);
   const tabs = useId();
   const off = useDisabledClis();
 
@@ -683,7 +683,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
   const [confirming, setConfirming] = useState<string>();
   const [removing, setRemoving] = useState(false);
   const [period, setPeriod] = useState<Period>("today");
-  const { usage } = useUsage(host.id, true);
+  const usage = useUsage(host.id, true);
   const tabs = useId();
 
   const loadKeys = useCallback(async () => {
