@@ -913,8 +913,8 @@ test("with eventsBefore, opens at the newest page and loads older ones near the 
   await renderChat();
   const befores = () =>
     request.mock.calls.filter(([, method]) => method === "agent/events").map(([, , p]) => p.before);
-  // The newest page ends with the run's finish, which shows, so no older page loads yet.
-  expect(befores()).toEqual([Number.MAX_SAFE_INTEGER]);
+  // The newest page holds only the run's last updates, so the one before it loads too.
+  expect(befores()).toEqual([Number.MAX_SAFE_INTEGER, 7]);
   expect(request).not.toHaveBeenCalledWith("local", "agent/list", expect.anything());
   // After the log's seq from before the newest page, which is past that page's last.
   expect(subscribe).toHaveBeenCalledOnce();
@@ -929,7 +929,7 @@ test("with eventsBefore, opens at the newest page and loads older ones near the 
   act(() => void document.querySelector('[role="log"]')!.dispatchEvent(new Event("scroll")));
   await settle();
   tall.mockRestore();
-  expect(befores()).toEqual([Number.MAX_SAFE_INTEGER, 6, 4, 2]);
+  expect(befores()).toEqual([Number.MAX_SAFE_INTEGER, 7, 5, 3]);
   const shown = transcriptText();
   expect(shown.indexOf("Add a README")).toBeGreaterThanOrEqual(0);
   expect(shown.indexOf("Add a README")).toBeLessThan(shown.indexOf("Mentioned the tests"));
@@ -1998,7 +1998,7 @@ test("while the run works on a plan, a strip over the composer shows it, until a
   await renderChat();
   expect(strip()).not.toBeNull();
   // The run finishes (seq 8).
-  second.emit({ type: "event", event: { subscription: "s", ...logged[6]! } });
+  second.emit({ type: "event", event: { subscription: "s", ...logged[7]! } });
   expect(strip()).toBeNull();
   act(() => unmount());
 
