@@ -135,11 +135,14 @@ fn compacted_from(event: &ParallaxEvent) -> Option<u64> {
     }
 }
 
-pub(crate) fn kind_of(event: &ParallaxEvent) -> String {
-    serde_json::to_value(event)
-        .ok()
-        .and_then(|value| value.get("kind")?.as_str().map(str::to_owned))
-        .unwrap_or_default()
+/// The `kind` of an event serialized by `serde_json`. `ParallaxEvent` is internally tagged, so the
+/// tag is always the first field, and no kind name needs escaping. Empty for anything else, such
+/// as the empty payload of an event that failed to serialize.
+pub(crate) fn kind_of(payload: &str) -> &str {
+    payload
+        .strip_prefix(r#"{"kind":""#)
+        .and_then(|rest| rest.split_once('"'))
+        .map_or("", |(kind, _)| kind)
 }
 
 /// Evicts from the front of `events` until it is within both `retention` and `max_bytes`,
@@ -217,10 +220,10 @@ impl EventLog {
         });
         let head = db.event_head()?;
         let events = db
-            .latest_events(retention.max(1), max_bytes)?
-            .into_iter()
-            .map(|stored| Arc::new(entry(&stored)))
-            .collect();
+            .latest_events(retention.max(1), max_bytes, |stored| {
+                Arc::new(entry(&stored))
+            })?
+            .into();
         let reader = match Store::open_read_only(path) {
             Ok(reader) => Some(reader),
             Err(error) => {
@@ -571,6 +574,28 @@ mod tests {
     /// `retention`.
     fn open(path: &Path, retention: usize) -> StoreHandle {
         StoreHandle::open(path, retention, usize::MAX, usize::MAX)
+    }
+
+    /// `kind_of` reads the same kind from a payload as serde's tag holds.
+    #[test]
+    fn kind_of_reads_the_serde_tag() {
+        for event in [
+            ParallaxEvent::Unknown,
+            finished(RunId::generate()),
+            ParallaxEvent::AgentOutput {
+                run_id: RunId::generate(),
+                items: vec![AgentOutputItem::SessionStarted {
+                    session_id: "\"kind\":\"x\"".into(),
+                    model: None,
+                }],
+                compacted: None,
+            },
+        ] {
+            let payload = serde_json::to_string(&event).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&payload).unwrap();
+            assert_eq!(super::kind_of(&payload), value["kind"].as_str().unwrap());
+        }
+        assert_eq!(super::kind_of(""), "");
     }
 
     #[test]
