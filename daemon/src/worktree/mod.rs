@@ -664,6 +664,25 @@ impl WorktreeManager {
         Ok(Some(renamed))
     }
 
+    /// Renames branch `from` in `repo_path` back to `to`, for a [`Self::rename_branch`] whose
+    /// new name plxd couldn't record.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::rename_branch`].
+    pub async fn rename_back(
+        &self,
+        repo_path: &Path,
+        from: &str,
+        to: &str,
+    ) -> Result<(), WorktreeError> {
+        let repo_root = self.repo_root(repo_path).await?;
+        let _guard = self.lock_repo(&repo_root).await;
+        self.run_git_ok(&repo_root, &["branch", "-m", "--", from, to])
+            .await
+            .map(drop)
+    }
+
     /// Files that differ between `base` (a commit git can resolve, normally
     /// [`CreatedWorktree::base`]) and the worktree's current state, committed or not.
     ///

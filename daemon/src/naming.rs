@@ -20,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::agents;
+use crate::backend::fake;
 use crate::backend::namer::{self, Name};
 use crate::server::Daemon;
 use crate::threads::thread_entry;
@@ -72,7 +73,9 @@ User message:
 
 /// Names thread `run`, just started with `naming`, in the background.
 pub(crate) fn start(daemon: &Arc<Daemon>, run: &AgentRun, naming: ThreadNaming) {
-    if run.prompt.trim().is_empty() {
+    // The app's end-to-end tests run threads on the fake backend, where a real CLI on the
+    // developer's machine would rename them mid-test.
+    if run.prompt.trim().is_empty() || std::env::var_os(fake::SCRIPT_ENV).is_some() {
         return;
     }
     let (run_id, backend, prompt) = (run.id, run.backend.clone(), prompt(&run.prompt));

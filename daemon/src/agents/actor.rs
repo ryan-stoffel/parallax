@@ -762,39 +762,43 @@ impl Actor {
         if self.effect.is_some() {
             return Ok(());
         }
+        let (repo, old) = (PathBuf::from(&worktree.repo_path), worktree.branch.clone());
         let renamed = self
             .daemon
             .agents
             .worktrees
-            .rename_branch(
-                Path::new(&worktree.repo_path),
-                self.id,
-                &worktree.branch,
-                slug,
-            )
+            .rename_branch(&repo, self.id, &old, slug)
             .await
             .map_err(|error| ErrorObject::parallax(ErrorKind::WorktreeFailed, error.to_string()))?;
         let Some(branch) = renamed else {
             return Ok(());
         };
-        info!(run = %self.id, %branch, "renamed a named thread's branch");
         let (id, run_id, project, row) = (self.row.id, self.id, self.project, self.row.clone());
         let stored = branch.clone();
-        // ponytail: a failed write leaves git's new name and the row's old one apart, so Accept
-        // and cleanup miss the branch; rename it back if the store ever fails here.
-        self.write(move |db, now| {
-            db.set_worktree_branch(id, &stored)
-                .map_err(|error| store_error(&error))?;
-            let mut state = convert::run_state(&row);
-            state.branch = Some(stored);
-            db.stage(
-                now,
-                Some(project),
-                ParallaxEvent::AgentUpdated { run_id, state },
-            );
-            Ok(())
-        })
-        .await?;
+        let written = self
+            .write(move |db, now| {
+                db.set_worktree_branch(id, &stored)
+                    .map_err(|error| store_error(&error))?;
+                let mut state = convert::run_state(&row);
+                state.branch = Some(stored);
+                db.stage(
+                    now,
+                    Some(project),
+                    ParallaxEvent::AgentUpdated { run_id, state },
+                );
+                Ok(())
+            })
+            .await;
+        // The row keeps the old name, so git takes it back: Open PR, Accept, and cleanup all
+        // name the branch from the row.
+        if let Err(error) = written {
+            let worktrees = &self.daemon.agents.worktrees;
+            if let Err(undo) = worktrees.rename_back(&repo, &branch, &old).await {
+                warn!(run = %self.id, %undo, %branch, "could not name a branch back after its rename wasn't stored");
+            }
+            return Err(error);
+        }
+        info!(run = %self.id, %branch, "renamed a named thread's branch");
         if let Some(worktree) = &mut self.worktree {
             worktree.branch = branch;
         }
