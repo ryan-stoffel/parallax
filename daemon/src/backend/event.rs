@@ -7,8 +7,14 @@ use std::collections::BTreeMap;
 use std::ops::{Add, AddAssign};
 
 use jiff::Timestamp;
+pub use parallax_protocol::{
+    AgentSubagentStatus as SubagentStatus, AgentTodoItem as TodoItem,
+    AgentTodoStatus as TodoStatus, AgentToolStatus as ToolStatus,
+};
 use parallax_protocol::{ApprovalId, TurnId};
 use serde::{Deserialize, Serialize};
+
+use super::process::Exit;
 
 /// One thing that happened in a run.
 ///
@@ -241,68 +247,12 @@ pub struct ApprovalRequest {
     pub interactive: bool,
 }
 
-/// One item of an [`Event::TodoList`].
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TodoItem {
-    /// What to do.
-    pub text: String,
-    /// How far along it is.
-    pub status: TodoStatus,
-}
-
-/// How far along an [`TodoItem`] is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum TodoStatus {
-    /// Not started.
-    Pending,
-    /// Being worked on.
-    InProgress,
-    /// Done.
-    Completed,
-    /// A status this version does not know.
-    #[serde(other)]
-    Other,
-}
-
 impl Event {
     /// Whether this is the run's last event.
     #[must_use]
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Finished { .. })
     }
-}
-
-/// How a tool call ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ToolStatus {
-    /// It ran and succeeded.
-    Ok,
-    /// It ran and failed.
-    Error,
-    /// The tool policy or the CLI's approval rules refused it: Claude's `permission_denied`, or a
-    /// Codex approval request that exec's `never` policy denied.
-    Denied,
-    /// A status this version does not know.
-    #[serde(other)]
-    Other,
-}
-
-/// How an [`Event::SubagentFinished`] subagent ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum SubagentStatus {
-    /// It finished its work.
-    Completed,
-    /// It failed.
-    Failed,
-    /// It was stopped before it finished.
-    Stopped,
-    /// A status this version does not know.
-    #[serde(other)]
-    Other,
 }
 
 /// What a [`Event::Warning`] is about.
@@ -357,6 +307,54 @@ pub struct Failure {
     /// The end of the CLI's stderr, when it wrote any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stderr_tail: Option<String>,
+}
+
+impl Failure {
+    /// A failure with no process exit attached.
+    #[must_use]
+    pub fn new(failure: FailureKind, message: String) -> Self {
+        Self {
+            failure,
+            message,
+            exit: None,
+            stderr_tail: None,
+        }
+    }
+
+    /// The failed outcome, with how the process ended when it did.
+    #[must_use]
+    pub fn ended(mut self, exit: Option<&Exit>) -> Outcome {
+        if let Some(exit) = exit {
+            self.exit = Some(exit.info);
+            self.stderr_tail = (!exit.stderr_tail.is_empty()).then(|| exit.stderr_tail.clone());
+        }
+        Outcome::Failed(self)
+    }
+}
+
+/// How a run ends when `label`'s CLI exited with no outcome of its own: not signed in, as
+/// `signed_out` tells from its stderr, done mid-turn, or crashed.
+#[must_use]
+pub fn exit_outcome(label: &str, signed_out: bool, exit: &Exit) -> Outcome {
+    let failure = if signed_out {
+        Failure::new(
+            FailureKind::NotSignedIn,
+            format!("{label} is not signed in"),
+        )
+    } else if exit.info.success() {
+        Failure::new(
+            FailureKind::VendorError,
+            format!("{label} exited without finishing its turn"),
+        )
+    } else {
+        let message = match (exit.info.code, exit.info.signal) {
+            (_, Some(signal)) => format!("{label} was killed by signal {signal}"),
+            (Some(code), None) => format!("{label} exited with code {code}"),
+            (None, None) => format!("{label} ended in an unknown way"),
+        };
+        Failure::new(FailureKind::Crashed, message)
+    };
+    failure.ended(Some(exit))
 }
 
 /// What kind of failure ended a run. Routing (#119) falls back to another account on

@@ -21,7 +21,6 @@ pub mod app_server;
 #[cfg(test)]
 mod tests;
 
-use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -32,7 +31,7 @@ use super::commands::{self, CommandsProbe};
 use super::event::FailureKind;
 use super::limits::{self, LimitsProbe};
 use super::namer::{self, NameProbe};
-use super::process::{Environment, Launcher};
+use super::process::Launcher;
 use super::{
     AgentEffort, AgentPermission, Backend, Capabilities, ImageMediaType, Overrides, PromptImage,
     RunRequest, StartError, Started, check_argument,
@@ -98,18 +97,7 @@ impl CodexBackend {
 ///
 /// [`StartError::Unsupported`] for an effort this version doesn't know.
 pub fn effort_level(effort: AgentEffort) -> Result<&'static str, StartError> {
-    Ok(match effort {
-        AgentEffort::Low => "low",
-        AgentEffort::Medium => "medium",
-        AgentEffort::High => "high",
-        AgentEffort::Xhigh => "xhigh",
-        AgentEffort::Max => "max",
-        AgentEffort::Unknown => {
-            return Err(StartError::Unsupported(
-                "Codex has no such reasoning effort".into(),
-            ));
-        }
-    })
+    super::effort_level(effort, "Codex has no such reasoning effort")
 }
 
 /// Writes `images` as files into a new folder in `dir` (plxd's data folder's `tmp/`), named by
@@ -184,19 +172,6 @@ pub(super) fn classify(message: &str) -> FailureKind {
     }
 }
 
-/// The variables of `base` that no run gets: [`SCRUBBED_PREFIXES`].
-#[must_use]
-pub fn scrubbed(base: &Environment) -> Vec<OsString> {
-    base.names()
-        .filter(|name| {
-            SCRUBBED_PREFIXES
-                .iter()
-                .any(|prefix| name.as_encoded_bytes().starts_with(prefix.as_bytes()))
-        })
-        .map(OsStr::to_owned)
-        .collect()
-}
-
 impl Backend for CodexBackend {
     fn name(&self) -> &str {
         self.overrides.name.as_deref().unwrap_or(PROGRAM)
@@ -204,10 +179,6 @@ impl Backend for CodexBackend {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            follow_ups: true,
-            resume: true,
-            reports_cost: false,
-            rate_limits: false,
             // A thread on app-server runs in Codex's own mode sandbox, not 0013's.
             worker_sandbox: false,
             fork: true,

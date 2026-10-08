@@ -76,10 +76,11 @@ use tokio::sync::{Notify, mpsc};
 
 use self::stream::{Ask, AskKind, Step, Translator, permission_answer};
 use super::commands::{self, CommandsProbe};
-use super::event::{Event, Failure, FailureKind, ModelUsage, Outcome, Usage, WarningKind};
+use super::event::{
+    Event, Failure, FailureKind, ModelUsage, Outcome, Usage, WarningKind, exit_outcome,
+};
 use super::process::{
-    CancelPolicy, Environment, Exit, Launcher, Output, Process, ProcessSpec, Signal, StdinMode,
-    StdinPipe,
+    CancelPolicy, Exit, Launcher, Output, Process, ProcessSpec, Signal, StdinMode, StdinPipe,
 };
 use super::{
     AgentPermission, Answer, AnswerError, ApprovalId, Backend, CancelSwitch, Capabilities,
@@ -185,17 +186,11 @@ impl AcpBackend {
         }
     }
 
-    /// The agent this backend runs.
-    #[must_use]
-    pub fn agent(&self) -> &AcpAgent {
-        &self.agent
-    }
-
     /// The agent in `cwd` with no arguments yet, the inherited [`AcpAgent::scrub`] variables
     /// dropped, its environment set, and stdin piped.
     fn spec(&self, cwd: &Path) -> ProcessSpec {
         let mut spec = ProcessSpec::new(&self.agent.program, cwd);
-        spec.scrub = scrubbed(self.launcher.base(), &self.agent.scrub);
+        spec.scrub = self.launcher.base().starting_with(&self.agent.scrub);
         spec.inject = self.agent.env.iter().cloned().collect();
         spec.stdin = StdinMode::Piped;
         spec.record = Some("acp");
@@ -318,19 +313,6 @@ pub fn arguments(agent: &AcpAgent, request: &RunRequest) -> Result<Vec<OsString>
     Ok(args)
 }
 
-/// The variables of `base` that no run gets: those starting with one of `prefixes`.
-#[must_use]
-pub fn scrubbed(base: &Environment, prefixes: &[String]) -> Vec<OsString> {
-    base.names()
-        .filter(|name| {
-            prefixes
-                .iter()
-                .any(|prefix| name.as_encoded_bytes().starts_with(prefix.as_bytes()))
-        })
-        .map(OsStr::to_owned)
-        .collect()
-}
-
 /// The thread's `plxd mcp --thread` server as `mcpServers` takes it, for a thread with `approvals`
 /// or Bypass, as Claude Code gets it (0041). The agent's own configured servers still load.
 fn thread_mcp_servers(request: &RunRequest) -> Result<Vec<Value>, StartError> {
@@ -356,14 +338,7 @@ impl Backend for AcpBackend {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities {
-            follow_ups: true,
-            resume: true,
-            reports_cost: false,
-            rate_limits: false,
-            worker_sandbox: false,
-            fork: false,
-        }
+        Capabilities::default()
     }
 
     fn permissions(&self) -> &[AgentPermission] {
@@ -795,7 +770,7 @@ impl Driver {
                         return;
                     }
                     let message = format!("{} couldn't switch modes: {message}", self.agent.label);
-                    self.failure = Some(failure(FailureKind::VendorError, message));
+                    self.failure = Some(Failure::new(FailureKind::VendorError, message));
                     self.close();
                     return;
                 }
@@ -806,7 +781,7 @@ impl Driver {
                     let turn_id = prompt.turn_id;
                     self.emit(Event::TurnFinished { turn_id, result }).await;
                 }
-                self.failure = Some(failure(classify(&message), message));
+                self.failure = Some(Failure::new(classify(&message), message));
                 self.in_flight = None;
                 self.close();
                 return;
@@ -870,7 +845,7 @@ impl Driver {
             .map(str::to_owned)
             .or_else(|| self.resume.clone());
         let Some(session) = session else {
-            self.failure = Some(failure(
+            self.failure = Some(Failure::new(
                 FailureKind::VendorError,
                 format!("{} started no session", self.agent.label),
             ));
@@ -1033,40 +1008,19 @@ impl Driver {
             return Outcome::Cancelled;
         }
         if let Some(failure) = self.failure.take() {
-            return failed(failure, exit.as_ref());
+            return failure.ended(exit.as_ref());
         }
         let Some(exit) = exit else {
-            return failed(
-                failure(FailureKind::Internal, "lost track of the process".into()),
-                None,
-            );
+            return Failure::new(FailureKind::Internal, "lost track of the process".into())
+                .ended(None);
         };
         if (exit.info.success() || self.stopped) && self.results > 0 {
             return Outcome::Completed {
                 result: self.last_result.take(),
             };
         }
-        let failure = match classify(&exit.stderr_tail) {
-            FailureKind::NotSignedIn => failure(
-                FailureKind::NotSignedIn,
-                format!("{} is not signed in", self.agent.label),
-            ),
-            _ if exit.info.success() => failure(
-                FailureKind::VendorError,
-                format!("{} exited without finishing its turn", self.agent.label),
-            ),
-            _ => {
-                let message = match (exit.info.code, exit.info.signal) {
-                    (_, Some(signal)) => {
-                        format!("{} was killed by signal {signal}", self.agent.label)
-                    }
-                    (Some(code), None) => format!("{} exited with code {code}", self.agent.label),
-                    (None, None) => format!("{} ended in an unknown way", self.agent.label),
-                };
-                failure(FailureKind::Crashed, message)
-            }
-        };
-        failed(failure, Some(&exit))
+        let signed_out = classify(&exit.stderr_tail) == FailureKind::NotSignedIn;
+        exit_outcome(&self.agent.label, signed_out, &exit)
     }
 }
 
@@ -1112,22 +1066,4 @@ fn classify(message: &str) -> FailureKind {
     } else {
         FailureKind::VendorError
     }
-}
-
-fn failure(failure: FailureKind, message: String) -> Failure {
-    Failure {
-        failure,
-        message,
-        exit: None,
-        stderr_tail: None,
-    }
-}
-
-/// A failed outcome, with how the process ended when it did.
-fn failed(mut failure: Failure, exit: Option<&Exit>) -> Outcome {
-    if let Some(exit) = exit {
-        failure.exit = Some(exit.info);
-        failure.stderr_tail = (!exit.stderr_tail.is_empty()).then(|| exit.stderr_tail.clone());
-    }
-    Outcome::Failed(failure)
 }

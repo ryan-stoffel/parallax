@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures_util::StreamExt;
 use rustix::process::Pid;
 use serde_json::json;
 
@@ -262,8 +261,15 @@ async fn events_stream_in_order_and_usage_adds_up() {
             result: Some("The README is one line.".into())
         }
     );
+    let usage = all
+        .iter()
+        .filter_map(|event| match event {
+            Event::Usage(delta) => Some(delta.usage),
+            _ => None,
+        })
+        .fold(Usage::default(), |sum, usage| sum + usage);
     assert_eq!(
-        events.usage(),
+        usage,
         Usage {
             input_tokens: 1500,
             output_tokens: 120,
@@ -272,17 +278,6 @@ async fn events_stream_in_order_and_usage_adds_up() {
             cost_usd_micros: Some(25_000),
         }
     );
-    assert_eq!(events.outcome(), Some(outcome(&all)));
-}
-
-#[tokio::test]
-async fn the_stream_works_as_a_futures_stream() {
-    let events = launch(&backend("resume"), request(&root())).await.events;
-    let all: Vec<Event> = tokio::time::timeout(Duration::from_secs(10), events.collect())
-        .await
-        .unwrap();
-    assert_eq!(all.len(), 3);
-    assert!(all[2].is_terminal());
 }
 
 #[tokio::test]
@@ -559,7 +554,10 @@ async fn a_resumed_session_reports_only_its_own_usage() {
             .collect()
     };
     assert_eq!(deltas(&all), [1200, 50]);
-    assert_eq!(fresh.usage_totals(), [opus(1250)]);
+    let Some(Event::Finished { usage_totals, .. }) = all.last() else {
+        panic!("{all:?}")
+    };
+    assert_eq!(usage_totals, &[opus(1250)]);
 
     // The vendor's totals carry over into the resumed session; the run counts what it added.
     let mut resumed = request(&root());
@@ -571,7 +569,6 @@ async fn a_resumed_session_reports_only_its_own_usage() {
     let mut events = launch(&backend, resumed).await.events;
     let all = rest(&mut events).await;
     assert_eq!(deltas(&all), [200, 50]);
-    assert_eq!(events.usage().input_tokens, 250);
     let Some(Event::Finished { usage_totals, .. }) = all.last() else {
         panic!("{all:?}")
     };
@@ -581,7 +578,6 @@ async fn a_resumed_session_reports_only_its_own_usage() {
 #[tokio::test]
 async fn a_backend_without_follow_ups_refuses_them_and_closes_stdin() {
     let backend = backend("follow-up").without_follow_ups();
-    assert!(!backend.capabilities().follow_ups);
     let Started { run, mut events } = launch(&backend, request(&root())).await;
     assert_eq!(
         run.send(FollowUp {

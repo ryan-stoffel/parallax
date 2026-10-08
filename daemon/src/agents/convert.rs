@@ -5,9 +5,8 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentApproveResult, AgentFailureKind, AgentMerge, AgentMergeKind, AgentOutcome,
-    AgentOutputItem, AgentPolicy, AgentRun, AgentRunState, AgentStatus, AgentSubagentStatus,
-    AgentTodoItem, AgentTodoStatus, AgentToolStatus, ApprovalId, CoordinatorThreadId, DiffSummary,
-    ProjectId, RunId,
+    AgentOutputItem, AgentPolicy, AgentRun, AgentRunState, AgentStatus, ApprovalId,
+    CoordinatorThreadId, DiffSummary, ProjectId, RunId,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -15,9 +14,7 @@ use serde_json::{Value, json};
 use tracing::error;
 
 use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
-use crate::backend::{
-    ApprovalRequest, Event, FailureKind, Outcome, SubagentStatus, TodoItem, TodoStatus, ToolStatus,
-};
+use crate::backend::{ApprovalRequest, Event, FailureKind, Outcome, TodoItem};
 use crate::json::escaped_len;
 use crate::worktree::MergeHow;
 
@@ -262,33 +259,6 @@ pub(super) fn outcome(outcome: &Outcome) -> (AgentOutcome, &'static str, Option<
     }
 }
 
-fn tool_status(status: ToolStatus) -> AgentToolStatus {
-    match status {
-        ToolStatus::Ok => AgentToolStatus::Ok,
-        ToolStatus::Error => AgentToolStatus::Error,
-        ToolStatus::Denied => AgentToolStatus::Denied,
-        ToolStatus::Other => AgentToolStatus::Unknown,
-    }
-}
-
-fn subagent_status(status: SubagentStatus) -> AgentSubagentStatus {
-    match status {
-        SubagentStatus::Completed => AgentSubagentStatus::Completed,
-        SubagentStatus::Failed => AgentSubagentStatus::Failed,
-        SubagentStatus::Stopped => AgentSubagentStatus::Stopped,
-        SubagentStatus::Other => AgentSubagentStatus::Unknown,
-    }
-}
-
-fn todo_status(status: TodoStatus) -> AgentTodoStatus {
-    match status {
-        TodoStatus::Pending => AgentTodoStatus::Pending,
-        TodoStatus::InProgress => AgentTodoStatus::InProgress,
-        TodoStatus::Completed => AgentTodoStatus::Completed,
-        TodoStatus::Other => AgentTodoStatus::Unknown,
-    }
-}
-
 /// `text` cut to at most `max` bytes on a character boundary, with a note when it was cut.
 pub(super) fn truncate(text: &str, max: usize) -> String {
     if text.len() <= max {
@@ -325,7 +295,7 @@ fn capped_input(input: &Value, max: usize) -> Value {
 /// (`escaped_len`, as `serde_json` writes a string), not raw ones, so text that needs a lot of
 /// escaping can't make the list's real JSON size exceed the cap. Always keeps at least one item,
 /// matching how the log's own paging never returns an empty, non-progressing page.
-fn capped_todo_items(items: &[TodoItem]) -> Vec<AgentTodoItem> {
+fn capped_todo_items(items: &[TodoItem]) -> Vec<TodoItem> {
     let mut capped = Vec::new();
     let mut bytes = 0;
     for item in items {
@@ -337,9 +307,9 @@ fn capped_todo_items(items: &[TodoItem]) -> Vec<AgentTodoItem> {
             break;
         }
         bytes += size;
-        capped.push(AgentTodoItem {
+        capped.push(TodoItem {
             text,
-            status: todo_status(item.status),
+            status: item.status,
         });
     }
     capped
@@ -389,7 +359,7 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             output,
         } => AgentOutputItem::ToolResult {
             call_id: truncate(call_id, MAX_ID_BYTES),
-            status: tool_status(*status),
+            status: *status,
             output: output
                 .as_deref()
                 .map(|output| truncate(output, MAX_TOOL_OUTPUT_BYTES)),
@@ -459,7 +429,7 @@ fn subagent_item(event: &Event) -> Option<AgentOutputItem> {
             summary,
         } => AgentOutputItem::SubagentFinished {
             call_id: truncate(call_id, MAX_ID_BYTES),
-            status: subagent_status(*status),
+            status: *status,
             summary: summary
                 .as_deref()
                 .map(|summary| truncate(summary, MAX_TEXT_ITEM_BYTES)),

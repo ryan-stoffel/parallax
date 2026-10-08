@@ -1163,7 +1163,7 @@ async fn acp_probe(launcher: &Launcher, agent: &AcpAgent, found: &mut Found) {
     let home = std::env::home_dir().unwrap_or_else(std::env::temp_dir);
     let mut spec = ProcessSpec::new(&agent.program, &home);
     spec.args.clone_from(&agent.args);
-    spec.scrub = acp::scrubbed(launcher.base(), &agent.scrub);
+    spec.scrub = launcher.base().starting_with(&agent.scrub);
     spec.inject = agent.env.iter().cloned().collect();
     spec.inject.set("BROWSER", "/usr/bin/true");
     spec.stdin = StdinMode::Piped;

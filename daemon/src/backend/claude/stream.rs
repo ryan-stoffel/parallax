@@ -297,7 +297,7 @@ impl Translator {
                     Some("completed") => SubagentStatus::Completed,
                     Some("failed") => SubagentStatus::Failed,
                     Some("stopped") => SubagentStatus::Stopped,
-                    _ => SubagentStatus::Other,
+                    _ => SubagentStatus::Unknown,
                 };
                 vec![Step::Emit(Event::SubagentFinished {
                     call_id: call_id.to_owned(),
@@ -588,12 +588,7 @@ impl Translator {
                 (_, false) => errors.join("; "),
                 _ => format!("Claude Code ended the turn with {subtype:?}"),
             };
-            self.last_failure = Some(Failure {
-                failure,
-                message: truncate(&text),
-                exit: None,
-                stderr_tail: None,
-            });
+            self.last_failure = Some(Failure::new(failure, truncate(&text)));
             self.last_result = None;
         } else {
             self.last_failure = None;
@@ -750,12 +745,7 @@ fn warning(warning: WarningKind, detail: String) -> Step {
 }
 
 fn violation(failure: FailureKind, message: String) -> Step {
-    Step::Violation(Failure {
-        failure,
-        message,
-        exit: None,
-        stderr_tail: None,
-    })
+    Step::Violation(Failure::new(failure, message))
 }
 
 /// Output before a `system/init` passed the credential check: the CLI may already be using
@@ -897,7 +887,7 @@ fn todo_list(input: &Value) -> Option<Vec<TodoItem>> {
                         Some("pending") => TodoStatus::Pending,
                         Some("in_progress") => TodoStatus::InProgress,
                         Some("completed") => TodoStatus::Completed,
-                        _ => TodoStatus::Other,
+                        _ => TodoStatus::Unknown,
                     },
                 })
             })

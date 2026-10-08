@@ -422,7 +422,7 @@ fn tool_status(item: &Map<String, Value>) -> ToolStatus {
         Some("declined") => ToolStatus::Denied,
         // A finished web search has no status.
         None => ToolStatus::Ok,
-        Some(_) => ToolStatus::Other,
+        Some(_) => ToolStatus::Unknown,
     }
 }
 
@@ -457,7 +457,7 @@ fn plan_items(plan: Option<&Value>) -> Vec<TodoItem> {
                     Some("completed") => TodoStatus::Completed,
                     Some("inProgress") => TodoStatus::InProgress,
                     Some("pending") => TodoStatus::Pending,
-                    _ => TodoStatus::Other,
+                    _ => TodoStatus::Unknown,
                 },
             })
         })
@@ -526,15 +526,11 @@ fn turn_failure(error: Option<&Value>) -> Failure {
         Some("usageLimitExceeded" | "rateLimitExceeded") => FailureKind::RateLimited,
         _ => classify(message),
     };
-    Failure {
-        failure,
-        message: match message.char_indices().nth(MAX_MESSAGE_CHARS) {
-            Some((end, _)) => format!("{}...", &message[..end]),
-            None => message.to_owned(),
-        },
-        exit: None,
-        stderr_tail: None,
-    }
+    let message = match message.char_indices().nth(MAX_MESSAGE_CHARS) {
+        Some((end, _)) => format!("{}...", &message[..end]),
+        None => message.to_owned(),
+    };
+    Failure::new(failure, message)
 }
 
 #[cfg(test)]

@@ -546,7 +546,7 @@ fn todo(entry: &Value) -> Option<TodoItem> {
         Some("pending" | "TODO_STATUS_PENDING") => TodoStatus::Pending,
         Some("in_progress" | "TODO_STATUS_IN_PROGRESS") => TodoStatus::InProgress,
         Some("completed" | "TODO_STATUS_COMPLETED") => TodoStatus::Completed,
-        _ => TodoStatus::Other,
+        _ => TodoStatus::Unknown,
     };
     Some(TodoItem { text, status })
 }

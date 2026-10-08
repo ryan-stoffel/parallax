@@ -59,8 +59,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
 use self::translate::{Ask, Step, Translator, answer_response, refusal};
-use super::{CONFIG_DIR_ENV, CONTEXT_WINDOWS, PROGRAM, effort_level, scrubbed, write_images};
-use crate::backend::event::{Event, Failure, FailureKind, Outcome, WarningKind};
+use super::{CONFIG_DIR_ENV, CONTEXT_WINDOWS, PROGRAM, effort_level, write_images};
+use crate::backend::event::{Event, Failure, FailureKind, Outcome, WarningKind, exit_outcome};
 use crate::backend::process::{
     CancelPolicy, Exit, Launcher, Output, Process, ProcessSpec, Signal, SpawnError, StdinMode,
     StdinPipe,
@@ -199,7 +199,7 @@ pub(super) fn spec(
 ) -> ProcessSpec {
     let mut spec = ProcessSpec::new(PROGRAM, cwd);
     spec.args = vec!["app-server".into()];
-    spec.scrub = scrubbed(launcher.base());
+    spec.scrub = launcher.base().starting_with(super::SCRUBBED_PREFIXES);
     if let Some(home) = config_home {
         spec.inject.set(CONFIG_DIR_ENV, home);
     }
@@ -553,7 +553,7 @@ impl Driver {
             }
             // The turn never ran.
             (Request::Turn, Err(message)) => {
-                self.failure = Some(failure(super::classify(&message), message));
+                self.failure = Some(Failure::new(super::classify(&message), message));
                 self.finish_running(None).await;
                 self.next_turn().await;
             }
@@ -599,7 +599,7 @@ impl Driver {
 
     /// The thread couldn't start, so no turn runs: the run fails and app-server exits.
     fn fail_to_start(&mut self, message: String) {
-        self.failure = Some(failure(super::classify(&message), message));
+        self.failure = Some(Failure::new(super::classify(&message), message));
         self.stdin.close();
         self.control.close();
     }
@@ -745,52 +745,18 @@ impl Driver {
             return Outcome::Cancelled;
         }
         if let Some(failure) = self.failure.take() {
-            return failed(failure, exit.as_ref());
+            return failure.ended(exit.as_ref());
         }
         let Some(exit) = exit else {
-            return failed(
-                failure(FailureKind::Internal, "lost track of the process".into()),
-                None,
-            );
+            return Failure::new(FailureKind::Internal, "lost track of the process".into())
+                .ended(None);
         };
         if exit.info.success() && self.turns_done > 0 && self.running.is_none() {
             return Outcome::Completed {
                 result: self.last_result.take(),
             };
         }
-        let failure = if super::classify(&exit.stderr_tail) == FailureKind::NotSignedIn {
-            failure(FailureKind::NotSignedIn, "Codex is not signed in".into())
-        } else if exit.info.success() {
-            failure(
-                FailureKind::VendorError,
-                "Codex exited without finishing its turn".into(),
-            )
-        } else {
-            let message = match (exit.info.code, exit.info.signal) {
-                (_, Some(signal)) => format!("Codex was killed by signal {signal}"),
-                (Some(code), None) => format!("Codex exited with code {code}"),
-                (None, None) => "Codex ended in an unknown way".to_owned(),
-            };
-            failure(FailureKind::Crashed, message)
-        };
-        failed(failure, Some(&exit))
+        let signed_out = super::classify(&exit.stderr_tail) == FailureKind::NotSignedIn;
+        exit_outcome("Codex", signed_out, &exit)
     }
-}
-
-fn failure(failure: FailureKind, message: String) -> Failure {
-    Failure {
-        failure,
-        message,
-        exit: None,
-        stderr_tail: None,
-    }
-}
-
-/// A failed outcome, with how the process ended when it did.
-fn failed(mut failure: Failure, exit: Option<&Exit>) -> Outcome {
-    if let Some(exit) = exit {
-        failure.exit = Some(exit.info);
-        failure.stderr_tail = (!exit.stderr_tail.is_empty()).then(|| exit.stderr_tail.clone());
-    }
-    Outcome::Failed(failure)
 }

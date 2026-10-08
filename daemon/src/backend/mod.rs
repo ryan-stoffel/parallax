@@ -37,11 +37,8 @@ use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::task::{Context, Poll};
 
-use futures_util::Stream;
 pub use parallax_protocol::{
     AgentEffort, AgentPermission, ApprovalId, ImageMediaType, PromptImage, RunId, TurnId,
 };
@@ -51,9 +48,8 @@ use zeroize::Zeroize;
 
 pub use self::commands::CommandsProbe;
 pub use self::event::{
-    ApprovalRequest, CumulativeUsage, Event, ExitInfo, Failure, FailureKind, LimitStatus,
-    LimitWindow, ModelUsage, Outcome, SubagentStatus, TodoItem, TodoStatus, ToolStatus, Usage,
-    WarningKind,
+    ApprovalRequest, CumulativeUsage, Event, Failure, FailureKind, LimitStatus, LimitWindow,
+    ModelUsage, Outcome, SubagentStatus, TodoItem, TodoStatus, ToolStatus, Usage, WarningKind,
 };
 pub use self::limits::LimitsProbe;
 pub use self::namer::NameProbe;
@@ -347,6 +343,22 @@ fn mcp_config(
     }))
 }
 
+/// The name Claude Code's `--effort` and Codex's `model_reasoning_effort` share for `effort`.
+///
+/// # Errors
+///
+/// [`StartError::Unsupported`] with `unknown` for an effort this version doesn't know.
+pub fn effort_level(effort: AgentEffort, unknown: &str) -> Result<&'static str, StartError> {
+    Ok(match effort {
+        AgentEffort::Low => "low",
+        AgentEffort::Medium => "medium",
+        AgentEffort::High => "high",
+        AgentEffort::Xhigh => "xhigh",
+        AgentEffort::Max => "max",
+        AgentEffort::Unknown => return Err(StartError::Unsupported(unknown.to_owned())),
+    })
+}
+
 /// Checks that `value`, such as a model or a session id, can be a CLI's argument: not empty,
 /// not starting with `-`, where the CLI would read it as an option, and with no whitespace or
 /// control characters.
@@ -596,19 +608,7 @@ impl Drop for ApiKey {
 
 /// What a backend can do.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "independent features, not states of one thing"
-)]
 pub struct Capabilities {
-    /// [`Run::send`] works.
-    pub follow_ups: bool,
-    /// [`RunRequest::resume`] works.
-    pub resume: bool,
-    /// Its usage includes a cost.
-    pub reports_cost: bool,
-    /// Its runs report limit windows.
-    pub rate_limits: bool,
     /// It enforces the worker sandbox (0013) for a [`ToolPolicy::WorkspaceWrite`] run on this
     /// OS, so M3's runner may start workers on it. Cursor never does: it runs only threads
     /// (0036).
@@ -850,9 +850,7 @@ impl EventSink {
         };
         let stream = EventStream {
             events: receiver,
-            usage: Usage::default(),
-            outcome: None,
-            usage_totals: Vec::new(),
+            done: false,
         };
         (sink, stream)
     }
@@ -905,12 +903,6 @@ impl EventSink {
         .await
     }
 
-    /// Whether the stream has ended.
-    #[must_use]
-    pub fn is_finished(&self) -> bool {
-        self.finished
-    }
-
     /// Discards the running usage total this sink has summed so far and starts over from
     /// `baseline`, as if nothing had been recorded before it.
     ///
@@ -937,7 +929,7 @@ impl EventSink {
     }
 }
 
-/// A run's events. It ends after exactly one [`Event::Finished`], and it sums the run's usage.
+/// A run's events. It ends after exactly one [`Event::Finished`].
 ///
 /// If the backend stops without finishing, for example because its task panicked, the stream
 /// ends with a [`FailureKind::Internal`] failure, so a consumer always sees an outcome. That
@@ -945,69 +937,27 @@ impl EventSink {
 #[derive(Debug)]
 pub struct EventStream {
     events: mpsc::Receiver<Event>,
-    usage: Usage,
-    outcome: Option<Outcome>,
-    usage_totals: Vec<ModelUsage>,
+    done: bool,
 }
 
 impl EventStream {
     /// The next event, or `None` after [`Event::Finished`].
     pub async fn next(&mut self) -> Option<Event> {
-        std::future::poll_fn(|cx| Pin::new(&mut *self).poll_next(cx)).await
-    }
-
-    /// The sum of the run's [`Event::Usage`] deltas so far.
-    #[must_use]
-    pub fn usage(&self) -> Usage {
-        self.usage
-    }
-
-    /// How the run ended, once [`Event::Finished`] has been read.
-    #[must_use]
-    pub fn outcome(&self) -> Option<&Outcome> {
-        self.outcome.as_ref()
-    }
-
-    /// The session's usage totals from [`Event::Finished`], once it has been read.
-    #[must_use]
-    pub fn usage_totals(&self) -> &[ModelUsage] {
-        &self.usage_totals
-    }
-}
-
-impl Stream for EventStream {
-    type Item = Event;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Event>> {
-        if self.outcome.is_some() {
-            return Poll::Ready(None);
+        if self.done {
+            return None;
         }
-        let event = match self.events.poll_recv(cx) {
-            Poll::Pending => return Poll::Pending,
-            Poll::Ready(Some(event)) => event,
-            Poll::Ready(None) => Event::Finished {
-                outcome: Outcome::Failed(Failure {
-                    failure: FailureKind::Internal,
-                    message: "the backend stopped without finishing the run".to_owned(),
-                    exit: None,
-                    stderr_tail: None,
-                }),
-                usage_totals: Vec::new(),
-            },
-        };
-        match &event {
-            Event::Usage(delta) => self.usage += delta.usage,
-            Event::Finished {
-                outcome,
-                usage_totals,
-            } => {
-                self.outcome = Some(outcome.clone());
-                self.usage_totals.clone_from(usage_totals);
-                self.events.close();
-            }
-            _ => {}
+        let event = self.events.recv().await.unwrap_or_else(|| Event::Finished {
+            outcome: Outcome::Failed(Failure::new(
+                FailureKind::Internal,
+                "the backend stopped without finishing the run".to_owned(),
+            )),
+            usage_totals: Vec::new(),
+        });
+        if event.is_terminal() {
+            self.done = true;
+            self.events.close();
         }
-        Poll::Ready(Some(event))
+        Some(event)
     }
 }
 
@@ -1110,20 +1060,20 @@ mod tests {
         sink.finish(Outcome::Completed { result: None })
             .await
             .unwrap();
-        assert!(sink.is_finished());
         let mut events = Vec::new();
         while let Some(event) = stream.next().await {
             events.push(event);
         }
         assert_eq!(events.len(), 3);
-        assert_eq!(stream.outcome(), Some(&Outcome::Cancelled));
-        assert_eq!(stream.usage().input_tokens, 7);
         assert_eq!(
-            stream.usage_totals(),
-            [ModelUsage {
-                model: None,
-                usage: input(7)
-            }]
+            events[2],
+            Event::Finished {
+                outcome: Outcome::Cancelled,
+                usage_totals: vec![ModelUsage {
+                    model: None,
+                    usage: input(7)
+                }]
+            }
         );
     }
 
@@ -1146,9 +1096,15 @@ mod tests {
         sink.finish(Outcome::Completed { result: None })
             .await
             .unwrap();
-        while stream.next().await.is_some() {}
+        let mut last = None;
+        while let Some(event) = stream.next().await {
+            last = Some(event);
+        }
+        let Some(Event::Finished { usage_totals, .. }) = last else {
+            panic!("{last:?}")
+        };
         assert_eq!(
-            stream.usage_totals(),
+            usage_totals,
             [ModelUsage {
                 model: None,
                 usage: input(4)
@@ -1171,15 +1127,17 @@ mod tests {
             .await
             .unwrap();
         let mut deltas = Vec::new();
+        let mut totals = Vec::new();
         while let Some(event) = stream.next().await {
-            if let Event::Usage(delta) = event {
-                deltas.push(delta.usage.input_tokens);
+            match event {
+                Event::Usage(delta) => deltas.push(delta.usage.input_tokens),
+                Event::Finished { usage_totals, .. } => totals = usage_totals,
+                _ => {}
             }
         }
         assert_eq!(deltas, [200, 50]);
-        assert_eq!(stream.usage().input_tokens, 250);
         assert_eq!(
-            stream.usage_totals(),
+            totals,
             [ModelUsage {
                 model: Some("opus".into()),
                 usage: input(1250)
