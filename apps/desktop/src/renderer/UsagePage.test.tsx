@@ -8,7 +8,6 @@ import type { UsageDay } from "../protocol/generated/protocol";
 import {
   attribute,
   buckets,
-  localDate,
   niceTop,
   resetTime,
   stack,
@@ -18,6 +17,7 @@ import {
   type Measures,
   type Range,
 } from "./UsagePage";
+import { dayKey } from "./profile";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -28,7 +28,7 @@ const midnight = (at: number) => new Date(at).setHours(0, 0, 0, 0);
 /** A day of `tokens` input tokens on `at`'s local day, costing `cost` micro-dollars when it says. */
 const usage = (at: number, agent: string, model: string, tokens: number, cost?: number) =>
   ({
-    date: localDate(at),
+    date: dayKey(at),
     agent: agent as UsageDay["agent"],
     model,
     inputTokens: tokens,
@@ -52,7 +52,7 @@ test("ranges are whole local days ending today, and the range before is as long"
   expect([...month.previous, ...month.starts].every((s) => midnight(s) === s)).toBe(true);
   expect(new Set([...month.previous, ...month.starts]).size).toBe(60);
   expect(month.previous.at(-1)).toBe(midnight(month.starts[0]! - HOUR));
-  expect(localDate(month.previous[0]!)).toBe("2026-08-01");
+  expect(dayKey(month.previous[0]!)).toBe("2026-08-01");
 });
 
 /** `range`'s summary over a flat `tokens` a day, today holding only the part of it so far. */
@@ -135,7 +135,7 @@ test("sessions count in the range and the range before, the last day before only
   const now = new Date(2026, 8, 29, 12, 0).getTime();
   const { starts, previous, partial } = buckets("7d", now);
   const day = (at: number, sessions: number) => ({
-    date: localDate(at),
+    date: dayKey(at),
     agent: "claude" as const,
     sessions,
   });
@@ -271,7 +271,7 @@ const daily =
   ({ since }: Record<string, unknown>) => ({
     days: days.filter((d) => d.date >= (since as string)),
     problems,
-    sessions: [{ date: localDate(now), agent: "claude", sessions: 7 }],
+    sessions: [{ date: dayKey(now), agent: "claude", sessions: 7 }],
   });
 
 const now = Date.now();

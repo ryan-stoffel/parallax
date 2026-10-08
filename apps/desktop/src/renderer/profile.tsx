@@ -48,6 +48,12 @@ export function dayKey(at: number): string {
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 }
 
+/** The local midnight `key`'s day starts at, `key` being a `dayKey`. */
+export function dayOf(key: string): Date {
+  const [y, m, d] = key.split("-").map(Number) as [number, number, number];
+  return new Date(y, m - 1, d);
+}
+
 /** The local day after `key`'s, by calendar, so a DST change never skips or repeats one. */
 function nextDay(key: string): string {
   const [y, m, d] = key.split("-").map(Number) as [number, number, number];

@@ -5,11 +5,9 @@ import {
   useMemo,
   useRef,
   useState,
-  type ComponentType,
   type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
-  type SVGProps,
 } from "react";
 
 import type { RpcError } from "../preload/bridge";
@@ -27,9 +25,10 @@ import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { locale } from "./locale";
-import { ClaudeLogo, CursorLogo, OpenAILogo } from "./logos";
+import { dayKey, dayOf } from "./profile";
+import { kinds, type Kind } from "./providers";
 import { IconButton, Segmented } from "./ui";
-import { limitDetails, limitMeter, type LimitTone } from "./Usage";
+import { limitDetails, limitMeter, usd, type LimitTone } from "./Usage";
 import { clockOptions } from "./prefs";
 
 type View = "cost" | "tokens" | "limits";
@@ -56,14 +55,12 @@ const rangeWords: Record<Range, { past: string; previous: string }> = {
   "90d": { past: "in the past 90 days", previous: "in the previous 90 days" },
 };
 
-type Logo = ComponentType<SVGProps<SVGSVGElement>>;
-
 /** The backends that run accounts (0012), and the agents `usage/daily` counts. */
 export type Backend = "claude" | "codex" | "cursor";
-const backends: Record<Backend, { name: string; Logo: Logo }> = {
-  claude: { name: "Claude Code", Logo: ClaudeLogo },
-  codex: { name: "Codex", Logo: OpenAILogo },
-  cursor: { name: "Cursor", Logo: CursorLogo },
+const backends: Record<Backend, Kind> = {
+  claude: kinds["claude"]!,
+  codex: kinds["codex"]!,
+  cursor: kinds["cursor"]!,
 };
 const providerBackend: Record<Provider, Backend> = {
   anthropic: "claude",
@@ -117,19 +114,6 @@ function dayStart(at: number): number {
   const d = new Date(at);
   d.setHours(0, 0, 0, 0);
   return d.getTime();
-}
-
-/** `at`'s local day, as `usage/daily` names days: `2026-09-30`. */
-export function localDate(at: number): string {
-  const d = new Date(at);
-  const two = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
-}
-
-/** The local midnight a `usage/daily` day starts at. */
-function startOf(date: string): number {
-  const [year, month, day] = date.split("-").map(Number);
-  return new Date(year!, month! - 1, day).getTime();
 }
 
 /**
@@ -223,7 +207,7 @@ export function summarize(
   const perBackend = new Map<Backend, Summary["backends"][number]>();
   const perModel = new Map<string, Summary["models"][number]>();
   for (const d of days) {
-    const at = startOf(d.date);
+    const at = dayOf(d.date).getTime();
     if (earlier.has(at)) add(before, d, at === previous.at(-1) ? partial : 1);
     const i = index.get(at);
     if (i === undefined) continue;
@@ -251,7 +235,7 @@ export function summarize(
   if (sessions) {
     counted = { total: 0, previous: 0 };
     for (const s of sessions) {
-      const at = startOf(s.date);
+      const at = dayOf(s.date).getTime();
       if (index.has(at)) counted.total += s.sessions;
       else if (earlier.has(at))
         counted.previous += s.sessions * (at === previous.at(-1) ? partial : 1);
@@ -347,7 +331,6 @@ export function niceTop(max: number): number {
   return [1, 2, 2.5, 5, 10].map((m) => m * unit).find((step) => step * 4 >= max)! * 4;
 }
 
-const usd = new Intl.NumberFormat("en", { style: "currency", currency: "USD" });
 const tokenCount = new Intl.NumberFormat("en", {
   notation: "compact",
   maximumSignificantDigits: 3,
@@ -458,7 +441,7 @@ function History({
 }) {
   const span = useMemo(() => buckets(range, now), [range, now]);
   // One request covers the range and the one before it.
-  const since = localDate(span.previous[0]!);
+  const since = dayKey(span.previous[0]!);
   const [loaded, setLoaded] = useState<Record<string, Loaded | undefined>>({});
   // Here rather than in Breakdown, which unmounts while a new range loads.
   const [by, setBy] = useState<BreakdownBy>("model");

@@ -95,8 +95,11 @@ export function UsageLines({ usage, period }: { usage?: AccountUsage; period: Pe
   );
 }
 
-const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
-const usd = new Intl.NumberFormat("en", { style: "currency", currency: "USD" });
+export const compact = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+export const usd = new Intl.NumberFormat("en", { style: "currency", currency: "USD" });
 
 const tokensIn = (p: UsagePeriod) =>
   p.inputTokens + p.outputTokens + p.cacheReadTokens + p.cacheWriteTokens;
