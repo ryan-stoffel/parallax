@@ -31,7 +31,7 @@ import { uuidv7 } from "./uuidv7";
 import type { Workspace, WorkspaceSource } from "./WorkspaceMenu";
 
 /** A key in a palette's footer of keys. */
-export const kbd = "rounded-md bg-selected px-1.5 py-0.5 font-sans text-[11.5px] text-foreground";
+const kbd = "rounded-md bg-selected px-1.5 py-0.5 font-sans text-[11.5px] text-foreground";
 
 type Step = { kind: "menu" | WorkspaceSource | "project" } | { kind: "cloneTo"; slug: string };
 
@@ -643,7 +643,7 @@ function Problem({ error }: { error?: string }) {
   ) : null;
 }
 
-const navigate: [ReactNode, string] = [
+export const navigate: [ReactNode, string] = [
   <>
     <kbd className={`${kbd} grid size-5.5 place-items-center p-0`}>
       <ArrowUp className="size-3" />
@@ -654,9 +654,10 @@ const navigate: [ReactNode, string] = [
   </>,
   "Navigate",
 ];
-const close: [ReactNode, string] = ["Esc", "Close"];
+export const close: [ReactNode, string] = ["Esc", "Close"];
 
-function Footer({ keys, children }: { keys: [ReactNode, string][]; children?: ReactNode }) {
+/** A palette's key hints along its bottom, as `[key, what it does]`. */
+export function Footer({ keys, children }: { keys: [ReactNode, string][]; children?: ReactNode }) {
   return (
     <div className="flex items-center gap-4 border-t border-border bg-background/40 px-4 py-2.5 text-[12.5px] text-muted-foreground">
       {keys.map(([key, label]) => (
