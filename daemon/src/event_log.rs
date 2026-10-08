@@ -106,7 +106,6 @@ pub(crate) fn run_of(event: &ParallaxEvent) -> Option<RunId> {
         | ParallaxEvent::AgentOutput { run_id, .. }
         | ParallaxEvent::AgentAccountFallback { run_id, .. }
         | ParallaxEvent::AgentFinished { run_id, .. }
-        | ParallaxEvent::AgentDiffReady { run_id, .. }
         | ParallaxEvent::AgentAccepted { run_id, .. }
         | ParallaxEvent::AgentWakeupsPaused { run_id }
         | ParallaxEvent::QueueUpdated { run_id, .. } => Some(*run_id),

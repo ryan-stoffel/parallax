@@ -7,7 +7,7 @@
 //! on one [`actor`] task per run owns it: it streams the backend's events into the event log as
 //! `agent.*` events, records usage (#120) against whichever account the run is on, takes
 //! `agent/send` and `agent/cancel`, and when a CLI process ends, commits the worktree through
-//! #166's hardened `commit_all` and reports `agent.diffReady`.
+//! #166's hardened `commit_all` and reports the diff in `agent.updated`.
 //!
 //! A run whose client started it with `approvals`, and every run in a Project, its coordinator
 //! included, lets its CLI ask before a tool call (PLX-222, decisions 0031 and 0042). It logs the
@@ -80,7 +80,7 @@ use tokio_util::task::TaskTracker;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use self::actor::{Actor, Command};
+use self::actor::{Actor, Command, Queued};
 pub(crate) use self::actor::{GitAction, QueueOp, logged_events, session_account};
 pub(crate) use self::approvals::APPROVAL_TIMEOUT;
 pub(crate) use self::convert::agent_run as snapshot;
@@ -1486,21 +1486,23 @@ pub(crate) async fn send(
             ));
         }
     };
-    let options = RunOptions {
-        model,
-        effort,
-        permission,
-        context_window,
-        fast,
-    };
-    ask(&daemon, run_id, |reply| Command::Send {
+    let message = Queued {
         turn_id,
         text,
         images,
         threads,
-        options,
+        options: RunOptions {
+            model,
+            effort,
+            permission,
+            context_window,
+            fast,
+        },
         account,
         from,
+    };
+    ask(&daemon, run_id, |reply| Command::Send {
+        message,
         steer,
         reply,
     })
@@ -1512,24 +1514,8 @@ pub(crate) async fn queue(
     daemon: Arc<Daemon>,
     run_id: RunId,
     op: QueueOp,
-) -> Result<QueueResult, ErrorObject> {
-    ask(&daemon, run_id, |reply| Command::Queue {
-        op,
-        command_id: None,
-        reply,
-    })
-    .await
-}
-
-pub(crate) async fn queue_command(
-    daemon: Arc<Daemon>,
-    run_id: RunId,
-    op: QueueOp,
     command_id: Option<Uuid>,
 ) -> Result<QueueResult, ErrorObject> {
-    if command_id.is_none() {
-        return queue(daemon, run_id, op).await;
-    }
     ask(&daemon, run_id, |reply| Command::Queue {
         op,
         command_id,
@@ -1704,22 +1690,14 @@ pub(super) fn approval_not_found(run: RunId, approval: ApprovalId) -> ErrorObjec
 /// which stops a running CLI first and never races the run's own resume, commit, or accept. A
 /// push or Open PR in flight refuses it (`gitRefused`), unless `wait`, which waits for it to
 /// finish first, as `project/delete` does so it never stops with half its runs deleted (PLX-458).
-pub(crate) async fn delete(daemon: &Arc<Daemon>, id: RunId, wait: bool) -> Result<(), ErrorObject> {
-    ask(daemon, id, |reply| Command::Delete {
-        wait,
-        command_id: None,
-        reply,
-    })
-    .await
-}
-
-pub(crate) async fn delete_command(
+pub(crate) async fn delete(
     daemon: &Arc<Daemon>,
     id: RunId,
+    wait: bool,
     command_id: Option<Uuid>,
 ) -> Result<(), ErrorObject> {
     ask(daemon, id, |reply| Command::Delete {
-        wait: false,
+        wait,
         command_id,
         reply,
     })
@@ -2378,7 +2356,7 @@ mod tests {
         })
         .await
         .unwrap();
-        let list = || queue(Arc::clone(&daemon), id, QueueOp::List);
+        let list = || queue(Arc::clone(&daemon), id, QueueOp::List, None);
 
         list().await.unwrap();
         let racing = daemon

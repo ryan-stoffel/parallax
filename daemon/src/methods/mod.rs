@@ -34,20 +34,11 @@ use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestId, Response};
 use parallax_protocol::methods::{
-    AccountsDefaultsGet, AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysList,
-    AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentApprove, AgentAutoResume,
-    AgentCancel, AgentCommands, AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFileCreate,
-    AgentFileDelete, AgentFileRename, AgentFiles, AgentGitStatus, AgentImage, AgentList,
-    AgentOpenPr, AgentPush, AgentRequestChanges, AgentResumeNow, AgentSend, AgentStart, AgentWait,
-    ConnectDevices, ContextList, ContextRead, ContextWrite, CursorInstall, CursorSignIn,
-    CursorSignInCancel, CursorSignOut, EventsSubscribe, EventsUnsubscribe, GithubInstall,
-    GithubSignInCancel, GithubSignInStart, GithubStatusGet, HostHealth, HostSettingsGet,
-    HostSettingsSet, HostVersion, InboxList, InboxSeen, Initialize, PrAct, PrDiff, PrLink,
-    PrUnlink, PrView, ProjectCreate, ProjectDelete, ProjectFromThreads, ProjectList, ProjectStart,
-    ProjectUpdate, ProvidersList, ProvidersRemove, ProvidersSave, RequestMethod, UsageDaily,
-    UsageGet, UsageHistory, UsageLimits,
+    self, EventsSubscribe, EventsUnsubscribe, Initialize, RequestMethod,
 };
-use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
+use parallax_protocol::{
+    EventsSubscribeResult, EventsUnsubscribeResult, ProvidersListResult, SubscriptionId,
+};
 use serde::Serialize;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -56,7 +47,9 @@ pub(crate) use defaults::read_defaults;
 pub(crate) use events::{Cursor, Cursors};
 pub(crate) use host::{Session, initialize, os_version};
 
+use crate::agents::{self, GitAction};
 use crate::server::Daemon;
+use crate::threads;
 
 /// What a request handler has to work with.
 pub(crate) struct Context {
@@ -94,90 +87,12 @@ pub(crate) enum Reply {
 }
 
 /// Answers a request on an initialized connection.
-#[expect(clippy::too_many_lines, reason = "one match arm per method family")]
 pub(crate) async fn dispatch(mut context: Context, mut request: Request) -> Reply {
     if let Some(reply) = command_prelude(&mut context, &mut request) {
         return reply;
     }
     let id = request.id.clone();
     let result = match request.method.as_str() {
-        HostHealth::NAME => {
-            handle::<HostHealth, _, _>(&context, &request, |p| ready(Ok(host::health(&context, p))))
-                .await
-        }
-        HostVersion::NAME => {
-            handle::<HostVersion, _, _>(&context, &request, |p| {
-                ready(Ok(host::version(&context, p)))
-            })
-            .await
-        }
-        name if name.starts_with("host/settings/") => {
-            found(name, host_settings_method(&context, &request).await)
-        }
-        ConnectDevices::NAME => {
-            handle::<ConnectDevices, _, _>(&context, &request, |p| connect::devices(&context, p))
-                .await
-        }
-        name if project_scoped(name) => found(name, project_method(&context, &request).await),
-        AccountsList::NAME => {
-            handle::<AccountsList, _, _>(&context, &request, |p| accounts::list(&context, p)).await
-        }
-        AccountsRefresh::NAME => {
-            handle::<AccountsRefresh, _, _>(&context, &request, |p| accounts::refresh(&context, p))
-                .await
-        }
-        name if name.starts_with("providers/") => {
-            found(name, providers_method(&context, &request).await)
-        }
-        AccountsKeysAdd::NAME => {
-            handle::<AccountsKeysAdd, _, _>(&context, &request, |p| {
-                accounts::keys::add(&context, p)
-            })
-            .await
-        }
-        AccountsKeysList::NAME => {
-            handle::<AccountsKeysList, _, _>(&context, &request, |p| {
-                accounts::keys::list(&context, p)
-            })
-            .await
-        }
-        AccountsKeysRemove::NAME => {
-            handle::<AccountsKeysRemove, _, _>(&context, &request, |p| {
-                accounts::keys::remove(&context, p)
-            })
-            .await
-        }
-        name if name.starts_with("usage/") => found(name, usage_method(&context, &request).await),
-        AccountsDefaultsGet::NAME => {
-            handle::<AccountsDefaultsGet, _, _>(&context, &request, |p| defaults::get(&context, p))
-                .await
-        }
-        AccountsDefaultsSet::NAME => {
-            handle::<AccountsDefaultsSet, _, _>(&context, &request, |p| defaults::set(&context, p))
-                .await
-        }
-        ContextList::NAME => {
-            handle::<ContextList, _, _>(&context, &request, |p| context::list(&context, p)).await
-        }
-        ContextRead::NAME => {
-            handle::<ContextRead, _, _>(&context, &request, |p| context::read(&context, p)).await
-        }
-        ContextWrite::NAME => {
-            handle::<ContextWrite, _, _>(&context, &request, |p| context::write(&context, p)).await
-        }
-        name if name.starts_with("agent/") => found(name, agent_method(&context, &request).await),
-        name if name.starts_with("pr/") => found(name, pr_method(&context, &request).await),
-        name if name.starts_with("cursor/") => cursor_method(&context, &request)
-            .await
-            .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
-        name if name.starts_with("github/") => github_method(&context, &request)
-            .await
-            .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
-        name if name.starts_with("queue/") => queue::dispatch(&context, &request).await,
-        name if name.starts_with("question/") => question::dispatch(&context, &request).await,
-        name if name.starts_with("memory/") => memory::dispatch(&context, &request).await,
-        name if name.starts_with("land/") => land::dispatch(&context, &request).await,
-        name if thread::handles(name) => thread::dispatch(&context, &request).await,
         EventsSubscribe::NAME => {
             let subscribed = match request.params() {
                 Ok(params) => events::subscribe(&context, params).await,
@@ -209,7 +124,7 @@ pub(crate) async fn dispatch(mut context: Context, mut request: Request) -> Repl
             INVALID_REQUEST,
             "Invalid request: the connection is already initialized",
         )),
-        other => Err(ErrorObject::method_not_found(other)),
+        _ => route(&context, &request).await,
     };
     Reply::Response(Response {
         id: Some(id),
@@ -217,288 +132,140 @@ pub(crate) async fn dispatch(mut context: Context, mut request: Request) -> Repl
     })
 }
 
-/// A family method's answer, or `method_not_found` if the family has no method `name`.
-fn found(name: &str, answer: Option<Result<Value, ErrorObject>>) -> Result<Value, ErrorObject> {
-    answer.unwrap_or_else(|| Err(ErrorObject::method_not_found(name)))
-}
-
-/// Answers a `host/settings/*` method (PLX-371), or `None` if there is no such method.
-async fn host_settings_method(
-    context: &Context,
-    request: &Request,
-) -> Option<Result<Value, ErrorObject>> {
-    Some(match request.method.as_str() {
-        HostSettingsGet::NAME => {
-            handle::<HostSettingsGet, _, _>(context, request, |p| host::settings(context, p)).await
+/// A `match` on the request's method with one arm per `Method => handler` pair, `Method` named in
+/// `parallax_protocol::methods`, each answered through [`handle`], and `method_not_found` for any
+/// other name.
+macro_rules! routes {
+    ($context:expr, $request:expr, { $($method:ident => $handler:expr,)* }) => {
+        match $request.method.as_str() {
+            $(methods::$method::NAME => {
+                handle::<methods::$method, _, _>($context, $request, $handler).await
+            })*
+            other => Err(ErrorObject::method_not_found(other)),
         }
-        HostSettingsSet::NAME => {
-            handle::<HostSettingsSet, _, _>(context, request, |p| host::set_settings(context, p))
-                .await
-        }
-        _ => return None,
-    })
-}
-
-/// Answers a `pr/*` method, or `None` if there is no such method.
-async fn pr_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
-    Some(match request.method.as_str() {
-        PrView::NAME => handle::<PrView, _, _>(context, request, |p| pr::view(context, p)).await,
-        PrAct::NAME => handle::<PrAct, _, _>(context, request, |p| pr::act(context, p)).await,
-        PrDiff::NAME => handle::<PrDiff, _, _>(context, request, |p| pr::diff(context, p)).await,
-        PrLink::NAME => {
-            handle::<PrLink, _, _>(context, request, |p| pr::link(context, p, true)).await
-        }
-        PrUnlink::NAME => {
-            handle::<PrUnlink, _, _>(context, request, |p| pr::link(context, p, false)).await
-        }
-        _ => return None,
-    })
-}
-
-/// Answers a `usage/*` method, or `None` if there is no such method.
-async fn usage_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
-    Some(match request.method.as_str() {
-        UsageGet::NAME => {
-            handle::<UsageGet, _, _>(context, request, |p| usage::get(context, p)).await
-        }
-        UsageHistory::NAME => {
-            handle::<UsageHistory, _, _>(context, request, |p| usage::history(context, p)).await
-        }
-        UsageDaily::NAME => {
-            handle::<UsageDaily, _, _>(context, request, |p| usage::daily(context, p)).await
-        }
-        UsageLimits::NAME => {
-            handle::<UsageLimits, _, _>(context, request, |p| usage::limits(context, p)).await
-        }
-        _ => return None,
-    })
-}
-
-/// Answers a `github/*` method (PLX-336, PLX-423), or `None` if there is no such method.
-async fn cursor_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
-    Some(match request.method.as_str() {
-        CursorSignIn::NAME => {
-            handle::<CursorSignIn, _, _>(context, request, |p| cursor::sign_in(context, p)).await
-        }
-        CursorSignInCancel::NAME => {
-            handle::<CursorSignInCancel, _, _>(context, request, |p| {
-                ready(Ok(cursor::sign_in_cancel(context, p)))
-            })
-            .await
-        }
-        CursorSignOut::NAME => {
-            handle::<CursorSignOut, _, _>(context, request, |p| cursor::sign_out(context, p)).await
-        }
-        CursorInstall::NAME => {
-            handle::<CursorInstall, _, _>(context, request, |p| ready(cursor::install(context, p)))
-                .await
-        }
-        _ => return None,
-    })
-}
-
-async fn github_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
-    Some(match request.method.as_str() {
-        GithubStatusGet::NAME => {
-            handle::<GithubStatusGet, _, _>(context, request, |p| accounts::github(context, p))
-                .await
-        }
-        GithubInstall::NAME => {
-            handle::<GithubInstall, _, _>(context, request, |p| {
-                accounts::github_install(context, p)
-            })
-            .await
-        }
-        GithubSignInStart::NAME => {
-            handle::<GithubSignInStart, _, _>(context, request, |p| {
-                accounts::github_sign_in(context, p)
-            })
-            .await
-        }
-        GithubSignInCancel::NAME => {
-            handle::<GithubSignInCancel, _, _>(context, request, |p| {
-                ready(Ok(accounts::github_sign_in_cancel(context, p)))
-            })
-            .await
-        }
-        _ => return None,
-    })
-}
-
-/// Whether `name` is a `project/*` method or a Project's `inbox/*` one (PLX-401).
-fn project_scoped(name: &str) -> bool {
-    name.starts_with("project/") || name.starts_with("inbox/")
-}
-
-/// Answers a `project/*` method (PLX-227) or a Project's `inbox/*` one (PLX-401), or `None` if
-/// there is no such method.
-async fn project_method(
-    context: &Context,
-    request: &Request,
-) -> Option<Result<Value, ErrorObject>> {
-    Some(match request.method.as_str() {
-        ProjectList::NAME => {
-            handle::<ProjectList, _, _>(context, request, |p| project::list(context, p)).await
-        }
-        ProjectCreate::NAME => {
-            handle::<ProjectCreate, _, _>(context, request, |p| project::create(context, p)).await
-        }
-        ProjectStart::NAME => {
-            handle::<ProjectStart, _, _>(context, request, |p| project::start(context, p)).await
-        }
-        ProjectUpdate::NAME => {
-            handle::<ProjectUpdate, _, _>(context, request, |p| project::update(context, p)).await
-        }
-        ProjectDelete::NAME => {
-            handle::<ProjectDelete, _, _>(context, request, |p| project::delete(context, p)).await
-        }
-        ProjectFromThreads::NAME => {
-            handle::<ProjectFromThreads, _, _>(context, request, |p| {
-                project::from_threads(context, p)
-            })
-            .await
-        }
-        InboxList::NAME => {
-            handle::<InboxList, _, _>(context, request, |p| inbox::list(context, p)).await
-        }
-        InboxSeen::NAME => {
-            handle::<InboxSeen, _, _>(context, request, |p| inbox::seen(context, p)).await
-        }
-        _ => return None,
-    })
-}
-
-/// Answers a `providers/*` method (0040), each with every instance after it, or `None` if
-/// there is no such method.
-async fn providers_method(
-    context: &Context,
-    request: &Request,
-) -> Option<Result<Value, ErrorObject>> {
-    let daemon = &context.daemon;
-    let list = |refresh| async move {
-        let mut listed = daemon.providers.list(&daemon.cli_detector, refresh).await;
-        for info in &mut listed.providers {
-            if info.instance.kind == parallax_protocol::ProviderKind::Cursor {
-                info.sign_in_error = daemon.cursor.failure(&info.instance.id);
-            }
-        }
-        listed
     };
-    Some(match request.method.as_str() {
-        ProvidersList::NAME => {
-            handle::<ProvidersList, _, _>(
-                context,
-                request,
-                |p| async move { Ok(list(p.refresh).await) },
-            )
-            .await
-        }
-        ProvidersSave::NAME => {
-            handle::<ProvidersSave, _, _>(context, request, |p| async move {
-                daemon.providers.save(p.instance).await?;
-                // A lower reserve, or an instance turned on, may start a waiting child (0046).
-                daemon.agents.placement.notify_one();
-                Ok(list(false).await)
-            })
-            .await
-        }
-        ProvidersRemove::NAME => {
-            handle::<ProvidersRemove, _, _>(context, request, |p| async move {
-                daemon.providers.remove(&p.id).await?;
-                Ok(list(false).await)
-            })
-            .await
-        }
-        _ => return None,
+}
+
+/// Answers every method but `initialize` and `events/*`, one line per method.
+#[expect(clippy::too_many_lines, reason = "one line per method")]
+async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObject> {
+    let daemon = &context.daemon;
+    routes!(context, request, {
+        HostHealth => |p| ready(Ok(host::health(context, p))),
+        HostVersion => |p| ready(Ok(host::version(context, p))),
+        HostSettingsGet => |p| host::settings(context, p),
+        HostSettingsSet => |p| host::set_settings(context, p),
+        ConnectDevices => |p| connect::devices(context, p),
+        AccountsList => |p| accounts::list(context, p),
+        AccountsRefresh => |p| accounts::refresh(context, p),
+        AccountsKeysAdd => |p| accounts::keys::add(context, p),
+        AccountsKeysList => |p| accounts::keys::list(context, p),
+        AccountsKeysRemove => |p| accounts::keys::remove(context, p),
+        AccountsDefaultsGet => |p| defaults::get(context, p),
+        AccountsDefaultsSet => |p| defaults::set(context, p),
+        // Each `providers/*` answers with every instance after it (0040).
+        ProvidersList => |p| async move { Ok(providers(daemon, p.refresh).await) },
+        ProvidersSave => |p| async move {
+            daemon.providers.save(p.instance).await?;
+            // A lower reserve, or an instance turned on, may start a waiting child (0046).
+            daemon.agents.placement.notify_one();
+            Ok(providers(daemon, false).await)
+        },
+        ProvidersRemove => |p| async move {
+            daemon.providers.remove(&p.id).await?;
+            Ok(providers(daemon, false).await)
+        },
+        UsageGet => |p| usage::get(context, p),
+        UsageHistory => |p| usage::history(context, p),
+        UsageDaily => |p| usage::daily(context, p),
+        UsageLimits => |p| usage::limits(context, p),
+        CursorSignIn => |p| cursor::sign_in(context, p),
+        CursorSignInCancel => |p| ready(Ok(cursor::sign_in_cancel(context, p))),
+        CursorSignOut => |p| cursor::sign_out(context, p),
+        CursorInstall => |p| ready(cursor::install(context, p)),
+        GithubStatusGet => |p| accounts::github(context, p),
+        GithubInstall => |p| accounts::github_install(context, p),
+        GithubSignInStart => |p| accounts::github_sign_in(context, p),
+        GithubSignInCancel => |p| ready(Ok(accounts::github_sign_in_cancel(context, p))),
+        ContextList => |p| context::list(context, p),
+        ContextRead => |p| context::read(context, p),
+        ContextWrite => |p| context::write(context, p),
+        ProjectList => |p| project::list(context, p),
+        ProjectCreate => |p| project::create(context, p),
+        ProjectStart => |p| project::start(context, p),
+        ProjectUpdate => |p| project::update(context, p),
+        ProjectDelete => |p| project::delete(context, p),
+        ProjectFromThreads => |p| project::from_threads(context, p),
+        InboxList => |p| inbox::list(context, p),
+        InboxSeen => |p| inbox::seen(context, p),
+        ThreadList => |_| threads::list(daemon),
+        ThreadStart => |p| thread::start(context, p),
+        ThreadFork => |p| thread::fork(context, p),
+        ThreadArchive => |p| threads::archive(daemon, p),
+        ThreadUpdate => |p| threads::update(daemon, p),
+        ThreadDelete => |p| thread::delete(context, p),
+        ThreadSearch => |p| threads::search(daemon, p),
+        RepoAdd => |p| threads::add_repo(daemon, p),
+        RepoUpdate => |p| threads::update_repo(daemon, p),
+        RepoRefs => |p| threads::refs(daemon, p),
+        RepoFiles => |p| composer::files(context, p),
+        AgentStart => |p| agent::start(context, p),
+        AgentSend => |p| agent::send(context, p),
+        AgentCancel => |p| agent::cancel(context, p),
+        AgentList => |p| agent::list(context, p),
+        AgentEvents => |p| agent::events(context, p),
+        AgentWait => |p| agents::wait::wait(context, p),
+        AgentImage => |p| agents::image(daemon, p),
+        AgentDiff => |p| agents::review::diff(daemon, p.run_id),
+        AgentFile => |p| agents::review::file(daemon, p),
+        AgentFiles => |p| agents::review::files(daemon, p),
+        AgentFileCreate => |p| agents::review::create_entry(daemon, p),
+        AgentFileRename => |p| agents::review::rename_entry(daemon, p),
+        AgentFileDelete => |p| agents::review::delete_entry(daemon, p),
+        AgentAccept => |p| agent::accept(context, p),
+        AgentRequestChanges => |p| agent::request_changes(context, p),
+        AgentOpenPr => |p| agent::open_pr(context, p),
+        AgentApprove => |p| agent::approve(context, p),
+        AgentGitStatus => |p| agent::git(context, p.run_id, GitAction::Status),
+        AgentCommit => |p| agent::commit(context, p),
+        AgentPush => |p| agent::git(context, p.run_id, GitAction::Push),
+        AgentCommands => |p| composer::list_commands(context, p),
+        AgentResumeNow => |p| agent::resume_now(context, p),
+        AgentAutoResume => |p| agent::auto_resume(context, p),
+        PrView => |p| agents::view_pr(Arc::clone(daemon), p),
+        PrAct => |p| pr::act(context, p),
+        PrDiff => |p| agents::diff_pr(Arc::clone(daemon), p),
+        PrLink => |p| pr::link(context, p, true),
+        PrUnlink => |p| pr::link(context, p, false),
+        QueueList => |p| queue::list(context, p),
+        QueueEdit => |p| queue::edit(context, p),
+        QueueReorder => |p| queue::reorder(context, p),
+        QueueCancel => |p| queue::cancel(context, p),
+        QueueSteer => |p| queue::steer(context, p),
+        QuestionAsk => |p| question::ask(context, p),
+        QuestionAnswer => |p| question::answer(context, p),
+        QuestionEscalate => |p| question::escalate(context, p),
+        QuestionList => |p| question::list(context, p),
+        MemoryList => |p| memory::list(context, p),
+        MemoryRead => |p| memory::read(context, p),
+        MemoryWrite => |p| memory::write(context, p),
+        MemoryDelete => |p| memory::delete(context, p),
+        MemoryPropose => |p| memory::propose(context, p),
+        LandQueue => |p| land::queue(context, p),
+        LandApprove => |p| land::approve(context, p),
+        LandSendBack => |p| land::send_back(context, p),
     })
 }
 
-/// Answers an `agent/*` method (#156, #157, PLX-191, PLX-222), or `None` if there is no such
-/// method.
-async fn agent_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
-    Some(match request.method.as_str() {
-        AgentStart::NAME => {
-            handle::<AgentStart, _, _>(context, request, |p| agent::start(context, p)).await
+/// The provider instances, with each Cursor one's sign-in failure.
+async fn providers(daemon: &Daemon, refresh: bool) -> ProvidersListResult {
+    let mut listed = daemon.providers.list(&daemon.cli_detector, refresh).await;
+    for info in &mut listed.providers {
+        if info.instance.kind == parallax_protocol::ProviderKind::Cursor {
+            info.sign_in_error = daemon.cursor.failure(&info.instance.id);
         }
-        AgentSend::NAME => {
-            handle::<AgentSend, _, _>(context, request, |p| agent::send(context, p)).await
-        }
-        AgentCancel::NAME => {
-            handle::<AgentCancel, _, _>(context, request, |p| agent::cancel(context, p)).await
-        }
-        AgentList::NAME => {
-            handle::<AgentList, _, _>(context, request, |p| agent::list(context, p)).await
-        }
-        AgentEvents::NAME => {
-            handle::<AgentEvents, _, _>(context, request, |p| agent::events(context, p)).await
-        }
-        AgentImage::NAME => {
-            handle::<AgentImage, _, _>(context, request, |p| agent::image(context, p)).await
-        }
-        AgentDiff::NAME => {
-            handle::<AgentDiff, _, _>(context, request, |p| agent::diff(context, p)).await
-        }
-        AgentFile::NAME => {
-            handle::<AgentFile, _, _>(context, request, |p| agent::file(context, p)).await
-        }
-        AgentFiles::NAME => {
-            handle::<AgentFiles, _, _>(context, request, |p| agent::files(context, p)).await
-        }
-        AgentFileCreate::NAME => {
-            handle::<AgentFileCreate, _, _>(context, request, |p| agent::create_entry(context, p))
-                .await
-        }
-        AgentFileRename::NAME => {
-            handle::<AgentFileRename, _, _>(context, request, |p| agent::rename_entry(context, p))
-                .await
-        }
-        AgentFileDelete::NAME => {
-            handle::<AgentFileDelete, _, _>(context, request, |p| agent::delete_entry(context, p))
-                .await
-        }
-        AgentAccept::NAME => {
-            handle::<AgentAccept, _, _>(context, request, |p| agent::accept(context, p)).await
-        }
-        AgentRequestChanges::NAME => {
-            handle::<AgentRequestChanges, _, _>(context, request, |p| {
-                agent::request_changes(context, p)
-            })
-            .await
-        }
-        AgentOpenPr::NAME => {
-            handle::<AgentOpenPr, _, _>(context, request, |p| agent::open_pr(context, p)).await
-        }
-        AgentApprove::NAME => {
-            handle::<AgentApprove, _, _>(context, request, |p| agent::approve(context, p)).await
-        }
-        AgentGitStatus::NAME => {
-            handle::<AgentGitStatus, _, _>(context, request, |p| agent::git_status(context, p))
-                .await
-        }
-        AgentCommit::NAME => {
-            handle::<AgentCommit, _, _>(context, request, |p| agent::commit(context, p)).await
-        }
-        AgentPush::NAME => {
-            handle::<AgentPush, _, _>(context, request, |p| agent::push(context, p)).await
-        }
-        AgentCommands::NAME => {
-            handle::<AgentCommands, _, _>(context, request, |p| composer::list_commands(context, p))
-                .await
-        }
-        AgentResumeNow::NAME => {
-            handle::<AgentResumeNow, _, _>(context, request, |p| agent::resume_now(context, p))
-                .await
-        }
-        AgentAutoResume::NAME => {
-            handle::<AgentAutoResume, _, _>(context, request, |p| agent::auto_resume(context, p))
-                .await
-        }
-        AgentWait::NAME => {
-            handle::<AgentWait, _, _>(context, request, |p| crate::agents::wait::wait(context, p))
-                .await
-        }
-        _ => return None,
-    })
+    }
+    listed
 }
 
 /// Cancels a non-listed method, and takes `commandId` off the params.

@@ -65,50 +65,11 @@ pub const TOOLS: &[&str] = &[
 /// The tools a caller in a Project also gets: its shared context (0019).
 pub const CONTEXT_TOOLS: &[&str] = &["read_context", "write_context"];
 
-/// [`TOOLS`], then [`CONTEXT_TOOLS`]: what a caller in a Project gets.
-const PROJECT_TOOLS: &[&str] = &[
-    "thread_list",
-    "thread_read",
-    "thread_search",
-    "thread_launch",
-    "thread_fork",
-    "thread_send",
-    "thread_wait",
-    "thread_interrupt",
-    "thread_update",
-    "pr_link",
-    "pr_unlink",
-    "read_context",
-    "write_context",
-];
-
-/// Every tool as Claude Code names them, `mcp__<server>__<tool>`: a thread's and a coordinator's
-/// `--allowedTools`, so they run without asking in every permission mode. Claude Code's todo tools
-/// follow them there. The server offers each caller only its own role's tools, so the others'
-/// names allow nothing.
-pub const ALLOWED_TOOLS: &[&str] = &[
-    "mcp__plxd__thread_list",
-    "mcp__plxd__thread_read",
-    "mcp__plxd__thread_search",
-    "mcp__plxd__thread_launch",
-    "mcp__plxd__thread_fork",
-    "mcp__plxd__thread_send",
-    "mcp__plxd__thread_wait",
-    "mcp__plxd__thread_interrupt",
-    "mcp__plxd__thread_update",
-    "mcp__plxd__pr_link",
-    "mcp__plxd__pr_unlink",
-    "mcp__plxd__read_context",
-    "mcp__plxd__write_context",
-    "mcp__plxd__ask",
-    "mcp__plxd__answer",
-    "mcp__plxd__escalate",
-    "mcp__plxd__memory_read",
-    "mcp__plxd__memory_propose",
-    "mcp__plxd__memory_write",
-    "mcp__plxd__land",
-    "mcp__plxd__checks_propose",
-];
+/// plxd's server as Claude Code names it in a thread's and a coordinator's `--allowedTools`, which
+/// allows every tool the server offers, so they run without asking in every permission mode.
+/// Claude Code's todo tools follow it there. The server offers each caller only its own role's
+/// tools.
+pub const ALLOWED_TOOLS: &[&str] = &["mcp__plxd"];
 
 /// About how much transcript one `thread_read` page carries, in bytes. A page ends at an event,
 /// so it can run over by one event's text, which [`ITEM_BYTES`] caps.
@@ -190,7 +151,8 @@ impl Tools for Server {
     fn names(&self) -> Vec<&'static str> {
         let tools = if self.project.is_some() {
             [
-                PROJECT_TOOLS,
+                TOOLS,
+                CONTEXT_TOOLS,
                 question::tools(self.coordinator),
                 land::tools(self.coordinator),
             ]
@@ -1407,25 +1369,16 @@ async fn update(binding: &Binding, args: UpdateArgs) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ALLOWED_TOOLS, CONTEXT_TOOLS, PROJECT_TOOLS, TOOLS, definitions};
+    use super::{ALLOWED_TOOLS, CONTEXT_TOOLS, TOOLS, definitions};
     use crate::mcp::{SERVER, land, question};
 
     #[test]
-    fn the_allowlist_is_exactly_the_tools_under_the_servers_name() {
-        let expected: Vec<String> = [
-            PROJECT_TOOLS,
-            question::CHILD_TOOLS,
-            question::COORDINATOR_TOOLS,
-            crate::mcp::memory::TOOLS,
-            land::TOOLS,
-        ]
-        .concat()
-        .iter()
-        .map(|tool| format!("mcp__{SERVER}__{tool}"))
-        .collect();
-        assert_eq!(ALLOWED_TOOLS, expected.as_slice());
-        assert_eq!(PROJECT_TOOLS, [TOOLS, CONTEXT_TOOLS].concat());
-        for (project, tools) in [(false, TOOLS), (true, PROJECT_TOOLS)] {
+    fn the_allowlist_is_the_servers_name_and_each_role_lists_its_tools() {
+        assert_eq!(ALLOWED_TOOLS, [format!("mcp__{SERVER}")]);
+        for (project, tools) in [
+            (false, TOOLS.to_vec()),
+            (true, [TOOLS, CONTEXT_TOOLS].concat()),
+        ] {
             let listed: Vec<String> = definitions(project)
                 .as_array()
                 .unwrap()
@@ -1458,8 +1411,9 @@ mod tests {
         for name in instructions.split('`').skip(1).step_by(2) {
             if name.contains('_') && name.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
                 assert!(
-                    PROJECT_TOOLS.contains(&name)
-                        || crate::mcp::memory::TOOLS.contains(&name)
+                    [TOOLS, CONTEXT_TOOLS, crate::mcp::memory::COORDINATOR_TOOLS]
+                        .concat()
+                        .contains(&name)
                         || land::TOOLS.contains(&name),
                     "coordinator.md names `{name}`, not a tool"
                 );

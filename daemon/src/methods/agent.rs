@@ -11,12 +11,10 @@ use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentAcceptParams, AgentAcceptResult, AgentApprovalAnswer, AgentApproveParams,
     AgentApproveResult, AgentAutoResumeParams, AgentCancelParams, AgentCommitParams,
-    AgentDiffParams, AgentDiffResult, AgentEventsParams, AgentEventsResult, AgentFileCreateParams,
-    AgentFileDeleteParams, AgentFileEditResult, AgentFileParams, AgentFileRenameParams,
-    AgentFileResult, AgentFilesParams, AgentFilesResult, AgentGitStatusParams, AgentImageParams,
-    AgentListParams, AgentListResult, AgentOpenPrParams, AgentOpenPrResult, AgentPolicy,
-    AgentPushParams, AgentRequestChangesParams, AgentResumeNowParams, AgentRunResult,
-    AgentSendParams, AgentStartParams, ErrorKind, GitStatus, LoggedEvent, PromptImage, RunId,
+    AgentEventsParams, AgentEventsResult, AgentListParams, AgentListResult, AgentOpenPrParams,
+    AgentOpenPrResult, AgentPolicy, AgentRequestChangesParams, AgentResumeNowParams,
+    AgentRunResult, AgentSendParams, AgentStartParams, ErrorKind, GitStatus, LoggedEvent,
+    PromptImage, RunId,
 };
 
 use super::Context;
@@ -226,51 +224,6 @@ pub(crate) async fn list(
     Ok(AgentListResult { runs, seq })
 }
 
-pub(crate) async fn diff(
-    context: &Context,
-    params: AgentDiffParams,
-) -> Result<AgentDiffResult, ErrorObject> {
-    agents::review::diff(&context.daemon, params.run_id).await
-}
-
-pub(crate) async fn file(
-    context: &Context,
-    params: AgentFileParams,
-) -> Result<AgentFileResult, ErrorObject> {
-    agents::review::file(&context.daemon, params).await
-}
-
-pub(crate) async fn files(
-    context: &Context,
-    params: AgentFilesParams,
-) -> Result<AgentFilesResult, ErrorObject> {
-    agents::review::files(&context.daemon, params).await
-}
-
-pub(crate) async fn create_entry(
-    context: &Context,
-    params: AgentFileCreateParams,
-) -> Result<AgentFileEditResult, ErrorObject> {
-    agents::review::create_entry(&context.daemon, params).await?;
-    Ok(AgentFileEditResult {})
-}
-
-pub(crate) async fn rename_entry(
-    context: &Context,
-    params: AgentFileRenameParams,
-) -> Result<AgentFileEditResult, ErrorObject> {
-    agents::review::rename_entry(&context.daemon, params).await?;
-    Ok(AgentFileEditResult {})
-}
-
-pub(crate) async fn delete_entry(
-    context: &Context,
-    params: AgentFileDeleteParams,
-) -> Result<AgentFileEditResult, ErrorObject> {
-    agents::review::delete_entry(&context.daemon, params).await?;
-    Ok(AgentFileEditResult {})
-}
-
 pub(crate) async fn accept(
     context: &Context,
     params: AgentAcceptParams,
@@ -312,15 +265,8 @@ pub(crate) async fn open_pr(
         .await
 }
 
-/// `agent/gitStatus` (PLX-298): through the run's actor, like `agent/commit` and `agent/push`.
-pub(crate) async fn git_status(
-    context: &Context,
-    params: AgentGitStatusParams,
-) -> Result<GitStatus, ErrorObject> {
-    git(context, params.run_id, GitAction::Status).await
-}
-
-/// `agent/commit`: the message checked here, then the commit through the run's actor.
+/// `agent/commit`: the message checked here, then the commit through the run's actor, as
+/// `agent/gitStatus` and `agent/push` go (PLX-298).
 pub(crate) async fn commit(
     context: &Context,
     params: AgentCommitParams,
@@ -337,15 +283,8 @@ pub(crate) async fn commit(
     git(context, run_id, GitAction::Commit(message)).await
 }
 
-/// `agent/push`.
-pub(crate) async fn push(
-    context: &Context,
-    params: AgentPushParams,
-) -> Result<GitStatus, ErrorObject> {
-    git(context, params.run_id, GitAction::Push).await
-}
-
-async fn git(
+/// `agent/gitStatus`, `agent/commit`, or `agent/push`'s action, through the run's actor.
+pub(super) async fn git(
     context: &Context,
     run_id: RunId,
     action: GitAction,
@@ -387,13 +326,6 @@ pub(crate) async fn request_changes(
         },
     )
     .await
-}
-
-pub(crate) async fn image(
-    context: &Context,
-    params: AgentImageParams,
-) -> Result<PromptImage, ErrorObject> {
-    agents::image(&context.daemon, params).await
 }
 
 pub(crate) async fn events(

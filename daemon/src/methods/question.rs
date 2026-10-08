@@ -13,21 +13,17 @@
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use parallax_protocol::jsonrpc::{ErrorObject, Request};
-use parallax_protocol::methods::{
-    QuestionAnswer, QuestionAsk, QuestionEscalate, QuestionList, RequestMethod,
-};
+use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentSendParams, ErrorKind, InboxKind, ProjectAutonomy, ProjectId, Question,
     QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionId,
     QuestionListParams, QuestionListResult, QuestionResult, QuestionStatus, RunId, TurnId,
 };
 use parallax_store::Store;
-use serde_json::Value;
 use tracing::info;
 use uuid::Uuid;
 
-use super::{Context, handle, inbox};
+use super::{Context, inbox};
 use crate::agents::convert::NO_WRITE;
 use crate::agents::coordinator::coordinator_of;
 use crate::agents::{self, run_not_found, wake};
@@ -43,26 +39,10 @@ const ESCALATED: &str = "escalated";
 const DECIDED: &str = "decided";
 const ANSWERED: &str = "answered";
 
-/// Answers a `question/*` method.
-pub(crate) async fn dispatch(context: &Context, request: &Request) -> Result<Value, ErrorObject> {
-    match request.method.as_str() {
-        QuestionAsk::NAME => {
-            handle::<QuestionAsk, _, _>(context, request, |p| ask(context, p)).await
-        }
-        QuestionAnswer::NAME => {
-            handle::<QuestionAnswer, _, _>(context, request, |p| answer(context, p)).await
-        }
-        QuestionEscalate::NAME => {
-            handle::<QuestionEscalate, _, _>(context, request, |p| escalate(context, p)).await
-        }
-        QuestionList::NAME => {
-            handle::<QuestionList, _, _>(context, request, |p| list(context, p)).await
-        }
-        other => Err(ErrorObject::method_not_found(other)),
-    }
-}
-
-async fn ask(context: &Context, params: QuestionAskParams) -> Result<QuestionResult, ErrorObject> {
+pub(super) async fn ask(
+    context: &Context,
+    params: QuestionAskParams,
+) -> Result<QuestionResult, ErrorObject> {
     let QuestionAskParams {
         run,
         question,
@@ -141,7 +121,7 @@ async fn ask(context: &Context, params: QuestionAskParams) -> Result<QuestionRes
     Ok(QuestionResult { question: asked })
 }
 
-async fn answer(
+pub(super) async fn answer(
     context: &Context,
     params: QuestionAnswerParams,
 ) -> Result<QuestionResult, ErrorObject> {
@@ -230,7 +210,7 @@ async fn answer(
     })
 }
 
-async fn escalate(
+pub(super) async fn escalate(
     context: &Context,
     params: QuestionEscalateParams,
 ) -> Result<QuestionResult, ErrorObject> {
@@ -264,7 +244,7 @@ async fn escalate(
     })
 }
 
-async fn list(
+pub(super) async fn list(
     context: &Context,
     params: QuestionListParams,
 ) -> Result<QuestionListResult, ErrorObject> {

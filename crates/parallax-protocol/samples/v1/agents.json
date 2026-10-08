@@ -313,13 +313,12 @@
       "time": "2026-09-25T12:03:10Z",
       "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
       "event": {
-        "kind": "agent.diffReady",
+        "kind": "agent.updated",
         "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
-        "diff": {
-          "commit": "9b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c",
-          "files": 2,
-          "insertions": 41,
-          "deletions": 3
+        "state": {
+          "status": "completed",
+          "accountId": "claude",
+          "updatedAt": "2026-09-25T12:03:10Z"
         }
       }
     }

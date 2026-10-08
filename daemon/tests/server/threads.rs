@@ -462,7 +462,7 @@ async fn a_thread_runs_in_a_worktree_of_its_repo_entry_and_lists_under_it() {
     assert!(
         events
             .iter()
-            .any(|event| matches!(event.event, ParallaxEvent::AgentDiffReady { .. }))
+            .any(|event| matches!(&event.event, ParallaxEvent::AgentUpdated { state, .. } if state.diff.is_some()))
     );
     assert_eq!(
         git(&path, &["show", &format!("{branch}:NOTES.md")]),
@@ -528,7 +528,7 @@ async fn a_thread_in_the_current_checkout_works_on_the_branch_the_user_has_out()
     assert!(
         !events
             .iter()
-            .any(|event| matches!(event.event, ParallaxEvent::AgentDiffReady { .. })),
+            .any(|event| matches!(&event.event, ParallaxEvent::AgentUpdated { state, .. } if state.diff.is_some())),
         "nothing is committed, so there is no diff"
     );
     assert_eq!(

@@ -138,21 +138,9 @@ fn failed_text(prompt: &str, message: &str) -> String {
 
 /// What an actor is asked to do.
 pub(super) enum Command {
-    /// `agent/send`.
+    /// `agent/send`, into the running turn rather than after it when `steer` (PLX-370).
     Send {
-        turn_id: TurnId,
-        text: String,
-        /// The message's images, already checked (PLX-191).
-        images: Vec<PromptImage>,
-        /// The threads attached to it, already checked (PLX-372).
-        threads: Vec<RunId>,
-        /// New options for the run (PLX-161, PLX-163).
-        options: RunOptions,
-        /// A new account for the run, perhaps on another backend.
-        account: Option<AccountChoice>,
-        /// The thread that sent it through its Parallax tools (0041).
-        from: Option<RunId>,
-        /// Into the running turn rather than after it (PLX-370).
+        message: Queued,
         steer: bool,
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
     },
@@ -283,15 +271,19 @@ pub(crate) enum QueueOp {
 /// A message waiting for the run's CLI: one sent during a turn, one that changes what the CLI
 /// runs with, or one sent after either. Stored, so a restart keeps it (PLX-370).
 #[derive(Clone)]
-struct Queued {
-    turn_id: TurnId,
-    text: String,
-    images: Vec<PromptImage>,
-    threads: Vec<RunId>,
-    options: RunOptions,
-    account: Option<AccountChoice>,
+pub(super) struct Queued {
+    pub turn_id: TurnId,
+    pub text: String,
+    /// Its images, already checked (PLX-191).
+    pub images: Vec<PromptImage>,
+    /// The threads attached to it, already checked (PLX-372).
+    pub threads: Vec<RunId>,
+    /// New options for the run (PLX-161, PLX-163).
+    pub options: RunOptions,
+    /// A new account for the run, perhaps on another backend.
+    pub account: Option<AccountChoice>,
     /// The thread that sent it through its Parallax tools (0041).
-    from: Option<RunId>,
+    pub from: Option<RunId>,
 }
 
 /// What a stored [`Queued`] keeps beside its text, as its row's JSON.
@@ -634,32 +626,17 @@ impl Actor {
             && self.resume_due().is_none()
     }
 
-    #[expect(clippy::too_many_lines, reason = "one arm per actor command")]
     async fn on_command(&mut self, command: Command) {
         match command {
             Command::Send {
-                turn_id,
-                text,
-                images,
-                threads,
-                options,
-                account,
-                from,
+                message,
                 steer,
                 reply,
             } => {
+                let (turn_id, from) = (message.turn_id, message.from);
                 if let Some(from) = from {
                     self.senders.insert(turn_id, from);
                 }
-                let message = Queued {
-                    turn_id,
-                    text,
-                    images,
-                    threads,
-                    options,
-                    account,
-                    from,
-                };
                 let answer = self.send(message, steer).await;
                 if answer.is_err() && from.is_some() {
                     self.senders.remove(&turn_id);
@@ -1625,7 +1602,7 @@ impl Actor {
         info!(run = %self.id, turn = %queued.turn_id, "a message waits for the run's CLI");
         self.queued.push_back(queued);
         // A message plxd couldn't store must not look queued.
-        if let Err(error) = self.store_queue().await {
+        if let Err(error) = self.store_queue(&self.queued.clone(), None).await {
             self.queued.pop_back();
             return Err(error);
         }
@@ -1771,7 +1748,7 @@ impl Actor {
                 }
                 let mut edited = self.queued.clone();
                 edited[at].text = text;
-                self.store_queue_for(&edited).await?;
+                self.store_queue(&edited, None).await?;
                 self.queued = edited;
             }
             QueueOp::Reorder { ids } => {
@@ -1793,7 +1770,7 @@ impl Actor {
                         rest.len()
                     )));
                 }
-                self.store_queue_for(&reordered).await?;
+                self.store_queue(&reordered, None).await?;
                 self.queued = reordered;
             }
             QueueOp::Cancel { id } => {
@@ -1804,7 +1781,7 @@ impl Actor {
                 // Staged in the same job as the queue, so the two commit together.
                 self.push(AgentOutputItem::FollowUpDropped { turn_id: id })
                     .await;
-                self.store_queue_command(&remaining, command_id).await?;
+                self.store_queue(&remaining, command_id).await?;
                 self.queued = remaining;
                 self.senders.remove(&id);
             }
@@ -1822,13 +1799,10 @@ impl Actor {
                         self.queued.insert(at, queued);
                         return Err(error);
                     }
-                    if let Err(error) = self
-                        .store_queue_command(&self.queued.clone(), command_id)
-                        .await
-                    {
+                    if let Err(error) = self.store_queue(&self.queued.clone(), command_id).await {
                         // Delivery already happened. Remove its durable queue entry without the
                         // failing receipt update, and retain the error even if persistence fails.
-                        let reconciled = self.store_queue_for(&self.queued.clone()).await;
+                        let reconciled = self.store_queue(&self.queued.clone(), None).await;
                         let error = match reconciled {
                             Ok(()) => error,
                             Err(reconcile) => ErrorObject::internal_error(format!(
@@ -1898,23 +1872,15 @@ impl Actor {
 
     /// Stores the waiting messages as they are now, and reports them as `queue.updated`.
     async fn save_queue(&mut self) {
-        if let Err(error) = self.store_queue().await {
+        if let Err(error) = self.store_queue(&self.queued.clone(), None).await {
             warn!(run = %self.id, error = %error.message, "could not store a run's waiting messages");
         }
     }
 
-    /// Stores the waiting messages as they are now, and reports them as `queue.updated`.
-    async fn store_queue(&mut self) -> Result<(), ErrorObject> {
-        self.store_queue_for(&self.queued.clone()).await
-    }
-
-    /// Stores a proposed queue, before the actor applies it, and reports it as `queue.updated`,
-    /// in one job after any transcript items waiting to be sent.
-    async fn store_queue_for(&mut self, queued: &VecDeque<Queued>) -> Result<(), ErrorObject> {
-        self.store_queue_command(queued, None).await
-    }
-
-    async fn store_queue_command(
+    /// Stores `queued`, often a proposed queue before the actor applies it, completes
+    /// `command_id`'s receipt, and reports it as `queue.updated`, in one job after any transcript
+    /// items waiting to be sent.
+    async fn store_queue(
         &mut self,
         queued: &VecDeque<Queued>,
         command_id: Option<Uuid>,
@@ -2829,12 +2795,12 @@ impl Actor {
                 None
             }
         };
-        let mut events = vec![ParallaxEvent::AgentFinished {
+        let events = vec![ParallaxEvent::AgentFinished {
             run_id: self.id,
             outcome: outcome.clone(),
         }];
         if let Some(diff) = diff {
-            events.push(self.record_diff(diff));
+            self.record_diff(diff);
         }
         status.clone_into(&mut self.row.state.status);
         self.row.state.error = error;
@@ -2864,17 +2830,13 @@ impl Actor {
         self.daemon.agents.placement.notify_one();
     }
 
-    /// Records the run's new commit and its diff in its state, and returns the `agent.diffReady`
-    /// that tells clients. The caller saves the row with it ([`Actor::save_with`]).
-    fn record_diff(&mut self, diff: DiffSummary) -> ParallaxEvent {
-        self.row.state.commit_sha = Some(diff.commit.clone());
+    /// Records the run's new commit and its diff in its state. The caller's save reports it in
+    /// `agent.updated`.
+    fn record_diff(&mut self, diff: DiffSummary) {
+        self.row.state.commit_sha = Some(diff.commit);
         self.row.state.files_changed = Some(diff.files);
         self.row.state.insertions = Some(diff.insertions);
         self.row.state.deletions = Some(diff.deletions);
-        ParallaxEvent::AgentDiffReady {
-            run_id: self.id,
-            diff,
-        }
     }
 
     /// Commits whatever the run changed in its worktree, on its branch, with `message`, and
@@ -3019,7 +2981,7 @@ impl Actor {
     }
 
     /// [`Actor::save`], staging `events` before `agent.updated` in the same job, so an
-    /// `agent.finished` or `agent.diffReady` commits with the state it reports: a crash can't
+    /// `agent.finished` commits with the state it reports: a crash can't
     /// leave the event without the row, and a restart then report the run interrupted after it.
     async fn save_with(&mut self, events: Vec<ParallaxEvent>) {
         let (id, state) = (self.row.id, self.row.state.clone());
@@ -3666,8 +3628,8 @@ mod tests {
         );
     }
 
-    /// `agent.finished` and `agent.diffReady` commit with the state they report, in `save`'s job:
-    /// a save that fails publishes neither, and one that commits publishes them before
+    /// `agent.finished` commits with the state it reports, in `save`'s job: a save that fails
+    /// publishes neither it nor `agent.updated`, and one that commits publishes it before
     /// `agent.updated`, so a restart can't find the run running after its finish.
     #[tokio::test]
     async fn a_finish_commits_with_the_runs_state_or_not_at_all() {

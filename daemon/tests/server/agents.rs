@@ -299,6 +299,11 @@ pub(crate) fn has_item(item: AgentOutputItem) -> impl FnMut(&EventsEventParams) 
     move |event| matches!(&event.event, ParallaxEvent::AgentOutput { items, .. } if items.contains(&item))
 }
 
+/// Whether `event` is an `agent.updated` that reports a commit.
+pub(crate) fn committed(event: &EventsEventParams) -> bool {
+    matches!(&event.event, ParallaxEvent::AgentUpdated { state, .. } if state.diff.is_some())
+}
+
 pub(crate) fn items(events: &[EventsEventParams]) -> Vec<AgentOutputItem> {
     events
         .iter()
@@ -482,12 +487,7 @@ async fn a_worker_edits_its_worktree_writes_shared_context_commits_and_replays()
     .await;
     let kinds = kinds(&events);
     assert_eq!(kinds[0], "agent.started", "{kinds:?}");
-    for expected in [
-        "agent.updated",
-        "agent.output",
-        "agent.finished",
-        "agent.diffReady",
-    ] {
+    for expected in ["agent.updated", "agent.output", "agent.finished"] {
         assert!(
             kinds.iter().any(|kind| kind == expected),
             "{expected} in {kinds:?}"
@@ -511,18 +511,11 @@ async fn a_worker_edits_its_worktree_writes_shared_context_commits_and_replays()
             result: Some("Done.".to_owned())
         }]
     );
-    let diff = events
-        .iter()
-        .find_map(|event| match &event.event {
-            ParallaxEvent::AgentDiffReady { diff, .. } => Some(diff.clone()),
-            _ => None,
-        })
-        .expect("diffReady");
-    assert_eq!((diff.files, diff.insertions, diff.deletions), (1, 2, 1));
     let ParallaxEvent::AgentUpdated { state: done, .. } = &events.last().unwrap().event else {
         unreachable!()
     };
-    assert_eq!(done.diff.as_ref(), Some(&diff));
+    let diff = done.diff.as_ref().expect("a diff");
+    assert_eq!((diff.files, diff.insertions, diff.deletions), (1, 2, 1));
     assert_eq!(done.session_id.as_deref(), Some("session-1"));
     for event in &events {
         if let ParallaxEvent::AgentUpdated { .. } = event.event {
@@ -531,7 +524,7 @@ async fn a_worker_edits_its_worktree_writes_shared_context_commits_and_replays()
         }
     }
 
-    assert_committed(Path::new(&project.repo_path), &branch, &worktree, &diff);
+    assert_committed(Path::new(&project.repo_path), &branch, &worktree, diff);
     assert_eq!(
         std::fs::read_to_string(&note).unwrap(),
         "Build with cargo.\n"
@@ -611,7 +604,7 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
         result: Some("Second answer.".to_owned()),
     }));
     assert!(
-        !kinds(&events).contains(&"agent.diffReady".to_owned()),
+        !events.iter().any(committed),
         "nothing changed, so nothing was committed"
     );
 

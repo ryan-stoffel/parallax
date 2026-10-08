@@ -186,9 +186,9 @@ async fn ensure_project_exists(context: &Context, project: ProjectId) -> Result<
         .await
 }
 
-/// Runs `job` on tokio's blocking pool, turning a panic or a dropped task into an internal error
-/// rather than losing it silently.
-async fn run_blocking<T, F>(job: F) -> Result<T, ErrorObject>
+/// Runs `job` on tokio's blocking pool, for `context/*` and `memory/*`, turning a panic or a
+/// dropped task into an internal error rather than losing it silently.
+pub(super) async fn run_blocking<T, F>(job: F) -> Result<T, ErrorObject>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, ErrorObject> + Send + 'static,
@@ -201,7 +201,7 @@ where
     }
 }
 
-fn io_error(path: &str) -> impl Fn(std::io::Error) -> ErrorObject {
+pub(super) fn io_error(path: &str) -> impl Fn(std::io::Error) -> ErrorObject {
     let path = path.to_owned();
     move |error| context::io_error(&path, &error)
 }

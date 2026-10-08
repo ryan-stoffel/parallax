@@ -83,7 +83,7 @@ async fn a_worktree_run_commits_the_user_s_edits_and_pushes_its_branch() {
     let head = git(&worktree, &["rev-parse", "HEAD"]);
     until(
         &mut client,
-        |e| matches!(&e.event, ParallaxEvent::AgentDiffReady { diff, .. } if diff.commit == head),
+        |e| matches!(&e.event, ParallaxEvent::AgentUpdated { state, .. } if state.diff.as_ref().is_some_and(|diff| diff.commit == head)),
     )
     .await;
 

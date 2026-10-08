@@ -1204,7 +1204,7 @@ pub(crate) async fn delete(
             .ok_or_else(|| thread_not_found(run_id))
     })
     .await?;
-    agents::delete_command(daemon, run_id, command_id)
+    agents::delete(daemon, run_id, false, command_id)
         .await
         .map_err(|error| {
             let gone = error

@@ -2,7 +2,7 @@
 //! `agentReview` capabilities.
 //!
 //! What a client reviews is exactly what `agent/accept` merges: the run's latest commit, the one
-//! `agent.diffReady` reported, against the commit its worktree was created from. `agent/diff`
+//! `agent.updated`'s diff reported, against the commit its worktree was created from. `agent/diff`
 //! lists the files that differ, with a unified diff each. `agent/file` reads one file on either
 //! side, so a client can show it in a diff editor, for a local or a remote host alike (#67).
 //! Behind the `files` capability (PLX-296), `agent/files` lists one folder of the run's files on
