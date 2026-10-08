@@ -607,6 +607,7 @@ export const REQUEST_METHODS = [
 	"cursor/signIn",
 	"cursor/signInCancel",
 	"cursor/signOut",
+	"cursor/install",
 ] as const;
 
 /** Notifications, which get no response, by method. */

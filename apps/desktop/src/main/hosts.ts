@@ -14,7 +14,7 @@ import {
   type DeviceHost,
   type DeviceIcon,
   iconFor,
-  mainMethods,
+  withheldMethods,
   type RendererMethod,
   type RpcResponse,
   type SshHost,
@@ -63,9 +63,11 @@ const ipcStats = process.env["PLX_IPC_STATS"]
     })
   : undefined;
 
-// The methods the renderer may call, checked at runtime because the renderer is untrusted (0022).
+// The methods the renderer may call, checked at runtime because the renderer is untrusted. Per
+// 0022 it may call any plxd method, so a new protocol method reaches it by default, unless it's
+// added to `withheldMethods` (bridge.ts).
 const rendererMethods = new Set<string>(REQUEST_METHODS);
-for (const method of mainMethods) rendererMethods.delete(method);
+for (const method of withheldMethods) rendererMethods.delete(method);
 
 /** Every host's connection, by host id: `local`, then each saved SSH host. */
 const connections = new Map<string, Connection>();
