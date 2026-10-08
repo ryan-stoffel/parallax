@@ -1,7 +1,6 @@
 import { Folder, House, LoaderCircle, Plus } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
-import type { RpcError } from "../preload/bridge";
 import type { AccountChoice, PromptImage, Repo, Role } from "../protocol/generated/protocol";
 import { TranscriptView } from "./AgentChat";
 import { Composer, tabItem } from "./Composer";
@@ -14,7 +13,7 @@ import { newThreadPrefs } from "./prefs";
 import { RefMenu } from "./RefMenu";
 import { RunTargetMenu, type Workspace } from "./RunTargetMenu";
 import { attachThreads, ThreadLinksContext, type ThreadLinks } from "./threadContext";
-import { noRepo, type ThreadGroup } from "./threads";
+import { noRepo, type ThreadGroup, type ThreadStart, type ThreadsView } from "./threads";
 import { ariaKeyshortcut, bindingsOf, useShortcutLabel } from "./keybindings";
 import { Picker } from "./ui";
 import { uuidv7 } from "./uuidv7";
@@ -35,16 +34,7 @@ interface NewThreadProps {
   /** Whether the host is this computer, so its folders can be picked. */
   local: boolean;
   addRepo: (path: string) => Promise<Repo | string>;
-  start: (
-    runId: string,
-    groupId: string,
-    prompt: string,
-    images: PromptImage[],
-    options: RunOptions,
-    checkout: boolean,
-    gitRef: string | undefined,
-    attached?: string[],
-  ) => Promise<RpcError | undefined>;
+  start: ThreadsView["start"];
   /** Whether the host's plxd takes a thread's model, effort, and permission (`runOptions`). */
   runOptions: boolean;
   /**
@@ -58,20 +48,10 @@ interface NewThreadProps {
 }
 
 /** One start of a thread. Retrying it reuses its run id, so plxd never makes a second thread (0007). */
-interface Attempt {
-  runId: string;
-  groupId: string;
-  prompt: string;
-  images: PromptImage[];
-  /** The run ids of the threads attached to the prompt. */
-  threads: string[];
-  options: RunOptions;
-  checkout: boolean;
-  /** The picked ref: the worktree's base, or the branch the checkout switches to. */
-  gitRef?: string;
+type Attempt = ThreadStart & {
   /** Started with Cmd/Ctrl+Enter, leaving New Thread open. */
   background: boolean;
-}
+};
 
 /** An account a worker or coordinator can run on, as the account chooser lists it. */
 export interface AccountOption {
@@ -229,16 +209,7 @@ export function NewThread({
     askForAccount = true,
     notice?: string,
   ): Promise<string | undefined> => {
-    const error = await start(
-      attempt.runId,
-      attempt.groupId,
-      attempt.prompt,
-      attempt.images,
-      attempt.options,
-      attempt.checkout,
-      attempt.gitRef,
-      attempt.threads,
-    );
+    const error = await start(attempt);
     failed.current = error ? attempt : undefined;
     if (!error) {
       onStarted(attempt.runId, notice, attempt.background);

@@ -310,6 +310,26 @@ export function rootOf(state: ThreadsState, thread: Thread): Thread {
   return root;
 }
 
+/**
+ * A thread to start in group `groupId` with `prompt` and its `images`, with `options` sent as they
+ * are, on a branch named from the prompt's words. A plxd with `threadNaming` then names the thread
+ * and its branch with the naming model in Settings (0058). With `checkout`, it works in the
+ * repository's own checkout instead of a new worktree, so it gets no branch. Reuse `runId`, with
+ * the same options, `checkout`, and `gitRef`, to retry.
+ */
+export interface ThreadStart {
+  runId: string;
+  groupId: string;
+  prompt: string;
+  images: PromptImage[];
+  /** The run ids of the threads attached to the prompt as context (0047). */
+  threads: string[];
+  options: RunOptions;
+  checkout: boolean;
+  /** The ref the worktree starts from, or with `checkout`, the branch the checkout switches to. */
+  gitRef?: string;
+}
+
 export interface ThreadsView {
   state: ThreadsState;
   /** Why the list couldn't load or stopped updating, for people. */
@@ -321,26 +341,8 @@ export interface ThreadsView {
   loading?: boolean;
   /** Registers a repository (idempotent on its path). Resolves to its entry or an error message. */
   addRepo: (path: string) => Promise<Repo | string>;
-  /**
-   * Starts a thread in a group with `prompt` and its `images`, with `options` sent as they are, on
-   * a branch named from the prompt's words. A plxd with `threadNaming` then names the thread and
-   * its branch with the naming model in Settings (0058). With `checkout`, it works in the
-   * repository's own checkout instead of a new worktree, so it gets no branch. `gitRef` is the
-   * ref the worktree starts from, or with `checkout`, the branch the checkout switches to first.
-   * `attached` are the run ids of threads attached to the prompt as context (0047). Reuse
-   * `runId`, with the same options, `checkout`, and `gitRef`, to retry. Resolves to plxd's error,
-   * or undefined.
-   */
-  start: (
-    runId: string,
-    groupId: string,
-    prompt: string,
-    images: PromptImage[],
-    options: RunOptions,
-    checkout: boolean,
-    gitRef: string | undefined,
-    attached?: string[],
-  ) => Promise<RpcError | undefined>;
+  /** Starts a thread as `ThreadStart` says. Resolves to plxd's error, or undefined. */
+  start: (start: ThreadStart) => Promise<RpcError | undefined>;
   /**
    * Forks thread `runId` at `turnId`, or at its latest turn (`thread/fork`, 0050), keeping its model
    * or running on `choice`'s. Resolves to the fork's id, or plxd's error.
@@ -567,23 +569,23 @@ export function useThreads(
         return answer.result.repo;
       },
 
-      async start(
-        runId: string,
-        groupId: string,
-        prompt: string,
-        images: PromptImage[],
-        options: RunOptions,
-        checkout: boolean,
-        gitRef: string | undefined,
-        attached: string[] = [],
-      ) {
+      async start({
+        runId,
+        groupId,
+        prompt,
+        images,
+        threads,
+        options,
+        checkout,
+        gitRef,
+      }: ThreadStart) {
         const branchSlug = slugify(prompt);
         const { naming: model, namingEffort } = newThreadPrefs.get();
         const answer = await window.parallax.request(hostId, "thread/start", {
           runId,
           prompt,
           ...(images.length > 0 && { images }),
-          ...(attached.length > 0 && { threads: attached }),
+          ...(threads.length > 0 && { threads }),
           ...(groupId !== noRepo && { repo: groupId }),
           ...options,
           // The checkout keeps its own branch, so a name gives it none.
