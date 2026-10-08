@@ -115,11 +115,20 @@ pub struct ProviderInstance {
 /// An instance's detected state, and what it offers.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about an instance, not states of one thing"
+)]
 pub struct ProviderInfo {
     /// Its settings.
     pub instance: ProviderInstance,
     /// Whether its program resolves on the host.
     pub installed: bool,
+    /// Whether plxd is installing it in the background: Cursor's SDK after `cursor/install`, or
+    /// on its own for someone who used Cursor before (0053). `note` says so meanwhile, and says
+    /// why if the install fails.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub installing: bool,
     /// The program's resolved path, when installed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -231,3 +240,13 @@ pub type CursorSignOutParams = CursorSignInParams;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CursorSignOutResult {}
+
+/// Params of `cursor/install`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorInstallParams {}
+
+/// Result of `cursor/install`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorInstallResult {}

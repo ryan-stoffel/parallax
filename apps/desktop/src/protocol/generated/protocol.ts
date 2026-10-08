@@ -501,6 +501,12 @@ export type ParallaxRequests = {
 	 * `cursor/signOut`: forgets the Cursor SDK login stored for the instance.
 	 */
 	"cursor/signOut": { params: CursorSignInParams, result: CursorSignOutResult },
+	/**
+	 * `cursor/install`: starts installing the Cursor SDK the sidecar pins into plxd's data
+	 * folder with npm, and answers at once (0053). `providers/list` reports Cursor
+	 * `installing` until it's done, then installed, or why it failed in its `note`.
+	 */
+	"cursor/install": { params: CursorInstallParams, result: CursorInstallResult },
 };
 
 /** Notifications, which get no response, by method. */
@@ -1285,6 +1291,12 @@ export type ProviderInfo = {
 	 * Whether its program resolves on the host.
 	 */
 	installed: boolean,
+	/**
+	 * Whether plxd is installing it in the background: Cursor's SDK after `cursor/install`, or
+	 * on its own for someone who used Cursor before (0053). `note` says so meanwhile, and says
+	 * why if the install fails.
+	 */
+	installing?: boolean,
 	/**
 	 * The program's resolved path, when installed.
 	 */
@@ -5699,6 +5711,16 @@ export type CursorSignInCancelResult = Record<symbol, never>;
  * Result of `cursor/signOut`.
  */
 export type CursorSignOutResult = Record<symbol, never>;
+
+/**
+ * Params of `cursor/install`.
+ */
+export type CursorInstallParams = Record<symbol, never>;
+
+/**
+ * Result of `cursor/install`.
+ */
+export type CursorInstallResult = Record<symbol, never>;
 
 /**
  * Params of `$/cancelRequest`.
