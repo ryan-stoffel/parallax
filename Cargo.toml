@@ -40,6 +40,11 @@ unsafe_code = "deny"
 pedantic = { level = "warn", priority = -1 }
 dbg_macro = "warn"
 
+# One codegen unit and no symbol table halve plxd (PLX-611). Panics still name file and line.
+[profile.release]
+codegen-units = 1
+strip = "symbols"
+
 # `cargo build --profile bench -p plxd --features fake-backend`: release optimizations with debug
 # assertions on, which the fake backend requires, for scripts/bench/load.py.
 [profile.bench]
