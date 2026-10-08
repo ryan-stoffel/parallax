@@ -7,7 +7,7 @@
 //! on one [`actor`] task per run owns it: it streams the backend's events into the event log as
 //! `agent.*` events, records usage (#120) against whichever account the run is on, takes
 //! `agent/send` and `agent/cancel`, and when a CLI process ends, commits the worktree through
-//! #166's hardened `commit_all` and reports `agent.diffReady`.
+//! #166's hardened `commit_all` and reports the diff in `agent.updated`.
 //!
 //! A run whose client started it with `approvals`, and every run in a Project, its coordinator
 //! included, lets its CLI ask before a tool call (PLX-222, decisions 0031 and 0042). It logs the

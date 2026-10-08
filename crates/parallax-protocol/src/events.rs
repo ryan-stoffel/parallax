@@ -5,8 +5,7 @@ use ts_rs::TS;
 use crate::id::uuid_v7_id;
 use crate::{
     AgentFailureKind, AgentMerge, AgentOutcome, AgentOutputItem, AgentRun, AgentRunState,
-    ContextFile, DiffSummary, InboxItem, Project, ProjectId, QueuedMessage, Repo, RepoId, RunId,
-    Thread,
+    ContextFile, InboxItem, Project, ProjectId, QueuedMessage, Repo, RepoId, RunId, Thread,
 };
 
 uuid_v7_id! {
@@ -199,14 +198,6 @@ pub enum ParallaxEvent {
         run_id: RunId,
         /// How it ended.
         outcome: AgentOutcome,
-    },
-    /// plxd committed a run's changes on its branch.
-    #[serde(rename = "agent.diffReady")]
-    AgentDiffReady {
-        /// The run's id.
-        run_id: RunId,
-        /// The commit and its stats against the worktree's base.
-        diff: DiffSummary,
     },
     /// `agent/accept` merged a run's commit into the project's branch on the host (#157). The
     /// run's worktree and branch are gone; an `agent.updated` with status `accepted` follows.

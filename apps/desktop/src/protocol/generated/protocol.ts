@@ -2541,15 +2541,7 @@ export type ParallaxEvent = { "kind": "project.created",
 	/**
 	 * How it ended.
 	 */
-	outcome: AgentOutcome, } | { "kind": "agent.diffReady",
-	/**
-	 * The run's id.
-	 */
-	runId: RunId,
-	/**
-	 * The commit and its stats against the worktree's base.
-	 */
-	diff: DiffSummary, } | { "kind": "agent.accepted",
+	outcome: AgentOutcome, } | { "kind": "agent.accepted",
 	/**
 	 * The run's id.
 	 */

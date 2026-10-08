@@ -2829,12 +2829,12 @@ impl Actor {
                 None
             }
         };
-        let mut events = vec![ParallaxEvent::AgentFinished {
+        let events = vec![ParallaxEvent::AgentFinished {
             run_id: self.id,
             outcome: outcome.clone(),
         }];
         if let Some(diff) = diff {
-            events.push(self.record_diff(diff));
+            self.record_diff(diff);
         }
         status.clone_into(&mut self.row.state.status);
         self.row.state.error = error;
@@ -2864,17 +2864,13 @@ impl Actor {
         self.daemon.agents.placement.notify_one();
     }
 
-    /// Records the run's new commit and its diff in its state, and returns the `agent.diffReady`
-    /// that tells clients. The caller saves the row with it ([`Actor::save_with`]).
-    fn record_diff(&mut self, diff: DiffSummary) -> ParallaxEvent {
-        self.row.state.commit_sha = Some(diff.commit.clone());
+    /// Records the run's new commit and its diff in its state. The caller's save reports it in
+    /// `agent.updated`.
+    fn record_diff(&mut self, diff: DiffSummary) {
+        self.row.state.commit_sha = Some(diff.commit);
         self.row.state.files_changed = Some(diff.files);
         self.row.state.insertions = Some(diff.insertions);
         self.row.state.deletions = Some(diff.deletions);
-        ParallaxEvent::AgentDiffReady {
-            run_id: self.id,
-            diff,
-        }
     }
 
     /// Commits whatever the run changed in its worktree, on its branch, with `message`, and
@@ -3019,7 +3015,7 @@ impl Actor {
     }
 
     /// [`Actor::save`], staging `events` before `agent.updated` in the same job, so an
-    /// `agent.finished` or `agent.diffReady` commits with the state it reports: a crash can't
+    /// `agent.finished` commits with the state it reports: a crash can't
     /// leave the event without the row, and a restart then report the run interrupted after it.
     async fn save_with(&mut self, events: Vec<ParallaxEvent>) {
         let (id, state) = (self.row.id, self.row.state.clone());
@@ -3666,9 +3662,8 @@ mod tests {
         );
     }
 
-    /// `agent.finished` and `agent.diffReady` commit with the state they report, in `save`'s job:
-    /// a save that fails publishes neither, and one that commits publishes them before
-    /// `agent.updated`, so a restart can't find the run running after its finish.
+    /// `agent.finished` commits with the state it reports, in `save`'s job: a save that fails
+    /// publishes neither, and one that commits publishes it before `agent.updated`, so a restart can't find the run running after its finish.
     #[tokio::test]
     async fn a_finish_commits_with_the_runs_state_or_not_at_all() {
         let dir = tempfile::tempdir().unwrap();

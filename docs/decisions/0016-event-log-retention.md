@@ -15,7 +15,7 @@
 
 ### Run events stay while their run does
 
-An agent run's events (`agent.started`, `agent.updated`, `agent.output`, `agent.accountFallback`, `agent.finished`, `agent.diffReady`) stay in the table for as long as the run's row does in `runs`. A finished turn's `agent.output` batches are rewritten as one row once they leave the in-memory window (0052), so a run's history is one row per finished turn rather than one per 50 ms batch. Only deleting a thread (`thread/delete`) or a Project (`project/delete`, PLX-338) removes a run's row, and its events with it. `agent/events` pages a run's whole history from the table (0014), and guessing at a run-history retention policy (keep the last N finished runs? by age? per project?) without a real run-removal feature to hang it on would be arbitrary. #207 tracks pruning old finished runs (and their events) once that's needed.
+An agent run's events (`agent.started`, `agent.updated`, `agent.output`, `agent.accountFallback`, `agent.finished`) stay in the table for as long as the run's row does in `runs`. A finished turn's `agent.output` batches are rewritten as one row once they leave the in-memory window (0052), so a run's history is one row per finished turn rather than one per 50 ms batch. Only deleting a thread (`thread/delete`) or a Project (`project/delete`, PLX-338) removes a run's row, and its events with it. `agent/events` pages a run's whole history from the table (0014), and guessing at a run-history retention policy (keep the last N finished runs? by age? per project?) without a real run-removal feature to hang it on would be arbitrary. #207 tracks pruning old finished runs (and their events) once that's needed.
 
 ### Host and project events are pruned by count
 
