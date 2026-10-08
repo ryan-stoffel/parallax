@@ -45,6 +45,7 @@ const electronBundle = (name: "main" | "preload"): PackUserConfig => ({
   format: "cjs",
   platform: "node",
   sourcemap: true,
+  minify: true,
   deps: {
     neverBundle: external,
     alwaysBundle: (id) => !external.includes(id) && !id.startsWith("node:"),

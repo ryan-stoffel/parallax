@@ -20,10 +20,15 @@ publish:
 # would fetch Electron's headers and run node-gyp anyway on some runners.
 npmRebuild: false
 # dist/ is the whole app: vite.config.ts bundles every dependency except node-pty. Only
-# `dependencies` are packaged, and package.json keeps just that one there.
+# `dependencies` are packaged, and package.json keeps just that one there. Sourcemaps stay out:
+# nothing enables them at run time. node-pty keeps only the prebuild for this build's OS and arch
+# (`${platform}` is the build machine's, and package-app builds for its own arch), the only one
+# it loads.
 files:
   - dist/**
   - package.json
+  - "!**/*.map"
+  - "!node_modules/node-pty/prebuilds/!(${platform}-${arch})/**"
 # Native code can't load from inside app.asar: node-pty's prebuilds and spawn-helper.
 asarUnpack:
   - node_modules/node-pty/**
