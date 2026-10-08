@@ -39,7 +39,14 @@ export function useHosts(): Host[] {
     return stop;
   }, []);
   useEffect(() => window.parallax.onLocalName(setLocalName), []);
-  useEffect(() => window.parallax.onDevices(setDevices), []);
+  // Each look for devices sends them again, so an unchanged list keeps the old array.
+  useEffect(
+    () =>
+      window.parallax.onDevices((next) =>
+        setDevices((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next)),
+      ),
+    [],
+  );
   const icon = connect?.on ? connect.icon : undefined;
   // The same array until the hosts change, so lists built from it can be kept.
   return useMemo(

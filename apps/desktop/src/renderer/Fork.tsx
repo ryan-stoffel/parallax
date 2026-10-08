@@ -69,6 +69,9 @@ export function ForkMenu({
   const menu = ref ?? own;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // Its items render only while it's open: set before it shows, so the first takes focus, and
+  // cleared once it has hidden, so focus goes back to the button that opened it.
+  const [open, setOpen] = useState(false);
   const instance = (p: string) => catalog.instances.find((i) => i.id === p);
   const logo = (p: string) => {
     const found = instance(p);
@@ -95,57 +98,65 @@ export function ForkMenu({
       popover="auto"
       role="menu"
       aria-label="Fork"
+      onBeforeToggle={(e) => e.newState === "open" && setOpen(true)}
       onToggle={(e: ToggleEvent<HTMLDivElement>) => {
         if (e.newState === "open")
           e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-        else setError(undefined);
+        else {
+          setError(undefined);
+          setOpen(false);
+        }
       }}
       onKeyDown={moveFocus}
       className={`${menuPanel(align)} w-64 p-1 text-[13px]`}
     >
-      <p className="px-2 pt-1 pb-1.5 text-[11.5px] font-medium text-faint-foreground">
-        Fork into a new thread
-      </p>
-      <button
-        type="button"
-        role="menuitem"
-        disabled={busy}
-        onClick={() => void pick({})}
-        className={`${menuItem} disabled:opacity-50`}
-      >
-        <KeptLogo aria-hidden />
-        <span className="truncate">Keep {keptName}</span>
-      </button>
-      {others.length > 0 && (
+      {open && (
         <>
-          <div className="my-1 h-px bg-border" />
-          <p className="px-2 pt-0.5 pb-1 text-[11.5px] font-medium text-faint-foreground">
-            Or pick another model
+          <p className="px-2 pt-1 pb-1.5 text-[11.5px] font-medium text-faint-foreground">
+            Fork into a new thread
           </p>
-          <div className="max-h-56 overflow-y-auto">
-            {others.map((m) => {
-              const Logo = logo(m.provider);
-              // Two providers can offer a model of the same name.
-              const where = instance(m.provider)?.name ?? m.provider;
-              return (
-                <button
-                  key={`${m.provider}/${m.id}`}
-                  type="button"
-                  role="menuitem"
-                  aria-label={`${m.name} (${where})`}
-                  disabled={busy}
-                  onClick={() => void pick(choiceOf(m, run))}
-                  className={`${menuItem} disabled:opacity-50`}
-                >
-                  <Logo aria-hidden />
-                  <span className="truncate">{m.name}</span>
-                  <span className="ml-auto shrink-0 text-[12px] text-faint-foreground">
-                    {where}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={busy}
+            onClick={() => void pick({})}
+            className={`${menuItem} disabled:opacity-50`}
+          >
+            <KeptLogo aria-hidden />
+            <span className="truncate">Keep {keptName}</span>
+          </button>
+          {others.length > 0 && (
+            <>
+              <div className="my-1 h-px bg-border" />
+              <p className="px-2 pt-0.5 pb-1 text-[11.5px] font-medium text-faint-foreground">
+                Or pick another model
+              </p>
+              <div className="max-h-56 overflow-y-auto">
+                {others.map((m) => {
+                  const Logo = logo(m.provider);
+                  // Two providers can offer a model of the same name.
+                  const where = instance(m.provider)?.name ?? m.provider;
+                  return (
+                    <button
+                      key={`${m.provider}/${m.id}`}
+                      type="button"
+                      role="menuitem"
+                      aria-label={`${m.name} (${where})`}
+                      disabled={busy}
+                      onClick={() => void pick(choiceOf(m, run))}
+                      className={`${menuItem} disabled:opacity-50`}
+                    >
+                      <Logo aria-hidden />
+                      <span className="truncate">{m.name}</span>
+                      <span className="ml-auto shrink-0 text-[12px] text-faint-foreground">
+                        {where}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </>
       )}
       {error && (

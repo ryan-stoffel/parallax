@@ -11,7 +11,8 @@ import { dragThread } from "./threadDrag";
 // Two threads side by side (PLX-587).
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-// happy-dom has no popovers. The menus' items are in the DOM either way.
+// happy-dom has no popovers. A row's menus render their items once sent the event a browser sends
+// as one opens.
 HTMLElement.prototype.showPopover = () => {};
 HTMLElement.prototype.hidePopover = () => {};
 
@@ -121,8 +122,13 @@ const threadRow = (title: string) =>
   [...document.querySelectorAll('#sidebar li[data-kind="thread"]')].find(
     (li) => li.querySelector("[data-title]")?.textContent === title,
   )!;
-const menuItem = (row: Element, label: string) =>
-  [...row.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent === label);
+const menuItem = (row: Element, label: string) => {
+  act(() => {
+    for (const menu of row.querySelectorAll('[role="menu"]'))
+      menu.dispatchEvent(Object.assign(new Event("beforetoggle"), { newState: "open" }));
+  });
+  return [...row.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent === label);
+};
 // Each side's title, the focused one starred.
 const panes = () =>
   [...document.querySelectorAll("main section[data-pane]")].map(

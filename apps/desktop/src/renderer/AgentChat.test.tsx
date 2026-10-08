@@ -160,6 +160,11 @@ test("in a fork, the history it copied is muted and offers no Fork, and the late
   expect(
     forks()[1]!.closest(".group\\/prompt")!.querySelector('[aria-label="Copy message"]'),
   ).not.toBeNull();
+  // happy-dom has no popovers: the Fork menus get the event a browser sends as one opens.
+  act(() => {
+    for (const menu of document.querySelectorAll('[role="menu"][aria-label="Fork"]'))
+      menu.dispatchEvent(Object.assign(new Event("beforetoggle"), { newState: "open" }));
+  });
   const keep = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) =>
     b.textContent?.startsWith("Keep"),
   )!;

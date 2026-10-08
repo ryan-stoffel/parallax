@@ -1305,7 +1305,9 @@ body {
 }
 
 /* The sidebar's attention marks (AttentionMark.tsx, 0033), from the logo's two circles. Only
-   transform and opacity move, so a list of working rows stays on the compositor. */
+   transform and opacity move. Chromium repaints an svg's animated children on the main thread
+   each frame, and will-change gives each Working mark a layer of its own, which keeps that repaint
+   from reaching the GPU process. */
 .mark-blue,
 .mark-coral {
   transform-box: fill-box;
@@ -1317,6 +1319,9 @@ body {
 }
 .mark-coral {
   fill: var(--mark-coral);
+}
+.mark-working {
+  will-change: transform;
 }
 /* Each slides through the other and back; the one passing in front grows, the other shrinks. */
 .mark-working .mark-blue {

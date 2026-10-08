@@ -40,8 +40,10 @@ import {
   Fragment,
   useEffect,
   useId,
+  useImperativeHandle,
   useRef,
   useState,
+  type ComponentProps,
   type ComponentType,
   type ReactNode,
   type RefObject,
@@ -364,8 +366,7 @@ export function ThreadList({
   // The threads whose children show, by key, and the open thread whose groups were last opened.
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [revealed, setRevealed] = useState<string>();
-  const [card, setCard] = useState<{ item: Item; top: number; left: number }>();
-  const cardTimer = useRef<number>(undefined);
+  const card = useRef<CardHandle>(null);
   // Snoozes end on time even with nothing else changing.
   const now = useMinute();
 
@@ -495,21 +496,7 @@ export function ThreadList({
     return () => window.removeEventListener("keydown", onKeyDown);
   });
 
-  const showCard = (item: Item, row: HTMLElement) => {
-    window.clearTimeout(cardTimer.current);
-    const place = () => {
-      const rect = row.getBoundingClientRect();
-      // A little clear of the sidebar, and kept on screen: it is at most about 15rem tall.
-      const edge = (row.closest("#sidebar") ?? row).getBoundingClientRect().right;
-      setCard({ item, top: Math.min(rect.top, window.innerHeight - 248), left: edge + 12 });
-    };
-    if (card) place();
-    else cardTimer.current = window.setTimeout(place, cardDelay);
-  };
-  const hideCard = () => {
-    window.clearTimeout(cardTimer.current);
-    setCard(undefined);
-  };
+  const hideCard = () => card.current?.hide();
 
   const askDelete = (item: Item) => {
     setToDelete(item);
@@ -591,7 +578,18 @@ export function ThreadList({
           });
           setActionError("error" in answer ? answer.error.message : undefined);
         }}
-        onRest={(el) => showCard(item, el)}
+        onRest={(el) =>
+          card.current?.show(el, {
+            title: titleOf(item),
+            run: view.state.runs[t.id],
+            repo: {
+              name: item.repo && !item.repo.scratch ? item.repo.name : "No Repo",
+              icon: <RepoIcon repo={item.repo} />,
+            },
+            host: item.host,
+            snoozedUntil: t.snoozedUntil,
+          })
+        }
         onLeave={hideCard}
       />
     );
@@ -756,22 +754,7 @@ export function ThreadList({
         row={row}
         pageSize={pageArchived ? archivePageSize : undefined}
       />
-      {card && (
-        <ThreadCard
-          title={titleOf(card.item)}
-          run={
-            card.item.kind === "thread" ? card.item.view.state.runs[card.item.thread.id] : undefined
-          }
-          repo={{
-            name: card.item.repo && !card.item.repo.scratch ? card.item.repo.name : "No Repo",
-            icon: <RepoIcon repo={card.item.repo} />,
-          }}
-          host={card.item.host}
-          snoozedUntil={card.item.kind === "thread" ? card.item.thread.snoozedUntil : undefined}
-          top={card.top}
-          left={card.left}
-        />
-      )}
+      <RowCard ref={card} />
       <AddDialog
         ref={addDialog}
         hosts={hosts.map((h) => h.host)}
@@ -878,8 +861,9 @@ function SectionToggle({
 
 /**
  * A drawer pinned under the list, such as Working, Snoozed, or Archived, shown while it holds any
- * rows. It scrolls under a cap, and its summary sticks to the top, so collapsing stays reachable.
- * With `pageSize`, the first page shows and each click reveals that many more.
+ * rows, which render only while it's open. It scrolls under a cap, and its summary sticks to the
+ * top, so collapsing stays reachable. With `pageSize`, the first page shows and each click reveals
+ * that many more.
  */
 function Drawer<T>({
   label,
@@ -898,15 +882,19 @@ function Drawer<T>({
 }) {
   const details = useRef<HTMLDetailsElement>(null);
   const [pages, setPages] = useState(1);
+  const [open, setOpen] = useState(defaultOpen);
   const shown = items.length > 0;
   // Uncontrolled after this: a controlled `open` fights the summary's own toggle.
   useEffect(() => {
     const el = details.current;
     if (!el) return;
     if (defaultOpen) el.open = true;
-    const onToggle = () => onOpenChange?.(el.open);
+    const onToggle = () => {
+      setOpen(el.open);
+      onOpenChange?.(el.open);
+    };
     el.addEventListener("toggle", onToggle);
-    onOpenChange?.(el.open);
+    onToggle();
     return () => el.removeEventListener("toggle", onToggle);
   }, [shown, defaultOpen, onOpenChange]);
   if (!shown) return null;
@@ -918,7 +906,12 @@ function Drawer<T>({
       ref={details}
       className="group/drawer max-h-[40%] min-h-0 shrink-0 overflow-y-auto px-2 pb-1"
     >
-      <summary className="sticky top-0 z-10 flex cursor-default list-none items-center gap-3 rounded-md bg-sidebar px-2 py-1.5 text-[12.5px] text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+      <summary
+        // Before the summary opens it, so its rows are there in the frame that opens it. Closing
+        // waits for the toggle: a closed drawer hides its rows anyway.
+        onClick={() => setOpen(true)}
+        className="sticky top-0 z-10 flex cursor-default list-none items-center gap-3 rounded-md bg-sidebar px-2 py-1.5 text-[12.5px] text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
+      >
         <span>
           {label} <span className="text-faint-foreground">({items.length})</span>
         </span>
@@ -928,8 +921,8 @@ function Drawer<T>({
           className="size-4 shrink-0 transition-transform group-open/drawer:rotate-180"
         />
       </summary>
-      <ul className="flex flex-col gap-0.5">{visible.map(row)}</ul>
-      {more > 0 && (
+      {open && <ul className="flex flex-col gap-0.5">{visible.map(row)}</ul>}
+      {open && more > 0 && (
         <button
           type="button"
           onClick={() => setPages((n) => n + 1)}
@@ -1554,6 +1547,10 @@ function ThreadRow({
   const snoozeMenu = useRef<HTMLDivElement>(null);
   const actions = useRef<HTMLButtonElement>(null);
   const [custom, setCustom] = useState("");
+  // Each menu's items render only while it's open: set before it shows, so its first item takes
+  // focus, and cleared once it has hidden, so focus goes back to its button.
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   // The host's auto-resume setting, read as the menu opens, for the run's own toggle.
   const [hostResumes, setHostResumes] = useState<boolean>();
   const resumes = run?.autoResume ?? hostResumes ?? true;
@@ -1692,60 +1689,66 @@ function ThreadRow({
           popover="auto"
           role="menu"
           aria-label="Snooze"
+          onBeforeToggle={(e) => e.newState === "open" && setSnoozeOpen(true)}
           onToggle={(e: ToggleEvent<HTMLDivElement>) => {
             if (e.newState === "open")
               e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+            else setSnoozeOpen(false);
           }}
           onKeyDown={moveFocus}
           className={`${menuPanel("end")} min-w-56 p-1`}
         >
-          {snoozeChoices().map((c) => (
-            <button
-              key={c.label}
-              type="button"
-              role="menuitem"
-              className={menuItem}
-              onClick={choose(() => onSnooze(c.until))}
-            >
-              {c.label}
-              <span className="ml-auto text-[12px] text-faint-foreground tabular-nums">
-                {c.label.startsWith("In") ? clock(c.until.toISOString()) : when(c.until)}
-              </span>
-            </button>
-          ))}
-          <div className="my-1 h-px bg-border" />
-          <form
-            className="flex items-center gap-1 px-1 py-0.5"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const until = new Date(custom);
-              if (!Number.isNaN(until.getTime())) choose(() => onSnooze(until))();
-            }}
-          >
-            <input
-              type="datetime-local"
-              aria-label="Snooze until"
-              value={custom}
-              onChange={(e) => setCustom(e.target.value)}
-              className="min-w-0 flex-1 rounded-md bg-hover px-1.5 py-1 text-[12px] [color-scheme:inherit]"
-            />
-            <button
-              type="submit"
-              disabled={!custom}
-              className="rounded-md px-2 py-1 text-[12px] hover:bg-hover disabled:opacity-50"
-            >
-              Custom
-            </button>
-          </form>
-          {snoozedNow && (
-            <button
-              type="button"
-              role="menuitem"
-              className={menuItem}
-              onClick={choose(() => onSnooze(new Date()))}
-            >
-              Unsnooze
-            </button>
+          {snoozeOpen && (
+            <>
+              {snoozeChoices().map((c) => (
+                <button
+                  key={c.label}
+                  type="button"
+                  role="menuitem"
+                  className={menuItem}
+                  onClick={choose(() => onSnooze(c.until))}
+                >
+                  {c.label}
+                  <span className="ml-auto text-[12px] text-faint-foreground tabular-nums">
+                    {c.label.startsWith("In") ? clock(c.until.toISOString()) : when(c.until)}
+                  </span>
+                </button>
+              ))}
+              <div className="my-1 h-px bg-border" />
+              <form
+                className="flex items-center gap-1 px-1 py-0.5"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const until = new Date(custom);
+                  if (!Number.isNaN(until.getTime())) choose(() => onSnooze(until))();
+                }}
+              >
+                <input
+                  type="datetime-local"
+                  aria-label="Snooze until"
+                  value={custom}
+                  onChange={(e) => setCustom(e.target.value)}
+                  className="min-w-0 flex-1 rounded-md bg-hover px-1.5 py-1 text-[12px] [color-scheme:inherit]"
+                />
+                <button
+                  type="submit"
+                  disabled={!custom}
+                  className="rounded-md px-2 py-1 text-[12px] hover:bg-hover disabled:opacity-50"
+                >
+                  Custom
+                </button>
+              </form>
+              {snoozedNow && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={menuItem}
+                  onClick={choose(() => onSnooze(new Date()))}
+                >
+                  Unsnooze
+                </button>
+              )}
+            </>
           )}
         </div>
       )}
@@ -1755,8 +1758,12 @@ function ThreadRow({
         popover="auto"
         role="menu"
         aria-label="Thread actions"
+        onBeforeToggle={(e) => e.newState === "open" && setMenuOpen(true)}
         onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-          if (e.newState !== "open") return;
+          if (e.newState !== "open") {
+            setMenuOpen(false);
+            return;
+          }
           e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
           if (autoResumable && run)
             void window.parallax.request(hostId, "host/settings/get", {}).then((answer) => {
@@ -1766,50 +1773,61 @@ function ThreadRow({
         onKeyDown={moveFocus}
         className={`${menuPanel("end")} min-w-36 p-1`}
       >
-        {onOpenBeside && (
-          <button type="button" role="menuitem" className={menuItem} onClick={choose(onOpenBeside)}>
-            Open side by side
-          </button>
-        )}
-        <button type="button" role="menuitem" className={menuItem} onClick={choose(onArchive)}>
-          {thread.archived ? "Unarchive" : "Archive"}
-        </button>
-        {onFork && run && (
-          // Its latest turn forks once it ends; Fork's own menu opens under the actions button.
-          <button
-            type="button"
-            role="menuitem"
-            disabled={isRunning(run.status)}
-            title={isRunning(run.status) ? "Fork once this turn finishes" : undefined}
-            className={`${menuItem} disabled:opacity-50`}
-            onClick={choose(() =>
-              forkMenu.current?.showPopover({ source: actions.current ?? undefined }),
+        {menuOpen && (
+          <>
+            {onOpenBeside && (
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItem}
+                onClick={choose(onOpenBeside)}
+              >
+                Open side by side
+              </button>
             )}
-          >
-            Fork…
-          </button>
+            <button type="button" role="menuitem" className={menuItem} onClick={choose(onArchive)}>
+              {thread.archived ? "Unarchive" : "Archive"}
+            </button>
+            {onFork && run && (
+              // Its latest turn forks once it ends; Fork's own menu opens under the actions button.
+              <button
+                type="button"
+                role="menuitem"
+                disabled={isRunning(run.status)}
+                title={isRunning(run.status) ? "Fork once this turn finishes" : undefined}
+                className={`${menuItem} disabled:opacity-50`}
+                onClick={choose(() =>
+                  forkMenu.current?.showPopover({ source: actions.current ?? undefined }),
+                )}
+              >
+                Fork…
+              </button>
+            )}
+            {autoResumable && run && (
+              // Choosing the host's setting clears the override, so the thread follows the host again.
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={resumes}
+                className={menuItem}
+                onClick={choose(() =>
+                  onAutoResume(!resumes === hostResumes ? undefined : !resumes),
+                )}
+              >
+                Resume after usage limits
+                {resumes && <Check aria-hidden className="ml-auto size-3.5" />}
+              </button>
+            )}
+            <button
+              type="button"
+              role="menuitem"
+              className={`${menuItem} text-danger`}
+              onClick={choose(onDelete)}
+            >
+              Delete…
+            </button>
+          </>
         )}
-        {autoResumable && run && (
-          // Choosing the host's setting clears the override, so the thread follows the host again.
-          <button
-            type="button"
-            role="menuitemcheckbox"
-            aria-checked={resumes}
-            className={menuItem}
-            onClick={choose(() => onAutoResume(!resumes === hostResumes ? undefined : !resumes))}
-          >
-            Resume after usage limits
-            {resumes && <Check aria-hidden className="ml-auto size-3.5" />}
-          </button>
-        )}
-        <button
-          type="button"
-          role="menuitem"
-          className={`${menuItem} text-danger`}
-          onClick={choose(onDelete)}
-        >
-          Delete…
-        </button>
       </div>
       {onFork && run && (
         <ForkMenu
@@ -1907,6 +1925,36 @@ export const statusLooks: Partial<Record<AgentStatus, { Icon: LucideIcon; color:
   waiting: { Icon: AlarmClock, color: "text-warning" },
   accepted: { Icon: GitMerge, color: "text-violet-500" },
 };
+
+type CardContent = Omit<ComponentProps<typeof ThreadCard>, "top" | "left">;
+type CardHandle = { show: (row: HTMLElement, content: CardContent) => void; hide: () => void };
+
+/**
+ * The card of the thread row the pointer rests on, which the rows show and hide through `ref`, so
+ * resting on one re-renders only the card, not the list.
+ */
+function RowCard({ ref }: { ref: RefObject<CardHandle | null> }) {
+  const [card, setCard] = useState<ComponentProps<typeof ThreadCard>>();
+  const timer = useRef<number>(undefined);
+  useImperativeHandle(ref, () => ({
+    show(row, content) {
+      window.clearTimeout(timer.current);
+      const place = () => {
+        const rect = row.getBoundingClientRect();
+        // A little clear of the sidebar, and kept on screen: it is at most about 15rem tall.
+        const edge = (row.closest("#sidebar") ?? row).getBoundingClientRect().right;
+        setCard({ ...content, top: Math.min(rect.top, window.innerHeight - 248), left: edge + 12 });
+      };
+      if (card) place();
+      else timer.current = window.setTimeout(place, cardDelay);
+    },
+    hide() {
+      window.clearTimeout(timer.current);
+      setCard(undefined);
+    },
+  }));
+  return card && <ThreadCard {...card} />;
+}
 
 /**
  * What a thread is, shown beside its row: its title, repository, computer, branch, account,

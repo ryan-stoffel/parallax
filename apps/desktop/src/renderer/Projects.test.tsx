@@ -2222,6 +2222,9 @@ test("Archived lists 25 threads, Show more reveals the next page, and the summar
   await renderApp();
   const archived = drawer("Archived")!;
   expect(archived.querySelector("summary")!.textContent).toContain("(60)");
+  // Its rows render only while it's open.
+  expect(drawerTitles("Archived")).toEqual([]);
+  await click(archived.querySelector("summary"));
   // The drawer itself scrolls, and its summary sticks to the top of that scroll.
   expect(archived.className).toContain("overflow-y-auto");
   expect(archived.querySelector("summary")!.className).toContain("sticky");
@@ -2242,6 +2245,7 @@ test("Archived lists 25 threads, Show more reveals the next page, and the summar
   sidebarPrefs.set({ ...sidebarDefaults, pageArchived: false });
   act(() => unmount());
   await renderApp();
+  await click(drawer("Archived")!.querySelector("summary"));
   expect(drawerTitles("Archived")).toHaveLength(60);
   expect(
     [...drawer("Archived")!.querySelectorAll("button")].some((b) =>
