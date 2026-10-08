@@ -72,6 +72,18 @@ export const NPM_INSTALLS: Partial<Record<ProviderKind, string>> = {
 export const npmInstallLine = (pkg: string, windows: boolean) =>
   windows ? `npm install -g ${pkg}` : `npm install -g --prefix "$HOME/.local" ${pkg}`;
 
+/**
+ * `tag` in canonical form if `Intl` accepts it, else undefined (the default locale). Linux can
+ * report tags that make every formatter throw, such as "c" for LANG=C.UTF-8 or "ca-ES@valencia".
+ */
+export function validLocale(tag: string | undefined): string | undefined {
+  try {
+    return tag ? Intl.getCanonicalLocales(tag)[0] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface ParallaxBridge {
   /** Node's `process.platform`, e.g. "darwin", "win32", "linux". */
   platform: string;
@@ -102,6 +114,8 @@ export interface ParallaxBridge {
    * `pnpm dev`, from a checkout (PLX-204).
    */
   updatable: boolean;
+  /** The OS's locale, such as "de-DE", for `src/renderer/locale.ts`. Undefined when invalid. */
+  locale: string | undefined;
   /**
    * Packaged: installs the downloaded release and relaunches, else downloads the available one,
    * else checks now. A packaged app follows its own build's channel (0028): a nightly follows

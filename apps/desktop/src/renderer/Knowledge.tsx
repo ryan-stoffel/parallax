@@ -8,6 +8,7 @@ import { board, ContextReader, useContent, useProjectContext } from "./ContextPa
 import { DoneMark } from "./AttentionMark";
 import type { InboxView } from "./Inbox";
 import { Loader } from "./Loader";
+import { locale } from "./locale";
 import { MemoryPanel, type Memory } from "./MemoryPanel";
 import { MiniPrompt } from "./MiniPrompt";
 import { age } from "./Sidebar";
@@ -347,7 +348,7 @@ function ProjectFiles({
   onBack: () => void;
 }) {
   const sorted = files.toSorted((a, b) =>
-    a.path === board ? -1 : b.path === board ? 1 : a.path.localeCompare(b.path),
+    a.path === board ? -1 : b.path === board ? 1 : a.path.localeCompare(b.path, locale()),
   );
   return (
     <div className="flex min-h-0 flex-1 flex-col">

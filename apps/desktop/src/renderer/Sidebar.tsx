@@ -75,6 +75,7 @@ import {
   type Attention,
 } from "./attention";
 import { AttentionBadge } from "./AttentionMark";
+import { locale } from "./locale";
 import { AutonomyChoice } from "./ProjectPermission";
 import { resumeTime } from "./ResumeCard";
 import { ConnectionStatus } from "./ConnectionStatus";
@@ -1911,7 +1912,7 @@ function SplitGroup({
 
 /** A day and time a snooze ends, as its menu writes it: "Mon 9:00 AM". */
 function when(date: Date): string {
-  return date.toLocaleString(undefined, { weekday: "short", ...clockOptions() });
+  return date.toLocaleString(locale(), { weekday: "short", ...clockOptions() });
 }
 
 /** A run's status as its icon and color, in a thread's card and the Agents list. */

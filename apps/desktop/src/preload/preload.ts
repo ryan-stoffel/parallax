@@ -12,6 +12,7 @@ import type {
   UpdateState,
   ParallaxBridge,
 } from "./bridge";
+import { validLocale } from "./bridge";
 
 // Subscription listeners by the key this preload gave them.
 const subscriptions = new Map<string, (message: SubscriptionMessage) => void>();
@@ -39,6 +40,11 @@ const bridge: ParallaxBridge = {
   cloneRepo: (slug, dest) => ipcRenderer.invoke("parallax:cloneRepo", slug, dest),
   copyPicture: (rect) => ipcRenderer.invoke("parallax:copyPicture", rect) as Promise<void>,
   updatable: process.argv.includes("--parallax-updatable"),
+  locale: validLocale(
+    process.argv
+      .find((arg) => arg.startsWith("--parallax-locale="))
+      ?.slice("--parallax-locale=".length),
+  ),
   update: () => ipcRenderer.invoke("parallax:update") as Promise<string>,
   onUpdateState(listener) {
     const forward = (_event: unknown, state: UpdateState) => listener(state);

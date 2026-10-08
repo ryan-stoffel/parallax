@@ -42,6 +42,7 @@ import { MarkdownText } from "./AgentChat";
 import { diffBand, diffLook } from "./Approval";
 import { tabItem } from "./Composer";
 import { describeError, githubProblem } from "./errors";
+import { locale } from "./locale";
 import { behaviorPrefs } from "./prefs";
 import { age } from "./Sidebar";
 import { menuItem, menuPanel, moveFocus, SetUpGithub } from "./ui";
@@ -230,8 +231,10 @@ export function PullRequestList({
                     <span className="min-w-0 flex-1 truncate">{pr?.title ?? repoOf(url)}</span>
                     {pr && (
                       <span className="shrink-0 font-mono text-[12px]">
-                        <span className="text-added">+{pr.additions.toLocaleString()}</span>{" "}
-                        <span className="text-danger">−{pr.deletions.toLocaleString()}</span>
+                        <span className="text-added">+{pr.additions.toLocaleString(locale())}</span>{" "}
+                        <span className="text-danger">
+                          −{pr.deletions.toLocaleString(locale())}
+                        </span>
                       </span>
                     )}
                   </span>
@@ -944,8 +947,8 @@ export function PullRequestView({
           <span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
             <FileDiff aria-hidden className="size-4" />
             {pr.changedFiles} {pr.changedFiles === 1 ? "file" : "files"}
-            <span className="font-mono text-added">+{pr.additions.toLocaleString()}</span>
-            <span className="font-mono text-danger">−{pr.deletions.toLocaleString()}</span>
+            <span className="font-mono text-added">+{pr.additions.toLocaleString(locale())}</span>
+            <span className="font-mono text-danger">−{pr.deletions.toLocaleString(locale())}</span>
           </span>
         </div>
       </header>

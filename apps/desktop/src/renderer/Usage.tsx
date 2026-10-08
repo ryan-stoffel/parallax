@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type { AccountUsage, UsageLimitWindow, UsagePeriod } from "../protocol/generated/protocol";
+import { locale } from "./locale";
 import { hourCycle } from "./prefs";
 
 /** The two periods `usage/get` reports: today, and this week from Monday, in the host's local time. */
@@ -174,7 +175,7 @@ function duration(ms: number, short = false): string {
 }
 
 const at = (iso: string) =>
-  new Date(iso).toLocaleString(undefined, {
+  new Date(iso).toLocaleString(locale(), {
     dateStyle: "medium",
     timeStyle: "short",
     ...hourCycle(),

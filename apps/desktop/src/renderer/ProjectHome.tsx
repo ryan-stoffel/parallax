@@ -6,6 +6,7 @@ import { runAttention, type Attention } from "./attention";
 import { DoneMark } from "./AttentionMark";
 import { questionOf, type InboxView } from "./Inbox";
 import { Loader } from "./Loader";
+import { locale } from "./locale";
 import { OpenHint } from "./OpenHint";
 import type { ProjectAgentsView } from "./ProjectAgents";
 import { instanceLogo } from "./providers";
@@ -397,7 +398,7 @@ const columns = 18;
 const columnMs = 10 * 60 * 1000;
 const rows = 5;
 
-const clock = (at: number) => new Date(at).toLocaleTimeString(undefined, clockOptions());
+const clock = (at: number) => new Date(at).toLocaleTimeString(locale(), clockOptions());
 
 /**
  * The Project's pulse as a dot matrix: a column every ten minutes over the last three hours, lit

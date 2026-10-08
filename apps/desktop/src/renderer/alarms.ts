@@ -4,6 +4,7 @@ import type { ConnectionState, Profile } from "../preload/bridge";
 import type { AgentRun, InboxItem, Thread } from "../protocol/generated/protocol";
 import { attentionOf, type Attention } from "./attention";
 import type { Host } from "./hosts";
+import { locale } from "./locale";
 import { notify, type Notice } from "./notifications";
 import type { HostThreads } from "./Sidebar";
 import { asksOf } from "./threads";
@@ -100,7 +101,7 @@ export function markOf(thread: Thread, run: AgentRun | undefined, asks: number):
 // rather than, say, a pull request linked to a run that finished long ago.
 const active: ThreadMark[] = ["working", "needsYou", "waiting"];
 
-const clock = (at: string) => new Date(at).toLocaleTimeString([], clockOptions());
+const clock = (at: string) => new Date(at).toLocaleTimeString(locale(), clockOptions());
 
 /**
  * The notice for a thread whose mark changed from `before` to `now`, named `name`, if the change
