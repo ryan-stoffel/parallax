@@ -1,10 +1,11 @@
 //! `cursor/signIn`, `cursor/signInCancel`, and `cursor/signOut` (0053): a Cursor account login
-//! through the SDK sidecar, gated on the `providers` capability like `providers/list`.
+//! through the SDK sidecar, and `cursor/install`, which installs the SDK. Gated on the
+//! `providers` capability like `providers/list`.
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    CursorSignInCancelParams, CursorSignInCancelResult, CursorSignInParams, CursorSignInResult,
-    CursorSignOutParams, CursorSignOutResult,
+    CursorInstallParams, CursorInstallResult, CursorSignInCancelParams, CursorSignInCancelResult,
+    CursorSignInParams, CursorSignInResult, CursorSignOutParams, CursorSignOutResult,
 };
 
 use super::Context;
@@ -59,6 +60,20 @@ pub(crate) async fn sign_out(
         .map_err(ErrorObject::internal_error)?;
     context.daemon.providers.invalidate(&instance).await;
     Ok(CursorSignOutResult {})
+}
+
+/// Installs the Cursor SDK into plxd's data folder, once the user asks for it.
+pub(crate) async fn install(
+    context: &Context,
+    _: CursorInstallParams,
+) -> Result<CursorInstallResult, ErrorObject> {
+    context
+        .daemon
+        .cursor
+        .install()
+        .await
+        .map_err(ErrorObject::internal_error)?;
+    Ok(CursorInstallResult {})
 }
 
 fn instance_of(instance: Option<String>) -> String {

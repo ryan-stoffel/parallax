@@ -39,30 +39,31 @@ use crate::{
     AgentResumeNowParams, AgentRunResult, AgentSendParams, AgentStartParams, AgentWaitParams,
     AgentWaitResult, ConnectDevicesParams, ConnectDevicesResult, ContextListParams,
     ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
-    ContextWriteResult, CursorSignInCancelParams, CursorSignInCancelResult, CursorSignInParams,
-    CursorSignInResult, CursorSignOutParams, CursorSignOutResult, EventsEventParams,
-    EventsResyncParams, EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams,
-    EventsUnsubscribeResult, GitStatus, GithubInstallParams, GithubSignIn,
-    GithubSignInCancelParams, GithubSignInCancelResult, GithubSignInParams, GithubStatus,
-    GithubStatusParams, HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams,
-    HostSettingsSetParams, HostVersionParams, HostVersionResult, InboxListParams, InboxListResult,
-    InboxSeenParams, InboxSeenResult, InitializeParams, InitializeResult, LandApproveParams,
-    LandQueueParams, LandResult, LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult,
-    MemoryListParams, MemoryListResult, MemoryProposeParams, MemoryProposeResult, MemoryReadParams,
-    MemoryReadResult, MemoryWriteParams, MemoryWriteResult, PrActParams, PrDiffResult,
-    PrViewParams, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
-    ProjectDeleteResult, ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectListParams,
-    ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage,
-    ProvidersListParams, ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams,
-    PullRequest, QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams,
-    QuestionListParams, QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams,
-    QueueListParams, QueueReorderParams, QueueResult, QueueSteerParams, RepoAddParams,
-    RepoAddResult, RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult,
-    RepoUpdateParams, RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult,
-    ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult,
-    ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
-    ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams,
-    UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
+    ContextWriteResult, CursorInstallParams, CursorInstallResult, CursorSignInCancelParams,
+    CursorSignInCancelResult, CursorSignInParams, CursorSignInResult, CursorSignOutParams,
+    CursorSignOutResult, EventsEventParams, EventsResyncParams, EventsSubscribeParams,
+    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus,
+    GithubInstallParams, GithubSignIn, GithubSignInCancelParams, GithubSignInCancelResult,
+    GithubSignInParams, GithubStatus, GithubStatusParams, HostHealthParams, HostHealthResult,
+    HostSettings, HostSettingsGetParams, HostSettingsSetParams, HostVersionParams,
+    HostVersionResult, InboxListParams, InboxListResult, InboxSeenParams, InboxSeenResult,
+    InitializeParams, InitializeResult, LandApproveParams, LandQueueParams, LandResult,
+    LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult, MemoryListParams, MemoryListResult,
+    MemoryProposeParams, MemoryProposeResult, MemoryReadParams, MemoryReadResult,
+    MemoryWriteParams, MemoryWriteResult, PrActParams, PrDiffResult, PrViewParams,
+    ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
+    ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectListParams, ProjectListResult,
+    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
+    ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, PullRequest,
+    QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
+    QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
+    QueueReorderParams, QueueResult, QueueSteerParams, RepoAddParams, RepoAddResult,
+    RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
+    RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult, ThreadSearchParams,
+    ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
+    ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
+    UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -422,6 +423,10 @@ method_table! {
         CursorSignInCancel = "cursor/signInCancel": CursorSignInCancelParams => CursorSignInCancelResult;
         /// `cursor/signOut`: forgets the Cursor SDK login stored for the instance.
         CursorSignOut = "cursor/signOut": CursorSignOutParams => CursorSignOutResult;
+        /// `cursor/install`: installs the Cursor SDK the sidecar pins into plxd's data folder
+        /// with npm, and answers once it's done (0053). Until then `providers/list` reports
+        /// Cursor not installed.
+        CursorInstall = "cursor/install": CursorInstallParams => CursorInstallResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -560,6 +565,7 @@ mod tests {
                 "cursor/signIn",
                 "cursor/signInCancel",
                 "cursor/signOut",
+                "cursor/install",
                 "$/cancelRequest",
                 "events/event",
                 "events/resync",

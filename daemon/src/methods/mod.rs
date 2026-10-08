@@ -39,12 +39,13 @@ use parallax_protocol::methods::{
     AgentCancel, AgentCommands, AgentCommit, AgentDiff, AgentEvents, AgentFile, AgentFileCreate,
     AgentFileDelete, AgentFileRename, AgentFiles, AgentGitStatus, AgentImage, AgentList,
     AgentOpenPr, AgentPush, AgentRequestChanges, AgentResumeNow, AgentSend, AgentStart, AgentWait,
-    ConnectDevices, ContextList, ContextRead, ContextWrite, CursorSignIn, CursorSignInCancel,
-    CursorSignOut, EventsSubscribe, EventsUnsubscribe, GithubInstall, GithubSignInCancel,
-    GithubSignInStart, GithubStatusGet, HostHealth, HostSettingsGet, HostSettingsSet, HostVersion,
-    InboxList, InboxSeen, Initialize, PrAct, PrDiff, PrLink, PrUnlink, PrView, ProjectCreate,
-    ProjectDelete, ProjectFromThreads, ProjectList, ProjectStart, ProjectUpdate, ProvidersList,
-    ProvidersRemove, ProvidersSave, RequestMethod, UsageDaily, UsageGet, UsageHistory, UsageLimits,
+    ConnectDevices, ContextList, ContextRead, ContextWrite, CursorInstall, CursorSignIn,
+    CursorSignInCancel, CursorSignOut, EventsSubscribe, EventsUnsubscribe, GithubInstall,
+    GithubSignInCancel, GithubSignInStart, GithubStatusGet, HostHealth, HostSettingsGet,
+    HostSettingsSet, HostVersion, InboxList, InboxSeen, Initialize, PrAct, PrDiff, PrLink,
+    PrUnlink, PrView, ProjectCreate, ProjectDelete, ProjectFromThreads, ProjectList, ProjectStart,
+    ProjectUpdate, ProvidersList, ProvidersRemove, ProvidersSave, RequestMethod, UsageDaily,
+    UsageGet, UsageHistory, UsageLimits,
 };
 use parallax_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 use serde::Serialize;
@@ -287,6 +288,9 @@ async fn cursor_method(context: &Context, request: &Request) -> Option<Result<Va
         }
         CursorSignOut::NAME => {
             handle::<CursorSignOut, _, _>(context, request, |p| cursor::sign_out(context, p)).await
+        }
+        CursorInstall::NAME => {
+            handle::<CursorInstall, _, _>(context, request, |p| cursor::install(context, p)).await
         }
         _ => return None,
     })

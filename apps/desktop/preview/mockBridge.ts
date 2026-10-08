@@ -688,6 +688,15 @@ const handlers: { [M in Method]?: Handler<M> } = {
     return { url: "https://cursor.com/loginDeepControl?preview=1" };
   },
   "cursor/signInCancel": () => ({}),
+  // plxd's npm install of the SDK (0053): every Cursor instance is installed and signed out.
+  "cursor/install": () => {
+    db.providers = db.providers.map((x) =>
+      x.instance.kind === "cursor"
+        ? { ...x, installed: true, path: "/usr/local/bin/node", version: "1.0.35", signedIn: false }
+        : x,
+    );
+    return {};
+  },
   "cursor/signOut": (p) => {
     setCursor(p.instance ?? "cursor", false);
     return {};

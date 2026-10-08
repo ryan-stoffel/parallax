@@ -1345,11 +1345,9 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
         env: [],
         models: [],
       },
-      // The SDK sidecar (0053): signed out until `cursor/signIn` finishes in the browser.
-      installed: true,
-      path: "/Applications/Parallax.app/Contents/Resources/cursor-sdk/main.mjs",
-      version: "1.0.35",
-      signedIn: false,
+      // The SDK sidecar (0053): not installed until Install (`cursor/install`), then signed out
+      // until `cursor/signIn` finishes in the browser.
+      installed: false,
       models: [],
       permissions: ["edit", "auto", "plan", "bypass"],
       efforts: false,

@@ -649,8 +649,9 @@ function instanceStatus(info: ProviderInfo): string {
     : "Authenticated";
 }
 
-/** The kinds Install puts on a host, with the vendor's own script (main's terminal.ts). */
+/** The kinds Install puts on a host: with the vendor's own script (main's terminal.ts), or Cursor's SDK with plxd. */
 const installable = new Set([
+  "cursor",
   "claude",
   "codex",
   "pi",
@@ -968,9 +969,10 @@ function Card({ label, children }: { label: string; children: ReactNode }) {
  * account, and Sign in (in a terminal under it, after which the instances are probed again with
  * `onSignedIn`); how it runs, with its version for a kind that has more than one; its variables;
  * its models; and Claude's and Codex's usage and API keys. An agent Parallax knows how to install
- * (Claude Code, Codex, Pi, OpenCode, Grok Build, Hermes, Antigravity) offers Install in place of
- * its account while it isn't installed: Pi and OpenCode with npm in the background, the others in
- * the same terminal. Each change saves the instance on the host.
+ * (Cursor, Claude Code, Codex, Pi, OpenCode, Grok Build, Hermes, Antigravity) offers Install in
+ * place of its account while it isn't installed: Cursor's SDK through plxd and Pi and OpenCode
+ * with npm, in the background, the others in the same terminal. Each change saves the instance on
+ * the host.
  */
 function InstancePane({
   id,
@@ -1022,13 +1024,18 @@ function InstancePane({
   // ponytail: this computer's OS, which an SSH host's may not be; main runs the host's own.
   const npmLine = npmPackage && npmInstallLine(npmPackage, window.parallax.platform === "win32");
   const install = async () => {
-    if (!npmPackage) {
+    const cursor = instance.kind === "cursor";
+    if (!npmPackage && !cursor) {
       setInstalling(true);
       return onSignIn(true);
     }
     setError(undefined);
     setNpmInstalling(true);
-    const failed = await window.parallax.install(hostId, instance.kind);
+    let failed: string | undefined;
+    if (cursor) {
+      const answer = await window.parallax.request(hostId, "cursor/install", {});
+      if ("error" in answer) failed = describeError(answer.error);
+    } else failed = await window.parallax.install(hostId, instance.kind);
     setNpmInstalling(false);
     if (failed) setError(failed);
     else onSignedIn();

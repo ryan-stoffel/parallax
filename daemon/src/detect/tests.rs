@@ -122,13 +122,11 @@ async fn a_cli_absent_from_path_is_reported_not_installed_and_nothing_else() {
             }
         );
     }
+    // The sidecar ships, but its SDK isn't installed in a fresh data folder.
     let cursor = find(&clis, CliKind::Cursor);
-    assert_eq!(
-        cursor.installed,
-        crate::backend::cursor_sdk::script_present()
-    );
+    assert!(!cursor.installed, "{cursor:?}");
     assert_eq!(cursor.plan, None);
-    if cursor.installed && cursor.note.is_some() {
+    if crate::backend::cursor_sdk::script_present() {
         assert!(
             cursor.note.as_deref().unwrap().contains("Node.js"),
             "{cursor:?}"

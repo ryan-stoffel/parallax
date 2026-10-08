@@ -861,6 +861,32 @@ describe("on a plxd with providers", () => {
     expect(rows("Account")[1]).toBe("AccountPi isn't installed on this host");
   });
 
+  test("Cursor's Install asks plxd to install its SDK, and shows why it couldn't", async () => {
+    listed[1] = {
+      ...listed[1]!,
+      instance: instance("cursor", "cursor", "Cursor"),
+      installed: false,
+      signedIn: undefined,
+      note: undefined,
+    };
+    answers["cursor/install"] = () => ({ error: { code: -32603, message: "npm is required" } });
+    await renderSettings();
+    expect(tabs()[1]!.trim()).toBe("CursorNot installed");
+    await click(tab("Cursor"));
+    expect(rows("Account")[1]).toBe("InstallNot installedInstall");
+    await click(visible('[aria-label="Install Cursor"]')!);
+    expect(calls("cursor/install")).toHaveLength(1);
+    expect(document.querySelector('[role="alert"]')!.textContent).toContain("npm is required");
+
+    answers["cursor/install"] = () => {
+      listed[1] = { ...listed[1]!, installed: true, signedIn: false };
+      return { result: {} };
+    };
+    await click(visible('[aria-label="Install Cursor"]')!);
+    expect(calls("providers/list").at(-1)!.params).toEqual({ refresh: true });
+    expect(rows("Account")[1]).toBe("AccountNot authenticatedSign in");
+  });
+
   const dialog = () => document.querySelector("dialog")!;
   const next = async () => {
     await act(async () => dialog().querySelector("form")!.requestSubmit());

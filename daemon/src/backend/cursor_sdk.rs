@@ -1,8 +1,10 @@
 //! Cursor threads through the official Cursor SDK (0053).
 //!
 //! `@cursor/sdk` is a Node library, so plxd runs `sidecar/cursor` and speaks JSON lines with it.
-//! Sign-in is the SDK's browser login, which mints a key into plxd's data folder. Ambient
-//! `CURSOR_*` is dropped. A `CURSOR_API_KEY` set on the provider instance wins over the login, as
+//! The app ships only the sidecar's own files. [`install`] puts the pinned SDK in plxd's data
+//! folder the first time the user installs Cursor, and the sidecar runs from there. Sign-in is
+//! the SDK's browser login, which mints a key into plxd's data folder. Ambient `CURSOR_*` is
+//! dropped. A `CURSOR_API_KEY` set on the provider instance wins over the login, as
 //! in T3 Code.
 
 use std::collections::{HashMap, VecDeque};
@@ -177,13 +179,126 @@ impl Backend for CursorSdkBackend {
     }
 }
 
-/// Whether the sidecar script is in the repo or beside `plxd`.
+/// Whether the sidecar's files are in the repo or beside `plxd`, installed or not.
 #[must_use]
 pub(crate) fn script_present() -> bool {
-    script_path().is_file()
+    source_dir().join("src").join("main.mjs").is_file()
 }
 
-/// What a status probe found. `installed` is true when the sidecar is there, even if Node is not.
+const NODE_REQUIRED: &str = "Node.js 22.13 or newer is required";
+
+/// One SDK install at a time.
+static INSTALLING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Installs the SDK version the sidecar pins into `<data>/tools/cursor-sdk/<version>/` with
+/// `npm ci --omit=dev`, unless it's there, then removes every other version. Returns what went
+/// wrong, for people.
+pub(crate) async fn install(launcher: &Launcher) -> Result<(), String> {
+    let _one = INSTALLING.lock().await;
+    let source = source_dir();
+    let pin = pin(&source).ok_or("The Cursor SDK sidecar isn't part of this plxd.")?;
+    let root = installs_dir(launcher);
+    let target = root.join(&pin);
+    if !target.is_dir() {
+        if detect::resolve(launcher, "node").is_none() {
+            return Err(format!("{NODE_REQUIRED} to install the Cursor SDK"));
+        }
+        if detect::resolve(launcher, "npm").is_none() {
+            return Err("npm is required to install the Cursor SDK".into());
+        }
+        let failed = |error: std::io::Error| format!("Couldn't install the Cursor SDK: {error}");
+        std::fs::create_dir_all(&root).map_err(failed)?;
+        // Removed on drop, with whatever is still in it.
+        let temp = tempfile::Builder::new()
+            .prefix(".install-")
+            .tempdir_in(&root)
+            .map_err(failed)?;
+        for name in ["package.json", "package-lock.json"] {
+            std::fs::copy(source.join(name), temp.path().join(name)).map_err(failed)?;
+        }
+        let mut spec = ProcessSpec::new("npm", temp.path());
+        spec.args = ["ci", "--omit=dev", "--no-audit", "--no-fund"]
+            .into_iter()
+            .map(Into::into)
+            .collect();
+        let ran = detect::run_spec(launcher, &spec, b"", Duration::from_secs(600))
+            .await
+            .map_err(|error| format!("Couldn't install the Cursor SDK: npm {error}"))?;
+        if ran.exit_code != Some(0) {
+            let why = ran
+                .stderr_tail
+                .trim()
+                .lines()
+                .last()
+                .unwrap_or("npm failed");
+            return Err(format!("Couldn't install the Cursor SDK: {why}"));
+        }
+        std::fs::rename(temp.path(), &target).map_err(failed)?;
+    }
+    remove_others(&root, &pin);
+    Ok(())
+}
+
+/// Removes everything in `root` but `keep`: older versions, and what a stopped install left.
+/// ponytail: a version a running sidecar still holds open on Windows stays until the next install.
+fn remove_others(root: &Path, keep: &str) {
+    for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
+        if entry.file_name() != keep {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// The installed SDK for the version the sidecar pins, if it's there.
+pub(crate) fn installed(launcher: &Launcher) -> Option<PathBuf> {
+    let dir = installs_dir(launcher).join(pin(&source_dir())?);
+    dir.is_dir().then_some(dir)
+}
+
+/// Whether some SDK version was installed before, which means the user chose Cursor.
+fn installed_before(launcher: &Launcher) -> bool {
+    std::fs::read_dir(installs_dir(launcher))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+}
+
+fn installs_dir(launcher: &Launcher) -> PathBuf {
+    launcher.data_dir().tools_dir().join("cursor-sdk")
+}
+
+/// The `@cursor/sdk` version `source`'s package.json pins.
+fn pin(source: &Path) -> Option<String> {
+    let bytes = std::fs::read(source.join("package.json")).ok()?;
+    let value: Value = serde_json::from_slice(&bytes).ok()?;
+    let pin = value.pointer("/dependencies/@cursor~1sdk")?.as_str()?;
+    (!pin.is_empty()
+        && pin
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || ".-".contains(c)))
+    .then(|| pin.to_owned())
+}
+
+/// Copies the shipped `src/` files into `dir`'s when they differ, each by a rename, so an app
+/// update that keeps the SDK version still runs its own sidecar.
+fn sync_sources(source: &Path, dir: &Path) -> std::io::Result<()> {
+    let to = dir.join("src");
+    std::fs::create_dir_all(&to)?;
+    for entry in std::fs::read_dir(source.join("src"))? {
+        let entry = entry?;
+        let want = std::fs::read(entry.path())?;
+        let path = to.join(entry.file_name());
+        if std::fs::read(&path).ok().as_ref() != Some(&want) {
+            let mut temp = tempfile::NamedTempFile::new_in(&to)?;
+            std::io::Write::write_all(&mut temp, &want)?;
+            temp.persist(&path)?;
+        }
+    }
+    Ok(())
+}
+
+/// What a status probe found. `installed` is true when the SDK is, even if Node is not.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Report {
     pub installed: bool,
@@ -202,16 +317,10 @@ pub(crate) async fn inspect(
     env: &[(OsString, OsString)],
     timeout: Duration,
 ) -> Report {
-    if override_program(launcher).is_none() && !script_present() {
-        return Report::default();
-    }
-    if override_program(launcher).is_none() && detect::resolve(launcher, "node").is_none() {
-        return Report {
-            installed: true,
-            path: Some(script_path().display().to_string()),
-            note: Some("Node.js 22.13 or newer is required".into()),
-            ..Report::default()
-        };
+    if override_program(launcher).is_none()
+        && let Some(report) = not_runnable(launcher).await
+    {
+        return report;
     }
     let cwd = launcher.data_dir().root().to_owned();
     let spec = match command(launcher, instance, "status", &cwd, env) {
@@ -286,6 +395,34 @@ pub(crate) async fn inspect(
             .unwrap_or_default();
     }
     report
+}
+
+/// Why the sidecar can't run yet, if it can't: no sidecar, no SDK, or no Node. The SDK isn't
+/// installed until the user installs Cursor, so detection never runs npm for someone who doesn't
+/// use it. Someone who did gets a new version here, on the next probe.
+async fn not_runnable(launcher: &Launcher) -> Option<Report> {
+    if !script_present() {
+        return Some(Report::default());
+    }
+    let has_node = detect::resolve(launcher, "node").is_some();
+    if installed(launcher).is_none() {
+        let note = if installed_before(launcher) {
+            install(launcher).await.err()
+        } else {
+            (!has_node).then(|| NODE_REQUIRED.to_owned())
+        };
+        if installed(launcher).is_none() {
+            return Some(Report {
+                note,
+                ..Report::default()
+            });
+        }
+    }
+    (!has_node).then(|| Report {
+        installed: true,
+        note: Some(NODE_REQUIRED.into()),
+        ..Report::default()
+    })
 }
 
 /// What Settings shows when a browser login fails, T3 Code's wording.
@@ -412,6 +549,15 @@ impl CursorAuth {
                 ..CancelPolicy::default()
             });
         }
+    }
+
+    /// Installs the SDK (see [`install`]).
+    ///
+    /// # Errors
+    ///
+    /// Why it couldn't, for people.
+    pub async fn install(&self) -> Result<(), String> {
+        install(&self.launcher).await
     }
 
     /// Forgets the stored login for `instance`.
@@ -778,7 +924,8 @@ fn command(
     let (program, mut args) = if let Some(program) = override_program(launcher) {
         (program, Vec::new())
     } else {
-        (node_for(launcher)?, vec![script_path().into()])
+        let (node, script) = sidecar(launcher)?;
+        (node, vec![script.into()])
     };
     args.extend([
         command.into(),
@@ -810,19 +957,17 @@ fn instance_paths(launcher: &Launcher, instance: &str) -> (PathBuf, PathBuf) {
     (dir.join("auth.json"), dir.join("agents"))
 }
 
-fn script_path() -> PathBuf {
+/// The sidecar's files: `cursor-sdk/` beside `plxd` in the app, else the repo's `sidecar/cursor`.
+fn source_dir() -> PathBuf {
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
-        let bundled = dir.join("cursor-sdk").join("main.mjs");
-        if bundled.is_file() {
+        let bundled = dir.join("cursor-sdk");
+        if bundled.join("package.json").is_file() {
             return bundled;
         }
     }
-    PathBuf::from(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../sidecar/cursor/src/main.mjs"
-    ))
+    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../sidecar/cursor"))
 }
 
 fn override_program(launcher: &Launcher) -> Option<PathBuf> {
@@ -884,15 +1029,20 @@ fn str_of<'a>(value: &'a Value, name: &str) -> Option<&'a str> {
     value.get(name).and_then(Value::as_str)
 }
 
-fn node_for(launcher: &Launcher) -> Result<PathBuf, StartError> {
-    if !script_present() {
-        return Err(StartError::Unsupported(
-            "the Cursor SDK sidecar is not installed".into(),
-        ));
-    }
-    detect::resolve(launcher, "node").ok_or_else(|| {
-        StartError::Unsupported("Node.js 22.13 or newer is required to run Cursor".into())
-    })
+/// `node` and the installed sidecar's `main.mjs`, its files brought up to date.
+fn sidecar(launcher: &Launcher) -> Result<(PathBuf, PathBuf), StartError> {
+    let dir = installed(launcher).ok_or_else(|| {
+        StartError::Unsupported("Install Cursor in Settings > Providers first".into())
+    })?;
+    let node = detect::resolve(launcher, "node")
+        .ok_or_else(|| StartError::Unsupported(format!("{NODE_REQUIRED} to run Cursor")))?;
+    sync_sources(&source_dir(), &dir).map_err(|error| {
+        StartError::Invalid(format!(
+            "couldn't update the Cursor SDK sidecar in {}: {error}",
+            dir.display()
+        ))
+    })?;
+    Ok((node, dir.join("src").join("main.mjs")))
 }
 
 fn message_of(value: &Value) -> String {
@@ -1155,6 +1305,63 @@ wait
         assert!(
             !root.join("closed-early").exists(),
             "stdin closed with a turn still to start"
+        );
+    }
+
+    /// A `PATH` with a `node` and an `npm` that notes it ran and makes `node_modules`.
+    fn npm_launcher(root: &std::path::Path) -> Launcher {
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let npm = format!(
+            "#!/bin/sh\ntouch '{}'\nmkdir node_modules\n",
+            root.join("npm-ran").display()
+        );
+        for (name, script) in [("node", "#!/bin/sh\n"), ("npm", npm.as_str())] {
+            fs::write(bin.join(name), script).unwrap();
+            fs::set_permissions(bin.join(name), fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut env = Environment::empty();
+        env.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
+        Launcher::new(DataDir::new(root.join("data")).unwrap(), env)
+    }
+
+    /// A probe on a data folder that never had the SDK says not installed and runs no npm.
+    /// `cursor/install` installs it, and then it's installed.
+    #[tokio::test]
+    async fn the_sdk_installs_only_when_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let launcher = npm_launcher(&root);
+        let report = super::inspect(&launcher, "cursor", &[], Duration::from_secs(5)).await;
+        assert!(!report.installed);
+        assert!(!root.join("npm-ran").exists(), "a probe ran npm");
+
+        super::install(&launcher).await.unwrap();
+        let installed = super::installed(&launcher).unwrap();
+        assert!(installed.join("node_modules").is_dir());
+        assert!(installed.join("package-lock.json").is_file());
+    }
+
+    /// After an update changes the pin, the next probe installs the new version, since an older
+    /// one means the user chose Cursor, and removes the old one and a stopped install's leftovers.
+    #[tokio::test]
+    async fn a_new_pin_installs_on_the_next_probe_and_old_versions_go() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let launcher = npm_launcher(&root);
+        let installs = super::installs_dir(&launcher);
+        fs::create_dir_all(installs.join("0.0.1").join("node_modules")).unwrap();
+        fs::create_dir_all(installs.join(".install-stopped")).unwrap();
+        let _ = super::inspect(&launcher, "cursor", &[], Duration::from_secs(5)).await;
+        assert!(root.join("npm-ran").exists());
+        let left: Vec<_> = fs::read_dir(&installs)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(
+            left,
+            [super::pin(&super::source_dir()).unwrap()],
+            "only the pinned version is left"
         );
     }
 

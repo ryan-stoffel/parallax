@@ -794,7 +794,7 @@ async fn probe_cursor(launcher: &Launcher, entry: &Stored) -> Found {
             .any(|var| var.secret && var.name == api_key);
     let report = if secret_key {
         crate::backend::cursor_sdk::Report {
-            installed: crate::backend::cursor_sdk::script_present(),
+            installed: crate::backend::cursor_sdk::installed(launcher).is_some(),
             signed_in: Some(true),
             note: Some("Uses CURSOR_API_KEY from this provider's settings".into()),
             ..Default::default()

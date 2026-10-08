@@ -136,6 +136,7 @@ const rendererMethods: Record<RendererMethod, true> = {
   "cursor/signIn": true,
   "cursor/signInCancel": true,
   "cursor/signOut": true,
+  "cursor/install": true,
   "inbox/list": true,
   "inbox/seen": true,
   "queue/list": true,

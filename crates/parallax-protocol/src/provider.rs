@@ -231,3 +231,13 @@ pub type CursorSignOutParams = CursorSignInParams;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CursorSignOutResult {}
+
+/// Params of `cursor/install`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorInstallParams {}
+
+/// Result of `cursor/install`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorInstallResult {}
