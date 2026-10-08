@@ -71,7 +71,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use tokio::io::AsyncWriteExt;
 use tokio::sync::{Notify, mpsc};
 
 use self::stream::{Ask, AskKind, Step, Translator, permission_answer};
@@ -80,7 +79,7 @@ use super::event::{
     Event, Failure, FailureKind, ModelUsage, Outcome, Usage, WarningKind, exit_outcome,
 };
 use super::process::{
-    CancelPolicy, Exit, Launcher, Output, Process, ProcessSpec, Signal, StdinMode, StdinPipe,
+    CancelPolicy, Exit, Launcher, Output, Process, ProcessSpec, Signal, StdinMode, write_lines,
 };
 use super::{
     AgentPermission, Answer, AnswerError, ApprovalId, Backend, CancelSwitch, Capabilities,
@@ -531,15 +530,6 @@ enum Request {
         required: bool,
     },
     Prompt(Prompt),
-}
-
-/// Writes lines to stdin in order, off the driver's loop, and closes it once every sender is gone.
-async fn write_lines(mut stdin: StdinPipe, mut lines: mpsc::UnboundedReceiver<String>) {
-    while let Some(line) = lines.recv().await {
-        if stdin.write_all(line.as_bytes()).await.is_err() {
-            break;
-        }
-    }
 }
 
 /// One run: speaks ACP with the CLI, delivers follow-ups and answers, and decides the outcome

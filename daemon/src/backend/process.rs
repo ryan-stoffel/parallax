@@ -57,6 +57,18 @@ pub type StdinPipe = tokio::net::unix::pipe::Sender;
 #[cfg(windows)]
 pub type StdinPipe = tokio::process::ChildStdin;
 
+/// Writes each line to `stdin` in order, off the caller's loop, and closes it once every sender is
+/// gone. Lines carry their own newline.
+pub async fn write_lines(mut stdin: StdinPipe, mut lines: mpsc::UnboundedReceiver<String>) {
+    use tokio::io::AsyncWriteExt as _;
+
+    while let Some(line) = lines.recv().await {
+        if stdin.write_all(line.as_bytes()).await.is_err() {
+            break;
+        }
+    }
+}
+
 /// What [`Signals`] can send. Windows has no signals, so there `INT` and `TERM` send nothing (the
 /// backend closes stdin instead) and `KILL` terminates the process's job (0023). The numbers are
 /// POSIX's.

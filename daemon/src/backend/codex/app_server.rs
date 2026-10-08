@@ -55,7 +55,6 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
 use self::translate::{Ask, Step, Translator, answer_response, refusal};
@@ -63,7 +62,7 @@ use super::{CONFIG_DIR_ENV, CONTEXT_WINDOWS, PROGRAM, effort_level, write_images
 use crate::backend::event::{Event, Failure, FailureKind, Outcome, WarningKind, exit_outcome};
 use crate::backend::process::{
     CancelPolicy, Exit, Launcher, Output, Process, ProcessSpec, Signal, SpawnError, StdinMode,
-    StdinPipe,
+    write_lines,
 };
 use crate::backend::{
     AgentPermission, Answer, ApprovalId, CancelSwitch, Credential, Decision, EVENT_BUFFER,
@@ -350,14 +349,6 @@ impl Stdin {
 
     fn close(&mut self) {
         self.queue = None;
-    }
-}
-
-async fn write_lines(mut pipe: StdinPipe, mut lines: mpsc::UnboundedReceiver<String>) {
-    while let Some(line) = lines.recv().await {
-        if pipe.write_all(line.as_bytes()).await.is_err() {
-            break;
-        }
     }
 }
 

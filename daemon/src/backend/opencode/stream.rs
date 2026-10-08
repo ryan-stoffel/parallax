@@ -9,9 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value, json};
 
-use crate::backend::event::{
-    ApprovalRequest, Event, ModelUsage, TodoItem, TodoStatus, ToolStatus, Usage,
-};
+use crate::backend::event::{ApprovalRequest, Event, ModelUsage, ToolStatus, Usage, todo};
 use crate::backend::{AgentPermission, ApprovalId};
 
 /// The answer to every question `OpenCode` asks, since the app can't show one.
@@ -148,7 +146,7 @@ impl Translator {
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .filter_map(todo)
+                    .filter_map(|entry| todo(entry, "content"))
                     .collect();
                 vec![Step::Emit(Event::TodoList { items })]
             }
@@ -483,16 +481,4 @@ fn snake_case(input: &Value) -> Value {
         })
         .collect();
     Value::Object(fields)
-}
-
-/// A todo: `content` and a `status`.
-fn todo(entry: &Value) -> Option<TodoItem> {
-    let text = entry["content"].as_str()?.to_owned();
-    let status = match entry["status"].as_str() {
-        Some("pending") => TodoStatus::Pending,
-        Some("in_progress") => TodoStatus::InProgress,
-        Some("completed") => TodoStatus::Completed,
-        _ => TodoStatus::Unknown,
-    };
-    Some(TodoItem { text, status })
 }
