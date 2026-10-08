@@ -24,6 +24,7 @@ import {
   validLocale,
 } from "../preload/bridge";
 import { startAccount } from "./account";
+import { registerAppScheme, rendererUrl, serveAppScheme } from "./appScheme";
 import {
   appBundle,
   detectEditors,
@@ -52,6 +53,7 @@ app.setName(isNightly(app.getVersion()) ? "Parallax (Nightly)" : "Parallax");
 
 // Set by scripts/dev.mjs. Ignored in a packaged app, which only loads its own files.
 const devServerUrl = app.isPackaged ? undefined : process.env["PLX_DEV_SERVER_URL"];
+registerAppScheme();
 
 function createWindow() {
   const dark = nativeTheme.shouldUseDarkColors;
@@ -81,8 +83,7 @@ function createWindow() {
   });
   win.once("ready-to-show", () => win.show());
 
-  if (devServerUrl) void win.loadURL(devServerUrl);
-  else void win.loadFile(path.join(__dirname, "../renderer/index.html"));
+  void win.loadURL(devServerUrl ?? rendererUrl);
 }
 
 // The side panel's browser's session: persistent, and apart from the app's.
@@ -391,7 +392,8 @@ nativeTheme.on("updated", () => {
   }
 });
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
+  if (!devServerUrl) await serveAppScheme();
   // Pages in the side panel's browser get no camera, microphone, notifications, and the like.
   const browserSession = session.fromPartition(browserPartition);
   browserSession.setPermissionRequestHandler((_c, _p, grant) => grant(false));

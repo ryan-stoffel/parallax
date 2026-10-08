@@ -3,8 +3,8 @@ import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite-plus";
 import type { PackUserConfig } from "vite-plus/pack";
 
-// The renderer's Content Security Policy, set as a <meta> tag because the
-// built app loads from file://, where response headers can't carry one.
+// The renderer's Content Security Policy, set as a <meta> tag so it applies
+// alike under the dev server and the built app's app:// scheme (appScheme.ts).
 // Inline styles are allowed: xterm.js (SignInTerminal) sizes and colors its
 // rows with <style> tags it writes, as Vite's dev server does. Scripts stay
 // 'self', except for React Refresh's inline preamble in dev. The dev server's
