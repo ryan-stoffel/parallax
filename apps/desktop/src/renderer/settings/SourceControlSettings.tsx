@@ -6,6 +6,7 @@ import { useCopy } from "../AgentChat";
 import { statusLabel, useConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { localId, useHosts, type Host } from "../hosts";
+import { locale } from "../locale";
 import { GitHubLogo } from "../logos";
 import { notify } from "../notifications";
 import { IconButton } from "../ui";
@@ -262,7 +263,7 @@ function GitHub({
           <div className="min-w-0">
             <span className="block text-[12.5px] text-muted-foreground">
               Enter this code at {pending.url.replace(/^https:\/\//, "")}. It expires at{" "}
-              {new Date(pending.expiresAt).toLocaleTimeString([], clockOptions())}.
+              {new Date(pending.expiresAt).toLocaleTimeString(locale(), clockOptions())}.
             </span>
             <span
               aria-label="One-time code"

@@ -102,6 +102,8 @@ export interface ParallaxBridge {
    * `pnpm dev`, from a checkout (PLX-204).
    */
   updatable: boolean;
+  /** The OS's locale, such as "de-DE", for `src/renderer/locale.ts`. */
+  locale: string | undefined;
   /**
    * Packaged: installs the downloaded release and relaunches, else downloads the available one,
    * else checks now. A packaged app follows its own build's channel (0028): a nightly follows

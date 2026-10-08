@@ -1081,6 +1081,7 @@ export const mockBridge: ParallaxBridge = {
   cloneRepo: (_slug, dest) => delay({ path: expand(dest) }, 1200),
   copyPicture: () => delay(undefined),
   updatable: false,
+  locale: undefined,
   update: () => delay("Up to date"),
   onUpdateState: (listener) => {
     listener(updateState);

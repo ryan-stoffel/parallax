@@ -11,6 +11,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import type { PullRequest } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
+import { locale } from "./locale";
 import { lookOf, numberOf, type Linked } from "./PullRequests";
 import { age } from "./Sidebar";
 import { menuItem, menuPanel, moveFocus } from "./ui";
@@ -108,7 +109,7 @@ export function sortRows(rows: PrRow[], sort: PrSort): PrRow[] {
     newest: (a, b) => time(b, "createdAt") - time(a, "createdAt"),
     oldest: (a, b) => time(a, "createdAt") - time(b, "createdAt"),
     number: (a, b) => num(b) - num(a),
-    title: (a, b) => (a.read?.pr?.title ?? "￿").localeCompare(b.read?.pr?.title ?? "￿"),
+    title: (a, b) => (a.read?.pr?.title ?? "￿").localeCompare(b.read?.pr?.title ?? "￿", locale()),
   };
   return [...rows].sort((a, b) => (!a.read?.pr ? 1 : !b.read?.pr ? -1 : by[sort](a, b)));
 }

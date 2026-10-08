@@ -33,6 +33,14 @@ test("a resume time today is the time alone, and another day's has its date firs
   expect(tomorrow.endsWith(`, ${time}`)).toBe(true);
 });
 
+test("a resume time is in the OS's locale, which the bridge gives, not Chromium's default", () => {
+  const tomorrow = () => resumeTime(at, new Date(2026, 9, 3, 9).getTime());
+  window.parallax = { locale: "de-DE" } as Partial<ParallaxBridge> as ParallaxBridge;
+  expect(tomorrow()).toBe("4. Okt., 15:40");
+  window.parallax = { locale: "en-GB" } as Partial<ParallaxBridge> as ParallaxBridge;
+  expect(tomorrow()).toBe("4 Oct, 15:40");
+});
+
 test("a waiting run says when it resumes, and a run that isn't waiting shows nothing", () => {
   render(run());
   expect(document.body.textContent).toContain(`Usage limit reached. Resumes at ${resumeTime(at)}`);

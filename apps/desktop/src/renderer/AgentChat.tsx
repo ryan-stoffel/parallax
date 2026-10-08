@@ -80,6 +80,7 @@ import { ForkButton, ForkContext, type ForkTarget } from "./Fork";
 import type { Host } from "./hosts";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { Loader, type LoaderStyle } from "./Loader";
+import { locale } from "./locale";
 import { GitHubLogo, LinearLogo } from "./logos";
 import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
 import { useCatalog, type Provider, type RunOptions } from "./models";
@@ -2527,8 +2528,8 @@ function sentAt(at: string) {
   const date = new Date(at);
   const time = clockOptions();
   return date.toDateString() === new Date().toDateString()
-    ? date.toLocaleTimeString([], time)
-    : date.toLocaleString([], { month: "short", day: "numeric", ...time });
+    ? date.toLocaleTimeString(locale(), time)
+    : date.toLocaleString(locale(), { month: "short", day: "numeric", ...time });
 }
 
 /**

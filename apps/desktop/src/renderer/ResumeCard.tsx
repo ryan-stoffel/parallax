@@ -2,6 +2,7 @@ import { AlarmClock } from "lucide-react";
 import { useState } from "react";
 
 import type { AgentRun } from "../protocol/generated/protocol";
+import { locale } from "./locale";
 import { clockOptions } from "./prefs";
 
 /**
@@ -10,9 +11,9 @@ import { clockOptions } from "./prefs";
  */
 export function resumeTime(iso: string, now = Date.now()): string {
   const at = new Date(iso);
-  const time = at.toLocaleTimeString(undefined, clockOptions());
+  const time = at.toLocaleTimeString(locale(), clockOptions());
   if (at.toDateString() === new Date(now).toDateString()) return time;
-  return `${at.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${time}`;
+  return `${at.toLocaleDateString(locale(), { month: "short", day: "numeric" })}, ${time}`;
 }
 
 /**

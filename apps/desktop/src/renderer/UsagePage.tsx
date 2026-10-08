@@ -26,6 +26,7 @@ import {
 import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
+import { locale } from "./locale";
 import { ClaudeLogo, CursorLogo, OpenAILogo } from "./logos";
 import { IconButton, Segmented } from "./ui";
 import { limitDetails, limitMeter, type LimitTone } from "./Usage";
@@ -279,7 +280,7 @@ function rank(models: Summary["models"], measure: (m: Measures) => number) {
     (a, b) =>
       measure(b.total) - measure(a.total) ||
       tokensOf(b.total) - tokensOf(a.total) ||
-      `${a.backend}/${a.model}`.localeCompare(`${b.backend}/${b.model}`),
+      `${a.backend}/${a.model}`.localeCompare(`${b.backend}/${b.model}`, locale()),
   );
 }
 
@@ -702,12 +703,12 @@ function Dashboard({
           note={
             !sessions
               ? "Not counted"
-              : `${Math.round(sessions.previous).toLocaleString()} ${words.previous}`
+              : `${Math.round(sessions.previous).toLocaleString(locale())} ${words.previous}`
           }
         >
           {sessions ? (
             <span className="text-[40px] font-semibold tracking-tight tabular-nums">
-              {sessions.total.toLocaleString()}
+              {sessions.total.toLocaleString(locale())}
             </span>
           ) : (
             none
@@ -751,7 +752,7 @@ function Dashboard({
             <dt className="truncate text-[12px] text-muted-foreground">{label}</dt>
             <dd className="mt-1.5 flex items-baseline gap-2 whitespace-nowrap">
               <span
-                title={n.toLocaleString()}
+                title={n.toLocaleString(locale())}
                 className="text-[18px] leading-none font-semibold tracking-tight tabular-nums"
               >
                 {tokenCount.format(n)}
@@ -1476,7 +1477,7 @@ function HostLimits({
     const info = backend && backends[backend];
     return { ...a, backend, name: info?.name ?? a.accountId, Logo: info?.Logo };
   });
-  accounts.sort((a, b) => a.name.localeCompare(b.name));
+  accounts.sort((a, b) => a.name.localeCompare(b.name, locale()));
   const now = Date.now();
 
   return (
