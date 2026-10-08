@@ -857,30 +857,21 @@ function Drawer<T>({
   defaultOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
-  const details = useRef<HTMLDetailsElement>(null);
   const [pages, setPages] = useState(1);
   const [open, setOpen] = useState(defaultOpen);
-  const shown = items.length > 0;
-  // Uncontrolled after this: a controlled `open` fights the summary's own toggle.
-  useEffect(() => {
-    const el = details.current;
-    if (!el) return;
-    if (defaultOpen) el.open = true;
-    const onToggle = () => {
-      setOpen(el.open);
-      onOpenChange?.(el.open);
-    };
-    el.addEventListener("toggle", onToggle);
-    onToggle();
-    return () => el.removeEventListener("toggle", onToggle);
-  }, [shown, defaultOpen, onOpenChange]);
-  if (!shown) return null;
+  if (items.length === 0) return null;
   const visible = pageSize ? items.slice(0, pageSize * pages) : items;
   const remaining = items.length - visible.length;
   const more = pageSize && remaining > 0 ? Math.min(pageSize, remaining) : 0;
   return (
+    // `open` is set only as it mounts, since it never changes, so the summary's toggle holds. A
+    // drawer that mounts open fires `toggle` too.
     <details
-      ref={details}
+      open={defaultOpen}
+      onToggle={(e) => {
+        setOpen(e.currentTarget.open);
+        onOpenChange?.(e.currentTarget.open);
+      }}
       className="group/drawer max-h-[40%] min-h-0 shrink-0 overflow-y-auto px-2 pb-1"
     >
       <summary
