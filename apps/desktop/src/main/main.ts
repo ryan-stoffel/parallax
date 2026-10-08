@@ -127,9 +127,11 @@ app.on("web-contents-created", (_event, contents) => {
 
 ipcMain.handle("parallax:version", () => app.getVersion());
 
-// What the Update button shows. Windows get each change; a (re)loaded renderer asks.
+// What the Update button shows. Windows get each change, not the same state again after each
+// check; a (re)loaded renderer asks.
 let updateState: UpdateState = {};
 function publishUpdate(state: UpdateState) {
+  if (JSON.stringify(state) === JSON.stringify(updateState)) return;
   updateState = state;
   for (const win of BrowserWindow.getAllWindows())
     win.webContents.send("parallax:updateState", state);

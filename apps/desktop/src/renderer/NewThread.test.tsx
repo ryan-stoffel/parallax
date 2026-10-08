@@ -10,7 +10,8 @@ import { accessDefaults, accessPrefs } from "./accessPrefs";
 import { App } from "./App";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-// happy-dom has no popovers. The row menu's buttons are in the DOM either way.
+// happy-dom has no popovers. `openRowMenus` sends the rows' menus the event a browser sends as one
+// opens, which renders their items.
 HTMLElement.prototype.hidePopover = () => {};
 // The composer's image reads, so a test can wait for them: happy-dom reads a file on two chained
 // timers, which a fixed wait races when the event loop stalls (PLX-277).
@@ -119,6 +120,11 @@ const threadRow = (title: string) =>
   [...document.querySelectorAll('#sidebar li[data-kind="thread"] > button:first-child')].find((b) =>
     b.querySelector("[data-title]")?.textContent?.startsWith(title),
   );
+const openRowMenus = () =>
+  act(() => {
+    for (const menu of document.querySelectorAll('#sidebar li[data-kind="thread"] [role="menu"]'))
+      menu.dispatchEvent(Object.assign(new Event("beforetoggle"), { newState: "open" }));
+  });
 const calls = (method: string) =>
   request.mock.calls.filter(([, m]) => m === method).map(([, , params]) => params);
 const heading = () => document.querySelector("h1")?.textContent;
@@ -774,11 +780,14 @@ test("the row menu archives into Archived, and unarchives back", async () => {
   // The run is still going, so the thread sits in Working until it's archived.
   expect(drawer("Working")?.textContent).toContain("Fix the flaky test");
 
+  openRowMenus();
   await act(async () => button("Archive")!.click());
   expect(calls("thread/archive")).toEqual([{ runId: thread.id, archived: true }]);
+  await act(async () => drawer("Archived")!.querySelector("summary")!.click());
   expect(drawer("Archived")?.textContent).toContain("Fix the flaky test");
   expect(drawer("Working")).toBeUndefined();
 
+  openRowMenus();
   await act(async () => button("Unarchive")!.click());
   expect(calls("thread/archive").at(-1)).toEqual({ runId: thread.id, archived: false });
   expect(drawer("Archived")).toBeUndefined();
@@ -789,6 +798,7 @@ test("Delete asks first, and only deletes once confirmed", async () => {
   answers["thread/delete"] = () => ({ result: {} });
   await renderApp();
   await act(async () => button("Thread actions")!.click());
+  openRowMenus();
   await act(async () => button("Delete…")!.click());
   const dialog = document.querySelector<HTMLDialogElement>('[aria-labelledby="delete-title"]')!;
   expect(dialog.open).toBe(true);

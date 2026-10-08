@@ -36,6 +36,12 @@ const run = (over: Partial<AgentRun> = {}): AgentRun =>
 function render(r: AgentRun, onFork: (choice: object) => Promise<RpcError | undefined>) {
   root ??= createRoot(document.body.appendChild(document.createElement("div")));
   act(() => root!.render(<ForkMenu id="fork" hostId="local" run={r} onFork={onFork} />));
+  // happy-dom has no popovers: the menu gets the event a browser sends as it opens.
+  act(() => {
+    document
+      .getElementById("fork")!
+      .dispatchEvent(Object.assign(new Event("beforetoggle"), { newState: "open" }));
+  });
 }
 const menuItems = () => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
 const nameOf = (b: HTMLElement) => b.getAttribute("aria-label") ?? b.textContent;
