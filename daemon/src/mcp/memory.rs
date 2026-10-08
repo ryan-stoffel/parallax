@@ -24,9 +24,6 @@ use serde_json::{Value, json};
 
 use super::{MAX_CONTEXT_BYTES, MAX_PATH_BYTES, Plxd, check_text, parse, pretty};
 
-/// Every memory tool, as some caller gets it.
-pub const TOOLS: &[&str] = &["memory_read", "memory_propose", "memory_write"];
-
 /// A Project's child's memory tools, and a plain thread's.
 pub const CHILD_TOOLS: &[&str] = &["memory_read", "memory_propose"];
 
@@ -359,7 +356,7 @@ struct WriteArgs {
 
 #[cfg(test)]
 mod tests {
-    use super::{CHILD_TOOLS, COORDINATOR_TOOLS, Memory, Role, TOOLS};
+    use super::{CHILD_TOOLS, COORDINATOR_TOOLS, Memory, Role};
 
     fn memory(role: Role) -> Memory {
         Memory {
@@ -386,7 +383,7 @@ mod tests {
                 .map(|tool| tool["name"].as_str().unwrap().to_owned())
                 .collect();
             assert_eq!(listed, names);
-            assert!(names.iter().all(|name| TOOLS.contains(name)));
+            assert!(names.iter().all(|name| COORDINATOR_TOOLS.contains(name)));
         }
         let thread = memory(Role::Thread);
         let refused = thread.scope(Some("you")).unwrap_err();
