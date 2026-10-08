@@ -431,7 +431,7 @@ export function ThreadList({
   // A thread whose parent is in the list nests under it (0041), oldest first, collapsed until
   // opened or until one of them is the open thread.
   const parentKey = (i: Item) =>
-    i.kind === "thread" && i.view.lineage && i.thread.parent
+    i.kind === "thread" && "threadLineage" in i.view.capabilities && i.thread.parent
       ? `${i.host.id}/${i.thread.parent}`
       : undefined;
   const inList = new Set(pool.map((i) => i.key));
@@ -518,15 +518,15 @@ export function ThreadList({
           host={many ? item.host : undefined}
           selected={selected}
           badge={badge}
-          editable={item.view.editable}
-          moded={item.view.moded}
-          autonomous={item.view.autonomous}
+          editable={"projectEdit" in item.view.capabilities}
+          moded={"projectPermission" in item.view.capabilities}
+          autonomous={"projectAutonomy" in item.view.capabilities}
           iconImageBytes={item.view.iconImageBytes}
           onOpen={() => openItem(item)}
           onUpdate={async (change) =>
             setActionError(await item.view.updateProject(item.project.id, change))
           }
-          onDelete={item.view.deletable ? () => askDelete(item) : undefined}
+          onDelete={"projectDelete" in item.view.capabilities ? () => askDelete(item) : undefined}
         />
       );
     const { thread: t, view } = item;
@@ -543,8 +543,8 @@ export function ThreadList({
         selected={selected}
         badge={badge}
         nested={nested}
-        snoozable={view.attention}
-        autoResumable={view.autoResume}
+        snoozable={"threadAttention" in view.capabilities}
+        autoResumable={"autoResume" in view.capabilities}
         onOpen={() => openItem(item)}
         onArchive={async () => setActionError(await view.archive(t.id, !t.archived))}
         onSnooze={async (until) =>
@@ -557,7 +557,7 @@ export function ThreadList({
             : undefined
         }
         onFork={
-          view.forkable
+          "threadFork" in view.capabilities
             ? async (choice) => {
                 const forked = await view.fork(t.id, undefined, choice);
                 if (typeof forked !== "string") return forked;
@@ -1015,7 +1015,7 @@ function RepoFilterMenu({
                 {many && <span className="shrink-0 text-faint-foreground">{host.name}</span>}
                 {check(filter === key)}
               </button>
-              {view.attention && (
+              {"threadAttention" in view.capabilities && (
                 <button
                   type="button"
                   aria-label={`Change ${repo.name}'s icon`}

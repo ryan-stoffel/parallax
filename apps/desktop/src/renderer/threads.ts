@@ -388,24 +388,10 @@ export interface ThreadsView {
     images: PromptImage[],
     options: CoordinatorOptions,
   ) => Promise<RpcError | undefined>;
-  /** Whether the host's plxd keeps seen and snooze state and repo icons (`threadAttention`, 0033). */
-  attention: boolean;
-  /** Whether the host's plxd renames Projects and sets their icons (`projectEdit`, 0032). */
-  editable: boolean;
-  /** Whether the host's plxd deletes Projects (`projectDelete`, PLX-338). */
-  deletable: boolean;
-  /** Whether the host's plxd keeps a Project's permission mode (`projectPermission`, 0042). */
-  moded: boolean;
-  /** Whether the host's plxd keeps a Project's autonomy (`projectAutonomy`, 0043). */
-  autonomous: boolean;
+  /** The host's plxd's capabilities, or none while it isn't connected. */
+  capabilities: Capabilities;
   /** The cap on an icon image's base64, where the host's plxd keeps icon images (`iconImages`, 0038). */
   iconImageBytes?: number;
-  /** Whether the host's plxd keeps threads' parents and titles (`threadLineage`, 0041). */
-  lineage: boolean;
-  /** Whether the host's plxd resumes runs after usage limits (`autoResume`, 0049). */
-  autoResume: boolean;
-  /** Whether the host's plxd forks threads (`threadFork`, 0050). */
-  forkable: boolean;
   /**
    * Marks a thread seen, or snoozes it until a time (a past one ends the snooze). Resolves to an
    * error message, or undefined.
@@ -437,8 +423,8 @@ export type CoordinatorOptions = Pick<
  * `resync`. Loads only while connected, which is when plxd's `capabilities` are known. With
  * `approvals`, the threads and coordinators started here forward their permission requests
  * (PLX-196, 0031); with `threadLineage`, titles kept in this app move to plxd once (0041); with
- * `threadNaming`, plxd names new threads and their branches (0058). The rest become the view's
- * flags for the sidebar and top bar. A Project's new Needs you inbox item (0043) goes to
+ * `threadNaming`, plxd names new threads and their branches (0058). The view carries them all for
+ * the sidebar and top bar. A Project's new Needs you inbox item (0043) goes to
  * `onNeedsYou`.
  */
 export function useThreads(
@@ -745,15 +731,8 @@ export function useThreads(
       state,
       error,
       loading,
-      attention: has("threadAttention"),
-      editable: has("projectEdit"),
-      deletable: has("projectDelete"),
-      moded: has("projectPermission"),
-      autonomous: has("projectAutonomy"),
+      capabilities: capabilities ?? noCapabilities,
       iconImageBytes,
-      lineage,
-      autoResume: has("autoResume"),
-      forkable: has("threadFork"),
       ...actions,
     }),
     [state, error, loading, capabilities, iconImageBytes, actions],
@@ -783,18 +762,13 @@ export async function waitingSince(
 }
 
 const notConnected = "Not connected to this host.";
+/** A disconnected host's capabilities: one shared object, so a view without them stays equal. */
+const noCapabilities: Capabilities = {};
 
 /** A host's view before its list loads: empty, and every action answers that it isn't connected. */
 export const idleThreads: ThreadsView = {
   state: emptyThreads,
-  attention: false,
-  editable: false,
-  deletable: false,
-  moded: false,
-  autonomous: false,
-  lineage: false,
-  autoResume: false,
-  forkable: false,
+  capabilities: noCapabilities,
   addRepo: async () => notConnected,
   start: async () => ({ code: -32000, message: notConnected }),
   fork: async () => ({ code: -32000, message: notConnected }),
