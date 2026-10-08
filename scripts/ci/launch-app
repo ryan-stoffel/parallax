@@ -41,8 +41,6 @@ function launch() {
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.PLX_DEV_SERVER_URL;
-  // The thread namer would download its model; the smoke test only needs the app to launch.
-  env.PLX_NO_NAMER = '1';
 
   let command = [electron, '-r', __filename, desktop];
   if (process.platform === 'linux' && !env.DISPLAY) command = ['xvfb-run', '-a', ...command];

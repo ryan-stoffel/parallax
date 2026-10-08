@@ -16,25 +16,17 @@ publish:
   owner: ryan-stoffel
   repo: parallax
   channel: ${channel}
-# node-pty and node-llama-cpp ship prebuilt binaries for every target, so nothing needs compiling.
-# @electron/rebuild would fetch Electron's headers and run node-gyp anyway on some runners.
+# node-pty ships prebuilt binaries for every target, so nothing needs compiling. @electron/rebuild
+# would fetch Electron's headers and run node-gyp anyway on some runners.
 npmRebuild: false
-# dist/ is the whole app: vite.config.ts bundles every dependency except the ones below. Only
-# `dependencies` are packaged, and package.json keeps just those there.
-# node-llama-cpp's CUDA and Vulkan binaries (Linux and Windows x64 only) add 200 to 300 MB and need
-# the vendor's GPU runtime installed; without them it runs on the CPU, which is enough for the
-# thread namer's small model.
+# dist/ is the whole app: vite.config.ts bundles every dependency except node-pty. Only
+# `dependencies` are packaged, and package.json keeps just that one there.
 files:
   - dist/**
   - package.json
-  - "!node_modules/@node-llama-cpp/*-cuda*/**"
-  - "!node_modules/@node-llama-cpp/*-vulkan/**"
-# Native code can't load from inside app.asar. node-pty's prebuilds and spawn-helper, and
-# node-llama-cpp with the @node-llama-cpp/<platform> package holding its llama.cpp binary.
+# Native code can't load from inside app.asar: node-pty's prebuilds and spawn-helper.
 asarUnpack:
   - node_modules/node-pty/**
-  - node_modules/node-llama-cpp/**
-  - node_modules/@node-llama-cpp/**
 # plxd, built for this target, and plxd.version, the version it reports (0030), go in the
 # resources folder, where findPlxd looks. package-app puts both in target/package-resources.
 extraResources:

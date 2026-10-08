@@ -175,6 +175,7 @@ use self::stream::{Ask, Step, Translator, TurnDone};
 use super::commands::{self, CommandsProbe};
 use super::event::{Event, Failure, FailureKind, Outcome, WarningKind};
 use super::limits::{self, LimitsProbe};
+use super::namer::{self, NameProbe};
 use super::process::{
     CancelPolicy, Environment, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, Signal,
     SpawnError, StdinMode, StdinPipe,
@@ -904,6 +905,43 @@ pub fn permission_mode(permission: Option<AgentPermission>) -> Result<&'static s
     }
 }
 
+/// The CLI's arguments for naming a thread with `model` at `effort` (0058): no tools, slash
+/// commands, MCP servers, or hooks, and no session or memory folder saved, which would keep the
+/// user's message, or an empty folder per thread, in the config folder's `projects/` for good.
+///
+/// # Errors
+///
+/// [`StartError::Invalid`] for a model that could be read as an option, and
+/// [`StartError::Unsupported`] for an effort this version doesn't know.
+fn namer_arguments(model: &str, effort: Option<AgentEffort>) -> Result<Vec<OsString>, StartError> {
+    check_argument("model", model)?;
+    let schema = namer::schema().to_string();
+    let mut args: Vec<OsString> = [
+        "-p",
+        "--output-format",
+        "json",
+        "--json-schema",
+        &schema,
+        "--model",
+        model,
+        "--tools",
+        "",
+        "--disable-slash-commands",
+        "--strict-mcp-config",
+        "--settings",
+        r#"{"disableAllHooks":true,"autoMemoryEnabled":false}"#,
+        "--permission-mode",
+        "dontAsk",
+        "--no-session-persistence",
+    ]
+    .map(OsString::from)
+    .into();
+    if let Some(effort) = effort {
+        args.extend(["--effort".into(), effort_level(effort)?.into()]);
+    }
+    Ok(args)
+}
+
 /// `--effort`'s value for `effort`.
 fn effort_level(effort: AgentEffort) -> Result<&'static str, StartError> {
     Ok(match effort {
@@ -1046,6 +1084,24 @@ impl Backend for ClaudeBackend {
                 }),
             ],
             parse: limits::claude,
+        }))
+    }
+
+    /// `claude -p` on the user's login ([`namer_arguments`]), answering in [`namer::schema`]'s
+    /// shape ([`namer::claude`]).
+    fn namer(
+        &self,
+        dir: &Path,
+        model: &str,
+        effort: Option<AgentEffort>,
+    ) -> Result<Option<NameProbe>, StartError> {
+        let (mut spec, _) = self.spec(dir, &Credential::Subscription { config_home: None })?;
+        spec.args = namer_arguments(model, effort)?;
+        spec.args.extend(self.overrides.args.iter().cloned());
+        self.pin_gateway_model(&mut spec, Some(model));
+        Ok(Some(NameProbe {
+            process: self.launcher.spawn(&spec)?,
+            parse: namer::claude,
         }))
     }
 

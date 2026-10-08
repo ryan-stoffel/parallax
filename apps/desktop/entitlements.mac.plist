@@ -2,8 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Hardened-runtime entitlements for every signed executable in the app (electron-builder.yml).
      V8 needs JIT in the main and helper processes. Nothing else is needed: node-pty's pty.node and
-     spawn-helper, node-llama-cpp's addon and dylibs, and plxd are all signed with the app's Team
-     ID, so library validation passes, and spawning children needs no entitlement. -->
+     spawn-helper, and plxd are all signed with the app's Team ID, so library validation passes,
+     and spawning children needs no entitlement. -->
 <plist version="1.0">
   <dict>
     <key>com.apple.security.cs.allow-jit</key>

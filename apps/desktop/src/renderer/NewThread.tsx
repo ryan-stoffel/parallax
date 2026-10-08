@@ -1,7 +1,7 @@
 import { Folder, House, LoaderCircle, Plus } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
-import type { RpcError, ThreadName } from "../preload/bridge";
+import type { RpcError } from "../preload/bridge";
 import type { AccountChoice, PromptImage, Repo, Role } from "../protocol/generated/protocol";
 import { TranscriptView } from "./AgentChat";
 import { Composer, tabItem } from "./Composer";
@@ -43,7 +43,6 @@ interface NewThreadProps {
     options: RunOptions,
     checkout: boolean,
     gitRef: string | undefined,
-    name?: ThreadName,
     attached?: string[],
   ) => Promise<RpcError | undefined>;
   /** Whether the host's plxd takes a thread's model, effort, and permission (`runOptions`). */
@@ -70,7 +69,6 @@ interface Attempt {
   checkout: boolean;
   /** The picked ref: the worktree's base, or the branch the checkout switches to. */
   gitRef?: string;
-  name: ThreadName;
   /** Started with Cmd/Ctrl+Enter, leaving New Thread open. */
   background: boolean;
 }
@@ -239,7 +237,6 @@ export function NewThread({
       attempt.options,
       attempt.checkout,
       attempt.gitRef,
-      attempt.name,
       attempt.threads,
     );
     failed.current = error ? attempt : undefined;
@@ -306,8 +303,6 @@ export function NewThread({
         : undefined;
     // A background start leaves the box empty for the next thread.
     if (!background) setStarting({ prompt, images, threads });
-    // A retry keeps its name, so the same start is the same request. Images alone name nothing.
-    const name = same?.name ?? (prompt.trim() ? await window.parallax.nameThread(prompt) : {});
     const error = await attemptStart({
       runId: same?.runId ?? uuidv7(),
       groupId: group.id,
@@ -317,7 +312,6 @@ export function NewThread({
       options,
       checkout,
       gitRef,
-      name,
       background,
     });
     // On success the app opens the thread instead.

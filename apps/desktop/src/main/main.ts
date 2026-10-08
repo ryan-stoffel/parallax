@@ -12,7 +12,7 @@ import {
   session,
   shell,
 } from "electron";
-import { existsSync } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -35,8 +35,6 @@ import {
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
 import { savedHost, startHosts } from "./hosts";
 import { isBrowsable, isOpenableExternally, mayNavigate } from "./links";
-import { createNamer } from "./namer";
-import { fallbackName } from "./naming";
 import { appDataDir } from "./plxd";
 import { cloneRepo, createRepo, listFolders } from "./repos";
 import { readTerminalApp, terminalCommand, terminalName, writeTerminalApp } from "./terminalApp";
@@ -174,12 +172,6 @@ app.on("browser-window-focus", () => {
   if (updater) updater.checkSoon();
   else if (process.connected) process.send?.("check");
 });
-
-// Names a new thread and its branch from its first prompt (see namer.ts).
-const namer = createNamer(path.join(app.getPath("userData"), "models"));
-ipcMain.handle("parallax:nameThread", (_event, prompt: unknown) =>
-  typeof prompt === "string" ? namer.name(prompt) : fallbackName(""),
-);
 
 // New Thread's "Add repository…" and the add palette's "Choose in Finder": a folder on this Mac,
 // sheet-attached to the asking window.
@@ -403,9 +395,12 @@ void app.whenReady().then(() => {
   // Under `pnpm dev`, Update follows main (scripts/channels.mjs). Nightly and stable are tags on it.
   if (!updater) process.send?.({ channel: "nightly" });
   startAccount();
-  // The end-to-end tests launch the app on CI machines, where a 490 MB download isn't wanted.
-  if (!process.env["PLX_NO_NAMER"]) namer.warm();
   createWindow();
+  // The on-device thread namer's model, which earlier versions downloaded: plxd names threads
+  // now (0058). Reclaims its 469 MB without holding up the window.
+  void fs
+    .rm(path.join(app.getPath("userData"), "models"), { recursive: true, force: true })
+    .catch((error: unknown) => console.warn("could not remove the old namer's model:", error));
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

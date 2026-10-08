@@ -171,6 +171,7 @@ pub(super) fn run_state(row: &parallax_store::Run) -> AgentRunState {
         pull_requests: state.pull_requests.clone(),
         resume_at: state.resume_at,
         auto_resume: state.auto_resume,
+        branch: None,
         updated_at: row.updated_at,
     }
 }

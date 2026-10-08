@@ -74,6 +74,7 @@ async fn caller(client: &mut Conn, repos: &TempDir) -> (RunId, RepoId) {
             checkout: false,
             base: None,
             checkout_ref: None,
+            naming: None,
         })
         .await
         .unwrap();
@@ -599,6 +600,7 @@ async fn thread_fork_refuses_a_running_turn_and_more_permission() {
             checkout: false,
             base: None,
             checkout_ref: None,
+            naming: None,
         })
         .await
         .unwrap()

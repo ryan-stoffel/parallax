@@ -8,8 +8,8 @@
 //! rather than touch uncommitted changes (see `review`), and [`WorktreeManager::switch`], when a
 //! Current checkout thread starts on a ref the user picked, which git refuses likewise (see
 //! `refs`). Otherwise `worktree add`, `worktree
-//! remove`, and `worktree prune` only touch `.git/worktrees` metadata and refs, and `status`,
-//! `rev-parse`, and `diff` are read-only.
+//! remove`, `worktree prune`, and the `branch -m` that names a thread's branch (0058) only touch
+//! `.git/worktrees` metadata and refs, and `status`, `rev-parse`, and `diff` are read-only.
 //!
 //! The runner (`crate::agents`, #156) is its caller: `agent/start` creates a run's worktree here
 //! and stores its row, including [`CreatedWorktree::git_dir`], in `parallax-store`'s `worktrees`
@@ -27,7 +27,8 @@
 //! A worktree lives at `<data dir>/worktrees/<repo slug>/<run id>`, where `<repo slug>` is the
 //! repo's directory name plus a short hash of its canonical path (so two repos named the same
 //! thing never collide, and the folder stays readable). Its branch is `parallax/<short run id>`
-//! (or `parallax/<slug>` for a named one, see [`WorktreeManager::create_named`]),
+//! (or `parallax/<slug>` for a named one, see [`WorktreeManager::create_named`], which
+//! [`WorktreeManager::rename_branch`] can rename to once a thread is named),
 //! `<short run id>` being the first 8 hex digits of the SHA-256 of the run id — the same
 //! short-hash idea [`crate::paths::DataDir`] uses for its socket fallback, and collision-free in
 //! the way a prefix of the run id's own (time-ordered) `UUIDv7` bytes would not be.
@@ -537,30 +538,7 @@ impl WorktreeManager {
         // other's half-written files. The checkout, the slow part, runs after it, so many
         // threads in one repo start in parallel.
         let guard = self.lock_repo(&repo_root).await;
-        let short = short_hash(&run_id.to_string());
-        let branch = match slug {
-            Some(slug) if valid_branch_slug(slug) => {
-                let named = format!("parallax/{slug}");
-                let taken = self
-                    .run_git(
-                        &repo_root,
-                        &[
-                            "rev-parse",
-                            "--verify",
-                            "--quiet",
-                            &format!("refs/heads/{named}"),
-                        ],
-                    )
-                    .await?
-                    .success();
-                if taken {
-                    format!("{named}-{short}")
-                } else {
-                    named
-                }
-            }
-            _ => format!("parallax/{short}"),
-        };
+        let branch = self.free_branch(&repo_root, run_id, slug).await?;
         let path = self
             .root
             .join(project_dir_name(&repo_root))
@@ -613,6 +591,96 @@ impl WorktreeManager {
             git_dir,
             base_dirty,
         })
+    }
+
+    /// The branch run `run_id` gets in `repo_root`: `parallax/<slug>` for a valid `slug`, with the
+    /// short run id after it when a branch already has that name, or else `parallax/<short run
+    /// id>`. The caller holds the repo's lock.
+    async fn free_branch(
+        &self,
+        repo_root: &Path,
+        run_id: RunId,
+        slug: Option<&str>,
+    ) -> Result<String, WorktreeError> {
+        let short = short_hash(&run_id.to_string());
+        let Some(slug) = slug.filter(|slug| valid_branch_slug(slug)) else {
+            return Ok(format!("parallax/{short}"));
+        };
+        let named = format!("parallax/{slug}");
+        let taken = self
+            .run_git(
+                repo_root,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/heads/{named}"),
+                ],
+            )
+            .await?
+            .success();
+        Ok(if taken {
+            format!("{named}-{short}")
+        } else {
+            named
+        })
+    }
+
+    /// Renames run `run_id`'s branch `branch` in `repo_path` to the name [`Self::create_named`]
+    /// would give it for `slug` (0058), and a worktree that has it out follows. Returns the new
+    /// name, or `None` when the branch keeps its own: it has an upstream, so its name is on a
+    /// remote too, it already has that name, or `slug` isn't a valid one.
+    ///
+    /// # Errors
+    ///
+    /// [`WorktreeError::NotAGitRepo`], or [`WorktreeError::GitFailed`],
+    /// [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`] from running git, as for a branch
+    /// that no longer exists.
+    pub async fn rename_branch(
+        &self,
+        repo_path: &Path,
+        run_id: RunId,
+        branch: &str,
+        slug: &str,
+    ) -> Result<Option<String>, WorktreeError> {
+        let repo_root = self.repo_root(repo_path).await?;
+        let _guard = self.lock_repo(&repo_root).await;
+        let upstream = self
+            .run_git(
+                &repo_root,
+                &["config", "--get", &format!("branch.{branch}.merge")],
+            )
+            .await?
+            .success();
+        if upstream || !valid_branch_slug(slug) || branch == format!("parallax/{slug}") {
+            return Ok(None);
+        }
+        let renamed = self.free_branch(&repo_root, run_id, Some(slug)).await?;
+        if renamed == branch {
+            return Ok(None);
+        }
+        self.run_git_ok(&repo_root, &["branch", "-m", "--", branch, &renamed])
+            .await?;
+        Ok(Some(renamed))
+    }
+
+    /// Renames branch `from` in `repo_path` back to `to`, for a [`Self::rename_branch`] whose
+    /// new name plxd couldn't record.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::rename_branch`].
+    pub async fn rename_back(
+        &self,
+        repo_path: &Path,
+        from: &str,
+        to: &str,
+    ) -> Result<(), WorktreeError> {
+        let repo_root = self.repo_root(repo_path).await?;
+        let _guard = self.lock_repo(&repo_root).await;
+        self.run_git_ok(&repo_root, &["branch", "-m", "--", from, to])
+            .await
+            .map(drop)
     }
 
     /// Files that differ between `base` (a commit git can resolve, normally

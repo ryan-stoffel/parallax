@@ -339,6 +339,16 @@ impl Providers {
         self.cache.lock().await.remove(id);
     }
 
+    /// The kind of the instance `id`, if the host has it.
+    pub async fn kind(&self, id: &str) -> Option<ProviderKind> {
+        self.stored
+            .lock()
+            .await
+            .iter()
+            .find(|entry| entry.instance.id == id)
+            .map(|entry| entry.instance.kind)
+    }
+
     /// Whether the instance `id` sets the variable `name`, secret or not.
     pub async fn sets(&self, id: &str, name: &str) -> bool {
         self.stored
@@ -976,6 +986,15 @@ impl Backend for WithSecrets {
             return Ok(None);
         }
         self.plain.limits(cwd)
+    }
+
+    fn namer(
+        &self,
+        dir: &Path,
+        model: &str,
+        effort: Option<parallax_protocol::AgentEffort>,
+    ) -> Result<Option<crate::backend::NameProbe>, crate::backend::StartError> {
+        self.full().namer(dir, model, effort)
     }
 }
 

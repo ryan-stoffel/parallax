@@ -228,6 +228,11 @@ pub(super) enum Command {
         parent: RunId,
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
     },
+    /// Names the run's worktree branch for `slug`, once its thread is named (0058).
+    RenameBranch {
+        slug: String,
+        reply: oneshot::Sender<Result<(), ErrorObject>>,
+    },
 }
 
 impl Command {
@@ -258,7 +263,7 @@ impl Command {
             Self::Git { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
-            Self::Delete { reply, .. } => {
+            Self::Delete { reply, .. } | Self::RenameBranch { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
             Self::Wake(..) => {}
@@ -738,7 +743,66 @@ impl Actor {
             } => {
                 let _ = reply.send(self.join(project, parent).await);
             }
+            Command::RenameBranch { slug, reply } => {
+                let _ = reply.send(self.rename_branch(&slug).await);
+            }
         }
+    }
+
+    /// Renames the run's worktree branch for `slug` (0058), in git, its row, and here, and reports
+    /// it in `agent.updated`. Nothing changes for a run with no worktree, one whose push or Open
+    /// PR is running, or a branch with an upstream ([`WorktreeManager::rename_branch`]).
+    /// Running in the actor keeps it from racing the run's own commits.
+    ///
+    /// [`WorktreeManager::rename_branch`]: crate::worktree::WorktreeManager::rename_branch
+    async fn rename_branch(&mut self, slug: &str) -> Result<(), ErrorObject> {
+        let Some(worktree) = &self.worktree else {
+            return Ok(());
+        };
+        if self.effect.is_some() {
+            return Ok(());
+        }
+        let (repo, old) = (PathBuf::from(&worktree.repo_path), worktree.branch.clone());
+        let renamed = self
+            .daemon
+            .agents
+            .worktrees
+            .rename_branch(&repo, self.id, &old, slug)
+            .await
+            .map_err(|error| ErrorObject::parallax(ErrorKind::WorktreeFailed, error.to_string()))?;
+        let Some(branch) = renamed else {
+            return Ok(());
+        };
+        let (id, run_id, project, row) = (self.row.id, self.id, self.project, self.row.clone());
+        let stored = branch.clone();
+        let written = self
+            .write(move |db, now| {
+                db.set_worktree_branch(id, &stored)
+                    .map_err(|error| store_error(&error))?;
+                let mut state = convert::run_state(&row);
+                state.branch = Some(stored);
+                db.stage(
+                    now,
+                    Some(project),
+                    ParallaxEvent::AgentUpdated { run_id, state },
+                );
+                Ok(())
+            })
+            .await;
+        // The row keeps the old name, so git takes it back: Open PR, Accept, and cleanup all
+        // name the branch from the row.
+        if let Err(error) = written {
+            let worktrees = &self.daemon.agents.worktrees;
+            if let Err(undo) = worktrees.rename_back(&repo, &branch, &old).await {
+                warn!(run = %self.id, %undo, %branch, "could not name a branch back after its rename wasn't stored");
+            }
+            return Err(error);
+        }
+        info!(run = %self.id, %branch, "renamed a named thread's branch");
+        if let Some(worktree) = &mut self.worktree {
+            worktree.branch = branch;
+        }
+        Ok(())
     }
 
     /// Moves the run into Project `project` as `parent`'s child (0042). Its mode, inbox, wake-ups,

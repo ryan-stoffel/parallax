@@ -164,6 +164,7 @@ pub(crate) fn thread(repo: Option<RepoId>) -> ThreadStartParams {
         base: None,
         checkout_ref: None,
         threads: Vec::new(),
+        naming: None,
     }
 }
 

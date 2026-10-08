@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
-import type { RpcError, ThreadName } from "../preload/bridge";
+import type { RpcError } from "../preload/bridge";
 import type {
   AccountChoice,
   AgentRun,
@@ -19,6 +19,8 @@ import type {
 } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import type { RunOptions } from "./models";
+import { slugify } from "./naming";
+import { newThreadPrefs } from "./prefs";
 import { isRunning, trackApprovals, updateRun, type ApprovalsByRun } from "./transcript";
 import { uuidv7 } from "./uuidv7";
 
@@ -179,10 +181,9 @@ export function titleOf(run: AgentRun): string {
   return readTitle(run.id) ?? (run.prompt.trim().split("\n")[0] || "Image");
 }
 
-// A thread's generated title, kept in this app for a plxd without `threadLineage`, which keeps no
-// title. A lineage host gets it with `thread/start`, and `useThreads` moves any kept here to it.
-// Run ids are unique across hosts. ponytail: not shared with other computers running the app, or
-// with a cleared browser profile; both fall back to the prompt's first line.
+// A thread's generated title, which earlier versions kept in this app for a plxd without
+// `threadLineage`, which keeps no title. `useThreads` moves any kept here to a lineage host. Run
+// ids are unique across hosts.
 const titleKey = (runId: string) => `parallax:title:${runId}`;
 
 function readTitle(runId: string): string | undefined {
@@ -190,14 +191,6 @@ function readTitle(runId: string): string | undefined {
     return localStorage.getItem(titleKey(runId)) ?? undefined;
   } catch {
     return undefined;
-  }
-}
-
-function saveTitle(runId: string, title: string) {
-  try {
-    localStorage.setItem(titleKey(runId), title);
-  } catch {
-    // Storage is off: the thread keeps its prompt as its title.
   }
 }
 
@@ -328,12 +321,14 @@ export interface ThreadsView {
   /** Registers a repository (idempotent on its path). Resolves to its entry or an error message. */
   addRepo: (path: string) => Promise<Repo | string>;
   /**
-   * Starts a thread in a group with `prompt` and its `images`, with `options` sent as they are, and
-   * its branch and title from `name`. With `checkout`, it works in the repository's own checkout
-   * instead of a new worktree, so it gets no branch. `gitRef` is the ref the worktree starts from,
-   * or with `checkout`, the branch the checkout switches to first. `attached` are the run ids of
-   * threads attached to the prompt as context (0047). Reuse `runId`, with the same options,
-   * `checkout`, and `gitRef`, to retry. Resolves to plxd's error, or undefined.
+   * Starts a thread in a group with `prompt` and its `images`, with `options` sent as they are, on
+   * a branch named from the prompt's words. A plxd with `threadNaming` then names the thread and
+   * its branch with the naming model in Settings (0058). With `checkout`, it works in the
+   * repository's own checkout instead of a new worktree, so it gets no branch. `gitRef` is the
+   * ref the worktree starts from, or with `checkout`, the branch the checkout switches to first.
+   * `attached` are the run ids of threads attached to the prompt as context (0047). Reuse
+   * `runId`, with the same options, `checkout`, and `gitRef`, to retry. Resolves to plxd's error,
+   * or undefined.
    */
   start: (
     runId: string,
@@ -343,7 +338,6 @@ export interface ThreadsView {
     options: RunOptions,
     checkout: boolean,
     gitRef: string | undefined,
-    name?: ThreadName,
     attached?: string[],
   ) => Promise<RpcError | undefined>;
   /**
@@ -441,8 +435,9 @@ export type CoordinatorOptions = Pick<
  * Project's own events for its runs and their permission requests (0033), starting over on
  * `resync`. Loads only while `connected`. The flags are what the host's plxd advertises: with
  * `approvals`, the threads and coordinators started here forward their permission requests
- * (PLX-196, 0031); with `lineage`, a thread's generated title goes to plxd (0041), and titles kept
- * in this app move there once; `attention`, `editable`, `deletable`, `iconImageBytes`,
+ * (PLX-196, 0031); with `lineage`, titles kept in this app move to plxd once (0041); with
+ * `naming`, plxd names new threads and their branches (0058); `attention`, `editable`,
+ * `deletable`, `iconImageBytes`,
  * `lineage`, `autoResume`, and `forkable` are passed through for the sidebar and top bar. A
  * Project's new Needs you inbox item (0043) goes to `onNeedsYou`.
  */
@@ -461,6 +456,7 @@ export function useThreads(
     autoResume = false,
     onNeedsYou,
     forkable = false,
+    naming = false,
   }: Partial<
     Pick<
       ThreadsView,
@@ -476,6 +472,7 @@ export function useThreads(
     >
   > & {
     approvals?: boolean;
+    naming?: boolean;
     /** Called for each new Needs you item in one of the host's Projects' inboxes (0043). */
     onNeedsYou?: (project: string, item: InboxItem) => void;
   } = {},
@@ -630,9 +627,10 @@ export function useThreads(
       options: RunOptions,
       checkout: boolean,
       gitRef: string | undefined,
-      name?: ThreadName,
       attached: string[] = [],
     ) => {
+      const branchSlug = slugify(prompt);
+      const { naming: model, namingEffort } = newThreadPrefs.get();
       const answer = await window.parallax.request(hostId, "thread/start", {
         runId,
         prompt,
@@ -641,18 +639,20 @@ export function useThreads(
         ...(groupId !== noRepo && { repo: groupId }),
         ...options,
         // The checkout keeps its own branch, so a name gives it none.
-        ...(checkout ? { checkout } : name?.slug && { branchSlug: name.slug }),
+        ...(checkout ? { checkout } : branchSlug && { branchSlug }),
         ...(gitRef && (checkout ? { checkoutRef: gitRef } : { base: gitRef })),
         ...(approvals && { approvals }),
-        ...(lineage && name?.title && { title: name.title }),
+        ...(naming &&
+          prompt.trim() && {
+            naming: { backend: model.provider, model: model.id, effort: namingEffort },
+          }),
       });
       if ("error" in answer) return answer.error;
-      if (!lineage && name?.title) saveTitle(runId, name.title);
       dispatch({ type: "runs", runs: [answer.result.run] });
       dispatch({ type: "event", event: { kind: "thread.started", thread: answer.result.thread } });
       return undefined;
     },
-    [hostId, approvals, lineage],
+    [hostId, approvals, naming],
   );
 
   const fork = useCallback(

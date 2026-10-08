@@ -26,6 +26,7 @@ pub mod event;
 pub mod fake;
 pub mod key_account;
 pub mod limits;
+pub mod namer;
 pub mod opencode;
 pub mod process;
 pub mod record;
@@ -55,6 +56,7 @@ pub use self::event::{
     WarningKind,
 };
 pub use self::limits::LimitsProbe;
+pub use self::namer::NameProbe;
 use self::process::{CancelPolicy, Signals, SpawnError};
 pub use self::sandbox::WorkerSandbox;
 
@@ -141,6 +143,23 @@ pub trait Backend: Send + Sync {
     ///
     /// If the CLI can't be started.
     fn limits(&self, _cwd: &Path) -> Result<Option<LimitsProbe>, StartError> {
+        Ok(None)
+    }
+
+    /// Starts the CLI in `dir`, an empty folder of the call's own that holds
+    /// [`namer::SCHEMA_FILE`], to name a thread (0058): `model` at `effort`, on the login a thread
+    /// on this backend gets, with no tools, for [`namer::ask`]. `None` for a backend that can't,
+    /// the default.
+    ///
+    /// # Errors
+    ///
+    /// If the model or effort can't be given to the CLI, or the CLI can't be started.
+    fn namer(
+        &self,
+        _dir: &Path,
+        _model: &str,
+        _effort: Option<AgentEffort>,
+    ) -> Result<Option<NameProbe>, StartError> {
         Ok(None)
     }
 }

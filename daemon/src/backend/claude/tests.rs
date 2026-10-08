@@ -13,7 +13,7 @@ use super::stream::{Ask, Step, Translator};
 use super::{
     BYPASS_PERMISSION_MODE, ClaudeBackend, EXIT_PLAN_MODE, NO_WRITE_ARGS, PLAN_WORKER_TOOL_LIST,
     PLAN_WORKSPACE_WRITE_ARGS, PROMPT_TOOL_ARGS, TODO_TOOLS, WORKER_TOOL_LIST, WORKER_TOOLS,
-    WORKSPACE_WRITE_ARGS, no_write_settings, write_env_file,
+    WORKSPACE_WRITE_ARGS, namer_arguments, no_write_settings, write_env_file,
 };
 use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
 use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
@@ -3398,4 +3398,29 @@ fn compaction_reports_its_start_and_its_boundary() {
     );
     let cleared = br#"{"type":"system","subtype":"status","status":null}"#;
     assert_eq!(translator.line(cleared), Vec::new());
+}
+
+/// Naming a thread (0058) saves no session or memory folder, which would keep the user's first
+/// message, or an empty folder, in the config folder's `projects/`, and runs with no tools or MCP
+/// servers.
+#[test]
+fn naming_saves_no_session_and_has_no_tools() {
+    let args = namer_arguments("claude-haiku-4-5", Some(AgentEffort::Low)).unwrap();
+    let args: Vec<&str> = args.iter().map(|arg| arg.to_str().unwrap()).collect();
+    for flag in ["--no-session-persistence", "--strict-mcp-config", "-p"] {
+        assert!(args.contains(&flag), "{flag} in {args:?}");
+    }
+    assert!(
+        args.windows(2).any(|pair| pair == ["--tools", ""]),
+        "{args:?}"
+    );
+    assert!(
+        args.windows(2).any(|pair| pair == ["--effort", "low"]),
+        "{args:?}"
+    );
+    assert!(
+        args.iter()
+            .any(|arg| arg.contains(r#""autoMemoryEnabled":false"#)),
+        "{args:?}"
+    );
 }

@@ -31,10 +31,11 @@ use tempfile::TempDir;
 use super::commands::{self, CommandsProbe};
 use super::event::FailureKind;
 use super::limits::{self, LimitsProbe};
+use super::namer::{self, NameProbe};
 use super::process::{Environment, Launcher};
 use super::{
     AgentEffort, AgentPermission, Backend, Capabilities, ImageMediaType, Overrides, PromptImage,
-    RunRequest, StartError, Started,
+    RunRequest, StartError, Started, check_argument,
 };
 use crate::images;
 
@@ -266,6 +267,45 @@ impl Backend for CodexBackend {
                 commands::request(commands::LIST_ID, "account/rateLimits/read", &json!(null)),
             ],
             parse: limits::codex,
+        }))
+    }
+
+    /// `codex exec` on this backend's login, ephemeral and read-only, answering in
+    /// [`namer::schema`]'s shape ([`namer::codex`]). The instance's arguments are `app-server`'s,
+    /// so it gets only its program and variables.
+    fn namer(
+        &self,
+        dir: &Path,
+        model: &str,
+        effort: Option<AgentEffort>,
+    ) -> Result<Option<NameProbe>, StartError> {
+        check_argument("model", model)?;
+        let home = self.overrides.home.as_deref();
+        let mut spec = app_server::spec(&self.launcher, &self.overrides, dir, home);
+        let schema = dir.join(namer::SCHEMA_FILE);
+        spec.args = vec![
+            "exec".into(),
+            "--ephemeral".into(),
+            "--skip-git-repo-check".into(),
+            "-s".into(),
+            "read-only".into(),
+            "--json".into(),
+            "--model".into(),
+            model.into(),
+            "--output-schema".into(),
+            schema.into(),
+        ];
+        if let Some(effort) = effort {
+            let level = effort_level(effort)?;
+            spec.args.extend([
+                "--config".into(),
+                format!("model_reasoning_effort=\"{level}\"").into(),
+            ]);
+        }
+        spec.args.push("-".into());
+        Ok(Some(NameProbe {
+            process: self.launcher.spawn(&spec)?,
+            parse: namer::codex,
         }))
     }
 

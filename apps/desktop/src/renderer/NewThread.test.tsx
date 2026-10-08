@@ -50,12 +50,10 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
 });
 const pickFolder = vi.fn<() => Promise<string | null>>();
 let capabilities: Capabilities;
-const nameThread = vi.fn<ParallaxBridge["nameThread"]>(async () => ({}));
 
 beforeEach(() => {
   request.mockClear();
   capabilities = {};
-  nameThread.mockReset().mockResolvedValue({});
   localStorage.clear();
   accessPrefs.set(accessDefaults);
   answers = {
@@ -78,7 +76,6 @@ beforeEach(() => {
     onConnectionState: () => () => {},
     subscribe: () => () => {},
     request,
-    nameThread,
     pickFolder,
     hosts: async () => [],
     onHosts: () => () => {},
@@ -200,6 +197,7 @@ test("New Thread adds a picked folder, starts there, and reuses its run id on a 
     runId: expect.any(String),
     repo: calls("repo/add")[0]!["id"],
     prompt: "Tidy the README",
+    branchSlug: "tidy-the-readme",
   });
   expect(retry).toEqual(first);
   // The thread opens, and its row is in the sidebar under its repository.
@@ -360,7 +358,9 @@ test("No Repo starts a thread with no repo", async () => {
   await choose("Repository", "No Repo");
   expect(heading()).toBe("What should we work on without a repo?");
   await send("Hi");
-  expect(calls("thread/start")).toEqual([{ runId: expect.any(String), prompt: "Hi" }]);
+  expect(calls("thread/start")).toEqual([
+    { runId: expect.any(String), prompt: "Hi", branchSlug: "hi" },
+  ]);
   expect(crumbs()).toEqual(["This Mac", "No Repo", "Hi"]);
 });
 
@@ -463,6 +463,7 @@ describe("with plxd's run options", () => {
       runId: expect.any(String),
       repo: parallax.id,
       prompt: "Plan the settings split",
+      branchSlug: "plan-the-settings-split",
       model: "claude-fable-5-1",
       effort: "max",
       permission: "plan",
@@ -482,6 +483,7 @@ describe("with plxd's run options", () => {
         runId: expect.any(String),
         repo: parallax.id,
         prompt: "Tidy the README",
+        branchSlug: "tidy-the-readme",
         model: "claude-opus-5-5",
         effort: "high",
         permission: "edit",
@@ -520,6 +522,7 @@ describe("with plxd's run options", () => {
         runId: expect.any(String),
         repo: parallax.id,
         prompt: "Tidy the README",
+        branchSlug: "tidy-the-readme",
         model: "gpt-6.1-sol",
         effort: "high",
         permission: "edit",
@@ -536,8 +539,8 @@ test("without run options, New Thread offers no model, effort, or access", async
   expect(calls("accounts/defaults/get")).toEqual([]);
 });
 
-test("a thread starts on the branch its prompt was named for, and takes the name as its title", async () => {
-  nameThread.mockResolvedValue({ title: "Fix flaky test", slug: "fix-flaky-test" });
+test("a thread starts on a branch named from its prompt, and plxd names it with the naming model", async () => {
+  capabilities = { threadNaming: {} };
   answers["thread/start"] = (p) => ({
     result: {
       thread: { id: p["runId"], repo: parallax.id, createdAt: "2026-09-26T12:05:00Z" },
@@ -551,15 +554,14 @@ test("a thread starts on the branch its prompt was named for, and takes the name
       runId: expect.any(String),
       prompt: "the flaky test is flaky, please fix it",
       repo: parallax.id,
-      branchSlug: "fix-flaky-test",
+      branchSlug: "the-flaky-test-is",
+      naming: { backend: "codex", model: "gpt-6-luna", effort: "low" },
     },
   ]);
-  expect(crumbs()).toEqual(["This Mac", "parallax", "Fix flaky test"]);
 });
 
 test("Picking another computer in Runs on keeps the draft and starts the thread there, in its repository of the same name", async () => {
   window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
-  nameThread.mockResolvedValue({ title: "Fix flaky test", slug: "fix-flaky-test" });
   const mini: Repo = { ...parallax, id: "r-mini-parallax", path: "/Users/me/parallax" };
   answers["thread/list"] = (p) => ({
     result: { repos: [parallax], threads: [thread], seq: 7, ...p },
@@ -599,7 +601,6 @@ test("Picking another computer in Runs on keeps the draft and starts the thread 
 
 test("Local checkout starts a thread in the repository itself, with no branch of its own", async () => {
   capabilities = { checkout: {} };
-  nameThread.mockResolvedValue({ title: "Fix flaky test", slug: "fix-flaky-test" });
   answers["thread/start"] = (p) => ({
     result: {
       thread: { id: p["runId"], repo: parallax.id, createdAt: "2026-09-26T12:05:00Z" },
@@ -643,7 +644,13 @@ describe("the ref picker", () => {
     expect(button("From origin/develop")).toBeDefined();
     await send("Fix it");
     expect(calls("thread/start")).toEqual([
-      { runId: expect.any(String), prompt: "Fix it", repo: parallax.id, base: "origin/develop" },
+      {
+        runId: expect.any(String),
+        prompt: "Fix it",
+        repo: parallax.id,
+        branchSlug: "fix-it",
+        base: "origin/develop",
+      },
     ]);
   });
 
@@ -734,7 +741,6 @@ test("a thread can start with an image alone, titled Image, and nothing to name 
       repo: parallax.id,
     },
   ]);
-  expect(nameThread).not.toHaveBeenCalled();
   expect(crumbs()).toEqual(["This Mac", "parallax", "Image"]);
   vi.unstubAllGlobals();
 });
@@ -985,7 +991,12 @@ describe("keyboard shortcuts (PLX-316)", () => {
     await settle();
 
     expect(calls("thread/start")).toEqual([
-      { runId: expect.any(String), repo: parallax.id, prompt: "Tidy the README" },
+      {
+        runId: expect.any(String),
+        repo: parallax.id,
+        prompt: "Tidy the README",
+        branchSlug: "tidy-the-readme",
+      },
     ]);
     expect(crumbs()).toEqual(["This Mac", "parallax", "New thread"]);
     expect(heading()).toBe("What should we build in parallax?");

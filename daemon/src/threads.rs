@@ -28,6 +28,9 @@
 //! A thread started with `checkout` gets no worktree: it works in its repo entry's own checkout,
 //! on the branch the user has out or the one `checkoutRef` switches it to, and plxd leaves its
 //! changes there uncommitted. A thread with no repo has no checkout, so it can't ask for one.
+//!
+//! `thread/start` with `naming` returns as soon as the thread has started, and [`crate::naming`]
+//! names it and its branch in the background (0058).
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -448,6 +451,7 @@ pub(crate) async fn start(
         checkout_ref,
         threads,
         notify,
+        naming,
     } = params;
     let git_ref = git_ref(checkout, base, checkout_ref)?;
     let title = title.as_deref().map(check_title).transpose()?.flatten();
@@ -518,6 +522,9 @@ pub(crate) async fn start(
         .thread
         .as_ref()
         .ok_or_else(|| ErrorObject::internal_error("a new thread has no thread row"))?;
+    if let Some(naming) = naming.filter(|_| !taken) {
+        crate::naming::start(&daemon, &created.run, naming);
+    }
     Ok(ThreadStartResult {
         thread: thread_entry(thread)?,
         run: created.run,

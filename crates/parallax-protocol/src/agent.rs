@@ -361,6 +361,11 @@ pub struct AgentRunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub auto_resume: Option<bool>,
+    /// Its worktree's branch, sent only when plxd renamed it after naming the thread (0058).
+    /// Absent leaves `AgentRun.branch` as it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub branch: Option<String>,
     /// When it changed, in RFC 3339 UTC.
     pub updated_at: Timestamp,
 }
