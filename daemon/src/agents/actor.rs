@@ -3629,7 +3629,8 @@ mod tests {
     }
 
     /// `agent.finished` commits with the state it reports, in `save`'s job: a save that fails
-    /// publishes neither, and one that commits publishes it before `agent.updated`, so a restart can't find the run running after its finish.
+    /// publishes neither it nor `agent.updated`, and one that commits publishes it before
+    /// `agent.updated`, so a restart can't find the run running after its finish.
     #[tokio::test]
     async fn a_finish_commits_with_the_runs_state_or_not_at_all() {
         let dir = tempfile::tempdir().unwrap();

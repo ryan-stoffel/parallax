@@ -119,7 +119,7 @@ Later milestones add methods and events behind a capability, with no version bum
 
 | Capability | Methods | Events |
 | --- | --- | --- |
-| M3 `agents` | `agent/start {runId, ...}`, `agent/stop`, `agent/list`, `agent/output {runId, after}` (paged, returns `seq`), `agent/diff` (paged), `context/list`, `context/read`, `context/write` | `agent.started`, `agent.output`, `agent.finished`, `agent.diffReady`, `context.changed` |
+| M3 `agents` | `agent/start {runId, ...}`, `agent/stop`, `agent/list`, `agent/output {runId, after}` (paged, returns `seq`), `agent/diff` (paged), `context/list`, `context/read`, `context/write` | `agent.started`, `agent.output`, `agent.finished`, `context.changed` |
 | M4 `coordinator` | `coordinator/send {turnId, ...}`, `coordinator/stop`, `plan/approve {planId}`, which fails with `planReplaced` if #11's flow replaced that plan | `coordinator.output`, `coordinator.turnFinished`, `plan.proposed`; parallel agents are just more `runId`s |
 | M5 `localRunner` | `runner/start {runId, ...}`, `runner/stop`, and the shared context mirror sync (0005), which the host sends over the connection the MacBook opened. `client.machineId` tells two machines apart. | `runner.output`, `runner.finished` |
 | M6 `triggers` | `trigger/list`, `trigger/create {id, ...}` | `trigger.fired` |
