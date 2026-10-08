@@ -42,6 +42,7 @@ import { cloneRepo, createRepo, listFolders } from "./repos";
 import { readTerminalApp, terminalCommand, terminalName, writeTerminalApp } from "./terminalApp";
 import { startStorage } from "./storage";
 import { isNightly, startUpdater } from "./updater";
+import { broadcast } from "./windows";
 
 // The app menu's About, Hide, and Quit items show the app's name, which says a nightly build is
 // one, as its bundle's name does (scripts/ci/package-app). userData is `desktop` in plxd's
@@ -138,8 +139,7 @@ let updateState: UpdateState = {};
 function publishUpdate(state: UpdateState) {
   if (JSON.stringify(state) === JSON.stringify(updateState)) return;
   updateState = state;
-  for (const win of BrowserWindow.getAllWindows())
-    win.webContents.send("parallax:updateState", state);
+  broadcast("parallax:updateState", state);
 }
 ipcMain.handle("parallax:updateState", () => updateState);
 

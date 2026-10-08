@@ -5,6 +5,7 @@ import path from "node:path";
 
 import type { Profile } from "../preload/bridge";
 import { serveSignIn, type Answer, type SignInPage } from "./loopback";
+import { broadcast } from "./windows";
 
 // The Supabase project that holds Parallax accounts (0037). Both values are public: the key only
 // names the project. PLX_SUPABASE_URL and PLX_SUPABASE_KEY point a dev build at another project.
@@ -105,8 +106,7 @@ export function startAccount() {
   let profile: Profile | null | undefined = auth ? undefined : null;
   const publish = (next: Profile | null) => {
     profile = next;
-    for (const win of BrowserWindow.getAllWindows())
-      win.webContents.send("parallax:profile", profile);
+    broadcast("parallax:profile", profile);
   };
   // The last picture fetched, so an hourly token refresh doesn't fetch it again.
   let picture: { url: string; data: string | undefined } | undefined;

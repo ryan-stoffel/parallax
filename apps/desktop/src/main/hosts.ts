@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, powerMonitor, type WebContents } from "electron";
+import { app, ipcMain, powerMonitor, type WebContents } from "electron";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
@@ -52,6 +52,7 @@ import {
 } from "./terminal";
 import { dataDir, findPlxd, replaceServe, plxdVersion } from "./plxd";
 import { isNightly } from "./updater";
+import { broadcast, perWindow } from "./windows";
 
 // With PLX_IPC_STATS set, the subscription messages sent to renderers and their JSON bytes, for
 // the load test (PLX-447), which reads `globalThis.ipcStats` through Playwright's `app.evaluate`.
@@ -755,28 +756,9 @@ function invalid(code: number, message: string): RpcResponse<never> {
   return { error: { code, message } };
 }
 
-function broadcast(channel: string, ...args: unknown[]): void {
-  for (const window of BrowserWindow.getAllWindows()) window.webContents.send(channel, ...args);
-}
-
 /** A window's subscriptions, ended when it closes or reloads, since its listeners are gone. */
-function windowSubscriptions(sender: WebContents): Map<string, () => void> {
-  let own = subscriptions.get(sender);
-  if (!own) {
-    const created = new Map<string, () => void>();
-    const endAll = () => {
-      for (const unsubscribe of created.values()) unsubscribe();
-      created.clear();
-    };
-    // `did-navigate` fires when a main-frame navigation commits, such as a reload. Not
-    // `did-start-navigation`, which also fires for link clicks that `will-navigate` cancels.
-    sender.on("did-navigate", endAll);
-    sender.once("destroyed", () => {
-      endAll();
-      subscriptions.delete(sender);
-    });
-    subscriptions.set(sender, created);
-    own = created;
-  }
-  return own;
-}
+const windowSubscriptions = (sender: WebContents) =>
+  perWindow(subscriptions, sender, (own) => {
+    for (const unsubscribe of own.values()) unsubscribe();
+    own.clear();
+  });
