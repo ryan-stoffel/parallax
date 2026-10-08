@@ -343,15 +343,17 @@ export function App() {
       ? threads.state.threads.find((t) => t.id === selection.threadId)
       : undefined;
   // Each thread on screen that has news is seen now, including one that finishes while it's open.
-  const news = threads.attention
-    ? panes
-        .filter((id) => {
-          const t = threads.state.threads.find((t) => t.id === id);
-          const attention = t && attentionOf(t, threads.state.runs[id], asksOf(threads.state, id));
-          return attention === "done" || attention === "failed";
-        })
-        .join(" ")
-    : "";
+  const news =
+    "threadAttention" in threads.capabilities
+      ? panes
+          .filter((id) => {
+            const t = threads.state.threads.find((t) => t.id === id);
+            const attention =
+              t && attentionOf(t, threads.state.runs[id], asksOf(threads.state, id));
+            return attention === "done" || attention === "failed";
+          })
+          .join(" ")
+      : "";
   useEffect(() => {
     for (const id of news.split(" ").filter(Boolean)) void threads.update(id, { seen: true });
   }, [news, threads]);
@@ -374,7 +376,10 @@ export function App() {
   );
 
   // The open thread's parent and children or siblings, on a plxd that keeps them (0041).
-  const lineage = threads.lineage && openThread ? lineageOf(threads.state, openThread) : undefined;
+  const lineage =
+    "threadLineage" in threads.capabilities && openThread
+      ? lineageOf(threads.state, openThread)
+      : undefined;
   // Each open thread's agent's own subagents, as its chat reports them (PLX-382).
   const [native, setNative] = useState<Readonly<Record<string, NativeSubagent[]>>>({});
   const reportNative = useCallback(
@@ -855,7 +860,7 @@ export function App() {
                   const focused = threadId === selection.threadId;
                   const paneThread = threads.state.threads.find((t) => t.id === threadId);
                   const paneParent =
-                    threads.lineage && paneThread
+                    "threadLineage" in threads.capabilities && paneThread
                       ? lineageOf(threads.state, paneThread)?.parent?.id
                       : undefined;
                   const title = threads.state.titles[threadId];
@@ -917,7 +922,7 @@ export function App() {
                         }
                         forked={!!paneThread?.forkedFrom}
                         onFork={
-                          threads.forkable
+                          "threadFork" in threads.capabilities
                             ? (turnId, choice) => forkThread(threadId, turnId, choice)
                             : undefined
                         }
