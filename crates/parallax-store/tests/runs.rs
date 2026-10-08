@@ -386,7 +386,7 @@ fn worktree_fields() -> WorktreeFields {
 
 #[test]
 fn a_run_and_its_worktree_are_created_together_or_not_at_all() {
-    let (_dir, mut store) = open();
+    let (dir, mut store) = open();
     let id = Uuid::now_v7();
     let (run, worktree) = store
         .create_run_with_worktree(id, &fields(Uuid::now_v7()), &starting(), &worktree_fields())
@@ -396,7 +396,14 @@ fn a_run_and_its_worktree_are_created_together_or_not_at_all() {
 
     // A worktree row already there makes the run's insert roll back with it.
     let taken = Uuid::now_v7();
-    store.create_worktree(taken, &worktree_fields()).unwrap();
+    Connection::open(dir.path().join("parallax.sqlite3"))
+        .unwrap()
+        .execute(
+            "INSERT INTO worktrees (id, repo_path, path, branch, base, created_at)
+             VALUES (?1, '', '', '', '', '2026-01-01T00:00:00Z')",
+            [taken.to_string()],
+        )
+        .unwrap();
     assert!(matches!(
         store.create_run_with_worktree(
             taken,
@@ -529,17 +536,7 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     {
         let mut store = Store::open(&path).unwrap();
         store
-            .create_worktree(
-                id,
-                &WorktreeFields {
-                    repo_path: "/src/app".to_owned(),
-                    path: "/data/worktrees/app/run".to_owned(),
-                    branch: "parallax/abcd1234".to_owned(),
-                    base: "abc".to_owned(),
-                    git_dir: "/src/app/.git/worktrees/run".to_owned(),
-                    base_dirty: false,
-                },
-            )
+            .create_run_with_worktree(id, &fields(Uuid::now_v7()), &starting(), &worktree_fields())
             .unwrap();
     }
     // Roll the database back to what #119 left on develop: schema 6, no runs, events, git_dir or

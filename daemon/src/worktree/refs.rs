@@ -5,7 +5,7 @@ use std::path::Path;
 
 use parallax_protocol::RepoRef;
 
-use super::{WorktreeError, WorktreeManager, describe_failure, owned_args};
+use super::{WorktreeError, WorktreeManager};
 
 impl WorktreeManager {
     /// The local and remote-tracking branches of `repo_path`'s repository, from one
@@ -65,17 +65,10 @@ impl WorktreeManager {
             };
         }
         // A switch rewrites the working tree, which can take as long as Accept's checkout.
-        let output = self
-            .run_git_for(&repo_root, &args, self.merge_timeout)
-            .await?;
-        if !output.success() {
-            return Err(WorktreeError::GitFailed {
-                cwd: repo_root,
-                args: owned_args(&args),
-                detail: describe_failure(&output),
-            });
-        }
-        Ok(())
+        self.run_git_for(&repo_root, &args, self.merge_timeout)
+            .await?
+            .ok(&repo_root, &args)
+            .map(drop)
     }
 
     /// The path of every file on `branch` of `repo_path`'s repository, from `git ls-tree`, for

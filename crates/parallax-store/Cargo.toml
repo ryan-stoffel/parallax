@@ -16,7 +16,6 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { workspace = true, features = ["v7"] }
 jiff = { workspace = true }
 thiserror = "2"
-serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

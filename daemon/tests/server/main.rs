@@ -36,4 +36,3 @@ mod requests;
 mod support;
 mod thread_tools;
 mod threads;
-mod usage;

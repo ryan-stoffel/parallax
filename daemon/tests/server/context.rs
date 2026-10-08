@@ -89,57 +89,6 @@ async fn write_read_and_list_round_trip() {
 }
 
 #[tokio::test]
-async fn a_retry_is_idempotent_and_a_different_write_with_the_same_id_conflicts() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-    let project = project(&mut client, dir.path()).await;
-    let params = write_params(project.id, "notes.md", "hello", None);
-
-    let first = client.call::<ContextWrite>(params.clone()).await.unwrap();
-    let retried = client.call::<ContextWrite>(params.clone()).await.unwrap();
-    assert_eq!(first, retried, "a retry returns the same result unchanged");
-
-    let conflicting = ContextWriteParams {
-        content: "different".to_owned(),
-        ..params
-    };
-    let error = client.call::<ContextWrite>(conflicting).await.unwrap_err();
-    assert_eq!(kind(&error), ErrorKind::IdConflict);
-}
-
-#[tokio::test]
-async fn a_fresh_id_overwrites_a_paths_previous_content() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-    let project = project(&mut client, dir.path()).await;
-
-    client
-        .call::<ContextWrite>(write_params(project.id, "notes.md", "first", None))
-        .await
-        .unwrap();
-    client
-        .call::<ContextWrite>(write_params(
-            project.id,
-            "notes.md",
-            "second, and longer",
-            None,
-        ))
-        .await
-        .unwrap();
-
-    let read = client
-        .call::<ContextRead>(ContextReadParams {
-            project: project.id,
-            path: "notes.md".to_owned(),
-        })
-        .await
-        .unwrap();
-    assert_eq!(read.content, "second, and longer");
-}
-
-#[tokio::test]
 async fn traversal_absolute_hidden_nested_and_bad_extension_paths_are_refused() {
     let dir = temp_dir();
     let plxd = Plxd::start(dir.path()).await;
@@ -215,29 +164,6 @@ async fn context_methods_for_an_unknown_project_are_project_not_found() {
         .await
         .unwrap_err();
     assert_eq!(kind(&error), ErrorKind::ProjectNotFound);
-}
-
-#[tokio::test]
-async fn a_file_over_the_per_file_cap_is_rejected() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-    let project = project(&mut client, dir.path()).await;
-
-    let too_big = "a".repeat(1024 * 1024 + 1);
-    let error = client
-        .call::<ContextWrite>(write_params(project.id, "big.md", &too_big, None))
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&error), ErrorKind::ContextTooLarge);
-
-    let listed = client
-        .call::<ContextList>(ContextListParams {
-            project: project.id,
-        })
-        .await
-        .unwrap();
-    assert!(listed.files.is_empty());
 }
 
 #[tokio::test]

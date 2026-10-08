@@ -1,5 +1,4 @@
 use rusqlite::{OptionalExtension, params};
-use uuid::Uuid;
 
 use crate::Store;
 use crate::error::StoreError;
@@ -134,12 +133,6 @@ impl Store {
         )?;
         Ok(())
     }
-}
-
-/// A UUID written as lowercase hyphenated text, for `command_id` and `run_id`.
-#[must_use]
-pub fn command_id_text(id: Uuid) -> String {
-    id.hyphenated().to_string()
 }
 
 #[cfg(test)]

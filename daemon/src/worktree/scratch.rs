@@ -114,7 +114,7 @@ mod tests {
             "a second init keeps the first commit"
         );
         let created = manager
-            .create(&scratch, parallax_protocol::RunId::generate(), None)
+            .create_named(&scratch, parallax_protocol::RunId::generate(), None, None)
             .await
             .unwrap();
         assert!(created.path.join(".git").exists());
@@ -133,7 +133,12 @@ mod tests {
             .await
             .unwrap();
         let cut = manager
-            .create(&fork, parallax_protocol::RunId::generate(), Some(&commit))
+            .create_named(
+                &fork,
+                parallax_protocol::RunId::generate(),
+                Some(&commit),
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(cut.base, commit);

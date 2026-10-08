@@ -4,12 +4,15 @@
 //! [`KeyStore`] is the interface. [`system_store`] is this OS's real one: `KeychainStore`, one
 //! generic password per account under a service name via the `security-framework` crate;
 //! `SecretServiceStore`, one item per account in the default collection via `keyring-core`; or
-//! [`NoKeyStore`] where plxd has none. [`MemoryKeyStore`] is an in-memory mock for tests. Only
+//! [`NoKeyStore`] where plxd has none. `MemoryKeyStore` is an in-memory mock for tests. Only
 //! these ever see a key in the clear, and only for as long as it takes to hand it to the OS or a
 //! caller; Parallax's project store and event log never do (0004, decision record 0009).
 
+#[cfg(test)]
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::{Mutex, PoisonError};
 
 use parallax_protocol::AccountId;
 use zeroize::Zeroizing;
@@ -130,11 +133,13 @@ impl KeyStore for NoKeyStore {
 }
 
 /// An in-memory [`KeyStore`], for tests. Holds no reference to the real Keychain.
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub struct MemoryKeyStore {
     keys: Mutex<HashMap<AccountId, String>>,
 }
 
+#[cfg(test)]
 impl MemoryKeyStore {
     /// An empty store.
     #[must_use]
@@ -143,6 +148,7 @@ impl MemoryKeyStore {
     }
 }
 
+#[cfg(test)]
 impl KeyStore for MemoryKeyStore {
     fn set(&self, account: AccountId, key: &str) -> Result<(), KeyStoreError> {
         self.keys
