@@ -12,20 +12,16 @@
 
 use std::path::{Path, PathBuf};
 
-use parallax_protocol::jsonrpc::{ErrorObject, Request};
-use parallax_protocol::methods::{
-    MemoryDelete, MemoryList, MemoryPropose, MemoryRead, MemoryWrite, RequestMethod,
-};
+use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     ErrorKind, InboxKind, MemoryDeleteParams, MemoryDeleteResult, MemoryFile, MemoryKind,
     MemoryListParams, MemoryListResult, MemoryProposalTo, MemoryProposeParams, MemoryProposeResult,
     MemoryReadParams, MemoryReadResult, MemoryScope, MemoryScopeKind, MemoryWriteParams,
     MemoryWriteResult, ProjectId, RunId,
 };
-use serde_json::Value;
 use uuid::Uuid;
 
-use super::{Context, handle};
+use super::Context;
 use crate::context::corrections::Change;
 use crate::context::{self, memory};
 use crate::store::store_error;
@@ -35,28 +31,6 @@ const MAX_TITLE_BYTES: usize = 256;
 
 /// The longest proposal, in bytes: an entry is a short, lasting fact (0044).
 pub(crate) const MAX_PROPOSAL_BYTES: usize = 4 * 1024;
-
-/// Answers a `memory/*` method.
-pub(crate) async fn dispatch(context: &Context, request: &Request) -> Result<Value, ErrorObject> {
-    match request.method.as_str() {
-        MemoryList::NAME => {
-            handle::<MemoryList, _, _>(context, request, |p| list(context, p)).await
-        }
-        MemoryRead::NAME => {
-            handle::<MemoryRead, _, _>(context, request, |p| read(context, p)).await
-        }
-        MemoryWrite::NAME => {
-            handle::<MemoryWrite, _, _>(context, request, |p| write(context, p)).await
-        }
-        MemoryDelete::NAME => {
-            handle::<MemoryDelete, _, _>(context, request, |p| delete(context, p)).await
-        }
-        MemoryPropose::NAME => {
-            handle::<MemoryPropose, _, _>(context, request, |p| propose(context, p)).await
-        }
-        other => Err(ErrorObject::method_not_found(other)),
-    }
-}
 
 /// What a path holds, by its folder.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -93,7 +67,7 @@ fn checked<'a>(path: &'a str, allowed: &[Place], method: &str) -> Result<&'a str
     Ok(path)
 }
 
-async fn list(
+pub(super) async fn list(
     context: &Context,
     params: MemoryListParams,
 ) -> Result<MemoryListResult, ErrorObject> {
@@ -112,7 +86,7 @@ async fn list(
     .await
 }
 
-async fn read(
+pub(super) async fn read(
     context: &Context,
     params: MemoryReadParams,
 ) -> Result<MemoryReadResult, ErrorObject> {
@@ -146,7 +120,7 @@ async fn read(
     .await
 }
 
-async fn write(
+pub(super) async fn write(
     context: &Context,
     params: MemoryWriteParams,
 ) -> Result<MemoryWriteResult, ErrorObject> {
@@ -218,7 +192,7 @@ async fn write(
     Ok(MemoryWriteResult { file })
 }
 
-async fn delete(
+pub(super) async fn delete(
     context: &Context,
     params: MemoryDeleteParams,
 ) -> Result<MemoryDeleteResult, ErrorObject> {
@@ -240,7 +214,7 @@ async fn delete(
     Ok(MemoryDeleteResult {})
 }
 
-async fn propose(
+pub(super) async fn propose(
     context: &Context,
     params: MemoryProposeParams,
 ) -> Result<MemoryProposeResult, ErrorObject> {

@@ -5,28 +5,10 @@
 use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
-use parallax_protocol::{
-    AgentRunResult, PrActParams, PrAction, PrDiffResult, PrViewParams, PullRequest,
-};
+use parallax_protocol::{AgentRunResult, PrActParams, PrAction, PrViewParams, PullRequest};
 
 use super::Context;
 use crate::agents;
-
-/// `pr/view`.
-pub(crate) async fn view(
-    context: &Context,
-    params: PrViewParams,
-) -> Result<PullRequest, ErrorObject> {
-    agents::view_pr(Arc::clone(&context.daemon), params).await
-}
-
-/// `pr/diff`.
-pub(crate) async fn diff(
-    context: &Context,
-    params: PrViewParams,
-) -> Result<PrDiffResult, ErrorObject> {
-    agents::diff_pr(Arc::clone(&context.daemon), params).await
-}
 
 /// `pr/link` with `linked`, or `pr/unlink` without.
 pub(crate) async fn link(

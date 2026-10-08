@@ -20,19 +20,17 @@ use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use jiff::Timestamp;
-use parallax_protocol::jsonrpc::{ErrorObject, Request};
-use parallax_protocol::methods::{LandApprove, LandQueue, LandSendBack, RequestMethod};
+use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentPolicy, AgentSendParams, AgentStatus, ErrorKind, InboxKind, LandApproveParams,
     LandQueueParams, LandResult, LandSendBackParams, Landing, LandingStatus, ProjectId, RunId,
     TurnId,
 };
-use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use super::Context;
 use super::agent::check_message;
-use super::{Context, handle};
 use crate::agents;
 use crate::server::Daemon;
 use crate::store::store_error;
@@ -60,20 +58,6 @@ const OUTPUT_SHOWN: usize = 2 * 1024;
 static PROJECT_LOCKS: LazyLock<Mutex<HashMap<ProjectId, Arc<tokio::sync::Mutex<()>>>>> =
     LazyLock::new(Mutex::default);
 
-/// Answers a `land/*` method.
-pub(crate) async fn dispatch(context: &Context, request: &Request) -> Result<Value, ErrorObject> {
-    match request.method.as_str() {
-        LandQueue::NAME => handle::<LandQueue, _, _>(context, request, |p| queue(context, p)).await,
-        LandApprove::NAME => {
-            handle::<LandApprove, _, _>(context, request, |p| approve(context, p)).await
-        }
-        LandSendBack::NAME => {
-            handle::<LandSendBack, _, _>(context, request, |p| send_back(context, p)).await
-        }
-        other => Err(ErrorObject::method_not_found(other)),
-    }
-}
-
 fn refused(message: impl Into<String>) -> ErrorObject {
     ErrorObject::parallax(ErrorKind::LandRefused, message)
 }
@@ -81,7 +65,10 @@ fn refused(message: impl Into<String>) -> ErrorObject {
 /// `land/queue`: queues a Project's completed child, refusing a coordinator, a run outside a
 /// Project, one with no branch, and an exploration (0045). A child already waiting, queued, or
 /// sent back stays as it is.
-async fn queue(context: &Context, params: LandQueueParams) -> Result<LandResult, ErrorObject> {
+pub(super) async fn queue(
+    context: &Context,
+    params: LandQueueParams,
+) -> Result<LandResult, ErrorObject> {
     let run_id = params.run_id;
     let command_id = context.command_id;
     let (row, task, fresh) = context
@@ -162,7 +149,10 @@ async fn queue(context: &Context, params: LandQueueParams) -> Result<LandResult,
 }
 
 /// `land/approve`: a waiting child lands in its turn.
-async fn approve(context: &Context, params: LandApproveParams) -> Result<LandResult, ErrorObject> {
+pub(super) async fn approve(
+    context: &Context,
+    params: LandApproveParams,
+) -> Result<LandResult, ErrorObject> {
     let row = waiting(context, params.run_id).await?;
     let row = parallax_store::Landing {
         status: QUEUED.to_owned(),
@@ -195,7 +185,7 @@ async fn approve(context: &Context, params: LandApproveParams) -> Result<LandRes
 
 /// `land/sendBack`: a waiting child gets the user's message instead, and is queued again when
 /// that turn ends.
-async fn send_back(
+pub(super) async fn send_back(
     context: &Context,
     params: LandSendBackParams,
 ) -> Result<LandResult, ErrorObject> {

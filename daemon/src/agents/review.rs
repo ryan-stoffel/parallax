@@ -16,9 +16,9 @@ use std::sync::Arc;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentDiffFile, AgentDiffResult, AgentDiffStats, AgentEntry, AgentEntryKind,
-    AgentFileCreateParams, AgentFileDeleteParams, AgentFileParams, AgentFileRenameParams,
-    AgentFileResult, AgentFileSide, AgentFileStatus, AgentFilesParams, AgentFilesResult, ErrorKind,
-    RunId,
+    AgentFileCreateParams, AgentFileDeleteParams, AgentFileEditResult, AgentFileParams,
+    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFileStatus, AgentFilesParams,
+    AgentFilesResult, ErrorKind, RunId,
 };
 use parallax_store::{Run as RunRow, Worktree};
 use tokio::io::AsyncReadExt as _;
@@ -489,7 +489,7 @@ fn edit_failed(path: &str, error: &std::io::Error) -> ErrorObject {
 pub(crate) async fn create_entry(
     daemon: &Arc<Daemon>,
     params: AgentFileCreateParams,
-) -> Result<(), ErrorObject> {
+) -> Result<AgentFileEditResult, ErrorObject> {
     let AgentFileCreateParams {
         run_id,
         path,
@@ -508,7 +508,8 @@ pub(crate) async fn create_entry(
             .await
             .map(drop)
     };
-    created.map_err(|error| edit_failed(&path, &error))
+    created.map_err(|error| edit_failed(&path, &error))?;
+    Ok(AgentFileEditResult {})
 }
 
 /// `agent/fileRename`: moves an entry, a symlink itself rather than its target, never over
@@ -516,7 +517,7 @@ pub(crate) async fn create_entry(
 pub(crate) async fn rename_entry(
     daemon: &Arc<Daemon>,
     params: AgentFileRenameParams,
-) -> Result<(), ErrorObject> {
+) -> Result<AgentFileEditResult, ErrorObject> {
     let AgentFileRenameParams { run_id, from, to } = params;
     if to == from || to.starts_with(&format!("{from}/")) {
         return Err(ErrorObject::invalid_params(format!(
@@ -543,7 +544,8 @@ pub(crate) async fn rename_entry(
     }
     tokio::fs::rename(&source, &target)
         .await
-        .map_err(|error| edit_failed(&from, &error))
+        .map_err(|error| edit_failed(&from, &error))?;
+    Ok(AgentFileEditResult {})
 }
 
 /// Whether `to` names the entry `from` does, as a change of case does on a case-insensitive file
@@ -563,7 +565,7 @@ fn same_entry(_: &std::fs::Metadata, _: &std::fs::Metadata, from: &str, to: &str
 pub(crate) async fn delete_entry(
     daemon: &Arc<Daemon>,
     params: AgentFileDeleteParams,
-) -> Result<(), ErrorObject> {
+) -> Result<AgentFileEditResult, ErrorObject> {
     let AgentFileDeleteParams { run_id, path } = params;
     let (root, _) = run_folder(daemon, run_id).await?;
     let at = editable(&root, &path).await?;
@@ -576,7 +578,8 @@ pub(crate) async fn delete_entry(
     } else {
         tokio::fs::remove_file(&at).await
     };
-    removed.map_err(|error| edit_failed(&path, &error))
+    removed.map_err(|error| edit_failed(&path, &error))?;
+    Ok(AgentFileEditResult {})
 }
 
 /// Standard base64, with padding.
