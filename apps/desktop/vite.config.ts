@@ -65,7 +65,7 @@ export default defineConfig({
     rolldownOptions: {
       treeshake: {
         manualPureFunctions: ["MarkdownIt", "MarkdownParser", "Schema"],
-        moduleSideEffects: (id) => (id.includes("/markdown-it/") ? false : undefined),
+        moduleSideEffects: (id) => (/[\\/]markdown-it[\\/]/.test(id) ? false : undefined),
       },
     },
   },
