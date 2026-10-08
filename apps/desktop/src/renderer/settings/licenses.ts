@@ -60,11 +60,6 @@ export const notices: Notice[] = [
     text: `${OFL}\n\n${NERD_FONTS}`,
   },
   {
-    name: "Symbols Nerd Font Mono",
-    license: "MIT",
-    text: NERD_FONTS,
-  },
-  {
     name: "Sora",
     license: "SIL OFL 1.1",
     text: "Copyright 2019 The Sora Project Authors (https://github.com/sora-xor/sora-font). Licensed under the SIL Open Font License, Version 1.1 (https://openfontlicense.org).",
