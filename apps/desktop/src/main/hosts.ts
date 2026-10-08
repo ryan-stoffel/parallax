@@ -5,7 +5,7 @@ import { stat } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import path from "node:path";
 
-import { ErrorCodes, type CliKind } from "../protocol/generated/protocol";
+import { ErrorCodes, REQUEST_METHODS, type CliKind } from "../protocol/generated/protocol";
 import {
   HOME_VARS,
   NPM_INSTALLS,
@@ -14,6 +14,7 @@ import {
   type DeviceHost,
   type DeviceIcon,
   iconFor,
+  mainMethods,
   type RendererMethod,
   type RpcResponse,
   type SshHost,
@@ -61,104 +62,9 @@ const ipcStats = process.env["PLX_IPC_STATS"]
     })
   : undefined;
 
-// The methods the renderer may call, checked at runtime because the renderer is untrusted
-// (0022). Typed so that adding a method to the protocol fails the type-check until it is here.
-const rendererMethods: Record<RendererMethod, true> = {
-  "host/health": true,
-  "host/version": true,
-  "project/list": true,
-  "project/create": true,
-  "project/start": true,
-  "project/update": true,
-  "project/delete": true,
-  "project/fromThreads": true,
-  "accounts/keys/add": true,
-  "accounts/keys/list": true,
-  "accounts/keys/remove": true,
-  "accounts/list": true,
-  "accounts/refresh": true,
-  "providers/list": true,
-  "providers/save": true,
-  "providers/remove": true,
-  "usage/get": true,
-  "usage/history": true,
-  "usage/daily": true,
-  "usage/limits": true,
-  "accounts/defaults/get": true,
-  "accounts/defaults/set": true,
-  "context/list": true,
-  "context/read": true,
-  "context/write": true,
-  "agent/start": true,
-  "agent/send": true,
-  "agent/cancel": true,
-  "agent/list": true,
-  "agent/events": true,
-  "agent/image": true,
-  "agent/diff": true,
-  "agent/file": true,
-  "agent/files": true,
-  "agent/fileCreate": true,
-  "agent/fileRename": true,
-  "agent/fileDelete": true,
-  "agent/accept": true,
-  "agent/requestChanges": true,
-  "agent/openPr": true,
-  "agent/gitStatus": true,
-  "agent/commit": true,
-  "agent/push": true,
-  "agent/approve": true,
-  "thread/list": true,
-  "repo/add": true,
-  "thread/start": true,
-  "thread/archive": true,
-  "thread/delete": true,
-  "thread/update": true,
-  "thread/search": true,
-  "thread/fork": true,
-  "repo/update": true,
-  "repo/refs": true,
-  "pr/view": true,
-  "pr/act": true,
-  "pr/diff": true,
-  "pr/link": true,
-  "pr/unlink": true,
-  "agent/commands": true,
-  "repo/files": true,
-  "github/status": true,
-  "agent/resumeNow": true,
-  "agent/autoResume": true,
-  "host/settings/get": true,
-  "host/settings/set": true,
-  "github/install": true,
-  "github/signIn": true,
-  "github/signInCancel": true,
-  "cursor/signIn": true,
-  "cursor/signInCancel": true,
-  "cursor/signOut": true,
-  "cursor/install": true,
-  "inbox/list": true,
-  "inbox/seen": true,
-  "queue/list": true,
-  "queue/edit": true,
-  "queue/reorder": true,
-  "queue/cancel": true,
-  "queue/steer": true,
-  "question/ask": true,
-  "question/answer": true,
-  "question/escalate": true,
-  "question/list": true,
-  "memory/list": true,
-  "memory/read": true,
-  "memory/write": true,
-  "memory/delete": true,
-  "memory/propose": true,
-  "land/queue": true,
-  "land/approve": true,
-  "land/sendBack": true,
-  "agent/wait": true,
-  "connect/devices": true,
-};
+// The methods the renderer may call, checked at runtime because the renderer is untrusted (0022).
+const rendererMethods = new Set<string>(REQUEST_METHODS);
+for (const method of mainMethods) rendererMethods.delete(method);
 
 /** Every host's connection, by host id: `local`, then each saved SSH host. */
 const connections = new Map<string, Connection>();
@@ -235,7 +141,7 @@ export function startHosts(): void {
   ipcMain.handle(
     "parallax:request",
     (_event, hostId: unknown, method: unknown, params: unknown) => {
-      if (typeof method !== "string" || !Object.hasOwn(rendererMethods, method)) {
+      if (typeof method !== "string" || !rendererMethods.has(method)) {
         return invalid(ErrorCodes.MethodNotFound, `unknown method: ${String(method)}`);
       }
       const host = typeof hostId === "string" ? connections.get(hostId) : undefined;
