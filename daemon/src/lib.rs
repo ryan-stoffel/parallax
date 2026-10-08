@@ -103,6 +103,18 @@ pub fn version() -> &'static str {
     })
 }
 
+/// `bytes`' SHA-256, in lowercase hex.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    Sha256::digest(bytes)
+        .iter()
+        .fold(String::new(), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
+}
+
 /// The version in [`VERSION_FILE`] beside `exe`, if the file is there and not blank.
 fn stamped_version(exe: &std::path::Path) -> Option<String> {
     let text = std::fs::read_to_string(exe.with_file_name(VERSION_FILE)).ok()?;

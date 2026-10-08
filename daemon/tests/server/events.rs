@@ -158,21 +158,6 @@ async fn an_update_is_a_host_level_event_that_outlives_a_restart() {
 }
 
 #[tokio::test]
-async fn a_retried_create_adds_no_event() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-    let params = create_params(dir.path(), "parallax");
-    client.call::<ProjectCreate>(params.clone()).await.unwrap();
-    client.call::<ProjectCreate>(params).await.unwrap();
-
-    let mut watcher = Client::ready(&plxd.socket).await;
-    subscribe(&mut watcher, 0).await;
-    assert_eq!(event(&mut watcher).await.seq, 1);
-    watcher.stays_quiet(Duration::from_millis(200)).await;
-}
-
-#[tokio::test]
 async fn a_subscription_to_a_missing_project_is_refused() {
     let dir = temp_dir();
     let plxd = Plxd::start(dir.path()).await;

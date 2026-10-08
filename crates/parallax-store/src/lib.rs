@@ -50,7 +50,7 @@ pub use placements::Placement;
 pub use project::{Project, ProjectEdit, ProjectFields, ProjectIcon};
 pub use questions::Question;
 pub use queue::QueuedRow;
-pub use receipts::{CommandReceipt, RECEIPT_RETENTION_SECS, command_id_text};
+pub use receipts::{CommandReceipt, RECEIPT_RETENTION_SECS};
 pub use runs::{Run, RunAccept, RunFields, RunState};
 pub use threads::{ForkedFrom, Repo, RepoFields, Thread, ThreadFields, ThreadUpdate};
 pub use usage::{LimitSnapshot, SessionModelUsage, UsageDelta, UsageHour, UsageSummary};

@@ -15,7 +15,7 @@ use parallax_protocol::ProjectId;
 use tracing::warn;
 
 use super::review::z_tokens;
-use super::{WorktreeError, WorktreeManager, describe_failure, owned_args};
+use super::{WorktreeError, WorktreeManager, describe_failure};
 
 /// How long fetching the base branch may take.
 const FETCH_TIMEOUT: Duration = Duration::from_mins(2);
@@ -138,13 +138,7 @@ impl WorktreeManager {
                 paths.dedup();
                 return Ok(Merged::Conflict(paths));
             }
-            _ => {
-                return Err(WorktreeError::GitFailed {
-                    cwd: path,
-                    args: owned_args(&args),
-                    detail: describe_failure(&merged),
-                });
-            }
+            _ => return Err(merged.failure(&path, &args)),
         }
         let tree = z_tokens(&merged.stdout)
             .next()
@@ -236,11 +230,7 @@ impl WorktreeManager {
         let checked = self.run_git(&path, &args).await?;
         // A problem found exits non-zero with it on stdout; a git failure prints nothing there.
         if !checked.success() && checked.stdout.trim().is_empty() {
-            return Err(WorktreeError::GitFailed {
-                cwd: path,
-                args: owned_args(&args),
-                detail: describe_failure(&checked),
-            });
+            return Err(checked.failure(&path, &args));
         }
         Ok(checked
             .stdout
@@ -275,11 +265,7 @@ impl WorktreeManager {
             )
             .await?;
         if started.stdout.trim() != tip {
-            return Err(WorktreeError::GitFailed {
-                cwd: worktree_path.to_owned(),
-                args: owned_args(&args),
-                detail: describe_failure(&merged),
-            });
+            return Err(merged.failure(worktree_path, &args));
         }
         Ok(())
     }

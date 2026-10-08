@@ -1,9 +1,8 @@
 //! A Project's integration branch and its worktree (PLX-409, decision 0045).
 //!
 //! Each Project has one integration branch, `parallax/<project slug>`, cut from its base branch.
-//! plxd keeps it checked out in a worktree of its own, `<data dir>/integration/<project id>`,
-//! outside [`WorktreeManager::root`] so `gc_orphans` never takes it for a run's. Only the landing
-//! queue (PLX-410) writes there. A child's worktree is cut from the branch's tip.
+//! plxd keeps it checked out in a worktree of its own, `<data dir>/integration/<project id>`.
+//! Only the landing queue (PLX-410) writes there. A child's worktree is cut from the branch's tip.
 
 use std::io;
 use std::path::{Path, PathBuf};

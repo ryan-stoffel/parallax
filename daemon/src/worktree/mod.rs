@@ -27,18 +27,18 @@
 //! A worktree lives at `<data dir>/worktrees/<repo slug>/<run id>`, where `<repo slug>` is the
 //! repo's directory name plus a short hash of its canonical path (so two repos named the same
 //! thing never collide, and the folder stays readable). Its branch is `parallax/<short run id>`
-//! (or `parallax/<slug>` for a named one, see [`WorktreeManager::create_named`], which
-//! [`WorktreeManager::rename_branch`] can rename to once a thread is named),
+//! (or `parallax/<slug>` for a named one, which [`WorktreeManager::rename_branch`] can rename to
+//! once a thread is named),
 //! `<short run id>` being the first 8 hex digits of the SHA-256 of the run id — the same
 //! short-hash idea [`crate::paths::DataDir`] uses for its socket fallback, and collision-free in
 //! the way a prefix of the run id's own (time-ordered) `UUIDv7` bytes would not be.
 //!
 //! # Base and identity
 //!
-//! [`WorktreeManager::create`] resolves `base` to a concrete commit once, at creation, so a later
-//! [`WorktreeManager::diff`] is never compared against a ref that has since moved. When the caller
-//! leaves `base` unset (the repo's current branch `HEAD`), creation never
-//! refuses over the repo's own working tree (#257): an untracked file was never going to be in a
+//! [`WorktreeManager::create_named`] resolves `base` to a concrete commit once, at creation, so a
+//! later [`WorktreeManager::diff_stat`] is never compared against a ref that has since moved.
+//! When the caller leaves `base` unset (the repo's current branch `HEAD`), creation never refuses
+//! over the repo's own working tree (#257): an untracked file was never going to be in a
 //! fresh worktree anyway, and a tracked, uncommitted change simply isn't included either, the same
 //! as checking out any other commit. [`CreatedWorktree::base_dirty`] flags the latter case — the
 //! repo's tracked files had uncommitted changes at that moment — so a caller can tell the user
@@ -53,42 +53,29 @@
 //! # A worker's worktree is hostile input (#166)
 //!
 //! An agent run (#137, decision 0013) can write every file in its worktree. `commit_all`,
-//! `diff`, and `changed_files` run git there on the worker's behalf, so the worktree's own
+//! `diff_stat`, and `diff_commits` run git there on the worker's behalf, so the worktree's own
 //! tracked content and git state must never be able to make that git process run the worker's
 //! code: a hook, a repository-configured `core.hooksPath` pointing at a tracked folder (as husky
 //! does), a `.gitattributes` diff or filter driver, or a `.git` file rewritten to point somewhere
 //! else entirely.
 //!
-//! [`WorktreeManager::create`] resolves the linked worktree's own private git directory once,
+//! [`WorktreeManager::create_named`] resolves the linked worktree's own private git directory once,
 //! right after `git worktree add`, the one moment its `.git` file is still trustworthy (nothing
 //! has run in the new worktree yet). [`CreatedWorktree::git_dir`] carries that path, and every
-//! later call that touches the worktree (`changed_files`, `diff`, `commit_all`) takes it and pins
+//! later call that touches the worktree (`diff_stat`, `diff_commits`, `commit_all`) takes it and pins
 //! `--git-dir`/`--work-tree` explicitly, so a `.git` file the worker rewrites afterward is never
 //! consulted again. Those calls also run with hooks, the pager, external diff and textconv
 //! drivers, and remote helper protocols disabled by `-c`, and with `GIT_CONFIG_NOSYSTEM`, a
 //! `/dev/null` `GIT_CONFIG_GLOBAL`, and a scrubbed, dedicated `HOME`, so the only config git can
 //! still read is the pinned repository's own local config, which the worker cannot write.
 //!
-//! [`WorktreeManager::create`] and [`WorktreeManager::remove`] are not scoped this way: their git
+//! [`WorktreeManager::create_named`] and [`WorktreeManager::remove`] are not scoped this way: their git
 //! commands run against `repo_root`, the user's own checkout, which a sandboxed worker never
 //! writes, so there is no `.git` file or repo-local config of the worker's to distrust there. A
 //! coordinator or a worker in Bypass Permissions can write it, but either can already run any
 //! command as the user (0027). They still run
 //! with hooks off, like every git call plxd makes (#157, #191): once a run is accepted, the
 //! checkout's hooks can include files the worker wrote.
-//!
-//! [`WorktreeManager::gc_orphans`] takes a third path (#171): an orphan folder has no
-//! [`CreatedWorktree::git_dir`] pinned for it the way a known worktree does, so it never
-//! discovers a repository from, or trusts, an orphan's own `.git` file. It removes the plain
-//! folder directly, after confirming with `lstat` that the folder (and each project folder above
-//! it under [`WorktreeManager::root`]) is a real directory rather than a symlink a worker could
-//! plant to send that removal somewhere else. Removing a folder this way can leave its
-//! repository with a stale `.git/worktrees/<id>` entry that still names the branch and path an
-//! orphaned run used; until pruned, git refuses to check that branch out, delete it, or reuse
-//! its path, anywhere. So `gc_orphans` also prunes every repository the caller passes it in
-//! `known_repos` — never one discovered from an orphan, only ones the store already knows —
-//! the same trust [`WorktreeManager::create`] and [`WorktreeManager::remove`] already place in
-//! `repo_root`.
 //!
 //! **Known gap (#175):** a `-c` override wins over a config value no matter how that value was
 //! set, including through an `include`/`includeIf`, so hooks and hooksPath stay closed either
@@ -114,23 +101,19 @@ mod tests;
 mod windows_tests;
 
 pub use checks::{CHECKS_TIMEOUT, Checked};
-pub use folder::{PushError, RunFolder};
+pub use folder::RunFolder;
 pub use landing::Merged;
 pub use pull_request::{PrError, github_pr_urls};
-pub use review::{
-    AcceptError, Accepted, Blob, CommitDiff, FileDiff, MAX_BLOB_BYTES, MergeHow, validate_repo_path,
-};
+pub use review::{AcceptError, MAX_BLOB_BYTES, MergeHow, validate_repo_path};
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ffi::OsString;
-use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use std::time::Duration;
 
 use parallax_protocol::RunId;
-use sha2::{Digest, Sha256};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::timeout;
 use tracing::warn;
@@ -142,10 +125,6 @@ use crate::backend::process::{
 /// How long a single git invocation may run before plxd gives up on it and kills its process
 /// group. A hung `git` (an unexpected credential prompt, a stuck hook) must never block plxd.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// The most bytes of unified diff [`WorktreeManager::diff`] returns before truncating. Diffs,
-/// like everything else, come through paged or capped methods (decision record 0007).
-pub const DEFAULT_MAX_DIFF_BYTES: usize = 1024 * 1024;
 
 /// The longest line a git call whose whole output is read may write (PLX-143). A `-z` output has
 /// no newline, so it is one line: 64 MiB holds about 800k paths. A longer line fails the call.
@@ -386,15 +365,6 @@ pub struct ChangedFile {
     pub old_path: Option<String>,
 }
 
-/// A unified diff, possibly cut short.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Diff {
-    /// The diff text.
-    pub text: String,
-    /// Whether `text` was cut short of the full diff.
-    pub truncated: bool,
-}
-
 /// How much a worktree differs from its base, from [`WorktreeManager::diff_stat`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DiffStat {
@@ -413,15 +383,6 @@ pub struct Commit {
     pub sha: String,
 }
 
-/// What [`WorktreeManager::gc_orphans`] did.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct GcReport {
-    /// Worktree folders it removed.
-    pub removed: Vec<PathBuf>,
-    /// A folder it could not remove, or a repository it could not prune, and why.
-    pub errors: Vec<(PathBuf, String)>,
-}
-
 /// Creates, inspects, and removes the worktrees agent runs use.
 ///
 /// Cheap to clone: it shares its [`Launcher`] and its per-repository lock table.
@@ -432,8 +393,6 @@ pub struct WorktreeManager {
     integration_root: PathBuf,
     coordinator_root: PathBuf,
     git_safe_home: PathBuf,
-    timeout: Duration,
-    max_diff_bytes: usize,
     max_git_line_bytes: usize,
     merge_timeout: Duration,
     repo_locks: Arc<StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>>,
@@ -450,32 +409,16 @@ impl WorktreeManager {
             integration_root: data_dir_root.join(INTEGRATION_DIR),
             coordinator_root: data_dir_root.join(COORDINATORS_DIR),
             git_safe_home: data_dir_root.join(GIT_SAFE_HOME_DIR),
-            timeout: DEFAULT_TIMEOUT,
-            max_diff_bytes: DEFAULT_MAX_DIFF_BYTES,
             max_git_line_bytes: DEFAULT_MAX_GIT_LINE_BYTES,
             merge_timeout: review::MERGE_TIMEOUT,
             repo_locks: Arc::new(StdMutex::new(HashMap::new())),
         }
     }
 
-    /// Overrides the per-command timeout, [`DEFAULT_TIMEOUT`] by default.
-    #[must_use]
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
-
     /// Overrides how long Accept's checkout may run, 300 s by default.
     #[must_use]
     pub fn with_merge_timeout(mut self, merge_timeout: Duration) -> Self {
         self.merge_timeout = merge_timeout;
-        self
-    }
-
-    /// Overrides the diff size cap, [`DEFAULT_MAX_DIFF_BYTES`] by default.
-    #[must_use]
-    pub fn with_max_diff_bytes(mut self, max_diff_bytes: usize) -> Self {
-        self.max_diff_bytes = max_diff_bytes;
         self
     }
 
@@ -486,15 +429,10 @@ impl WorktreeManager {
         self
     }
 
-    /// The parallax-owned folder every worktree lives under.
-    #[must_use]
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
-    /// Creates a worktree of `repo_path` for `run_id`, on a new branch `parallax/<short run id>`
-    /// starting from `base` (a commit-ish git can resolve), or the repo's current branch `HEAD`
-    /// when `base` is `None`.
+    /// Creates a worktree of `repo_path` for `run_id`, on a new branch starting from `base` (a
+    /// commit-ish git can resolve), or the repo's current branch `HEAD` when `base` is `None`. The
+    /// branch is `parallax/<slug>` when `slug` is given ([`valid_branch_slug`]), with the short
+    /// run id after it when a branch already has that name, or else `parallax/<short run id>`.
     ///
     /// # Errors
     ///
@@ -502,22 +440,6 @@ impl WorktreeManager {
     /// [`WorktreeError::UnknownRevision`] if `base` doesn't resolve, or
     /// [`WorktreeError::GitFailed`], [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`] from
     /// running git.
-    pub async fn create(
-        &self,
-        repo_path: &Path,
-        run_id: RunId,
-        base: Option<&str>,
-    ) -> Result<CreatedWorktree, WorktreeError> {
-        self.create_named(repo_path, run_id, base, None).await
-    }
-
-    /// [`WorktreeManager::create`] with the branch `parallax/<slug>` instead of `parallax/<short run id>`
-    /// when `slug` is given ([`valid_branch_slug`]). A branch that already has the name gets the
-    /// short run id after it.
-    ///
-    /// # Errors
-    ///
-    /// As [`WorktreeManager::create`], plus [`WorktreeError::GitFailed`] for an invalid `slug`.
     pub async fn create_named(
         &self,
         repo_path: &Path,
@@ -683,60 +605,8 @@ impl WorktreeManager {
             .map(drop)
     }
 
-    /// Files that differ between `base` (a commit git can resolve, normally
-    /// [`CreatedWorktree::base`]) and the worktree's current state, committed or not.
-    ///
-    /// `git_dir` must be [`CreatedWorktree::git_dir`] for `worktree_path`: it pins the git
-    /// command to the worktree's real git directory instead of trusting its `.git` file, and
-    /// disables the execution vectors a worker's tracked files or repo-local config could
-    /// otherwise reach (#166).
-    ///
-    /// # Errors
-    ///
-    /// [`WorktreeError::GitFailed`], [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`].
-    pub async fn changed_files(
-        &self,
-        worktree_path: &Path,
-        git_dir: &Path,
-        base: &str,
-    ) -> Result<Vec<ChangedFile>, WorktreeError> {
-        self.stage_all(worktree_path, git_dir).await?;
-        let mut args = vec!["diff", "--cached", "--no-color", "--find-renames"];
-        args.extend_from_slice(NO_DIFF_DRIVERS);
-        args.extend_from_slice(&["--name-status", base]);
-        let output = self
-            .run_worktree_git_ok(worktree_path, git_dir, &args)
-            .await?;
-        Ok(parse_name_status(&output))
-    }
-
-    /// A unified diff between `base` and the worktree's current state, committed or not, cut off
-    /// at this manager's diff size cap.
-    ///
-    /// `git_dir` must be [`CreatedWorktree::git_dir`] for `worktree_path`; see
-    /// [`WorktreeManager::changed_files`].
-    ///
-    /// # Errors
-    ///
-    /// [`WorktreeError::GitFailed`], [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`].
-    pub async fn diff(
-        &self,
-        worktree_path: &Path,
-        git_dir: &Path,
-        base: &str,
-    ) -> Result<Diff, WorktreeError> {
-        self.stage_all(worktree_path, git_dir).await?;
-        let mut args = vec!["diff", "--cached", "--no-color", "--find-renames"];
-        args.extend_from_slice(NO_DIFF_DRIVERS);
-        args.push(base);
-        let output = self
-            .run_worktree_git_ok(worktree_path, git_dir, &args)
-            .await?;
-        Ok(cap_diff(output, self.max_diff_bytes))
-    }
-
     /// How many files and lines differ between `base` and the worktree's current state, committed
-    /// or not: `git diff --numstat`, pinned and hardened like [`WorktreeManager::diff`]. A binary
+    /// or not: `git diff --numstat`, pinned and hardened (#166). A binary
     /// file counts as a changed file with no lines.
     ///
     /// # Errors
@@ -786,8 +656,8 @@ impl WorktreeManager {
     /// is at the keyboard, and a headless commit that triggers either must not hang plxd.
     /// `--no-verify` alone only skips the `pre-commit` and `commit-msg` hooks; `git_dir` must be
     /// [`CreatedWorktree::git_dir`] for `worktree_path`, which additionally disables every other
-    /// hook and execution vector a worker's worktree could reach (#166); see
-    /// [`WorktreeManager::changed_files`].
+    /// hook and execution vector a worker's worktree could reach (#166); see the module
+    /// documentation.
     ///
     /// # Errors
     ///
@@ -846,93 +716,9 @@ impl WorktreeManager {
         Ok(())
     }
 
-    /// Removes every worktree folder under [`WorktreeManager::root`] that isn't in `known`
-    /// (normally every [`parallax_store::Worktree::path`] the store has), and cleans up any project
-    /// folder that becomes empty as a result. Afterward, prunes every repository in
-    /// `known_repos` (normally every project repository the store has): removing an orphan's
-    /// folder directly, with no git command, can leave that repository's own
-    /// `.git/worktrees/<id>` entry behind, still naming the branch and path the orphaned run
-    /// used, and until pruned, git refuses to check that branch out, delete it, or reuse its
-    /// path, anywhere (#171).
-    ///
-    /// An orphan folder is worker-writable, and gc has no `git_dir` pinned for it the way a known
-    /// worktree does (#171: nothing was ever recorded for something the store has since
-    /// forgotten). So removing it never discovers a repository from an orphan's `.git` file, or
-    /// runs a git command against whatever that file names — it could have been rewritten to
-    /// redirect anywhere, the same class of attack #166 closed for the calls scoped to a known
-    /// worktree. gc only ever removes the plain folder, after confirming it (and the project
-    /// folder above it) is a real directory, never a symlink a worker could plant to make gc
-    /// follow it outside [`WorktreeManager::root`]. The pruning pass runs only against
-    /// `known_repos`, never against anything discovered from an orphan: the same trust
-    /// [`WorktreeManager::create`] and [`WorktreeManager::remove`] already place in `repo_root`,
-    /// the user's own checkout.
-    pub async fn gc_orphans(
-        &self,
-        known: &HashSet<PathBuf>,
-        known_repos: &HashSet<PathBuf>,
-    ) -> GcReport {
-        let mut report = GcReport::default();
-        let project_dirs = match read_dir_entries(&self.root).await {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return report,
-            Err(error) => {
-                report.errors.push((self.root.clone(), error.to_string()));
-                return report;
-            }
-        };
-
-        for project_dir in project_dirs {
-            if !is_real_dir(&project_dir).await {
-                // Not a genuine directory plxd created: a stray file, or a symlink planted to
-                // make gc follow it outside `root` (#171). Either way, never descended into.
-                warn!(
-                    path = %project_dir.display(),
-                    "gc found a project entry that is not a real directory; left alone, not followed"
-                );
-                continue;
-            }
-            let run_dirs = match read_dir_entries(&project_dir).await {
-                Ok(entries) => entries,
-                Err(error) => {
-                    report.errors.push((project_dir, error.to_string()));
-                    continue;
-                }
-            };
-
-            let mut project_now_empty = true;
-            for run_dir in run_dirs {
-                if known.contains(&run_dir) {
-                    project_now_empty = false;
-                    continue;
-                }
-                match self.remove_orphan(&run_dir).await {
-                    Ok(()) => report.removed.push(run_dir),
-                    Err(error) => {
-                        report.errors.push((run_dir, error.to_string()));
-                        project_now_empty = false;
-                    }
-                }
-            }
-            if project_now_empty {
-                let _ = tokio::fs::remove_dir(&project_dir).await;
-            }
-        }
-
-        for repo_root in known_repos {
-            let _guard = self.lock_repo(repo_root).await;
-            if let Err(error) = self.run_git_ok(repo_root, &["worktree", "prune"]).await {
-                report.errors.push((repo_root.clone(), error.to_string()));
-            }
-        }
-
-        report
-    }
-
-    /// Removes an orphan folder directly, with no git command: gc has no pinned `git_dir` for it
-    /// (#171), so nothing here may discover a repository from, or trust, whatever `path`'s own
-    /// `.git` file says — a worker could have rewritten it before plxd ever looked, just as
-    /// #166 found for a known worktree. `path` itself must be a real directory, never a symlink a
-    /// worker could substitute to route this removal outside [`WorktreeManager::root`].
+    /// Removes a folder plxd owns directly, with no git command, so nothing here may discover a
+    /// repository from, or trust, whatever `path`'s own `.git` file says (#166, #171). `path`
+    /// itself must be a real directory, never a symlink planted to route this removal elsewhere.
     async fn remove_orphan(&self, path: &Path) -> Result<(), WorktreeError> {
         if !is_real_dir(path).await {
             return Err(WorktreeError::Io {
@@ -993,9 +779,9 @@ impl WorktreeManager {
     }
 
     /// Stages every change in the worktree, including untracked files: plain `git diff <base>`
-    /// never shows an untracked file, so [`WorktreeManager::changed_files`],
-    /// [`WorktreeManager::diff`], and [`WorktreeManager::commit_all`] all compare `base` against
-    /// the index (`--cached`) after staging, rather than the working tree directly. That gives the
+    /// never shows an untracked file, so [`WorktreeManager::diff_stat`] and
+    /// [`WorktreeManager::commit_all`] compare `base` against the index (`--cached`) after
+    /// staging, rather than the working tree directly. That gives the
     /// same answer before and after a run's changes are committed: once committed, staging finds
     /// nothing new, and the index already matches `HEAD`.
     async fn stage_all(&self, worktree_path: &Path, git_dir: &Path) -> Result<(), WorktreeError> {
@@ -1084,7 +870,7 @@ impl WorktreeManager {
     /// husky's `.husky/`), and `worktree add` (`post-checkout`) or `branch -D`
     /// (`reference-transaction`) would otherwise run them, headless and unsandboxed, in plxd.
     async fn run_git(&self, cwd: &Path, args: &[&str]) -> Result<GitOutput, WorktreeError> {
-        self.run_git_for(cwd, args, self.timeout).await
+        self.run_git_for(cwd, args, DEFAULT_TIMEOUT).await
     }
 
     /// [`WorktreeManager::run_git`] with its own timeout, for the one call that may take long.
@@ -1094,19 +880,31 @@ impl WorktreeManager {
         args: &[&str],
         limit: Duration,
     ) -> Result<GitOutput, WorktreeError> {
-        let process = self.launcher.spawn(&self.git_spec(cwd, args))?;
-        let Ok(collected) = timeout(limit, collect(process, cwd, args)).await else {
-            return Err(WorktreeError::Timeout {
-                cwd: cwd.to_owned(),
-                args: owned_args(args),
-                timeout: limit,
-            });
-        };
-        let (stdout, exit) = collected?;
+        let (stdout, exit) = self
+            .exec(&self.git_spec(cwd, args), cwd, args, limit)
+            .await?;
         Ok(GitOutput {
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
             exit,
         })
+    }
+
+    /// Runs `spec`, `git args` in `cwd`, and reads all of its stdout, killing it after `limit`.
+    async fn exec(
+        &self,
+        spec: &ProcessSpec,
+        cwd: &Path,
+        args: &[&str],
+        limit: Duration,
+    ) -> Result<(Vec<u8>, Exit), WorktreeError> {
+        let process = self.launcher.spawn(spec)?;
+        timeout(limit, collect(process, cwd, args))
+            .await
+            .map_err(|_| WorktreeError::Timeout {
+                cwd: cwd.to_owned(),
+                args: owned_args(args),
+                timeout: limit,
+            })?
     }
 
     /// The process spec [`WorktreeManager::run_git`] runs.
@@ -1130,15 +928,7 @@ impl WorktreeManager {
     /// Like [`WorktreeManager::run_git`], but a non-zero exit becomes [`WorktreeError::GitFailed`]
     /// and only stdout is returned.
     async fn run_git_ok(&self, cwd: &Path, args: &[&str]) -> Result<String, WorktreeError> {
-        let output = self.run_git(cwd, args).await?;
-        if !output.success() {
-            return Err(WorktreeError::GitFailed {
-                cwd: cwd.to_owned(),
-                args: owned_args(args),
-                detail: describe_failure(&output),
-            });
-        }
-        Ok(output.stdout)
+        self.run_git(cwd, args).await?.ok(cwd, args)
     }
 
     /// Runs `git args` against `work_tree`, with the git directory pinned to `git_dir` and every
@@ -1154,15 +944,7 @@ impl WorktreeManager {
     ) -> Result<GitOutput, WorktreeError> {
         let mut spec = self.worktree_spec(work_tree, git_dir, args).await?;
         spec.limits.max_line_bytes = self.max_git_line_bytes;
-        let process = self.launcher.spawn(&spec)?;
-        let Ok(collected) = timeout(self.timeout, collect(process, work_tree, args)).await else {
-            return Err(WorktreeError::Timeout {
-                cwd: work_tree.to_owned(),
-                args: owned_args(args),
-                timeout: self.timeout,
-            });
-        };
-        let (stdout, exit) = collected?;
+        let (stdout, exit) = self.exec(&spec, work_tree, args, DEFAULT_TIMEOUT).await?;
         Ok(GitOutput {
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
             exit,
@@ -1209,15 +991,9 @@ impl WorktreeManager {
         git_dir: &Path,
         args: &[&str],
     ) -> Result<String, WorktreeError> {
-        let output = self.run_worktree_git(work_tree, git_dir, args).await?;
-        if !output.success() {
-            return Err(WorktreeError::GitFailed {
-                cwd: work_tree.to_owned(),
-                args: owned_args(args),
-                detail: describe_failure(&output),
-            });
-        }
-        Ok(output.stdout)
+        self.run_worktree_git(work_tree, git_dir, args)
+            .await?
+            .ok(work_tree, args)
     }
 }
 
@@ -1248,6 +1024,24 @@ struct GitOutput {
 impl GitOutput {
     fn success(&self) -> bool {
         self.exit.info.success()
+    }
+
+    /// [`WorktreeError::GitFailed`] for this, the output of `git args` in `cwd`.
+    fn failure(&self, cwd: &Path, args: &[&str]) -> WorktreeError {
+        WorktreeError::GitFailed {
+            cwd: cwd.to_owned(),
+            args: owned_args(args),
+            detail: describe_failure(self),
+        }
+    }
+
+    /// Its stdout, or [`Self::failure`] for a non-zero exit.
+    fn ok(self, cwd: &Path, args: &[&str]) -> Result<String, WorktreeError> {
+        if self.success() {
+            Ok(self.stdout)
+        } else {
+            Err(self.failure(cwd, args))
+        }
     }
 }
 
@@ -1311,11 +1105,7 @@ pub fn valid_branch_slug(slug: &str) -> bool {
 /// name and the repository hash in a worktree folder's name; a prefix of a `UUIDv7` would cluster
 /// collisions in time, since most of a `UUIDv7`'s own bits are a timestamp.
 fn short_hash(text: &str) -> String {
-    let digest = Sha256::digest(text.as_bytes());
-    digest[..4].iter().fold(String::new(), |mut hex, byte| {
-        let _ = write!(hex, "{byte:02x}");
-        hex
-    })
+    crate::sha256_hex(text.as_bytes())[..8].to_owned()
 }
 
 /// The `<repo slug>` folder name for `repo_root`: its own directory name, sanitized, plus a short
@@ -1342,22 +1132,6 @@ fn project_dir_name(repo_root: &Path) -> String {
         sanitized
     };
     format!("{sanitized}-{}", short_hash(&repo_root.to_string_lossy()))
-}
-
-/// Parses `git diff --name-status`' output: one `STATUS\tpath` line, or `RNNN\told\tnew` for a
-/// rename or copy.
-fn parse_name_status(output: &str) -> Vec<ChangedFile> {
-    output
-        .lines()
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            let mut fields = line.split('\t');
-            let code = fields.next().unwrap_or_default();
-            let first = fields.next().unwrap_or_default().to_owned();
-            let second = fields.next().map(str::to_owned);
-            changed_file(code, first, second)
-        })
-        .collect()
 }
 
 /// One `--name-status` entry: its status letters and one path, or two for a rename or copy.
@@ -1405,41 +1179,9 @@ fn parse_numstat(output: &str) -> DiffStat {
     stat
 }
 
-/// Cuts `text` to at most `max_bytes`, on a UTF-8 boundary, and notes when it did.
-fn cap_diff(text: String, max_bytes: usize) -> Diff {
-    if text.len() <= max_bytes {
-        return Diff {
-            text,
-            truncated: false,
-        };
-    }
-    let mut end = max_bytes.min(text.len());
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    Diff {
-        text: format!(
-            "{}\n... (diff truncated at {max_bytes} bytes)\n",
-            &text[..end]
-        ),
-        truncated: true,
-    }
-}
-
-/// The paths of `dir`'s entries, or the error reading it.
-async fn read_dir_entries(dir: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut read_dir = tokio::fs::read_dir(dir).await?;
-    let mut entries = Vec::new();
-    while let Some(entry) = read_dir.next_entry().await? {
-        entries.push(entry.path());
-    }
-    Ok(entries)
-}
-
 /// Whether `path` itself is a plain directory, checked with `lstat` rather than `stat` (#171): a
-/// symlink to a directory is not a directory here. [`WorktreeManager::gc_orphans`] checks every
-/// path it descends into or removes this way, one level at a time, so a symlink planted at any
-/// level under [`WorktreeManager::root`] is never followed.
+/// symlink to a directory is not a directory here, so a symlink a worker plants is never
+/// followed.
 async fn is_real_dir(path: &Path) -> bool {
     matches!(
         tokio::fs::symlink_metadata(path).await,

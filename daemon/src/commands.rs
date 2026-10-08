@@ -11,7 +11,6 @@ use parallax_protocol::jsonrpc::{ErrorObject, Request};
 use parallax_protocol::methods::RequestMethod;
 use serde::Serialize;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use tokio::sync::{oneshot, watch};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -162,7 +161,7 @@ pub(crate) fn take_command_id(request: &mut Request) -> Result<Option<Uuid>, Err
 /// SHA-256 of `params` serialized again, without `commandId`.
 pub(crate) fn params_hash(params: &impl Serialize) -> Result<String, ErrorObject> {
     let bytes = serde_json::to_vec(params).map_err(ErrorObject::internal_error)?;
-    Ok(hex_sha256(&bytes))
+    Ok(crate::sha256_hex(&bytes))
 }
 
 /// The run a method names, if its params have `runId` or `run`.
@@ -425,16 +424,6 @@ fn decode_stored(json: &str) -> Result<Result<Value, ErrorObject>, ErrorObject> 
         return Ok(Err(error));
     }
     Ok(Ok(value))
-}
-
-fn hex_sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .fold(String::new(), |mut hex, byte| {
-            use std::fmt::Write as _;
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

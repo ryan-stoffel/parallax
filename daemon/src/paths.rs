@@ -29,13 +29,11 @@
 //! passes the folder on, so a `plxd` that an agent runs reaches the same socket.
 
 use std::ffi::OsStr;
-use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use parallax_protocol::ProjectId;
-use sha2::{Digest, Sha256};
 
 /// The environment variable that sets the data folder when `--data-dir` is not given.
 pub const DATA_DIR_ENV: &str = "PLXD_DATA_DIR";
@@ -274,11 +272,7 @@ impl DataDir {
     /// The first `bytes` bytes of the SHA-256 of the folder's path, in hex. On Windows, the path's
     /// bytes are its WTF-8 encoding, which is UTF-8 for any path that is valid Unicode.
     fn hash(&self, bytes: usize) -> String {
-        let digest = Sha256::digest(self.root.as_os_str().as_encoded_bytes());
-        digest[..bytes].iter().fold(String::new(), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
+        crate::sha256_hex(self.root.as_os_str().as_encoded_bytes())[..bytes * 2].to_owned()
     }
 }
 

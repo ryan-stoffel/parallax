@@ -14,7 +14,6 @@
 //!   `github/signInCancel` kills its process group. After a sign-in that worked, it runs `gh auth
 //!   setup-git`, whose failure is a note, not an error. `gh` keeps the token; plxd never reads it.
 
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -22,11 +21,11 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use parallax_protocol::{GithubSignIn, GithubStatus};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 
 use crate::backend::process::{Environment, Launcher, Output, Process, Signal, Signals};
 use crate::detect::{probe_spec, resolve, run_spec};
 use crate::paths::DataDir;
+use crate::sha256_hex;
 
 /// The latest `cli/cli` release, as GitHub's API describes it.
 pub const RELEASE_URL: &str = "https://api.github.com/repos/cli/cli/releases/latest";
@@ -278,16 +277,6 @@ async fn finish_login(mut process: Process, launcher: Launcher, state: Arc<Mutex
         state.sign_in = None;
         state.note = note;
     }
-}
-
-/// `bytes`' SHA-256, in lowercase hex as `checksums.txt` has it.
-fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .fold(String::new(), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
 }
 
 /// The last non-empty line of `text`, or a stand-in when there is none.

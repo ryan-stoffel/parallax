@@ -27,7 +27,7 @@ is #170's job, not this one's.
 - **`daemon/src/routing.rs`** is the decision engine `resolve()` (account + backend, in-memory, no
   I/O) and `start()` (reads the credential and starts the run). `Resolved`'s fields are private:
   `resolve()` is the only place that decides a coordinator's policy, `start()` re-applies
-  `ToolPolicy::NoWrite` for `Role::Coordinator` from `Resolved::role()` regardless of what
+  `ToolPolicy::NoWrite` for `Role::Coordinator` from the run's role regardless of what
   `Resolved::policy()` already says, and nothing between the two calls can substitute a
   `workspace-write` policy for it.
 - **A `BackendRegistry` maps one backend per `Provider`.** A backend takes both a subscription

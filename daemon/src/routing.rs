@@ -194,7 +194,7 @@ fn enforced_policy(role: Role, policy: ToolPolicy) -> ToolPolicy {
 /// Every field is private. A coordinator's forced [`ToolPolicy::NoWrite`] is meaningless if
 /// something between `resolve` and `start` can change it back, so nothing outside this module can
 /// read or write one without going through [`Resolved::policy`], and [`start`] enforces it again
-/// from [`Resolved::role`] regardless of what `policy()` already says.
+/// from the run's role regardless of what `policy()` already says.
 pub struct Resolved {
     backend: Arc<dyn Backend>,
     /// The backend a key-account fallback runs on: the provider's startup one (0040), not an
@@ -222,12 +222,6 @@ impl Resolved {
     #[must_use]
     pub fn backend(&self) -> &dyn Backend {
         self.backend.as_ref()
-    }
-
-    /// The role this run is for.
-    #[must_use]
-    pub fn role(&self) -> Role {
-        self.role
     }
 
     /// The policy this run actually gets.

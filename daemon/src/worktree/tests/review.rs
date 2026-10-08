@@ -29,7 +29,10 @@ async fn fixture() -> Fixture {
     git(&repo, &["commit", "-q", "-m", "more files"]);
     let data_dir = tempfile::tempdir().unwrap();
     let mgr = manager(data_dir.path());
-    let created = mgr.create(&repo, RunId::generate(), None).await.unwrap();
+    let created = mgr
+        .create_named(&repo, RunId::generate(), None, None)
+        .await
+        .unwrap();
     Fixture {
         _repo_dir: repo_dir,
         _data_dir: data_dir,
@@ -58,7 +61,7 @@ impl Fixture {
             .sha
     }
 
-    async fn accept(&self, commit: &str) -> Result<crate::worktree::Accepted, AcceptError> {
+    async fn accept(&self, commit: &str) -> Result<crate::worktree::review::Accepted, AcceptError> {
         self.mgr
             .accept(&self.repo, commit, "Merge Parallax run: test\n")
             .await
@@ -217,7 +220,7 @@ async fn a_file_list_too_long_to_read_fails_the_diff_and_accept() {
     }
     let head = f.commit().await;
     let (worktree, git_dir, base) = (f.worktree(), &f.created.git_dir, &f.created.base);
-    let files = |diff: crate::worktree::CommitDiff| diff.files.len();
+    let files = |diff: crate::worktree::review::CommitDiff| diff.files.len();
     assert_eq!(
         f.mgr
             .diff_commits(worktree, git_dir, base, &head)
@@ -585,7 +588,7 @@ async fn no_hook_runs_through_accept_remove_and_the_next_create() {
     // The next `agent/start` makes a worktree, which fires `post-checkout` when hooks are on.
     let second = f
         .mgr
-        .create(&f.repo, RunId::generate(), None)
+        .create_named(&f.repo, RunId::generate(), None, None)
         .await
         .unwrap();
     assert!(second.path.join(".husky/post-checkout").exists());
@@ -639,7 +642,7 @@ async fn accept_never_overwrites_an_ignored_file() {
     // A worktree cut from the new HEAD, whose agent force-adds its own .env.
     let run = f
         .mgr
-        .create(&f.repo, RunId::generate(), None)
+        .create_named(&f.repo, RunId::generate(), None, None)
         .await
         .unwrap();
     std::fs::write(run.path.join(".env"), "SECRET=agent\n").unwrap();

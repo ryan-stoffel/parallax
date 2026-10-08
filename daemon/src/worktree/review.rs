@@ -30,8 +30,8 @@ use tokio::time::timeout;
 use tracing::warn;
 
 use super::{
-    ChangeStatus, ChangedFile, DiffStat, NO_DIFF_DRIVERS, WorktreeError, WorktreeManager,
-    changed_file, collect, describe_failure, owned_args,
+    ChangeStatus, ChangedFile, DEFAULT_TIMEOUT, DiffStat, NO_DIFF_DRIVERS, WorktreeError,
+    WorktreeManager, changed_file, collect, describe_failure, owned_args,
 };
 use crate::backend::process::{Output, StdinMode};
 use crate::json::escaped_len as json_len;
@@ -208,7 +208,7 @@ const IN_PROGRESS: &[(&str, &str)] = &[
 impl WorktreeManager {
     /// The files that differ between commits `base` and `head`, with stats and size-capped
     /// unified diffs, read through the worktree's pinned git folder like
-    /// [`WorktreeManager::diff`] (#166). It reads only commits, never the worktree's files.
+    /// [`WorktreeManager::diff_stat`] (#166). It reads only commits, never the worktree's files.
     ///
     /// # Errors
     ///
@@ -356,14 +356,14 @@ impl WorktreeManager {
                 }
             }
         };
-        let (sections, exit) = match timeout(self.timeout, read).await {
+        let (sections, exit) = match timeout(DEFAULT_TIMEOUT, read).await {
             Ok(Ok(read)) => read,
             Ok(Err(error)) => return Err(error),
             Err(_) => {
                 return Err(WorktreeError::Timeout {
                     cwd: worktree_path.to_owned(),
                     args: owned_args(args),
-                    timeout: self.timeout,
+                    timeout: DEFAULT_TIMEOUT,
                 });
             }
         };
@@ -440,16 +440,9 @@ impl WorktreeManager {
         }
         let args = ["cat-file", "blob", object.as_str()];
         let spec = self.worktree_spec(worktree_path, git_dir, &args).await?;
-        let process = self.launcher.spawn(&spec)?;
-        let Ok(collected) = timeout(self.timeout, collect(process, worktree_path, &args)).await
-        else {
-            return Err(WorktreeError::Timeout {
-                cwd: worktree_path.to_owned(),
-                args: owned_args(&args),
-                timeout: self.timeout,
-            });
-        };
-        let (mut bytes, exit) = collected?;
+        let (mut bytes, exit) = self
+            .exec(&spec, worktree_path, &args, DEFAULT_TIMEOUT)
+            .await?;
         if !exit.info.success() {
             return Err(WorktreeError::GitFailed {
                 cwd: worktree_path.to_owned(),
@@ -515,11 +508,11 @@ impl WorktreeManager {
             }
             collect(process, work_tree, &args).await
         };
-        let Ok(collected) = timeout(self.timeout, run).await else {
+        let Ok(collected) = timeout(DEFAULT_TIMEOUT, run).await else {
             return Err(WorktreeError::Timeout {
                 cwd: work_tree.to_owned(),
                 args: owned_args(&args),
-                timeout: self.timeout,
+                timeout: DEFAULT_TIMEOUT,
             });
         };
         let (stdout, exit) = collected?;
@@ -558,7 +551,7 @@ impl WorktreeManager {
         let repo = repo_root.display().to_string();
 
         let head_ref = self
-            .run_checkout_git(&repo_root, &["symbolic-ref", "--quiet", "HEAD"])
+            .run_git(&repo_root, &["symbolic-ref", "--quiet", "HEAD"])
             .await?;
         let into = match head_ref.stdout.trim().strip_prefix("refs/heads/") {
             Some(branch) if head_ref.success() => branch.to_owned(),
@@ -590,7 +583,7 @@ impl WorktreeManager {
         };
 
         let changes = self
-            .run_checkout_git_ok(
+            .run_git_ok(
                 &repo_root,
                 &[
                     "diff",
@@ -702,7 +695,7 @@ impl WorktreeManager {
     ) -> Result<(), AcceptError> {
         let paths: HashSet<&str> = changes.iter().map(|(_, path)| path.as_str()).collect();
         let status = self
-            .run_checkout_git_ok(
+            .run_git_ok(
                 repo_root,
                 &[
                     "status",
@@ -891,7 +884,7 @@ impl WorktreeManager {
                 "--",
             ];
             args.extend_from_slice(chunk);
-            let listing = self.run_checkout_git_ok(repo_root, &args).await?;
+            let listing = self.run_git_ok(repo_root, &args).await?;
             for entry in z_tokens(&listing) {
                 let Some((meta, name)) = entry.split_once('\t') else {
                     continue;
@@ -946,7 +939,7 @@ impl WorktreeManager {
         for chunk in files.chunks(200) {
             let mut args = vec!["hash-object", "--"];
             args.extend(chunk.iter().map(|(path, _)| *path));
-            let hashes = self.run_checkout_git_ok(repo_root, &args).await?;
+            let hashes = self.run_git_ok(repo_root, &args).await?;
             for ((path, mode), object) in chunk.iter().zip(hashes.lines()) {
                 ids.insert((*path).to_owned(), format!("{mode} {}", object.trim()));
             }
@@ -957,7 +950,7 @@ impl WorktreeManager {
     /// `git rev-parse --git-path <name>` as an absolute path.
     async fn git_path(&self, repo_root: &Path, name: &str) -> Result<PathBuf, WorktreeError> {
         let path = self
-            .run_checkout_git_ok(
+            .run_git_ok(
                 repo_root,
                 &["rev-parse", "--path-format=absolute", "--git-path", name],
             )
@@ -970,7 +963,7 @@ impl WorktreeManager {
         for (name, _) in IN_PROGRESS {
             args.extend_from_slice(&["--git-path", name]);
         }
-        let paths = self.run_checkout_git_ok(repo_root, &args).await?;
+        let paths = self.run_git_ok(repo_root, &args).await?;
         for ((_, what), path) in IN_PROGRESS.iter().zip(paths.lines()) {
             if tokio::fs::symlink_metadata(path).await.is_ok() {
                 return Err(AcceptError::Refused(format!(
@@ -988,7 +981,7 @@ impl WorktreeManager {
         descendant: &str,
     ) -> Result<bool, WorktreeError> {
         let output = self
-            .run_checkout_git(
+            .run_git(
                 repo_root,
                 &["merge-base", "--is-ancestor", ancestor, descendant],
             )
@@ -996,11 +989,10 @@ impl WorktreeManager {
         match output.exit.info.code {
             Some(0) => Ok(true),
             Some(1) => Ok(false),
-            _ => Err(WorktreeError::GitFailed {
-                cwd: repo_root.to_owned(),
-                args: owned_args(&["merge-base", "--is-ancestor", ancestor, descendant]),
-                detail: describe_failure(&output),
-            }),
+            _ => Err(output.failure(
+                repo_root,
+                &["merge-base", "--is-ancestor", ancestor, descendant],
+            )),
         }
     }
 
@@ -1015,7 +1007,7 @@ impl WorktreeManager {
         message: &str,
     ) -> Result<String, AcceptError> {
         let tree = self
-            .run_checkout_git(
+            .run_git(
                 repo_root,
                 &[
                     "merge-tree",
@@ -1040,11 +1032,9 @@ impl WorktreeManager {
                 });
             }
             _ => {
-                return Err(AcceptError::Git(WorktreeError::GitFailed {
-                    cwd: repo_root.to_owned(),
-                    args: owned_args(&["merge-tree", "--write-tree", head, target]),
-                    detail: describe_failure(&tree),
-                }));
+                return Err(AcceptError::Git(
+                    tree.failure(repo_root, &["merge-tree", "--write-tree", head, target]),
+                ));
             }
         }
         let tree = z_tokens(&tree.stdout)
@@ -1060,7 +1050,7 @@ impl WorktreeManager {
             )));
         }
         let commit = self
-            .run_checkout_git_ok(
+            .run_git_ok(
                 repo_root,
                 &[
                     "commit-tree",
@@ -1076,32 +1066,6 @@ impl WorktreeManager {
             )
             .await?;
         Ok(commit.trim().to_owned())
-    }
-
-    /// `git args` in the user's own checkout, with its own configuration. Like every call through
-    /// [`WorktreeManager::run_git`], it runs no hooks.
-    async fn run_checkout_git(
-        &self,
-        repo_root: &Path,
-        args: &[&str],
-    ) -> Result<super::GitOutput, WorktreeError> {
-        self.run_git(repo_root, args).await
-    }
-
-    async fn run_checkout_git_ok(
-        &self,
-        repo_root: &Path,
-        args: &[&str],
-    ) -> Result<String, WorktreeError> {
-        let output = self.run_checkout_git(repo_root, args).await?;
-        if !output.success() {
-            return Err(WorktreeError::GitFailed {
-                cwd: repo_root.to_owned(),
-                args: owned_args(args),
-                detail: describe_failure(&output),
-            });
-        }
-        Ok(output.stdout)
     }
 }
 
