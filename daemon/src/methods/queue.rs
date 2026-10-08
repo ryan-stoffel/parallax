@@ -20,12 +20,7 @@ async fn queue(context: &Context, run_id: RunId, op: QueueOp) -> Result<QueueRes
     context
         .daemon
         .agents
-        .detached(agents::queue_command(
-            daemon,
-            run_id,
-            op,
-            context.command_id,
-        ))
+        .detached(agents::queue(daemon, run_id, op, context.command_id))
         .await
 }
 

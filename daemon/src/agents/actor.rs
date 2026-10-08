@@ -138,21 +138,9 @@ fn failed_text(prompt: &str, message: &str) -> String {
 
 /// What an actor is asked to do.
 pub(super) enum Command {
-    /// `agent/send`.
+    /// `agent/send`, into the running turn rather than after it when `steer` (PLX-370).
     Send {
-        turn_id: TurnId,
-        text: String,
-        /// The message's images, already checked (PLX-191).
-        images: Vec<PromptImage>,
-        /// The threads attached to it, already checked (PLX-372).
-        threads: Vec<RunId>,
-        /// New options for the run (PLX-161, PLX-163).
-        options: RunOptions,
-        /// A new account for the run, perhaps on another backend.
-        account: Option<AccountChoice>,
-        /// The thread that sent it through its Parallax tools (0041).
-        from: Option<RunId>,
-        /// Into the running turn rather than after it (PLX-370).
+        message: Queued,
         steer: bool,
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
     },
@@ -283,15 +271,19 @@ pub(crate) enum QueueOp {
 /// A message waiting for the run's CLI: one sent during a turn, one that changes what the CLI
 /// runs with, or one sent after either. Stored, so a restart keeps it (PLX-370).
 #[derive(Clone)]
-struct Queued {
-    turn_id: TurnId,
-    text: String,
-    images: Vec<PromptImage>,
-    threads: Vec<RunId>,
-    options: RunOptions,
-    account: Option<AccountChoice>,
+pub(super) struct Queued {
+    pub turn_id: TurnId,
+    pub text: String,
+    /// Its images, already checked (PLX-191).
+    pub images: Vec<PromptImage>,
+    /// The threads attached to it, already checked (PLX-372).
+    pub threads: Vec<RunId>,
+    /// New options for the run (PLX-161, PLX-163).
+    pub options: RunOptions,
+    /// A new account for the run, perhaps on another backend.
+    pub account: Option<AccountChoice>,
     /// The thread that sent it through its Parallax tools (0041).
-    from: Option<RunId>,
+    pub from: Option<RunId>,
 }
 
 /// What a stored [`Queued`] keeps beside its text, as its row's JSON.
@@ -634,32 +626,17 @@ impl Actor {
             && self.resume_due().is_none()
     }
 
-    #[expect(clippy::too_many_lines, reason = "one arm per actor command")]
     async fn on_command(&mut self, command: Command) {
         match command {
             Command::Send {
-                turn_id,
-                text,
-                images,
-                threads,
-                options,
-                account,
-                from,
+                message,
                 steer,
                 reply,
             } => {
+                let (turn_id, from) = (message.turn_id, message.from);
                 if let Some(from) = from {
                     self.senders.insert(turn_id, from);
                 }
-                let message = Queued {
-                    turn_id,
-                    text,
-                    images,
-                    threads,
-                    options,
-                    account,
-                    from,
-                };
                 let answer = self.send(message, steer).await;
                 if answer.is_err() && from.is_some() {
                     self.senders.remove(&turn_id);
@@ -1625,7 +1602,7 @@ impl Actor {
         info!(run = %self.id, turn = %queued.turn_id, "a message waits for the run's CLI");
         self.queued.push_back(queued);
         // A message plxd couldn't store must not look queued.
-        if let Err(error) = self.store_queue().await {
+        if let Err(error) = self.store_queue(&self.queued.clone(), None).await {
             self.queued.pop_back();
             return Err(error);
         }
@@ -1771,7 +1748,7 @@ impl Actor {
                 }
                 let mut edited = self.queued.clone();
                 edited[at].text = text;
-                self.store_queue_for(&edited).await?;
+                self.store_queue(&edited, None).await?;
                 self.queued = edited;
             }
             QueueOp::Reorder { ids } => {
@@ -1793,7 +1770,7 @@ impl Actor {
                         rest.len()
                     )));
                 }
-                self.store_queue_for(&reordered).await?;
+                self.store_queue(&reordered, None).await?;
                 self.queued = reordered;
             }
             QueueOp::Cancel { id } => {
@@ -1804,7 +1781,7 @@ impl Actor {
                 // Staged in the same job as the queue, so the two commit together.
                 self.push(AgentOutputItem::FollowUpDropped { turn_id: id })
                     .await;
-                self.store_queue_command(&remaining, command_id).await?;
+                self.store_queue(&remaining, command_id).await?;
                 self.queued = remaining;
                 self.senders.remove(&id);
             }
@@ -1822,13 +1799,10 @@ impl Actor {
                         self.queued.insert(at, queued);
                         return Err(error);
                     }
-                    if let Err(error) = self
-                        .store_queue_command(&self.queued.clone(), command_id)
-                        .await
-                    {
+                    if let Err(error) = self.store_queue(&self.queued.clone(), command_id).await {
                         // Delivery already happened. Remove its durable queue entry without the
                         // failing receipt update, and retain the error even if persistence fails.
-                        let reconciled = self.store_queue_for(&self.queued.clone()).await;
+                        let reconciled = self.store_queue(&self.queued.clone(), None).await;
                         let error = match reconciled {
                             Ok(()) => error,
                             Err(reconcile) => ErrorObject::internal_error(format!(
@@ -1898,23 +1872,15 @@ impl Actor {
 
     /// Stores the waiting messages as they are now, and reports them as `queue.updated`.
     async fn save_queue(&mut self) {
-        if let Err(error) = self.store_queue().await {
+        if let Err(error) = self.store_queue(&self.queued.clone(), None).await {
             warn!(run = %self.id, error = %error.message, "could not store a run's waiting messages");
         }
     }
 
-    /// Stores the waiting messages as they are now, and reports them as `queue.updated`.
-    async fn store_queue(&mut self) -> Result<(), ErrorObject> {
-        self.store_queue_for(&self.queued.clone()).await
-    }
-
-    /// Stores a proposed queue, before the actor applies it, and reports it as `queue.updated`,
-    /// in one job after any transcript items waiting to be sent.
-    async fn store_queue_for(&mut self, queued: &VecDeque<Queued>) -> Result<(), ErrorObject> {
-        self.store_queue_command(queued, None).await
-    }
-
-    async fn store_queue_command(
+    /// Stores `queued`, often a proposed queue before the actor applies it, completes
+    /// `command_id`'s receipt, and reports it as `queue.updated`, in one job after any transcript
+    /// items waiting to be sent.
+    async fn store_queue(
         &mut self,
         queued: &VecDeque<Queued>,
         command_id: Option<Uuid>,
