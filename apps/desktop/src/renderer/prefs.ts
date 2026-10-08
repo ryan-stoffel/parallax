@@ -16,6 +16,12 @@ export type NewThreadPrefs = {
   permission: AgentPermission;
   /** Where a thread in a repository works. */
   workspace: "worktree" | "checkout";
+  /**
+   * The model the host's plxd names a new thread and its branch with (0058), by instance and id.
+   * A host without that instance uses the thread's own instance's default.
+   */
+  naming: { provider: string; id: string };
+  namingEffort: AgentEffort;
 };
 
 export const newThreadDefaults: NewThreadPrefs = {
@@ -23,6 +29,8 @@ export const newThreadDefaults: NewThreadPrefs = {
   fast: false,
   permission: "edit",
   workspace: "worktree",
+  naming: { provider: "codex", id: "gpt-6-luna" },
+  namingEffort: "low",
 };
 
 export const newThreadPrefs = stored("parallax.newThreads", newThreadDefaults, merged);

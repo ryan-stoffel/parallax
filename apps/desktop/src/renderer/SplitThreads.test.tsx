@@ -77,7 +77,6 @@ beforeEach(() => {
     onConnectionState: () => () => {},
     subscribe: () => () => {},
     request,
-    nameThread: async () => ({}),
     hosts: async () => [],
     onHosts: () => () => {},
     onConnect: () => () => {},

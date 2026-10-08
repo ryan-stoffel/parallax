@@ -8,7 +8,7 @@ import { useConnection } from "../ConnectionStatus";
 import { EffortMenu } from "../EffortMenu";
 import { localId, useHosts } from "../hosts";
 import { ModelMenu } from "../ModelMenu";
-import { useCatalog, type Provider } from "../models";
+import { models, useCatalog, type Provider } from "../models";
 import { nameOf, OPEN_TARGET_KEY, TERMINAL_CHOSEN, targetIcon } from "../OpenMenu";
 import {
   behaviorPrefs,
@@ -189,7 +189,8 @@ export function GeneralSettings() {
 /**
  * What a new thread starts with, picked with the composer's own menus (`newThreadPrefs`). The
  * model list is this computer's; a thread on a host that lacks the model starts on that host's
- * first.
+ * first. The naming model is any Claude Code or Codex model; a host that lacks it names threads
+ * with the thread's own provider's default (0058).
  */
 function NewThreads() {
   const catalog = useCatalog(localId);
@@ -211,6 +212,16 @@ function NewThreads() {
     prefs.context !== undefined && contexts.includes(prefs.context) ? prefs.context : contexts[0];
   const hasFast = !!model?.fast;
   const workspace = workspaces.find((w) => w.value === prefs.workspace) ?? workspaces[0]!;
+  const namers = catalog.instances.filter((i) => i.kind === "claude" || i.kind === "codex");
+  const namerCatalog = {
+    ...catalog,
+    instances: namers,
+    models: catalog.models.filter((m) => namers.some((i) => i.id === m.provider)),
+  };
+  const naming = prefs.naming;
+  const namer = [...namerCatalog.models, ...models].find(
+    (m) => m.provider === naming.provider && m.id === naming.id,
+  ) ?? { id: naming.id, name: naming.id, provider: naming.provider, contexts: [] };
 
   return (
     <Section title="New threads">
@@ -277,6 +288,27 @@ function NewThreads() {
             align="end"
             panelClassName="w-[24rem]"
           />
+        </span>
+      </Row>
+      <Row
+        title="Naming model"
+        description="Names a new thread and its branch from its first message, after it starts."
+      >
+        <span className="flex gap-2">
+          <span className={pickerBox}>
+            <ModelMenu
+              catalog={namerCatalog}
+              unavailable={blocked}
+              value={namer}
+              onChange={(m) => setNewThreadPrefs({ naming: { provider: m.provider, id: m.id } })}
+            />
+          </span>
+          <span className={pickerBox}>
+            <EffortMenu
+              value={prefs.namingEffort}
+              onChange={(namingEffort) => setNewThreadPrefs({ namingEffort })}
+            />
+          </span>
         </span>
       </Row>
     </Section>

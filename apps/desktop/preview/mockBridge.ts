@@ -80,6 +80,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "threadAttention",
     "threadFork",
     "threadLineage",
+    "threadNaming",
     "threadTools",
     "threads",
   ].map((name) => [name, {}]),
@@ -406,6 +407,26 @@ const handlers: { [M in Method]?: Handler<M> } = {
       ...(p.parent && { parent: p.parent }),
     };
     startRun(run, thread);
+    // As plxd does (0058): a title and a branch from the naming model, a moment later.
+    if (p.naming && !p.checkout && p.prompt.trim())
+      later(1500, () => {
+        const words = p.prompt.trim().split(/\s+/).slice(0, 5);
+        threadResult(run.id, { title: words.join(" ").replace(/[.,:;!?]$/, "") });
+        const branch = `parallax/${words
+          .join("-")
+          .toLowerCase()
+          .replace(/[^a-z0-9-]/g, "")}`;
+        run.branch = branch;
+        const { status, accountId } = run;
+        emit(
+          {
+            kind: "agent.updated",
+            runId: run.id,
+            state: { status, accountId, branch, updatedAt: now() },
+          },
+          run.project,
+        );
+      });
     return { thread, run };
   },
   "thread/fork": (p) => {
@@ -1064,16 +1085,6 @@ export const mockBridge: ParallaxBridge = {
   onUpdateState: (listener) => {
     listener(updateState);
     return noop;
-  },
-  nameThread: (prompt) => {
-    const words = prompt.trim().split(/\s+/).slice(0, 6);
-    const title = words.join(" ").replace(/[.,:;]$/, "");
-    const slug = words
-      .slice(0, 4)
-      .join("-")
-      .toLowerCase()
-      .replace(/[^a-z0-9-]/g, "");
-    return delay({ title, slug: slug || undefined });
   },
 
   request<M extends RendererMethod>(

@@ -63,13 +63,11 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
     ? { logId: "log-1", ...answer(params) }
     : { error: { code: -32601, message: `${method} isn't faked` } };
 });
-const nameThread = vi.fn<ParallaxBridge["nameThread"]>(async () => ({}));
 
 beforeEach(() => {
   request.mockClear();
   localStorage.clear();
   capabilities = { threadLineage: {} };
-  nameThread.mockReset().mockResolvedValue({});
   threads = [
     thread("parent", 0, { title: "Ship lineage" }),
     thread("a", 1, { parent: "parent", title: "Style the chips" }),
@@ -101,7 +99,6 @@ beforeEach(() => {
     onConnectionState: () => () => {},
     subscribe: () => () => {},
     request,
-    nameThread,
     hosts: async () => [],
     onHosts: () => () => {},
     onConnect: () => () => {},
@@ -352,19 +349,16 @@ test("without threadLineage, children aren't nested and there are no chips", asy
   expect(toggle("2 threads")).toBeUndefined();
 });
 
-test("titles come from plxd: a new thread sends its generated title, and a title kept here moves there once", async () => {
+test("titles come from plxd: a new thread asks plxd to name it, and a title kept here moves there once", async () => {
+  capabilities = { threadLineage: {}, threadNaming: {} };
   threads = [thread("old", 0)];
   runs = [run("old")];
   localStorage.setItem("parallax:title:old", "Kept title");
   answers["thread/update"] = (p) => ({
     result: { thread: { ...thread("old", 0), title: p["title"] } },
   });
-  nameThread.mockResolvedValue({ title: "Fix flaky test", slug: "fix-flaky-test" });
   answers["thread/start"] = (p) => ({
-    result: {
-      thread: { ...thread(p["runId"] as string, 30), title: p["title"] },
-      run: run(p["runId"] as string),
-    },
+    result: { thread: thread(p["runId"] as string, 30), run: run(p["runId"] as string) },
   });
   await renderApp();
   expect(calls("thread/update")).toEqual([{ runId: "old", title: "Kept title" }]);
@@ -380,10 +374,13 @@ test("titles come from plxd: a new thread sends its generated title, and a title
   });
   await settle();
   expect(calls("thread/start")).toEqual([
-    expect.objectContaining({ title: "Fix flaky test", branchSlug: "fix-flaky-test" }),
+    expect.objectContaining({
+      branchSlug: "the-flaky-test-is",
+      naming: { backend: "codex", model: "gpt-6-luna", effort: "low" },
+    }),
   ]);
+  expect(calls("thread/start")[0]).not.toHaveProperty("title");
   expect(Object.keys(localStorage).filter((k) => k.startsWith("parallax:title:"))).toEqual([]);
-  expect(crumbs()).toEqual(["This Mac", "parallax", "Fix flaky test"]);
 });
 
 // The parent's agent's own subagents (PLX-382): two of Claude Code's Agent calls, one done.

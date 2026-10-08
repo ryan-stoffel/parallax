@@ -34,7 +34,6 @@ export async function launch(
   if (!existsSync(plxd)) throw new Error(`no plxd at ${plxd}; see the top of launch.ts`);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    PLX_NO_NAMER: "1",
     PLXD_PATH: plxd,
     PLXD_DATA_DIR: dataDir,
     PLXD_FAKE_BACKEND: path.resolve(import.meta.dirname, script),

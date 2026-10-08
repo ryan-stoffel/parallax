@@ -1,6 +1,6 @@
 # 0029: App packaging and release builds
 
-- Status: accepted; versions, macOS signing, and the update metadata superseded by [0030](0030-release-versions.md); `release.yml`'s jobs superseded by PLX-211 (below)
+- Status: accepted; versions, macOS signing, and the update metadata superseded by [0030](0030-release-versions.md); `release.yml`'s jobs superseded by PLX-211 (below); node-llama-cpp removed by [0058](0058-thread-naming.md)
 - Date: 2026-09-30
 - Issue: PLX-66
 
@@ -22,7 +22,7 @@ The releases 0028 publishes carried only notes. The app needs `plxd` inside its 
   | Windows arm64 | `windows-11-arm` | `nsis` | `aarch64-pc-windows-msvc` |
 
 - **Each installer is built on its own runner**, with no cross-compiling. `scripts/ci/package-app` builds `plxd --release` for the runner's target, then `dist/`, then the installer, into `apps/desktop/release/`. It puts `plxd` (`plxd.exe`) in the package's resources folder, through `extraResources`, and the same script builds an installer on a developer's machine.
-- **Native modules** are unpacked from `app.asar`: `node-pty` (its prebuilds and macOS `spawn-helper`), `node-llama-cpp`, and the `@node-llama-cpp/<platform>` package holding its llama.cpp binary. Only `node-pty` and `node-llama-cpp` are `dependencies`; everything the bundles inline is a dev dependency, so electron-builder doesn't copy it into the package too. pnpm's strict `node_modules` needed no workaround, because electron-builder reads pnpm's layout itself.
+- **Native modules** are unpacked from `app.asar`: `node-pty` (its prebuilds and macOS `spawn-helper`). `node-llama-cpp` and its `@node-llama-cpp/<platform>` package were too, until [0058](0058-thread-naming.md) removed them. Only `node-pty` is a `dependency`; everything the bundles inline is a dev dependency, so electron-builder doesn't copy it into the package too. pnpm's strict `node_modules` needed no workaround, because electron-builder reads pnpm's layout itself.
 - **Version** is stamped at build time with `-c.extraMetadata.version` and never committed. [0030](0030-release-versions.md) sets it (`YYMM.1DDHH.1MMSS`, plus `-nightly` off `main`). A local build is `0.0.0-local`.
 - **Builds are unsigned**, except the macOS release build, which [0030](0030-release-versions.md) signs and notarizes. Without a certificate (`CSC_KEYCHAIN` or `CSC_LINK`), `package-app` sets `CSC_IDENTITY_AUTO_DISCOVERY=false` unless it is already set, so a local build doesn't pick up a Developer ID from the keychain. An unsigned macOS arm64 app launches without ad-hoc signing. Known limitation: Windows Smart App Control, which clean Windows 11 installs start in evaluation mode and many end up with on, blocks an unsigned `plxd.exe` or installer outright, not just with a warning, and a self-signed certificate doesn't pass it. Ryan chose to leave Windows unsigned for now; the Windows installers won't run on machines with it on until PLX-65 signs them.
 - **`release.yml`** is a `plan` job, a `build` matrix of the five runners, and `finish` and `notarize` jobs after them. PLX-211 made publishing per OS, to get the macOS update out in about two minutes:
@@ -47,7 +47,6 @@ The releases 0028 publishes carried only notes. The app needs `plxd` inside its 
 
 - The macOS update is out as soon as the macOS build is, about two minutes after a push that changes no Rust and three and a half when Rust changes (PLX-211; 7.5 minutes before). The whole run still takes as long as the slowest of five native builds, and the next push's run waits for it (one run per branch keeps the notes in order). Pushes that queue behind a running build collapse to the newest, as in 0028.
 - Every release adds about 0.8 GB of installers (dmg 167 MB, AppImages 169 and 179 MB, Windows 155 and 142 MB), and nothing prunes them (0028's consequence, now bigger).
-- The packages leave out node-llama-cpp's CUDA and Vulkan binaries (Linux and Windows x64), which would add 200 to 300 MB each and need the vendor's GPU runtime. It runs on the CPU there; the only user today is the thread namer's small model.
 - Installers aren't smoke-tested in CI. Launching a packaged build is a manual check, recorded on PLX-66: on all five runners the unpacked app launched, connected to its bundled `plxd`, spawned a shell through `node-pty`, and loaded `node-llama-cpp`, once, from a temporary step that was removed before merge.
 - The `musl` Linux builds are new to CI: `check-rust` builds the glibc target, so `musl-tools` is installed on the release runners for bundled SQLite.
 - 0023's line that each package also bundles `plxd` for remote hosts is PLX-28's, not this record's.

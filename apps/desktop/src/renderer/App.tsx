@@ -1193,6 +1193,7 @@ function HostLoader({
     autoResume: !!capabilities && "autoResume" in capabilities,
     onNeedsYou: (projectId, item) => onNeedsYou(hostId, projectId, item),
     forkable: !!capabilities && "threadFork" in capabilities,
+    naming: !!capabilities && "threadNaming" in capabilities,
   });
   useEffect(() => onView(hostId, view), [hostId, view, onView]);
   return null;
