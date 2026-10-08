@@ -211,6 +211,18 @@ function HostProviders({ host, picker }: { host: Host; picker: ReactNode }) {
   );
 }
 
+/** Up and Down move between a tablist's tabs, wrapping at the ends, and choose the one they reach. */
+function moveTab(e: KeyboardEvent<HTMLDivElement>) {
+  const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+  const tabs = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
+  const i = tabs.findIndex((tab) => tab.getAttribute("aria-selected") === "true");
+  if (!step || i === -1) return;
+  e.preventDefault();
+  const next = tabs[(i + step + tabs.length) % tabs.length]!;
+  next.click();
+  next.focus();
+}
+
 /**
  * One host's providers on an older plxd: each CLI it detects there as a tab, and the chosen one's
  * pane. Loads once the host is connected; Refresh probes the CLIs again. Usage over the chosen
@@ -263,16 +275,6 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
   }, [connected, load]);
 
   const current = detected?.find((c) => c.cli === selected) ?? detected?.[0];
-  // Up and Down move between the tabs, wrapping at the ends, and choose the one they reach.
-  const moveTab = (e: KeyboardEvent<HTMLDivElement>) => {
-    const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
-    if (!step || !detected || !current) return;
-    e.preventDefault();
-    const i = detected.indexOf(current);
-    const next = detected[(i + step + detected.length) % detected.length]!;
-    setSelected(next.cli);
-    document.getElementById(`${tabs}-${next.cli}`)?.focus();
-  };
 
   return (
     <>
@@ -443,7 +445,6 @@ function ProviderPane({
   onKeys: (update: (keys?: KeyAccount[]) => KeyAccount[] | undefined) => void;
   onSignedIn: () => void;
 }) {
-  const [adding, setAdding] = useState(false);
   const info = cliInfo[cli.cli];
   const name = info?.name ?? cli.cli;
   const Logo = backendLogos[cli.cli];
@@ -563,53 +564,16 @@ function ProviderPane({
           )}
         </Section>
       )}
-      {usage && (
-        <Section
-          title="Usage"
-          action={
-            <Segmented label="Usage period" options={periods} value={period} onChange={onPeriod} />
-          }
-        >
-          <div className={settingRow}>
-            <div className="min-w-0">
-              <UsageLines usage={usage.get(cli.cli)} period={period} />
-            </div>
-          </div>
-        </Section>
-      )}
+      {usage && <UsageSection usage={usage.get(cli.cli)} period={period} onPeriod={onPeriod} />}
       {keyProvider && keys && (
-        <Section title={`${providerNames[keyProvider]} API keys`}>
-          {keys
-            .filter((k) => k.provider === keyProvider)
-            .map((account) => (
-              <KeyRow
-                key={account.id}
-                hostId={hostId}
-                account={account}
-                usage={usage && <UsageLines usage={usage.get(account.id)} period={period} />}
-                onRemoved={() => onKeys((all) => all?.filter((k) => k.id !== account.id))}
-              />
-            ))}
-          {adding ? (
-            <KeyForm
-              hostId={hostId}
-              provider={keyProvider}
-              onDone={(account) => {
-                setAdding(false);
-                if (account) onKeys((all) => [...(all ?? []), account]);
-              }}
-            />
-          ) : (
-            <button
-              type="button"
-              onClick={() => setAdding(true)}
-              className="flex w-full items-center gap-2 rounded-b-xl px-4 py-3 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
-            >
-              <Plus aria-hidden />
-              Add API key
-            </button>
-          )}
-        </Section>
+        <KeysSection
+          hostId={hostId}
+          provider={keyProvider}
+          keys={keys}
+          onKeys={onKeys}
+          usage={usage}
+          period={period}
+        />
       )}
       <Section title="Models">
         {offered.length ? (
@@ -722,15 +686,6 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
     setError(failed);
   };
   const on = list?.filter((p) => p.instance.enabled) ?? [];
-  // Up and Down move between the tabs, wrapping at the ends, and choose the one they reach.
-  const moveTab = (e: KeyboardEvent<HTMLDivElement>) => {
-    const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
-    if (!step || !list || !current) return;
-    e.preventDefault();
-    const next = list[(list.indexOf(current) + step + list.length) % list.length]!;
-    setSelected(next.instance.id);
-    document.getElementById(`${tabs}-${next.instance.id}`)?.focus();
-  };
 
   return (
     <>
@@ -1013,7 +968,6 @@ function InstancePane({
   const version = versionOf(instance);
   // The host's keys are for its Claude Code and Codex, the instances named for their kind.
   const keyProvider = instance.id === instance.kind ? cliInfo[instance.id]?.keyProvider : undefined;
-  const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string>();
   // Whether the open terminal installs the CLI rather than signs in. Kept from when it opened, so
   // an install that ends and finds the CLI doesn't turn into a sign-in.
@@ -1327,52 +1281,17 @@ function InstancePane({
       <EnvSection env={instance.env} onSave={(env) => save({ env })} />
       <ProviderModels hostId={hostId} info={info} onSave={(models) => save({ models })} />
       {usage && (instance.kind === "claude" || instance.kind === "codex") && (
-        <Section
-          title="Usage"
-          action={
-            <Segmented label="Usage period" options={periods} value={period} onChange={onPeriod} />
-          }
-        >
-          <div className={settingRow}>
-            <div className="min-w-0">
-              <UsageLines usage={usage.get(instance.id)} period={period} />
-            </div>
-          </div>
-        </Section>
+        <UsageSection usage={usage.get(instance.id)} period={period} onPeriod={onPeriod} />
       )}
       {keyProvider && keys && (
-        <Section title={`${providerNames[keyProvider]} API keys`}>
-          {keys
-            .filter((k) => k.provider === keyProvider)
-            .map((key) => (
-              <KeyRow
-                key={key.id}
-                hostId={hostId}
-                account={key}
-                usage={usage && <UsageLines usage={usage.get(key.id)} period={period} />}
-                onRemoved={() => onKeys((all) => all?.filter((k) => k.id !== key.id))}
-              />
-            ))}
-          {adding ? (
-            <KeyForm
-              hostId={hostId}
-              provider={keyProvider}
-              onDone={(added) => {
-                setAdding(false);
-                if (added) onKeys((all) => [...(all ?? []), added]);
-              }}
-            />
-          ) : (
-            <button
-              type="button"
-              onClick={() => setAdding(true)}
-              className="flex w-full items-center gap-2 rounded-b-xl px-4 py-3 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
-            >
-              <Plus aria-hidden />
-              Add API key
-            </button>
-          )}
-        </Section>
+        <KeysSection
+          hostId={hostId}
+          provider={keyProvider}
+          keys={keys}
+          onKeys={onKeys}
+          usage={usage}
+          period={period}
+        />
       )}
     </div>
   );
@@ -1573,6 +1492,85 @@ function KeyRow({
         )}
       </div>
     </div>
+  );
+}
+
+/** A pane's usage over `period`, with the period to show. */
+function UsageSection({
+  usage,
+  period,
+  onPeriod,
+}: {
+  usage?: AccountUsage;
+  period: Period;
+  onPeriod: (period: Period) => void;
+}) {
+  return (
+    <Section
+      title="Usage"
+      action={
+        <Segmented label="Usage period" options={periods} value={period} onChange={onPeriod} />
+      }
+    >
+      <div className={settingRow}>
+        <div className="min-w-0">
+          <UsageLines usage={usage} period={period} />
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+/** The host's API keys for `provider`, each with its usage over `period`, to add and remove. */
+function KeysSection({
+  hostId,
+  provider,
+  keys,
+  onKeys,
+  usage,
+  period,
+}: {
+  hostId: string;
+  provider: Provider;
+  keys: KeyAccount[];
+  onKeys: (update: (keys?: KeyAccount[]) => KeyAccount[] | undefined) => void;
+  usage?: ReadonlyMap<string, AccountUsage>;
+  period: Period;
+}) {
+  const [adding, setAdding] = useState(false);
+  return (
+    <Section title={`${providerNames[provider]} API keys`}>
+      {keys
+        .filter((k) => k.provider === provider)
+        .map((account) => (
+          <KeyRow
+            key={account.id}
+            hostId={hostId}
+            account={account}
+            usage={usage && <UsageLines usage={usage.get(account.id)} period={period} />}
+            onRemoved={() => onKeys((all) => all?.filter((k) => k.id !== account.id))}
+          />
+        ))}
+      {adding ? (
+        <KeyForm
+          hostId={hostId}
+          provider={provider}
+          onDone={(account) => {
+            setAdding(false);
+            if (account) onKeys((all) => [...(all ?? []), account]);
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          className="flex w-full items-center gap-2 rounded-b-xl px-4 py-3 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
+        >
+          <Plus aria-hidden />
+          Add API key
+        </button>
+      )}
+    </Section>
   );
 }
 

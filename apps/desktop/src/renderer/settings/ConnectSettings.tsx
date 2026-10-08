@@ -13,7 +13,7 @@ import { ConnectWizard } from "../ConnectWizard";
 import { DeviceIcon, deviceIconNames } from "../DeviceIcon";
 import { localId, useConnect, useHosts } from "../hosts";
 import { menuItem, menuPanel } from "../ui";
-import { primaryButton, quietButton, Row, Section, settingRow, Switch } from "./parts";
+import { primaryButton, quietButton, RenameForm, Row, Section, settingRow, Switch } from "./parts";
 
 /**
  * Settings > Connections' Parallax Connect section (0056): Install puts plx-connect on this
@@ -266,29 +266,12 @@ function DeviceCard({
       <DeviceIcon icon={device.icon} className="size-5 shrink-0 text-muted-foreground" />
       <div className="min-w-0 flex-1">
         {renaming ? (
-          <form
-            className="flex items-center gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void save({ name: new FormData(e.currentTarget).get("name") as string });
-            }}
-          >
-            <input
-              name="name"
-              aria-label="Device name"
-              defaultValue={device.name}
-              autoFocus
-              maxLength={64}
-              onKeyDown={(e) => e.key === "Escape" && setRenaming(false)}
-              className="w-48 rounded-md border border-border bg-background px-2 py-0.5 text-[13px]"
-            />
-            <button type="submit" className={primaryButton}>
-              Save
-            </button>
-            <button type="button" className={quietButton} onClick={() => setRenaming(false)}>
-              Cancel
-            </button>
-          </form>
+          <RenameForm
+            label="Device name"
+            value={device.name}
+            onSave={(name) => void save({ name })}
+            onCancel={() => setRenaming(false)}
+          />
         ) : (
           <p className="flex items-baseline gap-2 truncate text-[14px] font-medium">
             {device.name}

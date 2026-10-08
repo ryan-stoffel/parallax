@@ -1,13 +1,5 @@
 import { GitFork } from "lucide-react";
-import {
-  createContext,
-  useContext,
-  useId,
-  useRef,
-  useState,
-  type RefObject,
-  type ToggleEvent,
-} from "react";
+import { createContext, useContext, useId, useRef, useState, type RefObject } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type { AgentRun } from "../protocol/generated/protocol";
@@ -16,7 +8,7 @@ import { useCatalog, type Model } from "./models";
 import { kindOf, logoOf } from "./providers";
 import type { ForkChoice } from "./threads";
 import { isRunning } from "./transcript";
-import { menuItem, menuPanel, moveFocus } from "./ui";
+import { Menu, menuItem } from "./ui";
 
 /** plxd's refusal of `thread/fork` (0050), for people. `running` is whether the thread runs now. */
 export function forkError(error: RpcError, running: boolean): string {
@@ -92,23 +84,17 @@ export function ForkMenu({
   };
 
   return (
-    <div
+    <Menu
       ref={menu}
       id={id}
-      popover="auto"
-      role="menu"
-      aria-label="Fork"
+      label="Fork"
+      align={align}
+      className="w-64 p-1 text-[13px]"
       onBeforeToggle={(e) => e.newState === "open" && setOpen(true)}
-      onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-        if (e.newState === "open")
-          e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-        else {
-          setError(undefined);
-          setOpen(false);
-        }
+      onClose={() => {
+        setError(undefined);
+        setOpen(false);
       }}
-      onKeyDown={moveFocus}
-      className={`${menuPanel(align)} w-64 p-1 text-[13px]`}
     >
       {open && (
         <>
@@ -164,7 +150,7 @@ export function ForkMenu({
           {error}
         </p>
       )}
-    </div>
+    </Menu>
   );
 }
 

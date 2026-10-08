@@ -45,7 +45,7 @@ import { describeError, githubProblem } from "./errors";
 import { locale } from "./locale";
 import { behaviorPrefs } from "./prefs";
 import { age } from "./Sidebar";
-import { menuItem, menuPanel, moveFocus, SetUpGithub } from "./ui";
+import { ConfirmDialog, menuItem, menuPanel, moveFocus, SetUpGithub } from "./ui";
 
 /** A linked pull request as last read: GitHub's view of it, when, and why a read or action failed. */
 export interface Linked {
@@ -267,35 +267,30 @@ export function PullRequestList({
   );
 }
 
-/** All of a pull request's checks in a few words, as its Summary tab shows them. */
-function checksOf(pr: PullRequest): { Icon: LucideIcon; color: string; text: string } {
-  const total = pr.checks.length;
-  const count = (state: PrCheck["state"]) => pr.checks.filter((c) => c.state === state).length;
-  switch (pr.checksState) {
-    case "failed":
-      return { Icon: CircleX, color: "text-danger", text: `${count("failed")} of ${total} failed` };
-    case "pending":
-      return {
-        Icon: CircleDot,
-        color: "text-warning",
-        text: `${count("pending")} of ${total} running`,
-      };
-    case "passed":
-      return { Icon: CircleCheck, color: "text-added", text: "All checks passed" };
-    default:
-      return {
-        Icon: CircleMinus,
-        color: "text-faint-foreground",
-        text: total ? "Checks skipped" : "No checks",
-      };
-  }
-}
-
 const checkIcons: Record<string, { Icon: LucideIcon; color: string }> = {
   passed: { Icon: CircleCheck, color: "text-added" },
   failed: { Icon: CircleX, color: "text-danger" },
   pending: { Icon: CircleDot, color: "text-warning" },
 };
+/** A check, or all of them, neither passed, failed, nor running: skipped, or none. */
+const noCheck = { Icon: CircleMinus, color: "text-faint-foreground" };
+
+/** All of a pull request's checks in a few words, as its Summary tab shows them. */
+function checksOf(pr: PullRequest): { Icon: LucideIcon; color: string; text: string } {
+  const total = pr.checks.length;
+  const count = (state: PrCheck["state"]) => pr.checks.filter((c) => c.state === state).length;
+  const text =
+    pr.checksState === "failed"
+      ? `${count("failed")} of ${total} failed`
+      : pr.checksState === "pending"
+        ? `${count("pending")} of ${total} running`
+        : pr.checksState === "passed"
+          ? "All checks passed"
+          : total
+            ? "Checks skipped"
+            : "No checks";
+  return { ...(checkIcons[pr.checksState ?? ""] ?? noCheck), text };
+}
 
 /** A menu row: its icon, label, and an optional line under it. */
 function Item({
@@ -1102,10 +1097,7 @@ export function PullRequestView({
         <p className="text-[14px] font-medium">{summary.text}</p>
         <ul className="mt-2 flex flex-col gap-1.5">
           {pr.checks.map((c, i) => {
-            const { Icon, color } = checkIcons[c.state] ?? {
-              Icon: CircleMinus,
-              color: "text-faint-foreground",
-            };
+            const { Icon, color } = checkIcons[c.state] ?? noCheck;
             return (
               <li key={i} className="flex items-center gap-2 text-[13px]">
                 <Icon aria-hidden className={`size-4 shrink-0 ${color}`} />
@@ -1147,21 +1139,12 @@ export function PullRequestView({
             disabled={busy}
             onClick={() => act("squash")}
           />
-          {pr.autoMerge ? (
-            <Item
-              Icon={GitMerge}
-              label="Disable auto-merge"
-              disabled={busy}
-              onClick={() => act("disableAutoMerge")}
-            />
-          ) : (
-            <Item
-              Icon={GitMerge}
-              label="Enable auto-merge"
-              disabled={busy}
-              onClick={() => act("autoMerge")}
-            />
-          )}
+          <Item
+            Icon={GitMerge}
+            label={pr.autoMerge ? "Disable auto-merge" : "Enable auto-merge"}
+            disabled={busy}
+            onClick={() => act(pr.autoMerge ? "disableAutoMerge" : "autoMerge")}
+          />
         </div>
       )}
 
@@ -1203,36 +1186,18 @@ export function PullRequestView({
           }
         />
         {separator}
-        {pr.draft ? (
-          <Item
-            Icon={GitPullRequest}
-            label="Ready for review"
-            disabled={busy || !open}
-            onClick={() => act("ready")}
-          />
-        ) : (
-          <Item
-            Icon={GitPullRequestDraft}
-            label="Convert to draft"
-            disabled={busy || !open}
-            onClick={() => act("draft")}
-          />
-        )}
-        {pr.autoMerge ? (
-          <Item
-            Icon={GitMerge}
-            label="Disable auto-merge"
-            disabled={busy || !open}
-            onClick={() => act("disableAutoMerge")}
-          />
-        ) : (
-          <Item
-            Icon={GitMerge}
-            label="Enable auto-merge"
-            disabled={busy || !open}
-            onClick={() => act("autoMerge")}
-          />
-        )}
+        <Item
+          Icon={pr.draft ? GitPullRequest : GitPullRequestDraft}
+          label={pr.draft ? "Ready for review" : "Convert to draft"}
+          disabled={busy || !open}
+          onClick={() => act(pr.draft ? "ready" : "draft")}
+        />
+        <Item
+          Icon={GitMerge}
+          label={pr.autoMerge ? "Disable auto-merge" : "Enable auto-merge"}
+          disabled={busy || !open}
+          onClick={() => act(pr.autoMerge ? "disableAutoMerge" : "autoMerge")}
+        />
         {separator}
         <Item Icon={GitMerge} label="Merge" disabled={busy || !open} onClick={() => act("merge")} />
         <Item
@@ -1265,39 +1230,17 @@ export function PullRequestView({
         />
       </div>
 
-      <dialog
+      <ConfirmDialog
         ref={closeDialog}
-        aria-labelledby={`${id}-close`}
-        className="m-auto w-[24rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+        title={`Close pull request #${pr.number}?`}
+        action="Close pull request"
+        onConfirm={() => {
+          closeDialog.current?.close();
+          act("close");
+        }}
       >
-        <form method="dialog" className="px-5 pt-4 pb-4">
-          <h2 id={`${id}-close`} className="text-[15px] font-semibold">
-            Close pull request #{pr.number}?
-          </h2>
-          <p className="mt-1.5 text-[13px] text-muted-foreground">
-            “{pr.title}” closes without merging. It can be reopened on GitHub.
-          </p>
-          <div className="mt-4 flex justify-end gap-2">
-            <button
-              type="submit"
-              value="cancel"
-              className="rounded-md px-3 py-1.5 text-[13px] hover:bg-hover"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                closeDialog.current?.close();
-                act("close");
-              }}
-              className="rounded-md bg-red-600 px-3 py-1.5 text-[13px] font-medium text-white hover:opacity-90"
-            >
-              Close pull request
-            </button>
-          </div>
-        </form>
-      </dialog>
+        “{pr.title}” closes without merging. It can be reopened on GitHub.
+      </ConfirmDialog>
     </div>
   );
 }

@@ -3,13 +3,9 @@ import { contextBridge, ipcRenderer, webFrame } from "electron";
 import { ErrorCodes } from "../protocol/generated/protocol";
 import type {
   ConnectionState,
-  ConnectState,
-  DeviceHost,
   Profile,
-  SshHost,
   SubscriptionMessage,
   TerminalMessage,
-  UpdateState,
   ParallaxBridge,
 } from "./bridge";
 import { validLocale } from "./bridge";
@@ -27,6 +23,17 @@ const terminals = new Map<string, (message: TerminalMessage) => void>();
 ipcRenderer.on("parallax:terminal", (_event, id: string, message: TerminalMessage) =>
   terminals.get(id)?.(message),
 );
+
+/**
+ * Calls `listener` with each value main sends on `channel`, and first, with `read`, with the
+ * current one, which main answers on the same channel. Returns the function that stops it.
+ */
+function follow<T>(channel: string, listener: (value: T) => void, read = true): () => void {
+  const forward = (_event: unknown, value: T) => listener(value);
+  ipcRenderer.on(channel, forward);
+  if (read) void (ipcRenderer.invoke(channel) as Promise<T>).then(listener);
+  return () => ipcRenderer.removeListener(channel, forward);
+}
 
 // The renderer's only way into the app, exposed as `window.parallax`.
 const bridge: ParallaxBridge = {
@@ -46,12 +53,7 @@ const bridge: ParallaxBridge = {
       ?.slice("--parallax-locale=".length),
   ),
   update: () => ipcRenderer.invoke("parallax:update") as Promise<string>,
-  onUpdateState(listener) {
-    const forward = (_event: unknown, state: UpdateState) => listener(state);
-    ipcRenderer.on("parallax:updateState", forward);
-    void (ipcRenderer.invoke("parallax:updateState") as Promise<UpdateState>).then(listener);
-    return () => ipcRenderer.removeListener("parallax:updateState", forward);
-  },
+  onUpdateState: (listener) => follow("parallax:updateState", listener),
 
   request: (hostId, method, params) =>
     ipcRenderer.invoke("parallax:request", hostId, method, params),
@@ -80,35 +82,16 @@ const bridge: ParallaxBridge = {
 
   hosts: () => ipcRenderer.invoke("parallax:hosts"),
   sshSuggestions: () => ipcRenderer.invoke("parallax:sshSuggestions"),
-  onHosts(listener) {
-    const forward = (_event: unknown, hosts: SshHost[]) => listener(hosts);
-    ipcRenderer.on("parallax:hosts", forward);
-    return () => ipcRenderer.removeListener("parallax:hosts", forward);
-  },
-  onLocalName(listener) {
-    const forward = (_event: unknown, name: string) => listener(name);
-    ipcRenderer.on("parallax:localName", forward);
-    void (ipcRenderer.invoke("parallax:localName") as Promise<string>).then(listener);
-    return () => ipcRenderer.removeListener("parallax:localName", forward);
-  },
+  onHosts: (listener) => follow("parallax:hosts", listener, false),
+  onLocalName: (listener) => follow("parallax:localName", listener),
   renameLocal: (name) => ipcRenderer.invoke("parallax:renameLocal", name),
   saveHost: (host, id) => ipcRenderer.invoke("parallax:saveHost", host, id),
   removeHost: (id) => ipcRenderer.invoke("parallax:removeHost", id),
 
-  onConnect(listener) {
-    const forward = (_event: unknown, state: ConnectState) => listener(state);
-    ipcRenderer.on("parallax:connect", forward);
-    void (ipcRenderer.invoke("parallax:connect") as Promise<ConnectState>).then(listener);
-    return () => ipcRenderer.removeListener("parallax:connect", forward);
-  },
+  onConnect: (listener) => follow("parallax:connect", listener),
   installConnect: () => ipcRenderer.invoke("parallax:installConnect"),
   setConnect: (on) => ipcRenderer.invoke("parallax:setConnect", on),
-  onDevices(listener) {
-    const forward = (_event: unknown, devices: DeviceHost[]) => listener(devices);
-    ipcRenderer.on("parallax:devices", forward);
-    void (ipcRenderer.invoke("parallax:devices") as Promise<DeviceHost[]>).then(listener);
-    return () => ipcRenderer.removeListener("parallax:devices", forward);
-  },
+  onDevices: (listener) => follow("parallax:devices", listener),
   saveDevice: (hostId, look) => ipcRenderer.invoke("parallax:saveDevice", hostId, look),
   setDeviceEnabled: (hostId, enabled) =>
     ipcRenderer.invoke("parallax:setDeviceEnabled", hostId, enabled),
@@ -137,13 +120,12 @@ const bridge: ParallaxBridge = {
   chooseTerminalApp: () => ipcRenderer.invoke("parallax:chooseTerminalApp"),
 
   onProfile(listener) {
-    const forward = (_event: unknown, profile: Profile | null) => listener(profile);
-    ipcRenderer.on("parallax:profile", forward);
+    const stop = follow("parallax:profile", listener, false);
     // Undefined until main knows: the listener first hears a real answer.
     void (ipcRenderer.invoke("parallax:profile") as Promise<Profile | null | undefined>).then(
       (profile) => profile !== undefined && listener(profile),
     );
-    return () => ipcRenderer.removeListener("parallax:profile", forward);
+    return stop;
   },
   signIn: (create) => ipcRenderer.invoke("parallax:signIn", create),
   saveName: (firstName, lastName) => ipcRenderer.invoke("parallax:saveName", firstName, lastName),

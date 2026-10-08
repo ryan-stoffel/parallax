@@ -9,12 +9,12 @@ import {
   FolderOpen,
   FolderPlus,
 } from "lucide-react";
-import { type KeyboardEvent, type ToggleEvent, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type { AgentEntry, AgentFileResult } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
-import { IconButton, menuItem, menuPanel, moveFocus, openOnContextMenu } from "./ui";
+import { ConfirmDialog, IconButton, Menu, menuItem, openOnContextMenu } from "./ui";
 
 /** A folder's entries once listed, or why they couldn't be. */
 type Listing = { entries: AgentEntry[]; truncated: boolean } | { error: string };
@@ -351,18 +351,12 @@ export function FilesPanel({
       )}
       {editable && (
         <>
-          <div
+          <Menu
             ref={menu}
-            popover="auto"
-            role="menu"
-            aria-label={target ? `Actions for ${nameOf(target.path)}` : "File actions"}
-            onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-              if (e.newState === "open")
-                e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-              else setTarget(undefined);
-            }}
-            onKeyDown={moveFocus}
-            className={`${menuPanel("end")} min-w-36 p-1`}
+            label={target ? `Actions for ${nameOf(target.path)}` : "File actions"}
+            align="end"
+            className="min-w-36 p-1"
+            onClose={() => setTarget(undefined)}
           >
             {target && targetFolder !== undefined && (
               <>
@@ -404,46 +398,21 @@ export function FilesPanel({
                 </button>
               </>
             )}
-          </div>
-          <dialog
+          </Menu>
+          <ConfirmDialog
             ref={deleteDialog}
-            aria-labelledby="delete-entry-title"
-            className="m-auto w-[24rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+            title={<>Delete “{toDelete && nameOf(toDelete.path)}”?</>}
+            titleClass="break-all"
+            action="Delete"
+            busy={deleting ? "Deleting…" : undefined}
+            error={deleteError}
+            onConfirm={() => void confirmDelete()}
           >
-            <form method="dialog" className="px-5 pt-4 pb-4">
-              <h2 id="delete-entry-title" className="text-[15px] font-semibold break-all">
-                Delete “{toDelete && nameOf(toDelete.path)}”?
-              </h2>
-              <p className="mt-1.5 text-[13px] text-muted-foreground">
-                {toDelete?.isFolder
-                  ? "This folder and everything in it are deleted from disk."
-                  : "This is deleted from disk."}{" "}
-                This can't be undone.
-              </p>
-              {deleteError && (
-                <p role="alert" className="mt-2 text-[12.5px] text-danger">
-                  {deleteError}
-                </p>
-              )}
-              <div className="mt-4 flex justify-end gap-2">
-                <button
-                  type="submit"
-                  value="cancel"
-                  className="rounded-md px-3 py-1.5 text-[13px] hover:bg-hover"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={deleting}
-                  onClick={() => void confirmDelete()}
-                  className="rounded-md bg-red-600 px-3 py-1.5 text-[13px] font-medium text-white enabled:hover:opacity-90 disabled:opacity-50"
-                >
-                  {deleting ? "Deleting…" : "Delete"}
-                </button>
-              </div>
-            </form>
-          </dialog>
+            {toDelete?.isFolder
+              ? "This folder and everything in it are deleted from disk."
+              : "This is deleted from disk."}{" "}
+            This can't be undone.
+          </ConfirmDialog>
         </>
       )}
     </div>

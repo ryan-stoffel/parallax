@@ -32,10 +32,11 @@ import { useHosts, type Host } from "../hosts";
 import { ParallaxMark } from "../logos";
 import { models } from "../models";
 import { instanceName, kinds } from "../providers";
-import { activityOf, Avatar, dayKey, rhythmOf, useProfile, type Activity } from "../profile";
+import { activityOf, Avatar, dayKey, dayOf, rhythmOf, useProfile, type Activity } from "../profile";
 import { backendLogos } from "../Sidebar";
 import type { ThreadsView } from "../threads";
 import { hourCycle } from "../prefs";
+import { compact } from "../Usage";
 import { primaryButton, quietButton, Section, settingRow } from "./parts";
 
 /** How far back the Tokens chart looks, in days. */
@@ -43,7 +44,6 @@ const TOKEN_DAYS = 90;
 /** The activity grid's weeks: a year, ending with this one. */
 const WEEKS = 53;
 
-const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 const monthYear = new Intl.DateTimeFormat("en", { month: "long", year: "numeric" });
 const shortDay = new Intl.DateTimeFormat("en", {
   weekday: "short",
@@ -60,12 +60,6 @@ const nameField =
   "w-32 rounded-md border border-border bg-background px-2.5 py-1 text-[13px] placeholder:text-faint-foreground";
 const outlineButton =
   "flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5";
-
-/** The local midnight of `key`, a `dayKey`. */
-function dayOf(key: string): Date {
-  const [y, m, d] = key.split("-").map(Number) as [number, number, number];
-  return new Date(y, m - 1, d);
-}
 
 /**
  * Settings > Account, which the sidebar's Profile button opens: the Parallax account (0037) and

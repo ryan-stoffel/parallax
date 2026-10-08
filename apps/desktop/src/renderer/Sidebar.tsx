@@ -89,6 +89,7 @@ import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
 import { iconColors, iconLook } from "./projectIcons";
 import { ForkMenu } from "./Fork";
 import { archivePageSize, sidebarPrefs } from "./sidebarPrefs";
+import { stored } from "./stored";
 import { dragThread } from "./threadDrag";
 import {
   asksOf,
@@ -100,7 +101,9 @@ import {
 } from "./threads";
 import { accountLabel, isRunning, statusLabel as runStatusLabel } from "./transcript";
 import {
+  ConfirmDialog,
   IconButton,
+  Menu,
   menuItem,
   menuPanel,
   moveFocus,
@@ -273,9 +276,10 @@ const cardDelay = 450;
 /** The Repos filter's choice: every repo, No Repo's threads, or one repo by host and id. */
 type RepoFilter = "all" | "none" | `${string}/${string}`;
 const filterKey = "parallax:repoFilter";
-// "true" while the Projects or Threads section is collapsed.
-const collapsedKey = "parallax:projectsCollapsed";
-const threadsCollapsedKey = "parallax:threadsCollapsed";
+/** Whether the Projects section is collapsed. */
+export const collapsedProjects = stored("parallax:projectsCollapsed", false, (raw) => raw === true);
+/** Whether the Threads section is collapsed. */
+export const collapsedThreads = stored("parallax:threadsCollapsed", false, (raw) => raw === true);
 
 /** A sidebar setting kept in localStorage, or null while there is none or storage is off. */
 function readStored(key: string): string | null {
@@ -349,18 +353,8 @@ export function ThreadList({
     setFilterState(next);
     saveStored(filterKey, next);
   };
-  const [collapsed, setCollapsedState] = useState(() => readStored(collapsedKey) === "true");
-  const setCollapsed = (next: boolean) => {
-    setCollapsedState(next);
-    saveStored(collapsedKey, String(next));
-  };
-  const [threadsCollapsed, setThreadsCollapsedState] = useState(
-    () => readStored(threadsCollapsedKey) === "true",
-  );
-  const setThreadsCollapsed = (next: boolean) => {
-    setThreadsCollapsedState(next);
-    saveStored(threadsCollapsedKey, String(next));
-  };
+  const collapsed = collapsedProjects.use();
+  const threadsCollapsed = collapsedThreads.use();
   const { workingSection, pageArchived } = sidebarPrefs.use();
   // The Working drawer starts open, so a thread that just left the list stays in view.
   const [workingOpen, setWorkingOpen] = useState(true);
@@ -708,7 +702,7 @@ export function ThreadList({
                 label="Projects"
                 collapsed={collapsed}
                 controls={projectsId}
-                onToggle={() => setCollapsed(!collapsed)}
+                onToggle={() => collapsedProjects.set(!collapsed)}
               />
               <IconButton label="New project" onClick={() => addDialog.current?.open("project")}>
                 <Plus />
@@ -727,7 +721,7 @@ export function ThreadList({
             label="Threads"
             collapsed={threadsCollapsed}
             controls={threadsId}
-            onToggle={() => setThreadsCollapsed(!threadsCollapsed)}
+            onToggle={() => collapsedThreads.set(!threadsCollapsed)}
           />
         </div>
         <div id={threadsId} hidden={threadsCollapsed}>
@@ -764,45 +758,19 @@ export function ThreadList({
         create={open?.createProject ?? (async () => "Not connected")}
         onCreated={(hostId, project) => onOpenProject(hostId, project.id)}
       />
-      <dialog
+      <ConfirmDialog
         ref={deleteDialog}
-        aria-labelledby="delete-title"
-        className="m-auto w-[24rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+        title={toDelete?.kind === "project" ? "Delete this Project?" : "Delete this thread?"}
+        action="Delete"
+        busy={deleting ? "Deleting…" : undefined}
+        error={deleteError}
+        onConfirm={() => void confirmDelete()}
       >
-        <form method="dialog" className="px-5 pt-4 pb-4">
-          <h2 id="delete-title" className="text-[15px] font-semibold">
-            {toDelete?.kind === "project" ? "Delete this Project?" : "Delete this thread?"}
-          </h2>
-          <p className="mt-1.5 text-[13px] text-muted-foreground">
-            “{toDelete && titleOf(toDelete)}” goes for good
-            {toDelete?.kind === "project"
-              ? projectLoss(toDelete.runs.length)
-              : ", with its transcript, worktree, and branch."}
-          </p>
-          {deleteError && (
-            <p role="alert" className="mt-2 text-[12.5px] text-danger">
-              {deleteError}
-            </p>
-          )}
-          <div className="mt-4 flex justify-end gap-2">
-            <button
-              type="submit"
-              value="cancel"
-              className="rounded-md px-3 py-1.5 text-[13px] hover:bg-hover"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={deleting}
-              onClick={() => void confirmDelete()}
-              className="rounded-md bg-red-600 px-3 py-1.5 text-[13px] font-medium text-white enabled:hover:opacity-90 disabled:opacity-50"
-            >
-              {deleting ? "Deleting…" : "Delete"}
-            </button>
-          </div>
-        </form>
-      </dialog>
+        “{toDelete && titleOf(toDelete)}” goes for good
+        {toDelete?.kind === "project"
+          ? projectLoss(toDelete.runs.length)
+          : ", with its transcript, worktree, and branch."}
+      </ConfirmDialog>
       <div className="border-t border-border p-2">
         <ConnectionStatus hostId={host.id} />
         <Footer onOpenSettings={onOpenSettings} onOpenPullRequests={onOpenPullRequests} />
@@ -881,30 +849,21 @@ function Drawer<T>({
   defaultOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
-  const details = useRef<HTMLDetailsElement>(null);
   const [pages, setPages] = useState(1);
   const [open, setOpen] = useState(defaultOpen);
-  const shown = items.length > 0;
-  // Uncontrolled after this: a controlled `open` fights the summary's own toggle.
-  useEffect(() => {
-    const el = details.current;
-    if (!el) return;
-    if (defaultOpen) el.open = true;
-    const onToggle = () => {
-      setOpen(el.open);
-      onOpenChange?.(el.open);
-    };
-    el.addEventListener("toggle", onToggle);
-    onToggle();
-    return () => el.removeEventListener("toggle", onToggle);
-  }, [shown, defaultOpen, onOpenChange]);
-  if (!shown) return null;
+  if (items.length === 0) return null;
   const visible = pageSize ? items.slice(0, pageSize * pages) : items;
   const remaining = items.length - visible.length;
   const more = pageSize && remaining > 0 ? Math.min(pageSize, remaining) : 0;
   return (
+    // `open` is set only as it mounts, since it never changes, so the summary's toggle holds. A
+    // drawer that mounts open fires `toggle` too.
     <details
-      ref={details}
+      open={defaultOpen}
+      onToggle={(e) => {
+        setOpen(e.currentTarget.open);
+        onOpenChange?.(e.currentTarget.open);
+      }}
       className="group/drawer max-h-[40%] min-h-0 shrink-0 overflow-y-auto px-2 pb-1"
     >
       <summary
@@ -1293,19 +1252,7 @@ function ProjectRow({
               <Ellipsis />
             </button>
           </div>
-          <div
-            ref={menu}
-            id={menuId}
-            popover="auto"
-            role="menu"
-            aria-label="Project actions"
-            onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-              if (e.newState === "open")
-                e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-            }}
-            onKeyDown={moveFocus}
-            className={`${menuPanel("end")} min-w-36 p-1`}
-          >
+          <Menu ref={menu} id={menuId} label="Project actions" align="end" className="min-w-36 p-1">
             {editable && (
               <>
                 <button
@@ -1361,7 +1308,7 @@ function ProjectRow({
                 Delete…
               </button>
             )}
-          </div>
+          </Menu>
         </>
       )}
       {/* Each pick saves at once; the picker stays open for the next. */}
@@ -1684,20 +1631,14 @@ function ThreadRow({
         </button>
       </div>
       {snoozable && (
-        <div
+        <Menu
           ref={snoozeMenu}
           id={snoozeId}
-          popover="auto"
-          role="menu"
-          aria-label="Snooze"
+          label="Snooze"
+          align="end"
+          className="min-w-56 p-1"
           onBeforeToggle={(e) => e.newState === "open" && setSnoozeOpen(true)}
-          onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-            if (e.newState === "open")
-              e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-            else setSnoozeOpen(false);
-          }}
-          onKeyDown={moveFocus}
-          className={`${menuPanel("end")} min-w-56 p-1`}
+          onClose={() => setSnoozeOpen(false)}
         >
           {snoozeOpen && (
             <>
@@ -1751,28 +1692,22 @@ function ThreadRow({
               )}
             </>
           )}
-        </div>
+        </Menu>
       )}
-      <div
+      <Menu
         ref={menu}
         id={menuId}
-        popover="auto"
-        role="menu"
-        aria-label="Thread actions"
+        label="Thread actions"
+        align="end"
+        className="min-w-36 p-1"
         onBeforeToggle={(e) => e.newState === "open" && setMenuOpen(true)}
-        onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-          if (e.newState !== "open") {
-            setMenuOpen(false);
-            return;
-          }
-          e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+        onClose={() => setMenuOpen(false)}
+        onOpen={() => {
           if (autoResumable && run)
             void window.parallax.request(hostId, "host/settings/get", {}).then((answer) => {
               if ("result" in answer) setHostResumes(answer.result.autoResume);
             });
         }}
-        onKeyDown={moveFocus}
-        className={`${menuPanel("end")} min-w-36 p-1`}
       >
         {menuOpen && (
           <>
@@ -1829,7 +1764,7 @@ function ThreadRow({
             </button>
           </>
         )}
-      </div>
+      </Menu>
       {onFork && run && (
         <ForkMenu
           ref={forkMenu}

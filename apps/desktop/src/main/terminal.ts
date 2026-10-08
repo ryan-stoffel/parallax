@@ -6,6 +6,7 @@ import os from "node:os";
 import { NPM_INSTALLS, npmInstallLine, type TerminalMessage } from "../preload/bridge";
 import type { CliKind } from "../protocol/generated/protocol";
 import { SSH_CONTROL_PATH } from "./connection";
+import { perWindow } from "./windows";
 
 /** Each vendor CLI's own sign-in (0004), as its `--help` gives it. */
 const loginArgs: Record<CliKind, string[]> = {
@@ -363,20 +364,7 @@ export function closeAllTerminals(): void {
 }
 
 /** A window's terminals, closed when it reloads or closes, since nothing there can use them. */
-function windowSessions(sender: WebContents): Map<string, Session> {
-  let own = sessions.get(sender);
-  if (!own) {
-    const created = new Map<string, Session>();
-    const closeAll = () => {
-      for (const id of created.keys()) closeTerminal(sender, id);
-    };
-    sender.on("did-navigate", closeAll);
-    sender.once("destroyed", () => {
-      closeAll();
-      sessions.delete(sender);
-    });
-    sessions.set(sender, created);
-    own = created;
-  }
-  return own;
-}
+const windowSessions = (sender: WebContents) =>
+  perWindow(sessions, sender, (own) => {
+    for (const id of own.keys()) closeTerminal(sender, id);
+  });

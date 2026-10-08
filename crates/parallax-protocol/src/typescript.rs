@@ -1,8 +1,8 @@
 //! Generates the desktop app's TypeScript types from this crate's types, with ts-rs.
 //!
 //! The output is one file with no imports, committed at [`PATH`] (decision record 0022). It holds
-//! the constants, the method maps (`ParallaxRequests` and `ParallaxNotifications`), and every type they
-//! reach. The JSON-RPC envelope is not generated.
+//! the constants, the method maps (`ParallaxRequests` and `ParallaxNotifications`), every request
+//! method's name (`REQUEST_METHODS`), and every type they reach. The JSON-RPC envelope is not generated.
 //!
 //! After changing a type, run [`COMMAND`] and commit the result. A test in `cargo test` fails
 //! while the committed file differs from what [`generate`] returns.
@@ -36,6 +36,7 @@ pub fn generate() -> String {
         types: BTreeMap::new(),
         roots: Vec::new(),
         requests: String::new(),
+        request_names: String::new(),
         notifications: String::new(),
     };
     methods::visit(&mut generator);
@@ -73,11 +74,14 @@ pub fn generate() -> String {
          /** Requests, which the client sends and plxd answers, by method. */\n\
          export type ParallaxRequests = {{\n{}}};\n\
          \n\
+         /** Every request method, in `ParallaxRequests`' order. */\n\
+         export const REQUEST_METHODS = [\n{}] as const;\n\
+         \n\
          /** Notifications, which get no response, by method. */\n\
          export type ParallaxNotifications = {{\n{}}};\n\
          \n\
          {}",
-        generator.requests, generator.notifications, declarations
+        generator.requests, generator.request_names, generator.notifications, declarations
     )
     .unwrap();
     out.truncate(out.trim_end().len());
@@ -94,6 +98,7 @@ struct Generator<'a> {
     types: BTreeMap<String, Declaration>,
     roots: Vec<String>,
     requests: String,
+    request_names: String,
     notifications: String,
 }
 
@@ -189,6 +194,7 @@ impl methods::Visitor for Generator<'_> {
             M::Result::name(self.config)
         )
         .unwrap();
+        writeln!(self.request_names, "\t\"{}\",", M::NAME).unwrap();
     }
 
     fn notification<N: NotificationMethod>(&mut self, docs: &[&str]) {

@@ -5,7 +5,7 @@ import {
   GitPullRequestArrow,
   type LucideIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useId, useRef, useState, type ToggleEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type { AgentRun, GitStatus } from "../protocol/generated/protocol";
@@ -14,7 +14,7 @@ import { describeError, githubProblem } from "./errors";
 import { titleOf } from "./threads";
 import { isRunning } from "./transcript";
 import { notify, type Notice } from "./notifications";
-import { menuButton, menuItem, menuPanel, moveFocus } from "./ui";
+import { Menu, menuButton, menuItem } from "./ui";
 
 export type GitAction = "commit" | "push" | "pr";
 
@@ -203,19 +203,7 @@ export function GitMenu({
           <ChevronDown aria-hidden className="opacity-70" />
         </button>
       </div>
-      <div
-        ref={menu}
-        id={id}
-        popover="auto"
-        role="menu"
-        aria-label="Git"
-        onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-          if (e.newState === "open")
-            e.currentTarget.querySelector<HTMLElement>("button:enabled")?.focus();
-        }}
-        onKeyDown={moveFocus}
-        className={`${menuPanel("end")} w-80 p-1`}
-      >
+      <Menu ref={menu} id={id} label="Git" align="end" className="w-80 p-1" focus="button:enabled">
         {actions.map(({ action, label, Icon }) => (
           <button
             key={action}
@@ -238,7 +226,7 @@ export function GitMenu({
             {error}
           </p>
         )}
-      </div>
+      </Menu>
       <dialog
         ref={dialog}
         aria-labelledby={`${id}-commit`}

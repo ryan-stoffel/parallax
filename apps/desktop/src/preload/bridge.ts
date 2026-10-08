@@ -416,11 +416,32 @@ export type ConnectState = {
   channel: "stable" | "nightly";
 };
 
-/** The methods the renderer may call. Main owns the handshake and event subscriptions. */
-export type RendererMethod = Exclude<
-  keyof ParallaxRequests,
-  "initialize" | "events/subscribe" | "events/unsubscribe"
->;
+/**
+ * The methods the renderer may not call. Main owns the handshake and event subscriptions, and the
+ * rest are plxd's for its MCP tools, which the app never sends.
+ */
+export const withheldMethods = [
+  "initialize",
+  "events/subscribe",
+  "events/unsubscribe",
+  "agent/accept",
+  "agent/diff",
+  "agent/requestChanges",
+  "agent/wait",
+  "context/write",
+  "land/approve",
+  "land/queue",
+  "land/sendBack",
+  "memory/propose",
+  "pr/link",
+  "pr/unlink",
+  "project/fromThreads",
+  "question/ask",
+  "question/escalate",
+] as const satisfies readonly (keyof ParallaxRequests)[];
+
+/** The methods the renderer may call: every request but `withheldMethods`. */
+export type RendererMethod = Exclude<keyof ParallaxRequests, (typeof withheldMethods)[number]>;
 
 /** A JSON-RPC error. A Parallax error (code -32000) carries `data.kind`. */
 export type RpcError = { code: number; message: string; data?: ErrorData };

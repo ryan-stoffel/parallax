@@ -5,13 +5,13 @@ import path from "node:path";
 
 import type { Profile } from "../preload/bridge";
 import { serveSignIn, type Answer, type SignInPage } from "./loopback";
+import { broadcast } from "./windows";
 
 // The Supabase project that holds Parallax accounts (0037). Both values are public: the key only
 // names the project. PLX_SUPABASE_URL and PLX_SUPABASE_KEY point a dev build at another project.
 const SUPABASE_URL = process.env["PLX_SUPABASE_URL"] ?? "https://hkfrqrikselgxhoswgtk.supabase.co";
 const SUPABASE_KEY =
   process.env["PLX_SUPABASE_KEY"] ?? "sb_publishable_YYLxUEvqEOWBt000SGDoiA_i5_vhanC";
-const notSetUp = "Accounts aren't set up in this build yet.";
 
 /**
  * The session's storage: one file in userData, encrypted with the OS keychain. Where the OS has
@@ -87,32 +87,29 @@ function bringForward() {
  * needs.
  */
 export function startAccount() {
-  const auth = SUPABASE_URL
-    ? new AuthClient({
-        url: `${SUPABASE_URL}/auth/v1`,
-        headers: { apikey: SUPABASE_KEY },
-        storage: encryptedStorage(path.join(app.getPath("userData"), "account")),
-        flowType: "pkce",
-        detectSessionInUrl: false,
-        // Each redirect carries its PKCE flow id, so a sign-up's email link and an OAuth sign-in
-        // started on the same page each trade their code with their own verifier. Sign-up has no
-        // other way to name its flow. Experimental in auth-js: recheck it on upgrades (PLX-300).
-        experimental: { appendPkceFlowIdToRedirects: true },
-      })
-    : undefined;
+  const auth = new AuthClient({
+    url: `${SUPABASE_URL}/auth/v1`,
+    headers: { apikey: SUPABASE_KEY },
+    storage: encryptedStorage(path.join(app.getPath("userData"), "account")),
+    flowType: "pkce",
+    detectSessionInUrl: false,
+    // Each redirect carries its PKCE flow id, so a sign-up's email link and an OAuth sign-in
+    // started on the same page each trade their code with their own verifier. Sign-up has no
+    // other way to name its flow. Experimental in auth-js: recheck it on upgrades (PLX-300).
+    experimental: { appendPkceFlowIdToRedirects: true },
+  });
 
   // Undefined until auth-js reads the stored session, so a signed-in user never looks signed out.
-  let profile: Profile | null | undefined = auth ? undefined : null;
+  let profile: Profile | null | undefined;
   const publish = (next: Profile | null) => {
     profile = next;
-    for (const win of BrowserWindow.getAllWindows())
-      win.webContents.send("parallax:profile", profile);
+    broadcast("parallax:profile", profile);
   };
   // The last picture fetched, so an hourly token refresh doesn't fetch it again.
   let picture: { url: string; data: string | undefined } | undefined;
   // Each change gets a number, so a slow picture fetch never overwrites a newer profile.
   let changes = 0;
-  auth?.onAuthStateChange((_event, session) => {
+  auth.onAuthStateChange((_event, session) => {
     const change = ++changes;
     const user: User | undefined = session?.user;
     if (!user) return publish(null);
@@ -135,7 +132,6 @@ export function startAccount() {
   ipcMain.handle("parallax:profile", () => profile);
 
   ipcMain.handle("parallax:signIn", async (_event, create: boolean) => {
-    if (!auth) return notSetUp;
     // One page at a time, so a late one can't switch accounts.
     page?.close();
     const signedIn = (error: { message: string } | null): Answer =>
@@ -185,7 +181,6 @@ export function startAccount() {
   // Settings > Account's name. Saved where sign-up keeps it, which a provider's sign-in leaves
   // alone; the profile republishes when Supabase answers.
   ipcMain.handle("parallax:saveName", async (_event, firstName: unknown, lastName: unknown) => {
-    if (!auth) return notSetUp;
     if (typeof firstName !== "string" || typeof lastName !== "string") return "Enter a name.";
     const { error } = await auth.updateUser({
       data: { first_name: firstName.trim(), last_name: lastName.trim() },
@@ -196,6 +191,6 @@ export function startAccount() {
   ipcMain.handle("parallax:signOut", async () => {
     page?.close();
     // Local: other devices stay signed in.
-    await auth?.signOut({ scope: "local" });
+    await auth.signOut({ scope: "local" });
   });
 }

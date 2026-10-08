@@ -24,6 +24,7 @@ import type {
   Thread,
 } from "../protocol/generated/protocol";
 import { App } from "./App";
+import { collapsedProjects, collapsedThreads } from "./Sidebar";
 import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -93,6 +94,8 @@ beforeEach(() => {
   request.mockClear();
   localStorage.clear();
   sidebarPrefs.set(sidebarDefaults);
+  collapsedProjects.set(false);
+  collapsedThreads.set(false);
   popoverSources = [];
   listeners = new Set();
   capabilities = {};
@@ -2059,7 +2062,9 @@ const statusOf = (title: string) =>
 const keyDown = (init: KeyboardEventInit) =>
   act(async () => void window.dispatchEvent(new KeyboardEvent("keydown", init)));
 const deleteDialog = () =>
-  document.querySelector<HTMLDialogElement>('[aria-labelledby="delete-title"]')!;
+  [...document.querySelectorAll("dialog")].find((d) =>
+    d.querySelector("h2")?.textContent?.startsWith("Delete this"),
+  )!;
 
 test("Projects sit in a collapsible section above Threads, with New project beside its heading, and stay collapsed after a reload", async () => {
   withThread();

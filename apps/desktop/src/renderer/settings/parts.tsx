@@ -168,3 +168,42 @@ export function formatBytes(bytes: number): string {
   }
   return i === 0 ? `${n} ${units[0]}` : `${n < 10 ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
 }
+
+/** A name to edit in place: Enter or Save calls `onSave`, and Escape or Cancel `onCancel`. */
+export function RenameForm({
+  label,
+  value,
+  onSave,
+  onCancel,
+}: {
+  label: string;
+  value: string;
+  onSave: (name: string) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <form
+      className="flex items-center gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSave(new FormData(e.currentTarget).get("name") as string);
+      }}
+    >
+      <input
+        name="name"
+        aria-label={label}
+        defaultValue={value}
+        autoFocus
+        maxLength={64}
+        onKeyDown={(e) => e.key === "Escape" && onCancel()}
+        className="w-48 rounded-md border border-border bg-background px-2 py-0.5 text-[13px] text-foreground"
+      />
+      <button type="submit" className={primaryButton}>
+        Save
+      </button>
+      <button type="button" className={quietButton} onClick={onCancel}>
+        Cancel
+      </button>
+    </form>
+  );
+}

@@ -1,10 +1,10 @@
 import { ChevronDown, FolderOpen, SquareTerminal } from "lucide-react";
-import { useEffect, useId, useRef, useState, type ReactNode, type ToggleEvent } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { OpenTarget } from "../preload/bridge";
 import { CursorLogo, VSCodeLogo } from "./logos";
 import { useShortcutLabel } from "./keybindings";
-import { appShortcut, menuButton, menuItem, menuPanel, moveFocus } from "./ui";
+import { appShortcut, Menu, menuButton, menuItem } from "./ui";
 
 /** Where the last target chosen is kept; Settings > General sets it too. */
 export const OPEN_TARGET_KEY = "parallax.openTarget";
@@ -123,18 +123,7 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
           <ChevronDown aria-hidden className="opacity-70" />
         </button>
       </div>
-      <div
-        ref={menu}
-        id={id}
-        popover="auto"
-        role="menu"
-        aria-label="Open in"
-        onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-          if (e.newState === "open") e.currentTarget.querySelector<HTMLElement>("button")?.focus();
-        }}
-        onKeyDown={moveFocus}
-        className={`${menuPanel("end")} min-w-44 p-1`}
-      >
+      <Menu ref={menu} id={id} label="Open in" align="end" className="min-w-44 p-1" focus="button">
         {targets.map((t) => (
           <button
             key={t}
@@ -150,7 +139,7 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
             )}
           </button>
         ))}
-      </div>
+      </Menu>
     </>
   );
 }
