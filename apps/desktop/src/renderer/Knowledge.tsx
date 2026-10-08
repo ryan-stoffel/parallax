@@ -1,7 +1,7 @@
 import { BookOpen, ChevronLeft, Circle, FileText, TriangleAlert } from "lucide-react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useCallback, useState } from "react";
+import { useState } from "react";
 
 import type { AgentRun, ContextFile } from "../protocol/generated/protocol";
 import { board, ContextReader, useContent, useProjectContext } from "./ContextPanel";
@@ -51,25 +51,24 @@ export function KnowledgePanel({
   expanded?: boolean;
 }) {
   const { files, error } = useProjectContext(hostId, project ?? "", connected && !!project);
-  const [memories, setMemories] = useState<readonly Memory[]>([]);
-  const onFiles = useCallback((f: readonly Memory[]) => setMemories(f), []);
   const [browsing, setBrowsing] = useState(false);
   const [openPath, setOpenPath] = useState<string>();
   const open = files.find((f) => f.path === openPath);
   const notesFile = files.find((f) => f.path === board);
-  const head = project && (
-    <>
-      <ProjectState
-        hostId={hostId}
-        project={project}
-        file={notesFile}
-        error={error}
-        working={working}
-        onFiles={files.length > 0 ? () => setBrowsing(true) : undefined}
-      />
-      <Known memories={memories} files={files} inbox={inbox} expanded={expanded} />
-    </>
-  );
+  const head = (memories: readonly Memory[]) =>
+    project && (
+      <>
+        <ProjectState
+          hostId={hostId}
+          project={project}
+          file={notesFile}
+          error={error}
+          working={working}
+          onFiles={files.length > 0 ? () => setBrowsing(true) : undefined}
+        />
+        <Known memories={memories} files={files} inbox={inbox} expanded={expanded} />
+      </>
+    );
   const prompt = project && memory && (
     <MiniPrompt hostId={hostId} coordinator={coordinator} large={expanded} />
   );
@@ -96,10 +95,9 @@ export function KnowledgePanel({
             repo={repo}
             start={head}
             footer={prompt || undefined}
-            onFiles={onFiles}
           />
         ) : (
-          <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">{head}</div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">{head([])}</div>
         )}
       </div>
     </div>

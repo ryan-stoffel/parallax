@@ -476,9 +476,7 @@ function History({
   }, [hosts, loaded, since, range, span, version]);
   // The last frame with usage, shown dimmed while another range loads, so nothing jumps.
   const [held, setHeld] = useState<Frame>();
-  useEffect(() => {
-    if (frame.answered > 0) setHeld(frame);
-  }, [frame]);
+  if (frame.answered > 0 && held !== frame) setHeld(frame);
   const shown = frame.answered > 0 ? frame : frame.loading ? held : undefined;
 
   return (

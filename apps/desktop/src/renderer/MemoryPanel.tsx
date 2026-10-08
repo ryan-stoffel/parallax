@@ -203,7 +203,8 @@ function useMemory(hostId: string, project: string | undefined, repo: string | u
  * knowledge, from the You, Repo, and Project scopes; then the proposals waiting for the user. Each
  * opens to its text, to edit, promote, or delete it, or for a proposal to save or discard it.
  * Show it only on a plxd with `memory`, and key it by host and folder. `start` and `footer` are
- * the Knowledge view's: what it shows before the list, and the box under it.
+ * the Knowledge view's: what it shows before the list, given the listed files, and the box under
+ * it.
  */
 export function MemoryPanel({
   hostId,
@@ -211,24 +212,18 @@ export function MemoryPanel({
   repo,
   start,
   footer,
-  onFiles,
 }: {
   hostId: string;
   /** The open Project, or absent for a thread outside one. */
   project?: string;
   /** The repo entry whose memory is the Repo scope, if there is one. */
   repo?: string;
-  /** Before everything, scrolling with it. */
-  start?: ReactNode;
+  /** Before everything, scrolling with it, given the listed files (none until they load). */
+  start?: (files: readonly Memory[]) => ReactNode;
   /** Under the list, such as a box that sends a change to the coordinator. */
   footer?: ReactNode;
-  /** Told the listed files each time they load. */
-  onFiles?: (files: readonly Memory[]) => void;
 }) {
   const { files, error, reload } = useMemory(hostId, project, repo);
-  useEffect(() => {
-    if (files) onFiles?.(files);
-  }, [files, onFiles]);
   const calls = useMemo(() => memoryCalls(hostId), [hostId]);
   const sections = files && sectionsOf(files);
   const taken = ({ scope, path }: Target) =>
@@ -255,7 +250,7 @@ export function MemoryPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-        {start}
+        {start?.(files ?? [])}
         {project && (
           <section aria-label="Brief">
             <h3 className={sectionHeading}>Brief</h3>
