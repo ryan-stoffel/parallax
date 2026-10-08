@@ -969,8 +969,8 @@ export function TranscriptView({
     ending.current = false;
     virtualizer.scrollToIndex(prompt.index, { align: "start" });
   };
-  // What each row says, for Find: the messages, as they read rendered.
-  const texts = useMemo(
+  // What each row says, for Find: the messages, as they read rendered. Read only while it's open.
+  const texts = useCallback(
     () =>
       view.map((row) => {
         if (row.kind === "user")
@@ -1042,7 +1042,8 @@ export function TranscriptView({
                       sender={"from" in row && row.from ? titles?.[row.from] : undefined}
                       copied={muted}
                       forkable={!muted && !(live && v.index >= latest)}
-                      reply={replies.has(v.index) ? { turnId: replies.get(v.index) } : undefined}
+                      reply={replies.has(v.index)}
+                      replyTurn={replies.get(v.index)}
                       onEdit={onEdit?.key === row.key ? onEdit.edit : undefined}
                     />
                   </div>
@@ -1066,7 +1067,7 @@ const listKinds = new Set(["work", "plan", "todo", "musing", "compaction"]);
 
 /**
  * The user's prompts among `view`'s rows, for the rail: a follow-up's text from `sent` when the
- * log lacks it, and the start of the agent's last reply before the next prompt. Parallax's own
+ * log lacks it, and the agent's replies before the next prompt. Parallax's own
  * wake-ups and other threads' messages aren't the user's, and replies to them aren't replies to
  * the prompt before.
  */
@@ -1080,10 +1081,7 @@ function promptsOf(view: readonly ViewRow[], sent: ReadonlyMap<string, SentMessa
       const text = said ? plainText(said) : "";
       last = { index, text: text || (row.images?.length ? "Image" : "Follow-up message") };
       prompts.push(last);
-    } else if (row.kind === "assistant" && last) {
-      const reply = plainText(row.text.split(/\n\s*\n/).find((p) => p.trim()) ?? "");
-      if (reply) last.reply = reply;
-    }
+    } else if (row.kind === "assistant" && last) (last.replies ??= []).push(row.text);
   });
   return prompts;
 }
@@ -1136,8 +1134,9 @@ interface RowProps {
   copied?: boolean;
   /** For a user's message: whether its turn can fork, where the chat offers Fork. */
   forkable?: boolean;
-  /** For an assistant message: set on a turn's last, which offers Copy and Fork at `turnId`. */
-  reply?: { turnId?: string };
+  /** For an assistant message: set on a turn's last, which offers Copy and Fork at `replyTurn`. */
+  reply?: boolean;
+  replyTurn?: string;
   /** For a user's message the agent hasn't started on: the pencil, which edits it. */
   onEdit?: () => void;
 }
@@ -1160,6 +1159,7 @@ export const RowView = memo(function RowView({
   copied,
   forkable,
   reply,
+  replyTurn,
   onEdit,
 }: RowProps) {
   switch (row.kind) {
@@ -1295,7 +1295,7 @@ export const RowView = memo(function RowView({
       return (
         <div className="group/prompt flex flex-col gap-1.5">
           {body}
-          <PromptMeta text={row.text} fork={forkable && <ForkButton turnId={reply.turnId} />} />
+          <PromptMeta text={row.text} fork={forkable && <ForkButton turnId={replyTurn} />} />
         </div>
       );
     }
@@ -2310,10 +2310,10 @@ const markdownComponents: Components = {
 };
 
 // Highlights a code block whose fence names its language, never a guess; a diff's lines are
-// drawn by DiffLines instead.
-const highlight: ComponentProps<typeof Markdown>["rehypePlugins"] = [
-  [rehypeHighlight, { detect: false, plainText: ["diff", "patch"] }],
-];
+// drawn by DiffLines instead. Built once: react-markdown runs its plugins' setup on every render,
+// and rehype-highlight's registers 37 languages each time.
+const highlighter = rehypeHighlight({ detect: false, plainText: ["diff", "patch"] });
+const highlight: ComponentProps<typeof Markdown>["rehypePlugins"] = [() => highlighter];
 
 /** A Markdown tree node's text, as a code block's, for Copy. */
 type TextNode = { value?: string; children?: TextNode[] };
@@ -2323,7 +2323,13 @@ const textOf = (node: TextNode): string => node.value ?? node.children?.map(text
  * An agent message, rendered from Markdown with GitHub's extensions. `components` replace some
  * elements' renderers, such as the Context view's links; they get the same safe, HTML-free tree.
  */
-export function MarkdownText({ text, components }: { text: string; components?: Components }) {
+export const MarkdownText = memo(function MarkdownText({
+  text,
+  components,
+}: {
+  text: string;
+  components?: Components;
+}) {
   return (
     <div className="markdown">
       <Markdown
@@ -2335,7 +2341,7 @@ export function MarkdownText({ text, components }: { text: string; components?: 
       </Markdown>
     </div>
   );
-}
+});
 
 const gfm = [remarkGfm];
 

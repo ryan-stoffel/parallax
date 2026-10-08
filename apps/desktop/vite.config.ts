@@ -56,7 +56,19 @@ export default defineConfig({
   root: "src/renderer",
   base: "./",
   plugins: [react(), tailwindcss(), cspMeta],
-  build: { outDir: "../../dist/renderer", emptyOutDir: true },
+  build: {
+    outDir: "../../dist/renderer",
+    emptyOutDir: true,
+    // The composer uses prosemirror-markdown's serializer only. Its module also builds a parser
+    // on markdown-it at load, which marking these calls pure and markdown-it side-effect free
+    // leaves out (109 KB). Other modules keep their package.json `sideEffects`.
+    rolldownOptions: {
+      treeshake: {
+        manualPureFunctions: ["MarkdownIt", "MarkdownParser", "Schema"],
+        moduleSideEffects: (id) => (/[\\/]markdown-it[\\/]/.test(id) ? false : undefined),
+      },
+    },
+  },
 
   // Main process and preload (`vp pack`).
   pack: [electronBundle("main"), electronBundle("preload")],
