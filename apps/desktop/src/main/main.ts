@@ -21,6 +21,7 @@ import {
   type OpenTarget,
   type RegistryAgent,
   type UpdateState,
+  validLocale,
 } from "../preload/bridge";
 import { startAccount } from "./account";
 import {
@@ -393,6 +394,11 @@ void app.whenReady().then(() => {
   const browserSession = session.fromPartition(browserPartition);
   browserSession.setPermissionRequestHandler((_c, _p, grant) => grant(false));
   browserSession.setPermissionCheckHandler(() => false);
+  // Its Accept-Language is the OS's languages, as before the app shipped only Chromium's en-US
+  // locale (PLX-613). Its pages' `navigator.language` is en-US all the same.
+  const languages = app.getPreferredSystemLanguages().filter((tag) => validLocale(tag));
+  if (languages.length > 0)
+    browserSession.setUserAgent(browserSession.getUserAgent(), languages.join(","));
   startHosts();
   startStorage();
   // Under `pnpm dev`, Update follows main (scripts/channels.mjs). Nightly and stable are tags on it.
