@@ -357,6 +357,26 @@ pub fn exit_outcome(label: &str, signed_out: bool, exit: &Exit) -> Outcome {
     failure.ended(Some(exit))
 }
 
+/// A todo from `entry`'s `text` field and `status`, or `None` without text.
+pub fn todo(entry: &serde_json::Value, text: &str) -> Option<TodoItem> {
+    Some(TodoItem {
+        text: entry.get(text)?.as_str()?.to_owned(),
+        status: todo_status(entry.get("status").and_then(serde_json::Value::as_str)),
+    })
+}
+
+/// A todo status in any backend's spelling: `in_progress` (Claude, ACP, `OpenCode`), `inProgress`
+/// (Codex, the Cursor SDK), or Cursor ACP's `TODO_STATUS_*`.
+#[must_use]
+pub fn todo_status(status: Option<&str>) -> TodoStatus {
+    match status {
+        Some("pending" | "TODO_STATUS_PENDING") => TodoStatus::Pending,
+        Some("in_progress" | "inProgress" | "TODO_STATUS_IN_PROGRESS") => TodoStatus::InProgress,
+        Some("completed" | "TODO_STATUS_COMPLETED") => TodoStatus::Completed,
+        _ => TodoStatus::Unknown,
+    }
+}
+
 /// What kind of failure ended a run. Routing (#119) falls back to another account on
 /// [`FailureKind::NotSignedIn`] and [`FailureKind::RateLimited`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

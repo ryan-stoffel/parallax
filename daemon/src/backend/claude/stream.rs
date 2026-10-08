@@ -15,7 +15,7 @@ use super::{
 use crate::backend::event::{
     ApprovalRequest, Event, Failure, FailureKind, LimitStatus, LimitWindow,
     MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES, ModelUsage, SubagentStatus, TodoItem,
-    TodoStatus, ToolStatus, Usage, WarningKind,
+    ToolStatus, Usage, WarningKind, todo,
 };
 use crate::backend::{ApprovalId, ToolPolicy};
 
@@ -880,17 +880,7 @@ fn todo_list(input: &Value) -> Option<Vec<TodoItem>> {
     Some(
         todos
             .iter()
-            .filter_map(|todo| {
-                Some(TodoItem {
-                    text: todo.get("content")?.as_str()?.to_owned(),
-                    status: match todo.get("status").and_then(Value::as_str) {
-                        Some("pending") => TodoStatus::Pending,
-                        Some("in_progress") => TodoStatus::InProgress,
-                        Some("completed") => TodoStatus::Completed,
-                        _ => TodoStatus::Unknown,
-                    },
-                })
-            })
+            .filter_map(|entry| todo(entry, "content"))
             .collect(),
     )
 }

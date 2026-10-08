@@ -13,7 +13,7 @@ use jiff::Timestamp;
 
 use crate::backend::event::{
     ApprovalRequest, Event, Failure, FailureKind, LimitStatus, LimitWindow,
-    MAX_ALWAYS_ALLOW_RULE_BYTES, TodoItem, TodoStatus, ToolStatus, Usage, WarningKind,
+    MAX_ALWAYS_ALLOW_RULE_BYTES, TodoItem, ToolStatus, Usage, WarningKind, todo,
 };
 use crate::backend::{ApprovalId, Decision};
 
@@ -450,17 +450,7 @@ fn plan_items(plan: Option<&Value>) -> Vec<TodoItem> {
     plan.and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|step| {
-            Some(TodoItem {
-                text: step.get("step")?.as_str()?.to_owned(),
-                status: match step.get("status").and_then(Value::as_str) {
-                    Some("completed") => TodoStatus::Completed,
-                    Some("inProgress") => TodoStatus::InProgress,
-                    Some("pending") => TodoStatus::Pending,
-                    _ => TodoStatus::Unknown,
-                },
-            })
-        })
+        .filter_map(|step| todo(step, "step"))
         .collect()
 }
 

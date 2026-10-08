@@ -8,9 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value, json};
 
-use crate::backend::event::{
-    ApprovalRequest, Event, TodoItem, TodoStatus, ToolStatus, WarningKind,
-};
+use crate::backend::event::{ApprovalRequest, Event, TodoItem, ToolStatus, WarningKind, todo};
 use crate::backend::{AgentPermission, ApprovalId};
 
 /// The tool name a plan reaches the app under: Claude Code's, whose request the app already shows
@@ -216,7 +214,7 @@ impl Translator {
                     .and_then(Value::as_array)
                     .into_iter()
                     .flatten()
-                    .filter_map(todo)
+                    .filter_map(|entry| todo(entry, "content"))
                     .collect();
                 vec![Step::Emit(Event::TodoList { items })]
             }
@@ -358,9 +356,10 @@ impl Translator {
                     self.todos.clear();
                 }
                 for entry in todos.into_iter().flatten() {
-                    let (Some(key), Some(item)) =
-                        (entry.get("id").and_then(Value::as_str), todo(entry))
-                    else {
+                    let (Some(key), Some(item)) = (
+                        entry.get("id").and_then(Value::as_str),
+                        todo(entry, "content"),
+                    ) else {
                         continue;
                     };
                     match self.todos.iter_mut().find(|(id, _)| id == key) {
@@ -537,18 +536,6 @@ fn chunk_text(update: &Value) -> &str {
         .and_then(|content| content.get("text"))
         .and_then(Value::as_str)
         .unwrap_or_default()
-}
-
-/// A todo or plan entry: `content` and a `status` in either of Cursor's spellings.
-fn todo(entry: &Value) -> Option<TodoItem> {
-    let text = entry.get("content").and_then(Value::as_str)?.to_owned();
-    let status = match entry.get("status").and_then(Value::as_str) {
-        Some("pending" | "TODO_STATUS_PENDING") => TodoStatus::Pending,
-        Some("in_progress" | "TODO_STATUS_IN_PROGRESS") => TodoStatus::InProgress,
-        Some("completed" | "TODO_STATUS_COMPLETED") => TodoStatus::Completed,
-        _ => TodoStatus::Unknown,
-    };
-    Some(TodoItem { text, status })
 }
 
 /// What a tool returned: a command's stdout and stderr, a read's `content` as text or text blocks,

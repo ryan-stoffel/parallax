@@ -14,18 +14,18 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
 use crate::detect;
 
+use super::event::todo_status;
 use super::process::{
-    CancelPolicy, Exit, Launcher, Output, Process, ProcessSpec, Signals, StdinMode, StdinPipe,
+    CancelPolicy, Exit, Launcher, Output, Process, ProcessSpec, Signals, StdinMode, write_lines,
 };
 use super::{
     AgentPermission, Backend, CancelSwitch, Capabilities, EVENT_BUFFER, Event, EventSink, Failure,
     FailureKind, FollowUp, Held, ModelUsage, Outcome, RunHandle, RunRequest, StartError, Started,
-    StreamClosed, TodoItem, TodoStatus, ToolStatus, TurnId, Usage, WarningKind,
+    StreamClosed, TodoItem, ToolStatus, TurnId, Usage, WarningKind,
 };
 use parallax_protocol::ProviderModel;
 
@@ -150,7 +150,7 @@ impl Backend for CursorSdkBackend {
             "mcp": mcp,
         });
         lines
-            .send(serde_json::to_string(&start).unwrap_or_default())
+            .send(format!("{start}\n"))
             .map_err(|_| StartError::Invalid("couldn't write to the Cursor SDK sidecar".into()))?;
         let mut turns = VecDeque::new();
         turns.push_back(PendingTurn {
@@ -829,12 +829,7 @@ impl Driver {
                     .iter()
                     .map(|item| TodoItem {
                         text: str_of(item, "text").unwrap_or("").to_owned(),
-                        status: match str_of(item, "status") {
-                            Some("inProgress") => TodoStatus::InProgress,
-                            Some("completed") => TodoStatus::Completed,
-                            Some("pending") => TodoStatus::Pending,
-                            _ => TodoStatus::Unknown,
-                        },
+                        status: todo_status(str_of(item, "status")),
                     })
                     .collect()
             })
@@ -905,9 +900,7 @@ impl Driver {
         let Some(stdin) = &self.stdin else {
             return Err(());
         };
-        stdin
-            .send(serde_json::to_string(value).unwrap_or_default())
-            .map_err(|_| ())
+        stdin.send(format!("{value}\n")).map_err(|_| ())
     }
 
     /// Closes the sidecar's stdin once it is idle with no turn plxd sent still to start, so a
@@ -961,18 +954,6 @@ impl Driver {
             }
         };
         let _ = self.sink.finish(outcome).await;
-    }
-}
-
-async fn write_lines(mut stdin: StdinPipe, mut lines: mpsc::UnboundedReceiver<String>) {
-    while let Some(line) = lines.recv().await {
-        if stdin.write_all(line.as_bytes()).await.is_err() || stdin.write_all(b"\n").await.is_err()
-        {
-            break;
-        }
-        if stdin.flush().await.is_err() {
-            break;
-        }
     }
 }
 
