@@ -321,6 +321,30 @@ pub struct ThreadStartParams {
     /// Threads attached to the first message as context, as `agent/start` takes them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub threads: Vec<RunId>,
+    /// The model that names the thread once it has started (0058), behind `threadNaming`. plxd
+    /// asks it for a title and a branch name from `prompt`, then sets the title unless the thread
+    /// has one by then, and renames the worktree's branch while it has no upstream, reporting it
+    /// in `agent.updated`. Not part of what makes a retry with the same run id conflict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub naming: Option<ThreadNaming>,
+}
+
+/// The model that names a new thread, as `thread/start`'s `naming` (0058). When its instance
+/// can't name threads on the host, plxd uses the default model of the thread's own instance:
+/// `claude-haiku-4-5` for Claude Code, `gpt-6-luna` for Codex.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadNaming {
+    /// The provider instance that runs it, as a subscription `AccountChoice`'s `backend`: a
+    /// Claude Code or Codex one.
+    pub backend: String,
+    /// The model, as the CLI's `--model` takes it.
+    pub model: String,
+    /// How hard it thinks. Absent means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effort: Option<AgentEffort>,
 }
 
 /// Params of `thread/search`: finds threads by what was said in them (PLX-372, decision 0047),

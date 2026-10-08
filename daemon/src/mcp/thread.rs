@@ -1084,6 +1084,7 @@ async fn launch(binding: &Binding, args: LaunchArgs) -> Result<String, String> {
             checkout,
             base,
             checkout_ref: branch,
+            naming: None,
         })
         .await?;
     let (listed, _) = host(plxd).await?;

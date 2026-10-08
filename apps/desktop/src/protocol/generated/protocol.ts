@@ -3014,6 +3014,11 @@ export type AgentRunState = {
 	 */
 	autoResume?: boolean,
 	/**
+	 * Its worktree's branch, sent only when plxd renamed it after naming the thread (0058).
+	 * Absent leaves `AgentRun.branch` as it was.
+	 */
+	branch?: string,
+	/**
 	 * When it changed, in RFC 3339 UTC.
 	 */
 	updatedAt: string,
@@ -3891,6 +3896,34 @@ export type ThreadStartParams = {
 	 * Threads attached to the first message as context, as `agent/start` takes them.
 	 */
 	threads?: Array<RunId>,
+	/**
+	 * The model that names the thread once it has started (0058), behind `threadNaming`. plxd
+	 * asks it for a title and a branch name from `prompt`, then sets the title unless the thread
+	 * has one by then, and renames the worktree's branch while it has no upstream, reporting it
+	 * in `agent.updated`. Not part of what makes a retry with the same run id conflict.
+	 */
+	naming?: ThreadNaming,
+};
+
+/**
+ * The model that names a new thread, as `thread/start`'s `naming` (0058). When its instance
+ * can't name threads on the host, plxd uses the default model of the thread's own instance:
+ * `claude-haiku-4-5` for Claude Code, `gpt-6-luna` for Codex.
+ */
+export type ThreadNaming = {
+	/**
+	 * The provider instance that runs it, as a subscription `AccountChoice`'s `backend`: a
+	 * Claude Code or Codex one.
+	 */
+	backend: string,
+	/**
+	 * The model, as the CLI's `--model` takes it.
+	 */
+	model: string,
+	/**
+	 * How hard it thinks. Absent means the CLI's default.
+	 */
+	effort?: AgentEffort,
 };
 
 /**

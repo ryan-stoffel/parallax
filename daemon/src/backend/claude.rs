@@ -175,6 +175,7 @@ use self::stream::{Ask, Step, Translator, TurnDone};
 use super::commands::{self, CommandsProbe};
 use super::event::{Event, Failure, FailureKind, Outcome, WarningKind};
 use super::limits::{self, LimitsProbe};
+use super::namer::{self, NameProbe};
 use super::process::{
     CancelPolicy, Environment, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, Signal,
     SpawnError, StdinMode, StdinPipe,
@@ -1046,6 +1047,48 @@ impl Backend for ClaudeBackend {
                 }),
             ],
             parse: limits::claude,
+        }))
+    }
+
+    /// `claude -p` on the user's login with no tools, slash commands, MCP servers, or hooks,
+    /// answering in [`namer::schema`]'s shape ([`namer::claude`]).
+    fn namer(
+        &self,
+        dir: &Path,
+        model: &str,
+        effort: Option<AgentEffort>,
+    ) -> Result<Option<NameProbe>, StartError> {
+        check_argument("model", model)?;
+        let (mut spec, _) = self.spec(dir, &Credential::Subscription { config_home: None })?;
+        let schema = namer::schema().to_string();
+        spec.args = [
+            "-p",
+            "--output-format",
+            "json",
+            "--json-schema",
+            &schema,
+            "--model",
+            model,
+            "--tools",
+            "",
+            "--disable-slash-commands",
+            "--strict-mcp-config",
+            "--settings",
+            r#"{"disableAllHooks":true}"#,
+            "--permission-mode",
+            "dontAsk",
+        ]
+        .map(OsString::from)
+        .into();
+        if let Some(effort) = effort {
+            spec.args
+                .extend(["--effort".into(), effort_level(effort)?.into()]);
+        }
+        spec.args.extend(self.overrides.args.iter().cloned());
+        self.pin_gateway_model(&mut spec, Some(model));
+        Ok(Some(NameProbe {
+            process: self.launcher.spawn(&spec)?,
+            parse: namer::claude,
         }))
     }
 

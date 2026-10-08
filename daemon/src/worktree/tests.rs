@@ -159,6 +159,64 @@ async fn create_named_uses_the_slug_and_keeps_names_unique() {
     assert!(!odd.branch.contains("bad"), "{odd:?}");
 }
 
+/// 0058: a named thread's branch is renamed by the naming rules, and its worktree follows, until
+/// it has an upstream.
+#[tokio::test]
+async fn a_branch_is_renamed_until_it_has_an_upstream() {
+    let repo_dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
+    let data_dir = tempfile::tempdir().unwrap();
+    let mgr = manager(data_dir.path());
+    let id = RunId::generate();
+    let created = mgr
+        .create_named(&repo, id, None, Some("the-login-page"))
+        .await
+        .unwrap();
+
+    let renamed = mgr
+        .rename_branch(&repo, id, &created.branch, "login-crash")
+        .await
+        .unwrap();
+    assert_eq!(renamed.as_deref(), Some("parallax/login-crash"));
+    assert_eq!(
+        git_output(&created.path, &["branch", "--show-current"]),
+        "parallax/login-crash"
+    );
+
+    // A name another branch has gets the short run id, as at creation.
+    git(&repo, &["branch", "parallax/taken"]);
+    let renamed = mgr
+        .rename_branch(&repo, id, "parallax/login-crash", "taken")
+        .await
+        .unwrap();
+    let short = short_hash(&id.to_string());
+    assert_eq!(renamed, Some(format!("parallax/taken-{short}")));
+
+    // Once pushed, it keeps its name.
+    let branch = format!("parallax/taken-{short}");
+    git(
+        &repo,
+        &["config", &format!("branch.{branch}.remote"), "origin"],
+    );
+    git(
+        &repo,
+        &[
+            "config",
+            &format!("branch.{branch}.merge"),
+            &format!("refs/heads/{branch}"),
+        ],
+    );
+    let kept = mgr
+        .rename_branch(&repo, id, &branch, "anything-else")
+        .await
+        .unwrap();
+    assert_eq!(kept, None);
+    assert_eq!(
+        git_output(&created.path, &["branch", "--show-current"]),
+        branch
+    );
+}
+
 #[test]
 fn branch_slugs_are_lowercase_words_joined_by_hyphens() {
     for ok in ["a", "fix-login-bug", "v2-api", &"a".repeat(40)] {

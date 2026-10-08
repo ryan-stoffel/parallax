@@ -60,6 +60,7 @@ pub mod launch_agent;
 pub mod logging;
 pub mod mcp;
 mod methods;
+mod naming;
 pub mod paths;
 pub mod peer;
 pub mod providers;

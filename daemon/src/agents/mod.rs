@@ -307,6 +307,17 @@ impl Agents {
         commands
     }
 
+    /// Runs `task` in the background, dropping it when plxd stops.
+    pub(crate) fn background(&self, task: impl Future<Output = ()> + Send + 'static) {
+        let shutdown = self.shutdown.clone();
+        self.tracker.spawn(async move {
+            tokio::select! {
+                () = shutdown.cancelled() => {}
+                () = task => {}
+            }
+        });
+    }
+
     /// Stops every running CLI, and waits a while for their runs to record that they were
     /// interrupted. Called once, when plxd stops, before the store closes.
     pub async fn shutdown(&self) {
@@ -1619,6 +1630,20 @@ pub(crate) async fn link_pr(
     ask(&daemon, run_id, |reply| Command::LinkPr {
         url,
         linked,
+        reply,
+    })
+    .await
+}
+
+/// Renames run `run_id`'s worktree branch for `slug`, a valid branch slug, through the run's
+/// actor, once its thread is named (0058).
+pub(crate) async fn rename_branch(
+    daemon: &Arc<Daemon>,
+    run_id: RunId,
+    slug: String,
+) -> Result<(), ErrorObject> {
+    ask(daemon, run_id, |reply| Command::RenameBranch {
+        slug,
         reply,
     })
     .await

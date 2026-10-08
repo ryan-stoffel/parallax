@@ -193,6 +193,22 @@ impl Store {
         Ok(worktrees)
     }
 
+    /// Records that run `id`'s worktree branch was renamed to `branch` (decision record 0058).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::NotFound`] if the run has no worktree, or a database error.
+    pub fn set_worktree_branch(&self, id: Uuid, branch: &str) -> Result<(), StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE worktrees SET branch = ?2 WHERE id = ?1",
+            params![id.to_string(), branch],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::NotFound { id });
+        }
+        Ok(())
+    }
+
     /// Deletes a worktree's row by its run id, if it exists.
     ///
     /// Returns whether a row was deleted.
