@@ -34,7 +34,7 @@ use super::namer::{self, NameProbe};
 use super::process::Launcher;
 use super::{
     AgentEffort, AgentPermission, Backend, Capabilities, ImageMediaType, Overrides, PromptImage,
-    RunRequest, StartError, Started, check_argument,
+    Rewind, RunRequest, StartError, Started, check_argument,
 };
 use crate::images;
 
@@ -185,6 +185,7 @@ impl Backend for CodexBackend {
             // A thread on app-server runs in Codex's own mode sandbox, not 0013's.
             worker_sandbox: false,
             fork: true,
+            rewind: true,
         }
     }
 
@@ -290,5 +291,17 @@ impl Backend for CodexBackend {
             ));
         }
         app_server::start(&self.launcher, &self.overrides, &self.servers, request)
+    }
+
+    fn rewind(
+        &self,
+        rewind: Rewind,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<String, String>> + Send>> {
+        let (launcher, overrides, servers) = (
+            self.launcher.clone(),
+            self.overrides.clone(),
+            std::sync::Arc::clone(&self.servers),
+        );
+        Box::pin(async move { app_server::revert(&launcher, &overrides, &servers, rewind).await })
     }
 }

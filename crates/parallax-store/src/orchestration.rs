@@ -250,6 +250,24 @@ impl Store {
         next.map(|at| timestamp::parse(&at)).transpose()
     }
 
+    /// Whether thread `thread_id` has an effect of `kind` not yet ended.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn has_open_effect(&self, thread_id: Uuid, kind: &str) -> Result<bool, StoreError> {
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT 1 FROM effects
+                 WHERE thread_id = ?1 AND status IN ('pending', 'running') AND kind = ?2
+                 LIMIT 1",
+            )?
+            .query_row(params![thread_id.to_string(), kind], |_| Ok(()))
+            .optional()?
+            .is_some())
+    }
+
     /// Records how claimed effect `id` ended. Does nothing to an effect no longer `running`.
     ///
     /// # Errors

@@ -54,6 +54,8 @@ pub enum ThreadRunStatus {
     Failed,
     /// It was stopped, or never sent.
     Cancelled,
+    /// A revert to an earlier turn undid it (0062): its turn left the provider's conversation.
+    RolledBack,
     /// A status this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -111,6 +113,54 @@ pub struct ThreadRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub completed_at: Option<Timestamp>,
+    /// The worktree as its turn left it (0062), once plxd has captured it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub checkpoint: Option<TurnCheckpoint>,
+}
+
+/// A turn's checkpoint (0062): a git ref, `refs/parallax/checkpoints/<thread>/<ordinal>`, holding
+/// the thread's folder as the turn left it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnCheckpoint {
+    /// Whether its ref holds the folder.
+    pub status: CheckpointStatus,
+    /// The files the turn changed, with their line counts, by path. Empty unless `ready`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<CheckpointFile>,
+}
+
+/// Where a checkpoint is (T3 Code's).
+///
+/// A newer plxd may send a status this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum CheckpointStatus {
+    /// Its ref holds the folder: its diff can be read and the thread reverted to it.
+    Ready,
+    /// The folder isn't a git repository, so there is nothing to capture.
+    Missing,
+    /// Capturing it failed.
+    Error,
+    /// A revert to an earlier turn deleted its ref.
+    Stale,
+    /// A status this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// One file a turn changed, as `git diff --numstat` counts it. A binary file has no lines.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointFile {
+    /// Its path, from the folder's root.
+    pub path: String,
+    /// Lines added.
+    pub additions: u32,
+    /// Lines removed.
+    pub deletions: u32,
 }
 
 #[expect(
@@ -261,6 +311,22 @@ pub enum OrchestrationCommand {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         hold_queue: bool,
     },
+    /// Reverts the thread to the checkpoint after run `ordinal`, or to its start with 0 (T3
+    /// Code's `checkpoint.rollback`, 0062): the provider drops the turns after it from its
+    /// conversation, so the next message continues from there, and with `restoreFiles` the
+    /// thread's worktree goes back to the checkpoint. Refused, with nothing changed, while a turn
+    /// runs, for a checkpoint that isn't `ready`, for a provider that can't rewind, and with
+    /// `restoreFiles`, for a folder that isn't the thread's own worktree.
+    #[serde(rename = "checkpoint.rollback")]
+    CheckpointRollback {
+        /// The thread.
+        thread_id: RunId,
+        /// The run whose checkpoint it reverts to, or 0 for the thread's start.
+        ordinal: u32,
+        /// Whether the files go back too, or only the conversation.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        restore_files: bool,
+    },
     /// A type this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -380,6 +446,63 @@ pub struct ThreadHistoryResult {
     pub events: Vec<LoggedEvent>,
     /// Whether older ones remain.
     pub more: bool,
+}
+
+/// Params of `orchestration/threadRuns`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadRunsParams {
+    /// The thread: its run id.
+    pub thread_id: RunId,
+}
+
+/// Result of `orchestration/threadRuns`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadRunsResult {
+    /// Its runs, as [`ThreadSnapshot::runs`].
+    pub runs: Vec<ThreadRun>,
+}
+
+/// Params of `orchestration/getTurnDiff` (T3 Code's `getTurnDiff`, 0062).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnDiffParams {
+    /// The thread: its run id.
+    pub thread_id: RunId,
+    /// The run whose checkpoint the diff starts from, or 0 for the thread's start.
+    pub from: u32,
+    /// The run whose checkpoint it ends at. Its checkpoint must be `ready`.
+    pub to: u32,
+    /// Whether whitespace changes count. Ignored unless false, as T3 Code does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ignore_whitespace: Option<bool>,
+}
+
+/// Params of `orchestration/getFullThreadDiff`: the diff from the thread's start.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct FullThreadDiffParams {
+    /// The thread: its run id.
+    pub thread_id: RunId,
+    /// The run whose checkpoint it ends at.
+    pub to: u32,
+    /// As [`TurnDiffParams::ignore_whitespace`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ignore_whitespace: Option<bool>,
+}
+
+/// Result of `orchestration/getTurnDiff` and `orchestration/getFullThreadDiff`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnDiffResult {
+    /// The unified diff, `git diff --patch`'s.
+    pub diff: String,
+    /// True when the diff was cut at 10 MB.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
 }
 
 #[cfg(test)]

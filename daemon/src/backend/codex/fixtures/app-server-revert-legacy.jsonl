@@ -1,0 +1,6 @@
+# A thread with legacy history: plxd refuses to revert it and sends nothing else.
+<
+{"id":1,"result":{"userAgent":"plxd/0.160.0","codexHome":"/Users/u/.codex","platformFamily":"unix","platformOs":"macos"}}
+<
+<
+{"id":2,"result":{"thread":{"id":"t-0","historyMode":"legacy","status":{"type":"idle"},"turns":[]}}}

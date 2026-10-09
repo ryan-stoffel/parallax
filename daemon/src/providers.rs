@@ -1004,6 +1004,13 @@ impl Backend for WithSecrets {
     ) -> Result<Option<crate::backend::NameProbe>, crate::backend::StartError> {
         self.full().namer(dir, model, effort)
     }
+
+    fn rewind(
+        &self,
+        rewind: crate::backend::Rewind,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<String, String>> + Send>> {
+        self.full().rewind(rewind)
+    }
 }
 
 /// How Pi signs in, from what its adapter's probe found: in the `pi` the adapter runs, where plxd

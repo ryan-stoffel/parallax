@@ -205,6 +205,9 @@ pub(crate) fn initialize(
 /// `prWatch` (0063): `pr/watch`, `pr/unwatch`, and `pr/watches`.
 /// `setupScripts` (PLX-650): `repo/scripts`, `repo/saveScripts`, and the `thread.script` event.
 /// `hostUpdate` (PLX-700, 0066): `host/update`, which installs a newer plxd and restarts into it.
+/// `checkpoints` (0062): `orchestration/threadRuns`, `orchestration/getTurnDiff`,
+/// `orchestration/getFullThreadDiff`, `checkpoint.rollback`, and the `thread.checkpoint` and
+/// `thread.reverted` events.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -219,6 +222,7 @@ fn capabilities_advertised() -> Capabilities {
         ("agents".to_owned(), serde_json::Map::new()),
         ("approvals".to_owned(), serde_json::Map::new()),
         ("autoResume".to_owned(), serde_json::Map::new()),
+        ("checkpoints".to_owned(), serde_json::Map::new()),
         ("checks".to_owned(), serde_json::Map::new()),
         ("checkout".to_owned(), serde_json::Map::new()),
         ("commandIds".to_owned(), serde_json::Map::new()),

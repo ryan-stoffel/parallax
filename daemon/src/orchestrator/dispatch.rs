@@ -126,6 +126,9 @@ fn describe(command: &OrchestrationCommand) -> Result<(RunId, &'static str), Err
         }
         OrchestrationCommand::QueueResume { thread_id } => (*thread_id, "queue.resume"),
         OrchestrationCommand::RunInterrupt { thread_id, .. } => (*thread_id, "run.interrupt"),
+        OrchestrationCommand::CheckpointRollback { thread_id, .. } => {
+            (*thread_id, "checkpoint.rollback")
+        }
         OrchestrationCommand::Unknown => {
             return Err(ErrorObject::invalid_params("unknown command type"));
         }
@@ -207,6 +210,15 @@ async fn act(
         OrchestrationCommand::QueueResume { .. } => queue(daemon, thread, QueueOp::Resume).await,
         OrchestrationCommand::RunInterrupt { hold_queue, .. } => {
             stop(daemon, thread, hold_queue).await
+        }
+        OrchestrationCommand::CheckpointRollback {
+            ordinal,
+            restore_files,
+            ..
+        } => {
+            let work = agents::revert(Arc::clone(daemon), thread, ordinal, restore_files);
+            daemon.agents.detached(work).await?;
+            Ok(None)
         }
         OrchestrationCommand::Unknown => Err(ErrorObject::invalid_params("unknown command type")),
     }

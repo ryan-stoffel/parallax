@@ -26,7 +26,7 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
-use parallax_protocol::{ErrorKind, ParallaxEvent, ProjectId, RepoId, RunId};
+use parallax_protocol::{ErrorKind, ParallaxEvent, ProjectId, RepoId, RunId, TurnId};
 use parallax_store::{
     ClaimedEffect, EffectOutcome, NewEffect, OrchestrationReceipt, Run, RunFields, RunState,
     Thread, ThreadFields, ThreadUpdate, Worktree, WorktreeFields,
@@ -57,6 +57,7 @@ const THREAD_WAKE: &str = "thread.wake";
 const DELEGATED_TASKS_STOP: &str = "delegated-tasks.stop";
 const SETTLE_SCRIPT: &str = "settle-script.run";
 const SESSION_DETACH: &str = "provider-session.detach";
+pub(crate) const CHECKPOINT_CAPTURE: &str = "checkpoint.capture";
 
 /// Effect kinds that may run again after a restart, since each does only what is left to do.
 /// [`recover`] cancels an open effect of any other kind, such as `provider-session.detach`,
@@ -66,13 +67,15 @@ const REPLAY_SAFE: &[&str] = &[
     PROJECT_CLEANUP,
     THREAD_WAKE,
     DELEGATED_TASKS_STOP,
+    CHECKPOINT_CAPTURE,
 ];
 
-/// The lanes, and the effect worker's wake-up.
+/// The lanes, the effect worker's wake-up, and its word that an effect ended.
 #[derive(Default)]
 pub(crate) struct Orchestrator {
     lanes: Mutex<HashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>,
     wake: Notify,
+    finished: Notify,
 }
 
 /// A held lane: no other command for its thread runs until it drops. Creating a run and
@@ -124,6 +127,12 @@ impl Orchestrator {
     /// Wakes the effect worker, after a job outside [`Self::commit`] enqueued an effect.
     pub(crate) fn notify(&self) {
         self.wake.notify_one();
+    }
+
+    /// Resolves once an effect has ended and its row says so. Enable it before reading the
+    /// effects it waits for, so none ends unseen in between.
+    pub(crate) fn effect_finished(&self) -> tokio::sync::futures::Notified<'_> {
+        self.finished.notified()
     }
 
     /// Runs `command` in its thread's lane: see the module documentation.
@@ -260,6 +269,8 @@ struct Rows {
     /// parent or fork origin it is.
     scratch: bool,
     children: Vec<Uuid>,
+    /// For `thread.delete`: its repo entry's repository, which holds its checkpoints.
+    repo_path: Option<String>,
     /// For `project.delete`: its repository, if it exists, and its runs, coordinators first.
     project: Option<String>,
     runs: Vec<Uuid>,
@@ -300,12 +311,14 @@ enum Refusal {
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all_fields = "camelCase")]
 enum Effect {
-    /// A deleted thread's worktree and branch, and a thread with no repo's scratch repository
-    /// and context folder.
+    /// A deleted thread's worktree and branch, its checkpoint refs in repository `refs` (0062),
+    /// and a thread with no repo's scratch repository and context folder.
     #[serde(rename = "thread.cleanup")]
     ThreadCleanup {
         worktree: Option<Removal>,
         scratch: bool,
+        #[serde(default)]
+        refs: Option<String>,
     },
     /// A deleted Project's integration and coordinator worktrees and its context folder.
     #[serde(rename = "project.cleanup")]
@@ -323,6 +336,9 @@ enum Effect {
     /// Archive's and settle's release of the thread's live session (0060).
     #[serde(rename = "provider-session.detach")]
     SessionDetach,
+    /// A run ended: its checkpoint (0062).
+    #[serde(rename = "checkpoint.capture")]
+    CheckpointCapture { turn: TurnId, ordinal: u32 },
 }
 
 impl Effect {
@@ -334,7 +350,23 @@ impl Effect {
             Self::DelegatedTasksStop { .. } => DELEGATED_TASKS_STOP,
             Self::SettleScript => SETTLE_SCRIPT,
             Self::SessionDetach => SESSION_DETACH,
+            Self::CheckpointCapture { .. } => CHECKPOINT_CAPTURE,
         }
+    }
+}
+
+/// The `checkpoint.capture` effect for thread `thread`'s run `turn`, which ended (0062). Its id is
+/// the run's, so a replay of the event that ended it can't enqueue it twice.
+pub(crate) fn capture_effect(thread: Uuid, turn: TurnId, ordinal: u32) -> NewEffect {
+    let id = format!("{CHECKPOINT_CAPTURE}/{thread}/{turn}");
+    let effect = Effect::CheckpointCapture { turn, ordinal };
+    NewEffect {
+        id: id.clone(),
+        command_id: id,
+        thread_id: thread,
+        kind: CHECKPOINT_CAPTURE.to_owned(),
+        // A struct of an id and a number always serializes.
+        payload: serde_json::to_string(&effect).unwrap_or_default(),
     }
 }
 
@@ -481,11 +513,11 @@ fn read(db: &Tx, thread: Uuid, action: &Action) -> Result<Rows, ErrorObject> {
         Action::Delete { .. } => {
             rows.thread.run = db.get_run(thread).map_err(error)?;
             rows.thread.thread = db.get_thread(thread).map_err(error)?;
-            if let Some(row) = &rows.thread.thread {
-                rows.scratch = db
-                    .get_repo(row.repo_id)
-                    .map_err(error)?
-                    .is_some_and(|repo| repo.fields.scratch);
+            if let Some(row) = &rows.thread.thread
+                && let Some(repo) = db.get_repo(row.repo_id).map_err(error)?
+            {
+                rows.scratch = repo.fields.scratch;
+                rows.repo_path = Some(repo.fields.path);
             }
             rows.children = db
                 .list_threads()
@@ -591,10 +623,20 @@ fn decide(thread: Uuid, action: Action, rows: Rows) -> Result<Decision, Refusal>
                 path: worktree.path,
                 branch: worktree.branch,
             });
-            let effects = if worktree.is_some() || rows.scratch {
+            // A scratch repository goes whole, refs and all.
+            let refs = (!rows.scratch)
+                .then(|| {
+                    worktree
+                        .as_ref()
+                        .map(|worktree| worktree.repo_path.clone())
+                        .or(rows.repo_path)
+                })
+                .flatten();
+            let effects = if worktree.is_some() || rows.scratch || refs.is_some() {
                 vec![Effect::ThreadCleanup {
                     worktree,
                     scratch: rows.scratch,
+                    refs,
                 }]
             } else {
                 Vec::new()
@@ -859,6 +901,7 @@ async fn run_one(daemon: Arc<Daemon>, claimed: ClaimedEffect) {
     if let Err(error) = finished {
         warn!(error = %error.message, "could not record how an effect ended");
     }
+    daemon.orchestrator.finished.notify_waiters();
 }
 
 /// Does `effect`, effect `id`, for `thread`. An error says whether it is final; any other is
@@ -870,7 +913,14 @@ async fn perform(
     effect: Effect,
 ) -> Result<(), (String, bool)> {
     match effect {
-        Effect::ThreadCleanup { worktree, scratch } => {
+        Effect::ThreadCleanup {
+            worktree,
+            scratch,
+            refs,
+        } => {
+            if let Some(repo) = refs {
+                crate::checkpoints::forget(daemon, Path::new(&repo), thread).await;
+            }
             if let Some(Removal {
                 repo_path,
                 path,
@@ -933,6 +983,11 @@ async fn perform(
             let run_id = RunId::try_from(thread).map_err(|_| (corrupt(thread).message, true))?;
             crate::agents::detach(daemon, run_id).await;
             Ok(())
+        }
+        Effect::CheckpointCapture { turn, ordinal } => {
+            crate::checkpoints::capture(daemon, thread, turn, ordinal)
+                .await
+                .map_err(|error| (error.message, false))
         }
         Effect::DelegatedTasksStop { children } => {
             for child in children {

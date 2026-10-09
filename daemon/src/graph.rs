@@ -11,6 +11,10 @@
 //! question, so its node is a `user_input_request`. Permission requests are runtime requests
 //! too, which a sidebar reads while they wait. `queue.updated` writes the queued runs.
 //!
+//! A run that ends `completed`, `interrupted`, or `cancelled` is in [`Folded::ended`], for its
+//! checkpoint (0062). `thread.checkpoint` writes a run's checkpoint onto it, and
+//! `thread.reverted` marks the runs a revert undid `rolledBack`, their checkpoints `stale`.
+//!
 //! [`import`] folds a thread's stored events the first time the thread is touched after the
 //! graph was added, so its runs are numbered from its start; the writer does it before a new
 //! event's fold, and [`sweep`] imports the rest in the background, newest first.
@@ -21,8 +25,8 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentApprovalDecision, AgentOutcome, AgentOutputItem, AgentSubagentStatus, AgentToolStatus,
-    ApprovalId, LoggedEvent, ParallaxEvent, ProjectId, QueuedMessage, RunId, ThreadRun,
-    ThreadRunStatus, TurnId,
+    ApprovalId, CheckpointStatus, LoggedEvent, ParallaxEvent, ProjectId, QueuedMessage, RunId,
+    ThreadRun, ThreadRunStatus, TurnId,
 };
 use parallax_store::{GraphNode, GraphRun, RuntimeRequest, Store, StoreError};
 use tokio_util::sync::CancellationToken;
@@ -32,8 +36,16 @@ use uuid::Uuid;
 use crate::server::Daemon;
 use crate::store::store_error;
 
-/// Folds `event`, at `seq`, into thread `thread`'s graph. Returns the run it belongs to: for a
-/// batch of output, the newest run it touched.
+/// What folding one event did.
+#[derive(Debug, Default)]
+pub(crate) struct Folded {
+    /// The run it belongs to: for a batch of output, the newest run it touched.
+    pub run: Option<Uuid>,
+    /// The runs it ended `completed`, `interrupted`, or `cancelled`, oldest first.
+    pub ended: Vec<ThreadRun>,
+}
+
+/// Folds `event`, at `seq`, into thread `thread`'s graph.
 pub(crate) fn apply(
     db: &Store,
     thread: Uuid,
@@ -41,6 +53,27 @@ pub(crate) fn apply(
     time: Timestamp,
     project: Option<ProjectId>,
     event: &ParallaxEvent,
+) -> Result<Folded, StoreError> {
+    let mut ended = Vec::new();
+    let run = fold(db, thread, seq, time, project, event, &mut ended)?;
+    ended.retain(|run: &ThreadRun| {
+        matches!(
+            run.status,
+            ThreadRunStatus::Completed | ThreadRunStatus::Interrupted | ThreadRunStatus::Cancelled
+        )
+    });
+    Ok(Folded { run, ended })
+}
+
+/// [`apply`]'s fold: returns the run `event` belongs to, and adds the runs it ended to `ended`.
+fn fold(
+    db: &Store,
+    thread: Uuid,
+    seq: u64,
+    time: Timestamp,
+    project: Option<ProjectId>,
+    event: &ParallaxEvent,
+    ended: &mut Vec<ThreadRun>,
 ) -> Result<Option<Uuid>, StoreError> {
     match event {
         ParallaxEvent::AgentOutput { items, .. } => {
@@ -50,6 +83,7 @@ pub(crate) fn apply(
                 fold.item(item, None)?;
                 touched = fold.current().map(|run| run.id.into()).or(touched);
             }
+            ended.append(&mut fold.ended);
             Ok(touched)
         }
         ParallaxEvent::AgentFinished { outcome, .. } => {
@@ -64,6 +98,7 @@ pub(crate) fn apply(
             while let Some(run) = fold.open.pop() {
                 fold.end(run, status)?;
             }
+            ended.append(&mut fold.ended);
             // What the CLI left open ended with it, a background subagent included.
             db.end_open_nodes(thread, status_name(status))?;
             db.end_pending_requests(thread, "cancelled")?;
@@ -92,8 +127,38 @@ pub(crate) fn apply(
             db.replace_queued_runs(thread, &queued)?;
             Ok(None)
         }
+        ParallaxEvent::ThreadCheckpoint {
+            turn_id,
+            checkpoint,
+            ..
+        } => {
+            let Some(mut run) = stored_run(db, thread, *turn_id)? else {
+                return Ok(None);
+            };
+            run.checkpoint = Some(checkpoint.clone());
+            put_run(db, thread, &run, None)?;
+            Ok(Some(run.id.into()))
+        }
+        ParallaxEvent::ThreadReverted { turns, .. } => {
+            for turn in turns {
+                let Some(mut run) = stored_run(db, thread, *turn)? else {
+                    continue;
+                };
+                run.status = ThreadRunStatus::RolledBack;
+                if let Some(checkpoint) = &mut run.checkpoint {
+                    checkpoint.status = CheckpointStatus::Stale;
+                    checkpoint.files.clear();
+                }
+                put_run(db, thread, &run, None)?;
+            }
+            Ok(None)
+        }
         _ => Ok(None),
     }
+}
+
+fn stored_run(db: &Store, thread: Uuid, turn: TurnId) -> Result<Option<ThreadRun>, StoreError> {
+    Ok(db.graph_run(thread, turn.into())?.as_ref().and_then(parse))
 }
 
 /// A batch's fold: the thread's open runs, oldest first, which its items change.
@@ -104,6 +169,8 @@ struct Fold<'a> {
     time: Timestamp,
     project: Option<ProjectId>,
     open: Vec<ThreadRun>,
+    /// The runs it ended.
+    ended: Vec<ThreadRun>,
 }
 
 impl<'a> Fold<'a> {
@@ -126,6 +193,7 @@ impl<'a> Fold<'a> {
             time,
             project,
             open,
+            ended: Vec::new(),
         })
     }
 
@@ -387,6 +455,7 @@ impl<'a> Fold<'a> {
             queue_held: false,
             started_at: Some(self.time),
             completed_at: None,
+            checkpoint: None,
         };
         fill(&mut run);
         put_run(self.db, self.thread, &run, Some(self.seq))?;
@@ -405,7 +474,7 @@ impl<'a> Fold<'a> {
 
     /// Ends `run`, which left `open`, with `status`: its attempt and its root node. A subagent
     /// it started can work on after its turn; the CLI's exit ends that.
-    fn end(&self, mut run: ThreadRun, status: ThreadRunStatus) -> Result<(), StoreError> {
+    fn end(&mut self, mut run: ThreadRun, status: ThreadRunStatus) -> Result<(), StoreError> {
         let word = status_name(status);
         run.status = status;
         run.completed_at = Some(self.time);
@@ -414,7 +483,9 @@ impl<'a> Fold<'a> {
                 .set_attempt_status(self.thread, run.id.into(), attempt, word)?;
         }
         self.db.set_node_status(self.thread, &root(run.id), word)?;
-        put_run(self.db, self.thread, &run, None)
+        put_run(self.db, self.thread, &run, None)?;
+        self.ended.push(run);
+        Ok(())
     }
 
     fn set_current_status(&mut self, status: ThreadRunStatus) -> Result<(), StoreError> {
@@ -508,6 +579,7 @@ fn queued_run(thread: Uuid, position: usize, message: &QueuedMessage, held: bool
         queue_held: held,
         started_at: None,
         completed_at: None,
+        checkpoint: None,
     };
     GraphRun {
         id: run.id.into(),
@@ -531,6 +603,7 @@ fn status_name(status: ThreadRunStatus) -> &'static str {
         ThreadRunStatus::Completed => "completed",
         ThreadRunStatus::Interrupted => "interrupted",
         ThreadRunStatus::Failed => "failed",
+        ThreadRunStatus::RolledBack => "rolled_back",
         ThreadRunStatus::Cancelled | ThreadRunStatus::Unknown => "cancelled",
     }
 }
@@ -547,7 +620,7 @@ pub(crate) fn import(db: &Store, thread: Uuid) -> Result<(), StoreError> {
         let project = stored
             .project_id
             .and_then(|id| ProjectId::try_from(id).ok());
-        if let Some(run) = apply(db, thread, stored.seq, stored.time, project, &event)? {
+        if let Some(run) = apply(db, thread, stored.seq, stored.time, project, &event)?.run {
             db.set_event_run(stored.seq, run)?;
         }
     }

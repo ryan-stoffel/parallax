@@ -12,6 +12,7 @@ use std::time::Duration;
 use parallax_protocol::GitStatus;
 
 use super::{Commit, GitOutput, WorktreeError, WorktreeManager, describe_failure};
+use crate::backend::process::ProcessSpec;
 
 /// How long a push may take: it goes over the network and can carry a large branch.
 pub(super) const NETWORK_TIMEOUT: Duration = Duration::from_secs(300);
@@ -242,7 +243,7 @@ impl WorktreeManager {
         Ok(origin.stdout.trim().to_owned())
     }
 
-    async fn folder_git(
+    pub(super) async fn folder_git(
         &self,
         folder: RunFolder<'_>,
         args: &[&str],
@@ -255,7 +256,7 @@ impl WorktreeManager {
         }
     }
 
-    async fn folder_git_ok(
+    pub(super) async fn folder_git_ok(
         &self,
         folder: RunFolder<'_>,
         args: &[&str],
@@ -265,6 +266,32 @@ impl WorktreeManager {
                 self.run_worktree_git_ok(path, git_dir, args).await
             }
             RunFolder::Checkout(path) => self.run_git_ok(path, args).await,
+        }
+    }
+
+    /// The process spec for `git args` in `folder`, as [`Self::folder_git`] runs it.
+    pub(super) async fn folder_spec(
+        &self,
+        folder: RunFolder<'_>,
+        args: &[&str],
+    ) -> Result<ProcessSpec, WorktreeError> {
+        Ok(match folder {
+            RunFolder::Worktree { path, git_dir } => {
+                let mut spec = self.worktree_spec(path, git_dir, args).await?;
+                spec.limits.max_line_bytes = self.max_git_line_bytes;
+                spec
+            }
+            RunFolder::Checkout(path) => self.git_spec(path, args),
+        })
+    }
+}
+
+impl RunFolder<'_> {
+    /// The folder itself.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Worktree { path, .. } | Self::Checkout(path) => path,
         }
     }
 }

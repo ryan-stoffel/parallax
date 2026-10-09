@@ -32,6 +32,7 @@ use tokio::time::Instant;
 
 use crate::support::{Client, InProcess, PATIENCE, eventually, kind, temp_dir};
 
+mod checkpoints;
 mod context;
 mod files;
 mod fork;
