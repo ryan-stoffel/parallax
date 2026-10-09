@@ -172,6 +172,8 @@ impl Store {
 
     /// Claims at most `limit` effects available at `now`, marking them `running`: each the
     /// oldest open effect of its thread, so a thread runs its effects one at a time, in order.
+    /// The claim queries repeat `effects_open`'s `status IN ('pending', 'running')` beside
+    /// `status = 'pending'` so SQLite uses that partial index.
     ///
     /// # Errors
     ///

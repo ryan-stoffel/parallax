@@ -753,7 +753,8 @@ pub(crate) async fn work(daemon: Arc<Daemon>, stop: CancellationToken) {
     }
 }
 
-/// Runs one claimed effect and records how it ended, in its thread's lane.
+/// Runs one claimed effect, then records how it ended in its thread's lane. A failure that used
+/// its last attempt is logged and stays as a `failed` row.
 async fn run_one(daemon: Arc<Daemon>, claimed: ClaimedEffect) {
     let ran = match serde_json::from_str::<Effect>(&claimed.payload) {
         Ok(effect) => perform(&daemon, claimed.thread_id, effect).await,

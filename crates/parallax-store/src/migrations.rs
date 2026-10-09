@@ -675,7 +675,8 @@ pub(crate) fn run(conn: &mut Connection) -> Result<(), StoreError> {
 /// Writes `<database>.pre-<version>` with `VACUUM INTO`, unless it exists already: a start that
 /// stopped before the migration committed made it from the same schema. The copy is written
 /// under a name of its own and then renamed, since two connections opening the store at once
-/// can't both write one file.
+/// can't both write one file. A copy that fails, as on a full disk, is removed with its journal,
+/// so a retry at the next start doesn't leave another one.
 fn back_up(conn: &Connection, version: i64) -> Result<(), StoreError> {
     let Some(path) = conn.path().filter(|path| !path.is_empty()) else {
         return Ok(());
@@ -685,9 +686,15 @@ fn back_up(conn: &Connection, version: i64) -> Result<(), StoreError> {
         return Ok(());
     }
     let partial = format!("{backup}.{}", uuid::Uuid::now_v7());
-    conn.execute("VACUUM INTO ?1", params![partial])?;
-    fs::rename(&partial, &backup)?;
-    Ok(())
+    let copied = conn
+        .execute("VACUUM INTO ?1", params![partial])
+        .map_err(StoreError::from)
+        .and_then(|_| fs::rename(&partial, &backup).map_err(StoreError::from));
+    if copied.is_err() {
+        let _ = fs::remove_file(&partial);
+        let _ = fs::remove_file(format!("{partial}-journal"));
+    }
+    copied
 }
 
 #[cfg(test)]
@@ -751,5 +758,33 @@ mod tests {
             })
             .unwrap();
         assert_eq!(migrated, ("r".to_owned(), "k".to_owned()));
+    }
+
+    /// A backup that fails partway, here on a corrupt page, leaves no partial copy or journal
+    /// behind, so each failed start doesn't use up more of a full disk.
+    #[test]
+    fn a_failed_backup_leaves_no_partial_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE t (x TEXT);").unwrap();
+            for _ in 0..200 {
+                conn.execute("INSERT INTO t VALUES (?1)", ["y".repeat(500)])
+                    .unwrap();
+            }
+        }
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[4096 * 3..4096 * 4].fill(0xff);
+        std::fs::write(&path, bytes).unwrap();
+
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        assert!(super::back_up(&conn, 39).is_err());
+        let left: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.contains(".pre-39"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
     }
 }
