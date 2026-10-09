@@ -57,7 +57,7 @@ esac"#,
         dir,
         "emulator",
         r#"case "$1" in
-  -list-avds) printf 'Pixel_8\nTablet\n' ;;
+  -list-avds) printf 'INFO    | Storing crashdata in: /tmp/x\nPixel_8\nTablet\n' ;;
   -avd) touch "$D/booted"; sleep 2 ;;
 esac"#,
     );

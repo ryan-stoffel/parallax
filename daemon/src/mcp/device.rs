@@ -673,7 +673,13 @@ async fn android_devices(android: &Android) -> Result<Vec<Device>, String> {
         devices.push(android_device(android, serial).await);
     }
     let avds = run(&android.emulator, &["-list-avds"], COMMAND_TIMEOUT).await?;
-    for name in String::from_utf8_lossy(&avds).lines().map(str::trim) {
+    // The emulator can print `INFO | ...` notes before the names; an AVD's name has no spaces.
+    let avds = String::from_utf8_lossy(&avds);
+    let names = avds.lines().map(str::trim).filter(|line| {
+        line.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+    });
+    for name in names {
         let running = devices
             .iter()
             .any(|device| !device.physical && device.name == name);

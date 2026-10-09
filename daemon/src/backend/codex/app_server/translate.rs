@@ -641,8 +641,6 @@ mod tests {
         );
     }
 
-    /// PLX-371: the windows' reset times are what auto-resume waits for, and a fully used one is
-    /// refused.
     #[test]
     fn an_mcp_tools_images_are_its_events_images_and_left_out_of_its_output() {
         let line = r#"{"method":"item/completed","params":{"item":{"type":"mcpToolCall","id":"mcp-1","server":"plxd","tool":"device_screenshot","status":"completed","arguments":{},"result":{"content":[{"type":"text","text":"{}"},{"type":"image","data":"iVBORw0KGgo=","mimeType":"image/png"}]}}}}"#;
@@ -662,6 +660,8 @@ mod tests {
         assert!(output.contains(r#""mimeType":"image/png""#), "{output}");
     }
 
+    /// PLX-371: the windows' reset times are what auto-resume waits for, and a fully used one is
+    /// refused.
     #[test]
     fn rate_limit_updates_are_limit_windows() {
         let steps = translate(include_str!("../fixtures/app-server-turn.jsonl"));
