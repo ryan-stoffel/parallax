@@ -190,7 +190,8 @@ export type ParallaxRequests = {
 	 */
 	"preview/frame": { params: PreviewFrameParams, result: PreviewFrameResult },
 	/**
-	 * `preview/input`: the user's control, mouse, wheel, keys, or address bar on a tab.
+	 * `preview/input`: the user's control, mouse, wheel, keys, viewport, or address bar on a
+	 * tab.
 	 */
 	"preview/input": { params: PreviewInputParams, result: PreviewInputResult },
 	/**
