@@ -15,12 +15,16 @@ const connected: ConnectionState = {
   capabilities: {},
 };
 let remote = false;
+let remoteWeb = false;
 let hosts: SavedHost[] = [];
-const request = vi.fn(async (_host: string, method: string, params: { remote?: boolean }) => {
-  if (method === "host/settings/get") return { result: { autoResume: true, remote }, logId: "log" };
+type Set = { remote?: boolean; remoteWeb?: boolean };
+const request = vi.fn(async (_host: string, method: string, params: Set) => {
+  const settings = () => ({ result: { autoResume: true, remote, remoteWeb }, logId: "log" });
+  if (method === "host/settings/get") return settings();
   if (method === "host/settings/set") {
     remote = params.remote ?? remote;
-    return { result: { autoResume: true, remote }, logId: "log" };
+    remoteWeb = params.remoteWeb ?? remoteWeb;
+    return settings();
   }
   if (method === "remote/pair")
     return {
@@ -36,6 +40,7 @@ const discoverLan = vi.fn(async () => [{ id: "0", name: "studio" }]);
 
 beforeEach(() => {
   remote = false;
+  remoteWeb = false;
   hosts = [{ id: `lan:${"ab".repeat(32)}`, name: "studio", routes: ["192.168.1.20"] }];
   request.mockClear();
   pairLan.mockClear();
@@ -90,6 +95,13 @@ test("the switch turns pairing on, Pair a device shows a code, and Add computer 
   expect(document.body.textContent).toContain("full control of this one");
   await click(button("Pair a device"));
   expect(document.querySelector('[aria-label="Pairing code"]')?.textContent).toBe("7KQ-4M2");
+  // Open in a browser serves the app at the addresses the code reaches, off until turned on.
+  const web = document.querySelector('[role="switch"][aria-label="Open in a browser"]')!;
+  expect(web.getAttribute("aria-checked")).toBe("false");
+  expect(document.body.textContent).toContain("https://192.168.1.20:7341");
+  await click(web);
+  expect(request).toHaveBeenCalledWith("local", "host/settings/set", { remoteWeb: true });
+  expect(web.getAttribute("aria-checked")).toBe("true");
 
   // Add computer finds the computers showing a code, by name, and picks the only one.
   await click(button("Add computer"));

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Parallax</title>
+    <!-- The pairing screen's look, before the app's styles load with the app. -->
+    <style>
+      #pair {
+        display: none;
+        min-height: 100vh;
+        place-items: center;
+        margin: 0;
+        padding: 24px;
+        box-sizing: border-box;
+        font:
+          14px/1.45 system-ui,
+          sans-serif;
+        color: #18181b;
+        background: #fafafa;
+      }
+      #pair form {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        width: 100%;
+        max-width: 340px;
+      }
+      #pair h1 {
+        margin: 0;
+        font-size: 18px;
+      }
+      #pair p {
+        margin: 0;
+        color: #71717a;
+      }
+      #pair input,
+      #pair button {
+        font: inherit;
+        padding: 9px 12px;
+        border-radius: 8px;
+        border: 1px solid #d4d4d8;
+      }
+      #pair input {
+        font-family: ui-monospace, monospace;
+        font-size: 18px;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+      }
+      #pair button {
+        border: 0;
+        color: #fff;
+        background: #18181b;
+      }
+      #pair [role="alert"] {
+        color: #dc2626;
+      }
+      @media (prefers-color-scheme: dark) {
+        #pair {
+          color: #f4f4f5;
+          background: #18181b;
+        }
+        #pair input {
+          color: inherit;
+          background: #27272a;
+          border-color: #3f3f46;
+        }
+        #pair button {
+          color: #18181b;
+          background: #f4f4f5;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <main id="pair">
+      <form>
+        <h1>Pair this browser</h1>
+        <p>
+          On <span id="host">your computer</span>, open Settings, then Connections, and choose Pair
+          a device. Enter the code it shows. A paired browser has full control of that computer.
+        </p>
+        <input aria-label="Code" placeholder="7KQ-4M2" autocomplete="one-time-code" required />
+        <button type="submit">Pair</button>
+        <p role="alert"></p>
+      </form>
+    </main>
+    <script type="module" src="./web.ts"></script>
+  </body>
+</html>

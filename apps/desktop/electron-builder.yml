@@ -29,6 +29,11 @@ files:
   - dist/**
   - package.json
   - "!**/*.map"
+# The renderer build sits beside app.asar, unpacked, so plxd, next to it in the resources folder,
+# can serve it as the web client (PLX-651) without a copy of its own. The app reads it through
+# app.asar as before.
+asarUnpack:
+  - dist/renderer/**
 # plxd, built for this target, and plxd.version, the version it reports (0030), go in the
 # resources folder, where findPlxd looks. package-app puts both in target/package-resources.
 extraResources:

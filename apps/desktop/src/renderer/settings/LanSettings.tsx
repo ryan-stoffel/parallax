@@ -21,7 +21,8 @@ const GRANTS =
 
 /**
  * Settings > Connections' Same network section (PLX-641, 0065). Its switch, the local plxd's
- * `remote`, has it listen for paired computers over HTTPS with its own pinned certificate. Pair a
+ * `remote`, has it listen for paired computers over HTTPS with its own pinned certificate, and Open
+ * in a browser, its `remoteWeb`, also serves the app there for a browser to pair with (PLX-651). Pair a
  * device shows a short one-time code while this computer advertises itself by name over mDNS, and
  * the computers paired with this one can be revoked, even with the switch off. Below, the
  * computers this app paired with, each with its connection and Remove, and Add computer, which
@@ -32,6 +33,7 @@ export function LanSettings() {
   const connected = local?.status === "connected";
   const computers = useHosts().filter((h) => h.routes);
   const [on, setOn] = useState<boolean>();
+  const [web, setWeb] = useState<boolean>();
   // The code on show, and how many computers were paired when it was made.
   const [code, setCode] = useState<RemotePairResult & { before: number }>();
   const [status, setStatus] = useState<RemoteSessionsResult>();
@@ -46,7 +48,9 @@ export function LanSettings() {
   useEffect(() => {
     if (!connected) return;
     void window.parallax.request(localId, "host/settings/get", {}).then((answer) => {
-      if ("result" in answer) setOn(answer.result.remote);
+      if (!("result" in answer)) return;
+      setOn(answer.result.remote);
+      setWeb(answer.result.remoteWeb);
     });
     void readSessions();
   }, [connected]);
@@ -68,6 +72,12 @@ export function LanSettings() {
     setOn(answer.result.remote);
     setCode(undefined);
     void readSessions();
+  };
+  const toggleWeb = async (next: boolean) => {
+    const answer = await window.parallax.request(localId, "host/settings/set", { remoteWeb: next });
+    if ("error" in answer) return setError(answer.error.message);
+    setError(undefined);
+    setWeb(answer.result.remoteWeb);
   };
   const pair = async () => {
     const answer = await window.parallax.request(localId, "remote/pair", {});
@@ -97,6 +107,29 @@ export function LanSettings() {
           <p role="alert" className={`${settingRow} text-[12.5px] text-danger`}>
             {status.problem}
           </p>
+        )}
+        {on && web !== undefined && (
+          <Row
+            title="Open in a browser"
+            description={
+              <>
+                Serves Parallax at{" "}
+                <span className="font-mono text-foreground">
+                  {(showing?.addresses ?? ["this computer's address"])
+                    .map((a) => `https://${a.includes(":") ? a : `${a}:7341`}`)
+                    .join(", ")}
+                </span>{" "}
+                for a browser on this network or your tailnet, which pairs with a code from Pair a
+                device. The browser warns about this computer's certificate the first time.
+              </>
+            }
+          >
+            <Switch
+              label="Open in a browser"
+              checked={web}
+              onChange={(next) => void toggleWeb(next)}
+            />
+          </Row>
         )}
         {on && status?.listening && (
           <Row

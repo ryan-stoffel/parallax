@@ -78,7 +78,12 @@ export async function printFailure({ page, dataDir }: Launched) {
 export async function close(launched: Launched | undefined) {
   if (!launched) return;
   await launched.app.close();
-  const pid = servePids(launched.dataDir).at(-1) ?? 0;
+  await stopServe(launched.dataDir);
+}
+
+/** Stops the `serve` that `plxd attach` started for `dataDir`, and waits until it exits. */
+export async function stopServe(dataDir: string) {
+  const pid = servePids(dataDir).at(-1) ?? 0;
   // Never pid 0 or below, which process.kill reads as a whole process group.
   if (Number.isSafeInteger(pid) && pid > 1) {
     process.kill(pid, "SIGTERM");
