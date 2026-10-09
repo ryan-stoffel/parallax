@@ -444,6 +444,7 @@ mod tests {
             cancel: CancellationToken::new(),
             stopped_reading: CancellationToken::new(),
             command_id: None,
+            replies: tokio::sync::mpsc::channel(1).0,
         };
         let (run_id, project) = (RunId::generate(), ProjectId::generate());
         daemon

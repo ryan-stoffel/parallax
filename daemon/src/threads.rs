@@ -1073,6 +1073,9 @@ pub(crate) async fn archive(
     params: ThreadArchiveParams,
 ) -> Result<ThreadArchiveResult, ErrorObject> {
     let ThreadArchiveParams { run_id, archived } = params;
+    if archived {
+        daemon.terminals.close_thread(&run_id.to_string());
+    }
     store(daemon, move |db| {
         let before = db
             .get_thread(run_id.into())
@@ -1220,7 +1223,7 @@ pub(crate) async fn delete(
 }
 
 /// Deletes run `run_id` once its CLI has exited: its rows and stored events, and for a thread its
-/// thread row and `thread.deleted`, in one transaction, then its events in memory, then
+/// thread row and `thread.deleted`, in one transaction, then its terminals, its events in memory, then
 /// `worktree` and its branch, and for a thread with no repo its scratch repository and its own
 /// context folder. A Project's run (`project/delete`, PLX-338) has no thread row and gets no
 /// event of its own. The store clears the run from its children's parent and its forks' origin,
@@ -1277,6 +1280,7 @@ pub(crate) async fn purge(
         Ok(deleted)
     })
     .await?;
+    daemon.terminals.close_thread(&run_id.to_string());
     daemon.log.purge_run(run_id);
     if let Some(worktree) = worktree
         && let Err(error) = daemon

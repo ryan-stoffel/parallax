@@ -7,7 +7,8 @@
 //! `project.rs`; 0042 `projectFromThreads`: `project/fromThreads` in `project.rs`; PLX-318 `pullRequests`, PLX-328 `prDiff`, and PLX-373 `threadTools` (`pr/link`
 //! and `pr/unlink`): `pr.rs`; PLX-359 `composerMenus`: `composer.rs`; PLX-336 `githubStatus`:
 //! `github/status` in `accounts.rs`; PLX-423 `githubSetup`: `github/install`, `github/signIn`, and
-//! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`; PLX-370 `queue`: `queue.rs`; PLX-402 `questions`: `question.rs`; PLX-405 `memory`: `memory.rs`; PLX-410 `landing`: `land.rs`; PLX-574 `connect`: `connect/devices` in `connect.rs`), and `host.rs` advertises the
+//! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`; PLX-370 `queue`: `queue.rs`; PLX-402 `questions`: `question.rs`; PLX-405 `memory`: `memory.rs`; PLX-410 `landing`: `land.rs`; PLX-574 `connect`: `connect/devices` in `connect.rs`; PLX-637 `terminals`: `terminal/*` in
+//! `crate::terminals`), and `host.rs` advertises the
 //! capability in `initialize`.
 
 mod accounts;
@@ -32,12 +33,15 @@ mod usage;
 use std::future::{Future, ready};
 use std::sync::Arc;
 
-use parallax_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestId, Response};
+use parallax_protocol::jsonrpc::{
+    ErrorObject, INVALID_REQUEST, Notification, Request, RequestId, Response,
+};
 use parallax_protocol::methods::{
     self, EventsSubscribe, EventsUnsubscribe, Initialize, RequestMethod,
 };
 use parallax_protocol::{
     EventsSubscribeResult, EventsUnsubscribeResult, ProvidersListResult, SubscriptionId,
+    TerminalListResult, TerminalResult,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -63,6 +67,9 @@ pub(crate) struct Context {
     pub stopped_reading: CancellationToken,
     /// `commandId` taken out of the params before the method parses them (0052).
     pub command_id: Option<uuid::Uuid>,
+    /// The connection's writer, for notifications that aren't events, such as a terminal's
+    /// output.
+    pub replies: tokio::sync::mpsc::Sender<Reply>,
 }
 
 /// What the connection's writer sends for a request.
@@ -84,6 +91,8 @@ pub(crate) enum Reply {
         response: Response,
         subscription: SubscriptionId,
     },
+    /// A notification that isn't an event, such as a terminal's output (PLX-637).
+    Notification(Notification),
 }
 
 /// Answers a request on an initialized connection.
@@ -254,6 +263,19 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         LandQueue => |p| land::queue(context, p),
         LandApprove => |p| land::approve(context, p),
         LandSendBack => |p| land::send_back(context, p),
+        TerminalOpen => |p| ready(
+            daemon
+                .terminals
+                .open(p, &context.replies, &context.stopped_reading)
+                .map(|()| TerminalResult {})
+        ),
+        TerminalClose => |p| {
+            daemon.terminals.close(p.thread_id, p.terminal_id);
+            ready(Ok(TerminalResult {}))
+        },
+        TerminalList => |p| ready(Ok(TerminalListResult {
+            terminals: daemon.terminals.list(p.thread_id.as_deref()),
+        })),
     })
 }
 
@@ -339,6 +361,7 @@ mod tests {
             cancel: CancellationToken::new(),
             stopped_reading: CancellationToken::new(),
             command_id: None,
+            replies: tokio::sync::mpsc::channel(1).0,
         };
         let request = Request {
             id: 1.into(),

@@ -3,12 +3,7 @@
 #
 # Electron 44 has no install script. It downloads its binary the first time
 # `electron` is required (scripts/dev.mjs does that).
-#
-# node-pty's scripts only check for a prebuilt binary, or compile one with
-# node-gyp when there is none. Its N-API prebuilds cover every target in 0023,
-# and work in Electron without a rebuild, so its scripts never run.
 allowBuilds:
-  node-pty: false
   # Squirrel.Windows, which electron-builder only uses for a target we don't build.
   electron-winstaller: false
 

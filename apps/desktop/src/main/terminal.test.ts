@@ -7,7 +7,6 @@ import {
   hostLogin,
   masterCommand,
   runInstall,
-  shellCommand,
   terminalEnv,
   type Command,
 } from "./terminal";
@@ -22,12 +21,11 @@ test("runs a CLI's sign-in here, through cmd.exe for a Windows batch shim", () =
   expect(loginCommand("codex", "C:\\Tools\\codex.exe", undefined, "win32").args).toEqual(["login"]);
   expect(loginCommand("codex", "C:\\Users\\A B\\npm\\codex.CMD", undefined, "win32")).toEqual({
     file: process.env["ComSpec"] ?? "cmd.exe",
-    args: '/d /s /c ""C:\\Users\\A B\\npm\\codex.CMD" login"',
+    args: ["/d", "/c", "C:\\Users\\A B\\npm\\codex.CMD", "login"],
   });
 });
 
 test("runs it over ssh -t, quoting the path for the host's shell", () => {
-  // From a Mac: Windows runs ssh.exe, which the next test covers.
   const remote = (cli: CliKind, path: string) => loginCommand(cli, path, mini, "darwin");
   const ssh = (...args: string[]) => ({
     file: "ssh",
@@ -66,48 +64,7 @@ test("runs it over ssh -t, quoting the path for the host's shell", () => {
   );
 });
 
-test("runs ssh.exe on Windows, where node-pty won't add the extension", () => {
-  const path = "/usr/local/bin/codex";
-  expect(loginCommand("codex", path, mini, "win32").file).toBe("ssh.exe");
-  const custom = { ...mini, ssh: "C:\\Tools\\ssh.exe" };
-  expect(loginCommand("codex", path, custom, "win32").file).toBe("C:\\Tools\\ssh.exe");
-  expect(loginCommand("codex", path, mini, "linux").file).toBe("ssh");
-});
-
-test("opens the login shell in a folder here: $SHELL -l, or PowerShell on Windows", () => {
-  const env = { SHELL: "/bin/zsh" };
-  expect(shellCommand("/repo/wt", undefined, "darwin", env)).toEqual({
-    file: "/bin/zsh",
-    args: ["-l"],
-    cwd: "/repo/wt",
-  });
-  expect(shellCommand("/repo/wt", undefined, "linux", {}).file).toBe("/bin/sh");
-  expect(shellCommand("C:\\repo\\wt", undefined, "win32", env)).toEqual({
-    file: "powershell.exe",
-    args: ["-NoLogo"],
-    cwd: "C:\\repo\\wt",
-  });
-});
-
-test("opens it on an SSH host after a cd, quoted for the host's shell", () => {
-  const ssh = (remote: string) => ({
-    file: "ssh",
-    args: ["-t", "-e", "none", "-o", "ControlPath=none", "--", "me@mini", remote],
-  });
-  expect(shellCommand("/home/me/wt", mini, "darwin")).toEqual(
-    ssh(`cd /home/me/wt && exec "$SHELL" -l`),
-  );
-  expect(shellCommand("~", mini, "darwin")).toEqual(ssh(`cd ~ && exec "$SHELL" -l`));
-  expect(shellCommand("/home/it's me/wt", mini, "linux")).toEqual(
-    ssh(`cd '/home/it'\\''s me/wt' && exec "$SHELL" -l`),
-  );
-  expect(shellCommand("C:\\Users\\A B\\wt", mini, "darwin")).toEqual(
-    ssh('cd /d "C:\\Users\\A B\\wt" && cmd'),
-  );
-  expect(shellCommand("/home/me/wt", mini, "win32").file).toBe("ssh.exe");
-});
-
-test("gives the terminal a UTF-8 LANG only when no locale is set", () => {
+test("gives an install a UTF-8 LANG only when no locale is set", () => {
   expect(terminalEnv({ HOME: "/Users/me" })).toEqual({ HOME: "/Users/me", LANG: "en_US.UTF-8" });
   expect(terminalEnv({ LANG: "" })).toEqual({ LANG: "en_US.UTF-8" });
   expect(terminalEnv({ LANG: "fr_FR.UTF-8" })).toEqual({ LANG: "fr_FR.UTF-8" });

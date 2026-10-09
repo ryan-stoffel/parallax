@@ -35,10 +35,9 @@ const cspMeta: Plugin = {
 };
 
 // Main and preload are separate CommonJS bundles: a sandboxed preload must be
-// one self-contained file. Every dependency is inlined except Electron itself
-// and node-pty, whose native binaries can't be, so the packaged app needs only
-// its folder from node_modules (PLX-66).
-const external = ["electron", "node-pty"];
+// one self-contained file. Every dependency is inlined except Electron itself,
+// so the packaged app needs nothing from node_modules (PLX-66).
+const external = ["electron"];
 const electronBundle = (name: "main" | "preload"): PackUserConfig => ({
   entry: { [name]: `src/${name}/${name}.ts` },
   outDir: `dist/${name}`,

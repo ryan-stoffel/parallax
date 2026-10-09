@@ -226,11 +226,13 @@ export interface ParallaxBridge {
   acpRegistry(): Promise<RegistryAgent[] | string>;
 
   /**
-   * Opens this window's terminal `id`, in place of any terminal it had with that id: `cli`'s own
-   * sign-in on a host (0004), a provider instance's (its `ProviderInfo.login`, on a plxd with
-   * `providers`), or the user's login shell in a host's folder. Resolves to an error
-   * for people, or undefined once it runs. The app only passes on what's typed and printed; it
-   * never reads or keeps it. A window's terminals end when it reloads or closes.
+   * Opens this window's terminal `id` in plxd (PLX-637), in place of any terminal it had with that
+   * id: `cli`'s own sign-in on a host (0004), a provider instance's (its `ProviderInfo.login`, on
+   * a plxd with `providers`), or the user's login shell in a host's folder. A shell's `id` names
+   * it on its host, so opening it again, from any window or after a restart, attaches to it and
+   * replays what it printed. Resolves to an error for people, or undefined once it runs. The app
+   * only passes on what's typed and printed; it never reads or keeps it. When a window reloads or
+   * closes, its shells keep running and its other terminals end.
    */
   openTerminal(
     id: string,
@@ -330,14 +332,14 @@ export type UpdateState = {
 /**
  * What a terminal runs: an SSH host's login, for a password or 2FA (`login`), a CLI's sign-in on a
  * host, a provider instance's sign-in by its id, the install of an agent of a provider kind, or a
- * shell in a folder on a host.
+ * shell in a folder on a host, which its thread's archive or delete ends.
  */
 export type TerminalTarget =
   | { hostId: string; login: true }
   | { hostId: string; cli: CliKind }
   | { hostId: string; provider: string }
   | { hostId: string; install: ProviderKind }
-  | { hostId: string; path: string }
+  | { hostId: string; path: string; threadId?: string }
   | { hostId: string; connect: ConnectAdd };
 
 /** What Add computer sets up with `plx-connect add` (0056): a Tailscale IP, and an ssh user. */
@@ -366,7 +368,10 @@ export type RegistryAgent = {
   };
 };
 
-export type TerminalMessage = { type: "data"; data: string } | { type: "exit"; exitCode: number };
+/** What a terminal printed, all it kept so far (`replay`, which replaces what's shown), or its exit. */
+export type TerminalMessage =
+  | { type: "data" | "replay"; data: string }
+  | { type: "exit"; exitCode: number };
 
 /** A host the user added, reached with `ssh <destination> plxd attach` (0022). */
 export type SshHost = {
@@ -429,8 +434,9 @@ export type ConnectState = {
 };
 
 /**
- * The methods the renderer may not call. Main owns the handshake and event subscriptions, and the
- * rest are plxd's for its MCP tools, which the app never sends.
+ * The methods the renderer may not call. Main owns the handshake, event subscriptions, and
+ * terminals (it decides what they run), and the rest are plxd's for its MCP tools, which the app
+ * never sends.
  */
 export const withheldMethods = [
   "initialize",
@@ -450,6 +456,8 @@ export const withheldMethods = [
   "project/fromThreads",
   "question/ask",
   "question/escalate",
+  "terminal/open",
+  "terminal/close",
 ] as const satisfies readonly (keyof ParallaxRequests)[];
 
 /** The methods the renderer may call: every request but `withheldMethods`. */

@@ -265,6 +265,8 @@ pub(crate) struct Daemon {
     pub cursor: crate::backend::cursor_sdk::CursorAuth,
     /// Parallax Connect's tailnet and listener state (0056).
     pub connect: tailnet::Connect,
+    /// The terminals plxd runs for its clients (PLX-637).
+    pub terminals: crate::terminals::Terminals,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -412,6 +414,7 @@ impl Server {
             providers,
             commands: crate::commands::Commands::new(),
             connect: tailnet::Connect::new(tailnet, config.connect_port, config.connect_address),
+            terminals: crate::terminals::Terminals::default(),
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for
@@ -742,6 +745,7 @@ impl Daemon {
                 parallax_protocol::CONNECT_PORT,
                 None,
             ),
+            terminals: crate::terminals::Terminals::default(),
         })
     }
 }

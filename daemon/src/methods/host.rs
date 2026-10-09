@@ -192,6 +192,7 @@ pub(crate) fn initialize(
 /// silently ignore, and the sweep that removes a settled thread's merged worktree.
 /// `connect` (PLX-574, 0056): `connect`, `deviceName`, and `deviceIcon` in `host/settings`, which
 /// an older plxd would silently ignore, `connect/devices`, and the tailnet listener.
+/// `terminals` (PLX-637): `terminal/*`, the terminals plxd runs for its clients.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -247,6 +248,7 @@ fn capabilities_advertised() -> Capabilities {
         ("sendAccount".to_owned(), serde_json::Map::new()),
         ("sendModel".to_owned(), serde_json::Map::new()),
         ("sendOptions".to_owned(), serde_json::Map::new()),
+        ("terminals".to_owned(), serde_json::Map::new()),
         ("threadAttention".to_owned(), serde_json::Map::new()),
         (
             "threadContext".to_owned(),

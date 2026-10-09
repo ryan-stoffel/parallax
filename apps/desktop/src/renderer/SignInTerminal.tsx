@@ -4,7 +4,7 @@ import type { TerminalTarget } from "../preload/bridge";
 import { TerminalView } from "./Terminal";
 
 /**
- * A terminal running a sign-in on a host, in the main process's pty, as the window's terminal
+ * A terminal running a sign-in on a host, in this computer's plxd, as the window's terminal
  * `sign-in`: a CLI's own (0004), a provider instance's `login`, a CLI's install, or an SSH host's
  * login (0007). `onExit` runs when it ends; closing the pane (`onClose`, or unmounting) ends it if
  * it's still running.

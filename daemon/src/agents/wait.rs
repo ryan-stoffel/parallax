@@ -42,7 +42,7 @@ pub(crate) async fn wait(
         daemon,
         cancel,
         stopped_reading,
-        command_id: _,
+        ..
     } = context;
     let AgentWaitParams {
         run_ids,
