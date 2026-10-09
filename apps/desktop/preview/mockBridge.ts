@@ -16,12 +16,15 @@ import {
   type SubscriptionMessage,
   type TerminalMessage,
   type UpdateState,
+  type WatchMessage,
+  type WatchParams,
 } from "../src/preload/bridge";
 import {
   PROTOCOL_VERSION,
   type AgentOutputItem,
   type AgentRun,
   type Capabilities,
+  type EventsEventParams,
   type JsonValue,
   type RemoteSession,
   type ScheduledTask,
@@ -30,8 +33,10 @@ import {
   type ParallaxEvent,
   type ParallaxRequests,
   type ProviderInfo,
+  type ShellSnapshot,
   type TailnetDevice,
   type Thread,
+  type ThreadSnapshot,
 } from "../src/protocol/generated/protocol";
 import { createFixtures, HOME, PARALLAX_PATH, type RunEvent } from "./fixtures";
 
@@ -64,6 +69,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "landing",
     "memory",
     "openPr",
+    "orchestration",
     "prDiff",
     "projectAutonomy",
     "projectDelete",
@@ -129,9 +135,10 @@ type Listener = {
   id: string;
   /** The host it subscribed on: a run's events go to its own host's listeners. */
   host: string;
-  project?: string;
+  /** What it gets of an event, if anything, as plxd's cursor filters and cuts it. */
+  view: (logged: LoggedEvent) => LoggedEvent | undefined;
   after: number;
-  listener: (m: SubscriptionMessage) => void;
+  listener: (m: { type: "event"; event: EventsEventParams }) => void;
 };
 let subscriptions = 0;
 const listeners = new Set<Listener>();
@@ -151,10 +158,41 @@ function emit(event: ParallaxEvent, project?: string) {
   }
   const host =
     "runId" in event ? hostOf(event.runId) : "thread" in event ? hostOf(event.thread.id) : LOCAL;
-  for (const l of listeners)
-    if (l.host === host && l.project === project && logged.seq > l.after)
-      setTimeout(() => l.listener({ type: "event", event: { subscription: l.id, ...logged } }), 0);
+  for (const l of listeners) {
+    const seen = l.host === host && logged.seq > l.after ? l.view(logged) : undefined;
+    if (seen)
+      setTimeout(() => l.listener({ type: "event", event: { subscription: l.id, ...seen } }));
+  }
   return logged;
+}
+
+const isRequest = (i: AgentOutputItem) =>
+  i.kind === "approvalRequested" || i.kind === "approvalResolved";
+
+/** A shell's view of an event, as plxd's `shell` filter has it: output only for its requests. */
+function shellView(logged: LoggedEvent): LoggedEvent | undefined {
+  const { event } = logged;
+  if (event.kind !== "agent.output") return logged;
+  const items = event.items.filter(isRequest);
+  return items.length ? { ...logged, event: { ...event, items } } : undefined;
+}
+
+/** The permission requests `runIds` wait on, each an `agent.output` of its own, oldest first. */
+function waiting(runIds: string[]): LoggedEvent[] {
+  return runIds.flatMap((id) => {
+    const open = new Map<string, LoggedEvent>();
+    for (const logged of logs.get(id) ?? []) {
+      const { event } = logged;
+      if (event.kind === "agent.finished") open.clear();
+      if (event.kind !== "agent.output") continue;
+      for (const item of event.items) {
+        if (item.kind === "approvalRequested")
+          open.set(item.approvalId, { ...logged, event: { ...event, items: [item] } });
+        if (item.kind === "approvalResolved") open.delete(item.approvalId);
+      }
+    }
+    return [...open.values()];
+  });
 }
 
 const now = () => new Date().toISOString();
@@ -1273,11 +1311,62 @@ export const mockBridge: ParallaxBridge = {
     const entry: Listener = {
       id: `sub-${++subscriptions}`,
       host: hostId,
-      project: params.project,
+      view: (logged) => (logged.project === params.project ? logged : undefined),
       after: params.after,
       listener,
     };
     listeners.add(entry);
+    return () => listeners.delete(entry);
+  },
+  // A snapshot from the fixtures, then the events emitted after it.
+  watch(hostId: string, params: WatchParams, listen: (m: never) => void) {
+    // Each overload's listener takes its own snapshot's type.
+    const listener = listen as (m: WatchMessage) => void;
+    const own = (id: string) => hostOf(id) === hostId;
+    const thread = "threadId" in params ? params.threadId : undefined;
+    let snapshot: ShellSnapshot | ThreadSnapshot;
+    if (thread === undefined) {
+      const known = hostId === LOCAL || !!deviceOf(hostId);
+      const runs = known ? db.runs.filter((r) => own(r.id)) : [];
+      snapshot = {
+        seq,
+        projects: hostId === LOCAL ? db.projects : [],
+        repos: known ? db.repos : [],
+        threads: known ? db.threads.filter((t) => own(t.id)) : [],
+        runs,
+        requests: waiting(runs.map((r) => r.id)),
+      };
+    } else {
+      const run = runOf(thread);
+      if (!run) {
+        setTimeout(() =>
+          listener({ type: "error", error: fail(`no run ${thread}`, "runNotFound") }),
+        );
+        return noop;
+      }
+      snapshot = {
+        seq,
+        thread: run,
+        runs: [],
+        events: logs.get(thread) ?? [],
+        more: false,
+        requests: [],
+      };
+    }
+    const entry: Listener = {
+      id: `sub-${++subscriptions}`,
+      host: hostId,
+      view: (logged) =>
+        thread === undefined
+          ? shellView(logged)
+          : "runId" in logged.event && logged.event.runId === thread
+            ? logged
+            : undefined,
+      after: seq,
+      listener,
+    };
+    listeners.add(entry);
+    setTimeout(() => listener({ type: "snapshot", snapshot: structuredClone(snapshot) }), 40);
     return () => listeners.delete(entry);
   },
   connectionState: (hostId) =>

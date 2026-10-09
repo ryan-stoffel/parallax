@@ -302,14 +302,11 @@ export function AgentChat({
   const connected = connection?.status === "connected";
   const catalog = useCatalog(hostId);
   const queueEnabled = connected && "queue" in connection.capabilities;
-  const { transcript, error, sent, send, cancel, queue, queueError, older, loadOlder } =
-    useAgentRun(
-      hostId,
-      runId,
-      connected,
-      queueEnabled,
-      connected && "eventsBefore" in connection.capabilities,
-    );
+  const { transcript, error, sent, send, cancel, queue, older, loadOlder } = useAgentRun(
+    hostId,
+    runId,
+    connected,
+  );
   // Permission requests (PLX-196): those answered here read as answered at once.
   const { answers, answer, dismiss } = useAnswers(hostId);
   const [resendError, setResendError] = useState<string>();
@@ -738,7 +735,6 @@ export function AgentChat({
             messages={queue}
             running={isRunning(run?.status)}
             disabledReason={disabledReason}
-            loadError={queueError}
             onCancelled={(id) => setCancelled((prev) => new Set(prev).add(id))}
           />
         )}

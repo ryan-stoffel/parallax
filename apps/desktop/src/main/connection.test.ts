@@ -5,7 +5,12 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import { PROTOCOL_VERSION } from "../protocol/generated/protocol";
-import type { ConnectionState, SubscriptionMessage, TerminalMessage } from "../preload/bridge";
+import type {
+  ConnectionState,
+  SubscriptionMessage,
+  TerminalMessage,
+  WatchMessage,
+} from "../preload/bridge";
 import { backoffMs, Connection, exitError, LOCATE_PLXD, sshCommand } from "./connection";
 
 type Message = Record<string, unknown> & {
@@ -193,6 +198,78 @@ test("resumes a subscription from the last seq after a reconnect", () => {
   vi.advanceTimersByTime(1000);
   child().handshake();
   expect(child().request("events/subscribe").params).toEqual({ after: 2 });
+});
+
+test("a watch starts from its snapshot, and resumes after its last seq on a reconnect or a resync (0059)", () => {
+  const connection = connect();
+  child().handshake();
+  const messages: WatchMessage[] = [];
+  connection.watch({ threadId: "t-1" }, (message) => messages.push(message));
+  const first = child().request("orchestration/subscribeThread");
+  expect(first.params).toEqual({ threadId: "t-1" });
+  const event = (seq: number) => ({
+    method: "events/event",
+    params: { subscription: "sub-1", seq, time: "2026-09-27T00:00:00Z", event: { kind: "x" } },
+  });
+  const snapshot = { seq: 4, thread: {}, runs: [], events: [], more: false, requests: [] };
+  // The response and its first events in one chunk: none may be lost, and none is a repeat.
+  child().reply({ id: first.id, result: { subscription: "sub-1", snapshot } }, event(4), event(5));
+  expect(messages.map((m) => (m.type === "event" ? m.event.seq : m.type))).toEqual(["snapshot", 5]);
+
+  // A reconnect asks for the gap after the last seq; plxd replays it, with no snapshot.
+  child().emit("close", 0, null);
+  vi.advanceTimersByTime(1000);
+  child().handshake();
+  const resumed = child().request("orchestration/subscribeThread");
+  expect(resumed.params).toEqual({ threadId: "t-1", afterSeq: 5 });
+  child().reply(
+    { id: resumed.id, result: { subscription: "sub-2" } },
+    {
+      ...event(6),
+      params: { ...event(6).params, subscription: "sub-2" },
+    },
+  );
+  expect(messages.at(-1)).toMatchObject({ type: "event", event: { seq: 6 } });
+
+  // Fallen behind, it asks again after its last seq, and plxd answers with a fresh snapshot.
+  child().reply({ method: "events/resync", params: { subscription: "sub-2" } });
+  const again = child().request("orchestration/subscribeThread");
+  expect(again.params).toEqual({ threadId: "t-1", afterSeq: 6 });
+  child().reply({
+    id: again.id,
+    result: { subscription: "sub-3", snapshot: { ...snapshot, seq: 90 } },
+  });
+  expect(messages.at(-1)).toMatchObject({ type: "snapshot", snapshot: { seq: 90 } });
+
+  // A new log numbers from scratch, so the next one starts from a snapshot.
+  child().emit("close", 0, null);
+  vi.advanceTimersByTime(1000);
+  child().handshake("log-2");
+  expect(child().request("orchestration/subscribeThread").params).toEqual({ threadId: "t-1" });
+});
+
+test("a shell watch that plxd refuses ends with its error, and an ended watch unsubscribes", () => {
+  const connection = connect();
+  child().handshake();
+  const refused = vi.fn();
+  connection.watch({ shell: true }, refused);
+  const shell = child().request("orchestration/subscribeShell");
+  expect(shell.params).toEqual({});
+  const error = { code: -32601, message: "Method not found" };
+  child().reply({ id: shell.id, error });
+  expect(refused).toHaveBeenCalledWith({ type: "error", error });
+
+  const stop = connection.watch({ shell: true }, vi.fn());
+  const next = child().request("orchestration/subscribeShell");
+  child().reply({
+    id: next.id,
+    result: {
+      subscription: "sub-9",
+      snapshot: { seq: 1, projects: [], repos: [], threads: [], runs: [], requests: [] },
+    },
+  });
+  stop();
+  expect(child().request("events/unsubscribe").params).toEqual({ subscription: "sub-9" });
 });
 
 test("routes a terminal's output, and opens a shell again after a reconnect (PLX-637)", async () => {

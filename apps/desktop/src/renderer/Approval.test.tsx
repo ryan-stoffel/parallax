@@ -22,6 +22,7 @@ import {
   type Asked,
 } from "./Approval";
 import type { Approval, ApprovalRequest, ApprovalResolution, Item } from "./transcript";
+import { fakeWatch } from "./fakeWatch";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom lays nothing out: a tall transcript and short rows, so the virtualized list renders all.
@@ -109,6 +110,7 @@ beforeEach(() => {
     }),
     onConnectionState: () => () => {},
     request,
+    watch: fakeWatch(() => window.parallax),
     subscribe: (_host, _params, l) => {
       listener = l;
       return () => {};

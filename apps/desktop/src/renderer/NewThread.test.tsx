@@ -9,6 +9,7 @@ import type { Capabilities, ErrorKind, Repo, Thread } from "../protocol/generate
 import { accessDefaults, accessPrefs } from "./accessPrefs";
 import { App } from "./App";
 import { dragThread } from "./threadDrag";
+import { fakeWatch } from "./fakeWatch";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. `openRowMenus` sends the rows' menus the event a browser sends as one
@@ -76,6 +77,7 @@ beforeEach(() => {
       capabilities,
     }),
     onConnectionState: () => () => {},
+    watch: fakeWatch(() => window.parallax),
     subscribe: () => () => {},
     request,
     pickFolder,
@@ -968,10 +970,12 @@ test("known error kinds read plainly, and unknown ones show plxd's message", asy
 });
 
 test("an open thread deleted by another client goes back to New Thread", async () => {
-  let deliver: (message: SubscriptionMessage) => void = () => {};
+  // Every subscription gets it; the shell's is the one that takes it.
+  const listeners = new Set<(message: SubscriptionMessage) => void>();
+  const deliver = (message: SubscriptionMessage) => listeners.forEach((l) => l(message));
   window.parallax.subscribe = (_host, _params, listener) => {
-    deliver = listener;
-    return () => {};
+    listeners.add(listener);
+    return () => listeners.delete(listener);
   };
   await renderApp();
   await act(async () => (threadRow("Fix the flaky test") as HTMLElement).click());

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, HostInput, SshHost, ParallaxBridge } from "../preload/bridge";
 import { App } from "./App";
+import { fakeWatch } from "./fakeWatch";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -55,6 +56,7 @@ beforeEach(() => {
     setThemeSource: vi.fn(),
     connectionState: async (hostId) => states[hostId]!,
     onConnectionState: () => () => {},
+    watch: fakeWatch(() => window.parallax),
     subscribe: () => () => {},
     request: request as unknown as ParallaxBridge["request"],
     hosts: async () => [mini],

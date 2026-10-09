@@ -22,7 +22,6 @@ export function QueueStrip({
   messages,
   running,
   disabledReason,
-  loadError,
   onCancelled,
 }: {
   hostId: string;
@@ -30,7 +29,6 @@ export function QueueStrip({
   messages: QueuedMessage[];
   running: boolean;
   disabledReason?: string;
-  loadError?: string;
   /** Called with a message's id once plxd has cancelled it. */
   onCancelled?: (id: string) => void;
 }) {
@@ -69,7 +67,7 @@ export function QueueStrip({
     void change("queue/reorder", undefined, ids);
   }
 
-  if (!messages.length && !loadError && !error) return null;
+  if (!messages.length && !error) return null;
   return (
     <section
       aria-label="Queued messages"
@@ -230,9 +228,9 @@ export function QueueStrip({
           </li>
         ))}
       </ol>
-      {(error || loadError) && (
+      {error && (
         <p role="alert" className="px-3 py-2 text-danger">
-          {error || loadError}
+          {error}
         </p>
       )}
     </section>

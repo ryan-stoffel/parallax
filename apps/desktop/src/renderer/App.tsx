@@ -29,7 +29,7 @@ import { Notifications } from "./notifications";
 import { localId, useHosts } from "./hosts";
 import { iconImageBytes } from "./images";
 import { OpenMenu } from "./OpenMenu";
-import { AgentsPanel, useProjectAgents, withProjectThreads } from "./ProjectAgents";
+import { AgentsPanel, useProjectAgents } from "./ProjectAgents";
 import { ProjectChat } from "./ProjectChat";
 import { ProjectHome, waitingCount } from "./ProjectHome";
 import { PullRequestChip, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
@@ -257,14 +257,9 @@ export function App() {
       : undefined;
   if (selection.kind === "project" && !project && known.current.has(selection.projectId))
     setSelection({ kind: "new" });
-  const projectList = useProjectAgents(host.id, project?.id, connected, approvals);
-  // With the threads in the Project that its list doesn't have, as its sidebar row counts them.
+  // With the threads in the Project, as its sidebar row counts them.
   const inProject = useMemo(() => threadProjects(threads.state), [threads.state]);
-  const agents = useMemo(
-    () =>
-      project ? withProjectThreads(projectList, threads.state, project.id, inProject) : projectList,
-    [projectList, threads.state, project, inProject],
-  );
+  const agents = useProjectAgents(host.id, project?.id, threads.state, inProject, approvals);
   // The open subagent, whose chat takes the coordinator's place while the Project stays selected.
   const agentId = selection.kind === "project" ? selection.agentId : undefined;
   // Entering a Project shows its inbox in the side panel.

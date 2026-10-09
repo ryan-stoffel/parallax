@@ -7,6 +7,7 @@ import type { ParallaxBridge, RpcResponse } from "../preload/bridge";
 import type { AgentRun, Repo, Thread } from "../protocol/generated/protocol";
 import { App } from "./App";
 import { dragThread } from "./threadDrag";
+import { fakeWatch } from "./fakeWatch";
 
 // Two threads side by side (PLX-587).
 
@@ -76,6 +77,7 @@ beforeEach(() => {
       capabilities: {},
     }),
     onConnectionState: () => () => {},
+    watch: fakeWatch(() => window.parallax),
     subscribe: () => () => {},
     request,
     hosts: async () => [],

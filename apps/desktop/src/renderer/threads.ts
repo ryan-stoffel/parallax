@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
+import { ErrorCodes } from "../protocol/generated/protocol";
 import type {
   AccountChoice,
   Capabilities,
@@ -22,7 +23,7 @@ import { describeError } from "./errors";
 import type { RunOptions } from "./models";
 import { slugify } from "./naming";
 import { newThreadPrefs } from "./prefs";
-import { isRunning, trackApprovals, updateRun, type ApprovalsByRun } from "./transcript";
+import { trackApprovals, updateRun, type ApprovalsByRun } from "./transcript";
 import { uuidv7 } from "./uuidv7";
 
 /** A host's projects, repo entries, and normal threads (0017), and each thread's title and run. */
@@ -419,14 +420,15 @@ export type CoordinatorOptions = Pick<
 >;
 
 /**
- * A host's threads and projects, kept live: `thread/list`, `agent/list` (for titles and runs), and
- * `project/list`, then host-level events after the thread list's `seq`, and each repo's and
- * Project's own events for its runs and their permission requests (0033), starting over on
- * `resync`. Loads only while connected, which is when plxd's `capabilities` are known. With
- * `approvals`, the threads and coordinators started here forward their permission requests
- * (PLX-196, 0031); with `threadLineage`, titles kept in this app move to plxd once (0041); with
- * `threadNaming`, plxd names new threads and their branches (0058). The view carries them all for
- * the sidebar and top bar. A Project's new Needs you inbox item (0043) goes to
+ * A host's threads and projects, kept live through `orchestration/subscribeShell` (0059): a
+ * snapshot of its projects, repo entries, threads, runs, and the permission requests runs wait
+ * on, then what a sidebar shows of every scope's events (0033). A reconnect resumes after the
+ * last event, from a fresh snapshot when the gap is too long to replay. Loads only while
+ * connected, which is when plxd's `capabilities` are known; an older plxd has no shell to load.
+ * With `approvals`, the threads and coordinators started here forward their permission
+ * requests (PLX-196, 0031); with `threadLineage`, titles kept in this app move to plxd once
+ * (0041); with `threadNaming`, plxd names new threads and their branches (0058). The view carries
+ * them all for the sidebar and top bar. A Project's new Needs you inbox item (0043) goes to
  * `onNeedsYou`.
  */
 export function useThreads(
@@ -452,27 +454,7 @@ export function useThreads(
   useEffect(() => {
     if (!connected) return;
     let stopped = false;
-    let unsubscribe = () => {};
-
-    // Each repo's and Project's own events, for its runs' status and permission requests. `shell`
-    // leaves out the rest of their output (PLX-453); an older plxd ignores it and sends it all.
-    let scopes = new Map<string, () => void>();
-    const watch = (scope: string, after: number, logId: string) => {
-      if (scopes.has(scope)) return;
-      const params = { after, project: scope, shell: true, logId };
-      scopes.set(
-        scope,
-        window.parallax.subscribe(hostId, params, (message) => {
-          if (stopped) return;
-          if (message.type === "resync") return void load();
-          if (message.type !== "event") return;
-          dispatch({ type: "scope", events: [message.event] });
-          const { event } = message.event;
-          if (event.kind === "inbox.added" && event.item.kind === "needsYou")
-            needsYou.current?.(scope, event.item);
-        }),
-      );
-    };
+    let moved = false;
 
     // Titles this app kept before plxd kept them go to plxd, once each, for threads it has none for.
     async function moveTitles(threads: Thread[]) {
@@ -493,68 +475,37 @@ export function useThreads(
       }
     }
 
-    async function load() {
-      setLoading(true);
-      for (const stop of scopes.values()) stop();
-      scopes = new Map();
-      const list = await window.parallax.request(hostId, "thread/list", {});
+    setLoading(true);
+    const stop = window.parallax.watch(hostId, { shell: true }, (message) => {
       if (stopped) return;
-      if ("error" in list) return setError(list.error.message);
-      // After the list, so every thread listed has its run here.
-      const runs = await window.parallax.request(hostId, "agent/list", {});
-      if (stopped) return;
-      if ("error" in runs) return setError(runs.error.message);
-      // Also after the list, whose older `seq` the subscription starts from: a project it
-      // replays is already here, and applying it again changes nothing.
-      const projects = await window.parallax.request(hostId, "project/list", {});
-      if (stopped) return;
-      if ("error" in projects) return setError(projects.error.message);
-      dispatch({
-        type: "snapshot",
-        ...list.result,
-        projects: projects.result.projects,
-        runs: runs.result.runs,
-      });
-      setError(undefined);
-      if (lineage) void moveTitles(list.result.threads);
-      // Requests from before the list are in the logs of runs that still go. Read first, and
-      // only for requests, so they never undo a newer change from the subscriptions below.
-      const backlog = await waitingSince(hostId, runs.result.runs, () => stopped);
-      if (stopped) return;
-      dispatch({ type: "approvals", events: backlog });
-      setLoading(false);
-      // From the run list's `seq`, which plxd replays from, so no change since is missed.
-      const after = runs.result.seq;
-      for (const r of list.result.repos) watch(r.id, after, runs.logId);
-      for (const p of projects.result.projects) watch(p.id, after, runs.logId);
-      unsubscribe();
-      const since = { after: list.result.seq, logId: list.logId };
-      unsubscribe = window.parallax.subscribe(hostId, since, (message) => {
-        if (stopped) return;
-        if (message.type === "resync") return void load();
-        if (message.type === "error") return setError(message.error.message);
-        const { event } = message.event;
-        dispatch({ type: "event", event });
-        // A new scope's events start after this one, which is newer than its creation.
-        if (event.kind === "repo.added") watch(event.repo.id, message.event.seq, list.logId);
-        if (event.kind === "project.created")
-          watch(event.project.id, message.event.seq, list.logId);
-        // Its title is its run's prompt, which the event doesn't carry.
-        if (event.kind === "thread.started")
-          void window.parallax
-            .request(hostId, "agent/list", { project: event.thread.repo })
-            .then((answer) => {
-              if (!stopped && "result" in answer)
-                dispatch({ type: "runs", runs: answer.result.runs });
-            });
-      });
-    }
-
-    void load();
+      if (message.type === "error")
+        return setError(
+          message.error.code === ErrorCodes.MethodNotFound ? tooOld : message.error.message,
+        );
+      if (message.type === "snapshot") {
+        const { projects, repos, threads, runs, requests } = message.snapshot;
+        dispatch({ type: "snapshot", projects, repos, threads, runs });
+        dispatch({ type: "approvals", events: requests });
+        setError(undefined);
+        setLoading(false);
+        if (lineage && !moved) {
+          moved = true;
+          void moveTitles(threads);
+        }
+        return;
+      }
+      // A host-level event changes the lists, and a scope's its runs and their requests; each
+      // action leaves the other's kinds alone.
+      const logged = message.event;
+      dispatch({ type: "event", event: logged.event });
+      dispatch({ type: "scope", events: [logged] });
+      const { event } = logged;
+      if (event.kind === "inbox.added" && event.item.kind === "needsYou" && logged.project)
+        needsYou.current?.(logged.project, event.item);
+    });
     return () => {
       stopped = true;
-      unsubscribe();
-      for (const stop of scopes.values()) stop();
+      stop();
     };
   }, [hostId, connected, lineage]);
 
@@ -741,27 +692,8 @@ export function useThreads(
   );
 }
 
-/**
- * The permission-request events in the logs of `runs` that still go and forward requests, read
- * page by page, for whatever subscribes after the list. A page that fails leaves that run's out;
- * new requests still arrive by subscription.
- */
-export async function waitingSince(
-  hostId: string,
-  runs: AgentRun[],
-  stopped: () => boolean,
-): Promise<LoggedEvent[]> {
-  const events: LoggedEvent[] = [];
-  for (const run of runs.filter((r) => r.approvals && isRunning(r.status)))
-    for (let after = 0, more = true; more;) {
-      const page = await window.parallax.request(hostId, "agent/events", { runId: run.id, after });
-      if (stopped() || "error" in page) break;
-      events.push(...page.result.events);
-      after = page.result.events.at(-1)?.seq ?? after;
-      more = page.result.more && page.result.events.length > 0;
-    }
-  return events;
-}
+/** Why a host's lists can't load: its plxd predates the subscriptions this app uses (0059). */
+const tooOld = "This host's plxd is too old for this version of Parallax. Update Parallax there.";
 
 const notConnected = "Not connected to this host.";
 /** A disconnected host's capabilities: one shared object, so a view without them stays equal. */

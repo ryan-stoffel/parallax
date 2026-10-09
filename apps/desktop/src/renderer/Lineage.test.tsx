@@ -14,6 +14,7 @@ import type {
   Thread,
 } from "../protocol/generated/protocol";
 import { App } from "./App";
+import { fakeWatch } from "./fakeWatch";
 
 // A thread's parent and children in the top bar and the sidebar (PLX-374, 0041).
 
@@ -97,6 +98,7 @@ beforeEach(() => {
       capabilities,
     }),
     onConnectionState: () => () => {},
+    watch: fakeWatch(() => window.parallax),
     subscribe: () => () => {},
     request,
     hosts: async () => [],

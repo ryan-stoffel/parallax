@@ -7,6 +7,8 @@ import type {
   EventsEventParams,
   EventsSubscribeParams,
   LogId,
+  ShellSnapshot,
+  ThreadSnapshot,
   ParallaxRequests,
   ProviderKind,
 } from "../protocol/generated/protocol";
@@ -157,6 +159,22 @@ export interface ParallaxBridge {
     hostId: string,
     params: SubscribeParams,
     listener: (message: SubscriptionMessage) => void,
+  ): () => void;
+  /**
+   * A host's shell (`{shell: true}`) or one thread (`{threadId}`), kept live (0059): a snapshot,
+   * then the events after its `seq`. A reconnect or a lagging subscription resumes after the
+   * last `seq` delivered, and plxd either replays the gap or sends a fresh snapshot, which
+   * replaces the last. Ends only with an `error`. Returns the function that ends it.
+   */
+  watch(
+    hostId: string,
+    params: { shell: true },
+    listener: (message: WatchMessage<ShellSnapshot>) => void,
+  ): () => void;
+  watch(
+    hostId: string,
+    params: { threadId: string },
+    listener: (message: WatchMessage<ThreadSnapshot>) => void,
   ): () => void;
   /** A host's connection state now. Rejects for an unknown host id, as `retry` does. */
   connectionState(hostId: string): Promise<ConnectionState>;
@@ -514,6 +532,16 @@ export type HostResponse<R> = { result: R; logId: LogId } | { error: RpcError };
 
 /** `events/subscribe`'s params, plus the `logId` of the response `after` came from. */
 export type SubscribeParams = EventsSubscribeParams & { logId: LogId };
+
+/** What `watch` follows: a host's shell, or one thread. */
+export type WatchParams = { shell: true } | { threadId: string };
+
+export type WatchMessage<S = ShellSnapshot | ThreadSnapshot> =
+  /** Where it stands now. It replaces anything shown before. */
+  | { type: "snapshot"; snapshot: S }
+  | { type: "event"; event: EventsEventParams }
+  /** It ended with an error, such as `runNotFound`. */
+  | { type: "error"; error: RpcError };
 
 export type SubscriptionMessage =
   | { type: "event"; event: EventsEventParams }

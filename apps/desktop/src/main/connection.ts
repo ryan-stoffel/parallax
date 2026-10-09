@@ -10,6 +10,8 @@ import {
   type IncompatibleProtocolDetail,
   type InitializeResult,
   type LogId,
+  type SubscribeShellResult,
+  type SubscribeThreadResult,
   type SubscriptionId,
   type ParallaxRequests,
   type TerminalExitParams,
@@ -22,9 +24,12 @@ import type {
   ConnectionState,
   HostResponse,
   RpcError,
+  RpcResponse,
   SubscribeParams,
   SubscriptionMessage,
   TerminalMessage,
+  WatchMessage,
+  WatchParams,
 } from "../preload/bridge";
 import { RpcClient } from "./rpc";
 
@@ -53,6 +58,7 @@ const RECEIPTED_METHODS = new Set([
   "project/start",
   "project/delete",
   "thread/delete",
+  "orchestration/dispatch",
 ]);
 
 /** Mutating methods get one commandId per logical request, including its transport retry. */
@@ -175,6 +181,21 @@ type Subscription = {
   id?: SubscriptionId;
 };
 
+/**
+ * An `orchestration/subscribeShell` or `subscribeThread` (0059): a snapshot, then its events. A
+ * reconnect or a resync subscribes again after the last `seq` delivered, which plxd answers by
+ * replaying a short gap or with a fresh snapshot.
+ */
+type Watch = {
+  params: WatchParams;
+  listener: (message: WatchMessage) => void;
+  /** The last `seq` delivered, in log `logId`. */
+  seq?: number;
+  logId?: LogId;
+  /** plxd's id for it on the current connection. */
+  id?: SubscriptionId;
+};
+
 /** A terminal plxd runs, as this connection opened it, and who shows it. */
 type Terminal = { params: TerminalOpenParams; listeners: Set<(message: TerminalMessage) => void> };
 
@@ -196,6 +217,7 @@ export class Connection {
   private heartbeatTimer?: NodeJS.Timeout;
   private livenessTimer?: NodeJS.Timeout;
   private readonly subscriptions = new Set<Subscription>();
+  private readonly watches = new Set<Watch>();
   private readonly terminals = new Map<string, Terminal>();
   private readonly reconnectWaiters = new Set<() => void>();
 
@@ -215,6 +237,7 @@ export class Connection {
   /** Stops for good: kills the child and drops every subscription. */
   dispose(): void {
     this.subscriptions.clear();
+    this.watches.clear();
     this.teardown();
     for (const done of this.reconnectWaiters) done();
   }
@@ -278,6 +301,23 @@ export class Connection {
         this.client?.send(
           "events/unsubscribe",
           { subscription: subscription.id },
+          REQUEST_TIMEOUT_MS,
+          ignore,
+        );
+      }
+    };
+  }
+
+  /** See `ParallaxBridge.watch`. Returns the function that ends it. */
+  watch(params: WatchParams, listener: Watch["listener"]): () => void {
+    const watch: Watch = { params, listener };
+    this.watches.add(watch);
+    if (this.state.status === "connected") this.sendWatch(watch);
+    return () => {
+      if (this.watches.delete(watch) && watch.id) {
+        this.client?.send(
+          "events/unsubscribe",
+          { subscription: watch.id },
           REQUEST_TIMEOUT_MS,
           ignore,
         );
@@ -459,6 +499,7 @@ export class Connection {
     });
     for (const done of this.reconnectWaiters) done();
     for (const subscription of this.subscriptions) this.sendSubscribe(subscription);
+    for (const watch of this.watches) this.sendWatch(watch);
     for (const [key, terminal] of this.terminals) {
       client.send("terminal/open", terminal.params, REQUEST_TIMEOUT_MS, (response) => {
         if ("error" in response) this.endTerminal(key, -1);
@@ -491,6 +532,39 @@ export class Connection {
     });
   }
 
+  private sendWatch(watch: Watch): void {
+    const client = this.client;
+    // A `seq` from another log is meaningless, so a new log starts from a snapshot.
+    const afterSeq = watch.logId === this.logId ? watch.seq : undefined;
+    const after = afterSeq === undefined ? {} : { afterSeq };
+    watch.id = undefined;
+    // `send`'s callback runs before the next line is read, so the id is known before its events.
+    const answered = (response: RpcResponse<SubscribeShellResult | SubscribeThreadResult>) => {
+      if (client !== this.client) return; // The next connection subscribes again.
+      if (!this.watches.has(watch)) {
+        if ("result" in response) {
+          const { subscription } = response.result;
+          client?.send("events/unsubscribe", { subscription }, REQUEST_TIMEOUT_MS, ignore);
+        }
+        return;
+      }
+      if ("error" in response) {
+        this.watches.delete(watch);
+        return watch.listener({ type: "error", error: response.error });
+      }
+      watch.id = response.result.subscription;
+      const { snapshot } = response.result;
+      if (!snapshot) return;
+      watch.seq = snapshot.seq;
+      watch.logId = this.logId;
+      watch.listener({ type: "snapshot", snapshot });
+    };
+    if ("threadId" in watch.params) {
+      const params = { threadId: watch.params.threadId, ...after };
+      client?.send("orchestration/subscribeThread", params, REQUEST_TIMEOUT_MS, answered);
+    } else client?.send("orchestration/subscribeShell", after, REQUEST_TIMEOUT_MS, answered);
+  }
+
   private onNotification(method: string, params: unknown): void {
     if (method === "terminal/output") {
       const { data, replay, ...key } = params as TerminalOutputParams;
@@ -510,10 +584,19 @@ export class Connection {
       for (const subscription of this.subscriptions) {
         if (subscription.id === id) return this.endSubscription(subscription, { type: "resync" });
       }
+      // A watch subscribes again after its last `seq`, which replays or snapshots.
+      for (const watch of this.watches) if (watch.id === id) return this.sendWatch(watch);
       return;
     }
     if (method !== "events/event") return;
     const event = params as EventsEventParams;
+    for (const watch of this.watches) {
+      if (watch.id !== event.subscription) continue;
+      if (watch.seq !== undefined && event.seq <= watch.seq) return; // Already seen.
+      watch.seq = event.seq;
+      watch.listener({ type: "event", event });
+      return;
+    }
     for (const subscription of this.subscriptions) {
       if (subscription.id !== event.subscription) continue;
       if (event.seq <= subscription.params.after) return; // Already seen.
