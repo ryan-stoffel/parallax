@@ -127,7 +127,7 @@ fn decide_changes_only_what_differs() {
 }
 
 /// Archive and settle release the thread's live session through `provider-session.detach`
-/// (0060); unarchiving and unsettling don't.
+/// (0060), and settle runs the settle script after it (PLX-650).
 #[test]
 fn archive_and_settle_detach_the_session() {
     let id = Uuid::now_v7();
@@ -147,7 +147,7 @@ fn archive_and_settle_detach_the_session() {
         decide(id, Action::Update(settle.clone()), rows(Some(row))),
         Ok(Decision {
             changes: vec![Change::Update(settle)],
-            effects: vec![Effect::SessionDetach],
+            effects: vec![Effect::SessionDetach, Effect::SettleScript],
         })
     );
 }
