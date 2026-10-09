@@ -164,6 +164,19 @@ impl Host {
         Self { dir, server }
     }
 
+    /// A host whose API keys and secrets live in `keys`, never the real keystore.
+    pub(crate) fn start_with_keys(
+        dir: TempDir,
+        backends: BackendRegistry,
+        keys: std::sync::Arc<dyn plxd::keystore::KeyStore>,
+    ) -> Self {
+        let mut config = InProcess::config(dir.path());
+        config.backends = Some(backends);
+        config.keys = Some(keys);
+        let server = InProcess::start(config);
+        Self { dir, server }
+    }
+
     pub(crate) async fn restart(self, backends: BackendRegistry) -> Self {
         let Self { dir, server } = self;
         server.stop().await;

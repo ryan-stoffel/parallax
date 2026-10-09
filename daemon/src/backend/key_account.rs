@@ -92,6 +92,7 @@ mod tests {
     fn a_locked_keychain_is_keychain_unavailable() {
         // Nothing can unlock the Keychain to answer, such as a headless session (0004, 0007,
         // #91).
+        #[derive(Debug)]
         struct LockedStore;
         impl KeyStore for LockedStore {
             fn set(&self, _account: AccountId, _key: &str) -> Result<(), KeyStoreError> {

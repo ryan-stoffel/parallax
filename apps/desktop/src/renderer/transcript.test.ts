@@ -12,6 +12,7 @@ import {
   subagentState,
   trackApprovals,
   waitingApprovals,
+  waitingSecrets,
   workedFor,
   type Item,
   type Subagent,
@@ -883,4 +884,24 @@ test("a script's end replaces its start where it was (PLX-650)", () => {
     at({ ...script, status: "interrupted" }),
   );
   expect(of(restarted.items, "script")).toMatchObject([{ status: "interrupted" }]);
+});
+
+test("a secret request waits until it is resolved or its run ends, and never holds a value", () => {
+  const asked = output(
+    { kind: "secretRequested", requestId: "s1", label: "Webhook secret", reason: "To sign." },
+    { kind: "secretRequested", requestId: "s2", label: "API token", reason: "To call it." },
+  );
+  const t = build(asked, output({ kind: "secretResolved", requestId: "s1", status: "saved" }));
+  expect(of(t.items, "secret").map((s) => [s.request.requestId, s.status])).toEqual([
+    ["s1", "saved"],
+    ["s2", undefined],
+  ]);
+  expect(waitingSecrets(t.items).map((s) => s.request.label)).toEqual(["API token"]);
+  const ended = applyEvents(
+    t,
+    [at({ kind: "agent.finished", runId, outcome: { status: "cancelled" } })],
+    runId,
+  );
+  expect(waitingSecrets(ended.items)).toEqual([]);
+  expect(of(ended.items, "secret")[1]?.status).toBe("cancelled");
 });

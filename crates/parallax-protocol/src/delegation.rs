@@ -4,12 +4,13 @@
 //! that thread delegated, its child with lineage `subagent`, or with no `completionWake` a
 //! top-level thread beside it. `task/status` reads a delegated task, and changes how its end
 //! reaches its parent. `thread/mergeBack` hands a fork's or a child's new context to the thread
-//! it came from, with its next message.
+//! it came from, with its next message. `secret/request` asks the user for a secret through the
+//! app (`request_secret`), and `secret/answer` is the app's answer.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{AccountChoice, AgentEffort, AgentPermission, AgentRun, RunId};
+use crate::{AccountChoice, AgentEffort, AgentPermission, AgentRun, RunId, SecretStatus};
 
 /// When a delegated task's end wakes its parent, as T3 Code's `completionWake`.
 ///
@@ -138,3 +139,87 @@ pub struct ThreadMergeBackResult {
     /// The transfer's id, a UUID.
     pub transfer_id: String,
 }
+
+/// Params of `secret/request`: asks the user for a secret in run `runId`'s thread, or keeps
+/// waiting on request `requestId` if it was asked already, for at most `waitMs`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretRequestParams {
+    /// The run that asks, which must be running a turn.
+    pub run_id: RunId,
+    /// The request's id, a UUID the caller makes. Reuse it to keep waiting.
+    pub request_id: String,
+    /// What it needs, shown as the card's title.
+    pub label: String,
+    /// What it is for, and where the user gets it.
+    pub reason: String,
+    /// A hint for the input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub placeholder: Option<String>,
+    /// How long to wait for an answer before answering `pending`, at most 50000.
+    pub wait_ms: u32,
+}
+
+/// Result of `secret/request`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretRequestResult {
+    /// How the request stands.
+    pub status: SecretStatus,
+    /// With `saved`: `secret-ref:<id>`, which a tool such as `schedule/save` uses once, within
+    /// 24 hours, for the thread that asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub secret_ref: Option<String>,
+}
+
+/// An answer to a secret request.
+///
+/// A newer client may send an answer this version does not know; plxd refuses it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum SecretChoice {
+    /// The user's value, which plxd keeps in the host's keystore.
+    Save {
+        /// The secret.
+        secret: String,
+    },
+    /// The user chose not to give one.
+    Decline,
+    /// The agent stopped waiting.
+    Cancel,
+    /// An answer this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+// Never print the value, whoever formats it.
+impl std::fmt::Debug for SecretChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Save { .. } => "Save { .. }",
+            Self::Decline => "Decline",
+            Self::Cancel => "Cancel",
+            Self::Unknown => "Unknown",
+        })
+    }
+}
+
+/// Params of `secret/answer`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretAnswerParams {
+    /// The run that asked.
+    pub run_id: RunId,
+    /// The request.
+    pub request_id: String,
+    /// The answer.
+    pub answer: SecretChoice,
+}
+
+/// Result of `secret/answer`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretAnswerResult {}

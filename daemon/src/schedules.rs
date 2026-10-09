@@ -4,7 +4,8 @@
 //! thread per fire.
 //!
 //! A task is a row of `scheduled_tasks`: its next run, and the [`ScheduledTask`] with its
-//! webhook token and secret as JSON. [`run`] keeps one timer for the earliest next run, re-armed
+//! webhook token as JSON. A webhook's signing secret is in the host's keystore under the task's
+//! id (PLX-648), given in the save or as a `secretRef` from `request_secret`. [`run`] keeps one timer for the earliest next run, re-armed
 //! whenever a task changes, and none while no task has one.
 //!
 //! A fire takes the task's orchestrator lane and commits in one writer job: a receipt for
@@ -26,8 +27,8 @@ use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Span, Timestamp};
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountChoice, AgentEffort, AgentPermission, AgentSendParams, ProjectId, RepoId, RunId,
-    Schedule, ScheduleDeleteResult, ScheduleIdParams, ScheduleListResult, ScheduleRunStatus,
+    AccountChoice, AccountId, AgentEffort, AgentPermission, AgentSendParams, ProjectId, RepoId,
+    RunId, Schedule, ScheduleDeleteResult, ScheduleIdParams, ScheduleListResult, ScheduleRunStatus,
     ScheduleSaveParams, ScheduleWebhook, ScheduledTask, SignatureEncoding, ThreadStartParams,
     TurnId,
 };
@@ -38,6 +39,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use crate::server::Daemon;
 use crate::store::{Tx, store_error};
@@ -80,16 +82,20 @@ impl Schedules {
     }
 }
 
-/// A task as stored: what the protocol shows, and its webhook's token and secret, which it
-/// doesn't. `task.webhook` is filled in only when shown.
+/// A task as stored: what the protocol shows, and its webhook's token and where its secret is,
+/// which it doesn't. `task.webhook` is filled in only when shown.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Stored {
     task: ScheduledTask,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     token: Option<String>,
+    /// A secret saved before PLX-648, which a new one replaces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     secret: Option<String>,
+    /// Whether the keystore holds its secret under the task's id.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    keychain: bool,
 }
 
 /// What fired a task.
@@ -173,15 +179,19 @@ pub(crate) async fn list(daemon: &Daemon) -> Result<ScheduleListResult, ErrorObj
 /// and, when the save names no secret, its webhook secret.
 pub(crate) async fn save(
     daemon: &Daemon,
-    params: ScheduleSaveParams,
+    mut params: ScheduleSaveParams,
 ) -> Result<ScheduledTask, ErrorObject> {
     check(&params)?;
     let id = match &params.id {
         Some(id) => task_id(id)?,
         None => Uuid::now_v7(),
     };
+    let key = AccountId::try_from(id)
+        .map_err(|_| ErrorObject::invalid_params(format!("{id} is not a scheduled task's id")))?;
     let replacing = params.id.is_some();
     let _lane = daemon.orchestrator.lane(id).await;
+    let secret = new_secret(daemon, &mut params).await?;
+    let given = secret.is_some();
     let stored = daemon
         .store
         .run(&CancellationToken::new(), move |db| {
@@ -190,11 +200,19 @@ pub(crate) async fn save(
                 return Err(not_found(id));
             }
             check_targets(db, &params)?;
-            let stored = build(id, params, existing, Timestamp::now())?;
+            let stored = build(id, params, existing, given, Timestamp::now())?;
             put(db, &stored)?;
             Ok(stored)
         })
         .await?;
+    // After the row, so a keystore that fails leaves a task whose requests fail their check.
+    if let Some(secret) = secret {
+        let keys = Arc::clone(&daemon.keys);
+        tokio::task::spawn_blocking(move || keys.set(key, &secret))
+            .await
+            .map_err(|error| ErrorObject::internal_error(error.to_string()))?
+            .map_err(|error| crate::methods::keychain_error(&error))?;
+    }
     daemon.schedules.changed.notify_one();
     Ok(shown(stored, origin(daemon).await.as_deref()))
 }
@@ -212,6 +230,13 @@ pub(crate) async fn delete(
             db.delete_scheduled_task(id).map_err(|e| store_error(&e))
         })
         .await?;
+    if let Ok(key) = AccountId::try_from(id) {
+        let keys = Arc::clone(&daemon.keys);
+        let removed = tokio::task::spawn_blocking(move || keys.delete(key)).await;
+        if !matches!(removed, Ok(Ok(()))) {
+            warn!(%id, "could not remove a deleted task's webhook secret from the keystore");
+        }
+    }
     daemon.schedules.changed.notify_one();
     Ok(ScheduleDeleteResult { deleted })
 }
@@ -557,8 +582,12 @@ pub(crate) async fn hook(
         return (429, json!({ "error": "rate_limited" }));
     }
     if let Some(signature) = signature {
-        let secret = stored.secret.as_deref().unwrap_or_default();
-        if !webhook::verify(signature, secret, headers, body) {
+        let secret = match stored.secret.clone() {
+            Some(legacy) => Some(Zeroizing::new(legacy)),
+            None => keystore_secret(daemon, id).await,
+        };
+        let secret = secret.as_deref().map_or("", String::as_str);
+        if secret.is_empty() || !webhook::verify(signature, secret, headers, body) {
             return (401, json!({ "error": "invalid_signature" }));
         }
     }
@@ -654,9 +683,13 @@ fn check(params: &ScheduleSaveParams) -> Result<(), ErrorObject> {
             signature: Some(signature),
         } if signature.header.trim().is_empty()
             || signature.encoding == SignatureEncoding::Unknown
-            || signature.secret.as_deref().is_some_and(str::is_empty) =>
+            || signature.secret.as_deref().is_some_and(str::is_empty)
+            || (signature.secret.is_some() && signature.secret_ref.is_some()) =>
         {
-            invalid("a signature needs a header, hex or base64, and a non-empty secret")
+            invalid(
+                "a signature needs a header, hex or base64, and a non-empty secret or a \
+                 secretRef, not both",
+            )
         }
         Schedule::Unknown => invalid("schedule's type must be interval, fixed_time, or webhook"),
         _ => Ok(()),
@@ -694,6 +727,7 @@ fn build(
     id: Uuid,
     params: ScheduleSaveParams,
     existing: Option<Stored>,
+    given: bool,
     now: Timestamp,
 ) -> Result<Stored, ErrorObject> {
     let ScheduleSaveParams {
@@ -701,7 +735,7 @@ fn build(
         title,
         prompt,
         enabled,
-        mut schedule,
+        schedule,
         thread,
         project,
         repo,
@@ -709,29 +743,29 @@ fn build(
         model,
         effort,
         permission,
+        from: _,
     } = params;
-    // A webhook keeps its token, and its secret unless the save names a new one.
-    let (token, secret) = match &mut schedule {
+    // A webhook keeps its token, and its secret unless the save gave a new one, which `save`
+    // keeps in the keystore.
+    let (token, secret, keychain) = match &schedule {
         Schedule::Webhook { signature } => {
             let token = existing
                 .as_ref()
                 .and_then(|stored| stored.token.clone())
                 .map_or_else(webhook::new_token, Ok)?;
-            let secret = match signature.as_mut() {
-                None => None,
-                Some(signature) => match signature.secret.take() {
-                    Some(secret) => Some(secret),
-                    None => existing.as_ref().and_then(|stored| stored.secret.clone()),
-                },
+            let (secret, keychain) = match (signature, &existing) {
+                (Some(_), _) if given => (None, true),
+                (Some(_), Some(stored)) => (stored.secret.clone(), stored.keychain),
+                _ => (None, false),
             };
-            if signature.is_some() && secret.is_none() {
+            if signature.is_some() && secret.is_none() && !keychain {
                 return Err(ErrorObject::invalid_params(
                     "a new signature needs its secret",
                 ));
             }
-            (Some(token), secret)
+            (Some(token), secret, keychain)
         }
-        _ => (None, None),
+        _ => (None, None, false),
     };
     let before = existing.map(|stored| stored.task);
     // An unchanged trigger keeps its next run, so an edit doesn't push it back.
@@ -774,7 +808,42 @@ fn build(
         },
         token,
         secret,
+        keychain,
     })
+}
+
+/// Takes the save's new webhook secret out of `params`: its `secret`, or the value of its
+/// `secretRef`, which only the thread in `from` can use, and which this uses up.
+async fn new_secret(
+    daemon: &Daemon,
+    params: &mut ScheduleSaveParams,
+) -> Result<Option<Zeroizing<String>>, ErrorObject> {
+    let Schedule::Webhook {
+        signature: Some(signature),
+    } = &mut params.schedule
+    else {
+        return Ok(None);
+    };
+    if let Some(secret) = signature.secret.take() {
+        return Ok(Some(Zeroizing::new(secret)));
+    }
+    match signature.secret_ref.take() {
+        Some(secret_ref) => crate::secrets::consume(daemon, &secret_ref, params.from)
+            .await
+            .map(Some),
+        None => Ok(None),
+    }
+}
+
+/// Task `id`'s webhook secret from the keystore, if it can be read.
+async fn keystore_secret(daemon: &Daemon, id: Uuid) -> Option<Zeroizing<String>> {
+    let key = AccountId::try_from(id).ok()?;
+    let keys = Arc::clone(&daemon.keys);
+    tokio::task::spawn_blocking(move || keys.get(key))
+        .await
+        .ok()?
+        .ok()
+        .flatten()
 }
 
 /// Whether two triggers fire at the same times, as T3's `isSameSchedule`.
@@ -811,13 +880,14 @@ fn shown(stored: Stored, origin: Option<&str>) -> ScheduledTask {
         mut task,
         token,
         secret,
+        keychain,
     } = stored;
     if let Some(token) = token {
         let path = format!("{}{}/{token}", webhook::PREFIX, task.id);
         task.webhook = Some(ScheduleWebhook {
             url: origin.map(|origin| format!("{origin}{path}")),
             path,
-            has_secret: secret.is_some(),
+            has_secret: secret.is_some() || keychain,
         });
     }
     task

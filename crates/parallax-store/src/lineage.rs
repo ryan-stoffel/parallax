@@ -1,6 +1,6 @@
 //! Delegation (0063, PLX-648): threads that work in another thread's workspace, the tasks among
-//! them that a thread delegated, and `merge_back` context transfers. The daemon owns what a
-//! lineage's payload means; this crate stores it as text.
+//! them that a thread delegated, `merge_back` context transfers, and `request_secret`'s one-time
+//! refs. The daemon owns what a lineage's payload means; this crate stores it as text.
 
 use jiff::Timestamp;
 use rusqlite::{OptionalExtension, params};
@@ -179,6 +179,76 @@ impl Store {
         let rows = stmt.query_map(params![target.to_string()], |row| row.get::<_, String>(0))?;
         rows.map(|id| Ok(Uuid::parse_str(&id?)?)).collect()
     }
+
+    /// Records one-time secret ref `id`, which thread `thread` asked for, until `expires_at`.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn add_secret_ref(
+        &self,
+        id: Uuid,
+        thread: Uuid,
+        expires_at: Timestamp,
+    ) -> Result<(), StoreError> {
+        self.conn
+            .prepare_cached(
+                "INSERT INTO secret_refs (id, thread_id, expires_at) VALUES (?1, ?2, ?3)",
+            )?
+            .execute(params![
+                id.to_string(),
+                thread.to_string(),
+                timestamp::format(expires_at)
+            ])?;
+        Ok(())
+    }
+
+    /// Removes secret ref `id`, so it is never used again, and returns the thread that asked
+    /// for it and when it expires, if it was there.
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored id or time is corrupt.
+    pub fn take_secret_ref(&self, id: Uuid) -> Result<Option<(Uuid, Timestamp)>, StoreError> {
+        let row = self
+            .conn
+            .prepare_cached(
+                "DELETE FROM secret_refs WHERE id = ?1 RETURNING thread_id, expires_at",
+            )?
+            .query_row(params![id.to_string()], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .optional()?;
+        row.map(|(thread, at)| Ok((Uuid::parse_str(&thread)?, timestamp::parse(&at)?)))
+            .transpose()
+    }
+
+    /// The secret refs that expired by `now`, and when the next one expires.
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored id or time is corrupt.
+    pub fn secret_ref_expiry(
+        &self,
+        now: Timestamp,
+    ) -> Result<(Vec<Uuid>, Option<Timestamp>), StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT id, expires_at FROM secret_refs ORDER BY expires_at")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut expired = Vec::new();
+        for row in rows {
+            let (id, at) = row?;
+            let at = timestamp::parse(&at)?;
+            if at > now {
+                return Ok((expired, Some(at)));
+            }
+            expired.push(Uuid::parse_str(&id)?);
+        }
+        Ok((expired, None))
+    }
 }
 
 #[cfg(test)]
@@ -188,6 +258,23 @@ mod tests {
 
     use super::Lineage;
     use crate::Store;
+
+    /// A ref is taken once, and the expiry lists it once it's due.
+    #[test]
+    fn a_secret_ref_is_taken_once_and_expires() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("parallax.sqlite3")).unwrap();
+        let (id, thread) = (Uuid::now_v7(), Uuid::now_v7());
+        let at = Timestamp::from_second(2_000_000_000).unwrap();
+        store.add_secret_ref(id, thread, at).unwrap();
+        assert_eq!(
+            store.secret_ref_expiry(Timestamp::UNIX_EPOCH).unwrap(),
+            (vec![], Some(at))
+        );
+        assert_eq!(store.secret_ref_expiry(at).unwrap(), (vec![id], None));
+        assert_eq!(store.take_secret_ref(id).unwrap(), Some((thread, at)));
+        assert_eq!(store.take_secret_ref(id).unwrap(), None, "one use");
+    }
 
     #[test]
     fn a_lineage_reads_back_and_replaces() {

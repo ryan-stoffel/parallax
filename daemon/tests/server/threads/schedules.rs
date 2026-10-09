@@ -27,6 +27,7 @@ fn hourly(title: &str, prompt: &str, thread: Option<RunId>) -> ScheduleSaveParam
         model: None,
         effort: None,
         permission: None,
+        from: None,
     }
 }
 

@@ -66,6 +66,7 @@ use crate::{
     RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoSaveScriptsParams,
     RepoScriptsParams, RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult,
     ScheduleIdParams, ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask,
+    SecretAnswerParams, SecretAnswerResult, SecretRequestParams, SecretRequestResult,
     SubscribeShellParams, SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult,
     TaskDelegateParams, TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams,
     TerminalListResult, TerminalOpenParams, TerminalOutputParams, TerminalResizeParams,
@@ -503,6 +504,13 @@ method_table! {
         /// `thread/mergeBack`: a fork's or child's new context goes with the next message of the
         /// thread it came from.
         ThreadMergeBack = "thread/mergeBack": ThreadMergeBackParams => ThreadMergeBackResult;
+        /// `secret/request`: asks the user for a secret through the app, or keeps waiting on a
+        /// request already made, and answers how it stands (`request_secret`, 0063). Refused
+        /// with `keychainUnavailable` on a host with no keystore. Gated on the `secrets`
+        /// capability, like `secret/answer`.
+        SecretRequest = "secret/request": SecretRequestParams => SecretRequestResult;
+        /// `secret/answer`: the user's answer to a secret request, or the agent giving up on it.
+        SecretAnswer = "secret/answer": SecretAnswerParams => SecretAnswerResult;
         /// `orchestration/dispatch`: runs one command on a thread (0059, PLX-644), idempotent on
         /// its `commandId`. Gated on the `orchestration` capability, like every
         /// `orchestration/*` method.
@@ -691,6 +699,8 @@ mod tests {
                 "task/delegate",
                 "task/status",
                 "thread/mergeBack",
+                "secret/request",
+                "secret/answer",
                 "orchestration/dispatch",
                 "orchestration/subscribeShell",
                 "orchestration/subscribeThread",

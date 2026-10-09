@@ -618,6 +618,17 @@ export type ParallaxRequests = {
 	 */
 	"thread/mergeBack": { params: ThreadMergeBackParams, result: ThreadMergeBackResult },
 	/**
+	 * `secret/request`: asks the user for a secret through the app, or keeps waiting on a
+	 * request already made, and answers how it stands (`request_secret`, 0063). Refused
+	 * with `keychainUnavailable` on a host with no keystore. Gated on the `secrets`
+	 * capability, like `secret/answer`.
+	 */
+	"secret/request": { params: SecretRequestParams, result: SecretRequestResult },
+	/**
+	 * `secret/answer`: the user's answer to a secret request, or the agent giving up on it.
+	 */
+	"secret/answer": { params: SecretAnswerParams, result: SecretAnswerResult },
+	/**
 	 * `orchestration/dispatch`: runs one command on a thread (0059, PLX-644), idempotent on
 	 * its `commandId`. Gated on the `orchestration` capability, like every
 	 * `orchestration/*` method.
@@ -762,6 +773,8 @@ export const REQUEST_METHODS = [
 	"task/delegate",
 	"task/status",
 	"thread/mergeBack",
+	"secret/request",
+	"secret/answer",
 	"orchestration/dispatch",
 	"orchestration/subscribeShell",
 	"orchestration/subscribeThread",
@@ -3209,7 +3222,31 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
 	 * Its final report, when the vendor includes it, cut short when it is long.
 	 */
-	summary?: string,
+	summary?: string, } | { "kind": "secretRequested",
+	/**
+	 * The request's id, which `secret/answer` names.
+	 */
+	requestId: string,
+	/**
+	 * What the agent needs, such as `GitHub webhook secret`.
+	 */
+	label: string,
+	/**
+	 * What it is for, and where the user gets it.
+	 */
+	reason: string,
+	/**
+	 * A hint for the input.
+	 */
+	placeholder?: string, } | { "kind": "secretResolved",
+	/**
+	 * The request's id.
+	 */
+	requestId: string,
+	/**
+	 * What came of it.
+	 */
+	status: SecretStatus,
 };
 
 /**
@@ -3272,6 +3309,13 @@ export type ApprovalId = string;
  * message's image reaches the CLI. `turnStarted` lists them, and `agent/image` serves them.
  */
 export type ImageId = string;
+
+/**
+ * How a secret request stands (0063).
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type SecretStatus = "pending" | "saved" | "declined" | "cancelled";
 
 /**
  * The part of a run that changes while it runs, as `agent.updated` reports it. The rest of
@@ -6668,9 +6712,14 @@ export type WebhookSignature = {
 	prefix: string,
 	/**
 	 * The shared secret. Only `schedule/save` takes it, and omitting it there keeps the stored
-	 * one. plxd never returns it.
+	 * one. plxd keeps it in the host's keystore and never returns it.
 	 */
 	secret?: string,
+	/**
+	 * In place of `secret`: a `secret-ref:<id>` from `secret/request`, which this save uses up.
+	 * Only the thread that asked for it, named in `schedule/save`'s `from`, can use it.
+	 */
+	secretRef?: string,
 };
 
 /**
@@ -6757,6 +6806,10 @@ export type ScheduleSaveParams = {
 	 * A launched thread's access.
 	 */
 	permission?: AgentPermission,
+	/**
+	 * The thread saving it, for a `secretRef` only that thread can use.
+	 */
+	from?: RunId,
 };
 
 /**
@@ -7027,6 +7080,87 @@ export type ThreadMergeBackResult = {
 	 */
 	transferId: string,
 };
+
+/**
+ * Params of `secret/request`: asks the user for a secret in run `runId`'s thread, or keeps
+ * waiting on request `requestId` if it was asked already, for at most `waitMs`.
+ */
+export type SecretRequestParams = {
+	/**
+	 * The run that asks, which must be running a turn.
+	 */
+	runId: RunId,
+	/**
+	 * The request's id, a UUID the caller makes. Reuse it to keep waiting.
+	 */
+	requestId: string,
+	/**
+	 * What it needs, shown as the card's title.
+	 */
+	label: string,
+	/**
+	 * What it is for, and where the user gets it.
+	 */
+	reason: string,
+	/**
+	 * A hint for the input.
+	 */
+	placeholder?: string,
+	/**
+	 * How long to wait for an answer before answering `pending`, at most 50000.
+	 */
+	waitMs: number,
+};
+
+/**
+ * Result of `secret/request`.
+ */
+export type SecretRequestResult = {
+	/**
+	 * How the request stands.
+	 */
+	status: SecretStatus,
+	/**
+	 * With `saved`: `secret-ref:<id>`, which a tool such as `schedule/save` uses once, within
+	 * 24 hours, for the thread that asked.
+	 */
+	secretRef?: string,
+};
+
+/**
+ * Params of `secret/answer`.
+ */
+export type SecretAnswerParams = {
+	/**
+	 * The run that asked.
+	 */
+	runId: RunId,
+	/**
+	 * The request.
+	 */
+	requestId: string,
+	/**
+	 * The answer.
+	 */
+	answer: SecretChoice,
+};
+
+/**
+ * An answer to a secret request.
+ *
+ * A newer client may send an answer this version does not know; plxd refuses it.
+ */
+export type SecretChoice = { "type": "save",
+	/**
+	 * The secret.
+	 */
+	secret: string, } | { "type": "decline" } | { "type": "cancel"
+};
+
+/**
+ * Result of `secret/answer`.
+ */
+export type SecretAnswerResult = Record<symbol, never>;
 
 /**
  * A command for `orchestration/dispatch` (0059), by `type`.

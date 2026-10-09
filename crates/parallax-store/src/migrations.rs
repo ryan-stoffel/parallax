@@ -701,6 +701,18 @@ const MIGRATIONS: &[Migration] = &[
         CREATE INDEX context_transfers_pending ON context_transfers (target)
             WHERE status = 'pending';",
     },
+    // `request_secret` (0063, PLX-648): each one-time secret ref still unused, with the thread
+    // that asked for it and when it expires. The value is in the host's keystore under the ref's
+    // id, never here.
+    Migration {
+        version: 43,
+        sql: "CREATE TABLE secret_refs (
+            id TEXT NOT NULL PRIMARY KEY,
+            thread_id TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        );
+        CREATE INDEX secret_refs_expiry ON secret_refs (expires_at);",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a

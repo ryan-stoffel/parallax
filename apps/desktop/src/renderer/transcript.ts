@@ -15,6 +15,7 @@ import type {
   LoggedEvent,
   ParallaxEvent,
   RunId,
+  SecretStatus,
 } from "../protocol/generated/protocol";
 
 /** One row of the transcript. `key` is stable across re-renders; `at` is when it began. */
@@ -77,6 +78,16 @@ type ItemBody =
    * absent while it waits.
    */
   | { kind: "approval"; key: string; request: ApprovalRequest; resolved?: ApprovalResolution }
+  /**
+   * The agent asking the user for a secret (`request_secret`, 0063): what it asks for, and how it
+   * ended, which is absent while it waits. The value never reaches the transcript.
+   */
+  | {
+      kind: "secret";
+      key: string;
+      request: SecretRequest;
+      status?: Exclude<SecretStatus, "pending">;
+    }
   /** How one CLI process of the run ended. */
   | { kind: "end"; key: string; outcome: AgentOutcome }
   /**
@@ -131,6 +142,9 @@ export function htmlRenderRef(output?: string): HtmlRenderRef | undefined {
   }
   return undefined;
 }
+
+/** A secret request as `secretRequested` carries it. */
+export type SecretRequest = Omit<Extract<AgentOutputItem, { kind: "secretRequested" }>, "kind">;
 
 /** A permission request as `approvalRequested` carries it. */
 export type ApprovalRequest = Omit<Extract<AgentOutputItem, { kind: "approvalRequested" }>, "kind">;
@@ -359,6 +373,8 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
         items.forEach((item, i) => {
           if (item.kind === "approval" && !item.resolved)
             items[i] = { ...item, resolved: { decision: "withdrawn", by: "stop", at: time } };
+          else if (item.kind === "secret" && !item.status)
+            items[i] = { ...item, status: "cancelled" };
         });
         push({ kind: "end", key: key(), outcome: event.outcome });
         break;
@@ -694,9 +710,27 @@ function applyOutput(
         items[i] = { ...asked, resolved: { ...resolution, at: time } };
       break;
     }
+    case "secretRequested": {
+      const { kind: _, ...request } = item;
+      items.push({ kind: "secret", key, request });
+      break;
+    }
+    case "secretResolved": {
+      const i = items.findLastIndex(
+        (x) => x.kind === "secret" && x.request.requestId === item.requestId,
+      );
+      const asked = items[i];
+      if (asked?.kind === "secret" && item.status !== "pending")
+        items[i] = { ...asked, status: item.status };
+      break;
+    }
     // usage isn't shown.
   }
 }
+
+/** The secret requests still waiting, oldest first. */
+export const waitingSecrets = (items: readonly Item[]) =>
+  items.filter((i): i is Extract<Item, { kind: "secret" }> => i.kind === "secret" && !i.status);
 
 /** Whether a JSON value is an object, not an array or null. */
 export const isObject = (v?: JsonValue): v is Record<string, JsonValue> =>

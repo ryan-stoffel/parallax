@@ -790,6 +790,13 @@ const handlers: { [M in Method]?: Handler<M> } = {
     });
     return { decision, by: "user", ...(p.always && { always: true }) };
   },
+  // The value goes nowhere: only how the request ended is logged, as plxd logs it (0063).
+  "secret/answer": (p) => {
+    const status =
+      p.answer.type === "save" ? "saved" : p.answer.type === "decline" ? "declined" : "cancelled";
+    output(p.runId, { kind: "secretResolved", requestId: p.requestId, status });
+    return {};
+  },
   "agent/image": () => fail("The preview keeps no images.", "imageNotFound"),
   "agent/commands": () => ({ commands: db.commands }),
   "agent/gitStatus": (p) => {

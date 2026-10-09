@@ -1564,3 +1564,178 @@ async fn a_shared_worktree_child_doesnt_block_the_repository_checkout() {
     .await;
     host.server.stop().await;
 }
+
+/// A keystore in memory, so a test never touches the real one.
+#[derive(Debug, Default)]
+struct Keys(Mutex<std::collections::HashMap<parallax_protocol::AccountId, String>>);
+
+impl plxd::keystore::KeyStore for Keys {
+    fn set(
+        &self,
+        account: parallax_protocol::AccountId,
+        key: &str,
+    ) -> Result<(), plxd::keystore::KeyStoreError> {
+        self.0.lock().unwrap().insert(account, key.to_owned());
+        Ok(())
+    }
+
+    fn get(
+        &self,
+        account: parallax_protocol::AccountId,
+    ) -> Result<Option<zeroize::Zeroizing<String>>, plxd::keystore::KeyStoreError> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .get(&account)
+            .cloned()
+            .map(Into::into))
+    }
+
+    fn delete(
+        &self,
+        account: parallax_protocol::AccountId,
+    ) -> Result<(), plxd::keystore::KeyStoreError> {
+        self.0.lock().unwrap().remove(&account);
+        Ok(())
+    }
+}
+
+/// Every file under `dir`, recursively.
+fn files(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(files(&path));
+        } else {
+            found.push(path);
+        }
+    }
+    found
+}
+
+/// Run `run`'s secret requests in its transcript, by id, with how each ended.
+async fn secret_requests(
+    client: &mut Conn,
+    run: RunId,
+) -> Vec<(String, Option<parallax_protocol::SecretStatus>)> {
+    let mut found: Vec<(String, Option<parallax_protocol::SecretStatus>)> = Vec::new();
+    for item in transcript(client, run).await {
+        match item {
+            AgentOutputItem::SecretRequested { request_id, .. } => found.push((request_id, None)),
+            AgentOutputItem::SecretResolved { request_id, status } => {
+                if let Some(asked) = found.iter_mut().find(|(id, _)| *id == request_id) {
+                    asked.1 = Some(status);
+                }
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// PLX-648 (0063): `request_secret` puts a card in the thread, the user's answer goes to the
+/// keystore, and the agent gets only a one-time ref, which `schedule_task` uses up. The value is
+/// in no file of plxd's, no event, and no tool result. An unanswered request times out and closes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_secret_reaches_only_the_keystore_and_the_agent_gets_a_one_time_ref() {
+    const SECRET: &str = "plx648-test-value";
+    let keys = Arc::new(Keys::default());
+    let host = Host::start_with_keys(temp_dir(), fake(steered()), keys.clone());
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+
+    let mut other = host.client().await;
+    let (saved, ()) = tokio::join!(
+        mcp.ok(
+            "request_secret",
+            json!({"label": "GitHub webhook secret", "reason": "To check the release webhook's signature."}),
+        ),
+        async {
+            let deadline = Instant::now() + PATIENCE;
+            let request_id = loop {
+                if let Some((id, _)) = secret_requests(&mut other, me).await.pop() {
+                    break id;
+                }
+                assert!(Instant::now() < deadline, "no secret card");
+                sleep(Duration::from_millis(50)).await;
+            };
+            other
+                .call::<parallax_protocol::methods::SecretAnswer>(
+                    parallax_protocol::SecretAnswerParams {
+                        run_id: me,
+                        request_id,
+                        answer: parallax_protocol::SecretChoice::Save {
+                            secret: SECRET.to_owned(),
+                        },
+                    },
+                )
+                .await
+                .unwrap();
+        },
+    );
+    assert_eq!(saved["status"], "saved", "{saved}");
+    let secret_ref = saved["secretRef"].as_str().unwrap().to_owned();
+    assert!(secret_ref.starts_with("secret-ref:"), "{secret_ref}");
+    assert_eq!(
+        secret_requests(&mut client, me).await[0].1,
+        Some(parallax_protocol::SecretStatus::Saved)
+    );
+
+    let schedule = json!({
+        "prompt": "Note the release {{body.release.tag_name}}.",
+        "schedule": {"type": "webhook", "signature": {
+            "header": "x-hub-signature-256", "encoding": "hex", "prefix": "sha256=", "secretRef": secret_ref,
+        }},
+    });
+    let task = mcp.ok("schedule_task", schedule.clone()).await;
+    assert_eq!(task["webhookSignature"], "set", "{task}");
+    let again = mcp.refused("schedule_task", schedule).await;
+    assert!(again.contains("used already"), "one use: {again}");
+    let held: Vec<String> = keys.0.lock().unwrap().values().cloned().collect();
+    assert_eq!(held, [SECRET], "only the task's copy is left");
+
+    let timed_out = mcp
+        .ok(
+            "request_secret",
+            json!({"label": "API token", "reason": "To call the API.", "timeoutMs": 1000}),
+        )
+        .await;
+    assert_eq!(timed_out["status"], "timed_out", "{timed_out}");
+    assert_eq!(
+        secret_requests(&mut client, me).await[1].1,
+        Some(parallax_protocol::SecretStatus::Cancelled),
+        "the card closes"
+    );
+
+    let events = client
+        .call::<AgentEvents>(AgentEventsParams {
+            before: None,
+            run_id: me,
+            after: 0,
+            limit: Some(1000),
+        })
+        .await
+        .unwrap();
+    assert!(!serde_json::to_string(&events).unwrap().contains(SECRET));
+    host.server.stop().await;
+    let written = files(host.dir.path());
+    assert!(
+        written.iter().any(|file| file.ends_with("plxd.sqlite3")),
+        "{written:?}"
+    );
+    for file in written {
+        let bytes = std::fs::read(&file).unwrap_or_default();
+        assert!(
+            !bytes
+                .windows(SECRET.len())
+                .any(|window| window == SECRET.as_bytes()),
+            "{} holds the secret",
+            file.display()
+        );
+    }
+}

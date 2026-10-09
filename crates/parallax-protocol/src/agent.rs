@@ -743,7 +743,48 @@ pub enum AgentOutputItem {
         #[ts(optional)]
         summary: Option<String>,
     },
+    /// The agent asked the user for a secret with `request_secret` (0063, PLX-648). The app
+    /// shows a private card; the value goes to `secret/answer` and never into the transcript.
+    SecretRequested {
+        /// The request's id, which `secret/answer` names.
+        request_id: String,
+        /// What the agent needs, such as `GitHub webhook secret`.
+        label: String,
+        /// What it is for, and where the user gets it.
+        reason: String,
+        /// A hint for the input.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        placeholder: Option<String>,
+    },
+    /// How a secret request ended. Never carries the value.
+    SecretResolved {
+        /// The request's id.
+        request_id: String,
+        /// What came of it.
+        status: SecretStatus,
+    },
     /// A kind this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// How a secret request stands (0063).
+///
+/// A newer plxd may send a status this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SecretStatus {
+    /// Waiting for the user.
+    Pending,
+    /// The user saved a value, kept in the host's keystore under a one-time ref.
+    Saved,
+    /// The user chose not to give one.
+    Declined,
+    /// The request ended unanswered: the turn ended, or the agent stopped waiting.
+    Cancelled,
+    /// A status this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
     Unknown,

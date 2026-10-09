@@ -81,7 +81,7 @@ pub use agent::{
     AgentResumeNowParams, AgentRun, AgentRunResult, AgentRunState, AgentSendParams,
     AgentStartParams, AgentStatus, AgentSubagentStatus, AgentTodoItem, AgentTodoStatus,
     AgentToolStatus, AgentWaitParams, AgentWaitResult, AgentWaitUntil, CoordinatorThreadId,
-    DiffSummary, ImageId, ImageMediaType, LoggedEvent, PromptImage, RunId, TurnId,
+    DiffSummary, ImageId, ImageMediaType, LoggedEvent, PromptImage, RunId, SecretStatus, TurnId,
 };
 pub use approval::{
     AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams,
@@ -108,7 +108,8 @@ pub use defaults::{
     Role,
 };
 pub use delegation::{
-    CompletionWake, DelegatedTask, TaskDelegateParams, TaskDelivery, TaskStatusParams,
+    CompletionWake, DelegatedTask, SecretAnswerParams, SecretAnswerResult, SecretChoice,
+    SecretRequestParams, SecretRequestResult, TaskDelegateParams, TaskDelivery, TaskStatusParams,
     ThreadMergeBackParams, ThreadMergeBackResult,
 };
 pub use error::{ErrorData, ErrorKind, IncompatibleProtocolDetail};

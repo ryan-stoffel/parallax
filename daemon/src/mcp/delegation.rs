@@ -1,8 +1,9 @@
 //! A thread's delegation tools (0063, PLX-648), with T3 Code's names and inputs:
 //! `orchestrator_capabilities`, `delegate_task`, `task_status`, `task_cancel`, and
 //! `create_threads` through `task/delegate`, `task/status`, and `orchestration/dispatch`, and
-//! `thread_merge_back` through `thread/mergeBack`. Every caller gets them; plxd refuses a
-//! Project's runs, which start children through their coordinator.
+//! `thread_merge_back` through `thread/mergeBack`, and `request_secret` through `secret/request`.
+//! Every caller gets them; plxd refuses to delegate from a Project's runs, which start children
+//! through their coordinator.
 //!
 //! A task is a child thread in the caller's worktree. Its id is its thread's run id. An async
 //! task wakes the caller when it ends (`completionWake: always`); `wait` blocks for its result
@@ -14,12 +15,13 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use parallax_protocol::methods::{
-    OrchestrationDispatch, ProvidersList, TaskDelegate, TaskStatus, ThreadMergeBack,
+    OrchestrationDispatch, ProvidersList, SecretAnswer, SecretRequest, TaskDelegate, TaskStatus,
+    ThreadMergeBack,
 };
 use parallax_protocol::{
-    AccountChoice, AgentEffort, AgentPermission, AgentRun, AgentStatus, CompletionWake,
-    DelegatedTask, OrchestrationCommand, ProvidersListParams, RunId, TaskDelegateParams,
-    TaskStatusParams, ThreadMergeBackParams,
+    AccountChoice, AgentEffort, AgentPermission, AgentRun, AgentStatus, CompletionWake, DelegatedTask,
+    OrchestrationCommand, ProvidersListParams, RunId, SecretAnswerParams, SecretChoice,
+    SecretRequestParams, SecretStatus, TaskDelegateParams, TaskStatusParams, ThreadMergeBackParams,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -36,11 +38,18 @@ pub const TOOLS: &[&str] = &[
     "task_cancel",
     "create_threads",
     "thread_merge_back",
+    "request_secret",
 ];
 
 /// How long `delegate_task`'s `wait` blocks without a `timeoutMs`, and the most it takes, as T3's.
 const DEFAULT_WAIT: Duration = Duration::from_mins(10);
 const MAX_WAIT: Duration = Duration::from_mins(60);
+
+/// How long `request_secret` waits for the user without a `timeoutMs`, and the most it takes, as
+/// T3's, and the longest one `secret/request` waits.
+const DEFAULT_SECRET_WAIT: Duration = Duration::from_mins(10);
+const MAX_SECRET_WAIT: Duration = Duration::from_mins(60);
+const SECRET_POLL: Duration = Duration::from_secs(50);
 
 /// The most threads one `create_threads` makes, as T3's.
 const MAX_BATCH: usize = 20;
@@ -170,6 +179,21 @@ pub fn definitions() -> Vec<Value> {
             ),
             false,
         ),
+        tool(
+            "request_secret",
+            "Ask the user for a secret (a token, API key, signing secret, or password) through a private card in this thread, and wait for the answer. The value is kept in the host's keystore and NEVER returned to you or shown in the transcript. When saved, the result carries a secretRef: pass it to a tool that takes one, such as schedule_task's signature.secretRef. It works once, for this thread, within 24 hours. Never ask for secrets in chat, and never invent one.",
+            object(
+                json!({
+                    "label": {"type": "string", "description": "What you need, the card's title, such as 'GitHub webhook secret'."},
+                    "reason": {"type": "string", "description": "One or two sentences on what it is for and where the user gets it."},
+                    "placeholder": {"type": "string", "description": "A hint inside the input, such as 'Paste your GitHub token'."},
+                    "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 3_600_000, "description": "How long to wait for the user. Default 600000 (10 minutes)."},
+                    "clientRequestId": {"type": "string", "description": "Reuse it when retrying a call that lost its result, so the user sees one card. Use a new one to ask again after timed_out or cancelled."},
+                }),
+                &["label", "reason"],
+            ),
+            false,
+        ),
     ]
 }
 
@@ -276,6 +300,19 @@ struct CreateArgs {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SecretArgs {
+    label: String,
+    reason: String,
+    #[serde(default)]
+    placeholder: Option<String>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    #[serde(default)]
+    client_request_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct MergeBackArgs {
     #[serde(default)]
     source_thread_id: Option<RunId>,
@@ -323,6 +360,11 @@ impl Delegation {
                     "targetThreadId": target_thread_id,
                     "status": "pending",
                 })))
+            }
+            "request_secret" => {
+                let args: SecretArgs = parse(arguments)?;
+                let request = self.run_id(args.client_request_id.clone());
+                request_secret(plxd, caller, request, args).await
             }
             other => Err(format!("no tool is named {other:?}")),
         }
@@ -502,6 +544,66 @@ fn params(
         permission,
         completion_wake,
     })
+}
+
+/// `request_secret`: `secret/request` until the user answers, the turn ends, or the timeout, which
+/// closes the card. `request` is the request's id.
+async fn request_secret(
+    plxd: &Plxd,
+    caller: RunId,
+    request: RunId,
+    args: SecretArgs,
+) -> Result<String, String> {
+    let SecretArgs {
+        label,
+        reason,
+        placeholder,
+        timeout_ms,
+        ..
+    } = args;
+    let timeout = timeout_ms
+        .map_or(DEFAULT_SECRET_WAIT, Duration::from_millis)
+        .clamp(Duration::from_secs(1), MAX_SECRET_WAIT);
+    let deadline = Instant::now() + timeout;
+    let request_id = request.to_string();
+    let ask = |wait: Duration| SecretRequestParams {
+        run_id: caller,
+        request_id: request_id.clone(),
+        label: label.clone(),
+        reason: reason.clone(),
+        placeholder: placeholder.clone(),
+        wait_ms: u32::try_from(wait.as_millis()).unwrap_or(u32::MAX),
+    };
+    let mut answered = loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let answered = plxd
+            .call::<SecretRequest>(ask(left.min(SECRET_POLL)))
+            .await?;
+        if answered.status != SecretStatus::Pending || left.is_zero() {
+            break answered;
+        }
+    };
+    let mut timed_out = false;
+    if answered.status == SecretStatus::Pending {
+        // Close the card. An answer that raced the timeout still wins.
+        let closed = plxd
+            .call::<SecretAnswer>(SecretAnswerParams {
+                run_id: caller,
+                request_id: request_id.clone(),
+                answer: SecretChoice::Cancel,
+            })
+            .await;
+        timed_out = closed.is_ok();
+        answered = plxd.call::<SecretRequest>(ask(Duration::ZERO)).await?;
+    }
+    Ok(pretty(&match (answered.status, answered.secret_ref) {
+        (SecretStatus::Saved, Some(secret_ref)) => {
+            json!({"status": "saved", "secretRef": secret_ref})
+        }
+        (SecretStatus::Declined, _) => json!({"status": "declined"}),
+        _ if timed_out => json!({"status": "timed_out"}),
+        _ => json!({"status": "cancelled"}),
+    }))
 }
 
 /// `task/status` for `caller`'s task `task_id`.
