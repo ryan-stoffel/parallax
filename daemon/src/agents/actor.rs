@@ -19,8 +19,10 @@
 //! follow-up goes to the live process. A turn settles once the last one in flight ends with
 //! nothing waiting: its commit, `agent.finished`, and wake-ups run then, while the process stays
 //! up. The session is released [`SESSION_IDLE`] after that, later while its tool calls or
-//! subagents are still open, up to [`SESSION_MAX_PIN`], or at once on archive, settle, Accept, a
-//! Project join, or a failed turn, which ends its process so its `Finished` says why.
+//! subagents are still open, up to [`SESSION_MAX_PIN`], or sooner once more than the host's
+//! [`super::MAX_IDLE_SESSIONS`] are idle and it is the least recently used, or at once on archive,
+//! settle, Accept, a Project join, its coordinator's replacement, or a failed turn, which ends its
+//! process so its `Finished` says why.
 //!
 //! A message sent while its CLI works on a turn waits in the run's queue (PLX-370, decision
 //! 0048), stored so a restart keeps it, until the turn ends; then it goes to the same CLI. A
@@ -600,7 +602,18 @@ impl Actor {
             info!(run = %self.id, "releasing an agent run's session");
             live.released = true;
             live.run.hold(false);
+            self.daemon.agents.idle.remove(self.id);
         }
+    }
+
+    /// Ends the live session now, for a message or an Accept that can't use it: nothing runs in
+    /// it, so it is cancelled, which kills a CLI that doesn't exit within its grace period, rather
+    /// than released and waited for.
+    async fn end_session(&mut self) {
+        if let Some(live) = &self.live {
+            live.run.cancel();
+        }
+        self.drain().await;
     }
 
     /// When an idle session is next checked for release, if it has one.
@@ -643,6 +656,16 @@ impl Actor {
             live.settled = Some(now);
             live.release_at = Some(now + SESSION_IDLE);
             self.daemon.agents.running.fetch_sub(1, Ordering::Relaxed);
+            // Past the host's cap, the least recently used idle session goes.
+            if !live.released
+                && let Some(oldest) = self.daemon.agents.idle.push(self.id)
+            {
+                let daemon = Arc::clone(&self.daemon);
+                info!(run = %oldest, "releasing the least recently used idle session");
+                self.daemon
+                    .agents
+                    .background(async move { super::detach(&daemon, oldest).await });
+            }
         }
         self.finish(&Outcome::Completed { result }).await;
     }
@@ -657,6 +680,7 @@ impl Actor {
         }
         live.release_at = None;
         self.daemon.agents.running.fetch_add(1, Ordering::Relaxed);
+        self.daemon.agents.idle.remove(self.id);
         self.show_running().await;
     }
 
@@ -1260,8 +1284,7 @@ impl Actor {
             )));
         };
         // Its worktree goes, so its idle session ends first (0060).
-        self.release();
-        self.drain().await;
+        self.end_session().await;
         let worktrees = &self.daemon.agents.worktrees;
         let repo = Path::new(&worktree.repo_path);
         let message = merge_message(&self.row.fields.prompt, self.id, &worktree.branch);
@@ -1699,8 +1722,7 @@ impl Actor {
             && self.queued.is_empty()
             && (!self.live_open() || self.changing(&queued))
         {
-            self.release();
-            self.drain().await;
+            self.end_session().await;
         }
         // A running CLI can't change what it runs with, a turn in progress finishes before the
         // next starts, what's sent after a message that waits waits too, so the messages keep
@@ -1787,8 +1809,7 @@ impl Actor {
                 self.drain().await;
             }
             Some(Err(SendError::Finished)) => {
-                self.release();
-                self.drain().await;
+                self.end_session().await;
             }
             None => self.effect_busy(ErrorKind::RunNotResumable)?,
         }
@@ -2376,8 +2397,7 @@ impl Actor {
             }
         }
         if self.live.is_some() {
-            self.release();
-            self.drain().await;
+            self.end_session().await;
         }
         Ok(Err((queued.text, queued.images, queued.threads)))
     }
@@ -3208,6 +3228,7 @@ impl Actor {
         self.open_work.clear();
         self.handed.clear();
         if let Some(live) = self.live.take() {
+            self.daemon.agents.idle.remove(self.id);
             // An idle session's turn was counted out when it settled.
             if live.settled.is_none() {
                 self.daemon.agents.running.fetch_sub(1, Ordering::Relaxed);

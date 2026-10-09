@@ -58,7 +58,7 @@ pub(crate) mod wait;
 pub(crate) mod wake;
 pub(crate) mod worker;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -118,6 +118,37 @@ pub(crate) struct Agents {
     /// Held from placing a Project's child until it counts as running or waiting, so two at once
     /// never both take a Project's last free slot (0046).
     placing: tokio::sync::Mutex<()>,
+    /// The runs whose live sessions are idle (0060).
+    pub(super) idle: IdleSessions,
+}
+
+/// The most idle live sessions a host keeps (0060). Past it, the least recently used is released.
+/// T3 Code has no cap; Parallax's Projects fan out to many threads, each of whose idle CLI holds
+/// hundreds of MiB.
+pub(super) const MAX_IDLE_SESSIONS: usize = 5;
+
+/// The runs whose live sessions are idle, least recently used first. A running turn is never here,
+/// so the cap never releases one.
+#[derive(Default)]
+pub(super) struct IdleSessions(Mutex<VecDeque<RunId>>);
+
+impl IdleSessions {
+    /// Run `id`'s session went idle: the least recently used run to release, if that took the
+    /// count past [`MAX_IDLE_SESSIONS`].
+    pub(super) fn push(&self, id: RunId) -> Option<RunId> {
+        let mut idle = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        idle.retain(|&run| run != id);
+        idle.push_back(id);
+        (idle.len() > MAX_IDLE_SESSIONS)
+            .then(|| idle.pop_front())
+            .flatten()
+    }
+
+    /// Run `id`'s session is busy again, released, or gone.
+    pub(super) fn remove(&self, id: RunId) {
+        let mut idle = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        idle.retain(|&run| run != id);
+    }
 }
 
 impl std::fmt::Debug for Agents {
@@ -167,6 +198,7 @@ impl Agents {
             resume_timing: ResumeTiming::default(),
             placement: tokio::sync::Notify::new(),
             placing: tokio::sync::Mutex::new(()),
+            idle: IdleSessions::default(),
         }
     }
 
@@ -1927,6 +1959,25 @@ mod tests {
     use super::{child_header, in_mode, queue, record, store, store_error};
     use crate::context::memory::Start;
     use crate::server::Daemon;
+
+    /// 0060: idle sessions past the cap release the least recently used; one that went idle
+    /// again moves to the back, and one that is busy, released, or gone leaves the count.
+    #[test]
+    fn past_the_cap_the_least_recently_idle_session_goes() {
+        let idle = super::IdleSessions::default();
+        let runs: Vec<RunId> = (0..=super::MAX_IDLE_SESSIONS)
+            .map(|_| RunId::generate())
+            .collect();
+        for &run in &runs[..super::MAX_IDLE_SESSIONS] {
+            assert_eq!(idle.push(run), None);
+        }
+        // The first went idle again: the second is now the oldest.
+        assert_eq!(idle.push(runs[0]), None);
+        assert_eq!(idle.push(runs[super::MAX_IDLE_SESSIONS]), Some(runs[1]));
+        // A busy one leaves the count, so the next goes idle under the cap.
+        idle.remove(runs[2]);
+        assert_eq!(idle.push(RunId::generate()), None);
+    }
 
     /// PLX-406 (0044): the brief, then the index, between the tools and the task, and neither
     /// when the Project has none.

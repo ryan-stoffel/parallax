@@ -2,6 +2,7 @@
 # A stand-in for `codex app-server` in tests. It records its arguments and environment under
 # $FAKE_CODEX_DIR, then plays $FAKE_CODEX_FIXTURE, a conversation, line by line:
 #   < or @read  read one line of stdin and append it to $FAKE_CODEX_DIR/stdin, waiting for it
+#   @exit N exit with code N at once, as an app-server that crashes
 #   #...    a comment; blank lines are skipped too
 # Every other line goes to stdout as it is. At the end it records the rest of stdin, so it exits
 # once plxd closes stdin, as app-server does.
@@ -14,6 +15,7 @@ while IFS= read -r line <&3; do
   case $line in
     '#'* | '') ;;
     '<' | '@read') IFS= read -r input && printf '%s\n' "$input" >> "$dir/stdin" ;;
+    '@exit '*) exit "${line#@exit }" ;;
     *) printf '%s\n' "$line" ;;
   esac
 done

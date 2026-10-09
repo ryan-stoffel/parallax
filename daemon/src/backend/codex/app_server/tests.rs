@@ -539,6 +539,110 @@ async fn threads_on_one_login_share_an_app_server_and_unsubscribe_when_done() {
     assert_eq!(initialized, 1, "one app-server: {written:?}");
 }
 
+/// The lines plxd wrote to the fake once one passes `wanted`, waiting for its writer.
+async fn written_until(dir: &TempDir, wanted: impl Fn(&Value) -> bool) -> Vec<Value> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let written: Vec<Value> = fs::read_to_string(dir.path().join("stdin"))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        if written.iter().any(&wanted) {
+            return written;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "{written:?}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// 0060: a server request for a thread plxd has none for, such as a subagent's child thread's
+/// approval, is answered with an error, so the turn goes on.
+#[tokio::test]
+async fn a_request_for_an_unknown_thread_gets_an_error() {
+    let (dir, backend) = fake(include_str!("../fixtures/app-server-unknown-thread.jsonl"));
+    let mut request = request(AgentPermission::Edit);
+    request.approvals = true;
+    let mut events = backend.start(request).unwrap().events;
+    let all = rest(&mut events).await;
+    assert!(
+        !all.iter()
+            .any(|event| matches!(event, Event::ApprovalRequested(_))),
+        "{all:?}"
+    );
+    assert!(matches!(
+        all.last(),
+        Some(Event::Finished {
+            outcome: Outcome::Completed { .. },
+            ..
+        })
+    ));
+    let written = written_until(&dir, |line| line["id"] == "child-ask").await;
+    let answer = written
+        .iter()
+        .find(|line| line["id"] == "child-ask")
+        .unwrap();
+    assert!(
+        answer["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("t-child")
+    );
+}
+
+/// 0060: Stop on a shared app-server interrupts the thread's running turn with
+/// `turn/interrupt`, and the thread leaves, unsubscribed, rather than the process being signalled.
+#[tokio::test]
+async fn stop_interrupts_the_turn_and_the_thread_leaves() {
+    let (dir, backend) = fake(include_str!("../fixtures/app-server-interrupt.jsonl"));
+    let mut request = request(AgentPermission::Edit);
+    request.approvals = false;
+    let started = backend.start(request).unwrap();
+    let mut events = started.events;
+    while !matches!(next(&mut events).await, Event::ToolCall { .. }) {}
+    started.run.cancel();
+    let all = rest(&mut events).await;
+    assert!(matches!(
+        all.last(),
+        Some(Event::Finished {
+            outcome: Outcome::Cancelled,
+            ..
+        })
+    ));
+    let written = written_until(&dir, |line| line["method"] == "thread/unsubscribe").await;
+    let interrupt = written
+        .iter()
+        .find(|line| line["method"] == "turn/interrupt")
+        .expect("turn/interrupt");
+    assert_eq!(
+        interrupt["params"],
+        json!({"threadId": "t-1", "turnId": "u-1"})
+    );
+}
+
+/// 0060: when the shared app-server dies, every thread on it ends, failed, mid-turn.
+#[tokio::test]
+async fn every_thread_ends_when_the_shared_app_server_dies() {
+    let (_dir, backend) = fake(include_str!("../fixtures/app-server-crash.jsonl"));
+    let mut runs = Vec::new();
+    for _ in 0..2 {
+        let mut request = request(AgentPermission::Edit);
+        request.approvals = false;
+        runs.push(backend.start(request).unwrap().events);
+    }
+    for events in &mut runs {
+        let all = rest(events).await;
+        let Some(Event::Finished {
+            outcome: Outcome::Failed(failure),
+            ..
+        }) = all.last()
+        else {
+            panic!("{all:?}");
+        };
+        assert_eq!(failure.message, "Codex exited with code 3");
+    }
+}
+
 /// A Project's coordinator runs on app-server as a thread does, with its own tools (0042).
 #[test]
 fn a_coordinator_gets_its_tools_as_a_thread_does() {

@@ -94,7 +94,7 @@ pub(crate) async fn start(
         ..RunState::default()
     };
     // One store job, so two starts with different run ids can't both find no live coordinator.
-    let (row, autonomy) = store(&daemon, move |db| {
+    let (row, autonomy, replaced) = store(&daemon, move |db| {
         let Some(project_row) = db
             .get_project(project.into())
             .map_err(|e| store_error(&e))?
@@ -104,7 +104,8 @@ pub(crate) async fn start(
                 format!("no project has id {project}"),
             ));
         };
-        if let Some(current) = newest(db, project.into())?
+        let current = newest(db, project.into())?;
+        if let Some(current) = &current
             && (current.state.status == STARTING || current.state.status == RUNNING)
         {
             return Err(ErrorObject::parallax(
@@ -120,9 +121,15 @@ pub(crate) async fn start(
             .create_run(run_id.into(), &fields, &state)
             .map_err(|e| store_error(&e))?;
         stage_started(db, &row, None)?;
-        Ok((row, crate::store::project_autonomy(&project_row.autonomy)))
+        let autonomy = crate::store::project_autonomy(&project_row.autonomy);
+        Ok((row, autonomy, current.map(|current| current.id)))
     })
     .await?;
+    // The coordinator it replaces may have an idle session in the same worktree: it ends, so two
+    // coordinator CLIs never share it (0060).
+    if let Some(old) = replaced.and_then(|id| RunId::try_from(id).ok()) {
+        super::detach(&daemon, old).await;
+    }
     info!(run = %run_id, project = %project, backend = %row.fields.backend, "created a project's coordinator");
 
     let mut actor = Actor::new(Arc::clone(&daemon), row, None, HashMap::new());

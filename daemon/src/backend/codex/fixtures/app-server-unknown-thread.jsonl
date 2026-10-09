@@ -1,0 +1,14 @@
+# An approval for a thread plxd has none for, such as a subagent's child thread's: plxd answers
+# it with an error, so Codex never waits on it.
+<
+{"id":1,"result":{"userAgent":"plxd/0.160.0","codexHome":"/Users/u/.codex","platformFamily":"unix","platformOs":"macos"}}
+<
+<
+{"id":2,"result":{"thread":{"id":"t-1"},"model":"gpt-6-sol"}}
+<
+{"id":3,"result":{"turn":{"id":"u-1"}}}
+{"method":"item/commandExecution/requestApproval","id":"child-ask","params":{"threadId":"t-child","turnId":"u-9","itemId":"exec-9","command":"ls","cwd":"/repo"}}
+# The error
+<
+{"method":"item/completed","params":{"threadId":"t-1","turnId":"u-1","item":{"type":"agentMessage","id":"m-1","text":"Done."}}}
+{"method":"turn/completed","params":{"threadId":"t-1","turn":{"id":"u-1","status":"completed","error":null}}}

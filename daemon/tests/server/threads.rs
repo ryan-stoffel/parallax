@@ -39,6 +39,8 @@ mod from_threads;
 mod project;
 mod schedules;
 mod scripts;
+#[cfg(unix)]
+mod sessions;
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")

@@ -61,6 +61,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 use tokio::sync::{mpsc, watch};
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 use self::translate::{Ask, Step, Translator, answer_response, refusal};
 use super::{CONFIG_DIR_ENV, CONTEXT_WINDOWS, PROGRAM, effort_level, write_images};
@@ -140,7 +141,7 @@ pub(super) fn start(
         .unzip();
 
     let home = overrides.config_home(&request.account.credential);
-    let (server, inbox, key) = Server::join(launcher, overrides, servers, &request.cwd, home)?;
+    let (server, inbox, key) = Server::join(launcher, overrides, servers, home)?;
 
     // A cancel interrupts this thread's turn on the shared app-server, not the process.
     let switch = CancelSwitch::new();
@@ -349,6 +350,8 @@ pub(super) struct Server {
     ready: watch::Sender<Option<Result<(), String>>>,
     /// app-server exited, so no new thread joins it.
     dead: AtomicBool,
+    /// Tells the reader the last thread left, even while app-server writes nothing.
+    _left: DropGuard,
 }
 
 /// Where a line goes.
@@ -361,6 +364,15 @@ struct Routes {
     native: HashMap<String, u64>,
     /// Requests waiting for their answers.
     requests: HashMap<u64, u64>,
+}
+
+impl Routes {
+    /// A new thread's inbox, and its key.
+    fn add(&mut self, inbox: mpsc::UnboundedSender<Inbound>) -> u64 {
+        self.next_key += 1;
+        self.inboxes.insert(self.next_key, inbox);
+        self.next_key
+    }
 }
 
 /// What reaches a thread from its app-server.
@@ -389,55 +401,54 @@ impl Server {
         launcher: &Launcher,
         overrides: &Overrides,
         servers: &Servers,
-        cwd: &Path,
         home: Option<PathBuf>,
     ) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<Inbound>, u64), SpawnError> {
         let mut servers = servers.lock().unwrap_or_else(PoisonError::into_inner);
         servers.retain(|_, server| server.strong_count() > 0);
-        let live = servers
-            .get(&home)
-            .and_then(Weak::upgrade)
-            .filter(|server| !server.dead.load(Ordering::Acquire));
-        let server = if let Some(server) = live {
-            server
-        } else {
-            let server = Self::spawn(launcher, overrides, cwd, home.as_deref())?;
-            servers.insert(home, Arc::downgrade(&server));
-            server
-        };
         let (inbox, receiver) = mpsc::unbounded_channel();
-        let key = {
-            let mut routes = server.routes.lock().unwrap_or_else(PoisonError::into_inner);
-            routes.next_key += 1;
-            let key = routes.next_key;
-            routes.inboxes.insert(key, inbox);
-            key
-        };
+        if let Some(server) = servers.get(&home).and_then(Weak::upgrade) {
+            // Checked under the routes' lock, which the reader holds as it marks the server dead
+            // and tells its threads, so a thread joins before that or not at all.
+            let mut routes = server.routes();
+            if !server.dead.load(Ordering::Acquire) {
+                let key = routes.add(inbox);
+                drop(routes);
+                return Ok((server, receiver, key));
+            }
+        }
+        let server = Self::spawn(launcher, overrides, home.as_deref())?;
+        servers.insert(home, Arc::downgrade(&server));
+        let key = server.routes().add(inbox);
         Ok((server, receiver, key))
     }
 
+    /// Starts app-server in plxd's data folder, which no thread's Accept or delete removes; each
+    /// thread names its own cwd in `thread/start`.
     fn spawn(
         launcher: &Launcher,
         overrides: &Overrides,
-        cwd: &Path,
         home: Option<&Path>,
     ) -> Result<Arc<Self>, SpawnError> {
-        let mut process = launcher.spawn(&spec(launcher, overrides, cwd, home))?;
+        let cwd = launcher.data_dir().root().to_owned();
+        std::fs::create_dir_all(&cwd).map_err(SpawnError::Io)?;
+        let mut process = launcher.spawn(&spec(launcher, overrides, &cwd, home))?;
         let (stdin, lines) = mpsc::unbounded_channel();
         if let Some(pipe) = process.take_stdin() {
             tokio::spawn(write_lines(pipe, lines));
         }
+        let left = CancellationToken::new();
         let server = Arc::new(Self {
             stdin,
             next_id: AtomicU64::new(INITIALIZE),
             routes: Mutex::default(),
             ready: watch::Sender::new(None),
             dead: AtomicBool::new(false),
+            _left: left.clone().drop_guard(),
         });
         server.send(
             &json!({"id": INITIALIZE, "method": "initialize", "params": initialize_params()}),
         );
-        tokio::spawn(read(Arc::downgrade(&server), process));
+        tokio::spawn(read(Arc::downgrade(&server), process, left));
         Ok(server)
     }
 
@@ -494,7 +505,19 @@ impl Server {
                 }
                 id.and_then(|id| routes.requests.get(&id).copied())
             }
-            (_, Some(_), Some(thread)) => routes.native.get(thread).copied(),
+            (id, Some(method), Some(thread)) => {
+                let key = routes.native.get(thread).copied();
+                // A request for a thread none of plxd's is, such as a subagent's child thread's
+                // approval, gets an error, so Codex never waits on it, as T3 Code answers one.
+                if key.is_none()
+                    && let Some(id) = id
+                {
+                    let message = format!("plxd has no thread {thread} for {method}");
+                    self.send(&json!({"id": id, "error": refusal(&message)}));
+                    return;
+                }
+                key
+            }
             // A server request for no thread gets one answer, from any thread.
             (Some(_), Some(_), None) => routes.inboxes.keys().next().copied(),
             (None, Some(_), None) => {
@@ -532,31 +555,44 @@ impl Server {
 }
 
 /// Reads `process`'s output for `server` until it exits, then tells every thread.
-async fn read(server: Weak<Server>, mut process: Process) {
+async fn read(server: Weak<Server>, mut process: Process, left: CancellationToken) {
     loop {
-        let output = process.next().await;
-        let Some(server) = server.upgrade() else {
-            // The last thread left; app-server exits once stdin closes.
-            if matches!(output, Some(Output::Exited(_)) | None) {
+        let output = tokio::select! {
+            output = process.next() => output,
+            () = left.cancelled() => {
+                // The last thread left, which closed stdin: app-server exits, or after a grace
+                // period dropping `process` kills it, however stuck.
+                let exited = async {
+                    while !matches!(process.next().await, Some(Output::Exited(_)) | None) {}
+                };
+                let _ = tokio::time::timeout(EXIT_GRACE, exited).await;
                 return;
             }
+        };
+        let Some(server) = server.upgrade() else {
             continue;
         };
         match output {
             Some(Output::Line(line)) => server.route(line),
             Some(Output::Oversized { bytes }) => server.broadcast(|| Inbound::Oversized(bytes)),
             exited => {
-                server.dead.store(true, Ordering::Release);
                 let exit = match exited {
                     Some(Output::Exited(exit)) => Some(exit),
                     _ => None,
                 };
-                server.broadcast(|| Inbound::Exited(exit.clone()));
+                let routes = server.routes();
+                server.dead.store(true, Ordering::Release);
+                for inbox in routes.inboxes.values() {
+                    let _ = inbox.send(Inbound::Exited(exit.clone()));
+                }
                 return;
             }
         }
     }
 }
+
+/// How long app-server gets to exit once its last thread has left.
+const EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// One thread on its shared app-server: forwards its events, runs its turns one at a time,
 /// relays approval requests, and decides the outcome when it leaves.

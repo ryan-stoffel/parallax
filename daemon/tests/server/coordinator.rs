@@ -339,6 +339,55 @@ async fn a_new_start_replaces_the_coordinator_only_once_it_stops_running() {
     host.server.stop().await;
 }
 
+/// 0060: a coordinator replaced while its session is idle has that session ended, so two
+/// coordinator CLIs never share the Project's worktree.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_replaced_coordinators_idle_session_ends() {
+    let script = vec![
+        init("coordinator-1"),
+        Step::EchoPid,
+        Step::EndTurn { result: None },
+        Step::AwaitFollowUp,
+        end_turn("Done."),
+    ];
+    let host = Host::start(temp_dir(), fake(script));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap();
+    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let pid: i32 = items(&events)
+        .iter()
+        .find_map(|item| match item {
+            AgentOutputItem::Text { text, .. } => text.parse().ok(),
+            _ => None,
+        })
+        .expect("the CLI printed its pid");
+    let pid = rustix::process::Pid::from_raw(pid).unwrap();
+    assert!(
+        rustix::process::test_kill_process(pid).is_ok(),
+        "idle, still up"
+    );
+
+    client
+        .call::<ProjectStart>(start_params(project.id, "Start over."))
+        .await
+        .unwrap();
+    let deadline = std::time::Instant::now() + PATIENCE;
+    while rustix::process::test_kill_process(pid).is_ok() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the old coordinator still runs"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    host.server.stop().await;
+}
+
 /// Workers on one script, and each coordinator launch on the next of its own, keeping every
 /// request.
 struct Roles {
