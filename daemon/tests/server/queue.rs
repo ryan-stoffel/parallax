@@ -247,6 +247,32 @@ async fn a_message_that_cant_be_stored_is_refused() {
     host.server.stop().await;
 }
 
+/// `/compact` (PLX-638) on a backend that can't compact its context, here the fake CLI, is
+/// refused rather than queued for it.
+#[tokio::test]
+async fn compact_is_refused_on_a_backend_that_cant_compact() {
+    let host = Host::start(temp_dir(), fake(busy()));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let params = start_params(project.id, "Work for a while");
+    let run_id = params.run_id;
+    client.call::<AgentStart>(params).await.unwrap();
+    until(&mut client, working()).await;
+
+    let refused = client
+        .call::<AgentSend>(send_params(run_id, TurnId::generate(), " /compact "))
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&refused), ErrorKind::UnsupportedOption);
+    assert!(
+        refused.message.ends_with("can't compact its context"),
+        "{refused:?}"
+    );
+    assert_eq!(queue(&mut client, run_id).await, []);
+    host.server.stop().await;
+}
+
 /// Failed edits, reorders, and cancellations leave both queues and the event log unchanged.
 #[tokio::test]
 async fn queue_mutations_that_cant_be_stored_are_refused() {

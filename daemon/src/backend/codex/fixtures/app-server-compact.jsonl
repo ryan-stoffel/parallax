@@ -1,0 +1,14 @@
+# A resumed thread whose message is /compact: plxd sends thread/compact/start, and Codex runs it as
+# a turn with a contextCompaction item (recorded from codex-cli 0.160.0).
+<
+{"id":1,"result":{"userAgent":"plxd/0.160.0","codexHome":"/Users/u/.codex","platformFamily":"unix","platformOs":"macos"}}
+<
+<
+{"id":2,"result":{"thread":{"id":"t-0","sessionId":"t-0","preview":"Earlier","ephemeral":false,"modelProvider":"openai","model":"gpt-6-sol","status":{"type":"idle"},"turns":[]},"model":"gpt-6-sol","modelProvider":"openai","cwd":"/repo","approvalPolicy":"never","sandbox":{"type":"workspaceWrite","writableRoots":[],"networkAccess":false,"excludeTmpdirEnvVar":false,"excludeSlashTmp":false},"reasoningEffort":"high"}}
+<
+{"id":3,"result":{}}
+{"method":"turn/started","params":{"threadId":"t-0","turn":{"id":"u-4","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":1791517818,"completedAt":null,"durationMs":null}},"emittedAtMs":1791517818988}
+{"method":"item/started","params":{"item":{"type":"contextCompaction","id":"cc-1"},"threadId":"t-0","turnId":"u-4","startedAtMs":1791517818988},"emittedAtMs":1791517818989}
+{"method":"item/completed","params":{"item":{"type":"contextCompaction","id":"cc-1"},"threadId":"t-0","turnId":"u-4","completedAtMs":1791517831649},"emittedAtMs":1791517831650}
+{"method":"thread/status/changed","params":{"threadId":"t-0","status":{"type":"idle"}},"emittedAtMs":1791517831651}
+{"method":"turn/completed","params":{"threadId":"t-0","turn":{"id":"u-4","items":[],"itemsView":"notLoaded","status":"completed","error":null,"startedAt":1791517818,"completedAt":1791517831,"durationMs":12668}},"emittedAtMs":1791517831651}

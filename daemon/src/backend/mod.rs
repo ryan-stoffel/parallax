@@ -359,6 +359,14 @@ pub fn effort_level(effort: AgentEffort, unknown: &str) -> Result<&'static str, 
     })
 }
 
+/// Whether a message asks to compact the thread's context (PLX-638): exactly `/compact`, in any
+/// case and with no images, as T3 Code tests it. Claude Code runs it as its own command, Codex
+/// as `thread/compact/start`, and plxd refuses it for every other backend.
+#[must_use]
+pub fn is_compact(text: &str, images: &[PromptImage]) -> bool {
+    images.is_empty() && text.trim().eq_ignore_ascii_case("/compact")
+}
+
 /// Checks that `value`, such as a model or a session id, can be a CLI's argument: not empty,
 /// not starting with `-`, where the CLI would read it as an option, and with no whitespace or
 /// control characters.

@@ -109,7 +109,7 @@ pub enum Event {
         detail: String,
     },
     /// The CLI compacts its context: Claude's `status` `compacting` as it starts, then its
-    /// `compact_boundary`, `done`.
+    /// `compact_boundary`, `done`; Codex's `contextCompaction` item started, then completed.
     ContextCompaction {
         /// Whether it's finished.
         done: bool,

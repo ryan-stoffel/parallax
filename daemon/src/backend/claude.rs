@@ -1212,9 +1212,15 @@ struct Message {
 impl Message {
     /// The message's content is `text` alone, or with images, the Messages API's base64 image
     /// blocks and then `text` as a text block (PLX-191). A message of images alone has no text
-    /// block, since the API refuses a blank one (PLX-193).
+    /// block, since the API refuses a blank one (PLX-193). A `/compact` ([`super::is_compact`])
+    /// goes as Claude Code's own command, which compacts the session (PLX-638).
     fn new(turn_id: Option<TurnId>, text: &str, images: &[PromptImage], follow_up: bool) -> Self {
         let uuid = turn_id.unwrap_or_else(TurnId::generate).to_string();
+        let text = if super::is_compact(text, images) {
+            "/compact"
+        } else {
+            text
+        };
         let content = if images.is_empty() {
             Value::from(text)
         } else {

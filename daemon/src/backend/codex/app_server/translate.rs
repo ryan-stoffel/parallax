@@ -256,6 +256,8 @@ impl Translator {
                     text: parts.join("\n\n"),
                 })]
             }
+            // A `/compact`'s, or one Codex starts itself when the context fills (PLX-638).
+            "contextCompaction" => vec![Step::Emit(Event::ContextCompaction { done })],
             "commandExecution" | "fileChange" | "mcpToolCall" | "webSearch" => {
                 let (name, input) = tool(kind, item);
                 if kind == "fileChange" {

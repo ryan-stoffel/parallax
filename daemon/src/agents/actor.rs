@@ -44,7 +44,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use parallax_protocol::jsonrpc::ErrorObject;
-use parallax_protocol::{AcceptId, AgentMerge};
+use parallax_protocol::{AcceptId, AgentMerge, CliKind};
 use parallax_protocol::{
     AccountChoice, AccountId, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision,
     AgentApproveParams, AgentApproveResult, AgentFailureKind, AgentOutcome, AgentOutputItem,
@@ -75,6 +75,7 @@ use super::{Place, Prepared, RunOptions, prepare, store, store_error};
 use crate::backend::{
     AccountRef, Answer, AnswerError, Backend, Credential, Decision, Event, EventStream, FollowUp,
     ModelUsage, Outcome, Resume, Run, RunRequest, SendError, ThreadTools, Usage, WorkerSandbox,
+    is_compact,
     run_temp::{self, RunTemp},
 };
 use crate::routing;
@@ -1429,6 +1430,7 @@ impl Actor {
         if queued.text.trim().is_empty() && queued.images.is_empty() {
             return Err(ErrorObject::invalid_params("text must not be empty"));
         }
+        self.check_compact(&queued)?;
         // A run in a Project runs in its mode, so a message can't change it (0042).
         if queued.options.permission.is_some()
             && super::project_mode(&self.daemon, self.project)
@@ -1500,6 +1502,13 @@ impl Actor {
     /// now (PLX-370). A backend that takes no messages while it runs is cancelled and resumed
     /// with it, and a run with no CLI running resumes with it at once.
     async fn steer(&mut self, queued: Queued) -> Result<AgentRun, ErrorObject> {
+        if is_compact(&queued.text, &queued.images) {
+            return Err(ErrorObject::parallax(
+                ErrorKind::UnsupportedOption,
+                "/compact runs as a turn of its own, so it can't go into the running turn; queue \
+                 it instead",
+            ));
+        }
         if self.changing(&queued) {
             return Err(ErrorObject::parallax(
                 ErrorKind::UnsupportedOption,
@@ -1537,6 +1546,31 @@ impl Actor {
         } = queued;
         self.resume(turn_id, text, images, threads, RunOptions::default(), None)
             .await
+    }
+
+    /// Refuses a `/compact` (PLX-638) on a backend that can't compact its context: only Claude
+    /// Code and Codex can, as T3 Code's adapters. A backend this host no longer has passes, since
+    /// the message can't start anywhere.
+    fn check_compact(&self, queued: &Queued) -> Result<(), ErrorObject> {
+        if !is_compact(&queued.text, &queued.images) {
+            return Ok(());
+        }
+        let name = &self.row.fields.backend;
+        let compacts = self
+            .daemon
+            .agents
+            .backends
+            .by_backend_name(name)
+            .is_none_or(|(_, backend)| {
+                matches!(backend.cli(), Some(CliKind::Claude | CliKind::Codex))
+            });
+        if compacts {
+            return Ok(());
+        }
+        Err(ErrorObject::parallax(
+            ErrorKind::UnsupportedOption,
+            format!("{} can't compact its context", backend_name(name)),
+        ))
     }
 
     /// Hands `queued` to the live CLI as its next turn.
