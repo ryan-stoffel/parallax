@@ -76,6 +76,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("pullRequests".to_owned(), serde_json::Map::new()),
             ("queue".to_owned(), serde_json::Map::new()),
             ("questions".to_owned(), serde_json::Map::new()),
+            ("remote".to_owned(), serde_json::Map::new()),
             ("repoRefs".to_owned(), serde_json::Map::new()),
             ("runOptions".to_owned(), serde_json::Map::new()),
             ("sendAccount".to_owned(), serde_json::Map::new()),

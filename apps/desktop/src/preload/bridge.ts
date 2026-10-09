@@ -165,10 +165,13 @@ export interface ParallaxBridge {
   /** Reconnects a failed host now, including one that stopped retrying. */
   retry(hostId: string): Promise<void>;
 
-  /** The saved SSH hosts, oldest first. This computer is host `local`, which isn't one of them. */
-  hosts(): Promise<SshHost[]>;
+  /**
+   * The saved SSH hosts, oldest first, then the computers paired on the LAN. This computer is
+   * host `local`, which isn't one of them.
+   */
+  hosts(): Promise<SavedHost[]>;
   /** Every later change to the saved hosts. Returns the unsubscribe function. */
-  onHosts(listener: (hosts: SshHost[]) => void): () => void;
+  onHosts(listener: (hosts: SavedHost[]) => void): () => void;
   /**
    * The hosts ssh already knows here, to suggest in Add host (PLX-580): the aliases in the user's
    * ssh config, then the plain names in known_hosts.
@@ -184,8 +187,8 @@ export interface ParallaxBridge {
   /** Adds a host, or edits the one with `id`. Resolves to an error for people, or undefined. */
   saveHost(host: HostInput, id?: string): Promise<string | undefined>;
   /**
-   * Forgets a host and disconnects from it. Nothing on the host changes. Resolves to an error for
-   * people, or undefined.
+   * Forgets a host, SSH or LAN, and disconnects from it. Nothing on the host changes. Resolves to
+   * an error for people, or undefined.
    */
   removeHost(id: string): Promise<string | undefined>;
   /**
@@ -194,6 +197,20 @@ export interface ParallaxBridge {
    * for people, or undefined.
    */
   installPlxd(id: string): Promise<string | undefined>;
+  /**
+   * The computers on this network showing a pairing code (PLX-641), found over mDNS, by name.
+   * Resolves to an error for people when mDNS can't run.
+   */
+  discoverLan(): Promise<{ id: string; name: string }[] | string>;
+  /**
+   * Pairs with a computer `discoverLan` found, by its id, or at an address typed in, with the code
+   * it shows (PLX-641, 0065); saves it with its routes, and connects. Resolves to an error for
+   * people, or undefined.
+   */
+  pairLan(
+    target: { found: string } | { address: string },
+    code: string,
+  ): Promise<string | undefined>;
 
   /** Parallax Connect here (0056). Calls `listener` now and on every change. Returns the unsubscribe function. */
   onConnect(listener: (state: ConnectState) => void): () => void;
@@ -390,6 +407,16 @@ export type SshHost = {
   plxdInstalled?: true;
 };
 
+/**
+ * A computer paired on the LAN (PLX-641), by host id `lan:<its certificate fingerprint>`, reached
+ * with `plxd dial --remote` over its routes in order: the one it paired over, then the ones it
+ * reported.
+ */
+export type LanHost = { id: string; name: string; routes: string[] };
+
+/** A host saved in this app. */
+export type SavedHost = SshHost | LanHost;
+
 /** What the Hosts settings edit. The main process checks it and picks the id. */
 export type HostInput = { name: string; destination: string };
 
@@ -500,14 +527,18 @@ export type ConnectionState =
   | { status: "failed"; error: ConnectionError; retrying: boolean };
 
 export type ConnectionError = {
-  /** `sshSetup`: the host needs the user, such as to accept its host key, so it isn't retried. */
+  /**
+   * `sshSetup`: the host needs the user, such as to accept its host key, so it isn't retried.
+   * `refused`: a LAN computer doesn't know this one anymore, so it needs pairing again.
+   */
   reason:
     | "notFound"
     | "incompatibleProtocol"
     | "exited"
     | "unresponsive"
     | "protocolError"
-    | "sshSetup";
+    | "sshSetup"
+    | "refused";
   /** For people: what went wrong and how to fix it. */
   message: string;
   /** plxd's version, when it refused the handshake. */

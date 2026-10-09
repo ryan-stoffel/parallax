@@ -245,9 +245,9 @@ async fn want(daemon: &Daemon) -> Want {
     }
 }
 
-/// The whois checks pending, overall and per peer address.
+/// The whois checks pending, overall and per peer address. LAN pairing's handshakes use them too.
 #[derive(Clone)]
-struct Checks {
+pub(super) struct Checks {
     all: Arc<Semaphore>,
     per_ip: Arc<Mutex<HashMap<IpAddr, usize>>>,
 }
@@ -263,7 +263,7 @@ impl Default for Checks {
 
 impl Checks {
     /// A slot for a check of a connection from `ip`, or `None` when either cap is reached.
-    fn start(&self, ip: IpAddr) -> Option<Check> {
+    pub(super) fn start(&self, ip: IpAddr) -> Option<Check> {
         let mut per_ip = self.per_ip.lock().unwrap_or_else(PoisonError::into_inner);
         if per_ip.get(&ip).copied().unwrap_or(0) >= MAX_PENDING_CHECKS_PER_IP {
             return None;
@@ -279,7 +279,7 @@ impl Checks {
 }
 
 /// A pending check's slot, given back when it drops.
-struct Check {
+pub(super) struct Check {
     _permit: OwnedSemaphorePermit,
     per_ip: Arc<Mutex<HashMap<IpAddr, usize>>>,
     ip: IpAddr,

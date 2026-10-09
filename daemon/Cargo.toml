@@ -39,11 +39,28 @@ parallax-store = { path = "../crates/parallax-store" }
 # Reads Cursor desktop's sign-in for `usage/daily` (0039). The store already builds it.
 rusqlite = { version = "0.32", features = ["bundled"] }
 zeroize.workspace = true
+# Remote access on the LAN (PLX-641, 0065): HTTPS and WebSocket with a pinned self-signed key,
+# and ES256 DPoP proofs, all on ring, not aws-lc-rs, which would need CMake and NASM. ring's build
+# needs a C compiler, as rusqlite's bundled SQLite already does, and clang on Windows arm64.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["handshake"] }
+# Its HTTP requests and base64url. tungstenite already builds both.
+httparse = "1"
+data-encoding = "2"
+# Pairing codes and session tokens. tempfile and uuid already build it.
+getrandom = "0.4"
+# Pairing with a short code: SPAKE2 vouches for the host's certificate, and mDNS finds hosts
+# waiting to pair. Both pure Rust.
+spake2 = "0.4"
+mdns-sd = { version = "0.21", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 # `net` for the browser proxy's view of this machine's own addresses (PLX-639).
 nix = { workspace = true, features = ["net", "process", "signal"] }
-rustix = { workspace = true, features = ["fs", "process"] }
+rustix = { workspace = true, features = ["fs", "process", "system"] }
 
 # Agent CLIs run through tokio's process support, and every Win32 call plxd makes is in
 # `src/windows.rs` (0023).

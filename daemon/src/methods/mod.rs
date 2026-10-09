@@ -8,7 +8,7 @@
 //! and `pr/unlink`): `pr.rs`; PLX-359 `composerMenus`: `composer.rs`; PLX-336 `githubStatus`:
 //! `github/status` in `accounts.rs`; PLX-423 `githubSetup`: `github/install`, `github/signIn`, and
 //! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`; PLX-370 `queue`: `queue.rs`; PLX-402 `questions`: `question.rs`; PLX-405 `memory`: `memory.rs`; PLX-410 `landing`: `land.rs`; PLX-574 `connect`: `connect/devices` in `connect.rs`; PLX-637 `terminals`: `terminal/*` in
-//! `crate::terminals`), and `host.rs` advertises the
+//! `crate::terminals`; PLX-641 `remote`: `remote/*` in `remote.rs`), and `host.rs` advertises the
 //! capability in `initialize`.
 
 mod accounts;
@@ -27,6 +27,7 @@ mod pr;
 pub(crate) mod project;
 pub(crate) mod question;
 mod queue;
+mod remote;
 mod thread;
 mod usage;
 
@@ -165,6 +166,9 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         HostSettingsGet => |p| host::settings(context, p),
         HostSettingsSet => |p| host::set_settings(context, p),
         ConnectDevices => |p| connect::devices(context, p),
+        RemotePair => |p| remote::pair(context, p),
+        RemoteSessions => |p| remote::sessions(context, p),
+        RemoteRevoke => |p| remote::revoke(context, p),
         AccountsList => |p| accounts::list(context, p),
         AccountsRefresh => |p| accounts::refresh(context, p),
         AccountsKeysAdd => |p| accounts::keys::add(context, p),

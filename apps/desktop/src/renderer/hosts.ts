@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { ConnectState, DeviceHost, DeviceIcon, SshHost } from "../preload/bridge";
+import type { ConnectState, DeviceHost, DeviceIcon, SavedHost } from "../preload/bridge";
 
 /**
- * A host as the sidebar lists it. Only SSH hosts have a destination. `icon` is this computer's or
- * a Parallax Connect device's (0056).
+ * A host as the sidebar lists it. Only SSH hosts have a destination, and only LAN computers
+ * routes (PLX-641). `icon` is this computer's or a Parallax Connect device's (0056).
  */
 export type Host = {
   id: string;
   name: string;
   destination?: string;
+  routes?: string[];
   icon?: DeviceIcon;
 };
 
@@ -25,10 +26,11 @@ export function useConnect(): ConnectState | undefined {
 
 /**
  * Every host, kept current: this computer first, named as Settings > Connections names it, then
- * the saved SSH hosts, oldest first, then the Connect devices turned on here, by name.
+ * the saved SSH hosts, oldest first, then the LAN computers, then the Connect devices turned on
+ * here, by name.
  */
 export function useHosts(): Host[] {
-  const [saved, setSaved] = useState<SshHost[]>([]);
+  const [saved, setSaved] = useState<SavedHost[]>([]);
   const [devices, setDevices] = useState<DeviceHost[]>([]);
   const [localName, setLocalName] = useState("This computer");
   const connect = useConnect();

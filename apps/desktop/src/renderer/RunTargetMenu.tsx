@@ -29,7 +29,13 @@ export const workspaces: (PickerOption & { value: Workspace })[] = [
  * for an SSH host.
  */
 export const hostIcon = (host: Host) =>
-  host.icon ? <DeviceIcon icon={host.icon} /> : host.destination ? <Server /> : <Laptop />;
+  host.icon ? (
+    <DeviceIcon icon={host.icon} />
+  ) : host.destination || host.routes ? (
+    <Server />
+  ) : (
+    <Laptop />
+  );
 
 /**
  * Where a thread runs: which of Parallax's computers, and in a new worktree or the local checkout.

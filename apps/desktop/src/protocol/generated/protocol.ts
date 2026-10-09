@@ -381,6 +381,20 @@ export type ParallaxRequests = {
 	 */
 	"connect/devices": { params: ConnectDevicesParams, result: ConnectDevicesResult },
 	/**
+	 * `remote/pair`: a new one-time pairing code, which replaces any earlier one (PLX-641,
+	 * 0065). Gated on the `remote` capability, like `remote/sessions` and `remote/revoke`.
+	 */
+	"remote/pair": { params: RemotePairParams, result: RemotePairResult },
+	/**
+	 * `remote/sessions`: the paired clients' sessions.
+	 */
+	"remote/sessions": { params: RemoteSessionsParams, result: RemoteSessionsResult },
+	/**
+	 * `remote/revoke`: ends a session and closes its connections. An unknown id changes
+	 * nothing.
+	 */
+	"remote/revoke": { params: RemoteRevokeParams, result: RemoteSessionsResult },
+	/**
 	 * `inbox/list`: a Project's inbox, oldest first, and the event log's `seq` from before the
 	 * read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
 	 */
@@ -602,6 +616,9 @@ export const REQUEST_METHODS = [
 	"host/settings/get",
 	"host/settings/set",
 	"connect/devices",
+	"remote/pair",
+	"remote/sessions",
+	"remote/revoke",
 	"inbox/list",
 	"inbox/seen",
 	"github/install",
@@ -5010,6 +5027,11 @@ export type HostSettings = {
 	 */
 	connect?: boolean,
 	/**
+	 * Whether plxd listens for paired clients over HTTPS on port 7341 (PLX-641, 0065). Off by
+	 * default. An older plxd, without the `remote` capability, leaves it out.
+	 */
+	remote?: boolean,
+	/**
 	 * This device's nickname for Parallax Connect, when one is set.
 	 */
 	deviceName?: string,
@@ -5036,6 +5058,10 @@ export type HostSettingsSetParams = {
 	 * The new `connect`, behind the `connect` capability. Absent leaves it.
 	 */
 	connect?: boolean,
+	/**
+	 * The new `remote`, behind the `remote` capability. Absent leaves it.
+	 */
+	remote?: boolean,
 	/**
 	 * The new `deviceName`, behind the `connect` capability. `""` clears it. Control characters
 	 * are dropped and the rest trimmed to at most 64 characters.
@@ -5121,6 +5147,93 @@ export type TailnetDevice = {
  * A newer plxd may send states that are not listed here. Treat those as unknown.
  */
 export type TailscaleState = "running" | "stopped" | "missing";
+
+/**
+ * Params of `remote/pair`.
+ */
+export type RemotePairParams = Record<symbol, never>;
+
+/**
+ * Result of `remote/pair`: a one-time pairing code another computer on this network enters
+ * (PLX-641, 0065).
+ */
+export type RemotePairResult = {
+	/**
+	 * Such as `7KQ-4M2`. It works once, until `expiresAt`, and locks after 5 wrong tries. A
+	 * newer code replaces it.
+	 */
+	code: string,
+	/**
+	 * When the code stops working, in RFC 3339.
+	 */
+	expiresAt: string,
+	/**
+	 * The name this host advertises over mDNS while the code waits.
+	 */
+	name: string,
+	/**
+	 * Where another computer can reach this one, best first, for when mDNS can't find it: its
+	 * LAN address, then its Tailscale address. Each is an IP, with `:port` when plxd listens on
+	 * another port than 7341.
+	 */
+	addresses: Array<string>,
+};
+
+/**
+ * Params of `remote/sessions`.
+ */
+export type RemoteSessionsParams = Record<symbol, never>;
+
+/**
+ * Result of `remote/sessions` and `remote/revoke`: the paired clients' sessions, oldest first.
+ */
+export type RemoteSessionsResult = {
+	/**
+	 * The sessions.
+	 */
+	sessions: Array<RemoteSession>,
+	/**
+	 * Whether plxd is listening for paired clients now.
+	 */
+	listening: boolean,
+	/**
+	 * Whether a pairing code is waiting, so plxd advertises itself over mDNS. False once the
+	 * code is used, locked, or expired.
+	 */
+	pairing: boolean,
+	/**
+	 * Why it isn't while `remote` is on, such as the port being in use by another program.
+	 */
+	problem?: string,
+};
+
+/**
+ * A paired client's session.
+ */
+export type RemoteSession = {
+	/**
+	 * Its id, which `remote/revoke` takes.
+	 */
+	id: string,
+	/**
+	 * The name the client gave while pairing.
+	 */
+	name: string,
+	/**
+	 * When it paired, in RFC 3339.
+	 */
+	createdAt: string,
+};
+
+/**
+ * Params of `remote/revoke`: ends a session and closes its connections.
+ */
+export type RemoteRevokeParams = {
+	/**
+	 * The session's id, from `remote/sessions`.
+	 */
+	id: string,
+};
 
 /**
  * Params of `inbox/list`. Fails with `projectNotFound` for an unknown project.

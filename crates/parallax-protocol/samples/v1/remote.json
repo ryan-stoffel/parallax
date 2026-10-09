@@ -1,0 +1,61 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "host/settings/set",
+    "params": { "remote": true }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": { "autoResume": true, "cleanWorktrees": true, "connect": false, "remote": true }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "remote/pair",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "code": "7KQ-4M2",
+      "expiresAt": "2026-10-09T04:20:00Z",
+      "name": "Ryan's Mac Mini",
+      "addresses": ["192.168.1.20", "100.74.190.83"]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "remote/sessions",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "sessions": [
+        {
+          "id": "4c1d2f0e-8a3b-4b6e-9a51-2f7c0d9e6b13",
+          "name": "Ryan's MacBook Air",
+          "createdAt": "2026-10-09T04:11:02Z"
+        }
+      ],
+      "listening": true,
+      "pairing": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "remote/revoke",
+    "params": { "id": "4c1d2f0e-8a3b-4b6e-9a51-2f7c0d9e6b13" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": { "sessions": [], "listening": false, "pairing": false, "problem": "Port 7341 is in use by another program." }
+  }
+]

@@ -1,6 +1,6 @@
 import { app, ipcMain, powerMonitor, type WebContents } from "electron";
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
@@ -19,6 +19,7 @@ import {
   withheldMethods,
   type RendererMethod,
   type RpcResponse,
+  type SavedHost,
   type SshHost,
   type SubscribeParams,
 } from "../preload/bridge";
@@ -35,7 +36,14 @@ import {
 } from "./connect";
 import { Connection, LOCATE_PLXD, sshCommand } from "./connection";
 import { installPlxd } from "./installPlxd";
-import { checkHost, readSettings, writeSettings, type Settings } from "./settings";
+import {
+  checkHost,
+  isRoute,
+  readSettings,
+  writeSettings,
+  type SavedLan,
+  type Settings,
+} from "./settings";
 import { sshSuggestions } from "./sshConfig";
 import {
   closeTerminal,
@@ -78,7 +86,10 @@ const ipcStats = process.env["PLX_IPC_STATS"]
 const rendererMethods = new Set<string>(REQUEST_METHODS);
 for (const method of withheldMethods) rendererMethods.delete(method);
 
-/** Every host's connection, by host id: `local`, then each saved SSH host. */
+/**
+ * Every host's connection, by host id: `local`, each saved SSH host, each Connect device, and each
+ * LAN computer.
+ */
 const connections = new Map<string, Connection>();
 /** Each window's subscriptions, by the key its preload chose. */
 const subscriptions = new Map<WebContents, Map<string, () => void>>();
@@ -105,6 +116,7 @@ export function startHosts(): void {
     console.error(settingsError);
   }
   for (const host of settings.hosts) addSshConnection(host, host.plxdInstalled);
+  for (const computer of settings.lan ?? []) addLanConnection(computer);
   void findConnect(connectProgram(), homedir()).then((found) => {
     connectInstalled = found;
     broadcast("parallax:connect", connectState());
@@ -129,11 +141,15 @@ export function startHosts(): void {
   );
   ipcMain.handle("parallax:removeDevice", (_event, hostId: unknown) => removeDevice(hostId));
 
-  ipcMain.handle("parallax:hosts", () => settings.hosts);
+  ipcMain.handle("parallax:hosts", () => listedHosts(settings));
   ipcMain.handle("parallax:sshSuggestions", () => sshSuggestions(homedir()));
   ipcMain.handle("parallax:saveHost", (_event, input: unknown, id: unknown) => saveHost(input, id));
   ipcMain.handle("parallax:removeHost", (_event, id: unknown) => removeHost(id));
   ipcMain.handle("parallax:installPlxd", (_event, id: unknown) => installPlxdOn(id));
+  ipcMain.handle("parallax:discoverLan", () => discoverLan());
+  ipcMain.handle("parallax:pairLan", (_event, target: unknown, code: unknown) =>
+    pairLan(target, code),
+  );
   ipcMain.handle("parallax:localName", () => localName());
   ipcMain.handle("parallax:renameLocal", (_event, name: unknown) => {
     if (typeof name !== "string") return "invalid name";
@@ -251,10 +267,13 @@ export function startHosts(): void {
         command = await providerSignInCommand(hostId, provider);
       if (!command) return "invalid terminal";
       if (typeof command === "string") return command;
-      // It runs on this computer, over ssh for another host, under an id of its own, so an
-      // earlier one's last output and exit never reach it.
+      // It runs on this computer, over ssh for an SSH host or Connect device, or on a LAN
+      // computer's own plxd, under an id of its own, so an earlier one's last output and exit
+      // never reach it.
       const { file: program, args, env = {} } = command;
-      return openTerminal(event.sender, id, connection("local"), {
+      const runner = isLanHost(hostId) ? connections.get(hostId) : connection("local");
+      if (!runner) return "That host isn't in Parallax anymore.";
+      return openTerminal(event.sender, id, runner, {
         threadId: "",
         terminalId: `${id}:${randomUUID()}`,
         command: { program, args, env },
@@ -271,6 +290,9 @@ export function startHosts(): void {
       !Object.hasOwn(NPM_INSTALLS, kind)
     )
       return "invalid install";
+    // runInstall runs here; a LAN computer's install opens in a terminal on its own plxd.
+    if (isLanHost(hostId))
+      return "On a computer paired on this network, agents install in a terminal.";
     return runInstall(await installOn(hostId, kind));
   });
   ipcMain.on("parallax:terminalInput", (event, id: unknown, data: unknown) => {
@@ -293,9 +315,10 @@ export function startHosts(): void {
 }
 
 /**
- * How a host's terminals reach it, unless it's this computer: an SSH host by its destination, a
- * Connect device (0056) by ssh to its Tailscale IP, as `plx-connect add` did. Undefined only for
- * `local`, so a remote host's command can never run here.
+ * How a host's command terminals reach it from this computer: an SSH host by its destination, a
+ * Connect device (0056) by ssh to its Tailscale IP, as `plx-connect add` did. Undefined for
+ * `local` and for a LAN computer, whose commands run on its own plxd (`isLanHost`), so neither
+ * needs ssh, and a remote host's command never runs here.
  */
 function sshOf(hostId: string): SshTarget | undefined {
   const ssh = settings.ssh ?? "ssh";
@@ -316,11 +339,14 @@ async function installOn(hostId: string, kind: string): Promise<Command | string
   const host = connections.get(hostId);
   if (!host) return "That host isn't in Parallax anymore.";
   const ssh = sshOf(hostId);
-  // An SSH host's OS decides its shell; this computer's is known.
-  const version = ssh ? await host.request("host/version", {}) : undefined;
+  // A remote host's OS decides its shell; this computer's is known.
+  const remote = ssh || isLanHost(hostId);
+  const version = remote ? await host.request("host/version", {}) : undefined;
   if (version && "error" in version)
     return `Parallax couldn't ask the host which OS it runs: ${version.error.message}`;
   const os = version && "result" in version ? version.result.os : undefined;
+  // A LAN computer runs it on its own plxd, as if local there, with its own shell.
+  if (isLanHost(hostId)) return installCommand(kind, undefined, platformOf(os), {});
   return installCommand(kind, ssh, process.platform, process.env, os);
 }
 
@@ -338,7 +364,7 @@ async function signInCommand(hostId: string, cli: CliKind): Promise<Command | st
     return `Parallax couldn't ask the host where the CLI is: ${answer.error.message}`;
   const path = answer.result.clis.find((each) => each.cli === cli)?.path;
   if (!path) return "That CLI isn't installed on this host anymore.";
-  return loginCommand(cli, path, ssh);
+  return loginCommand(cli, path, ssh, await lanPlatform(hostId));
 }
 
 /**
@@ -365,7 +391,8 @@ async function providerSignInCommand(hostId: string, id: string): Promise<Comman
     ...(homeVar && home ? { [homeVar]: home } : {}),
   };
   const own = found.path && /[^/\\]+$/.exec(found.path)?.[0].replace(/\.\w+$/, "") === program;
-  return loginCommand(kind, own ? found.path! : program, ssh, undefined, args, env);
+  const platform = await lanPlatform(hostId);
+  return loginCommand(kind, own ? found.path! : program, ssh, platform, args, env);
 }
 
 /**
@@ -486,13 +513,14 @@ async function replaceOtherServe(state: ConnectionState): Promise<void> {
 function addConnection(
   hostId: string,
   command: () => string[] | undefined,
-  { destination, device }: { destination?: string; device?: string } = {},
+  { destination, device, lan }: { destination?: string; device?: string; lan?: string } = {},
 ) {
   connections.get(hostId)?.dispose();
   const created = new Connection({
     command,
     ...(destination !== undefined && { destination }),
     ...(device !== undefined && { device }),
+    ...(lan !== undefined && { lan }),
     clientVersion: app.getVersion(),
     onState: (state) => {
       // A replaced or removed connection has nothing more to say.
@@ -581,13 +609,26 @@ function saveHost(input: unknown, id: unknown): string | undefined {
   return undefined;
 }
 
-/** `window.parallax.removeHost`. Resolves to an error for people, as `saveHost` does. */
+/** `window.parallax.removeHost`, an SSH host or a LAN computer. Resolves to an error for people. */
 function removeHost(id: unknown): string | undefined {
-  if (typeof id !== "string" || !settings.hosts.some((h) => h.id === id)) return undefined;
-  const error = saveSettings({ ...settings, hosts: settings.hosts.filter((h) => h.id !== id) });
+  if (typeof id !== "string") return undefined;
+  const lan = settings.lan ?? [];
+  const isLan = lan.some((c) => lanHostId(c.fingerprint) === id);
+  if (!isLan && !settings.hosts.some((h) => h.id === id)) return undefined;
+  const error = saveSettings(
+    isLan
+      ? { ...settings, lan: lan.filter((c) => lanHostId(c.fingerprint) !== id) }
+      : { ...settings, hosts: settings.hosts.filter((h) => h.id !== id) },
+  );
   if (error) return error;
   connections.get(id)?.dispose();
   connections.delete(id);
+  // Its session token and DPoP key go with it.
+  if (isLan) {
+    const fingerprint = id.slice("lan:".length);
+    const dir = dataDir(process.env, process.platform, homedir());
+    rmSync(path.join(dir, "remote-hosts", fingerprint), { force: true });
+  }
   return undefined;
 }
 
@@ -600,7 +641,137 @@ function saveSettings(next: Settings): string | undefined {
     return `Parallax couldn't save its settings: ${(error as Error).message}`;
   }
   settings = next;
-  broadcast("parallax:hosts", next.hosts);
+  broadcast("parallax:hosts", listedHosts(next));
+  return undefined;
+}
+
+// Remote pairing on the LAN (PLX-641, 0065): each paired computer is host `lan:<its certificate
+// fingerprint>`, reached with `plxd dial --remote`, which pins the certificate and tries its
+// routes in order. Its session token and DPoP key stay in the local plxd's data folder.
+
+const lanHostId = (fingerprint: string) => `lan:${fingerprint}`;
+
+/** The saved hosts as the renderer lists them: SSH hosts, then LAN computers. */
+const listedHosts = (from: Settings): SavedHost[] => [
+  ...from.hosts,
+  ...(from.lan ?? []).map(({ fingerprint, name, routes }) => ({
+    id: lanHostId(fingerprint),
+    name,
+    routes,
+  })),
+];
+
+/** Whether `hostId` is a computer paired on the LAN, whose commands run on its own plxd. */
+const isLanHost = (hostId: string) =>
+  (settings.lan ?? []).some((c) => lanHostId(c.fingerprint) === hostId);
+
+/** A platform for plxd's `host/version` OS, such as `macOS 26.0`, `windows`, or `linux`. */
+const platformOf = (os?: string): NodeJS.Platform =>
+  /^windows/i.test(os ?? "") ? "win32" : /^macos/i.test(os ?? "") ? "darwin" : "linux";
+
+/** A LAN computer's platform, for a command that runs there; this computer's otherwise. */
+async function lanPlatform(hostId: string): Promise<NodeJS.Platform> {
+  if (!isLanHost(hostId)) return process.platform;
+  const answer = await connections.get(hostId)?.request("host/version", {});
+  return platformOf(answer && "result" in answer ? answer.result.os : undefined);
+}
+
+/** A route's address without its port: `192.168.1.20` for `192.168.1.20:7341`. */
+export const routeHost = (route: string) =>
+  route.startsWith("[")
+    ? route.slice(1, route.indexOf("]"))
+    : route.split(":").length === 2
+      ? route.split(":")[0]!
+      : route;
+
+function addLanConnection({ fingerprint, name, routes }: SavedLan): void {
+  addConnection(
+    lanHostId(fingerprint),
+    () => {
+      const plxd = localPlxd();
+      return plxd === undefined
+        ? undefined
+        : [plxd, "dial", "--remote", fingerprint, "--", ...routes];
+    },
+    { lan: name },
+  );
+}
+
+/** The hosts the last `discoverLan` found, by the id the renderer picks one with. */
+let found = new Map<string, { name: string; routes: string[] }>();
+
+/**
+ * `window.parallax.discoverLan`: runs `plxd dial --discover`, which listens a few seconds for
+ * computers advertising a pairing code over mDNS. The renderer gets their names only.
+ */
+async function discoverLan(): Promise<{ id: string; name: string }[] | string> {
+  const plxd = localPlxd();
+  if (!plxd) return "plxd wasn't found. Set PLXD_PATH to the plxd binary.";
+  let stdout: string;
+  try {
+    ({ stdout } = await runPlxd(plxd, "dial", "--discover"));
+  } catch (error) {
+    return `Parallax couldn't look for computers: ${(error as { stderr?: string }).stderr?.trim() || "plxd failed"}`;
+  }
+  const hosts = JSON.parse(stdout) as { name?: unknown; routes?: unknown }[];
+  found = new Map();
+  for (const [index, host] of hosts.entries()) {
+    const routes = Array.isArray(host.routes) ? host.routes.filter(isRoute) : [];
+    if (typeof host.name === "string" && routes.length)
+      found.set(String(index), { name: host.name, routes });
+  }
+  return [...found].map(([id, { name }]) => ({ id, name }));
+}
+
+/** A pairing code as typed: letters, digits, spaces, and dashes. */
+const isCode = (value: unknown): value is string =>
+  typeof value === "string" && /^[\w -]{1,20}$/.test(value);
+
+/**
+ * `window.parallax.pairLan`: runs `plxd dial --pair` to the computer `discoverLan` found as
+ * `target.found`, or at `target.address`, with the code on its stdin, so no other user sees it in
+ * the process list. It prints the computer's fingerprint, name, and routes; this keeps the
+ * computer and connects. Resolves to an error for people.
+ */
+async function pairLan(target: unknown, code: unknown): Promise<string | undefined> {
+  const { found: id, address } = (isObject(target) ? target : {}) as Record<string, unknown>;
+  const routes =
+    typeof id === "string"
+      ? found.get(id)?.routes
+      : typeof address === "string" && isRoute(address.trim())
+        ? [address.trim()]
+        : undefined;
+  if (!routes) return "Pick a computer, or enter its address, such as 192.168.1.20.";
+  if (!isCode(code)) return "Enter the code the other computer shows.";
+  const plxd = localPlxd();
+  if (!plxd) return "plxd wasn't found. Set PLXD_PATH to the plxd binary.";
+  let stdout: string;
+  try {
+    const running = runPlxd(plxd, "dial", "--pair", `--name=${localName()}`, "--", ...routes);
+    running.child.stdin?.end(`${code}\n`);
+    ({ stdout } = await running);
+  } catch (error) {
+    const exit = (error as { code?: unknown }).code;
+    if (exit === 5)
+      return "That code is wrong, used, or expired. Check it, or make a new one on the other computer.";
+    if (exit === 4)
+      return "Couldn't reach the other computer. Check that it's on this network and still showing its code.";
+    return `Parallax couldn't pair: ${(error as { stderr?: string }).stderr?.trim() || "plxd failed"}`;
+  }
+  const paired = JSON.parse(stdout) as { fingerprint?: unknown; name?: unknown; routes?: unknown };
+  const { fingerprint, name } = paired;
+  const kept = Array.isArray(paired.routes) ? paired.routes.filter(isRoute) : [];
+  if (typeof fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(fingerprint) || !kept.length)
+    return "plxd answered without the computer's fingerprint and routes.";
+  const computer: SavedLan = {
+    fingerprint,
+    name: (typeof name === "string" && name) || routeHost(kept[0]!),
+    routes: kept,
+  };
+  const lan = [...(settings.lan ?? []).filter((c) => c.fingerprint !== fingerprint), computer];
+  const failed = saveSettings({ ...settings, lan });
+  if (failed) return failed;
+  addLanConnection(computer);
   return undefined;
 }
 

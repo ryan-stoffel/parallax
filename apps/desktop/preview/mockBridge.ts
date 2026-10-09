@@ -8,6 +8,7 @@ import {
   type DeviceHost,
   type DeviceIcon,
   type HostResponse,
+  type LanHost,
   type ParallaxBridge,
   type RendererMethod,
   type RpcError,
@@ -22,6 +23,7 @@ import {
   type AgentRun,
   type Capabilities,
   type JsonValue,
+  type RemoteSession,
   type LoggedEvent,
   type MemoryScope,
   type ParallaxEvent,
@@ -284,17 +286,51 @@ const threadResult = (runId: string, change: Partial<Thread> = {}) => {
   return { thread };
 };
 
+// Remote pairing (PLX-641): this computer's switch and the sessions of computers paired with it,
+// and the computers this app paired with.
+const lan = { on: false, sessions: [] as RemoteSession[], hosts: [] as LanHost[] };
+const hostsListeners = new Set<(hosts: LanHost[]) => void>();
+const isLanHost = (hostId: string) => lan.hosts.some((h) => h.id === hostId);
+
 const handlers: { [M in Method]?: Handler<M> } = {
   "host/settings/get": () => ({
     autoResume: true,
     connect: !!connect.on,
+    remote: lan.on,
     deviceIcon: connect.icon,
   }),
-  "host/settings/set": (p) => ({
-    autoResume: p.autoResume ?? true,
-    connect: p.connect ?? !!connect.on,
-    deviceIcon: connect.icon,
+  "host/settings/set": (p) => {
+    lan.on = p.remote ?? lan.on;
+    return {
+      autoResume: p.autoResume ?? true,
+      connect: p.connect ?? !!connect.on,
+      remote: lan.on,
+      deviceIcon: connect.icon,
+    };
+  },
+  "remote/pair": () => {
+    // The other computer pairs a few seconds later, as someone pasting the link would.
+    setTimeout(() => {
+      if (lan.sessions.length) return;
+      const createdAt = new Date().toISOString();
+      lan.sessions.push({ id: "s1", name: "Ryan's MacBook Air", createdAt });
+    }, 6000);
+    return {
+      code: "7KQ-4M2",
+      expiresAt: new Date(Date.now() + 300_000).toISOString(),
+      name: "macbook",
+      addresses: ["192.168.1.20", "100.87.92.42"],
+    };
+  },
+  "remote/sessions": () => ({
+    sessions: lan.sessions,
+    listening: lan.on,
+    pairing: lan.on && !lan.sessions.length,
   }),
+  "remote/revoke": (p) => {
+    lan.sessions = lan.sessions.filter((s) => s.id !== p.id);
+    return { sessions: lan.sessions, listening: lan.on, pairing: false };
+  },
   "connect/devices": () => ({
     tailscale: "running",
     port: 7340,
@@ -1116,6 +1152,12 @@ export const mockBridge: ParallaxBridge = {
     method: M,
     params: ParallaxRequests[M]["params"],
   ): Promise<HostResponse<ParallaxRequests[M]["result"]>> {
+    // A LAN computer runs nothing in the preview.
+    if (isLanHost(hostId))
+      return delay({
+        result: { repos: [], threads: [], runs: [], projects: [], seq },
+        logId: LOG_ID,
+      } as unknown as HostResponse<Result<M>>);
     if (hostId !== LOCAL && !deviceOf(hostId)?.parallax)
       return delay({ error: fail(`no host has id ${hostId}`) } as HostResponse<Result<M>>);
     if (hostId !== LOCAL) {
@@ -1173,7 +1215,7 @@ export const mockBridge: ParallaxBridge = {
     return () => listeners.delete(entry);
   },
   connectionState: (hostId) =>
-    hostId === LOCAL || deviceOf(hostId)
+    hostId === LOCAL || deviceOf(hostId) || isLanHost(hostId)
       ? delay(connected, 10)
       : Promise.reject(new Error(`no host ${hostId}`)),
   onConnectionState: (listener) => {
@@ -1182,9 +1224,12 @@ export const mockBridge: ParallaxBridge = {
   },
   retry: () => delay(undefined),
 
-  hosts: () => delay([]),
+  hosts: () => delay([...lan.hosts]),
   sshSuggestions: () => delay(["mac-mini", "devbox", "100.87.92.42", "github.com"]),
-  onHosts: () => noop,
+  onHosts: (listener) => {
+    hostsListeners.add(listener);
+    return () => hostsListeners.delete(listener);
+  },
   onLocalName: (listener) => {
     listener(localName);
     localNameListeners.add(listener);
@@ -1196,8 +1241,22 @@ export const mockBridge: ParallaxBridge = {
     return delay(undefined);
   },
   saveHost: () => delay("Hosts can't be added in the preview."),
-  removeHost: () => delay(undefined),
+  removeHost: (id) => {
+    lan.hosts = lan.hosts.filter((h) => h.id !== id);
+    for (const l of hostsListeners) l([...lan.hosts]);
+    return delay(undefined);
+  },
   installPlxd: () => delay("plxd can't be installed in the preview."),
+  discoverLan: () => delay([{ id: "0", name: "studio" }], 900),
+  pairLan: async (target, code) => {
+    await delay(undefined, 600);
+    if (code.replace(/[\s-]/g, "").length !== 6)
+      return "That code is wrong, used, or expired. Check it, or make a new one on the other computer.";
+    const first = "address" in target ? target.address : "192.168.1.31";
+    lan.hosts.push({ id: "lan:studio", name: "studio", routes: [first, "100.74.190.83"] });
+    for (const l of hostsListeners) l([...lan.hosts]);
+    return undefined;
+  },
 
   onConnect: (listener) => {
     listener({ ...connect });
