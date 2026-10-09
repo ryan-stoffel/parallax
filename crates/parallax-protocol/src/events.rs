@@ -5,7 +5,8 @@ use ts_rs::TS;
 use crate::id::uuid_v7_id;
 use crate::{
     AgentFailureKind, AgentMerge, AgentOutcome, AgentOutputItem, AgentRun, AgentRunState,
-    ContextFile, InboxItem, Project, ProjectId, QueuedMessage, Repo, RepoId, RunId, Thread,
+    ContextFile, InboxItem, Project, ProjectId, QueuedMessage, Repo, RepoId, RunId, ScriptStatus,
+    ScriptTrigger, Thread,
 };
 
 uuid_v7_id! {
@@ -270,6 +271,32 @@ pub enum ParallaxEvent {
         run_id: RunId,
         /// Its repo entry.
         repo: RepoId,
+    },
+    /// A thread's setup or settle script started or ended (PLX-650). Project-scoped, like every
+    /// `agent.*` event, and in the run's own events.
+    #[serde(rename = "thread.script")]
+    ThreadScript {
+        /// The thread's run id.
+        run_id: RunId,
+        /// When it ran.
+        trigger: ScriptTrigger,
+        /// The script's name.
+        name: String,
+        /// The plxd terminal it runs in, under the thread.
+        terminal_id: String,
+        /// True for a setup script that holds the agent's first turn until it exits.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        blocking: bool,
+        /// Where it is.
+        status: ScriptStatus,
+        /// Its exit code, once it exited.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        exit_code: Option<i32>,
+        /// Why it couldn't start.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        error: Option<String>,
     },
     /// A kind this version does not know yet.
     #[serde(other)]

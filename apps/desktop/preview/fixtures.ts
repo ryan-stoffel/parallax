@@ -93,6 +93,8 @@ export const ids = {
   onboarding: uuid(41),
   tahoe: uuid(42),
   scratchThread: uuid(43),
+  docsSearch: uuid(44),
+  docsLinks: uuid(45),
   questionInbox: uuid(60),
   questionPalette: uuid(61),
   approvalScheduler: uuid(70),
@@ -982,6 +984,45 @@ export function createFixtures(now = Date.now()): Fixtures {
     )
     .update(ago(60 * 49), { status: "completed" })
     .finish(ago(60 * 49), { status: "completed" });
+
+  // A repository's setup script (PLX-650): one holds its thread's first turn, one failed.
+  const setupScript = {
+    kind: "thread.script",
+    trigger: "setup",
+    name: "Install",
+    terminalId: "setup-install",
+    blocking: true,
+  } as const;
+  const docsSearch = thread({
+    id: ids.docsSearch,
+    repo: ids.repoDocs,
+    title: "Index the docs for search",
+    slug: "docs-search",
+    prompt: "Add Pagefind to the docs build and a search box to the header.",
+    status: "starting",
+    started: 1,
+    updated: 0,
+  });
+  log(docsSearch)
+    .update(ago(1), { status: "starting" })
+    .raw(ago(1), { ...setupScript, runId: docsSearch.id, status: "running" });
+  const linksError =
+    "The setup script Install exited with code 1. Its terminal setup-install stays open.";
+  const docsLinks = thread({
+    id: ids.docsLinks,
+    repo: ids.repoDocs,
+    title: "Fix broken links in the docs",
+    slug: "docs-links",
+    prompt: "Find and fix the broken links in the docs, then add a link check to CI.",
+    status: "failed",
+    started: 30,
+    updated: 29,
+  });
+  log(docsLinks)
+    .raw(ago(30), { ...setupScript, runId: docsLinks.id, status: "running" })
+    .raw(ago(29), { ...setupScript, runId: docsLinks.id, status: "failed", exitCode: 1 })
+    .update(ago(29), { status: "failed", error: linksError })
+    .finish(ago(29), { status: "failed", failure: "setupFailed", message: linksError });
 
   // ---- Questions and the inbox --------------------------------------------------------------
 

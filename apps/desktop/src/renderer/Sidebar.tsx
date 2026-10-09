@@ -34,6 +34,7 @@ import {
   Settings,
   SquareDashed,
   SquarePen,
+  SquareTerminal,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -2000,6 +2001,7 @@ const sections: { id: SettingsSection; name: string; Icon: LucideIcon }[] = [
   { id: "providers", name: "Providers", Icon: Bot },
   { id: "sourceControl", name: "Source control", Icon: GitBranch },
   { id: "schedules", name: "Schedules", Icon: CalendarClock },
+  { id: "scripts", name: "Scripts", Icon: SquareTerminal },
   { id: "storage", name: "Storage", Icon: HardDrive },
   { id: "connections", name: "Connections", Icon: Server },
 ];

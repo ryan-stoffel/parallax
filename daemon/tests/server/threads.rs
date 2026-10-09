@@ -38,6 +38,7 @@ mod fork;
 mod from_threads;
 mod project;
 mod schedules;
+mod scripts;
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")

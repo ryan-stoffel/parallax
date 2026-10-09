@@ -295,6 +295,8 @@ pub(crate) struct Daemon {
     pub connect: tailnet::Connect,
     /// The terminals plxd runs for its clients (PLX-637).
     pub terminals: crate::terminals::Terminals,
+    /// The runs a blocking setup script holds (PLX-650).
+    pub(crate) setup_holds: crate::setup_scripts::Holds,
     /// The remote listener's pairing code, tickets, and sessions (PLX-641).
     pub remote: remote::Remote,
     /// Agents' browser tabs (PLX-639).
@@ -453,6 +455,7 @@ impl Server {
             orchestrator: crate::orchestrator::Orchestrator::default(),
             connect: tailnet::Connect::new(tailnet, config.connect_port, config.connect_address),
             terminals: crate::terminals::Terminals::default(),
+            setup_holds: crate::setup_scripts::Holds::default(),
             remote: remote::Remote::new(
                 config.remote_port,
                 config.remote_address,
@@ -555,6 +558,7 @@ impl Server {
             return Err(io::Error::other(error.message));
         }
         agents::recover(&daemon).await;
+        crate::setup_scripts::recover(&daemon).await;
         agents::deliver_queued(&daemon).await;
         crate::methods::land::resume(&daemon).await;
         let compact = {
@@ -829,6 +833,7 @@ impl Daemon {
                 None,
             ),
             terminals: crate::terminals::Terminals::default(),
+            setup_holds: crate::setup_scripts::Holds::default(),
             remote: remote::Remote::new(crate::remote::PORT, None, None, remote::CODE_LIFETIME),
             schedules: crate::schedules::Schedules::default(),
             pr_watches: crate::pr_watch::Watches::default(),

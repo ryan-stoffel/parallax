@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 
@@ -96,10 +96,15 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function renderSettings(name: SettingsSection = "providers") {
+async function renderSettings(
+  name: SettingsSection = "providers",
+  listed: ComponentProps<typeof Settings>["listed"] = [],
+) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
-    root.render(<Settings section={name} listed={[]} theme="system" onThemeChange={() => {}} />),
+    root.render(
+      <Settings section={name} listed={listed} theme="system" onThemeChange={() => {}} />,
+    ),
   );
   unmount = () => {
     root.unmount();
@@ -648,6 +653,39 @@ test("Schedules lists a host's tasks and pauses one", async () => {
       host: "local",
       params: expect.objectContaining({ id: "task-1", enabled: false, thread: "t-1" }),
     },
+  ]);
+  states["local"] = { status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} };
+});
+
+test("Scripts imports a parallax.json script and saves it (PLX-650)", async () => {
+  states["local"] = {
+    status: "connected",
+    plxd: "0.1.0",
+    protocol: 1,
+    capabilities: { setupScripts: {} },
+  };
+  const install = {
+    id: "install",
+    name: "Install",
+    command: "pnpm install",
+    runOnWorktreeCreate: true,
+    async: false,
+  };
+  answers["repo/scripts"] = () => ({ result: { scripts: [], fileScripts: [install] } });
+  answers["repo/saveScripts"] = () => ({ result: { scripts: [install], fileScripts: [install] } });
+  const repo = { id: "r-1", name: "app", path: "/repo", createdAt: "2026-10-09T04:00:00Z" };
+  const listed = [
+    { host: { id: "local" }, view: { state: { repos: [repo] } } },
+  ] as unknown as ComponentProps<typeof Settings>["listed"];
+  await renderSettings("scripts", listed);
+  expect(section("Scripts").textContent).toContain("No scripts.");
+  const file = section("From parallax.json");
+  expect(file.textContent).toContain("Install · setup, holds the agent");
+  await click(button(file, "Import"));
+  expect(document.querySelector<HTMLInputElement>('[aria-label="Name"]')!.value).toBe("Install");
+  await click(button(section("Scripts"), "Save"));
+  expect(calls("repo/saveScripts")).toEqual([
+    { host: "local", params: { repo: "r-1", scripts: [install] } },
   ]);
   states["local"] = { status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} };
 });

@@ -59,6 +59,7 @@ mod queue;
 mod remote;
 mod review;
 mod schedule;
+mod scripts;
 mod terminal;
 mod thread;
 pub mod typescript;
@@ -181,6 +182,10 @@ pub use schedule::{
     PrWatchResult, PrWatchesParams, PrWatchesResult, Schedule, ScheduleDeleteResult,
     ScheduleIdParams, ScheduleListParams, ScheduleListResult, ScheduleRunStatus,
     ScheduleSaveParams, ScheduleWebhook, ScheduledTask, SignatureEncoding, WebhookSignature,
+};
+pub use scripts::{
+    RepoSaveScriptsParams, RepoScript, RepoScriptsParams, RepoScriptsResult, ScriptStatus,
+    ScriptTrigger,
 };
 pub use terminal::{
     TerminalCommand, TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult,

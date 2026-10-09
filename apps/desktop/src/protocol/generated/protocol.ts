@@ -593,6 +593,16 @@ export type ParallaxRequests = {
 	 */
 	"pr/watches": { params: PrWatchesParams, result: PrWatchesResult },
 	/**
+	 * `repo/scripts`: a repo entry's setup and settle scripts, and those its `parallax.json`
+	 * declares (PLX-650). Fails with `repoNotFound` for an unknown entry. Gated on the
+	 * `setupScripts` capability, like `repo/saveScripts`.
+	 */
+	"repo/scripts": { params: RepoScriptsParams, result: RepoScriptsResult },
+	/**
+	 * `repo/saveScripts`: replaces a repo entry's scripts.
+	 */
+	"repo/saveScripts": { params: RepoSaveScriptsParams, result: RepoScriptsResult },
+	/**
 	 * `orchestration/dispatch`: runs one command on a thread (0059, PLX-644), idempotent on
 	 * its `commandId`. Gated on the `orchestration` capability, like every
 	 * `orchestration/*` method.
@@ -732,6 +742,8 @@ export const REQUEST_METHODS = [
 	"pr/watch",
 	"pr/unwatch",
 	"pr/watches",
+	"repo/scripts",
+	"repo/saveScripts",
 	"orchestration/dispatch",
 	"orchestration/subscribeShell",
 	"orchestration/subscribeThread",
@@ -2842,7 +2854,39 @@ export type ParallaxEvent = { "kind": "project.created",
 	/**
 	 * Its repo entry.
 	 */
-	repo: RepoId,
+	repo: RepoId, } | { "kind": "thread.script",
+	/**
+	 * The thread's run id.
+	 */
+	runId: RunId,
+	/**
+	 * When it ran.
+	 */
+	trigger: ScriptTrigger,
+	/**
+	 * The script's name.
+	 */
+	name: string,
+	/**
+	 * The plxd terminal it runs in, under the thread.
+	 */
+	terminalId: string,
+	/**
+	 * True for a setup script that holds the agent's first turn until it exits.
+	 */
+	blocking?: boolean,
+	/**
+	 * Where it is.
+	 */
+	status: ScriptStatus,
+	/**
+	 * Its exit code, once it exited.
+	 */
+	exitCode?: number,
+	/**
+	 * Why it couldn't start.
+	 */
+	error?: string,
 };
 
 /**
@@ -2850,7 +2894,7 @@ export type ParallaxEvent = { "kind": "project.created",
  *
  * A newer plxd may send a kind this version does not know; treat it as unknown.
  */
-export type AgentFailureKind = "notSignedIn" | "rateLimited" | "policyViolation" | "unexpectedApiKey" | "vendorError" | "crashed" | "spawnFailed" | "commitFailed" | "internal";
+export type AgentFailureKind = "notSignedIn" | "rateLimited" | "policyViolation" | "unexpectedApiKey" | "vendorError" | "crashed" | "spawnFailed" | "setupFailed" | "commitFailed" | "internal";
 
 /**
  * What `agent/accept` did to the project's repository.
@@ -3399,6 +3443,18 @@ export type Repo = {
  * every retry of `repo/add`. plxd generates the scratch entry's.
  */
 export type RepoId = string;
+
+/**
+ * Where a script is.
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type ScriptStatus = "running" | "done" | "failed" | "cancelled" | "interrupted";
+
+/**
+ * When a script ran.
+ */
+export type ScriptTrigger = "setup" | "settle";
 
 /**
  * A normal thread: what threads add to its run.
@@ -6731,6 +6787,83 @@ export type PrWatchesResult = {
 	 * The URLs.
 	 */
 	urls: Array<string>,
+};
+
+/**
+ * Params of `repo/scripts`.
+ */
+export type RepoScriptsParams = {
+	/**
+	 * The repo entry.
+	 */
+	repo: RepoId,
+};
+
+/**
+ * Result of `repo/scripts` and `repo/saveScripts`.
+ */
+export type RepoScriptsResult = {
+	/**
+	 * The scripts plxd runs for the repository.
+	 */
+	scripts: Array<RepoScript>,
+	/**
+	 * The scripts the repository's `parallax.json` declares, which plxd runs only once the user
+	 * imports them, as T3 Code does with `t3.json`'s.
+	 */
+	fileScripts?: Array<RepoScript>,
+	/**
+	 * Why `parallax.json` was ignored, when it exists but isn't valid.
+	 */
+	fileError?: string,
+};
+
+/**
+ * One script, in T3 Code's `ProjectScript` shape. A repository's first `runOnWorktreeCreate`
+ * script is its setup script and its first `runOnSettle` one its settle script, as in T3.
+ */
+export type RepoScript = {
+	/**
+	 * plxd's id for it, from its name, which its terminal is named after. Ignored in
+	 * `repo/saveScripts`.
+	 */
+	id: string,
+	/**
+	 * Its name.
+	 */
+	name: string,
+	/**
+	 * The shell command, run in the user's shell in the worktree.
+	 */
+	command: string,
+	/**
+	 * Runs in each new thread's worktree once it's created.
+	 */
+	runOnWorktreeCreate?: boolean,
+	/**
+	 * Runs in the thread's worktree each time the thread settles.
+	 */
+	runOnSettle?: boolean,
+	/**
+	 * For a setup script: `false` holds the agent's first turn until it exits, and fails the
+	 * run if it exits with an error. Absent or `true` starts the agent alongside it.
+	 */
+	async?: boolean,
+};
+
+/**
+ * Params of `repo/saveScripts`: replaces the repository's scripts. Fails with `invalidParams`
+ * for an empty name or command, or more than 50 scripts.
+ */
+export type RepoSaveScriptsParams = {
+	/**
+	 * The repo entry.
+	 */
+	repo: RepoId,
+	/**
+	 * Its scripts, in order.
+	 */
+	scripts: Array<RepoScript>,
 };
 
 /**

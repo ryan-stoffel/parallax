@@ -8,6 +8,7 @@
 //! a client sees each byte exactly once.
 
 use std::collections::{HashMap, VecDeque};
+use std::future::Future;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::mpsc as std_mpsc;
@@ -24,6 +25,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::task::AbortHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
+use uuid::Uuid;
 
 use crate::methods::Reply;
 
@@ -56,6 +58,13 @@ struct Terminal {
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// The connections it streams to, so opening it again on one replaces that stream.
     streams: Mutex<Vec<Stream>>,
+    /// The program it runs: for a shell, the one its user's `$SHELL` or account names.
+    shell: String,
+    /// Its program's process id and its terminal device, to find what still runs there.
+    #[cfg(unix)]
+    pid: Option<u32>,
+    #[cfg(unix)]
+    tty: Option<String>,
 }
 
 /// A connection a terminal streams to, and the task that streams it.
@@ -99,7 +108,7 @@ impl Terminals {
                 terminal.resize(size);
                 Arc::clone(terminal)
             } else {
-                let terminal = start(key.clone(), params, size, Arc::clone(&self.open))?;
+                let terminal = start(key.clone(), params, size, Arc::clone(&self.open), &[])?;
                 open.insert(key, Arc::clone(&terminal));
                 terminal
             }
@@ -172,6 +181,58 @@ impl Terminals {
         }
     }
 
+    /// Starts the user's shell in a new terminal `(thread_id, terminal_id)` in `cwd`, in place of
+    /// any with that key, with `env`, and types `command` into it, wrapped as T3 Code's setup
+    /// scripts are so the shell prints a line with its exit code after a per-run token (PLX-650).
+    /// Resolves to that code, or `None` if the terminal ended first. The shell stays open.
+    pub(crate) fn run_script(
+        &self,
+        thread_id: &str,
+        terminal_id: &str,
+        cwd: &str,
+        command: &str,
+        env: &[(&str, &str)],
+    ) -> Result<impl Future<Output = Option<i32>> + Send + 'static, ErrorObject> {
+        let key = (thread_id.to_owned(), terminal_id.to_owned());
+        let params = TerminalOpenParams {
+            thread_id: key.0.clone(),
+            terminal_id: key.1.clone(),
+            cwd: Some(cwd.to_owned()),
+            command: None,
+            cols: 120,
+            rows: 30,
+        };
+        let size = PtySize {
+            rows: params.rows,
+            cols: params.cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let terminal = start(key.clone(), params, size, Arc::clone(&self.open), env)?;
+        if let Some(old) = lock(&self.open).insert(key, Arc::clone(&terminal)) {
+            old.kill();
+        }
+        let sentinel = format!("__PLX_SCRIPT_DONE_{}__", Uuid::now_v7().simple());
+        // Subscribed before typing, so the line can't pass unseen.
+        let (output, seen, exit) = terminal.subscribe();
+        let typed = wrap_script(command, &sentinel, &terminal.shell);
+        let _ = terminal.input.send(format!("{typed}\r"));
+        Ok(async move { watch_script(&terminal, output, seen, exit, &sentinel).await })
+    }
+
+    /// Closes a script's terminal unless something it started still runs there, as T3 Code's
+    /// `closeIdle` keeps a terminal with a running subprocess: any process on its terminal
+    /// device besides its shell. Keeps it when that can't be checked. Blocks on `ps`.
+    pub(crate) fn close_idle(&self, thread_id: &str, terminal_id: &str) {
+        let key = (thread_id.to_owned(), terminal_id.to_owned());
+        let Some(terminal) = lock(&self.open).get(&key).cloned() else {
+            return;
+        };
+        if !busy(&terminal) {
+            self.close(key.0, key.1);
+        }
+    }
+
     /// `terminal/list`: the running terminals, or one thread's, in no particular order.
     pub(crate) fn list(&self, thread_id: Option<&str>) -> Vec<TerminalKey> {
         lock(&self.open)
@@ -228,11 +289,16 @@ impl Terminal {
 
 /// Starts `params`' program, or the user's login shell (`PowerShell` on Windows), in a new
 /// pseudo-terminal, with the threads that serve it.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one sequence of steps, each of which must happen before the next"
+)]
 fn start(
     key: Key,
     params: TerminalOpenParams,
     size: PtySize,
     open: Open,
+    env: &[(&str, &str)],
 ) -> Result<Arc<Terminal>, ErrorObject> {
     let cwd = params.cwd.filter(|cwd| cwd != "~");
     if let Some(cwd) = &cwd
@@ -266,11 +332,18 @@ fn start(
         }
         None => CommandBuilder::new_default_prog(),
     };
+    let shell = match &builder.get_argv().first() {
+        Some(program) => program.to_string_lossy().into_owned(),
+        None => builder.get_shell(),
+    };
     // Its home folder when absent.
     if let Some(cwd) = cwd {
         builder.cwd(cwd);
     }
     builder.env("TERM", "xterm-256color");
+    for (name, value) in env {
+        builder.env(name, value);
+    }
     // In the C locale, as when launchd starts plxd, zsh counts each byte of a character like a
     // prompt's U+E0A0 as a column, so its line editor draws in the wrong place.
     if ["LC_ALL", "LC_CTYPE", "LANG"]
@@ -282,6 +355,14 @@ fn start(
 
     let pair = native_pty_system().openpty(size).map_err(|e| failed(&e))?;
     let mut child = pair.slave.spawn_command(builder).map_err(|e| failed(&e))?;
+    #[cfg(unix)]
+    let tty = pair.master.tty_name().map(|path| {
+        path.to_string_lossy()
+            .trim_start_matches("/dev/")
+            .to_owned()
+    });
+    #[cfg(unix)]
+    let pid = child.process_id();
     drop(pair.slave);
     let reader = pair.master.try_clone_reader().map_err(|e| failed(&e))?;
     let writer = pair.master.take_writer().map_err(|e| failed(&e))?;
@@ -298,6 +379,11 @@ fn start(
         input,
         killer: Mutex::new(child.clone_killer()),
         streams: Mutex::default(),
+        shell,
+        #[cfg(unix)]
+        pid,
+        #[cfg(unix)]
+        tty,
     });
 
     let (read_done, reading) = std_mpsc::channel::<()>();
@@ -470,6 +556,98 @@ async fn stream(
             }
         }
     }
+}
+
+/// Whether a process other than `terminal`'s shell runs on its terminal device outside its
+/// foreground process group, or that can't be told. Once a script's exit line has printed, the
+/// foreground holds only what the shell runs for its prompt, such as a `direnv` hook, while what
+/// the script left running in the background stays outside it.
+#[cfg(unix)]
+fn busy(terminal: &Terminal) -> bool {
+    let (Some(tty), Some(pid)) = (&terminal.tty, terminal.pid) else {
+        return true;
+    };
+    let listed = std::process::Command::new("ps")
+        .args(["-o", "pid=,stat=", "-t", tty])
+        .output();
+    let listed = match listed {
+        Ok(listed) if listed.status.success() => listed,
+        _ => return true,
+    };
+    let pid = pid.to_string();
+    String::from_utf8_lossy(&listed.stdout).lines().any(|line| {
+        let mut fields = line.split_whitespace();
+        let (Some(other), Some(stat)) = (fields.next(), fields.next()) else {
+            return false;
+        };
+        other != pid && !stat.contains('+')
+    })
+}
+
+// ponytail: Windows has no `ps`, so a clean exit closes the shell there; listing the
+// pseudo-console's processes is PLX-677.
+#[cfg(windows)]
+fn busy(_: &Terminal) -> bool {
+    false
+}
+
+/// `command` as it's typed into `shell`, as T3 Code's `wrapCommandForCompletion` types it: run in a block
+/// that closes on its own line, so a trailing comment or heredoc can't swallow the line after it,
+/// then printing `sentinel` and the exit code on a line of their own. Lines end in `\r`, the
+/// Enter key for every shell's line editor. The echoed input never matches: there `sentinel` is
+/// followed by `%s` or `$`, not digits.
+fn wrap_script(command: &str, sentinel: &str, shell: &str) -> String {
+    let body = command.replace("\r\n", "\r").replace('\n', "\r");
+    let shell = shell.rsplit(['/', '\\']).next().unwrap_or_default();
+    let shell = shell.strip_suffix(".exe").unwrap_or(shell);
+    if shell == "pwsh" || shell == "powershell" {
+        format!(
+            "$global:LASTEXITCODE = $null; & {{\r{body}\r}}; if ($null -ne $LASTEXITCODE) {{ $__plxc = $LASTEXITCODE }} elseif ($?) {{ $__plxc = 0 }} else {{ $__plxc = 1 }}; Write-Host \"{sentinel}$__plxc\""
+        )
+    } else if shell == "fish" {
+        format!("begin\r{body}\rend; printf '\\n{sentinel}%s\\n' $status")
+    } else {
+        format!("( {body}\r); printf '\\n{sentinel}%s\\n' \"$?\"")
+    }
+}
+
+/// Waits for the line [`wrap_script`] prints and returns its exit code, reading what the
+/// terminal printed so far (`seen`) and then its output. `None` once the terminal exits without
+/// it. Keeps only the tail a split line could still need.
+async fn watch_script(
+    terminal: &Arc<Terminal>,
+    mut output: broadcast::Receiver<Output>,
+    mut seen: String,
+    mut exit: Option<i32>,
+    sentinel: &str,
+) -> Option<i32> {
+    loop {
+        if let Some(code) = script_exit(&seen, sentinel) {
+            return Some(code);
+        }
+        if exit.is_some() {
+            return None;
+        }
+        let keep = seen.floor_char_boundary(seen.len().saturating_sub(sentinel.len() + 16));
+        seen.drain(..keep);
+        match output.recv().await {
+            Ok(Output::Data(data)) => seen.push_str(&data),
+            Ok(Output::Exit(code)) => exit = Some(code),
+            Err(broadcast::error::RecvError::Lagged(_)) => {
+                (output, seen, exit) = terminal.subscribe();
+            }
+            Err(broadcast::error::RecvError::Closed) => return None,
+        }
+    }
+}
+
+/// The exit code after `sentinel` in `text`, once its line has ended.
+fn script_exit(text: &str, sentinel: &str) -> Option<i32> {
+    text.match_indices(sentinel).find_map(|(at, _)| {
+        let rest = &text[at + sentinel.len()..];
+        let end = rest.find(['\r', '\n'])?;
+        rest[..end].parse().ok()
+    })
 }
 
 /// `text` in pieces of at most [`MAX_CHUNK`] bytes, cut between characters. At least one, so an

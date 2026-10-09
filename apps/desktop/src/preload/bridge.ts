@@ -383,7 +383,11 @@ export type TerminalTarget =
   | { hostId: string; cli: CliKind }
   | { hostId: string; provider: string }
   | { hostId: string; install: ProviderKind }
-  | { hostId: string; path: string; threadId?: string }
+  /**
+   * A shell in `path`, or with `terminalId`, the thread's plxd terminal of that id, such as a setup
+   * script's `setup-<id>` (PLX-650), which `id` then only names in this window.
+   */
+  | { hostId: string; path: string; threadId?: string; terminalId?: string }
   | { hostId: string; connect: ConnectAdd };
 
 /** What Add computer sets up with `plx-connect add` (0056): a Tailscale IP, and an ssh user. */

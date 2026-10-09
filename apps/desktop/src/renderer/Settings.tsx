@@ -69,6 +69,7 @@ import {
 } from "./settings/parts";
 import { ProviderModels } from "./settings/ProviderModels";
 import { ScheduleSettings } from "./settings/ScheduleSettings";
+import { ScriptSettings } from "./settings/ScriptSettings";
 import { SourceControlSettings } from "./settings/SourceControlSettings";
 import { StorageSettings } from "./settings/StorageSettings";
 import type { ThreadsView } from "./threads";
@@ -122,6 +123,8 @@ export function Settings({
           <SourceControlSettings key={sourceControlHost} hostId={sourceControlHost} />
         ) : section === "schedules" ? (
           <ScheduleSettings />
+        ) : section === "scripts" ? (
+          <ScriptSettings listed={listed} />
         ) : section === "storage" ? (
           <StorageSettings />
         ) : (

@@ -28,6 +28,12 @@ const REMOTE_WEB: &str = "remote_web";
 /// The `host_settings` key for the remote clients' sessions, as plxd's JSON (PLX-641).
 const REMOTE_SESSIONS: &str = "remote_sessions";
 
+/// The `host_settings` key prefix for a repository's scripts, before its path (PLX-650).
+const REPO_SCRIPTS: &str = "repo_scripts:";
+
+/// The `host_settings` key for the scripts that are running, which a restart interrupts.
+const RUNNING_SCRIPTS: &str = "running_scripts";
+
 impl Store {
     /// Whether a run a usage limit stopped waits and resumes, unless the run overrides it
     /// (PLX-371, decision 0049). On when never set.
@@ -175,6 +181,43 @@ impl Store {
     /// A database error.
     pub fn set_remote_sessions(&self, sessions: Option<&str>) -> Result<(), StoreError> {
         self.set_text(REMOTE_SESSIONS, sessions)
+    }
+
+    /// The setup and settle scripts of the repository at `path`, as plxd's JSON, if any
+    /// (PLX-650).
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn repo_scripts(&self, path: &str) -> Result<Option<String>, StoreError> {
+        self.text(&format!("{REPO_SCRIPTS}{path}"))
+    }
+
+    /// Stores the scripts of the repository at `path`, or forgets them with `None`.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_repo_scripts(&self, path: &str, scripts: Option<&str>) -> Result<(), StoreError> {
+        self.set_text(&format!("{REPO_SCRIPTS}{path}"), scripts)
+    }
+
+    /// The setup and settle scripts that started and haven't ended, as plxd's JSON (PLX-650).
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn running_scripts(&self) -> Result<Option<String>, StoreError> {
+        self.text(RUNNING_SCRIPTS)
+    }
+
+    /// Stores the scripts that are running, or none with `None`.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_running_scripts(&self, scripts: Option<&str>) -> Result<(), StoreError> {
+        self.set_text(RUNNING_SCRIPTS, scripts)
     }
 
     /// A boolean host setting, on unless stored as `false`.

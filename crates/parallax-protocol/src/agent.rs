@@ -398,6 +398,8 @@ pub enum AgentFailureKind {
     Crashed,
     /// The CLI could not be started.
     SpawnFailed,
+    /// The thread's blocking setup script failed, so its CLI never started (PLX-650).
+    SetupFailed,
     /// plxd could not commit the run's changes, for example because the repository has no git
     /// identity.
     CommitFailed,

@@ -269,13 +269,25 @@ export function startHosts(): void {
       if (!isTerminalId(id) || !isObject(target) || !isSize(cols) || !isSize(rows)) {
         return "invalid terminal";
       }
-      const { hostId, cli, provider, install, path, threadId, connect, login } = target;
+      const { hostId, cli, provider, install, path, threadId, terminalId, connect, login } = target;
       if (typeof hostId !== "string") return "invalid terminal";
       if (typeof path === "string") {
         if (threadId !== undefined && typeof threadId !== "string") return "invalid terminal";
+        // A thread's script terminal (PLX-650), which plxd started.
+        if (
+          terminalId !== undefined &&
+          !(typeof threadId === "string" && isScriptTerminal(terminalId))
+        )
+          return "invalid terminal";
         const host = connections.get(hostId);
         if (!host) return "That host isn't in Parallax anymore.";
-        const params = { threadId: threadId ?? "", terminalId: id, cwd: path, cols, rows };
+        const params = {
+          threadId: threadId ?? "",
+          terminalId: terminalId ?? id,
+          cwd: path,
+          cols,
+          rows,
+        };
         return openTerminal(event.sender, id, host, params);
       }
       let command: Command | string | undefined;
@@ -1116,6 +1128,10 @@ function connection(hostId: unknown): Connection {
 /** A terminal's id, which its window picks. */
 const isTerminalId = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0 && value.length <= 500;
+
+/** A thread's setup or settle script terminal's plxd id: `setup-<id>` or `settle-<id>-<8 hex>`. */
+const isScriptTerminal = (value: unknown): value is string =>
+  typeof value === "string" && /^(setup|settle)-[a-z0-9-]{1,48}$/.test(value);
 
 /** A terminal's width or height, in character cells. */
 const isSize = (value: unknown): value is number =>

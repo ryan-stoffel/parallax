@@ -236,3 +236,80 @@ async fn a_command_ends_with_the_connection_that_opened_it() {
     .await
     .expect("the command ended");
 }
+
+#[test]
+fn a_script_s_exit_line_is_read_once_it_ends_and_never_from_the_echo() {
+    let sentinel = "__PLX_SCRIPT_DONE_abc__";
+    // The shell echoes what was typed: there the sentinel is followed by a format, not digits.
+    let echo = format!("$ ( false\r\n> ); printf '\\n{sentinel}%s\\n' \"$?\"\r\n");
+    assert_eq!(super::script_exit(&echo, sentinel), None);
+    assert_eq!(
+        super::script_exit(&format!("{echo}\r\n{sentinel}1"), sentinel),
+        None
+    );
+    assert_eq!(
+        super::script_exit(&format!("{echo}\r\n{sentinel}127\r\n$ "), sentinel),
+        Some(127)
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_script_reports_its_exit_code_and_its_shell_stays_open() {
+    let terminals = Terminals::default();
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().to_str().unwrap();
+    let env = [("PARALLAX_WORKTREE_PATH", cwd)];
+    let ok = terminals
+        .run_script(
+            "t",
+            "setup-ok",
+            cwd,
+            "echo \"$PARALLAX_WORKTREE_PATH\" > out.txt",
+            &env,
+        )
+        .unwrap();
+    assert_eq!(timeout(PATIENCE, ok).await.unwrap(), Some(0));
+    let written = std::fs::read_to_string(dir.path().join("out.txt")).unwrap();
+    assert_eq!(written.trim(), cwd);
+
+    let failed = terminals
+        .run_script("t", "setup-fail", cwd, "echo failing\nexit 3", &[])
+        .unwrap();
+    assert_eq!(timeout(PATIENCE, failed).await.unwrap(), Some(3));
+    // The shell outlives the script, for a look at what failed.
+    assert_eq!(terminals.list(Some("t")).len(), 2);
+    terminals.close_thread("t");
+}
+
+#[test]
+fn a_script_is_wrapped_for_the_shell_the_terminal_runs() {
+    let posix = super::wrap_script("make\nmake test", "S", "/bin/zsh");
+    assert_eq!(posix, "( make\rmake test\r); printf '\\nS%s\\n' \"$?\"");
+    let fish = super::wrap_script("make", "S", "/opt/homebrew/bin/fish");
+    assert_eq!(fish, "begin\rmake\rend; printf '\\nS%s\\n' $status");
+    for shell in [
+        "powershell.exe",
+        r"C:\Program Files\PowerShell\7\pwsh.exe",
+        "/usr/bin/pwsh",
+    ] {
+        let wrapped = super::wrap_script("exit 3", "S", shell);
+        assert!(wrapped.contains("& {\rexit 3\r};"), "{wrapped}");
+        assert!(wrapped.ends_with("Write-Host \"S$__plxc\""), "{wrapped}");
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_clean_exit_keeps_a_terminal_where_something_it_started_still_runs() {
+    let terminals = Terminals::default();
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().to_str().unwrap();
+    let server = terminals
+        .run_script("t", "setup-server", cwd, "sleep 30 > /dev/null 2>&1 &", &[])
+        .unwrap();
+    assert_eq!(timeout(PATIENCE, server).await.unwrap(), Some(0));
+    terminals.close_idle("t", "setup-server");
+    assert_eq!(terminals.list(Some("t")).len(), 1, "the server still runs");
+    terminals.close_thread("t");
+}

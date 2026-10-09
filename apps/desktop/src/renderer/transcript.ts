@@ -92,7 +92,15 @@ type ItemBody =
   /** A page the agent showed with html_render (PLX-639), kept with run `runId`'s images. */
   | ({ kind: "htmlRender"; key: string; runId: string } & HtmlRenderRef)
   /** A browser recording the agent stopped with preview_recording_stop (PLX-639). */
-  | { kind: "recording"; key: string; runId: string; attachmentId: string };
+  | { kind: "recording"; key: string; runId: string; attachmentId: string }
+  /** A setup or settle script (PLX-650), as its latest `thread.script` has it. */
+  | ({ kind: "script"; key: string; runId: string } & ThreadScript);
+
+/** What `thread.script` says of a thread's script. */
+export type ThreadScript = Omit<
+  Extract<ParallaxEvent, { kind: "thread.script" }>,
+  "kind" | "runId"
+>;
 
 /** What an html_render result names: the page, its title, and the frame height the agent asked for. */
 export interface HtmlRenderRef {
@@ -362,6 +370,14 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
           text: "Wake-ups are paused: finished subagents won't wake the coordinator. Your next message resumes them.",
         });
         break;
+      case "thread.script": {
+        // A script's end replaces its start, where it was.
+        const { kind: _, runId: __, ...script } = event;
+        const i = items.findIndex((r) => r.kind === "script" && r.terminalId === script.terminalId);
+        if (i >= 0) items[i] = { ...items[i]!, ...script } as Item;
+        else push({ kind: "script", key: key(), runId, ...script });
+        break;
+      }
       case "agent.output":
         event.items.forEach((item, i) => {
           if (item.kind === "turnStarted") openTurns++;
@@ -889,6 +905,7 @@ const failures: Record<AgentFailureKind, string> = {
   vendorError: "the provider returned an error",
   crashed: "the CLI crashed",
   spawnFailed: "the CLI didn't start",
+  setupFailed: "the setup script didn't succeed",
   commitFailed: "Parallax couldn't commit its changes",
   internal: "something went wrong in plxd",
 };
