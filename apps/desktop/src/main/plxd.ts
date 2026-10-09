@@ -80,9 +80,31 @@ export function appDataDir(
   return !exists(current) && exists(legacy) ? legacy : current;
 }
 
-/** Whether `plxd service status`'s output says the service is installed and loaded. */
-export const serviceLoaded = (status: string) =>
-  /^installed: true$/m.test(status) && /^loaded: true$/m.test(status);
+/**
+ * What `keepServing` (hosts.ts) does next, from `plxd service status`'s output: `done` once the
+ * service is running plxd; else `failed` when this launch's install didn't get it running
+ * (`installed`); else `install` when no agents are running (`runningAgents`, undefined when
+ * unknown), since stopping `serve` ends their runs; else `wait`.
+ */
+export function serviceStep(
+  status: string,
+  runningAgents: number | undefined,
+  installed: boolean,
+): "done" | "failed" | "install" | "wait" {
+  const yes = (field: string) => new RegExp(`^${field}: true$`, "m").test(status);
+  if (yes("installed") && yes("loaded") && yes("running")) return "done";
+  if (installed) return "failed";
+  return runningAgents === 0 ? "install" : "wait";
+}
+
+/** The program a LaunchAgent plist runs: the first string of its `ProgramArguments`. */
+export function plistProgram(plist: string): string | undefined {
+  const text = /<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]*)<\/string>/.exec(
+    plist,
+  )?.[1];
+  const entities: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+  return text?.replace(/&(amp|lt|gt|quot|apos);/g, (_, name: string) => entities[name]!);
+}
 
 /** What `<plxd> --version` reports ("plxd 1.2.3" → "1.2.3"), or undefined if it can't run. */
 export async function plxdVersion(plxd: string): Promise<string | undefined> {

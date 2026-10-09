@@ -90,7 +90,7 @@ fn escape_plist_text(text: &str) -> String {
 ///
 /// # Errors
 ///
-/// [`ServiceError::AlreadyRunningOutsideService`] when nothing is loaded under `label` yet, but
+/// [`ServiceError::AlreadyRunningOutsideService`] when nothing is running under `label`, but
 /// something is already answering `data_dir`'s socket, unless `replace`: bootstrapping would only
 /// start a second `serve` that fights the first one for the lock. Other variants for a
 /// filesystem or `launchctl` failure, or [`ServiceError::StillRunning`].
@@ -105,8 +105,11 @@ pub fn install(
 ) -> Result<InstallOutcome, ServiceError> {
     check_label_serves(label, data_dir, DataDir::default_location().ok().as_ref())?;
     let uid = rustix::process::getuid().as_raw();
-    let already_loaded = load_state(uid, label)?.loaded();
-    let (program, outside) = prepare_install(data_dir, already_loaded, replace)?;
+    let state = load_state(uid, label)?;
+    let already_loaded = state.loaded();
+    // Loaded isn't enough: a loaded agent whose `serve` keeps exiting 3 leaves the one outside it
+    // holding the data folder.
+    let (program, outside) = prepare_install(data_dir, state.running(), replace)?;
     let plist = render_plist(label, &program, data_dir);
     let path = plist_path(label)?;
     write_file(&path, &plist)?;

@@ -1,7 +1,8 @@
 import { app, ipcMain, powerMonitor, type WebContents } from "electron";
 import { execFile, execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -51,7 +52,7 @@ import {
   type Command,
   type SshTarget,
 } from "./terminal";
-import { dataDir, findPlxd, replaceServe, plxdVersion, serviceLoaded } from "./plxd";
+import { dataDir, findPlxd, plistProgram, plxdVersion, replaceServe, serviceStep } from "./plxd";
 import { isNightly } from "./updater";
 import { broadcast, perWindow } from "./windows";
 
@@ -85,6 +86,7 @@ const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
  * serves the `window.parallax` calls that reach plxd or edit the hosts.
  */
 export function startHosts(): void {
+  void repointService();
   addConnection("local", () => {
     const plxd = localPlxd();
     return plxd === undefined ? undefined : [plxd, "attach"];
@@ -617,39 +619,79 @@ function followConnect(on: boolean | undefined, icon?: string): void {
   broadcast("parallax:devices", deviceHosts());
 }
 
-/** Whether the local plxd runs from its login service (`keepServing`), or a handover is running. */
-let serviceState: "unknown" | "handingOver" | "done" = "unknown";
+/**
+ * Where `keepServing` is: `installed` after this launch's `install --replace`, until a discovery
+ * confirms it; `busy` while a step runs; `done` once the service runs plxd; `failed` until the
+ * next launch.
+ */
+let serviceState: "unknown" | "busy" | "installed" | "done" | "failed" = "unknown";
+
+/** Runs the local plxd with `args`, for its `service` commands. */
+const runPlxd = (plxd: string, ...args: string[]) =>
+  promisify(execFile)(plxd, args, { timeout: 60_000 });
+
+/**
+ * The local plxd for a packaged Mac app's login service, or undefined. A translocated app runs
+ * from a random path that's gone once it quits, so a service can't point at it.
+ */
+function servicePlxd(): string | undefined {
+  if (!app.isPackaged || process.platform !== "darwin") return undefined;
+  const plxd = localPlxd();
+  return plxd && !plxd.includes("/AppTranslocation/") ? plxd : undefined;
+}
 
 /**
  * While Connect is on, hands a packaged Mac app's local plxd over to its LaunchAgent (PLX-631).
  * Until then plxd is the app's child: macOS lists Parallax as running in the background after it
- * quits, and nothing starts plxd after a restart, so other computers can't reach it. Waits for no
- * agents to be running, since stopping `serve` ends their runs, and is tried at every discovery
- * until it's done. The connection reconnects through the LaunchAgent by itself. Linux's AppImage
- * runs plxd from a temporary mount a service can't point at, so plx-connect installs it there.
+ * quits, and nothing starts plxd after a restart, so other computers can't reach it. Runs at every
+ * discovery: `serviceStep` decides, installing with `--replace` only when the last `host/health`
+ * said no agents were running (one could start in the moment before `serve` stops). The next
+ * discovery confirms the service runs plxd; the connection reconnects through it by itself.
+ * Linux's AppImage runs plxd from a temporary mount a service can't point at, so plx-connect
+ * installs it there.
  */
 async function keepServing(): Promise<void> {
-  if (serviceState !== "unknown" || !app.isPackaged || process.platform !== "darwin") return;
-  const plxd = localPlxd();
-  // A translocated app runs from a random path that's gone once it quits.
-  if (!plxd || plxd.includes("/AppTranslocation/")) return;
-  serviceState = "handingOver";
+  const plxd = servicePlxd();
+  if (!plxd || (serviceState !== "unknown" && serviceState !== "installed")) return;
+  const installed = serviceState === "installed";
+  serviceState = "busy";
   try {
-    const run = (...args: string[]) => promisify(execFile)(plxd, args, { timeout: 60_000 });
-    if (!serviceLoaded((await run("service", "status")).stdout)) {
-      const health = await connections.get("local")?.request("host/health", {});
-      if (!health || "error" in health || health.result.runningAgents > 0) {
-        serviceState = "unknown";
-        return;
-      }
-      await run("service", "install", "--replace");
-      console.log("parallax: plxd runs from its login service now");
+    const { stdout } = await runPlxd(plxd, "service", "status");
+    const health = await connections.get("local")?.request("host/health", {});
+    const agents = health && "result" in health ? health.result.runningAgents : undefined;
+    const step = serviceStep(stdout, agents, installed);
+    if (step === "install") {
+      await runPlxd(plxd, "service", "install", "--replace");
+      serviceState = "installed";
+      return;
     }
-    serviceState = "done";
+    if (step === "failed") console.warn("parallax: plxd's login service isn't running it:", stdout);
+    serviceState = step === "wait" ? "unknown" : step;
   } catch (error) {
-    // Tried again at the next discovery.
     console.warn("parallax: couldn't hand plxd over to its login service:", error);
-    serviceState = "unknown";
+    serviceState = "failed";
+  }
+}
+
+/**
+ * A LaunchAgent left by a Parallax that has since moved or been deleted runs a plxd that's gone:
+ * launchd keeps failing to start it while `attach`'s `kickstart` still succeeds, so attach never
+ * starts one itself. Points the agent at this app's plxd. An agent whose plxd exists is left
+ * alone, even another install's, so a stable and a nightly app don't take it back and forth.
+ */
+async function repointService(): Promise<void> {
+  const plxd = servicePlxd();
+  if (!plxd) return;
+  try {
+    const { stdout } = await runPlxd(plxd, "service", "status");
+    const file = /^file: (.*)$/m.exec(stdout)?.[1];
+    if (!file || !/^installed: true$/m.test(stdout)) return;
+    const program = plistProgram(await readFile(file, "utf8"));
+    if (!program || existsSync(program)) return;
+    await runPlxd(plxd, "service", "install");
+    console.log(`parallax: pointed plxd's login service at ${plxd}, from the missing ${program}`);
+  } catch (error) {
+    console.warn("parallax: couldn't check plxd's login service:", error);
   }
 }
 

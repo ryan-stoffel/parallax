@@ -7,7 +7,8 @@ import {
   dataDir,
   findPlxd,
   replaceServe,
-  serviceLoaded,
+  plistProgram,
+  serviceStep,
   type ServeSystem,
   type PlxdLookup,
 } from "./plxd";
@@ -121,10 +122,34 @@ test("a replaced serve is waited for until it exits", async () => {
   expect(vi.mocked(system.kill).mock.calls).toEqual([[42], [42, 0], [42, 0], [42, 0], [42, 0]]);
 });
 
-test("the login service counts as set up only when installed and loaded", () => {
-  const status = (installed: boolean, loaded: boolean) =>
-    `label: io.github.ryan-stoffel.parallax.plxd\nfile: /Users/r/Library/LaunchAgents/x.plist\ninstalled: ${installed}\nloaded: ${loaded}\nrunning: false\npid: -\nanswers initialize: true\n`;
-  expect(serviceLoaded(status(true, true))).toBe(true);
-  expect(serviceLoaded(status(true, false))).toBe(false);
-  expect(serviceLoaded(status(false, false))).toBe(false);
+test("keepServing's next step: done once the service runs plxd, installing only with no agents running", () => {
+  const status = (installed: boolean, loaded: boolean, running: boolean) =>
+    `label: io.github.ryan-stoffel.parallax.plxd\nfile: /Users/r/Library/LaunchAgents/x.plist\ninstalled: ${installed}\nloaded: ${loaded}\nrunning: ${running}\npid: -\nanswers initialize: true\n`;
+  expect(serviceStep(status(true, true, true), 3, false)).toBe("done");
+  // Loaded but not running: the app's own serve may still hold the data folder.
+  expect(serviceStep(status(true, true, false), 0, false)).toBe("install");
+  expect(serviceStep(status(false, false, false), 0, false)).toBe("install");
+  expect(serviceStep(status(false, false, false), 2, false)).toBe("wait");
+  expect(serviceStep(status(false, false, false), undefined, false)).toBe("wait");
+  // This launch installed it, and it still isn't running: no second try until the next launch.
+  expect(serviceStep(status(true, true, false), 0, true)).toBe("failed");
+});
+
+test("a LaunchAgent's program is the first ProgramArguments string, unescaped", () => {
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+\t<key>Label</key>
+\t<string>io.github.ryan-stoffel.parallax.plxd</string>
+\t<key>ProgramArguments</key>
+\t<array>
+\t\t<string>/Applications/R&amp;D/Parallax (Nightly).app/Contents/Resources/plxd</string>
+\t\t<string>serve</string>
+\t</array>
+</dict>
+</plist>`;
+  expect(plistProgram(plist)).toBe(
+    "/Applications/R&D/Parallax (Nightly).app/Contents/Resources/plxd",
+  );
+  expect(plistProgram("<plist></plist>")).toBeUndefined();
 });
