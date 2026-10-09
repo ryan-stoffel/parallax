@@ -97,14 +97,22 @@ async fn tools(host: &Host, run: RunId) -> Mcp {
     Mcp::spawn(mcp_command(host.dir.path(), &["--thread", &run])).await
 }
 
+/// The names `mcp`'s `tools/list` gives, but the device tools every caller gets last (PLX-640).
 async fn names(mcp: &mut Mcp) -> Vec<String> {
     let listed = mcp.request("tools/list", json!({})).await;
-    listed["result"]["tools"]
+    let mut names: Vec<String> = listed["result"]["tools"]
         .as_array()
         .unwrap()
         .iter()
         .map(|tool| tool["name"].as_str().unwrap().to_owned())
-        .collect()
+        .collect();
+    let devices = names.split_off(names.len() - plxd::mcp::device::TOOLS.len());
+    assert_eq!(
+        devices,
+        plxd::mcp::device::TOOLS,
+        "every caller's last tools"
+    );
+    names
 }
 
 /// A Project whose coordinator has finished its first turn, and whose children hang.

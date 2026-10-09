@@ -278,6 +278,11 @@ impl Translator {
                     call_id: id.to_owned(),
                     status: tool_status(item),
                     output: tool_output(kind, item),
+                    images: item
+                        .get("result")
+                        .and_then(|result| result.get("content"))
+                        .map(crate::images::from_blocks)
+                        .unwrap_or_default(),
                 })]
             }
             _ => Vec::new(),
@@ -440,11 +445,27 @@ fn tool_output(kind: &str, item: &Map<String, Value>) -> Option<String> {
             .or_else(|| {
                 item.get("result")
                     .filter(|r| !r.is_null())
-                    .map(Value::to_string)
+                    .map(without_images)
             }),
         _ => None,
     };
     output.filter(|output| !output.is_empty())
+}
+
+/// An MCP tool's `result` as JSON text, with each image's base64 left out: the event's `images`
+/// carry them.
+fn without_images(result: &Value) -> String {
+    let mut result = result.clone();
+    if let Some(blocks) = result.get_mut("content").and_then(Value::as_array_mut) {
+        for block in blocks {
+            if block.get("type").and_then(Value::as_str) == Some("image")
+                && let Some(block) = block.as_object_mut()
+            {
+                block.remove("data");
+            }
+        }
+    }
+    result.to_string()
 }
 
 /// `turn/plan/updated`'s steps.
@@ -527,6 +548,7 @@ fn turn_failure(error: Option<&Value>) -> Failure {
 
 #[cfg(test)]
 mod tests {
+    use parallax_protocol::{ImageMediaType, PromptImage};
     use serde_json::json;
 
     use super::{Ask, AskKind, Step, Translator, answer_response};
@@ -573,7 +595,7 @@ mod tests {
         )));
         assert!(events.iter().any(|event| matches!(
             event,
-            Event::ToolResult { call_id, status: ToolStatus::Ok, output: Some(output) }
+            Event::ToolResult { call_id, status: ToolStatus::Ok, output: Some(output), .. }
                 if call_id == "exec-1" && output.starts_with("[main 42ed0b6] probe")
         )));
         assert!(events.iter().any(|event| matches!(
@@ -617,6 +639,25 @@ mod tests {
                 failure: None
             })
         );
+    }
+
+    #[test]
+    fn an_mcp_tools_images_are_its_events_images_and_left_out_of_its_output() {
+        let line = r#"{"method":"item/completed","params":{"item":{"type":"mcpToolCall","id":"mcp-1","server":"plxd","tool":"device_screenshot","status":"completed","arguments":{},"result":{"content":[{"type":"text","text":"{}"},{"type":"image","data":"iVBORw0KGgo=","mimeType":"image/png"}]}}}}"#;
+        let steps = translate(line);
+        let [Event::ToolResult { output, images, .. }] = events(&steps)[..] else {
+            panic!("one tool result: {steps:?}");
+        };
+        assert_eq!(
+            images,
+            &[PromptImage {
+                media_type: ImageMediaType::Png,
+                data: "iVBORw0KGgo=".to_owned(),
+            }]
+        );
+        let output = output.as_deref().unwrap();
+        assert!(!output.contains("iVBORw0KGgo="), "{output}");
+        assert!(output.contains(r#""mimeType":"image/png""#), "{output}");
     }
 
     /// PLX-371: the windows' reset times are what auto-resume waits for, and a fully used one is

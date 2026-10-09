@@ -572,6 +572,10 @@ pub enum AgentOutputItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         output: Option<String>,
+        /// The images the tool returned, such as a device screenshot (PLX-640), in order, for
+        /// `agent/image`. Absent when it returned none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<ImageId>,
     },
     /// The model's reasoning, when the vendor shows it.
     Reasoning {
@@ -1046,7 +1050,8 @@ pub struct AgentEventsParams {
 }
 
 /// Params of `agent/image`: one image sent with a run's messages, by an id from its
-/// `turnStarted` (PLX-191). Its result is the [`PromptImage`] as it was sent.
+/// `turnStarted` (PLX-191), or one a tool returned, by an id from its `toolResult` (PLX-640). Its
+/// result is the [`PromptImage`] as it was sent or returned.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentImageParams {

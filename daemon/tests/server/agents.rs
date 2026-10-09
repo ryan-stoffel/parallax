@@ -27,7 +27,7 @@ use parallax_protocol::{
 };
 use plxd::backend::fake::{FakeBackend, Script, Step};
 use plxd::backend::process::{CancelPolicy, Environment, Launcher};
-use plxd::backend::{Event, FailureKind, ModelUsage, Usage};
+use plxd::backend::{Event, FailureKind, ModelUsage, ToolStatus, Usage};
 use plxd::paths::DataDir;
 use plxd::routing::BackendRegistry;
 use rustix::process::Signal;
@@ -736,6 +736,53 @@ async fn images_sent_with_the_prompt_and_a_follow_up_are_listed_by_their_turns_a
         .await
         .unwrap_err();
     assert_eq!(kind(&missing), ErrorKind::ImageNotFound);
+    host.server.stop().await;
+}
+
+/// A tool's image, such as a device screenshot (PLX-640), is stored, listed on its
+/// `toolResult`, and served by `agent/image`.
+#[tokio::test]
+async fn a_tools_images_are_listed_on_its_result_and_served() {
+    let png = PromptImage {
+        media_type: ImageMediaType::Png,
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
+    };
+    let dir = temp_dir();
+    let host = Host::start(
+        dir,
+        fake(vec![
+            init("tool-images"),
+            Step::Emit(Event::ToolResult {
+                call_id: "shot".to_owned(),
+                status: ToolStatus::Ok,
+                output: Some("{}".to_owned()),
+                images: vec![png.clone()],
+            }),
+            end_turn("Done."),
+        ]),
+    );
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let params = start_params(project.id, "Screenshot the simulator");
+    let run_id = params.run_id;
+    client.call::<AgentStart>(params).await.unwrap();
+    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let ids = items(&events)
+        .into_iter()
+        .find_map(|item| match item {
+            AgentOutputItem::ToolResult { images, .. } => Some(images),
+            _ => None,
+        })
+        .expect("a toolResult");
+    let [image_id] = ids[..] else {
+        panic!("the result lists its one image: {ids:?}");
+    };
+    let served = client
+        .call::<AgentImage>(AgentImageParams { run_id, image_id })
+        .await
+        .unwrap();
+    assert_eq!(served, png);
     host.server.stop().await;
 }
 

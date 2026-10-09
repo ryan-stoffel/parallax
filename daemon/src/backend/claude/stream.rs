@@ -525,6 +525,10 @@ impl Translator {
                 call_id: call_id.to_owned(),
                 status,
                 output: block.get("content").and_then(tool_output),
+                images: block
+                    .get("content")
+                    .map(crate::images::from_blocks)
+                    .unwrap_or_default(),
             }));
         }
         in_subagent(message, None, steps)
@@ -860,7 +864,7 @@ fn skip_escape(chars: &mut std::str::Chars<'_>) {
     }
 }
 
-/// A `tool_result`'s content: a string, or text blocks.
+/// A `tool_result`'s content: a string, or its text blocks. Its images are the event's `images`.
 fn tool_output(content: &Value) -> Option<String> {
     let text = match content {
         Value::String(text) => text.clone(),

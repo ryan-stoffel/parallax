@@ -184,7 +184,11 @@ pub(crate) async fn file(
             exists: true,
             size: Some(blob.size),
             too_large: blob.size > MAX_BLOB_BYTES,
-            content: blob.content.as_deref().filter(|_| !size_only).map(base64),
+            content: blob
+                .content
+                .as_deref()
+                .filter(|_| !size_only)
+                .map(crate::images::encode),
         },
     })
 }
@@ -375,7 +379,7 @@ async fn read_working(
         exists: true,
         size: Some(size),
         too_large: too_large || (!size_only && content.is_none()),
-        content: content.as_deref().map(base64),
+        content: content.as_deref().map(crate::images::encode),
     })
 }
 
@@ -582,31 +586,9 @@ pub(crate) async fn delete_entry(
     Ok(AgentFileEditResult {})
 }
 
-/// Standard base64, with padding.
-fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b = [
-            chunk[0],
-            chunk.get(1).copied().unwrap_or(0),
-            chunk.get(2).copied().unwrap_or(0),
-        ];
-        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        for (index, shift) in [18, 12, 6, 0].into_iter().enumerate() {
-            if index <= chunk.len() {
-                out.push(char::from(ALPHABET[((n >> shift) & 63) as usize]));
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{base64, plain_on_windows};
+    use super::plain_on_windows;
 
     #[test]
     fn windows_refuses_drives_streams_short_names_and_trailing_dots_or_spaces() {
@@ -635,21 +617,5 @@ mod tests {
         ] {
             assert!(plain_on_windows(name), "{name:?}");
         }
-    }
-
-    #[test]
-    fn base64_matches_rfc_4648_vectors() {
-        for (input, output) in [
-            ("", ""),
-            ("f", "Zg=="),
-            ("fo", "Zm8="),
-            ("foo", "Zm9v"),
-            ("foob", "Zm9vYg=="),
-            ("fooba", "Zm9vYmE="),
-            ("foobar", "Zm9vYmFy"),
-        ] {
-            assert_eq!(base64(input.as_bytes()), output, "{input}");
-        }
-        assert_eq!(base64(&[0xff, 0xfe, 0x00]), "//4A");
     }
 }

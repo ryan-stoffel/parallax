@@ -5,8 +5,9 @@ use crate::Store;
 use crate::error::StoreError;
 use crate::timestamp;
 
-/// An image sent with a run's message (PLX-191, decision 0026): its file type as the protocol
-/// spells it, such as `image/png`, and its bytes in base64, as the client sent them.
+/// An image sent with a run's message (PLX-191, decision 0026) or returned by one of its tools
+/// (PLX-640): its file type as the protocol spells it, such as `image/png`, and its bytes in
+/// base64, as the client sent them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredImage {
     pub media_type: String,

@@ -248,6 +248,7 @@ mod tests {
             call_id: "c1".to_owned(),
             status: parallax_protocol::AgentToolStatus::Ok,
             output: Some("ok".to_owned()),
+            images: Vec::new(),
         };
         let end = turn_finished();
         assert_eq!(

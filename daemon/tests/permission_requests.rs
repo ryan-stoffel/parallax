@@ -197,6 +197,7 @@ fn results(events: &[Event]) -> Vec<(&str, ToolStatus, &str)> {
                 call_id,
                 status,
                 output,
+                ..
             } => Some((call_id.as_str(), *status, output.as_deref().unwrap_or(""))),
             _ => None,
         })

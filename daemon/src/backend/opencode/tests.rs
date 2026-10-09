@@ -402,6 +402,7 @@ async fn a_thread_at_a_server_url_streams_asks_and_finishes() {
         call_id: "call_1".into(),
         status: ToolStatus::Ok,
         output: Some("hello world\n".into()),
+        images: Vec::new(),
     }));
     let usage: Vec<_> = seen
         .iter()
@@ -508,6 +509,7 @@ async fn a_resumed_plan_run_appends_its_rules_and_an_interrupting_denial_aborts(
         call_id: "call_1".into(),
         status: ToolStatus::Denied,
         output: None,
+        images: Vec::new(),
     }));
     assert!(seen.contains(&Event::TurnFinished {
         turn_id: None,
@@ -767,7 +769,8 @@ async fn a_denial_goes_on_and_a_request_opencode_rejected_is_withdrawn() {
     assert!(seen.contains(&Event::ToolResult {
         call_id: "call_2".into(),
         status: ToolStatus::Denied,
-        output: None
+        output: None,
+        images: Vec::new(),
     }));
     assert!(matches!(
         seen.last(),

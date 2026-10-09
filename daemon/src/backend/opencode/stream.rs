@@ -202,6 +202,7 @@ impl Translator {
                     call_id: id.clone(),
                     status,
                     output: None,
+                    images: Vec::new(),
                 });
             }
         }
@@ -345,6 +346,7 @@ impl Translator {
                 call_id: id.to_owned(),
                 status,
                 output: output.as_str().map(str::to_owned),
+                images: Vec::new(),
             }));
         }
         steps

@@ -2829,7 +2829,12 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
 	 * What the tool returned, when the vendor includes it, cut short when it is long.
 	 */
-	output?: string, } | { "kind": "reasoning",
+	output?: string,
+	/**
+	 * The images the tool returned, such as a device screenshot (PLX-640), in order, for
+	 * `agent/image`. Absent when it returned none.
+	 */
+	images?: Array<ImageId>, } | { "kind": "reasoning",
 	/**
 	 * The vendor's id for the message, when it has one.
 	 */
@@ -3309,7 +3314,8 @@ export type ForkedFrom = {
 
 /**
  * Params of `agent/image`: one image sent with a run's messages, by an id from its
- * `turnStarted` (PLX-191). Its result is the [`PromptImage`] as it was sent.
+ * `turnStarted` (PLX-191), or one a tool returned, by an id from its `toolResult` (PLX-640). Its
+ * result is the [`PromptImage`] as it was sent or returned.
  */
 export type AgentImageParams = {
 	/**

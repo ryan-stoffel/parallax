@@ -155,8 +155,14 @@ type ViewRow =
   | { kind: "working"; key: string; since?: string }
   | { kind: "musing"; key: string };
 
-/** The run's worktree, which a tool row's paths read relative to. */
-const RootContext = createContext<string | undefined>(undefined);
+/**
+ * What a transcript's rows read: the run's worktree, which a tool row's paths read relative to,
+ * and how to fetch one of the run's images by id, for a tool row's images (PLX-640).
+ */
+const RowContext = createContext<{
+  root?: string;
+  loadImage?: (imageId: ImageId) => Promise<string | undefined>;
+}>({});
 
 /**
  * Focuses the composer's editor (Composer.tsx), as when the plan strip goes with focus in it: the
@@ -826,6 +832,7 @@ export function TranscriptView({
   onEdit?: { key: string; edit: () => void };
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const rowContext = useMemo(() => ({ root, loadImage }), [root, loadImage]);
   // Threads' titles, to name the thread that sent a message or stopped this one (0041).
   const titles = useContext(ThreadLinksContext)?.state.titles;
   const atBottom = useRef(true);
@@ -979,7 +986,7 @@ export function TranscriptView({
 
   return (
     // Bounds the rail and Scroll to end, which stay put while the list scrolls under them.
-    <RootContext value={root}>
+    <RowContext value={rowContext}>
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div
           ref={scrollRef}
@@ -1045,7 +1052,7 @@ export function TranscriptView({
         {scrolledUp && <ScrollToEnd onClick={scrollToEnd} />}
         {findBar}
       </div>
-    </RootContext>
+    </RowContext>
   );
 }
 
@@ -1573,7 +1580,7 @@ function Steps({
   openKeys: ReadonlySet<string>;
   onToggle: (key: string, open: boolean) => void;
 }) {
-  const root = useContext(RootContext);
+  const { root } = useContext(RowContext);
   const only = work.items.length === 1 ? work.items[0]! : undefined;
   if (only && !active)
     return <RowView row={only} live={live} open={openKeys.has(only.key)} onToggle={onToggle} />;
@@ -1829,7 +1836,7 @@ function ToolCall({
 }) {
   // A call that started one of the agent's own subagents opens it (PLX-382).
   const subagents = useContext(SubagentsContext);
-  const root = useContext(RootContext);
+  const { root, loadImage } = useContext(RowContext);
   if (isSubagentTool(item.name) && subagents?.subagents[item.callId])
     return <SubagentCall item={item} />;
   const kind = toolKind(item.name);
@@ -1871,6 +1878,16 @@ function ToolCall({
           </div>
         ) : (
           item.input !== undefined && <Block label="Input">{inputText(item.input)}</Block>
+        )}
+        {!!item.images?.length && (
+          <div>
+            <p className="mb-1 text-[11.5px] text-faint-foreground">Images</p>
+            <div className="flex flex-wrap gap-2">
+              {item.images.map((id) => (
+                <MessageImage key={id} image={id} loadImage={loadImage} />
+              ))}
+            </div>
+          </div>
         )}
         {item.output !== undefined && <Block label="Output">{item.output}</Block>}
       </div>
@@ -2141,6 +2158,10 @@ const plxdLabels: Partial<Record<string, string>> = {
   message_agent: "Messaged a subagent",
   cancel_agent: "Stopped a subagent",
   agent_diff: "Read a subagent's diff",
+  device_list: "Listed devices",
+  device_open: "Opened a device",
+  device_screenshot: "Took a device screenshot",
+  device_close: "Closed a device",
 };
 
 /**
