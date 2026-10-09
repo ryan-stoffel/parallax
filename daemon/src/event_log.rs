@@ -15,7 +15,7 @@
 //!
 //! The table is compacted on a retention policy (#187, decision 0016): an agent run's events stay
 //! as long as its run row does, now one row per finished turn (0052), while host and project
-//! events with no `run_id` — `project.created`, `context.changed` — are pruned to the newest
+//! events with no `thread_id` — `project.created`, `context.changed` — are pruned to the newest
 //! `host_retention` whenever one is staged. `host_retention` is always at least `retention`
 //! (`EventLog::with` enforces it): a restart only ever reloads the newest `retention` events, and
 //! by pigeonhole every host or project event in that reload is among the newest `retention` host
@@ -33,27 +33,84 @@
 //! subscriber's cursor (`check`/`next`) never sees a `head` whose entry isn't in the window yet. A
 //! separate `watch::Sender` only wakes subscribers to go re-check.
 
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::Timestamp;
-use parallax_protocol::{LogId, ParallaxEvent, ProjectId, RunId};
+use parallax_protocol::{AgentOutputItem, LogId, ParallaxEvent, ProjectId, RunId};
 use parallax_store::{Store, StoreError, StoredEvent};
+use serde_json::value::RawValue;
 use tokio::sync::watch;
 use tracing::{info, warn};
 
-/// One entry in the log.
+/// One entry in the log. The in-memory window keeps an event as JSON only, serialized once when
+/// it was staged or read from the database, which every subscriber's frame embeds as it is
+/// (0059), with what its filters need beside it.
 #[derive(Debug)]
 pub(crate) struct Entry {
     pub seq: u64,
     pub time: Timestamp,
     pub project: Option<ProjectId>,
-    pub event: ParallaxEvent,
-    /// The event's JSON size, for the in-memory replay window's byte bound.
-    pub bytes: usize,
+    /// The run it belongs to: [`run_of`] its event.
+    pub run: Option<RunId>,
+    /// Whether it is an `agent.output` with approval items, which a `shell` subscription keeps.
+    pub approvals: bool,
     /// A compacted turn's first `seq` (`compacted.from`), when the payload has one (PLX-491).
     pub compacted_from: Option<u64>,
+    pub json: Box<RawValue>,
+    /// The event a page read from the database parsed already, kept so its reader doesn't parse
+    /// it again. `None` in the window.
+    parsed: Option<ParallaxEvent>,
+}
+
+impl Entry {
+    /// An entry for `event`, serialized now.
+    fn new(seq: u64, time: Timestamp, project: Option<ProjectId>, event: &ParallaxEvent) -> Self {
+        Self::with_json(seq, time, project, event, raw(event))
+    }
+
+    pub(crate) fn with_json(
+        seq: u64,
+        time: Timestamp,
+        project: Option<ProjectId>,
+        event: &ParallaxEvent,
+        json: Box<RawValue>,
+    ) -> Self {
+        Self {
+            seq,
+            time,
+            project,
+            run: run_of(event),
+            approvals: matches!(event, ParallaxEvent::AgentOutput { items, .. }
+                if items.iter().any(is_approval)),
+            compacted_from: compacted_from(event),
+            json,
+            parsed: None,
+        }
+    }
+
+    /// The event: the one a page parsed, or else parsed from its JSON now. A kind this build
+    /// can't read comes back as `ParallaxEvent::Unknown`.
+    pub fn event(&self) -> Cow<'_, ParallaxEvent> {
+        match &self.parsed {
+            Some(event) => Cow::Borrowed(event),
+            None => {
+                Cow::Owned(serde_json::from_str(self.json.get()).unwrap_or(ParallaxEvent::Unknown))
+            }
+        }
+    }
+
+    /// Its `kind`, such as `agent.output`, read from its JSON without parsing it.
+    pub fn kind(&self) -> &str {
+        kind_of(self.json.get())
+    }
+
+    /// The event's JSON size, for the in-memory replay window's byte bound.
+    pub fn bytes(&self) -> usize {
+        self.json.get().len()
+    }
 }
 
 /// Why the events after a `seq` can't be replayed.
@@ -73,7 +130,7 @@ pub(crate) struct EventLog {
     /// The in-memory replay window's byte bound (#187): even within `retention`, evicts older
     /// events once their JSON exceeds this many bytes.
     max_bytes: usize,
-    /// How many of the newest host and project events (no `run_id`) the stored log keeps; older
+    /// How many of the newest host and project events (no `thread_id`) the stored log keeps; older
     /// ones are pruned whenever one is staged. Irrelevant for a log with no database.
     host_retention: usize,
     /// The in-memory replay window and `head`, together, so a reader never sees `head` reflect a
@@ -123,6 +180,15 @@ pub(crate) fn run_of(event: &ParallaxEvent) -> Option<RunId> {
     }
 }
 
+/// What a sidebar needs from a run's output: its permission requests and how they ended, as the
+/// app's `trackApprovals` reads them.
+pub(crate) fn is_approval(item: &AgentOutputItem) -> bool {
+    matches!(
+        item,
+        AgentOutputItem::ApprovalRequested { .. } | AgentOutputItem::ApprovalResolved { .. }
+    )
+}
+
 /// The turn's first `seq` when `event` is a compacted `agent.output`.
 fn compacted_from(event: &ParallaxEvent) -> Option<u64> {
     match event {
@@ -157,7 +223,7 @@ fn evict(
 ) {
     while events.len() > 1 && (events.len() > retention || *bytes > max_bytes) {
         if let Some(evicted) = events.pop_front() {
-            *bytes = bytes.saturating_sub(evicted.bytes);
+            *bytes = bytes.saturating_sub(evicted.bytes());
             *floor = evicted.seq + 1;
         }
     }
@@ -220,7 +286,7 @@ impl EventLog {
         let head = db.event_head()?;
         let events = db
             .latest_events(retention.max(1), max_bytes, |stored| {
-                Arc::new(entry(&stored))
+                Arc::new(entry(stored, false))
             })?
             .into();
         let reader = match Store::open_read_only(path) {
@@ -258,7 +324,7 @@ impl EventLog {
         // the newest `retention` host and project events, so keeping at least that many host
         // events never lets a restart's window skip one (0016).
         let host_retention = host_retention.max(retention);
-        let mut bytes = events.iter().map(|entry| entry.bytes).sum();
+        let mut bytes = events.iter().map(|entry| entry.bytes()).sum();
         let mut floor = events.front().map_or(head + 1, |entry| entry.seq);
         evict(&mut events, &mut bytes, &mut floor, retention, max_bytes);
         Self {
@@ -340,7 +406,7 @@ impl EventLog {
             floor,
         } = &mut *inner;
         for entry in entries {
-            *bytes += entry.bytes;
+            *bytes += entry.bytes();
             events.push_back(Arc::new(entry));
         }
         *head = last;
@@ -349,13 +415,16 @@ impl EventLog {
     }
 
     /// Appends an event to a log with no database: a store that couldn't open, and tests.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "callers build the event to append it, and only its JSON is kept"
+    )]
     pub fn append_in_memory(
         &self,
         time: Timestamp,
         project: Option<ProjectId>,
         event: ParallaxEvent,
     ) -> u64 {
-        let bytes = serde_json::to_string(&event).map_or(0, |json| json.len());
         // One lock for reading `head` and publishing, so two callers can't take the same `seq`.
         let mut inner = self.inner();
         let seq = inner.head + 1;
@@ -365,15 +434,9 @@ impl EventLog {
             head,
             floor,
         } = &mut *inner;
-        events.push_back(Arc::new(Entry {
-            seq,
-            time,
-            project,
-            event,
-            bytes,
-            compacted_from: None,
-        }));
-        *total += bytes;
+        let entry = Entry::new(seq, time, project, &event);
+        *total += entry.bytes();
+        events.push_back(Arc::new(entry));
         *head = seq;
         evict(events, total, floor, self.retention, self.max_bytes);
         self.head_watch.send_replace(seq);
@@ -396,8 +459,8 @@ impl EventLog {
             let db = reader.lock().unwrap_or_else(PoisonError::into_inner);
             let (stored, more) = db.run_events(run.into(), after, limit, max_bytes)?;
             let entries = stored
-                .iter()
-                .map(|stored| Arc::new(entry(stored)))
+                .into_iter()
+                .map(|stored| Arc::new(entry(stored, true)))
                 .collect();
             return Ok((entries, more));
         }
@@ -407,9 +470,9 @@ impl EventLog {
         for entry in inner
             .events
             .iter()
-            .filter(|entry| entry.seq > after && run_of(&entry.event) == Some(run))
+            .filter(|entry| entry.seq > after && entry.run == Some(run))
         {
-            let size = serde_json::to_string(&entry.event).map_or(0, |json| json.len());
+            let size = entry.bytes();
             if entries.len() >= limit.max(1) || (!entries.is_empty() && bytes + size > max_bytes) {
                 return Ok((entries, true));
             }
@@ -432,8 +495,8 @@ impl EventLog {
             let db = reader.lock().unwrap_or_else(PoisonError::into_inner);
             let (stored, more) = db.run_events_before(run.into(), before, limit, max_bytes)?;
             let entries = stored
-                .iter()
-                .map(|stored| Arc::new(entry(stored)))
+                .into_iter()
+                .map(|stored| Arc::new(entry(stored, true)))
                 .collect();
             return Ok((entries, more));
         }
@@ -445,9 +508,9 @@ impl EventLog {
             .events
             .iter()
             .rev()
-            .filter(|entry| entry.seq < before && run_of(&entry.event) == Some(run))
+            .filter(|entry| entry.seq < before && entry.run == Some(run))
         {
-            let size = serde_json::to_string(&event.event).map_or(0, |json| json.len());
+            let size = event.bytes();
             if entries.len() >= limit.max(1) || (!entries.is_empty() && bytes + size > max_bytes) {
                 more = true;
                 break;
@@ -457,8 +520,8 @@ impl EventLog {
         }
         if let Some(compacted) = inner.events.iter().find(|entry| {
             entry.seq >= before
-                && run_of(&entry.event) == Some(run)
-                && compacted_from(&entry.event).is_some_and(|from| from < before)
+                && entry.run == Some(run)
+                && entry.compacted_from.is_some_and(|from| from < before)
         }) {
             entries.insert(0, Arc::clone(compacted));
         }
@@ -471,9 +534,9 @@ impl EventLog {
         let mut inner = self.inner();
         let Inner { events, bytes, .. } = &mut *inner;
         events.retain(|entry| {
-            let keep = run_of(&entry.event) != Some(run);
+            let keep = entry.run != Some(run);
             if !keep {
-                *bytes = bytes.saturating_sub(entry.bytes);
+                *bytes = bytes.saturating_sub(entry.bytes());
             }
             keep
         });
@@ -493,14 +556,14 @@ impl EventLog {
         &self,
         after: u64,
         project: Option<ProjectId>,
-        keep: impl Fn(&ParallaxEvent) -> bool,
+        keep: impl Fn(&Entry) -> bool,
     ) -> Result<(Option<Arc<Entry>>, u64), Gone> {
         let inner = self.inner();
         let index = start(&inner, after)?;
         match inner
             .events
             .range(index..)
-            .find(|event| event.project == project && keep(&event.event))
+            .find(|entry| entry.project == project && keep(entry))
         {
             Some(event) => Ok((Some(Arc::clone(event)), event.seq)),
             None => Ok((None, inner.head)),
@@ -509,13 +572,10 @@ impl EventLog {
 
     /// Whether an event after `after` matches `matches`, or may have: one that was dropped from
     /// the window can't be checked, so that counts as a match. For `agent/wait` (PLX-451).
-    pub fn any_after(&self, after: u64, matches: impl Fn(&ParallaxEvent) -> bool) -> bool {
+    pub fn any_after(&self, after: u64, matches: impl Fn(&Entry) -> bool) -> bool {
         let inner = self.inner();
         start(&inner, after).map_or(true, |index| {
-            inner
-                .events
-                .range(index..)
-                .any(|entry| matches(&entry.event))
+            inner.events.range(index..).any(|entry| matches(entry))
         })
     }
 
@@ -524,21 +584,26 @@ impl EventLog {
     }
 }
 
-/// A stored event as a log entry. A payload this build can't read, such as a newer plxd's kind,
-/// comes back as `ParallaxEvent::Unknown`, keeping its place in the sequence.
-fn entry(stored: &StoredEvent) -> Entry {
+/// A stored event as a log entry, keeping the event it parsed for a page (`keep`) and not for
+/// the window. A payload this build can't read, such as a newer plxd's kind, comes back as
+/// `ParallaxEvent::Unknown`, keeping its place in the sequence, and is delivered as stored.
+fn entry(stored: StoredEvent, keep: bool) -> Entry {
     let event = serde_json::from_str(&stored.payload).unwrap_or(ParallaxEvent::Unknown);
-    let compacted_from = compacted_from(&event);
-    Entry {
-        seq: stored.seq,
-        time: stored.time,
-        project: stored
-            .project_id
-            .and_then(|id| ProjectId::try_from(id).ok()),
-        bytes: stored.payload.len(),
-        event,
-        compacted_from,
-    }
+    let json = RawValue::from_string(stored.payload).unwrap_or_else(|_| raw(&event));
+    let project = stored
+        .project_id
+        .and_then(|id| ProjectId::try_from(id).ok());
+    let mut entry = Entry::with_json(stored.seq, stored.time, project, &event, json);
+    entry.parsed = keep.then_some(event);
+    entry
+}
+
+/// `event`'s JSON.
+pub(crate) fn raw(event: &ParallaxEvent) -> Box<RawValue> {
+    serde_json::value::to_raw_value(event).unwrap_or_else(|error| {
+        warn!(%error, "could not serialize an event");
+        Box::default()
+    })
 }
 
 #[cfg(test)]
@@ -673,8 +738,7 @@ mod tests {
         for _ in 0..3 {
             append(&log, None);
         }
-        let is_finished =
-            |event: &ParallaxEvent| matches!(event, ParallaxEvent::AgentFinished { .. });
+        let is_finished = |entry: &super::Entry| entry.kind() == "agent.finished";
         assert!(log.any_after(0, is_finished), "seq 1 was dropped");
         assert!(!log.any_after(2, is_finished));
         log.append_in_memory(jiff::Timestamp::now(), None, finished(run));
@@ -714,7 +778,7 @@ mod tests {
             "only 2 are in memory"
         );
         let (event, _) = reopened.next(1, Some(project), |_| true).unwrap();
-        assert_eq!(event.unwrap().event, finished(run));
+        assert_eq!(event.unwrap().event().into_owned(), finished(run));
         assert_eq!(put(&store, None, ParallaxEvent::Unknown), 4);
         let (entries, more) = reopened.run_events(run, 0, 10, usize::MAX).unwrap();
         let seqs: Vec<u64> = entries.iter().map(|entry| entry.seq).collect();

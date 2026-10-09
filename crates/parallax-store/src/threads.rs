@@ -420,7 +420,7 @@ impl Store {
             "INSERT INTO thread_text (run_id, seq, text)
              SELECT ?1, MAX(events.seq), group_concat(json_extract(item.value, '$.text'), char(10))
              FROM events, json_each(events.payload, '$.items') AS item
-             WHERE events.run_id = ?1 AND events.kind = 'agent.output'
+             WHERE events.thread_id = ?1 AND events.type = 'agent.output'
                 AND events.seq > (SELECT COALESCE(MAX(seq), 0) FROM thread_text
                     WHERE run_id = ?1)
                 AND json_extract(item.value, '$.kind') = 'text'

@@ -50,7 +50,7 @@ pub(crate) async fn start(
         // on Codex and ACP, which attach them only with `approvals`.
         approvals: _,
     } = params;
-    let _starting = daemon.agents.start_guard(run_id).await;
+    let _lane = daemon.orchestrator.lane(run_id).await;
     // An unknown project has no mode, and fails below with `projectNotFound`.
     let mode = super::project_mode(&daemon, project).await?;
     let options = RunOptions {

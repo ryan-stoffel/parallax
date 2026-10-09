@@ -30,7 +30,7 @@ use rustix::process::Signal;
 use tempfile::TempDir;
 use tokio::time::Instant;
 
-use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
+use crate::support::{Client, InProcess, PATIENCE, eventually, kind, temp_dir};
 
 mod context;
 mod files;
@@ -710,9 +710,12 @@ async fn deleting_a_running_thread_stops_its_agent_and_removes_everything() {
         .await
         .unwrap_err();
     assert_eq!(kind(&events), ErrorKind::RunNotFound);
-    assert!(!worktree.exists(), "the worktree is removed");
-    assert!(!repository.exists(), "the scratch repository is removed");
-    assert!(!context.exists(), "the thread's notes are removed");
+    // The cleanup effect runs once the delete commits (0059).
+    eventually(
+        "the worktree, the scratch repository, and the thread's notes are removed",
+        || !worktree.exists() && !repository.exists() && !context.exists(),
+    )
+    .await;
 
     let mut replay = host.client().await;
     replay.subscribe(0, Some(scope(started.thread.repo))).await;
@@ -768,9 +771,10 @@ async fn a_delete_racing_a_message_to_a_finished_thread_leaves_nothing_running()
         .unwrap()
         .runs;
     assert!(runs.is_empty());
-    assert!(!worktree.exists(), "the worktree is removed");
-    let branches = git(&path, &["branch", "--list", &branch]);
-    assert!(branches.is_empty(), "the branch is removed: {branches}");
+    eventually("the worktree and its branch are removed", || {
+        !worktree.exists() && git(&path, &["branch", "--list", &branch]).is_empty()
+    })
+    .await;
     let after = client
         .send::<AgentSend>(message(params.run_id, "Still there?"))
         .await;
@@ -798,10 +802,11 @@ async fn an_accepted_quick_chat_deletes_its_scratch_repository() {
     assert!(repository.is_dir());
 
     client.delete(params.run_id).await.unwrap();
-    assert!(
-        !repository.exists(),
-        "removed although the accept removed the worktree row"
-    );
+    eventually(
+        "the scratch repository is removed, although the accept removed the worktree row",
+        || !repository.exists(),
+    )
+    .await;
 }
 
 #[tokio::test]

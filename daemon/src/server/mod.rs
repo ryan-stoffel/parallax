@@ -273,6 +273,8 @@ pub(crate) struct Daemon {
     pub providers: Providers,
     /// Detached listed-method tasks and in-memory command-id waiters (0052).
     pub commands: crate::commands::Commands,
+    /// Thread lanes and the effect worker's wake-up (0059).
+    pub orchestrator: crate::orchestrator::Orchestrator,
     /// Cursor account login through the SDK sidecar (0053).
     pub cursor: crate::backend::cursor_sdk::CursorAuth,
     /// Parallax Connect's tailnet and listener state (0056).
@@ -427,6 +429,7 @@ impl Server {
             cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher.clone()),
             providers,
             commands: crate::commands::Commands::new(),
+            orchestrator: crate::orchestrator::Orchestrator::default(),
             connect: tailnet::Connect::new(tailnet, config.connect_port, config.connect_address),
             terminals: crate::terminals::Terminals::default(),
             remote: remote::Remote::new(
@@ -511,9 +514,14 @@ impl Server {
                 return Err(error);
             }
         };
-        // An unavailable store has no claims to recover, and still serves read-only host state.
+        // An unavailable store has no claims or effects to recover, and still serves read-only
+        // host state.
         if daemon.store.state() != parallax_protocol::StoreState::Unavailable
-            && let Err(error) = crate::commands::purge_incomplete(&daemon).await
+            && let Err(error) = async {
+                crate::commands::purge_incomplete(&daemon).await?;
+                crate::orchestrator::recover(&daemon).await
+            }
+            .await
         {
             #[cfg(unix)]
             socket.remove();
@@ -539,6 +547,10 @@ impl Server {
                 crate::agents::cleanup::run(daemon, stop).await;
             })
         };
+        let effects = tokio::spawn(crate::orchestrator::work(
+            Arc::clone(&daemon),
+            shutdown.graceful.clone(),
+        ));
         let connections = TaskTracker::new();
         let abort = CancellationToken::new();
         let tailnet = tokio::spawn(tailnet::run(
@@ -625,6 +637,7 @@ impl Server {
         daemon.agents.shutdown().await;
         let _ = compact.await;
         let _ = cleanup.await;
+        let _ = effects.await;
         daemon.store.stop().await;
         daemon.reader.stop().await;
         lock.release();
@@ -768,6 +781,7 @@ impl Daemon {
             agents: Agents::new(backends, worktrees),
             providers,
             commands: crate::commands::Commands::new(),
+            orchestrator: crate::orchestrator::Orchestrator::default(),
             cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher),
             connect: tailnet::Connect::new(
                 Arc::new(crate::tailnet::Absent),

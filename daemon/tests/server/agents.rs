@@ -34,7 +34,7 @@ use rustix::process::Signal;
 use tempfile::TempDir;
 use tokio::time::Instant;
 
-use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
+use crate::support::{Client, InProcess, PATIENCE, eventually, kind, temp_dir};
 
 pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -1545,7 +1545,7 @@ async fn a_project_run_is_cut_from_the_integration_branch_tip() {
         })
         .await
         .unwrap();
-    assert!(!integration.exists(), "the worktree is removed");
+    eventually("the worktree is removed", || !integration.exists()).await;
     assert_eq!(
         git(repo, &["rev-parse", "parallax/app"]),
         tip,

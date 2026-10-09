@@ -14,21 +14,14 @@ use sha2::{Digest, Sha256};
 use tokio::time::{Instant, sleep};
 
 use crate::support::{
-    Client, InProcess, PATIENCE, Plxd, WriteLock, create_params, run_to_exit, socket_path, temp_dir,
+    Client, InProcess, PATIENCE, Plxd, WriteLock, create_params, eventually, run_to_exit,
+    socket_path, temp_dir,
 };
 
 const SETTLE: Duration = Duration::from_millis(300);
 
 fn mode(path: &Path) -> u32 {
     fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777
-}
-
-async fn eventually(what: &str, mut condition: impl FnMut() -> bool) {
-    let deadline = Instant::now() + PATIENCE;
-    while !condition() {
-        assert!(Instant::now() < deadline, "timed out waiting until {what}");
-        sleep(Duration::from_millis(20)).await;
-    }
 }
 
 #[tokio::test]

@@ -39,11 +39,11 @@ function seed(dataDir: string, runId: string) {
   const db = new DatabaseSync(path.join(dataDir, "plxd.sqlite3"), { timeout: 10_000 });
   const { project, head } = db
     .prepare(
-      "SELECT (SELECT project_id FROM events WHERE run_id = ? LIMIT 1) AS project, MAX(seq) AS head FROM events",
+      "SELECT (SELECT project_id FROM events WHERE thread_id = ? LIMIT 1) AS project, MAX(seq) AS head FROM events",
     )
     .get(runId) as { project: string; head: number };
   const insert = db.prepare(
-    "INSERT INTO events (seq, time, project_id, run_id, kind, payload) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO events (seq, time, project_id, thread_id, type, payload) VALUES (?, ?, ?, ?, ?, ?)",
   );
   let seq = head;
   const add = (event: { kind: string } & Record<string, unknown>) => {

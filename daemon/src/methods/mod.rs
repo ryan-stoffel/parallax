@@ -49,7 +49,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) use defaults::read_defaults;
-pub(crate) use events::{Cursor, Cursors};
+pub(crate) use events::{Cursor, Cursors, Delivery};
 pub(crate) use host::{Session, initialize, os_version};
 
 use crate::agents::{self, GitAction};
@@ -214,8 +214,8 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         ThreadList => |_| threads::list(daemon),
         ThreadStart => |p| thread::start(context, p),
         ThreadFork => |p| thread::fork(context, p),
-        ThreadArchive => |p| threads::archive(daemon, p),
-        ThreadUpdate => |p| threads::update(daemon, p),
+        ThreadArchive => |p| threads::archive(daemon, p, context.command_id),
+        ThreadUpdate => |p| threads::update(daemon, p, context.command_id),
         ThreadDelete => |p| thread::delete(context, p),
         ThreadSearch => |p| threads::search(daemon, p),
         RepoAdd => |p| threads::add_repo(daemon, p),
@@ -324,7 +324,7 @@ where
     let params = request.params::<M::Params>()?;
     if let Some(command_id) = context
         .command_id
-        .filter(|_| crate::commands::keeps_receipt(M::NAME))
+        .filter(|_| crate::commands::RECEIPTED_METHODS.contains(&M::NAME))
     {
         return crate::commands::run_receipted::<M, _, _>(
             &context.daemon,

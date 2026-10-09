@@ -130,6 +130,8 @@ pub(crate) struct Tx {
     staged: Vec<Entry>,
     /// Whether staging failed, which rolls the job back however it ends.
     failed: bool,
+    /// The orchestrator command this job commits, which tags the events it stages (0059).
+    pub command_id: Option<String>,
 }
 
 impl Deref for Tx {
@@ -156,11 +158,18 @@ impl Tx {
             begun: None,
             staged: Vec::new(),
             failed: false,
+            command_id: None,
         }
     }
 
     /// Stores `event` in this job's transaction with the next `seq`, and returns it. The event is
-    /// published once the job commits. If it can't be stored, the job rolls back and fails.
+    /// published once the job commits. If it can't be stored, the job rolls back and fails. It is
+    /// serialized once, here: the row, the in-memory window, and every subscriber's frame use
+    /// that JSON (0059).
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "callers build the event to stage it, and only its JSON is kept"
+    )]
     pub fn stage(
         &mut self,
         time: Timestamp,
@@ -175,14 +184,22 @@ impl Tx {
         self.seq += 1;
         let seq = self.seq;
         let run_id = run_of(&event);
-        let payload = serde_json::to_string(&event).unwrap_or_default();
+        let json = match serde_json::value::to_raw_value(&event) {
+            Ok(json) => json,
+            Err(error) => {
+                error!(seq, %error, "could not serialize an event; its job rolls back");
+                self.failed = true;
+                return seq;
+            }
+        };
         let stored = StoredEvent {
             seq,
             time,
             project_id: project.map(Uuid::from),
-            run_id: run_id.map(Uuid::from),
-            kind: kind_of(&payload).to_owned(),
-            payload,
+            thread_id: run_id.map(Uuid::from),
+            kind: kind_of(json.get()).to_owned(),
+            payload: json.get().to_owned(),
+            command_id: self.command_id.clone(),
         };
         match self.store.append_event(&stored) {
             Err(error) => {
@@ -198,15 +215,14 @@ impl Tx {
             }
             Ok(()) => {}
         }
-        self.staged.push(Entry {
-            seq,
-            time,
-            project,
-            event,
-            bytes: stored.payload.len(),
-            compacted_from: None,
-        });
+        self.staged
+            .push(Entry::with_json(seq, time, project, &event, json));
         seq
+    }
+
+    /// The newest `seq` this job staged, if it staged any.
+    pub fn last_staged(&self) -> Option<u64> {
+        self.staged.last().map(|entry| entry.seq)
     }
 
     /// Runs `job` in one transaction on the writer, and publishes what it staged once that
@@ -229,6 +245,7 @@ impl Tx {
             Ok(value) => match self.store.commit() {
                 Ok(()) => {
                     self.begun = None;
+                    self.command_id = None;
                     let staged = std::mem::take(&mut self.staged);
                     if let Some(log) = &self.log {
                         log.publish(staged);
@@ -251,6 +268,7 @@ impl Tx {
         }
         self.staged.clear();
         self.failed = false;
+        self.command_id = None;
         if let Err(error) = self.store.rollback() {
             error!(%error, "could not roll back a store job");
         }
@@ -966,7 +984,7 @@ mod tests {
         rusqlite::Connection::open(&path)
             .unwrap()
             .execute(
-                "INSERT INTO events (seq, time, kind, payload) \
+                "INSERT INTO events (seq, time, type, payload) \
                  VALUES (1, '2026-09-25T12:00:00Z', 'x', '{}')",
                 [],
             )

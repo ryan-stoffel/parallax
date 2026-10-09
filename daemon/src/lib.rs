@@ -64,6 +64,7 @@ pub mod logging;
 pub mod mcp;
 mod methods;
 mod naming;
+mod orchestrator;
 pub mod paths;
 pub mod peer;
 pub mod providers;

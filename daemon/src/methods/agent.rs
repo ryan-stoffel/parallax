@@ -417,7 +417,7 @@ fn logged(entry: &Entry) -> LoggedEvent {
         seq: entry.seq,
         time: entry.time,
         project: entry.project,
-        event: entry.event.clone(),
+        event: entry.event().into_owned(),
     }
 }
 

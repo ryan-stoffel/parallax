@@ -24,7 +24,7 @@ notify.workspace = true
 # The terminals plxd runs (PLX-637): a pseudo-terminal on macOS and Linux, ConPTY on Windows.
 portable-pty = "0.9.0"
 serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 sha2.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true

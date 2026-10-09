@@ -252,9 +252,10 @@ fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
                 seq,
                 time: "2026-09-26T12:00:00Z".parse().unwrap(),
                 project_id: Some(repo.id),
-                run_id: Some(run),
+                thread_id: Some(run),
                 kind: "agent.output".to_owned(),
                 payload: "{}".to_owned(),
+                command_id: None,
             })
             .unwrap();
     }
@@ -346,9 +347,10 @@ impl Threads {
                 seq: self.seq,
                 time: "2026-09-26T12:00:00Z".parse().unwrap(),
                 project_id: Some(self.repo),
-                run_id: Some(run),
+                thread_id: Some(run),
                 kind: "agent.output".to_owned(),
                 payload,
+                command_id: None,
             })
             .unwrap();
     }
@@ -488,7 +490,8 @@ fn a_new_turn_becomes_searchable_when_it_ends() {
     );
 }
 
-/// Migration 36 indexes a store's existing runs from their prompts, turns, and events.
+/// Migration 36 indexes a store's existing runs from their prompts, turns, and events. The
+/// store is rolled back to before it, and so before migration 39's events columns too.
 #[test]
 fn the_search_index_is_backfilled_from_existing_events() {
     let dir = tempfile::tempdir().unwrap();
@@ -517,7 +520,12 @@ fn the_search_index_is_backfilled_from_existing_events() {
         .execute_batch(
             "DROP TABLE thread_text_fts; DROP TABLE thread_text;
              DROP TRIGGER thread_text_prompt; DROP TRIGGER thread_text_turn;
-             DELETE FROM schema_version WHERE version = 36;",
+             DROP INDEX events_command; ALTER TABLE events DROP COLUMN command_id;
+             ALTER TABLE events DROP COLUMN run_id; ALTER TABLE events DROP COLUMN node_id;
+             ALTER TABLE events RENAME COLUMN thread_id TO run_id;
+             ALTER TABLE events RENAME COLUMN type TO kind;
+             DROP TABLE orchestration_receipts; DROP TABLE effects; DROP TABLE projection_meta;
+             DELETE FROM schema_version WHERE version IN (36, 39);",
         )
         .unwrap();
 

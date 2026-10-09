@@ -27,7 +27,7 @@ impl HandoffEvent {
     pub fn from_entry(entry: &Entry) -> Self {
         Self {
             seq: entry.seq,
-            event: entry.event.clone(),
+            event: entry.event().into_owned(),
             compacted_from: entry.compacted_from,
         }
     }

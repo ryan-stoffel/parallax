@@ -45,9 +45,10 @@ fn event(seq: u64, run_id: Option<Uuid>) -> StoredEvent {
         seq,
         time: "2026-09-25T12:00:00.25Z".parse().unwrap(),
         project_id: Some(Uuid::now_v7()),
-        run_id,
+        thread_id: run_id,
         kind: "agent.output".to_owned(),
         payload: format!(r#"{{"kind":"agent.output","n":{seq}}}"#),
+        command_id: None,
     }
 }
 
@@ -550,7 +551,8 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     // table (PLX-402's migration 30), the project autonomy column (PLX-403's migration 31), the
     // landings table and auto-land column (PLX-410's migration 33), the placement columns and
     // table (PLX-413's migration 34), the checks columns (PLX-411's migration 35), the search
-    // index (PLX-487's migration 36), or the attached-thread cursors (PLX-486's migration 37).
+    // index (PLX-487's migration 36), the attached-thread cursors (PLX-486's migration 37), or
+    // the orchestrator's tables (PLX-643's migration 39).
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
@@ -562,6 +564,7 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
              DROP TABLE thread_text_fts; DROP TABLE thread_text;
              DROP TABLE command_receipts;
              DROP TABLE attached_seen;
+             DROP TABLE orchestration_receipts; DROP TABLE effects; DROP TABLE projection_meta;
              ALTER TABLE worktrees DROP COLUMN git_dir;
              ALTER TABLE worktrees DROP COLUMN base_dirty;
              ALTER TABLE projects DROP COLUMN icon_name;

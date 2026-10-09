@@ -998,10 +998,17 @@ impl Actor {
             }
         }
         self.flush().await;
-        // Holds off a concurrent create/actor_for retry for this exact run id while its rows are
-        // deleted and this actor is dropped (#110); an unrelated run's own lock is untouched.
-        let _creating = self.daemon.agents.start_guard(self.id).await;
-        crate::threads::purge(&self.daemon, self.id, self.worktree.clone(), command_id).await?;
+        // The thread's lane (0059) holds off a concurrent create/actor_for retry for this run id
+        // while its rows are deleted and this actor is dropped (#110).
+        let lane = self.daemon.orchestrator.lane(self.id).await;
+        crate::threads::purge(
+            &self.daemon,
+            &lane,
+            self.id,
+            self.worktree.clone(),
+            command_id,
+        )
+        .await?;
         self.worktree = None;
         self.daemon.agents.forget(self.id);
         Ok(())
@@ -3579,13 +3586,13 @@ mod tests {
         let (logged, _) = daemon.log.run_events(actor.id, 0, 100, usize::MAX).unwrap();
         let dropped: Vec<_> = logged
             .iter()
-            .filter_map(|entry| match &entry.event {
+            .filter_map(|entry| match entry.event().into_owned() {
                 ParallaxEvent::AgentOutput { items, .. } => Some(items),
                 _ => None,
             })
             .flatten()
             .filter_map(|item| match item {
-                AgentOutputItem::FollowUpDropped { turn_id } => Some(*turn_id),
+                AgentOutputItem::FollowUpDropped { turn_id } => Some(turn_id),
                 _ => None,
             })
             .collect();
@@ -3626,8 +3633,8 @@ mod tests {
         let (logged, _) = daemon.log.run_events(actor.id, 0, 100, usize::MAX).unwrap();
         let batches: Vec<_> = logged
             .iter()
-            .filter_map(|entry| match &entry.event {
-                ParallaxEvent::AgentOutput { items, .. } => Some(items.clone()),
+            .filter_map(|entry| match entry.event().into_owned() {
+                ParallaxEvent::AgentOutput { items, .. } => Some(items),
                 _ => None,
             })
             .collect();
@@ -3646,13 +3653,7 @@ mod tests {
     /// The kinds of `run`'s logged events, in order.
     fn logged_kinds(daemon: &Daemon, run: RunId) -> Vec<String> {
         let (logged, _) = daemon.log.run_events(run, 0, 100, usize::MAX).unwrap();
-        logged
-            .iter()
-            .map(|entry| {
-                let payload = serde_json::to_string(&entry.event).unwrap();
-                crate::event_log::kind_of(&payload).to_owned()
-            })
-            .collect()
+        logged.iter().map(|entry| entry.kind().to_owned()).collect()
     }
 
     /// A row write that fails keeps the turn's pending output for the next write, rather than
@@ -3675,7 +3676,10 @@ mod tests {
         actor.flush().await;
 
         let (logged, _) = daemon.log.run_events(actor.id, 0, 100, usize::MAX).unwrap();
-        let events: Vec<_> = logged.iter().map(|entry| entry.event.clone()).collect();
+        let events: Vec<_> = logged
+            .iter()
+            .map(|entry| entry.event().into_owned())
+            .collect();
         assert_eq!(
             events,
             [ParallaxEvent::AgentOutput {

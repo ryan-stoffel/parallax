@@ -15,19 +15,21 @@ pub struct StoredEvent {
     pub time: Timestamp,
     /// The project it belongs to, or `None` for a host-level event.
     pub project_id: Option<Uuid>,
-    /// The agent run it belongs to, if any.
-    pub run_id: Option<Uuid>,
-    /// The event's `kind`, such as `agent.output`.
+    /// The thread it belongs to, if any: its agent run (0059 calls a run's row a thread).
+    pub thread_id: Option<Uuid>,
+    /// The event's `kind`, such as `agent.output`, stored as `type`.
     pub kind: String,
     /// The event's JSON.
     pub payload: String,
+    /// The orchestrator command that staged it, if one did (0059). Not read back.
+    pub command_id: Option<String>,
 }
 
 struct RawEvent {
     seq: u64,
     time: String,
     project_id: Option<String>,
-    run_id: Option<String>,
+    thread_id: Option<String>,
     kind: String,
     payload: String,
 }
@@ -38,7 +40,7 @@ impl RawEvent {
             seq: row.get(0)?,
             time: row.get(1)?,
             project_id: row.get(2)?,
-            run_id: row.get(3)?,
+            thread_id: row.get(3)?,
             kind: row.get(4)?,
             payload: row.get(5)?,
         })
@@ -54,14 +56,15 @@ impl RawEvent {
             seq: self.seq,
             time: timestamp::parse(&self.time)?,
             project_id: uuid(self.project_id)?,
-            run_id: uuid(self.run_id)?,
+            thread_id: uuid(self.thread_id)?,
             kind: self.kind,
             payload: self.payload,
+            command_id: None,
         })
     }
 }
 
-const COLUMNS: &str = "seq, time, project_id, run_id, kind, payload";
+const COLUMNS: &str = "seq, time, project_id, thread_id, type, payload";
 
 /// A finished turn whose last `agent.output` is older than the in-memory window (0052).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,16 +117,17 @@ impl Store {
     pub fn append_event(&self, event: &StoredEvent) -> Result<(), StoreError> {
         self.conn
             .prepare_cached(
-                "INSERT INTO events (seq, time, project_id, run_id, kind, payload)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO events (seq, time, project_id, thread_id, type, payload, command_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?
             .execute(params![
                 event.seq,
                 timestamp::format(event.time),
                 event.project_id.map(|id| id.to_string()),
-                event.run_id.map(|id| id.to_string()),
+                event.thread_id.map(|id| id.to_string()),
                 event.kind,
                 event.payload,
+                event.command_id,
             ])?;
         Ok(())
     }
@@ -192,7 +196,7 @@ impl Store {
         max_bytes: usize,
     ) -> Result<(Vec<StoredEvent>, bool), StoreError> {
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT {COLUMNS} FROM events WHERE run_id = ?1 AND seq > ?2 ORDER BY seq ASC"
+            "SELECT {COLUMNS} FROM events WHERE thread_id = ?1 AND seq > ?2 ORDER BY seq ASC"
         ))?;
         let rows = stmt.query_map(params![run_id.to_string(), after], RawEvent::from_row)?;
         let mut events = Vec::new();
@@ -228,7 +232,7 @@ impl Store {
     ) -> Result<(Vec<StoredEvent>, bool), StoreError> {
         let (mut events, more) = {
             let mut stmt = self.conn.prepare(&format!(
-                "SELECT {COLUMNS} FROM events WHERE run_id = ?1 AND seq < ?2 ORDER BY seq DESC"
+                "SELECT {COLUMNS} FROM events WHERE thread_id = ?1 AND seq < ?2 ORDER BY seq DESC"
             ))?;
             let cursor = i64::try_from(before).unwrap_or(i64::MAX);
             let rows = stmt.query_map(params![run_id.to_string(), cursor], RawEvent::from_row)?;
@@ -275,7 +279,7 @@ impl Store {
                     "SELECT {COLUMNS} FROM events
                      WHERE seq = (
                          SELECT MIN(seq) FROM events
-                         WHERE run_id = ?1 AND kind = 'agent.output' AND seq >= ?2
+                         WHERE thread_id = ?1 AND type = 'agent.output' AND seq >= ?2
                      )
                        AND json_valid(payload)
                        AND json_extract(payload, '$.compacted.from') < ?2"
@@ -305,11 +309,11 @@ impl Store {
         let Some((last, run)) = self
             .conn
             .query_row(
-                "SELECT seq, run_id FROM events
-                 WHERE kind = 'agent.output'
+                "SELECT seq, thread_id FROM events
+                 WHERE type = 'agent.output'
                    AND seq < ?1
                    AND seq > ?2
-                   AND run_id IS NOT NULL
+                   AND thread_id IS NOT NULL
                    AND json_valid(payload)
                    AND json_extract(payload, '$.compacted') IS NULL
                    AND EXISTS (
@@ -334,8 +338,8 @@ impl Store {
             .conn
             .query_row(
                 "SELECT MAX(seq) FROM events
-                 WHERE run_id = ?1
-                   AND kind = 'agent.output'
+                 WHERE thread_id = ?1
+                   AND type = 'agent.output'
                    AND seq < ?2
                    AND json_valid(payload)
                    AND EXISTS (
@@ -349,7 +353,7 @@ impl Store {
             .flatten();
         let from: u64 = self.conn.query_row(
             "SELECT MIN(seq) FROM events
-             WHERE run_id = ?1 AND kind = 'agent.output' AND seq > ?2 AND seq <= ?3",
+             WHERE thread_id = ?1 AND type = 'agent.output' AND seq > ?2 AND seq <= ?3",
             params![run_id.to_string(), prev.unwrap_or(0), last],
             |row| row.get(0),
         )?;
@@ -369,7 +373,7 @@ impl Store {
     ) -> Result<Vec<StoredEvent>, StoreError> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {COLUMNS} FROM events
-             WHERE run_id = ?1 AND kind = 'agent.output' AND seq >= ?2 AND seq <= ?3
+             WHERE thread_id = ?1 AND type = 'agent.output' AND seq >= ?2 AND seq <= ?3
              ORDER BY seq ASC"
         ))?;
         let rows = stmt.query_map(params![run_id.to_string(), from, last], RawEvent::from_row)?;
@@ -415,7 +419,7 @@ impl Store {
         Ok(deleted)
     }
 
-    /// Deletes host and project events (those with no `run_id`, such as `project.created` and
+    /// Deletes host and project events (those with no `thread_id`, such as `project.created` and
     /// `context.changed`) beyond the newest `keep`, to bound the table's growth (#187). An agent
     /// run's events are never touched here: they stay as long as the run's own row does, and
     /// nothing removes a run's row yet. Returns how many rows were deleted.
@@ -434,9 +438,9 @@ impl Store {
             .conn
             .prepare_cached(
                 "DELETE FROM events
-                 WHERE run_id IS NULL
+                 WHERE thread_id IS NULL
                    AND seq <= (
-                       SELECT seq FROM events WHERE run_id IS NULL ORDER BY seq DESC LIMIT 1 OFFSET ?1
+                       SELECT seq FROM events WHERE thread_id IS NULL ORDER BY seq DESC LIMIT 1 OFFSET ?1
                    )",
             )?
             .execute(params![keep])?;
