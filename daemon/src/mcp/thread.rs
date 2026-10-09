@@ -109,6 +109,8 @@ pub struct Binding {
     /// plxd's data folder's `tmp/`, where the device tools keep the devices each thread has open
     /// (PLX-640).
     pub temp: PathBuf,
+    /// plxd's data folder, where the browser tools' headless browser is installed (PLX-639).
+    pub data_dir: crate::paths::DataDir,
 }
 
 /// A bound server: its [`Binding`], and what the caller's run is.
@@ -171,7 +173,7 @@ impl Tools for Server {
             .memory
             .as_ref()
             .map_or(&[][..], |memory| memory.names());
-        [&tools[..], memory, device::TOOLS].concat()
+        [&tools[..], memory, super::html::TOOLS, device::TOOLS].concat()
     }
 
     fn definitions(&self) -> Value {
@@ -184,6 +186,7 @@ impl Tools for Server {
             if let Some(memory) = &self.memory {
                 list.extend(memory.definitions());
             }
+            list.extend(super::html::definitions());
             list.extend(device::definitions());
         }
         tools
@@ -192,6 +195,9 @@ impl Tools for Server {
     async fn call(&self, name: &str, arguments: Value) -> Result<Reply, String> {
         if name.starts_with("device_") {
             return self.devices.call(name, arguments).await;
+        }
+        if name.starts_with("html_") {
+            return super::html::call(&self.binding, name, arguments).await;
         }
         if name.starts_with("memory_") {
             return memory_tool(self, name, arguments).await.map(Reply::from);
@@ -1440,6 +1446,7 @@ mod tests {
         tools.extend(question::definitions(true));
         tools.extend(land::definitions(true));
         tools.extend(device::definitions());
+        tools.extend(crate::mcp::html::definitions());
         for tool in &tools {
             let schema = &tool["inputSchema"];
             assert_eq!(schema["additionalProperties"], false, "{tool}");

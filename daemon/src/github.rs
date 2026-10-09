@@ -280,7 +280,7 @@ async fn finish_login(mut process: Process, launcher: Launcher, state: Arc<Mutex
 }
 
 /// The last non-empty line of `text`, or a stand-in when there is none.
-fn last_line(text: &str) -> &str {
+pub(crate) fn last_line(text: &str) -> &str {
     text.lines()
         .rev()
         .map(str::trim)
@@ -482,7 +482,7 @@ async fn download_release(
 }
 
 /// Downloads `url` to `file` with the system `curl`, ignoring any `.curlrc` (`-q`).
-async fn download(
+pub(crate) async fn download(
     launcher: &Launcher,
     what: &str,
     url: &str,
@@ -532,7 +532,7 @@ fn gh_root(unpacked: &Path) -> Option<PathBuf> {
 
 /// The `tar` that unpacks gh's archive. macOS and Windows get a zip, which only the system's
 /// bsdtar reads, so they skip a GNU tar earlier on `PATH` (nix's, or Git for Windows').
-fn tar_program() -> String {
+pub(crate) fn tar_program() -> String {
     if cfg!(target_os = "macos") {
         "/usr/bin/tar".to_owned()
     } else if cfg!(windows)

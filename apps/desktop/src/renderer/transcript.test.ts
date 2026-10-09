@@ -827,3 +827,19 @@ test("a compaction shows under way, then done in its place, and a finished turn 
   );
   expect(retried.turnDone).toBe(true);
 });
+
+test("an html_render result adds its page after the call, and a failed one doesn't", () => {
+  const render = (callId: string, status: "ok" | "error", out: string) => [
+    output({ kind: "toolCall", callId, name: "mcp__plxd__html_render", input: {} }),
+    output({ kind: "toolResult", callId, status, output: out }),
+  ];
+  const page = JSON.stringify({
+    htmlRender: { attachmentId: "a1", title: "Chart", height: 320 },
+    message: "Shown",
+  });
+  const t = build(...render("c1", "ok", page), ...render("c2", "error", page));
+  expect(of(t.items, "htmlRender")).toEqual([
+    expect.objectContaining({ runId, attachmentId: "a1", title: "Chart", height: 320 }),
+  ]);
+  expect(t.items.map((i) => i.kind)).toEqual(["tool", "htmlRender", "tool"]);
+});

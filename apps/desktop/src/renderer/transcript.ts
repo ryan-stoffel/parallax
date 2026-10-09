@@ -88,7 +88,29 @@ type ItemBody =
   /** A session on another model than the last one that named its own (PLX-495). */
   | { kind: "modelSwitch"; key: string; from: string; to: string }
   /** The agent compacting its context: under way, then `done` (PLX-584). */
-  | { kind: "compaction"; key: string; done: boolean };
+  | { kind: "compaction"; key: string; done: boolean }
+  /** A page the agent showed with html_render (PLX-639), kept with run `runId`'s images. */
+  | ({ kind: "htmlRender"; key: string; runId: string } & HtmlRenderRef);
+
+/** What an html_render result names: the page, its title, and the frame height the agent asked for. */
+export interface HtmlRenderRef {
+  attachmentId: string;
+  title: string;
+  height: number;
+}
+
+/** The page an html_render tool's output names, or undefined for anything else. */
+export function htmlRenderRef(output?: string): HtmlRenderRef | undefined {
+  try {
+    const { attachmentId, title, height } =
+      (JSON.parse(output ?? "") as { htmlRender?: Partial<HtmlRenderRef> }).htmlRender ?? {};
+    if (typeof attachmentId === "string" && typeof title === "string" && typeof height === "number")
+      return { attachmentId, title, height };
+  } catch {
+    // Not JSON, or cut short.
+  }
+  return undefined;
+}
 
 /** A permission request as `approvalRequested` carries it. */
 export type ApprovalRequest = Omit<Extract<AgentOutputItem, { kind: "approvalRequested" }>, "kind">;
@@ -337,7 +359,7 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
             openTurns = Math.max(0, openTurns - 1);
             turnDone = openTurns === 0;
           } else if (activityKinds.has(item.kind)) turnDone = false;
-          applyOutput(items, item, key(i), time, subagents);
+          applyOutput(items, item, key(i), time, subagents, runId);
         });
         break;
     }
@@ -421,6 +443,7 @@ function applyOutput(
   key: string,
   time: string,
   subagents: Record<string, Subagent>,
+  runId: string,
   owner?: string,
 ) {
   const last = items.at(-1);
@@ -506,7 +529,7 @@ function applyOutput(
       const sub = subagents[item.callId] ?? { callId: item.callId, items: [] };
       const inner = [...sub.items];
       const before = inner.length;
-      applyOutput(inner, item.item, key, time, subagents, item.callId);
+      applyOutput(inner, item.item, key, time, subagents, runId, item.callId);
       for (let i = before; i < inner.length; i++) inner[i] = { ...inner[i]!, at: time };
       subagents[item.callId] = {
         ...(subagents[item.callId] ?? sub),
@@ -556,6 +579,11 @@ function applyOutput(
       };
       if (i >= 0) items[i] = { ...(items[i] as Extract<Item, { kind: "tool" }>), ...result };
       else items.push({ kind: "tool", key, callId: item.callId, name: null, ...result });
+      const page =
+        i >= 0 && (items[i] as { name: string | null }).name === `${plxdTools}html_render`
+          ? item.status === "ok" && htmlRenderRef(item.output)
+          : undefined;
+      if (page) items.push({ kind: "htmlRender", key: `${key}:page`, runId, ...page });
       break;
     }
     case "todoList":

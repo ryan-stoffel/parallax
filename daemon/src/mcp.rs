@@ -34,6 +34,7 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 use crate::peer::Plxd;
 
 pub mod device;
+pub mod html;
 pub mod land;
 pub mod memory;
 pub mod question;

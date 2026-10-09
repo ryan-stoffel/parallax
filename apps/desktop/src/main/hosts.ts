@@ -380,6 +380,48 @@ function readComputerName(): string {
   return hostname().replace(/\.local$/, "");
 }
 
+// An html_render page runs its own inline scripts and forms and loads https resources, nothing
+// else, and stays sandboxed even if something opens it outside its frame. A form can't send the
+// page anywhere.
+const renderPolicy = [
+  "sandbox allow-scripts allow-forms",
+  "form-action 'none'",
+  "default-src 'none'",
+  "script-src 'unsafe-inline' 'unsafe-eval' https:",
+  "style-src 'unsafe-inline' https:",
+  "img-src data: blob: https:",
+  "font-src data: https:",
+  "media-src data: blob: https:",
+  "connect-src https:",
+].join("; ");
+
+/**
+ * The html_render page (PLX-639) at `plx-render://page/<host>/<run>/<attachment>`, which that
+ * host's plxd keeps with the run's images, as a document of its own.
+ */
+export async function renderPage(url: string): Promise<Response> {
+  const [, hostId, runId, imageId] = (URL.parse(url)?.pathname ?? "").split("/").map((part) => {
+    try {
+      return decodeURIComponent(part);
+    } catch {
+      return "";
+    }
+  });
+  const host = hostId ? connections.get(hostId) : undefined;
+  const page =
+    host && runId && imageId
+      ? await host.request("agent/image", { runId, imageId }).catch(() => undefined)
+      : undefined;
+  if (!page || "error" in page || page.result.mediaType !== "text/html")
+    return new Response("That page isn't on this host.", { status: 404 });
+  return new Response(Buffer.from(page.result.data, "base64"), {
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Security-Policy": renderPolicy,
+    },
+  });
+}
+
 /** A saved SSH host by id. Undefined for this computer, `local`, and for an unknown id. */
 export const savedHost = (id: string): SshHost | undefined =>
   settings.hosts.find((h) => h.id === id);

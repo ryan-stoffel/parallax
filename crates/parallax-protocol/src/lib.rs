@@ -69,13 +69,13 @@ pub use account::{
     Provider, RawKey,
 };
 pub use agent::{
-    AgentAutoResumeParams, AgentCancelParams, AgentEffort, AgentEventsParams, AgentEventsResult,
-    AgentFailureKind, AgentImageParams, AgentListParams, AgentListResult, AgentOutcome,
-    AgentOutputItem, AgentPermission, AgentPolicy, AgentResumeNowParams, AgentRun, AgentRunResult,
-    AgentRunState, AgentSendParams, AgentStartParams, AgentStatus, AgentSubagentStatus,
-    AgentTodoItem, AgentTodoStatus, AgentToolStatus, AgentWaitParams, AgentWaitResult,
-    AgentWaitUntil, CoordinatorThreadId, DiffSummary, ImageId, ImageMediaType, LoggedEvent,
-    PromptImage, RunId, TurnId,
+    AgentAttachParams, AgentAttachResult, AgentAutoResumeParams, AgentCancelParams, AgentEffort,
+    AgentEventsParams, AgentEventsResult, AgentFailureKind, AgentImageParams, AgentListParams,
+    AgentListResult, AgentOutcome, AgentOutputItem, AgentPermission, AgentPolicy,
+    AgentResumeNowParams, AgentRun, AgentRunResult, AgentRunState, AgentSendParams,
+    AgentStartParams, AgentStatus, AgentSubagentStatus, AgentTodoItem, AgentTodoStatus,
+    AgentToolStatus, AgentWaitParams, AgentWaitResult, AgentWaitUntil, CoordinatorThreadId,
+    DiffSummary, ImageId, ImageMediaType, LoggedEvent, PromptImage, RunId, TurnId,
 };
 pub use approval::{
     AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams,

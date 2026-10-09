@@ -49,6 +49,7 @@
 mod agents;
 pub mod attach;
 pub mod backend;
+mod browser;
 mod commands;
 mod context;
 mod detect;
@@ -65,6 +66,8 @@ mod naming;
 pub mod paths;
 pub mod peer;
 pub mod providers;
+#[cfg(unix)]
+mod public_proxy;
 mod repo;
 pub mod routing;
 pub mod server;

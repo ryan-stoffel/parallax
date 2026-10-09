@@ -68,10 +68,11 @@ use std::time::Duration;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentApproveParams, AgentApproveResult,
-    AgentDelivery, AgentEffort, AgentImageParams, AgentOpenPrResult, AgentOutcome, AgentOutputItem,
-    AgentPermission, AgentRun, AgentSendParams, AgentStartParams, ApprovalId, CoordinatorThreadId,
-    ErrorKind, GitStatus, ImageMediaType, ParallaxEvent, PrActParams, PrDiffResult, PrViewParams,
-    ProjectId, ProjectPermission, PromptImage, PullRequest, QueueResult, Role, RunId, TurnId,
+    AgentAttachParams, AgentAttachResult, AgentDelivery, AgentEffort, AgentImageParams,
+    AgentOpenPrResult, AgentOutcome, AgentOutputItem, AgentPermission, AgentRun, AgentSendParams,
+    AgentStartParams, ApprovalId, CoordinatorThreadId, ErrorKind, GitStatus, ImageId,
+    ImageMediaType, ParallaxEvent, PrActParams, PrDiffResult, PrViewParams, ProjectId,
+    ProjectPermission, PromptImage, PullRequest, QueueResult, Role, RunId, TurnId,
 };
 use parallax_store::{RunFields, RunState, StoreError, ThreadFields, WorktreeFields};
 use tokio::sync::{mpsc, oneshot};
@@ -1574,6 +1575,42 @@ pub(crate) async fn image(
         media_type: option_value(&stored.media_type).unwrap_or(ImageMediaType::Unknown),
         data: stored.data,
     })
+}
+
+/// `agent/attach`: keeps a page or recording a run's browser tools made with its images
+/// (PLX-639). Its data must be base64 of a `text/html` or `video/webm` file.
+pub(crate) async fn attach(
+    daemon: &Arc<Daemon>,
+    params: AgentAttachParams,
+) -> Result<AgentAttachResult, ErrorObject> {
+    let AgentAttachParams { run_id, attachment } = params;
+    if !matches!(
+        attachment.media_type,
+        ImageMediaType::Html | ImageMediaType::Webm
+    ) || crate::images::decode(&attachment.data).is_none()
+    {
+        return Err(ErrorObject::invalid_params(
+            "attachment must be base64 of a text/html or video/webm file",
+        ));
+    }
+    let id = ImageId::generate();
+    let stored = parallax_store::StoredImage {
+        media_type: option_name(attachment.media_type).unwrap_or_default(),
+        data: attachment.data,
+    };
+    store(daemon, move |db| {
+        if db
+            .get_run(run_id.into())
+            .map_err(|e| store_error(&e))?
+            .is_none()
+        {
+            return Err(run_not_found(run_id));
+        }
+        db.add_images(run_id.into(), &[(id.into(), stored)])
+            .map_err(|e| store_error(&e))
+    })
+    .await?;
+    Ok(AgentAttachResult { image_id: id })
 }
 
 /// `agent/cancel`, by the user or, with `from`, by another thread's Parallax tools (0041).

@@ -9,6 +9,7 @@ import {
   nativeImage,
   nativeTheme,
   net,
+  protocol,
   session,
   shell,
 } from "electron";
@@ -35,7 +36,7 @@ import {
   type Editor,
 } from "./editors";
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
-import { savedHost, startHosts } from "./hosts";
+import { renderPage, savedHost, startHosts } from "./hosts";
 import { isBrowsable, isOpenableExternally, mayNavigate } from "./links";
 import { appDataDir } from "./plxd";
 import { cloneRepo, createRepo, listFolders } from "./repos";
@@ -394,6 +395,7 @@ nativeTheme.on("updated", () => {
 
 void app.whenReady().then(async () => {
   if (!devServerUrl) await serveAppScheme();
+  protocol.handle("plx-render", (request) => renderPage(request.url));
   // Pages in the side panel's browser get no camera, microphone, notifications, and the like.
   const browserSession = session.fromPartition(browserPartition);
   browserSession.setPermissionRequestHandler((_c, _p, grant) => grant(false));

@@ -1,0 +1,38 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "agent/attach",
+    "params": {
+      "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "attachment": {
+        "mediaType": "text/html",
+        "data": "PCFkb2N0eXBlIGh0bWw+PHA+SGk8L3A+"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "imageId": "01a0f100-3c4d-7e5f-8a61-7b8c9d0e1f21"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "agent/image",
+    "params": {
+      "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "imageId": "01a0f100-3c4d-7e5f-8a61-7b8c9d0e1f21"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "mediaType": "text/html",
+      "data": "PCFkb2N0eXBlIGh0bWw+PHA+SGk8L3A+"
+    }
+  }
+]

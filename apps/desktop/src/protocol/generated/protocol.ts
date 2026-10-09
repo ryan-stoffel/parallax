@@ -172,6 +172,11 @@ export type ParallaxRequests = {
 	 */
 	"agent/image": { params: AgentImageParams, result: PromptImage },
 	/**
+	 * `agent/attach`: keeps a page or recording a run's browser tools made with its images,
+	 * for `agent/image` (PLX-639). `plxd mcp` calls it for `html_render`.
+	 */
+	"agent/attach": { params: AgentAttachParams, result: AgentAttachResult },
+	/**
 	 * `agent/diff`: the files that differ between a run's base and its latest commit, each
 	 * with its stats and a size-capped unified diff (#157). Gated on the `agentReview`
 	 * capability, like every review method.
@@ -557,6 +562,7 @@ export const REQUEST_METHODS = [
 	"agent/list",
 	"agent/events",
 	"agent/image",
+	"agent/attach",
 	"agent/diff",
 	"agent/file",
 	"agent/files",
@@ -1021,11 +1027,13 @@ export type PromptImage = {
 };
 
 /**
- * An image's file type (PLX-191): the four that Claude and Codex both take.
+ * An image's file type (PLX-191): the four that Claude and Codex both take, plus the types of
+ * what a run's browser tools attach (PLX-639): an `html_render` page and a recording. A message's
+ * images take only the four.
  *
  * A newer peer may send a type this version does not know; treat it as unknown.
  */
-export type ImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+export type ImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "text/html" | "video/webm";
 
 /**
  * A project's id: a version 7 UUID that the client generates once and sends again on every
@@ -3360,6 +3368,31 @@ export type AgentImageParams = {
 	runId: RunId,
 	/**
 	 * The image.
+	 */
+	imageId: ImageId,
+};
+
+/**
+ * Params of `agent/attach`: a page or recording one of a run's tools made, kept with the run's
+ * images (PLX-639). Its result names it for `agent/image`.
+ */
+export type AgentAttachParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The attachment, of type `text/html` or `video/webm`.
+	 */
+	attachment: PromptImage,
+};
+
+/**
+ * Result of `agent/attach`.
+ */
+export type AgentAttachResult = {
+	/**
+	 * The attachment's id, for `agent/image`.
 	 */
 	imageId: ImageId,
 };

@@ -93,7 +93,7 @@ fn is_type(media_type: ImageMediaType, bytes: &[u8]) -> bool {
         ImageMediaType::Jpeg => bytes.starts_with(b"\xff\xd8\xff"),
         ImageMediaType::Gif => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
         ImageMediaType::Webp => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"),
-        ImageMediaType::Unknown => false,
+        ImageMediaType::Html | ImageMediaType::Webm | ImageMediaType::Unknown => false,
     }
 }
 

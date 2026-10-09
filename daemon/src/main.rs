@@ -224,8 +224,8 @@ fn mcp(args: &McpArgs) -> ! {
         let _ = writeln!(io::stderr(), "plxd mcp: {message}");
     };
     let dir = DataDir::resolve(args.data_dir.as_deref());
-    let (socket, temp) = match dir.and_then(|dir| Ok((dir.socket_path()?, dir.temp_dir()))) {
-        Ok((socket, temp)) => (socket.path, temp),
+    let (socket, data_dir) = match dir.and_then(|dir| Ok((dir.socket_path()?, dir))) {
+        Ok((socket, dir)) => (socket.path, dir),
         Err(error) => {
             report(&format!("could not find plxd's socket: {error}"));
             std::process::exit(EXIT_UNAVAILABLE.into());
@@ -245,7 +245,8 @@ fn mcp(args: &McpArgs) -> ! {
     let binding = plxd::mcp::thread::Binding {
         plxd: plxd::peer::Plxd::local(socket),
         run: args.thread,
-        temp,
+        temp: data_dir.temp_dir(),
+        data_dir,
     };
     let served = runtime.block_on(plxd::mcp::thread::run(&binding, stdin, stdout));
     if let Err(error) = served {

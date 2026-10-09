@@ -78,6 +78,7 @@ import { offlineReason, useConnection } from "./ConnectionStatus";
 import { describeError, githubProblem } from "./errors";
 import { ForkButton, ForkContext, type ForkTarget } from "./Fork";
 import type { Host } from "./hosts";
+import { HtmlRender } from "./HtmlRender";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { Loader, type LoaderStyle } from "./Loader";
 import { locale } from "./locale";
@@ -1135,6 +1136,12 @@ interface RowProps {
   onEdit?: () => void;
 }
 
+/** An html_render page (PLX-639), from the open host. */
+function HtmlRenderRow({ page }: { page: Extract<Item, { kind: "htmlRender" }> }) {
+  const hostId = useContext(ThreadLinksContext)?.hostId;
+  return hostId ? <HtmlRender hostId={hostId} page={page} /> : null;
+}
+
 /** A message Parallax or another thread sent, not the user (0025, 0041). */
 const notTheUsers = (row: Extract<Item, { kind: "user" }>) => row.wake || row.from !== undefined;
 
@@ -1306,6 +1313,8 @@ export const RowView = memo(function RowView({
       );
     case "tool":
       return <ToolCall item={row} live={live} open={open} onToggle={onToggle} />;
+    case "htmlRender":
+      return <HtmlRenderRow page={row} />;
     case "plan":
     case "todo":
       // The turn's plan and its later updates, as lines: the strip shows the whole list.
