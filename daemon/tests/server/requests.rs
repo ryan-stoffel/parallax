@@ -11,11 +11,12 @@ use parallax_protocol::methods::{
 };
 use parallax_protocol::{
     HostHealthParams, InitializeResult, ProjectCreateResult, ProjectListParams, ProjectListResult,
+    QueueStats,
 };
 use serde_json::{Value, json};
-use tokio::time::sleep;
+use tokio::time::{Instant, sleep};
 
-use crate::support::{Client, Plxd, WriteLock, create_params, temp_dir};
+use crate::support::{Client, PATIENCE, Plxd, WriteLock, create_params, temp_dir};
 
 // Long enough for a request to reach the store's thread, which takes microseconds.
 const SETTLE: Duration = Duration::from_millis(300);
@@ -27,16 +28,28 @@ async fn a_cancelled_request_gets_exactly_one_answer_and_started_work_finishes()
     let mut client = Client::ready(&plxd.socket).await;
     let lock = WriteLock::take(dir.path());
 
-    // The create starts and waits for SQLite's lock; the list queues behind it.
+    // The create starts and waits for SQLite's lock; the second create queues behind it. Lists
+    // read on their own thread (PLX-457), so only a write can queue here.
+    let before = store_queue(&mut client).await.jobs;
     let params = create_params(dir.path(), "parallax");
     let create = client.send::<ProjectCreate>(params.clone()).await;
-    sleep(SETTLE).await;
-    let list = client.send::<ProjectList>(ProjectListParams {}).await;
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let queue = store_queue(&mut client).await;
+        if queue.jobs > before && queue.queued == 0 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the create never started");
+        sleep(Duration::from_millis(10)).await;
+    }
+    let queued = client
+        .send::<ProjectCreate>(create_params(dir.path(), "queued"))
+        .await;
     client
-        .notify::<CancelRequest>(CancelRequestParams { id: list.clone() })
+        .notify::<CancelRequest>(CancelRequestParams { id: queued.clone() })
         .await;
     let cancelled = client.response().await;
-    assert_eq!(cancelled.id, Some(list));
+    assert_eq!(cancelled.id, Some(queued));
     assert_eq!(cancelled.result.unwrap_err().code, REQUEST_CANCELLED);
 
     // Cancelling the create, which already started, doesn't stop it.
@@ -58,7 +71,18 @@ async fn a_cancelled_request_gets_exactly_one_answer_and_started_work_finishes()
         .call::<ProjectList>(ProjectListParams {})
         .await
         .unwrap();
-    assert_eq!(listed.projects.len(), 1);
+    assert_eq!(listed.projects, [created.project]);
+}
+
+/// The store's job queue, from `host/health`.
+async fn store_queue(client: &mut Client) -> QueueStats {
+    client
+        .call::<HostHealth>(HostHealthParams {})
+        .await
+        .unwrap()
+        .queues
+        .expect("plxd reports its queues")
+        .store
 }
 
 #[tokio::test]
