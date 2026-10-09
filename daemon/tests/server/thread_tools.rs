@@ -1564,3 +1564,127 @@ async fn a_shared_worktree_child_doesnt_block_the_repository_checkout() {
     .await;
     host.server.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accept_refuses_idle_child_edits_after_the_reviewed_commit() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let path = worktree(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+    let made = mcp
+        .ok(
+            "create_threads",
+            json!({"threads": [{"prompt": "Edit later."}]}),
+        )
+        .await;
+    let child: RunId = made["threads"][0]["threadId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    working(&mut client, child).await;
+    std::fs::write(path.join("parent.txt"), "parent committed change").unwrap();
+    steer(&mut client, me, "Finish parent.").await;
+    idle(&mut client, me).await;
+    std::fs::write(path.join("child.txt"), "child work after parent commit").unwrap();
+    steer(&mut client, child, "Finish child.").await;
+    idle(&mut client, child).await;
+    assert!(path.join("child.txt").is_file());
+    let accepted = client
+        .call::<AgentAccept>(AgentAcceptParams {
+            run_id: me,
+            id: AcceptId::generate(),
+            commit: None,
+        })
+        .await;
+    assert_eq!(
+        accepted.unwrap_err().parallax_data().unwrap().kind,
+        ErrorKind::MergeRefused
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join("child.txt")).unwrap(),
+        "child work after parent commit"
+    );
+    host.server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resumed_children_obey_host_cap() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+    let prompts: Vec<Value> = (0..8)
+        .map(|i| json!({"prompt": format!("Old {i}")}))
+        .collect();
+    let made = mcp.ok("create_threads", json!({"threads": prompts})).await;
+    let mut old = Vec::new();
+    for item in made["threads"].as_array().unwrap() {
+        let child: RunId = item["threadId"].as_str().unwrap().parse().unwrap();
+        working(&mut client, child).await;
+        steer(&mut client, child, "Finish old child.").await;
+        idle(&mut client, child).await;
+        old.push(child);
+    }
+    let prompts: Vec<Value> = (0..8)
+        .map(|i| json!({"prompt": format!("New {i}")}))
+        .collect();
+    let made = mcp.ok("create_threads", json!({"threads": prompts})).await;
+    for item in made["threads"].as_array().unwrap() {
+        working(
+            &mut client,
+            item["threadId"].as_str().unwrap().parse().unwrap(),
+        )
+        .await;
+    }
+    let refused = client
+        .call::<AgentSend>(AgentSendParams {
+            run_id: old[0],
+            turn_id: TurnId::generate(),
+            text: "Resume old child.".into(),
+            from: None,
+            images: Vec::new(),
+            threads: Vec::new(),
+            model: None,
+            effort: None,
+            permission: None,
+            context_window: None,
+            fast: None,
+            account: None,
+            delivery: Some(AgentDelivery::Steer),
+        })
+        .await
+        .unwrap_err();
+    assert!(refused.message.contains("8 threads already run"));
+    let newest: RunId = made["threads"][0]["threadId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    steer(&mut client, newest, "Finish one child.").await;
+    idle(&mut client, newest).await;
+    steer(&mut client, old[0], "Resume old child.").await;
+    working_again(&mut client, old[0]).await;
+    let runs = client
+        .call::<AgentList>(AgentListParams { project: None })
+        .await
+        .unwrap()
+        .runs;
+    let children_running = runs
+        .iter()
+        .filter(|run| {
+            run.id != me && matches!(run.status, AgentStatus::Starting | AgentStatus::Running)
+        })
+        .count();
+    println!("Shared children running: {children_running}");
+    host.server.stop().await;
+    assert!(
+        children_running <= 8,
+        "Resuming children bypassed the host cap"
+    );
+}

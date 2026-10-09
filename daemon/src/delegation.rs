@@ -46,7 +46,20 @@ const MERGE_BACK: &str = "merge_back";
 
 /// The most threads in shared worktrees, delegated tasks and `create_threads` threads, that run
 /// at once on a host: a departure from T3, which has no cap, for the host's memory (0063).
-const MAX_SHARED_RUNNING: u64 = 8;
+pub(crate) const MAX_SHARED_RUNNING: u8 = 8;
+
+const CAPACITY_MESSAGE: &str =
+    "8 threads already run in shared worktrees on this host; wait for one to end, then try again";
+
+/// The refusal for a shared thread's turn while [`MAX_SHARED_RUNNING`] run.
+pub(crate) fn capacity_error() -> ErrorObject {
+    ErrorObject::parallax(ErrorKind::RunNotResumable, CAPACITY_MESSAGE)
+}
+
+/// Whether `error` is [`capacity_error`].
+pub(crate) fn at_capacity(error: &ErrorObject) -> bool {
+    error.message == CAPACITY_MESSAGE
+}
 
 /// A lineage row's payload: the worktree the thread works in, and for a delegated task, how its
 /// end reaches its parent.
@@ -270,7 +283,7 @@ fn claim(
         Some(_) => return conflict("exists in another thread's workspace"),
         None if retry => return conflict("exists and isn't a thread in a shared workspace"),
         None => {
-            if db.running_shared_threads().map_err(error)? >= MAX_SHARED_RUNNING {
+            if db.running_shared_threads().map_err(error)? >= u64::from(MAX_SHARED_RUNNING) {
                 return Err(ErrorObject::invalid_params(format!(
                     "{MAX_SHARED_RUNNING} threads already run in shared worktrees on this host, \
                      the most at once; wait for one to end, through its wake-up or \
@@ -479,6 +492,17 @@ pub(crate) async fn check_accept(daemon: &Daemon, run: RunId) -> Result<(), Erro
             users.join(", ")
         ),
     ))
+}
+
+/// Whether any thread, busy or not, works in `run`'s worktree.
+pub(crate) async fn has_users(daemon: &Daemon, run: RunId) -> Result<bool, ErrorObject> {
+    store(daemon, move |db| {
+        Ok(!db
+            .shared_users(run.into())
+            .map_err(|e| store_error(&e))?
+            .is_empty())
+    })
+    .await
 }
 
 /// What deleting `thread` means for a shared worktree (0063): whether other threads still work

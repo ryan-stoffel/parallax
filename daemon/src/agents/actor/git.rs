@@ -47,6 +47,32 @@ impl Folder {
 }
 
 impl Actor {
+    /// Whether other threads work in the run's worktree (0063), which then stays after Accept.
+    /// One may have left edits the reviewed `commit` lacks, so Accept refuses, with
+    /// `mergeRefused`, while that worktree has uncommitted changes or a `HEAD` past `commit`.
+    pub(super) async fn check_shared_workspace(&self, commit: &str) -> Result<bool, ErrorObject> {
+        if !crate::delegation::has_users(&self.daemon, self.id).await? {
+            return Ok(false);
+        }
+        let folder = self.folder().await?;
+        let worktrees = &self.daemon.agents.worktrees;
+        let status = worktrees
+            .status(folder.run_folder())
+            .await
+            .map_err(|e| ErrorObject::parallax(ErrorKind::MergeRefused, e.to_string()))?;
+        let head = worktrees
+            .head(folder.run_folder())
+            .await
+            .map_err(|e| ErrorObject::parallax(ErrorKind::MergeRefused, e.to_string()))?;
+        if status.changes != 0 || head != commit {
+            return Err(ErrorObject::parallax(
+                ErrorKind::MergeRefused,
+                "the worktree has changes beyond the reviewed commit; commit and review them before accepting",
+            ));
+        }
+        Ok(true)
+    }
+
     /// Runs `action`: status and commit answer now, and a push starts as the run's effect.
     pub(super) async fn on_git(&mut self, action: GitAction, reply: Reply<GitStatus>) {
         let commit = match action {

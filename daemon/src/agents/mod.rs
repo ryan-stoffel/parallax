@@ -120,6 +120,7 @@ pub(crate) struct Agents {
     placing: tokio::sync::Mutex<()>,
     /// The runs whose live sessions are idle (0060).
     pub(super) idle: IdleSessions,
+    pub(super) shared_slots: Arc<tokio::sync::Semaphore>,
 }
 
 /// The most idle live sessions a host keeps (0060). Past it, the least recently used is released.
@@ -199,6 +200,9 @@ impl Agents {
             placement: tokio::sync::Notify::new(),
             placing: tokio::sync::Mutex::new(()),
             idle: IdleSessions::default(),
+            shared_slots: Arc::new(tokio::sync::Semaphore::new(usize::from(
+                crate::delegation::MAX_SHARED_RUNNING,
+            ))),
         }
     }
 

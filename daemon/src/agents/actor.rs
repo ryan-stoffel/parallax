@@ -491,6 +491,10 @@ pub(super) struct Actor {
     /// The run's worktree, until `agent/accept` removes it.
     worktree: Option<Worktree>,
     live: Option<Live>,
+    /// A shared thread's place under the host's cap (0063), held from a turn's start to its end.
+    shared_slot: Option<tokio::sync::OwnedSemaphorePermit>,
+    /// When a turn the cap held back tries again.
+    capacity_retry: Option<Instant>,
     /// The push or Open PR running for the run, off this loop (PLX-458).
     effect: Option<JoinHandle<Finished>>,
     batch: Batch,
@@ -561,6 +565,8 @@ impl Actor {
             row,
             worktree,
             live: None,
+            shared_slot: None,
+            capacity_retry: None,
             effect: None,
             batch: Batch::default(),
             turns,
@@ -581,6 +587,30 @@ impl Actor {
             pr_calls: HashSet::new(),
             senders: HashMap::new(),
         }
+    }
+
+    /// Reserve before any shared child's process or idle-session turn reaches a backend.
+    async fn admit_shared(&mut self) -> Result<(), ErrorObject> {
+        if self.shared_slot.is_some() {
+            return Ok(());
+        }
+        let id = self.id;
+        let shared = store(&self.daemon, move |db| {
+            Ok(db
+                .lineage(id.into())
+                .map_err(|e| store_error(&e))?
+                .is_some_and(|lineage| lineage.workspace_of.is_some()))
+        })
+        .await?;
+        if shared {
+            self.shared_slot = Some(
+                Arc::clone(&self.daemon.agents.shared_slots)
+                    .try_acquire_owned()
+                    .map_err(|_| crate::delegation::capacity_error())?,
+            );
+        }
+        self.capacity_retry = None;
+        Ok(())
     }
 
     pub fn id(&self) -> RunId {
@@ -769,10 +799,12 @@ impl Actor {
             let wake_at = self
                 .wakes
                 .due()
-                .filter(|_| !self.busy() && self.effect.is_none() && self.pending_revert.is_none());
+                .filter(|_| !self.busy() && self.effect.is_none() && self.pending_revert.is_none()
+                    && self.capacity_retry.is_none());
             let expire_at = self.approvals.due();
             let resume_at = self.resume_due();
             let release_at = self.release_due();
+            let capacity_at = self.capacity_retry;
             let idle_at = (!self.stopping && self.idle()).then_some(active + IDLE);
             tokio::select! {
                 // Shutdown, then a command, then the due flush, and only then another backend
@@ -811,6 +843,9 @@ impl Actor {
                 }
                 () = sleep_until(release_at.unwrap_or_else(Instant::now)), if release_at.is_some() => {
                     self.release_idle();
+                }
+                () = sleep_until(capacity_at.unwrap_or_else(Instant::now)), if capacity_at.is_some() => {
+                    self.capacity_retry = None;
                 }
                 // Stopping frees what the actor holds, its `turns` above all (PLX-459).
                 () = sleep_until(idle_at.unwrap_or_else(Instant::now)), if idle_at.is_some() => {
@@ -1206,6 +1241,9 @@ impl Actor {
                 wake::deliver(&self.daemon, self.id, questions).await;
             }
             Ok(_) => self.pause_wakes(true).await,
+            Err(error) if crate::delegation::at_capacity(&error) => {
+                self.capacity_retry = Some(Instant::now() + Duration::from_secs(1));
+            }
             Err(error) => {
                 warn!(run = %self.id, error = %error.message, "could not wake a parent");
                 self.pause_wakes(true).await;
@@ -1314,7 +1352,8 @@ impl Actor {
     }
 
     /// `agent/accept`: merges the run's latest commit into the project's current branch, removes
-    /// its worktree and branch, and records it `accepted` (#157, #68).
+    /// its worktree and branch unless other threads share them (0063), and records it `accepted`
+    /// (#157, #68).
     async fn accept(
         &mut self,
         id: AcceptId,
@@ -1357,6 +1396,7 @@ impl Actor {
                 self.id
             )));
         };
+        let shared = self.check_shared_workspace(&commit).await?;
         // Its worktree goes, so its idle session ends first (0060).
         self.end_session().await;
         let worktrees = &self.daemon.agents.worktrees;
@@ -1367,9 +1407,10 @@ impl Actor {
             .await
             .map_err(|error| accept_error(&error))?;
         info!(run = %self.id, into = %accepted.into, commit = %accepted.commit, "accepted an agent run");
-        if let Err(error) = worktrees
-            .remove(repo, Path::new(&worktree.path), &worktree.branch)
-            .await
+        if !shared
+            && let Err(error) = worktrees
+                .remove(repo, Path::new(&worktree.path), &worktree.branch)
+                .await
         {
             warn!(run = %self.id, %error, "could not remove an accepted run's worktree");
         }
@@ -1951,10 +1992,15 @@ impl Actor {
             }
         }
         let (follow_up, seen) = queued.follow_up(&self.daemon, self.id).await?;
-        Ok(match &self.live {
+        self.admit_shared().await?;
+        let handed = match &self.live {
             Some(live) => live.run.send(follow_up).map(|()| seen),
             None => Err(SendError::Finished),
-        })
+        };
+        if handed.is_err() && !self.busy() {
+            self.shared_slot = None;
+        }
+        Ok(handed)
     }
 
     /// Records `queued`, which the live CLI has taken.
@@ -2022,7 +2068,7 @@ impl Actor {
     /// in progress, the next message that doesn't change what it runs with, as its next turn.
     /// One that does releases an idle session, so the next process can take it.
     async fn deliver(&mut self) {
-        if self.stopping || self.queue_held || self.pending_revert.is_some() {
+        if self.stopping || self.queue_held || self.pending_revert.is_some() || self.capacity_retry.is_some() {
             return;
         }
         if self.live.is_none() && self.effect.is_none() {
@@ -2045,6 +2091,10 @@ impl Actor {
             let handed = match self.hand_over(&next).await {
                 Ok(handed) => handed,
                 Err(error) => {
+                    if crate::delegation::at_capacity(&error) {
+                        self.capacity_retry = Some(Instant::now() + Duration::from_secs(1));
+                        break;
+                    }
                     self.queued.pop_front();
                     self.dropped(next.turn_id, &error.message).await;
                     self.save_queue().await;
@@ -2077,6 +2127,7 @@ impl Actor {
             let Some(next) = self.queued.pop_front() else {
                 return;
             };
+            let retry = next.clone();
             let Queued {
                 turn_id,
                 text,
@@ -2099,6 +2150,11 @@ impl Actor {
                         .clone()
                         .unwrap_or_else(|| "its CLI didn't start".to_owned()),
                 ),
+                Err(error) if crate::delegation::at_capacity(&error) => {
+                    self.queued.push_front(retry);
+                    self.capacity_retry = Some(Instant::now() + Duration::from_secs(1));
+                    return;
+                }
                 Err(error) => Some(error.message),
             };
             if let Some(why) = why {
@@ -2339,6 +2395,7 @@ impl Actor {
     /// another backend's account, or with no session to resume, a new session starts, told the
     /// conversation so far. A fork's first message forks its parent's session instead, when
     /// [`Actor::fork_source`] finds one (0050).
+    #[allow(clippy::too_many_lines)]
     async fn resume(
         &mut self,
         turn_id: TurnId,
@@ -2450,6 +2507,9 @@ impl Actor {
         } else {
             self.row.state.session_id = old_session;
             self.move_back(moved_from).await;
+            if self.capacity_retry.is_some() {
+                return Err(crate::delegation::capacity_error());
+            }
         }
         self.snapshot()
     }
@@ -2897,6 +2957,14 @@ impl Actor {
                 return false;
             }
         };
+        if let Err(error) = self.admit_shared().await {
+            if crate::delegation::at_capacity(&error) && turn_id.is_some() {
+                self.capacity_retry = Some(Instant::now() + Duration::from_secs(1));
+            } else {
+                self.failed_to_start(error.message).await;
+            }
+            return false;
+        }
         let account_id = resolved.account_id();
         let request = RunRequest {
             run_id: self.id,
@@ -3062,6 +3130,7 @@ impl Actor {
     /// Ends a run whose CLI never started with `outcome`: failed, or cancelled, as when its
     /// blocking setup script failed or the user stopped it (PLX-650).
     pub(super) async fn ended_before_start(&mut self, outcome: AgentOutcome) {
+        self.shared_slot = None;
         let message = if let AgentOutcome::Failed { message, .. } = &outcome {
             Some(message.clone())
         } else {
@@ -3356,6 +3425,7 @@ impl Actor {
     /// history (0044). Last it wakes the run's parent unless
     /// it was launched with `notify: false` (PLX-380).
     async fn finish(&mut self, outcome: &Outcome) {
+        self.shared_slot = None;
         self.flush().await;
         // The next start records it interrupted, as after a crash, and continues it where 0060
         // says.
@@ -4215,6 +4285,93 @@ mod tests {
         fn hold(&self, held: bool) {
             self.held.store(held, std::sync::atomic::Ordering::SeqCst);
         }
+    }
+
+    async fn shared_actor(daemon: &Arc<Daemon>) -> Actor {
+        use super::{convert, store, store_error};
+        let (mut row, worktree) = fake_row_and_worktree();
+        row.fields.checkout = true;
+        row.state.status = convert::COMPLETED.into();
+        let id = row.id;
+        store(daemon, move |db| {
+            db.put_lineage(
+                id,
+                &parallax_store::Lineage {
+                    relationship: None,
+                    workspace_of: Some(uuid::Uuid::now_v7()),
+                    payload: "{}".into(),
+                },
+            )
+            .map_err(|e| store_error(&e))?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        Actor::new(Arc::clone(daemon), row, Some(worktree), HashMap::new())
+    }
+
+    #[tokio::test]
+    async fn shared_admission_is_atomic_and_released_when_a_turn_stops() {
+        use crate::backend::Outcome;
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let mut jobs = Vec::new();
+        for _ in 0..9 {
+            let mut actor = shared_actor(&daemon).await;
+            jobs.push(tokio::spawn(async move {
+                let admitted = actor.admit_shared().await.is_ok();
+                (actor, admitted)
+            }));
+        }
+        let mut actors = Vec::new();
+        for job in jobs {
+            actors.push(job.await.unwrap());
+        }
+        assert_eq!(actors.iter().filter(|(_, admitted)| *admitted).count(), 8);
+        let blocked = actors.iter().position(|(_, admitted)| !admitted).unwrap();
+        let held = actors.iter().position(|(_, admitted)| *admitted).unwrap();
+        actors[held].0.finish(&Outcome::Cancelled).await;
+        actors[blocked].0.admit_shared().await.unwrap();
+        assert_eq!(daemon.agents.shared_slots.available_permits(), 0);
+    }
+
+    #[tokio::test]
+    async fn shared_idle_handoff_keeps_queued_messages_and_usage_retries_at_capacity() {
+        use super::convert;
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let mut actor = shared_actor(&daemon).await;
+        let run = Arc::new(SessionRun::default());
+        let (_sink, events) = EventSink::channel(4, Vec::new());
+        let mut live = Live::new(run.clone(), events, None);
+        live.settled = Some(tokio::time::Instant::now());
+        actor.live = Some(live);
+        let held = Arc::clone(&daemon.agents.shared_slots)
+            .acquire_many_owned(8)
+            .await
+            .unwrap();
+        let turn = TurnId::generate();
+        let queued = message(turn, "Keep this message", RunOptions::default());
+        assert!(crate::delegation::at_capacity(
+            &actor.hand_over(&queued).await.unwrap_err()
+        ));
+        actor.queued.push_back(queued);
+        actor.deliver().await;
+        assert_eq!(actor.queued.front().unwrap().turn_id, turn);
+        assert!(run.sent.lock().unwrap().is_empty());
+
+        actor.row.state.status = convert::WAITING.into();
+        actor.row.state.auto_resume = Some(true);
+        actor.row.state.resume_at = Some(jiff::Timestamp::now());
+        actor.check_resume().await;
+        assert_eq!(actor.row.state.status, convert::WAITING);
+        assert!(actor.row.state.resume_at.unwrap() > jiff::Timestamp::now());
+        assert!(run.sent.lock().unwrap().is_empty());
+        drop(held);
+        actor.capacity_retry = None;
+        actor.deliver().await;
+        assert!(actor.queued.is_empty());
+        assert_eq!(*run.sent.lock().unwrap(), [turn]);
     }
 
     /// 0060: a turn's end settles the run while its CLI stays up, the next message goes to that
