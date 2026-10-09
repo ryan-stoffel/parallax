@@ -4,6 +4,7 @@ scripts/bench/budgets.json.
 
     scripts/ci/check-load load.json unfiltered
     scripts/ci/check-load load-filtered.json filtered
+    scripts/ci/check-load load-orchestration.json orchestration
 
 The set names the harness mode it assumes: its `threads` and `filtered` must match the result's.
 Each budget is a maximum, or under "min" a minimum, for a dotted path into the result. A floor on

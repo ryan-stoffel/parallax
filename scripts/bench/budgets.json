@@ -40,5 +40,24 @@
       "plxd.cpuS": 6.5,
       "latencyMs.p95": 50
     }
+  },
+  "orchestration": {
+    "about": "30 threads with --orchestration; one orchestration/subscribeShell takes the host's and every scope's shell events, and orchestration/subscribeThread the open thread's, as 0059's phase 2 makes the app subscribe. Its caps are the filtered set's, with shell's the sum of host's and scope's.",
+    "threads": 30,
+    "filtered": true,
+    "min": {
+      "subscriptions.open.bytes": 53000
+    },
+    "max": {
+      "connection.events": 430,
+      "connection.bytes": 322000,
+      "subscriptions.shell.events": 270,
+      "subscriptions.shell.bytes": 118000,
+      "subscriptions.open.events": 160,
+      "subscriptions.open.bytes": 160000,
+      "plxd.rssGrowthMiB": 30,
+      "plxd.cpuS": 6.5,
+      "latencyMs.p95": 50
+    }
   }
 }

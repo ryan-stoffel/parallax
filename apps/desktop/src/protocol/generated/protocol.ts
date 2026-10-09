@@ -592,6 +592,27 @@ export type ParallaxRequests = {
 	 * `pr/watches`: the run's watched pull requests.
 	 */
 	"pr/watches": { params: PrWatchesParams, result: PrWatchesResult },
+	/**
+	 * `orchestration/dispatch`: runs one command on a thread (0059, PLX-644), idempotent on
+	 * its `commandId`. Gated on the `orchestration` capability, like every
+	 * `orchestration/*` method.
+	 */
+	"orchestration/dispatch": { params: OrchestrationCommand, result: DispatchResult },
+	/**
+	 * `orchestration/subscribeShell`: the host's shell at a `seq`, then its shell events as
+	 * `events/event` notifications, or with `afterSeq` the events after it when few enough
+	 * are left to replay.
+	 */
+	"orchestration/subscribeShell": { params: SubscribeShellParams, result: SubscribeShellResult },
+	/**
+	 * `orchestration/subscribeThread`: one thread at a `seq`, then its events, or with
+	 * `afterSeq` the events after it when few enough are left to replay.
+	 */
+	"orchestration/subscribeThread": { params: SubscribeThreadParams, result: SubscribeThreadResult },
+	/**
+	 * `orchestration/threadHistory`: a page of a thread's events before a `seq`.
+	 */
+	"orchestration/threadHistory": { params: ThreadHistoryParams, result: ThreadHistoryResult },
 };
 
 /** Every request method, in `ParallaxRequests`' order. */
@@ -711,6 +732,10 @@ export const REQUEST_METHODS = [
 	"pr/watch",
 	"pr/unwatch",
 	"pr/watches",
+	"orchestration/dispatch",
+	"orchestration/subscribeShell",
+	"orchestration/subscribeThread",
+	"orchestration/threadHistory",
 ] as const;
 
 /** Notifications, which get no response, by method. */
@@ -2789,7 +2814,11 @@ export type ParallaxEvent = { "kind": "project.created",
 	/**
 	 * The queue as it is now, first to be sent first.
 	 */
-	messages: Array<QueuedMessage>, } | { "kind": "repo.added",
+	messages: Array<QueuedMessage>,
+	/**
+	 * True while a Stop holds it until `queue.resume` (PLX-644). Absent means false.
+	 */
+	held?: boolean, } | { "kind": "repo.added",
 	/**
 	 * The entry.
 	 */
@@ -5628,6 +5657,10 @@ export type QueueResult = {
 	 * The waiting messages.
 	 */
 	messages: Array<QueuedMessage>,
+	/**
+	 * True while a Stop holds them until `queue.resume` (PLX-644). Absent means false.
+	 */
+	held?: boolean,
 };
 
 /**
@@ -6683,6 +6716,349 @@ export type PrWatchesResult = {
 	 * The URLs.
 	 */
 	urls: Array<string>,
+};
+
+/**
+ * A command for `orchestration/dispatch` (0059), by `type`.
+ *
+ * A newer peer may send a type this version does not know; plxd refuses it.
+ */
+export type OrchestrationCommand = { "type": "message.dispatch",
+	/**
+	 * The thread.
+	 */
+	threadId: RunId,
+	/**
+	 * The new run's id, which is the message's turn id. Reuse it to retry.
+	 */
+	messageId: TurnId,
+	/**
+	 * The message.
+	 */
+	text: string,
+	/**
+	 * Images sent with it, as `agent/send`'s.
+	 */
+	images?: Array<PromptImage>,
+	/**
+	 * Threads attached to it as context, as `agent/send`'s.
+	 */
+	threads?: Array<RunId>,
+	/**
+	 * A new model, as `agent/send`'s.
+	 */
+	model?: string,
+	/**
+	 * A new effort, as `agent/send`'s.
+	 */
+	effort?: AgentEffort,
+	/**
+	 * A new access, as `agent/send`'s.
+	 */
+	permission?: AgentPermission,
+	/**
+	 * A new context window, as `agent/send`'s.
+	 */
+	contextWindow?: number,
+	/**
+	 * Fast mode on or off, as `agent/send`'s.
+	 */
+	fast?: boolean,
+	/**
+	 * A new account, as `agent/send`'s.
+	 */
+	account?: AccountChoice,
+	/**
+	 * How it starts.
+	 */
+	dispatchMode: DispatchMode, } | { "type": "queued-run.reorder",
+	/**
+	 * The thread.
+	 */
+	threadId: RunId,
+	/**
+	 * Its queued runs, first to be sent first.
+	 */
+	runIds: Array<TurnId>, } | { "type": "queued-run.edit",
+	/**
+	 * The thread.
+	 */
+	threadId: RunId,
+	/**
+	 * The queued run.
+	 */
+	runId: TurnId,
+	/**
+	 * Its new text.
+	 */
+	text: string, } | { "type": "queued-run.cancel",
+	/**
+	 * The thread.
+	 */
+	threadId: RunId,
+	/**
+	 * The queued run.
+	 */
+	runId: TurnId, } | { "type": "queued-message.promote-to-steer",
+	/**
+	 * The thread.
+	 */
+	threadId: RunId,
+	/**
+	 * The queued run.
+	 */
+	runId: TurnId, } | { "type": "queue.resume",
+	/**
+	 * The thread.
+	 */
+	threadId: RunId, } | { "type": "run.interrupt",
+	/**
+	 * The thread.
+	 */
+	threadId: RunId,
+	/**
+	 * Whether its queue waits for `queue.resume`.
+	 */
+	holdQueue?: boolean,
+};
+
+/**
+ * A run's dispatch mode (T3 Code's).
+ *
+ * A newer peer may send a mode this version does not know; plxd refuses it.
+ */
+export type DispatchMode = { "type": "defer_start" } | { "type": "steer_active",
+	/**
+	 * The run under way. Absent means the thread's newest.
+	 */
+	targetRunId?: TurnId, } | { "type": "restart_active",
+	/**
+	 * The run under way. Absent means the thread's newest.
+	 */
+	targetRunId?: TurnId, } | { "type": "queue_after_active" } | { "type": "start_immediately"
+};
+
+/**
+ * Result of `orchestration/dispatch`.
+ */
+export type DispatchResult = {
+	/**
+	 * The event log's `seq` once the command was applied: its events are at or before it.
+	 */
+	seq: number,
+};
+
+/**
+ * Params of `orchestration/subscribeShell`.
+ */
+export type SubscribeShellParams = {
+	/**
+	 * Resume after this `seq`: the last one received.
+	 */
+	afterSeq?: number,
+};
+
+/**
+ * Result of `orchestration/subscribeShell`.
+ */
+export type SubscribeShellResult = {
+	/**
+	 * The new subscription, which its `events/event` notifications name.
+	 */
+	subscription: SubscriptionId,
+	/**
+	 * The shell to start from, with the events after its `seq` to follow. Absent when the
+	 * events after `afterSeq` follow instead.
+	 */
+	snapshot?: ShellSnapshot,
+};
+
+/**
+ * What a sidebar shows of a host.
+ */
+export type ShellSnapshot = {
+	/**
+	 * The event log's `seq` it stands at. Events after it follow.
+	 */
+	seq: number,
+	/**
+	 * Every project.
+	 */
+	projects: Array<Project>,
+	/**
+	 * Every repo entry.
+	 */
+	repos: Array<Repo>,
+	/**
+	 * Every normal thread.
+	 */
+	threads: Array<Thread>,
+	/**
+	 * Every agent run: each thread's, and each Project's coordinators' and children's.
+	 */
+	runs: Array<AgentRun>,
+	/**
+	 * The permission requests runs wait on, oldest first, each as an `agent.output` with its one
+	 * `approvalRequested` item, at the `seq` it was logged at.
+	 */
+	requests: Array<LoggedEvent>,
+};
+
+/**
+ * Params of `orchestration/subscribeThread`.
+ */
+export type SubscribeThreadParams = {
+	/**
+	 * The thread: its run id.
+	 */
+	threadId: RunId,
+	/**
+	 * Resume after this `seq`: the last one received.
+	 */
+	afterSeq?: number,
+};
+
+/**
+ * Result of `orchestration/subscribeThread`.
+ */
+export type SubscribeThreadResult = {
+	/**
+	 * The new subscription, which its `events/event` notifications name.
+	 */
+	subscription: SubscriptionId,
+	/**
+	 * The thread to start from, with the events after its `seq` to follow. Absent when the
+	 * events after `afterSeq` follow instead.
+	 */
+	snapshot?: ThreadSnapshot,
+};
+
+/**
+ * One thread as it stands.
+ */
+export type ThreadSnapshot = {
+	/**
+	 * The event log's `seq` it stands at. Events after it follow.
+	 */
+	seq: number,
+	/**
+	 * The thread's run, as `agent/list` has it.
+	 */
+	thread: AgentRun,
+	/**
+	 * Its runs: those that started, oldest first, then the queued ones, first to be sent first.
+	 */
+	runs: Array<ThreadRun>,
+	/**
+	 * Its newest events, oldest first, up to `seq`. A finished turn that left plxd's window is
+	 * one compacted `agent.output` (0052).
+	 */
+	events: Array<LoggedEvent>,
+	/**
+	 * Whether older events remain, for `orchestration/threadHistory` before the first one.
+	 */
+	more: boolean,
+	/**
+	 * The permission requests it waits on, as [`ShellSnapshot::requests`], for those older
+	 * than `events`.
+	 */
+	requests: Array<LoggedEvent>,
+};
+
+/**
+ * One run of a thread (T3 Code's Run): a message the user, plxd, or another thread sent, and the
+ * turn it became. A thread's first run is its prompt's.
+ */
+export type ThreadRun = {
+	/**
+	 * The message's turn id, or one plxd made for a turn that had none.
+	 */
+	id: TurnId,
+	/**
+	 * Where it is.
+	 */
+	status: ThreadRunStatus,
+	/**
+	 * Its place among the thread's runs that started, from 1. Absent while queued.
+	 */
+	ordinal?: number,
+	/**
+	 * Its place in the queue, from 0, while queued.
+	 */
+	position?: number,
+	/**
+	 * Its current attempt, from 1. A turn retried on another account after a usage limit or a
+	 * sign-out has another. Absent while queued.
+	 */
+	attempt?: number,
+	/**
+	 * The message. Absent for a first run, whose text is the thread's prompt, and a turn
+	 * plxd's log didn't record the text of.
+	 */
+	text?: string,
+	/**
+	 * How many images went with it.
+	 */
+	images?: number,
+	/**
+	 * The threads attached to it as context.
+	 */
+	threads?: Array<RunId>,
+	/**
+	 * The thread that sent it with its Parallax tools, not the user.
+	 */
+	from?: RunId,
+	/**
+	 * True for a turn plxd sent itself: a wake-up or a resume after a usage limit.
+	 */
+	wake?: boolean,
+	/**
+	 * True for a queued run held after a Stop: it waits for `queue.resume`.
+	 */
+	queueHeld?: boolean,
+	/**
+	 * When its turn started.
+	 */
+	startedAt?: string,
+	/**
+	 * When it ended.
+	 */
+	completedAt?: string,
+};
+
+/**
+ * Where a run is.
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type ThreadRunStatus = "queued" | "starting" | "running" | "waiting" | "completed" | "interrupted" | "failed" | "cancelled";
+
+/**
+ * Params of `orchestration/threadHistory`.
+ */
+export type ThreadHistoryParams = {
+	/**
+	 * The thread: its run id.
+	 */
+	threadId: RunId,
+	/**
+	 * The page is the events before this `seq`: the first one the client has.
+	 */
+	before: number,
+};
+
+/**
+ * Result of `orchestration/threadHistory`.
+ */
+export type ThreadHistoryResult = {
+	/**
+	 * The events, oldest first.
+	 */
+	events: Array<LoggedEvent>,
+	/**
+	 * Whether older ones remain.
+	 */
+	more: boolean,
 };
 
 /**

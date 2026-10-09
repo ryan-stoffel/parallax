@@ -21,6 +21,9 @@ pub(crate) struct Cursor {
     pub subscription: SubscriptionId,
     /// The project whose events it gets, or `None` for host-level events.
     pub project: Option<ProjectId>,
+    /// Every project's events and the host's, whatever `project` says: a shell subscription's
+    /// (0059's `orchestration/subscribeShell`).
+    pub all: bool,
     /// The `seq` of the last event delivered or skipped.
     pub after: u64,
     /// Only this run's events (PLX-453).
@@ -30,9 +33,10 @@ pub(crate) struct Cursor {
 }
 
 impl Cursor {
-    /// Whether this subscription's `run` and `shell` keep `entry`.
-    fn keeps(&self, entry: &Entry) -> bool {
-        self.run.is_none_or(|run| entry.run == Some(run))
+    /// Whether this subscription's scope, `run`, and `shell` keep `entry`.
+    pub(crate) fn keeps(&self, entry: &Entry) -> bool {
+        (self.all || entry.project == self.project)
+            && self.run.is_none_or(|run| entry.run == Some(run))
             && !(self.shell && entry.kind() == AGENT_OUTPUT && !entry.approvals)
     }
 
@@ -135,6 +139,7 @@ pub(crate) async fn subscribe(
     Ok(Cursor {
         subscription: SubscriptionId::generate(),
         project: params.project,
+        all: false,
         after: params.after,
         run: params.run,
         shell: params.shell,
@@ -180,8 +185,7 @@ impl Cursors {
             let index = self.turn % self.cursors.len();
             self.turn = self.turn.wrapping_add(1);
             let cursor = &mut self.cursors[index];
-            let Ok((event, seq)) =
-                log.next(cursor.after, cursor.project, |entry| cursor.keeps(entry))
+            let Ok((event, seq)) = log.next_matching(cursor.after, |entry| cursor.keeps(entry))
             else {
                 return Err(self.cursors.remove(index).subscription);
             };
@@ -213,6 +217,7 @@ mod tests {
         Cursor {
             subscription: SubscriptionId::generate(),
             project,
+            all: false,
             after,
             run: None,
             shell: false,
@@ -244,6 +249,7 @@ mod tests {
         cursors.add(Cursor {
             subscription: late_id,
             project: None,
+            all: false,
             after: 1,
             run: None,
             shell: false,

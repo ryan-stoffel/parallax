@@ -193,6 +193,9 @@ pub(crate) fn initialize(
 /// `connect` (PLX-574, 0056): `connect`, `deviceName`, and `deviceIcon` in `host/settings`, which
 /// an older plxd would silently ignore, `connect/devices`, and the tailnet listener.
 /// `terminals` (PLX-637): `terminal/*`, the terminals plxd runs for its clients.
+/// `orchestration` (PLX-644, 0059): `orchestration/dispatch`, `orchestration/subscribeShell`,
+/// `orchestration/subscribeThread`, and `orchestration/threadHistory`, and `held` on
+/// `queue.updated` and `queue/*`'s results.
 /// `remote` (PLX-641, 0065): `remote` in `host/settings`, `remote/pair`, `remote/sessions`,
 /// `remote/revoke`, and the HTTPS listener.
 /// `schedules` (0063): `schedule/*`, and the webhooks the HTTPS listener serves.
@@ -234,6 +237,7 @@ fn capabilities_advertised() -> Capabilities {
         ("landing".to_owned(), serde_json::Map::new()),
         ("memory".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
+        ("orchestration".to_owned(), serde_json::Map::new()),
         ("prDiff".to_owned(), serde_json::Map::new()),
         ("projectAutonomy".to_owned(), serde_json::Map::new()),
         ("projectDelete".to_owned(), serde_json::Map::new()),

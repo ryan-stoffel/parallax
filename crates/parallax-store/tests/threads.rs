@@ -256,6 +256,7 @@ fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
                 kind: "agent.output".to_owned(),
                 payload: "{}".to_owned(),
                 command_id: None,
+                run_id: None,
             })
             .unwrap();
     }
@@ -351,6 +352,7 @@ impl Threads {
                 kind: "agent.output".to_owned(),
                 payload,
                 command_id: None,
+                run_id: None,
             })
             .unwrap();
     }

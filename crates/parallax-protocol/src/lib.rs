@@ -49,6 +49,7 @@ pub mod jsonrpc;
 mod land;
 mod memory;
 pub mod methods;
+mod orchestration;
 mod preview;
 mod project;
 mod provider;
@@ -129,6 +130,12 @@ pub use memory::{
     MemoryDeleteParams, MemoryDeleteResult, MemoryFile, MemoryKind, MemoryListParams,
     MemoryListResult, MemoryProposalTo, MemoryProposeParams, MemoryProposeResult, MemoryReadParams,
     MemoryReadResult, MemoryScope, MemoryScopeKind, MemoryWriteParams, MemoryWriteResult,
+};
+pub use orchestration::{
+    DispatchMode, DispatchResult, MAX_REPLAY_BYTES, MAX_REPLAY_EVENTS, OrchestrationCommand,
+    ShellSnapshot, SubscribeShellParams, SubscribeShellResult, SubscribeThreadParams,
+    SubscribeThreadResult, ThreadHistoryParams, ThreadHistoryResult, ThreadRun, ThreadRunStatus,
+    ThreadSnapshot,
 };
 pub use preview::{
     PreviewCallParams, PreviewCallResult, PreviewFrameParams, PreviewFrameResult, PreviewInput,

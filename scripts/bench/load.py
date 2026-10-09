@@ -3,14 +3,17 @@
 
     cargo build --profile bench -p plxd --features fake-backend
     scripts/bench/load.py target/release/plxd [--threads 30] [--out load.json] [--replay EVENTS]
+        [--filtered | --orchestration]
     uv run --with matplotlib scripts/bench/load.py --compare before.json after.json --png out.png
 
 Runs `plxd serve` in a temporary data folder with every worker on the fake backend, playing a
 script of about 400 text, tool call, and tool result emits with sleeps. It adds one fresh repo,
 subscribes the way the app does (one connection: a host-level subscription, one per repo scope for
 the sidebar, and one more on the first run's scope for an open transcript; with `--filtered`, the
-scope one is `shell` and the open one is `run`, as PLX-454 makes the app subscribe), starts N
-threads at the same moment, and waits for every turn to end. It writes JSON with delivery latency
+scope one is `shell` and the open one is `run`, as PLX-454 makes the app subscribe; with
+`--orchestration`, `orchestration/subscribeShell` in place of the host and scope ones and
+`orchestration/subscribeThread` on the first run for the open one, as 0059's phase 2 makes the app
+subscribe), starts N threads at the same moment, and waits for every turn to end. It writes JSON with delivery latency
 (receive time minus the event's `time`, which plxd sets at flush), bytes and events per connection
 and per subscription, `host/health.queues` samples when plxd reports them, plxd's CPU, peak RSS,
 and RSS growth after the first sample, and whether plxd made a subscriber resync. `--compare`
@@ -118,7 +121,7 @@ def stats(values: list[float]) -> dict:
             "p99": pct(values, 99), "max": max(values)}
 
 
-async def run(plxd: str, count: int, steps: list, filtered: bool) -> dict:
+async def run(plxd: str, count: int, steps: list, filtered: bool, orchestration: bool) -> dict:
     data = tempfile.mkdtemp(prefix="plxl-", dir="/tmp")
     repo = data + "-repo"
     subprocess.run(["git", "init", "-q", repo], check=True)
@@ -134,14 +137,28 @@ async def run(plxd: str, count: int, steps: list, filtered: bool) -> dict:
         after = (await client.call("thread/list", {}))["seq"]
         runs = [uuid7() for _ in range(count)]
         names, resync = {}, None
-        subscriptions = (
-            ("host", {}),
-            ("scope", {"project": scope, **({"shell": True} if filtered else {})}),
-            ("open", {"project": scope, **({"run": runs[0]} if filtered else {})}),
-        )
-        for name, params in subscriptions:
+        account = {"kind": "subscription", "backend": "fake"}
+        start = lambda r: client.call(
+            "thread/start", {"runId": r, "repo": scope, "prompt": "load", "account": account})
+        if orchestration:
+            subscriptions = (
+                ("shell", "orchestration/subscribeShell", {"afterSeq": after}),
+                ("open", "orchestration/subscribeThread", {"threadId": runs[0], "afterSeq": after}),
+            )
+        else:
+            subscriptions = (
+                ("host", "events/subscribe", {}),
+                ("scope", "events/subscribe", {"project": scope, **({"shell": True} if filtered else {})}),
+                ("open", "events/subscribe", {"project": scope, **({"run": runs[0]} if filtered else {})}),
+            )
+        for name, method, params in subscriptions:
+            if method == "orchestration/subscribeThread":
+                # A thread subscription needs its thread: start it first, and replay since `after`.
+                await start(runs[0])
+            if method == "events/subscribe":
+                params = {"after": after, **params}
             try:
-                result = await client.call("events/subscribe", {"after": after, **params})
+                result = await client.call(method, params)
             except RuntimeError as error:
                 return {"resync": f"{name}: {error}"}
             names[result["subscription"]] = name
@@ -165,13 +182,12 @@ async def run(plxd: str, count: int, steps: list, filtered: bool) -> dict:
         while not samples:
             await asyncio.sleep(0.01)
         _, cpu0 = ps(daemon.pid)
-        account = {"kind": "subscription", "backend": "fake"}
-        await asyncio.gather(*(client.call(
-            "thread/start", {"runId": r, "repo": scope, "prompt": "load", "account": account}
-        ) for r in runs))
+        await asyncio.gather(*(start(r) for r in (runs[1:] if orchestration else runs)))
 
-        # Each run's turn ends once on the scope subscription and, for the open run, once more.
-        waiting = {("scope", r) for r in runs} | {("open", runs[0])}
+        # Each run's turn ends once on the scope (or shell) subscription and, for the open run,
+        # once more.
+        sidebar = "shell" if orchestration else "scope"
+        waiting = {(sidebar, r) for r in runs} | {("open", runs[0])}
         while True:
             try:
                 item = await asyncio.wait_for(client.events.get(), timeout=300 if waiting else 1)
@@ -203,7 +219,8 @@ async def run(plxd: str, count: int, steps: list, filtered: bool) -> dict:
         queues = [s["queues"] for s in samples if "queues" in s]
         return {
             "threads": count,
-            "filtered": filtered,
+            "filtered": filtered or orchestration,
+            "orchestration": orchestration,
             "emitsPerThread": sum("emit" in step for step in steps),
             "wallS": round(wall, 2),
             # A busy host stretches the latency tail; compare runs taken at similar load.
@@ -251,6 +268,7 @@ def compare(paths: list[str], png: str) -> None:
         (f"Delivered on {name} subscription (MiB)",
          lambda r, name=name: r["subscriptions"][name]["bytes"] / 2**20)
         for name in ("host", "scope", "open")
+        if all(name in r["subscriptions"] for r in runs)
     ]
     fig, axes = plt.subplots(3, 3, figsize=(12, 9.5))
     for ax, (title, value) in zip(axes.flat, panels):
@@ -274,6 +292,9 @@ def main():
     parser.add_argument("--out", default="load.json")
     parser.add_argument("--filtered", action="store_true",
                         help="subscribe with `shell` and `run` (needs the eventFilters capability)")
+    parser.add_argument("--orchestration", action="store_true",
+                        help="subscribe with orchestration/subscribeShell and subscribeThread "
+                             "(needs the orchestration capability)")
     parser.add_argument("--compare", nargs="+", metavar="JSON", help="chart these results")
     parser.add_argument("--png", default="load.png")
     parser.add_argument("--replay", metavar="EVENTS", help="play this replay snapshot's events")
@@ -283,7 +304,7 @@ def main():
     if not args.plxd:
         parser.error("give a plxd binary, or --compare")
     steps = replay(args.replay) if args.replay else script()
-    result = asyncio.run(run(args.plxd, args.threads, steps, args.filtered))
+    result = asyncio.run(run(args.plxd, args.threads, steps, args.filtered, args.orchestration))
     Path(args.out).write_text(json.dumps(result, indent=2) + "\n")
     keys = ("threads", "wallS", "loadAvg1m", "latencyMs", "connection", "plxd", "resync")
     summary = {k: result.get(k) for k in keys}

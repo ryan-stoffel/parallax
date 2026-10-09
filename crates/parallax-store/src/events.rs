@@ -23,6 +23,8 @@ pub struct StoredEvent {
     pub payload: String,
     /// The orchestrator command that staged it, if one did (0059). Not read back.
     pub command_id: Option<String>,
+    /// The run (turn) of its thread it belongs to, if any (0059). Not read back.
+    pub run_id: Option<Uuid>,
 }
 
 struct RawEvent {
@@ -60,6 +62,7 @@ impl RawEvent {
             kind: self.kind,
             payload: self.payload,
             command_id: None,
+            run_id: None,
         })
     }
 }
@@ -117,8 +120,9 @@ impl Store {
     pub fn append_event(&self, event: &StoredEvent) -> Result<(), StoreError> {
         self.conn
             .prepare_cached(
-                "INSERT INTO events (seq, time, project_id, thread_id, type, payload, command_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO events
+                    (seq, time, project_id, thread_id, type, payload, command_id, run_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             )?
             .execute(params![
                 event.seq,
@@ -128,6 +132,7 @@ impl Store {
                 event.kind,
                 event.payload,
                 event.command_id,
+                event.run_id.map(|id| id.to_string()),
             ])?;
         Ok(())
     }

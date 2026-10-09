@@ -298,6 +298,12 @@ jobs:
           python3 scripts/bench/load.py "$RUNNER_TEMP/plxd/plxd" --threads 30 --filtered \
             --out load-filtered.json
 
+      - name: Run the load harness with the orchestration subscriptions
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/bench/load.py "$RUNNER_TEMP/plxd/plxd" --threads 30 --orchestration \
+            --out load-orchestration.json
+
       - name: Check the budgets
         if: ${{ !cancelled() && hashFiles('load.json') != '' }}
         run: scripts/ci/check-load load.json unfiltered
@@ -305,6 +311,10 @@ jobs:
       - name: Check the filtered budgets
         if: ${{ !cancelled() && hashFiles('load-filtered.json') != '' }}
         run: scripts/ci/check-load load-filtered.json filtered
+
+      - name: Check the orchestration budgets
+        if: ${{ !cancelled() && hashFiles('load-orchestration.json') != '' }}
+        run: scripts/ci/check-load load-orchestration.json orchestration
 
       - name: Upload the results
         if: ${{ !cancelled() }}

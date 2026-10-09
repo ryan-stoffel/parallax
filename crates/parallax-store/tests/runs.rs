@@ -49,6 +49,7 @@ fn event(seq: u64, run_id: Option<Uuid>) -> StoredEvent {
         kind: "agent.output".to_owned(),
         payload: format!(r#"{{"kind":"agent.output","n":{seq}}}"#),
         command_id: None,
+        run_id: None,
     }
 }
 
@@ -566,6 +567,8 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
              DROP TABLE attached_seen;
              DROP TABLE orchestration_receipts; DROP TABLE effects; DROP TABLE projection_meta;
              DROP TABLE scheduled_tasks; DROP TABLE pr_watches;
+             DROP TABLE thread_runs; DROP TABLE run_attempts; DROP TABLE nodes;
+             DROP TABLE runtime_requests; DROP TABLE graph_imports;
              ALTER TABLE worktrees DROP COLUMN git_dir;
              ALTER TABLE worktrees DROP COLUMN base_dirty;
              ALTER TABLE projects DROP COLUMN icon_name;

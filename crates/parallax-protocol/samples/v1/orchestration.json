@@ -1,0 +1,338 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "orchestration/subscribeShell",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "subscription": "01a0f100-0000-7000-8000-000000000001",
+      "snapshot": {
+        "seq": 210,
+        "projects": [],
+        "repos": [
+          {
+            "id": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+            "name": "parallax",
+            "path": "/Users/me/src/parallax",
+            "createdAt": "2026-09-26T12:00:00Z"
+          }
+        ],
+        "threads": [
+          {
+            "id": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+            "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+            "createdAt": "2026-10-03T12:00:00Z"
+          }
+        ],
+        "runs": [
+          {
+            "id": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+            "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+            "prompt": "Add the dark mode toggle.",
+            "policy": "workspaceWrite",
+            "status": "running",
+            "backend": "claude",
+            "accountId": "claude",
+            "createdAt": "2026-10-03T12:00:00Z",
+            "updatedAt": "2026-10-03T12:00:05Z"
+          }
+        ],
+        "requests": [
+          {
+            "seq": 205,
+            "time": "2026-10-03T12:00:04Z",
+            "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+            "event": {
+              "kind": "agent.output",
+              "runId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+              "items": [
+                {
+                  "kind": "approvalRequested",
+                  "approvalId": "01a0f100-0000-7000-8000-000000000009",
+                  "toolName": "Bash",
+                  "input": { "command": "pnpm test" },
+                  "expiresAt": "2026-10-03T12:30:04Z"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "orchestration/subscribeThread",
+    "params": { "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "subscription": "01a0f100-0000-7000-8000-000000000002",
+      "snapshot": {
+        "seq": 210,
+        "thread": {
+          "id": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+          "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+          "prompt": "Add the dark mode toggle.",
+          "policy": "workspaceWrite",
+          "status": "running",
+          "backend": "claude",
+          "accountId": "claude",
+          "createdAt": "2026-10-03T12:00:00Z",
+          "updatedAt": "2026-10-03T12:00:05Z"
+        },
+        "runs": [
+          {
+            "id": "01a0f100-0000-7000-8000-000000000003",
+            "status": "waiting",
+            "ordinal": 1,
+            "attempt": 1,
+            "startedAt": "2026-10-03T12:00:01Z"
+          },
+          {
+            "id": "01a0e010-0000-7000-8000-000000000001",
+            "status": "queued",
+            "position": 0,
+            "text": "Then add tests.",
+            "images": 1,
+            "threads": ["01a0d391-2c3d-7e4f-9a0b-1c2d3e4f5a6b"],
+            "queueHeld": true
+          }
+        ],
+        "events": [
+          {
+            "seq": 201,
+            "time": "2026-10-03T12:00:01Z",
+            "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+            "event": {
+              "kind": "agent.output",
+              "runId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+              "items": [{ "kind": "turnStarted" }, { "kind": "text", "text": "Looking at the theme code." }]
+            }
+          }
+        ],
+        "more": true,
+        "requests": []
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "orchestration/threadHistory",
+    "params": { "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b", "before": 201 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "events": [
+        {
+          "seq": 200,
+          "time": "2026-10-03T12:00:00Z",
+          "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+          "event": {
+            "kind": "agent.started",
+            "runId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b"
+          }
+        }
+      ],
+      "more": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "orchestration/dispatch",
+    "params": {
+      "type": "message.dispatch",
+      "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+      "messageId": "01a0e010-0000-7000-8000-000000000002",
+      "text": "Use the system setting by default.",
+      "dispatchMode": { "type": "steer_active", "targetRunId": "01a0f100-0000-7000-8000-000000000003" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": { "seq": 211 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "orchestration/dispatch",
+    "params": {
+      "type": "message.dispatch",
+      "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+      "messageId": "01a0e010-0000-7000-8000-000000000003",
+      "text": "Then the docs.",
+      "model": "opus",
+      "dispatchMode": { "type": "queue_after_active" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": { "seq": 212 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "orchestration/dispatch",
+    "params": {
+      "type": "queued-run.reorder",
+      "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+      "runIds": ["01a0e010-0000-7000-8000-000000000003", "01a0e010-0000-7000-8000-000000000001"]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "result": { "seq": 213 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "orchestration/dispatch",
+    "params": {
+      "type": "run.interrupt",
+      "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+      "holdQueue": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "result": { "seq": 216 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0f100-0000-7000-8000-000000000002",
+      "seq": 214,
+      "time": "2026-10-03T12:00:09Z",
+      "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+      "event": {
+        "kind": "queue.updated",
+        "runId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "messages": [
+          {
+            "id": "01a0e010-0000-7000-8000-000000000003",
+            "text": "Then the docs.",
+            "images": 0,
+            "threads": []
+          }
+        ],
+        "held": true
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "orchestration/dispatch",
+    "params": { "type": "queue.resume", "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "result": { "seq": 217 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "method": "orchestration/dispatch",
+    "params": {
+      "type": "queued-run.edit",
+      "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+      "runId": "01a0e010-0000-7000-8000-000000000003",
+      "text": "Then the docs, briefly."
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "result": { "seq": 218 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 10,
+    "method": "orchestration/dispatch",
+    "params": {
+      "type": "queued-message.promote-to-steer",
+      "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+      "runId": "01a0e010-0000-7000-8000-000000000003"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 10,
+    "result": { "seq": 219 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 11,
+    "method": "orchestration/dispatch",
+    "params": {
+      "type": "queued-run.cancel",
+      "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+      "runId": "01a0e010-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 11,
+    "error": {
+      "code": -32000,
+      "message": "thread 01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b has no queued run 01a0e010-0000-7000-8000-000000000001",
+      "data": { "kind": "queuedMessageNotFound" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 14,
+    "method": "orchestration/dispatch",
+    "params": {
+      "type": "message.dispatch",
+      "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+      "messageId": "01a0e010-0000-7000-8000-000000000004",
+      "text": "Start that part over.",
+      "dispatchMode": { "type": "restart_active" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 14,
+    "result": { "seq": 220 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 12,
+    "method": "orchestration/subscribeThread",
+    "params": { "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b", "afterSeq": 214 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 12,
+    "result": { "subscription": "01a0f100-0000-7000-8000-000000000005" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 13,
+    "method": "orchestration/subscribeShell",
+    "params": { "afterSeq": 214 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 13,
+    "result": { "subscription": "01a0f100-0000-7000-8000-000000000006" }
+  }
+]

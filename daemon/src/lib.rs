@@ -56,6 +56,7 @@ mod context;
 mod detect;
 mod event_log;
 mod github;
+mod graph;
 mod images;
 mod json;
 pub mod keystore;

@@ -381,6 +381,22 @@ impl Store {
         )?)
     }
 
+    /// The runs `parent` started that are still `starting`, `running`, or `waiting` (0059's Stop
+    /// cascade).
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored id is corrupt.
+    pub fn running_children(&self, parent: Uuid) -> Result<Vec<Uuid>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM runs
+             WHERE parent = ?1 AND status IN ('starting', 'running', 'waiting')
+             ORDER BY created_at",
+        )?;
+        let ids = stmt.query_map(params![parent.to_string()], |row| row.get::<_, String>(0))?;
+        ids.map(|id| Ok(Uuid::parse_str(&id?)?)).collect()
+    }
+
     /// [`Store::list_runs`] with each run's worktree, `None` for a run without one, in one query
     /// for `agent/list` (PLX-450).
     ///
@@ -597,6 +613,7 @@ pub(crate) fn delete_run_rows(conn: &Connection, id: Uuid) -> Result<bool, Store
     let existed = conn.execute("DELETE FROM runs WHERE id = ?1", params![key])? > 0;
     conn.execute("DELETE FROM worktrees WHERE id = ?1", params![key])?;
     conn.execute("DELETE FROM events WHERE thread_id = ?1", params![key])?;
+    crate::graph::delete_graph_rows(conn, id)?;
     for table in [
         "turns",
         "images",

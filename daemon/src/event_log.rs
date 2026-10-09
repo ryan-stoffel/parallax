@@ -552,22 +552,54 @@ impl EventLog {
     ///
     /// The `seq` returned with it is where to continue from: the event's own, or the head's when
     /// no such event exists yet.
+    #[cfg(test)]
     pub fn next(
         &self,
         after: u64,
         project: Option<ProjectId>,
         keep: impl Fn(&Entry) -> bool,
     ) -> Result<(Option<Arc<Entry>>, u64), Gone> {
+        self.next_matching(after, |entry| entry.project == project && keep(entry))
+    }
+
+    /// The first event after `after` that `keep` accepts, whatever its project, with where to
+    /// continue from, as [`EventLog::next`].
+    pub fn next_matching(
+        &self,
+        after: u64,
+        keep: impl Fn(&Entry) -> bool,
+    ) -> Result<(Option<Arc<Entry>>, u64), Gone> {
         let inner = self.inner();
         let index = start(&inner, after)?;
-        match inner
-            .events
-            .range(index..)
-            .find(|entry| entry.project == project && keep(entry))
-        {
+        match inner.events.range(index..).find(|entry| keep(entry)) {
             Some(event) => Ok((Some(Arc::clone(event)), event.seq)),
             None => Ok((None, inner.head)),
         }
+    }
+
+    /// Whether the events after `after` that `keep` accepts are all still in the window, and
+    /// are at most `max_events` of them and `max_bytes` of JSON: a resume small enough to replay
+    /// (0059, T3 Code's `decideThreadResume`).
+    pub fn fits(
+        &self,
+        after: u64,
+        keep: impl Fn(&Entry) -> bool,
+        max_events: usize,
+        max_bytes: usize,
+    ) -> bool {
+        let inner = self.inner();
+        let Ok(index) = start(&inner, after) else {
+            return false;
+        };
+        let (mut events, mut bytes) = (0, 0);
+        for entry in inner.events.range(index..).filter(|entry| keep(entry)) {
+            events += 1;
+            bytes += entry.bytes();
+            if events > max_events || bytes > max_bytes {
+                return false;
+            }
+        }
+        true
     }
 
     /// Whether an event after `after` matches `matches`, or may have: one that was dropped from
@@ -587,7 +619,7 @@ impl EventLog {
 /// A stored event as a log entry, keeping the event it parsed for a page (`keep`) and not for
 /// the window. A payload this build can't read, such as a newer plxd's kind, comes back as
 /// `ParallaxEvent::Unknown`, keeping its place in the sequence, and is delivered as stored.
-fn entry(stored: StoredEvent, keep: bool) -> Entry {
+pub(crate) fn entry(stored: StoredEvent, keep: bool) -> Entry {
     let event = serde_json::from_str(&stored.payload).unwrap_or(ParallaxEvent::Unknown);
     let json = RawValue::from_string(stored.payload).unwrap_or_else(|_| raw(&event));
     let project = stored

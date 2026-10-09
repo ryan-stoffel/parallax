@@ -163,7 +163,7 @@ async fn waiting_messages_are_edited_reordered_cancelled_and_sent_in_order_after
     })
     .await;
     assert!(
-        matches!(&updated.last().unwrap().event, ParallaxEvent::QueueUpdated { run_id: id, messages }
+        matches!(&updated.last().unwrap().event, ParallaxEvent::QueueUpdated { run_id: id, messages, .. }
             if *id == run_id && messages[1].threads == [other_id])
     );
     assert_eq!(queue(&mut client, run_id).await, [a, b, c]);
