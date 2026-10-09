@@ -11,7 +11,19 @@ new Promise((resolve) => {
     mimeType: "video/webm;codecs=vp8",
     videoBitsPerSecond: 1_500_000,
   });
-  recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  // A recording stops itself at 5 MB, which still fits a plxd frame, and keeps what it has.
+  const MAX_BYTES = 5 * 1024 * 1024;
+  let bytes = 0;
+  let capped = false;
+  recorder.ondataavailable = (e) => {
+    if (!e.data.size) return;
+    chunks.push(e.data);
+    bytes += e.data.size;
+    if (bytes >= MAX_BYTES && recorder.state === "recording") {
+      capped = true;
+      recorder.stop();
+    }
+  };
   let latest = 0;
   let last;
   // The canvas only makes a video frame when it changes, so the last frame is drawn again
@@ -43,14 +55,16 @@ new Promise((resolve) => {
       };
       image.src = `data:image/jpeg;base64,${base64}`;
     },
+    // The WebM in base64, empty without frames, and whether it stopped at the cap.
     stop: () =>
       new Promise((done) => {
-        if (recorder.state === "inactive") return done("");
-        recorder.onstop = () => {
+        const finish = () => {
           const reader = new FileReader();
-          reader.onload = () => done(String(reader.result).split(",")[1] ?? "");
+          reader.onload = () => done({ data: String(reader.result).split(",")[1] ?? "", capped });
           reader.readAsDataURL(new Blob(chunks, { type: "video/webm" }));
         };
+        if (recorder.state === "inactive") return finish();
+        recorder.onstop = finish;
         recorder.stop();
       }),
   };

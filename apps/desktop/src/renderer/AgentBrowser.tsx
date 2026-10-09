@@ -30,12 +30,17 @@ export function AgentBrowser({
   const [address, setAddress] = useState<string>();
   const view = useRef<HTMLImageElement>(null);
   const lastMove = useRef(0);
+  // Whether the view takes up any space: a hidden side panel or view has none. Hidden, it pulls
+  // no frames, so plxd tells the agent nobody is watching, and the tab keeps its last size.
+  const [shown, setShown] = useState(true);
+  const seen = useRef(0);
 
   useEffect(() => {
+    if (!shown) return;
     let live = true;
-    let after = 0;
     void (async () => {
       while (live) {
+        const after = seen.current;
         const answer = await window.parallax
           .request(hostId, "preview/frame", { runId, tabId: tab.tabId, after })
           .catch(() => undefined);
@@ -47,13 +52,13 @@ export function AgentBrowser({
         const { seq, data, width, height, tab: now } = answer.result;
         setState(now);
         if (seq > after && data) setFrame({ data, width, height });
-        after = seq;
+        seen.current = seq;
       }
     })();
     return () => {
       live = false;
     };
-  }, [hostId, runId, tab.tabId]);
+  }, [hostId, runId, tab.tabId, shown]);
 
   // The tab's viewport follows the space it has here, while the agent leaves it in fill mode.
   const area = useRef<HTMLDivElement>(null);
@@ -63,12 +68,11 @@ export function AgentBrowser({
     let timer: ReturnType<typeof setTimeout> | undefined;
     const observer = new ResizeObserver(() => {
       clearTimeout(timer);
+      const [width, height] = [Math.round(el.clientWidth), Math.round(el.clientHeight)];
+      setShown(width > 0 && height > 0);
+      if (width === 0 || height === 0) return;
       timer = setTimeout(() => {
-        const input: PreviewInput = {
-          kind: "viewport",
-          width: Math.round(el.clientWidth),
-          height: Math.round(el.clientHeight),
-        };
+        const input: PreviewInput = { kind: "viewport", width, height };
         void window.parallax.request(hostId, "preview/input", { runId, tabId: tab.tabId, input });
       }, 150);
     });

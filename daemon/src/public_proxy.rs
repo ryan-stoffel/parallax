@@ -4,7 +4,11 @@
 //! (DNS rebinding) changes nothing. It refuses this machine (its loopback and every address its
 //! interfaces hold), private and shared networks, link-local addresses such as cloud metadata
 //! (169.254.169.254), multicast, and the IPv6 forms that carry one of those IPv4 addresses. A
-//! preview tab may reach loopback too, for the thread's own dev servers. It carries bytes only, so
+//! preview tab may reach loopback too, for the thread's own dev servers, but only by an IP
+//! literal or a `localhost` name: a public name that resolves to loopback (`localtest.me`, or a
+//! page rebinding its own name) is refused. A public page can still send blind requests to an
+//! allowed loopback address, as any browser's pages can, but can't read the answers across
+//! origins. It carries bytes only, so
 //! HTTP, TLS, and `WebSocket`s pass through unchanged.
 
 use std::io;
@@ -103,8 +107,17 @@ async fn serve(mut client: TcpStream, loopback: bool) -> io::Result<()> {
     if request[0] != 5 || request[1] != 1 || request[2] != 0 || port == 0 {
         return reply(&mut client, UNSUPPORTED).await;
     }
+    // Loopback only by an address or a `localhost` name, never by a name that resolves there. A
+    // `localhost` name is loopback without DNS, as browsers treat it.
+    let localhost = matches!(&host, Host::Name(name)
+        if { let name = name.trim_end_matches('.').to_ascii_lowercase(); name == "localhost" || name.ends_with(".localhost") });
+    let loopback = loopback && (localhost || matches!(host, Host::Ip(_)));
     let addresses: Vec<SocketAddr> = match host {
         Host::Ip(ip) => vec![SocketAddr::new(ip, port)],
+        Host::Name(_) if localhost => vec![
+            SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port),
+            SocketAddr::new(Ipv6Addr::LOCALHOST.into(), port),
+        ],
         Host::Name(name) => {
             match tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::lookup_host((name, port))).await
             {
@@ -303,5 +316,8 @@ mod tests {
         assert_eq!(connect(public.port, "localhost", port).await, 2);
         let with_loopback = start(true).await.unwrap();
         assert_eq!(connect(with_loopback.port, "localhost", port).await, 0);
+        assert_eq!(connect(with_loopback.port, "app.localhost", port).await, 0);
+        // A public name that resolves to loopback, as `localtest.me` does, is refused.
+        assert_ne!(connect(with_loopback.port, "localtest.me", port).await, 0);
     }
 }

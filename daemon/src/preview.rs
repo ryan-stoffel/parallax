@@ -4,23 +4,27 @@
 //! - **Tabs** are keyed by thread (its run) and tab id. A thread's `plxd mcp` sends each tool call
 //!   here with `preview/call`, and a thread acts only on its own tabs. One browser serves every
 //!   tab, started with the first and stopped with the last, with one profile for plxd's lifetime.
+//!   As in T3, a thread has at most 8 tabs and the host 32, a page a tab opens becomes another
+//!   tab of its thread, a tab nobody used for 30 minutes closes, and archiving or deleting a
+//!   thread closes its tabs.
 //! - **Network**: the browser goes out through [`crate::public_proxy`], which reaches public
 //!   addresses and this host's loopback, for the thread's dev servers, but never its networks,
 //!   cloud metadata, or this host's other addresses. WebRTC is off.
 //! - **Watching**: each tab screencasts JPEG frames, which the app's side panel long-polls with
 //!   `preview/frame`. The user's mouse, wheel, and keys come back with `preview/input`; the first
 //!   one takes control of the tab, and the agent's actions are refused until the user hands it
-//!   back, as in T3.
+//!   back, as in T3. A hidden view pulls no frames, so the tab reads as not visible.
 //! - **Targets**: a `locator` is `aria-ref=<ref>` from the latest `preview_snapshot`,
 //!   `role=<role>[name='…']`, `text=…`, or a CSS selector; `selector` is CSS. It must match one
 //!   element. Actions go through real input events at the element's center.
 //! - **Recording** draws the screencast's frames onto a canvas in a second page and records it
 //!   with `MediaRecorder`, as T3 does. Stopping keeps the `WebM` with the run's images, for the
-//!   transcript, and writes it to a file the agent can read.
+//!   transcript, and writes it to a file in plxd's `tmp/previews/<run>`, as `save` does a
+//!   screenshot, removed with the thread. It stops itself at 5 MB.
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
@@ -36,6 +40,9 @@ use tokio::sync::{mpsc, watch};
 
 use crate::backend::process::Launcher;
 use crate::browser::{self, Browser, Event, Page};
+
+/// Why an agent's action on a tab the user controls is refused.
+const HUMAN: &str = "The user controls this tab now. Wait for them to hand it back, or work in another tab with preview_open reuseExistingTab=false.";
 
 /// How long `preview/frame` waits for a new frame before answering with the last one.
 const FRAME_WAIT: Duration = Duration::from_secs(10);
@@ -53,11 +60,16 @@ const MAX_SNAPSHOT_BYTES: usize = 20 * 1024;
 const MAX_EVALUATE_BYTES: usize = 64 * 1024;
 /// The largest recording, as base64: it travels in one plxd frame (8 MiB).
 const MAX_RECORDING_BASE64: usize = 7 * 1024 * 1024;
+/// T3's caps: tabs per thread, and on the host.
+const MAX_THREAD_TABS: usize = 8;
+const MAX_TABS: usize = 32;
+/// How long a tab neither the agent nor the user has used stays open.
+const IDLE: Duration = Duration::from_mins(30);
 
 /// Every thread's tabs, and the browser they run in.
 pub(crate) struct Previews {
     launcher: Launcher,
-    state: tokio::sync::Mutex<State>,
+    state: Arc<tokio::sync::Mutex<State>>,
 }
 
 #[derive(Default)]
@@ -73,6 +85,10 @@ struct State {
 struct Tab {
     run: RunId,
     id: String,
+    /// The tab that opened it, for a popup.
+    opener: Option<String>,
+    /// Where its saved screenshots and recordings go.
+    evidence: PathBuf,
     page: Page,
     live: Arc<Mutex<Live>>,
     frames: watch::Receiver<Frame>,
@@ -89,7 +105,10 @@ struct Live {
     /// Whether the user controls the tab, and how often control has changed hands.
     human: bool,
     generation: u64,
+    /// When the app last asked for a frame.
     watched: Option<Instant>,
+    /// When the agent or the user last did something with the tab.
+    used: Option<Instant>,
     console: VecDeque<Value>,
     network: VecDeque<Value>,
     timeline: VecDeque<Value>,
@@ -125,8 +144,17 @@ impl Previews {
     pub(crate) fn new(launcher: Launcher) -> Self {
         Self {
             launcher,
-            state: tokio::sync::Mutex::default(),
+            state: Arc::default(),
         }
+    }
+
+    /// Closes thread `run`'s tabs, and deletes its saved screenshots and recordings, when it's
+    /// archived or deleted.
+    pub(crate) async fn close_thread(&self, run: RunId) {
+        let mut state = self.state.lock().await;
+        remove(&mut state, |tab| tab.run == run);
+        drop(state);
+        let _ = std::fs::remove_dir_all(evidence_root(&self.launcher).join(run.to_string()));
     }
 
     /// `preview/list`: a thread's tabs.
@@ -165,7 +193,11 @@ impl Previews {
             .tab(params.run_id, Some(&params.tab_id))
             .await
             .map_err(ErrorObject::invalid_params)?;
-        lock(&tab.live).watched = Some(Instant::now());
+        {
+            let mut live = lock(&tab.live);
+            live.watched = Some(Instant::now());
+            live.used = live.watched;
+        }
         let mut frames = tab.frames.clone();
         let _ = tokio::time::timeout(
             FRAME_WAIT,
@@ -330,9 +362,10 @@ impl Previews {
         }
         let tab = self.tab(run, target.tab_id.as_deref()).await?;
         self.state.lock().await.current.insert(run, tab.id.clone());
+        lock(&tab.live).used = Some(Instant::now());
         // Reading never needs control; acting does.
         if !matches!(tool, "preview_status" | "preview_snapshot") && lock(&tab.live).human {
-            return Err("The user controls this tab now. Wait for them to hand it back, or work in another tab with preview_open reuseExistingTab=false.".to_owned());
+            return Err(HUMAN.to_owned());
         }
         let _acting = tab.acting.lock().await;
         let started = Timestamp::now();
@@ -363,13 +396,17 @@ impl Previews {
                 .filter(|other| other.run == run)
                 .map(|other| {
                     let live = lock(&other.live);
-                    json!({
+                    let mut listed = json!({
                         "tabId": other.id,
                         "url": live.url,
                         "owner": if live.human { "human" } else { "agent" },
                         "ownedByCaller": true,
                         "visible": live.watched.is_some_and(|at| at.elapsed() < WATCHED_FOR),
-                    })
+                    });
+                    if let Some(opener) = &other.opener {
+                        listed["openerTabId"] = opener.as_str().into();
+                    }
+                    listed
                 })
                 .collect();
             return Ok((pretty(&status), None));
@@ -396,6 +433,10 @@ impl Previews {
             None => self.new_tab(run).await?,
         };
         self.state.lock().await.current.insert(run, tab.id.clone());
+        lock(&tab.live).used = Some(Instant::now());
+        if url.is_some() && lock(&tab.live).human {
+            return Err(HUMAN.to_owned());
+        }
         if let Some(url) = url {
             tab.navigate(&url, "load", DEFAULT_TIMEOUT_MS).await?;
         }
@@ -403,103 +444,226 @@ impl Previews {
     }
 
     async fn new_tab(&self, run: RunId) -> Result<Arc<Tab>, String> {
-        let mut state = self.state.lock().await;
-        let browser = match &state.browser {
-            Some(browser) if !browser.closed() => browser.clone(),
-            _ => {
-                let executable = browser::executable(&self.launcher).await?;
-                // Tabs reach public addresses and this host's loopback, for the thread's own dev
-                // servers, never its networks.
-                let browser = Browser::launch(&self.launcher, &executable, &[], true).await?;
-                state.browser = Some(browser.clone());
-                browser
-            }
-        };
-        state.numbered += 1;
-        let id = format!("tab-{}", state.numbered);
-        let mut page = browser.page().await?;
-        for method in ["Page.enable", "Runtime.enable", "Network.enable"] {
-            page.call(method, json!({})).await?;
+        let browser = self.browser().await?;
+        check_caps(&*self.state.lock().await, run)?;
+        let page = browser.page().await?;
+        add_tab(&self.state, page, run, None, &evidence_root(&self.launcher)).await
+    }
+
+    /// The running browser, started first if need be. It installs without holding the state, so
+    /// other tabs keep answering meanwhile.
+    async fn browser(&self) -> Result<Browser, String> {
+        let alive = |state: &State| state.browser.clone().filter(|browser| !browser.closed());
+        if let Some(browser) = alive(&*self.state.lock().await) {
+            return Ok(browser);
         }
-        page.call(
-            "Page.addScriptToEvaluateOnNewDocument",
-            json!({"source": crate::mcp::html::NO_WEBRTC, "runImmediately": true}),
-        )
-        .await?;
-        page.call(
-            "Page.setInterceptFileChooserDialog",
-            json!({"enabled": true}),
-        )
-        .await?;
-        page.call(
-            "Emulation.setDeviceMetricsOverride",
-            json!({"width": FILL.0, "height": FILL.1, "deviceScaleFactor": 1, "mobile": false}),
-        )
-        .await?;
-        // ponytail: a tab screencasts and stays open until preview_close or plxd exits; stop
-        // the screencast while nobody watches or records, and close idle tabs, if memory or CPU
-        // show it.
-        page.call(
-            "Page.startScreencast",
-            json!({"format": "jpeg", "quality": 70, "maxWidth": FILL.0, "maxHeight": FILL.0}),
-        )
-        .await?;
-        let live = Arc::new(Mutex::new(Live {
-            url: "about:blank".to_owned(),
-            setting: json!({"mode": "fill"}),
-            viewport: FILL,
-            color_scheme: "system",
-            ..Live::default()
-        }));
-        let (frames_tx, frames) = watch::channel(Frame::default());
-        let events = std::mem::replace(&mut page.events, mpsc::unbounded_channel().1);
-        tokio::spawn(watch_tab(
-            page.browser.clone(),
-            page.session.clone(),
-            page.target.clone(),
+        let executable = browser::executable(&self.launcher).await?;
+        let mut state = self.state.lock().await;
+        if let Some(browser) = alive(&state) {
+            return Ok(browser);
+        }
+        // Tabs reach public addresses and this host's loopback, for the thread's own dev
+        // servers, never its networks.
+        let browser = Browser::launch(&self.launcher, &executable, &[], true).await?;
+        let events = browser.events();
+        browser
+            .call("Target.setDiscoverTargets", json!({"discover": true}), None)
+            .await?;
+        tokio::spawn(adopt_popups(
+            Arc::downgrade(&self.state),
             events,
-            Arc::clone(&live),
-            frames_tx,
+            evidence_root(&self.launcher),
         ));
-        let tab = Arc::new(Tab {
-            run,
-            id,
-            page,
-            live,
-            frames,
-            acting: tokio::sync::Mutex::new(()),
-        });
-        state.tabs.push(Arc::clone(&tab));
-        Ok(tab)
+        state.browser = Some(browser.clone());
+        Ok(browser)
     }
 
     async fn close(&self, run: RunId, id: &str) -> Result<(), String> {
         let mut state = self.state.lock().await;
-        let before = state.tabs.len();
-        state.tabs.retain(|tab| !(tab.run == run && tab.id == id));
-        if state.tabs.len() == before {
+        let Some(tab) = state.tabs.iter().find(|tab| tab.run == run && tab.id == id) else {
             return Err(format!("This thread has no browser tab {id:?}."));
+        };
+        if lock(&tab.live).human {
+            return Err(HUMAN.to_owned());
         }
-        if state.current.get(&run).is_some_and(|current| current == id) {
-            let next = state
-                .tabs
-                .iter()
-                .rfind(|tab| tab.run == run)
-                .map(|tab| tab.id.clone());
-            match next {
-                Some(next) => state.current.insert(run, next),
-                None => state.current.remove(&run),
-            };
-        }
-        // The browser stops with its last tab.
-        if state.tabs.is_empty() {
-            state.browser = None;
-        }
+        remove(&mut state, |tab| tab.run == run && tab.id == id);
         Ok(())
     }
 }
 
+/// Refuses another tab past T3's caps.
+fn check_caps(state: &State, run: RunId) -> Result<(), String> {
+    if state.tabs.iter().filter(|tab| tab.run == run).count() >= MAX_THREAD_TABS {
+        return Err(format!(
+            "This thread has {MAX_THREAD_TABS} browser tabs open, the most it may. Close one with preview_close."
+        ));
+    }
+    if state.tabs.len() >= MAX_TABS {
+        return Err(format!(
+            "This host has {MAX_TABS} browser tabs open, the most it may. Close one with preview_close."
+        ));
+    }
+    Ok(())
+}
+
+/// Closes the tabs `which` picks, moves each thread's current tab to its newest one left, and
+/// stops the browser with the last tab.
+fn remove(state: &mut State, which: impl Fn(&Tab) -> bool) {
+    state.tabs.retain(|tab| !which(tab));
+    let State { tabs, current, .. } = state;
+    current.retain(|run, id| tabs.iter().any(|tab| tab.run == *run && tab.id == *id));
+    for tab in tabs.iter().rev() {
+        current.entry(tab.run).or_insert_with(|| tab.id.clone());
+    }
+    if state.tabs.is_empty() {
+        state.browser = None;
+    }
+}
+
+/// Sets up `page` as one of thread `run`'s tabs: its events, screencast, and idle timer.
+async fn add_tab(
+    state: &Arc<tokio::sync::Mutex<State>>,
+    mut page: Page,
+    run: RunId,
+    opener: Option<String>,
+    evidence: &Path,
+) -> Result<Arc<Tab>, String> {
+    for method in ["Page.enable", "Runtime.enable", "Network.enable"] {
+        page.call(method, json!({})).await?;
+    }
+    page.call(
+        "Page.addScriptToEvaluateOnNewDocument",
+        json!({"source": crate::mcp::html::NO_WEBRTC, "runImmediately": true}),
+    )
+    .await?;
+    page.call(
+        "Page.setInterceptFileChooserDialog",
+        json!({"enabled": true}),
+    )
+    .await?;
+    page.call(
+        "Emulation.setDeviceMetricsOverride",
+        json!({"width": FILL.0, "height": FILL.1, "deviceScaleFactor": 1, "mobile": false}),
+    )
+    .await?;
+    // ponytail: a tab screencasts while it's open, watched or not; stop it while nobody watches
+    // or records if CPU shows it.
+    page.call(
+        "Page.startScreencast",
+        json!({"format": "jpeg", "quality": 70, "maxWidth": FILL.0, "maxHeight": FILL.0}),
+    )
+    .await?;
+    let live = Arc::new(Mutex::new(Live {
+        url: "about:blank".to_owned(),
+        setting: json!({"mode": "fill"}),
+        viewport: FILL,
+        color_scheme: "system",
+        used: Some(Instant::now()),
+        ..Live::default()
+    }));
+    let (frames_tx, frames) = watch::channel(Frame::default());
+    let events = std::mem::replace(&mut page.events, mpsc::unbounded_channel().1);
+    tokio::spawn(watch_tab(
+        page.browser.clone(),
+        page.session.clone(),
+        page.target.clone(),
+        events,
+        Arc::clone(&live),
+        frames_tx,
+    ));
+    let mut locked = state.lock().await;
+    locked.numbered += 1;
+    let tab = Arc::new(Tab {
+        run,
+        id: format!("tab-{}", locked.numbered),
+        opener,
+        evidence: evidence.join(run.to_string()),
+        page,
+        live,
+        frames,
+        acting: tokio::sync::Mutex::new(()),
+    });
+    locked.tabs.push(Arc::clone(&tab));
+    locked.current.entry(run).or_insert_with(|| tab.id.clone());
+    drop(locked);
+    tokio::spawn(close_when_idle(Arc::downgrade(state), run, tab.id.clone()));
+    Ok(tab)
+}
+
+/// Closes a tab once neither the agent nor the user has used it for [`IDLE`], as T3 does.
+async fn close_when_idle(state: Weak<tokio::sync::Mutex<State>>, run: RunId, id: String) {
+    loop {
+        tokio::time::sleep(Duration::from_mins(1)).await;
+        let Some(state) = state.upgrade() else { return };
+        let mut state = state.lock().await;
+        let Some(tab) = state.tabs.iter().find(|tab| tab.run == run && tab.id == id) else {
+            return;
+        };
+        if lock(&tab.live).used.is_some_and(|at| at.elapsed() > IDLE) {
+            remove(&mut state, |tab| tab.run == run && tab.id == id);
+            return;
+        }
+    }
+}
+
+/// Makes each page a tab opens, such as with `window.open` or a `target=_blank` link, a tab of the
+/// same thread, within the caps, and closes it past them.
+async fn adopt_popups(
+    state: Weak<tokio::sync::Mutex<State>>,
+    mut events: mpsc::UnboundedReceiver<Event>,
+    evidence: PathBuf,
+) {
+    while let Some(Event { method, params }) = events.recv().await {
+        let info = &params["targetInfo"];
+        let (Some(target), Some(opener)) = (info["targetId"].as_str(), info["openerId"].as_str())
+        else {
+            continue;
+        };
+        if method != "Target.targetCreated" || info["type"] != "page" {
+            continue;
+        }
+        let Some(state) = state.upgrade() else { return };
+        let found = {
+            let locked = state.lock().await;
+            let opened_by = locked.tabs.iter().find(|tab| tab.page.target == opener);
+            opened_by.map(|tab| {
+                (
+                    tab.run,
+                    tab.id.clone(),
+                    check_caps(&locked, tab.run),
+                    locked.browser.clone(),
+                )
+            })
+        };
+        let Some((run, opener, room, Some(browser))) = found else {
+            continue;
+        };
+        if room.is_err() {
+            let _ = browser
+                .call("Target.closeTarget", json!({"targetId": target}), None)
+                .await;
+            continue;
+        }
+        if let Ok(page) = browser.attach(target).await {
+            let _ = add_tab(&state, page, run, Some(opener), &evidence).await;
+        }
+    }
+}
+
+/// Where threads' saved screenshots and recordings go: `tmp/previews/<run>` in plxd's data
+/// folder, which only this user reads, removed with the thread.
+fn evidence_root(launcher: &Launcher) -> PathBuf {
+    launcher.data_dir().temp_dir().join("previews")
+}
+
 impl Tab {
+    /// A file in the tab's thread's evidence folder, which this makes.
+    fn evidence_file(&self, name: &str) -> Result<PathBuf, String> {
+        std::fs::create_dir_all(&self.evidence)
+            .map_err(|error| format!("Couldn't make {}: {error}", self.evidence.display()))?;
+        Ok(self.evidence.join(name))
+    }
+
     /// Sizes the viewport to where the app shows the tab, while the tab is in fill mode.
     async fn fill(&self, width: u32, height: u32) -> Result<(), String> {
         let (width, height) = (width.clamp(200, 4096), height.clamp(200, 4096));
@@ -890,16 +1054,16 @@ impl Tab {
         if let Some(error) = exception(&stopped) {
             return Err(format!("The recording failed: {error}"));
         }
-        let data = stopped["result"]["value"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned();
+        let stopped = &stopped["result"]["value"];
+        let data = stopped["data"].as_str().unwrap_or_default().to_owned();
         if data.is_empty() {
             return Err("The recording captured no frames.".to_owned());
         }
+        // The recorder stops itself at 5 MB; this is the frame's own limit.
         if data.len() > MAX_RECORDING_BASE64 {
             return Err("The recording is over 5 MB. Record a shorter clip.".to_owned());
         }
+        let capped = stopped["capped"] == true;
         let bytes = crate::images::decode(&data).ok_or("The recording came back unreadable.")?;
         let id = crate::agents::attach(
             daemon,
@@ -914,17 +1078,21 @@ impl Tab {
         .await
         .map_err(|error| error.message)?
         .image_id;
-        let path = evidence_dir(self.run).join(format!("{id}.webm"));
+        let path = self.evidence_file(&format!("{id}.webm"))?;
         std::fs::write(&path, &bytes)
             .map_err(|error| format!("Couldn't write {}: {error}", path.display()))?;
-        Ok(json!({
+        let mut artifact = json!({
             "id": id,
             "tabId": self.id,
             "path": path,
             "mimeType": "video/webm",
             "sizeBytes": bytes.len(),
             "createdAt": recording.started.to_string(),
-        }))
+        });
+        if capped {
+            artifact["note"] = "The recording stopped itself at 5 MB, so it ends early.".into();
+        }
+        Ok(artifact)
     }
 
     async fn snapshot(&self, args: SnapshotArgs) -> Result<(Value, Option<String>), String> {
@@ -937,11 +1105,11 @@ impl Tab {
         if args.save.unwrap_or(false) {
             let bytes =
                 crate::images::decode(&png).ok_or("The screenshot came back unreadable.")?;
-            let path = evidence_dir(self.run).join(format!(
+            let path = self.evidence_file(&format!(
                 "{}-{}.png",
                 self.id,
                 Timestamp::now().as_millisecond()
-            ));
+            ))?;
             std::fs::write(&path, bytes)
                 .map_err(|error| format!("Couldn't write {}: {error}", path.display()))?;
             let url = lock(&self.live).url.clone();
@@ -1244,16 +1412,6 @@ fn push(entries: &mut VecDeque<Value>, entry: Value) {
         entries.pop_front();
     }
     entries.push_back(entry);
-}
-
-/// Where a thread's saved screenshots and recordings go: a folder in the system's temp folder,
-/// which the agent's sandbox can read.
-fn evidence_dir(run: RunId) -> PathBuf {
-    let dir = std::env::temp_dir()
-        .join("plxd-preview")
-        .join(run.to_string());
-    let _ = std::fs::create_dir_all(&dir);
-    dir
 }
 
 /// The error a `Runtime.evaluate` result reports, if any.
@@ -1688,6 +1846,7 @@ mod tests {
     /// Drives a real tab: the headless browser installs into `PLXD_TEST_DATA_DIR` the first time.
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "downloads the headless browser; set PLXD_TEST_DATA_DIR"]
+    #[expect(clippy::too_many_lines, reason = "one tab's life, step by step")]
     async fn an_agent_types_clicks_and_reads_a_page() {
         let dir = DataDir::new(std::env::var("PLXD_TEST_DATA_DIR").unwrap()).unwrap();
         let previews = Previews::new(Launcher::new(dir, Environment::inherited()));
@@ -1766,7 +1925,39 @@ mod tests {
         )
         .await;
         assert_eq!(status["title"], "Dev server", "{status}");
-        call("preview_close", json!({"tabId": "tab-1"})).await;
+        // A link that opens a new page makes it the thread's second tab.
+        call(
+            "preview_evaluate",
+            json!({"expression": "document.body.innerHTML = '<a href=\"about:blank#popup\" target=_blank>Pop</a>'"}),
+        )
+        .await;
+        call("preview_click", json!({"locator": "text=Pop"})).await;
+        let mut tabs = 0;
+        for _ in 0..50 {
+            tabs = previews
+                .list(parallax_protocol::PreviewListParams { run_id: run })
+                .await
+                .tabs
+                .len();
+            if tabs == 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert_eq!(tabs, 2);
+        let (status, _) = call("preview_status", json!({"tabId": "tab-1"})).await;
+        assert_eq!(status["tabs"][1]["openerTabId"], "tab-1", "{status}");
+        call("preview_close", json!({"tabId": "tab-2"})).await;
+        // Archiving or deleting the thread closes the rest, and stops the browser.
+        previews.close_thread(run).await;
+        assert!(
+            previews
+                .list(parallax_protocol::PreviewListParams { run_id: run })
+                .await
+                .tabs
+                .is_empty()
+        );
+        assert!(previews.state.lock().await.browser.is_none());
     }
 
     #[test]
