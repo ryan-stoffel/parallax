@@ -904,6 +904,10 @@ export function TranscriptView({
     paddingStart: 16,
     paddingEnd: 24,
     getItemKey: (i) => view[i]!.key,
+    // An older page put in above leaves the row at the top of the view where it is. The list
+    // renders the rows around that row's new place in the same pass, so it never measures rows
+    // at the old offset and moves the view by their error (PLX-545).
+    anchorTo: "end",
   });
   const total = virtualizer.getTotalSize();
   // Whether it's scrolled up from the end, which offers Scroll to end.
@@ -928,22 +932,10 @@ export function TranscriptView({
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
     follow();
   }, [total, view.length, follow, !!end]);
-  // Older rows put in above change the first row, so what's in view keeps its distance from the
-  // end instead of from the top. Then, near the top, the next older page loads.
-  const first = view[0]?.key;
-  const above = useRef({ first, fromEnd: 0 });
+  // Near the top, the next older page loads.
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (!el) return;
-    if (first !== above.current.first && !atBottom.current) {
-      el.scrollTop = el.scrollHeight - above.current.fromEnd;
-      // The virtualizer keeps the offset it last saw in a scroll event, which a busy machine
-      // delivers late. Until then it takes the new rows above the view for rows below it and
-      // skips correcting their measured heights, which shifts what's in view.
-      virtualizer.scrollOffset = el.scrollTop;
-    }
-    above.current = { first, fromEnd: el.scrollHeight - el.scrollTop };
-    if (onNearTop && el.scrollTop < el.clientHeight) onNearTop();
+    if (el && onNearTop && el.scrollTop < el.clientHeight) onNearTop();
   });
   // As the composer grows it shrinks the list from below: keep the latest output in view.
   useEffect(() => {
@@ -999,7 +991,6 @@ export function TranscriptView({
             if (atBottom.current) ending.current = false;
             // Scroll to end's smooth scroll passes through the middle, where it stays hidden.
             if (!ending.current) setScrolledUp(!atBottom.current);
-            above.current.fromEnd = el.scrollHeight - el.scrollTop;
             if (onNearTop && el.scrollTop < el.clientHeight) onNearTop();
             follow();
           }}
