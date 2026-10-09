@@ -1744,6 +1744,28 @@ mod tests {
             .await
             .unwrap_err();
         assert!(missing.contains("Nothing matches"), "{missing}");
+        // A dev server on this host's loopback opens, through the browser's proxy.
+        let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = server.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+            while let Ok((mut socket, _)) = server.accept().await {
+                let mut request = [0; 1024];
+                let _ = socket.read(&mut request).await;
+                let body = "<title>Dev server</title>";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        let (status, _) = call(
+            "preview_navigate",
+            json!({"target": {"kind": "environment-port", "port": port}}),
+        )
+        .await;
+        assert_eq!(status["title"], "Dev server", "{status}");
         call("preview_close", json!({"tabId": "tab-1"})).await;
     }
 
