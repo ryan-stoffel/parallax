@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use super::{History, Terminals, chunks, take_text};
+use super::{History, Terminals, chunks, take_text, without_queries};
 use crate::methods::Reply;
 
 const PATIENCE: Duration = Duration::from_secs(20);
@@ -49,6 +49,25 @@ fn a_replay_is_cut_between_characters_and_never_empty() {
     let parts: Vec<_> = chunks(&long).collect();
     assert_eq!(parts.concat(), long);
     assert!(parts.iter().all(|part| part.len() <= super::MAX_CHUNK));
+}
+
+#[test]
+fn a_replay_leaves_out_queries_and_replies_but_keeps_the_rest() {
+    let output = concat!(
+        "\x1b[6n\x1b[1;1R",                         // cursor position, and its reply
+        "\x1b[c\x1b[>c\x1b[?1;2c",                  // device attributes
+        "\x1b]11;?\x07\x1b]10;rgb:ff/ff/ff\x1b\\",  // colors
+        "\x1bP$qm\x1b\\\x1b[?2026$p\x1b[>q\x1b[?u", // setting, mode, version, keyboard
+        "\x1b[31mred\x1b[0m \x1b[2J\x1b[u\x1b]0;title\x07$ ",
+    );
+    let mut history = History::new(100, 1024);
+    history.push(output);
+    assert_eq!(
+        history.text(),
+        "\x1b[31mred\x1b[0m \x1b[2J\x1b[u\x1b]0;title\x07$ "
+    );
+    // An unfinished sequence at the end stays as it is.
+    assert_eq!(without_queries("$ \x1b[6"), "$ \x1b[6");
 }
 
 /// Prints `ready`, then `got-` and the line it reads.
@@ -98,10 +117,14 @@ async fn next(replies: &mut mpsc::Receiver<Reply>) -> Option<(String, bool)> {
 /// Reads output until it has shown `text`.
 async fn until(replies: &mut mpsc::Receiver<Reply>, text: &str) {
     let mut shown = String::new();
-    while !shown.contains(text) {
-        let (data, _) = next(replies).await.expect("it exited first");
-        shown.push_str(&data);
-    }
+    let read = async {
+        while !shown.contains(text) {
+            let (data, _) = next(replies).await.expect("it exited first");
+            shown.push_str(&data);
+        }
+    };
+    let showed = timeout(PATIENCE, read).await.is_ok();
+    assert!(showed, "{text:?} never showed; it printed {shown:?}");
 }
 
 #[tokio::test]

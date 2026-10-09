@@ -243,11 +243,12 @@ export function startHosts(): void {
         command = await providerSignInCommand(hostId, provider);
       if (!command) return "invalid terminal";
       if (typeof command === "string") return command;
-      // It runs on this computer, over ssh for another host. Its id is the window's own.
+      // It runs on this computer, over ssh for another host, under an id of its own, so an
+      // earlier one's last output and exit never reach it.
       const { file: program, args, env = {} } = command;
       return openTerminal(event.sender, id, connection("local"), {
         threadId: "",
-        terminalId: `${event.sender.id}:${id}`,
+        terminalId: `${id}:${randomUUID()}`,
         command: { program, args, env },
         cols,
         rows,

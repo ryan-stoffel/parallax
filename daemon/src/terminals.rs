@@ -292,8 +292,10 @@ fn start(
                         .ok()
                         .and_then(|status| i32::try_from(status.exit_code()).ok())
                         .unwrap_or(-1);
-                    // A Windows pseudo-console's output ends only once it closes.
-                    lock(&exited.shared).master = None;
+                    // A Windows pseudo-console's output ends only once it closes. Closing it waits
+                    // for the reader, which needs the lock, so it's dropped outside it.
+                    let master = lock(&exited.shared).master.take();
+                    drop(master);
                     // The last of its output, unless a process it left behind holds the terminal.
                     let _ = reading.recv_timeout(Duration::from_secs(2));
                     finish(&exited, code, &open);
@@ -399,7 +401,8 @@ async fn stream(
             .is_ok()
     };
     loop {
-        for (i, part) in chunks(&history).enumerate() {
+        // Sent, and let go: a stream holds only what it's sending.
+        for (i, part) in chunks(&std::mem::take(&mut history)).enumerate() {
             if !send(Output::Data(part.into()), i == 0).await {
                 return;
             }
@@ -516,9 +519,80 @@ impl History {
         }
     }
 
+    /// The kept output without its queries and their replies, so a client that replays it doesn't
+    /// answer them again and type the answers into the shell.
     fn text(&mut self) -> String {
-        String::from_utf8_lossy(self.text.make_contiguous()).into_owned()
+        without_queries(&String::from_utf8_lossy(self.text.make_contiguous()))
     }
+}
+
+/// `text` less the escape sequences that ask a terminal something or answer it, as T3 Code strips
+/// them from its history: cursor position and status reports, device attributes, mode, version,
+/// and keyboard queries, color queries, and setting and capability queries.
+fn without_queries(text: &str) -> String {
+    let mut kept = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('\x1b') {
+        kept.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let (len, query) = match after.as_bytes().first() {
+            Some(b'[') => csi(&after[1..]).map_or((0, false), |(len, query)| (len + 1, query)),
+            Some(b']') => string(&after[1..]).map_or((0, false), |(len, body)| {
+                let color = ["10;", "11;", "12;"].iter().any(|p| body.starts_with(p))
+                    && (body[3..].starts_with('?') || body[3..].starts_with("rgb:"));
+                (len + 1, color)
+            }),
+            Some(b'P') => string(&after[1..]).map_or((0, false), |(len, body)| {
+                let body = body.strip_prefix(['0', '1']).unwrap_or(body);
+                let query = ["$q", "$r", "+q", "+r"].iter().any(|p| body.starts_with(p));
+                (len + 1, query)
+            }),
+            _ => (0, false),
+        };
+        if !query {
+            kept.push('\x1b');
+        }
+        let skip = if query { len } else { 0 };
+        rest = &after[skip..];
+    }
+    kept.push_str(rest);
+    kept
+}
+
+/// The length of a control sequence's body and final byte at the start of `text`, after `ESC [`,
+/// and whether it's a query or a reply.
+fn csi(text: &str) -> Option<(usize, bool)> {
+    let end = text.find(|c: char| ('\x40'..='\x7e').contains(&c))?;
+    let (body, last) = (&text[..end], text.as_bytes()[end]);
+    if !body.bytes().all(|b| (0x20..=0x3f).contains(&b)) {
+        return None;
+    }
+    let digits = |s: &str| {
+        s.bytes()
+            .all(|b| b.is_ascii_digit() || b == b';' || b == b'?')
+    };
+    let query = match last {
+        b'n' => true,
+        b'R' => digits(body),
+        b'c' => digits(body.trim_start_matches('>')),
+        b'p' | b'y' => body.strip_suffix('$').is_some_and(digits),
+        b'q' => body.strip_prefix('>').is_some_and(digits),
+        b'u' => body.starts_with('?'),
+        _ => false,
+    };
+    Some((end + 1, query))
+}
+
+/// The length of an OSC or DCS string at the start of `text` with its terminator (BEL or
+/// `ESC \`), and its content.
+fn string(text: &str) -> Option<(usize, &str)> {
+    let end = text.find(['\x07', '\x1b'])?;
+    let terminator = match text.as_bytes()[end] {
+        0x07 => 1,
+        _ if text[end..].starts_with("\x1b\\") => 2,
+        _ => return None,
+    };
+    Some((end + terminator, &text[..end]))
 }
 
 fn notification<N: NotificationMethod>(params: N::Params) -> Notification {
