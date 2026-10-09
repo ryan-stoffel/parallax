@@ -51,13 +51,13 @@ pub(super) const MAX_TODO_TEXT_BYTES: usize = 4 * 1024;
 /// dropped, not only their text, since even a short text per item adds up at an unbounded count.
 pub(super) const MAX_TODO_LIST_BYTES: usize = 64 * 1024;
 
-pub(super) const STARTING: &str = "starting";
-pub(super) const RUNNING: &str = "running";
+pub(crate) const STARTING: &str = "starting";
+pub(crate) const RUNNING: &str = "running";
 pub(super) const COMPLETED: &str = "completed";
 pub(super) const FAILED: &str = "failed";
 pub(super) const CANCELLED: &str = "cancelled";
 pub(super) const INTERRUPTED: &str = "interrupted";
-pub(super) const WAITING: &str = "waiting";
+pub(crate) const WAITING: &str = "waiting";
 pub(super) const ACCEPTED: &str = "accepted";
 
 /// The store's text for the only policy `agent/start` takes.

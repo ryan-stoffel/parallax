@@ -66,6 +66,10 @@ pub const MAX_RESULT_BYTES: usize = 256 * 1024;
 /// the newest; the tools use nothing that differs between them.
 const MCP_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
 
+/// The longest a tool call can run: `delegate_task`'s `wait` at its longest, an hour, and a
+/// minute to spare. Codex's own default is 60 s, so plxd sets this for its server there.
+pub const MAX_TOOL_SECONDS: u64 = 61 * 60;
+
 /// The most tool calls the server runs at once. Each has at most one request in flight to plxd,
 /// so staying under plxd's 32 per connection means long waits never fill the connection.
 pub const MAX_CALLS: usize = 16;

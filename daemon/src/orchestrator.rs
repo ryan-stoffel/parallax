@@ -271,6 +271,10 @@ struct Rows {
     children: Vec<Uuid>,
     /// For `thread.delete`: its repo entry's repository, which holds its checkpoints.
     repo_path: Option<String>,
+    /// Also for `thread.delete` (0063): whether other threads still work in its worktree, which
+    /// then stays, and the shared worktree it was the last to work in, which goes with it.
+    shared: bool,
+    left: Option<Removal>,
     /// For `project.delete`: its repository, if it exists, and its runs, coordinators first.
     project: Option<String>,
     runs: Vec<Uuid>,
@@ -519,6 +523,13 @@ fn read(db: &Tx, thread: Uuid, action: &Action) -> Result<Rows, ErrorObject> {
                 rows.scratch = repo.fields.scratch;
                 rows.repo_path = Some(repo.fields.path);
             }
+            let (shared, left) = crate::delegation::on_delete(db, thread)?;
+            rows.shared = shared;
+            rows.left = left.map(|left| Removal {
+                repo_path: left.repo_path,
+                path: left.path,
+                branch: left.branch,
+            });
             rows.children = db
                 .list_threads()
                 .map_err(error)?
@@ -618,11 +629,15 @@ fn decide(thread: Uuid, action: Action, rows: Rows) -> Result<Decision, Refusal>
                     format!("no run has id {thread}"),
                 ));
             }
-            let worktree = worktree.map(|worktree| Removal {
-                repo_path: worktree.repo_path,
-                path: worktree.path,
-                branch: worktree.branch,
-            });
+            // A worktree another thread works in stays, and its last thread removes it (0063).
+            let worktree = worktree
+                .filter(|_| !rows.shared)
+                .map(|worktree| Removal {
+                    repo_path: worktree.repo_path,
+                    path: worktree.path,
+                    branch: worktree.branch,
+                })
+                .or(rows.left);
             // A scratch repository goes whole, refs and all.
             let refs = (!rows.scratch)
                 .then(|| {

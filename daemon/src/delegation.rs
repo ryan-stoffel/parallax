@@ -8,7 +8,9 @@
 //! beside it (`create_threads`). Its mode can't need less approval than the owner's, a no-write
 //! thread (a Project's coordinator) can't share its workspace, and the owner must be running a
 //! turn, as T3's must. Only threads in a repo entry share theirs: a Project's runs
-//! start children through their coordinator.
+//! start children through their coordinator. At most [`MAX_SHARED_RUNNING`] such threads run at
+//! once on a host. A shared worktree is never removed while a thread works in it ([`busy_users`]
+//! for Accept, [`on_delete`] for Delete).
 //!
 //! `task/status` reads a task and records what its parent did with it: read its result, which
 //! acknowledges it, cancelled it, which disposes of it, or stopped waiting on it, which turns
@@ -42,16 +44,44 @@ const SUBAGENT: &str = "subagent";
 /// The type of the context transfer `thread/mergeBack` records.
 const MERGE_BACK: &str = "merge_back";
 
-/// The longest chain of threads sharing one workspace that [`workdir`] follows.
-const MAX_SHARED_DEPTH: usize = 64;
+/// The most threads in shared worktrees, delegated tasks and `create_threads` threads, that run
+/// at once on a host: a departure from T3, which has no cap, for the host's memory (0063).
+const MAX_SHARED_RUNNING: u64 = 8;
 
-/// A delegated task's payload in its lineage row.
+/// A lineage row's payload: the worktree the thread works in, and for a delegated task, how its
+/// end reaches its parent.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Payload {
+    /// `None` when the owner works in its repository's own checkout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    worktree: Option<Shared>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task: Option<Task>,
+}
+
+/// A worktree threads share: its repository, folder, and branch, kept with each thread in it so
+/// the last one can remove it once its owner is gone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Shared {
+    pub repo_path: String,
+    pub path: String,
+    pub branch: String,
+}
+
+/// A delegated task's wake policy and delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Task {
     completion_wake: CompletionWake,
     #[serde(default)]
     delivery: TaskDelivery,
+}
+
+/// `lineage`'s payload. One plxd can't read is empty.
+fn payload(lineage: &Lineage) -> Payload {
+    serde_json::from_str(&lineage.payload).unwrap_or_default()
 }
 
 async fn store<T: Send + 'static>(
@@ -90,13 +120,7 @@ pub(crate) async fn delegate(
         completion_wake,
         delivery: TaskDelivery::Pending,
     });
-    let lineage = Lineage {
-        relationship: task.map(|_| SUBAGENT.to_owned()),
-        workspace_of: Some(owner.into()),
-        payload: serde_json::to_string(&task).map_err(ErrorObject::internal_error)?,
-    };
-    let (row, scope, inserted) =
-        store(&daemon, move |db| claim(db, run_id, owner, &lineage)).await?;
+    let (row, scope, inserted) = store(&daemon, move |db| claim(db, run_id, owner, task)).await?;
     let options = match inherit(&row, account.as_ref(), model, effort, permission) {
         Ok(options) => options,
         Err(error) => {
@@ -182,13 +206,14 @@ fn inherit(
     })
 }
 
-/// Checks that `owner` can share its workspace with new thread `run_id`, and records `lineage`
-/// for it unless a retry did: the owner's row, its repo entry, and whether this inserted it.
+/// Checks that `owner` can share its workspace with new thread `run_id`, and records its lineage
+/// unless a retry did: the owner's row, its repo entry, and whether this inserted it. The
+/// lineage names the worktree's owner, which is `owner`'s own owner when it shares one too.
 fn claim(
     db: &Store,
     run_id: RunId,
     owner: RunId,
-    lineage: &Lineage,
+    task: Option<Task>,
 ) -> Result<(parallax_store::Run, ProjectId, bool), ErrorObject> {
     let error = |error| store_error(&error);
     let row = db
@@ -219,17 +244,46 @@ fn claim(
              one"
         )));
     }
-    // A retry finds the lineage it made; another owner's is a different thread.
-    let inserted = match db.lineage(run_id.into()).map_err(error)? {
-        Some(existing) if existing.workspace_of == lineage.workspace_of => false,
-        Some(_) => {
-            return Err(ErrorObject::parallax(
-                ErrorKind::IdConflict,
-                format!("run {run_id} exists in another thread's workspace"),
-            ));
+    let (root, worktree) = match db.lineage(owner.into()).map_err(error)? {
+        Some(lineage) if lineage.workspace_of.is_some() => {
+            (lineage.workspace_of, payload(&lineage).worktree)
         }
+        _ => {
+            let worktree = db.get_worktree(owner.into()).map_err(error)?;
+            let shared = worktree.map(|worktree| Shared {
+                repo_path: worktree.repo_path,
+                path: worktree.path,
+                branch: worktree.branch,
+            });
+            (Some(owner.into()), shared)
+        }
+    };
+    let conflict = |why: &str| {
+        Err(ErrorObject::parallax(
+            ErrorKind::IdConflict,
+            format!("run {run_id} {why}"),
+        ))
+    };
+    // A retry finds the lineage it made; another owner's, or none, is a different thread.
+    let inserted = match db.lineage(run_id.into()).map_err(error)? {
+        Some(existing) if existing.workspace_of == root => false,
+        Some(_) => return conflict("exists in another thread's workspace"),
+        None if retry => return conflict("exists and isn't a thread in a shared workspace"),
         None => {
-            db.put_lineage(run_id.into(), lineage).map_err(error)?;
+            if db.running_shared_threads().map_err(error)? >= MAX_SHARED_RUNNING {
+                return Err(ErrorObject::invalid_params(format!(
+                    "{MAX_SHARED_RUNNING} threads already run in shared worktrees on this host, \
+                     the most at once; wait for one to end, through its wake-up or \
+                     task_status, then try again"
+                )));
+            }
+            let lineage = Lineage {
+                relationship: task.map(|_| SUBAGENT.to_owned()),
+                workspace_of: root,
+                payload: serde_json::to_string(&Payload { worktree, task })
+                    .map_err(ErrorObject::internal_error)?,
+            };
+            db.put_lineage(run_id.into(), &lineage).map_err(error)?;
             true
         }
     };
@@ -286,8 +340,9 @@ pub(crate) async fn status(
         let (Some(row), Some(mut lineage)) = (row, lineage) else {
             return Err(not_found());
         };
-        let mut task = match serde_json::from_str::<Option<Task>>(&lineage.payload) {
-            Ok(Some(task)) if row.fields.parent == Some(parent.into()) => task,
+        let mut stored = payload(&lineage);
+        let mut task = match stored.task {
+            Some(task) if row.fields.parent == Some(parent.into()) => task,
             _ => return Err(not_found()),
         };
         let worktree = db.get_worktree(task_id.into()).map_err(error)?;
@@ -304,8 +359,9 @@ pub(crate) async fn status(
             }
         }
         if task != before {
+            stored.task = Some(task);
             lineage.payload =
-                serde_json::to_string(&Some(task)).map_err(ErrorObject::internal_error)?;
+                serde_json::to_string(&stored).map_err(ErrorObject::internal_error)?;
             db.put_lineage(task_id.into(), &lineage).map_err(error)?;
         }
         Ok(DelegatedTask {
@@ -336,7 +392,7 @@ pub(crate) fn wakes(db: &Store, child: Uuid, parent: Uuid) -> Result<Option<bool
     let Some(lineage) = db.lineage(child).map_err(error)? else {
         return Ok(Some(false));
     };
-    let Ok(Some(task)) = serde_json::from_str::<Option<Task>>(&lineage.payload) else {
+    let Some(task) = payload(&lineage).task else {
         return Ok(Some(false));
     };
     if task.delivery != TaskDelivery::Pending {
@@ -361,8 +417,7 @@ pub(crate) fn quiet(db: &Store, tasks: &[Uuid]) -> Result<Vec<Uuid>, ErrorObject
         let pending = db
             .lineage(task)
             .map_err(|e| store_error(&e))?
-            .and_then(|lineage| serde_json::from_str::<Option<Task>>(&lineage.payload).ok())
-            .flatten()
+            .and_then(|lineage| payload(&lineage).task)
             .is_none_or(|task| task.delivery == TaskDelivery::Pending);
         if !pending {
             quiet.push(task);
@@ -371,40 +426,103 @@ pub(crate) fn quiet(db: &Store, tasks: &[Uuid]) -> Result<Vec<Uuid>, ErrorObject
     Ok(quiet)
 }
 
-/// The folder a checkout thread works in (0063): the worktree of the thread whose workspace it
-/// shares, following a chain of them, or else `scope`'s checkout.
+/// The folder a checkout thread works in (0063): the worktree it shares, or else `scope`'s
+/// checkout.
 pub(crate) fn workdir(db: &Store, scope: ProjectId, run: Uuid) -> Result<String, ErrorObject> {
-    let error = |error| store_error(&error);
-    let mut thread = run;
-    for _ in 0..MAX_SHARED_DEPTH {
-        let Some(owner) = db
-            .lineage(thread)
-            .map_err(error)?
-            .and_then(|lineage| lineage.workspace_of)
-        else {
-            return crate::threads::scope_path(db, scope);
-        };
-        if let Some(worktree) = db.get_worktree(owner).map_err(error)? {
-            return Ok(worktree.path);
-        }
-        let shares = db
-            .get_run(owner)
-            .map_err(error)?
-            .is_some_and(|row| row.fields.checkout);
-        if !shares {
-            return Err(ErrorObject::parallax(
-                ErrorKind::WorktreeFailed,
-                format!(
-                    "thread {run} works in thread {owner}'s worktree, which is gone; start a new \
-                     thread instead"
-                ),
-            ));
-        }
-        thread = owner;
+    let lineage = db.lineage(run).map_err(|e| store_error(&e))?;
+    match lineage
+        .as_ref()
+        .and_then(|lineage| payload(lineage).worktree)
+    {
+        None => crate::threads::scope_path(db, scope),
+        Some(shared) if std::path::Path::new(&shared.path).is_dir() => Ok(shared.path),
+        Some(shared) => Err(ErrorObject::parallax(
+            ErrorKind::WorktreeFailed,
+            format!(
+                "thread {run} works in the worktree at {}, which is gone; start a new thread \
+                 instead",
+                shared.path
+            ),
+        )),
     }
-    Err(ErrorObject::internal_error(format!(
-        "thread {run} shares a workspace through more than {MAX_SHARED_DEPTH} threads"
-    )))
+}
+
+/// The threads in `owner`'s worktree that are starting, running, or waiting to resume, which
+/// Accept must not pull it from under (0063).
+pub(crate) fn busy_users(db: &Store, owner: Uuid) -> Result<Vec<Uuid>, ErrorObject> {
+    let busy = [
+        agents::convert::STARTING,
+        agents::convert::RUNNING,
+        agents::convert::WAITING,
+    ];
+    Ok(db
+        .shared_users(owner)
+        .map_err(|e| store_error(&e))?
+        .into_iter()
+        .filter(|(_, status)| busy.contains(&status.as_str()))
+        .map(|(id, _)| id)
+        .collect())
+}
+
+/// Refuses, with `mergeRefused`, to accept `run` while [`busy_users`] work in its worktree.
+pub(crate) async fn check_accept(daemon: &Daemon, run: RunId) -> Result<(), ErrorObject> {
+    let users = store(daemon, move |db| busy_users(db, run.into())).await?;
+    if users.is_empty() {
+        return Ok(());
+    }
+    let users: Vec<String> = users.iter().map(ToString::to_string).collect();
+    Err(ErrorObject::parallax(
+        ErrorKind::MergeRefused,
+        format!(
+            "threads {} still work in run {run}'s worktree; wait for them to finish, or stop \
+             them, then accept",
+            users.join(", ")
+        ),
+    ))
+}
+
+/// What deleting `thread` means for a shared worktree (0063): whether other threads still work
+/// in its own, which then stays, and the shared worktree it was the last to work in after its
+/// owner went, which goes with it.
+pub(crate) fn on_delete(db: &Store, thread: Uuid) -> Result<(bool, Option<Shared>), ErrorObject> {
+    let error = |error| store_error(&error);
+    let used = !db.shared_users(thread).map_err(error)?.is_empty();
+    let Some(lineage) = db.lineage(thread).map_err(error)? else {
+        return Ok((used, None));
+    };
+    let (Some(owner), Some(shared)) = (lineage.workspace_of, payload(&lineage).worktree) else {
+        return Ok((used, None));
+    };
+    let last = db.get_run(owner).map_err(error)?.is_none()
+        && db
+            .shared_users(owner)
+            .map_err(error)?
+            .iter()
+            .all(|(id, _)| *id == thread);
+    Ok((used, last.then_some(shared)))
+}
+
+/// Disposes of every pending task `parent` delegated, as `task_cancel` does, so a held Stop drops
+/// the wake-ups its stopped tasks would owe (0063).
+pub(crate) fn dispose_tasks(db: &Store, parent: Uuid) -> Result<(), ErrorObject> {
+    let error = |error| store_error(&error);
+    for task in db.tasks_of(parent).map_err(error)? {
+        let Some(mut lineage) = db.lineage(task).map_err(error)? else {
+            continue;
+        };
+        let mut stored = payload(&lineage);
+        let Some(pending) = stored
+            .task
+            .as_mut()
+            .filter(|task| task.delivery == TaskDelivery::Pending)
+        else {
+            continue;
+        };
+        pending.delivery = TaskDelivery::Disposed;
+        lineage.payload = serde_json::to_string(&stored).map_err(ErrorObject::internal_error)?;
+        db.put_lineage(task, &lineage).map_err(error)?;
+    }
+    Ok(())
 }
 
 /// `thread/mergeBack`: see the module documentation. `source` must be a fork of `target`, or its

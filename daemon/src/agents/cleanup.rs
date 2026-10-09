@@ -56,8 +56,13 @@ async fn sweep(daemon: &Daemon, stop: &CancellationToken, known: &mut HashMap<St
             let Some(run) = db.get_run(thread.id).map_err(|e| store_error(&e))? else {
                 continue;
             };
+            // A worktree other threads work in stays (0063).
             if let Some(worktree) = db.get_worktree(thread.id).map_err(|e| store_error(&e))?
                 && idle(&run)
+                && db
+                    .shared_users(thread.id)
+                    .map_err(|e| store_error(&e))?
+                    .is_empty()
                 && !run.state.pull_requests.is_empty()
             {
                 candidates.push((run, worktree));

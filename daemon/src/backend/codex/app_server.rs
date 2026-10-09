@@ -261,6 +261,12 @@ fn thread_params(request: &RunRequest) -> Result<(&'static str, Value), StartErr
             ),
             "approve".into(),
         );
+        // Codex gives up on a tool call after 60 s by default, and `delegate_task`'s wait runs
+        // up to an hour.
+        config.insert(
+            format!("mcp_servers.{}.tool_timeout_sec", crate::mcp::SERVER),
+            crate::mcp::MAX_TOOL_SECONDS.into(),
+        );
     }
     if let Some(tokens) = request.context_window {
         if !CONTEXT_WINDOWS.contains(&tokens) {
