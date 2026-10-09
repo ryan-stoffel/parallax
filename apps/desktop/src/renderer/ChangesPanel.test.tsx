@@ -3,7 +3,7 @@ import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
-import type { ParallaxBridge } from "../preload/bridge";
+import type { ParallaxBridge, WatchMessage } from "../preload/bridge";
 import type { ThreadRun } from "../protocol/generated/protocol";
 import { ChangesPanel } from "./ChangesPanel";
 
@@ -59,13 +59,21 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
   return { logId: "l", result: { seq: 9 } };
 });
 const compose = vi.fn();
+let watchListener: (message: WatchMessage) => void;
 
 beforeEach(async () => {
   listedRuns = runs;
   largePatch = undefined;
   request.mockClear();
   compose.mockClear();
-  window.parallax = { platform: "darwin", request } as Partial<ParallaxBridge> as ParallaxBridge;
+  window.parallax = {
+    platform: "darwin",
+    request,
+    watch: (_host: string, _params: object, listener: (message: WatchMessage) => void) => {
+      watchListener = listener;
+      return () => {};
+    },
+  } as Partial<ParallaxBridge> as ParallaxBridge;
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   renderPanel = (props = {}) =>
     act(() =>
@@ -202,4 +210,32 @@ test("large diffs mount only the visible rows and can still fold", async () => {
   );
   expect(document.querySelector('[aria-label="Show large.txt"]')).not.toBeNull();
   expect(document.querySelectorAll("[data-index]").length).toBe(1);
+});
+
+test("thread checkpoint events reload turns even when the shell has no checkpoint details", async () => {
+  listedRuns = [...runs, { ...runs[1]!, id: "t4", ordinal: 4 }];
+  await act(async () =>
+    watchListener({
+      type: "event",
+      event: {
+        subscription: "s",
+        seq: 10,
+        time: "",
+        event: {
+          kind: "thread.checkpoint",
+          runId: "r",
+          turnId: "t4",
+          ordinal: 4,
+          checkpoint: ready,
+        },
+      },
+    }),
+  );
+  await settle();
+  expect([...document.querySelector("select")!.options].map((o) => o.value)).toEqual([
+    "all",
+    "1",
+    "2",
+    "4",
+  ]);
 });
