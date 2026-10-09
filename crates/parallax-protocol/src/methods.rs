@@ -457,7 +457,8 @@ method_table! {
         /// `terminal/resize`: a terminal's new size. The client sends it.
         TerminalResize = "terminal/resize": TerminalResizeParams;
         /// `terminal/detach`: stops a terminal's stream to this connection, and leaves it running
-        /// with its kept output (PLX-664). The client sends it once nothing shows the terminal.
+        /// with its kept output (PLX-664). The client sends it once nothing shows the terminal. A
+        /// terminal running a `command` ignores it, and still ends with its connection.
         TerminalDetach = "terminal/detach": TerminalKey;
         /// `terminal/output`: what a terminal printed. plxd sends it to each connection that
         /// opened the terminal and hasn't detached it.

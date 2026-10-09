@@ -120,7 +120,8 @@ impl Terminals {
     }
 
     /// `terminal/detach`: stops the terminal's stream to `replies`' connection. It keeps running
-    /// and keeping its output, for the next `terminal/open`.
+    /// and keeping its output, for the next `terminal/open`. A command keeps its stream, which
+    /// ends it with its connection, so a close racing its open can't leave it running.
     pub(crate) fn detach(
         &self,
         thread_id: String,
@@ -128,7 +129,7 @@ impl Terminals {
         replies: &mpsc::Sender<Reply>,
     ) {
         let terminal = lock(&self.open).get(&(thread_id, terminal_id)).cloned();
-        if let Some(terminal) = terminal {
+        if let Some(terminal) = terminal.filter(|terminal| !terminal.command) {
             drop(terminal.detach(replies));
         }
     }

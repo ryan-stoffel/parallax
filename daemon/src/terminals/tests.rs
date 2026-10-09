@@ -192,15 +192,14 @@ async fn detaching_stops_one_connections_stream_and_keeps_the_terminal() {
     let stopped = CancellationToken::new();
     let (first_tx, mut first) = mpsc::channel(256);
     let (second_tx, mut second) = mpsc::channel(256);
-    terminals
-        .open(open(Some(echo())), &first_tx, &stopped)
-        .unwrap();
-    until(&mut first, "ready").await;
+    // A shell: a command can't be detached.
+    terminals.open(open(None), &first_tx, &stopped).unwrap();
+    assert!(next(&mut first).await.unwrap().1);
     terminals.open(open(None), &second_tx, &stopped).unwrap();
-    until(&mut second, "ready").await;
+    assert!(next(&mut second).await.unwrap().1);
 
     terminals.detach("t".to_owned(), "1".to_owned(), &first_tx);
-    terminals.write("t".to_owned(), "1".to_owned(), "you\r".to_owned());
+    terminals.write("t".to_owned(), "1".to_owned(), "echo got-you\r".to_owned());
     until(&mut second, "got-you").await;
     let mut detached = String::new();
     while let Ok(Reply::Notification(message)) = first.try_recv() {
@@ -226,6 +225,8 @@ async fn a_command_ends_with_the_connection_that_opened_it() {
         .unwrap();
     until(&mut output, "ready").await;
 
+    // A detach leaves a command's stream, which ends it with the connection.
+    terminals.detach("t".to_owned(), "1".to_owned(), &replies);
     stopped.cancel();
     timeout(PATIENCE, async {
         while !terminals.list(None).is_empty() {
