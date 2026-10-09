@@ -258,3 +258,38 @@ async fn a_client_pairs_with_the_code_and_every_other_is_refused() {
     wait_listening(port, false).await;
     server.stop().await;
 }
+
+#[tokio::test]
+async fn an_expired_code_ends_the_pairing_and_its_advertisement() {
+    let port = free_port();
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.remote_address = Some(LOOPBACK);
+    config.remote_port = port;
+    config.remote_code_lifetime = Duration::from_millis(300);
+    let server = InProcess::start(config);
+    let mut client = Client::ready(&server.socket).await;
+    set_remote(&mut client, true).await;
+    wait_listening(port, true).await;
+
+    let code = new_code(&mut client).await;
+    let status = client
+        .call::<RemoteSessions>(RemoteSessionsParams {})
+        .await
+        .unwrap();
+    assert!(status.pairing, "a code is waiting");
+    let deadline = Instant::now() + PATIENCE;
+    while client
+        .call::<RemoteSessions>(RemoteSessionsParams {})
+        .await
+        .unwrap()
+        .pairing
+    {
+        assert!(Instant::now() < deadline, "the pairing never ended");
+        sleep(Duration::from_millis(50)).await;
+    }
+    let route = format!("127.0.0.1:{port}");
+    let late = remote::pair(std::slice::from_ref(&route), &code, "laptop", dir.path()).await;
+    assert!(matches!(late, Err(remote::Error::Refused)), "{late:?}");
+    server.stop().await;
+}

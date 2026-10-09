@@ -133,6 +133,8 @@ pub struct Config {
     pub remote_address: Option<IpAddr>,
     /// The remote listener's port. 7341 by default.
     pub remote_port: u16,
+    /// How long a pairing code works. 5 minutes by default; tests shorten it.
+    pub remote_code_lifetime: Duration,
 }
 
 impl Config {
@@ -160,6 +162,7 @@ impl Config {
             connect_check_interval: Duration::from_secs(10),
             remote_address: None,
             remote_port: crate::remote::PORT,
+            remote_code_lifetime: remote::CODE_LIFETIME,
         }
     }
 }
@@ -426,7 +429,11 @@ impl Server {
             commands: crate::commands::Commands::new(),
             connect: tailnet::Connect::new(tailnet, config.connect_port, config.connect_address),
             terminals: crate::terminals::Terminals::default(),
-            remote: remote::Remote::new(config.remote_port, config.remote_address),
+            remote: remote::Remote::new(
+                config.remote_port,
+                config.remote_address,
+                config.remote_code_lifetime,
+            ),
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for
@@ -768,7 +775,7 @@ impl Daemon {
                 None,
             ),
             terminals: crate::terminals::Terminals::default(),
-            remote: remote::Remote::new(crate::remote::PORT, None),
+            remote: remote::Remote::new(crate::remote::PORT, None, remote::CODE_LIFETIME),
         })
     }
 }

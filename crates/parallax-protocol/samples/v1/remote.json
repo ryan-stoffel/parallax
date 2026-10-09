@@ -43,7 +43,8 @@
           "createdAt": "2026-10-09T04:11:02Z"
         }
       ],
-      "listening": true
+      "listening": true,
+      "pairing": false
     }
   },
   {
@@ -55,6 +56,6 @@
   {
     "jsonrpc": "2.0",
     "id": 4,
-    "result": { "sessions": [], "listening": false, "problem": "Port 7341 is in use by another program." }
+    "result": { "sessions": [], "listening": false, "pairing": false, "problem": "Port 7341 is in use by another program." }
   }
 ]

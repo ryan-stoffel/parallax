@@ -28,7 +28,7 @@ const request = vi.fn(async (_host: string, method: string, params: { remote?: b
       logId: "log",
     };
   if (method === "remote/sessions")
-    return { result: { sessions: [], listening: remote }, logId: "log" };
+    return { result: { sessions: [], listening: remote, pairing: remote }, logId: "log" };
   return { error: { code: -32601, message: "no" } };
 });
 const pairLan = vi.fn(async () => undefined);

@@ -37,6 +37,9 @@ pub struct RemoteSessionsResult {
     pub sessions: Vec<RemoteSession>,
     /// Whether plxd is listening for paired clients now.
     pub listening: bool,
+    /// Whether a pairing code is waiting, so plxd advertises itself over mDNS. False once the
+    /// code is used, locked, or expired.
+    pub pairing: bool,
     /// Why it isn't while `remote` is on, such as the port being in use by another program.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

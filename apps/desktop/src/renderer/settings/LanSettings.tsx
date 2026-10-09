@@ -50,9 +50,10 @@ export function LanSettings() {
     });
     void readSessions();
   }, [connected]);
-  // While a code is up, a computer that pairs shows up here, and the code goes. A bind that
-  // failed shows up too.
-  const showing = code && sessions.length <= code.before ? code : undefined;
+  // While a code is up, a computer that pairs shows up here, and the code goes, as it does once
+  // plxd ends the pairing: used, locked, or expired. A bind that failed shows up too.
+  const showing =
+    code && sessions.length <= code.before && status?.pairing !== false ? code : undefined;
   const polling = !!showing || (on && !status?.listening);
   useEffect(() => {
     if (!polling) return;
@@ -73,6 +74,7 @@ export function LanSettings() {
     if ("error" in answer) return setError(answer.error.message);
     setError(undefined);
     setCode({ ...answer.result, before: sessions.length });
+    void readSessions();
   };
   const revoke = async (id: string) => {
     const answer = await window.parallax.request(localId, "remote/revoke", { id });

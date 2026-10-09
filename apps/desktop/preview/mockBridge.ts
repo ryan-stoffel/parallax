@@ -322,10 +322,14 @@ const handlers: { [M in Method]?: Handler<M> } = {
       addresses: ["192.168.1.20", "100.87.92.42"],
     };
   },
-  "remote/sessions": () => ({ sessions: lan.sessions, listening: lan.on }),
+  "remote/sessions": () => ({
+    sessions: lan.sessions,
+    listening: lan.on,
+    pairing: lan.on && !lan.sessions.length,
+  }),
   "remote/revoke": (p) => {
     lan.sessions = lan.sessions.filter((s) => s.id !== p.id);
-    return { sessions: lan.sessions, listening: lan.on };
+    return { sessions: lan.sessions, listening: lan.on, pairing: false };
   },
   "connect/devices": () => ({
     tailscale: "running",

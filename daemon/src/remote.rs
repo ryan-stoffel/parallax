@@ -70,10 +70,6 @@ pub const MAX_WRONG_CODES: u32 = 5;
 /// The mDNS service a host advertises while it waits for a pairing.
 pub const SERVICE_TYPE: &str = "_parallax._tcp.local.";
 
-/// The environment variable `plxd dial --pair` reads the code from, so it's never on a command
-/// line other users can see.
-pub const CODE_ENV: &str = "PLXD_PAIRING_CODE";
-
 /// The client's identity in SPAKE2. The host's is its certificate fingerprint.
 const PAKE_CLIENT: &[u8] = b"parallax pairing client";
 
@@ -896,18 +892,6 @@ async fn pair_at(route: &str, code: &str, name: &str, data_dir: &Path) -> Result
         name: finished["name"].as_str().unwrap_or_default().to_owned(),
         routes,
     })
-}
-
-/// Forgets the credential for the host with `fingerprint`, when this computer removes it.
-///
-/// # Errors
-///
-/// When the file exists and can't be removed.
-pub fn forget(data_dir: &Path, fingerprint: &str) -> io::Result<()> {
-    match fs::remove_file(credential_path(data_dir, fingerprint)) {
-        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
-        _ => Ok(()),
-    }
 }
 
 /// A host found over mDNS: its name and where it listens.

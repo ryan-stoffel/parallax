@@ -54,7 +54,7 @@ use crate::agents::store_error;
 use crate::remote::{self, Descriptor, HostKey};
 
 /// How long a pairing code works, as 0065 has it.
-const CODE_LIFETIME: Duration = Duration::from_mins(5);
+pub(crate) const CODE_LIFETIME: Duration = Duration::from_mins(5);
 
 /// How long a started SPAKE2 exchange waits for its finish.
 const PAKE_LIFETIME: Duration = Duration::from_secs(30);
@@ -80,7 +80,10 @@ pub(crate) struct Remote {
     pub port: u16,
     /// Bound instead of every IPv4 address, and reported as the only route. Tests only.
     pub address: Option<IpAddr>,
-    /// Wakes the listener at once, when `host/settings/set` changes `remote`.
+    /// How long a pairing code works. [`CODE_LIFETIME`], except in tests.
+    code_lifetime: Duration,
+    /// Wakes the listener at once, when `host/settings/set` changes `remote` or a new code
+    /// starts, so it ends the pairing when the code expires.
     pub changed: Notify,
     /// Whether the listener is bound now.
     pub listening: AtomicBool,
@@ -97,10 +100,11 @@ pub(crate) struct Remote {
 }
 
 impl Remote {
-    pub(crate) fn new(port: u16, address: Option<IpAddr>) -> Self {
+    pub(crate) fn new(port: u16, address: Option<IpAddr>, code_lifetime: Duration) -> Self {
         Self {
             port,
             address,
+            code_lifetime,
             changed: Notify::new(),
             listening: AtomicBool::new(false),
             problem: Mutex::default(),
@@ -123,7 +127,7 @@ impl Remote {
             .flatten();
         let pairing = Pairing {
             code: code.clone(),
-            expires: Instant::now() + CODE_LIFETIME,
+            expires: Instant::now() + self.code_lifetime,
             wrong: 0,
             pending: HashMap::new(),
             advert,
@@ -131,9 +135,23 @@ impl Remote {
         if let Some(old) = self.lock_pairing().replace(pairing) {
             old.end();
         }
+        // The listener's loop waits for the new expiry.
+        self.changed.notify_one();
         let expires = jiff::Timestamp::now()
-            + jiff::SignedDuration::try_from(CODE_LIFETIME).expect("five minutes");
+            + jiff::SignedDuration::try_from(self.code_lifetime).expect("a short lifetime");
         (code, expires)
+    }
+
+    /// The waiting code and when it expires, for the listener to end the pairing then.
+    fn pairing_deadline(&self) -> Option<(String, Instant)> {
+        self.lock_pairing()
+            .as_ref()
+            .map(|p| (p.code.clone(), p.expires))
+    }
+
+    /// Whether a code is waiting, and so this host advertises itself.
+    pub(crate) fn pairing(&self) -> bool {
+        self.lock_pairing().is_some()
     }
 
     fn lock_pairing(&self) -> std::sync::MutexGuard<'_, Option<Pairing>> {
@@ -303,7 +321,8 @@ fn advertise(name: &str, port: u16) -> Option<mdns_sd::ServiceDaemon> {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
-    let host = format!("{}.local.", label.trim_matches('-'));
+    // Not the OS's own host name, which macOS's mDNSResponder already answers for.
+    let host = format!("{}-parallax.local.", label.trim_matches('-'));
     let advertised = mdns_sd::ServiceDaemon::new().and_then(|mdns| {
         let none: Option<HashMap<String, String>> = None;
         let info = mdns_sd::ServiceInfo::new(remote::SERVICE_TYPE, name, &host, (), port, none)?
@@ -364,10 +383,19 @@ pub(super) async fn run(serving: Serving, stop: CancellationToken) {
             }
             remote.listening.store(bound.is_some(), Ordering::Relaxed);
         }
+        // An expired code stops advertising, and its mDNS thread, at once.
+        let deadline = remote.pairing_deadline();
+        let expiry = deadline
+            .as_ref()
+            .map_or_else(time::Instant::now, |(_, at)| time::Instant::from_std(*at));
         tokio::select! {
             biased;
             () = stop.cancelled() => break,
             () = remote.changed.notified() => settle = true,
+            () = time::sleep_until(expiry), if deadline.is_some() => {
+                let code = deadline.map(|(code, _)| code);
+                remote.end_pairing(code.as_deref());
+            }
             () = time::sleep(BIND_RETRY), if retry => settle = true,
             accepted = accept(bound.as_ref()) => match accepted {
                 Ok((stream, peer)) => {
@@ -1036,6 +1064,7 @@ pub(crate) fn listed_with_status(
     parallax_protocol::RemoteSessionsResult {
         sessions,
         listening: remote.listening.load(Ordering::Relaxed),
+        pairing: remote.pairing(),
         problem: remote
             .problem
             .lock()

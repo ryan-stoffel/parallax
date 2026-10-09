@@ -5191,6 +5191,11 @@ export type RemoteSessionsResult = {
 	 */
 	listening: boolean,
 	/**
+	 * Whether a pairing code is waiting, so plxd advertises itself over mDNS. False once the
+	 * code is used, locked, or expired.
+	 */
+	pairing: boolean,
+	/**
 	 * Why it isn't while `remote` is on, such as the port being in use by another program.
 	 */
 	problem?: string,
