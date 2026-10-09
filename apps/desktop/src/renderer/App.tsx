@@ -1094,6 +1094,8 @@ export function App() {
               hostId={host.id}
               runId={threadRun.id}
               prompt={threadRun.prompt}
+              backend={threadRun.backend}
+              running={isRunning(threadRun.status)}
               version={threads.state.checkpoints[threadRun.id]}
               unavailable={
                 offline ??

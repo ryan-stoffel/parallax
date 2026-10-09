@@ -385,8 +385,11 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
         const i =
           event.ordinal === 0
             ? 0
-            : items.findIndex((x) => x.kind === "user" && !!x.turnId && undone.has(x.turnId));
-        if (i >= 0) items.splice(i);
+            : items.findIndex(
+                (x) => x.kind === "user" && !!x.turnId && x.turnId === event.turns[0],
+              );
+        // A snapshot can start inside the undone turn, after its user message.
+        if (i >= 0 || undone.size > 0) items.splice(Math.max(0, i));
         break;
       }
       case "agent.output":

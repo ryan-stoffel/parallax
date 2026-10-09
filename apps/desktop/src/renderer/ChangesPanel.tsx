@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { ThreadRun } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
-import { DiffFileView, parseDiff } from "./PullRequests";
+import { ChangesDiff } from "./ChangesDiff";
 import { ConfirmDialog } from "./ui";
 
 /** A diff as plxd sent it, or why it couldn't. */
@@ -27,6 +27,8 @@ export function ChangesPanel({
   hostId,
   runId,
   prompt,
+  backend,
+  running,
   version,
   unavailable,
   onCompose,
@@ -34,6 +36,8 @@ export function ChangesPanel({
   hostId: string;
   runId: string;
   prompt: string;
+  backend: string;
+  running: boolean;
   version?: number;
   unavailable?: string;
   onCompose: (text: string) => void;
@@ -86,6 +90,16 @@ export function ChangesPanel({
     };
   }, [hostId, runId, latest, ordinal]);
 
+  const previous = turn ? turns[turns.indexOf(turn) - 1] : undefined;
+  const refusal =
+    running || turns.some((t) => ["starting", "running", "waiting"].includes(t.status))
+      ? "Interrupt the current turn before reverting checkpoints."
+      : backend !== "codex" && backend !== "fake"
+        ? "This provider does not support reverting conversation history. Start a new thread instead."
+        : previous && !ready(previous)
+          ? "The previous turn has no ready checkpoint to revert to."
+          : undefined;
+
   if (unavailable) return <Empty title="Changes aren't available" hint={unavailable} />;
   if (runs && "error" in runs) return <Empty title="Couldn't load the changes" hint={runs.error} />;
   if (runs && latest === undefined)
@@ -93,8 +107,8 @@ export function ChangesPanel({
 
   // Edit from here goes back to the turn before this one, or the thread's start.
   const editFromHere = async (restoreFiles: boolean) => {
-    if (!turn) return;
-    const before = turns[turns.indexOf(turn) - 1]?.ordinal ?? 0;
+    if (!turn || refusal || reverting) return;
+    const before = previous?.ordinal ?? 0;
     setReverting(true);
     setRevertError(undefined);
     const answer = await window.parallax.request(hostId, "orchestration/dispatch", {
@@ -111,9 +125,6 @@ export function ChangesPanel({
     void load();
   };
 
-  const files = shown && "diff" in shown ? parseDiff(shown.diff) : [];
-  const added = files.reduce((n, f) => n + f.added, 0);
-  const removed = files.reduce((n, f) => n + f.removed, 0);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
@@ -124,20 +135,22 @@ export function ChangesPanel({
           className="min-w-0 flex-1 truncate rounded-md bg-transparent py-1 text-[13px] hover:bg-hover"
         >
           <option value="all">All turns</option>
-          {turns.filter(ready).map((t, i) => (
+          {turns.filter(ready).map((t) => (
             <option key={t.id} value={t.ordinal}>
-              Turn {i + 1}: {firstLine(t.text ?? (t === turns[0] ? prompt : "")) || "(no text)"}
+              Turn {t.ordinal}: {firstLine(t.text ?? (t === turns[0] ? prompt : "")) || "(no text)"}
             </option>
           ))}
         </select>
         {turn && (
           <button
             type="button"
+            disabled={!!refusal || reverting}
+            title={refusal}
             onClick={() => {
               setRevertError(undefined);
               dialog.current?.showModal();
             }}
-            className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground"
+            className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Undo2 aria-hidden className="size-3.5" />
             Edit from here
@@ -150,36 +163,24 @@ export function ChangesPanel({
         </p>
       )}
       {shown && "diff" in shown && (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <p className="px-3 py-2 text-[12.5px] text-muted-foreground">
-            {files.length === 0 ? (
-              "No files changed."
-            ) : (
-              <>
-                {files.length} {files.length === 1 ? "file" : "files"} changed{" "}
-                <span className="font-mono text-added">+{added}</span>{" "}
-                <span className="font-mono text-danger">−{removed}</span>
-              </>
-            )}
-            {shown.truncated && " · cut at 10 MB"}
-          </p>
-          <ul className="border-t border-border">
-            {files.map((file) => (
-              <DiffFileView key={file.path} file={file} />
-            ))}
-          </ul>
-        </div>
+        <ChangesDiff
+          key={`${latest}/${ordinal ?? "all"}`}
+          diff={shown.diff}
+          truncated={shown.truncated}
+        />
       )}
       <ConfirmDialog
         ref={dialog}
         title="Edit from here?"
         action="Revert files too"
         busy={reverting ? "Reverting…" : undefined}
-        error={revertError}
+        error={refusal ?? revertError}
         onConfirm={() => void editFromHere(true)}
         alternate={{ action: "Revert and keep changes", onConfirm: () => void editFromHere(false) }}
       >
-        Rewind chat to before this message. Your prompt returns to the composer.
+        Revert chat to before turn {turn?.ordinal}. Its prompt returns to the composer. Revert files
+        too replaces the files in this thread’s worktree. Revert and keep changes leaves them as
+        they are.
       </ConfirmDialog>
     </div>
   );

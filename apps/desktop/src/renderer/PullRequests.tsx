@@ -491,8 +491,7 @@ export function parseDiff(diff: string): DiffFile[] {
 
 /**
  * One file of the Code tab, and of the Changes view (0062): a header that folds it, with its path,
- * size, and Viewed when `onViewed` is given, over its lines numbered on both sides. ponytail: every
- * line renders; window them if huge diffs lag.
+ * size, and Viewed when `onViewed` is given, over its lines numbered on both sides.
  */
 export function DiffFileView({
   file,
@@ -505,75 +504,101 @@ export function DiffFileView({
 }) {
   const [folded, setFolded] = useState(false);
   const shut = folded || viewed;
-  const Chevron = shut ? ChevronRight : ChevronDown;
   return (
     <li className="border-b border-border">
-      <div
-        className={`flex items-center gap-2 bg-code px-3 py-2 text-[13px] ${shut ? "" : "border-b border-border"}`}
+      <DiffFileHeader
+        file={file}
+        shut={shut}
+        onToggle={() => (viewed ? onViewed?.(false) : setFolded(!folded))}
       >
-        <button
-          type="button"
-          aria-expanded={!shut}
-          aria-label={`${shut ? "Show" : "Hide"} ${file.path}`}
-          onClick={() => (viewed ? onViewed?.(false) : setFolded(!folded))}
-          className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-hover"
-        >
-          <Chevron aria-hidden className="size-4" />
-        </button>
-        <span
-          className="min-w-0 flex-1 truncate font-mono text-[12.5px]"
-          title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
-        >
-          {file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
-        </span>
-        <span className="shrink-0 font-mono text-[12px]">
-          <span className="text-added">+{file.added}</span>{" "}
-          <span className="text-danger">−{file.removed}</span>
-        </span>
         {onViewed && (
           <label className="flex shrink-0 items-center gap-1.5 text-[12.5px] text-muted-foreground">
             <input type="checkbox" checked={viewed} onChange={(e) => onViewed(e.target.checked)} />
             Viewed
           </label>
         )}
-      </div>
+      </DiffFileHeader>
       {!shut && (
         <div className="code-scroll pb-1 font-mono text-[12px] leading-5">
           {file.binary && <p className="px-3 text-faint-foreground">Binary file not shown</p>}
-          {file.lines.map((line, i) =>
-            line.op === "@" ? (
-              <div key={i} className={`${diffBand} code-lines break-all whitespace-pre-wrap`}>
-                {line.text}
-              </div>
-            ) : (
-              <div key={i} className={`flex ${diffLook[line.op].row}`}>
-                <span
-                  aria-hidden
-                  className="w-10 shrink-0 pr-2 text-right text-faint-foreground/70 select-none"
-                >
-                  {line.old}
-                </span>
-                <span
-                  aria-hidden
-                  className="w-10 shrink-0 pr-2 text-right text-faint-foreground/70 select-none"
-                >
-                  {line.new}
-                </span>
-                <span aria-hidden className={`w-5 shrink-0 select-none ${diffLook[line.op].sign}`}>
-                  {line.op === "-" ? "−" : line.op}
-                </span>
-                {line.op !== " " && (
-                  <span className="sr-only">{line.op === "+" ? "Added: " : "Removed: "}</span>
-                )}
-                <span className="code-lines min-w-0 pr-3 break-all whitespace-pre-wrap">
-                  {line.text || " "}
-                </span>
-              </div>
-            ),
-          )}
+          {file.lines.map((line, i) => (
+            <DiffLineView key={i} line={line} />
+          ))}
         </div>
       )}
     </li>
+  );
+}
+
+/** Shared file header for the Code tab and the virtualized Changes view. */
+export function DiffFileHeader({
+  file,
+  shut,
+  onToggle,
+  children,
+}: {
+  file: DiffFile;
+  shut: boolean;
+  onToggle: () => void;
+  children?: ReactNode;
+}) {
+  const Chevron = shut ? ChevronRight : ChevronDown;
+  return (
+    <div
+      className={`flex items-center gap-2 bg-code px-3 py-2 text-[13px] ${shut ? "" : "border-b border-border"}`}
+    >
+      <button
+        type="button"
+        aria-expanded={!shut}
+        aria-label={`${shut ? "Show" : "Hide"} ${file.path}`}
+        onClick={onToggle}
+        className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-hover"
+      >
+        <Chevron aria-hidden className="size-4" />
+      </button>
+      <span
+        className="min-w-0 flex-1 truncate font-mono text-[12.5px]"
+        title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
+      >
+        {file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
+      </span>
+      <span className="shrink-0 font-mono text-[12px]">
+        <span className="text-added">+{file.added}</span>{" "}
+        <span className="text-danger">−{file.removed}</span>
+      </span>
+      {children}
+    </div>
+  );
+}
+
+/** Shared diff row, including wrapped text and accessible addition/removal labels. */
+export function DiffLineView({ line }: { line: DiffLine }) {
+  return line.op === "@" ? (
+    <div className={`${diffBand} code-lines break-all whitespace-pre-wrap`}>{line.text}</div>
+  ) : (
+    <div className={`flex ${diffLook[line.op].row}`}>
+      <span
+        aria-hidden
+        className="w-10 shrink-0 pr-2 text-right text-faint-foreground/70 select-none"
+      >
+        {line.old}
+      </span>
+      <span
+        aria-hidden
+        className="w-10 shrink-0 pr-2 text-right text-faint-foreground/70 select-none"
+      >
+        {line.new}
+      </span>
+      <span aria-hidden className={`w-5 shrink-0 select-none ${diffLook[line.op].sign}`}>
+        {line.op === "-" ? "−" : line.op}
+      </span>
+      {line.op !== " " && (
+        <span className="sr-only">{line.op === "+" ? "Added: " : "Removed: "}</span>
+      )}
+      <span className="code-lines min-w-0 pr-3 break-all whitespace-pre-wrap">
+        {line.text || " "}
+      </span>
+    </div>
   );
 }
 
