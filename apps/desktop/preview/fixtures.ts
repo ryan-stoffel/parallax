@@ -92,6 +92,7 @@ export const ids = {
   updater: uuid(40),
   onboarding: uuid(41),
   tahoe: uuid(42),
+  glyphCheck: uuid(46),
   scratchThread: uuid(43),
   docsSearch: uuid(44),
   docsLinks: uuid(45),
@@ -895,6 +896,8 @@ export function createFixtures(now = Date.now()): Fixtures {
     .update(ago(60 * 25), { status: "completed" })
     .finish(ago(60 * 25), { status: "completed" });
 
+  const glyphTask =
+    "Render the tinted icon at 32 px on light and dark Dock backgrounds, and say whether the glyph's inner ring survives.";
   const tahoe = thread({
     id: ids.tahoe,
     repo: ids.repoParallax,
@@ -951,12 +954,74 @@ export function createFixtures(now = Date.now()): Fixtures {
       kind: "reasoning",
       text: "**Checking the Dock sizes.** The 32 px render loses the glyph's inner ring, so the tinted variant needs a heavier stroke there.",
     },
+    // A task delegated to another provider, in this thread's worktree (0063, PLX-648).
+    ...tool(
+      "mcp__plxd__delegate_task",
+      {
+        task: glyphTask,
+        target: { providerInstanceId: "codex", model: GPT },
+        title: "Check the 32 px glyph",
+      },
+      JSON.stringify(
+        {
+          taskId: ids.glyphCheck,
+          childThreadId: ids.glyphCheck,
+          status: "running",
+          workState: "working",
+          providerInstanceId: "codex",
+          model: GPT,
+          mode: "edit",
+          branch: null,
+          summary: null,
+          error: null,
+          waitTimedOut: false,
+        },
+        null,
+        2,
+      ),
+    ),
     {
       kind: "toolCall",
       callId: callId(),
       name: "Bash",
       input: { command: "pnpm exec icon-preview --sizes 32,128 build/icon/Assets.car" },
     },
+  );
+
+  // Tahoe's delegated task: its child, on Codex, working in Tahoe's worktree (0063).
+  const glyphCheck: AgentRun = {
+    id: ids.glyphCheck,
+    project: ids.repoParallax,
+    prompt: glyphTask,
+    policy: "workspaceWrite",
+    status: "running",
+    backend: "codex",
+    accountId: "codex",
+    model: GPT,
+    permission: "edit",
+    approvals: true,
+    checkout: true,
+    createdAt: ago(3),
+    updatedAt: ago(1),
+  };
+  runs.push(glyphCheck);
+  threads.push({
+    id: ids.glyphCheck,
+    repo: ids.repoParallax,
+    parent: ids.tahoe,
+    title: "Check the 32 px glyph",
+    createdAt: ago(3),
+    lastPromptAt: ago(3),
+  });
+  log(glyphCheck).out(
+    ago(3),
+    session(GPT),
+    { kind: "turnStarted" },
+    ...tool(
+      "Bash",
+      { command: "xcrun actool build/icon --render 32 --appearance tinted" },
+      "build/icon/render-32-tinted.png",
+    ),
   );
 
   const scratch = thread({

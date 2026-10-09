@@ -11,7 +11,8 @@
 //! `crate::terminals`; PLX-641 `remote`: `remote/*` in `remote.rs`; 0063 `schedules` and `prWatch`:
 //! `schedule/*` in `crate::schedules` and `pr/watch`, `pr/unwatch`, and `pr/watches` in
 //! `crate::pr_watch`; PLX-650 `setupScripts`: `repo/scripts` and `repo/saveScripts` in
-//! `crate::setup_scripts`), and `host.rs` advertises the
+//! `crate::setup_scripts`; PLX-648 `delegation`: `task/delegate`, `task/status`, and
+//! `thread/mergeBack` in `crate::delegation`), and `host.rs` advertises the
 //! capability in `initialize`.
 
 mod accounts;
@@ -329,6 +330,9 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         PrUnwatch => |p| crate::pr_watch::unwatch(daemon, p),
         PrWatches => |p| crate::pr_watch::watches(daemon, p),
         RepoScripts => |p| crate::setup_scripts::scripts(daemon, p),
+        TaskDelegate => |p| crate::delegation::delegate(Arc::clone(daemon), p),
+        TaskStatus => |p| crate::delegation::status(daemon, p),
+        ThreadMergeBack => |p| crate::delegation::merge_back(daemon, p),
         RepoSaveScripts => |p| crate::setup_scripts::save(daemon, p),
     })
 }

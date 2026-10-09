@@ -42,7 +42,7 @@ use crate::{
     ContextReadParams, ContextReadResult, ContextWriteParams, ContextWriteResult,
     CursorInstallParams, CursorInstallResult, CursorSignInCancelParams, CursorSignInCancelResult,
     CursorSignInParams, CursorSignInResult, CursorSignOutParams, CursorSignOutResult,
-    DispatchResult, EventsEventParams, EventsResyncParams, EventsSubscribeParams,
+    DelegatedTask, DispatchResult, EventsEventParams, EventsResyncParams, EventsSubscribeParams,
     EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus,
     GithubInstallParams, GithubSignIn, GithubSignInCancelParams, GithubSignInCancelResult,
     GithubSignInParams, GithubStatus, GithubStatusParams, HostHealthParams, HostHealthResult,
@@ -67,13 +67,15 @@ use crate::{
     RepoScriptsParams, RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult,
     ScheduleIdParams, ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask,
     SubscribeShellParams, SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult,
-    TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult, TerminalOpenParams,
-    TerminalOutputParams, TerminalResizeParams, TerminalResult, TerminalWriteParams,
-    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
-    ThreadForkParams, ThreadHistoryParams, ThreadHistoryResult, ThreadListParams, ThreadListResult,
-    ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
-    ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams,
-    UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
+    TaskDelegateParams, TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams,
+    TerminalListResult, TerminalOpenParams, TerminalOutputParams, TerminalResizeParams,
+    TerminalResult, TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult,
+    ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams,
+    ThreadHistoryResult, ThreadListParams, ThreadListResult, ThreadMergeBackParams,
+    ThreadMergeBackResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams,
+    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult,
+    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams,
+    UsageLimitsResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -492,6 +494,15 @@ method_table! {
         RepoScripts = "repo/scripts": RepoScriptsParams => RepoScriptsResult;
         /// `repo/saveScripts`: replaces a repo entry's scripts.
         RepoSaveScripts = "repo/saveScripts": RepoSaveScriptsParams => RepoScriptsResult;
+        /// `task/delegate`: starts a thread in another thread's worktree, as a task it delegated
+        /// or a top-level thread beside it (0063, PLX-648). Idempotent on `runId`. Gated on the
+        /// `delegation` capability, like `task/status` and `thread/mergeBack`.
+        TaskDelegate = "task/delegate": TaskDelegateParams => ThreadStartResult;
+        /// `task/status`: a delegated task, after acknowledging its result or changing its wake.
+        TaskStatus = "task/status": TaskStatusParams => DelegatedTask;
+        /// `thread/mergeBack`: a fork's or child's new context goes with the next message of the
+        /// thread it came from.
+        ThreadMergeBack = "thread/mergeBack": ThreadMergeBackParams => ThreadMergeBackResult;
         /// `orchestration/dispatch`: runs one command on a thread (0059, PLX-644), idempotent on
         /// its `commandId`. Gated on the `orchestration` capability, like every
         /// `orchestration/*` method.
@@ -677,6 +688,9 @@ mod tests {
                 "pr/watches",
                 "repo/scripts",
                 "repo/saveScripts",
+                "task/delegate",
+                "task/status",
+                "thread/mergeBack",
                 "orchestration/dispatch",
                 "orchestration/subscribeShell",
                 "orchestration/subscribeThread",

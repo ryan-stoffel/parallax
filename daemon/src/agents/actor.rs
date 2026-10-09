@@ -217,8 +217,8 @@ pub(super) enum Command {
     },
     /// A child of this run finished, or a run started in this coordinator's Project, as
     /// [`wake::summary`] and [`wake::started`] tell it (PLX-42, PLX-380), with the ids of the
-    /// questions it names (PLX-469).
-    Wake(String, Vec<Uuid>),
+    /// questions it names (PLX-469), and the task it delegated that ended, if any (0063).
+    Wake(String, Vec<Uuid>, Option<Uuid>),
     /// `agent/resumeNow` (PLX-371).
     ResumeNow {
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
@@ -905,8 +905,8 @@ impl Actor {
                 }
                 let _ = reply.send(answer);
             }
-            Command::Wake(summary, questions) => {
-                self.wakes.push(summary, questions, Instant::now());
+            Command::Wake(summary, questions, task) => {
+                self.wakes.push(summary, questions, task, Instant::now());
             }
             Command::ResumeNow { reply } => {
                 let _ = reply.send(self.resume_now().await);
@@ -1124,6 +1124,15 @@ impl Actor {
                 .is_ok_and(|start| start.over)
         {
             lines.push(crate::context::memory::MERGE.to_owned());
+        }
+        // A delegated task the parent read or cancelled since it ended wakes nothing (0063).
+        let tasks = self.wakes.tasks();
+        if !tasks.is_empty() {
+            let quiet = store(&self.daemon, move |db| crate::delegation::quiet(db, &tasks)).await;
+            self.wakes.drop_tasks(&quiet.unwrap_or_default());
+            if self.wakes.is_empty() && lines.is_empty() {
+                return;
+            }
         }
         let Some((turn_id, text)) = self.wakes.next(&lines) else {
             self.pause_wakes(true).await;
@@ -3332,7 +3341,7 @@ impl Actor {
         if let Some(parent) = self.row.fields.parent
             && self.row.fields.notify_parent
         {
-            wake::notify(&self.daemon, parent, wake::summary(&run, &outcome));
+            wake::child_ended(&self.daemon, parent, &run, &outcome);
         }
         // A child sent back from landing goes back in its Project's queue once a turn completes
         // (PLX-410).

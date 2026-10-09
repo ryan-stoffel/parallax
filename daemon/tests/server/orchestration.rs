@@ -4,14 +4,14 @@
 //! and resumes.
 
 use parallax_protocol::methods::{
-    AgentStart, HostSettingsSet, OrchestrationDispatch, OrchestrationSubscribeShell,
+    AgentList, AgentStart, HostSettingsSet, OrchestrationDispatch, OrchestrationSubscribeShell,
     OrchestrationSubscribeThread, OrchestrationThreadHistory, ProjectStart, ThreadStart,
 };
 use parallax_protocol::{
-    AgentOutcome, AgentOutputItem, AgentStatus, DispatchMode, ErrorKind, EventsEventParams,
-    HostSettingsSetParams, OrchestrationCommand, ParallaxEvent, RunId, SubscribeShellParams,
-    SubscribeThreadParams, SubscribeThreadResult, ThreadHistoryParams, ThreadRunStatus,
-    ThreadSnapshot, TurnId,
+    AgentListParams, AgentOutcome, AgentOutputItem, AgentStatus, DispatchMode, ErrorKind,
+    EventsEventParams, HostSettingsSetParams, OrchestrationCommand, ParallaxEvent, RunId,
+    SubscribeShellParams, SubscribeThreadParams, SubscribeThreadResult, ThreadHistoryParams,
+    ThreadRunStatus, ThreadSnapshot, TurnId,
 };
 use plxd::backend::fake::Step;
 use uuid::Uuid;
@@ -576,4 +576,44 @@ async fn a_coordinators_stop_ends_its_turn_and_its_queue_goes_on() {
             (ThreadRunStatus::Running, false),
         ]
     );
+}
+
+/// A Project child's Stop acts as a plain thread's (Ryan, PLX-648): it holds the child's queue and
+/// stops the threads it started. Only the coordinator is exempt.
+#[tokio::test]
+async fn a_project_childs_stop_holds_its_queue_and_stops_its_threads() {
+    let host = Host::start(temp_dir(), fake(busy()));
+    let mut client = host.client().await;
+    let child = working_thread(&host, &mut client).await;
+    subscribe_working(&mut client, child).await;
+    let helper = parallax_protocol::ThreadStartParams {
+        parent: Some(child),
+        ..crate::threads::start_params(None, "Help")
+    };
+    let helper_id = helper.run_id;
+    client.call::<ThreadStart>(helper).await.unwrap();
+    let next = TurnId::generate();
+    dispatch(&mut client, message(child, next, "Then the tests")).await;
+
+    dispatch(&mut client, stop(child)).await;
+    let deadline = tokio::time::Instant::now() + crate::support::PATIENCE;
+    loop {
+        let runs = client
+            .call::<AgentList>(AgentListParams { project: None })
+            .await
+            .unwrap()
+            .runs;
+        if runs
+            .iter()
+            .any(|run| run.id == helper_id && run.status == AgentStatus::Cancelled)
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the helper never stopped"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(queued(&mut client, child).await, [(next, true)]);
 }

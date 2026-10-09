@@ -352,7 +352,8 @@ async fn prepare_run(
 ) -> Result<(Prepared, String), ErrorObject> {
     let (repo_path, context_scope, project_row, thread_run, defaults, mut accounts) =
         store(daemon, move |db| {
-            let repo_path = crate::threads::scope_path(db, project)?;
+            // A thread sharing another's workspace works in its worktree (0063).
+            let repo_path = crate::delegation::workdir(db, project, run.into())?;
             // A run whose scope is a Project, not a repo entry, is its coordinator or one of its
             // children (0042).
             let project_row = db
@@ -2363,7 +2364,7 @@ mod tests {
         assert!(!agents.retire(id, &commands), "a command holds a sender");
         assert!(
             racing
-                .try_send(Command::Wake(String::new(), Vec::new()))
+                .try_send(Command::Wake(String::new(), Vec::new(), None))
                 .is_ok()
         );
         drop(racing);

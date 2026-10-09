@@ -55,6 +55,7 @@ pub mod backend;
 mod browser;
 mod commands;
 mod context;
+mod delegation;
 mod detect;
 mod event_log;
 mod github;
