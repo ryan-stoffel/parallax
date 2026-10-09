@@ -4,8 +4,8 @@
  * --omit=peer`).
  */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import readline from "node:readline";
@@ -17,11 +17,11 @@ const fixtures = path.join(here, "../../../daemon/src/backend/claude/fixtures");
 const installed = existsSync(path.join(here, "../node_modules/@anthropic-ai/claude-agent-sdk"));
 const supervisor = process.env.PLXD_CLAUDE_PROCESS ?? path.join(here, "../../../target/debug/plxd");
 
-function scratchSidecar(t) {
+function scratchSidecar(t, entry = path.join(here, "main.mjs")) {
   const dir = mkdtempSync(path.join(tmpdir(), "claude-sidecar-"));
   copyFileSync(path.join(fixtures, "fake-claude.sh"), path.join(dir, "claude"));
   chmodSync(path.join(dir, "claude"), 0o755);
-  const sidecar = spawn(process.execPath, [path.join(here, "main.mjs")], {
+  const sidecar = spawn(process.execPath, [entry], {
     stdio: ["pipe", "pipe", "inherit"],
     detached: process.platform !== "win32",
   });
@@ -57,6 +57,31 @@ function scratchSidecar(t) {
   };
   return { dir, lines, cleanup, send, until, open, prompt, exit, sidecar };
 }
+
+test("packaged resources start a query through the real SDK and Rust supervisor",
+  { skip: !installed, timeout: 10000 }, async (t) => {
+    const resources = mkdtempSync(path.join(tmpdir(), "claude-package-"));
+    t.after(() => rmSync(resources, { recursive: true, force: true }));
+    const root = path.join(here, "../../..");
+    // Execute the release script's actual copy list, so a missing import fails this test.
+    const staging = readFileSync(path.join(root, "scripts/ci/package-app"), "utf8")
+      .split("\n").filter((line) => /^(mkdir|cp) .*claude-agent-sdk\//.test(line))
+      .join("\n").replaceAll("target/package-resources", '"$PLX_TEST_RESOURCES"');
+    assert.ok(staging.includes("main.mjs"), "release staging commands found");
+    execFileSync("sh", ["-eu", "-c", staging], {
+      cwd: root, env: { ...process.env, PLX_TEST_RESOURCES: resources },
+    });
+    const staged = path.join(resources, "claude-agent-sdk");
+    // The SDK is installed separately on first use, outside the shipped resources.
+    symlinkSync(path.join(here, "../node_modules"), path.join(staged, "node_modules"), "dir");
+    const { lines, open, prompt, until, send, exit } = scratchSidecar(t, path.join(staged, "src/main.mjs"));
+    open("packaged", []);
+    prompt("packaged");
+    await until((lines) => lines.some((line) => line.startsWith("packaged ") && line.includes('"type":"result"')));
+    send({ id: "packaged", type: "end" });
+    assert.deepEqual(await exit("packaged"), { code: 0, signal: null, stderr: "" });
+    assert.equal(lines.filter((line) => line.startsWith("packaged exit ")).length, 1);
+  });
 
 test("killing the shared sidecar group still cleans up a live CLI and its child",
   { skip: !installed || process.platform === "win32", timeout: 10000 }, async (t) => {

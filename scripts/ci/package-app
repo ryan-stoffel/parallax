@@ -71,7 +71,7 @@ cp sidecar/cursor/src/main.mjs sidecar/cursor/src/protocol.mjs target/package-re
 # The Claude Agent SDK sidecar's files (0061) too, installed the same way for a host with Claude.
 mkdir -p target/package-resources/claude-agent-sdk/src
 cp sidecar/claude/package.json sidecar/claude/package-lock.json target/package-resources/claude-agent-sdk/
-cp sidecar/claude/src/main.mjs sidecar/claude/src/protocol.mjs target/package-resources/claude-agent-sdk/src/
+cp sidecar/claude/src/main.mjs sidecar/claude/src/protocol.mjs sidecar/claude/src/process.mjs target/package-resources/claude-agent-sdk/src/
 
 cd apps/desktop
 node --version
