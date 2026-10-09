@@ -55,8 +55,9 @@ export function pickRelease(releases, channel) {
 
 /**
  * The installer in `release` for `os` and `arch`: the dmg on macOS (arm64 only), the NSIS exe on
- * Windows, the AppImage on Linux (`x86_64` is electron-builder's AppImage name for x64; `x64` is
- * accepted too). Throws a message for people when the release has none.
+ * Windows, and on Linux the static plxd by itself (PLX-642's asset), which runs where the
+ * AppImage's runtime can't, such as NixOS. Throws a message for people when
+ * the release has none.
  * @param {Release} release
  * @param {Os} os
  * @param {Arch} arch
@@ -73,7 +74,7 @@ export function pickAsset(release, os, arch) {
   } else if (os === "windows") {
     names = [`${prefix}-win-${arch}.exe`];
   } else {
-    names = arch === "x64" ? [`${prefix}-linux-x86_64.AppImage`, `${prefix}-linux-x64.AppImage`] : [`${prefix}-linux-arm64.AppImage`];
+    names = [`parallax-plxd-${version}-linux-${arch}`];
   }
   const asset = release.assets.find((a) => names.includes(a.name));
   if (!asset) {

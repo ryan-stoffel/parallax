@@ -82,14 +82,19 @@ const STATUS_MIN_VERSION: &str = "2.1.275";
 ///
 /// What is missing or broken, and the fix, as a message for `workerUnavailable`.
 pub async fn check_host(launcher: &Launcher, claude: &Path) -> Result<(), String> {
-    let bwrap = resolve(launcher, "bwrap").ok_or(
-        "bubblewrap (bwrap) isn't installed, and Claude Code's worker sandbox needs it on Linux; \
-         install the bubblewrap package",
-    )?;
-    let socat = resolve(launcher, "socat").ok_or(
-        "socat isn't installed, and Claude Code's worker sandbox needs it on Linux; install the \
-         socat package",
-    )?;
+    let (bwrap, socat) = match (resolve(launcher, "bwrap"), resolve(launcher, "socat")) {
+        (Some(bwrap), Some(socat)) => (bwrap, socat),
+        (bwrap, socat) => {
+            let missing: Vec<&str> = [("bubblewrap", bwrap.is_none()), ("socat", socat.is_none())]
+                .into_iter()
+                .filter_map(|(package, missing)| missing.then_some(package))
+                .collect();
+            let os_release = std::fs::read_to_string("/etc/os-release")
+                .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
+                .unwrap_or_default();
+            return Err(missing_packages(&missing, &os_release));
+        }
+    };
     check_scrub_flag(launcher, text(claude)?).await?;
     let dir = tempfile::tempdir()
         .map_err(|error| format!("could not make a folder to check the worker sandbox: {error}"))?;
@@ -238,6 +243,46 @@ fn bwrap_problem(ran: &Ran) -> String {
     )
 }
 
+/// The error for sandbox `packages` this host lacks, with how to install them on the distro its
+/// `os-release` names: a NixOS configuration line, or the package manager's command.
+fn missing_packages(packages: &[&str], os_release: &str) -> String {
+    let list = packages.join(" ");
+    let (names, verb, them, noun) = match packages {
+        [one] => ((*one).to_owned(), "isn't", "it", "package"),
+        _ => (packages.join(" and "), "aren't", "them", "packages"),
+    };
+    let field = |name: &str| {
+        os_release
+            .lines()
+            .find_map(|line| line.strip_prefix(name)?.strip_prefix('='))
+            .map(|value| value.trim_matches(['"', '\'']).to_owned())
+            .unwrap_or_default()
+    };
+    let ids = format!("{} {}", field("ID"), field("ID_LIKE"));
+    let is = |id: &str| ids.split_whitespace().any(|each| each == id);
+    let fix = if is("nixos") {
+        format!(
+            "add {list} to environment.systemPackages in configuration.nix, then run `sudo \
+             nixos-rebuild switch`"
+        )
+    } else if is("debian") || is("ubuntu") {
+        format!("run `sudo apt install {list}`")
+    } else if is("fedora") || is("rhel") {
+        format!("run `sudo dnf install {list}`")
+    } else if is("arch") {
+        format!("run `sudo pacman -S {list}`")
+    } else if is("suse") || is("opensuse") {
+        format!("run `sudo zypper install {list}`")
+    } else if is("alpine") {
+        format!("run `sudo apk add {list}`")
+    } else {
+        format!("install the {names} {noun}")
+    };
+    format!(
+        "{names} {verb} installed, and Claude Code's worker sandbox needs {them} on Linux; {fix}"
+    )
+}
+
 fn first_line(ran: &Ran) -> String {
     match ran
         .stderr_tail
@@ -264,7 +309,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
 
-    use super::{check_host, read_status, status_spec};
+    use super::{check_host, missing_packages, read_status, status_spec};
     use crate::backend::claude::ClaudeBackend;
     use crate::backend::process::{Environment, Launcher};
     use crate::backend::{
@@ -300,13 +345,44 @@ mod tests {
 
         let error = check_host(&only, &claude).await.unwrap_err();
         assert!(
-            error.contains("bubblewrap (bwrap) isn't installed"),
+            error.starts_with("bubblewrap and socat aren't installed"),
             "{error}"
         );
 
         script(&bin, "bwrap", "exit 0");
         let error = check_host(&only, &claude).await.unwrap_err();
-        assert!(error.contains("socat isn't installed"), "{error}");
+        assert!(error.starts_with("socat isn't installed"), "{error}");
+    }
+
+    #[test]
+    fn a_missing_package_comes_with_its_distro_s_install_command() {
+        let both = ["bubblewrap", "socat"];
+        let fix = |os_release: &str| missing_packages(&both, os_release);
+        assert!(fix("NAME=NixOS\nID=nixos\n").ends_with(
+            "add bubblewrap socat to environment.systemPackages in configuration.nix, then \
+                 run `sudo nixos-rebuild switch`"
+        ));
+        assert!(
+            fix("ID=ubuntu\nID_LIKE=debian\n").ends_with("run `sudo apt install bubblewrap socat`")
+        );
+        assert!(
+            fix("ID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\n")
+                .ends_with("`sudo dnf install bubblewrap socat`")
+        );
+        assert!(
+            fix("ID=endeavouros\nID_LIKE=arch\n").ends_with("`sudo pacman -S bubblewrap socat`")
+        );
+        assert!(
+            fix("ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n")
+                .ends_with("`sudo zypper install bubblewrap socat`")
+        );
+        assert!(fix("ID='alpine'\n").ends_with("`sudo apk add bubblewrap socat`"));
+        assert!(fix("").ends_with("install the bubblewrap and socat packages"));
+        assert_eq!(
+            missing_packages(&["socat"], "ID=debian\n"),
+            "socat isn't installed, and Claude Code's worker sandbox needs it on Linux; run \
+             `sudo apt install socat`"
+        );
     }
 
     /// A folder holding a `bwrap` and a `socat` that do nothing, and a launcher that finds them.
