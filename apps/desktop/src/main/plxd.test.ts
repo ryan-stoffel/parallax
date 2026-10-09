@@ -6,6 +6,7 @@ import {
   appDataDir,
   dataDir,
   findPlxd,
+  movesServiceBack,
   replaceServe,
   plistProgram,
   serviceStep,
@@ -133,6 +134,27 @@ test("keepServing's next step: done once the service runs plxd, installing only 
   expect(serviceStep(status(false, false, false), undefined, false)).toBe("wait");
   // This launch installed it, and it still isn't running: no second try until the next launch.
   expect(serviceStep(status(true, true, false), 0, true)).toBe("failed");
+});
+
+test("a LaunchAgent moves back from an SSH-installed plxd only to a newer one, with no agents running", () => {
+  const ssh = "/Users/r/.parallax-plxd/plxd";
+  const cases: [string, string | undefined, string | undefined, number | undefined, boolean][] = [
+    [ssh, "1.2.0", "1.3.0", 0, true],
+    [ssh, "1.3.0-nightly", "1.3.0", 0, true],
+    [ssh, "1.3.0", "1.3.0", 0, false],
+    [ssh, "1.4.0", "1.3.0", 0, false],
+    [ssh, "1.2.0", "1.3.0", 1, false],
+    [ssh, "1.2.0", "1.3.0", undefined, false],
+    [ssh, undefined, "1.3.0", 0, false],
+    [ssh, "1.2.0", undefined, 0, false],
+    // Another install's plxd stays.
+    ["/Applications/Parallax.app/Contents/Resources/plxd", "1.2.0", "1.3.0", 0, false],
+  ];
+  for (const [program, theirs, ours, agents, moves] of cases)
+    expect(
+      movesServiceBack(program, "/Users/r", theirs, ours, agents),
+      `${program} ${theirs} ${ours} ${agents}`,
+    ).toBe(moves);
 });
 
 test("a LaunchAgent's program is the first ProgramArguments string, unescaped", () => {

@@ -14,9 +14,9 @@ const RELEASES = "https://github.com/ryan-stoffel/parallax/releases/download";
  * old plxd stops, which ends its agents' runs: a host with plxd's login service (a Mac with
  * Connect on, a Linux host plx-connect set up) gets `service install --replace`, which points the
  * service at this plxd and restarts it, so a Mac's LaunchAgent moves off its own app's plxd
- * (`repointService` only repoints a missing program, so the app leaves it); any other host's
- * `plxd serve` gets SIGTERM, so the next attach starts this one. Exits 3 with one line for people
- * when it can't. `sh -s` reads it from ssh's stdin.
+ * until that one is newer (`repointService`); any other host's `plxd serve`, or one whose service
+ * can't be moved, gets SIGTERM, so the next attach starts this one. Exits 3 with one line for
+ * people when it can't. `sh -s` reads it from ssh's stdin.
  */
 export const INSTALL_SCRIPT = `set -eu
 version=$1
@@ -58,8 +58,9 @@ printf '%s\\n' "$version" > "$tmp/plxd.version"
 mv "$tmp/plxd.version" "$dir/plxd.version"
 mv "$tmp/plxd" "$dir/plxd"
 # A login service would start its own plxd again, so it's moved to this one, which restarts it.
-if "$dir/plxd" service status 2>/dev/null | grep -qx 'installed: true'; then
-  "$dir/plxd" service install --replace >/dev/null || fail "plxd's login service couldn't be moved to plxd $version."
+# When it can't be, such as on a Mac nobody has logged in to since it started, serve is stopped below.
+if "$dir/plxd" service status 2>/dev/null | grep -qx 'installed: true' &&
+  "$dir/plxd" service install --replace >/dev/null 2>&1; then
   exit 0
 fi
 # plxd's data folder, as plxd picks it: ~/.parallax, unless only the OS folder exists.

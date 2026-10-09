@@ -51,7 +51,15 @@ import {
   type Command,
   type SshTarget,
 } from "./terminal";
-import { dataDir, findPlxd, plistProgram, plxdVersion, replaceServe, serviceStep } from "./plxd";
+import {
+  dataDir,
+  findPlxd,
+  movesServiceBack,
+  plistProgram,
+  plxdVersion,
+  replaceServe,
+  serviceStep,
+} from "./plxd";
 import { isNightly } from "./updater";
 import { broadcast, perWindow } from "./windows";
 
@@ -503,8 +511,10 @@ function addConnection(
       broadcast("parallax:state", hostId, state);
       if (hostId === "local") void replaceOtherServe(state);
       if (state.status !== "connected") return;
-      if (hostId === "local") void refreshConnect();
-      else if (hostId.startsWith("tailnet:")) void readLook(hostId);
+      if (hostId === "local") {
+        void refreshConnect();
+        void repointService();
+      } else if (hostId.startsWith("tailnet:")) void readLook(hostId);
     },
   });
   connections.set(hostId, created);
@@ -733,10 +743,13 @@ async function keepServing(): Promise<void> {
 }
 
 /**
- * A LaunchAgent left by a Parallax that has since moved or been deleted runs a plxd that's gone:
- * launchd keeps failing to start it, and every `attach` waits out its whole deadline on
- * `kickstart` before starting a `serve` itself. Points the agent at this app's plxd. An agent whose plxd exists is left
- * alone, even another install's, so a stable and a nightly app don't take it back and forth.
+ * Points plxd's LaunchAgent at this app's plxd, at launch and on each local connect. A LaunchAgent
+ * left by a Parallax that has since moved or been deleted runs a plxd that's gone: launchd keeps
+ * failing to start it, and every `attach` waits out its whole deadline on `kickstart` before
+ * starting a `serve` itself. One an SSH client's update (PLX-642) moved to `~/.parallax-plxd/plxd`
+ * comes back once this app's plxd is newer and the local plxd says no agents are running, since
+ * `--replace` restarts `serve`. Any other agent whose plxd exists is left alone, even another
+ * install's, so a stable and a nightly app don't take it back and forth.
  */
 async function repointService(): Promise<void> {
   const plxd = servicePlxd();
@@ -746,9 +759,23 @@ async function repointService(): Promise<void> {
     const file = /^file: (.*)$/m.exec(stdout)?.[1];
     if (!file || !/^installed: true$/m.test(stdout)) return;
     const program = plistProgram(await readFile(file, "utf8"));
-    if (!program || existsSync(program)) return;
-    await runPlxd(plxd, "service", "install");
-    console.log(`parallax: pointed plxd's login service at ${plxd}, from the missing ${program}`);
+    if (!program) return;
+    if (!existsSync(program)) {
+      await runPlxd(plxd, "service", "install");
+      console.log(`parallax: pointed plxd's login service at ${plxd}, from the missing ${program}`);
+      return;
+    }
+    // Before spawning `--version` twice; `movesServiceBack` checks it again with the rest.
+    if (program !== path.posix.join(homedir(), ".parallax-plxd", "plxd")) return;
+    const [theirs, ours] = await Promise.all([plxdVersion(program), plxdVersion(plxd)]);
+    // Last before the replace, so an agent has the least time to start in between.
+    const health = await connections.get("local")?.request("host/health", {});
+    const agents = health && "result" in health ? health.result.runningAgents : undefined;
+    if (!movesServiceBack(program, homedir(), theirs, ours, agents)) return;
+    await runPlxd(plxd, "service", "install", "--replace");
+    console.log(
+      `parallax: moved plxd's login service to ${plxd} ${ours}, from ${program} ${theirs}`,
+    );
   } catch (error) {
     console.warn("parallax: couldn't check plxd's login service:", error);
   }

@@ -53,7 +53,8 @@ echo "$*" > '${root}/curl-args'
 cp '${root}/release/'"\${url##*/}" "$out" 2>/dev/null || exit 22`,
   );
   // plxd as released: it reports the version in the file beside it, attach says it ran, and its
-  // login service is installed when the file `~/service` exists, which logs each install.
+  // login service is installed when the file `~/service` exists, which logs each install, and
+  // can't be moved when `~/no-gui` does, as on a Mac nobody has logged in to.
   script(
     release(ASSET),
     `case $1 in
@@ -61,7 +62,7 @@ cp '${root}/release/'"\${url##*/}" "$out" 2>/dev/null || exit 22`,
   attach) echo "attached $0" ;;
   service) [ -f "$HOME/service" ] || exit 0
     [ "$2" = status ] && echo "installed: true"
-    [ "$2" = install ] && echo "$0 $*" >> "$HOME/service" ;;
+    [ "$2" = install ] && echo "$0 $*" >> "$HOME/service" && [ ! -f "$HOME/no-gui" ] ;;
 esac`,
   );
   writeFileSync(release(`${ASSET}.sha256`), `${sha256(release(ASSET))}  ${ASSET}\n`);
@@ -154,6 +155,30 @@ test.runIf(posix)(
       serve.kill();
     }
   },
+);
+
+test.runIf(posix)(
+  "stops the old serve itself when plxd's login service can't be moved",
+  async () => {
+    writeFileSync(path.join(home, "service"), "");
+    writeFileSync(path.join(home, "no-gui"), "");
+    const old = path.join(root, "plxd");
+    script(old, "trap 'kill $! 2>/dev/null; exit 0' TERM; sleep 30 & wait");
+    const serve = spawn("sh", [old, "serve"]);
+    const exited = new Promise((resolve) => serve.on("exit", resolve));
+    mkdirSync(path.join(home, ".parallax"));
+    writeFileSync(path.join(home, ".parallax", "plxd.lock"), `${serve.pid}\n`);
+    try {
+      expect(await installPlxd("mini", VERSION, ssh)).toBeUndefined();
+      expect(readFileSync(path.join(home, "service"), "utf8")).toBe(
+        `${installed("plxd")} service install --replace\n`,
+      );
+      expect(await exited).toBe(0); // Its SIGTERM trap ran.
+    } finally {
+      serve.kill();
+    }
+  },
+  20_000,
 );
 
 test("ssh's own failures read as a connection's do, and a bad version never reaches the host", async () => {

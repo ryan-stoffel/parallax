@@ -72,6 +72,14 @@ export const NPM_INSTALLS: Partial<Record<ProviderKind, string>> = {
 export const npmInstallLine = (pkg: string, windows: boolean) =>
   windows ? `npm install -g ${pkg}` : `npm install -g --prefix "$HOME/.local" ${pkg}`;
 
+/** Whether version `a` is older than `b` (0030): by number, then a nightly before its release. */
+export function olderVersion(a: string, b: string): boolean {
+  const [x, y] = [a, b].map((v) => /^(\d+)\.(\d+)\.(\d+)(-.+)?$/.exec(v));
+  if (!x || !y) return false;
+  for (const i of [1, 2, 3]) if (Number(x[i]) !== Number(y[i])) return Number(x[i]) < Number(y[i]);
+  return x[4] !== undefined && y[4] === undefined;
+}
+
 /**
  * `tag` in canonical form if `Intl` accepts it, else undefined (the default locale). Linux can
  * report tags that make every formatter throw, such as "c" for LANG=C.UTF-8 or "ca-ES@valencia".
