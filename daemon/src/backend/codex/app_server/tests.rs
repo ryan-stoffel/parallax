@@ -306,6 +306,50 @@ async fn a_resumed_thread_without_approvals_never_asks_and_declines_what_codex_d
     assert_eq!(written[5]["error"]["code"], -32601);
 }
 
+/// A `/compact` (PLX-638) compacts the thread with `thread/compact/start` instead of starting a
+/// turn, and its `contextCompaction` item shows under way, then done.
+#[tokio::test]
+async fn compact_compacts_the_thread_instead_of_starting_a_turn() {
+    let (dir, backend) = fake(include_str!("../fixtures/app-server-compact.jsonl"));
+    let mut request = request(AgentPermission::Edit);
+    request.prompt = " /Compact\n".into();
+    request.resume = Some(Resume::new("t-0"));
+    let turn_id = request.turn_id;
+    let events = rest(&mut backend.start(request).unwrap().events).await;
+    let shown: Vec<&Event> = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::ContextCompaction { .. } | Event::TurnFinished { .. }
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            &Event::ContextCompaction { done: false },
+            &Event::ContextCompaction { done: true },
+            &Event::TurnFinished {
+                turn_id,
+                result: None
+            },
+        ]
+    );
+    assert!(matches!(
+        events.last(),
+        Some(Event::Finished {
+            outcome: Outcome::Completed { result: None },
+            ..
+        })
+    ));
+    let written = written(&dir);
+    assert_eq!(
+        written[3],
+        json!({"id": 3, "method": "thread/compact/start", "params": {"threadId": "t-0"}})
+    );
+}
+
 /// A fork's first run forks the parent's thread rather than resuming it (0050).
 #[test]
 fn a_forks_first_run_forks_the_thread() {

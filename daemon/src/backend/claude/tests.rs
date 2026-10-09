@@ -11,9 +11,10 @@ use tempfile::TempDir;
 
 use super::stream::{Ask, Step, Translator};
 use super::{
-    BYPASS_PERMISSION_MODE, ClaudeBackend, EXIT_PLAN_MODE, NO_WRITE_ARGS, PLAN_WORKER_TOOL_LIST,
-    PLAN_WORKSPACE_WRITE_ARGS, PROMPT_TOOL_ARGS, TODO_TOOLS, WORKER_TOOL_LIST, WORKER_TOOLS,
-    WORKSPACE_WRITE_ARGS, namer_arguments, no_write_settings, write_env_file,
+    BYPASS_PERMISSION_MODE, ClaudeBackend, EXIT_PLAN_MODE, Message, NO_WRITE_ARGS,
+    PLAN_WORKER_TOOL_LIST, PLAN_WORKSPACE_WRITE_ARGS, PROMPT_TOOL_ARGS, TODO_TOOLS,
+    WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS, namer_arguments, no_write_settings,
+    write_env_file,
 };
 use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
 use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
@@ -3380,6 +3381,35 @@ async fn a_recorded_session_replays_to_its_snapshot() {
         )),
     )
     .await;
+}
+
+/// A `/compact` (PLX-638) goes to Claude Code as its own command, which compacts the session:
+/// the compaction rows show, and the summary and the command's output, user messages with string
+/// content (recorded from Claude Code 2.1.288), show nothing.
+#[test]
+fn compact_goes_as_claude_codes_own_command() {
+    let message: Value =
+        serde_json::from_str(&Message::new(None, " /Compact\n", &[], true).line).unwrap();
+    assert_eq!(message["message"]["content"], "/compact");
+    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
+    translator.line(&init_line(r#"["Read"]"#));
+    let lines: [&[u8]; 4] = [
+        br#"{"type":"system","subtype":"status","status":"compacting"}"#,
+        br#"{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual","pre_tokens":21257,"post_tokens":1302}}"#,
+        br#"{"type":"user","message":{"role":"user","content":"This session is being continued from a previous conversation."},"isCompactSummary":true}"#,
+        br#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>Compacted </local-command-stdout>"},"isReplay":true}"#,
+    ];
+    let steps: Vec<Step> = lines
+        .into_iter()
+        .flat_map(|line| translator.line(line))
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            Step::Emit(Event::ContextCompaction { done: false }),
+            Step::Emit(Event::ContextCompaction { done: true }),
+        ]
+    );
 }
 
 #[test]

@@ -11,8 +11,10 @@
 //! overrides that join the user's servers, its tools approved without asking (0041), fast mode as
 //! the `priority` service tier, and the mode's approval policy and sandbox ([`mode`]). The prompt
 //! is the first `turn/start`, as written, with its images as `localImage` files ([`write_images`])
-//! and the effort. Each follow-up is a later `turn/start` in the same process, sent once the turn
-//! before it has completed. A steer (PLX-370) is `turn/steer` with the running turn's id, which
+//! and the effort. A turn that is exactly `/compact` ([`is_compact`], PLX-638) is
+//! `thread/compact/start` instead, which Codex runs as a turn with a `contextCompaction` item.
+//! Each follow-up is a later turn in the same process, sent once the turn before it has
+//! completed. A steer (PLX-370) is `turn/steer` with the running turn's id, which
 //! codex-cli 0.160.0 adds to that turn's input after its current item; if Codex refuses it, or no
 //! turn runs, it is the next turn instead. Once no turn, steer, or approval request is outstanding
 //! and plxd holds no message for it ([`Run::hold`](super::super::Run::hold)), stdin closes and
@@ -67,7 +69,7 @@ use crate::backend::process::{
 use crate::backend::{
     AgentPermission, Answer, ApprovalId, CancelSwitch, Credential, Decision, EVENT_BUFFER,
     EventSink, FollowUp, Held, Overrides, RunHandle, RunRequest, StartError, Started, TurnId,
-    check_argument,
+    check_argument, is_compact,
 };
 
 /// The permissions a thread maps, in the picker's order (0027, 0054): Codex's own presets
@@ -152,8 +154,9 @@ pub(super) fn start(
         .unwrap_or_default();
     let (sink, events) = EventSink::channel(EVENT_BUFFER, baseline);
     let first = Turn {
-        turn_id: request.turn_id,
+        id: request.turn_id,
         input: input(&request.prompt, image_paths.as_deref().unwrap_or_default()),
+        compact: is_compact(&request.prompt, &request.images),
     };
     let driver = Driver {
         stdin: Stdin::start(&mut process),
@@ -298,11 +301,13 @@ fn input(text: &str, images: &[PathBuf]) -> Value {
     images.chain(text).collect()
 }
 
-/// A turn to start: the caller's id for it and its input.
+/// A turn to start: the caller's id for it and its input, or a `/compact` (PLX-638), which
+/// compacts the thread instead.
 #[derive(Debug)]
 struct Turn {
-    turn_id: Option<TurnId>,
+    id: Option<TurnId>,
     input: Value,
+    compact: bool,
 }
 
 /// The turn Codex is running: its caller's id, if it has one, Codex's own once `turn/start` has
@@ -392,7 +397,7 @@ struct Driver {
 
 impl Driver {
     async fn run(mut self) {
-        let first = self.queued.front().map(|turn| turn.turn_id);
+        let first = self.queued.front().map(|turn| turn.id);
         if let Some(turn_id) = first {
             self.emit(Event::TurnStarted { turn_id }).await;
         }
@@ -549,11 +554,8 @@ impl Driver {
                 self.next_turn().await;
             }
             (Request::Steer(turn), Ok(_)) => {
-                self.emit(Event::TurnStarted {
-                    turn_id: turn.turn_id,
-                })
-                .await;
-                match (&mut self.running, turn.turn_id) {
+                self.emit(Event::TurnStarted { turn_id: turn.id }).await;
+                match (&mut self.running, turn.id) {
                     (Some(running), Some(turn_id)) => running.steered.push(turn_id),
                     // The turn it joined has already completed.
                     (_, turn_id) => {
@@ -608,21 +610,24 @@ impl Driver {
         };
         // The prompt's TurnStarted went out when the run started.
         if std::mem::replace(&mut self.started_any, true) {
-            self.emit(Event::TurnStarted {
-                turn_id: turn.turn_id,
-            })
-            .await;
+            self.emit(Event::TurnStarted { turn_id: turn.id }).await;
         }
         self.running = Some(Running {
-            turn_id: turn.turn_id,
+            turn_id: turn.id,
             codex_id: None,
             steered: Vec::new(),
         });
-        let mut params = json!({"threadId": thread_id, "input": turn.input});
-        if let Some(effort) = self.effort {
-            params["effort"] = effort.into();
-        }
-        self.request(Request::Turn, "turn/start", &params);
+        // Codex runs a compaction as a turn of its own, with a `contextCompaction` item.
+        let (method, params) = if turn.compact {
+            ("thread/compact/start", json!({"threadId": thread_id}))
+        } else {
+            let mut params = json!({"threadId": thread_id, "input": turn.input});
+            if let Some(effort) = self.effort {
+                params["effort"] = effort.into();
+            }
+            ("turn/start", params)
+        };
+        self.request(Request::Turn, method, &params);
     }
 
     async fn follow_up(&mut self, follow_up: FollowUp) {
@@ -642,8 +647,9 @@ impl Driver {
             }
         };
         let turn = Turn {
-            turn_id: Some(follow_up.turn_id),
+            id: Some(follow_up.turn_id),
             input: input(&follow_up.text, &paths),
+            compact: is_compact(&follow_up.text, &follow_up.images),
         };
         if !follow_up.steer {
             self.queued.push_back(turn);
@@ -709,15 +715,10 @@ impl Driver {
         if !self.started_any {
             self.queued.pop_front();
         }
-        let mut dropped: Vec<TurnId> = self
-            .queued
-            .drain(..)
-            .filter_map(|turn| turn.turn_id)
-            .collect();
+        let mut dropped: Vec<TurnId> = self.queued.drain(..).filter_map(|turn| turn.id).collect();
         for request in std::mem::take(&mut self.requests).into_values() {
             if let Request::Steer(Turn {
-                turn_id: Some(turn_id),
-                ..
+                id: Some(turn_id), ..
             }) = request
             {
                 dropped.push(turn_id);
