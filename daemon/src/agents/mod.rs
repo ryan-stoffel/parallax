@@ -1580,7 +1580,9 @@ pub(crate) async fn deliver_queued(daemon: &Arc<Daemon>, cut: Vec<RunId>) {
             from: None,
             delivery: None,
         };
-        if let Err(error) = send_with(Arc::clone(daemon), params, Delivery::Queue).await {
+        // As a steer, which starts its own turn with none running, so it goes ahead of the held
+        // queue rather than waiting at its end (0060).
+        if let Err(error) = send_with(Arc::clone(daemon), params, Delivery::Steer).await {
             warn!(run = %id, error = %error.message, "could not continue a run after a restart");
         }
     }

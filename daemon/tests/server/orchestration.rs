@@ -342,7 +342,7 @@ async fn a_message_sent_after_a_held_stop_waits_behind_the_queue() {
 }
 
 /// 0060: with `continueAfterRestart` on, a plain thread's turn a restart cut off continues on
-/// its session once plxd is up.
+/// its session once plxd is up, ahead of its held queue.
 #[tokio::test]
 async fn a_cut_turn_continues_after_a_restart_with_the_setting_on() {
     let host = Host::start(temp_dir(), fake(busy()));
@@ -358,6 +358,8 @@ async fn a_cut_turn_continues_after_a_restart_with_the_setting_on() {
     let thread = params.run_id;
     client.call::<ThreadStart>(params).await.unwrap();
     subscribe_working(&mut client, thread).await;
+    let next = TurnId::generate();
+    dispatch(&mut client, message(thread, next, "Then this")).await;
     drop(client);
 
     let host = host.restart(fake(busy())).await;
@@ -370,6 +372,8 @@ async fn a_cut_turn_continues_after_a_restart_with_the_setting_on() {
         }))
     })
     .await;
+    // It runs ahead of the held queue, which waits for Resume.
+    assert_eq!(queued(&mut client, thread).await, [(next, true)]);
 }
 
 /// A resume replays a short gap with no snapshot, and answers a long gap, or a `seq` this log
