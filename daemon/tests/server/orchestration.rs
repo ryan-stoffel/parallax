@@ -87,6 +87,23 @@ async fn snapshot(client: &mut Conn, thread_id: RunId) -> ThreadSnapshot {
         .expect("a subscription with no afterSeq has a snapshot")
 }
 
+/// Subscribes to a thread and waits until it is working: in its snapshot when the text came
+/// first, or else as a live event.
+async fn subscribe_working(client: &mut Conn, thread_id: RunId) -> ThreadSnapshot {
+    let snapshot = snapshot(client, thread_id).await;
+    let text = AgentOutputItem::Text {
+        message_id: None,
+        text: "Working".to_owned(),
+    };
+    let working_already = snapshot.events.iter().any(|logged| {
+        matches!(&logged.event, ParallaxEvent::AgentOutput { items, .. } if items.contains(&text))
+    });
+    if !working_already {
+        until(client, working()).await;
+    }
+    snapshot
+}
+
 /// The queue as the thread's snapshot has it: its queued runs' ids, and whether each is held.
 async fn queued(client: &mut Conn, thread_id: RunId) -> Vec<(TurnId, bool)> {
     snapshot(client, thread_id)
@@ -135,8 +152,10 @@ async fn queue_commands_change_the_queued_runs_and_a_held_stop_keeps_them() {
     let host = Host::start(temp_dir(), fake(busy()));
     let mut client = host.client().await;
     let thread = working_thread(&host, &mut client).await;
-    assert_eq!(snapshot(&mut client, thread).await.thread.id, thread);
-    until(&mut client, working()).await;
+    assert_eq!(
+        subscribe_working(&mut client, thread).await.thread.id,
+        thread
+    );
 
     let (a, b, c) = (TurnId::generate(), TurnId::generate(), TurnId::generate());
     for (id, words) in [(a, "First"), (b, "Second"), (c, "Third")] {
@@ -242,8 +261,7 @@ async fn a_resume_replays_a_short_gap_and_snapshots_a_long_one() {
     let host = Host::start(temp_dir(), fake(busy()));
     let mut client = host.client().await;
     let thread = working_thread(&host, &mut client).await;
-    let start = snapshot(&mut client, thread).await.seq;
-    until(&mut client, working()).await;
+    let start = subscribe_working(&mut client, thread).await.seq;
     let waiting = TurnId::generate();
     dispatch(&mut client, message(thread, waiting, "Later")).await;
     // Each edit is one `queue.updated`: well past what a resume replays.
@@ -324,11 +342,18 @@ async fn the_shell_shows_status_and_a_stop_cascades_to_child_threads() {
         "{ids:?}"
     );
     assert_eq!(shell.threads.len(), 2);
-    until(&mut client, |event| {
-        matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
-            if *run_id == child_id && state.status == AgentStatus::Running)
-    })
-    .await;
+    // The child may already be running in the snapshot, with no live event to follow.
+    let child_running = shell
+        .runs
+        .iter()
+        .any(|run| run.id == child_id && run.status == AgentStatus::Running);
+    if !child_running {
+        until(&mut client, |event| {
+            matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
+                if *run_id == child_id && state.status == AgentStatus::Running)
+        })
+        .await;
+    }
 
     dispatch(&mut client, stop(parent_id)).await;
     let events = until(&mut client, |event| {
@@ -363,8 +388,7 @@ async fn a_steer_with_no_run_under_way_starts_its_own() {
     let host = Host::start(temp_dir(), fake(busy()));
     let mut client = host.client().await;
     let thread = working_thread(&host, &mut client).await;
-    subscribe(&mut client, thread, None).await;
-    until(&mut client, working()).await;
+    subscribe_working(&mut client, thread).await;
     dispatch(&mut client, stop(thread)).await;
     until(&mut client, |event| {
         matches!(&event.event, ParallaxEvent::AgentFinished { .. })
@@ -402,8 +426,7 @@ async fn a_coordinators_stop_ends_its_turn_and_its_queue_goes_on() {
     let project = create(&mut client, project_params(host.dir.path())).await;
     let params = crate::coordinator::start_params(project.id, "Plan the release");
     let coordinator = client.call::<ProjectStart>(params).await.unwrap().run.id;
-    subscribe(&mut client, coordinator, None).await;
-    until(&mut client, working()).await;
+    subscribe_working(&mut client, coordinator).await;
     let next = TurnId::generate();
     dispatch(
         &mut client,
