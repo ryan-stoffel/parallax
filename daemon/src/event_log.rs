@@ -619,7 +619,7 @@ impl EventLog {
 /// A stored event as a log entry, keeping the event it parsed for a page (`keep`) and not for
 /// the window. A payload this build can't read, such as a newer plxd's kind, comes back as
 /// `ParallaxEvent::Unknown`, keeping its place in the sequence, and is delivered as stored.
-fn entry(stored: StoredEvent, keep: bool) -> Entry {
+pub(crate) fn entry(stored: StoredEvent, keep: bool) -> Entry {
     let event = serde_json::from_str(&stored.payload).unwrap_or(ParallaxEvent::Unknown);
     let json = RawValue::from_string(stored.payload).unwrap_or_else(|_| raw(&event));
     let project = stored

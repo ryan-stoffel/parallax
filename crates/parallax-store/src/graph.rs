@@ -97,17 +97,20 @@ impl Store {
         rows.map(|row| run(row?)).collect()
     }
 
-    /// Run `id`, if it exists.
+    /// Thread `thread_id`'s run `id`, if it exists. A fork's copied runs keep their ids.
     ///
     /// # Errors
     ///
     /// A database error, or an error if a stored id is corrupt.
-    pub fn graph_run(&self, id: Uuid) -> Result<Option<GraphRun>, StoreError> {
+    pub fn graph_run(&self, thread_id: Uuid, id: Uuid) -> Result<Option<GraphRun>, StoreError> {
         self.conn
             .prepare_cached(&format!(
-                "SELECT {RUN_COLUMNS} FROM thread_runs WHERE id = ?1"
+                "SELECT {RUN_COLUMNS} FROM thread_runs WHERE thread_id = ?1 AND id = ?2"
             ))?
-            .query_row(params![id.to_string()], GraphRun::from_row)
+            .query_row(
+                params![thread_id.to_string(), id.to_string()],
+                GraphRun::from_row,
+            )
             .optional()?
             .map(run)
             .transpose()
@@ -220,15 +223,22 @@ impl Store {
     /// A database error.
     pub fn set_attempt_status(
         &self,
+        thread_id: Uuid,
         run_id: Uuid,
         ordinal: u32,
         status: &str,
     ) -> Result<(), StoreError> {
         self.conn
             .prepare_cached(
-                "UPDATE run_attempts SET status = ?3 WHERE run_id = ?1 AND ordinal = ?2",
+                "UPDATE run_attempts SET status = ?4
+                 WHERE thread_id = ?1 AND run_id = ?2 AND ordinal = ?3",
             )?
-            .execute(params![run_id.to_string(), ordinal, status])?;
+            .execute(params![
+                thread_id.to_string(),
+                run_id.to_string(),
+                ordinal,
+                status
+            ])?;
         Ok(())
     }
 
@@ -237,11 +247,16 @@ impl Store {
     /// # Errors
     ///
     /// A database error.
-    pub fn run_attempts(&self, run_id: Uuid) -> Result<Vec<(u32, String, String)>, StoreError> {
+    pub fn run_attempts(
+        &self,
+        thread_id: Uuid,
+        run_id: Uuid,
+    ) -> Result<Vec<(u32, String, String)>, StoreError> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT ordinal, reason, status FROM run_attempts WHERE run_id = ?1 ORDER BY ordinal",
+            "SELECT ordinal, reason, status FROM run_attempts
+             WHERE thread_id = ?1 AND run_id = ?2 ORDER BY ordinal",
         )?;
-        let rows = stmt.query_map(params![run_id.to_string()], |row| {
+        let rows = stmt.query_map(params![thread_id.to_string(), run_id.to_string()], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
@@ -276,11 +291,17 @@ impl Store {
     /// # Errors
     ///
     /// A database error.
-    pub fn node_status(&self, id: &str) -> Result<Option<(String, String)>, StoreError> {
+    pub fn node_status(
+        &self,
+        thread_id: Uuid,
+        id: &str,
+    ) -> Result<Option<(String, String)>, StoreError> {
         Ok(self
             .conn
-            .prepare_cached("SELECT kind, status FROM nodes WHERE id = ?1")?
-            .query_row(params![id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .prepare_cached("SELECT kind, status FROM nodes WHERE thread_id = ?1 AND id = ?2")?
+            .query_row(params![thread_id.to_string(), id], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
             .optional()?)
     }
 
@@ -289,10 +310,15 @@ impl Store {
     /// # Errors
     ///
     /// A database error.
-    pub fn set_node_status(&self, id: &str, status: &str) -> Result<(), StoreError> {
+    pub fn set_node_status(
+        &self,
+        thread_id: Uuid,
+        id: &str,
+        status: &str,
+    ) -> Result<(), StoreError> {
         self.conn
-            .prepare_cached("UPDATE nodes SET status = ?2 WHERE id = ?1")?
-            .execute(params![id, status])?;
+            .prepare_cached("UPDATE nodes SET status = ?3 WHERE thread_id = ?1 AND id = ?2")?
+            .execute(params![thread_id.to_string(), id, status])?;
         Ok(())
     }
 
@@ -362,11 +388,19 @@ impl Store {
     /// # Errors
     ///
     /// A database error.
-    pub fn runtime_request_node(&self, id: Uuid) -> Result<Option<Option<String>>, StoreError> {
+    pub fn runtime_request_node(
+        &self,
+        thread_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<Option<String>>, StoreError> {
         Ok(self
             .conn
-            .prepare_cached("SELECT node_id FROM runtime_requests WHERE id = ?1")?
-            .query_row(params![id.to_string()], |row| row.get(0))
+            .prepare_cached(
+                "SELECT node_id FROM runtime_requests WHERE thread_id = ?1 AND id = ?2",
+            )?
+            .query_row(params![thread_id.to_string(), id.to_string()], |row| {
+                row.get(0)
+            })
             .optional()?)
     }
 
@@ -375,10 +409,17 @@ impl Store {
     /// # Errors
     ///
     /// A database error.
-    pub fn set_runtime_request_status(&self, id: Uuid, status: &str) -> Result<(), StoreError> {
+    pub fn set_runtime_request_status(
+        &self,
+        thread_id: Uuid,
+        id: Uuid,
+        status: &str,
+    ) -> Result<(), StoreError> {
         self.conn
-            .prepare_cached("UPDATE runtime_requests SET status = ?2 WHERE id = ?1")?
-            .execute(params![id.to_string(), status])?;
+            .prepare_cached(
+                "UPDATE runtime_requests SET status = ?3 WHERE thread_id = ?1 AND id = ?2",
+            )?
+            .execute(params![thread_id.to_string(), id.to_string(), status])?;
         Ok(())
     }
 
@@ -469,21 +510,6 @@ impl Store {
         )?;
         let ids = stmt.query_map([], |row| row.get::<_, String>(0))?;
         ids.map(|id| Ok(Uuid::parse_str(&id?)?)).collect()
-    }
-
-    /// Thread `thread_id`'s stored events as `(seq, payload)`, oldest first, for an import.
-    ///
-    /// # Errors
-    ///
-    /// A database error.
-    pub fn thread_payloads(&self, thread_id: Uuid) -> Result<Vec<(u64, String)>, StoreError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT seq, payload FROM events WHERE thread_id = ?1 ORDER BY seq")?;
-        let rows = stmt.query_map(params![thread_id.to_string()], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
-        Ok(rows.collect::<Result<_, _>>()?)
     }
 
     /// Sets the run (turn) that event `seq` belongs to, which an import learns after the event

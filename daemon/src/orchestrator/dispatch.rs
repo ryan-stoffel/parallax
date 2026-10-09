@@ -8,11 +8,13 @@
 //! order. Its receipt, and the effect a Stop's cascade needs, commit together once it is done. A
 //! crash between the actor's change and the receipt leaves no receipt, and the retry runs it
 //! again: a message is idempotent on its id in the actor, a queue change made twice leaves the
-//! queue as once or fails `queuedMessageNotFound`, and a second Stop changes nothing.
+//! queue as once or fails `queuedMessageNotFound`, and a second Stop changes nothing. A command
+//! that fails with a fault, such as the store's, keeps no receipt either, so its retry runs it;
+//! only a rejection, bad params or a Parallax error, is stored.
 
 use std::sync::Arc;
 
-use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS};
 use parallax_protocol::{
     AgentSendParams, DispatchMode, DispatchResult, ErrorKind, OrchestrationCommand, RunId,
     ThreadRunStatus, TurnId,
@@ -65,6 +67,8 @@ pub(crate) async fn dispatch(
     let acted = act(daemon, thread, command).await;
     let (error, cascade) = match &acted {
         Ok(cascade) => (None, cascade.clone()),
+        // A store failure or a stopping plxd may pass: no receipt, so a retry runs it again.
+        Err(error) if !rejects(error) => return Err(error.clone()),
         Err(error) => (
             Some(serde_json::to_string(error).map_err(ErrorObject::internal_error)?),
             None,
@@ -98,6 +102,12 @@ pub(crate) async fn dispatch(
         daemon.orchestrator.notify();
     }
     acted.map(|_| DispatchResult { seq })
+}
+
+/// Whether `error` rejects its command for good, so its receipt keeps it: bad params, or a
+/// Parallax error such as `queuedMessageNotFound`, rather than a fault that a retry may get past.
+fn rejects(error: &ErrorObject) -> bool {
+    error.code == INVALID_PARAMS || error.parallax_data().is_some()
 }
 
 /// The thread a command is for, and its type.

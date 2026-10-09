@@ -5,7 +5,7 @@
 
 use parallax_protocol::methods::{
     AgentStart, OrchestrationDispatch, OrchestrationSubscribeShell, OrchestrationSubscribeThread,
-    OrchestrationThreadHistory, ThreadStart,
+    OrchestrationThreadHistory, ProjectStart, ThreadStart,
 };
 use parallax_protocol::{
     AgentOutcome, AgentOutputItem, AgentStatus, DispatchMode, ErrorKind, EventsEventParams,
@@ -389,6 +389,46 @@ async fn a_steer_with_no_run_under_way_starts_its_own() {
         [
             (ThreadRunStatus::Cancelled, Some(1)),
             (ThreadRunStatus::Running, Some(2)),
+        ]
+    );
+}
+
+/// A Project coordinator's Stop ends only its own turn (Ryan, 0059): its queue isn't held, so a
+/// message waiting behind the turn starts once the CLI has exited.
+#[tokio::test]
+async fn a_coordinators_stop_ends_its_turn_and_its_queue_goes_on() {
+    let host = Host::start(temp_dir(), fake(busy()));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    let params = crate::coordinator::start_params(project.id, "Plan the release");
+    let coordinator = client.call::<ProjectStart>(params).await.unwrap().run.id;
+    subscribe(&mut client, coordinator, None).await;
+    until(&mut client, working()).await;
+    let next = TurnId::generate();
+    dispatch(
+        &mut client,
+        message(coordinator, next, "Then the changelog"),
+    )
+    .await;
+    assert_eq!(queued(&mut client, coordinator).await, [(next, false)]);
+
+    dispatch(&mut client, stop(coordinator)).await;
+    until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::AgentOutput { items, .. }
+            if items.iter().any(|item| matches!(item, AgentOutputItem::TurnStarted { turn_id: Some(id), .. } if *id == next)))
+    })
+    .await;
+    let runs: Vec<_> = snapshot(&mut client, coordinator)
+        .await
+        .runs
+        .iter()
+        .map(|run| (run.status, run.queue_held))
+        .collect();
+    assert_eq!(
+        runs,
+        [
+            (ThreadRunStatus::Cancelled, false),
+            (ThreadRunStatus::Running, false),
         ]
     );
 }

@@ -831,3 +831,67 @@ async fn a_fork_of_an_unrun_fork_hands_over_from_where_the_conversation_ran() {
     );
     host.server.stop().await;
 }
+
+/// A fork's copied turns are runs of its own under the same turn ids (0059, PLX-644): the source
+/// keeps its runs, each on its first attempt, and the fork lists copies of them.
+#[tokio::test]
+async fn a_fork_has_its_own_runs_and_leaves_its_sources_alone() {
+    use parallax_protocol::methods::OrchestrationSubscribeThread;
+    use parallax_protocol::{SubscribeThreadParams, ThreadRunStatus};
+
+    let (host, _, _) = host();
+    let mut client = host.client().await;
+    let (started, follow_up) = two_turns(&mut client, start_params(None, "Write the notes")).await;
+    let source = started.thread.id;
+    let fork = client
+        .call::<ThreadFork>(fork_params(source))
+        .await
+        .unwrap()
+        .thread
+        .id;
+    let mut runs = async |thread_id| {
+        let snapshot = client
+            .call::<OrchestrationSubscribeThread>(SubscribeThreadParams {
+                thread_id,
+                after_seq: None,
+            })
+            .await
+            .unwrap()
+            .snapshot
+            .unwrap();
+        snapshot
+            .runs
+            .iter()
+            .map(|run| (run.id, run.ordinal, run.status, run.attempt))
+            .collect::<Vec<_>>()
+    };
+    let theirs = runs(source).await;
+    assert_eq!(theirs.len(), 2, "{theirs:?}");
+    assert_eq!(theirs[1].0, follow_up);
+    for (i, run) in theirs.iter().enumerate() {
+        let ordinal = u32::try_from(i + 1).unwrap();
+        assert_eq!(
+            (run.1, run.2, run.3),
+            (Some(ordinal), ThreadRunStatus::Completed, Some(1)),
+            "{theirs:?}"
+        );
+    }
+    // A first turn has no id of its own, so plxd made one for each thread.
+    let copies = runs(fork).await;
+    assert_eq!(copies[1], theirs[1], "the follow-up's copy keeps its id");
+    let shape = |runs: &[(TurnId, Option<u32>, ThreadRunStatus, Option<u32>)]| {
+        runs.iter()
+            .map(|run| (run.1, run.2, run.3))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        shape(&copies),
+        shape(&theirs),
+        "the fork's copies, as their source's"
+    );
+    assert_eq!(
+        runs(source).await,
+        theirs,
+        "and the source's unchanged by the copy"
+    );
+}

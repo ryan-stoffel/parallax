@@ -625,50 +625,52 @@ const MIGRATIONS: &[Migration] = &[
     // the thread's row); a queued one has a `position` and no `ordinal` until it starts.
     // `run_attempts` are its provider executions, `nodes` its execution tree (the root turn,
     // tools, approvals, user-input requests, subagents), and `runtime_requests` the approvals a
-    // provider waits on. Each keeps its filtered columns and a `payload` of the daemon's JSON.
+    // provider waits on. Each keeps its filtered columns and a `payload` of the daemon's JSON,
+    // keyed by its thread first: a fork copies its source's turns with their ids.
     // `thread_runs_open` keeps the fold's read of a thread's open runs, once per batch, from
     // scanning a long thread's finished ones. `graph_imports` lists the threads whose stored
     // events are folded in already.
     Migration {
         version: 41,
         sql: "CREATE TABLE thread_runs (
-            id TEXT NOT NULL PRIMARY KEY,
+            id TEXT NOT NULL,
             thread_id TEXT NOT NULL,
             ordinal INTEGER,
             status TEXT NOT NULL,
             position INTEGER,
             first_seq INTEGER,
             attempt INTEGER,
-            payload TEXT NOT NULL
+            payload TEXT NOT NULL,
+            PRIMARY KEY (thread_id, id)
         );
         CREATE INDEX thread_runs_thread ON thread_runs (thread_id, ordinal);
         CREATE INDEX thread_runs_open ON thread_runs (thread_id, ordinal)
             WHERE status IN ('starting', 'running', 'waiting');
         CREATE TABLE run_attempts (
+            thread_id TEXT NOT NULL,
             run_id TEXT NOT NULL,
             ordinal INTEGER NOT NULL,
-            thread_id TEXT NOT NULL,
             reason TEXT NOT NULL,
             status TEXT NOT NULL,
-            PRIMARY KEY (run_id, ordinal)
+            PRIMARY KEY (thread_id, run_id, ordinal)
         );
-        CREATE INDEX run_attempts_thread ON run_attempts (thread_id);
         CREATE TABLE nodes (
-            id TEXT NOT NULL PRIMARY KEY,
             thread_id TEXT NOT NULL,
+            id TEXT NOT NULL,
             run_id TEXT,
             parent_id TEXT,
             kind TEXT NOT NULL,
             status TEXT NOT NULL,
-            payload TEXT NOT NULL
+            payload TEXT NOT NULL,
+            PRIMARY KEY (thread_id, id)
         );
-        CREATE INDEX nodes_run ON nodes (thread_id, run_id);
         CREATE TABLE runtime_requests (
-            id TEXT NOT NULL PRIMARY KEY,
             thread_id TEXT NOT NULL,
+            id TEXT NOT NULL,
             node_id TEXT,
             status TEXT NOT NULL,
-            payload TEXT NOT NULL
+            payload TEXT NOT NULL,
+            PRIMARY KEY (thread_id, id)
         );
         CREATE INDEX runtime_requests_pending ON runtime_requests (thread_id)
             WHERE status = 'pending';

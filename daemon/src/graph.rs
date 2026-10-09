@@ -73,7 +73,7 @@ pub(crate) fn apply(
             let fold = Fold::new(db, thread, seq, time, project)?;
             for run in &fold.open {
                 if let Some(attempt) = run.attempt {
-                    db.set_attempt_status(run.id.into(), attempt, "failed")?;
+                    db.set_attempt_status(thread, run.id.into(), attempt, "failed")?;
                 }
                 let run = ThreadRun {
                     status: ThreadRunStatus::Starting,
@@ -189,7 +189,8 @@ impl<'a> Fold<'a> {
                         "failed"
                     }
                 };
-                self.db.set_node_status(&tool(run, call_id), status)
+                self.db
+                    .set_node_status(self.thread, &tool(run, call_id), status)
             }
             AgentOutputItem::ApprovalRequested {
                 approval_id,
@@ -214,7 +215,7 @@ impl<'a> Fold<'a> {
                     AgentSubagentStatus::Stopped | AgentSubagentStatus::Unknown => "cancelled",
                 };
                 self.db
-                    .set_node_status(&format!("{run}/subagent/{call_id}"), status)
+                    .set_node_status(self.thread, &format!("{run}/subagent/{call_id}"), status)
             }
             _ => Ok(()),
         }
@@ -287,10 +288,11 @@ impl<'a> Fold<'a> {
             _ => "resolved",
         };
         let id = Uuid::from(approval_id);
-        if let Some(node) = self.db.runtime_request_node(id)? {
-            self.db.set_runtime_request_status(id, status)?;
+        if let Some(node) = self.db.runtime_request_node(self.thread, id)? {
+            self.db
+                .set_runtime_request_status(self.thread, id, status)?;
             if let Some(node) = node {
-                self.db.set_node_status(&node, "completed")?;
+                self.db.set_node_status(self.thread, &node, "completed")?;
             }
         }
         if self
@@ -310,7 +312,7 @@ impl<'a> Fold<'a> {
             return Ok(());
         };
         let node = format!("{run}/subagent/{call_id}");
-        if self.db.node_status(&node)?.is_none() {
+        if self.db.node_status(self.thread, &node)?.is_none() {
             let payload = serde_json::json!({ "callId": call_id });
             self.node(
                 node.clone(),
@@ -340,7 +342,11 @@ impl<'a> Fold<'a> {
         fill: impl FnOnce(&mut ThreadRun),
     ) -> Result<(), StoreError> {
         let existing = match turn_id {
-            Some(id) => self.db.graph_run(id.into())?.as_ref().and_then(parse),
+            Some(id) => self
+                .db
+                .graph_run(self.thread, id.into())?
+                .as_ref()
+                .and_then(parse),
             None => self
                 .open
                 .iter()
@@ -360,7 +366,8 @@ impl<'a> Fold<'a> {
             run.completed_at = None;
             self.db
                 .put_run_attempt(run.id.into(), attempt, self.thread, reason, "running")?;
-            self.db.set_node_status(&root(run.id), "running")?;
+            self.db
+                .set_node_status(self.thread, &root(run.id), "running")?;
             put_run(self.db, self.thread, &run, None)?;
             self.open.retain(|open| open.id != run.id);
             self.open.push(run);
@@ -403,9 +410,10 @@ impl<'a> Fold<'a> {
         run.status = status;
         run.completed_at = Some(self.time);
         if let Some(attempt) = run.attempt {
-            self.db.set_attempt_status(run.id.into(), attempt, word)?;
+            self.db
+                .set_attempt_status(self.thread, run.id.into(), attempt, word)?;
         }
-        self.db.set_node_status(&root(run.id), word)?;
+        self.db.set_node_status(self.thread, &root(run.id), word)?;
         put_run(self.db, self.thread, &run, None)
     }
 
@@ -469,7 +477,9 @@ fn put_run(
 ) -> Result<(), StoreError> {
     let first_seq = match first_seq {
         Some(seq) => Some(seq),
-        None => db.graph_run(run.id.into())?.and_then(|row| row.first_seq),
+        None => db
+            .graph_run(thread, run.id.into())?
+            .and_then(|row| row.first_seq),
     };
     db.put_graph_run(&GraphRun {
         id: run.id.into(),

@@ -121,10 +121,10 @@ async fn nodes(store: &StoreHandle, thread: RunId, run: TurnId) -> Vec<(String, 
         .unwrap()
 }
 
-async fn attempts(store: &StoreHandle, run: TurnId) -> Vec<(u32, String, String)> {
+async fn attempts(store: &StoreHandle, thread: RunId, run: TurnId) -> Vec<(u32, String, String)> {
     store
         .run(&CancellationToken::new(), move |db| {
-            Ok(db.run_attempts(run.into()).unwrap())
+            Ok(db.run_attempts(thread.into(), run.into()).unwrap())
         })
         .await
         .unwrap()
@@ -209,7 +209,7 @@ async fn a_turn_becomes_a_run_with_its_tools_and_requests_as_nodes() {
         ])
     );
     assert_eq!(
-        attempts(&store, run.id).await,
+        attempts(&store, thread, run.id).await,
         [(1, "initial".to_owned(), "completed".to_owned())]
     );
     let pending = store
@@ -333,7 +333,7 @@ async fn a_fallback_adds_an_attempt_to_the_same_run() {
         (ThreadRunStatus::Completed, Some(2))
     );
     assert_eq!(
-        attempts(&store, all[0].id).await,
+        attempts(&store, thread, all[0].id).await,
         [
             (1, "initial".to_owned(), "failed".to_owned()),
             (2, "provider_recovery".to_owned(), "completed".to_owned()),

@@ -12,10 +12,12 @@ use parallax_protocol::{
     SubscribeThreadParams, SubscribeThreadResult, SubscriptionId, ThreadHistoryParams,
     ThreadHistoryResult, ThreadSnapshot,
 };
+use parallax_store::Store;
 
 use super::agent::{MAX_EVENTS_PAGE_BYTES, logged};
 use super::{Context, Cursor};
 use crate::agents::{self, coordinator};
+use crate::event_log::entry;
 use crate::store::{self, store_error};
 use crate::{graph, threads};
 
@@ -53,42 +55,39 @@ pub(super) async fn subscribe_shell(
         };
         return Ok((result, cursor));
     }
-    let ((projects, repos, threads, runs, requests), seq) = context
-        .daemon
-        .reader
-        .snapshot(&context.cancel, |db| {
-            let error = |error| store_error(&error);
-            let projects = db
-                .list_projects()
-                .map_err(error)?
-                .into_iter()
-                .map(|row| {
-                    let coordinator = coordinator::coordinator_of(db, row.id)?;
-                    store::project(row, coordinator)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let repos = db
-                .list_repos()
-                .map_err(error)?
-                .into_iter()
-                .map(threads::repo_entry)
-                .collect::<Result<Vec<_>, _>>()?;
-            let threads = db
-                .list_threads()
-                .map_err(error)?
-                .iter()
-                .map(threads::thread_entry)
-                .collect::<Result<Vec<_>, _>>()?;
-            let runs = db
-                .list_runs_with_worktrees(None)
-                .map_err(error)?
-                .iter()
-                .map(|(row, worktree)| agents::snapshot(row, worktree.as_ref()))
-                .collect::<Result<Vec<_>, _>>()?;
-            let requests = graph::requests(db, None)?;
-            Ok((projects, repos, threads, runs, requests))
-        })
-        .await?;
+    let ((projects, repos, threads, runs, requests), seq) = at_seq(context, |db, _| {
+        let error = |error| store_error(&error);
+        let projects = db
+            .list_projects()
+            .map_err(error)?
+            .into_iter()
+            .map(|row| {
+                let coordinator = coordinator::coordinator_of(db, row.id)?;
+                store::project(row, coordinator)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let repos = db
+            .list_repos()
+            .map_err(error)?
+            .into_iter()
+            .map(threads::repo_entry)
+            .collect::<Result<Vec<_>, _>>()?;
+        let threads = db
+            .list_threads()
+            .map_err(error)?
+            .iter()
+            .map(threads::thread_entry)
+            .collect::<Result<Vec<_>, _>>()?;
+        let runs = db
+            .list_runs_with_worktrees(None)
+            .map_err(error)?
+            .iter()
+            .map(|(row, worktree)| agents::snapshot(row, worktree.as_ref()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let requests = graph::requests(db, None)?;
+        Ok((projects, repos, threads, runs, requests))
+    })
+    .await?;
     cursor.after = seq;
     let result = SubscribeShellResult {
         subscription: cursor.subscription,
@@ -151,23 +150,32 @@ pub(super) async fn subscribe_thread(
             db.import_thread(thread_id.into())
         })
         .await?;
-    let seq = daemon.log.head();
-    let (thread, runs, requests) = daemon
-        .reader
-        .run(&context.cancel, move |db| {
-            let error = |error| store_error(&error);
-            let row = db
-                .get_run(thread_id.into())
-                .map_err(error)?
-                .ok_or_else(|| agents::run_not_found(thread_id))?;
-            let worktree = db.get_worktree(row.id).map_err(error)?;
-            let thread = agents::snapshot(&row, worktree.as_ref())?;
-            let runs = graph::runs(db, thread_id.into())?;
-            let requests = graph::requests(db, Some(thread_id.into()))?;
-            Ok((thread, runs, requests))
-        })
-        .await?;
-    let (events, more) = page(context, thread_id, seq + 1).await?;
+    let ((thread, runs, requests, (events, more)), seq) = at_seq(context, move |db, seq| {
+        let error = |error| store_error(&error);
+        let row = db
+            .get_run(thread_id.into())
+            .map_err(error)?
+            .ok_or_else(|| agents::run_not_found(thread_id))?;
+        let worktree = db.get_worktree(row.id).map_err(error)?;
+        let thread = agents::snapshot(&row, worktree.as_ref())?;
+        let runs = graph::runs(db, thread_id.into())?;
+        let requests = graph::requests(db, Some(thread_id.into()))?;
+        let (stored, more) = db
+            .run_events_before(
+                thread_id.into(),
+                seq + 1,
+                PAGE_EVENTS,
+                MAX_EVENTS_PAGE_BYTES,
+            )
+            .map_err(error)?;
+        let events = stored
+            .into_iter()
+            .rev()
+            .map(|stored| logged(&entry(stored, true)))
+            .collect();
+        Ok((thread, runs, requests, (events, more)))
+    })
+    .await?;
     cursor.after = seq;
     let result = SubscribeThreadResult {
         subscription: cursor.subscription,
@@ -211,6 +219,35 @@ async fn page(
         entries.iter().rev().map(|entry| logged(entry)).collect(),
         more,
     ))
+}
+
+/// Runs `read` in one read transaction on the reader, with the `seq` of the newest event it
+/// sees, so what it reads stands at exactly that `seq`. Then waits for the event log to publish
+/// up to that `seq`, which follows its commit at once, so a cursor can start after it.
+async fn at_seq<T: Send + 'static>(
+    context: &Context,
+    read: impl FnOnce(&Store, u64) -> Result<T, ErrorObject> + Send + 'static,
+) -> Result<(T, u64), ErrorObject> {
+    let (value, seq) = context
+        .daemon
+        .reader
+        .run(&context.cancel, move |db| {
+            db.begin_read().map_err(|error| store_error(&error))?;
+            let read = db
+                .event_head()
+                .map_err(|error| store_error(&error))
+                .and_then(|seq| Ok((read(db, seq)?, seq)));
+            let _ = db.rollback();
+            read
+        })
+        .await?;
+    let mut head = context.daemon.log.watch();
+    while *head.borrow_and_update() < seq {
+        if head.changed().await.is_err() {
+            break;
+        }
+    }
+    Ok((value, seq))
 }
 
 /// Whether a resume after `after` replays the gap: it is still in the window, and small enough
