@@ -26,6 +26,7 @@ import type {
 import { App } from "./App";
 import { collapsedProjects, collapsedThreads } from "./Sidebar";
 import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
+import { fakeWatch } from "./fakeWatch";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The Workspace menu's items are in the DOM either way. Showing one
@@ -125,6 +126,7 @@ beforeEach(() => {
       stateListeners.add(listener);
       return () => stateListeners.delete(listener);
     },
+    watch: fakeWatch(() => window.parallax),
     subscribe: (_host, _params, listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -1485,7 +1487,7 @@ async function openEmberAgents(...runs: AgentRun[]) {
     },
   });
   answers["agent/list"] = (p) => ({
-    result: { runs: p["project"] === "p-ember" ? all : [], seq: 7 },
+    result: { runs: [undefined, "p-ember"].includes(p["project"] as string) ? all : [], seq: 7 },
   });
   answers["agent/events"] = serveEvents(() => all);
   await renderApp();
@@ -1624,6 +1626,20 @@ test("the Agents view starts a subagent by hand, reusing its id to retry", async
   });
   expect(retry).toEqual(first);
   expect(box.value).toBe("");
+  // It lists once its agent.started reaches the shell, as plxd sends it.
+  const run = subagent(first!["runId"] as string, "Bump the version");
+  await act(async () =>
+    deliver({
+      type: "event",
+      event: {
+        subscription: "s-1",
+        seq: 8,
+        time: "",
+        project: "p-ember",
+        event: { kind: "agent.started", runId: run.id, run },
+      },
+    }),
+  );
   expect(agentRows()[0]).toMatch(/^Bump the version/);
 });
 
@@ -1818,7 +1834,7 @@ async function openEmberAsking(
     },
   });
   answers["agent/list"] = (p) => ({
-    result: { runs: p["project"] === "p-ember" ? all : [], seq: 7 },
+    result: { runs: [undefined, "p-ember"].includes(p["project"] as string) ? all : [], seq: 7 },
   });
   answers["agent/events"] = (params) => {
     const r = all.find((run) => run.id === params["runId"])!;
@@ -2553,7 +2569,7 @@ const serveInbox = () => {
     },
   });
   answers["agent/list"] = (p) => ({
-    result: { runs: p["project"] === "p-ember" ? runs : [], seq: 7 },
+    result: { runs: [undefined, "p-ember"].includes(p["project"] as string) ? runs : [], seq: 7 },
   });
   answers["agent/events"] = serveEvents(() => runs);
   answers["inbox/list"] = () => ({ result: { items: inboxItems, seq: 8 } });
@@ -2716,7 +2732,10 @@ test("a new Needs you item notifies with Open Project, from the OS while the win
     result: { projects: [project("ember", "2026-09-26T12:00:00Z")], seq: 7 },
   });
   answers["agent/list"] = (p) => ({
-    result: { runs: p["project"] === "p-ember" ? [login, docs] : [], seq: 7 },
+    result: {
+      runs: [undefined, "p-ember"].includes(p["project"] as string) ? [login, docs] : [],
+      seq: 7,
+    },
   });
   answers["agent/events"] = serveEvents(() => [login, docs]);
   answers["inbox/list"] = () => ({ result: { items: [], seq: 7 } });
@@ -2735,7 +2754,13 @@ test("a new Needs you item notifies with Open Project, from the OS while the win
     act(async () =>
       deliver({
         type: "event",
-        event: { subscription: "s-1", seq, time: "", event: { kind: "inbox.added", item } },
+        event: {
+          subscription: "s-1",
+          seq,
+          time: "",
+          project: "p-ember",
+          event: { kind: "inbox.added", item },
+        },
       }),
     );
   const toast = () => document.querySelector('[aria-label="Notifications"] > div');

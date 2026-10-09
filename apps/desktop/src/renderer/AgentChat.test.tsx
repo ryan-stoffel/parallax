@@ -6,7 +6,14 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, onTestFinished, test, vi } from "vite-plus/test";
 
 import samples from "../../../../crates/parallax-protocol/samples/v1/agents.json";
-import type { ConnectionState, SubscriptionMessage, ParallaxBridge } from "../preload/bridge";
+import type {
+  ConnectionState,
+  SubscriptionMessage,
+  ParallaxBridge,
+  RpcError,
+  WatchMessage,
+  WatchParams,
+} from "../preload/bridge";
 import type {
   AgentRun,
   AgentRunResult,
@@ -32,6 +39,7 @@ import { ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { dragThread } from "./threadDrag";
 import { emptyThreads } from "./threads";
 import type { Item } from "./transcript";
+import { fakeWatch } from "./fakeWatch";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // The real split, watched, to see which messages take it.
@@ -853,6 +861,7 @@ function fakeBridge(
       return () => connections.delete(l);
     },
     request,
+    watch: fakeWatch(() => window.parallax),
     subscribe,
   } as Partial<ParallaxBridge> as ParallaxBridge;
   return {
@@ -879,33 +888,108 @@ async function renderChat(noRepo?: boolean) {
 
 const transcriptText = () => document.querySelector('[role="log"]')?.textContent ?? "";
 
-test("loads every page, subscribes after the last seq, and appends live events", async () => {
-  const { request, subscribe, unsubscribe, emit } = fakeBridge(2);
+/**
+ * A bridge whose `watch` the test drives: `snapshot` and `emit` play plxd's side of the thread's
+ * subscription (0059), and `orchestration/threadHistory` serves the sample's events before a
+ * `seq`, two per page.
+ */
+function watchedBridge() {
+  let listener: (m: WatchMessage) => void = () => {};
+  const stop = vi.fn();
+  const watch = vi.fn((_host: string, _params: WatchParams, l: (m: never) => void) => {
+    listener = l as (m: WatchMessage) => void;
+    return stop;
+  });
+  const request = vi.fn(async (_host: string, method: string, params: { before?: number }) => {
+    if (method !== "orchestration/threadHistory") return { result: {}, logId: "log-1" };
+    const older = logged.filter((e) => e.seq < params.before!);
+    return { result: { events: older.slice(-2), more: older.length > 2 }, logId: "log-1" };
+  });
+  const connections = new Set<(hostId: string, state: ConnectionState) => void>();
+  window.parallax = {
+    platform: "darwin",
+    connectionState: async () => ({
+      status: "connected",
+      plxd: "0.1.0",
+      protocol: 1,
+      capabilities: {},
+    }),
+    onConnectionState: (l: (hostId: string, state: ConnectionState) => void) => {
+      connections.add(l);
+      return () => connections.delete(l);
+    },
+    request,
+    watch,
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  const connect = (state: ConnectionState) =>
+    act(() => connections.forEach((connection) => connection("local", state)));
+  const snapshot = (events: LoggedEvent[], more = false, seq = events.at(-1)?.seq ?? 0) =>
+    act(async () =>
+      listener({
+        type: "snapshot",
+        snapshot: { seq, thread: sampleRun, runs: [], events, more, requests: [] },
+      }),
+    );
+  const emit = (event: LoggedEvent) =>
+    act(async () => listener({ type: "event", event: { subscription: "s", ...event } }));
+  const emitError = (error: RpcError) => act(async () => listener({ type: "error", error }));
+  return { watch, stop, request, snapshot, emit, emitError, connect };
+}
+
+test("opens from the thread's snapshot, appends its events, and a fresh snapshot rebuilds it", async () => {
+  const { watch, stop, snapshot, emit } = watchedBridge();
   await renderChat();
-  expect(request).toHaveBeenCalledWith("local", "agent/events", { runId, after: 0 });
-  expect(subscribe).toHaveBeenCalledWith(
-    "local",
-    { after: 2, project: "01a0d349-6e00-7c9e-80e2-0426486a8cae", run: runId, logId: "log-1" },
-    expect.any(Function),
-  );
+  expect(watch).toHaveBeenCalledWith("local", { threadId: runId }, expect.any(Function));
+  await snapshot(logged.slice(0, 2));
   expect(transcriptText()).toContain("Add a README");
   expect(document.body.textContent).toContain("Worktree"); // the footer's tab
 
-  emit({ type: "event", event: { subscription: "s", ...logged[2]! } });
+  await emit(logged[2]!);
   // The agent's messages are never folded into a work dropdown.
   expect(transcriptText()).toContain("I'll add a README and note the build steps");
 
-  // A resync reloads from the start.
-  request.mockClear();
-  emit({ type: "resync" });
-  await settle();
-  expect(request).toHaveBeenCalledWith("local", "agent/events", { runId, after: 0 });
+  // A reconnect whose gap was too long to replay starts over from plxd's new snapshot.
+  await snapshot(logged.slice(0, 2), false, 50_000);
+  expect(transcriptText()).not.toContain("I'll add a README and note the build steps");
+  await emit({ ...logged[2]!, seq: 50_001 });
+  expect(transcriptText()).toContain("I'll add a README and note the build steps");
 
   act(() => unmount());
-  expect(unsubscribe).toHaveBeenCalled();
+  expect(stop).toHaveBeenCalled();
 });
 
-test("with eventsBefore, opens at the newest page and loads older ones near the top (PLX-490)", async () => {
+test("the thread's subscription stays open while the host is away, so main resumes it after the last event", async () => {
+  const { watch, stop, snapshot, emit, connect } = watchedBridge();
+  await renderChat();
+  await snapshot(logged.slice(0, 2));
+  const failed = { reason: "exited", message: "plxd exited" } as const;
+  connect({ status: "failed", retrying: true, error: failed });
+  connect({ status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} });
+  await settle();
+  expect(watch).toHaveBeenCalledOnce();
+  expect(stop).not.toHaveBeenCalled();
+  // The gap main replays arrives as events, onto the transcript as it was.
+  await emit(logged[2]!);
+  expect(transcriptText()).toContain("Add a README");
+  expect(transcriptText()).toContain("I'll add a README and note the build steps");
+});
+
+test("a thread's subscription that ended in an error opens again on the host's next connection", async () => {
+  const { watch, emitError, snapshot, connect } = watchedBridge();
+  await renderChat();
+  await emitError({ code: -32000, message: "plxd's store failed" });
+  expect(document.body.textContent).toContain("plxd's store failed");
+  expect(watch).toHaveBeenCalledOnce();
+  const failed = { reason: "exited", message: "plxd exited" } as const;
+  connect({ status: "failed", retrying: true, error: failed });
+  connect({ status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} });
+  await settle();
+  expect(watch).toHaveBeenCalledTimes(2);
+  await snapshot(logged.slice(0, 2));
+  expect(transcriptText()).toContain("Add a README");
+});
+
+test("a snapshot of a long thread opens at its newest events and loads older ones near the top (PLX-490)", async () => {
   // A browser keeps the offset at 0 or more, which reads as not near a top of no height.
   const scrollTop = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
   const clamp = vi.spyOn(Element.prototype, "scrollTop", "set").mockImplementation(function (
@@ -915,58 +999,31 @@ test("with eventsBefore, opens at the newest page and loads older ones near the 
     scrollTop.set!.call(this, Math.max(0, top));
   });
   onTestFinished(() => clamp.mockRestore());
-  const { request, subscribe, emit } = fakeBridge(8, {
-    listSeq: 20,
-    capabilities: { eventsBefore: {} },
-  });
+  const { request, snapshot, emit } = watchedBridge();
   await renderChat();
   const befores = () =>
-    request.mock.calls.filter(([, method]) => method === "agent/events").map(([, , p]) => p.before);
-  // The newest page holds only the run's last updates, so the one before it loads too.
-  expect(befores()).toEqual([Number.MAX_SAFE_INTEGER, 7]);
-  expect(request).not.toHaveBeenCalledWith("local", "agent/list", expect.anything());
-  // After the log's seq from before the newest page, which is past that page's last.
-  expect(subscribe).toHaveBeenCalledOnce();
-  expect(subscribe.mock.calls[0]![1]).toMatchObject({ after: 20, run: runId, logId: "log-1" });
+    request.mock.calls
+      .filter(([, method]) => method === "orchestration/threadHistory")
+      .map(([, , p]) => p.before);
+  // The newest events hold only the run's last updates, so the page before them loads too.
+  await snapshot(logged.slice(6, 8), true, 20);
+  await settle();
+  expect(befores()).toEqual([7]);
   expect(transcriptText()).not.toContain("Add a README");
 
   const text = "Live, and kept when older pages come in.";
   const event: ParallaxEvent = { kind: "agent.output", runId, items: [{ kind: "text", text }] };
-  emit({ type: "event", event: { subscription: "s", seq: 21, time: "", event } });
-  // Scrolled to within a screen of the top, the rest loads, a page at a time: four in all.
+  await emit({ seq: 21, time: "", event });
+  // Scrolled to within a screen of the top, the rest loads, a page at a time.
   const tall = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(10_000);
   act(() => void document.querySelector('[role="log"]')!.dispatchEvent(new Event("scroll")));
   await settle();
   tall.mockRestore();
-  expect(befores()).toEqual([Number.MAX_SAFE_INTEGER, 7, 5, 3]);
+  expect(befores()).toEqual([7, 5, 3]);
   const shown = transcriptText();
   expect(shown.indexOf("Add a README")).toBeGreaterThanOrEqual(0);
   expect(shown.indexOf("Add a README")).toBeLessThan(shown.indexOf("Mentioned the tests"));
   expect(shown.indexOf("Mentioned the tests")).toBeLessThan(shown.indexOf(text));
-});
-
-test("subscribes after the scope's snapshot seq, so repeated resyncs end", async () => {
-  // The run's last event is seq 8, but its project's log is at 1000.
-  const { subscribe } = fakeBridge(8, { listSeq: 1000, resyncs: 2 });
-  await renderChat();
-  await settle();
-  expect(subscribe.mock.calls.map(([, params]) => params.after)).toEqual([1000, 1000, 1000]);
-  expect(transcriptText()).toContain("Add a README");
-});
-
-test("a reconnect after siblings' traffic subscribes from the new snapshot, so it never resyncs", async () => {
-  // A quiet run's subscription only sees its own events, so its last seq falls behind the scope.
-  const { subscribe, unsubscribe, connect, traffic } = fakeBridge(8);
-  await renderChat();
-  const failed = { reason: "exited", message: "plxd exited" } as const;
-  connect({ status: "failed", retrying: true, error: failed });
-  expect(unsubscribe).toHaveBeenCalled();
-  traffic(50_000); // Far past what plxd's window replays from seq 8.
-  connect({ status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} });
-  await settle();
-  // The fake answers a subscribe from before `listSeq` with a resync, which would add a third.
-  expect(subscribe.mock.calls.map(([, params]) => params.after)).toEqual([8, 50_000]);
-  expect(transcriptText()).toContain("Add a README");
 });
 
 test("the composer tab shows the worktree and its branch", () => {

@@ -22,6 +22,7 @@ import {
   type SavedHost,
   type SshHost,
   type SubscribeParams,
+  type WatchParams,
 } from "../preload/bridge";
 import {
   addCommand,
@@ -221,6 +222,32 @@ export function startHosts(): void {
     );
     // It ends at once when `logId` is stale.
     if (!ended) windowSubscriptions(sender).set(key, unsubscribe);
+  });
+
+  ipcMain.handle("parallax:watch", (event, hostId: unknown, key: unknown, params: unknown) => {
+    if (typeof key !== "string") throw new Error("invalid subscription key");
+    if (!isObject(params)) throw new Error("params must be an object");
+    const { shell, threadId } = params;
+    const watched: WatchParams | undefined =
+      shell === true ? { shell } : typeof threadId === "string" ? { threadId } : undefined;
+    if (!watched) throw new Error("params must be {shell: true} or {threadId}");
+    const host = connection(hostId);
+    const sender = event.sender;
+    windowSubscriptions(sender).get(key)?.();
+    let ended = false;
+    const stop = host.watch(watched, (message) => {
+      if (message.type === "error") {
+        ended = true;
+        windowSubscriptions(sender).delete(key);
+      }
+      if (sender.isDestroyed()) return;
+      if (ipcStats) {
+        ipcStats.messages += 1;
+        ipcStats.bytes += Buffer.byteLength(JSON.stringify(message));
+      }
+      sender.send("parallax:subscription", key, message);
+    });
+    if (!ended) windowSubscriptions(sender).set(key, stop);
   });
 
   ipcMain.handle("parallax:unsubscribe", (event, key: unknown) => {

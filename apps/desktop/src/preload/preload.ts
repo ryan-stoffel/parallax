@@ -7,16 +7,40 @@ import type {
   SubscriptionMessage,
   TerminalMessage,
   ParallaxBridge,
+  WatchMessage,
+  WatchParams,
 } from "./bridge";
 import { validLocale } from "./bridge";
 
-// Subscription listeners by the key this preload gave them.
-const subscriptions = new Map<string, (message: SubscriptionMessage) => void>();
-ipcRenderer.on("parallax:subscription", (_event, key: string, message: SubscriptionMessage) => {
+// Subscription and watch listeners by the key this preload gave them.
+type Message = SubscriptionMessage | WatchMessage;
+const subscriptions = new Map<string, (message: Message) => void>();
+ipcRenderer.on("parallax:subscription", (_event, key: string, message: Message) => {
   const listener = subscriptions.get(key);
-  if (message.type !== "event") subscriptions.delete(key);
+  if (message.type === "resync" || message.type === "error") subscriptions.delete(key);
   listener?.(message);
 });
+
+/** Sends `channel` for a new subscription or watch, whose messages go to `listener`. */
+function listen(
+  channel: string,
+  hostId: string,
+  params: object,
+  listener: (message: Message) => void,
+): () => void {
+  const key = crypto.randomUUID();
+  subscriptions.set(key, listener);
+  ipcRenderer.invoke(channel, hostId, key, params).catch((error: Error) => {
+    if (subscriptions.delete(key))
+      listener({
+        type: "error",
+        error: { code: ErrorCodes.InvalidParams, message: error.message },
+      });
+  });
+  return () => {
+    if (subscriptions.delete(key)) void ipcRenderer.invoke("parallax:unsubscribe", key);
+  };
+}
 
 // Each terminal's listener, by its id: one each, since each id has one view.
 const terminals = new Map<string, (message: TerminalMessage) => void>();
@@ -57,20 +81,10 @@ const bridge: ParallaxBridge = {
 
   request: (hostId, method, params) =>
     ipcRenderer.invoke("parallax:request", hostId, method, params),
-  subscribe(hostId, params, listener) {
-    const key = crypto.randomUUID();
-    subscriptions.set(key, listener);
-    ipcRenderer.invoke("parallax:subscribe", hostId, key, params).catch((error: Error) => {
-      if (subscriptions.delete(key))
-        listener({
-          type: "error",
-          error: { code: ErrorCodes.InvalidParams, message: error.message },
-        });
-    });
-    return () => {
-      if (subscriptions.delete(key)) void ipcRenderer.invoke("parallax:unsubscribe", key);
-    };
-  },
+  subscribe: (hostId, params, listener) =>
+    listen("parallax:subscribe", hostId, params, listener as (message: Message) => void),
+  watch: (hostId: string, params: WatchParams, listener: (message: never) => void) =>
+    listen("parallax:watch", hostId, params, listener as (message: Message) => void),
   connectionState: (hostId) => ipcRenderer.invoke("parallax:connectionState", hostId),
   onConnectionState(listener) {
     const forward = (_event: unknown, hostId: string, state: ConnectionState) =>

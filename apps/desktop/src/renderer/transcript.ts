@@ -1,6 +1,6 @@
 // One agent run's transcript, rebuilt from its logged events. Pure, so it is
-// tested without React; useAgentRun feeds it pages of `agent/events` and live
-// events alike.
+// tested without React; useAgentRun feeds it a snapshot's events, older pages
+// of `orchestration/threadHistory`, and live events alike.
 import type {
   AgentFailureKind,
   AgentOutcome,
