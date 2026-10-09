@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use super::{
     InstallOutcome, ServiceError, ServiceState, Status, UninstallOutcome, check_label_serves,
-    home_dir, prepare_install, remove_file, run_ok, write_file,
+    home_dir, prepare_install, remove_file, run_ok, stop_outside_serve, write_file,
 };
 use crate::paths::{DATA_DIR_ENV, DataDir};
 
@@ -110,18 +110,31 @@ fn quote(text: &str) -> String {
 /// # Errors
 ///
 /// [`ServiceError::AlreadyRunningOutsideService`] when the unit isn't running but something is
-/// already answering `data_dir`'s socket. Other variants for a filesystem or `systemctl`
-/// failure, including a session with no user manager to reach.
-pub fn install(label: &str, data_dir: &DataDir) -> Result<InstallOutcome, ServiceError> {
+/// already answering `data_dir`'s socket, unless `replace`. Other variants for a filesystem or
+/// `systemctl` failure, including a session with no user manager to reach, or
+/// [`ServiceError::StillRunning`].
+///
+/// With `replace`, that `serve` is stopped once the unit is enabled, so an `attach` in between
+/// starts the unit rather than its own `serve`. `reset-failed` then clears a start limit that
+/// such a start may have hit while the old `serve` held the lock.
+pub fn install(
+    label: &str,
+    data_dir: &DataDir,
+    replace: bool,
+) -> Result<InstallOutcome, ServiceError> {
     check_label_serves(label, data_dir, DataDir::default_location().ok().as_ref())?;
     let state = load_state(label)?;
-    let program = prepare_install(data_dir, state.running())?;
+    let (program, outside) = prepare_install(data_dir, state.running(), replace)?;
     let unit = render_unit(&program, data_dir)?;
     write_file(&unit_path(label)?, &unit)?;
 
     let name = unit_name(label);
     systemctl(&["daemon-reload"])?;
     systemctl(&["enable", &name])?;
+    if outside {
+        stop_outside_serve(data_dir)?;
+        systemctl(&["reset-failed", &name])?;
+    }
     systemctl(&["restart", &name])?;
     Ok(if state.loaded() {
         InstallOutcome::Reinstalled

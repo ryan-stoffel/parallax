@@ -132,6 +132,16 @@ fn lock(path: &Path, data_dir: &Path) -> Result<File, StartError> {
     }
 }
 
+/// The pid of the `serve` holding the lock at `path`, or `None` when nothing holds it or its pid
+/// can't be read. For `plxd service install --replace`.
+#[cfg(unix)]
+pub(crate) fn lock_holder(path: &Path, data_dir: &Path) -> Option<u32> {
+    match lock(path, data_dir) {
+        Err(StartError::AlreadyRunning { pid, .. }) => pid,
+        _ => None,
+    }
+}
+
 /// Writes this process's pid into the lock file it holds.
 fn write_pid(mut file: File, path: &Path) -> Result<File, StartError> {
     let io_error = |error| StartError::io(format!("locking {}", path.display()), error);

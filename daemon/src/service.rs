@@ -15,11 +15,12 @@ use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parallax_protocol::jsonrpc::{Message, Request};
 use parallax_protocol::methods::Initialize;
 use parallax_protocol::{Capabilities, ClientInfo, InitializeParams, ProtocolRange};
+use rustix::process::{Pid, Signal, kill_process};
 
 #[cfg(target_os = "macos")]
 pub use launchd::{install, status, uninstall};
@@ -40,6 +41,9 @@ pub const SERVICE_LABEL_ENV: &str = "PLXD_SERVICE_LABEL";
 /// How long [`status`] and the conflict check in [`install`] wait for an `initialize` answer.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// How long [`stop_outside_serve`] waits for the `serve` it stopped to exit.
+const STOP_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Why installing, removing, or checking on the service failed.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -50,7 +54,7 @@ pub enum ServiceError {
     /// failure, fighting the first `serve` for the lock.
     #[error(
         "plxd is already serving {} outside its service; stop it, then run \
-         `plxd service install` again",
+         `plxd service install` again, or hand it over with `plxd service install --replace`",
         .data_dir.display()
     )]
     AlreadyRunningOutsideService {
@@ -68,6 +72,12 @@ pub enum ServiceError {
     NotTheDefaultDataDir {
         /// The data folder that was asked for.
         data_dir: PathBuf,
+    },
+    /// The `serve` that `install --replace` stopped hadn't exited after [`STOP_TIMEOUT`].
+    #[error("plxd (pid {pid}) was still running 30 s after it was asked to stop")]
+    StillRunning {
+        /// Its pid.
+        pid: u32,
     },
     /// The home folder is unknown, so the service's file can't be placed.
     #[error("the home folder is unknown")]
@@ -227,18 +237,61 @@ fn check_label_serves(
     Ok(())
 }
 
-/// What every install does before writing its file: refuses when something other than the
+/// What every install does before writing its file: checks whether something other than the
 /// service already answers `data_dir` (`ours` says whether the service is what could be
-/// answering), prepares the data folder and its `logs/`, and returns the running `plxd`'s path.
-fn prepare_install(data_dir: &DataDir, ours: bool) -> Result<PathBuf, ServiceError> {
-    if !ours && probe_initialize(data_dir) {
+/// answering), and refuses then unless `replace`. Then prepares the data folder and its `logs/`.
+/// Returns the running `plxd`'s path, and whether a `serve` outside the service must be stopped
+/// with [`stop_outside_serve`].
+fn prepare_install(
+    data_dir: &DataDir,
+    ours: bool,
+    replace: bool,
+) -> Result<(PathBuf, bool), ServiceError> {
+    let outside = !ours && probe_initialize(data_dir);
+    if outside && !replace {
         return Err(ServiceError::AlreadyRunningOutsideService {
             data_dir: data_dir.root().to_owned(),
         });
     }
     crate::server::prepare_data_dir(data_dir.root())?;
     prepare_log_dir(data_dir)?;
-    current_exe()
+    Ok((current_exe()?, outside))
+}
+
+/// Stops the `serve` holding `data_dir`'s lock, which `install --replace` hands over to the
+/// service: SIGTERM to the pid in its lock file, then waits up to [`STOP_TIMEOUT`] for it to
+/// remove the file or let go of the lock. Not for its pid to go: an exited process its parent
+/// hasn't reaped still has one. Nothing holding the lock is not an error.
+///
+/// # Errors
+///
+/// [`ServiceError::StillRunning`] when it hasn't exited in time, and [`ServiceError::Io`] when
+/// the signal can't be sent.
+pub fn stop_outside_serve(data_dir: &DataDir) -> Result<(), ServiceError> {
+    let lock = data_dir.lock_file();
+    // Checking for the file first keeps the lookup from creating one once `serve` removed it.
+    let holder = || {
+        lock.exists()
+            .then(|| crate::server::setup::lock_holder(&lock, data_dir.root()))
+            .flatten()
+    };
+    let Some(pid) = holder() else {
+        return Ok(());
+    };
+    let process = i32::try_from(pid)
+        .ok()
+        .and_then(Pid::from_raw)
+        .ok_or(ServiceError::StillRunning { pid })?;
+    kill_process(process, Signal::TERM)
+        .map_err(|error| ServiceError::io(format!("stopping plxd (pid {pid})"), error.into()))?;
+    let deadline = Instant::now() + STOP_TIMEOUT;
+    while holder() == Some(pid) {
+        if Instant::now() >= deadline {
+            return Err(ServiceError::StillRunning { pid });
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Ok(())
 }
 
 /// Connects to `data_dir`'s socket and sends `initialize`, to see whether something answers it

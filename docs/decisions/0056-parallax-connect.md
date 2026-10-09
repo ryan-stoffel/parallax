@@ -31,6 +31,7 @@ A Connect device's nickname and icon are host settings, `deviceName` and `device
 
 - Settings > Connections has a Parallax Connect section. Install runs `npm install -g plx-connect` on this computer, as an agent's install does (PLX-558). Then a toggle sets the local plxd's `connect`, and turning it on opens the Add computer wizard.
 - While the local plxd's `connect` is on, the app asks it for `connect/devices` every 15 s and keeps a connection, with id `tailnet:<node ID>`, to every other device that answers. A device stays listed, retrying, after it goes offline. So a computer set up from another one connects to all of them without its own wizard.
+- While Connect is on, a packaged Mac app hands the local plxd over to its LaunchAgent once no agents are running ([PLX-631](https://linear.app/ryanstoffel/issue/PLX-631)): `plxd service install --replace` bootstraps the agent, then stops the `serve` the app started. Otherwise plxd stays the app's child, so macOS lists Parallax as running in the background after it quits, and nothing starts plxd after a restart.
 - Each device's switch in Settings says whether this app uses it; off drops its connection and its threads here. Remove takes it off this app's list until Add computer adds it again. Neither changes anything on the device.
 - A Connect device's terminals, installs, and sign-ins go over ssh to its Tailscale IP, as SSH hosts' do.
 - Sidebar thread rows show their device's icon next to the provider logo when there is more than one host.
