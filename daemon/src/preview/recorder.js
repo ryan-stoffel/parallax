@@ -11,8 +11,9 @@ new Promise((resolve) => {
     mimeType: "video/webm;codecs=vp8",
     videoBitsPerSecond: 1_500_000,
   });
-  // A recording stops itself at 5 MB, which still fits a plxd frame, and keeps what it has.
-  const MAX_BYTES = 5 * 1024 * 1024;
+  // A recording stops itself at 4.5 MB and keeps what it has. As base64 that's 6 MiB, which
+  // leaves a second's chunk and the last flush under plxd's 7 MiB check and its 8 MiB frames.
+  const MAX_BYTES = 4.5 * 1024 * 1024;
   let bytes = 0;
   let capped = false;
   recorder.ondataavailable = (e) => {

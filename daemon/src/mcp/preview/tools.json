@@ -783,7 +783,7 @@
    "openWorldHint": true,
    "readOnlyHint": false
   },
-  "description": "Stop recording the browser tab selected by tabId, or this thread's current tab when omitted. The WebM (up to 5 MB) shows in this thread, and is written to a file on this host whose path comes back.",
+  "description": "Stop recording the browser tab selected by tabId, or this thread's current tab when omitted. The WebM (up to about 4.5 MB) shows in this thread, and is written to a file on this host whose path comes back.",
   "inputSchema": {
    "additionalProperties": false,
    "properties": {

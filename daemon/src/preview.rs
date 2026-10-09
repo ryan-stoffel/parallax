@@ -20,7 +20,7 @@
 //! - **Recording** draws the screencast's frames onto a canvas in a second page and records it
 //!   with `MediaRecorder`, as T3 does. Stopping keeps the `WebM` with the run's images, for the
 //!   transcript, and writes it to a file in plxd's `tmp/previews/<run>`, as `save` does a
-//!   screenshot, removed with the thread. It stops itself at 5 MB.
+//!   screenshot, removed with the thread. It stops itself at 4.5 MB.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -572,6 +572,8 @@ async fn add_tab(
         frames_tx,
     ));
     let mut locked = state.lock().await;
+    // Checked again where the tab is added, so tabs opened at once can't pass the caps together.
+    check_caps(&locked, run)?;
     locked.numbered += 1;
     let tab = Arc::new(Tab {
         run,
@@ -599,7 +601,11 @@ async fn close_when_idle(state: Weak<tokio::sync::Mutex<State>>, run: RunId, id:
         let Some(tab) = state.tabs.iter().find(|tab| tab.run == run && tab.id == id) else {
             return;
         };
-        if lock(&tab.live).used.is_some_and(|at| at.elapsed() > IDLE) {
+        let live = lock(&tab.live);
+        // A recording keeps its tab, however long it runs.
+        let idle = live.recording.is_none() && live.used.is_some_and(|at| at.elapsed() > IDLE);
+        drop(live);
+        if idle {
             remove(&mut state, |tab| tab.run == run && tab.id == id);
             return;
         }
@@ -1059,9 +1065,9 @@ impl Tab {
         if data.is_empty() {
             return Err("The recording captured no frames.".to_owned());
         }
-        // The recorder stops itself at 5 MB; this is the frame's own limit.
+        // The recorder stops itself near 4.5 MB (6 MiB of base64); this is the frame's own limit.
         if data.len() > MAX_RECORDING_BASE64 {
-            return Err("The recording is over 5 MB. Record a shorter clip.".to_owned());
+            return Err("The recording is too large to keep. Record a shorter clip.".to_owned());
         }
         let capped = stopped["capped"] == true;
         let bytes = crate::images::decode(&data).ok_or("The recording came back unreadable.")?;
@@ -1090,7 +1096,8 @@ impl Tab {
             "createdAt": recording.started.to_string(),
         });
         if capped {
-            artifact["note"] = "The recording stopped itself at 5 MB, so it ends early.".into();
+            artifact["note"] =
+                "The recording stopped itself at its 4.5 MB cap, so it ends early.".into();
         }
         Ok(artifact)
     }
@@ -1922,6 +1929,13 @@ mod tests {
         let (status, _) = call(
             "preview_navigate",
             json!({"target": {"kind": "environment-port", "port": port}}),
+        )
+        .await;
+        assert_eq!(status["title"], "Dev server", "{status}");
+        // And by its address, which Chrome sends the proxy as a name.
+        let (status, _) = call(
+            "preview_navigate",
+            json!({"url": format!("http://127.0.0.1:{port}/again")}),
         )
         .await;
         assert_eq!(status["title"], "Dev server", "{status}");

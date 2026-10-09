@@ -100,6 +100,14 @@ async fn serve(mut client: TcpStream, loopback: bool) -> io::Result<()> {
         }
         _ => return reply(&mut client, UNSUPPORTED).await,
     };
+    // Chrome sends an address in a URL, such as 127.0.0.1 or [::1], as a name.
+    let host = match host {
+        Host::Name(name) => match name.trim_start_matches('[').trim_end_matches(']').parse() {
+            Ok(ip) => Host::Ip(ip),
+            Err(_) => Host::Name(name),
+        },
+        ip @ Host::Ip(_) => ip,
+    };
     let mut port = [0; 2];
     client.read_exact(&mut port).await?;
     let port = u16::from_be_bytes(port);
@@ -319,5 +327,14 @@ mod tests {
         assert_eq!(connect(with_loopback.port, "app.localhost", port).await, 0);
         // A public name that resolves to loopback, as `localtest.me` does, is refused.
         assert_ne!(connect(with_loopback.port, "localtest.me", port).await, 0);
+        // Chrome sends an address as a name.
+        assert_eq!(connect(with_loopback.port, "127.0.0.1", port).await, 0);
+        assert_eq!(connect(public.port, "127.0.0.1", port).await, 2);
+        if let Ok(v6) = TcpListener::bind("[::1]:0").await {
+            let port = v6.local_addr().unwrap().port();
+            assert_eq!(connect(with_loopback.port, "[::1]", port).await, 0);
+            assert_eq!(connect(with_loopback.port, "::1", port).await, 0);
+            assert_eq!(connect(public.port, "[::1]", port).await, 2);
+        }
     }
 }
