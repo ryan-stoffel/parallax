@@ -675,8 +675,8 @@ async function keepServing(): Promise<void> {
 
 /**
  * A LaunchAgent left by a Parallax that has since moved or been deleted runs a plxd that's gone:
- * launchd keeps failing to start it while `attach`'s `kickstart` still succeeds, so attach never
- * starts one itself. Points the agent at this app's plxd. An agent whose plxd exists is left
+ * launchd keeps failing to start it, and every `attach` waits out its whole deadline on
+ * `kickstart` before starting a `serve` itself. Points the agent at this app's plxd. An agent whose plxd exists is left
  * alone, even another install's, so a stable and a nightly app don't take it back and forth.
  */
 async function repointService(): Promise<void> {
