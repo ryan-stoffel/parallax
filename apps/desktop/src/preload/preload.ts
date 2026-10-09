@@ -87,6 +87,7 @@ const bridge: ParallaxBridge = {
   renameLocal: (name) => ipcRenderer.invoke("parallax:renameLocal", name),
   saveHost: (host, id) => ipcRenderer.invoke("parallax:saveHost", host, id),
   removeHost: (id) => ipcRenderer.invoke("parallax:removeHost", id),
+  installPlxd: (id) => ipcRenderer.invoke("parallax:installPlxd", id),
 
   onConnect: (listener) => follow("parallax:connect", listener),
   installConnect: () => ipcRenderer.invoke("parallax:installConnect"),

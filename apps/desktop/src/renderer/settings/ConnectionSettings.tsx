@@ -8,7 +8,16 @@ import { localId, useHosts, type Host } from "../hosts";
 import { IconButton } from "../ui";
 import { ConnectSettings } from "./ConnectSettings";
 import { SshHostDialog } from "./SshHostDialog";
-import { PageTitle, quietButton, RenameForm, Row, Section, settingRow, StatusDot } from "./parts";
+import {
+  PageTitle,
+  primaryButton,
+  quietButton,
+  RenameForm,
+  Row,
+  Section,
+  settingRow,
+  StatusDot,
+} from "./parts";
 
 // xterm.js is large, so it loads when a sign-in first opens.
 const SignInTerminal = lazy(() =>
@@ -26,6 +35,37 @@ const signInFixes = ({ reason, exitCode, stderr = "" }: ConnectionError) =>
   !stderr.includes("REMOTE HOST IDENTIFICATION HAS CHANGED") &&
   /Permission denied|Host key verification failed/.test(stderr);
 
+/**
+ * What Parallax can do about an SSH host's plxd (PLX-642): install it where none was found (exit
+ * 127, after `LOCATE_PLXD`), or update one older than this app (`appVersion`), connected or not.
+ * Nothing for a development build, which has no release to install.
+ */
+export function plxdFix(
+  state: ConnectionState | undefined,
+  appVersion: string | undefined,
+): "install" | "update" | undefined {
+  if (!appVersion || !/^\d+\.\d+\.\d+(-nightly)?$/.test(appVersion)) return undefined;
+  if (state?.status === "failed" && state.error.exitCode === 127) return "install";
+  const running = runningPlxd(state);
+  return running !== undefined && older(running, appVersion) ? "update" : undefined;
+}
+
+/** The host's plxd version, when it answered or refused the handshake. */
+const runningPlxd = (state?: ConnectionState) =>
+  state?.status === "connected"
+    ? state.plxd
+    : state?.status === "failed"
+      ? state.error.plxd
+      : undefined;
+
+/** Whether version `a` is older than `b` (0030): by number, then a nightly before its release. */
+function older(a: string, b: string): boolean {
+  const [x, y] = [a, b].map((v) => /^(\d+)\.(\d+)\.(\d+)(-.+)?$/.exec(v));
+  if (!x || !y) return false;
+  for (const i of [1, 2, 3]) if (Number(x[i]) !== Number(y[i])) return Number(x[i]) < Number(y[i]);
+  return x[4] !== undefined && y[4] === undefined;
+}
+
 const tone = (state?: ConnectionState) =>
   state?.status === "connected" ? "on" : state?.status === "failed" ? "warn" : "off";
 
@@ -40,6 +80,8 @@ export function ConnectionSettings() {
   const remote = hosts.filter((h) => h.destination);
   // The host whose Add host dialog is open: its id, "new", or none.
   const [editing, setEditing] = useState<string>();
+  const [appVersion, setAppVersion] = useState<string>();
+  useEffect(() => void window.parallax.version().then(setAppVersion), []);
   const [removeError, setRemoveError] = useState<string>();
   const remove = async (id: string) => setRemoveError(await window.parallax.removeHost(id));
 
@@ -47,7 +89,7 @@ export function ConnectionSettings() {
     <>
       <PageTitle title="Connections">
         Where your agents run: this computer, your other computers through Parallax Connect, and
-        machines you reach over SSH with plxd installed.
+        machines you reach over SSH.
       </PageTitle>
       <LocalHost host={local} />
       <ConnectSettings />
@@ -74,6 +116,7 @@ export function ConnectionSettings() {
           <RemoteHost
             key={h.id}
             host={h}
+            appVersion={appVersion}
             onEdit={() => setEditing(h.id)}
             onRemove={() => void remove(h.id)}
           />
@@ -89,8 +132,8 @@ export function ConnectionSettings() {
             <Server aria-hidden className="size-6 text-faint-foreground" />
             <p className="text-[13px] font-medium">No SSH hosts yet</p>
             <p className="max-w-sm text-[12.5px] text-muted-foreground">
-              Add a machine you reach over SSH, such as a Mac mini with plxd installed, to run
-              agents there.
+              Add a machine you reach over SSH, such as a Mac mini, to run agents there. Parallax
+              can install plxd on it.
             </p>
           </div>
         )}
@@ -157,19 +200,30 @@ function LocalHost({ host }: { host: Host }) {
  * A saved SSH host: its connection, destination, and Edit and Remove. A host that failed for want
  * of a login or a trusted host key (`signInFixes`) has Sign in, which opens the terminal where ssh
  * asks for a password or the key (0007), then connects it. Windows' OpenSSH can't share a login,
- * so it has none.
+ * so it has none. A host without plxd, or with one older than the app, has Install or Update
+ * plxd (`plxdFix`), which installs this app's plxd there in one click.
  */
 function RemoteHost({
   host,
+  appVersion,
   onEdit,
   onRemove,
 }: {
   host: Host;
+  appVersion: string | undefined;
   onEdit: () => void;
   onRemove: () => void;
 }) {
   const state = useConnection(host.id);
   const [signingIn, setSigningIn] = useState(false);
+  const fix = plxdFix(state, appVersion);
+  const [installing, setInstalling] = useState(false);
+  const [installError, setInstallError] = useState<string>();
+  const install = async () => {
+    setInstalling(true);
+    setInstallError(await window.parallax.installPlxd(host.id));
+    setInstalling(false);
+  };
   const canSignIn =
     window.parallax.platform !== "win32" && state?.status === "failed" && signInFixes(state.error);
   useEffect(() => {
@@ -188,8 +242,33 @@ function RemoteHost({
             {state && ` · ${statusLabel(state)}`}
             {state?.status === "connected" && ` · plxd ${state.plxd}`}
           </span>
+          {fix && (
+            <p className="mt-1 text-[12.5px] text-muted-foreground">
+              {fix === "install"
+                ? `plxd isn't on ${host.name}. `
+                : `${host.name} runs plxd ${runningPlxd(state)}, older than this app. `}
+              {fix === "install" ? "Install" : "Update"} downloads plxd {appVersion} there from
+              GitHub, checks its SHA256, and puts it in ~/.parallax-plxd
+              {fix === "update" && ", then restarts plxd, which stops its running agents"}.
+            </p>
+          )}
+          {installError && (
+            <p role="alert" className="mt-1 text-[12.5px] text-danger">
+              {installError}
+            </p>
+          )}
         </div>
         <div className="flex shrink-0 gap-1">
+          {fix && (
+            <button
+              type="button"
+              className={primaryButton}
+              disabled={installing}
+              onClick={() => void install()}
+            >
+              {installing ? "Installing…" : fix === "install" ? "Install plxd" : "Update plxd"}
+            </button>
+          )}
           {canSignIn && !signingIn && (
             <button type="button" className={quietButton} onClick={() => setSigningIn(true)}>
               Sign in

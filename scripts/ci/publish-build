@@ -15,7 +15,7 @@ write() {
   if [ "${DRY_RUN:-}" = 1 ]; then echo "dry run: gh $*"; else gh "$@"; fi
 }
 
-# The installers, the macOS zip, and the blockmaps; then the channel's update metadata.
+# The installers, the macOS zip, the blockmaps, and plxd for SSH hosts; then the channel's update metadata.
 files=()
 for f in parallax-*; do [ -f "$f" ] && files+=("$f"); done
 if [ ${#files[@]} = 0 ]; then echo "publish-build: no installer in $PWD" >&2; exit 1; fi

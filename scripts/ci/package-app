@@ -75,3 +75,12 @@ pnpm --version
 pnpm install --frozen-lockfile
 pnpm build
 pnpm exec electron-builder --publish never "$builder_arch" -c.extraMetadata.version="$version" "$@"
+
+# plxd on its own, which the app installs on an SSH host (PLX-642), beside the installer so
+# publish-build attaches it and SHA256SUMS lists it. On macOS, the signed copy from inside the app.
+# Not on Windows: the install runs a POSIX script on the host.
+asset=release/parallax-plxd-$version
+case $host in
+  *-apple-*) cp release/mac*/*.app/Contents/Resources/plxd "$asset-mac-${builder_arch#--}" ;;
+  *-linux-*) cp ../../target/package-resources/plxd "$asset-linux-${builder_arch#--}" ;;
+esac

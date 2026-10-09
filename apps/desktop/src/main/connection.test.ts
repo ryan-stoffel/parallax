@@ -422,7 +422,7 @@ test("ssh failures read as what to do", () => {
 
 test("an SSH host's command uses its Sign in master, except on Windows", () => {
   const options = (platform: NodeJS.Platform) =>
-    sshCommand("mini", "ssh", false, platform).join(" ");
+    sshCommand("mini", "ssh", undefined, platform).join(" ");
   expect(options("darwin")).toContain("-o ControlMaster=no -o ControlPath=~/.ssh/parallax-%C");
   expect(options("darwin")).not.toContain("ControlPath=none");
   expect(options("win32")).toContain("-o ControlPath=none");
@@ -431,11 +431,13 @@ test("an SSH host's command uses its Sign in master, except on Windows", () => {
 
 test("an SSH host without plxd on PATH is reached through plxd where Parallax installs it", () => {
   expect(sshCommand("mini").slice(-3)).toEqual(["mini", "plxd", "attach"]);
-  expect(sshCommand("mini", "ssh", true).slice(-2)).toEqual(["mini", LOCATE_PLXD]);
-  // One argument, which the host's login shell hands to sh: PATH first, so a Retry after adding
-  // plxd to it works, then plx-connect's ~/.local/bin, then the app in either channel and
-  // place, and 127 when none is there.
-  expect(LOCATE_PLXD).toMatch(/^sh -c 'command -v plxd >\/dev\/null && exec plxd attach; /);
+  expect(sshCommand("mini", "ssh", [LOCATE_PLXD]).slice(-2)).toEqual(["mini", LOCATE_PLXD]);
+  // One argument, which the host's login shell hands to sh: the plxd the app installed first,
+  // then PATH, so a Retry after adding plxd to it works, then plx-connect's ~/.local/bin, then
+  // the app in either channel and place, and 127 when none is there.
+  expect(LOCATE_PLXD).toMatch(
+    /^sh -c '\[ -x "\$HOME\/.parallax-plxd\/plxd" \] && exec "\$HOME\/.parallax-plxd\/plxd" attach; command -v plxd >\/dev\/null && exec plxd attach; /,
+  );
   for (const path of [
     '"$HOME/.local/bin/plxd"',
     '"/Applications/Parallax.app/Contents/Resources/plxd"',

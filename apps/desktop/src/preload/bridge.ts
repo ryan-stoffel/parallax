@@ -180,6 +180,12 @@ export interface ParallaxBridge {
    * people, or undefined.
    */
   removeHost(id: string): Promise<string | undefined>;
+  /**
+   * Installs this app's plxd release in `~/.parallax-plxd` on an SSH host, checked against the
+   * release's SHA256SUMS, then reconnects to it (PLX-642). Resolves to an error for people, or
+   * undefined.
+   */
+  installPlxd(id: string): Promise<string | undefined>;
 
   /** Parallax Connect here (0056). Calls `listener` now and on every change. Returns the unsubscribe function. */
   onConnect(listener: (state: ConnectState) => void): () => void;
