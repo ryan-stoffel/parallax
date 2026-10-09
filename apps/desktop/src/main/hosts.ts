@@ -16,7 +16,6 @@ import {
   type DeviceHost,
   type DeviceIcon,
   iconFor,
-  olderVersion,
   withheldMethods,
   type RendererMethod,
   type RpcResponse,
@@ -52,7 +51,15 @@ import {
   type Command,
   type SshTarget,
 } from "./terminal";
-import { dataDir, findPlxd, plistProgram, plxdVersion, replaceServe, serviceStep } from "./plxd";
+import {
+  dataDir,
+  findPlxd,
+  movesServiceBack,
+  plistProgram,
+  plxdVersion,
+  replaceServe,
+  serviceStep,
+} from "./plxd";
 import { isNightly } from "./updater";
 import { broadcast, perWindow } from "./windows";
 
@@ -716,11 +723,11 @@ async function repointService(): Promise<void> {
       console.log(`parallax: pointed plxd's login service at ${plxd}, from the missing ${program}`);
       return;
     }
-    if (program !== path.join(homedir(), ".parallax-plxd", "plxd")) return;
-    const health = await connections.get("local")?.request("host/health", {});
-    if (!health || !("result" in health) || health.result.runningAgents !== 0) return;
     const [theirs, ours] = await Promise.all([plxdVersion(program), plxdVersion(plxd)]);
-    if (!theirs || !ours || !olderVersion(theirs, ours)) return;
+    // Last before the replace, so an agent has the least time to start in between.
+    const health = await connections.get("local")?.request("host/health", {});
+    const agents = health && "result" in health ? health.result.runningAgents : undefined;
+    if (!movesServiceBack(program, homedir(), theirs, ours, agents)) return;
     await runPlxd(plxd, "service", "install", "--replace");
     console.log(
       `parallax: moved plxd's login service to ${plxd} ${ours}, from ${program} ${theirs}`,

@@ -4,6 +4,8 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 
+import { olderVersion } from "../preload/bridge";
+
 export type PlxdLookup = {
   env: NodeJS.ProcessEnv;
   platform: NodeJS.Platform;
@@ -96,6 +98,25 @@ export function serviceStep(
   if (installed) return "failed";
   return runningAgents === 0 ? "install" : "wait";
 }
+
+/**
+ * Whether `repointService` (hosts.ts) moves plxd's LaunchAgent from `program`, which runs plxd
+ * `theirs`, to this app's plxd `ours`: only from the plxd an SSH client's update installed
+ * (`~/.parallax-plxd/plxd` under `home`, PLX-642), only to a strictly newer version, and only with
+ * no agents running (`agents`, undefined when unknown), since `--replace` restarts `serve`.
+ */
+export const movesServiceBack = (
+  program: string,
+  home: string,
+  theirs: string | undefined,
+  ours: string | undefined,
+  agents: number | undefined,
+) =>
+  program === path.join(home, ".parallax-plxd", "plxd") &&
+  theirs !== undefined &&
+  ours !== undefined &&
+  olderVersion(theirs, ours) &&
+  agents === 0;
 
 /** The program a LaunchAgent plist runs: the first string of its `ProgramArguments`. */
 export function plistProgram(plist: string): string | undefined {
