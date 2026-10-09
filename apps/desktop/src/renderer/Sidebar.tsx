@@ -1503,7 +1503,7 @@ function ThreadRow({
   const [menuOpen, setMenuOpen] = useState(false);
   // The host's auto-resume setting, read as the menu opens, for the run's own toggle.
   const [hostResumes, setHostResumes] = useState<boolean>();
-  const resumes = run?.autoResume ?? hostResumes ?? true;
+  const resumes = run?.autoResume ?? hostResumes ?? false;
   const choose = (action: () => void) => () => {
     menu.current?.hidePopover();
     snoozeMenu.current?.hidePopover();

@@ -125,16 +125,20 @@ fn signed(duration: Duration) -> SignedDuration {
 }
 
 /// Whether a run with `own` as its override waits and resumes after a usage limit: its override,
-/// or else the host's setting, which is on unless set off.
-pub(super) async fn enabled(daemon: &Daemon, own: Option<bool>) -> bool {
+/// or else for a run in a Project yes, since nobody may be watching it (0060), or else the host's
+/// setting, which is off unless set on.
+pub(super) async fn enabled(daemon: &Daemon, own: Option<bool>, in_project: bool) -> bool {
     if let Some(own) = own {
         return own;
+    }
+    if in_project {
+        return true;
     }
     store(daemon, |db| db.auto_resume().map_err(|e| store_error(&e)))
         .await
         .unwrap_or_else(|error| {
-            warn!(error = %error.message, "could not read the auto-resume setting; it stays on");
-            true
+            warn!(error = %error.message, "could not read the auto-resume setting; it stays off");
+            false
         })
 }
 

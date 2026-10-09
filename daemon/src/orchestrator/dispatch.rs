@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS};
 use parallax_protocol::{
-    AgentSendParams, DispatchMode, DispatchResult, ErrorKind, OrchestrationCommand, RunId,
-    ThreadRunStatus, TurnId,
+    AgentSendParams, AgentStatus, DispatchMode, DispatchResult, ErrorKind, OrchestrationCommand,
+    RunId, ThreadRunStatus, TurnId,
 };
 use parallax_store::{NewEffect, OrchestrationReceipt};
 use tokio_util::sync::CancellationToken;
@@ -174,10 +174,16 @@ async fn act(
             };
             let daemon = Arc::clone(daemon);
             let detached = Arc::clone(&daemon);
-            detached
+            let run = detached
                 .agents
                 .detached(agents::send_with(daemon, params, delivery))
                 .await?;
+            // A CLI that didn't start again leaves the run failed, and no turn for the message.
+            // Not a rejection, so no receipt keeps it, and a retry tries again.
+            if run.status == AgentStatus::Failed {
+                let why = run.error.as_deref().unwrap_or("the agent couldn't start");
+                return Err(ErrorObject::internal_error(why));
+            }
             Ok(None)
         }
         OrchestrationCommand::QueuedRunReorder { run_ids, .. } => {

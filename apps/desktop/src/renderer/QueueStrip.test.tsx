@@ -19,10 +19,12 @@ const messages: QueuedMessage[] = [
   { id: "b", text: "Update README", images: 0, threads: [] },
   { id: "c", text: "Run checks", images: 0, threads: [] },
 ];
-function render(list = messages, running = true) {
+function render(list = messages, running = true, held = false) {
   root ??= createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
-    root!.render(<QueueStrip hostId="local" runId="run" messages={list} running={running} />),
+    root!.render(
+      <QueueStrip hostId="local" runId="run" messages={list} held={held} running={running} />,
+    ),
   );
 }
 function setup() {
@@ -50,9 +52,10 @@ test("edits text without replacing images or attached threads, and follows autho
       .querySelector("form")!
       .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
   );
-  expect(request).toHaveBeenCalledWith("local", "queue/edit", {
-    runId: "run",
-    id: "a",
+  expect(request).toHaveBeenCalledWith("local", "orchestration/dispatch", {
+    type: "queued-run.edit",
+    threadId: "run",
+    runId: "a",
     text: "Add focused tests",
   });
   // The RPC result does not replace the live server state.
@@ -66,20 +69,30 @@ test("edits text without replacing images or attached threads, and follows autho
 test("cancels, steers, and reorders by stable message IDs", async () => {
   const request = setup();
   await act(async () => button("Cancel queued message 2").click());
-  expect(request).toHaveBeenLastCalledWith("local", "queue/cancel", { runId: "run", id: "b" });
+  expect(request).toHaveBeenLastCalledWith("local", "orchestration/dispatch", {
+    type: "queued-run.cancel",
+    threadId: "run",
+    runId: "b",
+  });
   await act(async () => button("Steer queued message 1 now").click());
-  expect(request).toHaveBeenLastCalledWith("local", "queue/steer", { runId: "run", id: "a" });
+  expect(request).toHaveBeenLastCalledWith("local", "orchestration/dispatch", {
+    type: "queued-message.promote-to-steer",
+    threadId: "run",
+    runId: "a",
+  });
   await act(async () => button("Move queued message 3 up").click());
-  expect(request).toHaveBeenLastCalledWith("local", "queue/reorder", {
-    runId: "run",
-    ids: ["a", "c", "b"],
+  expect(request).toHaveBeenLastCalledWith("local", "orchestration/dispatch", {
+    type: "queued-run.reorder",
+    threadId: "run",
+    runIds: ["a", "c", "b"],
   });
   const drop = new Event("drop", { bubbles: true, cancelable: true });
   Object.defineProperty(drop, "dataTransfer", { value: { getData: () => "c" } });
   await act(async () => document.querySelector("li")!.dispatchEvent(drop));
-  expect(request).toHaveBeenLastCalledWith("local", "queue/reorder", {
-    runId: "run",
-    ids: ["c", "a", "b"],
+  expect(request).toHaveBeenLastCalledWith("local", "orchestration/dispatch", {
+    type: "queued-run.reorder",
+    threadId: "run",
+    runIds: ["c", "a", "b"],
   });
   render(messages, false);
   expect(button("Steer queued message 1 now").disabled).toBe(true);
@@ -91,4 +104,17 @@ test("shows rejected changes without losing the queued message", async () => {
   await act(async () => button("Cancel queued message 1").click());
   expect(document.querySelector('[role="alert"]')?.textContent).toBe("Already delivered");
   expect(document.body.textContent).toContain("Add tests");
+});
+
+test("a held queue shows it is paused, and Resume resumes it (0060)", async () => {
+  const request = setup();
+  expect(document.body.textContent).not.toContain("Paused");
+  render(messages, false, true);
+  expect(document.body.textContent).toContain("Paused");
+  const resume = [...document.querySelectorAll("button")].find((b) => b.textContent === "Resume")!;
+  await act(async () => resume.click());
+  expect(request).toHaveBeenLastCalledWith("local", "orchestration/dispatch", {
+    type: "queue.resume",
+    threadId: "run",
+  });
 });

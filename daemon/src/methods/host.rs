@@ -327,6 +327,7 @@ pub(crate) async fn set_settings(
 ) -> Result<HostSettings, ErrorObject> {
     let HostSettingsSetParams {
         auto_resume,
+        continue_after_restart,
         clean_worktrees,
         connect,
         remote,
@@ -345,6 +346,14 @@ pub(crate) async fn set_settings(
             if let Some(on) = auto_resume {
                 db.set_auto_resume(on).map_err(|e| store_error(&e))?;
                 info!(auto_resume = on, "changed the host's auto-resume setting");
+            }
+            if let Some(on) = continue_after_restart {
+                db.set_continue_after_restart(on)
+                    .map_err(|e| store_error(&e))?;
+                info!(
+                    continue_after_restart = on,
+                    "changed the host's continue-after-restart setting"
+                );
             }
             if let Some(on) = clean_worktrees {
                 db.set_clean_worktrees(on).map_err(|e| store_error(&e))?;
@@ -413,6 +422,7 @@ fn check_device_icon(icon: &str) -> Result<Option<String>, ErrorObject> {
 fn read_settings(db: &parallax_store::Store) -> Result<HostSettings, ErrorObject> {
     Ok(HostSettings {
         auto_resume: db.auto_resume().map_err(|e| store_error(&e))?,
+        continue_after_restart: Some(db.continue_after_restart().map_err(|e| store_error(&e))?),
         clean_worktrees: Some(db.clean_worktrees().map_err(|e| store_error(&e))?),
         connect: Some(db.connect().map_err(|e| store_error(&e))?),
         remote: Some(db.remote().map_err(|e| store_error(&e))?),

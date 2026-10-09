@@ -6,6 +6,10 @@ use crate::error::StoreError;
 /// The `host_settings` key for whether usage limits make runs wait and resume (decision 0049).
 const AUTO_RESUME: &str = "auto_resume";
 
+/// The `host_settings` key for whether a plain thread's turn a restart cut off continues once
+/// plxd is up (decision 0060).
+const CONTINUE_AFTER_RESTART: &str = "continue_after_restart";
+
 /// The `host_settings` key for whether plxd removes a settled thread's worktree once its pull
 /// request merges (PLX-555).
 const CLEAN_WORKTREES: &str = "clean_worktrees";
@@ -36,13 +40,34 @@ const RUNNING_SCRIPTS: &str = "running_scripts";
 
 impl Store {
     /// Whether a run a usage limit stopped waits and resumes, unless the run overrides it
-    /// (PLX-371, decision 0049). On when never set.
+    /// (PLX-371, decision 0049). Off unless set on, as T3 Code's (0060).
     ///
     /// # Errors
     ///
     /// A database error.
     pub fn auto_resume(&self) -> Result<bool, StoreError> {
-        self.flag(AUTO_RESUME)
+        Ok(self.text(AUTO_RESUME)?.is_some_and(|value| value == "true"))
+    }
+
+    /// Whether a plain thread's turn a restart cut off gets "Continue where you left off." once
+    /// plxd is up (decision 0060). Off unless set on.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn continue_after_restart(&self) -> Result<bool, StoreError> {
+        Ok(self
+            .text(CONTINUE_AFTER_RESTART)?
+            .is_some_and(|value| value == "true"))
+    }
+
+    /// Sets the host's continue-after-restart setting.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_continue_after_restart(&self, on: bool) -> Result<(), StoreError> {
+        self.set_flag(CONTINUE_AFTER_RESTART, on)
     }
 
     /// Sets the host's auto-resume setting.
@@ -261,19 +286,24 @@ mod tests {
     use crate::Store;
 
     #[test]
-    fn host_settings_are_on_until_set_off_and_independent() {
+    fn host_settings_keep_their_defaults_until_set_and_are_independent() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("parallax.sqlite3")).unwrap();
-        assert!(store.auto_resume().unwrap());
-        assert!(store.clean_worktrees().unwrap());
-        store.set_auto_resume(false).unwrap();
+        // Off by default (0060), as is continuing after a restart; cleanup is on.
         assert!(!store.auto_resume().unwrap());
+        assert!(!store.continue_after_restart().unwrap());
+        assert!(store.clean_worktrees().unwrap());
+        store.set_auto_resume(true).unwrap();
+        assert!(store.auto_resume().unwrap());
         assert!(store.clean_worktrees().unwrap());
         store.set_clean_worktrees(false).unwrap();
         assert!(!store.clean_worktrees().unwrap());
-        store.set_auto_resume(true).unwrap();
-        assert!(store.auto_resume().unwrap());
+        store.set_continue_after_restart(true).unwrap();
+        assert!(store.continue_after_restart().unwrap());
+        store.set_auto_resume(false).unwrap();
+        assert!(!store.auto_resume().unwrap());
         assert!(!store.clean_worktrees().unwrap());
+        assert!(store.continue_after_restart().unwrap());
     }
 
     #[test]

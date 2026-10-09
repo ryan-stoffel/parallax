@@ -60,5 +60,15 @@ test("queues, edits, reorders and steers while the current turn keeps running (P
   await queue.getByRole("button", { name: "Cancel queued message 1", exact: true }).click();
   await expect(queue.locator("li")).toHaveCount(1);
   await expect(queue.locator("li")).toContainText("Document how queueing and steering work");
+  // Stop keeps what waits, paused, until Resume (0060).
   await page.getByRole("button", { name: "Stop", exact: true }).click();
+  await expect(queue).toContainText("Paused");
+  await expect(queue.locator("li")).toHaveCount(1);
+  await expect(transcript.getByText("Stopped", { exact: true })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("queue-paused.png") });
+  await queue.getByRole("button", { name: "Resume", exact: true }).click();
+  await expect(queue).toHaveCount(0);
+  await expect(
+    transcript.getByText("Document how queueing and steering work", { exact: true }),
+  ).toBeVisible();
 });

@@ -22,6 +22,11 @@ test("a limited thread waits with Resume now and Cancel, and both switches chang
     role: "worker", account: { kind: "subscription", backend: "fake" }
   })`);
   expect(defaults).not.toHaveProperty("error");
+  // Off by default (0060).
+  const on = await page.evaluate(
+    `window.parallax.request("local", "host/settings/set", { autoResume: true })`,
+  );
+  expect(on).not.toHaveProperty("error");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Back to app" }).click();
   const box = page.getByRole("textbox", { name: "Message", exact: true });
@@ -82,7 +87,7 @@ test("a limited thread waits with Resume now and Cancel, and both switches chang
       ),
     )
     .toBe(false);
-  await page.getByRole("region", { name: "Usage limits" }).screenshot({
+  await page.getByRole("region", { name: "Resuming threads" }).screenshot({
     path: test.info().outputPath("usage-limit-settings.png"),
   });
 });

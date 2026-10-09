@@ -10,16 +10,21 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-import type { QueuedMessage } from "../protocol/generated/protocol";
+import type { OrchestrationCommand, QueuedMessage } from "../protocol/generated/protocol";
 
 const action =
   "grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 [&_svg]:size-3.5";
 
-/** The host's next messages, editable until plxd delivers them. Changes arrive through queue.updated. */
+/**
+ * The host's next messages, editable until plxd delivers them, through `orchestration/dispatch`'s
+ * queued-run commands (0059). A queue a Stop or a restart held waits for Resume (`queue.resume`,
+ * 0060). Changes arrive through queue.updated.
+ */
 export function QueueStrip({
   hostId,
   runId,
   messages,
+  held,
   running,
   disabledReason,
   onCancelled,
@@ -27,6 +32,8 @@ export function QueueStrip({
   hostId: string;
   runId: string;
   messages: QueuedMessage[];
+  /** The queue waits for Resume. */
+  held: boolean;
   running: boolean;
   disabledReason?: string;
   /** Called with a message's id once plxd has cancelled it. */
@@ -38,24 +45,15 @@ export function QueueStrip({
   const [error, setError] = useState<string>();
   const disabled = busy || !!disabledReason;
 
-  async function change(
-    method: "queue/edit" | "queue/cancel" | "queue/steer" | "queue/reorder",
-    message?: QueuedMessage,
-    ids?: string[],
-  ) {
+  async function change(command: OrchestrationCommand) {
     if (disabled) return;
     setBusy(true);
     setError(undefined);
-    const answer =
-      method === "queue/reorder"
-        ? await window.parallax.request(hostId, method, { runId, ids: ids! })
-        : method === "queue/edit"
-          ? await window.parallax.request(hostId, method, { runId, id: message!.id, text })
-          : await window.parallax.request(hostId, method, { runId, id: message!.id });
+    const answer = await window.parallax.request(hostId, "orchestration/dispatch", command);
     setBusy(false);
     if ("error" in answer) return setError(answer.error.message);
     setEditing(undefined);
-    if (method === "queue/cancel") onCancelled?.(message!.id);
+    if (command.type === "queued-run.cancel") onCancelled?.(command.runId);
   }
 
   function move(id: string, to: number) {
@@ -64,7 +62,7 @@ export function QueueStrip({
     if (from < 0 || from === to) return;
     ids.splice(from, 1);
     ids.splice(to, 0, id);
-    void change("queue/reorder", undefined, ids);
+    void change({ type: "queued-run.reorder", threadId: runId, runIds: ids });
   }
 
   if (!messages.length && !error) return null;
@@ -77,8 +75,20 @@ export function QueueStrip({
         <span>
           Queued{" "}
           <span className="ml-1 rounded bg-hover px-1.5 text-foreground">{messages.length}</span>
+          {held && <span className="ml-2">Paused</span>}
         </span>
-        <span>Next turn</span>
+        {held ? (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => void change({ type: "queue.resume", threadId: runId })}
+            className="font-medium text-foreground disabled:opacity-40"
+          >
+            Resume
+          </button>
+        ) : (
+          <span>Next turn</span>
+        )}
       </div>
       <ol className="max-h-48 overflow-y-auto">
         {messages.map((m, index) => (
@@ -100,7 +110,7 @@ export function QueueStrip({
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
-                  void change("queue/edit", m);
+                  void change({ type: "queued-run.edit", threadId: runId, runId: m.id, text });
                 }}
                 className="space-y-1.5 px-1"
               >
@@ -210,7 +220,13 @@ export function QueueStrip({
                   disabled={disabled || !running}
                   aria-label={`Steer queued message ${index + 1} now`}
                   title="Steer now"
-                  onClick={() => void change("queue/steer", m)}
+                  onClick={() =>
+                    void change({
+                      type: "queued-message.promote-to-steer",
+                      threadId: runId,
+                      runId: m.id,
+                    })
+                  }
                 >
                   <CornerUpRight aria-hidden />
                 </button>
@@ -219,7 +235,9 @@ export function QueueStrip({
                   className={action}
                   disabled={disabled}
                   aria-label={`Cancel queued message ${index + 1}`}
-                  onClick={() => void change("queue/cancel", m)}
+                  onClick={() =>
+                    void change({ type: "queued-run.cancel", threadId: runId, runId: m.id })
+                  }
                 >
                   <X aria-hidden />
                 </button>

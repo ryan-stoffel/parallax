@@ -9,7 +9,7 @@ import type {
   QueuedMessage,
   ThreadRun,
 } from "../protocol/generated/protocol";
-import { applyEvents, emptyTranscript, isRunning, rebuild, type Transcript } from "./transcript";
+import { applyEvents, emptyTranscript, rebuild, type Transcript } from "./transcript";
 import { useWatchKey } from "./useWatchKey";
 import { uuidv7 } from "./uuidv7";
 
@@ -20,6 +20,8 @@ export interface AgentRunView {
   /** Messages this window sent, by turn id, since older logs hold only the id (PLX-92). */
   sent: ReadonlyMap<string, SentMessage>;
   queue: QueuedMessage[];
+  /** Whether a Stop or a restart holds the queue until it is resumed (0060). */
+  held: boolean;
   /**
    * Sends a message, its images, and the threads attached to it as the run's next turn, with a new
    * model, effort, or access for the run if given. Resolves to plxd's error, or why the run
@@ -32,8 +34,11 @@ export interface AgentRunView {
     threads?: string[],
     delivery?: AgentDelivery,
   ) => Promise<RpcError | undefined>;
-  /** Stops the run. Resolves to an error message, or undefined. */
-  cancel: () => Promise<string | undefined>;
+  /**
+   * Stops the run's turn, keeping what waits, held until Resume (`run.interrupt`), or with
+   * `drop`, dropping it (`agent/cancel`). Resolves to an error message, or undefined.
+   */
+  cancel: (drop?: boolean) => Promise<string | undefined>;
   /** Whether older events are left to load, for a transcript that opened at its end (PLX-490). */
   older: boolean;
   /** Loads the page of events before the oldest loaded, one page at a time. */
@@ -95,6 +100,7 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
   const pages = useRef<Pages>(undefined);
   const [older, setOlder] = useState(false);
   const [queue, setQueue] = useState<QueuedMessage[]>([]);
+  const [held, setHeld] = useState(false);
   const [watchKey, failed] = useWatchKey(`${hostId}\n${runId}`, connected);
 
   // Loads the page before `p`'s oldest event into it, one at a time: `false` while another is
@@ -163,12 +169,16 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
         setTranscript(t);
         setOlder(p.before !== undefined);
         showQueue(queuedOf(s.runs));
+        setHeld(s.runs.some((r) => r.status === "queued" && r.queueHeld));
         setError(undefined);
         void fill(p, t);
         return;
       }
       const event = message.event.event;
-      if (event.kind === "queue.updated" && event.runId === runId) showQueue(event.messages);
+      if (event.kind === "queue.updated" && event.runId === runId) {
+        showQueue(event.messages);
+        setHeld(!!event.held);
+      }
       pages.current?.events.push(message.event);
       setTranscript((prev) => applyEvents(prev, [message.event], runId));
     });
@@ -192,34 +202,40 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
     ) => {
       const turnId = uuidv7();
       setSent((prev) => new Map(prev).set(turnId, { text, images, threads }));
-      const answer = await window.parallax.request(hostId, "agent/send", {
-        runId,
-        turnId,
+      const answer = await window.parallax.request(hostId, "orchestration/dispatch", {
+        type: "message.dispatch",
+        threadId: runId,
+        messageId: turnId,
         text,
         ...options,
-        ...(delivery && { delivery }),
         ...(images.length > 0 && { images }),
         ...(threads.length > 0 && { threads }),
+        dispatchMode: { type: delivery === "steer" ? "steer_active" : "queue_after_active" },
       });
-      if ("result" in answer && isRunning(answer.result.run.status)) return undefined;
+      if (!("error" in answer)) return undefined;
       setSent((prev) => {
         const next = new Map(prev);
         next.delete(turnId);
         return next;
       });
-      // A finished run whose CLI didn't start again answers with the failed run, and no turn
-      // follows for the message.
-      return "error" in answer
-        ? answer.error
-        : { code: -32000, message: answer.result.run.error ?? "The agent couldn't start." };
+      return answer.error;
     },
     [hostId, runId],
   );
 
-  const cancel = useCallback(async () => {
-    const answer = await window.parallax.request(hostId, "agent/cancel", { runId });
-    return "error" in answer ? answer.error.message : undefined;
-  }, [hostId, runId]);
+  const cancel = useCallback(
+    async (drop = false) => {
+      const answer = drop
+        ? await window.parallax.request(hostId, "agent/cancel", { runId })
+        : await window.parallax.request(hostId, "orchestration/dispatch", {
+            type: "run.interrupt",
+            threadId: runId,
+            holdQueue: true,
+          });
+      return "error" in answer ? answer.error.message : undefined;
+    },
+    [hostId, runId],
+  );
 
-  return { transcript, error, sent, send, cancel, queue, older, loadOlder };
+  return { transcript, error, sent, send, cancel, queue, held, older, loadOlder };
 }

@@ -4,13 +4,14 @@
 //! and resumes.
 
 use parallax_protocol::methods::{
-    AgentStart, OrchestrationDispatch, OrchestrationSubscribeShell, OrchestrationSubscribeThread,
-    OrchestrationThreadHistory, ProjectStart, ThreadStart,
+    AgentStart, HostSettingsSet, OrchestrationDispatch, OrchestrationSubscribeShell,
+    OrchestrationSubscribeThread, OrchestrationThreadHistory, ProjectStart, ThreadStart,
 };
 use parallax_protocol::{
     AgentOutcome, AgentOutputItem, AgentStatus, DispatchMode, ErrorKind, EventsEventParams,
-    OrchestrationCommand, ParallaxEvent, RunId, SubscribeShellParams, SubscribeThreadParams,
-    SubscribeThreadResult, ThreadHistoryParams, ThreadRunStatus, ThreadSnapshot, TurnId,
+    HostSettingsSetParams, OrchestrationCommand, ParallaxEvent, RunId, SubscribeShellParams,
+    SubscribeThreadParams, SubscribeThreadResult, ThreadHistoryParams, ThreadRunStatus,
+    ThreadSnapshot, TurnId,
 };
 use plxd::backend::fake::Step;
 use uuid::Uuid;
@@ -252,6 +253,127 @@ async fn queue_commands_change_the_queued_runs_and_a_held_stop_keeps_them() {
             (a, ThreadRunStatus::Queued, None, false),
         ]
     );
+}
+
+/// 0060: after a restart a plain thread's queue waits, held, until `queue.resume`, and its cut
+/// turn ends `interrupted` with no "Continue where you left off." while the host setting is off.
+#[tokio::test]
+async fn a_plain_threads_queue_waits_after_a_restart_until_resumed() {
+    let host = Host::start(temp_dir(), fake(busy()));
+    let mut client = host.client().await;
+    let params = crate::threads::start_params(None, "Work for a while");
+    let thread = params.run_id;
+    client.call::<ThreadStart>(params).await.unwrap();
+    subscribe_working(&mut client, thread).await;
+    let next = TurnId::generate();
+    dispatch(&mut client, message(thread, next, "Then this")).await;
+    assert_eq!(queued(&mut client, thread).await, [(next, false)]);
+    drop(client);
+
+    let host = host
+        .restart(fake(vec![init("graph-1"), text("Resumed"), Step::Hang]))
+        .await;
+    let mut client = host.client().await;
+    let seen = snapshot(&mut client, thread).await;
+    let statuses: Vec<_> = seen
+        .runs
+        .iter()
+        .map(|run| (run.status, run.queue_held))
+        .collect();
+    assert_eq!(
+        statuses,
+        [
+            (ThreadRunStatus::Interrupted, false),
+            (ThreadRunStatus::Queued, true),
+        ],
+        "the cut turn ended and the queue waits"
+    );
+    // A message sent now waits behind it, though no session is live.
+    let newer = TurnId::generate();
+    dispatch(&mut client, message(thread, newer, "And this")).await;
+    assert_eq!(
+        queued(&mut client, thread).await,
+        [(next, true), (newer, true)]
+    );
+
+    dispatch(
+        &mut client,
+        OrchestrationCommand::QueueResume { thread_id: thread },
+    )
+    .await;
+    until(
+        &mut client,
+        has_item(AgentOutputItem::Text {
+            message_id: None,
+            text: "Resumed".to_owned(),
+        }),
+    )
+    .await;
+    assert_eq!(queued(&mut client, thread).await, [(newer, false)]);
+}
+
+/// 0060: once a held Stop's CLI has exited, a message sent waits behind the paused queue rather
+/// than starting a turn ahead of it.
+#[tokio::test]
+async fn a_message_sent_after_a_held_stop_waits_behind_the_queue() {
+    let host = Host::start(temp_dir(), fake(busy()));
+    let mut client = host.client().await;
+    let thread = working_thread(&host, &mut client).await;
+    subscribe_working(&mut client, thread).await;
+    let first = TurnId::generate();
+    dispatch(&mut client, message(thread, first, "First")).await;
+    dispatch(&mut client, stop(thread)).await;
+    until(&mut client, |event| {
+        matches!(
+            &event.event,
+            ParallaxEvent::AgentFinished {
+                outcome: AgentOutcome::Cancelled,
+                ..
+            }
+        )
+    })
+    .await;
+    let later = TurnId::generate();
+    dispatch(&mut client, message(thread, later, "Later")).await;
+    assert_eq!(
+        queued(&mut client, thread).await,
+        [(first, true), (later, true)]
+    );
+}
+
+/// 0060: with `continueAfterRestart` on, a plain thread's turn a restart cut off continues on
+/// its session once plxd is up, ahead of its held queue.
+#[tokio::test]
+async fn a_cut_turn_continues_after_a_restart_with_the_setting_on() {
+    let host = Host::start(temp_dir(), fake(busy()));
+    let mut client = host.client().await;
+    client
+        .call::<HostSettingsSet>(HostSettingsSetParams {
+            continue_after_restart: Some(true),
+            ..HostSettingsSetParams::default()
+        })
+        .await
+        .unwrap();
+    let params = crate::threads::start_params(None, "Work for a while");
+    let thread = params.run_id;
+    client.call::<ThreadStart>(params).await.unwrap();
+    subscribe_working(&mut client, thread).await;
+    let next = TurnId::generate();
+    dispatch(&mut client, message(thread, next, "Then this")).await;
+    drop(client);
+
+    let host = host.restart(fake(busy())).await;
+    let mut client = host.client().await;
+    subscribe(&mut client, thread, Some(0)).await;
+    until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::AgentOutput { items, .. } if items.iter().any(|item| {
+            matches!(item, AgentOutputItem::TurnStarted { text: Some(text), .. }
+                if text == "Continue where you left off.")
+        }))
+    })
+    .await;
+    // It runs ahead of the held queue, which waits for Resume.
+    assert_eq!(queued(&mut client, thread).await, [(next, true)]);
 }
 
 /// A resume replays a short gap with no snapshot, and answers a long gap, or a `seq` this log
