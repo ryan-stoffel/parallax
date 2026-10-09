@@ -1,7 +1,7 @@
 import { Pencil, Plus, Server } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 
-import type { ConnectionError, ConnectionState } from "../../preload/bridge";
+import { olderVersion, type ConnectionError, type ConnectionState } from "../../preload/bridge";
 import { statusLabel, useConnection } from "../ConnectionStatus";
 import { DeviceIcon } from "../DeviceIcon";
 import { localId, useHosts, type Host } from "../hosts";
@@ -47,7 +47,7 @@ export function plxdFix(
   if (!appVersion || !/^\d+\.\d+\.\d+(-nightly)?$/.test(appVersion)) return undefined;
   if (state?.status === "failed" && state.error.exitCode === 127) return "install";
   const running = runningPlxd(state);
-  return running !== undefined && older(running, appVersion) ? "update" : undefined;
+  return running !== undefined && olderVersion(running, appVersion) ? "update" : undefined;
 }
 
 /** The host's plxd version, when it answered or refused the handshake. */
@@ -57,14 +57,6 @@ const runningPlxd = (state?: ConnectionState) =>
     : state?.status === "failed"
       ? state.error.plxd
       : undefined;
-
-/** Whether version `a` is older than `b` (0030): by number, then a nightly before its release. */
-function older(a: string, b: string): boolean {
-  const [x, y] = [a, b].map((v) => /^(\d+)\.(\d+)\.(\d+)(-.+)?$/.exec(v));
-  if (!x || !y) return false;
-  for (const i of [1, 2, 3]) if (Number(x[i]) !== Number(y[i])) return Number(x[i]) < Number(y[i]);
-  return x[4] !== undefined && y[4] === undefined;
-}
 
 const tone = (state?: ConnectionState) =>
   state?.status === "connected" ? "on" : state?.status === "failed" ? "warn" : "off";
