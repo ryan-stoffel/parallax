@@ -35,7 +35,7 @@ plxd does the same, as commands and effects on [0059](0059-orchestration-rewrite
 ### PR watches
 
 - `watch_pull_request` on a linked PR (0041's `pr_link`). The sweep runs every 2 minutes while at least one watch exists, through `gh` (0050), with T3's wake conditions, caps, and end conditions. A wake is `message.dispatch` with `queue_after_active` and `createdBy: agent`.
-- Linked PRs on threads that aren't settled refresh by T3's sync rules, on the same sweep. With no watches and no such links there is no timer.
+- Linked PRs on threads that aren't settled refresh by T3's sync rules, on the same sweep. With no watches and no such links there is no timer. Not built yet: PLX-649 built the watches, and this refresh is PLX-669.
 
 ### Delegation
 

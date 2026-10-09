@@ -49,8 +49,9 @@ const MIN_INTERVAL_MS: u64 = 60_000;
 const MISSED_GRACE: SignedDuration = SignedDuration::from_mins(10);
 
 /// The longest the timer sleeps. Its clock is monotonic, which stops while the computer sleeps,
-/// so a long sleep would fire late after a wake; this bounds how late, within [`MISSED_GRACE`].
-const MAX_SLEEP: Duration = Duration::from_mins(5);
+/// so a long sleep would fire late after a wake; this bounds how late, well within
+/// [`MISSED_GRACE`]. It is also how long a task that failed to fire waits to be tried again.
+const MAX_SLEEP: Duration = Duration::from_mins(1);
 
 /// The longest prompt or title, in bytes.
 const MAX_PROMPT_BYTES: usize = 64 * 1024;
@@ -255,7 +256,8 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
     }
 }
 
-/// Fires every task due now, one at a time.
+/// Fires every task due now, one at a time. A task that fails to fire, such as one whose row
+/// can't be read, is tried again [`MAX_SLEEP`] later rather than at once, so the timer never spins.
 async fn fire_due(daemon: &Daemon) {
     let due = daemon
         .reader
@@ -271,6 +273,17 @@ async fn fire_due(daemon: &Daemon) {
     for id in due {
         if let Err(error) = fire(daemon, id, Trigger::Scheduled).await {
             warn!(%id, error = %error.message, "a scheduled task could not fire");
+            let retry = Timestamp::now() + SignedDuration::try_from(MAX_SLEEP).unwrap_or_default();
+            let postponed = daemon
+                .store
+                .run(&CancellationToken::new(), move |db| {
+                    db.postpone_scheduled_task(id, retry)
+                        .map_err(|e| store_error(&e))
+                })
+                .await;
+            if let Err(error) = postponed {
+                warn!(%id, error = %error.message, "could not postpone a scheduled task");
+            }
         }
     }
 }
@@ -539,18 +552,21 @@ pub(crate) async fn hook(
     if !stored.task.enabled {
         return (409, json!({ "error": "hook_disabled" }));
     }
+    // A request with a bad signature counts too, as T3's.
+    if !daemon.schedules.admit(id) {
+        return (429, json!({ "error": "rate_limited" }));
+    }
     if let Some(signature) = signature {
         let secret = stored.secret.as_deref().unwrap_or_default();
         if !webhook::verify(signature, secret, headers, body) {
             return (401, json!({ "error": "invalid_signature" }));
         }
     }
-    if !daemon.schedules.admit(id) {
-        return (429, json!({ "error": "rate_limited" }));
-    }
+    // Without the token, which would otherwise reach the prompt through `{{request}}`.
+    let path = format!("{}{id}", webhook::PREFIX);
     let request = webhook::Request {
         method,
-        path: route,
+        path: &path,
         query,
         headers,
         body: &String::from_utf8_lossy(body),

@@ -220,6 +220,18 @@ async fn the_timer_fires_a_task_when_it_comes_due() {
     let daemon = daemon(dir.path());
     let stop = CancellationToken::new();
     let timer = tokio::spawn(run(Arc::clone(&daemon), stop.clone()));
+    // A due row that can't be read fails to fire, and is tried again later, not at once, so it
+    // neither spins the timer nor holds back the task after it.
+    let broken = Uuid::now_v7();
+    let overdue = Timestamp::now() - SignedDuration::from_secs(1);
+    daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            db.put_scheduled_task(broken, Some(overdue), "not json")
+                .map_err(|e| crate::store::store_error(&e))
+        })
+        .await
+        .unwrap();
     let id = Uuid::try_parse(&save(&daemon, params(HOURLY)).await.unwrap().id).unwrap();
     due_at(
         &daemon,
@@ -236,6 +248,18 @@ async fn the_timer_fires_a_task_when_it_comes_due() {
     .await
     .expect("the timer fired");
     assert_eq!(stored(&daemon, id).await.task.run_count, 1);
+    let retry: String = rusqlite::Connection::open(dir.path().join("plxd.sqlite3"))
+        .unwrap()
+        .query_row(
+            "SELECT next_run_at FROM scheduled_tasks WHERE id = ?1",
+            [broken.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        retry.parse::<Timestamp>().unwrap() > Timestamp::now(),
+        "postponed"
+    );
     stop.cancel();
     timer.await.unwrap();
 }
@@ -253,7 +277,8 @@ async fn a_signed_webhook_fires_its_prompt_with_the_bodys_values() {
         }),
     });
     webhook.prompt =
-        "Write notes for {{body.release.tag_name}} ({{headers.x-github-event}})".to_owned();
+        "Write notes for {{body.release.tag_name}} ({{headers.x-github-event}})\n{{request}}"
+            .to_owned();
     let task = save(&daemon, webhook).await.unwrap();
     let id = Uuid::try_parse(&task.id).unwrap();
     let endpoint = task.webhook.unwrap();
@@ -298,6 +323,13 @@ async fn a_signed_webhook_fires_its_prompt_with_the_bodys_values() {
         sent[0].contains("Write notes for v1.2 (release)"),
         "{}",
         sent[0]
+    );
+    let token = endpoint.path.rsplit('/').next().unwrap();
+    let line = format!("POST /api/hooks/{id}?source=ci");
+    assert!(sent[0].contains(&line), "{}", sent[0]);
+    assert!(
+        !sent[0].contains(token),
+        "the token never reaches the prompt"
     );
 
     let mut paused = params(task.schedule.clone());

@@ -80,7 +80,8 @@ pub(super) fn verify(
 /// What a template reads from a request.
 pub(super) struct Request<'a> {
     pub method: &'a str,
-    /// Without the query.
+    /// `/api/hooks/<id>`, without the token, which would otherwise reach the prompt, and without
+    /// the query.
     pub path: &'a str,
     /// Without the `?`.
     pub query: &'a str,
@@ -296,7 +297,7 @@ mod tests {
         ]);
         let request = Request {
             method: "POST",
-            path: "/api/hooks/id/token",
+            path: "/api/hooks/id",
             query: "source=ci&api_key=hunter2",
             headers: &headers,
             body: r#"{"action":"published","release":{"tag_name":"v1.2"},"assets":[{"n":3}]}"#,
@@ -309,7 +310,7 @@ mod tests {
         assert_eq!(rendered, "release published v1.2 3 ci [] ");
 
         let whole = render("{{request}}", &request);
-        assert!(whole.starts_with("POST /api/hooks/id/token?source=ci&api_key=[redacted]\n"));
+        assert!(whole.starts_with("POST /api/hooks/id?source=ci&api_key=[redacted]\n"));
         assert!(whole.contains("authorization: [redacted]\n"), "{whole}");
         assert!(whole.ends_with("\n\n{\"action\":\"published\",\"release\":{\"tag_name\":\"v1.2\"},\"assets\":[{\"n\":3}]}"));
         assert_eq!(render("{{headers.authorization}}", &request), "Bearer abc");

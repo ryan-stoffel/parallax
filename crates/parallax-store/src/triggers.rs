@@ -63,6 +63,19 @@ impl Store {
         Ok(())
     }
 
+    /// Moves scheduled task `id`'s next run to `at`, leaving its payload, which may be unreadable,
+    /// as it is.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn postpone_scheduled_task(&self, id: Uuid, at: Timestamp) -> Result<(), StoreError> {
+        self.conn
+            .prepare_cached("UPDATE scheduled_tasks SET next_run_at = ?2 WHERE id = ?1")?
+            .execute(params![id.to_string(), timestamp::format(at)])?;
+        Ok(())
+    }
+
     /// Deletes scheduled task `id`, and says whether it existed.
     ///
     /// # Errors

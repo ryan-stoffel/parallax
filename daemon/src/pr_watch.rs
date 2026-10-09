@@ -1,7 +1,8 @@
 //! Pull request watches (0063), as T3 Code's `PullRequestWatchReactor` and `pullRequestWatch`:
 //! `pr/watch` has plxd read one of a run's linked pull requests every two minutes and wake the run
-//! when a check newly fails, the required checks (else all) pass, someone other than the viewer
-//! and the author comments or reviews, or the branch starts to conflict.
+//! when a check newly fails, the required checks (else all) pass, someone comments or reviews, or
+//! the branch starts to conflict. A remark by the account plxd reads as, or by the author when
+//! that account is unknown, never wakes.
 //!
 //! A watch is a row of `pr_watches`: what its run was last told, as JSON. [`run`] sweeps every
 //! [`SWEEP`] while a watch exists, and sets no timer while none does. Each pass reads each watched
