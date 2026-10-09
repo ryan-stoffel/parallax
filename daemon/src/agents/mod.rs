@@ -2099,10 +2099,7 @@ mod tests {
         let good = RunId::try_from(good).unwrap();
         let (logged, _) = daemon.log.run_events(good, 0, 10, usize::MAX).unwrap();
         assert!(
-            logged.iter().any(|entry| matches!(
-                entry.event,
-                parallax_protocol::ParallaxEvent::AgentFinished { .. }
-            )),
+            logged.iter().any(|entry| entry.kind() == "agent.finished"),
             "{logged:?}"
         );
     }

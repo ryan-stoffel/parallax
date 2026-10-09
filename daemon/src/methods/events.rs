@@ -6,14 +6,13 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AgentOutputItem, ErrorKind, EventsSubscribeParams, ParallaxEvent, ProjectId, RunId,
-    SubscriptionId,
+    ErrorKind, EventsSubscribeParams, ParallaxEvent, ProjectId, RunId, SubscriptionId,
 };
 use serde::Serialize;
 use serde_json::value::RawValue;
 
 use super::Context;
-use crate::event_log::{Entry, EventLog, Gone, raw, run_of};
+use crate::event_log::{Entry, EventLog, Gone, is_approval, raw};
 use crate::store::store_error;
 
 /// One subscription's place in the event log.
@@ -31,35 +30,35 @@ pub(crate) struct Cursor {
 }
 
 impl Cursor {
-    /// Whether this subscription's `run` and `shell` keep `event`.
-    fn keeps(&self, event: &ParallaxEvent) -> bool {
-        self.run.is_none_or(|run| run_of(event) == Some(run))
-            && !(self.shell
-                && matches!(event, ParallaxEvent::AgentOutput { items, .. }
-                    if !items.iter().any(is_approval)))
+    /// Whether this subscription's `run` and `shell` keep `entry`.
+    fn keeps(&self, entry: &Entry) -> bool {
+        self.run.is_none_or(|run| entry.run == Some(run))
+            && !(self.shell && entry.kind() == AGENT_OUTPUT && !entry.approvals)
     }
 
-    /// `event` as this subscription delivers it, when that differs from the event itself: a
+    /// `entry`'s event as this subscription delivers it, when that differs from its JSON: a
     /// `shell` subscription's `agent.output` cut down to its approval items.
-    fn view(&self, event: &ParallaxEvent) -> Option<Box<RawValue>> {
-        match event {
-            ParallaxEvent::AgentOutput {
-                run_id,
-                items,
-                compacted,
-            } if self.shell => Some(raw(&ParallaxEvent::AgentOutput {
-                run_id: *run_id,
-                items: items
-                    .iter()
-                    .filter(|item| is_approval(item))
-                    .cloned()
-                    .collect(),
-                compacted: compacted.clone(),
-            })),
-            _ => None,
+    fn view(&self, entry: &Entry) -> Option<Box<RawValue>> {
+        if !self.shell || entry.kind() != AGENT_OUTPUT {
+            return None;
         }
+        let ParallaxEvent::AgentOutput {
+            run_id,
+            items,
+            compacted,
+        } = entry.event().into_owned()
+        else {
+            return None;
+        };
+        Some(raw(&ParallaxEvent::AgentOutput {
+            run_id,
+            items: items.into_iter().filter(is_approval).collect(),
+            compacted,
+        }))
     }
 }
+
+const AGENT_OUTPUT: &str = "agent.output";
 
 /// One event for one subscription.
 #[derive(Debug)]
@@ -92,15 +91,6 @@ impl Delivery {
             event: self.view.as_deref().unwrap_or(&self.entry.json),
         }
     }
-}
-
-/// What a sidebar needs from a run's output: its permission requests and how they ended, as the
-/// app's `trackApprovals` reads them.
-fn is_approval(item: &AgentOutputItem) -> bool {
-    matches!(
-        item,
-        AgentOutputItem::ApprovalRequested { .. } | AgentOutputItem::ApprovalResolved { .. }
-    )
 }
 
 /// Checks a subscription and returns its cursor. The connection's writer sends the response and
@@ -191,7 +181,7 @@ impl Cursors {
             self.turn = self.turn.wrapping_add(1);
             let cursor = &mut self.cursors[index];
             let Ok((event, seq)) =
-                log.next(cursor.after, cursor.project, |event| cursor.keeps(event))
+                log.next(cursor.after, cursor.project, |entry| cursor.keeps(entry))
             else {
                 return Err(self.cursors.remove(index).subscription);
             };
@@ -199,7 +189,7 @@ impl Cursors {
             if let Some(entry) = event {
                 return Ok(Some(Delivery {
                     subscription: cursor.subscription,
-                    view: cursor.view(&entry.event),
+                    view: cursor.view(&entry),
                     entry,
                 }));
             }

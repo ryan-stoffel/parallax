@@ -191,7 +191,6 @@ mod tests {
     use std::time::Duration;
 
     use super::{compact_items, compact_one, sweep};
-    use crate::event_log::run_of;
     use crate::server::Daemon;
     use crate::store::StoreHandle;
     use jiff::Timestamp;
@@ -358,20 +357,20 @@ mod tests {
         let (entries, _) = daemon.log.run_events(run, 0, 100, usize::MAX).unwrap();
         let outputs: Vec<_> = entries
             .iter()
-            .filter(|entry| matches!(entry.event, ParallaxEvent::AgentOutput { .. }))
+            .filter(|entry| entry.kind() == "agent.output")
             .collect();
         assert_eq!(outputs.len(), 1);
         let ParallaxEvent::AgentOutput {
             items,
             compacted,
             run_id,
-        } = &outputs[0].event
+        } = outputs[0].event().into_owned()
         else {
             panic!("expected agent.output");
         };
-        assert_eq!(*run_id, run);
+        assert_eq!(run_id, run);
         assert_eq!(outputs[0].seq, last);
-        assert_eq!(compacted, &Some(Compacted { from }));
+        assert_eq!(compacted, Some(Compacted { from }));
         assert!(
             items
                 .iter()
@@ -423,22 +422,8 @@ mod tests {
             compacted.seq >= before,
             "the compacted row's seq is at or above before"
         );
-        assert_eq!(
-            compacted_from(&compacted.event),
-            Some(from),
-            "from < before ≤ seq"
-        );
+        assert_eq!(compacted.compacted_from, Some(from), "from < before ≤ seq");
         assert!(from < before && before <= compacted.seq);
-    }
-
-    fn compacted_from(event: &ParallaxEvent) -> Option<u64> {
-        match event {
-            ParallaxEvent::AgentOutput {
-                compacted: Some(compacted),
-                ..
-            } => Some(compacted.from),
-            _ => None,
-        }
     }
 
     #[tokio::test]
@@ -456,15 +441,11 @@ mod tests {
         let (entries, _) = daemon.log.run_events(run, 0, 100, usize::MAX).unwrap();
         let seqs: Vec<u64> = entries
             .iter()
-            .filter(|entry| run_of(&entry.event) == Some(run))
+            .filter(|entry| entry.run == Some(run))
             .map(|entry| entry.seq)
             .collect();
         assert_eq!(seqs, [from, mid, last]);
-        assert!(
-            entries
-                .iter()
-                .all(|entry| compacted_from(&entry.event).is_none())
-        );
+        assert!(entries.iter().all(|entry| entry.compacted_from.is_none()));
 
         let (event, seq) = daemon.log.next(last, Some(project), |_| true).unwrap();
         assert!(event.is_none());
@@ -486,10 +467,10 @@ mod tests {
         let (after, _) = daemon.log.run_events(run, 0, 100, usize::MAX).unwrap();
         let outputs: Vec<_> = after
             .iter()
-            .filter(|entry| matches!(entry.event, ParallaxEvent::AgentOutput { .. }))
+            .filter(|entry| entry.kind() == "agent.output")
             .collect();
         assert_eq!(outputs.len(), 1);
-        assert!(compacted_from(&outputs[0].event).is_some());
+        assert!(outputs[0].compacted_from.is_some());
     }
 
     #[tokio::test]
@@ -524,7 +505,8 @@ mod tests {
                 .iter()
                 .find(|entry| entry.seq == updated)
                 .unwrap()
-                .event,
+                .event()
+                .into_owned(),
             ParallaxEvent::AgentWakeupsPaused { .. }
         ));
     }

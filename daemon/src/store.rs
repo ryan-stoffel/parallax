@@ -166,6 +166,10 @@ impl Tx {
     /// published once the job commits. If it can't be stored, the job rolls back and fails. It is
     /// serialized once, here: the row, the in-memory window, and every subscriber's frame use
     /// that JSON (0059).
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "callers build the event to stage it, and only its JSON is kept"
+    )]
     pub fn stage(
         &mut self,
         time: Timestamp,
@@ -211,14 +215,8 @@ impl Tx {
             }
             Ok(()) => {}
         }
-        self.staged.push(Entry {
-            seq,
-            time,
-            project,
-            event,
-            json,
-            compacted_from: None,
-        });
+        self.staged
+            .push(Entry::with_json(seq, time, project, &event, json));
         seq
     }
 

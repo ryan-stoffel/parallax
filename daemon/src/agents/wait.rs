@@ -88,10 +88,12 @@ pub(crate) async fn wait(
                 _ = watch.changed() => {}
             }
             let head = daemon.log.head();
-            let touched = daemon.log.any_after(seen, |event| match event {
-                ParallaxEvent::AgentUpdated { run_id, .. }
-                | ParallaxEvent::AgentFinished { run_id, .. }
-                | ParallaxEvent::ThreadDeleted { run_id, .. } => run_ids.contains(run_id),
+            let touched = daemon.log.any_after(seen, |entry| match entry.kind() {
+                "agent.updated" | "agent.finished" => {
+                    entry.run.is_some_and(|run| run_ids.contains(&run))
+                }
+                "thread.deleted" => matches!(&*entry.event(),
+                    ParallaxEvent::ThreadDeleted { run_id, .. } if run_ids.contains(run_id)),
                 _ => false,
             });
             seen = head;
