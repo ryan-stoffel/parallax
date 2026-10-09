@@ -1517,3 +1517,50 @@ async fn threads_share_the_callers_worktree_and_a_child_merges_back_once() {
     assert!(again.contains("no turn of its own"), "{again}");
     host.server.stop().await;
 }
+
+/// Restart catch-up keeps the delegated task identity so `task_status` can suppress its wake.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restarted_delegated_completions_can_be_acknowledged() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+    let child = task(
+        &mcp.ok("delegate_task", json!({"task": "Keep editing."}))
+            .await,
+    );
+    working(&mut client, child).await;
+    drop(mcp);
+    drop(client);
+    let host = host.restart(fake(echo())).await;
+    let mut client = host.client().await;
+    let mut mcp = tools(&host, me).await;
+    mcp.ok("task_status", json!({"taskId": child})).await;
+    sleep(QUIET).await;
+    assert!(wakes(&mut client, me).await.is_empty());
+    host.server.stop().await;
+}
+
+/// A child in an owner's separate worktree doesn't block switching the repository checkout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shared_worktree_child_doesnt_block_the_repository_checkout() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+    let child = task(
+        &mcp.ok("delegate_task", json!({"task": "Keep editing."}))
+            .await,
+    );
+    working(&mut client, child).await;
+    mcp.ok(
+        "thread_launch",
+        json!({"prompt": "Use the checkout.", "backend": "fake", "workspace": "checkout", "branch": "main"}),
+    )
+    .await;
+    host.server.stop().await;
+}

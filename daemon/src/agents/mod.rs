@@ -575,13 +575,19 @@ async fn switch_checkout(
     reference: &str,
 ) -> Result<(), ErrorObject> {
     let busy = store(daemon, move |db| {
-        db.list_runs(Some(project.into()))
-            .map(|runs| {
-                runs.iter().any(|run| {
-                    run.fields.checkout && [STARTING, RUNNING].contains(&run.state.status.as_str())
-                })
-            })
-            .map_err(|e| store_error(&e))
+        for run in db
+            .list_runs(Some(project.into()))
+            .map_err(|e| store_error(&e))?
+        {
+            if run.fields.checkout
+                && [STARTING, RUNNING].contains(&run.state.status.as_str())
+                && crate::delegation::workdir(db, project, run.id)?
+                    == crate::threads::scope_path(db, project)?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     })
     .await?;
     if busy {
