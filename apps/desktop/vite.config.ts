@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite-plus";
@@ -67,6 +69,11 @@ export default defineConfig({
     // on markdown-it at load, which marking these calls pure and markdown-it side-effect free
     // leaves out (109 KB). Other modules keep their package.json `sideEffects`.
     rolldownOptions: {
+      // The app, and the web client plxd serves (web.html, PLX-651), which loads the same chunks.
+      input: {
+        index: fileURLToPath(new URL("src/renderer/index.html", import.meta.url)),
+        web: fileURLToPath(new URL("src/renderer/web.html", import.meta.url)),
+      },
       treeshake: {
         manualPureFunctions: ["MarkdownIt", "MarkdownParser", "Schema"],
         moduleSideEffects: (id) => (/[\\/]markdown-it[\\/]/.test(id) ? false : undefined),

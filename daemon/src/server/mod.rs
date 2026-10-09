@@ -131,10 +131,14 @@ pub struct Config {
     /// The address the remote listener binds instead of every IPv4 address. `None` by default;
     /// tests bind loopback.
     pub remote_address: Option<IpAddr>,
-    /// The remote listener's port. 7341 by default.
+    /// The remote listener's port. `PLXD_REMOTE_PORT` when set, for tests that run a whole plxd,
+    /// else 7341.
     pub remote_port: u16,
     /// How long a pairing code works. 5 minutes by default; tests shorten it.
     pub remote_code_lifetime: Duration,
+    /// The web client's files (PLX-651). By default `PLXD_WEB_DIR`, else the app's renderer build
+    /// beside this plxd in the app's resources folder, unpacked from app.asar.
+    pub remote_web_dir: Option<PathBuf>,
 }
 
 impl Config {
@@ -161,8 +165,18 @@ impl Config {
             connect_port: parallax_protocol::CONNECT_PORT,
             connect_check_interval: Duration::from_secs(10),
             remote_address: None,
-            remote_port: crate::remote::PORT,
+            remote_port: std::env::var("PLXD_REMOTE_PORT")
+                .ok()
+                .and_then(|port| port.parse().ok())
+                .unwrap_or(crate::remote::PORT),
             remote_code_lifetime: remote::CODE_LIFETIME,
+            remote_web_dir: std::env::var_os("PLXD_WEB_DIR")
+                .map(PathBuf::from)
+                .or_else(|| {
+                    let exe = std::env::current_exe().ok()?;
+                    let resources = exe.parent()?.join("app.asar.unpacked");
+                    Some(resources.join("dist").join("renderer"))
+                }),
         }
     }
 }
@@ -442,6 +456,7 @@ impl Server {
             remote: remote::Remote::new(
                 config.remote_port,
                 config.remote_address,
+                config.remote_web_dir.clone(),
                 config.remote_code_lifetime,
             ),
             schedules: crate::schedules::Schedules::default(),
@@ -814,7 +829,7 @@ impl Daemon {
                 None,
             ),
             terminals: crate::terminals::Terminals::default(),
-            remote: remote::Remote::new(crate::remote::PORT, None, remote::CODE_LIFETIME),
+            remote: remote::Remote::new(crate::remote::PORT, None, None, remote::CODE_LIFETIME),
             schedules: crate::schedules::Schedules::default(),
             pr_watches: crate::pr_watch::Watches::default(),
         })

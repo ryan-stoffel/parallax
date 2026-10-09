@@ -29,6 +29,11 @@ files:
   - dist/**
   - package.json
   - "!**/*.map"
+# The renderer build sits beside app.asar, unpacked, so plxd, next to it in the resources folder,
+# can serve it as the web client (PLX-651) without a copy of its own. The app reads it through
+# app.asar as before.
+asarUnpack:
+  - dist/renderer/**
 # plxd, built for this target, and plxd.version, the version it reports (0030), go in the
 # resources folder, where findPlxd looks. package-app puts both in target/package-resources.
 extraResources:
@@ -50,7 +55,9 @@ mac:
   # Chromium's .pak files (its locale and resources) aren't code, so they aren't signed one by one
   # (each a codesign run and a trip to Apple's timestamp server): Electron Framework's own
   # signature seals them as resources, like every other data file (PLX-211).
-  signIgnore: ['\.pak$']
+  # The renderer build unpacked for plxd's web client (PLX-651) is fonts, scripts, and styles, so
+  # it isn't signed file by file either.
+  signIgnore: ['\.pak$', 'app\.asar\.unpacked/dist/renderer/']
 # Signed with the app's identity when there is one. The updater reads the zip, so the dmg stays out
 # of the update metadata.
 dmg:

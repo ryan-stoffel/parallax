@@ -198,6 +198,8 @@ pub(crate) fn initialize(
 /// `queue.updated` and `queue/*`'s results.
 /// `remote` (PLX-641, 0065): `remote` in `host/settings`, `remote/pair`, `remote/sessions`,
 /// `remote/revoke`, and the HTTPS listener.
+/// `remoteWeb` (PLX-651): `remoteWeb` in `host/settings`, and the web client and browser pairing
+/// the HTTPS listener serves while it's on.
 /// `schedules` (0063): `schedule/*`, and the webhooks the HTTPS listener serves.
 /// `prWatch` (0063): `pr/watch`, `pr/unwatch`, and `pr/watches`.
 fn capabilities_advertised() -> Capabilities {
@@ -253,6 +255,7 @@ fn capabilities_advertised() -> Capabilities {
         ("queue".to_owned(), serde_json::Map::new()),
         ("questions".to_owned(), serde_json::Map::new()),
         ("remote".to_owned(), serde_json::Map::new()),
+        ("remoteWeb".to_owned(), serde_json::Map::new()),
         ("repoRefs".to_owned(), serde_json::Map::new()),
         ("runOptions".to_owned(), serde_json::Map::new()),
         ("schedules".to_owned(), serde_json::Map::new()),
@@ -325,6 +328,7 @@ pub(crate) async fn set_settings(
         clean_worktrees,
         connect,
         remote,
+        remote_web,
         device_name,
         device_icon,
     } = params;
@@ -355,6 +359,10 @@ pub(crate) async fn set_settings(
                 db.set_remote(on).map_err(|e| store_error(&e))?;
                 info!(remote = on, "changed the host's remote setting");
             }
+            if let Some(on) = remote_web {
+                db.set_remote_web(on).map_err(|e| store_error(&e))?;
+                info!(remote_web = on, "changed the host's web client setting");
+            }
             if let Some(name) = device_name {
                 db.set_device_name(name.as_deref())
                     .map_err(|e| store_error(&e))?;
@@ -371,6 +379,9 @@ pub(crate) async fn set_settings(
     }
     if remote.is_some() {
         context.daemon.remote.changed.notify_one();
+    }
+    if remote_web == Some(false) {
+        crate::server::remote::close_browsers(&context.daemon).await;
     }
     Ok(settings)
 }
@@ -403,6 +414,7 @@ fn read_settings(db: &parallax_store::Store) -> Result<HostSettings, ErrorObject
         clean_worktrees: Some(db.clean_worktrees().map_err(|e| store_error(&e))?),
         connect: Some(db.connect().map_err(|e| store_error(&e))?),
         remote: Some(db.remote().map_err(|e| store_error(&e))?),
+        remote_web: Some(db.remote_web().map_err(|e| store_error(&e))?),
         device_name: db.device_name().map_err(|e| store_error(&e))?,
         device_icon: db.device_icon().map_err(|e| store_error(&e))?,
     })

@@ -40,6 +40,11 @@ pub struct RemoteSessionsResult {
     /// Whether a pairing code is waiting, so plxd advertises itself over mDNS. False once the
     /// code is used, locked, or expired.
     pub pairing: bool,
+    /// The SHA-256 fingerprint of the listener's certificate, in hex, while it listens: what a
+    /// browser shows for it, to check before trusting it (PLX-651).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fingerprint: Option<String>,
     /// Why it isn't while `remote` is on, such as the port being in use by another program.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

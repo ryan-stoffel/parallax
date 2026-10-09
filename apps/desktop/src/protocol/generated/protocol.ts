@@ -5364,6 +5364,12 @@ export type HostSettings = {
 	 */
 	remote?: boolean,
 	/**
+	 * Whether the HTTPS listener also serves the app as a web client at `/`, and pairs browsers
+	 * with the short code (PLX-651). Off by default, and only in effect while `remote` is on. An
+	 * older plxd, without the `remoteWeb` capability, leaves it out.
+	 */
+	remoteWeb?: boolean,
+	/**
 	 * This device's nickname for Parallax Connect, when one is set.
 	 */
 	deviceName?: string,
@@ -5394,6 +5400,10 @@ export type HostSettingsSetParams = {
 	 * The new `remote`, behind the `remote` capability. Absent leaves it.
 	 */
 	remote?: boolean,
+	/**
+	 * The new `remoteWeb`, behind the `remoteWeb` capability. Absent leaves it.
+	 */
+	remoteWeb?: boolean,
 	/**
 	 * The new `deviceName`, behind the `connect` capability. `""` clears it. Control characters
 	 * are dropped and the rest trimmed to at most 64 characters.
@@ -5533,6 +5543,11 @@ export type RemoteSessionsResult = {
 	 * code is used, locked, or expired.
 	 */
 	pairing: boolean,
+	/**
+	 * The SHA-256 fingerprint of the listener's certificate, in hex, while it listens: what a
+	 * browser shows for it, to check before trusting it (PLX-651).
+	 */
+	fingerprint?: string,
 	/**
 	 * Why it isn't while `remote` is on, such as the port being in use by another program.
 	 */

@@ -250,22 +250,30 @@ async fn want(daemon: &Daemon) -> Want {
 pub(super) struct Checks {
     all: Arc<Semaphore>,
     per_ip: Arc<Mutex<HashMap<IpAddr, usize>>>,
+    max_per_ip: usize,
 }
 
 impl Default for Checks {
     fn default() -> Self {
-        Self {
-            all: Arc::new(Semaphore::new(MAX_PENDING_CHECKS)),
-            per_ip: Arc::default(),
-        }
+        Self::new(MAX_PENDING_CHECKS, MAX_PENDING_CHECKS_PER_IP)
     }
 }
 
 impl Checks {
+    /// Slots for `max` at once, and `max_per_ip` for one peer address. The remote listener uses
+    /// these for the web client's files too.
+    pub(super) fn new(max: usize, max_per_ip: usize) -> Self {
+        Self {
+            all: Arc::new(Semaphore::new(max)),
+            per_ip: Arc::default(),
+            max_per_ip,
+        }
+    }
+
     /// A slot for a check of a connection from `ip`, or `None` when either cap is reached.
     pub(super) fn start(&self, ip: IpAddr) -> Option<Check> {
         let mut per_ip = self.per_ip.lock().unwrap_or_else(PoisonError::into_inner);
-        if per_ip.get(&ip).copied().unwrap_or(0) >= MAX_PENDING_CHECKS_PER_IP {
+        if per_ip.get(&ip).copied().unwrap_or(0) >= self.max_per_ip {
             return None;
         }
         let permit = Arc::clone(&self.all).try_acquire_owned().ok()?;

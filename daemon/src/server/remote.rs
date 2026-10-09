@@ -19,6 +19,22 @@
 //! - `/api/hooks/<id>/<token>`, by any method: a scheduled task's webhook ([`crate::schedules`]),
 //!   with a body of up to [`MAX_HOOK_BYTES`].
 //!
+//! While the `remoteWeb` setting is on too (PLX-651), it serves the app as a web client:
+//!
+//! - `GET /` and `GET /assets/<file>`: the renderer build's `web.html` and its files, from
+//!   [`Remote::web_dir`], with a Content Security Policy. They hold no secrets, so they need no
+//!   session; everything they reach does.
+//! - `POST /api/pair/browser`: the waiting code itself, with a `DPoP` proof, from a browser. A
+//!   browser checks the certificate itself and can't pin one, so SPAKE2 would vouch for nothing
+//!   there. A right code answers with a browser's session, and a wrong one counts against the code
+//!   as a wrong confirmation does. While `remoteWeb` is off, a browser's session gets no ticket,
+//!   and turning it off closes their sockets; turning it on again lets them back in.
+//!
+//! Files stream in chunks, at most [`MAX_FILE_RESPONSES`] at once and [`MAX_FILE_RESPONSES_PER_IP`]
+//! for one address, and a reader that takes none of a chunk for [`remote::REQUEST_TIMEOUT`] is
+//! dropped, so stalled readers hold little memory. A browser's request to `/ws`, `/api/pair/*`, or
+//! `/api/auth/*` must come from this host's own origin, `https://<Host>`.
+//!
 //! While a code waits, plxd advertises itself over mDNS as `_parallax._tcp`, by name, with no
 //! secret. Turning `remote` off ends the pairing and closes every connection the listener
 //! accepted, and `remote/revoke` closes a session's own.
@@ -26,6 +42,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -79,12 +96,39 @@ const MAX_REQUEST_BYTES: usize = 16 * 1024;
 /// The most a webhook request's head and body may hold, as T3's.
 const MAX_HOOK_BYTES: usize = 1024 * 1024;
 
+/// How many connections may be in their TLS handshake and request at once, overall and from one
+/// address, each for at most [`remote::REQUEST_TIMEOUT`]. A browser loading the web client opens
+/// up to 6 connections to a host at once, and with Connect's 2 per address it lost some: about one
+/// load in three failed in e2e/web.spec.ts. Every client of `tailscale serve` comes from loopback,
+/// so they share one address's 6.
+const MAX_PENDING: usize = 16;
+const MAX_PENDING_PER_IP: usize = 6;
+
+/// How many of the web client's files may be on their way at once, and to one address: as many as
+/// a browser fetches from one host at a time. Every client of `tailscale serve` comes from
+/// loopback, so they share one address's share.
+const MAX_FILE_RESPONSES: usize = 16;
+const MAX_FILE_RESPONSES_PER_IP: usize = 6;
+
+/// How much of a file is read and sent at a time.
+const FILE_CHUNK: usize = 16 * 1024;
+
+/// The web client's Content Security Policy, as a header, which unlike vite.config.ts's `<meta>`
+/// can forbid framing. Its scripts and connections are this origin's only.
+const WEB_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+    img-src 'self' data: https://github.com https://*.githubusercontent.com; connect-src 'self'; \
+    object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
 /// The remote listener's state, shared with `remote/*`.
 #[derive(Debug)]
 pub(crate) struct Remote {
     pub port: u16,
     /// Bound instead of every IPv4 address, and reported as the only route. Tests only.
     pub address: Option<IpAddr>,
+    /// The web client's files: the renderer build, with `web.html` and `assets/`.
+    pub web_dir: Option<PathBuf>,
+    /// The listener's certificate fingerprint while it's bound, for Settings to show.
+    pub fingerprint: Mutex<Option<String>>,
     /// How long a pairing code works. [`CODE_LIFETIME`], except in tests.
     code_lifetime: Duration,
     /// Wakes the listener at once, when `host/settings/set` changes `remote` or a new code
@@ -105,10 +149,17 @@ pub(crate) struct Remote {
 }
 
 impl Remote {
-    pub(crate) fn new(port: u16, address: Option<IpAddr>, code_lifetime: Duration) -> Self {
+    pub(crate) fn new(
+        port: u16,
+        address: Option<IpAddr>,
+        web_dir: Option<PathBuf>,
+        code_lifetime: Duration,
+    ) -> Self {
         Self {
             port,
             address,
+            web_dir,
+            fingerprint: Mutex::default(),
             code_lifetime,
             changed: Notify::new(),
             listening: AtomicBool::new(false),
@@ -230,12 +281,21 @@ impl Remote {
             pairing.take().expect("a pairing").end();
             return Ok(key);
         }
-        waiting.wrong += 1;
-        if waiting.wrong >= remote::MAX_WRONG_CODES {
-            warn!("locked the pairing code after too many wrong tries");
+        Err(wrong_code(&mut pairing))
+    }
+
+    /// Uses up the waiting code if `code` is it, for a browser (PLX-651). A wrong one counts
+    /// against the code as a wrong confirmation does, so guesses get the same 5 tries.
+    fn use_code(&self, code: &str) -> Result<(), &'static str> {
+        let mut pairing = self.lock_pairing();
+        let Some(waiting) = pairing.as_ref().filter(|p| Instant::now() < p.expires) else {
+            return Err("no pairing code is waiting");
+        };
+        if waiting.code == code {
             pairing.take().expect("a pairing").end();
+            return Ok(());
         }
-        Err("a wrong pairing code")
+        Err(wrong_code(&mut pairing))
     }
 
     /// Records a proof's `jti` for its key. False when it was seen already.
@@ -289,6 +349,18 @@ impl Remote {
             token.cancel();
         }
     }
+}
+
+/// Counts a wrong code against the waiting pairing, and ends it at the last allowed one.
+fn wrong_code(pairing: &mut Option<Pairing>) -> &'static str {
+    if let Some(waiting) = pairing.as_mut() {
+        waiting.wrong += 1;
+        if waiting.wrong >= remote::MAX_WRONG_CODES {
+            warn!("locked the pairing code after too many wrong tries");
+            pairing.take().expect("a pairing").end();
+        }
+    }
+    "a wrong pairing code"
 }
 
 /// A pairing code waiting to be used.
@@ -350,6 +422,8 @@ struct Bound {
     tls: TlsAcceptor,
     /// Closes every connection this listener accepted. A child of the server's abort token.
     closing: CancellationToken,
+    /// The web client's files on their way.
+    files: Checks,
 }
 
 /// Keeps the listener in line with the `remote` setting until `stop`.
@@ -360,7 +434,7 @@ pub(super) async fn run(serving: Serving, stop: CancellationToken) {
     // Set when `remote` is on and the bind failed, so it tries again.
     let mut retry = false;
     let mut connection_id = 0_u64;
-    let checks = Checks::default();
+    let checks = Checks::new(MAX_PENDING, MAX_PENDING_PER_IP);
     loop {
         if settle {
             settle = false;
@@ -470,6 +544,10 @@ async fn bind(serving: &Serving) -> Option<Bound> {
         Ok(listener) => {
             info!(%address, fingerprint = %key.fingerprint, "listening for remote clients");
             *remote
+                .fingerprint
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(key.fingerprint.clone());
+            *remote
                 .problem
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner) = None;
@@ -478,6 +556,7 @@ async fn bind(serving: &Serving) -> Option<Bound> {
                 key,
                 tls,
                 closing: serving.abort.child_token(),
+                files: Checks::new(MAX_FILE_RESPONSES, MAX_FILE_RESPONSES_PER_IP),
             })
         }
         Err(error) => {
@@ -694,9 +773,11 @@ async fn respond<S: AsyncWrite + Unpin>(
         202 => "Accepted",
         400 => "Bad Request",
         401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         409 => "Conflict",
         413 => "Content Too Large",
+        503 => "Service Unavailable",
         429 => "Too Many Requests",
         _ => "Internal Server Error",
     };
@@ -737,6 +818,7 @@ impl Serving {
         let key = Arc::clone(&bound.key);
         let tls = bound.tls.clone();
         let closing = bound.closing.clone();
+        let files = bound.files.clone();
         self.connections.spawn(
             async move {
                 let read = async {
@@ -756,13 +838,30 @@ impl Serving {
                     Err(_) => return debug!(%peer, "closed a remote connection that sent no request in time"),
                 };
                 let route = request.path.split('?').next().unwrap_or_default();
+                let guarded = route == "/ws" || route.starts_with("/api/pair/") || route.starts_with("/api/auth/");
                 let (status, body) = match (request.method.as_str(), route) {
+                    _ if guarded && !same_origin(&request) => {
+                        (403, json!({ "error": "forbidden", "error_description": "another origin" }))
+                    }
                     ("GET", "/ws") => {
                         return serve_socket(stream, &request, daemon, stop_reading, &closing, peer).await;
+                    }
+                    ("GET", path) if web_file(path).is_some() && web_on(&daemon).await => {
+                        let Some(slot) = files.start(peer.ip()) else {
+                            let busy = json!({ "error": "busy" });
+                            let _ = time::timeout(remote::REQUEST_TIMEOUT, respond(&mut stream, 503, &busy)).await;
+                            return debug!(%peer, "refused a web client file: too many on their way");
+                        };
+                        let file = web_file(path).expect("a web file");
+                        serve_file(stream, &daemon, &file, peer).await;
+                        return drop(slot);
                     }
                     ("GET", "/.well-known/parallax") => (200, descriptor(&daemon, &key).await),
                     ("POST", "/api/pair/start") => start_pairing(&daemon, &key, &request),
                     ("POST", "/api/pair/finish") => finish_pairing(&daemon, &key, &request).await,
+                    ("POST", "/api/pair/browser") if web_on(&daemon).await => {
+                        pair_browser(&daemon, &request).await
+                    }
                     ("POST", "/api/auth/websocket-ticket") => ticket(&daemon, &request).await,
                     _ if request.too_large => (413, json!({ "error": "body_too_large" })),
                     (method, hook) if hook.starts_with("/api/hooks/") => {
@@ -853,28 +952,9 @@ async fn finish_pairing(
     if !daemon.remote.first_use(&proven) {
         return refused("a replayed DPoP proof");
     }
-    let token = remote::random_token(32);
-    let session = StoredSession {
-        id: uuid::Uuid::new_v4().to_string(),
-        name: clean_name(&finish.client_label),
-        token_hash: remote::hex(&remote::sha256(token.as_bytes())),
-        thumbprint: proven.thumbprint.clone(),
-        created_at: jiff::Timestamp::now().to_string(),
-    };
-    let name = session.name.clone();
-    let stored = daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            let mut sessions = read_sessions(db)?;
-            sessions.push(session);
-            write_sessions(db, &sessions)
-        })
-        .await;
-    if let Err(error) = stored {
-        warn!(error = %error.message, "could not keep a remote session");
+    let Some(token) = new_session(daemon, &proven, &finish.client_label, false).await else {
         return (500, json!({ "error": "server_error" }));
-    }
-    info!(%name, "paired a remote client");
+    };
     let confirm = remote::confirmation(&shared, b"host", fp, &proven.thumbprint);
     (
         200,
@@ -888,29 +968,236 @@ async fn finish_pairing(
     )
 }
 
+/// Keeps a new session bound to the key of `proven`, named `label`, and answers with its token.
+async fn new_session(
+    daemon: &Daemon,
+    proven: &remote::Proven,
+    label: &str,
+    browser: bool,
+) -> Option<String> {
+    let token = remote::random_token(32);
+    let session = StoredSession {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: clean_name(label),
+        token_hash: remote::hex(&remote::sha256(token.as_bytes())),
+        thumbprint: proven.thumbprint.clone(),
+        created_at: jiff::Timestamp::now().to_string(),
+        browser,
+    };
+    let name = session.name.clone();
+    let stored = daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            let mut sessions = read_sessions(db)?;
+            sessions.push(session);
+            write_sessions(db, &sessions)
+        })
+        .await;
+    if let Err(error) = stored {
+        warn!(error = %error.message, "could not keep a remote session");
+        return None;
+    }
+    info!(%name, "paired a remote client");
+    Some(token)
+}
+
+/// `POST /api/pair/browser` (PLX-651): the waiting code, typed into a browser, with a `DPoP`
+/// proof. A right one gets a session bound to the proof's key.
+async fn pair_browser(daemon: &Daemon, request: &Request) -> (u16, serde_json::Value) {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Pair {
+        code: String,
+        #[serde(default)]
+        client_label: String,
+    }
+    let Ok(pair) = serde_json::from_slice::<Pair>(&request.body) else {
+        return (400, json!({ "error": "invalid_request" }));
+    };
+    let proof = request.header("dpop").unwrap_or_default();
+    let now = remote::now_seconds();
+    let proven = match remote::verify_proof(proof, "POST", &request.url(), now, None) {
+        Ok(proven) => proven,
+        Err(why) => return refused(why),
+    };
+    // A replayed proof is refused before it can use up or count against the code. Proofs are only
+    // remembered while a code waits, so strangers can't grow the map at other times.
+    if !daemon.remote.pairing() {
+        return refused("no pairing code is waiting");
+    }
+    if !daemon.remote.first_use(&proven) {
+        return refused("a replayed DPoP proof");
+    }
+    if let Err(why) = daemon.remote.use_code(&remote::normalize_code(&pair.code)) {
+        return refused(why);
+    }
+    let Some(token) = new_session(daemon, &proven, &pair.client_label, true).await else {
+        return (500, json!({ "error": "server_error" }));
+    };
+    (
+        200,
+        json!({ "accessToken": token, "tokenType": "DPoP", "name": host_name(daemon).await }),
+    )
+}
+
+/// Whether a request comes from this host's own origin, or from no browser at all: a browser
+/// sends `Origin` with every WebSocket and POST, and a page elsewhere can't set it.
+fn same_origin(request: &Request) -> bool {
+    request.header("origin").is_none_or(|origin| {
+        request
+            .header("host")
+            .is_some_and(|host| origin == format!("https://{host}"))
+    })
+}
+
+/// Whether the web client is on: `remoteWeb`, read for each request so turning it off takes effect
+/// at once.
+async fn web_on(daemon: &Daemon) -> bool {
+    daemon
+        .reader
+        .run(&CancellationToken::new(), |db| {
+            db.remote_web().map_err(|e| store_error(&e))
+        })
+        .await
+        .unwrap_or(false)
+}
+
+/// The web client's file a `GET` of `path` names: `web.html` for `/`, or a file directly in
+/// `assets/` named with letters, digits, `.`, `_`, and `-` only, so no path leaves the folder.
+/// [`serve_file`] then serves it only if `assets/` lists that exact name, which leaves out
+/// Windows' device names (`CON`, `NUL`, `COM1`) and the trailing dots it strips.
+fn web_file(path: &str) -> Option<String> {
+    if path == "/" {
+        return Some("web.html".to_owned());
+    }
+    let name = path.strip_prefix("/assets/")?;
+    let plain = !name.starts_with('.')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b));
+    (plain && !name.is_empty()).then(|| format!("assets/{name}"))
+}
+
+/// `write`, unless the reader takes none of it for [`remote::REQUEST_TIMEOUT`].
+async fn step(write: impl Future<Output = io::Result<()>>) -> io::Result<()> {
+    time::timeout(remote::REQUEST_TIMEOUT, write)
+        .await
+        .unwrap_or_else(|_| Err(io::ErrorKind::TimedOut.into()))
+}
+
+/// Whether `dir` lists a file named exactly `name`.
+async fn lists(dir: &Path, name: &str) -> bool {
+    let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
+        return false;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if entry.file_name() == name {
+            return true;
+        }
+    }
+    false
+}
+
+/// Answers with the web client's `file`, or 404 when it isn't there, as in a plxd without the app.
+/// It streams in [`FILE_CHUNK`]s, and gives up on a reader that takes none of one for
+/// [`remote::REQUEST_TIMEOUT`].
+async fn serve_file(
+    mut stream: tokio_rustls::server::TlsStream<TcpStream>,
+    daemon: &Daemon,
+    file: &str,
+    peer: SocketAddr,
+) {
+    let opened = async {
+        let dir = daemon
+            .remote
+            .web_dir
+            .as_deref()
+            .ok_or(io::ErrorKind::NotFound)?;
+        let path = dir.join(file);
+        if let Some(name) = file.strip_prefix("assets/")
+            && !lists(&dir.join("assets"), name).await
+        {
+            return Err(io::ErrorKind::NotFound.into());
+        }
+        let opened = tokio::fs::File::open(&path).await?;
+        let length = opened.metadata().await?.len();
+        Ok::<_, io::Error>((opened, length))
+    };
+    let Ok((mut opened, length)) = opened.await else {
+        debug!(%peer, file, "the web client has no such file");
+        let _ = respond(&mut stream, 404, &json!({ "error": "not_found" })).await;
+        return;
+    };
+    let kind = match file.rsplit('.').next() {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("woff2") => "font/woff2",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        _ => "application/octet-stream",
+    };
+    // Asset names carry a hash of their contents, so they never change; the page always reloads.
+    let cache = if file == "web.html" {
+        "no-cache"
+    } else {
+        "public, max-age=31536000, immutable"
+    };
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {length}\r\nCache-Control: {cache}\r\nContent-Security-Policy: {WEB_CSP}\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n",
+    );
+    let send = async {
+        step(stream.write_all(head.as_bytes())).await?;
+        let mut chunk = vec![0; FILE_CHUNK];
+        loop {
+            let read = opened.read(&mut chunk).await?;
+            if read == 0 {
+                break;
+            }
+            step(stream.write_all(&chunk[..read])).await?;
+        }
+        step(stream.shutdown()).await
+    };
+    if let Err(error) = send.await {
+        debug!(%peer, %error, file, "could not send a web client file");
+    }
+}
+
 /// `POST /api/auth/websocket-ticket`: a 30 s ticket for `/ws`, for a session's token with a `DPoP`
 /// proof from its key.
+/// Its refusals tell the session's end apart from a bad proof, such as one from a clock that's
+/// off: only `invalid_token` means pairing again. A browser's session while `remoteWeb` is off is
+/// `access_denied`, and works again once it's on.
 async fn ticket(daemon: &Daemon, request: &Request) -> (u16, serde_json::Value) {
+    let refused =
+        |error: &str, why: &str| (401, json!({ "error": error, "error_description": why }));
     let Some(token) = request
         .header("authorization")
         .and_then(|value| value.strip_prefix("DPoP "))
     else {
-        return refused("no DPoP access token");
+        return refused("invalid_token", "no DPoP access token");
     };
     let Some(session) = session_for(daemon, token).await else {
-        return refused("an unknown or revoked session");
+        return refused("invalid_token", "an unknown or revoked session");
     };
     let proof = request.header("dpop").unwrap_or_default();
     let now = remote::now_seconds();
     let proven = match remote::verify_proof(proof, "POST", &request.url(), now, Some(token)) {
         Ok(proven) => proven,
-        Err(why) => return refused(why),
+        Err(why) => return refused("invalid_dpop_proof", why),
     };
     if proven.thumbprint != session.thumbprint {
-        return refused("a DPoP proof from another key");
+        return refused("invalid_dpop_proof", "a DPoP proof from another key");
     }
     if !daemon.remote.first_use(&proven) {
-        return refused("a replayed DPoP proof");
+        return refused("invalid_dpop_proof", "a replayed DPoP proof");
+    }
+    if session.browser && !web_on(daemon).await {
+        let why = "Open in a browser is off on this computer";
+        return (
+            403,
+            json!({ "error": "access_denied", "error_description": why }),
+        );
     }
     let ticket = daemon.remote.new_ticket(session.id);
     let seconds = TICKET_LIFETIME.as_secs();
@@ -941,8 +1228,8 @@ async fn serve_socket(
     };
     // Watched before the session is checked, so a revoke that lands in between still closes it.
     let closing = daemon.remote.watch(&session, closing);
-    // A session revoked after its ticket was made.
-    if !session_exists(&daemon, &session).await {
+    // A session revoked after its ticket was made, or a browser's after `remoteWeb` went off.
+    if !session_open(&daemon, &session).await {
         let refusal = refused("a revoked session");
         let _ = respond(&mut stream, refusal.0, &refusal.1).await;
         return;
@@ -1026,6 +1313,9 @@ struct StoredSession {
     /// The JWK thumbprint of the `DPoP` key it's bound to.
     thumbprint: String,
     created_at: String,
+    /// Made by `/api/pair/browser`, so it works only while `remoteWeb` is on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    browser: bool,
 }
 
 fn read_sessions(db: &Store) -> Result<Vec<StoredSession>, ErrorObject> {
@@ -1061,8 +1351,23 @@ async fn session_for(daemon: &Daemon, token: &str) -> Option<StoredSession> {
         .find(|s| s.token_hash == hash)
 }
 
-async fn session_exists(daemon: &Daemon, id: &str) -> bool {
-    stored_sessions(daemon).await.iter().any(|s| s.id == id)
+/// Whether session `id` may have a socket now: it exists, and a browser's only while `remoteWeb`
+/// is on.
+async fn session_open(daemon: &Daemon, id: &str) -> bool {
+    match stored_sessions(daemon).await.iter().find(|s| s.id == id) {
+        Some(session) => !session.browser || web_on(daemon).await,
+        None => false,
+    }
+}
+
+/// Closes every browser's connections, as `remoteWeb` turns off. Their sessions stay, for when it
+/// turns on again.
+pub(crate) async fn close_browsers(daemon: &Daemon) {
+    for session in stored_sessions(daemon).await {
+        if session.browser {
+            daemon.remote.revoke(&session.id);
+        }
+    }
 }
 
 fn listed(sessions: Vec<StoredSession>) -> Vec<RemoteSession> {
@@ -1180,6 +1485,12 @@ pub(crate) fn listed_with_status(
         sessions,
         listening: remote.listening.load(Ordering::Relaxed),
         pairing: remote.pairing(),
+        fingerprint: remote
+            .fingerprint
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .filter(|_| remote.listening.load(Ordering::Relaxed)),
         problem: remote
             .problem
             .lock()

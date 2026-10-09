@@ -111,6 +111,10 @@ pub struct HostSettingsSetParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub remote: Option<bool>,
+    /// The new `remoteWeb`, behind the `remoteWeb` capability. Absent leaves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub remote_web: Option<bool>,
     /// The new `deviceName`, behind the `connect` capability. `""` clears it. Control characters
     /// are dropped and the rest trimmed to at most 64 characters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -147,6 +151,12 @@ pub struct HostSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub remote: Option<bool>,
+    /// Whether the HTTPS listener also serves the app as a web client at `/`, and pairs browsers
+    /// with the short code (PLX-651). Off by default, and only in effect while `remote` is on. An
+    /// older plxd, without the `remoteWeb` capability, leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub remote_web: Option<bool>,
     /// This device's nickname for Parallax Connect, when one is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
