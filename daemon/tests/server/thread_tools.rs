@@ -14,7 +14,7 @@ use parallax_protocol::{
 use plxd::backend::fake::Step;
 use plxd::mcp::MAX_CALLS;
 use plxd::mcp::thread::TOOLS;
-use plxd::mcp::{device, html, preview};
+use plxd::mcp::{device, html, preview, triggers};
 use plxd::paths::DataDir;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -157,7 +157,15 @@ async fn a_thread_launches_waits_on_reads_searches_and_messages_a_child() {
     let memory: &[&str] = &["memory_read", "memory_propose"];
     assert_eq!(
         names,
-        [TOOLS, memory, html::TOOLS, preview::TOOLS, device::TOOLS].concat()
+        [
+            TOOLS,
+            memory,
+            html::TOOLS,
+            preview::TOOLS,
+            device::TOOLS,
+            triggers::TOOLS
+        ]
+        .concat()
     );
 
     let child = mcp

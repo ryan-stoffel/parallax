@@ -95,6 +95,7 @@ export type SettingsSection =
   | "keybinds"
   | "providers"
   | "sourceControl"
+  | "schedules"
   | "storage"
   | "connections";
 

@@ -24,6 +24,7 @@ import {
   type Capabilities,
   type JsonValue,
   type RemoteSession,
+  type ScheduledTask,
   type LoggedEvent,
   type MemoryScope,
   type ParallaxEvent,
@@ -77,6 +78,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "questions",
     "repoRefs",
     "runOptions",
+    "schedules",
     "sendAccount",
     "sendModel",
     "sendOptions",
@@ -292,7 +294,71 @@ const lan = { on: false, sessions: [] as RemoteSession[], hosts: [] as LanHost[]
 const hostsListeners = new Set<(hosts: LanHost[]) => void>();
 const isLanHost = (hostId: string) => lan.hosts.some((h) => h.id === hostId);
 
+// Scheduled tasks (0063), as agents create them with `schedule_task`.
+const minutesFromNow = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
+let schedules: ScheduledTask[] = [
+  {
+    id: "0199c7a0-5f1e-7b3a-8c4d-2e6f8a0b1c2d",
+    title: "Babysit the nightly build",
+    prompt: "Check last night's nightly release. If a job failed, find why and open a fix.",
+    enabled: true,
+    schedule: { type: "fixed_time", timeOfDay: "07:30", weekdays: [1, 2, 3, 4, 5] },
+    thread: db.threads[0]?.id,
+    nextRunAt: minutesFromNow(14 * 60),
+    lastRunAt: minutesFromNow(-10 * 60),
+    lastRunStatus: "succeeded",
+    runCount: 12,
+    createdAt: minutesFromNow(-20 * 24 * 60),
+  },
+  {
+    id: "0199c7a0-5f1e-7b3a-8c4d-2e6f8a0b1c2e",
+    title: "Release notes",
+    prompt: "Write release notes for {{body.release.tag_name}} from its merged pull requests.",
+    enabled: true,
+    schedule: {
+      type: "webhook",
+      signature: { header: "x-hub-signature-256", encoding: "hex", prefix: "sha256=" },
+    },
+    lastRunAt: minutesFromNow(-3 * 24 * 60),
+    lastRunStatus: "succeeded",
+    runCount: 4,
+    webhook: {
+      path: "/api/hooks/0199c7a0-5f1e-7b3a-8c4d-2e6f8a0b1c2e/k3Jx9Qm2bW7",
+      url: "https://192.168.1.20:7341/api/hooks/0199c7a0-5f1e-7b3a-8c4d-2e6f8a0b1c2e/k3Jx9Qm2bW7",
+      hasSecret: true,
+    },
+    createdAt: minutesFromNow(-9 * 24 * 60),
+  },
+  {
+    id: "0199c7a0-5f1e-7b3a-8c4d-2e6f8a0b1c2f",
+    title: "Dependency sweep",
+    prompt: "Update outdated dependencies and run the tests.",
+    enabled: false,
+    schedule: { type: "interval", everyMs: 7 * 24 * 60 * 60_000 },
+    lastRunAt: minutesFromNow(-8 * 24 * 60),
+    lastRunStatus: "failed",
+    lastRunError: "no account was named, and the worker role has no default",
+    runCount: 1,
+    createdAt: minutesFromNow(-30 * 24 * 60),
+  },
+];
+
 const handlers: { [M in Method]?: Handler<M> } = {
+  "schedule/list": () => ({ tasks: schedules }),
+  "schedule/save": (p) => {
+    const task = { ...schedules.find((t) => t.id === p.id)!, ...p, id: p.id! };
+    schedules = schedules.map((t) => (t.id === task.id ? task : t));
+    return task;
+  },
+  "schedule/run": (p) => {
+    const task = schedules.find((t) => t.id === p.id)!;
+    Object.assign(task, { lastRunAt: new Date().toISOString(), runCount: task.runCount + 1 });
+    return task;
+  },
+  "schedule/delete": (p) => {
+    schedules = schedules.filter((t) => t.id !== p.id);
+    return { deleted: true };
+  },
   "host/settings/get": () => ({
     autoResume: true,
     connect: !!connect.on,

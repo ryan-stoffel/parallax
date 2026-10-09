@@ -613,6 +613,45 @@ test("Storage turns a host's merged worktree cleanup off", async () => {
   states["local"] = { status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} };
 });
 
+test("Schedules lists a host's tasks and pauses one", async () => {
+  states["local"] = {
+    status: "connected",
+    plxd: "0.1.0",
+    protocol: 1,
+    capabilities: { schedules: {} },
+  };
+  const task = {
+    id: "task-1",
+    title: "Build check",
+    prompt: "Check the build again.",
+    enabled: true,
+    schedule: { type: "fixed_time", timeOfDay: "09:00", weekdays: [1, 2, 3, 4, 5] },
+    thread: "t-1",
+    lastRunStatus: "failed",
+    lastRunError: "no thread",
+    runCount: 2,
+    createdAt: "2026-10-09T04:00:00Z",
+  };
+  answers["schedule/list"] = () => ({ result: { tasks: [task] } });
+  answers["schedule/save"] = () => ({ result: { ...task, enabled: false } });
+  await renderSettings("schedules");
+  const tasks = section("Scheduled tasks");
+  expect(tasks.textContent).toContain("Build check");
+  expect(tasks.textContent).toContain(
+    "Weekdays at 09:00 · Not scheduled · Last run failed: no thread",
+  );
+  await click(
+    document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Enable Build check"]')!,
+  );
+  expect(calls("schedule/save")).toEqual([
+    {
+      host: "local",
+      params: expect.objectContaining({ id: "task-1", enabled: false, thread: "t-1" }),
+    },
+  ]);
+  states["local"] = { status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} };
+});
+
 test("Connections renames this computer", async () => {
   const renameLocal = vi.fn(async () => undefined);
   window.parallax.renameLocal = renameLocal;

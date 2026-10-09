@@ -560,6 +560,38 @@ export type ParallaxRequests = {
 	 * `terminal/list`: the running terminals, or one thread's.
 	 */
 	"terminal/list": { params: TerminalListParams, result: TerminalListResult },
+	/**
+	 * `schedule/list`: every scheduled task on the host (0063). Gated on the `schedules`
+	 * capability, like every `schedule/*` method.
+	 */
+	"schedule/list": { params: ScheduleListParams, result: ScheduleListResult },
+	/**
+	 * `schedule/save`: creates a scheduled task, or with `id` replaces one, and returns it.
+	 * Fails with `invalidParams` for a bad trigger or an unknown id.
+	 */
+	"schedule/save": { params: ScheduleSaveParams, result: ScheduledTask },
+	/**
+	 * `schedule/delete`: deletes a scheduled task. An unknown id changes nothing.
+	 */
+	"schedule/delete": { params: ScheduleIdParams, result: ScheduleDeleteResult },
+	/**
+	 * `schedule/run`: fires a scheduled task now, paused or not, and returns it.
+	 */
+	"schedule/run": { params: ScheduleIdParams, result: ScheduledTask },
+	/**
+	 * `pr/watch`: links a GitHub pull request URL to a run if it isn't, and watches it for
+	 * the run (0063). Fails with `invalidParams` for a pull request that isn't open. Gated
+	 * on the `prWatch` capability, like `pr/unwatch` and `pr/watches`.
+	 */
+	"pr/watch": { params: PrViewParams, result: PrWatchResult },
+	/**
+	 * `pr/unwatch`: stops watching a pull request for a run. It stays linked.
+	 */
+	"pr/unwatch": { params: PrViewParams, result: PrWatchResult },
+	/**
+	 * `pr/watches`: the run's watched pull requests.
+	 */
+	"pr/watches": { params: PrWatchesParams, result: PrWatchesResult },
 };
 
 /** Every request method, in `ParallaxRequests`' order. */
@@ -672,6 +704,13 @@ export const REQUEST_METHODS = [
 	"terminal/open",
 	"terminal/close",
 	"terminal/list",
+	"schedule/list",
+	"schedule/save",
+	"schedule/delete",
+	"schedule/run",
+	"pr/watch",
+	"pr/unwatch",
+	"pr/watches",
 ] as const;
 
 /** Notifications, which get no response, by method. */
@@ -6355,6 +6394,295 @@ export type TerminalListResult = {
 	 * Each running terminal.
 	 */
 	terminals: Array<TerminalKey>,
+};
+
+/**
+ * Params of `schedule/list`.
+ */
+export type ScheduleListParams = Record<symbol, never>;
+
+/**
+ * Result of `schedule/list`: every task on the host, oldest first.
+ */
+export type ScheduleListResult = {
+	/**
+	 * The tasks.
+	 */
+	tasks: Array<ScheduledTask>,
+};
+
+/**
+ * A scheduled task, as `schedule/save`, `schedule/list`, and `schedule/run` return it.
+ */
+export type ScheduledTask = {
+	/**
+	 * Its id, a UUID.
+	 */
+	id: string,
+	/**
+	 * Its name, and the title of each thread it launches.
+	 */
+	title: string,
+	/**
+	 * What each fire sends. A webhook's placeholders are filled from the request.
+	 */
+	prompt: string,
+	/**
+	 * A paused task doesn't fire, except by `schedule/run`.
+	 */
+	enabled: boolean,
+	/**
+	 * Its trigger.
+	 */
+	schedule: Schedule,
+	/**
+	 * The thread each fire queues its prompt into.
+	 */
+	thread?: RunId,
+	/**
+	 * The Project whose coordinator each fire messages.
+	 */
+	project?: ProjectId,
+	/**
+	 * Without `thread` or `project`: the repo entry each fire launches a thread in. Absent
+	 * launches it with no repository.
+	 */
+	repo?: RepoId,
+	/**
+	 * A launched thread's account. Absent uses the worker default.
+	 */
+	account?: AccountChoice,
+	/**
+	 * A launched thread's model.
+	 */
+	model?: string,
+	/**
+	 * A launched thread's effort.
+	 */
+	effort?: AgentEffort,
+	/**
+	 * A launched thread's access.
+	 */
+	permission?: AgentPermission,
+	/**
+	 * When it fires next. Absent for a webhook or a paused task.
+	 */
+	nextRunAt?: string,
+	/**
+	 * When it last fired.
+	 */
+	lastRunAt?: string,
+	/**
+	 * How its last fire went.
+	 */
+	lastRunStatus: ScheduleRunStatus,
+	/**
+	 * Why its last fire failed.
+	 */
+	lastRunError?: string,
+	/**
+	 * How many times it has fired.
+	 */
+	runCount: number,
+	/**
+	 * Where a webhook task receives requests.
+	 */
+	webhook?: ScheduleWebhook,
+	/**
+	 * When it was created.
+	 */
+	createdAt: string,
+};
+
+/**
+ * What fires a scheduled task.
+ *
+ * A newer plxd may send a trigger this version does not know; show it as unknown.
+ */
+export type Schedule = { "type": "interval",
+	/**
+	 * The interval.
+	 */
+	everyMs: number, } | { "type": "fixed_time",
+	/**
+	 * `HH:MM`, 24-hour, in the host's time zone.
+	 */
+	timeOfDay: string,
+	/**
+	 * 0 is Sunday and 6 Saturday. Empty means every day.
+	 */
+	weekdays?: Array<number>, } | { "type": "webhook",
+	/**
+	 * The signature each request must carry, if any.
+	 */
+	signature?: WebhookSignature,
+};
+
+/**
+ * An HMAC-SHA256 signature over a webhook request's raw body, as GitHub and most senders sign.
+ */
+export type WebhookSignature = {
+	/**
+	 * The header that carries it, such as `x-hub-signature-256`.
+	 */
+	header: string,
+	/**
+	 * How the digest is written in the header.
+	 */
+	encoding: SignatureEncoding,
+	/**
+	 * Text before the digest, such as `sha256=`. Empty for none.
+	 */
+	prefix: string,
+	/**
+	 * The shared secret. Only `schedule/save` takes it, and omitting it there keeps the stored
+	 * one. plxd never returns it.
+	 */
+	secret?: string,
+};
+
+/**
+ * How a webhook signature's digest is written.
+ *
+ * A newer client may send an encoding this version does not know; plxd refuses it.
+ */
+export type SignatureEncoding = "hex" | "base64";
+
+/**
+ * How a scheduled task's last fire went.
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type ScheduleRunStatus = "never" | "running" | "succeeded" | "failed";
+
+/**
+ * Where a webhook task receives requests.
+ */
+export type ScheduleWebhook = {
+	/**
+	 * `/api/hooks/<id>/<token>`. The token is the secret part, so share it only with the sender.
+	 */
+	path: string,
+	/**
+	 * The full URL on this host's LAN address, while remote access is on.
+	 */
+	url?: string,
+	/**
+	 * Whether requests must carry a valid signature.
+	 */
+	hasSecret: boolean,
+};
+
+/**
+ * Params of `schedule/save`: a task to create, or with `id`, to replace.
+ */
+export type ScheduleSaveParams = {
+	/**
+	 * The task to replace. Absent creates one.
+	 */
+	id?: string,
+	/**
+	 * Its name.
+	 */
+	title: string,
+	/**
+	 * What each fire sends, at most 64 KiB.
+	 */
+	prompt: string,
+	/**
+	 * Whether it fires on its own.
+	 */
+	enabled: boolean,
+	/**
+	 * Its trigger. An interval is at least 60000 ms.
+	 */
+	schedule: Schedule,
+	/**
+	 * The thread each fire queues into.
+	 */
+	thread?: RunId,
+	/**
+	 * The Project whose coordinator each fire messages.
+	 */
+	project?: ProjectId,
+	/**
+	 * The repo entry each fire launches a thread in.
+	 */
+	repo?: RepoId,
+	/**
+	 * A launched thread's account.
+	 */
+	account?: AccountChoice,
+	/**
+	 * A launched thread's model.
+	 */
+	model?: string,
+	/**
+	 * A launched thread's effort.
+	 */
+	effort?: AgentEffort,
+	/**
+	 * A launched thread's access.
+	 */
+	permission?: AgentPermission,
+};
+
+/**
+ * Params of `schedule/run` and `schedule/delete`.
+ */
+export type ScheduleIdParams = {
+	/**
+	 * The task's id.
+	 */
+	id: string,
+};
+
+/**
+ * Result of `schedule/delete`.
+ */
+export type ScheduleDeleteResult = {
+	/**
+	 * False when no task had the id.
+	 */
+	deleted: boolean,
+};
+
+/**
+ * Result of `pr/watch` and `pr/unwatch`.
+ */
+export type PrWatchResult = {
+	/**
+	 * The pull request's URL.
+	 */
+	url: string,
+	/**
+	 * Whether plxd watches it for the run now.
+	 */
+	watching: boolean,
+	/**
+	 * Whether it did before the call.
+	 */
+	wasWatching: boolean,
+};
+
+/**
+ * Params of `pr/watches`.
+ */
+export type PrWatchesParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Result of `pr/watches`: the URLs of the run's linked pull requests that plxd watches.
+ */
+export type PrWatchesResult = {
+	/**
+	 * The URLs.
+	 */
+	urls: Array<string>,
 };
 
 /**

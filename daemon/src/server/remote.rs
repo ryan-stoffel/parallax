@@ -16,6 +16,8 @@
 //!   after [`remote::MAX_WRONG_CODES`]. The session's token is stored hashed.
 //! - `POST /api/auth/websocket-ticket`: a ticket valid once for 30 s, for a `DPoP`-bound token.
 //! - `GET /ws?wsTicket=…`: a WebSocket carrying 0007's JSON-RPC, one message per frame.
+//! - `/api/hooks/<id>/<token>`, by any method: a scheduled task's webhook ([`crate::schedules`]),
+//!   with a body of up to [`MAX_HOOK_BYTES`].
 //!
 //! While a code waits, plxd advertises itself over mDNS as `_parallax._tcp`, by name, with no
 //! secret. Turning `remote` off ends the pairing and closes every connection the listener
@@ -73,6 +75,9 @@ const BIND_RETRY: Duration = Duration::from_secs(10);
 
 /// The most a request's head and body may hold.
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
+
+/// The most a webhook request's head and body may hold, as T3's.
+const MAX_HOOK_BYTES: usize = 1024 * 1024;
 
 /// The remote listener's state, shared with `remote/*`.
 #[derive(Debug)]
@@ -554,10 +559,15 @@ async fn read_request<S: AsyncRead + Unpin>(stream: &mut S) -> io::Result<Option
                     .get("content-length")
                     .and_then(|n| n.parse().ok())
                     .unwrap_or(0);
-                if length
-                    .checked_add(wanted)
-                    .is_none_or(|n| n > MAX_REQUEST_BYTES)
+                let max = if parsed
+                    .path
+                    .is_some_and(|path| path.starts_with("/api/hooks/"))
                 {
+                    MAX_HOOK_BYTES
+                } else {
+                    MAX_REQUEST_BYTES
+                };
+                if length.checked_add(wanted).is_none_or(|n| n > max) {
                     return Ok(None);
                 }
                 let mut body = buffer[length..].to_vec();
@@ -587,9 +597,12 @@ async fn respond<S: AsyncWrite + Unpin>(
 ) -> io::Result<()> {
     let reason = match status {
         200 => "OK",
+        202 => "Accepted",
         400 => "Bad Request",
         401 => "Unauthorized",
         404 => "Not Found",
+        409 => "Conflict",
+        429 => "Too Many Requests",
         _ => "Internal Server Error",
     };
     let body = body.to_string();
@@ -656,9 +669,15 @@ impl Serving {
                     ("POST", "/api/pair/start") => start_pairing(&daemon, &key, &request),
                     ("POST", "/api/pair/finish") => finish_pairing(&daemon, &key, &request).await,
                     ("POST", "/api/auth/websocket-ticket") => ticket(&daemon, &request).await,
+                    (method, hook) if hook.starts_with("/api/hooks/") => {
+                        let Request { path, headers, body, .. } = &request;
+                        crate::schedules::hook(&daemon, method, path, headers, body).await
+                    }
                     _ => (404, json!({ "error": "not_found" })),
                 };
-                if status != 200 {
+                // A webhook's path holds its token, so the log names only the route.
+                let route = if route.starts_with("/api/hooks/") { "/api/hooks/…" } else { route };
+                if !matches!(status, 200 | 202) {
                     warn!(%peer, path = route, status, "refused a remote request");
                 }
                 let _ = time::timeout(remote::REQUEST_TIMEOUT, respond(&mut stream, status, &body)).await;

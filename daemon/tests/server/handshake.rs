@@ -14,6 +14,7 @@ use serde_json::json;
 use crate::support::{Client, Plxd, kind, temp_dir};
 
 #[tokio::test]
+#[expect(clippy::too_many_lines, reason = "every capability, one per line")]
 async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
     let dir = temp_dir();
     let plxd = Plxd::start(dir.path()).await;
@@ -73,12 +74,14 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
                 .unwrap()
             ),
             ("prDiff".to_owned(), serde_json::Map::new()),
+            ("prWatch".to_owned(), serde_json::Map::new()),
             ("pullRequests".to_owned(), serde_json::Map::new()),
             ("queue".to_owned(), serde_json::Map::new()),
             ("questions".to_owned(), serde_json::Map::new()),
             ("remote".to_owned(), serde_json::Map::new()),
             ("repoRefs".to_owned(), serde_json::Map::new()),
             ("runOptions".to_owned(), serde_json::Map::new()),
+            ("schedules".to_owned(), serde_json::Map::new()),
             ("sendAccount".to_owned(), serde_json::Map::new()),
             ("sendModel".to_owned(), serde_json::Map::new()),
             ("sendOptions".to_owned(), serde_json::Map::new()),
