@@ -70,20 +70,21 @@ fn a_replay_leaves_out_queries_and_replies_but_keeps_the_rest() {
     assert_eq!(without_queries("$ \x1b[6"), "$ \x1b[6");
 }
 
-/// Prints `ready`, then `got-` and the line it reads.
+/// Prints `ready`, then `got-` and the line it reads. cmd.exe expands `!line!` when it runs
+/// (`/v:on`), where `%line%` would be expanded with the whole line, before `set /p` reads it.
 fn echo() -> TerminalCommand {
-    let (program, script) = if cfg!(windows) {
-        (
-            "cmd.exe",
-            "echo ready& set /p line=& echo got-%line%& set /p line=",
-        )
+    let args: &[&str] = if cfg!(windows) {
+        &[
+            "/v:on",
+            "/c",
+            "echo ready& set /p line=& echo got-!line!& set /p line=",
+        ]
     } else {
-        ("sh", "echo ready; read line; echo got-$line; read line")
+        &["-c", "echo ready; read line; echo got-$line; read line"]
     };
-    let flag = if cfg!(windows) { "/c" } else { "-c" };
     TerminalCommand {
-        program: program.to_owned(),
-        args: vec![flag.to_owned(), script.to_owned()],
+        program: if cfg!(windows) { "cmd.exe" } else { "sh" }.to_owned(),
+        args: args.iter().map(|&arg| arg.to_owned()).collect(),
         env: std::collections::BTreeMap::new(),
     }
 }
@@ -101,8 +102,14 @@ fn open(command: Option<TerminalCommand>) -> TerminalOpenParams {
 
 /// The next `terminal/output` (its text and whether it's a replay) or `terminal/exit` (`None`).
 async fn next(replies: &mut mpsc::Receiver<Reply>) -> Option<(String, bool)> {
-    let Some(Reply::Notification(message)) = timeout(PATIENCE, replies.recv()).await.unwrap()
-    else {
+    timeout(PATIENCE, receive(replies))
+        .await
+        .expect("no notification came")
+}
+
+/// [`next`] with no time limit.
+async fn receive(replies: &mut mpsc::Receiver<Reply>) -> Option<(String, bool)> {
+    let Some(Reply::Notification(message)) = replies.recv().await else {
         panic!("expected a notification");
     };
     if message.method == TerminalExit::NAME {
@@ -119,7 +126,7 @@ async fn until(replies: &mut mpsc::Receiver<Reply>, text: &str) {
     let mut shown = String::new();
     let read = async {
         while !shown.contains(text) {
-            let (data, _) = next(replies).await.expect("it exited first");
+            let (data, _) = receive(replies).await.expect("it exited first");
             shown.push_str(&data);
         }
     };
@@ -157,7 +164,24 @@ async fn opening_again_replays_the_history_then_streams_to_both() {
     // Archiving its thread closes it, and both see it exit.
     terminals.close_thread("t");
     for replies in [&mut first, &mut second] {
-        while next(replies).await.is_some() {}
+        let mut shown = String::new();
+        let read = async {
+            while let Ok(Some(Reply::Notification(message))) =
+                timeout(PATIENCE, replies.recv()).await
+            {
+                if message.method == TerminalExit::NAME {
+                    return true;
+                }
+                shown.push_str(&message.params::<TerminalOutputParams>().unwrap().data);
+            }
+            false
+        };
+        let exited = read.await;
+        let running = terminals.list(None);
+        assert!(
+            exited,
+            "no exit after closing; it printed {shown:?}; running {running:?}"
+        );
     }
     assert!(terminals.list(None).is_empty());
 }
