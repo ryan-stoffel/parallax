@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use super::{Fired, Trigger, check, fire, fire_job, hook, next_run, put, read, run, save};
 use crate::server::Daemon;
+use crate::store::store_error;
 
 fn daemon(dir: &Path) -> Arc<Daemon> {
     Daemon::for_tests(dir, 10, Duration::from_secs(90))
@@ -33,6 +34,7 @@ fn params(schedule: Schedule) -> ScheduleSaveParams {
         model: None,
         effort: None,
         permission: None,
+        from: None,
     }
 }
 
@@ -274,6 +276,7 @@ async fn a_signed_webhook_fires_its_prompt_with_the_bodys_values() {
             encoding: SignatureEncoding::Hex,
             prefix: "sha256=".to_owned(),
             secret: Some("s3cret".to_owned()),
+            secret_ref: None,
         }),
     });
     webhook.prompt =
@@ -292,6 +295,15 @@ async fn a_signed_webhook_fires_its_prompt_with_the_bodys_values() {
         panic!("{:?}", task.schedule);
     };
     assert_eq!(signature.secret, None, "never shown");
+    let row = daemon
+        .reader
+        .run(&CancellationToken::new(), move |db| {
+            db.scheduled_task(id).map_err(|e| store_error(&e))
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!row.contains("s3cret"), "the keystore keeps it: {row}");
 
     let body = br#"{"action":"published","release":{"tag_name":"v1.2"}}"#;
     let key = hmac::Key::new(hmac::HMAC_SHA256, b"s3cret");
@@ -338,10 +350,21 @@ async fn a_signed_webhook_fires_its_prompt_with_the_bodys_values() {
     save(&daemon, paused).await.unwrap();
     let (status, _) = hook(&daemon, "POST", &endpoint.path, &headers(&digest), body).await;
     assert_eq!(status, 409, "paused");
-    let kept = stored(&daemon, id).await;
-    assert_eq!(
-        kept.secret.as_deref(),
-        Some("s3cret"),
+    assert!(
+        stored(&daemon, id).await.keychain,
         "a save without one keeps it"
+    );
+    let key = parallax_protocol::AccountId::try_from(id).unwrap();
+    assert_eq!(
+        daemon.keys.get(key).unwrap().as_deref().map(String::as_str),
+        Some("s3cret")
+    );
+    super::delete(&daemon, parallax_protocol::ScheduleIdParams { id: task.id })
+        .await
+        .unwrap();
+    assert_eq!(
+        daemon.keys.get(key).unwrap(),
+        None,
+        "deleting it removes its secret"
     );
 }

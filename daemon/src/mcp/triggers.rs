@@ -69,12 +69,12 @@ pub fn definitions() -> Vec<Value> {
             "weekdays": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 6}, "description": "For fixed_time: 0 is Sunday. Omit for every day."},
             "signature": {
                 "type": "object",
-                "description": "For webhook: an HMAC-SHA256 signature every request must carry over its raw body. GitHub's is {header:'x-hub-signature-256', encoding:'hex', prefix:'sha256=', secret}.",
+                "description": "For webhook: an HMAC-SHA256 signature every request must carry over its raw body. GitHub's is {header:'x-hub-signature-256', encoding:'hex', prefix:'sha256=', secretRef}.",
                 "properties": {
                     "header": {"type": "string"},
                     "encoding": {"type": "string", "enum": ["hex", "base64"]},
                     "prefix": {"type": "string"},
-                    "secret": {"type": "string", "description": "The shared secret the user gave you. Omit on an update to keep the stored one."},
+                    "secretRef": {"type": "string", "description": "The secretRef request_secret returned, which this save uses up. Omit on an update to keep the stored secret."},
                 },
                 "required": ["header", "encoding", "prefix"],
                 "additionalProperties": false,
@@ -100,7 +100,7 @@ pub fn definitions() -> Vec<Value> {
     vec![
         tool(
             "schedule_task",
-            "Create work that runs on a schedule, even when no turn is active. Report the returned nextRunAt. A webhook run sees its request only through prompt placeholders: {{body.path}} (such as {{body.action}} or {{body.release.tag_name}}), {{headers.name}}, {{query.name}}, {{body}}, or {{request}} (method, headers with credentials redacted, and body). For a sender that signs requests, ask the user for its secret and set signature. Give the user the result's webhookUrl; when it is absent, remote access is off on this host, so tell the user to turn it on in Settings > Connections, or share webhookPath for a sender on this network. By default each run posts into this thread; use bindToCurrentThread=false only when the user wants a fresh thread per run. A fresh thread uses this thread's repository, model, effort, and access, and in a Project, each run goes to the Project's coordinator.",
+            "Create work that runs on a schedule, even when no turn is active. Report the returned nextRunAt. A webhook run sees its request only through prompt placeholders: {{body.path}} (such as {{body.action}} or {{body.release.tag_name}}), {{headers.name}}, {{query.name}}, {{body}}, or {{request}} (method, headers with credentials redacted, and body). For a sender that signs requests, first call request_secret so the user enters the secret privately (never ask for it in chat or invent one), then set signature with the returned secretRef. Give the user the result's webhookUrl; when it is absent, remote access is off on this host, so tell the user to turn it on in Settings > Connections, or share webhookPath for a sender on this network. By default each run posts into this thread; use bindToCurrentThread=false only when the user wants a fresh thread per run. A fresh thread uses this thread's repository, model, effort, and access, and in a Project, each run goes to the Project's coordinator.",
             object(
                 json!({
                     "prompt": {"type": "string", "description": "What each run sends, at most 64 KiB."},
@@ -276,6 +276,7 @@ pub(super) async fn call(
                 model: None,
                 effort: None,
                 permission: None,
+                from: Some(binding.run),
             };
             bind(binding, &mut params, bind_to_current_thread.unwrap_or(true)).await?;
             let task = plxd.call::<ScheduleSave>(params).await?;
@@ -323,6 +324,7 @@ pub(super) async fn call(
                 model: task.model,
                 effort: task.effort,
                 permission: task.permission,
+                from: Some(binding.run),
             };
             if let Some(bound) = bind_to_current_thread {
                 bind(binding, &mut params, bound).await?;

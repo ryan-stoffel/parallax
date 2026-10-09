@@ -139,6 +139,9 @@ pub struct Config {
     /// The web client's files (PLX-651). By default `PLXD_WEB_DIR`, else the app's renderer build
     /// beside this plxd in the app's resources folder, unpacked from app.asar.
     pub remote_web_dir: Option<PathBuf>,
+    /// Where API keys and secrets live. `None`, the default, is this OS's keystore
+    /// ([`keystore::system_store`]); tests use one in memory.
+    pub keys: Option<Arc<dyn KeyStore>>,
 }
 
 impl Config {
@@ -177,6 +180,7 @@ impl Config {
                     let resources = exe.parent()?.join("app.asar.unpacked");
                     Some(resources.join("dist").join("renderer"))
                 }),
+            keys: None,
         }
     }
 }
@@ -307,6 +311,8 @@ pub(crate) struct Daemon {
     pub pr_watches: crate::pr_watch::Watches,
     /// `host/update`'s install and handover (PLX-700).
     pub self_update: crate::self_update::SelfUpdate,
+    /// `request_secret`'s requests and its refs' expiry timer (0063).
+    pub secrets: crate::secrets::Secrets,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -422,7 +428,7 @@ impl Server {
             config.host_event_retention,
         );
         let reader = store.open_reader(&data_dir.store_file());
-        let keys = keystore::system_store();
+        let keys = config.keys.clone().unwrap_or_else(keystore::system_store);
         let providers = Providers::load(data_dir.root(), keys.clone(), &launcher, &backends);
         let tailnet = config
             .tailnet
@@ -467,6 +473,7 @@ impl Server {
             schedules: crate::schedules::Schedules::default(),
             pr_watches: crate::pr_watch::Watches::default(),
             self_update: crate::self_update::SelfUpdate::new(launcher.clone()),
+            secrets: crate::secrets::Secrets::default(),
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for
@@ -606,6 +613,10 @@ impl Server {
                 }
             })
         };
+        let secrets = tokio::spawn(crate::secrets::run(
+            Arc::clone(&daemon),
+            shutdown.graceful.clone(),
+        ));
         let connections = TaskTracker::new();
         let abort = CancellationToken::new();
         let tailnet = tokio::spawn(tailnet::run(
@@ -697,6 +708,7 @@ impl Server {
         let _ = schedules.await;
         let _ = pr_watches.await;
         let _ = handover.await;
+        let _ = secrets.await;
         daemon.store.stop().await;
         daemon.reader.stop().await;
         lock.release();
@@ -854,6 +866,7 @@ impl Daemon {
             schedules: crate::schedules::Schedules::default(),
             pr_watches: crate::pr_watch::Watches::default(),
             self_update: crate::self_update::SelfUpdate::new(launcher),
+            secrets: crate::secrets::Secrets::default(),
         })
     }
 }

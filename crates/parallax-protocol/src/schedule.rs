@@ -66,10 +66,15 @@ pub struct WebhookSignature {
     /// Text before the digest, such as `sha256=`. Empty for none.
     pub prefix: String,
     /// The shared secret. Only `schedule/save` takes it, and omitting it there keeps the stored
-    /// one. plxd never returns it.
+    /// one. plxd keeps it in the host's keystore and never returns it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub secret: Option<String>,
+    /// In place of `secret`: a `secret-ref:<id>` from `secret/request`, which this save uses up.
+    /// Only the thread that asked for it, named in `schedule/save`'s `from`, can use it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub secret_ref: Option<String>,
 }
 
 /// How a webhook signature's digest is written.
@@ -234,6 +239,10 @@ pub struct ScheduleSaveParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
+    /// The thread saving it, for a `secretRef` only that thread can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub from: Option<RunId>,
 }
 
 /// Params of `schedule/list`.
