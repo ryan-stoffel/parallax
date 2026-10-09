@@ -570,8 +570,9 @@ fn busy(terminal: &Terminal) -> bool {
     let listed = std::process::Command::new("ps")
         .args(["-o", "pid=,stat=", "-t", tty])
         .output();
-    let Ok(listed) = listed else {
-        return true;
+    let listed = match listed {
+        Ok(listed) if listed.status.success() => listed,
+        _ => return true,
     };
     let pid = pid.to_string();
     String::from_utf8_lossy(&listed.stdout).lines().any(|line| {
