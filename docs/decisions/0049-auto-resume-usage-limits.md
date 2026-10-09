@@ -1,6 +1,6 @@
 # 0049: A run a usage limit stopped resumes when the limit resets
 
-- Status: accepted
+- Status: accepted; superseded in part by [0060](0060-provider-sessions.md): the host setting defaults to off, as T3 Code's `autoResumeLimitedThreads` (Ryan, 2026-10-09), and recovery runs as T3's
 - Date: 2026-10-03
 - Issue: PLX-371 (part of PLX-368)
 

@@ -1,6 +1,6 @@
 # 0022: The desktop app's stack and layout
 
-- Status: accepted; how plxd listens on Linux and Windows, and which `ssh` the app runs on Windows, which this record deferred, are in [0023](0023-cross-platform.md)
+- Status: accepted; how plxd listens on Linux and Windows, and which `ssh` the app runs on Windows, which this record deferred, are in [0023](0023-cross-platform.md); superseded in part by [0064](0064-agent-ui-tools-and-terminals.md) (terminals are plxd's)
 - Date: 2026-09-27
 - Issue: PLX-6
 

@@ -1,6 +1,6 @@
 # 0052: plxd's orchestration kernel
 
-- Status: accepted; supersedes in part [0014](0014-agent-runs.md) (the event log's own writer thread, and a move's handoff cut from the front) and [0016](0016-event-log-retention.md) (a run's events are never compacted), and [0047](0047-thread-search-and-context.md)'s attached-thread summary cut from the front
+- Status: accepted; supersedes in part [0014](0014-agent-runs.md) (the event log's own writer thread, and a move's handoff cut from the front) and [0016](0016-event-log-retention.md) (a run's events are never compacted), and [0047](0047-thread-search-and-context.md)'s attached-thread summary cut from the front; superseded in part by [0059](0059-orchestration-rewrite.md) (the effects outbox, attempts, nodes, `agent/timeline`, and the receipt design, which 0059 replaces with T3 Code's) and [0062](0062-checkpoints-and-revert.md) (per-turn checkpoints); the one writer, staging, handoff budgets, and compaction carry over
 - Date: 2026-10-04
 - Issue: PLX-480, for PLX-443's steps 3 and 4: PLX-481, PLX-482, PLX-483, PLX-484, PLX-485, PLX-486, PLX-491, PLX-492
 
