@@ -10,6 +10,7 @@ import type {
   ConnectionState,
   SubscriptionMessage,
   ParallaxBridge,
+  RpcError,
   WatchMessage,
   WatchParams,
 } from "../preload/bridge";
@@ -931,7 +932,8 @@ function watchedBridge() {
     );
   const emit = (event: LoggedEvent) =>
     act(async () => listener({ type: "event", event: { subscription: "s", ...event } }));
-  return { watch, stop, request, snapshot, emit, connect };
+  const emitError = (error: RpcError) => act(async () => listener({ type: "error", error }));
+  return { watch, stop, request, snapshot, emit, emitError, connect };
 }
 
 test("opens from the thread's snapshot, appends its events, and a fresh snapshot rebuilds it", async () => {
@@ -970,6 +972,21 @@ test("the thread's subscription stays open while the host is away, so main resum
   await emit(logged[2]!);
   expect(transcriptText()).toContain("Add a README");
   expect(transcriptText()).toContain("I'll add a README and note the build steps");
+});
+
+test("a thread's subscription that ended in an error opens again on the host's next connection", async () => {
+  const { watch, emitError, snapshot, connect } = watchedBridge();
+  await renderChat();
+  await emitError({ code: -32000, message: "plxd's store failed" });
+  expect(document.body.textContent).toContain("plxd's store failed");
+  expect(watch).toHaveBeenCalledOnce();
+  const failed = { reason: "exited", message: "plxd exited" } as const;
+  connect({ status: "failed", retrying: true, error: failed });
+  connect({ status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} });
+  await settle();
+  expect(watch).toHaveBeenCalledTimes(2);
+  await snapshot(logged.slice(0, 2));
+  expect(transcriptText()).toContain("Add a README");
 });
 
 test("a snapshot of a long thread opens at its newest events and loads older ones near the top (PLX-490)", async () => {
