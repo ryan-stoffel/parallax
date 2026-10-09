@@ -10,6 +10,7 @@ import type {
   ThreadRun,
 } from "../protocol/generated/protocol";
 import { applyEvents, emptyTranscript, isRunning, rebuild, type Transcript } from "./transcript";
+import { useWatchKey } from "./useWatchKey";
 import { uuidv7 } from "./uuidv7";
 
 export interface AgentRunView {
@@ -82,10 +83,10 @@ const queuedOf = (runs: ThreadRun[]): QueuedMessage[] =>
 /**
  * One run's transcript, kept live through `orchestration/subscribeThread` (0059): a snapshot of
  * the run, its queue, and its newest events, then its events as they come. Older events load a
- * page at a time with `loadOlder`, and while the newest show nothing, on their own. A reconnect
- * resumes after the last event, or from a fresh snapshot, which rebuilds the transcript. Loads
- * only while `connected`. Key the caller by host and run, so another run starts from an empty
- * transcript.
+ * page at a time with `loadOlder`, and while the newest show nothing, on their own. It opens once
+ * the host connects and stays open across disconnects: a reconnect resumes after the last event,
+ * and a fresh snapshot rebuilds the transcript only when the gap is too long to replay
+ * (`useWatchKey`). Key the caller by host and run, so another run starts from an empty transcript.
  */
 export function useAgentRun(hostId: string, runId: string, connected: boolean): AgentRunView {
   const [transcript, setTranscript] = useState(emptyTranscript);
@@ -94,9 +95,36 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
   const pages = useRef<Pages>(undefined);
   const [older, setOlder] = useState(false);
   const [queue, setQueue] = useState<QueuedMessage[]>([]);
+  const [watchKey, failed] = useWatchKey(`${hostId}\n${runId}`, connected);
+
+  // Loads the page before `p`'s oldest event into it, one at a time: `false` while another is
+  // on its way, or once a fresh snapshot replaced `p` or the page failed.
+  const loadPage = useCallback(
+    async (p: Pages) => {
+      if (p.before === undefined || p.loading) return false;
+      p.loading = true;
+      const page = await window.parallax.request(hostId, "orchestration/threadHistory", {
+        threadId: runId,
+        before: p.before,
+      });
+      p.loading = false;
+      if (pages.current !== p) return false;
+      if ("error" in page) {
+        setError(page.error.message);
+        return false;
+      }
+      const { events, more } = page.result;
+      p.events = [...events, ...p.events];
+      p.before = more ? events[0]?.seq : undefined;
+      setOlder(p.before !== undefined);
+      setTranscript((prev) => rebuild(prev, p.events, runId));
+      return true;
+    },
+    [hostId, runId],
+  );
 
   useEffect(() => {
-    if (!connected) return;
+    if (!watchKey) return;
     let stopped = false;
 
     // The queue as plxd has it. Messages sent from here keep plxd's text, edits included, so a
@@ -117,24 +145,16 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
     // Older pages, while the ones in show nothing, as when the newest holds only the run's last
     // updates.
     async function fill(p: Pages, t: Transcript) {
-      while (t.items.length === 0 && p.before !== undefined) {
-        const page = await window.parallax.request(hostId, "orchestration/threadHistory", {
-          threadId: runId,
-          before: p.before,
-        });
-        if (stopped || pages.current !== p) return;
-        if ("error" in page) return setError(page.error.message);
-        p.events = [...page.result.events, ...p.events];
-        p.before = page.result.more ? page.result.events[0]?.seq : undefined;
+      while (!stopped && t.items.length === 0 && (await loadPage(p)))
         t = rebuild(t, p.events, runId);
-        setTranscript((prev) => rebuild(prev, p.events, runId));
-        setOlder(p.before !== undefined);
-      }
     }
 
     const stop = window.parallax.watch(hostId, { threadId: runId }, (message) => {
       if (stopped) return;
-      if (message.type === "error") return setError(message.error.message);
+      if (message.type === "error") {
+        failed();
+        return setError(message.error.message);
+      }
       if (message.type === "snapshot") {
         const s = message.snapshot;
         const p: Pages = { events: s.events, before: s.more ? s.events[0]?.seq : undefined };
@@ -156,26 +176,11 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
       stopped = true;
       stop();
     };
-  }, [hostId, runId, connected]);
+  }, [hostId, runId, watchKey, failed, loadPage]);
 
   const loadOlder = useCallback(() => {
-    const p = pages.current;
-    if (!p || p.before === undefined || p.loading) return;
-    p.loading = true;
-    void window.parallax
-      .request(hostId, "orchestration/threadHistory", { threadId: runId, before: p.before })
-      .then((page) => {
-        p.loading = false;
-        // A fresh snapshot started over meanwhile.
-        if (pages.current !== p) return;
-        if ("error" in page) return setError(page.error.message);
-        const { events, more } = page.result;
-        p.events = [...events, ...p.events];
-        p.before = more ? events[0]?.seq : undefined;
-        setOlder(p.before !== undefined);
-        setTranscript((prev) => rebuild(prev, p.events, runId));
-      });
-  }, [hostId, runId]);
+    if (pages.current) void loadPage(pages.current);
+  }, [loadPage]);
 
   const send = useCallback(
     async (

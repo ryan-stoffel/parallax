@@ -904,6 +904,7 @@ function watchedBridge() {
     const older = logged.filter((e) => e.seq < params.before!);
     return { result: { events: older.slice(-2), more: older.length > 2 }, logId: "log-1" };
   });
+  const connections = new Set<(hostId: string, state: ConnectionState) => void>();
   window.parallax = {
     platform: "darwin",
     connectionState: async () => ({
@@ -912,10 +913,15 @@ function watchedBridge() {
       protocol: 1,
       capabilities: {},
     }),
-    onConnectionState: () => () => {},
+    onConnectionState: (l: (hostId: string, state: ConnectionState) => void) => {
+      connections.add(l);
+      return () => connections.delete(l);
+    },
     request,
     watch,
   } as Partial<ParallaxBridge> as ParallaxBridge;
+  const connect = (state: ConnectionState) =>
+    act(() => connections.forEach((connection) => connection("local", state)));
   const snapshot = (events: LoggedEvent[], more = false, seq = events.at(-1)?.seq ?? 0) =>
     act(async () =>
       listener({
@@ -925,7 +931,7 @@ function watchedBridge() {
     );
   const emit = (event: LoggedEvent) =>
     act(async () => listener({ type: "event", event: { subscription: "s", ...event } }));
-  return { watch, stop, request, snapshot, emit };
+  return { watch, stop, request, snapshot, emit, connect };
 }
 
 test("opens from the thread's snapshot, appends its events, and a fresh snapshot rebuilds it", async () => {
@@ -948,6 +954,22 @@ test("opens from the thread's snapshot, appends its events, and a fresh snapshot
 
   act(() => unmount());
   expect(stop).toHaveBeenCalled();
+});
+
+test("the thread's subscription stays open while the host is away, so main resumes it after the last event", async () => {
+  const { watch, stop, snapshot, emit, connect } = watchedBridge();
+  await renderChat();
+  await snapshot(logged.slice(0, 2));
+  const failed = { reason: "exited", message: "plxd exited" } as const;
+  connect({ status: "failed", retrying: true, error: failed });
+  connect({ status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} });
+  await settle();
+  expect(watch).toHaveBeenCalledOnce();
+  expect(stop).not.toHaveBeenCalled();
+  // The gap main replays arrives as events, onto the transcript as it was.
+  await emit(logged[2]!);
+  expect(transcriptText()).toContain("Add a README");
+  expect(transcriptText()).toContain("I'll add a README and note the build steps");
 });
 
 test("a snapshot of a long thread opens at its newest events and loads older ones near the top (PLX-490)", async () => {

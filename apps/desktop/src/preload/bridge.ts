@@ -162,9 +162,10 @@ export interface ParallaxBridge {
   ): () => void;
   /**
    * A host's shell (`{shell: true}`) or one thread (`{threadId}`), kept live (0059): a snapshot,
-   * then the events after its `seq`. A reconnect or a lagging subscription resumes after the
-   * last `seq` delivered, and plxd either replays the gap or sends a fresh snapshot, which
-   * replaces the last. Ends only with an `error`. Returns the function that ends it.
+   * then the events after its `seq`. It stays open while the host is disconnected: a reconnect,
+   * or a lagging subscription, resumes after the last `seq` delivered, and plxd replays the gap,
+   * or sends a fresh snapshot, which replaces the last, when the gap is too long. Ends only with
+   * an `error`. Returns the function that ends it.
    */
   watch(
     hostId: string,

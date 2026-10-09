@@ -24,6 +24,7 @@ import type { RunOptions } from "./models";
 import { slugify } from "./naming";
 import { newThreadPrefs } from "./prefs";
 import { trackApprovals, updateRun, type ApprovalsByRun } from "./transcript";
+import { useWatchKey } from "./useWatchKey";
 import { uuidv7 } from "./uuidv7";
 
 /** A host's projects, repo entries, and normal threads (0017), and each thread's title and run. */
@@ -63,7 +64,7 @@ export type ThreadsAction =
   | { type: "event"; event: ParallaxEvent }
   /** A repo's or a Project's own events: its runs and their permission requests. */
   | { type: "scope"; events: LoggedEvent[] }
-  /** Older events from runs' logs, read only for the permission requests still waiting. */
+  /** The permission requests runs wait on, from the shell's snapshot. */
   | { type: "approvals"; events: LoggedEvent[] };
 
 /** Applies a snapshot, runs' titles, or a host-level event. Events are upserts, so a repeat is harmless. */
@@ -422,9 +423,10 @@ export type CoordinatorOptions = Pick<
 /**
  * A host's threads and projects, kept live through `orchestration/subscribeShell` (0059): a
  * snapshot of its projects, repo entries, threads, runs, and the permission requests runs wait
- * on, then what a sidebar shows of every scope's events (0033). A reconnect resumes after the
- * last event, from a fresh snapshot when the gap is too long to replay. Loads only while
- * connected, which is when plxd's `capabilities` are known; an older plxd has no shell to load.
+ * on, then what a sidebar shows of every scope's events (0033). It opens once the host connects,
+ * which is when plxd's `capabilities` are known, and stays open across disconnects: a reconnect
+ * resumes after the last event, and a fresh snapshot replaces the state only when the gap is
+ * too long to replay (`useWatchKey`). An older plxd has no shell to load.
  * With `approvals`, the threads and coordinators started here forward their permission
  * requests (PLX-196, 0031); with `threadLineage`, titles kept in this app move to plxd once
  * (0041); with `threadNaming`, plxd names new threads and their branches (0058). The view carries
@@ -447,12 +449,16 @@ export function useThreads(
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
   const needsYou = useRef(onNeedsYou);
+  // Read when a snapshot arrives, so a change doesn't reopen the shell.
+  const lineageNow = useRef(lineage);
   useEffect(() => {
     needsYou.current = onNeedsYou;
+    lineageNow.current = lineage;
   });
+  const [watchKey, failed] = useWatchKey(hostId, connected);
 
   useEffect(() => {
-    if (!connected) return;
+    if (!watchKey) return;
     let stopped = false;
     let moved = false;
 
@@ -478,17 +484,19 @@ export function useThreads(
     setLoading(true);
     const stop = window.parallax.watch(hostId, { shell: true }, (message) => {
       if (stopped) return;
-      if (message.type === "error")
+      if (message.type === "error") {
+        failed();
         return setError(
           message.error.code === ErrorCodes.MethodNotFound ? tooOld : message.error.message,
         );
+      }
       if (message.type === "snapshot") {
         const { projects, repos, threads, runs, requests } = message.snapshot;
         dispatch({ type: "snapshot", projects, repos, threads, runs });
         dispatch({ type: "approvals", events: requests });
         setError(undefined);
         setLoading(false);
-        if (lineage && !moved) {
+        if (lineageNow.current && !moved) {
           moved = true;
           void moveTitles(threads);
         }
@@ -507,7 +515,7 @@ export function useThreads(
       stopped = true;
       stop();
     };
-  }, [hostId, connected, lineage]);
+  }, [hostId, watchKey, failed]);
 
   // Each applies its own answer at once; the matching event repeats it harmlessly.
   const actions = useMemo(
