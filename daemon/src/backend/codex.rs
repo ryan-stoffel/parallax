@@ -8,7 +8,7 @@
 //! # Images
 //!
 //! The prompt's images (PLX-191) are files in a folder of their own in the data folder's `tmp/`,
-//! which [`write_images`] makes and the run's driver deletes once Codex has exited. The model
+//! which [`write_images`] makes and the thread deletes once it has left its app-server. The model
 //! sees plxd's temp path, never the user's file name, which plxd never gets.
 //!
 //! # Credentials
@@ -70,6 +70,8 @@ pub const CONFIG_DIR_ENV: &str = "CODEX_HOME";
 pub struct CodexBackend {
     launcher: Launcher,
     overrides: Overrides,
+    /// Its threads' shared app-servers, one per login (0060).
+    servers: app_server::Servers,
 }
 
 impl CodexBackend {
@@ -79,6 +81,7 @@ impl CodexBackend {
         Self {
             launcher,
             overrides: Overrides::default(),
+            servers: app_server::Servers::default(),
         }
     }
 
@@ -286,6 +289,6 @@ impl Backend for CodexBackend {
                 "plxd runs only threads and coordinators on Codex (decisions 0035, 0042)".into(),
             ));
         }
-        app_server::start(&self.launcher, &self.overrides, request)
+        app_server::start(&self.launcher, &self.overrides, &self.servers, request)
     }
 }

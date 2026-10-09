@@ -149,7 +149,7 @@ impl Actor {
     /// Commit and push refuse a running run, and one whose push or Open PR still runs
     /// (`gitRefused`).
     fn changes_refused(&self) -> Result<(), ErrorObject> {
-        if self.live.is_some() {
+        if self.busy() {
             return Err(refused(format!(
                 "run {} is still running; try again once its turn ends",
                 self.id

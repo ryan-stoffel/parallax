@@ -661,6 +661,8 @@ pub enum SendError {
 #[derive(Clone, Debug, Default)]
 pub struct CancelSwitch {
     state: Arc<Mutex<SwitchState>>,
+    /// Wakes [`CancelSwitch::cancelled`], for a driver with no process of its own to signal.
+    notify: Arc<tokio::sync::Notify>,
 }
 
 #[derive(Debug, Default)]
@@ -696,6 +698,17 @@ impl CancelSwitch {
         state.cancelled = true;
         if let Some((signals, policy)) = &state.target {
             signals.cancel(*policy);
+        }
+        self.notify.notify_waiters();
+    }
+
+    /// Completes once the run is cancelled.
+    pub async fn cancelled(&self) {
+        let notified = self.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.is_cancelled() {
+            notified.await;
         }
     }
 

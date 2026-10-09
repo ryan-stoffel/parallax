@@ -423,6 +423,7 @@ async fn a_thread_at_a_server_url_streams_asks_and_finishes() {
     assert!(seen.contains(&Event::TurnFinished {
         turn_id: None,
         result: Some("It printed hello world.".into()),
+        failed: false,
     }));
     assert!(matches!(
         seen.last(),
@@ -513,7 +514,8 @@ async fn a_resumed_plan_run_appends_its_rules_and_an_interrupting_denial_aborts(
     }));
     assert!(seen.contains(&Event::TurnFinished {
         turn_id: None,
-        result: None
+        result: None,
+        failed: false,
     }));
     assert!(matches!(
         seen.last(),

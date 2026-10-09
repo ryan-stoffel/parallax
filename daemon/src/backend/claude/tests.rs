@@ -323,6 +323,7 @@ async fn a_read_only_run_maps_the_stream_and_uses_the_no_write_policy() {
                 result: Some(
                     "The README describes Parallax, a macOS editor with a host daemon.".into()
                 ),
+                failed: false,
             },
             Event::Finished {
                 outcome: Outcome::Completed {
@@ -1008,7 +1009,8 @@ async fn an_error_result_fails_the_run_with_the_cli_s_errors() {
     }));
     assert!(all.contains(&Event::TurnFinished {
         turn_id: Some(turn(TURN_1)),
-        result: None
+        result: None,
+        failed: true,
     }));
     let Outcome::Failed(failure) = outcome(&all) else {
         panic!("{all:?}");
@@ -1482,11 +1484,13 @@ async fn a_follow_up_during_a_turn_that_the_cli_folds_in_finishes_with_it() {
             },
             &Event::TurnFinished {
                 turn_id: Some(turn(TURN_1)),
-                result: done.clone()
+                result: done.clone(),
+                failed: false,
             },
             &Event::TurnFinished {
                 turn_id: Some(turn(TURN_2)),
-                result: done
+                result: done,
+                failed: false,
             },
         ]
     );
@@ -1548,11 +1552,13 @@ async fn a_follow_up_can_be_its_own_turn_and_stdin_waits_for_it() {
             },
             &Event::TurnFinished {
                 turn_id: Some(turn(TURN_1)),
-                result: Some("First answer.".into())
+                result: Some("First answer.".into()),
+                failed: false,
             },
             &Event::TurnFinished {
                 turn_id: Some(turn(TURN_2)),
-                result: Some("Second answer.".into())
+                result: Some("Second answer.".into()),
+                failed: false,
             },
         ]
     );
@@ -1618,7 +1624,8 @@ async fn a_follow_up_answered_before_its_write_is_reported_still_ends() {
             &text("msg_01Ft1", "First answer."),
             &Event::TurnFinished {
                 turn_id: Some(turn(TURN_1)),
-                result: Some("First answer.".into())
+                result: Some("First answer.".into()),
+                failed: false,
             },
             // Outside any turn, so it doesn't start the follow-up's.
             &rate_limit,
@@ -1628,7 +1635,8 @@ async fn a_follow_up_answered_before_its_write_is_reported_still_ends() {
             &text("msg_01Ft2", "Second answer."),
             &Event::TurnFinished {
                 turn_id: Some(turn(TURN_2)),
-                result: Some("Second answer.".into())
+                result: Some("Second answer.".into()),
+                failed: false,
             },
         ]
     );
@@ -3275,6 +3283,7 @@ async fn a_held_cli_waits_after_its_turn_for_the_next_message() {
     assert!(all.contains(&Event::TurnFinished {
         turn_id: Some(turn(TURN_2)),
         result: Some("Second answer.".into()),
+        failed: false,
     }));
     assert!(matches!(outcome(&all), Outcome::Completed { .. }));
 }

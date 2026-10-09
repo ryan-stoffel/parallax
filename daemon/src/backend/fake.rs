@@ -45,7 +45,7 @@ use super::process::{
 use super::sandbox::worker_sandbox;
 use super::{
     Answer, ApprovalId, Backend, CancelSwitch, Capabilities, Credential, Decision, EVENT_BUFFER,
-    EventSink, FollowUp, RunHandle, RunRequest, StartError, Started, ToolPolicy, TurnId,
+    EventSink, FollowUp, Held, RunHandle, RunRequest, StartError, Started, ToolPolicy, TurnId,
 };
 
 // The feature swaps real agents for scripted ones, so no release may ever have it.
@@ -352,6 +352,7 @@ impl Backend for FakeBackend {
         let switch = CancelSwitch::new();
         switch.arm(process.signals().clone(), self.cancel);
         let (handle, control) = RunHandle::new(request.run_id, self.follow_ups, switch.clone());
+        let held = handle.held();
         // Answers reach the CLI on stdin, as follow-ups do.
         let asks = self.follow_ups && request.approvals;
         let (handle, answers) = if asks {
@@ -370,7 +371,7 @@ impl Backend for FakeBackend {
             control,
             answers,
             sink,
-            switch,
+            (switch, held),
             request.turn_id,
         ));
         Ok(Started {
@@ -512,9 +513,12 @@ async fn drive(
     mut control: mpsc::UnboundedReceiver<FollowUp>,
     mut answers: Option<mpsc::UnboundedReceiver<Answer>>,
     mut sink: EventSink,
-    switch: CancelSwitch,
+    (switch, mut held): (CancelSwitch, Held),
     first_turn: Option<TurnId>,
 ) {
+    // Once a hold is lifted, stdin closes when nothing is outstanding, as a vendor CLI's driver
+    // closes it, and a script waiting for a follow-up exits (0060). A run never held keeps it.
+    let mut released = false;
     let mut stdin = Stdin::start(&mut process, &mut control);
     let mut state = State {
         switch,
@@ -600,6 +604,15 @@ async fn drive(
                 None => control_open = false,
             },
             () = sink.closed(), if !state.switch.is_cancelled() => state.switch.cancel(),
+            () = held.changed() => released |= !held.now(),
+        }
+        if released
+            && state.turns.is_empty()
+            && writing == 0
+            && state.approvals.is_empty()
+            && control.is_empty()
+        {
+            drop(stdin.queue.take());
         }
     };
 
@@ -694,11 +707,12 @@ impl State {
                     format!("an event of kind {:?}", kind.unwrap_or_default()),
                 );
             }
-            Event::TurnFinished { result, .. } => {
+            Event::TurnFinished { result, failed, .. } => {
                 self.last_result.clone_from(&result);
                 Event::TurnFinished {
                     turn_id: self.turns.pop_front().flatten(),
                     result,
+                    failed,
                 }
             }
             Event::Finished { outcome, .. } => {
@@ -897,6 +911,7 @@ fn compile(script: &Script) -> Result<String, String> {
                 let event = Event::TurnFinished {
                     turn_id: None,
                     result: result.clone(),
+                    failed: false,
                 };
                 print_event(&mut out, &event)?;
             }

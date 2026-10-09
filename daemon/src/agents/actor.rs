@@ -15,11 +15,20 @@
 //! answered in time, and logs how each one ended, including when a cancel, a stop, or the CLI's
 //! exit ends it first.
 //!
+//! The CLI is the thread's session (0060): [`Run::hold`] keeps it open after its turn, so a
+//! follow-up goes to the live process. A turn settles once the last one in flight ends with
+//! nothing waiting: its commit, `agent.finished`, and wake-ups run then, while the process stays
+//! up. The session is released [`SESSION_IDLE`] after that, later while its tool calls or
+//! subagents are still open, up to [`SESSION_MAX_PIN`], or sooner once more than the host's
+//! [`super::MAX_IDLE_SESSIONS`] are idle and it is the least recently used, or at once on archive,
+//! settle, Accept, a Project join, its coordinator's replacement, or a failed turn, which ends its
+//! process so its `Finished` says why.
+//!
 //! A message sent while its CLI works on a turn waits in the run's queue (PLX-370, decision
-//! 0048), stored so a restart keeps it, until the turn ends; then it goes to the same CLI, which
-//! [`Run::hold`] keeps open for it. A message that changes what its CLI runs with (its model,
-//! another run option, or account) can't reach a CLI that's running, so it waits, with every
-//! message after it, until that CLI exits; then each goes to a new CLI process in turn. A new
+//! 0048), stored so a restart keeps it, until the turn ends; then it goes to the same CLI. A
+//! message that changes what its CLI runs with (its model, another run option, or account) can't
+//! reach a CLI that's running, so it waits, with every message after it, until that CLI is
+//! released and exits; then each goes to a new CLI process in turn. A new
 //! account on another backend moves the run there: the session can't follow, so a new one starts
 //! in the same place, told the conversation so far. Clients list, edit, reorder, and cancel what
 //! waits, and a steer goes into the running turn instead, through the backend, or by cancelling
@@ -94,6 +103,13 @@ const COALESCE: Duration = Duration::from_millis(50);
 /// How long an actor with nothing only it holds waits for a command before it stops (PLX-459).
 /// The next command starts a fresh one from the store.
 pub(super) const IDLE: Duration = Duration::from_mins(10);
+
+/// How long a session with no turn stays open, as T3 Code's `DEFAULT_IDLE_TIMEOUT_MS` (0060).
+pub(super) const SESSION_IDLE: Duration = Duration::from_mins(30);
+
+/// The longest open tool calls or subagents defer an idle session's release, one
+/// [`SESSION_IDLE`] at a time, as T3 Code's `DEFAULT_MAX_IDLE_PIN_MS`.
+const SESSION_MAX_PIN: Duration = Duration::from_hours(4);
 
 /// An `agent.output` is sent early once its items reach about this many bytes.
 const MAX_BATCH_BYTES: usize = 256 * 1024;
@@ -229,6 +245,8 @@ pub(super) enum Command {
         slug: String,
         reply: oneshot::Sender<Result<(), ErrorObject>>,
     },
+    /// `provider-session.detach` (0060): releases the run's session, after its turn if one runs.
+    Detach,
 }
 
 impl Command {
@@ -263,7 +281,7 @@ impl Command {
             Self::Delete { reply, .. } | Self::RenameBranch { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
-            Self::Wake(..) => {}
+            Self::Wake(..) | Self::Detach => {}
         }
     }
 }
@@ -402,6 +420,26 @@ struct Live {
     /// A worker's temp folder (PLX-130), removed once the CLI has exited: `events` ends only
     /// then.
     temp: Option<RunTemp>,
+    /// When its last turn settled, while no turn has started since (0060).
+    settled: Option<Instant>,
+    /// When an idle session is next checked for release.
+    release_at: Option<Instant>,
+    /// `hold(false)` was sent: the CLI exits once it has nothing outstanding, and takes no new
+    /// turn.
+    released: bool,
+}
+
+impl Live {
+    fn new(run: Arc<dyn Run>, events: EventStream, temp: Option<RunTemp>) -> Self {
+        Self {
+            run,
+            events,
+            temp,
+            settled: None,
+            release_at: None,
+            released: false,
+        }
+    }
 }
 
 /// plxd's own executable, which serves `plxd mcp` to a run's CLI.
@@ -427,10 +465,6 @@ struct Batch {
     since: Option<Instant>,
 }
 
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "independent facts about a run's actor, not states of one thing"
-)]
 pub(super) struct Actor {
     daemon: Arc<Daemon>,
     id: RunId,
@@ -460,8 +494,9 @@ pub(super) struct Actor {
     /// Turns the live CLI has been given and hasn't finished: while there are any, a queued
     /// message waits.
     in_flight: usize,
-    /// What [`Run::hold`] last told the live CLI.
-    held: bool,
+    /// The live CLI's tool calls with no result and subagents not finished, which defer its
+    /// session's release (0060).
+    open_work: HashSet<String>,
     /// Messages the live CLI took and hasn't started a turn for: one it drops instead, as a CLI
     /// that exits first does, waits again for the next CLI.
     handed: Vec<Queued>,
@@ -516,7 +551,7 @@ impl Actor {
             queued: VecDeque::new(),
             queue_held: false,
             in_flight: 0,
-            held: false,
+            open_work: HashSet::new(),
             handed: Vec::new(),
             stopping: false,
             deleted: false,
@@ -543,6 +578,121 @@ impl Actor {
     /// Whether this is a project's coordinator (0024) rather than a worker or a thread.
     fn is_coordinator(&self) -> bool {
         self.row.fields.policy == convert::NO_WRITE
+    }
+
+    /// Whether the live CLI has a turn in flight or one not yet settled, as opposed to an idle
+    /// session waiting for its next turn (0060).
+    fn busy(&self) -> bool {
+        self.live
+            .as_ref()
+            .is_some_and(|live| live.settled.is_none() || self.in_flight > 0)
+    }
+
+    /// Whether a live CLI can take a new turn: it hasn't been released.
+    fn live_open(&self) -> bool {
+        self.live.as_ref().is_some_and(|live| !live.released)
+    }
+
+    /// Releases the live session (0060): the CLI exits once it has nothing outstanding, and a
+    /// later message starts a new process that resumes the session.
+    fn release(&mut self) {
+        if let Some(live) = &mut self.live
+            && !live.released
+        {
+            info!(run = %self.id, "releasing an agent run's session");
+            live.released = true;
+            live.run.hold(false);
+            self.daemon.agents.idle.remove(self.id);
+        }
+    }
+
+    /// Ends the live session now, for a message or an Accept that can't use it: nothing runs in
+    /// it, so it is cancelled, which kills a CLI that doesn't exit within its grace period, rather
+    /// than released and waited for.
+    async fn end_session(&mut self) {
+        if let Some(live) = &self.live {
+            live.run.cancel();
+        }
+        self.drain().await;
+    }
+
+    /// When an idle session is next checked for release, if it has one.
+    fn release_due(&self) -> Option<Instant> {
+        let live = self.live.as_ref()?;
+        if live.released || self.in_flight > 0 {
+            return None;
+        }
+        live.release_at
+    }
+
+    /// An idle session's window passed: releases it, unless its tool calls or subagents are
+    /// still open, which defer it one more window, up to [`SESSION_MAX_PIN`] after it settled,
+    /// as T3 Code does.
+    fn release_idle(&mut self) {
+        let now = Instant::now();
+        let pinned = !self.open_work.is_empty();
+        if let Some(live) = &mut self.live
+            && let Some(settled) = live.settled
+            && pinned
+            && now < settled + SESSION_MAX_PIN
+        {
+            live.release_at = Some((now + SESSION_IDLE).min(settled + SESSION_MAX_PIN));
+            debug!(run = %self.id, "deferring an idle session's release for its background work");
+            return;
+        }
+        self.release();
+    }
+
+    /// The last turn in flight ended with nothing waiting for it: it settles as `outcome` while
+    /// the CLI stays up for the next turn (0060).
+    async fn settle(&mut self, result: Option<String>) {
+        // A request left from the turn that ended has nothing to answer it.
+        for approval_id in self.approvals.pending() {
+            let gone = ended(AgentApprovalDecision::Withdrawn, AgentApprovalBy::Agent);
+            self.resolve_approval(approval_id, gone).await;
+        }
+        let now = Instant::now();
+        if let Some(live) = &mut self.live {
+            live.settled = Some(now);
+            live.release_at = Some(now + SESSION_IDLE);
+            self.daemon.agents.running.fetch_sub(1, Ordering::Relaxed);
+            // Past the host's cap, the least recently used idle session goes.
+            if !live.released
+                && let Some(oldest) = self.daemon.agents.idle.push(self.id)
+            {
+                let daemon = Arc::clone(&self.daemon);
+                info!(run = %oldest, "releasing the least recently used idle session");
+                self.daemon
+                    .agents
+                    .background(async move { super::detach(&daemon, oldest).await });
+            }
+        }
+        self.finish(&Outcome::Completed { result }).await;
+    }
+
+    /// A turn started in an idle session: it counts as running again.
+    async fn wake_session(&mut self) {
+        let Some(live) = &mut self.live else {
+            return;
+        };
+        if live.settled.take().is_none() {
+            return;
+        }
+        live.release_at = None;
+        self.daemon.agents.running.fetch_add(1, Ordering::Relaxed);
+        self.daemon.agents.idle.remove(self.id);
+        self.show_running().await;
+    }
+
+    /// Reports the run `running`, as a new process's start does, unless it already is.
+    async fn show_running(&mut self) {
+        if self.row.state.status == convert::RUNNING {
+            return;
+        }
+        convert::RUNNING.clone_into(&mut self.row.state.status);
+        self.row.state.error = None;
+        self.row.state.resume_at = None;
+        self.save().await;
     }
 
     /// Whether this is one of a Project's children (0042): any run in a Project but its
@@ -577,14 +727,15 @@ impl Actor {
         loop {
             self.deliver().await;
             let deadline = self.batch.since.map(|since| since + COALESCE);
-            // A turn in progress gets its wake-ups next, once its CLI has exited, and a push or
-            // Open PR once it's done.
+            // A turn in progress gets its wake-ups next, once it has settled, and a push or Open
+            // PR once it's done.
             let wake_at = self
                 .wakes
                 .due()
-                .filter(|_| self.live.is_none() && self.effect.is_none());
+                .filter(|_| !self.busy() && self.effect.is_none());
             let expire_at = self.approvals.due();
             let resume_at = self.resume_due();
+            let release_at = self.release_due();
             let idle_at = (!self.stopping && self.idle()).then_some(active + IDLE);
             tokio::select! {
                 // Shutdown, then a command, then the due flush, and only then another backend
@@ -620,6 +771,9 @@ impl Actor {
                 }
                 () = sleep_until(resume_at.unwrap_or_else(Instant::now)), if resume_at.is_some() => {
                     self.check_resume().await;
+                }
+                () = sleep_until(release_at.unwrap_or_else(Instant::now)), if release_at.is_some() => {
+                    self.release_idle();
                 }
                 // Stopping frees what the actor holds, its `turns` above all (PLX-459).
                 () = sleep_until(idle_at.unwrap_or_else(Instant::now)), if idle_at.is_some() => {
@@ -763,6 +917,7 @@ impl Actor {
             Command::RenameBranch { slug, reply } => {
                 let _ = reply.send(self.rename_branch(&slug).await);
             }
+            Command::Detach => self.release(),
         }
     }
 
@@ -840,6 +995,8 @@ impl Actor {
             .await?
             .fields;
             self.project = project;
+            // Its next process runs as a child, with the Project's mode and tools.
+            self.release();
             info!(run = %self.id, %project, "a thread joined a Project");
         }
         self.snapshot()
@@ -848,7 +1005,8 @@ impl Actor {
     /// `agent/cancel`, by the user or by thread `from` through its Parallax tools (0041). A push
     /// or Open PR still running finishes.
     async fn cancel(&mut self, from: Option<RunId>) {
-        if self.live.is_some() {
+        let busy = self.busy();
+        if busy {
             info!(run = %self.id, ?from, "cancelling an agent run");
             if let Some(from) = from {
                 self.push(AgentOutputItem::Interrupted { from }).await;
@@ -861,7 +1019,8 @@ impl Actor {
         self.handed.clear();
         self.drop_queued().await;
         self.cancel_waiting().await;
-        if let Some(live) = &self.live {
+        // An idle session has no turn to stop, and stays for the next one.
+        if busy && let Some(live) = &self.live {
             live.run.cancel();
         }
         // Stop means stop: a child finishing a moment later doesn't start its parent again before
@@ -876,7 +1035,8 @@ impl Actor {
     /// first; without, the next message starts once the CLI has exited, after what the CLI drops
     /// as it stops ([`Self::track_turns`]).
     async fn interrupt(&mut self, hold_queue: bool) {
-        if self.live.is_some() {
+        let busy = self.busy();
+        if busy {
             info!(run = %self.id, hold_queue, "interrupting an agent run");
             self.stop_approvals(AgentApprovalBy::Cancel).await;
         }
@@ -891,7 +1051,7 @@ impl Actor {
             }
         }
         self.cancel_waiting().await;
-        if let Some(live) = &self.live {
+        if busy && let Some(live) = &self.live {
             live.run.cancel();
         }
         if self.is_coordinator() || self.has_children().await {
@@ -967,7 +1127,7 @@ impl Actor {
             )
             .await
         {
-            Ok(_) if self.live.is_some() => {
+            Ok(_) if self.busy() => {
                 let questions = self.wakes.delivered();
                 self.save_wakes().await;
                 super::wake::delivered_proposals(&self.daemon, self.project, paths).await;
@@ -1095,7 +1255,7 @@ impl Actor {
             return Err(super::run_accepted(self.id));
         }
         let refused = |why: String| ErrorObject::parallax(ErrorKind::MergeRefused, why);
-        if self.live.is_some() {
+        if self.busy() {
             return Err(refused(format!(
                 "run {} is still running; wait for it to finish, or cancel it, then accept",
                 self.id
@@ -1123,6 +1283,8 @@ impl Actor {
                 self.id
             )));
         };
+        // Its worktree goes, so its idle session ends first (0060).
+        self.end_session().await;
         let worktrees = &self.daemon.agents.worktrees;
         let repo = Path::new(&worktree.repo_path);
         let message = merge_message(&self.row.fields.prompt, self.id, &worktree.branch);
@@ -1198,7 +1360,7 @@ impl Actor {
             return Err(super::run_accepted(self.id));
         }
         let refused = |why: String| ErrorObject::parallax(ErrorKind::PrRefused, why);
-        if self.live.is_some() {
+        if self.busy() {
             return Err(refused(format!(
                 "run {} is still running; open a pull request once it has finished",
                 self.id
@@ -1517,6 +1679,18 @@ impl Actor {
         {
             queued.options.permission = None;
         }
+        // Options it may wait with are checked now, as a new process's start would check them,
+        // whether or not an idle session is still up when it arrives.
+        if !self.moves(queued.account.as_ref())
+            && let Some((_, backend)) = self
+                .daemon
+                .agents
+                .backends
+                .by_backend_name(&self.row.fields.backend)
+        {
+            self.changes(queued.options.clone())
+                .check(backend.as_ref())?;
+        }
         let (turn_id, text) = (queued.turn_id, &queued.text);
         if self.accepted() {
             return Err(super::run_accepted(self.id));
@@ -1541,11 +1715,23 @@ impl Actor {
         if delivery != Delivery::Queue {
             return self.steer(queued, delivery == Delivery::Restart).await;
         }
-        // A running CLI can't change what it runs with, a turn in progress finishes before the
-        // next starts, and what's sent after a message that waits waits too, so the messages keep
-        // their order.
+        // An idle session that can't take it ends now, and it starts the next process at once,
+        // as it would if the session had already gone.
         if self.live.is_some()
-            && (self.changing(&queued) || self.in_flight > 0 || !self.queued.is_empty())
+            && !self.busy()
+            && self.queued.is_empty()
+            && (!self.live_open() || self.changing(&queued))
+        {
+            self.end_session().await;
+        }
+        // A running CLI can't change what it runs with, a turn in progress finishes before the
+        // next starts, what's sent after a message that waits waits too, so the messages keep
+        // their order, and a released CLI takes no more.
+        if self.live.is_some()
+            && (!self.live_open()
+                || self.changing(&queued)
+                || self.in_flight > 0
+                || !self.queued.is_empty())
         {
             return self.queue(queued).await;
         }
@@ -1597,8 +1783,11 @@ impl Actor {
         }
         let (mut steer, seen) = queued.follow_up(&self.daemon, self.id).await?;
         steer.steer = true;
+        let busy = self.busy();
         let sent = self.live.as_ref().map(|live| {
-            if restart {
+            if live.released {
+                Err(SendError::Finished)
+            } else if restart && busy {
                 Err(SendError::Unsupported)
             } else {
                 live.run.send(steer)
@@ -1619,7 +1808,9 @@ impl Actor {
                 }
                 self.drain().await;
             }
-            Some(Err(SendError::Finished)) => self.drain().await,
+            Some(Err(SendError::Finished)) => {
+                self.end_session().await;
+            }
             None => self.effect_busy(ErrorKind::RunNotResumable)?,
         }
         let Queued {
@@ -1658,11 +1849,20 @@ impl Actor {
         ))
     }
 
-    /// Hands `queued` to the live CLI as its next turn.
+    /// Hands `queued` to the live CLI as its next turn. An idle coordinator's worktree moves to
+    /// the integration branch's tip first, as a new process's does (0042).
     async fn hand_over(
-        &self,
+        &mut self,
         queued: &Queued,
     ) -> Result<Result<Vec<(Uuid, u64)>, SendError>, ErrorObject> {
+        if self.is_coordinator() && !self.busy() {
+            let project = super::integration(&self.daemon, self.project).await?;
+            if let Some(project) = project {
+                self.coordinator_setup(Path::new(&project.repo_path))
+                    .await
+                    .map_err(|why| ErrorObject::parallax(ErrorKind::WorktreeFailed, why))?;
+            }
+        }
         let (follow_up, seen) = queued.follow_up(&self.daemon, self.id).await?;
         Ok(match &self.live {
             Some(live) => live.run.send(follow_up).map(|()| seen),
@@ -1673,6 +1873,8 @@ impl Actor {
     /// Records `queued`, which the live CLI has taken.
     async fn handed_over(&mut self, queued: Queued, seen: Vec<(Uuid, u64)>) {
         self.in_flight += 1;
+        // An idle session's run shows `running` as soon as it has the message.
+        self.show_running().await;
         self.handed.push(queued.clone());
         self.record_turn(queued.turn_id, queued.text.clone(), seen)
             .await;
@@ -1731,7 +1933,7 @@ impl Actor {
     /// Sends what waits as far as the run can take it now: while no CLI runs, the next message
     /// to a new CLI process, once no push or Open PR runs either; while the live CLI has no turn
     /// in progress, the next message that doesn't change what it runs with, as its next turn.
-    /// Holds the CLI open while that waits.
+    /// One that does releases an idle session, so the next process can take it.
     async fn deliver(&mut self) {
         if self.stopping || self.queue_held {
             return;
@@ -1739,11 +1941,15 @@ impl Actor {
         if self.live.is_none() && self.effect.is_none() {
             self.send_queued().await;
         }
-        while self.in_flight == 0 && self.live.is_some() {
+        while self.in_flight == 0 && self.live_open() {
             let Some(next) = self.queued.front().cloned() else {
                 break;
             };
             if self.changing(&next) {
+                // It needs a new process: the idle session goes, then it starts one.
+                if !self.busy() {
+                    self.release();
+                }
                 break;
             }
             // At least once (0048): the CLI gets the message before its stored row is deleted,
@@ -1773,14 +1979,6 @@ impl Actor {
                 // It goes once the CLI has exited.
                 Err(SendError::Unsupported | SendError::Finished) => break,
             }
-        }
-        let hold =
-            self.live.is_some() && self.queued.front().is_some_and(|next| !self.changing(next));
-        if let Some(live) = &self.live
-            && hold != self.held
-        {
-            live.run.hold(hold);
-            self.held = hold;
         }
     }
 
@@ -2064,6 +2262,12 @@ impl Actor {
         account: Option<AccountChoice>,
     ) -> Result<AgentRun, ErrorObject> {
         let moving = self.moves(account.as_ref());
+        let changing = moving || changes != RunOptions::default();
+        let message = self.in_session(turn_id, text, images, threads, changing);
+        let (text, images, threads) = match message.await? {
+            Ok(run) => return Ok(run),
+            Err(message) => message,
+        };
         let session_id = self.row.state.session_id.clone();
         // The session belongs to the account the run was on when it ended, after any fallback,
         // not to whatever the worker role's default is now.
@@ -2161,6 +2365,41 @@ impl Actor {
             self.move_back(moved_from).await;
         }
         self.snapshot()
+    }
+
+    /// Hands a message to the idle live session as its next turn (0060), or gives it back once
+    /// no session runs: one that can't take it, or must restart for a `changing` message, ends.
+    async fn in_session(
+        &mut self,
+        turn_id: TurnId,
+        text: String,
+        images: Vec<PromptImage>,
+        threads: Vec<RunId>,
+        changing: bool,
+    ) -> Result<Result<AgentRun, (String, Vec<PromptImage>, Vec<RunId>)>, ErrorObject> {
+        let queued = Queued {
+            turn_id,
+            text,
+            images,
+            threads,
+            options: RunOptions::default(),
+            account: None,
+            from: None,
+        };
+        if self.live_open() && !changing {
+            match self.hand_over(&queued).await? {
+                Ok(seen) => {
+                    self.handed_over(queued, seen).await;
+                    return self.snapshot().map(Ok);
+                }
+                Err(SendError::IdConflict) => return Err(id_conflict(turn_id)),
+                Err(SendError::Unsupported | SendError::Finished) => {}
+            }
+        }
+        if self.live.is_some() {
+            self.end_session().await;
+        }
+        Ok(Err((queued.text, queued.images, queued.threads)))
     }
 
     /// Stores `changes` to the run's options, checked against `backend`. When `backend` isn't the
@@ -2595,15 +2834,12 @@ impl Actor {
         };
         match routing::start(Arc::clone(&self.daemon.keys), &accounts, resolved, request) {
             Ok(started) => {
-                self.live = Some(Live {
-                    run: started.run,
-                    events: started.events,
-                    temp,
-                });
+                // The session outlives its turns until it is released (0060).
+                started.run.hold(true);
+                self.live = Some(Live::new(started.run, started.events, temp));
                 self.daemon.agents.running.fetch_add(1, Ordering::Relaxed);
                 // The prompt's turn.
                 self.in_flight = 1;
-                self.held = false;
                 convert::RUNNING.clone_into(&mut self.row.state.status);
                 self.row.state.account_id = account_id;
                 self.row.state.error = None;
@@ -2858,17 +3094,13 @@ impl Actor {
             }
             Event::Finished { outcome, .. } => {
                 let outcome = outcome.clone();
-                self.record_usage(event).await;
-                self.clear_live();
-                // The CLI exited while they waited, so nothing can answer them now.
-                for approval_id in self.approvals.pending() {
-                    let gone = ended(AgentApprovalDecision::Withdrawn, AgentApprovalBy::Agent);
-                    self.resolve_approval(approval_id, gone).await;
-                }
-                self.index_text().await;
-                self.finish(&outcome).await;
+                self.exited(event, &outcome).await;
             }
             _ => {
+                if matches!(event, Event::TurnStarted { .. }) {
+                    self.wake_session().await;
+                }
+                self.track_work(&event);
                 if self.track_turns(&event).await {
                     return;
                 }
@@ -2881,10 +3113,77 @@ impl Actor {
                 for url in created {
                     self.link_pr(url).await;
                 }
-                if matches!(event, Event::TurnFinished { .. }) {
+                if let Event::TurnFinished { result, failed, .. } = event {
                     self.index_text().await;
+                    self.turn_ended(result, failed).await;
                 }
             }
+        }
+    }
+
+    /// The CLI exited with `finished`: ends its turn as `outcome`, or, for an idle session whose
+    /// last turn already settled, only notes it.
+    async fn exited(&mut self, finished: Event, outcome: &Outcome) {
+        // A message the idle session took since and dropped waits again.
+        let settled = self
+            .live
+            .as_ref()
+            .is_some_and(|live| live.settled.is_some());
+        self.record_usage(finished).await;
+        self.clear_live();
+        // The CLI exited while they waited, so nothing can answer them now.
+        for approval_id in self.approvals.pending() {
+            let gone = ended(AgentApprovalDecision::Withdrawn, AgentApprovalBy::Agent);
+            self.resolve_approval(approval_id, gone).await;
+        }
+        if settled {
+            info!(run = %self.id, "an agent run's session ended");
+            // A message it took as it ended, and lost, had shown it running.
+            if self.queued.is_empty() && self.row.state.status == convert::RUNNING {
+                convert::COMPLETED.clone_into(&mut self.row.state.status);
+                self.save().await;
+            }
+            return;
+        }
+        self.index_text().await;
+        self.finish(outcome).await;
+    }
+
+    /// A turn ended. Once none is in flight, a failed one releases the session, so its process
+    /// ends and its `Finished` says why, as before 0060; otherwise the next waiting message goes
+    /// to the session, or with none it settles.
+    async fn turn_ended(&mut self, result: Option<String>, failed: bool) {
+        if self.in_flight > 0 || self.live.as_ref().is_none_or(|live| live.settled.is_some()) {
+            return;
+        }
+        if failed {
+            self.release();
+            return;
+        }
+        // Boxed: delivering can start a process, whose start can drain this one's events.
+        Box::pin(self.deliver()).await;
+        if self.in_flight == 0 {
+            self.settle(result).await;
+        }
+    }
+
+    /// Keeps [`Self::open_work`]: a tool call until its result, and a subagent until it
+    /// finishes.
+    fn track_work(&mut self, event: &Event) {
+        match event {
+            Event::ToolCall { call_id, .. } => {
+                self.open_work.insert(call_id.clone());
+            }
+            Event::ToolResult { call_id, .. } => {
+                self.open_work.remove(call_id);
+            }
+            Event::Subagent { call_id, .. } => {
+                self.open_work.insert(format!("subagent:{call_id}"));
+            }
+            Event::SubagentFinished { call_id, .. } => {
+                self.open_work.remove(&format!("subagent:{call_id}"));
+            }
+            _ => {}
         }
     }
 
@@ -2926,10 +3225,14 @@ impl Actor {
 
     fn clear_live(&mut self) {
         self.in_flight = 0;
-        self.held = false;
+        self.open_work.clear();
         self.handed.clear();
         if let Some(live) = self.live.take() {
-            self.daemon.agents.running.fetch_sub(1, Ordering::Relaxed);
+            self.daemon.agents.idle.remove(self.id);
+            // An idle session's turn was counted out when it settled.
+            if live.settled.is_none() {
+                self.daemon.agents.running.fetch_sub(1, Ordering::Relaxed);
+            }
             // A worker's temp can hold a whole package store, so it goes off this task's thread.
             tokio::task::spawn_blocking(move || drop(live.temp));
         }
@@ -3543,11 +3846,11 @@ mod tests {
             .await
             .expect("the channel holds the whole flood");
         }
-        actor.live = Some(Live {
-            run: Arc::new(NoopRun),
+        actor.live = Some(Live::new(
+            Arc::new(NoopRun),
             events,
-            temp: Some(crate::backend::run_temp::create(&daemon.data_dir).unwrap()),
-        });
+            Some(crate::backend::run_temp::create(&daemon.data_dir).unwrap()),
+        ));
 
         let (commands, receiver) = mpsc::channel(4);
         let (reply, answer) = oneshot::channel();
@@ -3609,11 +3912,7 @@ mod tests {
         let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
         // The fallback attempt's events: open and quiet for as long as the test runs.
         let (_fallback, events) = EventSink::channel(4, Vec::new());
-        actor.live = Some(Live {
-            run: Arc::new(ExitedRun),
-            events,
-            temp: None,
-        });
+        actor.live = Some(Live::new(Arc::new(ExitedRun), events, None));
         let approval_id = ApprovalId::generate();
         let request = ApprovalRequest {
             approval_id,
@@ -3671,11 +3970,7 @@ mod tests {
         let (row, worktree) = fake_row_and_worktree();
         let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
         let (_sink, events) = EventSink::channel(4, Vec::new());
-        actor.live = Some(Live {
-            run: Arc::new(NoopRun),
-            events,
-            temp: None,
-        });
+        actor.live = Some(Live::new(Arc::new(NoopRun), events, None));
 
         let sonnet = RunOptions {
             model: Some("sonnet".to_owned()),
@@ -3742,11 +4037,7 @@ mod tests {
         let (row, worktree) = fake_row_and_worktree();
         let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
         let (_sink, events) = EventSink::channel(4, Vec::new());
-        actor.live = Some(Live {
-            run: Arc::new(NoopRun),
-            events,
-            temp: None,
-        });
+        actor.live = Some(Live::new(Arc::new(NoopRun), events, None));
         let sonnet = RunOptions {
             model: Some("sonnet".to_owned()),
             ..RunOptions::default()
@@ -3797,6 +4088,115 @@ mod tests {
         assert_eq!(resumed.messages.len(), 2);
         let (logged, _) = daemon.log.run_events(actor.id, 0, 100, usize::MAX).unwrap();
         assert_eq!(last_held(&logged), Some(false));
+    }
+
+    /// A [`Run`] that takes every follow-up and records them and its hold.
+    #[derive(Default)]
+    struct SessionRun {
+        sent: std::sync::Mutex<Vec<TurnId>>,
+        held: std::sync::atomic::AtomicBool,
+    }
+
+    impl Run for SessionRun {
+        fn id(&self) -> RunId {
+            RunId::generate()
+        }
+
+        fn send(&self, message: FollowUp) -> Result<(), SendError> {
+            self.sent.lock().unwrap().push(message.turn_id);
+            Ok(())
+        }
+
+        fn cancel(&self) {}
+
+        fn hold(&self, held: bool) {
+            self.held.store(held, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// 0060: a turn's end settles the run while its CLI stays up, the next message goes to that
+    /// CLI, and the idle session is released after its window, later while work is open.
+    #[tokio::test]
+    async fn a_settled_turn_keeps_its_session_until_its_idle_window_passes() {
+        use super::{SESSION_IDLE, SESSION_MAX_PIN, convert};
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let (mut row, worktree) = fake_row_and_worktree();
+        // Nothing to commit.
+        row.fields.checkout = true;
+        let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
+        let run = Arc::new(SessionRun::default());
+        run.hold(true);
+        let (_sink, events) = EventSink::channel(4, Vec::new());
+        actor.live = Some(Live::new(run.clone(), events, None));
+        actor.in_flight = 1;
+        let finished = |turn_id, failed| {
+            Some(Event::TurnFinished {
+                turn_id,
+                result: Some("Done.".to_owned()),
+                failed,
+            })
+        };
+
+        actor.on_event(finished(None, false)).await;
+        assert!(!actor.busy(), "settled");
+        assert_eq!(actor.row.state.status, convert::COMPLETED);
+        assert!(actor.live.is_some(), "the CLI stays up");
+
+        let next = TurnId::generate();
+        actor
+            .send(
+                message(next, "And the tests", RunOptions::default()),
+                Delivery::Queue,
+            )
+            .await
+            .unwrap();
+        assert_eq!(*run.sent.lock().unwrap(), [next], "the live CLI takes it");
+        assert_eq!(actor.row.state.status, convert::RUNNING);
+        actor
+            .on_event(Some(Event::TurnStarted {
+                turn_id: Some(next),
+            }))
+            .await;
+        actor.on_event(finished(Some(next), false)).await;
+        assert!(!actor.busy());
+
+        let settled = actor.live.as_ref().unwrap().settled.unwrap();
+        assert_eq!(actor.release_due(), Some(settled + SESSION_IDLE));
+        // An open tool call defers the release by a window, up to the pin's limit.
+        actor.open_work.insert("call-1".to_owned());
+        actor.release_idle();
+        assert!(run.held.load(std::sync::atomic::Ordering::SeqCst));
+        actor.live.as_mut().unwrap().settled = settled.checked_sub(SESSION_MAX_PIN);
+        actor.release_idle();
+        assert!(
+            !run.held.load(std::sync::atomic::Ordering::SeqCst),
+            "released once the pin's limit passed"
+        );
+        assert_eq!(actor.release_due(), None);
+    }
+
+    /// 0060: a failed turn releases its session, so the CLI exits and its `Finished` says why.
+    #[tokio::test]
+    async fn a_failed_turn_releases_its_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let (row, worktree) = fake_row_and_worktree();
+        let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
+        let run = Arc::new(SessionRun::default());
+        run.hold(true);
+        let (_sink, events) = EventSink::channel(4, Vec::new());
+        actor.live = Some(Live::new(run.clone(), events, None));
+        actor.in_flight = 1;
+        actor
+            .on_event(Some(Event::TurnFinished {
+                turn_id: None,
+                result: None,
+                failed: true,
+            }))
+            .await;
+        assert!(!run.held.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(actor.busy(), "the turn ends with the CLI's exit");
     }
 
     /// Codex-style deltas in one batch join while they follow one another for the same message,
@@ -3953,11 +4353,7 @@ mod tests {
         let (row, worktree) = fake_row_and_worktree();
         let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
         let (_sink, events) = EventSink::channel(4, Vec::new());
-        actor.live = Some(Live {
-            run: Arc::new(NoopRun),
-            events,
-            temp: None,
-        });
+        actor.live = Some(Live::new(Arc::new(NoopRun), events, None));
         let turn = TurnId::generate();
         actor
             .send(

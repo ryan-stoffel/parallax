@@ -594,14 +594,8 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
     let params = start_params(project.id, "Answer twice");
     let run_id = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();
-    until(
-        &mut client,
-        has_item(AgentOutputItem::TurnFinished {
-            turn_id: None,
-            result: Some("First answer.".to_owned()),
-        }),
-    )
-    .await;
+    // The turn settles while its CLI stays up for the next one (0060).
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
 
     let first = TurnId::generate();
     let sent = client
@@ -725,14 +719,7 @@ async fn images_sent_with_the_prompt_and_a_follow_up_are_listed_by_their_turns_a
     };
     let run_id = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();
-    let events = until(
-        &mut client,
-        has_item(AgentOutputItem::TurnFinished {
-            turn_id: None,
-            result: Some("First answer.".to_owned()),
-        }),
-    )
-    .await;
+    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
     let [prompt_image] = turn_images(&items(&events), None)[..] else {
         panic!("the prompt's turn lists its one image");
     };
@@ -1421,8 +1408,11 @@ async fn a_projects_child_starts_as_a_thread_on_each_built_in_kind() {
         (bypass, bypass_mode, "codex", "codex"),
         (bypass, bypass_mode, "cursor", "cursor-sdk"),
     ] {
-        for file in ["argv", "stdin"] {
-            let _ = std::fs::remove_file(out.join(format!("{program}.{file}")));
+        // Both Codex children share the first one's app-server (0060), so it starts once.
+        if program != "codex" || project.id == auto.id {
+            for file in ["argv", "stdin"] {
+                let _ = std::fs::remove_file(out.join(format!("{program}.{file}")));
+            }
         }
         let run = client
             .call::<AgentStart>(AgentStartParams {
@@ -1466,7 +1456,16 @@ async fn a_projects_child_starts_as_a_thread_on_each_built_in_kind() {
                     "{stdin}"
                 );
             }
-            "codex" => assert_eq!(argv, ["app-server"]),
+            "codex" => {
+                assert_eq!(argv, ["app-server"]);
+                // The threads' app-server, not a login check's, initializes once.
+                let stdin = recorded(&out, program, "stdin", "\"title\":\"Parallax\"").await;
+                assert_eq!(
+                    stdin.matches("\"title\":\"Parallax\"").count(),
+                    1,
+                    "{stdin}"
+                );
+            }
             _ => {
                 assert_eq!(argv.first(), Some(&"run"), "{argv:?}");
                 let permission = if mode == auto_mode { "auto" } else { "bypass" };
@@ -1871,7 +1870,6 @@ async fn review_reads_commits_not_the_worktree_and_accept_waits_for_the_run_to_s
             init("review-1"),
             Step::EndTurn { result: None },
             Step::AwaitFollowUp,
-            end_turn("Noted."),
             Step::Hang,
         ]),
     );

@@ -864,6 +864,7 @@ impl Driver {
             .emit(Event::TurnFinished {
                 turn_id,
                 result: self.last_result.clone(),
+                failed: self.failure.is_some(),
             })
             .await
     }
