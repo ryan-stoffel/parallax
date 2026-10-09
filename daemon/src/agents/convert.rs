@@ -404,6 +404,7 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
         // The run's actor reports permission requests, with when they expire and how they end.
         Event::ApprovalRequested(_)
         | Event::ApprovalWithdrawn { .. }
+        | Event::TurnCursor { .. }
         | Event::RateLimit(_)
         | Event::AccountFallback { .. }
         | Event::Finished { .. }

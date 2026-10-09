@@ -996,6 +996,20 @@ describe("on a plxd with providers", () => {
     );
   });
 
+  test("Claude Code's Runtime says how its Agent SDK stands, such as the Node.js it needs", async () => {
+    await renderSettings();
+    await click(tab("Claude Code"));
+    expect(rows("Runtime").at(-1)).toBe(
+      "Claude Agent SDKRuns Claude Code through the Agent SDK on this host. Needs Node.js 22.16 or newer.",
+    );
+
+    listed[0] = { ...listed[0]!, note: "Node.js 22.16 or newer is required" };
+    unmount();
+    await renderSettings();
+    await click(tab("Claude Code"));
+    expect(rows("Runtime").at(-1)).toBe("Claude Agent SDKNode.js 22.16 or newer is required");
+  });
+
   const dialog = () => document.querySelector("dialog")!;
   const next = async () => {
     await act(async () => dialog().querySelector("form")!.requestSubmit());

@@ -570,6 +570,7 @@ async fn a_resumed_session_reports_only_its_own_usage() {
         session_id: "fresh-usage".into(),
         usage_totals: vec![opus(1000)],
         fork: false,
+        at: None,
     });
     let mut events = launch(&backend, resumed).await.events;
     let all = rest(&mut events).await;

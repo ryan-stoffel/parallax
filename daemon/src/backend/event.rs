@@ -133,6 +133,17 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         failed: bool,
     },
+    /// Where the session stood when a turn ended, which a later run resumes at with
+    /// [`Resume::at`](super::Resume::at) to rewind to that turn's end, dropping what came after
+    /// (0062): the `uuid` of Claude's last transcript entry. Comes before the turn's
+    /// [`Event::TurnFinished`], from a backend that can [`rewind`](super::Backend::rewind).
+    TurnCursor {
+        /// The turn's id, as its [`Event::TurnStarted`] had it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<TurnId>,
+        /// The vendor's id for the position.
+        cursor: String,
+    },
     /// A follow-up that [`Run::send`](super::Run::send) accepted never reached the CLI, because
     /// the run ended first. The caller can send it again in a run that resumes this session.
     FollowUpDropped {

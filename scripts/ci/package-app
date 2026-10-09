@@ -68,6 +68,10 @@ printf '%s\n' "$version" > target/package-resources/plxd.version
 mkdir -p target/package-resources/cursor-sdk/src
 cp sidecar/cursor/package.json sidecar/cursor/package-lock.json target/package-resources/cursor-sdk/
 cp sidecar/cursor/src/main.mjs sidecar/cursor/src/protocol.mjs target/package-resources/cursor-sdk/src/
+# The Claude Agent SDK sidecar's files (0061) too, installed the same way for a host with Claude.
+mkdir -p target/package-resources/claude-agent-sdk/src
+cp sidecar/claude/package.json sidecar/claude/package-lock.json target/package-resources/claude-agent-sdk/
+cp sidecar/claude/src/main.mjs sidecar/claude/src/protocol.mjs target/package-resources/claude-agent-sdk/src/
 
 cd apps/desktop
 node --version

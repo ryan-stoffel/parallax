@@ -1231,13 +1231,32 @@ async fn a_child_learns_its_project_and_a_fallback_moves_its_usage_to_the_new_ac
     host.server.stop().await;
 }
 
+/// A stand-in for the Claude Agent SDK sidecar (0061) that records each query's `open` line and
+/// what plxd sends its CLI's stdin in `out/claude.open` and `out/claude.stdin` beside its folder,
+/// and ends a query that plxd interrupts or kills.
+const CLAUDE_SDK: &str = r#"#!/bin/sh
+out="$(dirname "$0")/../out"
+while IFS= read -r line; do
+  case $line in
+    *'"type":"open"'*) printf '%s\n' "$line" > "$out/claude.open" ;;
+    *'"stdin":'*) printf '%s\n' "$line" >> "$out/claude.stdin" ;;
+    *'"type":"interrupt"'* | *'"type":"kill"'*)
+      id=$(printf '%s' "$line" | sed -n 's/^{"id":"\([^"]*\)".*/\1/p')
+      printf '%s exit {"code":null,"signal":2}\n' "$id" ;;
+  esac
+done
+"#;
+
 /// An in-process plxd whose Claude Code, Codex, and Cursor backends are plxd's real ones,
 /// running `scripts`, stand-ins for `claude`, `codex`, and the Cursor SDK sidecar (`cursor-sdk`,
 /// through `PLXD_CURSOR_SDK`), from a folder in `dir` that is the agents' whole `PATH` besides the
-/// system's.
+/// system's. Claude runs through [`CLAUDE_SDK`] (`PLXD_CLAUDE_SDK`).
 fn built_in_kinds(dir: &Path, scripts: [(&str, String); 3]) -> InProcess {
     let bin = dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
+    let scripts = scripts
+        .into_iter()
+        .chain([("claude-sdk", CLAUDE_SDK.to_owned())]);
     for (program, script) in scripts {
         let path = bin.join(program);
         std::fs::write(&path, script).unwrap();
@@ -1246,6 +1265,7 @@ fn built_in_kinds(dir: &Path, scripts: [(&str, String); 3]) -> InProcess {
     let mut environment = Environment::empty();
     environment.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
     environment.set("PLXD_CURSOR_SDK", bin.join("cursor-sdk"));
+    environment.set("PLXD_CLAUDE_SDK", bin.join("claude-sdk"));
     let mut config = InProcess::config(dir);
     config.agent_environment = Some(environment.clone());
     let mut backends = BackendRegistry::new();
@@ -1410,7 +1430,7 @@ async fn a_projects_child_starts_as_a_thread_on_each_built_in_kind() {
     ] {
         // Both Codex children share the first one's app-server (0060), so it starts once.
         if program != "codex" || project.id == auto.id {
-            for file in ["argv", "stdin"] {
+            for file in ["argv", "stdin", "open"] {
                 let _ = std::fs::remove_file(out.join(format!("{program}.{file}")));
             }
         }
@@ -1428,7 +1448,20 @@ async fn a_projects_child_starts_as_a_thread_on_each_built_in_kind() {
         assert_eq!(run.permission, Some(mode), "{backend}");
         assert!(run.branch.is_some(), "{backend} works in its own worktree");
 
-        let argv = recorded(&out, program, "argv", "\n").await;
+        // Claude's arguments go to the Agent SDK sidecar, in its query's `open` line.
+        let argv = if backend == "claude" {
+            let open = recorded(&out, program, "open", "\n").await;
+            let open: serde_json::Value = serde_json::from_str(&open).unwrap();
+            let args: Vec<&str> = open["args"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|arg| arg.as_str().unwrap())
+                .collect();
+            args.join("\n")
+        } else {
+            recorded(&out, program, "argv", "\n").await
+        };
         let argv: Vec<&str> = argv.lines().collect();
         match backend {
             "claude" => {
