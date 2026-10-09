@@ -11,16 +11,18 @@ const mac = () => window.parallax.platform === "darwin";
 
 /**
  * An xterm.js terminal showing main's terminal `id`, which it opens on `target` when it mounts and
- * ends when it unmounts. What's typed and printed only passes between the two. `onStart` is called
- * once what it runs has started, and `onEnd` gets an error for people if it couldn't start, or
- * nothing once what it ran exits. Its colors follow the
- * app theme, with `background` the CSS token behind it. Import it lazily: xterm.js is large.
+ * ends when it unmounts, unless it `keep`s it running in plxd for the next view. What's typed and
+ * printed only passes between the two. `onStart` is called once what it runs has started, and
+ * `onEnd` gets an error for people if it couldn't start, or nothing once what it ran exits. Its
+ * colors follow the app theme, with `background` the CSS token behind it. Import it lazily:
+ * xterm.js is large.
  */
 export function TerminalView({
   id,
   target,
   label,
   background = "--surface",
+  keep = false,
   onStart,
   onEnd,
 }: {
@@ -29,6 +31,8 @@ export function TerminalView({
   /** The terminal's accessible name. */
   label: string;
   background?: string;
+  /** Leaves it running when the view unmounts, as a thread's shell does. */
+  keep?: boolean;
   onStart?: () => void;
   /** Called with an error for people if it couldn't start, else with how it exited. */
   onEnd?: (error?: string, exitCode?: number) => void;
@@ -85,8 +89,9 @@ export function TerminalView({
     fitShown();
 
     const stop = window.parallax.onTerminal(id, (message) => {
-      if (message.type === "data") return term.write(message.data);
-      ended(undefined, message.exitCode);
+      if (message.type === "exit") return ended(undefined, message.exitCode);
+      if (message.type === "replay") term.reset();
+      term.write(message.data);
     });
     term.onData((data) => window.parallax.terminalInput(id, data));
     term.onResize(({ cols, rows }) => window.parallax.resizeTerminal(id, cols, rows));
@@ -120,10 +125,10 @@ export function TerminalView({
       observer.disconnect();
       themes.disconnect();
       stop();
-      window.parallax.closeTerminal(id);
+      if (!keep) window.parallax.closeTerminal(id);
       term.dispose();
     };
-  }, [id, background]);
+  }, [id, background, keep]);
 
   return <div ref={container} role="group" aria-label={label} className="h-full overflow-hidden" />;
 }

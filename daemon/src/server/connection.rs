@@ -28,8 +28,11 @@ use parallax_protocol::jsonrpc::{
 };
 use parallax_protocol::methods::{
     CancelRequest, EventsEvent, EventsResync, Initialize, NotificationMethod, RequestMethod,
+    TerminalResize, TerminalWrite,
 };
-use parallax_protocol::{ErrorKind, EventsEventParams, EventsResyncParams};
+use parallax_protocol::{
+    ErrorKind, EventsEventParams, EventsResyncParams, TerminalResizeParams, TerminalWriteParams,
+};
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{Semaphore, mpsc};
@@ -250,6 +253,7 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
                 self.stopped_reading.clone()
             },
             command_id: None,
+            replies: self.replies.clone(),
         };
         let in_flight = Arc::clone(&self.in_flight);
         let replies = self.replies.clone();
@@ -314,6 +318,31 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
     }
 
     fn notification(&self, notification: &Notification) {
+        // A terminal's input is written here, so it reaches the terminal in the order it was sent.
+        let terminals = &self.daemon.terminals;
+        if self.session.is_some() && notification.method == TerminalWrite::NAME {
+            if let Ok(TerminalWriteParams {
+                thread_id,
+                terminal_id,
+                data,
+            }) = notification.params()
+            {
+                terminals.write(thread_id, terminal_id, data);
+            }
+            return;
+        }
+        if self.session.is_some() && notification.method == TerminalResize::NAME {
+            if let Ok(TerminalResizeParams {
+                thread_id,
+                terminal_id,
+                cols,
+                rows,
+            }) = notification.params()
+            {
+                terminals.resize(thread_id, terminal_id, cols, rows);
+            }
+            return;
+        }
         if notification.method != CancelRequest::NAME {
             debug!(
                 method = ?untrusted(&notification.method),
@@ -530,6 +559,7 @@ async fn send_reply<W: AsyncWrite + Unpin>(
             cursors.remove(subscription);
             send_response(sink, response).await
         }
+        Reply::Notification(notification) => sink.feed(notification).await,
     }
 }
 

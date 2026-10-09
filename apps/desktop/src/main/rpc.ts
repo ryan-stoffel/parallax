@@ -93,7 +93,8 @@ export class RpcClient {
     this.pending.clear();
   }
 
-  private notify(method: string, params: unknown): void {
+  /** Sends a notification, which gets no response. */
+  notify(method: string, params: unknown): void {
     if (!this.closed) this.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
   }
 

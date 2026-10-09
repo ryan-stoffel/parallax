@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import { PROTOCOL_VERSION } from "../protocol/generated/protocol";
-import type { ConnectionState, SubscriptionMessage } from "../preload/bridge";
+import type { ConnectionState, SubscriptionMessage, TerminalMessage } from "../preload/bridge";
 import { backoffMs, Connection, exitError, LOCATE_PLXD, sshCommand } from "./connection";
 
 type Message = Record<string, unknown> & {
@@ -193,6 +193,43 @@ test("resumes a subscription from the last seq after a reconnect", () => {
   vi.advanceTimersByTime(1000);
   child().handshake();
   expect(child().request("events/subscribe").params).toEqual({ after: 2 });
+});
+
+test("routes a terminal's output, and opens a shell again after a reconnect (PLX-637)", async () => {
+  const connection = connect();
+  const capabilities = { terminals: {} };
+  child().reply({ id: child().request("initialize").id, result: { ...initialized, capabilities } });
+  const key = { threadId: "t1", terminalId: "drawer:local/t1" };
+  const shell = { ...key, cwd: "/wt", cols: 80, rows: 24 };
+  const command = { program: "codex", args: ["login"], env: {} };
+  const signIn = { threadId: "", terminalId: "1:sign-in", command, cols: 80, rows: 24 };
+  const shown: TerminalMessage[] = [];
+  const signedIn: TerminalMessage[] = [];
+  connection.attachTerminal(shell, (message) => shown.push(message));
+  connection.attachTerminal(signIn, (message) => signedIn.push(message));
+  const opened = connection.openTerminal(shell);
+  child().reply({ id: child().request("terminal/open").id, result: {} });
+  expect(await opened).toBeUndefined();
+  child().reply(
+    { method: "terminal/output", params: { ...key, data: "$ ", replay: true } },
+    { method: "terminal/output", params: { ...key, data: "ls\r\n" } },
+  );
+  expect(shown).toEqual([
+    { type: "replay", data: "$ " },
+    { type: "data", data: "ls\r\n" },
+  ]);
+  connection.writeTerminal(key, "pwd\r");
+  expect(child().request("terminal/write").params).toEqual({ ...key, data: "pwd\r" });
+  connection.resizeTerminal(key, 100, 30);
+
+  // plxd ends a command with its connection; a shell comes back at its last size.
+  child().emit("close", 0, null);
+  expect(signedIn).toEqual([{ type: "exit", exitCode: -1 }]);
+  vi.advanceTimersByTime(1000);
+  child().reply({ id: child().request("initialize").id, result: { ...initialized, capabilities } });
+  expect(child().request("terminal/open").params).toEqual({ ...shell, cols: 100, rows: 30 });
+  child().reply({ method: "terminal/exit", params: { ...key, exitCode: 0 } });
+  expect(shown.at(-1)).toEqual({ type: "exit", exitCode: 0 });
 });
 
 test("resyncRequired ends the subscription with a resync", () => {

@@ -1,0 +1,109 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "terminal/open",
+    "params": {
+      "threadId": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "terminalId": "drawer:1",
+      "cwd": "/Users/ada/src/app",
+      "cols": 80,
+      "rows": 24
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "terminal/output",
+    "params": {
+      "threadId": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "terminalId": "drawer:1",
+      "data": "~/src/app $ ",
+      "replay": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "terminal/resize",
+    "params": {
+      "threadId": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "terminalId": "drawer:1",
+      "cols": 120,
+      "rows": 30
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "terminal/write",
+    "params": {
+      "threadId": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "terminalId": "drawer:1",
+      "data": "exit\r"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "terminal/output",
+    "params": {
+      "threadId": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "terminalId": "drawer:1",
+      "data": "exit\r\n"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "terminal/exit",
+    "params": {
+      "threadId": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "terminalId": "drawer:1",
+      "exitCode": 0
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "terminal/open",
+    "params": {
+      "threadId": "",
+      "terminalId": "7:sign-in",
+      "command": {
+        "program": "codex",
+        "args": ["login"],
+        "env": { "CODEX_HOME": "/Users/ada/.codex-work" }
+      },
+      "cols": 80,
+      "rows": 24
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "terminal/list",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": { "terminals": [{ "threadId": "", "terminalId": "7:sign-in" }] }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "terminal/close",
+    "params": { "threadId": "", "terminalId": "7:sign-in" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {}
+  }
+]

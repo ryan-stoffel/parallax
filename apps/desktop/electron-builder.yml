@@ -16,26 +16,19 @@ publish:
   owner: ryan-stoffel
   repo: parallax
   channel: ${channel}
-# node-pty ships prebuilt binaries for every target, so nothing needs compiling. @electron/rebuild
-# would fetch Electron's headers and run node-gyp anyway on some runners.
+# The app has no native modules, so nothing needs compiling. @electron/rebuild would fetch
+# Electron's headers anyway on some runners.
 npmRebuild: false
 # Only Chromium's en-US locale ships: the rest are about 50 MiB of the installed app. The UI is
 # English only, and the renderer formats dates, numbers, and sort order in the OS's locale itself
 # (src/renderer/locale.ts), since Chromium's default locale is then en-US on every system (PLX-613).
 electronLanguages: [en-US]
-# dist/ is the whole app: vite.config.ts bundles every dependency except node-pty. Only
-# `dependencies` are packaged, and package.json keeps just that one there. Sourcemaps stay out:
-# nothing enables them at run time. node-pty keeps only the prebuild for this build's OS and arch
-# (`${platform}` is the build machine's, and package-app builds for its own arch), the only one
-# it loads.
+# dist/ is the whole app: vite.config.ts bundles every dependency, and package.json has no
+# `dependencies` to package. Sourcemaps stay out: nothing enables them at run time.
 files:
   - dist/**
   - package.json
   - "!**/*.map"
-  - "!node_modules/node-pty/prebuilds/!(${platform}-${arch})/**"
-# Native code can't load from inside app.asar: node-pty's prebuilds and spawn-helper.
-asarUnpack:
-  - node_modules/node-pty/**
 # plxd, built for this target, and plxd.version, the version it reports (0030), go in the
 # resources folder, where findPlxd looks. package-app puts both in target/package-resources.
 extraResources:

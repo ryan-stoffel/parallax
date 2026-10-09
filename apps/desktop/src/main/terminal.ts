@@ -1,11 +1,10 @@
 import type { WebContents } from "electron";
-import type { IPty } from "node-pty";
 import { execFile } from "node:child_process";
 import os from "node:os";
 
-import { NPM_INSTALLS, npmInstallLine, type TerminalMessage } from "../preload/bridge";
-import type { CliKind } from "../protocol/generated/protocol";
-import { SSH_CONTROL_PATH } from "./connection";
+import { NPM_INSTALLS, npmInstallLine } from "../preload/bridge";
+import type { CliKind, TerminalKey, TerminalOpenParams } from "../protocol/generated/protocol";
+import { SSH_CONTROL_PATH, type Connection } from "./connection";
 import { perWindow } from "./windows";
 
 /** Each vendor CLI's own sign-in (0004), as its `--help` gives it. */
@@ -18,16 +17,8 @@ const loginArgs: Record<CliKind, string[]> = {
 export const isCliKind = (value: unknown): value is CliKind =>
   typeof value === "string" && Object.hasOwn(loginArgs, value);
 
-/**
- * A program and its arguments, or on Windows its command line, already quoted, the folder it
- * starts in (the home folder if absent), and variables it gets besides the app's.
- */
-export type Command = {
-  file: string;
-  args: string[] | string;
-  cwd?: string;
-  env?: Record<string, string>;
-};
+/** A program, its arguments, and variables it gets besides those of what runs it. */
+export type Command = { file: string; args: string[]; env?: Record<string, string> };
 
 /** An SSH host's destination, checked when it was saved (`checkHost`), and the ssh program. */
 export type SshTarget = { destination: string; ssh: string };
@@ -35,7 +26,8 @@ export type SshTarget = { destination: string; ssh: string };
 /**
  * The command that signs in to an agent of `kind` at `path`, where the host's plxd found it, with
  * `args` (a CLI's own by default) and `env`: run here, or with `ssh -t` on an SSH host.
- * - Windows can't run an npm `.cmd` shim by itself, so one goes through `cmd.exe`.
+ * - Windows can't run an npm `.cmd` shim by itself, so one goes through `cmd.exe`, which keeps
+ *   the quotes around a path with spaces when they're the only ones.
  * - Over ssh, Codex's browser callback to localhost:1455 is forwarded back here, where the
  *   browser is, and fails at once if that port is taken. Cursor is told not to open a browser on
  *   the host. Claude Code needs neither: with no browser, it asks for a code to paste.
@@ -50,13 +42,12 @@ export function loginCommand(
   args: string[] = loginArgs[kind as CliKind] ?? [],
   env: Record<string, string> = {},
 ): Command {
-  const line = args.map(quote).join(" ");
   if (!ssh) {
     const vars = Object.keys(env).length ? { env } : {};
     if (platform === "win32" && /\.(cmd|bat)$/i.test(path)) {
       return {
         file: process.env["ComSpec"] ?? "cmd.exe",
-        args: `/d /s /c ""${path}" ${line}"`,
+        args: ["/d", "/c", path, ...args],
         ...vars,
       };
     }
@@ -74,7 +65,7 @@ export function loginCommand(
         .map(([name, value]) => `${name}=${quote(value)} `)
         .join("")
     : "";
-  return overSsh(ssh, `${prefix}${quote(path)} ${line}`, forward, platform);
+  return overSsh(ssh, `${prefix}${quote(path)} ${args.map(quote).join(" ")}`, forward);
 }
 
 /**
@@ -156,7 +147,6 @@ export function installCommand(
         ? `powershell -NoLogo -NoProfile -Command "${script.windows}"`
         : `exec "$SHELL" -lc ${quote(script.posix)}`,
       [],
-      platform,
     );
   if (windows)
     return { file: "powershell.exe", args: ["-NoLogo", "-NoProfile", "-Command", script.windows!] };
@@ -169,14 +159,13 @@ export function installCommand(
  */
 export function runInstall(command: Command | string): Promise<string | undefined> {
   if (typeof command === "string") return Promise.resolve(command);
-  const args = Array.isArray(command.args) ? command.args : [command.args];
   const options = {
-    cwd: command.cwd ?? os.homedir(),
+    cwd: os.homedir(),
     env: { ...terminalEnv(), ...command.env },
     maxBuffer: 16 * 1024 * 1024,
   };
   return new Promise((resolve) =>
-    execFile(command.file, args, options, (error, stdout, stderr) => {
+    execFile(command.file, command.args, options, (error, stdout, stderr) => {
       if (!error) return resolve(undefined);
       const lines = (`${stderr}`.trim() || `${stdout}`.trim() || error.message).split("\n");
       // npm's error lines say why, such as `npm error code E404`; it ends with generic advice.
@@ -185,27 +174,6 @@ export function runInstall(command: Command | string): Promise<string | undefine
       resolve(`The install failed: ${why}`);
     }),
   );
-}
-
-/**
- * The command that opens the user's login shell in `path`, a thread's folder: here, `$SHELL -l`
- * (PowerShell on Windows), or on an SSH host, the host's login shell after a `cd` to it over
- * `ssh -t`. A Windows host's path (`C:\...`) runs under its default shell, cmd.exe.
- */
-export function shellCommand(
-  path: string,
-  ssh?: SshTarget,
-  platform = process.platform,
-  env = process.env,
-): Command {
-  if (!ssh) {
-    if (platform === "win32") return { file: "powershell.exe", args: ["-NoLogo"], cwd: path };
-    return { file: env["SHELL"] || "/bin/sh", args: ["-l"], cwd: path };
-  }
-  const remote = /^[a-z]:\\/i.test(path)
-    ? `cd /d ${quote(path)} && cmd`
-    : `cd ${quote(path)} && exec "$SHELL" -l`;
-  return overSsh(ssh, remote, [], platform);
 }
 
 /**
@@ -248,20 +216,18 @@ export function hostLogin(
 
 /**
  * `remote` run on an SSH host with `ssh -t`. `-e none` turns off ssh's escape character, so
- * what's typed only ever reaches the host. node-pty looks a bare name up on PATH without PATHEXT
- * on Windows, so `ssh` becomes `ssh.exe` there.
+ * what's typed only ever reaches the host.
  */
-function overSsh(ssh: SshTarget, remote: string, options: string[], platform: string): Command {
-  const bare = platform === "win32" && !/\.\w+$/.test(ssh.ssh);
+function overSsh(ssh: SshTarget, remote: string, options: string[]): Command {
   return {
-    file: bare ? `${ssh.ssh}.exe` : ssh.ssh,
+    file: ssh.ssh,
     args: ["-t", "-e", "none", "-o", "ControlPath=none", ...options, "--", ssh.destination, remote],
   };
 }
 
 /**
- * What a terminal's program runs with: `env`, plus a UTF-8 `LANG` if `env` sets no locale, as when
- * launchd starts the app. In the C locale, zsh counts each byte of a character like a prompt's
+ * What an install runs with: `env`, plus a UTF-8 `LANG` if `env` sets no locale, as when launchd
+ * starts the app. In the C locale, zsh counts each byte of a character like a prompt's
  * U+E0A0 as a column, so its line editor draws in the wrong place.
  */
 export function terminalEnv(env = process.env): NodeJS.ProcessEnv {
@@ -276,95 +242,71 @@ export function quote(path: string): string {
   return `'${path.replaceAll("'", `'\\''`)}'`;
 }
 
-/**
- * A terminal. `pty` is unset while its command is still being found; `size` is the last one asked
- * for, which it starts at.
- */
-type Session = { pty?: IPty; size: { cols: number; rows: number } };
+/** A window's terminal: the connection to the plxd that runs it, and plxd's name for it. */
+type Opened = { connection: Connection; key: TerminalKey; command: boolean; detach: () => void };
 /** Each window's terminals, by the id it gave each. */
-const sessions = new Map<WebContents, Map<string, Session>>();
+const opened = new Map<WebContents, Map<string, Opened>>();
 
 /**
- * Starts `sender`'s terminal `id` once `command` says what to run, replacing any terminal it had
- * with that id. Resolves to an error for people, or undefined once it runs. What it prints goes
- * only to `sender`, as `parallax:terminal` messages with `id`, and is never logged or kept.
+ * Opens `sender`'s terminal `id` as plxd's terminal `params` (PLX-637), in place of any it had with
+ * that id: attached to it if it runs, else started. Resolves to an error for people, or undefined
+ * once it runs. What it prints goes only to `sender`, as `parallax:terminal` messages with `id`,
+ * and is never logged or kept here.
  */
 export async function openTerminal(
   sender: WebContents,
   id: string,
-  command: () => Promise<Command | string>,
-  cols: number,
-  rows: number,
+  connection: Connection,
+  params: TerminalOpenParams,
 ): Promise<string | undefined> {
-  closeTerminal(sender, id);
-  const own = windowSessions(sender);
-  const session: Session = { size: { cols, rows } };
-  own.set(id, session);
-  const current = () => own.get(id) === session;
-  const send = (message: TerminalMessage) => {
-    if (current() && !sender.isDestroyed()) sender.send("parallax:terminal", id, message);
+  const own = windowTerminals(sender);
+  own.get(id)?.detach();
+  const { threadId, terminalId } = params;
+  const detach = connection.attachTerminal(params, (message) => {
+    if (!sender.isDestroyed()) sender.send("parallax:terminal", id, message);
+  });
+  const entry: Opened = {
+    connection,
+    key: { threadId, terminalId },
+    command: !!params.command,
+    detach,
   };
-
-  try {
-    // Loaded here, so a broken native module only breaks the terminal, not the app.
-    const [found, { spawn }] = await Promise.all([command(), import("node-pty")]);
-    if (!current()) return undefined; // Closed or replaced meanwhile.
-    if (typeof found === "string") {
-      own.delete(id);
-      return found;
-    }
-    const pty = spawn(found.file, found.args, {
-      name: "xterm-256color",
-      ...session.size,
-      cwd: found.cwd ?? os.homedir(),
-      env: { ...terminalEnv(), ...found.env },
-    });
-    session.pty = pty;
-    pty.onData((data) => send({ type: "data", data }));
-    pty.onExit(({ exitCode }) => {
-      send({ type: "exit", exitCode });
-      if (current()) own.delete(id);
-    });
-    return undefined;
-  } catch (error) {
-    if (current()) own.delete(id);
-    return `The terminal couldn't start: ${(error as Error).message}`;
+  own.set(id, entry);
+  const error = await connection.openTerminal(params);
+  if (error && own.get(id) === entry) {
+    own.delete(id);
+    detach();
   }
+  return error;
 }
 
 export function writeTerminal(sender: WebContents, id: string, data: string): void {
-  sessions.get(sender)?.get(id)?.pty?.write(data);
+  const entry = opened.get(sender)?.get(id);
+  entry?.connection.writeTerminal(entry.key, data);
 }
 
 export function resizeTerminal(sender: WebContents, id: string, cols: number, rows: number): void {
-  try {
-    const session = sessions.get(sender)?.get(id);
-    if (!session) return;
-    session.size = { cols, rows };
-    session.pty?.resize(cols, rows);
-  } catch {
-    // It exited, and its exit is on the way.
-  }
+  const entry = opened.get(sender)?.get(id);
+  entry?.connection.resizeTerminal(entry.key, cols, rows);
 }
 
 /** Ends `sender`'s terminal `id`, killing what runs in it. */
 export function closeTerminal(sender: WebContents, id: string): void {
-  const own = sessions.get(sender);
-  const pty = own?.get(id)?.pty;
-  own?.delete(id);
-  try {
-    pty?.kill();
-  } catch {
-    // It already exited.
-  }
+  const entry = opened.get(sender)?.get(id);
+  opened.get(sender)?.delete(id);
+  entry?.detach();
+  entry?.connection.closeTerminal(entry.key);
 }
 
-export function closeAllTerminals(): void {
-  for (const [sender, own] of sessions) for (const id of own.keys()) closeTerminal(sender, id);
-}
-
-/** A window's terminals, closed when it reloads or closes, since nothing there can use them. */
-const windowSessions = (sender: WebContents) =>
-  perWindow(sessions, sender, (own) => {
-    for (const id of own.keys()) closeTerminal(sender, id);
+/**
+ * A window's terminals. When it reloads or closes, a shell keeps running in plxd for the next
+ * window to open, and a command, such as a sign-in, ends.
+ */
+const windowTerminals = (sender: WebContents) =>
+  perWindow(opened, sender, (own) => {
+    for (const [id, entry] of own) {
+      if (entry.command) closeTerminal(sender, id);
+      else entry.detach();
+    }
+    own.clear();
   });

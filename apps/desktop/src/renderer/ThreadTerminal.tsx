@@ -131,7 +131,11 @@ export function TerminalPool({
   );
 }
 
-/** A shell in `folder`, restarted from a bar under it once it exits or fails to start. */
+/**
+ * A shell in `folder`, which plxd keeps running for the next window, and after a restart, until
+ * it's closed or its thread is archived or deleted. Restarted from a bar under it once it exits
+ * or fails to start.
+ */
 function PooledTerminal({
   id,
   label,
@@ -155,9 +159,10 @@ function PooledTerminal({
           <TerminalView
             key={start}
             id={id}
-            target={{ hostId: folder.hostId, path: folder.path }}
+            target={{ hostId: folder.hostId, path: folder.path, threadId: folder.threadId }}
             label={label}
             background="--background"
+            keep
             onStart={() => started(id)}
             onEnd={(error) => {
               running.delete(id);
@@ -231,8 +236,33 @@ export function TerminalDrawer({
   }
   const current = folder && tabs[folder.key];
 
+  // A folder's other tabs that plxd still runs, as after a restart, come back once it's shown.
+  const listed = useRef(new Set<string>());
+  useEffect(() => {
+    if (!current || listed.current.has(current.folder.key)) return;
+    const { folder } = current;
+    listed.current.add(folder.key);
+    const prefix = `${drawerTerminalId(folder)}:`;
+    void window.parallax
+      .request(folder.hostId, "terminal/list", { threadId: folder.threadId ?? "" })
+      .then((answer) => {
+        const more = ("result" in answer ? answer.result.terminals : [])
+          .filter((t) => t.terminalId.startsWith(prefix))
+          .map((t) => Number(t.terminalId.slice(prefix.length)))
+          .filter((n) => Number.isInteger(n) && n > 1);
+        if (!more.length) return;
+        setTabs((all) => {
+          const t = all[folder.key];
+          if (!t) return all;
+          const open = [...new Set([...t.open, ...more])].sort((a, b) => a - b);
+          return { ...all, [folder.key]: { ...t, open, next: Math.max(t.next, ...open) + 1 } };
+        });
+      });
+  }, [current]);
+
   // Closing the shown tab shows the one after it, or before it; closing the last closes the drawer.
   const closeTab = (t: Tabs, n: number) => {
+    window.parallax.closeTerminal(tabTerminalId(t.folder, n));
     const i = t.open.indexOf(n);
     const rest = t.open.toSpliced(i, 1);
     if (!rest.length) {

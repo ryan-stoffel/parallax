@@ -2,7 +2,7 @@ import { app, ipcMain, powerMonitor, type WebContents } from "electron";
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -38,7 +38,6 @@ import { installPlxd } from "./installPlxd";
 import { checkHost, readSettings, writeSettings, type Settings } from "./settings";
 import { sshSuggestions } from "./sshConfig";
 import {
-  closeAllTerminals,
   closeTerminal,
   installCommand,
   isCliKind,
@@ -48,7 +47,6 @@ import {
   openTerminal,
   resizeTerminal,
   runInstall,
-  shellCommand,
   writeTerminal,
   type Command,
   type SshTarget,
@@ -210,46 +208,51 @@ export function startHosts(): void {
   ipcMain.handle("parallax:connectionState", (_event, hostId: unknown) => connection(hostId).state);
   ipcMain.handle("parallax:retry", (_event, hostId: unknown) => connection(hostId).retry());
 
-  // A window's terminals (terminal.ts), by an id it picks: an SSH host's login, a CLI's or a
-  // provider instance's sign-in, an agent's install by its provider kind, or a shell in a thread's
-  // folder. The renderer names the host and the CLI, instance, kind, or folder; only main decides
-  // what runs.
+  // A window's terminals (terminal.ts), by an id it picks, which plxd runs (PLX-637): a shell in a
+  // thread's folder on its host, or on this computer, an SSH host's login, a CLI's or a provider
+  // instance's sign-in, or an agent's install by its provider kind. The renderer names the host
+  // and the folder, CLI, instance, or kind; only main decides what runs.
   ipcMain.handle(
     "parallax:openTerminal",
-    (event, id: unknown, target: unknown, cols: unknown, rows: unknown) => {
+    async (event, id: unknown, target: unknown, cols: unknown, rows: unknown) => {
       if (!isTerminalId(id) || !isObject(target) || !isSize(cols) || !isSize(rows)) {
         return "invalid terminal";
       }
-      const { hostId, cli, provider, install, path, connect, login } = target;
+      const { hostId, cli, provider, install, path, threadId, connect, login } = target;
       if (typeof hostId !== "string") return "invalid terminal";
-      if (login === true) {
-        const command = hostLogin(hostId, settings.hosts, settings.ssh);
-        if (!command) return "invalid terminal";
-        return openTerminal(event.sender, id, () => Promise.resolve(command), cols, rows);
+      if (typeof path === "string") {
+        if (threadId !== undefined && typeof threadId !== "string") return "invalid terminal";
+        const host = connections.get(hostId);
+        if (!host) return "That host isn't in Parallax anymore.";
+        const params = { threadId: threadId ?? "", terminalId: id, cwd: path, cols, rows };
+        return openTerminal(event.sender, id, host, params);
       }
-      if (isObject(connect)) {
+      let command: Command | string | undefined;
+      if (login === true) command = hostLogin(hostId, settings.hosts, settings.ssh);
+      else if (isObject(connect)) {
         const { device, user } = connect;
         if (
-          hostId !== "local" ||
-          !isDeviceAddress(device) ||
-          (user !== undefined && !isSshUser(user))
+          hostId === "local" &&
+          isDeviceAddress(device) &&
+          (user === undefined || isSshUser(user))
         )
-          return "invalid terminal";
-        const command = addCommand(device, user, channel(), connectProgram());
-        return openTerminal(event.sender, id, () => Promise.resolve(command), cols, rows);
-      }
-      if (isInstallable(install)) {
-        return openTerminal(event.sender, id, () => installOn(hostId, install), cols, rows);
-      }
-      if (isCliKind(cli)) {
-        return openTerminal(event.sender, id, () => signInCommand(hostId, cli), cols, rows);
-      }
-      if (typeof provider === "string") {
-        const command = () => providerSignInCommand(hostId, provider);
-        return openTerminal(event.sender, id, command, cols, rows);
-      }
-      if (typeof path !== "string") return "invalid terminal";
-      return openTerminal(event.sender, id, () => folderCommand(hostId, path), cols, rows);
+          command = addCommand(device, user, channel(), connectProgram());
+      } else if (isInstallable(install)) command = await installOn(hostId, install);
+      else if (isCliKind(cli)) command = await signInCommand(hostId, cli);
+      else if (typeof provider === "string")
+        command = await providerSignInCommand(hostId, provider);
+      if (!command) return "invalid terminal";
+      if (typeof command === "string") return command;
+      // It runs on this computer, over ssh for another host, under an id of its own, so an
+      // earlier one's last output and exit never reach it.
+      const { file: program, args, env = {} } = command;
+      return openTerminal(event.sender, id, connection("local"), {
+        threadId: "",
+        terminalId: `${id}:${randomUUID()}`,
+        command: { program, args, env },
+        cols,
+        rows,
+      });
     },
   );
   // An npm install of an agent on a host, with no terminal (PLX-558).
@@ -278,7 +281,6 @@ export function startHosts(): void {
   });
   app.on("will-quit", () => {
     for (const each of connections.values()) each.dispose();
-    closeAllTerminals();
   });
 }
 
@@ -381,23 +383,6 @@ function readComputerName(): string {
 /** A saved SSH host by id. Undefined for this computer, `local`, and for an unknown id. */
 export const savedHost = (id: string): SshHost | undefined =>
   settings.hosts.find((h) => h.id === id);
-
-/**
- * What opens a shell in `folder` on a host: here, if it's still a folder; on an SSH host, over
- * ssh as the host's connection is. Resolves to an error for people.
- */
-async function folderCommand(hostId: string, folder: string): Promise<Command | string> {
-  // "~" is the host's home folder: here, the user's; over ssh, the login shell's start folder.
-  const ssh = sshOf(hostId);
-  if (folder === "~" && !ssh) folder = homedir();
-  if (!connections.has(hostId)) return "That host isn't in Parallax anymore.";
-  // A Windows path, which can't hold a `"`, goes to the host in double quotes.
-  if (ssh && /^[a-z]:\\/i.test(folder) && folder.includes('"')) return `${folder} isn't a folder.`;
-  if (ssh) return shellCommand(folder, ssh);
-  const isFolder =
-    path.isAbsolute(folder) && (await stat(folder).catch(() => undefined))?.isDirectory();
-  return isFolder ? shellCommand(folder) : `${folder} isn't a folder on this computer anymore.`;
-}
 
 /** The local `plxd` binary (plxd.ts). */
 const localPlxd = () =>

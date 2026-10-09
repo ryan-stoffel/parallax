@@ -30,12 +30,23 @@ vi.mock("./Terminal", () => ({
 }));
 
 const terminalInput = vi.fn();
+const closeTerminal = vi.fn();
+// The terminal ids plxd runs, as `terminal/list` answers.
+let running: string[] = [];
 beforeEach(() => {
   localStorage.clear();
   terminalInput.mockClear();
+  closeTerminal.mockClear();
+  running = [];
   window.parallax = {
     platform: "darwin",
     terminalInput,
+    closeTerminal,
+    request: () =>
+      Promise.resolve({
+        result: { terminals: running.map((terminalId) => ({ threadId: "t3", terminalId })) },
+        logId: "log",
+      }),
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
@@ -267,10 +278,12 @@ test("each drawer tab runs its own shell, and closing the last closes the drawer
   runInDrawer(folder, "pwd");
   expect(terminalInput).toHaveBeenLastCalledWith("drawer:local/t2", "pwd\r");
 
-  // Closing the shown tab shows the next; closing the last hides the drawer.
+  // Closing the shown tab ends its shell and shows the next; closing the last hides the drawer.
   act(() => button("Close Terminal 1").click());
+  expect(closeTerminal).toHaveBeenLastCalledWith("drawer:local/t2");
   expect(tabs()).toEqual(["[Terminal 2]"]);
   act(() => button("Close Terminal 2").click());
+  expect(closeTerminal).toHaveBeenLastCalledWith("drawer:local/t2:2");
   expect(drawer().hidden).toBe(true);
   act(() => button("Show").click());
   expect(tabs()).toEqual(["[Terminal 1]"]);
@@ -281,6 +294,17 @@ test("each drawer tab runs its own shell, and closing the last closes the drawer
   expect(drawer().hidden).toBe(true);
   act(() => button("Show").click());
   expect(tabs()).toEqual(["Terminal 1", "[Terminal 2]"]);
+});
+
+test("a folder's tabs that plxd still runs come back, as after a restart", async () => {
+  const folder: ThreadFolder = { key: "local/t3", hostId: "local", path: "/wt/t3", threadId: "t3" };
+  running = ["drawer:local/t3", "drawer:local/t3:3", "panel:local/t3"];
+  render(<TerminalDrawer open folder={folder} deleted={() => false} onClose={() => {}} />);
+  await act(async () => {});
+  const tabs = [...document.querySelectorAll('[aria-label="Terminals"] li > button:first-child')];
+  expect(tabs.map((b) => b.textContent)).toEqual(["Terminal 1", "Terminal 3"]);
+  act(() => button("New terminal").click());
+  expect(button("Terminal 4")).toBeDefined();
 });
 
 test("a preview opens the side panel's Browser view at its URL", () => {

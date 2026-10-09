@@ -55,6 +55,7 @@ mod pull_request;
 mod question;
 mod queue;
 mod review;
+mod terminal;
 mod thread;
 pub mod typescript;
 mod usage;
@@ -156,6 +157,11 @@ pub use review::{
     AgentFileDeleteParams, AgentFileEditResult, AgentFileParams, AgentFileRenameParams,
     AgentFileResult, AgentFileSide, AgentFileStatus, AgentFilesParams, AgentFilesResult,
     AgentMerge, AgentMergeKind, AgentOpenPrParams, AgentOpenPrResult, AgentRequestChangesParams,
+};
+pub use terminal::{
+    TerminalCommand, TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult,
+    TerminalOpenParams, TerminalOutputParams, TerminalResizeParams, TerminalResult,
+    TerminalWriteParams,
 };
 pub use thread::{
     ForkedFrom, MAX_THREAD_TITLE_BYTES, Repo, RepoAddParams, RepoAddResult, RepoId, RepoRef,

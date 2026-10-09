@@ -12,6 +12,10 @@ import {
   type LogId,
   type SubscriptionId,
   type ParallaxRequests,
+  type TerminalExitParams,
+  type TerminalKey,
+  type TerminalOpenParams,
+  type TerminalOutputParams,
 } from "../protocol/generated/protocol";
 import type {
   ConnectionError,
@@ -20,6 +24,7 @@ import type {
   RpcError,
   SubscribeParams,
   SubscriptionMessage,
+  TerminalMessage,
 } from "../preload/bridge";
 import { RpcClient } from "./rpc";
 
@@ -168,6 +173,12 @@ type Subscription = {
   id?: SubscriptionId;
 };
 
+/** A terminal plxd runs, as this connection opened it, and who shows it. */
+type Terminal = { params: TerminalOpenParams; listeners: Set<(message: TerminalMessage) => void> };
+
+/** A terminal's key in `Connection.terminals`. */
+const terminalKey = ({ threadId, terminalId }: TerminalKey) => `${threadId}\n${terminalId}`;
+
 /**
  * One host's connection: a `plxd attach` child speaking JSON-RPC over its stdio, kept alive
  * with heartbeats and reconnected with backoff when it ends. The main process makes one per
@@ -183,6 +194,7 @@ export class Connection {
   private heartbeatTimer?: NodeJS.Timeout;
   private livenessTimer?: NodeJS.Timeout;
   private readonly subscriptions = new Set<Subscription>();
+  private readonly terminals = new Map<string, Terminal>();
   private readonly reconnectWaiters = new Set<() => void>();
 
   constructor(private readonly options: ConnectionOptions) {}
@@ -269,6 +281,50 @@ export class Connection {
         );
       }
     };
+  }
+
+  /**
+   * Passes what plxd's terminal `params` prints, and its exit, to `listener` (PLX-637). After a
+   * reconnect, a shell is opened again, which replays what it printed; a command ends with the
+   * connection, as plxd ends it. Returns the function that stops listening.
+   */
+  attachTerminal(params: TerminalOpenParams, listener: (message: TerminalMessage) => void) {
+    const key = terminalKey(params);
+    let terminal = this.terminals.get(key);
+    if (!terminal) this.terminals.set(key, (terminal = { params, listeners: new Set() }));
+    terminal.params = params;
+    terminal.listeners.add(listener);
+    return () => {
+      terminal.listeners.delete(listener);
+      if (!terminal.listeners.size && this.terminals.get(key) === terminal) {
+        this.terminals.delete(key);
+      }
+    };
+  }
+
+  /** Opens plxd's terminal `params`. Resolves to an error for people, or undefined once it runs. */
+  async openTerminal(params: TerminalOpenParams): Promise<string | undefined> {
+    if (this.state.status === "connected" && !this.state.capabilities["terminals"]) {
+      return "This host's plxd is too old to run terminals. Update Parallax there.";
+    }
+    const answer = await this.request("terminal/open", params);
+    return "error" in answer ? answer.error.message : undefined;
+  }
+
+  /** Types `data` into a terminal, in order with what was typed before. */
+  writeTerminal(key: TerminalKey, data: string): void {
+    this.client?.notify("terminal/write", { ...key, data });
+  }
+
+  resizeTerminal(key: TerminalKey, cols: number, rows: number): void {
+    const terminal = this.terminals.get(terminalKey(key));
+    if (terminal) terminal.params = { ...terminal.params, cols, rows };
+    this.client?.notify("terminal/resize", { ...key, cols, rows });
+  }
+
+  /** Ends a terminal, killing what runs in it. Its exit reaches its listeners. */
+  closeTerminal(key: TerminalKey): void {
+    this.client?.send("terminal/close", key, REQUEST_TIMEOUT_MS, ignore);
   }
 
   /**
@@ -380,6 +436,11 @@ export class Connection {
     });
     for (const done of this.reconnectWaiters) done();
     for (const subscription of this.subscriptions) this.sendSubscribe(subscription);
+    for (const [key, terminal] of this.terminals) {
+      client.send("terminal/open", terminal.params, REQUEST_TIMEOUT_MS, (response) => {
+        if ("error" in response) this.endTerminal(key, -1);
+      });
+    }
   }
 
   private sendSubscribe(subscription: Subscription): void {
@@ -407,6 +468,18 @@ export class Connection {
   }
 
   private onNotification(method: string, params: unknown): void {
+    if (method === "terminal/output") {
+      const { data, replay, ...key } = params as TerminalOutputParams;
+      const message: TerminalMessage = { type: replay ? "replay" : "data", data };
+      for (const listener of this.terminals.get(terminalKey(key))?.listeners ?? []) {
+        listener(message);
+      }
+      return;
+    }
+    if (method === "terminal/exit") {
+      const { exitCode, ...key } = params as TerminalExitParams;
+      return this.endTerminal(terminalKey(key), exitCode);
+    }
     if (method === "events/resync") {
       // plxd already dropped it; its owner reloads its snapshot and subscribes again.
       const { subscription: id } = params as EventsResyncParams;
@@ -424,6 +497,12 @@ export class Connection {
       subscription.listener({ type: "event", event });
       return;
     }
+  }
+
+  private endTerminal(key: string, exitCode: number): void {
+    const terminal = this.terminals.get(key);
+    this.terminals.delete(key);
+    for (const listener of terminal?.listeners ?? []) listener({ type: "exit", exitCode });
   }
 
   private endSubscription(subscription: Subscription, message: SubscriptionMessage): void {
@@ -460,6 +539,10 @@ export class Connection {
     this.livenessTimer = undefined;
     client?.close("the connection to plxd ended");
     for (const subscription of this.subscriptions) subscription.id = undefined;
+    // plxd ends a command with the connection that opened it.
+    for (const [key, terminal] of this.terminals) {
+      if (terminal.params.command) this.endTerminal(key, -1);
+    }
     child?.kill();
   }
 

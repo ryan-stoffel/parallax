@@ -59,7 +59,9 @@ use crate::{
     QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
     QueueReorderParams, QueueResult, QueueSteerParams, RepoAddParams, RepoAddResult,
     RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
-    RepoUpdateResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    RepoUpdateResult, TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult,
+    TerminalOpenParams, TerminalOutputParams, TerminalResizeParams, TerminalResult,
+    TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
     ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult, ThreadSearchParams,
     ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
     ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
@@ -427,6 +429,16 @@ method_table! {
         /// folder with npm, and answers at once (0053). `providers/list` reports Cursor
         /// `installing` until it's done, then installed, or why it failed in its `note`.
         CursorInstall = "cursor/install": CursorInstallParams => CursorInstallResult;
+        /// `terminal/open`: starts a terminal, or attaches to the running one with its thread and
+        /// id, resized, and streams what it prints to this connection as `terminal/output`,
+        /// starting with its kept output, then `terminal/exit` (PLX-637). Gated on the
+        /// `terminals` capability, like every `terminal/*` method.
+        TerminalOpen = "terminal/open": TerminalOpenParams => TerminalResult;
+        /// `terminal/close`: ends a terminal, killing what runs in it. Closing one that isn't
+        /// running changes nothing.
+        TerminalClose = "terminal/close": TerminalKey => TerminalResult;
+        /// `terminal/list`: the running terminals, or one thread's.
+        TerminalList = "terminal/list": TerminalListParams => TerminalListResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -437,6 +449,15 @@ method_table! {
         /// `events/resync`: plxd ended a subscription that fell behind, and the connection
         /// stays open. plxd sends it only to a client that declared `resyncNotice` (PLX-455).
         EventsResync = "events/resync": EventsResyncParams;
+        /// `terminal/write`: input for a terminal, in the order sent. The client sends it.
+        TerminalWrite = "terminal/write": TerminalWriteParams;
+        /// `terminal/resize`: a terminal's new size. The client sends it.
+        TerminalResize = "terminal/resize": TerminalResizeParams;
+        /// `terminal/output`: what a terminal printed. plxd sends it to each connection that
+        /// opened the terminal.
+        TerminalOutput = "terminal/output": TerminalOutputParams;
+        /// `terminal/exit`: a terminal's program exited, and the terminal closed.
+        TerminalExit = "terminal/exit": TerminalExitParams;
     }
 }
 
@@ -566,9 +587,16 @@ mod tests {
                 "cursor/signInCancel",
                 "cursor/signOut",
                 "cursor/install",
+                "terminal/open",
+                "terminal/close",
+                "terminal/list",
                 "$/cancelRequest",
                 "events/event",
                 "events/resync",
+                "terminal/write",
+                "terminal/resize",
+                "terminal/output",
+                "terminal/exit",
             ]
         );
         assert_eq!(names.0.iter().collect::<BTreeSet<_>>().len(), names.0.len());

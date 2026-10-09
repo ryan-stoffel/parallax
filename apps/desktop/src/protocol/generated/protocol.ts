@@ -507,6 +507,22 @@ export type ParallaxRequests = {
 	 * `installing` until it's done, then installed, or why it failed in its `note`.
 	 */
 	"cursor/install": { params: CursorInstallParams, result: CursorInstallResult },
+	/**
+	 * `terminal/open`: starts a terminal, or attaches to the running one with its thread and
+	 * id, resized, and streams what it prints to this connection as `terminal/output`,
+	 * starting with its kept output, then `terminal/exit` (PLX-637). Gated on the
+	 * `terminals` capability, like every `terminal/*` method.
+	 */
+	"terminal/open": { params: TerminalOpenParams, result: TerminalResult },
+	/**
+	 * `terminal/close`: ends a terminal, killing what runs in it. Closing one that isn't
+	 * running changes nothing.
+	 */
+	"terminal/close": { params: TerminalKey, result: TerminalResult },
+	/**
+	 * `terminal/list`: the running terminals, or one thread's.
+	 */
+	"terminal/list": { params: TerminalListParams, result: TerminalListResult },
 };
 
 /** Every request method, in `ParallaxRequests`' order. */
@@ -608,6 +624,9 @@ export const REQUEST_METHODS = [
 	"cursor/signInCancel",
 	"cursor/signOut",
 	"cursor/install",
+	"terminal/open",
+	"terminal/close",
+	"terminal/list",
 ] as const;
 
 /** Notifications, which get no response, by method. */
@@ -626,6 +645,23 @@ export type ParallaxNotifications = {
 	 * stays open. plxd sends it only to a client that declared `resyncNotice` (PLX-455).
 	 */
 	"events/resync": EventsResyncParams,
+	/**
+	 * `terminal/write`: input for a terminal, in the order sent. The client sends it.
+	 */
+	"terminal/write": TerminalWriteParams,
+	/**
+	 * `terminal/resize`: a terminal's new size. The client sends it.
+	 */
+	"terminal/resize": TerminalResizeParams,
+	/**
+	 * `terminal/output`: what a terminal printed. plxd sends it to each connection that
+	 * opened the terminal.
+	 */
+	"terminal/output": TerminalOutputParams,
+	/**
+	 * `terminal/exit`: a terminal's program exited, and the terminal closed.
+	 */
+	"terminal/exit": TerminalExitParams,
 };
 
 /**
@@ -5817,6 +5853,95 @@ export type CursorInstallParams = Record<symbol, never>;
 export type CursorInstallResult = Record<symbol, never>;
 
 /**
+ * Params of `terminal/open`. A terminal is named by its thread and its own id; `threadId` is
+ * empty for one that belongs to no thread, such as a repository checkout's.
+ */
+export type TerminalOpenParams = {
+	/**
+	 * The thread it belongs to, whose archive or delete closes it.
+	 */
+	threadId: string,
+	/**
+	 * The client's name for it, unique within the thread.
+	 */
+	terminalId: string,
+	/**
+	 * The absolute folder a new terminal starts in. Absent, or `~`, is the home folder.
+	 */
+	cwd?: string,
+	/**
+	 * What a new terminal runs instead of the login shell. It ends when the connection that
+	 * opened it closes, where a shell outlives it.
+	 */
+	command?: TerminalCommand,
+	/**
+	 * Its size in character cells.
+	 */
+	cols: number,
+	/**
+	 * Its height in character cells.
+	 */
+	rows: number,
+};
+
+/**
+ * A program a terminal runs, found on `PATH` unless it's a path.
+ */
+export type TerminalCommand = {
+	/**
+	 * The program.
+	 */
+	program: string,
+	/**
+	 * Its arguments.
+	 */
+	args?: Array<string>,
+	/**
+	 * Variables it gets besides plxd's own.
+	 */
+	env?: { [key in string]: string },
+};
+
+/**
+ * Result of `terminal/open` and `terminal/close`.
+ */
+export type TerminalResult = Record<symbol, never>;
+
+/**
+ * A terminal's name: its thread and its own id.
+ */
+export type TerminalKey = {
+	/**
+	 * Its thread, or empty.
+	 */
+	threadId: string,
+	/**
+	 * Its id within the thread.
+	 */
+	terminalId: string,
+};
+
+/**
+ * Params of `terminal/list`.
+ */
+export type TerminalListParams = {
+	/**
+	 * Only this thread's terminals. Absent lists every one.
+	 */
+	threadId?: string,
+};
+
+/**
+ * Result of `terminal/list`: the terminals that are running.
+ */
+export type TerminalListResult = {
+	/**
+	 * Each running terminal.
+	 */
+	terminals: Array<TerminalKey>,
+};
+
+/**
  * Params of `$/cancelRequest`.
  */
 export type CancelRequestParams = {
@@ -5869,6 +5994,86 @@ export type EventsResyncParams = {
 	 * The subscription plxd ended.
 	 */
 	subscription: SubscriptionId,
+};
+
+/**
+ * Params of `terminal/write`: what's typed into a terminal.
+ */
+export type TerminalWriteParams = {
+	/**
+	 * Its thread, or empty.
+	 */
+	threadId: string,
+	/**
+	 * Its id within the thread.
+	 */
+	terminalId: string,
+	/**
+	 * The input.
+	 */
+	data: string,
+};
+
+/**
+ * Params of `terminal/resize`.
+ */
+export type TerminalResizeParams = {
+	/**
+	 * Its thread, or empty.
+	 */
+	threadId: string,
+	/**
+	 * Its id within the thread.
+	 */
+	terminalId: string,
+	/**
+	 * Its width in character cells.
+	 */
+	cols: number,
+	/**
+	 * Its height in character cells.
+	 */
+	rows: number,
+};
+
+/**
+ * Params of `terminal/output`: what a terminal printed.
+ */
+export type TerminalOutputParams = {
+	/**
+	 * Its thread, or empty.
+	 */
+	threadId: string,
+	/**
+	 * Its id within the thread.
+	 */
+	terminalId: string,
+	/**
+	 * The output.
+	 */
+	data: string,
+	/**
+	 * The start of its kept output, which replaces whatever the client shows.
+	 */
+	replay?: boolean,
+};
+
+/**
+ * Params of `terminal/exit`: what a terminal ran exited, and the terminal closed.
+ */
+export type TerminalExitParams = {
+	/**
+	 * Its thread, or empty.
+	 */
+	threadId: string,
+	/**
+	 * Its id within the thread.
+	 */
+	terminalId: string,
+	/**
+	 * The program's exit code, or -1 if it has none.
+	 */
+	exitCode: number,
 };
 
 /**
