@@ -55,8 +55,11 @@ struct Terminal {
     input: std_mpsc::Sender<String>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// The connections it streams to, so opening it again on one replaces that stream.
-    streams: Mutex<Vec<(mpsc::Sender<Reply>, AbortHandle)>>,
+    streams: Mutex<Vec<Stream>>,
 }
+
+/// A connection a terminal streams to, and the task that streams it.
+type Stream = (mpsc::Sender<Reply>, AbortHandle);
 
 /// What the reader, `terminal/open`, and the exit share.
 struct Shared {
@@ -74,8 +77,9 @@ enum Output {
 
 impl Terminals {
     /// `terminal/open`: attaches `replies`' connection to the running terminal with this key,
-    /// resized, else starts one. Its output goes to `replies` until the terminal exits or
-    /// `stopped` (the connection closing), which also ends a command terminal.
+    /// resized, else starts one. Its output goes to `replies` until the terminal exits, the
+    /// connection detaches it, or `stopped` (the connection closing), which also ends a command
+    /// terminal.
     pub(crate) fn open(
         &self,
         params: TerminalOpenParams,
@@ -109,16 +113,25 @@ impl Terminals {
             history,
             exit,
         ));
-        let mut streams = lock(&terminal.streams);
-        streams.retain(|(other, task)| {
-            let replaced = other.same_channel(replies);
-            if replaced {
-                task.abort();
-            }
-            !replaced && !other.is_closed()
-        });
-        streams.push((replies.clone(), stream.abort_handle()));
+        terminal
+            .detach(replies)
+            .push((replies.clone(), stream.abort_handle()));
         Ok(())
+    }
+
+    /// `terminal/detach`: stops the terminal's stream to `replies`' connection. It keeps running
+    /// and keeping its output, for the next `terminal/open`. A command keeps its stream, which
+    /// ends it with its connection, so a close racing its open can't leave it running.
+    pub(crate) fn detach(
+        &self,
+        thread_id: String,
+        terminal_id: String,
+        replies: &mpsc::Sender<Reply>,
+    ) {
+        let terminal = lock(&self.open).get(&(thread_id, terminal_id)).cloned();
+        if let Some(terminal) = terminal.filter(|terminal| !terminal.command) {
+            drop(terminal.detach(replies));
+        }
     }
 
     /// `terminal/write`: queues `data` for the terminal's program, if it runs.
@@ -187,11 +200,29 @@ impl Terminal {
         }
     }
 
-    /// A receiver for what it prints from now on, what it printed until now, and its exit code if
-    /// it already exited.
+    /// Stops its stream to `replies`' connection, and forgets those of closed connections.
+    /// Returns its streams, still locked.
+    fn detach(&self, replies: &mpsc::Sender<Reply>) -> MutexGuard<'_, Vec<Stream>> {
+        let mut streams = lock(&self.streams);
+        streams.retain(|(other, task)| {
+            let detached = other.same_channel(replies);
+            if detached {
+                task.abort();
+            }
+            !detached && !other.is_closed()
+        });
+        streams
+    }
+
+    /// A receiver for what it prints from now on, what it printed until now without its queries,
+    /// and its exit code if it already exited. The queries are stripped after the lock, which the
+    /// reader needs, is let go.
     fn subscribe(&self) -> (broadcast::Receiver<Output>, String, Option<i32>) {
-        let mut shared = lock(&self.shared);
-        (self.output.subscribe(), shared.history.text(), shared.exit)
+        let (output, history, exit) = {
+            let mut shared = lock(&self.shared);
+            (self.output.subscribe(), shared.history.text(), shared.exit)
+        };
+        (output, without_queries(&history), exit)
     }
 }
 
@@ -519,16 +550,16 @@ impl History {
         }
     }
 
-    /// The kept output without its queries and their replies, so a client that replays it doesn't
-    /// answer them again and type the answers into the shell.
+    /// The kept output.
     fn text(&mut self) -> String {
-        without_queries(&String::from_utf8_lossy(self.text.make_contiguous()))
+        String::from_utf8_lossy(self.text.make_contiguous()).into_owned()
     }
 }
 
-/// `text` less the escape sequences that ask a terminal something or answer it, as T3 Code strips
-/// them from its history: cursor position and status reports, device attributes, mode, version,
-/// and keyboard queries, color queries, and setting and capability queries.
+/// `text` less the escape sequences that ask a terminal something or answer it, so a client that
+/// replays a history doesn't answer them again and type the answers into the shell. T3 Code strips
+/// the same from its history: cursor position and status reports, device attributes, mode,
+/// version, and keyboard queries, color queries, and setting and capability queries.
 fn without_queries(text: &str) -> String {
     let mut kept = String::with_capacity(text.len());
     let mut rest = text;

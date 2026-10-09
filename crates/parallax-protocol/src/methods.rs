@@ -434,7 +434,7 @@ method_table! {
         CursorInstall = "cursor/install": CursorInstallParams => CursorInstallResult;
         /// `terminal/open`: starts a terminal, or attaches to the running one with its thread and
         /// id, resized, and streams what it prints to this connection as `terminal/output`,
-        /// starting with its kept output, then `terminal/exit` (PLX-637). Gated on the
+        /// starting with its kept output, then `terminal/exit`, until `terminal/detach` (PLX-637). Gated on the
         /// `terminals` capability, like every `terminal/*` method.
         TerminalOpen = "terminal/open": TerminalOpenParams => TerminalResult;
         /// `terminal/close`: ends a terminal, killing what runs in it. Closing one that isn't
@@ -456,8 +456,12 @@ method_table! {
         TerminalWrite = "terminal/write": TerminalWriteParams;
         /// `terminal/resize`: a terminal's new size. The client sends it.
         TerminalResize = "terminal/resize": TerminalResizeParams;
+        /// `terminal/detach`: stops a terminal's stream to this connection, and leaves it running
+        /// with its kept output (PLX-664). The client sends it once nothing shows the terminal. A
+        /// terminal running a `command` ignores it, and still ends with its connection.
+        TerminalDetach = "terminal/detach": TerminalKey;
         /// `terminal/output`: what a terminal printed. plxd sends it to each connection that
-        /// opened the terminal.
+        /// opened the terminal and hasn't detached it.
         TerminalOutput = "terminal/output": TerminalOutputParams;
         /// `terminal/exit`: a terminal's program exited, and the terminal closed.
         TerminalExit = "terminal/exit": TerminalExitParams;
@@ -599,6 +603,7 @@ mod tests {
                 "events/resync",
                 "terminal/write",
                 "terminal/resize",
+                "terminal/detach",
                 "terminal/output",
                 "terminal/exit",
             ]

@@ -232,6 +232,35 @@ test("routes a terminal's output, and opens a shell again after a reconnect (PLX
   expect(shown.at(-1)).toEqual({ type: "exit", exitCode: 0 });
 });
 
+test("detaches a terminal once nothing shows it, and doesn't open it again (PLX-664)", async () => {
+  const connection = connect();
+  child().reply({
+    id: child().request("initialize").id,
+    result: { ...initialized, capabilities: { terminals: {} } },
+  });
+  const key = { threadId: "t1", terminalId: "drawer:local/t1" };
+  const shell = { ...key, cwd: "/wt", cols: 80, rows: 24 };
+  const first = connection.attachTerminal(shell, () => {});
+  const second = connection.attachTerminal(shell, () => {});
+  first();
+  expect(child().request("terminal/detach")).toBeUndefined();
+  second();
+  expect(child().request("terminal/detach").params).toEqual(key);
+
+  // Its last listener left while it opened: the open's answer detaches it.
+  connection.attachTerminal(shell, () => {})();
+  child().sent.length = 0;
+  const opened = connection.openTerminal(shell);
+  child().reply({ id: child().request("terminal/open").id, result: {} });
+  await opened;
+  expect(child().request("terminal/detach").params).toEqual(key);
+
+  child().emit("close", 0, null);
+  vi.advanceTimersByTime(1000);
+  child().handshake();
+  expect(child().request("terminal/open")).toBeUndefined();
+});
+
 test("resyncRequired ends the subscription with a resync", () => {
   const connection = connect();
   child().handshake();

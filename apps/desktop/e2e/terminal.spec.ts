@@ -39,6 +39,17 @@ test("a thread's terminal keeps running, with its output, after the app quits an
   await expect(terminal).toContainText("before quit: still here");
   await shot("1-before-quit");
 
+  // A reload stops the shell's stream to the app (PLX-664). It keeps running, replays on the next
+  // open, and streams again.
+  await page.reload();
+  await page.getByText("Tidy up the README").first().click();
+  await page.getByRole("button", { name: "Show terminal" }).click();
+  terminal = page.getByRole("group", { name: "Terminal", exact: true });
+  await expect(terminal).toContainText("before quit: still here");
+  await terminal.click();
+  await page.keyboard.type('echo "$kept-reloaded"\r');
+  await expect(terminal).toContainText("still here-reloaded");
+
   await launched.app.close();
   launched = await launch("agent.json", undefined, undefined, launched.dataDir);
   ({ page } = launched);
