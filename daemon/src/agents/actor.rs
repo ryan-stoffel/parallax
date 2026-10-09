@@ -94,6 +94,7 @@ use crate::worktree::github_pr_urls;
 
 mod git;
 mod placed;
+mod revert;
 mod waiting;
 pub(crate) use git::GitAction;
 
@@ -203,6 +204,13 @@ pub(super) enum Command {
         body: String,
         reply: oneshot::Sender<Result<String, ErrorObject>>,
     },
+    /// `checkpoint.rollback` (0062).
+    Revert {
+        command_id: Uuid,
+        ordinal: u32,
+        restore_files: bool,
+        reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
+    },
     /// `agent/gitStatus`, `agent/commit`, or `agent/push` (PLX-298).
     Git {
         action: GitAction,
@@ -260,6 +268,7 @@ impl Command {
             | Self::ResumeNow { reply }
             | Self::AutoResume { reply, .. }
             | Self::Place { reply, .. }
+            | Self::Revert { reply, .. }
             | Self::Join { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
@@ -500,6 +509,7 @@ pub(super) struct Actor {
     queued: VecDeque<Queued>,
     /// Whether a Stop holds `queued` until `queue.resume` (0059). Stored with each queued row.
     queue_held: bool,
+    pending_revert: Option<revert::Pending>,
     /// Turns the live CLI has been given and hasn't finished: while there are any, a queued
     /// message waits.
     in_flight: usize,
@@ -559,6 +569,7 @@ impl Actor {
             last_message,
             queued: VecDeque::new(),
             queue_held: false,
+            pending_revert: None,
             in_flight: 0,
             open_work: HashSet::new(),
             handed: Vec::new(),
@@ -737,6 +748,18 @@ impl Actor {
     pub async fn run(mut self, mut commands: mpsc::Receiver<Command>, shutdown: CancellationToken) {
         self.load_wakes().await;
         self.load_queue().await;
+        if let Err(error) = self.load_revert().await {
+            warn!(run = %self.id, %error.message, "could not load pending rollback");
+            return;
+        }
+        if self
+            .pending_revert
+            .as_ref()
+            .is_some_and(|p| p.provider_done)
+            && let Err(error) = self.finish_pending_revert().await
+        {
+            warn!(run = %self.id, %error.message, "rollback local completion remains pending");
+        }
         let mut active = Instant::now();
         loop {
             self.deliver().await;
@@ -746,7 +769,7 @@ impl Actor {
             let wake_at = self
                 .wakes
                 .due()
-                .filter(|_| !self.busy() && self.effect.is_none());
+                .filter(|_| !self.busy() && self.effect.is_none() && self.pending_revert.is_none());
             let expire_at = self.approvals.due();
             let resume_at = self.resume_due();
             let release_at = self.release_due();
@@ -831,6 +854,24 @@ impl Actor {
 
     #[expect(clippy::too_many_lines, reason = "one arm per command")]
     async fn on_command(&mut self, command: Command) {
+        if self.pending_revert.is_some()
+            && !matches!(
+                &command,
+                Command::Revert { .. }
+                    | Command::Detach
+                    | Command::Git {
+                        action: GitAction::Status,
+                        ..
+                    }
+                    | Command::Queue {
+                        op: QueueOp::List,
+                        ..
+                    }
+            )
+        {
+            command.refuse(ErrorObject::parallax(ErrorKind::RevertRefused, "A checkpoint revert is pending. Retry that revert before starting a turn or changing this thread."));
+            return;
+        }
         match command {
             Command::Send {
                 message,
@@ -893,6 +934,14 @@ impl Actor {
                 let _ = reply.send(self.snapshot());
             }
             Command::Git { action, reply } => self.on_git(action, reply).await,
+            Command::Revert {
+                command_id,
+                ordinal,
+                restore_files,
+                reply,
+            } => {
+                let _ = reply.send(self.revert(command_id, ordinal, restore_files).await);
+            }
             Command::Delete {
                 wait,
                 command_id,
@@ -1313,6 +1362,7 @@ impl Actor {
         {
             warn!(run = %self.id, %error, "could not remove an accepted run's worktree");
         }
+        crate::checkpoints::forget(&self.daemon, repo, self.id.into()).await;
 
         let accept = RunAccept {
             id: id.into(),
@@ -1479,6 +1529,12 @@ impl Actor {
     fn effect_busy(&self, kind: ErrorKind) -> Result<(), ErrorObject> {
         if self.effect.is_none() {
             return Ok(());
+        }
+        if kind == ErrorKind::RevertRefused {
+            return Err(ErrorObject::parallax(
+                kind,
+                "Wait for the current Push or Open PR to finish before reverting.",
+            ));
         }
         Err(ErrorObject::parallax(
             kind,
@@ -1874,6 +1930,7 @@ impl Actor {
         &mut self,
         queued: &Queued,
     ) -> Result<Result<Vec<(Uuid, u64)>, SendError>, ErrorObject> {
+        self.checkpoint_before_turn().await;
         if self.is_coordinator() && !self.busy() {
             let project = super::integration(&self.daemon, self.project).await?;
             if let Some(project) = project {
@@ -1954,7 +2011,7 @@ impl Actor {
     /// in progress, the next message that doesn't change what it runs with, as its next turn.
     /// One that does releases an idle session, so the next process can take it.
     async fn deliver(&mut self) {
-        if self.stopping || self.queue_held {
+        if self.stopping || self.queue_held || self.pending_revert.is_some() {
             return;
         }
         if self.live.is_none() && self.effect.is_none() {
@@ -2799,6 +2856,7 @@ impl Actor {
         resume: Option<Resume>,
         paths: Option<(PathBuf, PathBuf)>,
     ) -> bool {
+        self.checkpoint_before_turn().await;
         let Prepared {
             resolved,
             accounts,
@@ -3341,6 +3399,16 @@ impl Actor {
         }
         // A child that ended may free a slot or an account for one waiting (0046).
         self.daemon.agents.placement.notify_one();
+    }
+
+    /// Before a new turn: the checkpoint it starts from is captured, once the last turn's is
+    /// (0062). A coordinator has none.
+    async fn checkpoint_before_turn(&mut self) {
+        if self.is_coordinator() {
+            return;
+        }
+        self.flush().await;
+        crate::checkpoints::before_turn(&self.daemon, self.id).await;
     }
 
     /// Records the run's new commit and its diff in its state. The caller's save reports it in

@@ -133,10 +133,11 @@ pub use memory::{
     MemoryReadResult, MemoryScope, MemoryScopeKind, MemoryWriteParams, MemoryWriteResult,
 };
 pub use orchestration::{
-    DispatchMode, DispatchResult, MAX_REPLAY_BYTES, MAX_REPLAY_EVENTS, OrchestrationCommand,
-    ShellSnapshot, SubscribeShellParams, SubscribeShellResult, SubscribeThreadParams,
-    SubscribeThreadResult, ThreadHistoryParams, ThreadHistoryResult, ThreadRun, ThreadRunStatus,
-    ThreadSnapshot,
+    CheckpointFile, CheckpointStatus, DispatchMode, DispatchResult, FullThreadDiffParams,
+    MAX_REPLAY_BYTES, MAX_REPLAY_EVENTS, OrchestrationCommand, ShellSnapshot, SubscribeShellParams,
+    SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult, ThreadHistoryParams,
+    ThreadHistoryResult, ThreadRun, ThreadRunStatus, ThreadRunsParams, ThreadRunsResult,
+    ThreadSnapshot, TurnCheckpoint, TurnDiffParams, TurnDiffResult,
 };
 pub use preview::{
     PreviewCallParams, PreviewCallResult, PreviewFrameParams, PreviewFrameResult, PreviewInput,

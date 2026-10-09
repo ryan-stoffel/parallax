@@ -11,7 +11,8 @@
 //! `crate::terminals`; PLX-641 `remote`: `remote/*` in `remote.rs`; 0063 `schedules` and `prWatch`:
 //! `schedule/*` in `crate::schedules` and `pr/watch`, `pr/unwatch`, and `pr/watches` in
 //! `crate::pr_watch`; PLX-650 `setupScripts`: `repo/scripts` and `repo/saveScripts` in
-//! `crate::setup_scripts`), and `host.rs` advertises the
+//! `crate::setup_scripts`; 0062 `checkpoints`: `orchestration/threadRuns`, `getTurnDiff`, and
+//! `getFullThreadDiff` in `crate::checkpoints`), and `host.rs` advertises the
 //! capability in `initialize`.
 
 mod accounts;
@@ -318,6 +319,9 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         },
         OrchestrationDispatch => |p| orchestration::dispatch(context, p),
         OrchestrationThreadHistory => |p| orchestration::thread_history(context, p),
+        OrchestrationThreadRuns => |p| crate::checkpoints::thread_runs(daemon, p),
+        OrchestrationGetTurnDiff => |p| crate::checkpoints::turn_diff(daemon, p),
+        OrchestrationGetFullThreadDiff => |p| crate::checkpoints::full_thread_diff(daemon, p),
         TerminalList => |p| ready(Ok(TerminalListResult {
             terminals: daemon.terminals.list(p.thread_id.as_deref()),
         })),

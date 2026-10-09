@@ -43,14 +43,14 @@ use crate::{
     CursorInstallParams, CursorInstallResult, CursorSignInCancelParams, CursorSignInCancelResult,
     CursorSignInParams, CursorSignInResult, CursorSignOutParams, CursorSignOutResult,
     DispatchResult, EventsEventParams, EventsResyncParams, EventsSubscribeParams,
-    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus,
-    GithubInstallParams, GithubSignIn, GithubSignInCancelParams, GithubSignInCancelResult,
-    GithubSignInParams, GithubStatus, GithubStatusParams, HostHealthParams, HostHealthResult,
-    HostSettings, HostSettingsGetParams, HostSettingsSetParams, HostVersionParams,
-    HostVersionResult, InboxListParams, InboxListResult, InboxSeenParams, InboxSeenResult,
-    InitializeParams, InitializeResult, LandApproveParams, LandQueueParams, LandResult,
-    LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult, MemoryListParams, MemoryListResult,
-    MemoryProposeParams, MemoryProposeResult, MemoryReadParams, MemoryReadResult,
+    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, FullThreadDiffParams,
+    GitStatus, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
+    GithubSignInCancelResult, GithubSignInParams, GithubStatus, GithubStatusParams,
+    HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
+    HostVersionParams, HostVersionResult, InboxListParams, InboxListResult, InboxSeenParams,
+    InboxSeenResult, InitializeParams, InitializeResult, LandApproveParams, LandQueueParams,
+    LandResult, LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult, MemoryListParams,
+    MemoryListResult, MemoryProposeParams, MemoryProposeResult, MemoryReadParams, MemoryReadResult,
     MemoryWriteParams, MemoryWriteResult, OrchestrationCommand, PrActParams, PrDiffResult,
     PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult, PreviewCallParams,
     PreviewCallResult, PreviewFrameParams, PreviewFrameResult, PreviewInputParams,
@@ -71,9 +71,10 @@ use crate::{
     TerminalOutputParams, TerminalResizeParams, TerminalResult, TerminalWriteParams,
     ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
     ThreadForkParams, ThreadHistoryParams, ThreadHistoryResult, ThreadListParams, ThreadListResult,
-    ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
-    ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams,
-    UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
+    ThreadRunsParams, ThreadRunsResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams,
+    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams, TurnDiffResult,
+    UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult, UsageHistoryParams,
+    UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -505,6 +506,16 @@ method_table! {
         OrchestrationSubscribeThread = "orchestration/subscribeThread": SubscribeThreadParams => SubscribeThreadResult;
         /// `orchestration/threadHistory`: a page of a thread's events before a `seq`.
         OrchestrationThreadHistory = "orchestration/threadHistory": ThreadHistoryParams => ThreadHistoryResult;
+        /// `orchestration/threadRuns`: a thread's runs, each with its checkpoint (0062). Gated on
+        /// the `checkpoints` capability, like `orchestration/getTurnDiff`,
+        /// `orchestration/getFullThreadDiff`, and `checkpoint.rollback`.
+        OrchestrationThreadRuns = "orchestration/threadRuns": ThreadRunsParams => ThreadRunsResult;
+        /// `orchestration/getTurnDiff`: the diff between two of a thread's checkpoints. Fails
+        /// with `invalidParams` for a range whose `to` checkpoint isn't `ready`, or `from` after
+        /// `to`.
+        OrchestrationGetTurnDiff = "orchestration/getTurnDiff": TurnDiffParams => TurnDiffResult;
+        /// `orchestration/getFullThreadDiff`: the diff from a thread's start to a checkpoint.
+        OrchestrationGetFullThreadDiff = "orchestration/getFullThreadDiff": FullThreadDiffParams => TurnDiffResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -681,6 +692,9 @@ mod tests {
                 "orchestration/subscribeShell",
                 "orchestration/subscribeThread",
                 "orchestration/threadHistory",
+                "orchestration/threadRuns",
+                "orchestration/getTurnDiff",
+                "orchestration/getFullThreadDiff",
                 "$/cancelRequest",
                 "events/event",
                 "events/resync",

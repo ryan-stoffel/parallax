@@ -6,7 +6,7 @@ use crate::id::uuid_v7_id;
 use crate::{
     AgentFailureKind, AgentMerge, AgentOutcome, AgentOutputItem, AgentRun, AgentRunState,
     ContextFile, InboxItem, Project, ProjectId, QueuedMessage, Repo, RepoId, RunId, ScriptStatus,
-    ScriptTrigger, Thread,
+    ScriptTrigger, Thread, TurnCheckpoint, TurnId,
 };
 
 uuid_v7_id! {
@@ -297,6 +297,33 @@ pub enum ParallaxEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         error: Option<String>,
+    },
+    /// plxd captured a turn's checkpoint (0062), or couldn't. Project-scoped, and in the run's
+    /// own events.
+    #[serde(rename = "thread.checkpoint")]
+    ThreadCheckpoint {
+        /// The thread's run id.
+        run_id: RunId,
+        /// The turn: its run in `orchestration/threadRuns`.
+        turn_id: TurnId,
+        /// That run's ordinal, which names the checkpoint.
+        ordinal: u32,
+        /// The checkpoint.
+        checkpoint: TurnCheckpoint,
+    },
+    /// `checkpoint.rollback` reverted a thread to the checkpoint after run `ordinal` (0062).
+    /// Project-scoped, and in the run's own events.
+    #[serde(rename = "thread.reverted")]
+    ThreadReverted {
+        /// The thread's run id.
+        run_id: RunId,
+        /// The run it went back to, or 0 for the thread's start.
+        ordinal: u32,
+        /// The runs it undid, oldest first, now `rolledBack`.
+        turns: Vec<TurnId>,
+        /// Whether the files went back too.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        restore_files: bool,
     },
     /// A kind this version does not know yet.
     #[serde(other)]

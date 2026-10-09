@@ -993,6 +993,9 @@ impl Backend for ClaudeBackend {
         Capabilities {
             worker_sandbox: cfg!(any(target_os = "macos", target_os = "linux")),
             fork: true,
+            // ponytail: refused until PLX-646's Agent SDK adapter implements `rewind` with
+            // `resumeSessionAt`.
+            rewind: false,
         }
     }
 

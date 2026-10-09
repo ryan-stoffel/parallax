@@ -623,6 +623,22 @@ export type ParallaxRequests = {
 	 * `orchestration/threadHistory`: a page of a thread's events before a `seq`.
 	 */
 	"orchestration/threadHistory": { params: ThreadHistoryParams, result: ThreadHistoryResult },
+	/**
+	 * `orchestration/threadRuns`: a thread's runs, each with its checkpoint (0062). Gated on
+	 * the `checkpoints` capability, like `orchestration/getTurnDiff`,
+	 * `orchestration/getFullThreadDiff`, and `checkpoint.rollback`.
+	 */
+	"orchestration/threadRuns": { params: ThreadRunsParams, result: ThreadRunsResult },
+	/**
+	 * `orchestration/getTurnDiff`: the diff between two of a thread's checkpoints. Fails
+	 * with `invalidParams` for a range whose `to` checkpoint isn't `ready`, or `from` after
+	 * `to`.
+	 */
+	"orchestration/getTurnDiff": { params: TurnDiffParams, result: TurnDiffResult },
+	/**
+	 * `orchestration/getFullThreadDiff`: the diff from a thread's start to a checkpoint.
+	 */
+	"orchestration/getFullThreadDiff": { params: FullThreadDiffParams, result: TurnDiffResult },
 };
 
 /** Every request method, in `ParallaxRequests`' order. */
@@ -748,6 +764,9 @@ export const REQUEST_METHODS = [
 	"orchestration/subscribeShell",
 	"orchestration/subscribeThread",
 	"orchestration/threadHistory",
+	"orchestration/threadRuns",
+	"orchestration/getTurnDiff",
+	"orchestration/getFullThreadDiff",
 ] as const;
 
 /** Notifications, which get no response, by method. */
@@ -2886,7 +2905,39 @@ export type ParallaxEvent = { "kind": "project.created",
 	/**
 	 * Why it couldn't start.
 	 */
-	error?: string,
+	error?: string, } | { "kind": "thread.checkpoint",
+	/**
+	 * The thread's run id.
+	 */
+	runId: RunId,
+	/**
+	 * The turn: its run in `orchestration/threadRuns`.
+	 */
+	turnId: TurnId,
+	/**
+	 * That run's ordinal, which names the checkpoint.
+	 */
+	ordinal: number,
+	/**
+	 * The checkpoint.
+	 */
+	checkpoint: TurnCheckpoint, } | { "kind": "thread.reverted",
+	/**
+	 * The thread's run id.
+	 */
+	runId: RunId,
+	/**
+	 * The run it went back to, or 0 for the thread's start.
+	 */
+	ordinal: number,
+	/**
+	 * The runs it undid, oldest first, now `rolledBack`.
+	 */
+	turns: Array<TurnId>,
+	/**
+	 * Whether the files went back too.
+	 */
+	restoreFiles?: boolean,
 };
 
 /**
@@ -3524,6 +3575,46 @@ export type ForkedFrom = {
 	 */
 	turn: TurnId,
 };
+
+/**
+ * A turn's checkpoint (0062): a git ref, `refs/parallax/checkpoints/<thread>/<ordinal>`, holding
+ * the thread's folder as the turn left it.
+ */
+export type TurnCheckpoint = {
+	/**
+	 * Whether its ref holds the folder.
+	 */
+	status: CheckpointStatus,
+	/**
+	 * The files the turn changed, with their line counts, by path. Empty unless `ready`.
+	 */
+	files?: Array<CheckpointFile>,
+};
+
+/**
+ * One file a turn changed, as `git diff --numstat` counts it. A binary file has no lines.
+ */
+export type CheckpointFile = {
+	/**
+	 * Its path, from the folder's root.
+	 */
+	path: string,
+	/**
+	 * Lines added.
+	 */
+	additions: number,
+	/**
+	 * Lines removed.
+	 */
+	deletions: number,
+};
+
+/**
+ * Where a checkpoint is (T3 Code's).
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type CheckpointStatus = "ready" | "missing" | "error" | "stale";
 
 /**
  * Params of `agent/image`: one image sent with a run's messages, by an id from its
@@ -6977,7 +7068,19 @@ export type OrchestrationCommand = { "type": "message.dispatch",
 	/**
 	 * Whether its queue waits for `queue.resume`.
 	 */
-	holdQueue?: boolean,
+	holdQueue?: boolean, } | { "type": "checkpoint.rollback",
+	/**
+	 * The thread.
+	 */
+	threadId: RunId,
+	/**
+	 * The run whose checkpoint it reverts to, or 0 for the thread's start.
+	 */
+	ordinal: number,
+	/**
+	 * Whether the files go back too, or only the conversation.
+	 */
+	restoreFiles?: boolean,
 };
 
 /**
@@ -7182,6 +7285,10 @@ export type ThreadRun = {
 	 * When it ended.
 	 */
 	completedAt?: string,
+	/**
+	 * The worktree as its turn left it (0062), once plxd has captured it.
+	 */
+	checkpoint?: TurnCheckpoint,
 };
 
 /**
@@ -7189,7 +7296,7 @@ export type ThreadRun = {
  *
  * A newer plxd may send a status this version does not know; treat it as unknown.
  */
-export type ThreadRunStatus = "queued" | "starting" | "running" | "waiting" | "completed" | "interrupted" | "failed" | "cancelled";
+export type ThreadRunStatus = "queued" | "starting" | "running" | "waiting" | "completed" | "interrupted" | "failed" | "cancelled" | "rolledBack";
 
 /**
  * Params of `orchestration/threadHistory`.
@@ -7217,6 +7324,80 @@ export type ThreadHistoryResult = {
 	 * Whether older ones remain.
 	 */
 	more: boolean,
+};
+
+/**
+ * Params of `orchestration/threadRuns`.
+ */
+export type ThreadRunsParams = {
+	/**
+	 * The thread: its run id.
+	 */
+	threadId: RunId,
+};
+
+/**
+ * Result of `orchestration/threadRuns`.
+ */
+export type ThreadRunsResult = {
+	/**
+	 * Its runs, as [`ThreadSnapshot::runs`].
+	 */
+	runs: Array<ThreadRun>,
+};
+
+/**
+ * Params of `orchestration/getTurnDiff` (T3 Code's `getTurnDiff`, 0062).
+ */
+export type TurnDiffParams = {
+	/**
+	 * The thread: its run id.
+	 */
+	threadId: RunId,
+	/**
+	 * The run whose checkpoint the diff starts from, or 0 for the thread's start.
+	 */
+	from: number,
+	/**
+	 * The run whose checkpoint it ends at. Its checkpoint must be `ready`.
+	 */
+	to: number,
+	/**
+	 * Whether whitespace changes count. Ignored unless false, as T3 Code does.
+	 */
+	ignoreWhitespace?: boolean,
+};
+
+/**
+ * Result of `orchestration/getTurnDiff` and `orchestration/getFullThreadDiff`.
+ */
+export type TurnDiffResult = {
+	/**
+	 * The unified diff, `git diff --patch`'s.
+	 */
+	diff: string,
+	/**
+	 * True when the diff was cut at 10 MB.
+	 */
+	truncated?: boolean,
+};
+
+/**
+ * Params of `orchestration/getFullThreadDiff`: the diff from the thread's start.
+ */
+export type FullThreadDiffParams = {
+	/**
+	 * The thread: its run id.
+	 */
+	threadId: RunId,
+	/**
+	 * The run whose checkpoint it ends at.
+	 */
+	to: number,
+	/**
+	 * As [`TurnDiffParams::ignore_whitespace`].
+	 */
+	ignoreWhitespace?: boolean,
 };
 
 /**
@@ -7374,7 +7555,7 @@ export type ErrorData = {
  * A newer plxd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "revertRefused";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it

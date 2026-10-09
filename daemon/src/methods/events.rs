@@ -37,7 +37,9 @@ impl Cursor {
     pub(crate) fn keeps(&self, entry: &Entry) -> bool {
         (self.all || entry.project == self.project)
             && self.run.is_none_or(|run| entry.run == Some(run))
-            && !(self.shell && entry.kind() == AGENT_OUTPUT && !entry.approvals)
+            && !(self.shell
+                && (entry.kind() == "thread.checkpoint"
+                    || (entry.kind() == AGENT_OUTPUT && !entry.approvals)))
     }
 
     /// `entry`'s event as this subscription delivers it, when that differs from its JSON: a
@@ -287,12 +289,22 @@ mod tests {
             items,
             compacted: None,
         };
+        let checkpoint = ParallaxEvent::ThreadCheckpoint {
+            run_id: open,
+            turn_id: parallax_protocol::TurnId::generate(),
+            ordinal: 1,
+            checkpoint: parallax_protocol::TurnCheckpoint {
+                status: parallax_protocol::CheckpointStatus::Ready,
+                files: Vec::new(),
+            },
+        };
         for event in [
             output(open, vec![text.clone()]),                      // 1
             output(sibling, vec![text.clone(), approval.clone()]), // 2
             ParallaxEvent::AgentWakeupsPaused { run_id: sibling }, // 3
             output(open, vec![approval.clone()]),                  // 4
             output(sibling, vec![text.clone()]),                   // 5
+            checkpoint.clone(),                                    // 6
         ] {
             log.append_in_memory(Timestamp::now(), Some(project), event);
         }
@@ -325,7 +337,8 @@ mod tests {
             of(run_id),
             [
                 (1, output(open, vec![text.clone()])),
-                (4, output(open, vec![approval.clone()]))
+                (4, output(open, vec![approval.clone()])),
+                (6, checkpoint)
             ]
         );
         assert_eq!(
@@ -337,7 +350,7 @@ mod tests {
             ]
         );
         // Both cursors moved past the last event, which neither delivered.
-        assert!(cursors.cursors.iter().all(|cursor| cursor.after == 5));
+        assert!(cursors.cursors.iter().all(|cursor| cursor.after == 6));
     }
 
     #[test]

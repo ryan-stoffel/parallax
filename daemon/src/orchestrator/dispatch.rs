@@ -64,7 +64,7 @@ pub(crate) async fn dispatch(
             }),
         };
     }
-    let acted = act(daemon, thread, command).await;
+    let acted = act(daemon, thread, id, command).await;
     let (error, cascade) = match &acted {
         Ok(cascade) => (None, cascade.clone()),
         // A store failure or a stopping plxd may pass: no receipt, so a retry runs it again.
@@ -89,8 +89,15 @@ pub(crate) async fn dispatch(
     daemon
         .store
         .run(&CancellationToken::new(), move |db| {
-            db.insert_orchestration_receipt(&receipt)
-                .map_err(|error| store_error(&error))?;
+            // Rollback publishes its receipt atomically with the restored run and graph.
+            if db
+                .orchestration_receipt(&receipt.command_id)
+                .map_err(|error| store_error(&error))?
+                .is_none()
+            {
+                db.insert_orchestration_receipt(&receipt)
+                    .map_err(|error| store_error(&error))?;
+            }
             if let Some(effect) = &effect {
                 db.enqueue_effect(effect)
                     .map_err(|error| store_error(&error))?;
@@ -126,6 +133,9 @@ fn describe(command: &OrchestrationCommand) -> Result<(RunId, &'static str), Err
         }
         OrchestrationCommand::QueueResume { thread_id } => (*thread_id, "queue.resume"),
         OrchestrationCommand::RunInterrupt { thread_id, .. } => (*thread_id, "run.interrupt"),
+        OrchestrationCommand::CheckpointRollback { thread_id, .. } => {
+            (*thread_id, "checkpoint.rollback")
+        }
         OrchestrationCommand::Unknown => {
             return Err(ErrorObject::invalid_params("unknown command type"));
         }
@@ -137,6 +147,7 @@ fn describe(command: &OrchestrationCommand) -> Result<(RunId, &'static str), Err
 async fn act(
     daemon: &Arc<Daemon>,
     thread: RunId,
+    command_id: Uuid,
     command: OrchestrationCommand,
 ) -> Result<Option<Vec<RunId>>, ErrorObject> {
     match command {
@@ -207,6 +218,21 @@ async fn act(
         OrchestrationCommand::QueueResume { .. } => queue(daemon, thread, QueueOp::Resume).await,
         OrchestrationCommand::RunInterrupt { hold_queue, .. } => {
             stop(daemon, thread, hold_queue).await
+        }
+        OrchestrationCommand::CheckpointRollback {
+            ordinal,
+            restore_files,
+            ..
+        } => {
+            let work = agents::revert(
+                Arc::clone(daemon),
+                thread,
+                command_id,
+                ordinal,
+                restore_files,
+            );
+            daemon.agents.detached(work).await?;
+            Ok(None)
         }
         OrchestrationCommand::Unknown => Err(ErrorObject::invalid_params("unknown command type")),
     }

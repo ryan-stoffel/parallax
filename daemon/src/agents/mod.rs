@@ -304,7 +304,18 @@ async fn store<T: Send + 'static>(
     daemon: &Daemon,
     job: impl FnOnce(&mut crate::store::Tx) -> Result<T, ErrorObject> + Send + 'static,
 ) -> Result<T, ErrorObject> {
-    daemon.store.run(&CancellationToken::new(), job).await
+    let (value, effects) = daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            let value = job(db)?;
+            Ok((value, db.effects))
+        })
+        .await?;
+    // A turn that ended enqueued its checkpoint's capture (0062).
+    if effects {
+        daemon.orchestrator.notify();
+    }
+    Ok(value)
 }
 
 pub(crate) fn store_error(error: &StoreError) -> ErrorObject {
@@ -1037,6 +1048,7 @@ async fn fork_created(
 ) -> Result<CreatedRun, ErrorObject> {
     let at = row.created_at;
     let copied = store(daemon, move |db| {
+        db.copying = true;
         for items in fork.transcript {
             db.stage(
                 at,
@@ -1515,6 +1527,23 @@ pub(crate) async fn interrupt(
     ask(daemon, id, |reply| Command::Interrupt { hold_queue, reply }).await
 }
 
+/// `checkpoint.rollback` (0062): through the run's actor, which holds off its turns meanwhile.
+pub(crate) async fn revert(
+    daemon: Arc<Daemon>,
+    id: RunId,
+    command_id: Uuid,
+    ordinal: u32,
+    restore_files: bool,
+) -> Result<AgentRun, ErrorObject> {
+    ask(&daemon, id, |reply| Command::Revert {
+        command_id,
+        ordinal,
+        restore_files,
+        reply,
+    })
+    .await
+}
+
 /// `queue/*` (PLX-370): through the run's actor, which keeps its waiting messages.
 pub(crate) async fn queue(
     daemon: Arc<Daemon>,
@@ -1539,6 +1568,24 @@ pub(crate) async fn queue(
 /// instead ([`wake::catch_up`], PLX-178), which placement's slots (0046) also hold to. Called
 /// once at startup, after [`recover`].
 pub(crate) async fn deliver_queued(daemon: &Arc<Daemon>, cut: Vec<RunId>) {
+    let pending = store(daemon, |db| {
+        db.checkpoint_revert_threads().map_err(|e| store_error(&e))
+    })
+    .await;
+    match pending {
+        Ok(threads) => {
+            for thread in threads {
+                if let Some(id) = Uuid::parse_str(&thread)
+                    .ok()
+                    .and_then(|id| RunId::try_from(id).ok())
+                    && let Err(error) = actor_for(daemon, id).await
+                {
+                    warn!(run = %id, %error.message, "could not resume pending checkpoint revert");
+                }
+            }
+        }
+        Err(error) => warn!(%error.message, "could not list pending checkpoint reverts"),
+    }
     for id in queued_runs(daemon).await {
         if let Err(error) = actor_for(daemon, id).await {
             warn!(run = %id, error = %error.message, "could not send a run's waiting messages");

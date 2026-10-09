@@ -1,0 +1,148 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "orchestration/threadRuns",
+    "params": { "threadId": "01a0d6c2-2a3b-7c4d-8e5f-6a7b8c9d0e03" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "runs": [
+        {
+          "id": "01a0d6c2-2a3b-7c4d-8e5f-6a7b8c9d0e03",
+          "status": "completed",
+          "ordinal": 1,
+          "attempt": 1,
+          "startedAt": "2026-10-09T12:00:00Z",
+          "completedAt": "2026-10-09T12:01:00Z",
+          "checkpoint": {
+            "status": "ready",
+            "files": [
+              { "path": "src/lib.rs", "additions": 12, "deletions": 3 },
+              { "path": "logo.png", "additions": 0, "deletions": 0 }
+            ]
+          }
+        },
+        {
+          "id": "01a0d6c3-2a3b-7c4d-8e5f-6a7b8c9d0e04",
+          "status": "rolledBack",
+          "ordinal": 2,
+          "attempt": 1,
+          "text": "Now rename it",
+          "startedAt": "2026-10-09T12:02:00Z",
+          "completedAt": "2026-10-09T12:05:00Z",
+          "checkpoint": { "status": "stale" }
+        },
+        {
+          "id": "01a0d6c4-2a3b-7c4d-8e5f-6a7b8c9d0e05",
+          "status": "completed",
+          "ordinal": 3,
+          "attempt": 1,
+          "text": "Try again",
+          "startedAt": "2026-10-09T12:06:00Z",
+          "completedAt": "2026-10-09T12:07:00Z",
+          "checkpoint": { "status": "error" }
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "orchestration/getTurnDiff",
+    "params": {
+      "threadId": "01a0d6c2-2a3b-7c4d-8e5f-6a7b8c9d0e03",
+      "from": 0,
+      "to": 1,
+      "ignoreWhitespace": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "diff": "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "orchestration/getFullThreadDiff",
+    "params": { "threadId": "01a0d6c2-2a3b-7c4d-8e5f-6a7b8c9d0e03", "to": 3 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": { "diff": "diff --git a/big.txt b/big.txt\n", "truncated": true }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "orchestration/dispatch",
+    "params": {
+      "type": "checkpoint.rollback",
+      "threadId": "01a0d6c2-2a3b-7c4d-8e5f-6a7b8c9d0e03",
+      "ordinal": 1,
+      "restoreFiles": true
+    }
+  },
+  { "jsonrpc": "2.0", "id": 4, "result": { "seq": 91 } },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "orchestration/dispatch",
+    "params": {
+      "type": "checkpoint.rollback",
+      "threadId": "01a0d6c2-2a3b-7c4d-8e5f-6a7b8c9d0e03",
+      "ordinal": 0
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "error": {
+      "code": -32000,
+      "message": "claude can't rewind a conversation",
+      "data": { "kind": "revertRefused" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d5c0-0a1b-7c2d-8e3f-4a5b6c7d8e01",
+      "seq": 90,
+      "time": "2026-10-09T12:05:01Z",
+      "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+      "event": {
+        "kind": "thread.checkpoint",
+        "runId": "01a0d6c2-2a3b-7c4d-8e5f-6a7b8c9d0e03",
+        "turnId": "01a0d6c3-2a3b-7c4d-8e5f-6a7b8c9d0e04",
+        "ordinal": 2,
+        "checkpoint": {
+          "status": "ready",
+          "files": [{ "path": "src/lib.rs", "additions": 1, "deletions": 1 }]
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d5c0-0a1b-7c2d-8e3f-4a5b6c7d8e01",
+      "seq": 91,
+      "time": "2026-10-09T12:05:30Z",
+      "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+      "event": {
+        "kind": "thread.reverted",
+        "runId": "01a0d6c2-2a3b-7c4d-8e5f-6a7b8c9d0e03",
+        "ordinal": 1,
+        "turns": ["01a0d6c3-2a3b-7c4d-8e5f-6a7b8c9d0e04"],
+        "restoreFiles": true
+      }
+    }
+  }
+]

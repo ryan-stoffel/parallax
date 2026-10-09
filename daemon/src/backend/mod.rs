@@ -37,6 +37,7 @@ use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 
 pub use parallax_protocol::{
@@ -158,6 +159,31 @@ pub trait Backend: Send + Sync {
     ) -> Result<Option<NameProbe>, StartError> {
         Ok(None)
     }
+
+    /// Drops a thread's newest turns from its conversation, so its next turn continues from the
+    /// one before them (0062, T3 Code's `rollbackThread`), and returns the session id that turn
+    /// resumes. Called with no live session on the thread. Only a backend whose
+    /// [`Capabilities::rewind`] is set gets it; the default refuses.
+    fn rewind(
+        &self,
+        _rewind: Rewind,
+    ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>> {
+        Box::pin(std::future::ready(Err(format!(
+            "{} can't rewind a conversation",
+            self.name()
+        ))))
+    }
+}
+
+/// What [`Backend::rewind`] drops.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rewind {
+    /// The thread's session: its last run's [`Event::SessionStarted`] id.
+    pub session_id: String,
+    /// The folder the thread works in.
+    pub cwd: PathBuf,
+    /// How many of its newest turns go. Never 0.
+    pub turns: u32,
 }
 
 /// A started run: its control handle and its events.
@@ -623,6 +649,8 @@ pub struct Capabilities {
     pub worker_sandbox: bool,
     /// [`Resume::fork`] works for a thread's run (0050).
     pub fork: bool,
+    /// [`Backend::rewind`] works (T3 Code's `canRollbackThread`, 0062).
+    pub rewind: bool,
 }
 
 /// Why a run could not start.
