@@ -1,12 +1,12 @@
 # 0065: Parallax is reachable from any device, through LAN pairing, SSH install, a web client, a hosted relay, and a mobile app
 
-- Status: accepted; amends PLAN.md's non-goal on hosted services, extends [0007](0007-editor-plxd-protocol.md) (a WebSocket transport beside `plxd attach`) and [0056](0056-parallax-connect.md), and builds on [0037](0037-accounts.md)'s accounts
+- Status: accepted; amends PLAN.md's non-goal on hosted services, extends [0007](0007-editor-plxd-protocol.md) (a WebSocket transport beside `plxd attach`) and [0056](0056-parallax-connect.md), and records PLX-642's SSH install, and builds on [0037](0037-accounts.md)'s accounts
 - Date: 2026-10-09
 - Issue: PLX-636, for PLX-641, PLX-642, PLX-651, PLX-652, and PLX-653
 
 ## Context
 
-A Parallax app reaches plxd in two ways. `plxd attach` over a child's stdio, locally or as `ssh … plxd attach`, speaks 0007's newline-delimited JSON-RPC (`apps/desktop/src/main/connection.ts`). Parallax Connect has plxd listen on its Tailscale address, port 7340, for the user's own untagged nodes, checked with `tailscale whois`, and the app runs `plxd dial` (0056, `daemon/src/server/tailnet.rs`). The app finds plxd on an SSH host but can't install or update it (PLX-580, `LOCATE_PLXD` exits 127). plxd has no HTTP or WebSocket server, no web client, and no relay. Phones can't reach it at all. PLAN lists "a hosted cloud service, except Parallax accounts" as a non-goal, and accounts (Supabase Auth, 0037) back nothing yet.
+A Parallax app reaches plxd in two ways. `plxd attach` over a child's stdio, locally or as `ssh … plxd attach`, speaks 0007's newline-delimited JSON-RPC (`apps/desktop/src/main/connection.ts`). Parallax Connect has plxd listen on its Tailscale address, port 7340, for the user's own untagged nodes, checked with `tailscale whois`, and the app runs `plxd dial` (0056, `daemon/src/server/tailnet.rs`). Since PLX-642, Settings > Connections installs or updates plxd on an SSH host (`apps/desktop/src/main/installPlxd.ts`). plxd has no HTTP or WebSocket server, no web client, and no relay. Phones can't reach it at all. PLAN lists "a hosted cloud service, except Parallax accounts" as a non-goal, and accounts (Supabase Auth, 0037) back nothing yet.
 
 T3 Code (`docs/internals/remote.md`, `environment-auth.md`, `t3-connect.md`, `docs/user/remote-access.md`):
 
@@ -40,12 +40,12 @@ Ryan chose all of it for Parallax on 2026-10-09 (PLX-635), with one change from 
 
 ### SSH install
 
-- When `LOCATE_PLXD` finds no plxd, or an older one, the SSH host dialog offers Install or Update. The app installs plxd into `~/.parallax/runtime/versions/<version>/` on the host with `curl` or `wget`, checks its SHA-256, and links `~/.parallax/runtime/current`. Then it connects with `plxd attach` as today, so no port is forwarded. Linux x64 and arm64, and macOS arm64, as T3.
-- `release.yml` attaches a standalone `plxd` archive per OS and arch, with its checksum in `SHA256SUMS`.
+- Built by PLX-642, like T3's: a host without plxd, or with an older one, gets Install or Update plxd in Settings > Connections. A POSIX script over ssh picks the release asset with `uname`, downloads it with `curl` or `wget`, checks it against its `.sha256`, and installs it in `~/.parallax-plxd`, which `LOCATE_PLXD` tries first. The app then connects with `plxd attach`, so no port is forwarded. This record keeps that design.
+- The web client's files (below) ship beside that plxd asset, so an SSH-installed plxd can serve them.
 
 ### The web client
 
-- plxd serves the app's renderer build at `/`, with a browser bridge that implements the preload API over `/ws`. Electron-only features (native menus, local file pickers, the updater) are hidden in a browser. The renderer files ship beside plxd in the app bundle and in the standalone archive.
+- plxd serves the app's renderer build at `/`, with a browser bridge that implements the preload API over `/ws`. Electron-only features (native menus, local file pickers, the updater) are hidden in a browser. The renderer files ship beside plxd in the app bundle and beside the standalone plxd release asset.
 - A hosted copy of the same client, on the relay's domain, keeps its hosts in the browser and connects to each directly, as app.t3.codes does.
 
 ### The relay
@@ -64,5 +64,4 @@ Ryan chose all of it for Parallax on 2026-10-09 (PLX-635), with one change from 
 - PLAN.md's non-goal changes: a hosted service is in scope for remote access, webhooks, and push.
 - plxd gains a network listener that isn't Tailscale-checked. It is off by default, every connection needs a paired, DPoP-bound session, and LAN traffic is TLS with a pinned key, unlike T3's plain HTTP. plxd gains three crates (`tokio-tungstenite`, `rustls`, `rcgen`).
 - The relay is infrastructure Ryan pays for and operates, with its own uptime and security. Running it is part of shipping.
-- SSH hosts no longer need a manual install. Releases gain standalone plxd archives.
 - The app's protocol client and stores become one package that Electron, the browser, and React Native share.
