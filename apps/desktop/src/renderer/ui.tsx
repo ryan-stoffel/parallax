@@ -279,6 +279,7 @@ export function Menu({
 /**
  * A modal asking to confirm `action`, such as deleting a thread. Cancel closes it, and the red
  * button runs `onConfirm`. While `busy`, that button is disabled and reads `busy`, as "Deleting…".
+ * `alternate` adds a plain button before it, for a second way to go ahead.
  */
 export function ConfirmDialog({
   ref,
@@ -288,6 +289,7 @@ export function ConfirmDialog({
   busy,
   error,
   onConfirm,
+  alternate,
   children,
 }: {
   ref: Ref<HTMLDialogElement>;
@@ -297,6 +299,8 @@ export function ConfirmDialog({
   busy?: string;
   error?: string;
   onConfirm: () => void;
+  /** A second way to go ahead, as a plain button before `action`'s. */
+  alternate?: { action: string; onConfirm: () => void };
   children: ReactNode;
 }) {
   const titleId = useId();
@@ -304,7 +308,7 @@ export function ConfirmDialog({
     <dialog
       ref={ref}
       aria-labelledby={titleId}
-      className="m-auto w-[24rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+      className={`m-auto ${alternate ? "w-[30rem]" : "w-[24rem]"} rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50`}
     >
       <form method="dialog" className="px-5 pt-4 pb-4">
         <h2 id={titleId} className={`text-[15px] font-semibold ${titleClass}`}>
@@ -324,6 +328,16 @@ export function ConfirmDialog({
           >
             Cancel
           </button>
+          {alternate && (
+            <button
+              type="button"
+              disabled={!!busy}
+              onClick={alternate.onConfirm}
+              className="rounded-md bg-selected px-3 py-1.5 text-[13px] font-medium enabled:hover:bg-hover disabled:opacity-50"
+            >
+              {alternate.action}
+            </button>
+          )}
           <button
             type="button"
             disabled={!!busy}

@@ -884,3 +884,62 @@ test("a script's end replaces its start where it was (PLX-650)", () => {
   );
   expect(of(restarted.items, "script")).toMatchObject([{ status: "interrupted" }]);
 });
+
+test("a revert drops the turns it undid, from their first message on (0062)", () => {
+  const [kept, undone] = [uuidv7(), uuidv7()];
+  const turn = (turnId: string, text: string) =>
+    output(
+      {
+        kind: "turnStarted",
+        turnId,
+        text,
+        wake: false,
+        images: [],
+        threads: [],
+      } as AgentOutputItem,
+      { kind: "text", text: `Did ${text}` },
+    );
+  const reverted = (ordinal: number, turns: string[]) =>
+    at({ kind: "thread.reverted", runId, ordinal, turns, restoreFiles: true });
+  const t = build(turn(kept, "one"), turn(undone, "two"), reverted(1, [undone]));
+  expect(t.items.map((i) => (i.kind === "user" ? i.text : i.kind))).toEqual(["one", "assistant"]);
+  // Back to the thread's start, whose first message has no turn id: nothing is left.
+  expect(build(turn(kept, "one"), reverted(0, [kept])).items).toEqual([]);
+});
+
+test("a revert clears a 500-event undone tail even if only a later undone prompt is loaded", () => {
+  const turn = (turnId: string) =>
+    output({ kind: "turnStarted", turnId, text: turnId, wake: false, images: [], threads: [] });
+  const kept = turn("kept");
+  const undone = turn("undone");
+  const tail = Array.from({ length: 501 }, (_, i) =>
+    output({ kind: "text", text: `undone output ${i}` }),
+  );
+  const events = [kept, undone, ...tail, turn("later")];
+  const reverted = at({
+    kind: "thread.reverted",
+    runId,
+    ordinal: 1,
+    turns: ["undone", "later"],
+    restoreFiles: false,
+  });
+  expect(rebuild(emptyTranscript, [...events.slice(-500), reverted], runId).items).toEqual([]);
+  expect(applyEvents(build(...events.slice(-500)), [reverted], runId).items).toEqual([]);
+  expect(rebuild(emptyTranscript, [...events, reverted], runId).items).toMatchObject([
+    { kind: "user", text: "kept" },
+  ]);
+  // A no-op revert has no undone turns and leaves the loaded conversation alone.
+  expect(
+    applyEvents(
+      build(kept),
+      [
+        {
+          ...reverted,
+          seq: reverted.seq + 1,
+          event: { ...reverted.event, turns: [] } as ParallaxEvent,
+        },
+      ],
+      runId,
+    ).items,
+  ).toHaveLength(1);
+});

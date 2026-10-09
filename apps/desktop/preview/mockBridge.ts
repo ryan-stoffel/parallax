@@ -37,6 +37,7 @@ import {
   type ShellSnapshot,
   type TailnetDevice,
   type Thread,
+  type ThreadRun,
   type ThreadSnapshot,
 } from "../src/protocol/generated/protocol";
 import { createFixtures, HOME, PARALLAX_PATH, type RunEvent } from "./fixtures";
@@ -54,6 +55,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "agents",
     "approvals",
     "autoResume",
+    "checkpoints",
     "checks",
     "checkout",
     "commandIds",
@@ -198,6 +200,81 @@ function waiting(runIds: string[]): LoggedEvent[] {
 }
 
 const now = () => new Date().toISOString();
+
+// ---- Checkpoints (0062) ------------------------------------------------------------------------
+
+/** What the updater thread's first turn changed, as `git diff` between its checkpoints. */
+const UPDATER_PATCH = `diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -88,6 +88,9 @@ jobs:
+       - name: Build the installer
+         run: corepack pnpm --dir apps/desktop build
++      - name: Stamp the channel
++        # A nightly follows nightlies, a promoted build Latest (0028).
++        run: echo "channel: \${{ inputs.channel }}" >> apps/desktop/dist/app-update.yml
+       - name: Sign
+         run: scripts/release/sign
+diff --git a/apps/desktop/src/main/updater.ts b/apps/desktop/src/main/updater.ts
+--- a/apps/desktop/src/main/updater.ts
++++ b/apps/desktop/src/main/updater.ts
+@@ -12,11 +12,14 @@ import { autoUpdater } from "electron-updater";
+ 
+ export function startUpdater(window: BrowserWindow) {
+-  // Both builds read Latest.
+-  autoUpdater.channel = "latest";
++  // The build's own channel, which the release workflow stamps into app-update.yml.
++  const channel = readChannel() ?? "latest";
++  autoUpdater.channel = channel;
++  autoUpdater.allowPrerelease = channel === "nightly";
+   autoUpdater.autoDownload = true;
+   autoUpdater.on("update-downloaded", () => window.webContents.send("update:ready"));
+   void autoUpdater.checkForUpdates();
+ }
+diff --git a/apps/desktop/src/renderer/Update.tsx b/apps/desktop/src/renderer/Update.tsx
+--- a/apps/desktop/src/renderer/Update.tsx
++++ b/apps/desktop/src/renderer/Update.tsx
+@@ -30,9 +30,4 @@ export function Update({ version }: { version: string }) {
+-  // A nightly's version ends in -nightly; anything else is stable.
+-  const nightly = /-nightly(\\.\\d+)?$/.test(version);
+-  if (nightly && !ready) return null;
+   return (
+     <button type="button" onClick={install}>
+`;
+
+/** Each thread's turns with their checkpoints: the updater thread's, from its log. */
+const checkpointRuns = new Map<string, ThreadRun[]>();
+function turnsOf(threadId: string): ThreadRun[] {
+  if (db.threads.find((t) => t.id === threadId)?.title !== "Rework the updater") return [];
+  if (!checkpointRuns.has(threadId)) {
+    const started = (logs.get(threadId) ?? []).flatMap(({ event }) =>
+      event.kind === "agent.output" ? event.items.filter((i) => i.kind === "turnStarted") : [],
+    );
+    checkpointRuns.set(
+      threadId,
+      started.map((turn, i) => ({
+        id: turn.turnId ?? `${threadId}-1`,
+        status: "completed",
+        ordinal: i + 1,
+        ...(turn.text && { text: turn.text }),
+        images: 0,
+        threads: [],
+        checkpoint: {
+          status: "ready",
+          files:
+            i === 0
+              ? [
+                  { path: ".github/workflows/release.yml", additions: 3, deletions: 0 },
+                  { path: "apps/desktop/src/main/updater.ts", additions: 4, deletions: 2 },
+                  { path: "apps/desktop/src/renderer/Update.tsx", additions: 0, deletions: 3 },
+                ]
+              : [],
+        },
+      })),
+    );
+  }
+  return checkpointRuns.get(threadId)!;
+}
 const later = (ms: number, f: () => void) => setTimeout(f, ms);
 
 function patchRun(id: string, change: Partial<AgentRun>) {
@@ -979,6 +1056,30 @@ const handlers: { [M in Method]?: Handler<M> } = {
     return {};
   },
 
+  "orchestration/threadRuns": (p) => ({ runs: turnsOf(p.threadId) }),
+  "orchestration/getTurnDiff": (p) => ({ diff: p.from === 0 ? UPDATER_PATCH : "" }),
+  "orchestration/getFullThreadDiff": () => ({ diff: UPDATER_PATCH }),
+  // Only a revert (0062): it undoes the turns after its target and says so, as plxd does.
+  "orchestration/dispatch": (p) => {
+    if (p.type !== "checkpoint.rollback")
+      return { code: -32601, message: `The preview doesn't fake ${p.type}.` };
+    const runs = turnsOf(p.threadId);
+    const undone = runs.filter((r) => r.ordinal! > p.ordinal && r.status !== "rolledBack");
+    for (const r of undone)
+      Object.assign(r, { status: "rolledBack", checkpoint: { status: "stale" } });
+    const turns = undone.map((r) => r.id);
+    emit(
+      {
+        kind: "thread.reverted",
+        runId: p.threadId,
+        ordinal: p.ordinal,
+        turns,
+        restoreFiles: !!p.restoreFiles,
+      },
+      scopeOf(p.threadId),
+    );
+    return { seq };
+  },
   "queue/list": () => ({ messages: [] }),
   "queue/edit": () => ({ messages: [] }),
   "queue/reorder": () => ({ messages: [] }),

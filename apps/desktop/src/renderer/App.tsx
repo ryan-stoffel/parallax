@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 import type { InboxItem, PreviewTab, Repo, Thread } from "../protocol/generated/protocol";
 import { Actions, type RepoAction } from "./Actions";
 import { AgentChat } from "./AgentChat";
+import { ChangesPanel } from "./ChangesPanel";
 import { ChildStrip } from "./ChildStrip";
 import type { Asked } from "./Approval";
 import { offlineReason, useConnection } from "./ConnectionStatus";
@@ -1083,6 +1084,30 @@ export function App() {
               openId={agentId}
               onOpen={openAgent}
               disabledReason={offline}
+            />
+          )
+        }
+        changes={
+          threadRun && (
+            <ChangesPanel
+              key={`${host.id}/${threadRun.id}`}
+              hostId={host.id}
+              runId={threadRun.id}
+              prompt={threadRun.prompt}
+              backend={threadRun.backend}
+              running={isRunning(threadRun.status)}
+              version={threads.state.checkpoints[threadRun.id]}
+              unavailable={
+                offline ??
+                (connected && "checkpoints" in connection.capabilities
+                  ? undefined
+                  : "Update Parallax on this host to see a thread's changes.")
+              }
+              onCompose={(text) => {
+                // The chat is under an expanded panel.
+                setPanelExpanded(false);
+                setCompose({ text, send: false });
+              }}
             />
           )
         }

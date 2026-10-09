@@ -1048,6 +1048,58 @@ test("a snapshot of a long thread opens at its newest events and loads older one
   expect(shown.indexOf("Mentioned the tests")).toBeLessThan(shown.indexOf(text));
 });
 
+test.each(["live", "snapshot"] as const)(
+  "a %s revert pages past the undone tail to the kept turn",
+  async (mode) => {
+    const turn = (seq: number, turnId: string, text: string): LoggedEvent => ({
+      seq,
+      time: "",
+      event: {
+        kind: "agent.output",
+        runId,
+        items: [{ kind: "turnStarted", turnId, text, wake: false, images: [], threads: [] }],
+      },
+    });
+    const history: LoggedEvent[] = [
+      turn(1, "kept", "Keep this message"),
+      turn(2, "undone", "Undo this message"),
+      ...Array.from({ length: 1100 }, (_, i): LoggedEvent => ({
+        seq: i + 3,
+        time: "",
+        event: {
+          kind: "agent.output",
+          runId,
+          items: [{ kind: "text", text: "Undone output" }],
+        },
+      })),
+    ];
+    const reverted: LoggedEvent = {
+      seq: 1103,
+      time: "",
+      event: { kind: "thread.reverted", runId, ordinal: 1, turns: ["undone"], restoreFiles: false },
+    };
+    const { request, snapshot, emit } = watchedBridge();
+    request.mockImplementation(async (_host, method, params) => {
+      if (method !== "orchestration/threadHistory") return { result: {}, logId: "log-1" };
+      const older = history.filter((e) => e.seq < params.before!);
+      return { result: { events: older.slice(-500), more: older.length > 500 }, logId: "log-1" };
+    });
+    await renderChat();
+    if (mode === "snapshot") await snapshot([...history.slice(-499), reverted], true);
+    else {
+      await snapshot(history.slice(-500), true);
+      await emit(reverted);
+    }
+    await settle();
+    expect(transcriptText()).toContain("Keep this message");
+    expect(transcriptText()).not.toContain("Undone output");
+    expect(transcriptText()).not.toContain("Undo this message");
+    expect(
+      request.mock.calls.filter(([, method]) => method === "orchestration/threadHistory").length,
+    ).toBeGreaterThanOrEqual(2);
+  },
+);
+
 test("the composer tab shows the worktree and its branch", () => {
   const started = samples.find((m) => "result" in m && m.id === 2)!;
   render(<RunTab run={(started as unknown as { result: AgentRunResult }).result.run} />);

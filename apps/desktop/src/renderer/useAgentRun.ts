@@ -181,6 +181,10 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
       }
       pages.current?.events.push(message.event);
       setTranscript((prev) => applyEvents(prev, [message.event], runId));
+      if (event.kind === "thread.reverted" && event.runId === runId && pages.current) {
+        const p = pages.current;
+        void fill(p, rebuild(emptyTranscript, p.events, runId));
+      }
     });
     return () => {
       stopped = true;

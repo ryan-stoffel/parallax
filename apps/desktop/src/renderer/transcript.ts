@@ -378,6 +378,20 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
         else push({ kind: "script", key: key(), runId, ...script });
         break;
       }
+      case "thread.reverted": {
+        // The turns a revert undid leave the conversation (0062): their messages and all after.
+        // The first turn's message has no turn id, so a revert to the start clears everything.
+        const undone = new Set<string>(event.turns);
+        const i =
+          event.ordinal === 0
+            ? 0
+            : items.findIndex(
+                (x) => x.kind === "user" && !!x.turnId && x.turnId === event.turns[0],
+              );
+        // A snapshot can start inside the undone turn, after its user message.
+        if (i >= 0 || undone.size > 0) items.splice(Math.max(0, i));
+        break;
+      }
       case "agent.output":
         event.items.forEach((item, i) => {
           if (item.kind === "turnStarted") openTurns++;
