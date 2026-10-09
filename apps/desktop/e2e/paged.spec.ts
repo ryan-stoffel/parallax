@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, test, type Page } from "@playwright/test";
 
 import { uuidv7 } from "../src/renderer/uuidv7";
-import { close, launch, printFailure, type Launched } from "./launch";
+import { close, launch, printFailure, servePids, type Launched } from "./launch";
 
 // A long run opens at its end and loads older pages as the transcript scrolls up, keeping what's
 // in view where it is (PLX-490). Its turns are written into plxd's database while plxd is
@@ -139,7 +139,11 @@ test("a long run opens at its end and scrolls back to its start (PLX-490)", asyn
   // Scrolled to within a screen of the top, the page before loads, and the first message in view
   // stays where it was, at a greater scroll offset, until there's no page left.
   let pages = 0;
+  const plxd = servePids(launched.dataDir).at(-1)!;
   for (;;) {
+    // Every other page arrives after the list has stopped scrolling, as from a slow host: plxd
+    // is paused until then (PLX-545). Windows has no way to pause it.
+    const slow = pages % 2 === 1 && process.platform !== "win32";
     // Two screens down, where nothing loads, so the rows around there render.
     await page.evaluate(`(() => {
       const log = document.querySelector('[role="log"]');
@@ -149,6 +153,11 @@ test("a long run opens at its end and scrolls back to its start (PLX-490)", asyn
     // Then up into the last screen in one go, which loads the page before. The rows rendered
     // above the old view are in the new one, and none has moved for the load yet.
     // The rows around the new offset render a frame later, so it waits for one in view.
+    if (slow) {
+      process.kill(plxd, "SIGSTOP");
+      // Well past the 150 ms after its last scroll event that the virtualizer counts as scrolling.
+      setTimeout(() => process.kill(plxd, "SIGCONT"), 500);
+    }
     const shown = await page.evaluate<{
       anchor: string;
       top: number;

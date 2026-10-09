@@ -3,7 +3,7 @@ import type { TiptapEditorHTMLElement } from "@tiptap/react";
 import { Globe } from "lucide-react";
 import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, test, vi } from "vite-plus/test";
+import { afterEach, expect, onTestFinished, test, vi } from "vite-plus/test";
 
 import samples from "../../../../crates/parallax-protocol/samples/v1/agents.json";
 import type { ConnectionState, SubscriptionMessage, ParallaxBridge } from "../preload/bridge";
@@ -906,6 +906,15 @@ test("loads every page, subscribes after the last seq, and appends live events",
 });
 
 test("with eventsBefore, opens at the newest page and loads older ones near the top (PLX-490)", async () => {
+  // A browser keeps the offset at 0 or more, which reads as not near a top of no height.
+  const scrollTop = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+  const clamp = vi.spyOn(Element.prototype, "scrollTop", "set").mockImplementation(function (
+    this: Element,
+    top: number,
+  ) {
+    scrollTop.set!.call(this, Math.max(0, top));
+  });
+  onTestFinished(() => clamp.mockRestore());
   const { request, subscribe, emit } = fakeBridge(8, {
     listSeq: 20,
     capabilities: { eventsBefore: {} },
