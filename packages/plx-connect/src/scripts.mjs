@@ -25,7 +25,7 @@ export const psQuote = (value) => `'${value.replaceAll("'", "''")}'`;
  */
 export function installScript(os, installer, channel) {
   if (os === "macos") return macScript(installer, channel);
-  if (os === "linux") return linuxScript(installer, channel);
+  if (os === "linux") return linuxScript(installer);
   return windowsScript(installer, channel);
 }
 
@@ -71,40 +71,83 @@ ${posixTail}`;
 }
 
 /**
- * Linux: saves the AppImage in ~/Applications, copies plxd out of it into ~/.local/bin (the
- * AppImage's own `--appimage-extract` needs no FUSE), and turns on lingering so plxd's user
- * service runs with nobody logged in.
+ * Linux: installs the release's static plxd in ~/.local/bin, so no AppImage runtime has to run
+ * (NixOS won't run one). Then installs bubblewrap and socat, which Claude Code's worker sandbox
+ * needs (0013), when it can without a password: `nix profile install` on NixOS, else the package
+ * manager as root or with passwordless sudo. Otherwise, and for nix-ld on NixOS, which agent CLIs'
+ * generic Linux binaries need, it says what to do. Then turns on lingering, so plxd's user service
+ * runs with nobody logged in.
  * @param {Installer} installer
- * @param {Channel} channel
  */
-export function linuxScript(installer, channel) {
-  const file = channel === "nightly" ? "Parallax-Nightly.AppImage" : "Parallax.AppImage";
+export function linuxScript(installer) {
   return `set -eu
 url=${shQuote(installer.url)}
-appimage="$HOME/Applications/"${shQuote(file)}
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$HOME/Applications" "$HOME/.local/bin"
+mkdir -p "$HOME/.local/bin"
 echo "Downloading $url"
 if command -v curl >/dev/null 2>&1; then
-  curl -fsSL --retry 3 -o "$tmp/app.AppImage" "$url"
+  curl -fsSL --retry 3 -o "$HOME/.local/bin/.plxd.new" "$url"
 else
-  wget -q -O "$tmp/app.AppImage" "$url"
+  wget -q -O "$HOME/.local/bin/.plxd.new" "$url"
 fi
-chmod +x "$tmp/app.AppImage"
-mv -f "$tmp/app.AppImage" "$appimage"
-echo "Installed $appimage"
-(cd "$tmp" && "$appimage" --appimage-extract resources/plxd >/dev/null </dev/null)
-cp "$tmp/squashfs-root/resources/plxd" "$HOME/.local/bin/.plxd.new"
 chmod +x "$HOME/.local/bin/.plxd.new"
 mv -f "$HOME/.local/bin/.plxd.new" "$HOME/.local/bin/plxd"
 plxd="$HOME/.local/bin/plxd"
 echo "Installed $plxd"
+${linuxPackages}
 if ! loginctl enable-linger "$(id -un)" >/dev/null 2>&1; then
   echo "warning: loginctl enable-linger failed, so plxd runs only while you're logged in."
 fi
 ${posixTail}`;
 }
+
+/**
+ * The part of the Linux script that sees to Claude Code's sandbox packages and, on NixOS, nix-ld.
+ * `has` also looks in Nix profiles, which a non-login shell may not have on its PATH.
+ */
+const linuxPackages = `has() {
+  command -v "$1" >/dev/null 2>&1 || [ -x "$HOME/.nix-profile/bin/$1" ] || [ -x "$HOME/.local/state/nix/profile/bin/$1" ]
+}
+missing() {
+  m=
+  has bwrap || m=bubblewrap
+  has socat || m="$m socat"
+  echo $m
+}
+nixos=
+[ -e /etc/NIXOS ] && nixos=1
+packages=$(missing)
+if [ -n "$packages" ]; then
+  echo "Installing $packages for Claude Code's worker sandbox"
+  sudo=
+  [ "$(id -u)" = 0 ] || sudo="sudo -n"
+  {
+    if [ -n "$nixos" ]; then
+      # shellcheck disable=SC2046 # one package per word
+      nix --extra-experimental-features 'nix-command flakes' profile install $(printf 'nixpkgs#%s ' $packages)
+    elif command -v apt-get >/dev/null 2>&1; then
+      $sudo apt-get install -y $packages
+    elif command -v dnf >/dev/null 2>&1; then
+      $sudo dnf install -y $packages
+    elif command -v pacman >/dev/null 2>&1; then
+      $sudo pacman -S --noconfirm --needed $packages
+    elif command -v zypper >/dev/null 2>&1; then
+      $sudo zypper --non-interactive install $packages
+    elif command -v apk >/dev/null 2>&1; then
+      $sudo apk add $packages
+    fi
+  } </dev/null >/dev/null 2>&1 || true
+  packages=$(missing)
+  if [ -z "$packages" ]; then
+    echo "Installed Claude Code's sandbox packages"
+  elif [ -n "$nixos" ]; then
+    echo "warning: Claude Code's worker sandbox needs $packages. Add them to environment.systemPackages in configuration.nix, then run sudo nixos-rebuild switch."
+  else
+    echo "warning: Claude Code's worker sandbox needs $packages, which need a password to install. Install them with your package manager, such as: sudo apt install $packages"
+  fi
+fi
+if [ -n "$nixos" ] && [ -z "\${NIX_LD:-}" ] && [ ! -e /run/current-system/sw/share/nix-ld/lib/ld.so ]; then
+  echo "warning: agent CLIs such as Claude Code ship generic Linux binaries, which NixOS runs only with nix-ld. Add programs.nix-ld.enable = true; to configuration.nix, then run sudo nixos-rebuild switch."
+fi`;
 
 /**
  * What every POSIX script ends with, once `$plxd` is set: Parallax Connect on, plxd's login

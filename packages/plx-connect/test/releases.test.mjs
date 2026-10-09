@@ -24,7 +24,8 @@ const newestNightly = release(`v${nightly}`, true, [
 const stable = release("v2609.10101.10000", false, [
   "parallax-2609.10101.10000-mac-arm64.dmg",
   "parallax-2609.10101.10000-linux-x86_64.AppImage",
-  "parallax-2609.10101.10000-linux-arm64.AppImage",
+  "parallax-plxd-2609.10101.10000-linux-x64",
+  "parallax-plxd-2609.10101.10000-linux-arm64",
 ]);
 const releases = [release("v2610.1.1-nightly", true, [], true), newestNightly, stable];
 
@@ -45,10 +46,11 @@ test("picks each OS's installer", () => {
     name: `parallax-${nightly}-win-arm64.exe`,
     url: `https://github.com/dl/v${nightly}/parallax-${nightly}-win-arm64.exe`,
   });
-  assert.equal(pickAsset(stable, "linux", "x64").name, "parallax-2609.10101.10000-linux-x86_64.AppImage");
-  assert.equal(pickAsset(stable, "linux", "arm64").name, "parallax-2609.10101.10000-linux-arm64.AppImage");
-  const x64 = release("v1.0.0", false, ["parallax-1.0.0-linux-x64.AppImage"]);
-  assert.equal(pickAsset(x64, "linux", "x64").name, "parallax-1.0.0-linux-x64.AppImage");
+  assert.equal(pickAsset(stable, "linux", "x64").name, "parallax-plxd-2609.10101.10000-linux-x64");
+  assert.equal(pickAsset(stable, "linux", "arm64").name, "parallax-plxd-2609.10101.10000-linux-arm64");
+  // An AppImage alone isn't enough: running it to unpack plxd fails on NixOS.
+  const appImageOnly = release("v1.0.0", false, ["parallax-1.0.0-linux-x86_64.AppImage"]);
+  assert.throws(() => pickAsset(appImageOnly, "linux", "x64"), /has no Linux x64 build/);
 });
 
 test("a missing build is an error that names the release, OS, and arch", () => {

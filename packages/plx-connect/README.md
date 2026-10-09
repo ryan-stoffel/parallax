@@ -27,3 +27,4 @@ Options:
 - Tailscale on both computers, logged in as the same Tailscale user. Tagged and shared devices can't join.
 - For `add`, SSH on the device: Remote Login on macOS, OpenSSH Server on Windows, or sshd on Linux. On macOS and Linux, SSH asks for the password at most once.
 - Parallax builds for macOS on Apple silicon, Windows x64 and arm64, and Linux x64 and arm64.
+- On Linux, Claude Code's sandbox needs bubblewrap and socat. plx-connect installs them when it can do so without a password: with `nix profile install` on NixOS, or with the package manager as root or with passwordless sudo. Otherwise it prints what to install. NixOS also needs `programs.nix-ld.enable = true;` to run agent CLIs.
