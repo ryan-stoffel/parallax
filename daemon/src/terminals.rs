@@ -61,7 +61,9 @@ struct Terminal {
     /// The program it runs: for a shell, the one its user's `$SHELL` or account names.
     shell: String,
     /// Its program's process id and its terminal device, to find what still runs there.
+    #[cfg(unix)]
     pid: Option<u32>,
+    #[cfg(unix)]
     tty: Option<String>,
 }
 
@@ -359,8 +361,7 @@ fn start(
             .trim_start_matches("/dev/")
             .to_owned()
     });
-    #[cfg(windows)]
-    let tty = None;
+    #[cfg(unix)]
     let pid = child.process_id();
     drop(pair.slave);
     let reader = pair.master.try_clone_reader().map_err(|e| failed(&e))?;
@@ -379,7 +380,9 @@ fn start(
         killer: Mutex::new(child.clone_killer()),
         streams: Mutex::default(),
         shell,
+        #[cfg(unix)]
         pid,
+        #[cfg(unix)]
         tty,
     });
 
