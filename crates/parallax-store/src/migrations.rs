@@ -676,6 +676,31 @@ const MIGRATIONS: &[Migration] = &[
             WHERE status = 'pending';
         CREATE TABLE graph_imports (thread_id TEXT NOT NULL PRIMARY KEY);",
     },
+    // Delegation (0063, PLX-648). `thread_lineage` is a thread that works in another's
+    // workspace (`workspace_of`), and with `relationship` `subagent`, a task that thread
+    // delegated, with its completion wake and delivery in `payload`. `context_transfers` holds
+    // T3's `merge_back` transfers: the source's log through `seq`, for the target's next
+    // message, `pending` until that message carries it.
+    Migration {
+        version: 42,
+        sql: "CREATE TABLE thread_lineage (
+            thread_id TEXT NOT NULL PRIMARY KEY,
+            relationship TEXT,
+            workspace_of TEXT,
+            payload TEXT NOT NULL
+        );
+        CREATE TABLE context_transfers (
+            id TEXT NOT NULL PRIMARY KEY,
+            type TEXT NOT NULL,
+            source TEXT NOT NULL,
+            target TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX context_transfers_pending ON context_transfers (target)
+            WHERE status = 'pending';",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a

@@ -56,6 +56,7 @@ mod browser;
 mod checkpoints;
 mod commands;
 mod context;
+mod delegation;
 mod detect;
 mod event_log;
 mod github;

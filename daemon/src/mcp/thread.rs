@@ -15,7 +15,7 @@
 //! Project, through `agent/start` with itself as their coordinator thread, so they show in the
 //! Project's Agents panel, run as threads that ask through the inbox, in the Project's mode, and
 //! `thread_list` lists its Project's runs, each once. Every caller also gets [`super::device`]'s
-//! tools (PLX-640) and [`super::triggers`]' (0063).
+//! tools (PLX-640), [`super::triggers`]', and [`super::delegation`]'s (0063).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -94,10 +94,10 @@ const MAX_WAIT: Duration = Duration::from_mins(30);
 
 /// How often `thread_wait` checks the thread on a plxd without `agent/wait`, and how long it
 /// pauses between connections.
-const POLL: Duration = Duration::from_millis(500);
+pub(super) const POLL: Duration = Duration::from_millis(500);
 
 /// The longest one `agent/wait` waits: plxd's cap, under its connection idle timeout.
-const MAX_AGENT_WAIT: Duration = Duration::from_mins(1);
+pub(super) const MAX_AGENT_WAIT: Duration = Duration::from_mins(1);
 
 /// What one server is bound to.
 #[derive(Clone)]
@@ -124,6 +124,8 @@ struct Server {
     memory: Option<super::memory::Memory>,
     /// The device tools, with the devices the caller has open (PLX-640).
     devices: device::Devices,
+    /// The delegation tools, with the requests they made (0063).
+    delegation: super::delegation::Delegation,
 }
 
 /// Checks that the bound run exists, then serves MCP on `input` and `output` until `input` ends.
@@ -152,6 +154,7 @@ pub async fn run(
         coordinator,
         memory,
         devices: device::Devices::new(&binding.temp, binding.run),
+        delegation: super::delegation::Delegation::default(),
     };
     super::serve(&server, input, output).await
 }
@@ -180,6 +183,7 @@ impl Tools for Server {
             super::preview::TOOLS,
             device::TOOLS,
             super::triggers::TOOLS,
+            super::delegation::TOOLS,
         ]
         .concat()
     }
@@ -198,6 +202,7 @@ impl Tools for Server {
             list.extend(super::preview::definitions());
             list.extend(device::definitions());
             list.extend(super::triggers::definitions());
+            list.extend(super::delegation::definitions());
         }
         tools
     }
@@ -214,6 +219,13 @@ impl Tools for Server {
         }
         if super::triggers::TOOLS.contains(&name) {
             return super::triggers::call(&self.binding, name, arguments)
+                .await
+                .map(Reply::from);
+        }
+        if super::delegation::TOOLS.contains(&name) {
+            return self
+                .delegation
+                .call(&self.binding, name, arguments)
                 .await
                 .map(Reply::from);
         }
@@ -767,7 +779,7 @@ fn not_yourself(caller: RunId, target: RunId, what: &str) -> Result<(), String> 
 }
 
 /// Whether `run`'s CLI is starting or working on a turn.
-fn running(run: &AgentRun) -> bool {
+pub(super) fn running(run: &AgentRun) -> bool {
     matches!(run.status, AgentStatus::Starting | AgentStatus::Running)
 }
 
@@ -797,7 +809,7 @@ pub(super) async fn find_run(plxd: &Plxd, run_id: RunId) -> Result<AgentRun, Str
 
 /// `run_id` once it is idle, or as it stands after `timeout`, from `agent/wait`. The outer `Err`
 /// is the connection failing first, the inner one plxd's error.
-async fn agent_wait(
+pub(super) async fn agent_wait(
     plxd: &Plxd,
     run_id: RunId,
     timeout: Duration,
@@ -1057,7 +1069,7 @@ async fn launch(binding: &Binding, args: LaunchArgs) -> Result<String, String> {
         Some(_) => false,
     };
     let permission = mode.or_else(|| same_backend.then_some(caller.permission).flatten());
-    check_mode(caller.permission, permission)?;
+    crate::delegation::check_mode(caller.permission, permission)?;
     let started = plxd
         .call::<ThreadStart>(ThreadStartParams {
             run_id: RunId::generate(),
@@ -1153,7 +1165,7 @@ async fn fork(binding: &Binding, args: ForkArgs) -> Result<String, String> {
     let find = |id: RunId| runs.iter().find(|run| run.id == id);
     let caller = find(binding.run).ok_or("your thread is no longer on this host")?;
     let original = find(run_id).ok_or_else(|| format!("no thread has run id {run_id}"))?;
-    check_mode(caller.permission, original.permission)?;
+    crate::delegation::check_mode(caller.permission, original.permission)?;
     let forked = plxd
         .call::<ThreadFork>(ThreadForkParams {
             run_id,
@@ -1253,39 +1265,6 @@ async fn launch_child(server: &Server, args: LaunchArgs) -> Result<String, Strin
         .await?
         .run;
     Ok(pretty(&describe(&run, None, &[], caller)))
-}
-
-/// Refuses a child `mode`, launched or forked, that needs less approval than the caller's `theirs`
-/// (0041). No mode means Edit.
-fn check_mode(
-    theirs: Option<AgentPermission>,
-    mode: Option<AgentPermission>,
-) -> Result<(), String> {
-    let theirs = theirs.unwrap_or(AgentPermission::Edit);
-    let child = mode.unwrap_or(AgentPermission::Edit);
-    if reach(child).is_some_and(|child| reach(theirs) >= Some(child)) {
-        return Ok(());
-    }
-    let name = |mode| crate::agents::convert::option_name(mode).unwrap_or_default();
-    Err(format!(
-        "you run in {} mode, so a thread you launch or fork can't run in {}, which needs less \
-         approval",
-        name(theirs),
-        name(child)
-    ))
-}
-
-/// How much `mode` lets a run do without asking, least first, or `None` for a mode this plxd
-/// doesn't know.
-fn reach(mode: AgentPermission) -> Option<u8> {
-    match mode {
-        AgentPermission::Plan => Some(0),
-        AgentPermission::Manual => Some(1),
-        AgentPermission::Edit => Some(2),
-        AgentPermission::Auto => Some(3),
-        AgentPermission::Bypass => Some(4),
-        AgentPermission::Unknown => None,
-    }
 }
 
 /// The repo entry `repo` names, by id or by path, registering a repository on the host that has
@@ -1467,6 +1446,7 @@ mod tests {
         tools.extend(crate::mcp::html::definitions());
         tools.extend(crate::mcp::preview::definitions());
         tools.extend(crate::mcp::triggers::definitions());
+        tools.extend(crate::mcp::delegation::definitions());
         for tool in &tools {
             let schema = &tool["inputSchema"];
             assert_eq!(schema["additionalProperties"], false, "{tool}");

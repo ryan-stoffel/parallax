@@ -158,11 +158,12 @@ impl Actor {
         self.effect_busy(ErrorKind::GitRefused)
     }
 
-    /// A Current checkout thread's checkout: its repo entry's path.
+    /// A Current checkout thread's checkout: its repo entry's path, or the worktree of the thread
+    /// whose workspace it shares (0063).
     pub(super) async fn checkout_path(&self) -> Result<PathBuf, ErrorObject> {
-        let project = self.project;
+        let (project, id) = (self.project, self.id);
         store(&self.daemon, move |db| {
-            crate::threads::scope_path(db, project)
+            crate::delegation::workdir(db, project, id.into())
         })
         .await
         .map(PathBuf::from)

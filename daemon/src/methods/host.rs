@@ -208,6 +208,7 @@ pub(crate) fn initialize(
 /// `checkpoints` (0062): `orchestration/threadRuns`, `orchestration/getTurnDiff`,
 /// `orchestration/getFullThreadDiff`, `checkpoint.rollback`, and the `thread.checkpoint` and
 /// `thread.reverted` events.
+/// `delegation` (PLX-648, 0063): `task/delegate`, `task/status`, and `thread/mergeBack`.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -230,6 +231,7 @@ fn capabilities_advertised() -> Capabilities {
         ("connect".to_owned(), serde_json::Map::new()),
         ("contextAndFast".to_owned(), serde_json::Map::new()),
         ("coordinator".to_owned(), serde_json::Map::new()),
+        ("delegation".to_owned(), serde_json::Map::new()),
         ("eventFilters".to_owned(), serde_json::Map::new()),
         ("eventsBefore".to_owned(), serde_json::Map::new()),
         ("fileEdit".to_owned(), serde_json::Map::new()),
