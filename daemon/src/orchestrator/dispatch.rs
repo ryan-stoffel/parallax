@@ -196,8 +196,9 @@ async fn act(
     }
 }
 
-/// How a message with `mode` reaches `thread`. A steer or restart aimed at a run that has ended
-/// starts as its own, as T3 Code does when steering comes too late.
+/// How a message with `mode` reaches `thread`. A steer or restart aimed at a run that has ended,
+/// or with no target at a thread with none under way, starts as its own, as T3 Code does when
+/// steering comes too late.
 async fn delivery(
     daemon: &Daemon,
     thread: RunId,
@@ -211,38 +212,44 @@ async fn delivery(
         DispatchMode::RestartActive { target_run_id } => (target_run_id, Delivery::Restart),
         DispatchMode::Unknown => return Err(ErrorObject::invalid_params("unknown dispatch mode")),
     };
-    let run = graph_run(daemon, thread, target).await?;
-    match run.map(|run| run.status) {
-        Some(ThreadRunStatus::Starting | ThreadRunStatus::Running | ThreadRunStatus::Waiting) => {
-            Ok(steer)
-        }
-        Some(_) => Ok(Delivery::Queue),
-        None => Err(ErrorObject::invalid_params(format!(
-            "thread {thread} has no run {target}"
-        ))),
-    }
+    let runs = graph_runs(daemon, thread).await?;
+    let run = match target {
+        Some(target) => Some(runs.iter().find(|run| run.id == target).ok_or_else(|| {
+            ErrorObject::invalid_params(format!("thread {thread} has no run {target}"))
+        })?),
+        None => runs.iter().rev().find(|run| open(run.status)),
+    };
+    Ok(match run {
+        Some(run) if open(run.status) => steer,
+        _ => Delivery::Queue,
+    })
 }
 
-/// Run `id` of `thread` from the graph, once the thread's stored events are in it.
-async fn graph_run(
+fn open(status: ThreadRunStatus) -> bool {
+    matches!(
+        status,
+        ThreadRunStatus::Starting | ThreadRunStatus::Running | ThreadRunStatus::Waiting
+    )
+}
+
+/// `thread`'s runs from the graph, once the thread's stored events are in it.
+async fn graph_runs(
     daemon: &Daemon,
     thread: RunId,
-    id: TurnId,
-) -> Result<Option<parallax_protocol::ThreadRun>, ErrorObject> {
+) -> Result<Vec<parallax_protocol::ThreadRun>, ErrorObject> {
     daemon
         .store
         .run(&CancellationToken::new(), move |db| {
             db.import_thread(thread.into())?;
-            Ok(crate::graph::runs(db, thread.into())?
-                .into_iter()
-                .find(|run| run.id == id))
+            crate::graph::runs(db, thread.into())
         })
         .await
 }
 
 /// Fails with `queuedMessageNotFound` unless run `id` waits in `thread`'s queue.
 async fn queued(daemon: &Daemon, thread: RunId, id: TurnId) -> Result<(), ErrorObject> {
-    match graph_run(daemon, thread, id).await? {
+    let runs = graph_runs(daemon, thread).await?;
+    match runs.iter().find(|run| run.id == id) {
         Some(run) if run.status == ThreadRunStatus::Queued => Ok(()),
         _ => Err(ErrorObject::parallax(
             ErrorKind::QueuedMessageNotFound,

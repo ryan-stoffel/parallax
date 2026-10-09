@@ -134,16 +134,22 @@ pub enum DispatchMode {
     /// Starts now, or waits in the queue behind the turn under way. `thread/start` prepares a
     /// thread's workspace before its first message, so this is `start_immediately`.
     DeferStart,
-    /// Goes into run `targetRunId`'s turn under way. A backend that takes no messages while it
-    /// runs is stopped and resumed with it. Once that turn has ended, it starts as its own.
+    /// Goes into run `targetRunId`'s turn under way, or with none, the thread's newest. A
+    /// backend that takes no messages while it runs is stopped and resumed with it. Once that
+    /// turn has ended, it starts as its own.
     SteerActive {
-        /// The run under way.
-        target_run_id: TurnId,
+        /// The run under way. Absent means the thread's newest.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        target_run_id: Option<TurnId>,
     },
-    /// Stops run `targetRunId`'s turn and resumes the thread with it, whatever the backend.
+    /// Stops run `targetRunId`'s turn, or with none the thread's newest, and resumes the thread
+    /// with it, whatever the backend.
     RestartActive {
-        /// The run under way.
-        target_run_id: TurnId,
+        /// The run under way. Absent means the thread's newest.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        target_run_id: Option<TurnId>,
     },
     /// Waits in the queue behind the turn under way, or starts now if there is none.
     QueueAfterActive,

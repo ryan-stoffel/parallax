@@ -33,6 +33,15 @@ fn working() -> impl FnMut(&EventsEventParams) -> bool {
 }
 
 fn message(thread_id: RunId, message_id: TurnId, text: &str) -> OrchestrationCommand {
+    sent(thread_id, message_id, text, DispatchMode::QueueAfterActive)
+}
+
+fn sent(
+    thread_id: RunId,
+    message_id: TurnId,
+    text: &str,
+    dispatch_mode: DispatchMode,
+) -> OrchestrationCommand {
     OrchestrationCommand::MessageDispatch {
         thread_id,
         message_id,
@@ -45,7 +54,7 @@ fn message(thread_id: RunId, message_id: TurnId, text: &str) -> OrchestrationCom
         context_window: None,
         fast: None,
         account: None,
-        dispatch_mode: DispatchMode::QueueAfterActive,
+        dispatch_mode,
     }
 }
 
@@ -345,4 +354,41 @@ async fn the_shell_shows_status_and_a_stop_cascades_to_child_threads() {
     assert!(resumed.snapshot.is_none());
     let replayed = until(&mut fresh, |event| event.seq == last).await;
     assert_eq!(replayed.len(), 1);
+}
+
+/// A steer with no target goes to the thread's run under way; with none under way, as after a
+/// Stop, it starts a run of its own.
+#[tokio::test]
+async fn a_steer_with_no_run_under_way_starts_its_own() {
+    let host = Host::start(temp_dir(), fake(busy()));
+    let mut client = host.client().await;
+    let thread = working_thread(&host, &mut client).await;
+    subscribe(&mut client, thread, None).await;
+    until(&mut client, working()).await;
+    dispatch(&mut client, stop(thread)).await;
+    until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::AgentFinished { .. })
+    })
+    .await;
+
+    let steer = TurnId::generate();
+    let mode = DispatchMode::SteerActive {
+        target_run_id: None,
+    };
+    dispatch(&mut client, sent(thread, steer, "Carry on", mode)).await;
+    until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::AgentOutput { items, .. }
+            if items.iter().any(|item| matches!(item, AgentOutputItem::TurnStarted { turn_id: Some(id), .. } if *id == steer)))
+    })
+    .await;
+    let runs = snapshot(&mut client, thread).await.runs;
+    assert_eq!(
+        runs.iter()
+            .map(|run| (run.status, run.ordinal))
+            .collect::<Vec<_>>(),
+        [
+            (ThreadRunStatus::Cancelled, Some(1)),
+            (ThreadRunStatus::Running, Some(2)),
+        ]
+    );
 }

@@ -6829,13 +6829,13 @@ export type OrchestrationCommand = { "type": "message.dispatch",
  */
 export type DispatchMode = { "type": "defer_start" } | { "type": "steer_active",
 	/**
-	 * The run under way.
+	 * The run under way. Absent means the thread's newest.
 	 */
-	targetRunId: TurnId, } | { "type": "restart_active",
+	targetRunId?: TurnId, } | { "type": "restart_active",
 	/**
-	 * The run under way.
+	 * The run under way. Absent means the thread's newest.
 	 */
-	targetRunId: TurnId, } | { "type": "queue_after_active" } | { "type": "start_immediately"
+	targetRunId?: TurnId, } | { "type": "queue_after_active" } | { "type": "start_immediately"
 };
 
 /**

@@ -298,6 +298,23 @@
   },
   {
     "jsonrpc": "2.0",
+    "id": 14,
+    "method": "orchestration/dispatch",
+    "params": {
+      "type": "message.dispatch",
+      "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+      "messageId": "01a0e010-0000-7000-8000-000000000004",
+      "text": "Start that part over.",
+      "dispatchMode": { "type": "restart_active" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 14,
+    "result": { "seq": 220 }
+  },
+  {
+    "jsonrpc": "2.0",
     "id": 12,
     "method": "orchestration/subscribeThread",
     "params": { "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b", "afterSeq": 214 }
