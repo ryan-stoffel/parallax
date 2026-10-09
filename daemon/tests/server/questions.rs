@@ -17,9 +17,9 @@ use parallax_protocol::{
 };
 use plxd::backend::fake::Step;
 use plxd::backend::{RunRequest, ToolPolicy};
-use plxd::mcp::land;
 use plxd::mcp::question::{CHILD_TOOLS, COORDINATOR_TOOLS};
 use plxd::mcp::thread::{CONTEXT_TOOLS, TOOLS};
+use plxd::mcp::{device, land};
 use plxd::paths::DataDir;
 use plxd::routing::BackendRegistry;
 use serde_json::json;
@@ -90,15 +90,18 @@ async fn questions(client: &mut Conn, project: ProjectId) -> Vec<Question> {
         .questions
 }
 
-/// The names `mcp`'s `tools/list` gives.
+/// The names `mcp`'s `tools/list` gives, but the device tools every caller gets last (PLX-640).
 async fn tool_names(mcp: &mut Mcp) -> Vec<String> {
     let listed = mcp.request("tools/list", json!({})).await;
-    listed["result"]["tools"]
+    let mut names: Vec<String> = listed["result"]["tools"]
         .as_array()
         .unwrap()
         .iter()
         .map(|tool| tool["name"].as_str().unwrap().to_owned())
-        .collect()
+        .collect();
+    let devices = names.split_off(names.len() - device::TOOLS.len());
+    assert_eq!(devices, device::TOOLS, "every caller's last tools");
+    names
 }
 
 /// Waits until `run` is running, so a message to it waits in its queue.

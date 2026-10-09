@@ -2362,8 +2362,17 @@ impl Actor {
     /// `TurnStarted` to list (PLX-191, decision 0026). If they can't be stored, the CLI still has
     /// them, and the transcript shows the message without them.
     async fn keep_images(&mut self, turn_id: Option<TurnId>, images: Vec<PromptImage>) {
+        let ids = self.store_images(images).await;
+        if !ids.is_empty() {
+            self.images.insert(turn_id, ids);
+        }
+    }
+
+    /// Stores `images` for `agent/image` and returns their ids, or none when there are none or
+    /// they can't be stored.
+    async fn store_images(&self, images: Vec<PromptImage>) -> Vec<ImageId> {
         if images.is_empty() {
-            return;
+            return Vec::new();
         }
         let ids: Vec<ImageId> = images.iter().map(|_| ImageId::generate()).collect();
         let rows: Vec<_> = ids
@@ -2384,13 +2393,27 @@ impl Actor {
         })
         .await;
         match stored {
-            Ok(()) => {
-                self.images.insert(turn_id, ids);
-            }
+            Ok(()) => ids,
             Err(error) => {
-                warn!(run = %self.id, error = %error.message, "could not store a message's images");
+                warn!(run = %self.id, error = %error.message, "could not store images");
+                Vec::new()
             }
         }
+    }
+
+    /// Stores the images a tool returned (PLX-640) and lists them on its `ToolResult`, when
+    /// they pass a message's checks; the transcript shows the result without any that don't.
+    async fn keep_tool_images(&self, event: &Event, item: &mut AgentOutputItem) {
+        let (Event::ToolResult { images, .. }, AgentOutputItem::ToolResult { images: ids, .. }) =
+            (event, item)
+        else {
+            return;
+        };
+        if let Err(error) = crate::images::check(images) {
+            warn!(run = %self.id, error = %error.message, "dropped a tool's images");
+            return;
+        }
+        *ids = self.store_images(images.clone()).await;
     }
 
     /// Keeps the threads attached to `turn_id`'s message, which its CLI has now taken, for its
@@ -2724,6 +2747,7 @@ impl Actor {
                 let created = self.created_prs(&event);
                 if let Some(mut item) = output_item(&event) {
                     self.fill_turn_started(&mut item);
+                    self.keep_tool_images(&event, &mut item).await;
                     self.push(item).await;
                 }
                 for url in created {

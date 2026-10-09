@@ -165,6 +165,19 @@ test("deltas without a message id stream into one message that the full text rep
   });
 });
 
+test("a tool result's images join its call (PLX-640)", () => {
+  const imageId = uuidv7();
+  const t = build(
+    output({ kind: "toolCall", callId: "c1", name: "mcp__plxd__device_screenshot", input: {} }),
+    output({ kind: "toolResult", callId: "c1", status: "ok", output: "{}", images: [imageId] }),
+    output({ kind: "toolCall", callId: "c2", name: "Bash", input: { command: "ls" } }),
+    output({ kind: "toolResult", callId: "c2", status: "ok", output: "a" }),
+  );
+  const [shot, ls] = of(t.items, "tool");
+  expect(shot).toMatchObject({ callId: "c1", status: "ok", images: [imageId] });
+  expect(ls).not.toHaveProperty("images");
+});
+
 test("a transcript opened at its end, built again with each older page, reads as a full load (PLX-490)", () => {
   const events = [
     ...upTo(8),

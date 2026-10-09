@@ -357,12 +357,15 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             call_id,
             status,
             output,
+            ..
         } => AgentOutputItem::ToolResult {
             call_id: truncate(call_id, MAX_ID_BYTES),
             status: *status,
             output: output
                 .as_deref()
                 .map(|output| truncate(output, MAX_TOOL_OUTPUT_BYTES)),
+            // The actor stores the images and fills in their ids.
+            images: Vec::new(),
         },
         Event::Reasoning { message_id, text } => AgentOutputItem::Reasoning {
             message_id: id(message_id.as_deref()),
@@ -593,6 +596,7 @@ mod tests {
             call_id: "c".into(),
             status: ToolStatus::Ok,
             output: Some("é".repeat(MAX_TOOL_OUTPUT_BYTES)),
+            images: Vec::new(),
         };
         let Some(AgentOutputItem::ToolResult { output, status, .. }) = output_item(&result) else {
             panic!("a tool result");
@@ -698,6 +702,7 @@ mod tests {
             call_id: big.clone(),
             status: ToolStatus::Ok,
             output: None,
+            images: Vec::new(),
         }) else {
             panic!("a tool result");
         };

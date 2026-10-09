@@ -14,10 +14,11 @@
 //! [`super::land`]'s `land` (PLX-410). A Project's coordinator launches its children in its
 //! Project, through `agent/start` with itself as their coordinator thread, so they show in the
 //! Project's Agents panel, run as threads that ask through the inbox, in the Project's mode, and
-//! `thread_list` lists its Project's runs, each once.
+//! `thread_list` lists its Project's runs, each once. Every caller also gets [`super::device`]'s
+//! tools (PLX-640).
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use parallax_protocol::methods::{
@@ -42,10 +43,10 @@ use tokio::time::{Instant, sleep};
 use uuid::Uuid;
 
 use super::{
-    MAX_CONTEXT_BYTES, MAX_PATH_BYTES, MAX_TEXT_BYTES, Plxd, Tools, check_text, clip, last_output,
-    parse, pretty, tail,
+    MAX_CONTEXT_BYTES, MAX_PATH_BYTES, MAX_TEXT_BYTES, Plxd, Reply, Tools, check_text, clip,
+    last_output, parse, pretty, tail,
 };
-use super::{land, question};
+use super::{device, land, question};
 
 /// Every tool the server offers a thread outside a Project.
 pub const TOOLS: &[&str] = &[
@@ -105,6 +106,9 @@ pub struct Binding {
     pub plxd: Plxd,
     /// The calling thread's run.
     pub run: RunId,
+    /// plxd's data folder's `tmp/`, where the device tools keep the devices each thread has open
+    /// (PLX-640).
+    pub temp: PathBuf,
 }
 
 /// A bound server: its [`Binding`], and what the caller's run is.
@@ -116,6 +120,8 @@ struct Server {
     coordinator: bool,
     /// The memory the caller reaches, if any (0044).
     memory: Option<super::memory::Memory>,
+    /// The device tools, with the devices the caller has open (PLX-640).
+    devices: device::Devices,
 }
 
 /// Checks that the bound run exists, then serves MCP on `input` and `output` until `input` ends.
@@ -143,6 +149,7 @@ pub async fn run(
         project: in_project.map(|project| project.id),
         coordinator,
         memory,
+        devices: device::Devices::new(&binding.temp, binding.run),
     };
     super::serve(&server, input, output).await
 }
@@ -164,7 +171,7 @@ impl Tools for Server {
             .memory
             .as_ref()
             .map_or(&[][..], |memory| memory.names());
-        [&tools[..], memory].concat()
+        [&tools[..], memory, device::TOOLS].concat()
     }
 
     fn definitions(&self) -> Value {
@@ -177,15 +184,19 @@ impl Tools for Server {
             if let Some(memory) = &self.memory {
                 list.extend(memory.definitions());
             }
+            list.extend(device::definitions());
         }
         tools
     }
 
-    async fn call(&self, name: &str, arguments: Value) -> Result<String, String> {
-        if name.starts_with("memory_") {
-            return memory_tool(self, name, arguments).await;
+    async fn call(&self, name: &str, arguments: Value) -> Result<Reply, String> {
+        if name.starts_with("device_") {
+            return self.devices.call(name, arguments).await;
         }
-        call_tool(self, name, arguments).await
+        if name.starts_with("memory_") {
+            return memory_tool(self, name, arguments).await.map(Reply::from);
+        }
+        call_tool(self, name, arguments).await.map(Reply::from)
     }
 }
 
@@ -1370,7 +1381,7 @@ async fn update(binding: &Binding, args: UpdateArgs) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{ALLOWED_TOOLS, CONTEXT_TOOLS, TOOLS, definitions};
-    use crate::mcp::{SERVER, land, question};
+    use crate::mcp::{SERVER, device, land, question};
 
     #[test]
     fn the_allowlist_is_the_servers_name_and_each_role_lists_its_tools() {
@@ -1428,6 +1439,7 @@ mod tests {
         tools.extend(question::definitions(false));
         tools.extend(question::definitions(true));
         tools.extend(land::definitions(true));
+        tools.extend(device::definitions());
         for tool in &tools {
             let schema = &tool["inputSchema"];
             assert_eq!(schema["additionalProperties"], false, "{tool}");

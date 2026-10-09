@@ -44,6 +44,8 @@ type ItemBody =
   /**
    * `status` is absent until its result arrives; `name` is null for a result with no call.
    * `subagent` is the first line of the prompt of the subagent a coordinator's plxd tool names.
+   * `images` are the ids of the images the tool returned, such as a device screenshot, for
+   * `agent/image` (PLX-640).
    */
   | {
       kind: "tool";
@@ -53,6 +55,7 @@ type ItemBody =
       input?: JsonValue;
       status?: AgentToolStatus;
       output?: string;
+      images?: ImageId[];
       subagent?: string;
     }
   /** `active` is the step under way as the agent words it, from Claude Code's task tools. */
@@ -546,7 +549,11 @@ function applyOutput(
       const sub = subagents[item.callId];
       if (sub) subagents[item.callId] = { ...sub, call: item.status };
       const i = items.findLastIndex((x) => x.kind === "tool" && x.callId === item.callId);
-      const result = { status: item.status, output: item.output };
+      const result = {
+        status: item.status,
+        output: item.output,
+        ...(!!item.images?.length && { images: item.images }),
+      };
       if (i >= 0) items[i] = { ...(items[i] as Extract<Item, { kind: "tool" }>), ...result };
       else items.push({ kind: "tool", key, callId: item.callId, name: null, ...result });
       break;

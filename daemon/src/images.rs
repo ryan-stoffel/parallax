@@ -1,10 +1,13 @@
 //! Images sent with a prompt or message (PLX-191, decision 0026): their caps, which `initialize`
 //! advertises as the `promptImages` capability's options, and the checks every method that takes
 //! `images` runs before anything is created or sent. Also an icon's image (PLX-339, decision
-//! 0038), whose cap `initialize` advertises as the `iconImages` capability's `maxBytes`.
+//! 0038), whose cap `initialize` advertises as the `iconImages` capability's `maxBytes`. And the
+//! images a tool returns, such as a device screenshot (PLX-640), which [`from_blocks`] finds.
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{ErrorKind, ImageMediaType, PromptImage};
+use serde::Deserialize as _;
+use serde_json::Value;
 
 /// The most images one message takes.
 pub(crate) const MAX_IMAGES: usize = 10;
@@ -94,6 +97,48 @@ fn is_type(media_type: ImageMediaType, bytes: &[u8]) -> bool {
     }
 }
 
+/// Standard base64, with padding.
+pub(crate) fn encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            chunk.get(1).copied().unwrap_or(0),
+            chunk.get(2).copied().unwrap_or(0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for (index, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+            if index <= chunk.len() {
+                out.push(char::from(ALPHABET[((n >> shift) & 63) as usize]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// The images among a tool result's content blocks, in MCP's shape (`data` and `mimeType`) or the
+/// Messages API's (`source.data` and `source.media_type`), leaving out any of a type plxd doesn't
+/// take. Anything but an array of blocks has none.
+pub(crate) fn from_blocks(content: &Value) -> Vec<PromptImage> {
+    let blocks = content.as_array().map_or(&[][..], Vec::as_slice);
+    blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("image"))
+        .filter_map(|block| {
+            let source = block.get("source").unwrap_or(block);
+            let media_type = source
+                .get("mimeType")
+                .or_else(|| source.get("media_type"))?;
+            let media_type = ImageMediaType::deserialize(media_type).ok()?;
+            let data = source.get("data")?.as_str()?.to_owned();
+            (media_type != ImageMediaType::Unknown).then_some(PromptImage { media_type, data })
+        })
+        .collect()
+}
+
 /// Decodes standard base64 with padding, or `None` if `text` isn't that.
 pub(crate) fn decode(text: &str) -> Option<Vec<u8>> {
     let text = text.as_bytes();
@@ -131,6 +176,7 @@ mod tests {
 
     use super::{
         MAX_ICON_BYTES, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TOTAL_BYTES, check, check_icon, decode,
+        encode,
     };
 
     /// A 1x1 PNG.
@@ -156,6 +202,22 @@ mod tests {
             .unwrap_err()
             .parallax_data()
             .map(|data| data.kind)
+    }
+
+    #[test]
+    fn encodes_rfc_4648_vectors() {
+        for (input, output) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg=="),
+            ("fooba", "Zm9vYmE="),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(encode(input.as_bytes()), output, "{input}");
+        }
+        assert_eq!(encode(&[0xff, 0xfe, 0x00]), "//4A");
     }
 
     #[test]

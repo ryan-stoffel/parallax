@@ -920,6 +920,7 @@ async fn a_worker_run_edits_in_its_cwd_and_reports_its_tool_calls() {
                 call_id,
                 status,
                 output,
+                ..
             } => Some((call_id.as_str(), *status, output.as_deref())),
             _ => None,
         })
@@ -1817,6 +1818,26 @@ fn command_lifecycle_messages_are_skipped_without_a_notice() {
 }
 
 #[test]
+fn a_tool_results_images_are_its_events_images() {
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+    translator.line(&init_line(r#"["Bash"]"#));
+    // An MCP tool's image, as Claude Code 2.1 sends it (PLX-640).
+    let line = br#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t1","type":"tool_result","content":[{"type":"text","text":"{}"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]}]}}"#;
+    assert_eq!(
+        translator.line(line),
+        [Step::Emit(Event::ToolResult {
+            call_id: "t1".to_owned(),
+            status: ToolStatus::Ok,
+            output: Some("{}".to_owned()),
+            images: vec![PromptImage {
+                media_type: ImageMediaType::Png,
+                data: "iVBORw0KGgo=".to_owned(),
+            }],
+        })]
+    );
+}
+
+#[test]
 fn output_before_the_init_is_refused() {
     let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
     let assistant =
@@ -2001,6 +2022,7 @@ async fn a_worker_plans_with_claude_code_s_task_tools() {
                 call_id,
                 status,
                 output,
+                ..
             } => Some((call_id.as_str(), *status, output.as_deref())),
             _ => None,
         })
@@ -2146,6 +2168,7 @@ async fn a_coordinator_plans_with_claude_code_s_task_tools_on_any_model() {
                 call_id,
                 status,
                 output,
+                ..
             } => Some((call_id.as_str(), *status, output.as_deref())),
             _ => None,
         })

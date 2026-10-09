@@ -1,6 +1,7 @@
 //! `plxd mcp --thread <runId>`: a thread's Parallax tools, as an MCP server on stdio (decisions
-//! 0019 and 0041). The tools are [`thread`]'s, with [`question`]'s for a Project's threads and
-//! [`memory`]'s by the caller's role (0044); this module is the server they share.
+//! 0019 and 0041). The tools are [`thread`]'s, with [`question`]'s for a Project's threads,
+//! [`memory`]'s by the caller's role (0044), and [`device`]'s (PLX-640); this module is the
+//! server they share.
 //!
 //! A Project's coordinator gets the same server as any thread (PLX-380): its 0019 tools, bound to
 //! one project, are gone.
@@ -32,6 +33,7 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::peer::Plxd;
 
+pub mod device;
 pub mod land;
 pub mod memory;
 pub mod question;
@@ -70,8 +72,22 @@ trait Tools {
     fn names(&self) -> Vec<&'static str>;
     /// `tools/list`'s `tools`.
     fn definitions(&self) -> Value;
-    /// Runs tool `name`, one of [`Tools::names`]: its text, or an error the model sees.
-    async fn call(&self, name: &str, arguments: Value) -> Result<String, String>;
+    /// Runs tool `name`, one of [`Tools::names`]: its reply, or an error the model sees.
+    async fn call(&self, name: &str, arguments: Value) -> Result<Reply, String>;
+}
+
+/// A tool's reply: its text, and a PNG the model sees as an image, such as a device's screen.
+pub struct Reply {
+    /// The text, which is JSON for most tools.
+    pub text: String,
+    /// The PNG's bytes, if the reply has one.
+    pub png: Option<Vec<u8>>,
+}
+
+impl From<String> for Reply {
+    fn from(text: String) -> Self {
+        Self { text, png: None }
+    }
 }
 
 async fn serve(
@@ -212,16 +228,19 @@ struct ToolCall {
     arguments: Option<Value>,
 }
 
-/// A `tools/call` result: the text, and whether it reports a failure the model should see.
-fn tool_result(outcome: Result<String, String>) -> Value {
-    let (text, is_error) = match outcome {
-        Ok(text) => (text, false),
-        Err(text) => (text, true),
+/// A `tools/call` result: the text, any image, and whether it reports a failure the model should
+/// see.
+fn tool_result(outcome: Result<Reply, String>) -> Value {
+    let (reply, is_error) = match outcome {
+        Ok(reply) => (reply, false),
+        Err(text) => (Reply::from(text), true),
     };
-    json!({
-        "content": [{"type": "text", "text": clip(&text, MAX_RESULT_BYTES)}],
-        "isError": is_error,
-    })
+    let mut content = vec![json!({"type": "text", "text": clip(&reply.text, MAX_RESULT_BYTES)})];
+    if let Some(png) = reply.png {
+        let data = crate::images::encode(&png);
+        content.push(json!({"type": "image", "data": data, "mimeType": "image/png"}));
+    }
+    json!({"content": content, "isError": is_error})
 }
 
 /// `text`, cut to at most `max` bytes at a character boundary, with a note when it was cut.
@@ -316,7 +335,26 @@ async fn last_output(plxd: &Plxd, run_id: RunId) -> Result<Option<String>, Strin
 
 #[cfg(test)]
 mod tests {
-    use super::{clip, tail};
+    use serde_json::json;
+
+    use super::{Reply, clip, tail, tool_result};
+
+    #[test]
+    fn a_reply_with_a_png_carries_it_as_an_image_block_after_its_text() {
+        let png = Some(b"\x89PNG".to_vec());
+        let result = tool_result(Ok(Reply {
+            text: "{}".to_owned(),
+            png,
+        }));
+        assert_eq!(
+            result["content"],
+            json!([
+                {"type": "text", "text": "{}"},
+                {"type": "image", "data": "iVBORw==", "mimeType": "image/png"},
+            ])
+        );
+        assert_eq!(result["isError"], false);
+    }
 
     #[test]
     fn long_text_is_cut_at_a_character_boundary_with_a_note() {

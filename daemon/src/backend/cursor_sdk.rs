@@ -816,6 +816,7 @@ impl Driver {
                 call_id: str_of(value, "callId").unwrap_or("tool").to_owned(),
                 status,
                 output: str_of(value, "output").map(str::to_owned),
+                images: Vec::new(),
             })
             .await
     }

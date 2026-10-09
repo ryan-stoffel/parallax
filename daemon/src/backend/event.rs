@@ -11,7 +11,7 @@ pub use parallax_protocol::{
     AgentSubagentStatus as SubagentStatus, AgentTodoItem as TodoItem,
     AgentTodoStatus as TodoStatus, AgentToolStatus as ToolStatus,
 };
-use parallax_protocol::{ApprovalId, TurnId};
+use parallax_protocol::{ApprovalId, PromptImage, TurnId};
 use serde::{Deserialize, Serialize};
 
 use super::process::Exit;
@@ -86,6 +86,9 @@ pub enum Event {
         /// What the tool returned, when the vendor includes it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,
+        /// The images it returned, such as a device screenshot (PLX-640).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<PromptImage>,
     },
     /// Part or all of the model's reasoning, when the vendor shows it: Claude's thinking blocks,
     /// Codex's `reasoning` items.

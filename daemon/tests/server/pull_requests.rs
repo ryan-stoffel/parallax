@@ -34,6 +34,7 @@ fn tool(call_id: &str, name: &str, input: serde_json::Value, output: &str) -> [S
             call_id: call_id.to_owned(),
             status: ToolStatus::Ok,
             output: Some(output.to_owned()),
+            images: Vec::new(),
         }),
     ]
 }
