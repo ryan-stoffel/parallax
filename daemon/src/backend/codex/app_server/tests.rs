@@ -700,6 +700,7 @@ fn thread_mcp_joins_user_config_on_start_resume_and_fork() {
                 "mcp_servers.plxd.args":
                     ["mcp", "--data-dir", "/tmp/parallax data", "--thread", request.run_id.to_string()],
                 "mcp_servers.plxd.default_tools_approval_mode": "approve",
+                "mcp_servers.plxd.tool_timeout_sec": 3660,
             })
         );
         request.approvals = false;

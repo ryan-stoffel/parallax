@@ -17,9 +17,9 @@ use parallax_protocol::methods::{
     OrchestrationDispatch, ProvidersList, TaskDelegate, TaskStatus, ThreadMergeBack,
 };
 use parallax_protocol::{
-    AccountChoice, AgentEffort, AgentPermission, AgentStatus, CompletionWake, DelegatedTask,
-    OrchestrationCommand, ProvidersListParams, RunId, TaskDelegateParams, TaskStatusParams,
-    ThreadMergeBackParams,
+    AccountChoice, AgentEffort, AgentPermission, AgentRun, AgentStatus, CompletionWake,
+    DelegatedTask, OrchestrationCommand, ProvidersListParams, RunId, TaskDelegateParams,
+    TaskStatusParams, ThreadMergeBackParams,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -523,16 +523,20 @@ async fn status(
     .await
 }
 
-/// Waits until `task` has ended a turn, or `timeout` passes: whether it ended. A task is never a
-/// Project's run, so it never waits for capacity (0046).
+/// Waits until `task` has ended a turn, or `timeout` passes: whether it ended.
 async fn wait_for(plxd: &Plxd, task: RunId, timeout: Duration) -> Result<bool, String> {
     let deadline = Instant::now() + timeout;
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         match agent_wait(plxd, task, left.min(MAX_AGENT_WAIT)).await {
             Ok(run) => {
-                if !running(&run?) {
+                let run = run?;
+                if !running(&run) && !waiting(&run) {
                     return Ok(true);
+                }
+                // A usage limit holds it until its reset, which `agent/wait` counts as idle.
+                if waiting(&run) {
+                    sleep(POLL).await;
                 }
             }
             // plxd may be restarting: try again until the deadline.
@@ -545,10 +549,15 @@ async fn wait_for(plxd: &Plxd, task: RunId, timeout: Duration) -> Result<bool, S
     }
 }
 
+/// Whether `run` waits to resume past a usage limit (0049): it hasn't ended.
+fn waiting(run: &AgentRun) -> bool {
+    run.status == AgentStatus::Waiting
+}
+
 /// A task as T3's tools show one.
 async fn shown(plxd: &Plxd, task: &DelegatedTask, wait_timed_out: bool) -> Result<Value, String> {
     let run = &task.run;
-    let ended = !running(run);
+    let ended = !running(run) && !waiting(run);
     let summary = if ended {
         last_output(plxd, run.id)
             .await?
@@ -593,7 +602,7 @@ async fn cancel(plxd: &Plxd, caller: RunId, task_id: RunId) -> Result<String, St
     crate::delegation::check_mode(mine.permission, task.run.permission).map_err(|_| {
         format!("task {task_id} now runs in a mode above yours, so you can't stop it")
     })?;
-    let ended = !running(&task.run);
+    let ended = !running(&task.run) && !waiting(&task.run);
     plxd.call::<OrchestrationDispatch>(OrchestrationCommand::RunInterrupt {
         thread_id: task_id,
         hold_queue: true,

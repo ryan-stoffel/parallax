@@ -85,6 +85,55 @@ impl Store {
         Ok(())
     }
 
+    /// The threads that work in `owner`'s workspace, with each one's run status.
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored id is corrupt.
+    pub fn shared_users(&self, owner: Uuid) -> Result<Vec<(Uuid, String)>, StoreError> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT l.thread_id, r.status FROM thread_lineage AS l
+             JOIN runs AS r ON r.id = l.thread_id WHERE l.workspace_of = ?1",
+        )?;
+        let rows = stmt.query_map(params![owner.to_string()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.map(|row| {
+            let (id, status) = row?;
+            Ok((Uuid::parse_str(&id)?, status))
+        })
+        .collect()
+    }
+
+    /// The delegated tasks (lineage `subagent`) whose parent is `parent`.
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored id is corrupt.
+    pub fn tasks_of(&self, parent: Uuid) -> Result<Vec<Uuid>, StoreError> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT l.thread_id FROM thread_lineage AS l JOIN runs AS r ON r.id = l.thread_id
+             WHERE r.parent = ?1 AND l.relationship = 'subagent'",
+        )?;
+        let rows = stmt.query_map(params![parent.to_string()], |row| row.get::<_, String>(0))?;
+        rows.map(|id| Ok(Uuid::parse_str(&id?)?)).collect()
+    }
+
+    /// How many threads in another's workspace are starting or running, host-wide.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn running_shared_threads(&self) -> Result<u64, StoreError> {
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT COUNT(*) FROM thread_lineage AS l JOIN runs AS r ON r.id = l.thread_id
+             WHERE r.status IN ('starting', 'running')",
+            )?
+            .query_row([], |row| row.get(0))?)
+    }
+
     /// Records a pending context transfer `id` of `kind` from `source`, through its `seq`, to
     /// `target`'s next message.
     ///

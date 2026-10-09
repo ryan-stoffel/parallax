@@ -7,12 +7,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use parallax_protocol::methods::{
-    AgentEvents, AgentList, AgentSend, OrchestrationDispatch, RepoAdd, ThreadList, ThreadStart,
+    AgentAccept, AgentEvents, AgentList, AgentSend, AgentWait, OrchestrationDispatch, RepoAdd,
+    TaskDelegate, ThreadDelete, ThreadList, ThreadStart,
 };
 use parallax_protocol::{
-    AccountChoice, AgentDelivery, AgentEventsParams, AgentListParams, AgentOutputItem,
-    AgentPermission, AgentSendParams, OrchestrationCommand, ParallaxEvent, RepoAddParams, RepoId,
-    RunId, Thread, ThreadListParams, ThreadStartParams, TurnId,
+    AcceptId, AccountChoice, AgentAcceptParams, AgentDelivery, AgentEventsParams, AgentListParams,
+    AgentOutputItem, AgentPermission, AgentSendParams, AgentStatus, AgentWaitParams,
+    AgentWaitUntil, ErrorKind, OrchestrationCommand, ParallaxEvent, RepoAddParams, RepoId, RunId,
+    TaskDelegateParams, Thread, ThreadDeleteParams, ThreadListParams, ThreadStartParams, TurnId,
 };
 use plxd::backend::fake::Step;
 use plxd::mcp::MAX_CALLS;
@@ -1214,10 +1216,212 @@ async fn a_task_is_cancelled_or_stopped_with_its_parent() {
         .unwrap();
     let waited = mcp.ok("thread_wait", json!({"runId": stopped})).await;
     assert_eq!(waited["thread"]["status"], "cancelled", "{waited}");
+
+    // The user's next message lets wake-ups through again, and its turn's end would send what
+    // waits: the Stop dropped the stopped task's.
+    client
+        .call::<AgentSend>(AgentSendParams {
+            run_id: me,
+            turn_id: TurnId::generate(),
+            text: "Carry on.".to_owned(),
+            model: None,
+            effort: None,
+            permission: None,
+            context_window: None,
+            fast: None,
+            account: None,
+            images: Vec::new(),
+            threads: Vec::new(),
+            from: None,
+            delivery: None,
+        })
+        .await
+        .unwrap();
+    let _ = client
+        .call::<OrchestrationDispatch>(OrchestrationCommand::QueueResume { thread_id: me })
+        .await;
+    working_again(&mut client, me).await;
+    steer(&mut client, me, "Wrap up.").await;
+    idle(&mut client, me).await;
     sleep(QUIET).await;
     assert!(
         wakes(&mut client, me).await.is_empty(),
-        "a cancelled task wakes no one, and a Stop pauses wake-ups"
+        "a cancelled or stopped task never wakes its parent"
+    );
+    host.server.stop().await;
+}
+
+/// Waits until `run` is idle, as the caller can't `thread_wait` on itself.
+async fn idle(client: &mut Conn, run: RunId) {
+    let waited = client
+        .call::<AgentWait>(AgentWaitParams {
+            run_ids: vec![run],
+            until: AgentWaitUntil::Any,
+            timeout_ms: 10_000,
+        })
+        .await
+        .unwrap();
+    assert!(
+        !matches!(
+            waited.runs[0].status,
+            AgentStatus::Starting | AgentStatus::Running
+        ),
+        "{run} is still running"
+    );
+}
+
+/// Waits until `run` is in the middle of a second turn of [`steered`].
+async fn working_again(client: &mut Conn, run: RunId) {
+    let deadline = Instant::now() + PATIENCE;
+    while texts(client, run)
+        .await
+        .iter()
+        .filter(|text| *text == "Working")
+        .count()
+        < 2
+    {
+        assert!(Instant::now() < deadline, "{run} never started again");
+        sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Accept never removes a worktree a thread is working in (0063): it refuses until the thread
+/// ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accept_refuses_while_a_thread_works_in_the_worktree() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+    let child = task(
+        &mcp.ok("delegate_task", json!({"task": "Keep editing."}))
+            .await,
+    );
+    working(&mut client, child).await;
+    steer(&mut client, me, "Wrap up.").await;
+    idle(&mut client, me).await;
+
+    let params = || AgentAcceptParams {
+        run_id: me,
+        id: AcceptId::generate(),
+        commit: None,
+    };
+    let refused = client.call::<AgentAccept>(params()).await.unwrap_err();
+    assert_eq!(
+        refused.parallax_data().unwrap().kind,
+        ErrorKind::MergeRefused
+    );
+    assert!(
+        refused.message.contains(&child.to_string()),
+        "{}",
+        refused.message
+    );
+
+    steer(&mut client, child, "Finish.").await;
+    mcp.ok("thread_wait", json!({"runId": child})).await;
+    let after = client
+        .call::<AgentAccept>(params())
+        .await
+        .err()
+        .map(|error| error.message);
+    assert!(
+        !after
+            .as_deref()
+            .is_some_and(|message| message.contains("still work in")),
+        "{after:?}"
+    );
+    host.server.stop().await;
+}
+
+/// Deleting a thread keeps its worktree while another thread works in it, and the last thread in
+/// it removes it (0063).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shared_worktree_outlives_its_owner_until_its_last_thread_goes() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let path = worktree(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+    let child = task(
+        &mcp.ok("delegate_task", json!({"task": "Keep editing."}))
+            .await,
+    );
+    working(&mut client, child).await;
+    drop(mcp);
+
+    client
+        .call::<ThreadDelete>(ThreadDeleteParams { run_id: me })
+        .await
+        .unwrap();
+    sleep(QUIET).await;
+    assert!(path.is_dir(), "its child still works in it");
+    steer(&mut client, child, "Finish.").await;
+    let deadline = Instant::now() + PATIENCE;
+    while !texts(&mut client, child)
+        .await
+        .iter()
+        .any(|text| text == "Finish.")
+    {
+        assert!(Instant::now() < deadline, "the child never got its message");
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    client
+        .call::<ThreadDelete>(ThreadDeleteParams { run_id: child })
+        .await
+        .unwrap();
+    let deadline = Instant::now() + PATIENCE;
+    while path.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the last thread left the worktree behind"
+        );
+        sleep(Duration::from_millis(50)).await;
+    }
+    host.server.stop().await;
+}
+
+/// At most 8 threads run in shared worktrees on a host at once, unlike T3 (0063). A retry that
+/// names a run outside any shared workspace is refused, not given a lineage.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_worktree_threads_are_capped_at_eight_running() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+    let prompts: Vec<Value> = (0..8)
+        .map(|i| json!({"prompt": format!("Part {i}.")}))
+        .collect();
+    let made = mcp.ok("create_threads", json!({"threads": prompts})).await;
+    assert_eq!(made["threads"].as_array().unwrap().len(), 8, "{made}");
+    let refused = mcp
+        .refused("delegate_task", json!({"task": "One more."}))
+        .await;
+    assert!(refused.contains("8 threads already run"), "{refused}");
+
+    let conflict = client
+        .call::<TaskDelegate>(TaskDelegateParams {
+            run_id: me,
+            owner: me,
+            prompt: "Again.".to_owned(),
+            title: None,
+            account: None,
+            model: None,
+            effort: None,
+            permission: None,
+            completion_wake: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        conflict.parallax_data().unwrap().kind,
+        ErrorKind::IdConflict
     );
     host.server.stop().await;
 }

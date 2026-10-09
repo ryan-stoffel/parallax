@@ -1285,6 +1285,8 @@ impl Actor {
             )));
         }
         self.effect_busy(ErrorKind::MergeRefused)?;
+        // Accept removes the worktree, so never from under a thread working in it (0063).
+        crate::delegation::check_accept(&self.daemon, self.id).await?;
         let Some(commit) = self.row.state.commit_sha.clone() else {
             return Err(refused(format!(
                 "run {} has no committed changes to accept",
