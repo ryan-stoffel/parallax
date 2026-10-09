@@ -14,8 +14,6 @@ export function describeError(error: RpcError): string {
       return "The account for this thread isn't on this host anymore.";
     case "keychainUnavailable":
       return "Parallax couldn't read the account's API key. Unlock your keychain, then try again.";
-    case "revertRefused":
-      return "This thread cannot be reverted now. Wait for its turn and checkpoint to finish, and use a provider that supports reverting. File restore also requires this thread’s own worktree.";
     case "repoNotFound":
       return "That repository isn't in Parallax anymore. Choose another one.";
     default:

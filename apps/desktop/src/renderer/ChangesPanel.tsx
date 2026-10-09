@@ -62,6 +62,21 @@ export function ChangesPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hostId, runId, version, unavailable]);
 
+  useEffect(() => {
+    if (unavailable) return;
+    // Checkpoint details stay on the thread subscription, outside the shell's stream.
+    return window.parallax.watch(hostId, { threadId: runId }, (message) => {
+      if (
+        message.type === "snapshot" ||
+        (message.type === "event" &&
+          ["thread.checkpoint", "thread.reverted"].includes(message.event.event.kind))
+      )
+        void load();
+    });
+    // `load` reads only these.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostId, runId, unavailable]);
+
   const turns = Array.isArray(runs) ? turnsOf(runs) : [];
   const latest = turns.findLast(ready)?.ordinal;
   const turn = shownTurn === "all" ? undefined : turns.find((t) => t.ordinal === shownTurn);
