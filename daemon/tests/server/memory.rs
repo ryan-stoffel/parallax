@@ -106,7 +106,12 @@ async fn names(mcp: &mut Mcp) -> Vec<String> {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap().to_owned())
         .collect();
-    let last = [plxd::mcp::html::TOOLS, plxd::mcp::device::TOOLS].concat();
+    let last = [
+        plxd::mcp::html::TOOLS,
+        plxd::mcp::preview::TOOLS,
+        plxd::mcp::device::TOOLS,
+    ]
+    .concat();
     let devices = names.split_off(names.len() - last.len());
     assert_eq!(devices, last, "every caller's last tools");
     names

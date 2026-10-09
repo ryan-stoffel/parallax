@@ -2,6 +2,8 @@ import type { DidFailLoadEvent, WebviewTag } from "electron";
 import { ArrowLeft, ArrowRight, Globe, RotateCw, TriangleAlert, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import type { PreviewTab } from "../protocol/generated/protocol";
+import { AgentBrowser } from "./AgentBrowser";
 import { IconButton } from "./ui";
 
 /** Google's results page for `query`. */
@@ -50,7 +52,19 @@ export const shortUrl = (url: string) =>
  * the one already shown. `remoteHost`, the open host's name when it's an SSH host, notes that
  * localhost is this computer.
  */
-export function Browser({ page, remoteHost }: { page?: { url: string }; remoteHost?: string }) {
+export function Browser({
+  page,
+  remoteHost,
+  agent,
+}: {
+  page?: { url?: string; agentTab?: string };
+  remoteHost?: string;
+  /** The open thread's agent tabs (PLX-639), which show above the user's own browser. */
+  agent?: { hostId: string; runId: string; tabs: PreviewTab[] };
+}) {
+  // The agent tab shown, by id, or undefined for the user's own browser.
+  const [agentTab, setAgentTab] = useState<string>();
+  const shownTab = agent?.tabs.find((t) => t.tabId === agentTab);
   const view = useRef<WebviewTag>(null);
   // The first page, which mounts the webview; later pages load in it.
   const [src, setSrc] = useState<string>();
@@ -73,8 +87,14 @@ export function Browser({ page, remoteHost }: { page?: { url: string }; remoteHo
     else setSrc(next);
   };
 
-  // Only a new `page` loads a page.
-  useEffect(() => page && open(page.url), [page]);
+  // Only a new `page` loads a page, or shows an agent's tab.
+  useEffect(() => {
+    if (page?.agentTab) setAgentTab(page.agentTab);
+    else if (page?.url !== undefined) {
+      setAgentTab(undefined);
+      open(page.url);
+    }
+  }, [page]);
 
   useEffect(() => {
     const el = view.current;
@@ -107,8 +127,8 @@ export function Browser({ page, remoteHost }: { page?: { url: string }; remoteHo
     };
   }, [src]);
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
+  const own = (
+    <div className={`min-h-0 flex-1 flex-col ${shownTab ? "hidden" : "flex"}`}>
       <form
         className="flex items-center gap-0.5 border-b border-border px-2 pb-1.5"
         onSubmit={(e) => {
@@ -198,6 +218,43 @@ export function Browser({ page, remoteHost }: { page?: { url: string }; remoteHo
           </div>
         )}
       </div>
+    </div>
+  );
+  if (!agent?.tabs.length) return own;
+  // The agent's tabs, then the user's own browser, which stays mounted behind them.
+  const choice = (label: string, id: string | undefined, title?: string) => (
+    <button
+      key={id ?? "own"}
+      type="button"
+      aria-pressed={agentTab === id}
+      title={title}
+      onClick={() => setAgentTab(id)}
+      className="max-w-40 truncate rounded-md px-2 py-0.5 text-[12px] text-muted-foreground hover:bg-hover aria-pressed:bg-selected aria-pressed:text-foreground"
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div
+        role="toolbar"
+        aria-label="Browser tabs"
+        className="flex gap-1 overflow-x-auto px-2 pb-1.5"
+      >
+        {agent.tabs.map((t) =>
+          choice(`Agent: ${t.title || shortUrl(t.url) || t.tabId}`, t.tabId, t.url),
+        )}
+        {choice("Yours", undefined)}
+      </div>
+      {shownTab && (
+        <AgentBrowser
+          key={shownTab.tabId}
+          hostId={agent.hostId}
+          runId={agent.runId}
+          tab={shownTab}
+        />
+      )}
+      {own}
     </div>
   );
 }

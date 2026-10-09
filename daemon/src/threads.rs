@@ -1077,6 +1077,7 @@ pub(crate) async fn archive(
     let ThreadArchiveParams { run_id, archived } = params;
     if archived {
         daemon.terminals.close_thread(&run_id.to_string());
+        daemon.previews.close_thread(run_id).await;
     }
     let thread = metadata(daemon, command_id, run_id, Action::Archive(archived)).await?;
     Ok(ThreadArchiveResult { thread })
@@ -1224,6 +1225,7 @@ pub(crate) async fn purge(
     let command = Command::new(command_id, run_id, Action::Delete { worktree });
     daemon.orchestrator.commit(daemon, lane, command).await?;
     daemon.terminals.close_thread(&run_id.to_string());
+    daemon.previews.close_thread(run_id).await;
     daemon.log.purge_run(run_id);
     info!(run = %run_id, "deleted a run");
     Ok(())

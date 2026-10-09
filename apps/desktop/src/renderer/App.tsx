@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 
-import type { InboxItem, Repo, Thread } from "../protocol/generated/protocol";
+import type { InboxItem, PreviewTab, Repo, Thread } from "../protocol/generated/protocol";
 import { Actions, type RepoAction } from "./Actions";
 import { AgentChat } from "./AgentChat";
 import { ChildStrip } from "./ChildStrip";
@@ -149,7 +149,20 @@ export function App() {
   // The folders whose terminal drawer is open, by key (ThreadTerminal.tsx).
   const [drawers, setDrawers] = useState<ReadonlySet<string>>(new Set());
   // The page a repository action last opened in the side panel's Browser view.
-  const [browse, setBrowse] = useState<{ url: string }>();
+  const [browse, setBrowse] = useState<{ url?: string; agentTab?: string }>();
+  // The open thread's agent browser tabs (PLX-639), which plxd lists after each browser tool call.
+  const [agentTabs, setAgentTabs] = useState<{ runId: string; tabs: PreviewTab[] }>();
+  const showPreviews = async (runId: string, reveal: boolean) => {
+    const answer = await window.parallax.request(host.id, "preview/list", { runId });
+    if ("error" in answer) return;
+    const { tabs } = answer.result;
+    setAgentTabs({ runId, tabs });
+    const last = tabs.at(-1);
+    if (reveal && last) {
+      setPanelOpen(true);
+      setBrowse({ agentTab: last.tabId });
+    }
+  };
   // A quiet note for the thread New Thread just started, such as the account it picked.
   const [notice, setNotice] = useState<{ threadId: string; text: string }>();
   // The pull request the side panel last opened, or with no URL its Pull requests view.
@@ -911,6 +924,7 @@ export function App() {
                         subagent={focused ? selection.subagent : undefined}
                         onOpenSubagent={openSubagent}
                         onSubagents={reportNative}
+                        onPreview={(runId, reveal) => void showPreviews(runId, reveal)}
                         strip={
                           paneParent && (
                             <ChildStrip
@@ -1016,6 +1030,11 @@ export function App() {
         topBarClassName={expanded && !sidebarOpen ? "traffic-light-inset" : ""}
         remoteHost={host.id === localId ? undefined : host.name}
         browse={browse}
+        agentTabs={
+          threadRun && agentTabs?.runId === threadRun.id
+            ? { hostId: host.id, ...agentTabs }
+            : undefined
+        }
         pullRequest={showPr}
         project={
           project && {

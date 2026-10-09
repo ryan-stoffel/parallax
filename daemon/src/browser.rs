@@ -286,6 +286,8 @@ struct Inner {
 struct Routes {
     replies: HashMap<u64, oneshot::Sender<Result<Value, String>>>,
     pages: HashMap<String, mpsc::UnboundedSender<Event>>,
+    /// Where the browser's own events go, such as a page it opened, once someone asks.
+    events: Option<mpsc::UnboundedSender<Event>>,
     /// Why the browser is gone, once it is.
     closed: Option<String>,
 }
@@ -399,6 +401,7 @@ impl Browser {
                 let _ = reply.send(Err(why.clone()));
             }
             routes.pages.clear();
+            routes.events = None;
             routes.closed = Some(why);
         });
         // Fails here, with Chrome's own words, when it can't start at all.
@@ -406,6 +409,11 @@ impl Browser {
             .call("Browser.getVersion", json!({}), None)
             .await
             .map(|_| browser)
+    }
+
+    /// Whether the browser has exited.
+    pub(crate) fn closed(&self) -> bool {
+        self.routes().closed.is_some()
     }
 
     /// Sends `method` to the browser, or to a page's session, and waits for its result.
@@ -483,7 +491,25 @@ impl Browser {
         let created = self
             .call("Target.createTarget", json!({"url": "about:blank"}), None)
             .await?;
-        let target = created["targetId"].as_str().unwrap_or_default().to_owned();
+        self.attach(created["targetId"].as_str().unwrap_or_default())
+            .await
+    }
+
+    /// The browser's own events, such as `Target.targetCreated` once targets are discovered. The
+    /// last caller gets them.
+    pub(crate) fn events(&self) -> mpsc::UnboundedReceiver<Event> {
+        let (tx, events) = mpsc::unbounded_channel();
+        self.routes().events = Some(tx);
+        events
+    }
+
+    /// Attaches to page `target`, such as one a page opened.
+    ///
+    /// # Errors
+    ///
+    /// When the browser fails or is gone.
+    pub(crate) async fn attach(&self, target: &str) -> Result<Page, String> {
+        let target = target.to_owned();
         let attached = self
             .call(
                 "Target.attachToTarget",
@@ -607,14 +633,17 @@ fn route(message: &[u8], routes: &Mutex<Routes>) {
             };
             let _ = reply.send(result);
         }
-    } else if let (Some(session), Some(method)) =
-        (message["sessionId"].as_str(), message["method"].as_str())
-        && let Some(page) = routes.pages.get(session)
-    {
-        let _ = page.send(Event {
-            method: method.to_owned(),
-            params: message["params"].take(),
-        });
+    } else if let Some(method) = message["method"].as_str() {
+        let to = match message["sessionId"].as_str() {
+            Some(session) => routes.pages.get(session),
+            None => routes.events.as_ref(),
+        };
+        if let Some(to) = to {
+            let _ = to.send(Event {
+                method: method.to_owned(),
+                params: message["params"].take(),
+            });
+        }
     }
 }
 

@@ -51,22 +51,24 @@ use crate::{
     LandQueueParams, LandResult, LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult,
     MemoryListParams, MemoryListResult, MemoryProposeParams, MemoryProposeResult, MemoryReadParams,
     MemoryReadResult, MemoryWriteParams, MemoryWriteResult, PrActParams, PrDiffResult,
-    PrViewParams, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
-    ProjectDeleteResult, ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectListParams,
-    ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage,
-    ProvidersListParams, ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams,
-    PullRequest, QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams,
-    QuestionListParams, QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams,
-    QueueListParams, QueueReorderParams, QueueResult, QueueSteerParams, RemotePairParams,
-    RemotePairResult, RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult,
-    RepoAddParams, RepoAddResult, RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult,
-    RepoUpdateParams, RepoUpdateResult, TerminalExitParams, TerminalKey, TerminalListParams,
-    TerminalListResult, TerminalOpenParams, TerminalOutputParams, TerminalResizeParams,
-    TerminalResult, TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult,
-    ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult,
-    ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
-    ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams,
-    UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
+    PrViewParams, PreviewCallParams, PreviewCallResult, PreviewFrameParams, PreviewFrameResult,
+    PreviewInputParams, PreviewInputResult, PreviewListParams, PreviewListResult,
+    ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
+    ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectListParams, ProjectListResult,
+    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
+    ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, PullRequest,
+    QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
+    QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
+    QueueReorderParams, QueueResult, QueueSteerParams, RemotePairParams, RemotePairResult,
+    RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult,
+    RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
+    RepoUpdateResult, TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult,
+    TerminalOpenParams, TerminalOutputParams, TerminalResizeParams, TerminalResult,
+    TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult, ThreadSearchParams,
+    ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
+    ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
+    UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -231,6 +233,16 @@ method_table! {
         /// `agent/attach`: keeps a page or recording a run's browser tools made with its images,
         /// for `agent/image` (PLX-639). `plxd mcp` calls it for `html_render`.
         AgentAttach = "agent/attach": AgentAttachParams => AgentAttachResult;
+        /// `preview/call`: one of a thread's `preview_*` browser tools (PLX-639), which its
+        /// `plxd mcp` sends here.
+        PreviewCall = "preview/call": PreviewCallParams => PreviewCallResult;
+        /// `preview/list`: a thread's browser tabs.
+        PreviewList = "preview/list": PreviewListParams => PreviewListResult;
+        /// `preview/frame`: a tab's newest frame, waiting up to 10 s for a new one.
+        PreviewFrame = "preview/frame": PreviewFrameParams => PreviewFrameResult;
+        /// `preview/input`: the user's control, mouse, wheel, keys, viewport, or address bar on a
+        /// tab.
+        PreviewInputSend = "preview/input": PreviewInputParams => PreviewInputResult;
         /// `agent/diff`: the files that differ between a run's base and its latest commit, each
         /// with its stats and a size-capped unified diff (#157). Gated on the `agentReview`
         /// capability, like every review method.
@@ -537,6 +549,10 @@ mod tests {
                 "agent/events",
                 "agent/image",
                 "agent/attach",
+                "preview/call",
+                "preview/list",
+                "preview/frame",
+                "preview/input",
                 "agent/diff",
                 "agent/file",
                 "agent/files",

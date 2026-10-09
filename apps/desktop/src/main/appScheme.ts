@@ -18,7 +18,7 @@ const rendererDir = path.join(__dirname, "../renderer");
 export function registerAppScheme(): void {
   protocol.registerSchemesAsPrivileged([
     { scheme: "app", privileges: { standard: true, secure: true, codeCache: true } },
-    { scheme: "plx-render", privileges: { standard: true, secure: true } },
+    { scheme: "plx-render", privileges: { standard: true, secure: true, stream: true } },
   ]);
 }
 

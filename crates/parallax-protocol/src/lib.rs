@@ -49,6 +49,7 @@ pub mod jsonrpc;
 mod land;
 mod memory;
 pub mod methods;
+mod preview;
 mod project;
 mod provider;
 mod pull_request;
@@ -127,6 +128,11 @@ pub use memory::{
     MemoryDeleteParams, MemoryDeleteResult, MemoryFile, MemoryKind, MemoryListParams,
     MemoryListResult, MemoryProposalTo, MemoryProposeParams, MemoryProposeResult, MemoryReadParams,
     MemoryReadResult, MemoryScope, MemoryScopeKind, MemoryWriteParams, MemoryWriteResult,
+};
+pub use preview::{
+    PreviewCallParams, PreviewCallResult, PreviewFrameParams, PreviewFrameResult, PreviewInput,
+    PreviewInputParams, PreviewInputResult, PreviewListParams, PreviewListResult, PreviewMouse,
+    PreviewTab,
 };
 pub use project::{
     Project, ProjectAutonomy, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,

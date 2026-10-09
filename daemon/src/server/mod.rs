@@ -283,6 +283,8 @@ pub(crate) struct Daemon {
     pub terminals: crate::terminals::Terminals,
     /// The remote listener's pairing code, tickets, and sessions (PLX-641).
     pub remote: remote::Remote,
+    /// Agents' browser tabs (PLX-639).
+    pub previews: crate::preview::Previews,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -427,6 +429,7 @@ impl Server {
                     backoff: config.resume_backoff,
                 }),
             cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher.clone()),
+            previews: crate::preview::Previews::new(launcher.clone()),
             providers,
             commands: crate::commands::Commands::new(),
             orchestrator: crate::orchestrator::Orchestrator::default(),
@@ -782,6 +785,7 @@ impl Daemon {
             providers,
             commands: crate::commands::Commands::new(),
             orchestrator: crate::orchestrator::Orchestrator::default(),
+            previews: crate::preview::Previews::new(launcher.clone()),
             cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher),
             connect: tailnet::Connect::new(
                 Arc::new(crate::tailnet::Absent),

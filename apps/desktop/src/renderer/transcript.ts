@@ -90,13 +90,25 @@ type ItemBody =
   /** The agent compacting its context: under way, then `done` (PLX-584). */
   | { kind: "compaction"; key: string; done: boolean }
   /** A page the agent showed with html_render (PLX-639), kept with run `runId`'s images. */
-  | ({ kind: "htmlRender"; key: string; runId: string } & HtmlRenderRef);
+  | ({ kind: "htmlRender"; key: string; runId: string } & HtmlRenderRef)
+  /** A browser recording the agent stopped with preview_recording_stop (PLX-639). */
+  | { kind: "recording"; key: string; runId: string; attachmentId: string };
 
 /** What an html_render result names: the page, its title, and the frame height the agent asked for. */
 export interface HtmlRenderRef {
   attachmentId: string;
   title: string;
   height: number;
+}
+
+/** The recording a preview_recording_stop output names, by its attachment id. */
+function recordingId(output?: string): string | undefined {
+  try {
+    const { id, mimeType } = JSON.parse(output ?? "") as { id?: unknown; mimeType?: unknown };
+    return typeof id === "string" && mimeType === "video/webm" ? id : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** The page an html_render tool's output names, or undefined for anything else. */
@@ -584,6 +596,14 @@ function applyOutput(
           ? item.status === "ok" && htmlRenderRef(item.output)
           : undefined;
       if (page) items.push({ kind: "htmlRender", key: `${key}:page`, runId, ...page });
+      const recorded =
+        i >= 0 &&
+        item.status === "ok" &&
+        (items[i] as { name: string | null }).name === `${plxdTools}preview_recording_stop`
+          ? recordingId(item.output)
+          : undefined;
+      if (recorded)
+        items.push({ kind: "recording", key: `${key}:video`, runId, attachmentId: recorded });
       break;
     }
     case "todoList":

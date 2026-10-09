@@ -431,8 +431,8 @@ const renderPolicy = [
 ].join("; ");
 
 /**
- * The html_render page (PLX-639) at `plx-render://page/<host>/<run>/<attachment>`, which that
- * host's plxd keeps with the run's images, as a document of its own.
+ * The html_render page or browser recording (PLX-639) at `plx-render://page/<host>/<run>/<id>`,
+ * which that host's plxd keeps with the run's images: a page as a document of its own.
  */
 export async function renderPage(url: string): Promise<Response> {
   const [, hostId, runId, imageId] = (URL.parse(url)?.pathname ?? "").split("/").map((part) => {
@@ -447,9 +447,16 @@ export async function renderPage(url: string): Promise<Response> {
     host && runId && imageId
       ? await host.request("agent/image", { runId, imageId }).catch(() => undefined)
       : undefined;
-  if (!page || "error" in page || page.result.mediaType !== "text/html")
+  if (!page || "error" in page)
     return new Response("That page isn't on this host.", { status: 404 });
-  return new Response(Buffer.from(page.result.data, "base64"), {
+  const { mediaType, data } = page.result;
+  const body = Buffer.from(data, "base64");
+  // A browser recording (PLX-639) is only a video.
+  if (mediaType === "video/webm")
+    return new Response(body, { headers: { "Content-Type": "video/webm" } });
+  if (mediaType !== "text/html")
+    return new Response("That page isn't on this host.", { status: 404 });
+  return new Response(body, {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
       "Content-Security-Policy": renderPolicy,

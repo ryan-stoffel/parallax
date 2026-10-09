@@ -1,0 +1,845 @@
+[
+ {
+  "annotations": {
+   "destructiveHint": false,
+   "openWorldHint": true,
+   "readOnlyHint": true
+  },
+  "description": "Report whether a browser tab is automation-capable, including its control owner, pending dialog, URL, title, visibility, loading state, viewport mode, and measured CSS-pixel size. Pass tabId to inspect a specific tab; omit it to use this thread's current tab. Also lists every tab in the thread (tabs) with its owner. When the user controls a tab, you can read it but not act on it until they hand it back.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "preview_status",
+  "title": "Get preview status"
+ },
+ {
+  "annotations": {
+   "destructiveHint": false,
+   "openWorldHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Initialize a browser tab, which the user can watch and take over in Parallax's side panel. Pass tabId to reuse a specific existing tab, set reuseExistingTab=false to create another tab, or omit both to use this thread's current tab.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "open": {
+     "description": "Whether to open the preview for the human. Defaults to true; set false for background-only automation.",
+     "type": "boolean"
+    },
+    "profileId": {
+     "description": "Accepted for T3 compatibility; Parallax has one browser profile.",
+     "type": "string"
+    },
+    "reuseExistingTab": {
+     "description": "Reuse tabId when supplied, otherwise this thread's current tab. Defaults to true; set false to create a new tab.",
+     "type": "boolean"
+    },
+    "show": {
+     "description": "Deprecated alias for open.",
+     "type": "boolean"
+    },
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    },
+    "url": {
+     "description": "Optional initial page URL. Absolute http(s) URL or a schemeless host such as t3.chat or localhost:5173. Schemeless public hosts use https; loopback hosts use http. Omit to open a blank tab.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "preview_open",
+  "title": "Open browser preview"
+ },
+ {
+  "annotations": {
+   "destructiveHint": true,
+   "openWorldHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Accept or dismiss the browser dialog reported by preview_status. For a prompt, supply promptText when accepting.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "accept": {
+     "description": "Accept the pending browser dialog when true, or dismiss it when false.",
+     "type": "boolean"
+    },
+    "promptText": {
+     "description": "Optional text to submit when accepting a prompt dialog.",
+     "type": "string"
+    },
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "accept"
+   ],
+   "type": "object"
+  },
+  "name": "preview_dialog",
+  "title": "Resolve browser dialog"
+ },
+ {
+  "annotations": {
+   "destructiveHint": false,
+   "openWorldHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Navigate a browser tab. Pass tabId to target a specific tab, plus {url:'https://t3.chat'} for a website or {target:{kind:'environment-port',port:5173}} for a dev server. Exactly one of url or target is required.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "readiness": {
+     "description": "Readiness milestone before returning. 'load' is the default; use 'none' only when a later wait call will verify the page.",
+     "enum": [
+      "load",
+      "domContentLoaded",
+      "none"
+     ],
+     "type": "string"
+    },
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    },
+    "target": {
+     "description": "Environment-relative target. Prefer {kind:'environment-port',port:5173} for a dev server on this host.",
+     "oneOf": [
+      {
+       "additionalProperties": false,
+       "properties": {
+        "kind": {
+         "const": "url"
+        },
+        "url": {
+         "description": "Absolute http(s) URL or a schemeless host such as t3.chat or localhost:5173. Schemeless public hosts use https; loopback hosts use http.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "kind",
+        "url"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "kind": {
+         "const": "environment-port"
+        },
+        "path": {
+         "description": "Optional path, query, and fragment, for example /settings?tab=account.",
+         "type": "string"
+        },
+        "port": {
+         "description": "Dev-server TCP port on this host.",
+         "maximum": 65535,
+         "minimum": 1,
+         "type": "integer"
+        },
+        "protocol": {
+         "description": "Dev-server protocol. Defaults to http.",
+         "enum": [
+          "http",
+          "https"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "kind",
+        "port"
+       ],
+       "type": "object"
+      }
+     ]
+    },
+    "timeoutMs": {
+     "description": "Maximum wait in milliseconds. Defaults to 15000; maximum 60000.",
+     "maximum": 60000,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "url": {
+     "description": "Website URL. Absolute http(s) URL or a schemeless host such as t3.chat or localhost:5173. Schemeless public hosts use https; loopback hosts use http.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "preview_navigate",
+  "title": "Navigate browser preview"
+ },
+ {
+  "annotations": {
+   "destructiveHint": false,
+   "openWorldHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Resize a browser tab, optionally selected by tabId. Use {mode:'fill'}, {mode:'freeform',width:1024,height:768}, or {mode:'preset',preset:'iphone-12-pro',orientation:'portrait'}. This changes CSS layout breakpoints without changing the browser user agent.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "height": {
+     "description": "Freeform viewport height in CSS pixels. Required only in freeform mode.",
+     "maximum": 4096,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "mode": {
+     "description": "fill is the default 1280x800, freeform uses exact dimensions, and preset uses a named device size.",
+     "enum": [
+      "fill",
+      "freeform",
+      "preset"
+     ],
+     "type": "string"
+    },
+    "orientation": {
+     "description": "Orientation for a named device preset.",
+     "enum": [
+      "portrait",
+      "landscape"
+     ],
+     "type": "string"
+    },
+    "preset": {
+     "description": "Named device size. Required only when mode is preset.",
+     "enum": [
+      "iphone-se",
+      "iphone-xr",
+      "iphone-12-pro",
+      "iphone-14-pro-max",
+      "pixel-7",
+      "samsung-galaxy-s8-plus",
+      "samsung-galaxy-s20-ultra",
+      "ipad-mini",
+      "ipad-air",
+      "ipad-pro",
+      "surface-pro-7",
+      "surface-duo",
+      "galaxy-z-fold-5",
+      "asus-zenbook-fold",
+      "samsung-galaxy-a51-71",
+      "nest-hub",
+      "nest-hub-max"
+     ],
+     "type": "string"
+    },
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    },
+    "timeoutMs": {
+     "description": "Maximum wait in milliseconds. Defaults to 15000; maximum 60000.",
+     "maximum": 60000,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "width": {
+     "description": "Freeform viewport width in CSS pixels. Required only in freeform mode.",
+     "maximum": 4096,
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "mode"
+   ],
+   "type": "object"
+  },
+  "name": "preview_resize",
+  "title": "Resize browser viewport"
+ },
+ {
+  "annotations": {
+   "destructiveHint": false,
+   "openWorldHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Emulate prefers-color-scheme in a browser tab, optionally selected by tabId. Use {colorScheme:'dark'} or {colorScheme:'light'}, and {colorScheme:'system'} to clear the override.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "colorScheme": {
+     "description": "Emulated prefers-color-scheme for the page.",
+     "enum": [
+      "system",
+      "light",
+      "dark"
+     ],
+     "type": "string"
+    },
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "colorScheme"
+   ],
+   "type": "object"
+  },
+  "name": "preview_set_appearance",
+  "title": "Set preview appearance"
+ },
+ {
+  "annotations": {
+   "destructiveHint": false,
+   "openWorldHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Inspect a page before interacting. Returns page state, semantic elements, an accessibilityTree outline with refs, console and network entries, action history, and screenshot dimensions. Pass locator=aria-ref=<ref> to target one exact element. Refresh refs after navigation, another snapshot, or human takeover. The text is capped near 20 KB; use preview_evaluate to read more. Set includeImage=true only when you need to see the page. Set save=true to write the PNG to disk and get back only the url and screenshotPath.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "includeImage": {
+     "description": "Include the PNG image in the tool response. Defaults to false.",
+     "type": "boolean"
+    },
+    "save": {
+     "description": "Write the screenshot PNG to disk and return its absolute path as screenshotPath. Defaults to false.",
+     "type": "boolean"
+    },
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "preview_snapshot",
+  "title": "Inspect browser page"
+ },
+ {
+  "annotations": {
+   "destructiveHint": true,
+   "openWorldHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Click exactly one target in the tab selected by tabId, or this thread's current tab when omitted. Prefer a locator; selector accepts CSS; x and y must be supplied together. Set button=right for a context menu or clickCount=2 for a double-click.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "button": {
+     "description": "Mouse button. Defaults to left.",
+     "enum": [
+      "left",
+      "right",
+      "middle"
+     ],
+     "type": "string"
+    },
+    "clickCount": {
+     "description": "1 for a click, 2 for a double-click, 3 for a triple-click. Defaults to 1.",
+     "maximum": 3,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "locator": {
+     "description": "Use locator='aria-ref=<ref>' with a ref from the latest snapshot, role=button[name='Send'], text=Sign in, or a CSS selector. Refs expire on navigation, a new snapshot, or control handoff; refresh the snapshot after a stale-ref error.",
+     "type": "string"
+    },
+    "selector": {
+     "description": "Legacy CSS selector such as button[type='submit']. Prefer locator.",
+     "type": "string"
+    },
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    },
+    "timeoutMs": {
+     "description": "Maximum wait in milliseconds. Defaults to 15000; maximum 60000.",
+     "maximum": 60000,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "x": {
+     "description": "Viewport-relative X coordinate in CSS pixels. Must be paired with y.",
+     "type": "number"
+    },
+    "y": {
+     "description": "Viewport-relative Y coordinate in CSS pixels. Must be paired with x.",
+     "type": "number"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "preview_click",
+  "title": "Click preview page"
+ },
+ {
+  "annotations": {
+   "destructiveHint": true,
+   "openWorldHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Insert literal text into one input in the tab selected by tabId, or this thread's current tab when omitted. Prefer a locator; set clear=true to replace existing text. With neither locator nor selector, types into the focused element.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "clear": {
+     "description": "Clear the existing input value before inserting text. Defaults to false.",
+     "type": "boolean"
+    },
+    "locator": {
+     "description": "Use locator='aria-ref=<ref>' with a ref from the latest snapshot, role=button[name='Send'], text=Sign in, or a CSS selector. Refs expire on navigation, a new snapshot, or control handoff; refresh the snapshot after a stale-ref error.",
+     "type": "string"
+    },
+    "selector": {
+     "description": "Legacy CSS selector such as button[type='submit']. Prefer locator.",
+     "type": "string"
+    },
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    },
+    "text": {
+     "description": "Literal text to insert.",
+     "type": "string"
+    },
+    "timeoutMs": {
+     "description": "Maximum wait in milliseconds. Defaults to 15000; maximum 60000.",
+     "maximum": 60000,
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "text"
+   ],
+   "type": "object"
+  },
+  "name": "preview_type",
+  "title": "Type into preview page"
+ },
+ {
+  "annotations": {
+   "destructiveHint": false,
+   "openWorldHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Move the mouse over exactly one target in the tab selected by tabId, or this thread's current tab when omitted, to reveal hover menus and tooltips.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "locator": {
+     "description": "Use locator='aria-ref=<ref>' with a ref from the latest snapshot, role=button[name='Send'], text=Sign in, or a CSS selector. Refs expire on navigation, a new snapshot, or control handoff; refresh the snapshot after a stale-ref error.",
+     "type": "string"
+    },
+    "selector": {
+     "description": "Legacy CSS selector such as button[type='submit']. Prefer locator.",
+     "type": "string"
+    },
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    },
+    "timeoutMs": {
+     "description": "Maximum wait in milliseconds. Defaults to 15000; maximum 60000.",
+     "maximum": 60000,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "x": {
+     "description": "Viewport-relative X coordinate in CSS pixels. Must be paired with y.",
+     "type": "number"
+    },
+    "y": {
+     "description": "Viewport-relative Y coordinate in CSS pixels. Must be paired with x.",
+     "type": "number"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "preview_hover",
+  "title": "Hover preview page"
+ },
+ {
+  "annotations": {
+   "destructiveHint": true,
+   "openWorldHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Choose options in one native <select> by option value or visible label. Custom dropdowns are not <select>; click them open and click the option instead.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "locator": {
+     "description": "The <select> element, for example aria-ref=<ref> or role=combobox[name='Size'].",
+     "type": "string"
+    },
+    "selector": {
+     "description": "Legacy CSS selector for a <select>. Prefer locator.",
+     "type": "string"
+    },
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    },
+    "timeoutMs": {
+     "description": "Maximum wait in milliseconds. Defaults to 15000; maximum 60000.",
+     "maximum": 60000,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "values": {
+     "description": "Option values or visible labels to select. Pass several for a multiple select, or an empty list to clear it.",
+     "items": {
+      "type": "string"
+     },
+     "maxItems": 100,
+     "type": "array"
+    }
+   },
+   "required": [
+    "values"
+   ],
+   "type": "object"
+  },
+  "name": "preview_select",
+  "title": "Select preview option"
+ },
+ {
+  "annotations": {
+   "destructiveHint": true,
+   "openWorldHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Drag one element onto another in the tab selected by tabId, or this thread's current tab when omitted.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "source": {
+     "description": "Locator of the element to drag, for example aria-ref=<ref> from the latest snapshot.",
+     "type": "string"
+    },
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    },
+    "target": {
+     "description": "Locator of the element to drop onto, for example aria-ref=<ref>.",
+     "type": "string"
+    },
+    "timeoutMs": {
+     "description": "Maximum wait in milliseconds. Defaults to 15000; maximum 60000.",
+     "maximum": 60000,
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "source",
+    "target"
+   ],
+   "type": "object"
+  },
+  "name": "preview_drag",
+  "title": "Drag in preview page"
+ },
+ {
+  "annotations": {
+   "destructiveHint": true,
+   "openWorldHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Give files on this host to the page. After clicking an upload control, preview_status reports the open fileChooser; call this with absolute paths to answer it, or with an empty list to cancel. Pass a locator for an <input type=file> to set its files without a picker.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "locator": {
+     "description": "Set files directly on this <input type=file> instead of answering the open file picker.",
+     "type": "string"
+    },
+    "paths": {
+     "description": "Absolute paths of files to give the page.",
+     "items": {
+      "type": "string"
+     },
+     "maxItems": 20,
+     "type": "array"
+    },
+    "selector": {
+     "description": "Legacy CSS selector for an <input type=file>. Prefer locator.",
+     "type": "string"
+    },
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    },
+    "timeoutMs": {
+     "description": "Maximum wait in milliseconds. Defaults to 15000; maximum 60000.",
+     "maximum": 60000,
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "paths"
+   ],
+   "type": "object"
+  },
+  "name": "preview_upload",
+  "title": "Upload files to preview page"
+ },
+ {
+  "annotations": {
+   "destructiveHint": true,
+   "openWorldHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Press one keyboard key in the tab selected by tabId, or this thread's current tab when omitted. Examples: {key:'Enter'}, {key:'Escape'}, or {key:'a',modifiers:['Meta']}.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "key": {
+     "description": "Keyboard key name such as Enter, Escape, Tab, ArrowDown, Backspace, or a single character.",
+     "type": "string"
+    },
+    "modifiers": {
+     "description": "Modifier keys held while pressing key.",
+     "items": {
+      "enum": [
+       "Alt",
+       "Control",
+       "Meta",
+       "Shift"
+      ],
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "key"
+   ],
+   "type": "object"
+  },
+  "name": "preview_press",
+  "title": "Press key in preview page"
+ },
+ {
+  "annotations": {
+   "destructiveHint": false,
+   "openWorldHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Scroll the tab selected by tabId, or this thread's current tab when omitted. Positive deltaY scrolls down and positive deltaX scrolls right; a locator/selector targets a container.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "deltaX": {
+     "description": "Horizontal scroll delta in CSS pixels. Positive scrolls right. Defaults to 0.",
+     "type": "number"
+    },
+    "deltaY": {
+     "description": "Vertical scroll delta in CSS pixels. Positive scrolls down. Defaults to 0.",
+     "type": "number"
+    },
+    "locator": {
+     "description": "A scrollable container. Omit to scroll the viewport.",
+     "type": "string"
+    },
+    "selector": {
+     "description": "Legacy CSS selector for a scrollable container. Omit to scroll the viewport.",
+     "type": "string"
+    },
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "preview_scroll",
+  "title": "Scroll preview page"
+ },
+ {
+  "annotations": {
+   "destructiveHint": true,
+   "openWorldHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Evaluate JavaScript in the tab selected by tabId, or this thread's current tab when omitted. Needs the same control as clicking. Returns {value} with a serializable result up to 64 KB; the expression may mutate page state.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "awaitPromise": {
+     "description": "Await a returned Promise. Defaults to true.",
+     "type": "boolean"
+    },
+    "expression": {
+     "description": "JavaScript expression evaluated in the page's main frame, for example document.title or (() => ({href: location.href}))().",
+     "type": "string"
+    },
+    "returnByValue": {
+     "description": "Serialize and return the value instead of a remote object reference. Defaults to true.",
+     "type": "boolean"
+    },
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "expression"
+   ],
+   "type": "object"
+  },
+  "name": "preview_evaluate",
+  "title": "Evaluate JavaScript in preview"
+ },
+ {
+  "annotations": {
+   "destructiveHint": false,
+   "openWorldHint": true,
+   "readOnlyHint": true
+  },
+  "description": "Wait in the tab selected by tabId, or this thread's current tab when omitted, until all supplied locator, selector, text, and URL conditions match.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "locator": {
+     "description": "A locator that must match an element, for example role=button[name='Send'].",
+     "type": "string"
+    },
+    "selector": {
+     "description": "Legacy CSS selector that must match an element. Prefer locator.",
+     "type": "string"
+    },
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    },
+    "text": {
+     "description": "Case-sensitive substring that must appear in visible document text.",
+     "type": "string"
+    },
+    "timeoutMs": {
+     "description": "Maximum wait in milliseconds. Defaults to 15000; maximum 60000.",
+     "maximum": 60000,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "urlIncludes": {
+     "description": "Substring that must appear in the current absolute URL.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "preview_wait_for",
+  "title": "Wait for preview page condition"
+ },
+ {
+  "annotations": {
+   "destructiveHint": false,
+   "openWorldHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Start recording the browser tab selected by tabId, or this thread's current tab when omitted.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "preview_recording_start",
+  "title": "Start browser recording"
+ },
+ {
+  "annotations": {
+   "destructiveHint": false,
+   "openWorldHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Stop recording the browser tab selected by tabId, or this thread's current tab when omitted. The WebM (up to about 4.5 MB) shows in this thread, and is written to a file on this host whose path comes back.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "tabId": {
+     "description": "Exact browser tab to target (see preview_status tabs). Omit to use this thread's current tab.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "preview_recording_stop",
+  "title": "Stop browser recording"
+ },
+ {
+  "annotations": {
+   "destructiveHint": false,
+   "readOnlyHint": true
+  },
+  "description": "List this thread's preview tabs. Pages reflect the current state and may shift as tabs change.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "cursor": {
+     "minimum": 0,
+     "type": "integer"
+    },
+    "limit": {
+     "maximum": 50,
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "type": "object"
+  },
+  "name": "preview_list"
+ },
+ {
+  "annotations": {
+   "destructiveHint": true,
+   "readOnlyHint": false
+  },
+  "description": "Close one preview tab owned by this thread.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "tabId": {
+     "description": "The tab to close.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "tabId"
+   ],
+   "type": "object"
+  },
+  "name": "preview_close"
+ }
+]

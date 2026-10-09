@@ -37,6 +37,7 @@ pub mod device;
 pub mod html;
 pub mod land;
 pub mod memory;
+pub mod preview;
 pub mod question;
 pub mod thread;
 
