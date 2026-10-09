@@ -16,8 +16,8 @@
 //! [`turn_diff`] diffs two checkpoints, [`full_thread_diff`] one against the thread's start, both
 //! cut at [`MAX_DIFF_BYTES`] and with whitespace ignored unless asked, as T3's are. A revert
 //! (`checkpoint.rollback`) is checked by [`plan_revert`], carried out by the thread's actor, which
-//! rewinds the provider, and finished by [`finish_revert`]: the files, the refs above the target,
-//! and `thread.reverted`, which marks the runs it undid `rolledBack`.
+//! rewinds the provider, and completed locally by its actor: restored files are committed, stale refs deleted,
+//! and `thread.reverted` marks the undone runs `rolledBack` with the completion receipt.
 //!
 //! Refs aren't capped by count, as T3's aren't: a revert deletes those above its target, and a
 //! thread's deletion or Accept deletes the rest ([`forget`]).
@@ -64,6 +64,7 @@ fn prefix(thread: Uuid) -> String {
 
 /// A thread's folder, owned: its worktree with the pinned git folder and base commit, or its
 /// checkout.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Folder {
     path: PathBuf,
     git_dir: Option<PathBuf>,
@@ -433,9 +434,10 @@ pub(crate) async fn forget(daemon: &Daemon, repo: &Path, thread: Uuid) {
     }
 }
 
-/// A revert that passed its checks: what [`finish_revert`] and the actor's rewind do.
+/// A revert that passed its checks, persisted by the actor before provider mutation.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Revert {
-    thread: Uuid,
+    thread: RunId,
     pub ordinal: u32,
     pub restore_files: bool,
     /// The provider's turns to drop.
@@ -486,7 +488,7 @@ pub(crate) async fn plan_revert(
         })
         .await?;
     let Some(folder) = folder else {
-        return Err(refused(format!("thread {thread} has no folder to revert")));
+        return Err(refused("This thread has no folder to revert.".to_owned()));
     };
     let check = Check {
         ordinal,
@@ -502,11 +504,11 @@ pub(crate) async fn plan_revert(
         .map_err(|error| ErrorObject::internal_error(error.to_string()))?
     {
         return Err(refused(format!(
-            "thread {thread} has no checkpoint for run {ordinal}"
+            "Turn {ordinal} has no checkpoint to revert to."
         )));
     }
     Ok(Revert {
-        thread: id,
+        thread,
         ordinal,
         restore_files,
         turns,
@@ -530,10 +532,10 @@ struct Check {
 
 impl Check {
     /// The provider turns a revert drops, and the runs it undoes, or why it is refused.
-    fn run(&self, runs: &[ThreadRun], backend: &str) -> Result<(u32, Vec<TurnId>), String> {
+    fn run(&self, runs: &[ThreadRun], _backend: &str) -> Result<(u32, Vec<TurnId>), String> {
         let ordinal = self.ordinal;
         if !self.can_rewind {
-            return Err(format!("{backend} can't rewind a conversation"));
+            return Err("This provider does not support reverting conversation history. Start a new thread instead.".to_owned());
         }
         if self.restore_files && !self.isolated {
             return Err(SHARED.to_owned());
@@ -545,7 +547,7 @@ impl Check {
                 ThreadRunStatus::Starting | ThreadRunStatus::Running | ThreadRunStatus::Waiting
             )
         }) {
-            return Err("a turn is still running; revert once it ends".to_owned());
+            return Err("Interrupt the current turn before reverting checkpoints.".to_owned());
         }
         if ordinal > 0
             && !started.iter().any(|run| {
@@ -557,7 +559,9 @@ impl Check {
                         .is_some_and(|checkpoint| checkpoint.status == CheckpointStatus::Ready)
             })
         {
-            return Err(format!("run {ordinal} has no ready checkpoint"));
+            return Err(format!(
+                "Turn {ordinal} has no ready checkpoint to revert to."
+            ));
         }
         let mut turns = 0;
         let mut undone = Vec::new();
@@ -583,13 +587,35 @@ impl Check {
     }
 }
 
-/// Finishes `revert` once the provider has rewound: the files when it restores them, the refs
-/// above its target, and `thread.reverted`.
+/// Restores files after the actor durably records provider completion.
 ///
 /// # Errors
 ///
 /// A git or store failure.
-pub(crate) async fn finish_revert(daemon: &Arc<Daemon>, revert: Revert) -> Result<(), ErrorObject> {
+pub(crate) async fn restore_revert(daemon: &Daemon, revert: &Revert) -> Result<(), ErrorObject> {
+    if revert.restore_files {
+        daemon
+            .agents
+            .worktrees()
+            .restore_checkpoint(
+                revert.folder.run_folder(),
+                &reference(revert.thread.into(), revert.ordinal),
+            )
+            .await
+            .map_err(|error| {
+                ErrorObject::internal_error(format!(
+                    "could not restore the checkpoint's files: {error}"
+                ))
+            })?;
+    }
+    Ok(())
+}
+
+/// Deletes stale refs. The actor commits the restored files before publishing the returned event.
+pub(crate) async fn finish_revert(
+    daemon: &Arc<Daemon>,
+    revert: Revert,
+) -> Result<(ProjectId, ParallaxEvent), ErrorObject> {
     let Revert {
         thread,
         ordinal,
@@ -598,16 +624,11 @@ pub(crate) async fn finish_revert(daemon: &Arc<Daemon>, revert: Revert) -> Resul
         folder,
         ..
     } = revert;
+    let thread = Uuid::from(thread);
     let worktrees = daemon.agents.worktrees();
     let failed = |what: &str, error: crate::worktree::WorktreeError| {
         ErrorObject::internal_error(format!("could not {what}: {error}"))
     };
-    if restore_files {
-        worktrees
-            .restore_checkpoint(folder.run_folder(), &reference(thread, ordinal))
-            .await
-            .map_err(|error| failed("restore the checkpoint's files", error))?;
-    }
     let refs = worktrees
         .list_refs(folder.run_folder(), &prefix(thread))
         .await
@@ -632,7 +653,7 @@ pub(crate) async fn finish_revert(daemon: &Arc<Daemon>, revert: Revert) -> Resul
         turns: undone,
         restore_files,
     };
-    stage(daemon, thread, folder.project, event).await
+    Ok((folder.project, event))
 }
 
 #[cfg(test)]

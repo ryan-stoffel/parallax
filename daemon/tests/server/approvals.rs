@@ -735,7 +735,7 @@ async fn run_and_shell_subscriptions_get_only_their_part_of_the_scope() {
         .count();
     assert!(texts > 0, "the open run's text is delivered");
 
-    // Every event in order, each run's output cut down to its request and its answer.
+    // Checkpoint details stay on thread streams; shell output keeps requests and answers.
     let shell = replay(&host, project.id, None, true, open).await;
     let cut: Vec<_> = all
         .into_iter()
@@ -755,6 +755,7 @@ async fn run_and_shell_subscriptions_get_only_their_part_of_the_scope() {
                     },
                 ))
             }
+            ParallaxEvent::ThreadCheckpoint { .. } => None,
             event => Some((seq, event)),
         })
         .collect();

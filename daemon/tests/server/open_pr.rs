@@ -74,7 +74,7 @@ esac
         tools
     }
 
-    fn environment(&self) -> Environment {
+    pub(crate) fn environment(&self) -> Environment {
         let mut env = Environment::inherited();
         env.set("PATH", self.0.path().join("bin"));
         env

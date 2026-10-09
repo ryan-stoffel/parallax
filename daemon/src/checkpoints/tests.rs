@@ -65,7 +65,7 @@ fn a_revert_is_refused_before_anything_changes() {
     };
     assert_eq!(
         no_rewind.run(&runs, "claude"),
-        Err("claude can't rewind a conversation".to_owned())
+        Err("This provider does not support reverting conversation history. Start a new thread instead.".to_owned())
     );
     let shared = Check {
         isolated: false,

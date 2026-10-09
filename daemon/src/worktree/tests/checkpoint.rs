@@ -96,3 +96,24 @@ async fn a_checkpoint_captures_restores_and_diffs_a_worktree_without_touching_it
     assert!(!mgr.has_checkpoint(folder, turn).await.unwrap());
     assert!(mgr.has_checkpoint(folder, start).await.unwrap());
 }
+
+#[tokio::test]
+async fn deleting_a_locked_checkpoint_ref_reports_the_git_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(dir.path());
+    let mgr = manager(dir.path());
+    let reference = "refs/parallax/checkpoints/test/1";
+    git_output(&repo, &["update-ref", reference, "HEAD"]);
+    let lock = repo.join(".git/refs/parallax/checkpoints/test/1.lock");
+    std::fs::write(&lock, "lock").unwrap();
+    assert!(
+        mgr.delete_ref(RunFolder::Checkout(&repo), reference)
+            .await
+            .is_err()
+    );
+    assert!(
+        mgr.has_checkpoint(RunFolder::Checkout(&repo), reference)
+            .await
+            .unwrap()
+    );
+}
