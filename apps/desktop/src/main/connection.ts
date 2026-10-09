@@ -286,7 +286,8 @@ export class Connection {
   /**
    * Passes what plxd's terminal `params` prints, and its exit, to `listener` (PLX-637). After a
    * reconnect, a shell is opened again, which replays what it printed; a command ends with the
-   * connection, as plxd ends it. Returns the function that stops listening.
+   * connection, as plxd ends it. Returns the function that stops listening, which, for the last
+   * listener, stops plxd streaming it here and leaves it running (PLX-664).
    */
   attachTerminal(params: TerminalOpenParams, listener: (message: TerminalMessage) => void) {
     const key = terminalKey(params);
@@ -298,8 +299,18 @@ export class Connection {
       terminal.listeners.delete(listener);
       if (!terminal.listeners.size && this.terminals.get(key) === terminal) {
         this.terminals.delete(key);
+        this.detachUnshown(params);
       }
     };
+  }
+
+  /**
+   * Stops plxd streaming terminal `key` here if nothing listens to it, as when its last listener
+   * left while it was being opened. It keeps running.
+   */
+  private detachUnshown({ threadId, terminalId }: TerminalKey): void {
+    if (this.terminals.has(terminalKey({ threadId, terminalId }))) return;
+    this.client?.notify("terminal/detach", { threadId, terminalId });
   }
 
   /** Opens plxd's terminal `params`. Resolves to an error for people, or undefined once it runs. */
@@ -308,7 +319,9 @@ export class Connection {
       return "This host's plxd is too old to run terminals. Update Parallax there.";
     }
     const answer = await this.request("terminal/open", params);
-    return "error" in answer ? answer.error.message : undefined;
+    if ("error" in answer) return answer.error.message;
+    this.detachUnshown(params);
+    return undefined;
   }
 
   /** Types `data` into a terminal, in order with what was typed before. */
@@ -439,6 +452,7 @@ export class Connection {
     for (const [key, terminal] of this.terminals) {
       client.send("terminal/open", terminal.params, REQUEST_TIMEOUT_MS, (response) => {
         if ("error" in response) this.endTerminal(key, -1);
+        else this.detachUnshown(terminal.params);
       });
     }
   }

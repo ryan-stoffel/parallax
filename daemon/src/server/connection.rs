@@ -28,10 +28,11 @@ use parallax_protocol::jsonrpc::{
 };
 use parallax_protocol::methods::{
     CancelRequest, EventsEvent, EventsResync, Initialize, NotificationMethod, RequestMethod,
-    TerminalResize, TerminalWrite,
+    TerminalDetach, TerminalResize, TerminalWrite,
 };
 use parallax_protocol::{
-    ErrorKind, EventsEventParams, EventsResyncParams, TerminalResizeParams, TerminalWriteParams,
+    ErrorKind, EventsEventParams, EventsResyncParams, TerminalKey, TerminalResizeParams,
+    TerminalWriteParams,
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf};
 use tokio::sync::mpsc::error::TryRecvError;
@@ -318,7 +319,8 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
     }
 
     fn notification(&self, notification: &Notification) {
-        // A terminal's input is written here, so it reaches the terminal in the order it was sent.
+        // A terminal's input is written here, so it reaches the terminal in the order it was
+        // sent, and a detach lands before a later open.
         let terminals = &self.daemon.terminals;
         if self.session.is_some() && notification.method == TerminalWrite::NAME {
             if let Ok(TerminalWriteParams {
@@ -340,6 +342,16 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             }) = notification.params()
             {
                 terminals.resize(thread_id, terminal_id, cols, rows);
+            }
+            return;
+        }
+        if self.session.is_some() && notification.method == TerminalDetach::NAME {
+            if let Ok(TerminalKey {
+                thread_id,
+                terminal_id,
+            }) = notification.params()
+            {
+                terminals.detach(thread_id, terminal_id, &self.replies);
             }
             return;
         }

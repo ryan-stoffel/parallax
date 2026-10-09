@@ -86,6 +86,11 @@
   },
   {
     "jsonrpc": "2.0",
+    "method": "terminal/detach",
+    "params": { "threadId": "", "terminalId": "7:sign-in" }
+  },
+  {
+    "jsonrpc": "2.0",
     "id": 3,
     "method": "terminal/list",
     "params": {}

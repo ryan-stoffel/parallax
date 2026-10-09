@@ -63,7 +63,7 @@ fn a_replay_leaves_out_queries_and_replies_but_keeps_the_rest() {
     let mut history = History::new(100, 1024);
     history.push(output);
     assert_eq!(
-        history.text(),
+        without_queries(&history.text()),
         "\x1b[31mred\x1b[0m \x1b[2J\x1b[u\x1b]0;title\x07$ "
     );
     // An unfinished sequence at the end stays as it is.
@@ -184,6 +184,36 @@ async fn opening_again_replays_the_history_then_streams_to_both() {
         );
     }
     assert!(terminals.list(None).is_empty());
+}
+
+#[tokio::test]
+async fn detaching_stops_one_connections_stream_and_keeps_the_terminal() {
+    let terminals = Terminals::default();
+    let stopped = CancellationToken::new();
+    let (first_tx, mut first) = mpsc::channel(256);
+    let (second_tx, mut second) = mpsc::channel(256);
+    terminals
+        .open(open(Some(echo())), &first_tx, &stopped)
+        .unwrap();
+    until(&mut first, "ready").await;
+    terminals.open(open(None), &second_tx, &stopped).unwrap();
+    until(&mut second, "ready").await;
+
+    terminals.detach("t".to_owned(), "1".to_owned(), &first_tx);
+    terminals.write("t".to_owned(), "1".to_owned(), "you\r".to_owned());
+    until(&mut second, "got-you").await;
+    let mut detached = String::new();
+    while let Ok(Reply::Notification(message)) = first.try_recv() {
+        detached.push_str(&message.params::<TerminalOutputParams>().unwrap().data);
+    }
+    assert!(!detached.contains("got-you"), "{detached:?}");
+
+    // It still runs, and opening it again replays what the detached connection missed.
+    terminals.open(open(None), &first_tx, &stopped).unwrap();
+    let (history, replay) = next(&mut first).await.unwrap();
+    assert!(replay);
+    assert!(history.contains("got-you"), "{history:?}");
+    terminals.close_thread("t");
 }
 
 #[tokio::test]
