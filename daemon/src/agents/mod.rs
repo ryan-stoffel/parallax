@@ -352,7 +352,8 @@ async fn prepare_run(
 ) -> Result<(Prepared, String), ErrorObject> {
     let (repo_path, context_scope, project_row, thread_run, defaults, mut accounts) =
         store(daemon, move |db| {
-            let repo_path = crate::threads::scope_path(db, project)?;
+            // A thread sharing another's workspace works in its worktree (0063).
+            let repo_path = crate::delegation::workdir(db, project, run.into())?;
             // A run whose scope is a Project, not a repo entry, is its coordinator or one of its
             // children (0042).
             let project_row = db
@@ -574,13 +575,19 @@ async fn switch_checkout(
     reference: &str,
 ) -> Result<(), ErrorObject> {
     let busy = store(daemon, move |db| {
-        db.list_runs(Some(project.into()))
-            .map(|runs| {
-                runs.iter().any(|run| {
-                    run.fields.checkout && [STARTING, RUNNING].contains(&run.state.status.as_str())
-                })
-            })
-            .map_err(|e| store_error(&e))
+        for run in db
+            .list_runs(Some(project.into()))
+            .map_err(|e| store_error(&e))?
+        {
+            if run.fields.checkout
+                && [STARTING, RUNNING].contains(&run.state.status.as_str())
+                && crate::delegation::workdir(db, project, run.id)?
+                    == crate::threads::scope_path(db, project)?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     })
     .await?;
     if busy {
@@ -2363,7 +2370,7 @@ mod tests {
         assert!(!agents.retire(id, &commands), "a command holds a sender");
         assert!(
             racing
-                .try_send(Command::Wake(String::new(), Vec::new()))
+                .try_send(Command::Wake(String::new(), Vec::new(), None))
                 .is_ok()
         );
         drop(racing);

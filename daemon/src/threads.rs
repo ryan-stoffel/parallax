@@ -129,7 +129,7 @@ pub(crate) fn thread_entry(row: &parallax_store::Thread) -> Result<Thread, Error
 
 /// A title as `thread/start` and `thread/update` take it: trimmed, with empty meaning none, and
 /// at most [`MAX_THREAD_TITLE_BYTES`] bytes.
-fn check_title(title: &str) -> Result<Option<String>, ErrorObject> {
+pub(crate) fn check_title(title: &str) -> Result<Option<String>, ErrorObject> {
     let title = title.trim();
     if title.len() > MAX_THREAD_TITLE_BYTES {
         return Err(ErrorObject::invalid_params(format!(

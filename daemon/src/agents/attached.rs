@@ -5,7 +5,9 @@
 //! ahead of the user's text: its id, its title, and what was said in it, rendered as 0014's handoff
 //! renders a conversation, without tool calls, and kept to [`SUMMARY_BYTES`] by [`super::handoff`].
 //! A thread the target has seen before sends only what was logged after that cursor. The transcript
-//! keeps the user's own text, and the message's `turnStarted` lists the threads.
+//! keeps the user's own text, and the message's `turnStarted` lists the threads. A thread that
+//! merged its context back (`thread_merge_back`, 0063) goes with the next message the same way,
+//! and recording what that message read consumes its transfer.
 
 use std::fmt::Write as _;
 
@@ -65,36 +67,57 @@ pub(crate) async fn check(daemon: &Daemon, threads: Vec<RunId>) -> Result<Vec<Ru
 }
 
 /// `text` as its CLI gets it: a summary of each of `threads` first, from what their logs hold
-/// now. `text` alone when there are none.
+/// now, then of each thread that merged its context back into `target` (`thread_merge_back`,
+/// 0063) and isn't among them. `text` alone when there are none.
 pub(super) async fn prompt(
     daemon: &Daemon,
     target: RunId,
     threads: &[RunId],
     text: &str,
 ) -> Result<Prompt, ErrorObject> {
-    if threads.is_empty() {
+    let merged: Vec<RunId> = store(daemon, move |db| {
+        db.pending_transfer_sources(target.into())
+            .map_err(|e| store_error(&e))
+    })
+    .await?
+    .into_iter()
+    .filter_map(|id| RunId::try_from(id).ok())
+    .filter(|id| !threads.contains(id))
+    .collect();
+    if threads.is_empty() && merged.is_empty() {
         return Ok(Prompt {
             text: text.to_owned(),
             seen: Vec::new(),
         });
     }
-    let mut prompt = String::from(
-        "The user attached these Parallax threads for context. Each holds what was said in \
-         it, oldest first, without tool calls:\n\n",
-    );
-    let mut seen = Vec::with_capacity(threads.len());
-    for &id in threads {
-        let _ = writeln!(prompt, "<thread id=\"{id}\">");
-        if let Some(title) = title(daemon, id).await? {
-            let _ = writeln!(prompt, "Title: {title}");
+    let mut prompt = String::new();
+    let mut seen = Vec::with_capacity(threads.len() + merged.len());
+    for (header, threads) in [(ATTACHED, threads), (MERGED, merged.as_slice())] {
+        if threads.is_empty() {
+            continue;
         }
-        let (summary, cursor) = summary(daemon, target, id).await?;
-        seen.push((id.into(), cursor));
-        let _ = write!(prompt, "{summary}\n</thread>\n\n");
+        prompt.push_str(header);
+        for &id in threads {
+            let _ = writeln!(prompt, "<thread id=\"{id}\">");
+            if let Some(title) = title(daemon, id).await? {
+                let _ = writeln!(prompt, "Title: {title}");
+            }
+            let (summary, cursor) = summary(daemon, target, id).await?;
+            seen.push((id.into(), cursor));
+            let _ = write!(prompt, "{summary}\n</thread>\n\n");
+        }
     }
     let _ = write!(prompt, "The user's message:\n{text}");
     Ok(Prompt { text: prompt, seen })
 }
+
+/// What comes before the threads attached to a message.
+const ATTACHED: &str = "The user attached these Parallax threads for context. Each holds what was said in \
+     it, oldest first, without tool calls:\n\n";
+
+/// What comes before the threads that merged their context back (0063).
+const MERGED: &str = "These Parallax threads merged their context back into this one: what was said in \
+     each since it forked or since you last read it, oldest first, without tool calls:\n\n";
 
 /// Thread `id`'s title, when it has one (0041). A thread deleted since [`check`] has none.
 async fn title(daemon: &Daemon, id: RunId) -> Result<Option<String>, ErrorObject> {

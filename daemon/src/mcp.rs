@@ -1,7 +1,7 @@
 //! `plxd mcp --thread <runId>`: a thread's Parallax tools, as an MCP server on stdio (decisions
 //! 0019 and 0041). The tools are [`thread`]'s, with [`question`]'s for a Project's threads,
 //! [`memory`]'s by the caller's role (0044), [`device`]'s (PLX-640), and [`triggers`]' schedule
-//! and pull request tools (0063); this module is the server they share.
+//! and pull request tools and [`delegation`]'s (0063); this module is the server they share.
 //!
 //! A Project's coordinator gets the same server as any thread (PLX-380): its 0019 tools, bound to
 //! one project, are gone.
@@ -33,6 +33,7 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::peer::Plxd;
 
+pub mod delegation;
 pub mod device;
 pub mod html;
 pub mod land;
@@ -64,6 +65,10 @@ pub const MAX_RESULT_BYTES: usize = 256 * 1024;
 /// MCP protocol versions the server answers with, newest last. A client asking for another gets
 /// the newest; the tools use nothing that differs between them.
 const MCP_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
+
+/// The longest a tool call can run: `delegate_task`'s `wait` at its longest, an hour, and a
+/// minute to spare. Codex's own default is 60 s, so plxd sets this for its server there.
+pub const MAX_TOOL_SECONDS: u64 = 61 * 60;
 
 /// The most tool calls the server runs at once. Each has at most one request in flight to plxd,
 /// so staying under plxd's 32 per connection means long waits never fill the connection.

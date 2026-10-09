@@ -52,7 +52,8 @@ pub(super) const EXCERPT_BYTES: usize = 500;
 /// they are paused. The actor stores `state` whenever it changes, so a restart keeps it.
 #[derive(Debug, Default)]
 pub(super) struct Wakes {
-    waiting: Vec<String>,
+    /// Each summary, with the delegated task it reports, if any (0063).
+    waiting: Vec<(String, Option<Uuid>)>,
     /// The questions named in `waiting`, stored as delivered once it is (PLX-469).
     questions: Vec<Uuid>,
     since: Option<Instant>,
@@ -63,9 +64,16 @@ pub(super) struct Wakes {
 }
 
 impl Wakes {
-    /// Adds a finished run's summary, and the ids of the questions it names.
-    pub fn push(&mut self, summary: String, questions: Vec<Uuid>, now: Instant) {
-        self.waiting.push(summary);
+    /// Adds a finished run's summary, the ids of the questions it names, and the delegated task
+    /// it reports.
+    pub fn push(
+        &mut self,
+        summary: String,
+        questions: Vec<Uuid>,
+        task: Option<Uuid>,
+        now: Instant,
+    ) {
+        self.waiting.push((summary, task));
         self.questions.extend(questions);
         self.since.get_or_insert(now);
     }
@@ -85,7 +93,28 @@ impl Wakes {
         }
         let turn = TurnId::generate();
         self.sent = Some(turn);
-        Some((turn, message(&[&self.waiting[..], proposals].concat())))
+        let lines: Vec<String> = self
+            .waiting
+            .iter()
+            .map(|(line, _)| line.clone())
+            .chain(proposals.iter().cloned())
+            .collect();
+        Some((turn, message(&lines)))
+    }
+
+    /// The delegated tasks whose ends wait to be sent.
+    pub fn tasks(&self) -> Vec<Uuid> {
+        self.waiting.iter().filter_map(|(_, task)| *task).collect()
+    }
+
+    /// Drops the ends of `quiet` tasks, whose results the parent read or which it cancelled
+    /// since (0063). Nothing is due once nothing waits.
+    pub fn drop_tasks(&mut self, quiet: &[Uuid]) {
+        self.waiting
+            .retain(|(_, task)| task.is_none_or(|task| !quiet.contains(&task)));
+        if self.waiting.is_empty() {
+            self.since = None;
+        }
     }
 
     /// The wake-up from [`Wakes::next`] reached the parent's CLI: it counts against the cap,
@@ -150,6 +179,47 @@ pub(crate) fn notify_questions(
     summary: String,
     questions: Vec<Uuid>,
 ) {
+    send(daemon, parent, summary, questions, None);
+}
+
+/// Wakes `parent` because its child `run` ended with `outcome` (0025). A task it delegated
+/// reports with T3 Code's delegated completion, unless the parent read or cancelled it, or it
+/// waits on it in a running turn ([`crate::delegation::wakes`], 0063).
+pub(super) fn child_ended(
+    daemon: &Arc<Daemon>,
+    parent: Uuid,
+    run: &AgentRun,
+    outcome: &AgentOutcome,
+) {
+    let child = Uuid::from(run.id);
+    let (line, delegated) = (summary(run, outcome), completion(run, outcome));
+    let owned = Arc::clone(daemon);
+    daemon.agents.tracker.spawn(async move {
+        let wakes = store(&owned, move |db| {
+            crate::delegation::wakes(db, child, parent)
+        })
+        .await;
+        match wakes {
+            Ok(None) => {}
+            Ok(Some(true)) => send(&owned, parent, delegated, Vec::new(), Some(child)),
+            Ok(Some(false)) => send(&owned, parent, line, Vec::new(), None),
+            Err(error) => {
+                warn!(parent = %parent, error = %error.message, "could not read how a child wakes its parent");
+                send(&owned, parent, line, Vec::new(), None);
+            }
+        }
+    });
+}
+
+/// Hands `summary` to run `parent`'s actor: see [`notify_questions`]. `task` is the delegated
+/// task it reports, if any.
+fn send(
+    daemon: &Arc<Daemon>,
+    parent: Uuid,
+    summary: String,
+    questions: Vec<Uuid>,
+    task: Option<Uuid>,
+) {
     let Ok(id) = RunId::try_from(parent) else {
         return;
     };
@@ -158,7 +228,7 @@ pub(crate) fn notify_questions(
         match super::actor_for(&owned, id).await {
             Ok(actor) => {
                 // A closed channel is a parent that stopped or was deleted: nothing to wake.
-                let _ = actor.send(Command::Wake(summary, questions)).await;
+                let _ = actor.send(Command::Wake(summary, questions, task)).await;
             }
             Err(error) => {
                 warn!(parent = %id, error = %error.message, "could not wake a parent");
@@ -335,6 +405,7 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
                 .unwrap_or(parent.created_at);
             let mut lines = Vec::new();
             let mut questions = Vec::new();
+            let mut tasks = Vec::new();
             if current && parent.state.status == INTERRUPTED && parent.updated_at > since {
                 lines.push(OWN_TURN.to_owned());
             }
@@ -349,19 +420,25 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
                     && run.fields.notify_parent
                     && run.updated_at > since
             }) {
-                if unrun_fork(db, run.id)? {
+                let delivery = crate::delegation::wakes(db, run.id, parent.id)?;
+                if unrun_fork(db, run.id)? || delivery.is_none() {
                     continue;
                 }
                 let worktree = db.get_worktree(run.id).map_err(|e| store_error(&e))?;
-                if let Some(line) = agent_run(run, worktree.as_ref())
-                    .ok()
-                    .and_then(|run| stored_summary(&run))
-                {
-                    lines.push(line);
+                let Ok(run) = agent_run(run, worktree.as_ref()) else {
+                    continue;
+                };
+                let Some(outcome) = stored_outcome(&run) else {
+                    continue;
+                };
+                if delivery == Some(true) {
+                    tasks.push((completion(&run, &outcome), run.id.into()));
+                } else {
+                    lines.push(summary(&run, &outcome));
                 }
             }
-            if !lines.is_empty() {
-                missed.push((parent.id, lines.join("\n"), questions));
+            if !lines.is_empty() || !tasks.is_empty() {
+                missed.push((parent.id, lines.join("\n"), questions, tasks));
             }
         }
         Ok(missed)
@@ -369,9 +446,14 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
     .await;
     match missed {
         Ok(missed) => {
-            for (parent, summary, questions) in missed {
+            for (parent, summary, questions, tasks) in missed {
                 info!(parent = %parent, "waking a parent for what it missed while plxd was stopped");
-                notify_questions(daemon, parent, summary, questions);
+                if !summary.is_empty() {
+                    notify_questions(daemon, parent, summary, questions);
+                }
+                for (line, task) in tasks {
+                    send(daemon, parent, line, Vec::new(), Some(task));
+                }
             }
         }
         Err(error) => {
@@ -396,7 +478,7 @@ const OWN_TURN: &str = "- Your own last turn was interrupted when plxd stopped; 
 /// [`summary`] from `run`'s row alone, for a run whose wake-up a restart lost: the row keeps its
 /// status and error, but not its last result or its failure's kind. `None` for a run that hasn't
 /// ended.
-fn stored_summary(run: &AgentRun) -> Option<String> {
+fn stored_outcome(run: &AgentRun) -> Option<AgentOutcome> {
     let outcome = match run.status {
         AgentStatus::Completed => AgentOutcome::Completed { result: None },
         AgentStatus::Failed => AgentOutcome::Failed {
@@ -407,7 +489,26 @@ fn stored_summary(run: &AgentRun) -> Option<String> {
         AgentStatus::Interrupted => AgentOutcome::Interrupted,
         _ => return None,
     };
-    Some(summary(run, &outcome))
+    Some(outcome)
+}
+
+/// The line for a task its parent delegated (0063), as T3 Code's delegated completion: the
+/// parent reads the result with `task_status`.
+fn completion(run: &AgentRun, outcome: &AgentOutcome) -> String {
+    let status = match outcome {
+        AgentOutcome::Completed { .. } => "completed",
+        AgentOutcome::Failed { .. } => "failed",
+        AgentOutcome::Cancelled => "cancelled",
+        AgentOutcome::Interrupted => "interrupted",
+        AgentOutcome::Unknown => "stopped",
+    };
+    format!(
+        "- Delegated task {} ({}) reached a terminal state: {status}. Use task_status with taskId \
+         {} to read the result.",
+        run.id,
+        task(&run.prompt),
+        run.id
+    )
 }
 
 /// One line on how `run`'s CLI process ended: its id, task, outcome, and branch.
@@ -514,8 +615,8 @@ mod tests {
         let mut wakes = Wakes::default();
         assert_eq!(wakes.due(), None, "nothing waiting");
         let first = Instant::now();
-        wakes.push("- Run a".to_owned(), Vec::new(), first);
-        wakes.push("- Run b".to_owned(), Vec::new(), first + BATCH / 2);
+        wakes.push("- Run a".to_owned(), Vec::new(), None, first);
+        wakes.push("- Run b".to_owned(), Vec::new(), None, first + BATCH / 2);
         assert_eq!(
             wakes.due(),
             Some(first + BATCH),
@@ -536,15 +637,15 @@ mod tests {
         let mut wakes = Wakes::default();
         let now = Instant::now();
         for _ in 0..CAP {
-            wakes.push("- Run".to_owned(), Vec::new(), now);
+            wakes.push("- Run".to_owned(), Vec::new(), None, now);
             assert!(wakes.next(&[]).is_some());
             wakes.delivered();
         }
-        wakes.push("- Run late".to_owned(), Vec::new(), now);
+        wakes.push("- Run late".to_owned(), Vec::new(), None, now);
         assert!(wakes.next(&[]).is_none(), "one past the cap");
         assert!(wakes.pause(), "which the actor pauses on, once");
         assert!(!wakes.pause());
-        wakes.push("- Run later".to_owned(), Vec::new(), now);
+        wakes.push("- Run later".to_owned(), Vec::new(), None, now);
         assert_eq!(wakes.due(), None, "paused: nothing is due");
 
         wakes.attended();

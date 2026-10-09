@@ -23,7 +23,8 @@ impl Store {
     }
 
     /// Records that target `target` has read each source through the given `seq`, replacing a
-    /// row it already had.
+    /// row it already had. A pending context transfer from that source through that `seq` is
+    /// consumed (PLX-648).
     ///
     /// # Errors
     ///
@@ -40,6 +41,12 @@ impl Store {
                  ON CONFLICT (target_run, source_run) DO UPDATE SET seq = excluded.seq",
                 params![target.to_string(), source.to_string(), seq],
             )?;
+            self.conn
+                .prepare_cached(
+                    "UPDATE context_transfers SET status = 'consumed'
+                     WHERE target = ?1 AND source = ?2 AND status = 'pending' AND seq <= ?3",
+                )?
+                .execute(params![target.to_string(), source.to_string(), seq])?;
         }
         Ok(())
     }

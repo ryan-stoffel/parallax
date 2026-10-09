@@ -603,6 +603,21 @@ export type ParallaxRequests = {
 	 */
 	"repo/saveScripts": { params: RepoSaveScriptsParams, result: RepoScriptsResult },
 	/**
+	 * `task/delegate`: starts a thread in another thread's worktree, as a task it delegated
+	 * or a top-level thread beside it (0063, PLX-648). Idempotent on `runId`. Gated on the
+	 * `delegation` capability, like `task/status` and `thread/mergeBack`.
+	 */
+	"task/delegate": { params: TaskDelegateParams, result: ThreadStartResult },
+	/**
+	 * `task/status`: a delegated task, after acknowledging its result or changing its wake.
+	 */
+	"task/status": { params: TaskStatusParams, result: DelegatedTask },
+	/**
+	 * `thread/mergeBack`: a fork's or child's new context goes with the next message of the
+	 * thread it came from.
+	 */
+	"thread/mergeBack": { params: ThreadMergeBackParams, result: ThreadMergeBackResult },
+	/**
 	 * `orchestration/dispatch`: runs one command on a thread (0059, PLX-644), idempotent on
 	 * its `commandId`. Gated on the `orchestration` capability, like every
 	 * `orchestration/*` method.
@@ -744,6 +759,9 @@ export const REQUEST_METHODS = [
 	"pr/watches",
 	"repo/scripts",
 	"repo/saveScripts",
+	"task/delegate",
+	"task/status",
+	"thread/mergeBack",
 	"orchestration/dispatch",
 	"orchestration/subscribeShell",
 	"orchestration/subscribeThread",
@@ -6874,6 +6892,140 @@ export type RepoSaveScriptsParams = {
 	 * Its scripts, in order.
 	 */
 	scripts: Array<RepoScript>,
+};
+
+/**
+ * Params of `task/delegate`. Idempotent on `runId`.
+ */
+export type TaskDelegateParams = {
+	/**
+	 * The new thread's run id, which the client makes. Reuse it to retry.
+	 */
+	runId: RunId,
+	/**
+	 * The thread whose workspace it works in: a thread in a repo entry, running a turn. With
+	 * `completionWake`, also its parent.
+	 */
+	owner: RunId,
+	/**
+	 * Its first message.
+	 */
+	prompt: string,
+	/**
+	 * Its title in the sidebar.
+	 */
+	title?: string,
+	/**
+	 * Where it runs. Absent: the owner's account.
+	 */
+	account?: AccountChoice,
+	/**
+	 * Its model. Absent: the owner's on the same backend, else the backend's default.
+	 */
+	model?: string,
+	/**
+	 * Its effort. Absent: the owner's on the same backend.
+	 */
+	effort?: AgentEffort,
+	/**
+	 * Its mode, which can't need less approval than the owner's. Absent: the owner's.
+	 */
+	permission?: AgentPermission,
+	/**
+	 * Set for a delegated task, the owner's child. Absent: a top-level thread.
+	 */
+	completionWake?: CompletionWake,
+};
+
+/**
+ * When a delegated task's end wakes its parent, as T3 Code's `completionWake`.
+ *
+ * A newer peer may send a policy this version does not know; plxd refuses it.
+ */
+export type CompletionWake = "always" | "settled_only";
+
+/**
+ * Params of `task/status`: reads a task `parent` delegated, after the changes asked for.
+ */
+export type TaskStatusParams = {
+	/**
+	 * The thread that delegated it.
+	 */
+	parent: RunId,
+	/**
+	 * The task: its thread's run id.
+	 */
+	taskId: RunId,
+	/**
+	 * Marks its result read, if it has ended, so its end no longer wakes the parent.
+	 */
+	acknowledge?: boolean,
+	/**
+	 * Its new wake policy.
+	 */
+	completionWake?: CompletionWake,
+	/**
+	 * Its end no longer wakes the parent, as when the parent cancels it.
+	 */
+	dispose?: boolean,
+};
+
+/**
+ * A delegated task, as `task/status` returns it.
+ */
+export type DelegatedTask = {
+	/**
+	 * Its thread's run id.
+	 */
+	taskId: RunId,
+	/**
+	 * The thread that delegated it.
+	 */
+	parent: RunId,
+	/**
+	 * When its end wakes the parent.
+	 */
+	completionWake: CompletionWake,
+	/**
+	 * Whether its end still wakes the parent.
+	 */
+	delivery: TaskDelivery,
+	/**
+	 * Its run, as it stands.
+	 */
+	run: AgentRun,
+};
+
+/**
+ * Whether a delegated task's end still wakes its parent.
+ *
+ * A newer plxd may send a state this version does not know; treat it as unknown.
+ */
+export type TaskDelivery = "pending" | "acknowledged" | "disposed";
+
+/**
+ * Params of `thread/mergeBack`: `source`'s context since it forked from `target`, or for
+ * `target`'s child, all of it, goes with `target`'s next message.
+ */
+export type ThreadMergeBackParams = {
+	/**
+	 * The fork or child.
+	 */
+	source: RunId,
+	/**
+	 * The thread it forked from, or its parent.
+	 */
+	target: RunId,
+};
+
+/**
+ * Result of `thread/mergeBack`.
+ */
+export type ThreadMergeBackResult = {
+	/**
+	 * The transfer's id, a UUID.
+	 */
+	transferId: string,
 };
 
 /**

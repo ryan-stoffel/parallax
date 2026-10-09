@@ -112,6 +112,7 @@ async fn names(mcp: &mut Mcp) -> Vec<String> {
         plxd::mcp::preview::TOOLS,
         plxd::mcp::device::TOOLS,
         plxd::mcp::triggers::TOOLS,
+        plxd::mcp::delegation::TOOLS,
     ]
     .concat();
     let devices = names.split_off(names.len() - last.len());

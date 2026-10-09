@@ -18,7 +18,7 @@ use parallax_protocol::{
     AgentDiffFile, AgentDiffResult, AgentDiffStats, AgentEntry, AgentEntryKind,
     AgentFileCreateParams, AgentFileDeleteParams, AgentFileEditResult, AgentFileParams,
     AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFileStatus, AgentFilesParams,
-    AgentFilesResult, ErrorKind, RunId,
+    AgentFilesResult, ErrorKind, ProjectId, RunId,
 };
 use parallax_store::{Run as RunRow, Worktree};
 use tokio::io::AsyncReadExt as _;
@@ -198,8 +198,8 @@ pub(crate) async fn file(
 const MAX_ENTRIES: usize = 5000;
 
 /// The folder a run's files are read from, and the pinned git folder to read it with: its
-/// worktree, or for a Current checkout thread, its repo entry's checkout, which is the user's own
-/// and has no pinned git folder. The folder itself must be a real folder, never a symlink; the
+/// worktree, or for a Current checkout thread, its repo entry's checkout or the worktree it shares
+/// (0063), which has no pinned git folder. The folder itself must be a real folder, never a symlink; the
 /// folders above it are the host's own, such as macOS's symlinked `/var`.
 pub(crate) async fn run_folder(
     daemon: &Arc<Daemon>,
@@ -226,11 +226,14 @@ pub(crate) async fn run_folder(
             return Ok((worktree.path.into(), Some(worktree.git_dir.into())));
         }
         if row.fields.checkout
-            && let Some(repo) = db
+            && let Ok(scope) = ProjectId::try_from(row.fields.project_id)
+            && db
                 .get_repo(row.fields.project_id)
                 .map_err(|error| store_error(&error))?
+                .is_some()
         {
-            return Ok((repo.fields.path.into(), None));
+            let path = crate::delegation::workdir(db, scope, id.into())?;
+            return Ok((path.into(), None));
         }
         Err(ErrorObject::invalid_params(format!(
             "run {id} has no folder of files to browse"

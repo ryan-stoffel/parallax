@@ -37,6 +37,7 @@ mod composer;
 mod connect;
 mod context;
 mod defaults;
+mod delegation;
 mod error;
 mod events;
 pub mod framing;
@@ -105,6 +106,10 @@ pub use context::{
 pub use defaults::{
     AccountChoice, AccountsDefaultsGetParams, AccountsDefaultsGetResult, AccountsDefaultsSetParams,
     Role,
+};
+pub use delegation::{
+    CompletionWake, DelegatedTask, TaskDelegateParams, TaskDelivery, TaskStatusParams,
+    ThreadMergeBackParams, ThreadMergeBackResult,
 };
 pub use error::{ErrorData, ErrorKind, IncompatibleProtocolDetail};
 pub use events::{

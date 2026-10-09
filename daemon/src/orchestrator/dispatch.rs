@@ -285,7 +285,8 @@ async fn queue(
 }
 
 /// Stops `thread`'s turn (0059's `run.interrupt`). With `hold_queue`, its queue waits for
-/// `queue.resume`, and it answers with the children still running, for the cascade. A Project's
+/// `queue.resume`, its tasks' ends wake it no more, and it answers with the children still
+/// running, for the cascade. A Project's
 /// coordinator stops only its own turn, and its queue goes on (Ryan, 0059).
 pub(super) async fn stop(
     daemon: &Arc<Daemon>,
@@ -305,6 +306,15 @@ pub(super) async fn stop(
         })
         .await?;
     let hold = hold_queue && !coordinator;
+    // A held Stop drops the wake-ups its stopped tasks would owe, as `task_cancel` does (0063).
+    if hold {
+        daemon
+            .store
+            .run(&CancellationToken::new(), move |db| {
+                crate::delegation::dispose_tasks(db, thread.into())
+            })
+            .await?;
+    }
     let work = {
         let daemon = Arc::clone(daemon);
         async move { agents::interrupt(&daemon, thread, hold).await }

@@ -633,6 +633,14 @@ pub(crate) fn delete_run_rows(conn: &Connection, id: Uuid) -> Result<bool, Store
         params![key],
     )?;
     conn.execute(
+        "DELETE FROM context_transfers WHERE target = ?1 OR source = ?1",
+        params![key],
+    )?;
+    conn.execute(
+        "DELETE FROM thread_lineage WHERE thread_id = ?1",
+        params![key],
+    )?;
+    conn.execute(
         "UPDATE runs SET parent = NULL WHERE parent = ?1",
         params![key],
     )?;

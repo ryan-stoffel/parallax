@@ -6,15 +6,20 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use parallax_protocol::methods::{AgentEvents, RepoAdd, ThreadList, ThreadStart};
+use parallax_protocol::methods::{
+    AgentAccept, AgentEvents, AgentList, AgentSend, AgentWait, OrchestrationDispatch, RepoAdd,
+    TaskDelegate, ThreadDelete, ThreadList, ThreadStart,
+};
 use parallax_protocol::{
-    AccountChoice, AgentEventsParams, AgentOutputItem, AgentPermission, ParallaxEvent,
-    RepoAddParams, RepoId, RunId, Thread, ThreadListParams, ThreadStartParams, TurnId,
+    AcceptId, AccountChoice, AgentAcceptParams, AgentDelivery, AgentEventsParams, AgentListParams,
+    AgentOutputItem, AgentPermission, AgentSendParams, AgentStatus, AgentWaitParams,
+    AgentWaitUntil, ErrorKind, OrchestrationCommand, ParallaxEvent, RepoAddParams, RepoId, RunId,
+    TaskDelegateParams, Thread, ThreadDeleteParams, ThreadListParams, ThreadStartParams, TurnId,
 };
 use plxd::backend::fake::Step;
 use plxd::mcp::MAX_CALLS;
 use plxd::mcp::thread::TOOLS;
-use plxd::mcp::{device, html, preview, triggers};
+use plxd::mcp::{delegation, device, html, preview, triggers};
 use plxd::paths::DataDir;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -163,7 +168,8 @@ async fn a_thread_launches_waits_on_reads_searches_and_messages_a_child() {
             html::TOOLS,
             preview::TOOLS,
             device::TOOLS,
-            triggers::TOOLS
+            triggers::TOOLS,
+            delegation::TOOLS
         ]
         .concat()
     );
@@ -905,4 +911,656 @@ fn record_requests(dir: &Path, socket: PathBuf) -> Arc<Mutex<Vec<String>>> {
         }
     });
     methods
+}
+
+/// Each turn prints its folder and prompt, then works until a message from inside it, which only a
+/// steer delivers, lets it end.
+fn steered() -> Vec<Step> {
+    vec![
+        init("work-1"),
+        Step::EchoCwd,
+        Step::EchoPrompt,
+        text("Working"),
+        Step::AwaitFollowUp,
+        end_turn("Started."),
+        end_turn("Steered."),
+    ]
+}
+
+/// The agent's messages in `run`'s transcript, oldest first.
+async fn texts(client: &mut Conn, run: RunId) -> Vec<String> {
+    transcript(client, run)
+        .await
+        .into_iter()
+        .filter_map(|item| match item {
+            AgentOutputItem::Text { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Waits until `run` is in the middle of a turn of [`steered`].
+async fn working(client: &mut Conn, run: RunId) {
+    let deadline = Instant::now() + PATIENCE;
+    while !texts(client, run)
+        .await
+        .iter()
+        .any(|text| text == "Working")
+    {
+        assert!(Instant::now() < deadline, "{run} never started working");
+        sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Sends `text` into `run`'s running turn, which lets a turn of [`steered`] end.
+async fn steer(client: &mut Conn, run: RunId, text: &str) {
+    client
+        .call::<AgentSend>(AgentSendParams {
+            run_id: run,
+            turn_id: TurnId::generate(),
+            text: text.to_owned(),
+            model: None,
+            effort: None,
+            permission: None,
+            context_window: None,
+            fast: None,
+            account: None,
+            images: Vec::new(),
+            threads: Vec::new(),
+            from: None,
+            delivery: Some(AgentDelivery::Steer),
+        })
+        .await
+        .unwrap();
+}
+
+/// `run`'s worktree, canonical.
+async fn worktree(client: &mut Conn, run: RunId) -> PathBuf {
+    let runs = client
+        .call::<AgentList>(AgentListParams { project: None })
+        .await
+        .unwrap()
+        .runs;
+    let path = runs
+        .iter()
+        .find(|r| r.id == run)
+        .unwrap()
+        .worktree_path
+        .clone();
+    std::fs::canonicalize(path.expect("a worktree")).unwrap()
+}
+
+fn task(value: &Value) -> RunId {
+    value["taskId"].as_str().unwrap().parse().unwrap()
+}
+
+/// Waits until `run` has woken `count` times, and returns its wake-up turns.
+async fn woken(client: &mut Conn, run: RunId, count: usize) -> Vec<String> {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let found = wakes(client, run).await;
+        if found.len() >= count {
+            return found;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{run} woke {} times",
+            found.len()
+        );
+        sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// The wake batch (2 s) and then some, to see that a wake-up didn't come.
+const QUIET: Duration = Duration::from_secs(3);
+
+/// PLX-648 (0063): `delegate_task` starts the caller's child in its worktree, on any backend, in a
+/// mode no broader than its own. An async task's end wakes the caller once its turn is over,
+/// unless it read the result with `task_status` first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_thread_delegates_tasks_in_its_worktree_and_is_woken_for_the_ones_it_didnt_read() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+
+    let refused = mcp
+        .refused(
+            "delegate_task",
+            json!({"task": "Ship it.", "runtimeMode": "bypass"}),
+        )
+        .await;
+    assert!(refused.contains("needs less approval"), "{refused}");
+
+    let read = mcp
+        .ok(
+            "delegate_task",
+            json!({"task": "Read the docs.", "target": {"providerInstanceId": "fake"}, "title": "Docs"}),
+        )
+        .await;
+    assert_eq!(read["workState"], "working", "{read}");
+    assert_eq!(read["waitTimedOut"], false);
+    let read = task(&read);
+    let told = task(
+        &mcp.ok(
+            "delegate_task",
+            json!({"task": "Run the tests.", "role": "test"}),
+        )
+        .await,
+    );
+    let mine = worktree(&mut client, me).await;
+    for child in [read, told] {
+        working(&mut client, child).await;
+        assert_eq!(thread(&mut client, child).await.parent, Some(me));
+        let cwd = texts(&mut client, child).await.remove(0);
+        assert_eq!(
+            std::fs::canonicalize(&cwd).unwrap(),
+            mine,
+            "a task works in its parent's worktree"
+        );
+    }
+    assert!(
+        texts(&mut client, told)
+            .await
+            .contains(&"Act as the test sub-agent for this task.\n\nRun the tests.".to_owned())
+    );
+
+    for child in [read, told] {
+        steer(&mut client, child, "Finish.").await;
+        mcp.ok("thread_wait", json!({"runId": child})).await;
+    }
+    let status = mcp.ok("task_status", json!({"taskId": read})).await;
+    assert_eq!(status["status"], "completed", "{status}");
+    assert_eq!(status["workState"], "result_available");
+    assert_eq!(status["summary"], "Steered.");
+    let missing = mcp.refused("task_status", json!({"taskId": me})).await;
+    assert!(missing.contains("delegated no task"), "{missing}");
+
+    steer(&mut client, me, "Wrap up.").await;
+    let wakes = woken(&mut client, me, 1).await;
+    assert!(
+        wakes[0].contains(&format!(
+            "- Delegated task {told} (Act as the test sub-agent for this task.) reached a terminal \
+             state: completed. Use task_status with taskId {told} to read the result."
+        )),
+        "{}",
+        wakes[0]
+    );
+    assert!(
+        !wakes[0].contains(&read.to_string()),
+        "it read that one: {}",
+        wakes[0]
+    );
+    host.server.stop().await;
+}
+
+/// The thread with parent `parent` whose prompt is `prompt`, once plxd has it.
+async fn child_of(client: &mut Conn, parent: RunId, prompt: &str) -> RunId {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let runs = client
+            .call::<AgentList>(AgentListParams { project: None })
+            .await
+            .unwrap()
+            .runs;
+        let threads = client
+            .call::<ThreadList>(ThreadListParams {})
+            .await
+            .unwrap()
+            .threads;
+        if let Some(run) = runs.iter().find(|run| {
+            run.prompt == prompt
+                && threads
+                    .iter()
+                    .any(|thread| thread.id == run.id && thread.parent == Some(parent))
+        }) {
+            return run.id;
+        }
+        assert!(Instant::now() < deadline, "no child {prompt:?}");
+        sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// `delegate_task` with `wait` returns the task's result, and its end doesn't wake the caller,
+/// whose turn was waiting on it (`settled_only`). A wait that times out hands the end back to a
+/// wake-up (`always`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_waited_task_returns_its_result_and_wakes_only_after_its_wait_times_out() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+
+    let mut other = host.client().await;
+    let (waited, quick) = tokio::join!(
+        mcp.ok(
+            "delegate_task",
+            json!({"task": "Quick check.", "mode": "wait", "timeoutMs": 60_000}),
+        ),
+        async {
+            let child = child_of(&mut other, me, "Quick check.").await;
+            working(&mut other, child).await;
+            steer(&mut other, child, "Finish.").await;
+            child
+        },
+    );
+    assert_eq!(task(&waited), quick);
+    assert_eq!(waited["status"], "completed", "{waited}");
+    assert_eq!(waited["summary"], "Steered.");
+    assert_eq!(waited["waitTimedOut"], false);
+
+    let slow = mcp
+        .ok(
+            "delegate_task",
+            json!({"task": "Slow check.", "mode": "wait", "timeoutMs": 500}),
+        )
+        .await;
+    assert_eq!(slow["waitTimedOut"], true, "{slow}");
+    assert_eq!(slow["status"], "running");
+    let slow = task(&slow);
+    working(&mut client, slow).await;
+    steer(&mut client, slow, "Finish.").await;
+    mcp.ok("thread_wait", json!({"runId": slow})).await;
+
+    steer(&mut client, me, "Wrap up.").await;
+    let wakes = woken(&mut client, me, 1).await;
+    assert!(
+        wakes[0].contains(&format!("Delegated task {slow}")),
+        "{}",
+        wakes[0]
+    );
+    assert!(!wakes[0].contains(&quick.to_string()), "{}", wakes[0]);
+    host.server.stop().await;
+}
+
+/// `task_cancel` stops a task as Stop does, and its end wakes no one. Stop on the caller stops the
+/// tasks it delegated (0063).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_task_is_cancelled_or_stopped_with_its_parent() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+
+    let cancelled = task(&mcp.ok("delegate_task", json!({"task": "Cancel me."})).await);
+    working(&mut client, cancelled).await;
+    let answer = mcp.ok("task_cancel", json!({"taskId": cancelled})).await;
+    assert_eq!(answer["status"], "cancel_requested", "{answer}");
+    let waited = mcp.ok("thread_wait", json!({"runId": cancelled})).await;
+    assert_eq!(waited["thread"]["status"], "cancelled", "{waited}");
+    let status = mcp.ok("task_status", json!({"taskId": cancelled})).await;
+    assert_eq!(status["status"], "cancelled");
+    let again = mcp.ok("task_cancel", json!({"taskId": cancelled})).await;
+    assert_eq!(
+        again["status"], "cancelled",
+        "an ended task keeps its status"
+    );
+
+    let stopped = task(
+        &mcp.ok("delegate_task", json!({"task": "Stop with me."}))
+            .await,
+    );
+    working(&mut client, stopped).await;
+    client
+        .call::<OrchestrationDispatch>(OrchestrationCommand::RunInterrupt {
+            thread_id: me,
+            hold_queue: true,
+        })
+        .await
+        .unwrap();
+    let waited = mcp.ok("thread_wait", json!({"runId": stopped})).await;
+    assert_eq!(waited["thread"]["status"], "cancelled", "{waited}");
+
+    // The user's next message lets wake-ups through again, and its turn's end would send what
+    // waits: the Stop dropped the stopped task's.
+    client
+        .call::<AgentSend>(AgentSendParams {
+            run_id: me,
+            turn_id: TurnId::generate(),
+            text: "Carry on.".to_owned(),
+            model: None,
+            effort: None,
+            permission: None,
+            context_window: None,
+            fast: None,
+            account: None,
+            images: Vec::new(),
+            threads: Vec::new(),
+            from: None,
+            delivery: None,
+        })
+        .await
+        .unwrap();
+    let _ = client
+        .call::<OrchestrationDispatch>(OrchestrationCommand::QueueResume { thread_id: me })
+        .await;
+    working_again(&mut client, me).await;
+    steer(&mut client, me, "Wrap up.").await;
+    idle(&mut client, me).await;
+    sleep(QUIET).await;
+    assert!(
+        wakes(&mut client, me).await.is_empty(),
+        "a cancelled or stopped task never wakes its parent"
+    );
+    host.server.stop().await;
+}
+
+/// Waits until `run` is idle, as the caller can't `thread_wait` on itself.
+async fn idle(client: &mut Conn, run: RunId) {
+    let waited = client
+        .call::<AgentWait>(AgentWaitParams {
+            run_ids: vec![run],
+            until: AgentWaitUntil::Any,
+            timeout_ms: 10_000,
+        })
+        .await
+        .unwrap();
+    assert!(
+        !matches!(
+            waited.runs[0].status,
+            AgentStatus::Starting | AgentStatus::Running
+        ),
+        "{run} is still running"
+    );
+}
+
+/// Waits until `run` is in the middle of a second turn of [`steered`].
+async fn working_again(client: &mut Conn, run: RunId) {
+    let deadline = Instant::now() + PATIENCE;
+    while texts(client, run)
+        .await
+        .iter()
+        .filter(|text| *text == "Working")
+        .count()
+        < 2
+    {
+        assert!(Instant::now() < deadline, "{run} never started again");
+        sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Accept never removes a worktree a thread is working in (0063): it refuses until the thread
+/// ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accept_refuses_while_a_thread_works_in_the_worktree() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+    let child = task(
+        &mcp.ok("delegate_task", json!({"task": "Keep editing."}))
+            .await,
+    );
+    working(&mut client, child).await;
+    steer(&mut client, me, "Wrap up.").await;
+    idle(&mut client, me).await;
+
+    let params = || AgentAcceptParams {
+        run_id: me,
+        id: AcceptId::generate(),
+        commit: None,
+    };
+    let refused = client.call::<AgentAccept>(params()).await.unwrap_err();
+    assert_eq!(
+        refused.parallax_data().unwrap().kind,
+        ErrorKind::MergeRefused
+    );
+    assert!(
+        refused.message.contains(&child.to_string()),
+        "{}",
+        refused.message
+    );
+
+    steer(&mut client, child, "Finish.").await;
+    mcp.ok("thread_wait", json!({"runId": child})).await;
+    let after = client
+        .call::<AgentAccept>(params())
+        .await
+        .err()
+        .map(|error| error.message);
+    assert!(
+        !after
+            .as_deref()
+            .is_some_and(|message| message.contains("still work in")),
+        "{after:?}"
+    );
+    host.server.stop().await;
+}
+
+/// Deleting a thread keeps its worktree while another thread works in it, and the last thread in
+/// it removes it (0063).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shared_worktree_outlives_its_owner_until_its_last_thread_goes() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let path = worktree(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+    let child = task(
+        &mcp.ok("delegate_task", json!({"task": "Keep editing."}))
+            .await,
+    );
+    working(&mut client, child).await;
+    drop(mcp);
+
+    client
+        .call::<ThreadDelete>(ThreadDeleteParams { run_id: me })
+        .await
+        .unwrap();
+    sleep(QUIET).await;
+    assert!(path.is_dir(), "its child still works in it");
+    steer(&mut client, child, "Finish.").await;
+    let deadline = Instant::now() + PATIENCE;
+    while !texts(&mut client, child)
+        .await
+        .iter()
+        .any(|text| text == "Finish.")
+    {
+        assert!(Instant::now() < deadline, "the child never got its message");
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    client
+        .call::<ThreadDelete>(ThreadDeleteParams { run_id: child })
+        .await
+        .unwrap();
+    let deadline = Instant::now() + PATIENCE;
+    while path.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the last thread left the worktree behind"
+        );
+        sleep(Duration::from_millis(50)).await;
+    }
+    host.server.stop().await;
+}
+
+/// At most 8 threads run in shared worktrees on a host at once, unlike T3 (0063). A retry that
+/// names a run outside any shared workspace is refused, not given a lineage.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_worktree_threads_are_capped_at_eight_running() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+    let prompts: Vec<Value> = (0..8)
+        .map(|i| json!({"prompt": format!("Part {i}.")}))
+        .collect();
+    let made = mcp.ok("create_threads", json!({"threads": prompts})).await;
+    assert_eq!(made["threads"].as_array().unwrap().len(), 8, "{made}");
+    let refused = mcp
+        .refused("delegate_task", json!({"task": "One more."}))
+        .await;
+    assert!(refused.contains("8 threads already run"), "{refused}");
+
+    let conflict = client
+        .call::<TaskDelegate>(TaskDelegateParams {
+            run_id: me,
+            owner: me,
+            prompt: "Again.".to_owned(),
+            title: None,
+            account: None,
+            model: None,
+            effort: None,
+            permission: None,
+            completion_wake: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        conflict.parallax_data().unwrap().kind,
+        ErrorKind::IdConflict
+    );
+    host.server.stop().await;
+}
+
+/// `create_threads` makes top-level threads in the caller's worktree, and `thread_merge_back`
+/// hands a child's conversation to its parent's next message, once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn threads_share_the_callers_worktree_and_a_child_merges_back_once() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+    let mine = worktree(&mut client, me).await;
+
+    let made = mcp
+        .ok(
+            "create_threads",
+            json!({"threads": [{"prompt": "First."}, {"prompt": "Second.", "title": "Two"}]}),
+        )
+        .await;
+    let made: Vec<RunId> = made["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|thread| thread["threadId"].as_str().unwrap().parse().unwrap())
+        .collect();
+    assert_eq!(made.len(), 2);
+    for thread_id in &made {
+        working(&mut client, *thread_id).await;
+        assert_eq!(
+            thread(&mut client, *thread_id).await.parent,
+            None,
+            "top-level"
+        );
+        let cwd = texts(&mut client, *thread_id).await.remove(0);
+        assert_eq!(std::fs::canonicalize(&cwd).unwrap(), mine);
+    }
+    let refused = mcp.refused("create_threads", json!({"threads": []})).await;
+    assert!(refused.contains("1 to 20"), "{refused}");
+
+    let child = task(
+        &mcp.ok("delegate_task", json!({"task": "Find the bug."}))
+            .await,
+    );
+    working(&mut client, child).await;
+    steer(&mut client, child, "It's in the parser.").await;
+    mcp.ok("thread_wait", json!({"runId": child})).await;
+    let unrelated = mcp
+        .refused(
+            "thread_merge_back",
+            json!({"sourceThreadId": made[0], "targetThreadId": me}),
+        )
+        .await;
+    assert!(
+        unrelated.contains("neither a fork nor a child"),
+        "{unrelated}"
+    );
+    let merged = mcp
+        .ok(
+            "thread_merge_back",
+            json!({"sourceThreadId": child, "targetThreadId": me}),
+        )
+        .await;
+    assert_eq!(merged["status"], "pending", "{merged}");
+
+    steer(&mut client, me, "Wrap up.").await;
+    let deadline = Instant::now() + PATIENCE;
+    let got = loop {
+        let found = texts(&mut client, me)
+            .await
+            .into_iter()
+            .find(|text| text.contains("merged their context back"));
+        if let Some(found) = found {
+            break found;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the merge never reached the parent"
+        );
+        sleep(Duration::from_millis(50)).await;
+    };
+    assert!(got.contains(&format!("<thread id=\"{child}\">")), "{got}");
+    assert!(got.contains("It's in the parser."), "{got}");
+    assert!(got.ends_with("The user's message:\nWrap up."), "{got}");
+    let again = mcp
+        .refused(
+            "thread_merge_back",
+            json!({"sourceThreadId": child, "targetThreadId": me}),
+        )
+        .await;
+    assert!(again.contains("no turn of its own"), "{again}");
+    host.server.stop().await;
+}
+
+/// Restart catch-up keeps the delegated task identity so `task_status` can suppress its wake.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restarted_delegated_completions_can_be_acknowledged() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+    let child = task(
+        &mcp.ok("delegate_task", json!({"task": "Keep editing."}))
+            .await,
+    );
+    working(&mut client, child).await;
+    drop(mcp);
+    drop(client);
+    let host = host.restart(fake(echo())).await;
+    let mut client = host.client().await;
+    let mut mcp = tools(&host, me).await;
+    mcp.ok("task_status", json!({"taskId": child})).await;
+    sleep(QUIET).await;
+    assert!(wakes(&mut client, me).await.is_empty());
+    host.server.stop().await;
+}
+
+/// A child in an owner's separate worktree doesn't block switching the repository checkout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shared_worktree_child_doesnt_block_the_repository_checkout() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+    let child = task(
+        &mcp.ok("delegate_task", json!({"task": "Keep editing."}))
+            .await,
+    );
+    working(&mut client, child).await;
+    mcp.ok(
+        "thread_launch",
+        json!({"prompt": "Use the checkout.", "backend": "fake", "workspace": "checkout", "branch": "main"}),
+    )
+    .await;
+    host.server.stop().await;
 }
