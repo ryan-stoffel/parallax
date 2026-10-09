@@ -517,3 +517,54 @@ async fn a_rolled_back_import_is_done_again() {
     assert_eq!(imported, 1);
     assert_eq!(runs(&store, thread).await.len(), 1);
 }
+
+#[tokio::test]
+async fn secret_requests_are_pending_runtime_requests_until_resolved() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(dir.path());
+    let (thread, project) = (RunId::generate(), ProjectId::generate());
+    let request_id = Uuid::now_v7().to_string();
+    stage(
+        &store,
+        project,
+        vec![output(
+            thread,
+            vec![
+                started(None, "Configure the hook"),
+                AgentOutputItem::SecretRequested {
+                    request_id: request_id.clone(),
+                    label: "Webhook secret".to_owned(),
+                    reason: "To sign".to_owned(),
+                    placeholder: None,
+                },
+            ],
+        )],
+    )
+    .await;
+    let pending = store
+        .run(&CancellationToken::new(), move |db| {
+            super::requests(db, Some(thread.into()))
+        })
+        .await
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    stage(
+        &store,
+        project,
+        vec![output(
+            thread,
+            vec![AgentOutputItem::SecretResolved {
+                request_id,
+                status: parallax_protocol::SecretStatus::Saved,
+            }],
+        )],
+    )
+    .await;
+    let pending = store
+        .run(&CancellationToken::new(), move |db| {
+            super::requests(db, Some(thread.into()))
+        })
+        .await
+        .unwrap();
+    assert!(pending.is_empty());
+}

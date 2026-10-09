@@ -16,7 +16,7 @@ use zeroize::{Zeroize, Zeroizing};
 use super::{KeyStore, KeyStoreError, SERVICE};
 
 /// The label shown for an item in a keyring app such as Seahorse, as on macOS.
-const ITEM_LABEL: &str = "Parallax API key";
+const ITEM_LABEL: &str = "Parallax secret";
 
 impl From<Error> for KeyStoreError {
     // `NoStorageAccess` is a locked collection, a dismissed unlock prompt, or no default

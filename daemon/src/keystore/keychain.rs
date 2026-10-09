@@ -11,7 +11,7 @@ use super::{KeyStore, KeyStoreError, SERVICE};
 
 /// The label shown for an item in Keychain Access, so a real one is recognizable among a user's
 /// other saved passwords.
-const ITEM_LABEL: &str = "Parallax API key";
+const ITEM_LABEL: &str = "Parallax secret";
 
 /// `security_framework_sys::base::errSecItemNotFound`, kept as a local constant so this module
 /// does not need `security-framework-sys` as a direct dependency for one status code.

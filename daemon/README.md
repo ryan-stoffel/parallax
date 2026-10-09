@@ -108,7 +108,7 @@ Without the unit, `attach` starts `serve` itself, in its own session, and it kee
 
 ### API keys on Linux
 
-Key accounts go in the Secret Service, the D-Bus API that GNOME Keyring and KeePassXC provide, as one item per account labeled "Parallax API key" in the default collection. `serve` needs an unlocked Secret Service on your session bus:
+Key accounts go in the Secret Service, the D-Bus API that GNOME Keyring and KeePassXC provide, as one item per account labeled "Parallax secret" in the default collection. `serve` needs an unlocked Secret Service on your session bus:
 
 - On a desktop, the keyring your login unlocks works, including for a `serve` started over SSH while you're logged in.
 - A headless host has none. Install one, such as `gnome-keyring`, and unlock it, or key accounts fail with `keychainUnavailable` and a message that says so. plxd never falls back to storing keys in a file. Subscriptions don't need it, because the vendor CLIs keep their own logins.

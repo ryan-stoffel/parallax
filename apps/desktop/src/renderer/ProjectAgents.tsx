@@ -58,7 +58,8 @@ export function useProjectAgents(
     const waiting: Record<string, Approval[]> = {};
     for (const r of runs) {
       const items = state.approvals[r.id]?.items;
-      if (items?.length) waiting[r.id] = items as Approval[];
+      if (items?.length)
+        waiting[r.id] = items.filter((item): item is Approval => item.kind === "approval");
     }
     return { runs, waiting, start };
   }, [project, state, inProject, start]);
