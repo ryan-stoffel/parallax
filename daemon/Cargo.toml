@@ -41,7 +41,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 zeroize.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-nix = { workspace = true, features = ["process", "signal"] }
+# `net` for the browser proxy's view of this machine's own addresses (PLX-639).
+nix = { workspace = true, features = ["net", "process", "signal"] }
 rustix = { workspace = true, features = ["fs", "process"] }
 
 # Agent CLIs run through tokio's process support, and every Win32 call plxd makes is in

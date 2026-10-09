@@ -69,10 +69,10 @@ export const pageUrl = (hostId: string, runId: string, attachmentId: string) =>
 
 /**
  * An html_render page inline in the transcript, as T3 Code shows one: borderless, in a frame that
- * runs its scripts and nothing else (no same origin, popups, or navigation of the app). It gets
- * the app's theme in its URL and again whenever the theme changes, reports its height, which the
- * frame fits up to the agent's `height`, and sends its links here to open in the browser. It
- * speaks MCP Apps' JSON-RPC over postMessage.
+ * runs its scripts and forms and nothing else (no same origin, popups, or navigation of the app).
+ * It gets the app's theme in its URL and again whenever the theme changes, reports its height,
+ * which the frame fits up to the agent's `height`, and sends links the user clicks here to open in
+ * the browser. It speaks MCP Apps' JSON-RPC over postMessage.
  */
 export function HtmlRender({
   hostId,
@@ -104,7 +104,15 @@ export function HtmlRender({
       if (method === "ui/notifications/size-changed" && typeof height === "number" && height > 0)
         setContentHeight(height);
       const url = params?.url;
-      if (method === "ui/open-link" && typeof url === "string" && /^https?:\/\//i.test(url)) {
+      // Only right after the user clicked in the page, as T3 checks: the page's own script can
+      // post this any time.
+      const clicked = document.activeElement === frame.current && navigator.userActivation.isActive;
+      if (
+        clicked &&
+        method === "ui/open-link" &&
+        typeof url === "string" &&
+        /^https?:\/\//i.test(url)
+      ) {
         // Main opens it in the system browser.
         window.open(url);
         if (typeof id === "string" || typeof id === "number")
@@ -140,7 +148,7 @@ export function HtmlRender({
       ref={frame}
       title={page.title}
       src={src}
-      sandbox="allow-scripts"
+      sandbox="allow-scripts allow-forms"
       style={{ height }}
       className="block w-full border-0"
     />

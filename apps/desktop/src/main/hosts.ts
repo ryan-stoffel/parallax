@@ -380,11 +380,12 @@ function readComputerName(): string {
   return hostname().replace(/\.local$/, "");
 }
 
-/** A saved SSH host by id. Undefined for this computer, `local`, and for an unknown id. */
-// An html_render page runs its own inline scripts and loads https resources, nothing else, and
-// stays sandboxed even if something opens it outside its frame.
+// An html_render page runs its own inline scripts and forms and loads https resources, nothing
+// else, and stays sandboxed even if something opens it outside its frame. A form can't send the
+// page anywhere.
 const renderPolicy = [
-  "sandbox allow-scripts",
+  "sandbox allow-scripts allow-forms",
+  "form-action 'none'",
   "default-src 'none'",
   "script-src 'unsafe-inline' 'unsafe-eval' https:",
   "style-src 'unsafe-inline' https:",
@@ -421,6 +422,7 @@ export async function renderPage(url: string): Promise<Response> {
   });
 }
 
+/** A saved SSH host by id. Undefined for this computer, `local`, and for an unknown id. */
 export const savedHost = (id: string): SshHost | undefined =>
   settings.hosts.find((h) => h.id === id);
 

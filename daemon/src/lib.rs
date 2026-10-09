@@ -66,6 +66,8 @@ mod naming;
 pub mod paths;
 pub mod peer;
 pub mod providers;
+#[cfg(unix)]
+mod public_proxy;
 mod repo;
 pub mod routing;
 pub mod server;

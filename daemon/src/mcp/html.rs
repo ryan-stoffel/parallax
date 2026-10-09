@@ -437,14 +437,18 @@ struct Load {
     loaded: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
+/// Runs before a page's scripts, in every frame.
+pub(crate) const NO_WEBRTC: &str =
+    "delete window.RTCPeerConnection; delete window.webkitRTCPeerConnection;";
+
 // Resolves after web fonts load and two frames paint, so late layout lands in the capture.
 const SETTLE: &str = "document.fonts.ready.then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)))))";
 // The root's scroll height never drops below the viewport, so a short page reports its own box.
 const MEASURE: &str = "(() => { const root = document.documentElement; return root.scrollHeight > root.clientHeight ? root.scrollHeight : root.getBoundingClientRect().height; })()";
 
 /// Loads `page` in a fresh headless browser at `width`, and screenshots the top of it.
-// ponytail: the page can reach this host's network, as the agent that wrote it can with its own
-// commands; add T3's public-only proxy if pages ever come from someone else.
+// The browser reaches only public addresses ([`crate::public_proxy`]), so a page can't read this
+// host's or its network's services into the screenshot or console.
 async fn preview(
     launcher: &Launcher,
     page: &str,
@@ -456,6 +460,7 @@ async fn preview(
         launcher,
         &executable,
         &["--hide-scrollbars", "--block-new-web-contents"],
+        false,
     )
     .await?;
     let mut tab = browser.page().await?;
@@ -478,6 +483,12 @@ async fn capture(
     for method in ["Page.enable", "Runtime.enable", "Log.enable"] {
         tab.call(method, json!({})).await?;
     }
+    // A page has no use for WebRTC, whose ICE servers could resolve names around the proxy.
+    tab.call(
+        "Page.addScriptToEvaluateOnNewDocument",
+        json!({"source": NO_WEBRTC, "runImmediately": true}),
+    )
+    .await?;
     tab.call(
         "Fetch.enable",
         json!({"patterns": [
@@ -741,6 +752,31 @@ mod tests {
         let png = crate::images::decode(&shot.png).unwrap();
         assert!(png.starts_with(b"\x89PNG"));
         std::fs::write(std::env::temp_dir().join("plx-html-preview.png"), png).unwrap();
+    }
+
+    /// A page can't reach this machine, even from a frame or a script (T3's public-only proxy).
+    #[tokio::test]
+    #[ignore = "downloads the headless browser; set PLXD_TEST_DATA_DIR"]
+    async fn a_page_cannot_reach_this_machine() {
+        let dir = DataDir::new(std::env::var("PLXD_TEST_DATA_DIR").unwrap()).unwrap();
+        let launcher = Launcher::new(dir, Environment::inherited());
+        let local = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = local.local_addr().unwrap().port();
+        let page = bootstrap(&format!(
+            "<iframe src=\"http://127.0.0.1:{port}/\"></iframe><iframe src=\"http://localhost:{port}/\"></iframe><script>fetch('http://localhost:{port}/').catch(() => console.log('refused'))</script>"
+        ));
+        let shot = loop {
+            match preview(&launcher, &page, 400, Appearance::Dark).await {
+                Err(error) if error.contains("Try again") => {}
+                other => break other.unwrap(),
+            }
+        };
+        let reached = tokio::time::timeout(std::time::Duration::from_secs(1), local.accept()).await;
+        assert!(
+            reached.is_err(),
+            "the page reached this machine: {:?}",
+            shot.console
+        );
     }
 
     #[test]

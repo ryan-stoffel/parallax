@@ -22,7 +22,7 @@ use std::time::Duration;
 use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::backend::process::Launcher;
@@ -69,6 +69,10 @@ const WAIT: Duration = Duration::from_secs(45);
 
 /// How long the archive may take to download, or to unpack.
 const ARCHIVE_TIMEOUT: Duration = Duration::from_mins(15);
+
+/// How old an `.install-*` folder is when it's left over: longer than a download and unpack can
+/// take.
+const STALE_INSTALL: Duration = Duration::from_hours(1);
 
 /// How long the browser may take to answer one command.
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -137,10 +141,21 @@ async fn install(
     folder: &Path,
     platform: &str,
     bytes: u64,
-    sha256: &str,
+    sha256: &'static str,
 ) -> Result<PathBuf, String> {
     std::fs::create_dir_all(folder)
         .map_err(|error| format!("Couldn't make {}: {error}.", folder.display()))?;
+    // What an install that plxd quit during left behind. One still going in another plxd process
+    // is younger than any install can take.
+    for entry in std::fs::read_dir(folder).into_iter().flatten().flatten() {
+        let stale = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .is_ok_and(|at| at.elapsed().is_ok_and(|age| age > STALE_INSTALL));
+        if stale && entry.file_name().to_string_lossy().starts_with(".install-") {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
     // Removed on drop, with whatever is still in it.
     let temp = tempfile::Builder::new()
         .prefix(".install-")
@@ -158,20 +173,29 @@ async fn install(
         ARCHIVE_TIMEOUT,
     )
     .await?;
-    let data =
-        std::fs::read(&zip).map_err(|error| format!("Couldn't read the download: {error}."))?;
-    if data.len() as u64 != bytes || crate::sha256_hex(&data) != sha256 {
+    // About 100 MB to read and hash, off the async threads.
+    let read = zip.clone();
+    let matches = tokio::task::spawn_blocking(move || {
+        std::fs::read(&read)
+            .map(|data| data.len() as u64 == bytes && crate::sha256_hex(&data) == sha256)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| format!("Couldn't read the download: {error}."))?;
+    if !matches {
         return Err(
             "The downloaded headless browser doesn't match its checksum, so plxd didn't install it."
                 .to_owned(),
         );
     }
-    drop(data);
     unzip(launcher, &zip, temp.path()).await?;
     let unpacked = temp
         .path()
         .join(format!("chrome-headless-shell-{platform}"));
     let executable = unpacked.join("chrome-headless-shell");
+    if !executable.is_file() {
+        return Err("The archive has no headless browser in it.".to_owned());
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -251,6 +275,9 @@ struct Inner {
     next_id: AtomicU64,
     #[cfg(unix)]
     process: crate::backend::process::RawProcess,
+    /// The browser's only way out.
+    #[cfg(unix)]
+    _proxy: crate::public_proxy::PublicProxy,
     _profile: tempfile::TempDir,
 }
 
@@ -265,6 +292,8 @@ struct Routes {
 
 impl Browser {
     /// Starts the headless shell at `executable` with a temporary profile, and `extra` arguments.
+    /// Its network goes through [`crate::public_proxy`], which reaches public addresses, and with
+    /// `loopback` this machine's loopback too. WebRTC can't go around it.
     ///
     /// # Errors
     ///
@@ -273,6 +302,7 @@ impl Browser {
         launcher: &Launcher,
         executable: &Path,
         extra: &[&str],
+        loopback: bool,
     ) -> Result<Self, String> {
         let profile = tempfile::Builder::new()
             .prefix("plxd-browser-")
@@ -296,33 +326,46 @@ impl Browser {
         }
         args.push(format!("--user-data-dir={}", profile.path().display()));
         args.push("about:blank".to_owned());
-        Self::start(launcher, executable, &args, profile).await
+        Self::start(launcher, executable, args, profile, loopback).await
     }
 
     #[cfg(windows)]
-    async fn start(
+    fn start(
         _launcher: &Launcher,
         _executable: &Path,
-        _args: &[String],
+        _args: Vec<String>,
         _profile: tempfile::TempDir,
-    ) -> Result<Self, String> {
-        Err("Parallax's headless browser doesn't run on Windows yet.".to_owned())
+        _loopback: bool,
+    ) -> std::future::Ready<Result<Self, String>> {
+        std::future::ready(Err(
+            "Parallax's headless browser doesn't run on Windows yet (PLX-659).".to_owned(),
+        ))
     }
 
     #[cfg(unix)]
     async fn start(
         launcher: &Launcher,
         executable: &Path,
-        args: &[String],
+        mut args: Vec<String>,
         profile: tempfile::TempDir,
+        loopback: bool,
     ) -> Result<Self, String> {
+        let proxy = crate::public_proxy::start(loopback)
+            .await
+            .map_err(|error| format!("Couldn't start the browser's proxy: {error}."))?;
+        args.extend([
+            format!("--proxy-server=socks5://127.0.0.1:{}", proxy.port),
+            // Loopback would skip the proxy otherwise, and WebRTC would send UDP around it.
+            "--proxy-bypass-list=<-loopback>".to_owned(),
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp".to_owned(),
+        ]);
         let mut spec = crate::detect::probe_spec("/bin/sh");
         // Descriptors 3 and 4, the DevTools pipe, become plxd's stdin and stdout pipes.
         spec.args = ["-c", "exec \"$0\" \"$@\" 3<&0 4>&1 </dev/null >/dev/null"]
             .into_iter()
             .map(Into::into)
             .chain([executable.as_os_str().to_owned()])
-            .chain(args.iter().map(Into::into))
+            .chain(args.into_iter().map(Into::into))
             .collect();
         let mut process = launcher
             .spawn_raw(&spec)
@@ -337,6 +380,7 @@ impl Browser {
                 routes: Arc::clone(&routes),
                 next_id: AtomicU64::new(0),
                 process,
+                _proxy: proxy,
                 _profile: profile,
             }),
         };
@@ -526,6 +570,8 @@ impl Drop for Page {
 /// Reads NUL-delimited messages from the browser until it closes the pipe, and routes each.
 #[cfg(unix)]
 async fn read(mut stdout: impl tokio::io::AsyncRead + Unpin, routes: &Mutex<Routes>) {
+    use tokio::io::AsyncReadExt as _;
+
     let mut buffer = Vec::new();
     let mut chunk = vec![0; 64 * 1024];
     loop {
@@ -547,6 +593,7 @@ async fn read(mut stdout: impl tokio::io::AsyncRead + Unpin, routes: &Mutex<Rout
     }
 }
 
+#[cfg(unix)]
 fn route(message: &[u8], routes: &Mutex<Routes>) {
     let Ok(mut message) = serde_json::from_slice::<Value>(message) else {
         return;
@@ -581,7 +628,7 @@ fn is_root() -> bool {
     false
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::sync::Mutex;
 
