@@ -123,4 +123,14 @@ test("a paired browser lists threads, opens one, and sends a message", async () 
   await page.screenshot({ path: test.info().outputPath("web-sent.png") });
   const sessions = (await call("remote/sessions", {}))["result"] as { sessions: unknown[] };
   expect(sessions.sessions).toHaveLength(1);
+  // Settings shows the switch that serves this page, on, and this browser among the paired.
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Connections" }).click();
+  await expect(page.getByRole("switch", { name: "Pair computers on this network" })).toBeChecked();
+  await expect(page.getByRole("switch", { name: "Open in a browser" })).toBeChecked();
+  await expect(page.getByText(/^Browser on /)).toBeVisible();
+  await page.screenshot({
+    path: test.info().outputPath("web-settings.png"),
+    animations: "disabled",
+  });
 });
