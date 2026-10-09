@@ -49,23 +49,35 @@ HOME='${home}' PATH='${root}/bin':$PATH exec sh -c "$*"`,
     path.join(root, "bin", "curl"),
     `for a; do [ "$prev" = -o ] && out=$a; case $a in https://*) url=$a ;; esac; prev=$a; done
 echo "$url" >> '${root}/urls'
+echo "$*" > '${root}/curl-args'
 cp '${root}/release/'"\${url##*/}" "$out" 2>/dev/null || exit 22`,
   );
-  // plxd as released: it reports the version in the file beside it, and attach says it ran.
+  // plxd as released: it reports the version in the file beside it, attach says it ran, and its
+  // login service is installed when the file `~/service` exists, which logs each install.
   script(
     release(ASSET),
-    `case $1 in --version) echo "plxd $(cat "$(dirname "$0")/plxd.version")" ;; attach) echo "attached $0" ;; esac`,
+    `case $1 in
+  --version) echo "plxd $(cat "$(dirname "$0")/plxd.version")" ;;
+  attach) echo "attached $0" ;;
+  service) [ -f "$HOME/service" ] || exit 0
+    [ "$2" = status ] && echo "installed: true"
+    [ "$2" = install ] && echo "$0 $*" >> "$HOME/service" ;;
+esac`,
   );
-  writeFileSync(release("SHA256SUMS"), `${sha256(release(ASSET))}  ${ASSET}\n`);
+  writeFileSync(release(`${ASSET}.sha256`), `${sha256(release(ASSET))}  ${ASSET}\n`);
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 test.runIf(posix)("installs the release's plxd for the host, which attach then runs", async () => {
   expect(await installPlxd("mini", VERSION, ssh)).toBeUndefined();
   expect(readFileSync(path.join(root, "urls"), "utf8").trim().split("\n")).toEqual([
-    `https://github.com/ryan-stoffel/parallax/releases/download/v${VERSION}/SHA256SUMS`,
+    `https://github.com/ryan-stoffel/parallax/releases/download/v${VERSION}/${ASSET}.sha256`,
     `https://github.com/ryan-stoffel/parallax/releases/download/v${VERSION}/${ASSET}`,
   ]);
+  // HTTPS only, redirects too.
+  expect(readFileSync(path.join(root, "curl-args"), "utf8")).toContain(
+    "--proto =https --proto-redir =https",
+  );
   expect(readFileSync(installed("plxd.version"), "utf8")).toBe(`${VERSION}\n`);
   // Nothing left behind but plxd and its version.
   expect(spawnSync("ls", ["-A", path.join(home, ".parallax-plxd")]).stdout.toString()).toBe(
@@ -80,22 +92,22 @@ test.runIf(posix)("installs the release's plxd for the host, which attach then r
 });
 
 test.runIf(posix)("refuses plxd whose SHA256 isn't the release's", async () => {
-  writeFileSync(release("SHA256SUMS"), `${"0".repeat(64)}  ${ASSET}\n`);
+  writeFileSync(release(`${ASSET}.sha256`), `${"0".repeat(64)}  ${ASSET}\n`);
   expect(await installPlxd("mini", VERSION, ssh)).toBe(
-    "plxd's SHA256 doesn't match the release's SHA256SUMS.",
+    "plxd's SHA256 doesn't match the release's.",
   );
-  // Nor a release that doesn't list it.
-  writeFileSync(release("SHA256SUMS"), `${sha256(release(ASSET))}  parallax-plxd-other\n`);
+  // Nor a checksum for another file.
+  writeFileSync(release(`${ASSET}.sha256`), `${sha256(release(ASSET))}  parallax-plxd-other\n`);
   expect(await installPlxd("mini", VERSION, ssh)).toBe(
-    "plxd's SHA256 doesn't match the release's SHA256SUMS.",
+    "plxd's SHA256 doesn't match the release's.",
   );
   expect(spawnSync("ls", ["-A", path.join(home, ".parallax-plxd")]).stdout.toString()).toBe("");
 });
 
-test.runIf(posix)("says so when the release has no SHA256SUMS", async () => {
-  rmSync(release("SHA256SUMS"));
+test.runIf(posix)("says so when the release has no checksum for it", async () => {
+  rmSync(release(`${ASSET}.sha256`));
   expect(await installPlxd("mini", VERSION, ssh)).toBe(
-    `Couldn't download https://github.com/ryan-stoffel/parallax/releases/download/v${VERSION}/SHA256SUMS.`,
+    `Couldn't download https://github.com/ryan-stoffel/parallax/releases/download/v${VERSION}/${ASSET}.sha256.`,
   );
   expect(existsSync(installed("plxd"))).toBe(false);
 });
@@ -120,6 +132,28 @@ test.runIf(posix)(
     }
   },
   20_000,
+);
+
+test.runIf(posix)(
+  "moves plxd's login service to the new plxd instead of stopping its serve",
+  async () => {
+    writeFileSync(path.join(home, "service"), "");
+    // The service's own serve, which `install --replace` stops, not the script.
+    const old = path.join(root, "plxd");
+    script(old, "sleep 30 & wait");
+    const serve = spawn("sh", [old, "serve"]);
+    mkdirSync(path.join(home, ".parallax"));
+    writeFileSync(path.join(home, ".parallax", "plxd.lock"), `${serve.pid}\n`);
+    try {
+      expect(await installPlxd("mini", VERSION, ssh)).toBeUndefined();
+      expect(readFileSync(path.join(home, "service"), "utf8")).toBe(
+        `${installed("plxd")} service install --replace\n`,
+      );
+      expect(serve.exitCode).toBe(null);
+    } finally {
+      serve.kill();
+    }
+  },
 );
 
 test("ssh's own failures read as a connection's do, and a bad version never reaches the host", async () => {

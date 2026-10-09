@@ -29,7 +29,10 @@ test("a destination that ssh could read as an option, split, or pass to a shell 
 test("settings round-trip with keys this doesn't know, and a missing file is no hosts", () => {
   const settings = file();
   expect(readSettings(settings)).toEqual({ hosts: [] });
-  const hosts = [{ id: "h1", name: "Mac mini", destination: "mini" }];
+  const hosts = [
+    { id: "h1", name: "Mac mini", destination: "mini" },
+    { id: "h2", name: "devbox", destination: "devbox", plxdInstalled: true },
+  ];
   writeSettings(settings, {
     hosts,
     ssh: "C:\\ssh.exe",
@@ -57,6 +60,7 @@ test("a file this can't use as is throws, so a save can't overwrite what the use
     JSON.stringify({ hosts: [{ ...good, id: "local" }] }),
     JSON.stringify({ hosts: [{ ...good, destination: "-oProxyCommand=evil" }] }),
     JSON.stringify({ hosts: [{ ...good, destination: " mini" }] }),
+    JSON.stringify({ hosts: [{ ...good, plxdInstalled: "yes" }] }),
     JSON.stringify({ hosts: [], devices: {} }),
     JSON.stringify({ hosts: [], devices: [{ id: "n1", hostName: "mini", ip: "100.64.0.1" }] }),
     JSON.stringify({ hosts: [], devices: [{ ...device, icon: "toaster" }] }),

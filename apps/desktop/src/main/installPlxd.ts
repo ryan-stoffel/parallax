@@ -2,17 +2,21 @@ import { execFile } from "node:child_process";
 
 import { exitError, sshCommand } from "./connection";
 
-/** Each release `v<version>` has plxd for each macOS and Linux target (package-app), and SHA256SUMS. */
+/** Each release `v<version>` has plxd for each macOS and Linux target, and its `.sha256` (package-app). */
 const RELEASES = "https://github.com/ryan-stoffel/parallax/releases/download";
 
 /**
  * Installs plxd `$1`, a release's version, in `~/.parallax-plxd` on a macOS or Linux host, where
- * `LOCATE_PLXD` looks first, then stops the running `plxd serve` so the next attach starts this one
- * (SIGTERM, which ends its agents' runs). Not in plxd's data folder: creating `~/.parallax` would
- * move plxd off an older host's data in the OS folder. Like T3 Code's remote install
- * (packages/ssh/src/tunnel.ts): downloads with curl or wget, checks the SHA256 against the
- * release's SHA256SUMS, and proves it runs before replacing anything. Exits 3 with one line for
- * people when it can't. `sh -s` reads it from ssh's stdin.
+ * `LOCATE_PLXD` looks first. Not in plxd's data folder: creating `~/.parallax` would move plxd off
+ * an older host's data in the OS folder. Like T3 Code's remote install
+ * (packages/ssh/src/tunnel.ts): downloads with curl or wget over HTTPS only, checks the SHA256
+ * against the release's `<asset>.sha256`, and proves it runs before replacing anything. Then the
+ * old plxd stops, which ends its agents' runs: a host with plxd's login service (a Mac with
+ * Connect on, a Linux host plx-connect set up) gets `service install --replace`, which points the
+ * service at this plxd and restarts it, so a Mac's LaunchAgent moves off its own app's plxd
+ * (`repointService` only repoints a missing program, so the app leaves it); any other host's
+ * `plxd serve` gets SIGTERM, so the next attach starts this one. Exits 3 with one line for people
+ * when it can't. `sh -s` reads it from ssh's stdin.
  */
 export const INSTALL_SCRIPT = `set -eu
 version=$1
@@ -33,31 +37,40 @@ dir=$HOME/.parallax-plxd
 mkdir -p "$dir"
 tmp=$(mktemp -d "$dir/.install-XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
+# HTTPS only, redirects too: the checksum comes from the same place as plxd.
 fetch() {
-  if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 30 --max-time 600 "$1" -o "$2" || fail "Couldn't download $1."
-  elif command -v wget >/dev/null 2>&1; then wget -q -T 30 "$1" -O "$2" || fail "Couldn't download $1."
+  if command -v curl >/dev/null 2>&1; then curl -fsSL --proto =https --proto-redir =https --connect-timeout 30 --max-time 600 "$1" -o "$2" || fail "Couldn't download $1."
+  elif command -v wget >/dev/null 2>&1; then wget -q --https-only -T 30 "$1" -O "$2" || fail "Couldn't download $1."
   else fail "Installing plxd needs curl or wget on the host."
   fi
 }
-fetch "${RELEASES}/v$version/SHA256SUMS" "$tmp/SHA256SUMS"
+fetch "${RELEASES}/v$version/$name.sha256" "$tmp/plxd.sha256"
 fetch "${RELEASES}/v$version/$name" "$tmp/plxd"
-expected=$(awk -v name="$name" '$2 == name { print $1 }' "$tmp/SHA256SUMS")
+expected=$(awk -v name="$name" '$2 == name { print $1 }' "$tmp/plxd.sha256")
 if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$tmp/plxd" | cut -d' ' -f1)
 else actual=$(shasum -a 256 "$tmp/plxd" | cut -d' ' -f1)
 fi
-[ -n "$expected" ] && [ "$actual" = "$expected" ] || fail "plxd's SHA256 doesn't match the release's SHA256SUMS."
+[ -n "$expected" ] && [ "$actual" = "$expected" ] || fail "plxd's SHA256 doesn't match the release's."
 chmod 755 "$tmp/plxd"
 # plxd reports the version in this file beside it (0030).
 printf '%s\\n' "$version" > "$tmp/plxd.version"
 "$tmp/plxd" --version >/dev/null 2>&1 || fail "plxd $version doesn't run on this host."
 mv "$tmp/plxd.version" "$dir/plxd.version"
 mv "$tmp/plxd" "$dir/plxd"
+# A login service would start its own plxd again, so it's moved to this one, which restarts it.
+if "$dir/plxd" service status 2>/dev/null | grep -qx 'installed: true'; then
+  "$dir/plxd" service install --replace >/dev/null || fail "plxd's login service couldn't be moved to plxd $version."
+  exit 0
+fi
 # plxd's data folder, as plxd picks it: ~/.parallax, unless only the OS folder exists.
 [ ! -d "$HOME/.parallax" ] && [ -d "$data" ] || data=$HOME/.parallax
 pid=$(cat "\${PLXD_DATA_DIR:-$data}/plxd.lock" 2>/dev/null || true)
-if [ -n "$pid" ] && ps -o args= -p "$pid" 2>/dev/null | grep -q 'plxd serve'; then
+# This user's serve only: a stale pid may be another user's process by now.
+if [ -n "$pid" ] && [ "$(ps -o uid= -p "$pid" 2>/dev/null | tr -d ' ')" = "$(id -u)" ] &&
+  ps -o args= -p "$pid" | grep -q 'plxd serve'; then
   kill "$pid" 2>/dev/null || true
-  for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+  i=0
+  while [ $i -lt 30 ] && kill -0 "$pid" 2>/dev/null; do sleep 1; i=$((i + 1)); done
 fi
 `;
 

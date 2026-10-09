@@ -76,11 +76,14 @@ pnpm install --frozen-lockfile
 pnpm build
 pnpm exec electron-builder --publish never "$builder_arch" -c.extraMetadata.version="$version" "$@"
 
-# plxd on its own, which the app installs on an SSH host (PLX-642), beside the installer so
-# publish-build attaches it and SHA256SUMS lists it. On macOS, the signed copy from inside the app.
-# Not on Windows: the install runs a POSIX script on the host.
-asset=release/parallax-plxd-$version
+# plxd on its own, which the app installs on an SSH host (PLX-642), and its SHA256, which the
+# install checks, beside the installer so publish-build attaches both. Not SHA256SUMS, which waits
+# for every build. On macOS, the signed copy from inside the app. Not on Windows: the install runs
+# a POSIX script on the host.
+name=parallax-plxd-$version
 case $host in
-  *-apple-*) cp release/mac*/*.app/Contents/Resources/plxd "$asset-mac-${builder_arch#--}" ;;
-  *-linux-*) cp ../../target/package-resources/plxd "$asset-linux-${builder_arch#--}" ;;
+  *-apple-*) name=$name-mac-${builder_arch#--} && cp release/mac*/*.app/Contents/Resources/plxd "release/$name" ;;
+  *-linux-*) name=$name-linux-${builder_arch#--} && cp ../../target/package-resources/plxd "release/$name" ;;
+  *) name= ;;
 esac
+if [ -n "$name" ]; then (cd release && shasum -a 256 "$name" > "$name.sha256"); fi
