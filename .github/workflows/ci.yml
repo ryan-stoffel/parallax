@@ -102,15 +102,19 @@ jobs:
         with:
           node-version-file: apps/desktop/.node-version
 
-      - name: Install and test the Claude Agent SDK sidecar
+      - name: Install the Claude Agent SDK sidecar
         if: runner.os == 'Linux'
         working-directory: sidecar/claude
         run: |
           npm ci --omit=dev --omit=optional --omit=peer --no-audit --no-fund
-          node --test src/*.test.mjs
 
       - name: Lint, type-check, build, and test
         run: scripts/ci/check-rust
+
+      - name: Test the Claude Agent SDK sidecar against the process supervisor
+        if: runner.os == 'Linux'
+        working-directory: sidecar/claude
+        run: node --test src/*.test.mjs
 
       # The Ubuntu images may ship only the ssh client.
       - name: Install sshd

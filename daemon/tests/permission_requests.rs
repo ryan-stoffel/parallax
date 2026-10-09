@@ -106,6 +106,7 @@ fn claude_backend(
     env.set(API_ENV, api);
     env.set(CLAUDE_ENV, claude);
     env.set("PLXD_CLAUDE_SDK", sidecar());
+    env.set("PLXD_CLAUDE_PROCESS", env!("CARGO_BIN_EXE_plxd"));
     ClaudeBackend::new(Launcher::new(DataDir::new(data).unwrap(), env)).with_program(wrapper())
 }
 

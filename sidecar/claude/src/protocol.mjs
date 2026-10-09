@@ -3,6 +3,8 @@
  * lines plxd gets, and the answer to a permission request. No SDK import, so the tests run
  * without it.
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 /** The flags the SDK passes itself, with how many values each takes. */
 const SDK_OWN = {
@@ -39,8 +41,9 @@ const LIST_OPTIONS = {
  * `allowDangerouslySkipPermissions`. Any other flag goes in `extraArgs`, which the SDK passes on.
  *
  * @param {string[]} args
+ * @param {string} cwd
  */
-export function optionsFromArgs(args) {
+export function optionsFromArgs(args, cwd = process.cwd()) {
   const options = {};
   const extraArgs = {};
   let asks = false;
@@ -69,7 +72,11 @@ export function optionsFromArgs(args) {
     } else if (flag === "--add-dir") {
       (options.additionalDirectories ??= []).push(take());
     } else if (flag === "--mcp-config") {
-      options.mcpServers = { ...options.mcpServers, ...JSON.parse(take()).mcpServers };
+      const config = take();
+      const json = config.trimStart().startsWith("{")
+        ? config
+        : readFileSync(resolve(cwd, config), "utf8");
+      options.mcpServers = { ...options.mcpServers, ...JSON.parse(json).mcpServers };
     } else if (flag.startsWith("--")) {
       const next = args[i + 1];
       extraArgs[flag.slice(2)] =

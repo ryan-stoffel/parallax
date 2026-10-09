@@ -393,6 +393,14 @@ impl Query {
             let mut map = serializer.serialize_map(None).map_err(invalid)?;
             map.serialize_entry("id", &*id).map_err(invalid)?;
             map.serialize_entry("type", "open").map_err(invalid)?;
+            let supervisor = launcher
+                .base()
+                .get("PLXD_CLAUDE_PROCESS")
+                .map(PathBuf::from)
+                .map_or_else(std::env::current_exe, Ok)
+                .map_err(super::super::process::SpawnError::Io)?;
+            map.serialize_entry("supervisor", &supervisor.to_string_lossy())
+                .map_err(invalid)?;
             map.serialize_entry("executable", &program.to_string_lossy())
                 .map_err(invalid)?;
             let args: Vec<_> = spec.args.iter().map(|arg| arg.to_string_lossy()).collect();
