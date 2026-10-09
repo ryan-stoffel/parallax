@@ -34,6 +34,11 @@ pub(crate) const MAX_PENDING_CHECKS: usize = 8;
 /// How many of those may come from one peer address, so one peer can't hold every slot.
 pub(crate) const MAX_PENDING_CHECKS_PER_IP: usize = 2;
 
+/// How many more times a bind refused with "address in use" is tried, [`BIND_RETRY_PAUSE`]
+/// apart, before the listener waits for the next check.
+const BIND_RETRIES: u32 = 10;
+const BIND_RETRY_PAUSE: Duration = Duration::from_millis(20);
+
 /// Parallax Connect's state, shared by the listener and `connect/devices`.
 #[derive(Debug)]
 pub(crate) struct Connect {
@@ -152,7 +157,11 @@ pub(super) async fn run(serving: Serving, period: Duration, stop: CancellationTo
                     );
                     old.close();
                 }
-                match TcpListener::bind(address).await {
+                let bound_now = tokio::select! {
+                    () = stop.cancelled() => break,
+                    bound_now = bind(address) => bound_now,
+                };
+                match bound_now {
                     Ok(listener) => {
                         info!(%address, "listening on the tailnet");
                         bound = Some(Bound {
@@ -184,6 +193,21 @@ pub(super) async fn run(serving: Serving, period: Duration, stop: CancellationTo
     }
     // Shutdown drains the listener's connections like local ones, so it doesn't close them.
     connect.listening.store(false, Ordering::Relaxed);
+}
+
+/// Binds `address`. Right after the old listener closes, macOS can refuse its address for a
+/// moment, so a refused bind is tried again before the next check (PLX-595).
+async fn bind(address: SocketAddr) -> io::Result<TcpListener> {
+    let mut tries = 0;
+    loop {
+        match TcpListener::bind(address).await {
+            Err(error) if error.kind() == io::ErrorKind::AddrInUse && tries < BIND_RETRIES => {
+                tries += 1;
+                time::sleep(BIND_RETRY_PAUSE).await;
+            }
+            bound => return bound,
+        }
+    }
 }
 
 async fn accept(bound: Option<&Bound>) -> io::Result<(TcpStream, SocketAddr)> {
@@ -322,9 +346,22 @@ impl Serving {
 
 #[cfg(test)]
 mod tests {
-    use std::net::IpAddr;
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::time::Duration;
 
-    use super::{Checks, MAX_PENDING_CHECKS, MAX_PENDING_CHECKS_PER_IP};
+    use super::{Checks, MAX_PENDING_CHECKS, MAX_PENDING_CHECKS_PER_IP, bind};
+
+    #[tokio::test]
+    async fn a_bind_refused_as_in_use_is_tried_again() {
+        let taken = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = taken.local_addr().unwrap();
+        let freed = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            drop(taken);
+        });
+        bind(address).await.expect("bound once the address is free");
+        freed.join().unwrap();
+    }
 
     #[test]
     fn checks_are_capped_overall_and_per_peer_address() {

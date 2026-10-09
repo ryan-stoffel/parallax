@@ -201,8 +201,17 @@ async fn events_arrive_again_after_a_reconnect_and_a_new_subscription() {
     assert_eq!(project.name, "first");
 
     // The device closes its tailnet connections, then listens again. The client opens a new one
-    // on its next call, and says so.
+    // on its next call, and says so. Off takes effect first, once the client's calls fail, since
+    // the listener reads the setting when woken and could otherwise read on twice.
     set_connect(&mut client, false).await;
+    let deadline = Instant::now() + PATIENCE;
+    while health(&peer).await.is_ok() {
+        assert!(
+            Instant::now() < deadline,
+            "the device never stopped listening"
+        );
+        sleep(Duration::from_millis(20)).await;
+    }
     set_connect(&mut client, true).await;
     let deadline = Instant::now() + PATIENCE;
     loop {
