@@ -719,31 +719,27 @@ pub(crate) fn run(conn: &mut Connection) -> Result<(), StoreError> {
         back_up(conn, *version)?;
     }
 
-    for migration in MIGRATIONS.iter().filter(|m| !applied.contains(&m.version)) {
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-
-        // `applied` was read before this transaction acquired the write
-        // lock, so another connection may have applied this exact
-        // migration in the meantime (two `Store::open` calls racing to
-        // create the same brand-new database). Re-check under the lock,
-        // which now sees that connection's commit rather than our stale
-        // pre-lock snapshot, and skip re-applying it if so.
-        let already_applied: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM schema_version WHERE version = ?1)",
-            params![migration.version],
-            |row| row.get(0),
-        )?;
-
-        if !already_applied {
-            tx.execute_batch(migration.sql)?;
-            tx.execute(
-                "INSERT INTO schema_version (version, applied_at) VALUES (?1, ?2)",
-                params![migration.version, timestamp::now()],
-            )?;
-        }
-
-        tx.commit()?;
+    if MIGRATIONS.iter().all(|m| applied.contains(&m.version)) {
+        return Ok(());
     }
+
+    // One write lock for every missing migration, so connections opening a new store at once
+    // wait for it once rather than contending for it per migration. `applied` was read before
+    // the lock, so another connection may have applied some meanwhile: re-read it under the
+    // lock, which sees that connection's commit, and apply only what is still missing.
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let applied: BTreeSet<i64> = tx
+        .prepare("SELECT version FROM schema_version")?
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<_, _>>()?;
+    for migration in MIGRATIONS.iter().filter(|m| !applied.contains(&m.version)) {
+        tx.execute_batch(migration.sql)?;
+        tx.execute(
+            "INSERT INTO schema_version (version, applied_at) VALUES (?1, ?2)",
+            params![migration.version, timestamp::now()],
+        )?;
+    }
+    tx.commit()?;
 
     Ok(())
 }
