@@ -380,6 +380,9 @@ pub(crate) async fn set_settings(
     if remote.is_some() {
         context.daemon.remote.changed.notify_one();
     }
+    if remote_web == Some(false) {
+        crate::server::remote::close_browsers(&context.daemon).await;
+    }
     Ok(settings)
 }
 

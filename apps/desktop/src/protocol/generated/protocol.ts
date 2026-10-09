@@ -5544,6 +5544,11 @@ export type RemoteSessionsResult = {
 	 */
 	pairing: boolean,
 	/**
+	 * The SHA-256 fingerprint of the listener's certificate, in hex, while it listens: what a
+	 * browser shows for it, to check before trusting it (PLX-651).
+	 */
+	fingerprint?: string,
+	/**
 	 * Why it isn't while `remote` is on, such as the port being in use by another program.
 	 */
 	problem?: string,

@@ -55,7 +55,9 @@ mac:
   # Chromium's .pak files (its locale and resources) aren't code, so they aren't signed one by one
   # (each a codesign run and a trip to Apple's timestamp server): Electron Framework's own
   # signature seals them as resources, like every other data file (PLX-211).
-  signIgnore: ['\.pak$']
+  # The renderer build unpacked for plxd's web client (PLX-651) is fonts, scripts, and styles, so
+  # it isn't signed file by file either.
+  signIgnore: ['\.pak$', 'app\.asar\.unpacked/dist/renderer/']
 # Signed with the app's identity when there is one. The updater reads the zip, so the dmg stays out
 # of the update metadata.
 dmg:

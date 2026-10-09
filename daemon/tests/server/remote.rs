@@ -340,12 +340,14 @@ async fn https(
     (response.code.unwrap(), headers, answer[length..].to_vec())
 }
 
-/// A WebSocket to `/ws` with `ticket`, sent from `origin`.
+type WebSocket = tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<TcpStream>>;
+
+/// A WebSocket to `/ws` with `ticket`, sent from `origin`, once it has initialized.
 async fn web_socket(
     port: u16,
     ticket: &str,
     origin: &str,
-) -> Result<(), tokio_tungstenite::tungstenite::Error> {
+) -> Result<WebSocket, tokio_tungstenite::tungstenite::Error> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
     let (tls, _) = remote::open(&format!("127.0.0.1:{port}"), None)
         .await
@@ -362,7 +364,33 @@ async fn web_socket(
     let answer = timeout(PATIENCE, socket.next()).await.unwrap().unwrap()?;
     let answer: Value = serde_json::from_str(answer.to_text()?).unwrap();
     assert!(answer["result"]["logId"].is_string(), "{answer}");
-    Ok(())
+    Ok(socket)
+}
+
+/// A ticket for the browser session `token`, bound to `key`: the status and the answer.
+async fn web_ticket(port: u16, key: &remote::DpopKey, token: &str) -> (u16, Value) {
+    let path = "/api/auth/websocket-ticket";
+    let base = format!("https://127.0.0.1:{port}");
+    let authorization = format!("DPoP {token}");
+    let dpop = key.proof("POST", &format!("{base}{path}"), Some(token));
+    let headers = [
+        ("Authorization", authorization.as_str()),
+        ("DPoP", dpop.as_str()),
+        ("Origin", base.as_str()),
+    ];
+    let (status, _, body) = https(port, "POST", path, &headers, "").await;
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+async fn set_web(client: &mut Client, on: bool) {
+    let settings = client
+        .call::<HostSettingsSet>(HostSettingsSetParams {
+            remote_web: Some(on),
+            ..HostSettingsSetParams::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(settings.remote_web, Some(on));
 }
 
 #[tokio::test]
@@ -411,14 +439,7 @@ async fn the_web_client_is_served_only_when_on_and_pairs_a_browser_with_the_code
     .await;
     assert_eq!(status, 404);
 
-    let settings = client
-        .call::<HostSettingsSet>(HostSettingsSetParams {
-            remote_web: Some(true),
-            ..HostSettingsSetParams::default()
-        })
-        .await
-        .unwrap();
-    assert_eq!(settings.remote_web, Some(true));
+    set_web(&mut client, true).await;
 
     // The page and its assets, with a policy that forbids framing and other origins' scripts.
     let (status, headers, body) = https(port, "GET", "/", &[], "").await;
@@ -440,6 +461,10 @@ async fn the_web_client_is_served_only_when_on_and_pairs_a_browser_with_the_code
         "/assets/..%2fsecret.txt",
         "/assets/",
         "/assets/.hidden",
+        // Windows' devices, and the trailing dot it strips, aren't in the folder's listing.
+        "/assets/CON",
+        "/assets/nul.js",
+        "/assets/app-1a.js.",
     ] {
         assert_eq!(https(port, "GET", path, &[], "").await.0, 404, "{path}");
     }
@@ -461,6 +486,22 @@ async fn the_web_client_is_served_only_when_on_and_pairs_a_browser_with_the_code
     )
     .await;
     assert_eq!(status, 401);
+
+    // A proof seen once is refused before it reaches the code, so a replay can't use it up.
+    let seen = proof("/api/pair/browser", None);
+    let headers = [("DPoP", seen.as_str())];
+    let (status, ..) = https(
+        port,
+        "POST",
+        "/api/pair/browser",
+        &headers,
+        &pair(&wrong(&code)),
+    )
+    .await;
+    assert_eq!(status, 401);
+    let (status, _, body) = https(port, "POST", "/api/pair/browser", &headers, &pair(&code)).await;
+    assert_eq!(status, 401);
+    assert!(String::from_utf8_lossy(&body).contains("replayed"));
 
     // The right code, as typed, from this host's own origin.
     let dpop = proof("/api/pair/browser", None);
@@ -511,18 +552,15 @@ async fn the_web_client_is_served_only_when_on_and_pairs_a_browser_with_the_code
     .await;
     assert_eq!(status, 401, "locked");
 
-    // The session opens the WebSocket through a ticket, from this origin only.
-    let path = "/api/auth/websocket-ticket";
-    let authorization = format!("DPoP {token}");
-    let dpop = proof(path, Some(&token));
-    let headers = [
-        ("Authorization", authorization.as_str()),
-        ("DPoP", dpop.as_str()),
-        ("Origin", base.as_str()),
-    ];
-    let (status, _, body) = https(port, "POST", path, &headers, "").await;
-    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
-    let ticket: Value = serde_json::from_slice(&body).unwrap();
+    // The session opens the WebSocket through a ticket, from this origin only. An unknown token is
+    // `invalid_token`, the only refusal that means pairing again.
+    let (status, refusal) = web_ticket(port, &key, "nope").await;
+    assert_eq!(
+        (status, refusal["error"].as_str()),
+        (401, Some("invalid_token"))
+    );
+    let (status, ticket) = web_ticket(port, &key, &token).await;
+    assert_eq!(status, 200, "{ticket}");
     let ticket = ticket["ticket"].as_str().unwrap();
     let elsewhere = web_socket(port, ticket, "https://evil.example").await;
     assert!(
@@ -536,14 +574,98 @@ async fn the_web_client_is_served_only_when_on_and_pairs_a_browser_with_the_code
         "a ticket works once: {reused:?}"
     );
 
-    // Off again: the page is gone at once.
-    client
-        .call::<HostSettingsSet>(HostSettingsSetParams {
-            remote_web: Some(false),
-            ..HostSettingsSetParams::default()
-        })
+    // Off: the page is gone, a browser's open socket closes and it gets no ticket, and a paired
+    // computer keeps working.
+    let route = format!("127.0.0.1:{port}");
+    let desktop = temp_dir();
+    let second = new_code(&mut client).await;
+    let paired = remote::pair(
+        std::slice::from_ref(&route),
+        &second,
+        "desktop",
+        desktop.path(),
+    )
+    .await
+    .unwrap();
+    let (_, ticket) = web_ticket(port, &key, &token).await;
+    let mut socket = web_socket(port, ticket["ticket"].as_str().unwrap(), &base)
         .await
         .unwrap();
+    set_web(&mut client, false).await;
     assert_eq!(https(port, "GET", "/", &[], "").await.0, 404);
+    let closed = timeout(PATIENCE, socket.next()).await.unwrap();
+    assert!(
+        matches!(closed, None | Some(Ok(Message::Close(_)) | Err(_))),
+        "{closed:?}"
+    );
+    let (status, refusal) = web_ticket(port, &key, &token).await;
+    assert_eq!(
+        (status, refusal["error"].as_str()),
+        (403, Some("access_denied"))
+    );
+    let mut app = open(&[route], &paired.fingerprint, desktop.path())
+        .await
+        .unwrap();
+    assert!(app.initialize().await["result"]["logId"].is_string());
+
+    // On again: the browser's session works as before.
+    set_web(&mut client, true).await;
+    let (status, ticket) = web_ticket(port, &key, &token).await;
+    assert_eq!(status, 200, "{ticket}");
+    web_socket(port, ticket["ticket"].as_str().unwrap(), &base)
+        .await
+        .unwrap();
+    server.stop().await;
+}
+
+/// Reads this process's resident memory, in KiB.
+#[cfg(unix)]
+fn rss_kib() -> u64 {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn readers_that_stall_on_the_web_client_hold_little_memory() {
+    const READERS: usize = 200;
+    const FILE_BYTES: usize = 2 * 1024 * 1024;
+    let port = free_port();
+    let dir = temp_dir();
+    let web = temp_dir();
+    std::fs::create_dir(web.path().join("assets")).unwrap();
+    std::fs::write(web.path().join("assets/main-1a.js"), vec![b'x'; FILE_BYTES]).unwrap();
+    let mut config = InProcess::config(dir.path());
+    config.remote_address = Some(LOOPBACK);
+    config.remote_port = port;
+    config.remote_web_dir = Some(web.path().to_owned());
+    let server = InProcess::start(config);
+    let mut client = Client::ready(&server.socket).await;
+    set_remote(&mut client, true).await;
+    wait_listening(port, true).await;
+    set_web(&mut client, true).await;
+
+    let before = rss_kib();
+    // Each asks for the file and never reads the answer.
+    let mut stalled = Vec::new();
+    for _ in 0..READERS {
+        let (mut tls, _) = remote::open(&format!("127.0.0.1:{port}"), None)
+            .await
+            .unwrap();
+        let request = format!("GET /assets/main-1a.js HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+        tls.write_all(request.as_bytes()).await.unwrap();
+        stalled.push(tls);
+    }
+    sleep(Duration::from_secs(1)).await;
+    let grown = rss_kib().saturating_sub(before);
+    // Reading each whole file into memory, as this once did, held about 400 MiB here.
+    assert!(
+        grown < 64 * 1024,
+        "grew {grown} KiB with {READERS} stalled readers"
+    );
+    drop(stalled);
     server.stop().await;
 }

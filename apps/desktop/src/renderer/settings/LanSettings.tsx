@@ -15,6 +15,9 @@ import {
   Switch,
 } from "./parts";
 
+/** A SHA-256 fingerprint in hex as browsers show it: `AB CD …`. */
+const fingerprint = (hex: string) => hex.toUpperCase().match(/../g)!.join(" ");
+
 /** What a paired computer can do, said before anyone pairs one. */
 const GRANTS =
   "A paired computer has full control of this one: it can run agents and commands with full access, open terminals, change settings, and pair other computers. Pair only your own computers.";
@@ -119,8 +122,20 @@ export function LanSettings() {
                     .map((a) => `https://${a.includes(":") ? a : `${a}:7341`}`)
                     .join(", ")}
                 </span>{" "}
-                for a browser on this network or your tailnet, which pairs with a code from Pair a
-                device. The browser warns about this computer's certificate the first time.
+                for a browser, which pairs with a code from Pair a device. Use the tailnet address
+                where you can: Tailscale vouches for this computer. On this network the browser
+                warns about this computer's certificate. Continue only if the SHA-256 fingerprint it
+                shows is the one below, or trust the certificate in your OS first. Otherwise someone
+                on the network could pose as this computer and take the code. Turning this off
+                disconnects paired browsers until it's on again.
+                {status?.fingerprint && (
+                  <span
+                    aria-label="Certificate fingerprint"
+                    className="mt-1 block font-mono text-[11.5px] break-all text-foreground"
+                  >
+                    {fingerprint(status.fingerprint)}
+                  </span>
+                )}
               </>
             }
           >

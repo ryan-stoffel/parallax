@@ -35,7 +35,8 @@ export function rendererFile(url: string, dir = rendererDir): string | undefined
 const notFound = () => new Response(null, { status: 404 });
 
 /**
- * Serves dist/renderer (inside app.asar when packaged) at app://renderer, and 404 for the rest.
+ * Serves dist/renderer at app://renderer, and 404 for the rest. Packaged, it's read through
+ * app.asar, though electron-builder keeps the files unpacked beside it for plxd's web client.
  * The first time, it copies the file:// origin's localStorage over before resolving.
  */
 export async function serveAppScheme(): Promise<void> {

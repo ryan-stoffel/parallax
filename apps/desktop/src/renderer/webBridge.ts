@@ -125,18 +125,26 @@ export async function pair(code: string): Promise<string | undefined> {
 }
 
 /**
- * A 30 s ticket for `/ws`: null when the host doesn't know the session anymore, undefined when it
- * can't be reached.
+ * A 30 s ticket for `/ws`, or why there's none: `revoked` only when plxd doesn't know the session
+ * anymore (`invalid_token`), else an error for people, and the connection tries again.
  */
-async function ticket({ token, key }: Session): Promise<string | null | undefined> {
+async function ticket({ token, key }: Session): Promise<{ ticket: string } | { error: string }> {
   const path = "/api/auth/websocket-ticket";
   const response = await fetch(path, {
     method: "POST",
     headers: { Authorization: `DPoP ${token}`, DPoP: await proof(key, "POST", path, token) },
   }).catch(() => undefined);
-  if (response?.status === 401) return null;
-  if (!response?.ok) return undefined;
-  return ((await response.json()) as { ticket: string }).ticket;
+  if (!response) return { error: "Couldn't reach Parallax on this computer." };
+  const answer = (await response.json().catch(() => ({}))) as { ticket?: string; error?: string };
+  if (answer.ticket) return { ticket: answer.ticket };
+  if (answer.error === "invalid_token") return { error: "revoked" };
+  if (answer.error === "access_denied")
+    return { error: "Open in a browser is off on this computer. Turn it on there to continue." };
+  if (response.status === 401)
+    return {
+      error: "Parallax refused this browser's proof. Check that this device's clock is right.",
+    };
+  return { error: `Parallax couldn't connect (${response.status}).` };
 }
 
 type Pending = { done: (response: RpcResponse<unknown>) => void; timer: number };
@@ -185,13 +193,13 @@ export class WebHost {
   async connect(): Promise<void> {
     clearTimeout(this.retryTimer);
     this.setState({ status: "connecting" });
-    const wsTicket = await ticket(this.session);
-    if (wsTicket === null) {
+    const answer = await ticket(this.session);
+    if ("error" in answer) {
+      if (answer.error !== "revoked") return this.fail(answer.error);
       await forget();
       return this.signedOut();
     }
-    if (!wsTicket) return this.fail("Couldn't reach Parallax on this computer.");
-    const socket = new WebSocket(`wss://${location.host}/ws?wsTicket=${wsTicket}`);
+    const socket = new WebSocket(`wss://${location.host}/ws?wsTicket=${answer.ticket}`);
     this.socket = socket;
     socket.onmessage = (event) => {
       if (socket !== this.socket) return;

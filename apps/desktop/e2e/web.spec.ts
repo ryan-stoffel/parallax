@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtempSync } from "node:fs";
+import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -14,7 +15,15 @@ import { stopServe } from "./launch";
 
 const desktop = path.join(import.meta.dirname, "..");
 const plxd = process.env["PLXD_PATH"] ?? path.join(desktop, "../../target/debug/plxd");
-const url = "https://127.0.0.1:7341/";
+
+/** A port nothing listens on now, for plxd's remote listener, so a developer's own plxd keeps 7341. */
+async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  await new Promise((resolve) => server.close(resolve));
+  return port;
+}
 
 test.describe.configure({ mode: "serial" });
 
@@ -23,15 +32,19 @@ let attach: ChildProcessWithoutNullStreams;
 let call: (method: string, params: object) => Promise<Record<string, unknown>>;
 let browser: ElectronApplication;
 let page: Page;
+let url: string;
 
 test.beforeAll(async () => {
   dataDir = mkdtempSync(path.join(tmpdir(), "parallax-e2e-web-"));
+  const port = await freePort();
+  url = `https://127.0.0.1:${port}/`;
   attach = spawn(plxd, ["attach"], {
     env: {
       ...process.env,
       PLXD_DATA_DIR: dataDir,
       PLXD_FAKE_BACKEND: path.join(import.meta.dirname, "web.json"),
       PLXD_WEB_DIR: path.join(desktop, "dist/renderer"),
+      PLXD_REMOTE_PORT: String(port),
     },
   });
   const waiting = new Map<number, (message: Record<string, unknown>) => void>();
@@ -76,15 +89,18 @@ test.afterAll(async () => {
 
 test("a browser that hasn't paired gets nothing but the pairing screen", async () => {
   await expect(page.getByRole("heading", { name: "Pair this browser" })).toBeVisible();
-  const refused = await page.evaluate(async () => {
-    const ticket = await fetch("/api/auth/websocket-ticket", { method: "POST" });
-    const socket = await new Promise((resolve) => {
-      const ws = new WebSocket("wss://127.0.0.1:7341/ws?wsTicket=guess");
-      ws.onopen = () => resolve("open");
-      ws.onerror = () => resolve("refused");
-    });
-    return { ticket: ticket.status, socket };
-  });
+  const refused = await page.evaluate(
+    async (wsUrl) => {
+      const ticket = await fetch("/api/auth/websocket-ticket", { method: "POST" });
+      const socket = await new Promise((resolve) => {
+        const ws = new WebSocket(wsUrl);
+        ws.onopen = () => resolve("open");
+        ws.onerror = () => resolve("refused");
+      });
+      return { ticket: ticket.status, socket };
+    },
+    url.replace("https:", "wss:") + "ws?wsTicket=guess",
+  );
   expect(refused).toEqual({ ticket: 401, socket: "refused" });
   const code = page.getByRole("textbox", { name: "Code" });
   await code.fill("AAA-AAA");

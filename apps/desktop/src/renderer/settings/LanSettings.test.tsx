@@ -32,7 +32,10 @@ const request = vi.fn(async (_host: string, method: string, params: Set) => {
       logId: "log",
     };
   if (method === "remote/sessions")
-    return { result: { sessions: [], listening: remote, pairing: remote }, logId: "log" };
+    return {
+      result: { sessions: [], listening: remote, pairing: remote, fingerprint: "ab".repeat(32) },
+      logId: "log",
+    };
   return { error: { code: -32601, message: "no" } };
 });
 const pairLan = vi.fn(async () => undefined);
@@ -99,6 +102,9 @@ test("the switch turns pairing on, Pair a device shows a code, and Add computer 
   const web = document.querySelector('[role="switch"][aria-label="Open in a browser"]')!;
   expect(web.getAttribute("aria-checked")).toBe("false");
   expect(document.body.textContent).toContain("https://192.168.1.20:7341");
+  expect(document.querySelector('[aria-label="Certificate fingerprint"]')?.textContent).toBe(
+    Array(32).fill("AB").join(" "),
+  );
   await click(web);
   expect(request).toHaveBeenCalledWith("local", "host/settings/set", { remoteWeb: true });
   expect(web.getAttribute("aria-checked")).toBe("true");

@@ -250,20 +250,21 @@ async fn want(daemon: &Daemon) -> Want {
 pub(super) struct Checks {
     all: Arc<Semaphore>,
     per_ip: Arc<Mutex<HashMap<IpAddr, usize>>>,
-    /// The cap for one peer address: [`MAX_PENDING_CHECKS_PER_IP`] by default.
     max_per_ip: usize,
 }
 
 impl Default for Checks {
     fn default() -> Self {
-        Self::with_max_per_ip(MAX_PENDING_CHECKS_PER_IP)
+        Self::new(MAX_PENDING_CHECKS, MAX_PENDING_CHECKS_PER_IP)
     }
 }
 
 impl Checks {
-    pub(super) fn with_max_per_ip(max_per_ip: usize) -> Self {
+    /// Slots for `max` at once, and `max_per_ip` for one peer address. The remote listener uses
+    /// these for the web client's files too.
+    pub(super) fn new(max: usize, max_per_ip: usize) -> Self {
         Self {
-            all: Arc::new(Semaphore::new(MAX_PENDING_CHECKS)),
+            all: Arc::new(Semaphore::new(max)),
             per_ip: Arc::default(),
             max_per_ip,
         }
