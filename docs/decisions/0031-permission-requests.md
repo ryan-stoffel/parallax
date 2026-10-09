@@ -1,6 +1,6 @@
 # 0031: Claude Code's permission requests reach the app over stdio
 
-- Status: accepted; supersedes in part [0027](0027-claude-permission-modes.md) (headless Manual denies every request that would prompt), for runs whose client asks for the channel, and [0013](0013-worker-sandbox.md) (a worker's tools), for a worker in Plan that asks ([Plan mode and `ExitPlanMode`](#plan-mode-and-exitplanmode), PLX-243); a normal thread asks in Accept Edits too since [0034](0034-threads-are-full-claude-code.md)
+- Status: accepted; supersedes in part [0027](0027-claude-permission-modes.md) (headless Manual denies every request that would prompt), for runs whose client asks for the channel, and [0013](0013-worker-sandbox.md) (a worker's tools), for a worker in Plan that asks ([Plan mode and `ExitPlanMode`](#plan-mode-and-exitplanmode), PLX-243); a normal thread asks in Accept Edits too since [0034](0034-threads-are-full-claude-code.md); superseded in part by [0059](0059-orchestration-rewrite.md) (requests are runtime requests, and only a Project child's keep the 30-minute deny) and [0061](0061-claude-agent-sdk.md) (Claude's requests come through the Agent SDK's `canUseTool`)
 - Date: 2026-10-01
 - Issue: PLX-222; PLX-243 for a worker's `ExitPlanMode`
 

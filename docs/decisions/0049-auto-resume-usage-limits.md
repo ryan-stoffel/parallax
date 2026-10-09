@@ -1,6 +1,6 @@
 # 0049: A run a usage limit stopped resumes when the limit resets
 
-- Status: accepted
+- Status: accepted; superseded in part by [0060](0060-provider-sessions.md) (T3 Code's usage-limit recovery, off by default)
 - Date: 2026-10-03
 - Issue: PLX-371 (part of PLX-368)
 

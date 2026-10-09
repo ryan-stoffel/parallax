@@ -1,6 +1,6 @@
 # 0016: Retention for the stored event log and its in-memory replay window
 
-- Status: accepted
+- Status: accepted; extended by [0059](0059-orchestration-rewrite.md) (a thread replay is bounded to 128 events or 1 MiB, then a snapshot)
 - Date: 2026-09-25
 - Issue: #187
 

@@ -1,6 +1,6 @@
 # 0025: Runs a coordinator started wake it when they finish
 
-- Status: accepted; restarts added by PLX-178; the cap is 100, and a child's start and its `ask` also wake a Project's coordinator, since [0043](0043-project-inbox-and-autonomy.md#wake-ups); since PLX-380 any parent wakes when a child it launched ends a CLI process, unless `thread_launch` (or `thread/start` and `agent/start`) set `notify: false`, by the same batching, pause, and restart rules ([0041](0041-thread-lineage-and-host-mcp.md)), and a run the user starts in a Project wakes its coordinator; Stop pauses a run's wake-ups only when it has such children
+- Status: accepted; restarts added by PLX-178; the cap is 100, and a child's start and its `ask` also wake a Project's coordinator, since [0043](0043-project-inbox-and-autonomy.md#wake-ups); since PLX-380 any parent wakes when a child it launched ends a CLI process, unless `thread_launch` (or `thread/start` and `agent/start`) set `notify: false`, by the same batching, pause, and restart rules ([0041](0041-thread-lineage-and-host-mcp.md)), and a run the user starts in a Project wakes its coordinator; Stop pauses a run's wake-ups only when it has such children; superseded in part by [0063](0063-schedules-pr-watches-and-delegation.md) (wake-ups are delegated completions, steered into a running turn where the provider can steer, and Stop cascades to children)
 - Date: 2026-09-29
 - Issue: PLX-42, PLX-178
 

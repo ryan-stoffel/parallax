@@ -1,6 +1,6 @@
 # 0035: A Codex thread is full Codex on `codex app-server`
 
-- Status: accepted; extends [0034](0034-threads-are-full-claude-code.md) to Codex, and supersedes in part [0013](0013-worker-sandbox.md), [0027](0027-claude-permission-modes.md) (Codex maps `edit` only), and [0031](0031-permission-requests.md#codex) (Codex never asks) for a Codex thread; a coordinator's Codex children are threads since [0042](0042-project-children-are-threads.md), and `codex exec` is gone since PLX-396
+- Status: accepted; extends [0034](0034-threads-are-full-claude-code.md) to Codex, and supersedes in part [0013](0013-worker-sandbox.md), [0027](0027-claude-permission-modes.md) (Codex maps `edit` only), and [0031](0031-permission-requests.md#codex) (Codex never asks) for a Codex thread; a coordinator's Codex children are threads since [0042](0042-project-children-are-threads.md), and `codex exec` is gone since PLX-396; superseded in part by [0060](0060-provider-sessions.md) (one shared `codex app-server` per provider instance)
 - Date: 2026-10-02
 - Issue: PLX-282
 
