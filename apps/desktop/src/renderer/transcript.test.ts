@@ -905,3 +905,24 @@ test("a secret request waits until it is resolved or its run ends, and never hol
   expect(waitingSecrets(ended.items)).toEqual([]);
   expect(of(ended.items, "secret")[1]?.status).toBe("cancelled");
 });
+
+test("waiting secrets count as needs-you requests and resolutions remove them", () => {
+  const asked = output({
+    kind: "secretRequested",
+    requestId: "s1",
+    label: "Webhook secret",
+    reason: "To sign.",
+  });
+  const pending = trackApprovals({}, [asked]);
+  expect(pending[runId]?.items).toMatchObject([{ kind: "secret", request: { requestId: "s1" } }]);
+  expect(
+    trackApprovals(pending, [output({ kind: "secretResolved", requestId: "s1", status: "saved" })])[
+      runId
+    ]?.items,
+  ).toEqual([]);
+  expect(
+    trackApprovals(pending, [
+      at({ kind: "agent.finished", runId, outcome: { status: "cancelled" } }),
+    ])[runId]?.items,
+  ).toEqual([]);
+});

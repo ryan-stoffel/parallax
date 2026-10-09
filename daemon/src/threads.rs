@@ -856,8 +856,8 @@ fn still_running(run_id: RunId, turn: TurnId) -> ErrorObject {
 }
 
 /// `events`' `agent.output` items up to the end of the parent's turn `turn`, one list per
-/// event, for a fork's log (0050), and whether that end was found. Approval items are left out,
-/// since their requests were the parent CLI's.
+/// event, for a fork's log (0050), and whether that end was found. Approval and secret request
+/// items are left out, since their requests were the parent's.
 ///
 /// Only the parent's own recorded turns mark turns: a `turnStarted` a fork copied from its own
 /// parent is part of its prompt's turn, `first`. The copy ends at `turn`'s `turnFinished`, which
@@ -914,7 +914,9 @@ fn transcript_until(
                     break 'events;
                 }
                 AgentOutputItem::ApprovalRequested { .. }
-                | AgentOutputItem::ApprovalResolved { .. } => continue,
+                | AgentOutputItem::ApprovalResolved { .. }
+                | AgentOutputItem::SecretRequested { .. }
+                | AgentOutputItem::SecretResolved { .. } => continue,
                 _ => {}
             }
             copied.push((index, item));

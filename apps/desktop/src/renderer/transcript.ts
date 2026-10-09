@@ -746,11 +746,11 @@ export const field = (input: JsonValue | undefined, name: string) => {
 export const waitingApprovals = (items: readonly Item[]): Approval[] =>
   items.filter((i): i is Approval => i.kind === "approval" && !i.resolved);
 
-/** By run id: a run's permission requests, kept while they wait (`trackApprovals`). */
+/** By run id: a run's permission and secret requests, kept while they wait (`trackApprovals`). */
 export type ApprovalsByRun = Readonly<Record<string, Transcript>>;
 
 /**
- * Applies a Project's events to each run's waiting permission requests: a request joins, and its
+ * Applies a Project's events to each run's waiting permission and secret requests: a request joins, and its
  * resolution or its run's next `agent.finished` takes it out, as `applyEvents` reads them. Repeats
  * are skipped by each run's `seq`, so pages of a run's log and the Project's subscription can
  * overlap.
@@ -765,7 +765,11 @@ export function trackApprovals(
     let kept: Extract<ParallaxEvent, { kind: "agent.output" | "agent.finished" }>;
     if (event.kind === "agent.output") {
       const items = event.items.filter(
-        (i) => i.kind === "approvalRequested" || i.kind === "approvalResolved",
+        (i) =>
+          i.kind === "approvalRequested" ||
+          i.kind === "approvalResolved" ||
+          i.kind === "secretRequested" ||
+          i.kind === "secretResolved",
       );
       if (items.length === 0) continue;
       kept = { ...event, items };
@@ -776,7 +780,13 @@ export function trackApprovals(
       [{ ...logged, event: kept }],
       kept.runId,
     );
-    next = { ...next, [kept.runId]: { seq: t.seq, items: waitingApprovals(t.items) } };
+    next = {
+      ...next,
+      [kept.runId]: {
+        seq: t.seq,
+        items: [...waitingApprovals(t.items), ...waitingSecrets(t.items)],
+      },
+    };
   }
   return next;
 }

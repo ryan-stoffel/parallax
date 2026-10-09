@@ -354,20 +354,36 @@ pub(crate) async fn consume(
         })
         .await?
         .map_err(refused)?;
-    let Some((_, expires)) = taken else {
+    let Some((thread, expires)) = taken else {
         return Err(refused(
             "it was used already or doesn't exist; ask again with request_secret",
         ));
     };
+    // The value leaves the keystore only once it is read: a keystore that can't be read now
+    // keeps it, and the ref, for another try.
     let keys = Arc::clone(&daemon.keys);
-    let value = tokio::task::spawn_blocking(move || {
-        let value = keys.get(key);
-        let _ = keys.delete(key);
-        value
+    let read = tokio::task::spawn_blocking(move || {
+        let value = keys.get(key)?;
+        if value.is_some() {
+            let _ = keys.delete(key);
+        }
+        Ok(value)
     })
     .await
-    .map_err(|error| ErrorObject::internal_error(error.to_string()))?
-    .map_err(|error| crate::methods::keychain_error(&error))?;
+    .map_err(|error| ErrorObject::internal_error(error.to_string()))?;
+    let value = match read {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = daemon
+                .store
+                .run(&CancellationToken::new(), move |db| {
+                    db.add_secret_ref(key.into(), thread, expires)
+                        .map_err(|e| store_error(&e))
+                })
+                .await;
+            return Err(crate::methods::keychain_error(&error));
+        }
+    };
     if expires <= Timestamp::now() {
         return Err(refused("it expired; ask again with request_secret"));
     }

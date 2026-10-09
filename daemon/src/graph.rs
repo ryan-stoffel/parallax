@@ -202,6 +202,21 @@ impl<'a> Fold<'a> {
                 decision,
                 ..
             } => self.resolve(*approval_id, *decision),
+            // A secret request (0063) waits as a runtime request with no node, so a sidebar
+            // flags its thread as an approval's.
+            AgentOutputItem::SecretRequested { request_id, .. } => {
+                match Uuid::try_parse(request_id) {
+                    Ok(id) => self.pending(item, id, None),
+                    Err(_) => Ok(()),
+                }
+            }
+            AgentOutputItem::SecretResolved { request_id, .. } => match Uuid::try_parse(request_id)
+            {
+                Ok(id) => self
+                    .db
+                    .set_runtime_request_status(self.thread, id, "resolved"),
+                Err(_) => Ok(()),
+            },
             AgentOutputItem::Subagent { call_id, item, .. } => self.subagent(call_id, item),
             AgentOutputItem::SubagentFinished {
                 call_id, status, ..
@@ -254,6 +269,16 @@ impl<'a> Fold<'a> {
             self.node(node.clone(), Some(parent), kind, "waiting", &payload)?;
             self.set_current_status(ThreadRunStatus::Waiting)?;
         }
+        self.pending(item, approval_id.into(), node)
+    }
+
+    /// Records `item`, a request `id` that waits, as a pending runtime request at node `node`.
+    fn pending(
+        &mut self,
+        item: &AgentOutputItem,
+        id: Uuid,
+        node: Option<String>,
+    ) -> Result<(), StoreError> {
         let Ok(run_id) = RunId::try_from(self.thread) else {
             return Ok(());
         };
@@ -268,7 +293,7 @@ impl<'a> Fold<'a> {
             },
         };
         self.db.put_runtime_request(&RuntimeRequest {
-            id: approval_id.into(),
+            id,
             thread_id: self.thread,
             node_id: node,
             status: "pending".to_owned(),

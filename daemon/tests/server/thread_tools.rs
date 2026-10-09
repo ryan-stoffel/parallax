@@ -1608,11 +1608,44 @@ fn files(dir: &Path) -> Vec<PathBuf> {
         let path = entry.path();
         if path.is_dir() {
             found.extend(files(&path));
-        } else {
+        } else if path.is_file() {
             found.push(path);
         }
     }
     found
+}
+
+/// Scans real files while the daemon runs and after shutdown, requiring a live WAL and logger.
+fn assert_no_secret_files(dir: &Path, secret: &str, live: bool) {
+    let written = files(dir);
+    if live {
+        for required in ["plxd.sqlite3", "plxd.sqlite3-wal", "plxd.log"] {
+            let file = written
+                .iter()
+                .find(|file| file.file_name().unwrap() == required)
+                .unwrap_or_else(|| panic!("missing live {required}: {written:?}"));
+            assert!(
+                std::fs::metadata(file).unwrap().len() > 0,
+                "empty live {required}"
+            );
+        }
+        assert!(
+            std::fs::read_to_string(dir.join("logs/plxd.log"))
+                .unwrap()
+                .contains("listening"),
+            "real daemon logging is active"
+        );
+    }
+    for file in written {
+        let bytes = std::fs::read(&file).unwrap();
+        assert!(
+            !bytes
+                .windows(secret.len())
+                .any(|window| window == secret.as_bytes()),
+            "{} holds the secret",
+            file.display()
+        );
+    }
 }
 
 /// Run `run`'s secret requests in its transcript, by id, with how each ended.
@@ -1642,7 +1675,10 @@ async fn secret_requests(
 async fn a_secret_reaches_only_the_keystore_and_the_agent_gets_a_one_time_ref() {
     const SECRET: &str = "plx648-test-value";
     let keys = Arc::new(Keys::default());
-    let host = Host::start_with_keys(temp_dir(), fake(steered()), keys.clone());
+    let dir = temp_dir();
+    let log = dir.path().join("logs/plxd.log");
+    plxd::logging::init(&log, &"debug".parse().unwrap()).unwrap();
+    let host = Host::start_with_keys(dir, fake(steered()), keys.clone());
     let mut client = host.client().await;
     let repos = temp_dir();
     let (me, _) = caller(&mut client, &repos).await;
@@ -1722,20 +1758,35 @@ async fn a_secret_reaches_only_the_keystore_and_the_agent_gets_a_one_time_ref() 
         .await
         .unwrap();
     assert!(!serde_json::to_string(&events).unwrap().contains(SECRET));
+    assert_no_secret_files(host.dir.path(), SECRET, true);
     host.server.stop().await;
-    let written = files(host.dir.path());
-    assert!(
-        written.iter().any(|file| file.ends_with("plxd.sqlite3")),
-        "{written:?}"
-    );
-    for file in written {
-        let bytes = std::fs::read(&file).unwrap_or_default();
-        assert!(
-            !bytes
-                .windows(SECRET.len())
-                .any(|window| window == SECRET.as_bytes()),
-            "{} holds the secret",
-            file.display()
-        );
-    }
+    assert_no_secret_files(host.dir.path(), SECRET, false);
+}
+
+/// A fork omits a pending secret item from the source's completed transcript.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_fork_never_copies_a_secret_request_card() {
+    let host = Host::start_with_keys(temp_dir(), fake(steered()), Arc::new(Keys::default()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    client
+        .call::<parallax_protocol::methods::SecretRequest>(parallax_protocol::SecretRequestParams {
+            run_id: me,
+            request_id: uuid::Uuid::now_v7().to_string(),
+            label: "Webhook secret".to_owned(),
+            reason: "To sign".to_owned(),
+            placeholder: None,
+            wait_ms: 0,
+        })
+        .await
+        .unwrap();
+    steer(&mut client, me, "Finish.").await;
+    idle(&mut client, me).await;
+    assert_eq!(secret_requests(&mut client, me).await.len(), 1);
+    let mut mcp = tools(&host, me).await;
+    let fork = id(&mcp.ok("thread_fork", json!({"runId": me})).await);
+    assert!(secret_requests(&mut client, fork).await.is_empty());
+    host.server.stop().await;
 }
