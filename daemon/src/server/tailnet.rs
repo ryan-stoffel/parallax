@@ -250,22 +250,29 @@ async fn want(daemon: &Daemon) -> Want {
 pub(super) struct Checks {
     all: Arc<Semaphore>,
     per_ip: Arc<Mutex<HashMap<IpAddr, usize>>>,
+    /// The cap for one peer address: [`MAX_PENDING_CHECKS_PER_IP`] by default.
+    max_per_ip: usize,
 }
 
 impl Default for Checks {
     fn default() -> Self {
-        Self {
-            all: Arc::new(Semaphore::new(MAX_PENDING_CHECKS)),
-            per_ip: Arc::default(),
-        }
+        Self::with_max_per_ip(MAX_PENDING_CHECKS_PER_IP)
     }
 }
 
 impl Checks {
+    pub(super) fn with_max_per_ip(max_per_ip: usize) -> Self {
+        Self {
+            all: Arc::new(Semaphore::new(MAX_PENDING_CHECKS)),
+            per_ip: Arc::default(),
+            max_per_ip,
+        }
+    }
+
     /// A slot for a check of a connection from `ip`, or `None` when either cap is reached.
     pub(super) fn start(&self, ip: IpAddr) -> Option<Check> {
         let mut per_ip = self.per_ip.lock().unwrap_or_else(PoisonError::into_inner);
-        if per_ip.get(&ip).copied().unwrap_or(0) >= MAX_PENDING_CHECKS_PER_IP {
+        if per_ip.get(&ip).copied().unwrap_or(0) >= self.max_per_ip {
             return None;
         }
         let permit = Arc::clone(&self.all).try_acquire_owned().ok()?;

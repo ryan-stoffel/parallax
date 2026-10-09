@@ -675,7 +675,15 @@ fn credential_path(data_dir: &Path, fingerprint: &str) -> PathBuf {
 
 /// A TLS connection to `route` that presents the certificate with fingerprint `pin`, or any
 /// certificate without one, and the fingerprint it presented.
-async fn open(route: &str, pin: Option<&str>) -> Result<(TlsStream<TcpStream>, String), Error> {
+///
+/// # Errors
+///
+/// [`Error::WrongHost`] when the certificate isn't the pinned one, or the network's error.
+///
+/// # Panics
+///
+/// Never: `parallax` is a valid server name.
+pub async fn open(route: &str, pin: Option<&str>) -> Result<(TlsStream<TcpStream>, String), Error> {
     let provider = provider();
     let seen = Arc::new(Mutex::new(None));
     let verifier = Pinned {

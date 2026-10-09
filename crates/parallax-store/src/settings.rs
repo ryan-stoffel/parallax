@@ -22,6 +22,9 @@ const DEVICE_ICON: &str = "device_icon";
 /// The `host_settings` key for whether plxd listens for remote clients (PLX-641, 0065).
 const REMOTE: &str = "remote";
 
+/// The `host_settings` key for whether the remote listener serves the web client (PLX-651).
+const REMOTE_WEB: &str = "remote_web";
+
 /// The `host_settings` key for the remote clients' sessions, as plxd's JSON (PLX-641).
 const REMOTE_SESSIONS: &str = "remote_sessions";
 
@@ -135,6 +138,25 @@ impl Store {
     /// A database error.
     pub fn set_remote(&self, on: bool) -> Result<(), StoreError> {
         self.set_flag(REMOTE, on)
+    }
+
+    /// Whether the remote listener serves the web client and pairs browsers (PLX-651). Off unless
+    /// set on.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn remote_web(&self) -> Result<bool, StoreError> {
+        Ok(self.text(REMOTE_WEB)?.is_some_and(|value| value == "true"))
+    }
+
+    /// Sets the host's web client setting.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_remote_web(&self, on: bool) -> Result<(), StoreError> {
+        self.set_flag(REMOTE_WEB, on)
     }
 
     /// The remote clients' sessions, as plxd stored them, if any.
