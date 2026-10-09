@@ -71,8 +71,8 @@ use crate::backend::process::{
 };
 use crate::backend::{
     AgentPermission, Answer, ApprovalId, CancelSwitch, Credential, Decision, EVENT_BUFFER,
-    EventSink, FollowUp, Held, Overrides, RunHandle, RunRequest, StartError, Started, TurnId,
-    check_argument, is_compact,
+    EventSink, FollowUp, Held, Overrides, Rewind, RunHandle, RunRequest, StartError, Started,
+    TurnId, check_argument, is_compact,
 };
 
 /// The permissions a thread maps, in the picker's order (0027, 0054): Codex's own presets
@@ -593,6 +593,146 @@ async fn read(server: Weak<Server>, mut process: Process, left: CancellationToke
 
 /// How long app-server gets to exit once its last thread has left.
 const EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How long a revert waits for app-server, which may start and load the thread first.
+const REVERT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Drops the newest `rewind.turns` turns of Codex thread `rewind.session_id` (0062), as T3
+/// Code's `revertCodexThread` does: `thread/read` checks the thread keeps paginated history,
+/// which Codex can revert, `thread/resume` loads it if it isn't, `thread/turns/list` pages its
+/// turns newest first to the oldest one that goes, and `thread/revert` drops it and every turn
+/// after it. It runs on the login's shared app-server, as a thread of its own, and unloads the
+/// thread again. Returns the thread's id.
+pub(super) async fn revert(
+    launcher: &Launcher,
+    overrides: &Overrides,
+    servers: &Servers,
+    rewind: Rewind,
+) -> Result<String, String> {
+    let home = overrides.config_home(&Credential::Subscription { config_home: None });
+    let (server, mut inbox, key) =
+        Server::join(launcher, overrides, servers, home).map_err(|error| error.to_string())?;
+    let reverted =
+        tokio::time::timeout(REVERT_TIMEOUT, revert_on(&server, &mut inbox, key, &rewind))
+            .await
+            .unwrap_or_else(|_| Err("Codex's app-server didn't answer in time".to_owned()));
+    server.leave(key);
+    reverted
+}
+
+async fn revert_on(
+    server: &Server,
+    inbox: &mut mpsc::UnboundedReceiver<Inbound>,
+    key: u64,
+    rewind: &Rewind,
+) -> Result<String, String> {
+    let mut ready = server.ready.subscribe();
+    loop {
+        let state = ready.borrow_and_update().clone();
+        match state {
+            Some(Ok(())) => break,
+            Some(Err(error)) => return Err(error),
+            None => ready
+                .changed()
+                .await
+                .map_err(|_| "Codex's app-server went away".to_owned())?,
+        }
+    }
+    let thread = rewind.session_id.as_str();
+    let read = call(
+        server,
+        inbox,
+        key,
+        "thread/read",
+        json!({"threadId": thread, "includeTurns": false}),
+    )
+    .await?;
+    if read["thread"]["historyMode"] != "paginated" {
+        return Err(format!(
+            "Codex thread {thread} keeps legacy history, which Codex can't revert"
+        ));
+    }
+    if read["thread"]["status"]["type"] == "notLoaded" {
+        let params = json!({"threadId": thread, "excludeTurns": true, "cwd": rewind.cwd});
+        call(server, inbox, key, "thread/resume", params).await?;
+    }
+    let (mut remaining, mut before, mut cursor) = (rewind.turns, None, Value::Null);
+    let mut pages = std::collections::HashSet::new();
+    while remaining > 0 {
+        if !pages.insert(cursor.to_string()) {
+            return Err("Codex repeated a page of the thread's turns".to_owned());
+        }
+        let params = json!({
+            "threadId": thread,
+            "cursor": cursor,
+            "limit": remaining.min(100),
+            "sortDirection": "desc",
+            "itemsView": "summary",
+        });
+        let page = call(server, inbox, key, "thread/turns/list", params).await?;
+        for turn in page["data"].as_array().into_iter().flatten() {
+            before = turn["id"].as_str().map(str::to_owned);
+            remaining -= 1;
+            if remaining == 0 {
+                break;
+            }
+        }
+        cursor = page["nextCursor"].clone();
+        if cursor.is_null() {
+            break;
+        }
+    }
+    let reverted = match before {
+        Some(before) => {
+            let params = json!({"threadId": thread, "beforeTurnId": before});
+            call(server, inbox, key, "thread/revert", params).await?
+        }
+        None => read,
+    };
+    server.request(None, "thread/unsubscribe", &json!({"threadId": thread}));
+    Ok(reverted["thread"]["id"]
+        .as_str()
+        .unwrap_or(thread)
+        .to_owned())
+}
+
+/// Sends request `method` as thread `key`, and waits for its result. A request app-server sends
+/// it meanwhile gets an error, as one for no thread of plxd's does.
+async fn call(
+    server: &Server,
+    inbox: &mut mpsc::UnboundedReceiver<Inbound>,
+    key: u64,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
+    let id = server.request(Some(key), method, &params);
+    loop {
+        let line = match inbox.recv().await {
+            Some(Inbound::Line(line)) => line,
+            Some(Inbound::Oversized(_)) => continue,
+            Some(Inbound::Exited(_)) | None => return Err("Codex's app-server exited".to_owned()),
+        };
+        let Ok(Value::Object(mut message)) = serde_json::from_slice::<Value>(&line) else {
+            continue;
+        };
+        match (message.get("id"), message.contains_key("method")) {
+            (Some(asked), true) => {
+                let refused = refusal(&format!(
+                    "plxd is reverting the thread, not running {method}"
+                ));
+                server.send(&json!({"id": asked, "error": refused}));
+            }
+            (Some(answered), false) if answered.as_u64() == Some(id) => {
+                if let Some(error) = message.get("error") {
+                    let why = error["message"].as_str().unwrap_or("no reason given");
+                    return Err(format!("Codex refused {method}: {why}"));
+                }
+                return Ok(message.remove("result").unwrap_or_default());
+            }
+            _ => {}
+        }
+    }
+}
 
 /// One thread on its shared app-server: forwards its events, runs its turns one at a time,
 /// relays approval requests, and decides the outcome when it leaves.

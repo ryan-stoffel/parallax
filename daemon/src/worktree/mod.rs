@@ -86,6 +86,7 @@
 //! repository's git folder — so this needs an unusual repository configuration to matter; #175
 //! tracks closing it.
 
+mod checkpoint;
 mod checks;
 mod coordinator;
 mod folder;
@@ -100,6 +101,7 @@ mod tests;
 #[cfg(all(test, windows))]
 mod windows_tests;
 
+pub use checkpoint::{DiffFormat, parse_numstat_z};
 pub use checks::{CHECKS_TIMEOUT, Checked};
 pub use folder::RunFolder;
 pub use landing::Merged;
@@ -1084,6 +1086,38 @@ async fn collect(
                 });
             }
             Some(Output::Exited(exit)) => return Ok((stdout, exit)),
+            None => unreachable!("Output::Exited always comes last"),
+        }
+    }
+}
+
+/// [`collect`], stopping once stdout passes `max_bytes`: the process is killed, and the output is
+/// cut there. Returns its exit when it ran to the end, and whether the output was cut.
+async fn collect_capped(
+    mut process: Process,
+    cwd: &Path,
+    args: &[&str],
+    max_bytes: usize,
+) -> Result<(Vec<u8>, Option<Exit>, bool), WorktreeError> {
+    let mut stdout = Vec::new();
+    loop {
+        match process.next().await {
+            Some(Output::Line(line)) => {
+                stdout.extend_from_slice(&line);
+                stdout.push(b'\n');
+                if stdout.len() > max_bytes {
+                    stdout.truncate(max_bytes);
+                    return Ok((stdout, None, true));
+                }
+            }
+            Some(Output::Oversized { bytes }) => {
+                return Err(WorktreeError::GitFailed {
+                    cwd: cwd.to_owned(),
+                    args: owned_args(args),
+                    detail: format!("it wrote a {bytes}-byte line, too long for plxd to read"),
+                });
+            }
+            Some(Output::Exited(exit)) => return Ok((stdout, Some(exit), false)),
             None => unreachable!("Output::Exited always comes last"),
         }
     }

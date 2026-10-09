@@ -107,6 +107,21 @@ impl Store {
             .transpose()
     }
 
+    /// Whether a run other than `id` has a worktree row at `path`: a folder threads share, which
+    /// a checkpoint restore must not touch (0062).
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error.
+    pub fn worktree_shared(&self, id: Uuid, path: &str) -> Result<bool, StoreError> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT 1 FROM worktrees WHERE path = ?2 AND id != ?1 LIMIT 1")?
+            .query_row(params![id.to_string(), path], |_| Ok(()))
+            .optional()?
+            .is_some())
+    }
+
     /// Records that run `id`'s worktree branch was renamed to `branch` (decision record 0058).
     ///
     /// # Errors

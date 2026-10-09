@@ -120,6 +120,11 @@ pub enum ErrorKind {
     /// coordinator or a run started with `explore`, or `land/approve` or `land/sendBack` one that
     /// isn't waiting for approval (PLX-410). The message says which. Nothing changed.
     LandRefused,
+    /// `checkpoint.rollback` refused before changing anything (0062): a turn is still running,
+    /// the thread's push or Open PR is, the checkpoint isn't `ready`, the thread's provider can't
+    /// rewind its conversation, or `restoreFiles` was asked of a folder that isn't the thread's
+    /// own worktree. The message says which.
+    RevertRefused,
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]

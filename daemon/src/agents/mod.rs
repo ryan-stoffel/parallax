@@ -304,7 +304,18 @@ async fn store<T: Send + 'static>(
     daemon: &Daemon,
     job: impl FnOnce(&mut crate::store::Tx) -> Result<T, ErrorObject> + Send + 'static,
 ) -> Result<T, ErrorObject> {
-    daemon.store.run(&CancellationToken::new(), job).await
+    let (value, effects) = daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            let value = job(db)?;
+            Ok((value, db.effects))
+        })
+        .await?;
+    // A turn that ended enqueued its checkpoint's capture (0062).
+    if effects {
+        daemon.orchestrator.notify();
+    }
+    Ok(value)
 }
 
 pub(crate) fn store_error(error: &StoreError) -> ErrorObject {
@@ -1037,6 +1048,7 @@ async fn fork_created(
 ) -> Result<CreatedRun, ErrorObject> {
     let at = row.created_at;
     let copied = store(daemon, move |db| {
+        db.copying = true;
         for items in fork.transcript {
             db.stage(
                 at,
@@ -1513,6 +1525,21 @@ pub(crate) async fn interrupt(
     // A blocking setup script would hold the command until it ends (PLX-650).
     crate::setup_scripts::release(daemon, id);
     ask(daemon, id, |reply| Command::Interrupt { hold_queue, reply }).await
+}
+
+/// `checkpoint.rollback` (0062): through the run's actor, which holds off its turns meanwhile.
+pub(crate) async fn revert(
+    daemon: Arc<Daemon>,
+    id: RunId,
+    ordinal: u32,
+    restore_files: bool,
+) -> Result<AgentRun, ErrorObject> {
+    ask(&daemon, id, |reply| Command::Revert {
+        ordinal,
+        restore_files,
+        reply,
+    })
+    .await
 }
 
 /// `queue/*` (PLX-370): through the run's actor, which keeps its waiting messages.

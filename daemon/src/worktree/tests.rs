@@ -1283,4 +1283,5 @@ async fn worktree_git_commands_ignore_a_rewritten_git_file() {
     );
 }
 
+mod checkpoint;
 mod review;

@@ -282,7 +282,16 @@ impl Backend for FakeBackend {
         Capabilities {
             worker_sandbox: true,
             fork: true,
+            rewind: true,
         }
+    }
+
+    /// Keeps the session as it is: the fake CLI has no conversation to drop.
+    fn rewind(
+        &self,
+        rewind: super::Rewind,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<String, String>> + Send>> {
+        Box::pin(std::future::ready(Ok(rewind.session_id)))
     }
 
     /// A Project's two modes (0042), so the app's end-to-end tests can run one. The fake CLI

@@ -559,6 +559,11 @@ impl Server {
         }
         let cut = agents::recover(&daemon).await;
         crate::setup_scripts::recover(&daemon).await;
+        // Before what waits is sent: a turn waits for its thread's checkpoint captures (0062).
+        let effects = tokio::spawn(crate::orchestrator::work(
+            Arc::clone(&daemon),
+            shutdown.graceful.clone(),
+        ));
         agents::deliver_queued(&daemon, cut).await;
         crate::methods::land::resume(&daemon).await;
         let compact = {
@@ -576,10 +581,6 @@ impl Server {
             })
         };
         let import = tokio::spawn(crate::graph::sweep(
-            Arc::clone(&daemon),
-            shutdown.graceful.clone(),
-        ));
-        let effects = tokio::spawn(crate::orchestrator::work(
             Arc::clone(&daemon),
             shutdown.graceful.clone(),
         ));

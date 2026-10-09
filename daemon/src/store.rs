@@ -138,6 +138,12 @@ pub(crate) struct Tx {
     imported: HashSet<Uuid>,
     /// Those this job imported, forgotten if it rolls back.
     importing: Vec<Uuid>,
+    /// Set by a job that copies a fork's transcript: the runs it ends get no checkpoint (0062),
+    /// since the fork's worktree never held them. Cleared when the job ends.
+    pub copying: bool,
+    /// Whether this job has enqueued an effect, for the job to tell its caller, who wakes the
+    /// effect worker once it commits, as `agents::store` does. Cleared as each job starts.
+    pub effects: bool,
 }
 
 impl Deref for Tx {
@@ -167,6 +173,8 @@ impl Tx {
             command_id: None,
             imported: HashSet::new(),
             importing: Vec::new(),
+            copying: false,
+            effects: false,
         }
     }
 
@@ -242,7 +250,8 @@ impl Tx {
     }
 
     /// Folds `event`, thread `thread`'s, into the thread graph, importing the thread's stored
-    /// events first if they aren't yet. Returns the run it belongs to.
+    /// events first if they aren't yet, and enqueues a checkpoint capture for each run it ends
+    /// (0062). Returns the run it belongs to.
     fn fold(
         &mut self,
         thread: Uuid,
@@ -252,7 +261,17 @@ impl Tx {
         event: &ParallaxEvent,
     ) -> Result<Option<Uuid>, StoreError> {
         self.import_thread_rows(thread)?;
-        crate::graph::apply(&self.store, thread, seq, time, project, event)
+        let folded = crate::graph::apply(&self.store, thread, seq, time, project, event)?;
+        if !self.copying {
+            for run in &folded.ended {
+                if let Some(ordinal) = run.ordinal {
+                    let effect = crate::orchestrator::capture_effect(thread, run.id, ordinal);
+                    self.store.enqueue_effect(&effect)?;
+                    self.effects = true;
+                }
+            }
+        }
+        Ok(folded.run)
     }
 
     /// Imports thread `thread`'s stored events into the graph, unless they are already.
@@ -294,7 +313,10 @@ impl Tx {
             return Err(failed(&error));
         }
         self.begun = Some(self.seq);
-        let result = match job(self) {
+        self.effects = false;
+        let job = job(self);
+        self.copying = false;
+        let result = match job {
             Ok(_) if self.failed => Err(ErrorObject::internal_error(
                 "the project store could not store an event",
             )),
@@ -326,6 +348,7 @@ impl Tx {
         self.staged.clear();
         self.failed = false;
         self.command_id = None;
+        self.effects = false;
         for thread in self.importing.drain(..) {
             self.imported.remove(&thread);
         }

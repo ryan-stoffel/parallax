@@ -94,6 +94,7 @@ use crate::worktree::github_pr_urls;
 
 mod git;
 mod placed;
+mod revert;
 mod waiting;
 pub(crate) use git::GitAction;
 
@@ -203,6 +204,12 @@ pub(super) enum Command {
         body: String,
         reply: oneshot::Sender<Result<String, ErrorObject>>,
     },
+    /// `checkpoint.rollback` (0062).
+    Revert {
+        ordinal: u32,
+        restore_files: bool,
+        reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
+    },
     /// `agent/gitStatus`, `agent/commit`, or `agent/push` (PLX-298).
     Git {
         action: GitAction,
@@ -260,6 +267,7 @@ impl Command {
             | Self::ResumeNow { reply }
             | Self::AutoResume { reply, .. }
             | Self::Place { reply, .. }
+            | Self::Revert { reply, .. }
             | Self::Join { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
@@ -893,6 +901,13 @@ impl Actor {
                 let _ = reply.send(self.snapshot());
             }
             Command::Git { action, reply } => self.on_git(action, reply).await,
+            Command::Revert {
+                ordinal,
+                restore_files,
+                reply,
+            } => {
+                let _ = reply.send(self.revert(ordinal, restore_files).await);
+            }
             Command::Delete {
                 wait,
                 command_id,
@@ -1313,6 +1328,7 @@ impl Actor {
         {
             warn!(run = %self.id, %error, "could not remove an accepted run's worktree");
         }
+        crate::checkpoints::forget(&self.daemon, repo, self.id.into()).await;
 
         let accept = RunAccept {
             id: id.into(),
@@ -1874,6 +1890,7 @@ impl Actor {
         &mut self,
         queued: &Queued,
     ) -> Result<Result<Vec<(Uuid, u64)>, SendError>, ErrorObject> {
+        self.checkpoint_before_turn().await;
         if self.is_coordinator() && !self.busy() {
             let project = super::integration(&self.daemon, self.project).await?;
             if let Some(project) = project {
@@ -2799,6 +2816,7 @@ impl Actor {
         resume: Option<Resume>,
         paths: Option<(PathBuf, PathBuf)>,
     ) -> bool {
+        self.checkpoint_before_turn().await;
         let Prepared {
             resolved,
             accounts,
@@ -3341,6 +3359,16 @@ impl Actor {
         }
         // A child that ended may free a slot or an account for one waiting (0046).
         self.daemon.agents.placement.notify_one();
+    }
+
+    /// Before a new turn: the checkpoint it starts from is captured, once the last turn's is
+    /// (0062). A coordinator has none.
+    async fn checkpoint_before_turn(&mut self) {
+        if self.is_coordinator() {
+            return;
+        }
+        self.flush().await;
+        crate::checkpoints::before_turn(&self.daemon, self.id).await;
     }
 
     /// Records the run's new commit and its diff in its state. The caller's save reports it in
