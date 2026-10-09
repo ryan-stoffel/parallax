@@ -1,6 +1,6 @@
 // @ts-check
-// The install script for each OS (0056). Each installs the app, finds its plxd, turns Parallax
-// Connect on, keeps plxd running, and installs plx-connect when npm is there. macOS and Linux run
+// The install script for each OS (0056). Each installs the app (on Linux, plxd alone), finds its
+// plxd, turns Parallax Connect on, keeps plxd running, and installs plx-connect when npm is there. macOS and Linux run
 // theirs with `sh -s`, Windows with PowerShell. They print plain ASCII lines, since Windows
 // PowerShell's output encoding varies, and fail with a non-zero exit.
 
@@ -73,7 +73,8 @@ ${posixTail}`;
 /**
  * Linux: installs the release's static plxd in ~/.local/bin, so no AppImage runtime has to run
  * (NixOS won't run one). Then installs bubblewrap and socat, which Claude Code's worker sandbox
- * needs (0013), when it can without a password: `nix profile install` on NixOS, else the package
+ * needs (0013), when it can without a password: `nix profile install` on NixOS (unless the user's
+ * profile is nix-env's), else the package
  * manager as root or with passwordless sudo. Otherwise, and for nix-ld on NixOS, which agent CLIs'
  * generic Linux binaries need, it says what to do. Then turns on lingering, so plxd's user service
  * runs with nobody logged in.
@@ -121,9 +122,12 @@ if [ -n "$packages" ]; then
   sudo=
   [ "$(id -u)" = 0 ] || sudo="sudo -n"
   {
-    if [ -n "$nixos" ]; then
+    # nix profile would turn a nix-env profile into one nix-env refuses, so that one is left alone.
+    if [ -n "$nixos" ] && [ ! -e "$HOME/.nix-profile/manifest.nix" ] && [ ! -e "$HOME/.local/state/nix/profile/manifest.nix" ]; then
       # shellcheck disable=SC2046 # one package per word
       nix --extra-experimental-features 'nix-command flakes' profile install $(printf 'nixpkgs#%s ' $packages)
+    elif [ -n "$nixos" ]; then
+      :
     elif command -v apt-get >/dev/null 2>&1; then
       $sudo apt-get install -y $packages
     elif command -v dnf >/dev/null 2>&1; then
@@ -140,9 +144,9 @@ if [ -n "$packages" ]; then
   if [ -z "$packages" ]; then
     echo "Installed Claude Code's sandbox packages"
   elif [ -n "$nixos" ]; then
-    echo "warning: Claude Code's worker sandbox needs $packages. Add them to environment.systemPackages in configuration.nix, then run sudo nixos-rebuild switch."
+    echo "warning: Claude Code's worker sandbox needs $packages. Add to environment.systemPackages in configuration.nix, then run sudo nixos-rebuild switch."
   else
-    echo "warning: Claude Code's worker sandbox needs $packages, which need a password to install. Install them with your package manager, such as: sudo apt install $packages"
+    echo "warning: Claude Code's worker sandbox needs $packages, which plx-connect couldn't install without a password. Install with your package manager, such as: sudo apt install $packages"
   fi
 fi
 if [ -n "$nixos" ] && [ -z "\${NIX_LD:-}" ] && [ ! -e /run/current-system/sw/share/nix-ld/lib/ld.so ]; then

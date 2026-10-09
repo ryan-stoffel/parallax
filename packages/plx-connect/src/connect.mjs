@@ -54,11 +54,14 @@ async function readDetails(runner, os) {
   return parseDetails(os, stdout);
 }
 
+/** What plx-connect installs: the app, or on Linux plxd alone. @param {Channel} channel @param {Os} os */
+const product = (channel, os) => (os === "linux" ? "plxd" : appName(channel));
+
 /** The newest release of `channel` for `target`. @param {Channel} channel @param {Target} target */
 function findInstaller(channel, target) {
   return step(`Finding the newest ${channel} release`, async () => {
     const installer = pickAsset(pickRelease(await fetchReleases(), channel), target.os, target.arch);
-    return [`${appName(channel)} ${installer.version}: ${installer.name}`, installer];
+    return [`${product(channel, target.os)} ${installer.version}: ${installer.name}`, installer];
   });
 }
 
@@ -75,15 +78,15 @@ async function install(runner, target, name, ip, options) {
   const installer = await findInstaller(options.channel, target);
   const script = installScript(target.os, installer, options.channel);
   if (options.dryRun) {
-    console.log(`→ Installing ${appName(options.channel)} on ${name} with this ${target.os === "windows" ? "PowerShell" : "sh"} script (dry run, not run):`);
+    console.log(`→ Installing ${product(options.channel, target.os)} on ${name} with this ${target.os === "windows" ? "PowerShell" : "sh"} script (dry run, not run):`);
     for (const line of script.trimEnd().split("\n")) console.log(`  ${line}`);
     console.log(`→ Would wait up to 60 s for ${ip ?? name}:${PLXD_PORT} to answer.`);
     return;
   }
-  await step(`Installing ${appName(options.channel)} on ${name}`, async () => {
+  await step(`Installing ${product(options.channel, target.os)} on ${name}`, async () => {
     const { code } = await runner.script(target.os === "windows" ? "powershell" : "sh", script, false);
     if (code !== 0) throw new Error(`The install failed on ${name} (exit ${code}).`);
-    return [`Installed ${appName(options.channel)} ${installer.version} and turned on Parallax Connect`, undefined];
+    return [`Installed ${product(options.channel, target.os)} ${installer.version} and turned on Parallax Connect`, undefined];
   });
   await step(`Waiting for ${name} to answer on port ${PLXD_PORT}`, async () => {
     if (!ip) throw new Error("Tailscale gave this computer no IPv4 address to check.");

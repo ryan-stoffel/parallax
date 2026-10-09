@@ -255,7 +255,7 @@ fn missing_packages(packages: &[&str], os_release: &str) -> String {
         os_release
             .lines()
             .find_map(|line| line.strip_prefix(name)?.strip_prefix('='))
-            .map(|value| value.trim_matches('"').to_owned())
+            .map(|value| value.trim_matches(['"', '\'']).to_owned())
             .unwrap_or_default()
     };
     let ids = format!("{} {}", field("ID"), field("ID_LIKE"));
@@ -376,7 +376,7 @@ mod tests {
             fix("ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n")
                 .ends_with("`sudo zypper install bubblewrap socat`")
         );
-        assert!(fix("ID=alpine\n").ends_with("`sudo apk add bubblewrap socat`"));
+        assert!(fix("ID='alpine'\n").ends_with("`sudo apk add bubblewrap socat`"));
         assert!(fix("").ends_with("install the bubblewrap and socat packages"));
         assert_eq!(
             missing_packages(&["socat"], "ID=debian\n"),

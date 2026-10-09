@@ -1,6 +1,6 @@
 # plx-connect
 
-Sets up [Parallax](https://github.com/ryan-stoffel/parallax) on your computers and connects them with Parallax Connect, over Tailscale. It installs the newest Parallax from GitHub Releases, turns Connect on, and keeps plxd running, so every computer's Parallax sees every other one's threads.
+Sets up [Parallax](https://github.com/ryan-stoffel/parallax) on your computers and connects them with Parallax Connect, over Tailscale. It installs the newest Parallax from GitHub Releases (on Linux, plxd alone), turns Connect on, and keeps plxd running, so every computer's Parallax sees every other one's threads.
 
 ```sh
 npx plx-connect

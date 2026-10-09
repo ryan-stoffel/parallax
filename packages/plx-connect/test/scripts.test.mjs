@@ -48,10 +48,15 @@ test("Linux downloads the static plxd into ~/.local/bin and turns on lingering",
 /**
  * Runs the Linux script's package step in a temporary folder: `bin` holds only the tools named in
  * `tools` (fakes that log their arguments to `log`), and `nixos` makes /etc/NIXOS count.
- * @param {{ tools: string[], uid?: string, nixos?: boolean, nixLd?: boolean }} options
+ * `nixEnv` gives the user a nix-env profile.
+ * @param {{ tools: string[], uid?: string, nixos?: boolean, nixLd?: boolean, nixEnv?: boolean }} options
  */
-function runPackages({ tools, uid = "1000", nixos = false, nixLd = false }) {
+function runPackages({ tools, uid = "1000", nixos = false, nixLd = false, nixEnv = false }) {
   const dir = mkdtempSync(path.join(tmpdir(), "plx-packages-"));
+  if (nixEnv) {
+    mkdirSync(path.join(dir, ".nix-profile"));
+    writeFileSync(path.join(dir, ".nix-profile", "manifest.nix"), "[ ]");
+  }
   const bin = path.join(dir, "bin");
   mkdirSync(bin);
   const fake = (/** @type {string} */ name, /** @type {string} */ body) => {
@@ -82,13 +87,17 @@ test("Linux installs missing sandbox packages without a password, or says how", 
   // A user: sudo -n, so nothing waits for a password.
   const user = runPackages({ tools: ["apt-get", "sudo"] });
   assert.match(user.log, /^sudo -n apt-get install -y bubblewrap socat$/m);
-  assert.match(user.out, /needs bubblewrap socat, which need a password to install/);
+  assert.match(user.out, /needs bubblewrap socat, which plx-connect couldn't install without a password/);
   // NixOS: a Nix profile, no sudo; and nix-ld is named when it's off.
   const nixos = runPackages({ tools: ["nix"], nixos: true });
   assert.match(nixos.log, /^nix --extra-experimental-features nix-command flakes profile install nixpkgs#bubblewrap nixpkgs#socat$/m);
   assert.match(nixos.out, /Installed Claude Code's sandbox packages/);
   assert.match(nixos.out, /programs\.nix-ld\.enable = true;/);
   assert.doesNotMatch(runPackages({ tools: ["nix"], nixos: true, nixLd: true }).out, /nix-ld/);
+  // A nix-env profile is left alone: nix profile would convert it into one nix-env refuses.
+  const nixEnv = runPackages({ tools: ["nix", "apt-get"], nixos: true, nixEnv: true });
+  assert.equal(nixEnv.log, "");
+  assert.match(nixEnv.out, /Add to environment\.systemPackages in configuration\.nix/);
   // Both already there: nothing to do.
   const ready = runPackages({ tools: ["bwrap", "socat"] });
   assert.equal(ready.out, "");
