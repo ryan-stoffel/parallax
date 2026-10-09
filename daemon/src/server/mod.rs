@@ -556,6 +556,10 @@ impl Server {
                 crate::agents::cleanup::run(daemon, stop).await;
             })
         };
+        let import = tokio::spawn(crate::graph::sweep(
+            Arc::clone(&daemon),
+            shutdown.graceful.clone(),
+        ));
         let effects = tokio::spawn(crate::orchestrator::work(
             Arc::clone(&daemon),
             shutdown.graceful.clone(),
@@ -654,6 +658,7 @@ impl Server {
         daemon.agents.shutdown().await;
         let _ = compact.await;
         let _ = cleanup.await;
+        let _ = import.await;
         let _ = effects.await;
         let _ = schedules.await;
         let _ = pr_watches.await;

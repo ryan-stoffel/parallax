@@ -232,6 +232,9 @@ pub enum ParallaxEvent {
         run_id: RunId,
         /// The queue as it is now, first to be sent first.
         messages: Vec<QueuedMessage>,
+        /// True while a Stop holds it until `queue.resume` (PLX-644). Absent means false.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        held: bool,
     },
     /// `repo/add` registered a repository for normal threads, or plxd made its scratch entry
     /// (#110). Host-level.

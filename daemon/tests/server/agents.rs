@@ -8,7 +8,9 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
-use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS, Message, Notification};
+use parallax_protocol::jsonrpc::{
+    ErrorObject, INVALID_PARAMS, Message, Notification, Request, RequestId,
+};
 use parallax_protocol::methods::{
     AgentAccept, AgentCancel, AgentDiff, AgentEvents, AgentFile, AgentImage, AgentList,
     AgentRequestChanges, AgentSend, AgentStart, EventsEvent, EventsSubscribe, HostHealth,
@@ -254,6 +256,39 @@ impl Conn {
         }
     }
 
+    /// [`Conn::call`] with `commandId` in its params (0052, 0059).
+    pub(crate) async fn command<M: RequestMethod>(
+        &mut self,
+        params: M::Params,
+        command_id: uuid::Uuid,
+    ) -> Result<M::Result, ErrorObject> {
+        let mut value = serde_json::to_value(params).unwrap();
+        value.as_object_mut().unwrap().insert(
+            "commandId".to_owned(),
+            serde_json::json!(command_id.hyphenated().to_string()),
+        );
+        let id = RequestId::String(uuid::Uuid::now_v7().hyphenated().to_string());
+        self.client
+            .send_message(&Request {
+                id: id.clone(),
+                method: M::NAME.to_owned(),
+                params: Some(value),
+            })
+            .await;
+        loop {
+            match self.client.next().await {
+                Some(Message::Response(response)) => {
+                    assert_eq!(response.id, Some(id));
+                    return response.into_result();
+                }
+                Some(Message::Notification(notification)) => {
+                    self.pending.push_back(event(notification));
+                }
+                other => panic!("expected a response, got {other:?}"),
+            }
+        }
+    }
+
     async fn next_event(&mut self) -> EventsEventParams {
         if let Some(event) = self.pending.pop_front() {
             return event;
@@ -264,7 +299,7 @@ impl Conn {
         }
     }
 
-    async fn stays_quiet(&mut self, within: Duration) {
+    pub(crate) async fn stays_quiet(&mut self, within: Duration) {
         assert!(self.pending.is_empty(), "{:?}", self.pending);
         self.client.stays_quiet(within).await;
     }

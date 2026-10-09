@@ -54,10 +54,16 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const THREAD_CLEANUP: &str = "thread.cleanup";
 const PROJECT_CLEANUP: &str = "project.cleanup";
 const THREAD_WAKE: &str = "thread.wake";
+const DELEGATED_TASKS_STOP: &str = "delegated-tasks.stop";
 
 /// Effect kinds that may run again after a restart, since each does only what is left to do.
 /// [`recover`] cancels an open effect of any other kind.
-const REPLAY_SAFE: &[&str] = &[THREAD_CLEANUP, PROJECT_CLEANUP, THREAD_WAKE];
+const REPLAY_SAFE: &[&str] = &[
+    THREAD_CLEANUP,
+    PROJECT_CLEANUP,
+    THREAD_WAKE,
+    DELEGATED_TASKS_STOP,
+];
 
 /// The lanes, and the effect worker's wake-up.
 #[derive(Default)]
@@ -304,6 +310,10 @@ enum Effect {
     /// A scheduled task's fire or a pull request watch's news, sent to a thread (0063).
     #[serde(rename = "thread.wake")]
     Wake(crate::schedules::Wake),
+    /// A Stop's cascade (T3 Code's `delegated-tasks.stop`): stops the threads a stopped thread
+    /// started, each with its queue held and its own children after it.
+    #[serde(rename = "delegated-tasks.stop")]
+    DelegatedTasksStop { children: Vec<RunId> },
 }
 
 impl Effect {
@@ -312,6 +322,7 @@ impl Effect {
             Self::ThreadCleanup { .. } => THREAD_CLEANUP,
             Self::ProjectCleanup { .. } => PROJECT_CLEANUP,
             Self::Wake(_) => THREAD_WAKE,
+            Self::DelegatedTasksStop { .. } => DELEGATED_TASKS_STOP,
         }
     }
 }
@@ -786,7 +797,7 @@ pub(crate) async fn work(daemon: Arc<Daemon>, stop: CancellationToken) {
 /// its last attempt is logged and stays as a `failed` row.
 async fn run_one(daemon: Arc<Daemon>, claimed: ClaimedEffect) {
     let ran = match serde_json::from_str::<Effect>(&claimed.payload) {
-        Ok(effect) => perform(&daemon, claimed.thread_id, effect).await,
+        Ok(effect) => perform(&daemon, &claimed.id, claimed.thread_id, effect).await,
         Err(error) => Err((format!("plxd can't read this effect: {error}"), true)),
     };
     let outcome = match ran {
@@ -818,8 +829,14 @@ async fn run_one(daemon: Arc<Daemon>, claimed: ClaimedEffect) {
     }
 }
 
-/// Does `effect` for `thread`. An error says whether it is final; any other is retried.
-async fn perform(daemon: &Arc<Daemon>, thread: Uuid, effect: Effect) -> Result<(), (String, bool)> {
+/// Does `effect`, effect `id`, for `thread`. An error says whether it is final; any other is
+/// retried.
+async fn perform(
+    daemon: &Arc<Daemon>,
+    id: &str,
+    thread: Uuid,
+    effect: Effect,
+) -> Result<(), (String, bool)> {
     match effect {
         Effect::ThreadCleanup { worktree, scratch } => {
             if let Some(Removal {
@@ -876,8 +893,33 @@ async fn perform(daemon: &Arc<Daemon>, thread: Uuid, effect: Effect) -> Result<(
             crate::schedules::deliver(daemon, wake).await;
             Ok(())
         }
+        Effect::DelegatedTasksStop { children } => {
+            for child in children {
+                // A thread gone since, or one that stopped already, is stopped.
+                let Ok(cascade) = dispatch::stop(daemon, child, true).await else {
+                    continue;
+                };
+                let Some(grandchildren) = cascade else {
+                    continue;
+                };
+                let effect = dispatch::stop_effect(&format!("{id}/{child}"), child, grandchildren)
+                    .map_err(|error| (error.message, true))?;
+                daemon
+                    .store
+                    .run(&CancellationToken::new(), move |db| {
+                        db.enqueue_effect(&effect).map_err(|e| store_error(&e))
+                    })
+                    .await
+                    .map_err(|error| (error.message, false))?;
+                daemon.orchestrator.notify();
+            }
+            Ok(())
+        }
     }
 }
+
+mod dispatch;
+pub(crate) use dispatch::dispatch as dispatch_command;
 
 #[cfg(test)]
 mod tests;

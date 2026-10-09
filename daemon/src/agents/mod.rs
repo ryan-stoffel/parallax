@@ -82,8 +82,9 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use self::actor::{Actor, Command, Queued};
-pub(crate) use self::actor::{GitAction, QueueOp, logged_events, session_account};
+pub(crate) use self::actor::{Delivery, GitAction, QueueOp, logged_events, session_account};
 pub(crate) use self::approvals::APPROVAL_TIMEOUT;
+pub(crate) use self::convert::NO_WRITE;
 pub(crate) use self::convert::agent_run as snapshot;
 use self::convert::{
     COMPLETED, RUNNING, STARTING, WORKSPACE_WRITE, agent_run, option_name, option_value,
@@ -1364,6 +1365,24 @@ pub(crate) async fn send(
     daemon: Arc<Daemon>,
     params: AgentSendParams,
 ) -> Result<AgentRun, ErrorObject> {
+    let delivery = match params.delivery.unwrap_or_default() {
+        AgentDelivery::Queue => Delivery::Queue,
+        AgentDelivery::Steer => Delivery::Steer,
+        AgentDelivery::Unknown => {
+            return Err(ErrorObject::invalid_params(
+                "delivery must be queue or steer",
+            ));
+        }
+    };
+    send_with(daemon, params, delivery).await
+}
+
+/// `agent/send` with `delivery`, which its params' `delivery` can't say for a restart (0059).
+pub(crate) async fn send_with(
+    daemon: Arc<Daemon>,
+    params: AgentSendParams,
+    delivery: Delivery,
+) -> Result<AgentRun, ErrorObject> {
     let AgentSendParams {
         run_id,
         turn_id,
@@ -1377,20 +1396,11 @@ pub(crate) async fn send(
         images,
         threads,
         from,
-        delivery,
+        delivery: _,
     } = params;
     if let Some(from) = from {
         sender_exists(&daemon, from).await?;
     }
-    let steer = match delivery.unwrap_or_default() {
-        AgentDelivery::Queue => false,
-        AgentDelivery::Steer => true,
-        AgentDelivery::Unknown => {
-            return Err(ErrorObject::invalid_params(
-                "delivery must be queue or steer",
-            ));
-        }
-    };
     let message = Queued {
         turn_id,
         text,
@@ -1408,10 +1418,19 @@ pub(crate) async fn send(
     };
     ask(&daemon, run_id, |reply| Command::Send {
         message,
-        steer,
+        delivery,
         reply,
     })
     .await
+}
+
+/// `run.interrupt` (0059): stops run `id`'s turn and keeps its queue, held when `hold_queue`.
+pub(crate) async fn interrupt(
+    daemon: &Arc<Daemon>,
+    id: RunId,
+    hold_queue: bool,
+) -> Result<AgentRun, ErrorObject> {
+    ask(daemon, id, |reply| Command::Interrupt { hold_queue, reply }).await
 }
 
 /// `queue/*` (PLX-370): through the run's actor, which keeps its waiting messages.

@@ -44,7 +44,7 @@ pub(crate) const MAX_EVENTS_PAGE_BYTES: usize = 4 * 1024 * 1024;
 
 /// Checks a prompt or message: its text, which may be empty only when it has images (PLX-193),
 /// and its images (`images::check`).
-pub(super) fn check_message(
+pub(crate) fn check_message(
     name: &str,
     text: &str,
     images: &[PromptImage],
@@ -412,7 +412,7 @@ async fn events_before(
     })
 }
 
-fn logged(entry: &Entry) -> LoggedEvent {
+pub(super) fn logged(entry: &Entry) -> LoggedEvent {
     LoggedEvent {
         seq: entry.seq,
         time: entry.time,

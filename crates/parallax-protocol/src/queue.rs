@@ -97,4 +97,7 @@ pub struct QueueSteerParams {
 pub struct QueueResult {
     /// The waiting messages.
     pub messages: Vec<QueuedMessage>,
+    /// True while a Stop holds them until `queue.resume` (PLX-644). Absent means false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub held: bool,
 }

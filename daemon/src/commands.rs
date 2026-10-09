@@ -40,7 +40,8 @@ pub(crate) const RECEIPTED_METHODS: &[&str] = &[
 
 /// Methods whose receipts the orchestrator keeps (0059). Like [`RECEIPTED_METHODS`], they run
 /// to the end when their connection closes.
-const ORCHESTRATED_METHODS: &[&str] = &["project/delete", "thread/delete"];
+const ORCHESTRATED_METHODS: &[&str] =
+    &["orchestration/dispatch", "project/delete", "thread/delete"];
 
 /// Detached command tasks and in-memory waiters for an in-flight claim.
 pub(crate) struct Commands {

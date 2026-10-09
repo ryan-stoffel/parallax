@@ -42,15 +42,16 @@ use crate::{
     ContextReadParams, ContextReadResult, ContextWriteParams, ContextWriteResult,
     CursorInstallParams, CursorInstallResult, CursorSignInCancelParams, CursorSignInCancelResult,
     CursorSignInParams, CursorSignInResult, CursorSignOutParams, CursorSignOutResult,
-    EventsEventParams, EventsResyncParams, EventsSubscribeParams, EventsSubscribeResult,
-    EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus, GithubInstallParams, GithubSignIn,
-    GithubSignInCancelParams, GithubSignInCancelResult, GithubSignInParams, GithubStatus,
-    GithubStatusParams, HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams,
-    HostSettingsSetParams, HostVersionParams, HostVersionResult, InboxListParams, InboxListResult,
-    InboxSeenParams, InboxSeenResult, InitializeParams, InitializeResult, LandApproveParams,
-    LandQueueParams, LandResult, LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult,
-    MemoryListParams, MemoryListResult, MemoryProposeParams, MemoryProposeResult, MemoryReadParams,
-    MemoryReadResult, MemoryWriteParams, MemoryWriteResult, PrActParams, PrDiffResult,
+    DispatchResult, EventsEventParams, EventsResyncParams, EventsSubscribeParams,
+    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, GitStatus,
+    GithubInstallParams, GithubSignIn, GithubSignInCancelParams, GithubSignInCancelResult,
+    GithubSignInParams, GithubStatus, GithubStatusParams, HostHealthParams, HostHealthResult,
+    HostSettings, HostSettingsGetParams, HostSettingsSetParams, HostVersionParams,
+    HostVersionResult, InboxListParams, InboxListResult, InboxSeenParams, InboxSeenResult,
+    InitializeParams, InitializeResult, LandApproveParams, LandQueueParams, LandResult,
+    LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult, MemoryListParams, MemoryListResult,
+    MemoryProposeParams, MemoryProposeResult, MemoryReadParams, MemoryReadResult,
+    MemoryWriteParams, MemoryWriteResult, OrchestrationCommand, PrActParams, PrDiffResult,
     PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult, PreviewCallParams,
     PreviewCallResult, PreviewFrameParams, PreviewFrameResult, PreviewInputParams,
     PreviewInputResult, PreviewListParams, PreviewListResult, ProjectCreateParams,
@@ -64,14 +65,15 @@ use crate::{
     RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult,
     RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
     RepoUpdateResult, ScheduleDeleteResult, ScheduleIdParams, ScheduleListParams,
-    ScheduleListResult, ScheduleSaveParams, ScheduledTask, TerminalExitParams, TerminalKey,
-    TerminalListParams, TerminalListResult, TerminalOpenParams, TerminalOutputParams,
+    ScheduleListResult, ScheduleSaveParams, ScheduledTask, SubscribeShellParams,
+    SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult, TerminalExitParams,
+    TerminalKey, TerminalListParams, TerminalListResult, TerminalOpenParams, TerminalOutputParams,
     TerminalResizeParams, TerminalResult, TerminalWriteParams, ThreadArchiveParams,
     ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams,
-    ThreadListParams, ThreadListResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams,
-    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult,
-    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams,
-    UsageLimitsResult,
+    ThreadHistoryParams, ThreadHistoryResult, ThreadListParams, ThreadListResult,
+    ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
+    ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams,
+    UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -484,6 +486,19 @@ method_table! {
         PrUnwatch = "pr/unwatch": PrViewParams => PrWatchResult;
         /// `pr/watches`: the run's watched pull requests.
         PrWatches = "pr/watches": PrWatchesParams => PrWatchesResult;
+        /// `orchestration/dispatch`: runs one command on a thread (0059, PLX-644), idempotent on
+        /// its `commandId`. Gated on the `orchestration` capability, like every
+        /// `orchestration/*` method.
+        OrchestrationDispatch = "orchestration/dispatch": OrchestrationCommand => DispatchResult;
+        /// `orchestration/subscribeShell`: the host's shell at a `seq`, then its shell events as
+        /// `events/event` notifications, or with `afterSeq` the events after it when few enough
+        /// are left to replay.
+        OrchestrationSubscribeShell = "orchestration/subscribeShell": SubscribeShellParams => SubscribeShellResult;
+        /// `orchestration/subscribeThread`: one thread at a `seq`, then its events, or with
+        /// `afterSeq` the events after it when few enough are left to replay.
+        OrchestrationSubscribeThread = "orchestration/subscribeThread": SubscribeThreadParams => SubscribeThreadResult;
+        /// `orchestration/threadHistory`: a page of a thread's events before a `seq`.
+        OrchestrationThreadHistory = "orchestration/threadHistory": ThreadHistoryParams => ThreadHistoryResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -654,6 +669,10 @@ mod tests {
                 "pr/watch",
                 "pr/unwatch",
                 "pr/watches",
+                "orchestration/dispatch",
+                "orchestration/subscribeShell",
+                "orchestration/subscribeThread",
+                "orchestration/threadHistory",
                 "$/cancelRequest",
                 "events/event",
                 "events/resync",

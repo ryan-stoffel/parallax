@@ -203,8 +203,9 @@ async fn a_changed_or_deleted_entry_reaches_running_children_as_a_queued_message
         matches!(&event.event, ParallaxEvent::QueueUpdated { messages, .. } if messages.len() == 2)
     })
     .await;
-    let Some(ParallaxEvent::QueueUpdated { run_id, messages }) =
-        events.last().map(|event| &event.event)
+    let Some(ParallaxEvent::QueueUpdated {
+        run_id, messages, ..
+    }) = events.last().map(|event| &event.event)
     else {
         unreachable!()
     };

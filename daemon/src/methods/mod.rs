@@ -25,6 +25,7 @@ mod host;
 pub(crate) mod inbox;
 pub(crate) mod land;
 mod memory;
+mod orchestration;
 mod pr;
 pub(crate) mod project;
 pub(crate) mod question;
@@ -40,7 +41,8 @@ use parallax_protocol::jsonrpc::{
     ErrorObject, INVALID_REQUEST, Notification, Request, RequestId, Response,
 };
 use parallax_protocol::methods::{
-    self, EventsSubscribe, EventsUnsubscribe, Initialize, RequestMethod,
+    self, EventsSubscribe, EventsUnsubscribe, Initialize, OrchestrationSubscribeShell,
+    OrchestrationSubscribeThread, RequestMethod,
 };
 use parallax_protocol::{
     EventsSubscribeResult, EventsUnsubscribeResult, ProvidersListResult, SubscriptionId,
@@ -50,6 +52,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+pub(crate) use agent::check_message;
 pub(crate) use defaults::read_defaults;
 pub(crate) use events::{Cursor, Cursors, Delivery};
 pub(crate) use host::{Session, initialize, os_version};
@@ -123,6 +126,20 @@ pub(crate) async fn dispatch(mut context: Context, mut request: Request) -> Repl
                 Err(error) => Reply::Response(Response::error(Some(id), error)),
             };
         }
+        OrchestrationSubscribeShell::NAME => {
+            let subscribed = match request.params() {
+                Ok(params) => orchestration::subscribe_shell(&context, params).await,
+                Err(error) => Err(error),
+            };
+            return subscribed_reply(id, subscribed);
+        }
+        OrchestrationSubscribeThread::NAME => {
+            let subscribed = match request.params() {
+                Ok(params) => orchestration::subscribe_thread(&context, params).await,
+                Err(error) => Err(error),
+            };
+            return subscribed_reply(id, subscribed);
+        }
         EventsUnsubscribe::NAME => {
             return match request.params::<<EventsUnsubscribe as RequestMethod>::Params>() {
                 Ok(params) => Reply::Unsubscribe {
@@ -142,6 +159,20 @@ pub(crate) async fn dispatch(mut context: Context, mut request: Request) -> Repl
         id: Some(id),
         result,
     })
+}
+
+/// A subscription's answer: its result, then its events from `cursor`.
+fn subscribed_reply<T: Serialize>(
+    id: RequestId,
+    subscribed: Result<(T, Cursor), ErrorObject>,
+) -> Reply {
+    match subscribed {
+        Ok((result, cursor)) => Reply::Subscribe {
+            response: success(id, &result),
+            cursor,
+        },
+        Err(error) => Reply::Response(Response::error(Some(id), error)),
+    }
 }
 
 /// A `match` on the request's method with one arm per `Method => handler` pair, `Method` named in
@@ -284,6 +315,8 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
             daemon.terminals.close(p.thread_id, p.terminal_id);
             ready(Ok(TerminalResult {}))
         },
+        OrchestrationDispatch => |p| orchestration::dispatch(context, p),
+        OrchestrationThreadHistory => |p| orchestration::thread_history(context, p),
         TerminalList => |p| ready(Ok(TerminalListResult {
             terminals: daemon.terminals.list(p.thread_id.as_deref()),
         })),

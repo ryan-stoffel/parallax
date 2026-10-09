@@ -139,10 +139,11 @@ fn failed_text(prompt: &str, message: &str) -> String {
 
 /// What an actor is asked to do.
 pub(super) enum Command {
-    /// `agent/send`, into the running turn rather than after it when `steer` (PLX-370).
+    /// `agent/send` or `message.dispatch`, after the running turn, into it (PLX-370), or in
+    /// place of it.
     Send {
         message: Queued,
-        steer: bool,
+        delivery: Delivery,
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
     },
     /// `queue/*` (PLX-370).
@@ -155,6 +156,12 @@ pub(super) enum Command {
     Cancel {
         /// The thread that stopped the run through its Parallax tools (0041).
         from: Option<RunId>,
+        reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
+    },
+    /// `run.interrupt` (0059): stops the running turn and keeps the queue, held until
+    /// `queue.resume` when `hold_queue`.
+    Interrupt {
+        hold_queue: bool,
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
     },
     /// `pr/link` or `pr/unlink` (0041), with a checked URL.
@@ -230,6 +237,7 @@ impl Command {
         match self {
             Self::Send { reply, .. }
             | Self::Cancel { reply, .. }
+            | Self::Interrupt { reply, .. }
             | Self::LinkPr { reply, .. }
             | Self::ResumeNow { reply }
             | Self::AutoResume { reply, .. }
@@ -260,13 +268,26 @@ impl Command {
     }
 }
 
-/// What `queue/*` asks of the run's queue (PLX-370).
+/// What `queue/*` and the queued-run commands ask of the run's queue (PLX-370, 0059). `Resume`
+/// is `queue.resume`, which lets a queue held after a Stop go on.
 pub(crate) enum QueueOp {
     List,
     Edit { id: TurnId, text: String },
     Reorder { ids: Vec<TurnId> },
     Cancel { id: TurnId },
     Steer { id: TurnId },
+    Resume,
+}
+
+/// How a message reaches the run (0059's dispatch modes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Delivery {
+    /// After the running turn, or now when none runs.
+    Queue,
+    /// Into the running turn, or by stopping and resuming it where the backend can't take it.
+    Steer,
+    /// By stopping the running turn and resuming the run with it, whatever the backend.
+    Restart,
 }
 
 /// A message waiting for the run's CLI: one sent during a turn, one that changes what the CLI
@@ -287,7 +308,8 @@ pub(super) struct Queued {
     pub from: Option<RunId>,
 }
 
-/// What a stored [`Queued`] keeps beside its text, as its row's JSON.
+/// What a stored [`Queued`] keeps beside its text, as its row's JSON. `held` is the queue's:
+/// every row of a held queue has it (0059).
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 struct QueuedExtra {
@@ -296,16 +318,18 @@ struct QueuedExtra {
     options: RunOptions,
     account: Option<AccountChoice>,
     from: Option<RunId>,
+    held: bool,
 }
 
 impl Queued {
-    fn row(&self) -> QueuedRow {
+    fn row(&self, held: bool) -> QueuedRow {
         let extra = QueuedExtra {
             images: self.images.clone(),
             threads: self.threads.clone(),
             options: self.options.clone(),
             account: self.account.clone(),
             from: self.from,
+            held,
         };
         QueuedRow {
             turn_id: self.turn_id.into(),
@@ -315,19 +339,22 @@ impl Queued {
         }
     }
 
-    /// `row` as it was stored, or `None` if it's corrupt.
-    fn from_row(row: QueuedRow) -> Option<Self> {
+    /// `row` as it was stored, and whether its queue was held, or `None` if it's corrupt.
+    fn from_row(row: QueuedRow) -> Option<(Self, bool)> {
         let turn_id = TurnId::try_from(row.turn_id).ok()?;
         let extra: QueuedExtra = serde_json::from_str(&row.extra).ok()?;
-        Some(Self {
-            turn_id,
-            text: row.text,
-            images: extra.images,
-            threads: extra.threads,
-            options: extra.options,
-            account: extra.account,
-            from: extra.from,
-        })
+        Some((
+            Self {
+                turn_id,
+                text: row.text,
+                images: extra.images,
+                threads: extra.threads,
+                options: extra.options,
+                account: extra.account,
+                from: extra.from,
+            },
+            extra.held,
+        ))
     }
 
     /// It, for the live CLI as its next turn, after the summaries of the threads attached to it
@@ -400,6 +427,10 @@ struct Batch {
     since: Option<Instant>,
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about a run's actor, not states of one thing"
+)]
 pub(super) struct Actor {
     daemon: Arc<Daemon>,
     id: RunId,
@@ -424,6 +455,8 @@ pub(super) struct Actor {
     last_message: String,
     /// Messages waiting for the run's CLI, first to be sent first (PLX-370).
     queued: VecDeque<Queued>,
+    /// Whether a Stop holds `queued` until `queue.resume` (0059). Stored with each queued row.
+    queue_held: bool,
     /// Turns the live CLI has been given and hasn't finished: while there are any, a queued
     /// message waits.
     in_flight: usize,
@@ -481,6 +514,7 @@ impl Actor {
             attached: HashMap::new(),
             last_message,
             queued: VecDeque::new(),
+            queue_held: false,
             in_flight: 0,
             held: false,
             handed: Vec::new(),
@@ -620,25 +654,26 @@ impl Actor {
         self.live.is_none()
             && self.effect.is_none()
             && self.batch.items.is_empty()
-            && self.queued.is_empty()
+            && (self.queued.is_empty() || self.queue_held)
             && self.handed.is_empty()
             && self.wakes.is_empty()
             && self.approvals.due().is_none()
             && self.resume_due().is_none()
     }
 
+    #[expect(clippy::too_many_lines, reason = "one arm per command")]
     async fn on_command(&mut self, command: Command) {
         match command {
             Command::Send {
                 message,
-                steer,
+                delivery,
                 reply,
             } => {
                 let (turn_id, from) = (message.turn_id, message.from);
                 if let Some(from) = from {
                     self.senders.insert(turn_id, from);
                 }
-                let answer = self.send(message, steer).await;
+                let answer = self.send(message, delivery).await;
                 if answer.is_err() && from.is_some() {
                     self.senders.remove(&turn_id);
                 }
@@ -651,6 +686,10 @@ impl Actor {
             }
             Command::Cancel { from, reply } => {
                 self.cancel(from).await;
+                let _ = reply.send(self.snapshot());
+            }
+            Command::Interrupt { hold_queue, reply } => {
+                self.interrupt(hold_queue).await;
                 let _ = reply.send(self.snapshot());
             }
             Command::Approve { params, reply } => {
@@ -827,6 +866,34 @@ impl Actor {
         }
         // Stop means stop: a child finishing a moment later doesn't start its parent again before
         // the user writes.
+        if self.is_coordinator() || self.has_children().await {
+            self.pause_wakes(false).await;
+        }
+    }
+
+    /// `run.interrupt` (0059): stops the running turn as `cancel` does, but keeps what waits.
+    /// With `hold_queue` it waits for `queue.resume`, with what the CLI took and hasn't started
+    /// first; without, the next message starts once the CLI has exited, after what the CLI drops
+    /// as it stops ([`Self::track_turns`]).
+    async fn interrupt(&mut self, hold_queue: bool) {
+        if self.live.is_some() {
+            info!(run = %self.id, hold_queue, "interrupting an agent run");
+            self.stop_approvals(AgentApprovalBy::Cancel).await;
+        }
+        if hold_queue {
+            // What the CLI took and hasn't started waits again, first, with the rest.
+            for queued in self.handed.drain(..).rev() {
+                self.queued.push_front(queued);
+            }
+            if !self.queued.is_empty() {
+                self.queue_held = true;
+                self.save_queue().await;
+            }
+        }
+        self.cancel_waiting().await;
+        if let Some(live) = &self.live {
+            live.run.cancel();
+        }
         if self.is_coordinator() || self.has_children().await {
             self.pause_wakes(false).await;
         }
@@ -1433,7 +1500,11 @@ impl Actor {
 
     /// `agent/send`: `queued` goes into the running turn with `steer`, and otherwise as the
     /// run's next turn, waiting for it if it must.
-    async fn send(&mut self, mut queued: Queued, steer: bool) -> Result<AgentRun, ErrorObject> {
+    async fn send(
+        &mut self,
+        mut queued: Queued,
+        delivery: Delivery,
+    ) -> Result<AgentRun, ErrorObject> {
         if queued.text.trim().is_empty() && queued.images.is_empty() {
             return Err(ErrorObject::invalid_params("text must not be empty"));
         }
@@ -1467,8 +1538,8 @@ impl Actor {
         if self.effect.is_some() {
             return self.queue(queued).await;
         }
-        if steer {
-            return self.steer(queued).await;
+        if delivery != Delivery::Queue {
+            return self.steer(queued, delivery == Delivery::Restart).await;
         }
         // A running CLI can't change what it runs with, a turn in progress finishes before the
         // next starts, and what's sent after a message that waits waits too, so the messages keep
@@ -1507,8 +1578,9 @@ impl Actor {
 
     /// `agent/send` with `delivery: steer`, and `queue/steer`: `queued` goes into the turn running
     /// now (PLX-370). A backend that takes no messages while it runs is cancelled and resumed
-    /// with it, and a run with no CLI running resumes with it at once.
-    async fn steer(&mut self, queued: Queued) -> Result<AgentRun, ErrorObject> {
+    /// with it, as every backend is with `restart` (0059's `restart_active`), and a run with no
+    /// CLI running resumes with it at once.
+    async fn steer(&mut self, queued: Queued, restart: bool) -> Result<AgentRun, ErrorObject> {
         if is_compact(&queued.text, &queued.images) {
             return Err(ErrorObject::parallax(
                 ErrorKind::UnsupportedOption,
@@ -1525,7 +1597,13 @@ impl Actor {
         }
         let (mut steer, seen) = queued.follow_up(&self.daemon, self.id).await?;
         steer.steer = true;
-        let sent = self.live.as_ref().map(|live| live.run.send(steer));
+        let sent = self.live.as_ref().map(|live| {
+            if restart {
+                Err(SendError::Unsupported)
+            } else {
+                live.run.send(steer)
+            }
+        });
         match sent {
             Some(Ok(())) => {
                 info!(run = %self.id, turn = %queued.turn_id, "steering a running turn");
@@ -1655,7 +1733,7 @@ impl Actor {
     /// in progress, the next message that doesn't change what it runs with, as its next turn.
     /// Holds the CLI open while that waits.
     async fn deliver(&mut self) {
-        if self.stopping {
+        if self.stopping || self.queue_held {
             return;
         }
         if self.live.is_none() && self.effect.is_none() {
@@ -1826,15 +1904,25 @@ impl Actor {
                 self.queued = remaining;
                 self.senders.remove(&id);
             }
+            QueueOp::Resume => {
+                if self.queue_held {
+                    info!(run = %self.id, "resuming a held queue");
+                    self.queue_held = false;
+                    if let Err(error) = self.store_queue(&self.queued.clone(), command_id).await {
+                        self.queue_held = true;
+                        return Err(error);
+                    }
+                }
+            }
             QueueOp::Steer { id } => {
                 let at = self.position(id)?;
                 let queued = self.queued[at].clone();
                 if self.changing(&queued) {
                     // `steer` refuses it; the message keeps its place.
-                    self.steer(queued).await?;
+                    self.steer(queued, false).await?;
                 } else {
                     self.queued.remove(at);
-                    let steered = self.steer(queued.clone()).await;
+                    let steered = self.steer(queued.clone(), false).await;
                     if let Err(error) = steered {
                         let at = at.min(self.queued.len());
                         self.queued.insert(at, queued);
@@ -1861,6 +1949,7 @@ impl Actor {
         }
         Ok(QueueResult {
             messages: self.messages(),
+            held: self.queue_held,
         })
     }
 
@@ -1893,10 +1982,11 @@ impl Actor {
             Ok(rows) => {
                 for row in rows {
                     match Queued::from_row(row) {
-                        Some(queued) => {
+                        Some((queued, held)) => {
                             if let Some(from) = queued.from {
                                 self.senders.insert(queued.turn_id, from);
                             }
+                            self.queue_held |= held;
                             self.queued.push_back(queued);
                         }
                         None => {
@@ -1920,7 +2010,7 @@ impl Actor {
 
     /// Stores `queued`, often a proposed queue before the actor applies it, completes
     /// `command_id`'s receipt, and reports it as `queue.updated`, in one job after any transcript
-    /// items waiting to be sent.
+    /// items waiting to be sent. An empty queue is no longer held.
     async fn store_queue(
         &mut self,
         queued: &VecDeque<Queued>,
@@ -1928,7 +2018,8 @@ impl Actor {
     ) -> Result<(), ErrorObject> {
         let id = self.row.id;
         let (run_id, project) = (self.id, self.project);
-        let rows: Vec<QueuedRow> = queued.iter().map(Queued::row).collect();
+        let held = self.queue_held && !queued.is_empty();
+        let rows: Vec<QueuedRow> = queued.iter().map(|queued| queued.row(held)).collect();
         let messages: Vec<QueuedMessage> = queued.iter().map(Queued::message).collect();
         self.write(move |db, now| {
             db.set_queue(id, &rows)
@@ -1938,16 +2029,23 @@ impl Actor {
                 command_id,
                 &QueueResult {
                     messages: messages.clone(),
+                    held,
                 },
             )?;
             db.stage(
                 now,
                 Some(project),
-                ParallaxEvent::QueueUpdated { run_id, messages },
+                ParallaxEvent::QueueUpdated {
+                    run_id,
+                    messages,
+                    held,
+                },
             );
             Ok(())
         })
-        .await
+        .await?;
+        self.queue_held = held;
+        Ok(())
     }
 
     /// Starts a new CLI process for the run with `text`, after the summaries of `threads`, and
@@ -2780,7 +2878,14 @@ impl Actor {
         match event {
             Event::TurnStarted {
                 turn_id: Some(turn_id),
-            } => self.handed.retain(|queued| queued.turn_id != *turn_id),
+            } => {
+                self.handed.retain(|queued| queued.turn_id != *turn_id);
+                // A held interrupt put it back in the queue, but the CLI started it first.
+                if let Some(at) = self.queued.iter().position(|q| q.turn_id == *turn_id) {
+                    self.queued.remove(at);
+                    self.save_queue().await;
+                }
+            }
             Event::FollowUpDropped { turn_id } => {
                 if let Some(at) = self.handed.iter().position(|q| q.turn_id == *turn_id) {
                     let queued = self.handed.remove(at);
@@ -2788,6 +2893,8 @@ impl Actor {
                     self.save_queue().await;
                     return true;
                 }
+                // A held interrupt put it back in the queue already.
+                return self.queued.iter().any(|q| q.turn_id == *turn_id);
             }
             _ => {}
         }
@@ -3273,8 +3380,8 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{
-        Actor, Command, Live, Queued, commit_message, handoff_message, handoff_notice,
-        session_account,
+        Actor, Command, Delivery, Live, QueueOp, Queued, commit_message, handoff_message,
+        handoff_notice, session_account,
     };
     use crate::agents::RunOptions;
     use crate::backend::{
@@ -3553,20 +3660,23 @@ mod tests {
         };
         let (first, second) = (TurnId::generate(), TurnId::generate());
         let run = actor
-            .send(message(first, "Hurry up", sonnet.clone()), false)
+            .send(message(first, "Hurry up", sonnet.clone()), Delivery::Queue)
             .await
             .unwrap();
         assert_eq!(run.model, None, "nothing changes until the CLI exits");
         actor
-            .send(message(second, "And then", RunOptions::default()), false)
+            .send(
+                message(second, "And then", RunOptions::default()),
+                Delivery::Queue,
+            )
             .await
             .unwrap();
         actor
-            .send(message(first, "Hurry up", sonnet.clone()), false)
+            .send(message(first, "Hurry up", sonnet.clone()), Delivery::Queue)
             .await
             .unwrap();
         let conflict = actor
-            .send(message(first, "Other", sonnet), false)
+            .send(message(first, "Other", sonnet), Delivery::Queue)
             .await
             .unwrap_err();
         assert_eq!(
@@ -3597,6 +3707,73 @@ mod tests {
             })
             .collect();
         assert_eq!(dropped, [first, second]);
+    }
+
+    /// A held interrupt (0059's Stop) keeps what waits instead of dropping it: the queue reports
+    /// itself held, nothing is sent from it once the CLI has exited, and `queue.resume` lets it
+    /// go on.
+    #[tokio::test]
+    async fn a_held_interrupt_keeps_the_queue_until_it_resumes() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let (row, worktree) = fake_row_and_worktree();
+        let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
+        let (_sink, events) = EventSink::channel(4, Vec::new());
+        actor.live = Some(Live {
+            run: Arc::new(NoopRun),
+            events,
+            temp: None,
+        });
+        let sonnet = RunOptions {
+            model: Some("sonnet".to_owned()),
+            ..RunOptions::default()
+        };
+        let (first, second) = (TurnId::generate(), TurnId::generate());
+        actor
+            .send(message(first, "Next", sonnet), Delivery::Queue)
+            .await
+            .unwrap();
+        actor
+            .send(
+                message(second, "After", RunOptions::default()),
+                Delivery::Queue,
+            )
+            .await
+            .unwrap();
+
+        let (reply, answer) = oneshot::channel();
+        actor
+            .on_command(Command::Interrupt {
+                hold_queue: true,
+                reply,
+            })
+            .await;
+        answer.await.unwrap().unwrap();
+        let waiting: Vec<_> = actor.queued.iter().map(|queued| queued.turn_id).collect();
+        assert_eq!(waiting, [first, second], "a held Stop drops nothing");
+        assert!(actor.queue_held);
+        // The CLI has exited: a held queue still sends nothing.
+        actor.live = None;
+        actor.deliver().await;
+        assert_eq!(actor.queued.len(), 2);
+
+        let (logged, _) = daemon.log.run_events(actor.id, 0, 100, usize::MAX).unwrap();
+        let last_held = |logged: &[Arc<crate::event_log::Entry>]| {
+            logged
+                .iter()
+                .filter_map(|entry| match entry.event().into_owned() {
+                    ParallaxEvent::QueueUpdated { held, .. } => Some(held),
+                    _ => None,
+                })
+                .next_back()
+        };
+        assert_eq!(last_held(&logged), Some(true));
+
+        let resumed = actor.queue_op(QueueOp::Resume, None).await.unwrap();
+        assert!(!resumed.held);
+        assert_eq!(resumed.messages.len(), 2);
+        let (logged, _) = daemon.log.run_events(actor.id, 0, 100, usize::MAX).unwrap();
+        assert_eq!(last_held(&logged), Some(false));
     }
 
     /// Codex-style deltas in one batch join while they follow one another for the same message,
@@ -3760,7 +3937,10 @@ mod tests {
         });
         let turn = TurnId::generate();
         actor
-            .send(message(turn, "Also this", RunOptions::default()), false)
+            .send(
+                message(turn, "Also this", RunOptions::default()),
+                Delivery::Queue,
+            )
             .await
             .unwrap();
         assert_eq!(

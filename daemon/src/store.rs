@@ -20,6 +20,7 @@
 //! A job whose request is cancelled is skipped if it hasn't started. Once it has started, it runs
 //! to the end and the request gets its real result, so -32800 always means nothing was done.
 
+use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
@@ -132,6 +133,11 @@ pub(crate) struct Tx {
     failed: bool,
     /// The orchestrator command this job commits, which tags the events it stages (0059).
     pub command_id: Option<String>,
+    /// The threads whose stored events are in the graph ([`crate::graph::import`]), so a
+    /// staged event's fold checks memory rather than the table.
+    imported: HashSet<Uuid>,
+    /// Those this job imported, forgotten if it rolls back.
+    importing: Vec<Uuid>,
 }
 
 impl Deref for Tx {
@@ -159,6 +165,8 @@ impl Tx {
             staged: Vec::new(),
             failed: false,
             command_id: None,
+            imported: HashSet::new(),
+            importing: Vec::new(),
         }
     }
 
@@ -176,7 +184,7 @@ impl Tx {
         project: Option<ProjectId>,
         event: ParallaxEvent,
     ) -> u64 {
-        let Some(log) = &self.log else {
+        let Some(host_retention) = self.log.as_ref().map(|log| log.host_retention()) else {
             error!("a job on the store's reader tried to stage an event");
             self.failed = true;
             return 0;
@@ -184,6 +192,18 @@ impl Tx {
         self.seq += 1;
         let seq = self.seq;
         let run_id = run_of(&event);
+        // The thread graph's fold, in this transaction (0059): an error rolls the job back.
+        let turn = match run_id {
+            Some(thread) => match self.fold(thread.into(), seq, time, project, &event) {
+                Ok(turn) => turn,
+                Err(error) => {
+                    error!(seq, %error, "could not fold an event into the thread graph; its job rolls back");
+                    self.failed = true;
+                    None
+                }
+            },
+            None => None,
+        };
         let json = match serde_json::value::to_raw_value(&event) {
             Ok(json) => json,
             Err(error) => {
@@ -200,6 +220,7 @@ impl Tx {
             kind: kind_of(json.get()).to_owned(),
             payload: json.get().to_owned(),
             command_id: self.command_id.clone(),
+            run_id: turn,
         };
         match self.store.append_event(&stored) {
             Err(error) => {
@@ -209,7 +230,7 @@ impl Tx {
             // Only a host or project event can grow past the retention this way (#187). Pruning
             // is housekeeping, so its failure doesn't fail the write.
             Ok(()) if run_id.is_none() => {
-                if let Err(error) = self.store.prune_host_events(log.host_retention()) {
+                if let Err(error) = self.store.prune_host_events(host_retention) {
                     warn!(%error, "could not prune host and project events");
                 }
             }
@@ -218,6 +239,41 @@ impl Tx {
         self.staged
             .push(Entry::with_json(seq, time, project, &event, json));
         seq
+    }
+
+    /// Folds `event`, thread `thread`'s, into the thread graph, importing the thread's stored
+    /// events first if they aren't yet. Returns the run it belongs to.
+    fn fold(
+        &mut self,
+        thread: Uuid,
+        seq: u64,
+        time: Timestamp,
+        project: Option<ProjectId>,
+        event: &ParallaxEvent,
+    ) -> Result<Option<Uuid>, StoreError> {
+        self.import_thread_rows(thread)?;
+        crate::graph::apply(&self.store, thread, seq, time, project, event)
+    }
+
+    /// Imports thread `thread`'s stored events into the graph, unless they are already.
+    fn import_thread_rows(&mut self, thread: Uuid) -> Result<(), StoreError> {
+        if self.imported.contains(&thread) {
+            return Ok(());
+        }
+        if !self.store.graph_imported(thread)? {
+            crate::graph::import(&self.store, thread)?;
+            self.store.mark_graph_imported(thread)?;
+        }
+        self.imported.insert(thread);
+        self.importing.push(thread);
+        Ok(())
+    }
+
+    /// [`Tx::import_thread_rows`] as a job of its own, for the background import and for a
+    /// subscription that reads the thread's graph next.
+    pub fn import_thread(&mut self, thread: Uuid) -> Result<(), ErrorObject> {
+        self.import_thread_rows(thread)
+            .map_err(|error| store_error(&error))
     }
 
     /// The newest `seq` this job staged, if it staged any.
@@ -246,6 +302,7 @@ impl Tx {
                 Ok(()) => {
                     self.begun = None;
                     self.command_id = None;
+                    self.importing.clear();
                     let staged = std::mem::take(&mut self.staged);
                     if let Some(log) = &self.log {
                         log.publish(staged);
@@ -269,6 +326,9 @@ impl Tx {
         self.staged.clear();
         self.failed = false;
         self.command_id = None;
+        for thread in self.importing.drain(..) {
+            self.imported.remove(&thread);
+        }
         if let Err(error) = self.store.rollback() {
             error!(%error, "could not roll back a store job");
         }

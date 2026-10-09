@@ -142,6 +142,16 @@ PLX-643 to PLX-647 each hold the load budgets in `scripts/bench/budgets.json` an
 
 Delegation, schedules, PR watches (PLX-648, PLX-649), and setup scripts (PLX-650) follow, on the same commands and effects.
 
+### Phase 2 as built (PLX-644)
+
+Phase 2 lands in two PRs, the daemon then the app. Where it differs from the above:
+
+- **Tables.** Migration 40 adds `thread_runs` (the run; `runs` is still the thread row, so nothing is renamed to `legacy_*`), `run_attempts`, `nodes`, `runtime_requests`, and `graph_imports`, and backs the store up first. There are no `messages` or `turn_items` tables. A snapshot carries each run's stored `agent.output` rows instead, which compaction already makes one row per finished turn. A projection of them would write every streamed batch twice.
+- **Fold.** The graph is a fold of today's `agent.*` and `queue.updated` events, run in `Tx::stage`, in the event's own transaction. The fold also fills `events.run_id`. The importer is the same fold over a thread's stored events. It runs when the thread is first touched, and a background sweep handles the rest, newest first. A 1,000-thread store with 12,000 events (53 MB) imports in 0.7 s.
+- **Commands.** `orchestration/dispatch` checks each command against the graph and the actor carries it out. The command holds a lock on its own id, not its thread's lane, because the actor takes that lane itself. Its receipt, and the cascade's `delegated-tasks.stop` effect, commit after the actor answers. `defer_start` is `start_immediately`, because `thread/start` prepares the workspace before the command. Stop holds the queue, stored with each queued row, unless the thread is a Project's coordinator. A coordinator's Stop ends its own turn only.
+- **Subscriptions.** Events arrive as `events/event` and `events/resync`, the same frames `events/subscribe` uses, not as `orchestration/event`. A resume replays only from the in-memory window. A gap below the window gets a snapshot.
+- **Left for phase 3 (PLX-667).** The `git.*`, `pr.open`, `thread.accept`, and `wake.deliver` effects; the Project-child commit and deny; the rest of 0052's receipted methods; T3's domain event kinds in place of `agent.*`; and folding `turns` and `queued` into `thread_runs`.
+
 ## Alternatives
 
 | Alternative | Why it lost |
