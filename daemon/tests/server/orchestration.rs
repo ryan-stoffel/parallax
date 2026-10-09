@@ -324,11 +324,18 @@ async fn the_shell_shows_status_and_a_stop_cascades_to_child_threads() {
         "{ids:?}"
     );
     assert_eq!(shell.threads.len(), 2);
-    until(&mut client, |event| {
-        matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
-            if *run_id == child_id && state.status == AgentStatus::Running)
-    })
-    .await;
+    // The child may already be running in the snapshot, with no live event to follow.
+    let child_running = shell
+        .runs
+        .iter()
+        .any(|run| run.id == child_id && run.status == AgentStatus::Running);
+    if !child_running {
+        until(&mut client, |event| {
+            matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
+                if *run_id == child_id && state.status == AgentStatus::Running)
+        })
+        .await;
+    }
 
     dispatch(&mut client, stop(parent_id)).await;
     let events = until(&mut client, |event| {
