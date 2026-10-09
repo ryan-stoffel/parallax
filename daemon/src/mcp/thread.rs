@@ -15,7 +15,7 @@
 //! Project, through `agent/start` with itself as their coordinator thread, so they show in the
 //! Project's Agents panel, run as threads that ask through the inbox, in the Project's mode, and
 //! `thread_list` lists its Project's runs, each once. Every caller also gets [`super::device`]'s
-//! tools (PLX-640).
+//! tools (PLX-640) and [`super::triggers`]' (0063).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -179,6 +179,7 @@ impl Tools for Server {
             super::html::TOOLS,
             super::preview::TOOLS,
             device::TOOLS,
+            super::triggers::TOOLS,
         ]
         .concat()
     }
@@ -196,6 +197,7 @@ impl Tools for Server {
             list.extend(super::html::definitions());
             list.extend(super::preview::definitions());
             list.extend(device::definitions());
+            list.extend(super::triggers::definitions());
         }
         tools
     }
@@ -209,6 +211,11 @@ impl Tools for Server {
         }
         if name.starts_with("preview_") {
             return super::preview::call(&self.binding, name, arguments).await;
+        }
+        if super::triggers::TOOLS.contains(&name) {
+            return super::triggers::call(&self.binding, name, arguments)
+                .await
+                .map(Reply::from);
         }
         if name.starts_with("memory_") {
             return memory_tool(self, name, arguments).await.map(Reply::from);
@@ -776,7 +783,7 @@ async fn host(plxd: &Plxd) -> Result<(ThreadListResult, Vec<AgentRun>), String> 
 
 /// The run `run_id`, a thread's or any other on the host: read alone by an `agent/wait` that
 /// doesn't wait, or found in every run on a plxd without `agent/wait`.
-async fn find_run(plxd: &Plxd, run_id: RunId) -> Result<AgentRun, String> {
+pub(super) async fn find_run(plxd: &Plxd, run_id: RunId) -> Result<AgentRun, String> {
     if plxd.agent_wait().await? {
         return agent_wait(plxd, run_id, Duration::ZERO).await?;
     }
@@ -1459,6 +1466,7 @@ mod tests {
         tools.extend(device::definitions());
         tools.extend(crate::mcp::html::definitions());
         tools.extend(crate::mcp::preview::definitions());
+        tools.extend(crate::mcp::triggers::definitions());
         for tool in &tools {
             let schema = &tool["inputSchema"];
             assert_eq!(schema["additionalProperties"], false, "{tool}");

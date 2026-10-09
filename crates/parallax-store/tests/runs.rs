@@ -565,6 +565,7 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
              DROP TABLE command_receipts;
              DROP TABLE attached_seen;
              DROP TABLE orchestration_receipts; DROP TABLE effects; DROP TABLE projection_meta;
+             DROP TABLE scheduled_tasks; DROP TABLE pr_watches;
              ALTER TABLE worktrees DROP COLUMN git_dir;
              ALTER TABLE worktrees DROP COLUMN base_dirty;
              ALTER TABLE projects DROP COLUMN icon_name;

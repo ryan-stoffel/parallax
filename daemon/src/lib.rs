@@ -67,6 +67,7 @@ mod naming;
 mod orchestrator;
 pub mod paths;
 pub mod peer;
+mod pr_watch;
 pub(crate) mod preview;
 pub mod providers;
 #[cfg(unix)]
@@ -74,6 +75,7 @@ mod public_proxy;
 pub mod remote;
 mod repo;
 pub mod routing;
+mod schedules;
 pub mod server;
 #[cfg(unix)]
 pub mod service;

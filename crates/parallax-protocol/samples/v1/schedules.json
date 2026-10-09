@@ -1,0 +1,170 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "schedule/save",
+    "params": {
+      "title": "Nightly triage",
+      "prompt": "Triage the issues opened today.",
+      "enabled": true,
+      "schedule": { "type": "interval", "everyMs": 3600000 },
+      "thread": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e8f"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "id": "0199c7a0-5f1e-7b3a-8c4d-2e6f8a0b1c2d",
+      "title": "Nightly triage",
+      "prompt": "Triage the issues opened today.",
+      "enabled": true,
+      "schedule": { "type": "interval", "everyMs": 3600000 },
+      "thread": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e8f",
+      "nextRunAt": "2026-10-09T05:00:00Z",
+      "lastRunStatus": "never",
+      "runCount": 0,
+      "createdAt": "2026-10-09T04:00:00Z"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "schedule/save",
+    "params": {
+      "title": "Release notes",
+      "prompt": "Write notes for {{body.release.tag_name}}.",
+      "enabled": true,
+      "schedule": {
+        "type": "webhook",
+        "signature": { "header": "x-hub-signature-256", "encoding": "hex", "prefix": "sha256=", "secret": "s3cret" }
+      },
+      "repo": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e90",
+      "account": { "kind": "subscription", "backend": "claude" },
+      "model": "opus",
+      "effort": "high",
+      "permission": "edit"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "id": "0199c7a0-5f1e-7b3a-8c4d-2e6f8a0b1c2e",
+      "title": "Release notes",
+      "prompt": "Write notes for {{body.release.tag_name}}.",
+      "enabled": true,
+      "schedule": {
+        "type": "webhook",
+        "signature": { "header": "x-hub-signature-256", "encoding": "hex", "prefix": "sha256=" }
+      },
+      "repo": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e90",
+      "account": { "kind": "subscription", "backend": "claude" },
+      "model": "opus",
+      "effort": "high",
+      "permission": "edit",
+      "lastRunStatus": "never",
+      "runCount": 0,
+      "webhook": {
+        "path": "/api/hooks/0199c7a0-5f1e-7b3a-8c4d-2e6f8a0b1c2e/k3Jx9Qm2",
+        "url": "https://192.168.1.20:7341/api/hooks/0199c7a0-5f1e-7b3a-8c4d-2e6f8a0b1c2e/k3Jx9Qm2",
+        "hasSecret": true
+      },
+      "createdAt": "2026-10-09T04:00:01Z"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "schedule/run",
+    "params": { "id": "0199c7a0-5f1e-7b3a-8c4d-2e6f8a0b1c2d" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "id": "0199c7a0-5f1e-7b3a-8c4d-2e6f8a0b1c2d",
+      "title": "Nightly triage",
+      "prompt": "Triage the issues opened today.",
+      "enabled": true,
+      "schedule": { "type": "interval", "everyMs": 3600000 },
+      "thread": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e8f",
+      "nextRunAt": "2026-10-09T05:10:00Z",
+      "lastRunAt": "2026-10-09T04:10:00Z",
+      "lastRunStatus": "running",
+      "runCount": 1,
+      "createdAt": "2026-10-09T04:00:00Z"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "schedule/list",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "tasks": [
+        {
+          "id": "0199c7a0-5f1e-7b3a-8c4d-2e6f8a0b1c2f",
+          "title": "Standup",
+          "prompt": "Summarize yesterday's merged pull requests.",
+          "enabled": false,
+          "schedule": { "type": "fixed_time", "timeOfDay": "09:00", "weekdays": [1, 2, 3, 4, 5] },
+          "project": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e91",
+          "lastRunAt": "2026-10-08T16:00:00Z",
+          "lastRunStatus": "failed",
+          "lastRunError": "no thread has run id 01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e92",
+          "runCount": 3,
+          "createdAt": "2026-10-01T04:00:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "schedule/delete",
+    "params": { "id": "0199c7a0-5f1e-7b3a-8c4d-2e6f8a0b1c2f" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": { "deleted": true }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "pr/watch",
+    "params": { "runId": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e8f", "url": "https://github.com/ryan-stoffel/parallax/pull/670" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/670", "watching": true, "wasWatching": false }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "pr/watches",
+    "params": { "runId": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e8f" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "result": { "urls": ["https://github.com/ryan-stoffel/parallax/pull/670"] }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "pr/unwatch",
+    "params": { "runId": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e8f", "url": "https://github.com/ryan-stoffel/parallax/pull/670" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/670", "watching": false, "wasWatching": true }
+  }
+]

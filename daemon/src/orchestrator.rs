@@ -53,10 +53,11 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 const THREAD_CLEANUP: &str = "thread.cleanup";
 const PROJECT_CLEANUP: &str = "project.cleanup";
+const THREAD_WAKE: &str = "thread.wake";
 
 /// Effect kinds that may run again after a restart, since each does only what is left to do.
 /// [`recover`] cancels an open effect of any other kind.
-const REPLAY_SAFE: &[&str] = &[THREAD_CLEANUP, PROJECT_CLEANUP];
+const REPLAY_SAFE: &[&str] = &[THREAD_CLEANUP, PROJECT_CLEANUP, THREAD_WAKE];
 
 /// The lanes, and the effect worker's wake-up.
 #[derive(Default)]
@@ -109,6 +110,11 @@ impl Orchestrator {
         {
             lanes.remove(&id);
         }
+    }
+
+    /// Wakes the effect worker, after a job outside [`Self::commit`] enqueued an effect.
+    pub(crate) fn notify(&self) {
+        self.wake.notify_one();
     }
 
     /// Runs `command` in its thread's lane: see the module documentation.
@@ -295,6 +301,9 @@ enum Effect {
     /// A deleted Project's integration and coordinator worktrees and its context folder.
     #[serde(rename = "project.cleanup")]
     ProjectCleanup { repo_path: String },
+    /// A scheduled task's fire or a pull request watch's news, sent to a thread (0063).
+    #[serde(rename = "thread.wake")]
+    Wake(crate::schedules::Wake),
 }
 
 impl Effect {
@@ -302,8 +311,28 @@ impl Effect {
         match self {
             Self::ThreadCleanup { .. } => THREAD_CLEANUP,
             Self::ProjectCleanup { .. } => PROJECT_CLEANUP,
+            Self::Wake(_) => THREAD_WAKE,
         }
     }
+}
+
+/// Enqueues `wake` as command `command_id`'s one effect, in `thread`'s lane and `db`'s
+/// transaction (0063). Call [`Orchestrator::notify`] once the job commits.
+pub(crate) fn enqueue_wake(
+    db: &Tx,
+    command_id: &str,
+    thread: Uuid,
+    wake: crate::schedules::Wake,
+) -> Result<(), ErrorObject> {
+    let effect = Effect::Wake(wake);
+    db.enqueue_effect(&NewEffect {
+        id: format!("{command_id}/0"),
+        command_id: command_id.to_owned(),
+        thread_id: thread,
+        kind: effect.kind().to_owned(),
+        payload: serde_json::to_string(&effect).map_err(ErrorObject::internal_error)?,
+    })
+    .map_err(|e| store_error(&e))
 }
 
 /// A worktree to remove, with its branch.
@@ -790,7 +819,7 @@ async fn run_one(daemon: Arc<Daemon>, claimed: ClaimedEffect) {
 }
 
 /// Does `effect` for `thread`. An error says whether it is final; any other is retried.
-async fn perform(daemon: &Daemon, thread: Uuid, effect: Effect) -> Result<(), (String, bool)> {
+async fn perform(daemon: &Arc<Daemon>, thread: Uuid, effect: Effect) -> Result<(), (String, bool)> {
     match effect {
         Effect::ThreadCleanup { worktree, scratch } => {
             if let Some(Removal {
@@ -841,6 +870,10 @@ async fn perform(daemon: &Daemon, thread: Uuid, effect: Effect) -> Result<(), (S
                     )
                 })?;
             crate::threads::remove_context(daemon, project);
+            Ok(())
+        }
+        Effect::Wake(wake) => {
+            crate::schedules::deliver(daemon, wake).await;
             Ok(())
         }
     }

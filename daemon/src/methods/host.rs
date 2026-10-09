@@ -195,6 +195,8 @@ pub(crate) fn initialize(
 /// `terminals` (PLX-637): `terminal/*`, the terminals plxd runs for its clients.
 /// `remote` (PLX-641, 0065): `remote` in `host/settings`, `remote/pair`, `remote/sessions`,
 /// `remote/revoke`, and the HTTPS listener.
+/// `schedules` (0063): `schedule/*`, and the webhooks the HTTPS listener serves.
+/// `prWatch` (0063): `pr/watch`, `pr/unwatch`, and `pr/watches`.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -242,12 +244,14 @@ fn capabilities_advertised() -> Capabilities {
         ("projectTasks".to_owned(), serde_json::Map::new()),
         ("providers".to_owned(), serde_json::Map::new()),
         ("promptImages".to_owned(), prompt_images),
+        ("prWatch".to_owned(), serde_json::Map::new()),
         ("pullRequests".to_owned(), serde_json::Map::new()),
         ("queue".to_owned(), serde_json::Map::new()),
         ("questions".to_owned(), serde_json::Map::new()),
         ("remote".to_owned(), serde_json::Map::new()),
         ("repoRefs".to_owned(), serde_json::Map::new()),
         ("runOptions".to_owned(), serde_json::Map::new()),
+        ("schedules".to_owned(), serde_json::Map::new()),
         ("sendAccount".to_owned(), serde_json::Map::new()),
         ("sendModel".to_owned(), serde_json::Map::new()),
         ("sendOptions".to_owned(), serde_json::Map::new()),

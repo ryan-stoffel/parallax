@@ -601,6 +601,25 @@ const MIGRATIONS: &[Migration] = &[
             last_seq INTEGER NOT NULL
         );",
     },
+    // 0063: scheduled tasks and pull request watches, each as indexed columns plus a JSON
+    // payload the daemon owns. `scheduled_tasks_due` indexes the tasks with a next run, for the
+    // one timer. A watch goes with its run.
+    Migration {
+        version: 40,
+        sql: "CREATE TABLE scheduled_tasks (
+            id TEXT NOT NULL PRIMARY KEY,
+            next_run_at TEXT,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX scheduled_tasks_due ON scheduled_tasks (next_run_at)
+            WHERE next_run_at IS NOT NULL;
+        CREATE TABLE pr_watches (
+            run_id TEXT NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+            url TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (run_id, url)
+        );",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a

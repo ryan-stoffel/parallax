@@ -285,6 +285,10 @@ pub(crate) struct Daemon {
     pub remote: remote::Remote,
     /// Agents' browser tabs (PLX-639).
     pub previews: crate::preview::Previews,
+    /// The scheduled tasks' timer and webhook rate limits (0063).
+    pub schedules: crate::schedules::Schedules,
+    /// The pull request watches' sweep (0063).
+    pub pr_watches: crate::pr_watch::Watches,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -440,6 +444,8 @@ impl Server {
                 config.remote_address,
                 config.remote_code_lifetime,
             ),
+            schedules: crate::schedules::Schedules::default(),
+            pr_watches: crate::pr_watch::Watches::default(),
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for
@@ -554,6 +560,14 @@ impl Server {
             Arc::clone(&daemon),
             shutdown.graceful.clone(),
         ));
+        let schedules = tokio::spawn(crate::schedules::run(
+            Arc::clone(&daemon),
+            shutdown.graceful.clone(),
+        ));
+        let pr_watches = tokio::spawn(crate::pr_watch::run(
+            Arc::clone(&daemon),
+            shutdown.graceful.clone(),
+        ));
         let connections = TaskTracker::new();
         let abort = CancellationToken::new();
         let tailnet = tokio::spawn(tailnet::run(
@@ -641,6 +655,8 @@ impl Server {
         let _ = compact.await;
         let _ = cleanup.await;
         let _ = effects.await;
+        let _ = schedules.await;
+        let _ = pr_watches.await;
         daemon.store.stop().await;
         daemon.reader.stop().await;
         lock.release();
@@ -794,6 +810,8 @@ impl Daemon {
             ),
             terminals: crate::terminals::Terminals::default(),
             remote: remote::Remote::new(crate::remote::PORT, None, remote::CODE_LIFETIME),
+            schedules: crate::schedules::Schedules::default(),
+            pr_watches: crate::pr_watch::Watches::default(),
         })
     }
 }

@@ -16,6 +16,8 @@
 //!   after [`remote::MAX_WRONG_CODES`]. The session's token is stored hashed.
 //! - `POST /api/auth/websocket-ticket`: a ticket valid once for 30 s, for a `DPoP`-bound token.
 //! - `GET /ws?wsTicket=…`: a WebSocket carrying 0007's JSON-RPC, one message per frame.
+//! - `/api/hooks/<id>/<token>`, by any method: a scheduled task's webhook ([`crate::schedules`]),
+//!   with a body of up to [`MAX_HOOK_BYTES`].
 //!
 //! While a code waits, plxd advertises itself over mDNS as `_parallax._tcp`, by name, with no
 //! secret. Turning `remote` off ends the pairing and closes every connection the listener
@@ -73,6 +75,9 @@ const BIND_RETRY: Duration = Duration::from_secs(10);
 
 /// The most a request's head and body may hold.
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
+
+/// The most a webhook request's head and body may hold, as T3's.
+const MAX_HOOK_BYTES: usize = 1024 * 1024;
 
 /// The remote listener's state, shared with `remote/*`.
 #[derive(Debug)]
@@ -504,6 +509,8 @@ struct Request {
     path: String,
     headers: HashMap<String, String>,
     body: Vec<u8>,
+    /// A webhook whose body is over [`MAX_HOOK_BYTES`]: it was not read, and gets a 413.
+    too_large: bool,
 }
 
 impl Request {
@@ -526,7 +533,9 @@ impl Request {
     }
 }
 
-/// Reads one request: its head, up to [`MAX_REQUEST_BYTES`], and its body by `Content-Length`.
+/// Reads one request: its head, up to [`MAX_REQUEST_BYTES`], and its body by `Content-Length` or
+/// in chunks. A webhook's body may be up to [`MAX_HOOK_BYTES`]; a longer one is left unread and
+/// marked `too_large`. Any other request too long for its cap is `None`.
 async fn read_request<S: AsyncRead + Unpin>(stream: &mut S) -> io::Result<Option<Request>> {
     let mut buffer = Vec::with_capacity(1024);
     let mut chunk = [0; 1024];
@@ -550,32 +559,127 @@ async fn read_request<S: AsyncRead + Unpin>(stream: &mut S) -> io::Result<Option
                         )
                     })
                     .collect();
-                let wanted: usize = headers
-                    .get("content-length")
-                    .and_then(|n| n.parse().ok())
-                    .unwrap_or(0);
-                if length
-                    .checked_add(wanted)
-                    .is_none_or(|n| n > MAX_REQUEST_BYTES)
-                {
-                    return Ok(None);
-                }
-                let mut body = buffer[length..].to_vec();
-                body.resize(wanted, 0);
-                let have = buffer.len() - length;
-                if have < wanted {
-                    stream.read_exact(&mut body[have..]).await?;
-                }
-                return Ok(Some(Request {
+                let path = parsed.path.unwrap_or_default().to_owned();
+                let hook = path.starts_with("/api/hooks/");
+                let max = if hook {
+                    MAX_HOOK_BYTES
+                } else {
+                    MAX_REQUEST_BYTES - length.min(MAX_REQUEST_BYTES)
+                };
+                let mut request = Request {
                     method: parsed.method.unwrap_or_default().to_owned(),
-                    path: parsed.path.unwrap_or_default().to_owned(),
+                    path,
                     headers,
-                    body,
-                }));
+                    body: Vec::new(),
+                    too_large: false,
+                };
+                let rest = buffer.split_off(length);
+                let chunked = request
+                    .header("transfer-encoding")
+                    .is_some_and(|coding| coding.to_ascii_lowercase().contains("chunked"));
+                let body = if chunked {
+                    read_chunked(stream, rest, max).await?
+                } else {
+                    let wanted: usize = request
+                        .header("content-length")
+                        .and_then(|n| n.parse().ok())
+                        .unwrap_or(0);
+                    read_sized(stream, rest, wanted, max).await?
+                };
+                match body {
+                    Some(body) => request.body = body,
+                    None if hook => request.too_large = true,
+                    None => return Ok(None),
+                }
+                return Ok(Some(request));
             }
             Ok(httparse::Status::Partial) if buffer.len() < MAX_REQUEST_BYTES => {}
             _ => return Ok(None),
         }
+    }
+}
+
+/// A body of `wanted` bytes, the first of them already in `rest`; `None` when it is over `max`.
+async fn read_sized<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    mut rest: Vec<u8>,
+    wanted: usize,
+    max: usize,
+) -> io::Result<Option<Vec<u8>>> {
+    if wanted > max {
+        return Ok(None);
+    }
+    let have = rest.len().min(wanted);
+    rest.resize(wanted, 0);
+    if have < wanted {
+        stream.read_exact(&mut rest[have..]).await?;
+    }
+    Ok(Some(rest))
+}
+
+/// A chunked body, the first of it already in `rest`; `None` when it is over `max`.
+async fn read_chunked<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    mut rest: Vec<u8>,
+    max: usize,
+) -> io::Result<Option<Vec<u8>>> {
+    let invalid = || io::Error::new(io::ErrorKind::InvalidData, "a malformed chunked body");
+    let mut body = Vec::new();
+    loop {
+        let line = read_line(stream, &mut rest).await?;
+        let size = line.split(';').next().unwrap_or_default().trim();
+        let size = usize::from_str_radix(size, 16).map_err(|_| invalid())?;
+        if size == 0 {
+            // Trailers, to the empty line that ends them.
+            while !read_line(stream, &mut rest).await?.is_empty() {}
+            return Ok(Some(body));
+        }
+        if body.len().saturating_add(size) > max {
+            return Ok(None);
+        }
+        fill(stream, &mut rest, size + 2).await?;
+        if &rest[size..size + 2] != b"\r\n" {
+            return Err(invalid());
+        }
+        body.extend_from_slice(&rest[..size]);
+        rest.drain(..size + 2);
+    }
+}
+
+/// Reads until `rest` holds at least `wanted` bytes.
+async fn fill<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    rest: &mut Vec<u8>,
+    wanted: usize,
+) -> io::Result<()> {
+    let mut chunk = [0; 8192];
+    while rest.len() < wanted {
+        let read = stream.read(&mut chunk).await?;
+        if read == 0 {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        rest.extend_from_slice(&chunk[..read]);
+    }
+    Ok(())
+}
+
+/// The next line of `rest`, reading more as needed, without its CRLF. A chunk-size or trailer
+/// line is short, so one over 4 KiB is refused.
+async fn read_line<S: AsyncRead + Unpin>(stream: &mut S, rest: &mut Vec<u8>) -> io::Result<String> {
+    loop {
+        if let Some(at) = rest.windows(2).position(|pair| pair == b"\r\n") {
+            let line = String::from_utf8_lossy(&rest[..at]).into_owned();
+            rest.drain(..at + 2);
+            return Ok(line);
+        }
+        if rest.len() > 4096 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "a line is too long",
+            ));
+        }
+        let wanted = rest.len() + 1;
+        fill(stream, rest, wanted).await?;
     }
 }
 
@@ -587,9 +691,13 @@ async fn respond<S: AsyncWrite + Unpin>(
 ) -> io::Result<()> {
     let reason = match status {
         200 => "OK",
+        202 => "Accepted",
         400 => "Bad Request",
         401 => "Unauthorized",
         404 => "Not Found",
+        409 => "Conflict",
+        413 => "Content Too Large",
+        429 => "Too Many Requests",
         _ => "Internal Server Error",
     };
     let body = body.to_string();
@@ -656,9 +764,16 @@ impl Serving {
                     ("POST", "/api/pair/start") => start_pairing(&daemon, &key, &request),
                     ("POST", "/api/pair/finish") => finish_pairing(&daemon, &key, &request).await,
                     ("POST", "/api/auth/websocket-ticket") => ticket(&daemon, &request).await,
+                    _ if request.too_large => (413, json!({ "error": "body_too_large" })),
+                    (method, hook) if hook.starts_with("/api/hooks/") => {
+                        let Request { path, headers, body, .. } = &request;
+                        crate::schedules::hook(&daemon, method, path, headers, body).await
+                    }
                     _ => (404, json!({ "error": "not_found" })),
                 };
-                if status != 200 {
+                // A webhook's path holds its token, so the log names only the route.
+                let route = if route.starts_with("/api/hooks/") { "/api/hooks/…" } else { route };
+                if !matches!(status, 200 | 202) {
                     warn!(%peer, path = route, status, "refused a remote request");
                 }
                 let _ = time::timeout(remote::REQUEST_TIMEOUT, respond(&mut stream, status, &body)).await;
@@ -1092,4 +1207,46 @@ pub(crate) async fn host_name(daemon: &Daemon) -> String {
     #[cfg(windows)]
     let name = std::env::var("COMPUTERNAME").unwrap_or_default();
     name.trim_end_matches(".local").to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::io::AsyncWriteExt as _;
+
+    use super::{MAX_HOOK_BYTES, read_request};
+
+    async fn read(raw: Vec<u8>) -> Option<super::Request> {
+        let (mut client, mut server) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(async move { client.write_all(&raw).await });
+        read_request(&mut server).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_webhook_body_reads_by_length_or_in_chunks_and_an_oversized_one_is_marked() {
+        let sized =
+            read(b"POST /api/hooks/a/b HTTP/1.1\r\ncontent-length: 5\r\n\r\nhello".to_vec())
+                .await
+                .unwrap();
+        assert_eq!(sized.body, b"hello");
+
+        let chunked = b"POST /api/hooks/a/b HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n\
+                        5;ext=1\r\nhello\r\n7\r\n, world\r\n0\r\nx-trailer: 1\r\n\r\n";
+        let chunked = read(chunked.to_vec()).await.unwrap();
+        assert_eq!(chunked.body, b"hello, world");
+        assert!(!chunked.too_large);
+
+        let head = format!(
+            "POST /api/hooks/a/b HTTP/1.1\r\ncontent-length: {}\r\n\r\n",
+            MAX_HOOK_BYTES + 1
+        );
+        let big = read(head.into_bytes()).await.unwrap();
+        assert!(big.too_large);
+        assert!(big.body.is_empty());
+
+        let other = "POST /api/pair/start HTTP/1.1\r\ncontent-length: 20000\r\n\r\n";
+        assert!(
+            read(other.as_bytes().to_vec()).await.is_none(),
+            "other routes keep 16 KiB"
+        );
+    }
 }

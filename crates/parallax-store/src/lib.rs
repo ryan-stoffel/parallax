@@ -1,6 +1,7 @@
 //! SQLite-backed storage for Parallax projects, key accounts, agent runs and the images sent to them,
 //! normal threads and their repo entries, Projects' inboxes, landing queues, and their children's
-//! questions, plxd's event log, and its orchestrator's receipts and effects (0059).
+//! questions, plxd's event log, its orchestrator's receipts and effects (0059), and its scheduled
+//! tasks and pull request watches (0063).
 //!
 //! [`Store`] owns one SQLite connection and applies its own versioned
 //! migrations on open. The caller chooses the database path; this crate
@@ -28,6 +29,7 @@ mod runs;
 mod settings;
 mod threads;
 mod timestamp;
+mod triggers;
 mod turns;
 mod usage;
 mod wakes;

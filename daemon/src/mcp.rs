@@ -1,7 +1,7 @@
 //! `plxd mcp --thread <runId>`: a thread's Parallax tools, as an MCP server on stdio (decisions
 //! 0019 and 0041). The tools are [`thread`]'s, with [`question`]'s for a Project's threads,
-//! [`memory`]'s by the caller's role (0044), and [`device`]'s (PLX-640); this module is the
-//! server they share.
+//! [`memory`]'s by the caller's role (0044), [`device`]'s (PLX-640), and [`triggers`]' schedule
+//! and pull request tools (0063); this module is the server they share.
 //!
 //! A Project's coordinator gets the same server as any thread (PLX-380): its 0019 tools, bound to
 //! one project, are gone.
@@ -40,6 +40,7 @@ pub mod memory;
 pub mod preview;
 pub mod question;
 pub mod thread;
+pub mod triggers;
 
 /// The server's name in a thread's `--mcp-config`, which prefixes its tools' names there.
 pub const SERVER: &str = "plxd";

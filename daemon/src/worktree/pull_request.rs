@@ -152,7 +152,7 @@ impl WorktreeManager {
 
     /// Runs `gh args` in `repo_root` and returns its stdout, turning a missing `gh`, a sign-in
     /// it needs, and any other failure into a [`PrError`].
-    async fn gh(&self, repo_root: &Path, args: &[&str]) -> Result<String, PrError> {
+    pub(crate) async fn gh(&self, repo_root: &Path, args: &[&str]) -> Result<String, PrError> {
         let mut spec = ProcessSpec::new("gh", repo_root);
         spec.args = args.iter().map(OsString::from).collect();
         spec.inject.set("GH_PROMPT_DISABLED", "1");

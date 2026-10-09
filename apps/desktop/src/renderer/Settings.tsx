@@ -68,6 +68,7 @@ import {
   Switch,
 } from "./settings/parts";
 import { ProviderModels } from "./settings/ProviderModels";
+import { ScheduleSettings } from "./settings/ScheduleSettings";
 import { SourceControlSettings } from "./settings/SourceControlSettings";
 import { StorageSettings } from "./settings/StorageSettings";
 import type { ThreadsView } from "./threads";
@@ -119,6 +120,8 @@ export function Settings({
           <ProvidersSettings />
         ) : section === "sourceControl" ? (
           <SourceControlSettings key={sourceControlHost} hostId={sourceControlHost} />
+        ) : section === "schedules" ? (
+          <ScheduleSettings />
         ) : section === "storage" ? (
           <StorageSettings />
         ) : (

@@ -51,24 +51,27 @@ use crate::{
     LandQueueParams, LandResult, LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult,
     MemoryListParams, MemoryListResult, MemoryProposeParams, MemoryProposeResult, MemoryReadParams,
     MemoryReadResult, MemoryWriteParams, MemoryWriteResult, PrActParams, PrDiffResult,
-    PrViewParams, PreviewCallParams, PreviewCallResult, PreviewFrameParams, PreviewFrameResult,
-    PreviewInputParams, PreviewInputResult, PreviewListParams, PreviewListResult,
-    ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
-    ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectListParams, ProjectListResult,
-    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
+    PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult, PreviewCallParams,
+    PreviewCallResult, PreviewFrameParams, PreviewFrameResult, PreviewInputParams,
+    PreviewInputResult, PreviewListParams, PreviewListResult, ProjectCreateParams,
+    ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult, ProjectFromThreadsParams,
+    ProjectFromThreadsResult, ProjectListParams, ProjectListResult, ProjectStartParams,
+    ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
     ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, PullRequest,
     QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
     QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
     QueueReorderParams, QueueResult, QueueSteerParams, RemotePairParams, RemotePairResult,
     RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult,
     RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
-    RepoUpdateResult, TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult,
-    TerminalOpenParams, TerminalOutputParams, TerminalResizeParams, TerminalResult,
-    TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult, ThreadSearchParams,
-    ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
-    ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
-    UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
+    RepoUpdateResult, ScheduleDeleteResult, ScheduleIdParams, ScheduleListParams,
+    ScheduleListResult, ScheduleSaveParams, ScheduledTask, TerminalExitParams, TerminalKey,
+    TerminalListParams, TerminalListResult, TerminalOpenParams, TerminalOutputParams,
+    TerminalResizeParams, TerminalResult, TerminalWriteParams, ThreadArchiveParams,
+    ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams,
+    ThreadListParams, ThreadListResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams,
+    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult,
+    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams,
+    UsageLimitsResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -463,6 +466,24 @@ method_table! {
         TerminalClose = "terminal/close": TerminalKey => TerminalResult;
         /// `terminal/list`: the running terminals, or one thread's.
         TerminalList = "terminal/list": TerminalListParams => TerminalListResult;
+        /// `schedule/list`: every scheduled task on the host (0063). Gated on the `schedules`
+        /// capability, like every `schedule/*` method.
+        ScheduleList = "schedule/list": ScheduleListParams => ScheduleListResult;
+        /// `schedule/save`: creates a scheduled task, or with `id` replaces one, and returns it.
+        /// Fails with `invalidParams` for a bad trigger or an unknown id.
+        ScheduleSave = "schedule/save": ScheduleSaveParams => ScheduledTask;
+        /// `schedule/delete`: deletes a scheduled task. An unknown id changes nothing.
+        ScheduleDelete = "schedule/delete": ScheduleIdParams => ScheduleDeleteResult;
+        /// `schedule/run`: fires a scheduled task now, paused or not, and returns it.
+        ScheduleRun = "schedule/run": ScheduleIdParams => ScheduledTask;
+        /// `pr/watch`: links a GitHub pull request URL to a run if it isn't, and watches it for
+        /// the run (0063). Fails with `invalidParams` for a pull request that isn't open. Gated
+        /// on the `prWatch` capability, like `pr/unwatch` and `pr/watches`.
+        PrWatch = "pr/watch": PrViewParams => PrWatchResult;
+        /// `pr/unwatch`: stops watching a pull request for a run. It stays linked.
+        PrUnwatch = "pr/unwatch": PrViewParams => PrWatchResult;
+        /// `pr/watches`: the run's watched pull requests.
+        PrWatches = "pr/watches": PrWatchesParams => PrWatchesResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -626,6 +647,13 @@ mod tests {
                 "terminal/open",
                 "terminal/close",
                 "terminal/list",
+                "schedule/list",
+                "schedule/save",
+                "schedule/delete",
+                "schedule/run",
+                "pr/watch",
+                "pr/unwatch",
+                "pr/watches",
                 "$/cancelRequest",
                 "events/event",
                 "events/resync",

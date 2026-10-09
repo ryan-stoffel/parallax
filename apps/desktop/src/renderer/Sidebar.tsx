@@ -4,6 +4,7 @@ import {
   ArchiveRestore,
   ArrowLeft,
   Bot,
+  CalendarClock,
   ChartNoAxesColumn,
   Check,
   ChevronDown,
@@ -1998,6 +1999,7 @@ const sections: { id: SettingsSection; name: string; Icon: LucideIcon }[] = [
   { id: "keybinds", name: "Keybinds", Icon: Keyboard },
   { id: "providers", name: "Providers", Icon: Bot },
   { id: "sourceControl", name: "Source control", Icon: GitBranch },
+  { id: "schedules", name: "Schedules", Icon: CalendarClock },
   { id: "storage", name: "Storage", Icon: HardDrive },
   { id: "connections", name: "Connections", Icon: Server },
 ];

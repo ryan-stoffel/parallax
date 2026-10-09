@@ -10,12 +10,16 @@ use parallax_protocol::{AgentRunResult, PrActParams, PrAction, PrViewParams, Pul
 use super::Context;
 use crate::agents;
 
-/// `pr/link` with `linked`, or `pr/unlink` without.
+/// `pr/link` with `linked`, or `pr/unlink` without, which also ends the pull request's watch
+/// (0063).
 pub(crate) async fn link(
     context: &Context,
     params: PrViewParams,
     linked: bool,
 ) -> Result<AgentRunResult, ErrorObject> {
+    if !linked {
+        crate::pr_watch::unwatch(&context.daemon, params.clone()).await?;
+    }
     let PrViewParams { run_id, url } = params;
     let daemon = Arc::clone(&context.daemon);
     let run = agents::link_pr(daemon, run_id, url, linked).await?;

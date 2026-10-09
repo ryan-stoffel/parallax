@@ -8,7 +8,9 @@
 //! and `pr/unlink`): `pr.rs`; PLX-359 `composerMenus`: `composer.rs`; PLX-336 `githubStatus`:
 //! `github/status` in `accounts.rs`; PLX-423 `githubSetup`: `github/install`, `github/signIn`, and
 //! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`; PLX-370 `queue`: `queue.rs`; PLX-402 `questions`: `question.rs`; PLX-405 `memory`: `memory.rs`; PLX-410 `landing`: `land.rs`; PLX-574 `connect`: `connect/devices` in `connect.rs`; PLX-637 `terminals`: `terminal/*` in
-//! `crate::terminals`; PLX-641 `remote`: `remote/*` in `remote.rs`), and `host.rs` advertises the
+//! `crate::terminals`; PLX-641 `remote`: `remote/*` in `remote.rs`; 0063 `schedules` and `prWatch`:
+//! `schedule/*` in `crate::schedules` and `pr/watch`, `pr/unwatch`, and `pr/watches` in
+//! `crate::pr_watch`), and `host.rs` advertises the
 //! capability in `initialize`.
 
 mod accounts;
@@ -285,6 +287,13 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         TerminalList => |p| ready(Ok(TerminalListResult {
             terminals: daemon.terminals.list(p.thread_id.as_deref()),
         })),
+        ScheduleList => |_| crate::schedules::list(daemon),
+        ScheduleSave => |p| crate::schedules::save(daemon, p),
+        ScheduleDelete => |p| crate::schedules::delete(daemon, p),
+        ScheduleRun => |p| crate::schedules::run_now(daemon, p),
+        PrWatch => |p| crate::pr_watch::watch(daemon, p),
+        PrUnwatch => |p| crate::pr_watch::unwatch(daemon, p),
+        PrWatches => |p| crate::pr_watch::watches(daemon, p),
     })
 }
 

@@ -97,7 +97,8 @@ async fn tools(host: &Host, run: RunId) -> Mcp {
     Mcp::spawn(mcp_command(host.dir.path(), &["--thread", &run])).await
 }
 
-/// The names `mcp`'s `tools/list` gives, but the device tools every caller gets last (PLX-640).
+/// The names `mcp`'s `tools/list` gives, but the device tools (PLX-640) and the schedule and
+/// pull request tools (0063) every caller gets last.
 async fn names(mcp: &mut Mcp) -> Vec<String> {
     let listed = mcp.request("tools/list", json!({})).await;
     let mut names: Vec<String> = listed["result"]["tools"]
@@ -110,6 +111,7 @@ async fn names(mcp: &mut Mcp) -> Vec<String> {
         plxd::mcp::html::TOOLS,
         plxd::mcp::preview::TOOLS,
         plxd::mcp::device::TOOLS,
+        plxd::mcp::triggers::TOOLS,
     ]
     .concat();
     let devices = names.split_off(names.len() - last.len());
