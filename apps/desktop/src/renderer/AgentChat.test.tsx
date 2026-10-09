@@ -798,11 +798,30 @@ test("a failed run shows why; other endings are a divider", () => {
 const sampleRun = (logged[0]!.event as { run: AgentRun }).run;
 
 /**
+ * The messages the chat sent, as `message.dispatch` commands (0059), each as a call with its
+ * thread and message ids under the names `agent/send` gave them, and its dispatch mode as a
+ * `delivery`.
+ */
+function sendCalls(request: { mock: { calls: unknown[][] } }) {
+  return request.mock.calls
+    .filter(
+      ([, method, params]) =>
+        method === "orchestration/dispatch" &&
+        (params as { type: string }).type === "message.dispatch",
+    )
+    .map(([host, , params]) => {
+      const p = params as { threadId: string; messageId: string; dispatchMode: { type: string } };
+      const delivery = p.dispatchMode.type === "steer_active" ? "steer" : "queue";
+      return [host, "agent/send", { ...p, runId: p.threadId, turnId: p.messageId, delivery }];
+    });
+}
+
+/**
  * A bridge serving the sample's events up to `seq`, two per page, that records calls.
  * `agent/list` answers `listSeq`, and a subscribe from before it resyncs, as plxd does
  * when it can't replay that far back. The first `resyncs` subscribes resync anyway.
- * plxd advertises `capabilities`, `agent/send` answers the run as `sent` leaves it (running by
- * default), `agent/openPr` answers `prUrl`, or fails with `prError`, and `agent/image` a tiny PNG.
+ * plxd advertises `capabilities`, `message.dispatch` fails when `sent` leaves the run failed,
+ * `agent/openPr` answers `prUrl`, or fails with `prError`, and `agent/image` a tiny PNG.
  * `connect` changes the connection's state, and `traffic` moves the scope's log to `listSeq`.
  */
 function fakeBridge(
@@ -819,14 +838,17 @@ function fakeBridge(
 ) {
   let listener: (m: SubscriptionMessage) => void = () => {};
   const connections = new Set<(hostId: string, state: ConnectionState) => void>();
-  type Params = { after?: number; before?: number };
+  type Params = { after?: number; before?: number; type?: string };
   const request = vi.fn(async (_host: string, method: string, params: Params) => {
     if (method === "queue/list") return { result: { messages: [] }, logId: "log-1" };
     if (method === "agent/list") return { result: { runs: [], seq: listSeq }, logId: "log-1" };
-    if (method === "agent/cancel" && cancelError)
+    const command = (params as { type?: string }).type;
+    if ((method === "agent/cancel" || command === "run.interrupt") && cancelError)
       return { error: { code: -32000, message: cancelError } };
-    if (method === "agent/send")
-      return { result: { run: { ...sampleRun, status: "running", ...sent } }, logId: "log-1" };
+    // A run whose CLI didn't start again fails the message, and no turn follows.
+    if (command === "message.dispatch" && sent.status === "failed")
+      return { error: { code: -32603, message: sent.error ?? "The agent couldn't start." } };
+    if (method === "orchestration/dispatch") return { result: { seq: 1 }, logId: "log-1" };
     if (method === "agent/openPr")
       return prError ? { error: prError } : { result: { url: prUrl }, logId: "log-1" };
     if (method === "agent/image")
@@ -1057,10 +1079,10 @@ test("Enter sends with a fresh v7 turn id, but not while an IME is composing", a
   await dispatch(new CompositionEvent("compositionstart", { bubbles: true }));
   await enter(true);
   await dispatch(new CompositionEvent("compositionend", { bubbles: true }));
-  expect(request.mock.calls.some(([, method]) => method === "agent/send")).toBe(false);
+  expect(sendCalls(request).length > 0).toBe(false);
 
   await enter(false);
-  const send = request.mock.calls.find(([, method]) => method === "agent/send")!;
+  const send = sendCalls(request)[0]!;
   expect(send[2]).toMatchObject({ runId, text: "Also mention the tests." });
   expect((send[2] as { turnId: string }).turnId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7/);
   expect(box.textContent).toBe("");
@@ -1076,7 +1098,7 @@ test("a dropped follow-up sent from here can be sent again, once", async () => {
   await act(async () => {
     box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   });
-  const sends = () => request.mock.calls.filter(([, method]) => method === "agent/send");
+  const sends = () => sendCalls(request);
   const { turnId } = sends()[0]![2] as { turnId: string };
   emit({
     type: "event",
@@ -1119,19 +1141,25 @@ test("Stop puts a first prompt's images back too, fetched from plxd by id", asyn
   );
 });
 
-test("a follow-up Stop puts back in the box offers no Send again once plxd drops it", async () => {
+test("Stop leaves a follow-up the agent hasn't started out of the box, for its held queue", async () => {
   const { request, emit } = fakeBridge(4);
   await renderChat();
   type("Also mention the tests.");
   await act(async () => {
     composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   });
-  const send = request.mock.calls.find(([, method]) => method === "agent/send")!;
-  const { turnId } = send[2] as { turnId: string };
   await act(async () =>
     document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.click(),
   );
-  expect(composer().textContent).toBe("Also mention the tests.");
+  expect(request).toHaveBeenCalledWith("local", "orchestration/dispatch", {
+    type: "run.interrupt",
+    threadId: runId,
+    holdQueue: true,
+  });
+  expect(composer().textContent).toBe("");
+  // Not lost: where plxd drops it rather than queueing it, as a coordinator's Stop can, it
+  // offers Send again.
+  const { turnId } = sendCalls(request)[0]![2] as { turnId: string };
   emit({
     type: "event",
     event: {
@@ -1142,7 +1170,7 @@ test("a follow-up Stop puts back in the box offers no Send again once plxd drops
     },
   });
   expect([...document.querySelectorAll("button")].some((b) => b.textContent === "Send again")).toBe(
-    false,
+    true,
   );
 });
 
@@ -1170,7 +1198,7 @@ test("a message a finished run couldn't take goes back in the box, with no loade
   expect(document.querySelector('[role="alert"]')!.textContent).toBe("The agent couldn't start.");
 });
 
-test("a pasted image goes with agent/send beside the text, and shows while it's pending", async () => {
+test("a pasted image goes with the message beside the text, and shows while it's pending", async () => {
   vi.stubGlobal("createImageBitmap", async () => ({ width: 1, height: 1, close() {} }));
   const promptImages = { maxImages: 10, maxImageBytes: 5_242_880, maxTotalBytes: 6_291_456 };
   const { request } = fakeBridge(4, { capabilities: { promptImages } });
@@ -1189,7 +1217,7 @@ test("a pasted image goes with agent/send beside the text, and shows while it's 
     composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   });
 
-  const send = request.mock.calls.find(([, method]) => method === "agent/send")!;
+  const send = sendCalls(request)[0]!;
   expect(send[2]).toMatchObject({
     runId,
     text: "",
@@ -1200,7 +1228,7 @@ test("a pasted image goes with agent/send beside the text, and shows while it's 
   vi.unstubAllGlobals();
 });
 
-test("a thread dropped on the composer goes with agent/send as threads, and shows as a chip while pending (PLX-378)", async () => {
+test("a thread dropped on the composer goes with the message as threads, and shows as a chip while pending (PLX-378)", async () => {
   const { request } = fakeBridge(4, { capabilities: { threadContext: { maxThreads: 8 } } });
   render(<AgentChat hostId="local" runId={runId} threadLinks={threadLinks()} />);
   await settle();
@@ -1218,20 +1246,24 @@ test("a thread dropped on the composer goes with agent/send as threads, and show
     composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   });
 
-  const send = request.mock.calls.find(([, method]) => method === "agent/send")!;
+  const send = sendCalls(request)[0]!;
   expect(send[2]).toMatchObject({ runId, text: "Do the same here", threads: ["run-a"] });
   expect(document.querySelector('[role="log"] [data-thread-chip]')?.textContent).toBe(
     "Thread · nowFix the flaky test",
   );
 });
 
-test("Stop cancels, and a failed cancel says why and allows another try", async () => {
+test("Stop interrupts with the queue held, and a failed Stop says why and allows another try", async () => {
   const { request } = fakeBridge(4, { cancelError: "plxd is gone" });
   await renderChat();
   await act(async () =>
     document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.click(),
   );
-  expect(request).toHaveBeenCalledWith("local", "agent/cancel", { runId });
+  expect(request).toHaveBeenCalledWith("local", "orchestration/dispatch", {
+    type: "run.interrupt",
+    threadId: runId,
+    holdQueue: true,
+  });
   expect(document.querySelector('[role="alert"]')!.textContent).toBe("plxd is gone");
   expect(document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.disabled).toBe(
     false,
@@ -1259,7 +1291,11 @@ test("Stop or Esc before the agent answers puts the prompt back in the box, but 
   const { request } = fakeBridge(4); // the agent has replied
   await renderChat();
   await act(async () => stopButton().click());
-  expect(request).toHaveBeenCalledWith("local", "agent/cancel", { runId });
+  expect(request).toHaveBeenCalledWith("local", "orchestration/dispatch", {
+    type: "run.interrupt",
+    threadId: runId,
+    holdQueue: true,
+  });
   expect(composer().textContent).toBe("");
 });
 
@@ -1301,7 +1337,7 @@ test("the pencil before the agent answers stops the run and sends the message as
   await act(async () => {
     box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   });
-  const send = request.mock.calls.find(([, method]) => method === "agent/send")!;
+  const send = sendCalls(request)[0]!;
   expect(send[2]).toMatchObject({ runId, text: "Add a CONTRIBUTING guide." });
   expect(document.querySelector('textarea[aria-label="Edit message"]')).toBeNull();
 });
@@ -1313,7 +1349,7 @@ test("Cancel on an edited follow-up plxd dropped offers it again", async () => {
   await act(async () => {
     composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   });
-  const send = request.mock.calls.find(([, method]) => method === "agent/send")!;
+  const send = sendCalls(request)[0]!;
   const { turnId } = send[2] as { turnId: string };
   await act(async () =>
     document.querySelector<HTMLButtonElement>('button[aria-label="Edit message"]')!.click(),
@@ -1434,11 +1470,7 @@ test("with the PR view, Open PR opens it, a linked one's chip takes its place, a
 
   chat({ compose: { text: "Explain this pull request", send: true } });
   await settle();
-  expect(request).toHaveBeenCalledWith(
-    "local",
-    "agent/send",
-    expect.objectContaining({ runId, text: "Explain this pull request" }),
-  );
+  expect(sendCalls(request).at(-1)![2]).toMatchObject({ runId, text: "Explain this pull request" });
   expect(onComposed).toHaveBeenCalledTimes(1);
   chat({ compose: { text: `${url} `, send: false } });
   await settle();
@@ -2175,7 +2207,7 @@ test("queued messages track host updates, Enter queues, and Cmd+Enter steers (PL
   await act(async () =>
     composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
   );
-  const queued = request.mock.calls.find(([, method]) => method === "agent/send")![2] as {
+  const queued = sendCalls(request)[0]![2] as {
     turnId: string;
   };
   expect(queued).toMatchObject({ delivery: "queue", text: "Do this next" });
@@ -2210,53 +2242,47 @@ test("queued messages track host updates, Enter queues, and Cmd+Enter steers (PL
       new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }),
     ),
   );
-  expect(
-    request.mock.calls.filter(([, method]) => method === "agent/send").at(-1)![2],
-  ).toMatchObject({ delivery: "steer", text: "Change direction now" });
+  expect(sendCalls(request).at(-1)![2]).toMatchObject({
+    delivery: "steer",
+    text: "Change direction now",
+  });
   update([], 52);
   expect(document.querySelector('[aria-label="Queued messages"]')).toBeNull();
   expect(transcriptText()).not.toContain("Do this next");
 });
 
-test("with queueing, Stop puts the last queued message back and offers the rest again (PLX-376)", async () => {
+test("with queueing, Stop keeps the queue, paused, with Resume (0060)", async () => {
   const { request, emit } = fakeBridge(4, { capabilities: { queue: {} } });
   await renderChat();
-  const sends = () => request.mock.calls.filter(([, method]) => method === "agent/send");
   for (const text of ["First", "Second"]) {
     type(text);
     await act(async () =>
       composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
     );
   }
-  const [first, second] = sends().map(([, , params]) => (params as { turnId: string }).turnId);
+  const [first, second] = sendCalls(request).map(
+    ([, , params]) => (params as { turnId: string }).turnId,
+  );
   const event = (seq: number, e: object) =>
     emit({ type: "event", event: { subscription: "s", seq, time: "", event: e as never } });
-  event(50, {
-    kind: "queue.updated",
-    runId,
-    messages: [
-      { id: first, text: "First, edited", images: 0, threads: [] },
-      { id: second, text: "Second", images: 0, threads: [] },
-    ],
-  });
+  const messages = [
+    { id: first, text: "First", images: 0, threads: [] },
+    { id: second, text: "Second", images: 0, threads: [] },
+  ];
+  event(50, { kind: "queue.updated", runId, messages });
   await act(async () =>
     document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.click(),
   );
-  expect(composer().textContent).toBe("Second");
-  event(51, {
-    kind: "agent.output",
-    runId,
-    items: [
-      { kind: "followUpDropped", turnId: first },
-      { kind: "followUpDropped", turnId: second },
-    ],
+  expect(composer().textContent).toBe("");
+  event(51, { kind: "queue.updated", runId, messages, held: true });
+  const strip = document.querySelector('[aria-label="Queued messages"]')!;
+  expect(strip.textContent).toContain("Paused");
+  const resume = [...strip.querySelectorAll("button")].find((b) => b.textContent === "Resume")!;
+  await act(async () => resume.click());
+  expect(request).toHaveBeenLastCalledWith("local", "orchestration/dispatch", {
+    type: "queue.resume",
+    threadId: runId,
   });
-  event(52, { kind: "queue.updated", runId, messages: [] });
-  const sendAgain = () =>
-    [...document.querySelectorAll("button")].filter((b) => b.textContent === "Send again");
-  expect(sendAgain()).toHaveLength(1);
-  await act(async () => sendAgain()[0]!.click());
-  expect(sends().at(-1)![2]).toMatchObject({ text: "First, edited" });
 });
 
 test("a queued message cancelled from here leaves no notice or Send again (PLX-376)", async () => {
@@ -2266,7 +2292,7 @@ test("a queued message cancelled from here leaves no notice or Send again (PLX-3
   await act(async () =>
     composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
   );
-  const { turnId } = request.mock.calls.find(([, method]) => method === "agent/send")![2] as {
+  const { turnId } = sendCalls(request)[0]![2] as {
     turnId: string;
   };
   const event = (seq: number, e: object) =>

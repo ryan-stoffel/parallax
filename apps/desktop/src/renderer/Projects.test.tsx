@@ -193,6 +193,16 @@ const composer = () =>
   document.querySelector<TiptapEditorHTMLElement>('main [role="textbox"][aria-label="Message"]');
 const calls = (method: string) =>
   request.mock.calls.filter(([, m]) => m === method).map(([, , params]) => params);
+/** The messages sent, as `message.dispatch` commands (0059), with the ids `agent/send` named. */
+const sentMessages = () =>
+  calls("orchestration/dispatch")
+    .filter((p) => p["type"] === "message.dispatch")
+    .map((p) => ({ runId: p["threadId"], turnId: p["messageId"], text: p["text"] }));
+/** The runs Stop interrupted, as `run.interrupt` commands. */
+const stops = () =>
+  calls("orchestration/dispatch")
+    .filter((p) => p["type"] === "run.interrupt")
+    .map((p) => ({ runId: p["threadId"] }));
 /** The host each `method` call went to, in order. */
 const hostsOf = (method: string) =>
   request.mock.calls.filter(([, m]) => m === method).map(([host]) => host);
@@ -1233,8 +1243,7 @@ test("a Project's first message starts its coordinator and shows at once; ones s
     return { result: { run: started } };
   };
   answers["agent/events"] = serveEvents(() => [started]);
-  answers["agent/send"] = () => ({ result: { run: started } });
-  answers["agent/cancel"] = () => ({ result: { run: started } });
+  answers["orchestration/dispatch"] = () => ({ result: { seq: 1 } });
   await renderApp();
   await openEmber();
   // Claude's models and permission modes: a coordinator runs in the mode it's given (0027).
@@ -1253,7 +1262,7 @@ test("a Project's first message starts its coordinator and shows at once; ones s
   type("Fix the login bug");
   await click(button("Send"));
   expect(transcript()).toContain("Fix the login bug");
-  expect(calls("agent/send")).toEqual([]);
+  expect(sentMessages()).toEqual([]);
   await act(async () => release());
   await settle();
   expect(calls("project/start")).toEqual([
@@ -1277,12 +1286,12 @@ test("a Project's first message starts its coordinator and shows at once; ones s
 
   type("Start with the settings page");
   await click(button("Send"));
-  expect(calls("agent/send")).toEqual([
+  expect(sentMessages()).toEqual([
     { runId: started!.id, turnId: expect.any(String), text: "Fix the login bug" },
     { runId: started!.id, turnId: expect.any(String), text: "Start with the settings page" },
   ]);
   await click(button("Stop"));
-  expect(calls("agent/cancel")).toEqual([{ runId: started!.id }]);
+  expect(stops()).toEqual([{ runId: started!.id }]);
   expect(calls("project/start")).toHaveLength(1);
 });
 
@@ -1306,7 +1315,7 @@ test("with projectPermission, a Project's composers have no permission picker or
     return { result: { run: started } };
   };
   answers["agent/events"] = serveEvents(() => [started]);
-  answers["agent/send"] = () => ({ result: { run: started } });
+  answers["orchestration/dispatch"] = () => ({ result: { seq: 1 } });
   const access = () => document.querySelector('main button[aria-label^="Access:"]');
   const main = () => document.querySelector("main")!.textContent;
   await renderApp();
@@ -1324,7 +1333,7 @@ test("with projectPermission, a Project's composers have no permission picker or
   expect(main()).not.toContain("Bypass");
   type("Start with the settings page");
   await click(button("Send"));
-  expect(calls("agent/send")).toEqual([
+  expect(sentMessages()).toEqual([
     { runId: started!.id, turnId: expect.any(String), text: "Start with the settings page" },
   ]);
 });
@@ -1401,7 +1410,7 @@ test("a coordinator plxd can't resume offers Start over, which replaces it with 
     effort: "low",
     permission: "plan",
   });
-  answers["agent/send"] = () => ({
+  answers["orchestration/dispatch"] = () => ({
     error: {
       code: -32000,
       message: `run ${oldId} can't be resumed: its session's account claude no longer exists`,
@@ -1440,7 +1449,7 @@ test("a coordinator that stopped before its session started offers Start over wi
   await openEmber();
   await click(startOverButton());
   expect(calls("project/start")).toMatchObject([{ prompt: "Add a dark mode" }]);
-  expect(calls("agent/send")).toEqual([]);
+  expect(sentMessages()).toEqual([]);
 });
 
 const coordinatorId = "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b";
@@ -1546,7 +1555,7 @@ test("a Project's Agents view lists its children Needs you, Working, Done, Faile
 
 test("opening a subagent shows its chat, with Open PR, and the Project crumb goes back to the coordinator", async () => {
   // The finished subagent picks up the message.
-  answers["agent/send"] = () => ({ result: { run: { ...login, status: "running" } } });
+  answers["orchestration/dispatch"] = () => ({ result: { seq: 1 } });
   await openEmberAgents(login, docs);
   await click(agentRow("Fix the login bug"));
   expect(crumbs()).toEqual(["This Mac", "ember", "Fix the login bug"]);
@@ -1560,7 +1569,7 @@ test("opening a subagent shows its chat, with Open PR, and the Project crumb goe
 
   type("Cover the logout path too");
   await click(button("Send"));
-  expect(calls("agent/send")).toEqual([
+  expect(sentMessages()).toEqual([
     { runId: login.id, turnId: expect.any(String), text: "Cover the logout path too" },
   ]);
 
@@ -1579,11 +1588,11 @@ test("opening a subagent from an expanded side panel shrinks it, so the chat sho
 });
 
 test("a running subagent's chat stops it", async () => {
-  answers["agent/cancel"] = () => ({ result: { run: docs } });
+  answers["orchestration/dispatch"] = () => ({ result: { seq: 1 } });
   await openEmberAgents(docs);
   await click(agentRow("Write the docs"));
   await click(button("Stop"));
-  expect(calls("agent/cancel")).toEqual([{ runId: docs.id }]);
+  expect(stops()).toEqual([{ runId: docs.id }]);
 });
 
 test("the Agents view starts a subagent by hand, reusing its id to retry", async () => {

@@ -404,6 +404,15 @@ impl Queued {
     }
 }
 
+/// A stored queue's `rows`, held (0060), and the messages its `queue.updated` lists. A corrupt
+/// row is left out, as [`Actor::load_queue`] leaves it out.
+pub(super) fn held(rows: Vec<QueuedRow>) -> (Vec<QueuedRow>, Vec<QueuedMessage>) {
+    rows.into_iter()
+        .filter_map(Queued::from_row)
+        .map(|(queued, _)| (queued.row(true), queued.message()))
+        .unzip()
+}
+
 /// Where a request's answer goes.
 type Reply<T> = oneshot::Sender<Result<T, ErrorObject>>;
 
@@ -693,6 +702,11 @@ impl Actor {
         self.row.state.error = None;
         self.row.state.resume_at = None;
         self.save().await;
+    }
+
+    /// Whether this is a Project's coordinator or one of its children.
+    async fn in_project(&self) -> bool {
+        self.is_coordinator() || self.is_child().await
     }
 
     /// Whether this is one of a Project's children (0042): any run in a Project but its
@@ -1710,6 +1724,11 @@ impl Actor {
         // No CLI starts while a push or Open PR runs (PLX-458). A steer waits too: no turn runs
         // for it to go into.
         if self.effect.is_some() {
+            return self.queue(queued).await;
+        }
+        // A paused queue keeps its order: what's sent now waits behind it for `queue.resume`, live
+        // session or not, as T3 Code holds a new run behind held ones (0060).
+        if delivery == Delivery::Queue && self.queue_held && !self.queued.is_empty() {
             return self.queue(queued).await;
         }
         if delivery != Delivery::Queue {
@@ -3260,14 +3279,10 @@ impl Actor {
     /// it was launched with `notify: false` (PLX-380).
     async fn finish(&mut self, outcome: &Outcome) {
         self.flush().await;
+        // The next start records it interrupted, as after a crash, and continues it where 0060
+        // says.
         if self.stopping && matches!(outcome, Outcome::Cancelled) {
-            info!(run = %self.id, "an agent run was interrupted because plxd is stopping");
-            convert::INTERRUPTED.clone_into(&mut self.row.state.status);
-            self.save_with(vec![ParallaxEvent::AgentFinished {
-                run_id: self.id,
-                outcome: AgentOutcome::Interrupted,
-            }])
-            .await;
+            info!(run = %self.id, "plxd is stopping during an agent run's turn");
             return;
         }
         let (mut outcome, mut status, mut error) = convert::outcome(outcome);

@@ -7,12 +7,13 @@ use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
 use parallax_protocol::methods::{
-    AgentCancel, AgentList, AgentResumeNow, AgentSend, AgentStart, HostSettingsGet, HostSettingsSet,
+    AgentCancel, AgentList, AgentResumeNow, AgentSend, AgentStart, HostSettingsGet, RepoAdd,
+    ThreadStart,
 };
 use parallax_protocol::{
     AgentCancelParams, AgentListParams, AgentOutputItem, AgentPermission, AgentResumeNowParams,
-    AgentRunState, AgentStatus, ErrorKind, EventsEventParams, HostSettingsGetParams,
-    HostSettingsSetParams, ParallaxEvent, Provider, RunId, TurnId,
+    AgentRunState, AgentStatus, ErrorKind, EventsEventParams, HostSettingsGetParams, ParallaxEvent,
+    ProjectId, Provider, RepoAddParams, RepoId, RunId, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
 use plxd::backend::{
@@ -21,8 +22,8 @@ use plxd::backend::{
 use plxd::routing::BackendRegistry;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake_backend, init, items, project_params, send_params,
-    start_params, subscribe, until, updated_to,
+    Conn, Host, create, end_turn, fake_backend, init, items, project_params, real_repo,
+    send_params, start_params, subscribe, until, updated_to,
 };
 use crate::support::{InProcess, kind, temp_dir};
 
@@ -321,9 +322,10 @@ async fn with_no_reset_time_it_retries_on_a_growing_interval() {
     host.server.stop().await;
 }
 
-/// The host setting turns it off: a limited run just fails, and `agent/resumeNow` refuses it.
+/// The host setting is off by default (0060): a plain thread a limit stops just fails, and
+/// `agent/resumeNow` refuses it. A Project's runs, as in the tests above, wait whatever it says.
 #[tokio::test]
-async fn the_host_setting_turns_it_off() {
+async fn a_plain_thread_waits_only_with_the_host_setting_on() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let backends = sequence(vec![limited("s-1", Some(in_seconds(60)))], &seen);
     let host = host(temp_dir(), backends, Duration::from_secs(600));
@@ -332,34 +334,32 @@ async fn the_host_setting_turns_it_off() {
         .call::<HostSettingsGet>(HostSettingsGetParams {})
         .await
         .unwrap();
-    assert!(settings.auto_resume, "on by default");
-    let settings = client
-        .call::<HostSettingsSet>(HostSettingsSetParams {
-            auto_resume: Some(false),
-            ..HostSettingsSetParams::default()
+    assert!(!settings.auto_resume, "off by default");
+
+    let checkout = temp_dir();
+    let repo = client
+        .call::<RepoAdd>(RepoAddParams {
+            id: RepoId::generate(),
+            path: real_repo(checkout.path()).to_str().unwrap().to_owned(),
         })
         .await
-        .unwrap();
-    assert!(!settings.auto_resume);
-
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let run = client
-        .call::<AgentStart>(start_params(project.id, "Build it."))
-        .await
         .unwrap()
-        .run;
+        .repo;
+    let scope = ProjectId::try_from(uuid::Uuid::from(repo.id)).unwrap();
+    subscribe(&mut client, scope, 0).await;
+    let start = crate::open_pr::thread(Some(repo.id));
+    let run_id = start.run_id;
+    client.call::<ThreadStart>(start).await.unwrap();
     let events = until(&mut client, updated_to(AgentStatus::Failed)).await;
     assert!(events.iter().all(|event| waiting(event).is_none()));
     let refused = client
-        .call::<AgentResumeNow>(AgentResumeNowParams { run_id: run.id })
+        .call::<AgentResumeNow>(AgentResumeNowParams { run_id })
         .await
         .unwrap_err();
     assert_eq!(kind(&refused), ErrorKind::RunNotResumable);
     host.server.stop().await;
 }
 
-/// A reset that passed while plxd was stopped resumes the run as soon as plxd is back.
 #[tokio::test]
 async fn a_reset_that_passed_while_plxd_was_stopped_resumes_at_once() {
     let seen = Arc::new(Mutex::new(Vec::new()));

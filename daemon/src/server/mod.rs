@@ -557,9 +557,9 @@ impl Server {
             lock.release();
             return Err(io::Error::other(error.message));
         }
-        agents::recover(&daemon).await;
+        let cut = agents::recover(&daemon).await;
         crate::setup_scripts::recover(&daemon).await;
-        agents::deliver_queued(&daemon).await;
+        agents::deliver_queued(&daemon, cut).await;
         crate::methods::land::resume(&daemon).await;
         let compact = {
             let daemon = Arc::clone(&daemon);

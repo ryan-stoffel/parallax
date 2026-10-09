@@ -304,7 +304,7 @@ export function AgentChat({
   const connected = connection?.status === "connected";
   const catalog = useCatalog(hostId);
   const queueEnabled = connected && "queue" in connection.capabilities;
-  const { transcript, error, sent, send, cancel, queue, older, loadOlder } = useAgentRun(
+  const { transcript, error, sent, send, cancel, queue, held, older, loadOlder } = useAgentRun(
     hostId,
     runId,
     connected,
@@ -448,9 +448,9 @@ export function AgentChat({
       }),
     [rows, sent],
   );
-  // The latest prompt while nothing from the agent follows it, which Stop puts back in the box:
-  // its text, its attached threads, and its images: at hand when sent from here, or fetched from
-  // plxd by id on Stop.
+  // The latest prompt while nothing from the agent follows it, which the pencil edits in place
+  // and Stop puts back in the box: its text, its attached threads, and its images: at hand when
+  // sent from here, or fetched from plxd by id.
   // `row` is the message's row, which the pencil edits; a queued one has its own edit.
   const unanswered = useMemo<
     (Unanswered & { turnId?: string; row?: { key: string; turnId?: string } }) | undefined
@@ -495,10 +495,15 @@ export function AgentChat({
       row: { key: row.key, turnId: row.turnId },
     };
   }, [rows, sent, queue, hostId, runId]);
-  // A stopped prompt goes back in the box, so if plxd drops it, it offers no Send again too.
-  const stop = async () => {
+  // Stop holds what waits until Resume (0060), a follow-up the agent hasn't started included, so
+  // only a prompt whose turn it stopped goes back in the box.
+  const stop = () => cancel();
+  const stopBack = unanswered && !unanswered.turnId ? unanswered : undefined;
+  // The pencil's stop drops the message instead, which goes back in the box, so if plxd drops it,
+  // it offers no Send again too.
+  const drop = async () => {
     const back = unanswered;
-    const failed = await cancel();
+    const failed = await cancel(true);
     if (!failed && back?.turnId) setResent((prev) => new Set(prev).add(back.turnId!));
     return failed;
   };
@@ -508,7 +513,7 @@ export function AgentChat({
     const back = unanswered;
     if (!back?.row) return;
     const images = back.images();
-    const failed = await stop();
+    const failed = await drop();
     if (failed) return setResendError(failed);
     setResendError(undefined);
     if (back.row.turnId) setCancelled((prev) => new Set(prev).add(back.row!.turnId!));
@@ -735,6 +740,7 @@ export function AgentChat({
             hostId={hostId}
             runId={runId}
             messages={queue}
+            held={held}
             running={isRunning(run?.status)}
             disabledReason={disabledReason}
             onCancelled={(id) => setCancelled((prev) => new Set(prev).add(id))}
@@ -752,7 +758,7 @@ export function AgentChat({
           }
           history={history}
           onStop={isRunning(run?.status) ? stop : undefined}
-          unanswered={unanswered}
+          unanswered={stopBack}
           disabledReason={disabledReason}
           tab={
             tab ??

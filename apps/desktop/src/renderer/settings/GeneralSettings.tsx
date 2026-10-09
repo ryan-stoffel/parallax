@@ -2,7 +2,11 @@ import { Plus, SquareTerminal } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { OpenTarget } from "../../preload/bridge";
-import type { AgentPermission } from "../../protocol/generated/protocol";
+import type {
+  AgentPermission,
+  HostSettings,
+  HostSettingsSetParams,
+} from "../../protocol/generated/protocol";
 import { accessOptions } from "../Composer";
 import { useConnection } from "../ConnectionStatus";
 import { EffortMenu } from "../EffortMenu";
@@ -391,45 +395,49 @@ function Behavior() {
 }
 
 /**
- * Whether a host's runs wait out a usage limit and resume when it resets (`host/settings`, 0049).
- * A thread's own toggle, in its menu, overrides it.
+ * Whether a host's runs wait out a usage limit and resume when it resets (`host/settings`, 0049),
+ * and whether a plain thread's turn a plxd restart cut off continues once plxd is up (0060). Both
+ * are off by default. A thread's own toggle, in its menu, overrides the first.
  */
 function UsageLimits() {
   const hosts = useHosts();
   const [hostId, setHostId] = useState(localId);
   const connection = useConnection(hostId);
   const supported = connection?.status === "connected" && "autoResume" in connection.capabilities;
-  const [on, setOn] = useState<boolean>();
+  const [settings, setSettings] = useState<HostSettings>();
   const [error, setError] = useState<string>();
   useEffect(() => {
-    setOn(undefined);
+    setSettings(undefined);
     setError(undefined);
     if (!supported) return;
     let stale = false;
     void window.parallax.request(hostId, "host/settings/get", {}).then((answer) => {
       if (stale) return;
       if ("error" in answer) setError(answer.error.message);
-      else setOn(answer.result.autoResume);
+      else setSettings(answer.result);
     });
     return () => {
       stale = true;
     };
   }, [hostId, supported]);
-  const set = async (autoResume: boolean) => {
-    setOn(autoResume);
-    const answer = await window.parallax.request(hostId, "host/settings/set", { autoResume });
+  const set = async (
+    change: Pick<HostSettingsSetParams, "autoResume" | "continueAfterRestart">,
+  ) => {
+    const before = settings;
+    setSettings((prev) => prev && { ...prev, ...change });
+    const answer = await window.parallax.request(hostId, "host/settings/set", change);
     if ("error" in answer) {
-      setOn(!autoResume);
+      setSettings(before);
       setError(answer.error.message);
     } else {
-      setOn(answer.result.autoResume);
+      setSettings(answer.result);
       setError(undefined);
     }
   };
 
   return (
     <Section
-      title="Usage limits"
+      title="Resuming threads"
       action={<HostPicker hosts={hosts} value={hostId} onChange={setHostId} />}
     >
       <Row
@@ -438,16 +446,28 @@ function UsageLimits() {
           error ??
           (connection?.status === "connected" && !supported
             ? "This host's plxd can't resume threads after a usage limit."
-            : "A thread a usage limit stopped continues once the limit resets. Each thread's menu can override this.")
+            : "A thread a usage limit stopped continues once the limit resets. Each thread's menu can override this. A Project's threads always do.")
         }
       >
         <Switch
           label="Resume after a usage limit"
-          checked={on ?? false}
-          disabled={on === undefined}
-          onChange={(next) => void set(next)}
+          checked={settings?.autoResume ?? false}
+          disabled={settings === undefined}
+          onChange={(next) => void set({ autoResume: next })}
         />
       </Row>
+      {settings?.continueAfterRestart !== undefined && (
+        <Row
+          title="Continue threads after restarts"
+          description="A thread that was working when plxd restarted, as after an update, is told to continue where it left off. Either way, its queued messages wait for Resume."
+        >
+          <Switch
+            label="Continue threads after restarts"
+            checked={settings.continueAfterRestart}
+            onChange={(next) => void set({ continueAfterRestart: next })}
+          />
+        </Row>
+      )}
     </Section>
   );
 }

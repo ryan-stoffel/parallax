@@ -5399,10 +5399,16 @@ export type HostSettingsGetParams = Record<symbol, never>;
 export type HostSettings = {
 	/**
 	 * Whether a run a usage limit stopped waits for the limit to reset and then resumes
-	 * (PLX-371, decision 0049). On by default. A run's own `autoResume` overrides it. Turning it
-	 * off stops a waiting run from resuming when its timer fires.
+	 * (PLX-371, decision 0049). Off by default (0060). A run's own `autoResume` overrides it.
+	 * Turning it off stops a waiting run from resuming when its timer fires.
 	 */
 	autoResume: boolean,
+	/**
+	 * Whether a plain thread's turn that a plxd restart cut off gets "Continue where you left
+	 * off." once plxd is up (0060). Off by default. A Project's runs always continue. An older
+	 * plxd leaves it out.
+	 */
+	continueAfterRestart?: boolean,
 	/**
 	 * Whether plxd removes a settled thread's worktree and local branch once its linked pull
 	 * requests have merged (PLX-555). On by default. The thread and its transcript stay. An
@@ -5444,6 +5450,10 @@ export type HostSettingsSetParams = {
 	 * The new `autoResume`. Absent leaves it.
 	 */
 	autoResume?: boolean,
+	/**
+	 * The new `continueAfterRestart`. Absent leaves it.
+	 */
+	continueAfterRestart?: boolean,
 	/**
 	 * The new `cleanWorktrees`, behind the `worktreeCleanup` capability. Absent leaves it.
 	 */

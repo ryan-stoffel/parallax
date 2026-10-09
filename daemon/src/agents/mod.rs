@@ -1530,26 +1530,127 @@ pub(crate) async fn queue(
     .await
 }
 
-/// Starts the actor of every run that has waiting messages a plxd before this one stored, so
-/// they are sent (PLX-370). Called once at startup, after [`recover`].
-pub(crate) async fn deliver_queued(daemon: &Arc<Daemon>) {
-    let runs = store(daemon, |db| db.queued_runs().map_err(|e| store_error(&e))).await;
-    let runs = match runs {
-        Ok(runs) => runs,
-        Err(error) => {
-            warn!(error = %error.message, "could not read which runs have waiting messages");
-            return;
-        }
-    };
-    for run in runs {
-        let Ok(id) = RunId::try_from(run) else {
-            warn!(%run, "a run with waiting messages has an id that is not a UUIDv7");
-            continue;
-        };
+/// Starts the actor of every run with waiting messages, so a Project's coordinator's and
+/// children's are sent, as before (PLX-370), since nobody may be watching an Auto Project. A plain
+/// thread's [`recover`] held, so its actor waits for `queue.resume`. With the host's
+/// `continueAfterRestart`, a plain
+/// thread in `cut`, whose turn the restart cut off, then gets [`CONTINUE`] on its session, ahead
+/// of its held queue. A Project's cut runs go on through its coordinator's restart wake-up
+/// instead ([`wake::catch_up`], PLX-178), which placement's slots (0046) also hold to. Called
+/// once at startup, after [`recover`].
+pub(crate) async fn deliver_queued(daemon: &Arc<Daemon>, cut: Vec<RunId>) {
+    for id in queued_runs(daemon).await {
         if let Err(error) = actor_for(daemon, id).await {
             warn!(run = %id, error = %error.message, "could not send a run's waiting messages");
         }
     }
+    let on = store(daemon, |db| {
+        db.continue_after_restart().map_err(|e| store_error(&e))
+    })
+    .await
+    .unwrap_or_default();
+    for id in cut.into_iter().filter(|_| on) {
+        // A plain thread with a session to continue.
+        let plain = store(daemon, move |db| {
+            let Some(row) = db.get_run(id.into()).map_err(|e| store_error(&e))? else {
+                return Ok(false);
+            };
+            let project = db
+                .get_project(row.fields.project_id)
+                .map_err(|e| store_error(&e))?;
+            Ok(project.is_none() && row.state.session_id.is_some())
+        })
+        .await;
+        if !matches!(plain, Ok(true)) {
+            continue;
+        }
+        info!(run = %id, "continuing a turn a restart cut off");
+        let params = AgentSendParams {
+            run_id: id,
+            turn_id: TurnId::generate(),
+            text: CONTINUE.to_owned(),
+            model: None,
+            effort: None,
+            permission: None,
+            context_window: None,
+            fast: None,
+            account: None,
+            images: Vec::new(),
+            threads: Vec::new(),
+            from: None,
+            delivery: None,
+        };
+        if let Err(error) = send_with(Arc::clone(daemon), params, Delivery::Queue).await {
+            warn!(run = %id, error = %error.message, "could not continue a run after a restart");
+        }
+    }
+}
+
+/// The message a turn a restart cut off continues with, as T3 Code's.
+pub(crate) const CONTINUE: &str = "Continue where you left off.";
+
+/// The runs with stored waiting messages, which a plxd before this one left.
+async fn queued_runs(daemon: &Arc<Daemon>) -> Vec<RunId> {
+    let runs = store(daemon, |db| db.queued_runs().map_err(|e| store_error(&e))).await;
+    let runs = runs.unwrap_or_else(|error| {
+        warn!(error = %error.message, "could not read which runs have waiting messages");
+        Vec::new()
+    });
+    runs.into_iter()
+        .filter_map(|run| {
+            let id = RunId::try_from(run).ok();
+            if id.is_none() {
+                warn!(%run, "a run with waiting messages has an id that is not a UUIDv7");
+            }
+            id
+        })
+        .collect()
+}
+
+/// Holds every plain thread's stored queue until `queue.resume`, as T3 Code holds it (0060),
+/// before any actor can load one and send from it.
+async fn hold_queues(daemon: &Arc<Daemon>) {
+    for id in queued_runs(daemon).await {
+        match store(daemon, move |db| hold_queue(db, id)).await {
+            Ok(true) => info!(run = %id, "holding a thread's queue after a restart"),
+            Ok(false) => {}
+            Err(error) => {
+                warn!(run = %id, error = %error.message, "could not hold a thread's queue");
+            }
+        }
+    }
+}
+
+/// Holds run `id`'s stored queue when it is a plain thread's, and reports it held. Whether it
+/// did: a Project's run, or one gone since, is left as it is.
+fn hold_queue(db: &mut crate::store::Tx, id: RunId) -> Result<bool, ErrorObject> {
+    let Some(row) = db.get_run(id.into()).map_err(|e| store_error(&e))? else {
+        return Ok(false);
+    };
+    let project = row.fields.project_id;
+    if db
+        .get_project(project)
+        .map_err(|e| store_error(&e))?
+        .is_some()
+    {
+        return Ok(false);
+    }
+    let queue = db.queue(id.into()).map_err(|e| store_error(&e))?;
+    let (rows, messages) = actor::held(queue);
+    db.set_queue(id.into(), &rows)
+        .map_err(|e| store_error(&e))?;
+    let project = ProjectId::try_from(project)
+        .map_err(|_| ErrorObject::internal_error("a stored project id is not a UUIDv7"))?;
+    db.stage(
+        jiff::Timestamp::now(),
+        Some(project),
+        ParallaxEvent::QueueUpdated {
+            run_id: id,
+            messages,
+            held: true,
+        },
+    );
+    Ok(true)
 }
 
 /// `provider-session.detach` (0060): releases run `id`'s live session. A run with no actor has
@@ -1883,11 +1984,12 @@ pub(crate) async fn git(
 }
 
 /// Marks every run the store still has as `starting` or `running` as `interrupted`: plxd
-/// stopped without recording how they ended, as after a crash. Then wakes each project's
-/// coordinator for what it missed while plxd was stopped ([`wake::catch_up`], PLX-178), and
-/// starts the timers of runs waiting for a usage limit to reset ([`resume::restore`], PLX-371).
-/// Called once at startup, before any connection is accepted.
-pub(crate) async fn recover(daemon: &Arc<Daemon>) {
+/// stopped without recording how they ended, as after a crash. Then holds plain threads' queues
+/// (0060), wakes each project's coordinator for what it missed while plxd was stopped
+/// ([`wake::catch_up`], PLX-178), and starts the timers of runs waiting for a usage limit to reset ([`resume::restore`], PLX-371).
+/// Returns the runs it interrupted, for [`deliver_queued`]. Called once at startup, before any
+/// connection is accepted.
+pub(crate) async fn recover(daemon: &Arc<Daemon>) -> Vec<RunId> {
     let open = store(daemon, |db| {
         db.run_ids_with_status(&[convert::STARTING, convert::RUNNING])
             .map_err(|e| store_error(&e))
@@ -1897,6 +1999,7 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
         warn!(error = %error.message, "could not recover interrupted agent runs");
         Vec::new()
     });
+    let mut cut = Vec::new();
     // A job per run, so one that fails leaves the others recovered.
     for id in open {
         let recovered = store(daemon, move |db| {
@@ -1930,7 +2033,10 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
         })
         .await;
         match recovered {
-            Ok(true) => info!(run = %id, "an agent run was interrupted when plxd last stopped"),
+            Ok(true) => {
+                info!(run = %id, "an agent run was interrupted when plxd last stopped");
+                cut.extend(RunId::try_from(id).ok());
+            }
             // Deleted since the list was read.
             Ok(false) => {}
             Err(error) => {
@@ -1938,9 +2044,12 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) {
             }
         }
     }
+    // Before any actor starts and could send from a queue.
+    hold_queues(daemon).await;
     wake::catch_up(daemon).await;
     resume::restore(daemon).await;
     placement::start(daemon);
+    cut
 }
 
 #[cfg(test)]

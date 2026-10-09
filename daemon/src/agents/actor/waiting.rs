@@ -64,7 +64,13 @@ impl Actor {
             state.resume_tries = 0;
             return;
         }
-        if !resume::enabled(&self.daemon, self.row.state.auto_resume).await {
+        if !resume::enabled(
+            &self.daemon,
+            self.row.state.auto_resume,
+            self.in_project().await,
+        )
+        .await
+        {
             return;
         }
         let timing = self.daemon.agents.resume_timing();
@@ -79,7 +85,13 @@ impl Actor {
     /// The stored timer fired: resumes the session with [`MESSAGE`], unless auto-resume was
     /// turned off meanwhile.
     async fn resume_when_due(&mut self) {
-        if !resume::enabled(&self.daemon, self.row.state.auto_resume).await {
+        if !resume::enabled(
+            &self.daemon,
+            self.row.state.auto_resume,
+            self.in_project().await,
+        )
+        .await
+        {
             info!(run = %self.id, "auto-resume is off, so a waiting run stays stopped");
             self.stop_waiting(convert::FAILED).await;
             return;
@@ -114,7 +126,8 @@ impl Actor {
     ) -> Result<AgentRun, ErrorObject> {
         if self.row.state.auto_resume != auto_resume {
             self.row.state.auto_resume = auto_resume;
-            if self.row.state.status == WAITING && !resume::enabled(&self.daemon, auto_resume).await
+            if self.row.state.status == WAITING
+                && !resume::enabled(&self.daemon, auto_resume, self.in_project().await).await
             {
                 self.stop_waiting(convert::FAILED).await;
             } else {

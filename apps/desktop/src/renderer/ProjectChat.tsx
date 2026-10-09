@@ -201,12 +201,13 @@ export function ProjectChat({
     const failed = await starts.current;
     if (failed) return failed;
     // The new run keeps the first message's model and effort.
-    const sent = await window.parallax.request(hostId, "agent/send", {
-      runId,
-      turnId: uuidv7(),
+    const sent = await window.parallax.request(hostId, "orchestration/dispatch", {
+      type: "message.dispatch",
+      threadId: runId,
+      messageId: uuidv7(),
       text,
       ...(images.length > 0 && { images }),
-      ...(connected && "queue" in connection.capabilities && { delivery: "queue" as const }),
+      dispatchMode: { type: "queue_after_active" },
     });
     if ("error" in sent) setHeldError(`"${text}" wasn't sent: ${describeError(sent.error)}`);
     return undefined;
