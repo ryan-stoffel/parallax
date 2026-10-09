@@ -169,7 +169,10 @@ function emit(event: ParallaxEvent, project?: string) {
 }
 
 const isRequest = (i: AgentOutputItem) =>
-  i.kind === "approvalRequested" || i.kind === "approvalResolved";
+  i.kind === "approvalRequested" ||
+  i.kind === "approvalResolved" ||
+  i.kind === "secretRequested" ||
+  i.kind === "secretResolved";
 
 /** A shell's view of an event, as plxd's `shell` filter has it: output only for its requests. */
 function shellView(logged: LoggedEvent): LoggedEvent | undefined {
@@ -191,6 +194,9 @@ function waiting(runIds: string[]): LoggedEvent[] {
         if (item.kind === "approvalRequested")
           open.set(item.approvalId, { ...logged, event: { ...event, items: [item] } });
         if (item.kind === "approvalResolved") open.delete(item.approvalId);
+        if (item.kind === "secretRequested")
+          open.set(item.requestId, { ...logged, event: { ...event, items: [item] } });
+        if (item.kind === "secretResolved") open.delete(item.requestId);
       }
     }
     return [...open.values()];
@@ -789,6 +795,13 @@ const handlers: { [M in Method]?: Handler<M> } = {
       ...(p.message && { message: p.message }),
     });
     return { decision, by: "user", ...(p.always && { always: true }) };
+  },
+  // The value goes nowhere: only how the request ended is logged, as plxd logs it (0063).
+  "secret/answer": (p) => {
+    const status =
+      p.answer.type === "save" ? "saved" : p.answer.type === "decline" ? "declined" : "cancelled";
+    output(p.runId, { kind: "secretResolved", requestId: p.requestId, status });
+    return {};
   },
   "agent/image": () => fail("The preview keeps no images.", "imageNotFound"),
   "agent/commands": () => ({ commands: db.commands }),

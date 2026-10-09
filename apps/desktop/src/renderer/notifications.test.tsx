@@ -8,7 +8,7 @@ import type { AgentRun, Thread } from "../protocol/generated/protocol";
 import { threadNotice, useConnectionAlarms, useThreadAlarms, type ThreadMark } from "./alarms";
 import { NOTICE_MS, Notifications, notify } from "./notifications";
 import type { HostThreads } from "./Sidebar";
-import { emptyThreads, idleThreads, type ThreadsState } from "./threads";
+import { emptyThreads, idleThreads, threadsReducer, asksOf, type ThreadsState } from "./threads";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers.
@@ -220,4 +220,42 @@ test("a host connected before the window listened says so when it drops and come
   expect(titles()).toEqual(["Lost connection to dev box"]);
   act(() => change("dev", connected));
   expect(titles()).toEqual(["Reconnected to dev box"]);
+});
+
+test("a waiting secret flags the sidebar and notifies from a background thread", () => {
+  const thread = { id: "t-1", createdAt: "2026-10-04T12:00:00Z" } as Thread;
+  const run = { id: "t-1", status: "running", updatedAt: "2026-10-04T12:05:00Z" } as AgentRun;
+  const state: ThreadsState = { ...emptyThreads, threads: [thread], runs: { "t-1": run } };
+  const hosts = (next: ThreadsState): HostThreads[] => [
+    { host: { id: "dev", name: "dev box" }, view: { ...idleThreads, state: next } },
+  ];
+  function Alarms({ list }: { list: HostThreads[] }) {
+    useThreadAlarms(list, () => {}, []);
+    return <Notifications />;
+  }
+  const rerender = render(<Alarms list={hosts(state)} />);
+  const waiting = threadsReducer(state, {
+    type: "approvals",
+    events: [
+      {
+        seq: 1,
+        time: "",
+        event: {
+          kind: "agent.output",
+          runId: "t-1",
+          items: [
+            {
+              kind: "secretRequested",
+              requestId: "s-1",
+              label: "Webhook secret",
+              reason: "To sign.",
+            },
+          ],
+        },
+      },
+    ],
+  });
+  expect(asksOf(waiting, "t-1")).toBe(1);
+  rerender(<Alarms list={hosts(waiting)} />);
+  expect(titles()).toEqual(["Thread needs your input"]);
 });

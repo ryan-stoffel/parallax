@@ -204,6 +204,8 @@ pub(crate) fn initialize(
 /// `prWatch` (0063): `pr/watch`, `pr/unwatch`, and `pr/watches`.
 /// `setupScripts` (PLX-650): `repo/scripts`, `repo/saveScripts`, and the `thread.script` event.
 /// `delegation` (PLX-648, 0063): `task/delegate`, `task/status`, and `thread/mergeBack`.
+/// `secrets` (PLX-648, 0063): `secret/request`, `secret/answer`, the `secretRequested` and
+/// `secretResolved` transcript items, and `secretRef` in `schedule/save`.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -262,6 +264,7 @@ fn capabilities_advertised() -> Capabilities {
         ("repoRefs".to_owned(), serde_json::Map::new()),
         ("runOptions".to_owned(), serde_json::Map::new()),
         ("schedules".to_owned(), serde_json::Map::new()),
+        ("secrets".to_owned(), serde_json::Map::new()),
         ("sendAccount".to_owned(), serde_json::Map::new()),
         ("sendModel".to_owned(), serde_json::Map::new()),
         ("sendOptions".to_owned(), serde_json::Map::new()),

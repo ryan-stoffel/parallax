@@ -46,7 +46,7 @@ pub const UNAVAILABLE_MESSAGE: &str =
 ///
 /// An implementation must never pass a key to `tracing`, or write one anywhere but the OS's
 /// store (#117).
-pub trait KeyStore: Send + Sync {
+pub trait KeyStore: Send + Sync + std::fmt::Debug {
     /// Stores `key` for `account`, replacing any key already stored for it.
     ///
     /// # Errors

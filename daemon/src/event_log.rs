@@ -181,12 +181,15 @@ pub(crate) fn run_of(event: &ParallaxEvent) -> Option<RunId> {
     }
 }
 
-/// What a sidebar needs from a run's output: its permission requests and how they ended, as the
-/// app's `trackApprovals` reads them.
+/// What a sidebar needs from a run's output: its permission and secret requests and how they
+/// ended, as the app's `trackApprovals` reads them.
 pub(crate) fn is_approval(item: &AgentOutputItem) -> bool {
     matches!(
         item,
-        AgentOutputItem::ApprovalRequested { .. } | AgentOutputItem::ApprovalResolved { .. }
+        AgentOutputItem::ApprovalRequested { .. }
+            | AgentOutputItem::ApprovalResolved { .. }
+            | AgentOutputItem::SecretRequested { .. }
+            | AgentOutputItem::SecretResolved { .. }
     )
 }
 

@@ -103,6 +103,7 @@ import { plainText, PromptRail, ScrollToEnd, type Prompt } from "./PromptRail";
 import { attachThreads, SentThread, ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { QueueStrip } from "./QueueStrip";
 import { ResumeCard } from "./ResumeCard";
+import { SecretCard, SecretLine } from "./Secret";
 import { hostIcon } from "./RunTargetMenu";
 import {
   knownModel,
@@ -123,6 +124,7 @@ import {
   subagentRows,
   subagentState,
   waitingApprovals,
+  waitingSecrets,
   workedFor,
   plxdTools,
   type Approval,
@@ -356,6 +358,8 @@ export function AgentChat({
     [items, others, answers, runId],
   );
   const plan = useMemo(() => latestPlan(items), [items]);
+  // The oldest secret the agent waits on (0063).
+  const secret = useMemo(() => waitingSecrets(items)[0], [items]);
   const showImage = useCallback((id: ImageId) => loadImage(hostId, runId, id), [hostId, runId]);
 
   // A message plxd wouldn't send because the run can't be resumed, which `startOver` can take.
@@ -626,13 +630,24 @@ export function AgentChat({
     [hostId, run, onFork, connected],
   );
   const pinned = (
-    <PinnedApprovals
-      asked={asked}
-      answers={answers}
-      onAnswer={(a, choice, message) => void answer(a, choice, message)}
-      onDismiss={dismiss}
-      disabledReason={offlineReason(connection)}
-    />
+    <>
+      <PinnedApprovals
+        asked={asked}
+        answers={answers}
+        onAnswer={(a, choice, message) => void answer(a, choice, message)}
+        onDismiss={dismiss}
+        disabledReason={offlineReason(connection)}
+      />
+      {secret && (
+        <SecretCard
+          key={secret.key}
+          hostId={hostId}
+          runId={runId}
+          secret={secret}
+          disabledReason={offlineReason(connection)}
+        />
+      )}
+    </>
   );
 
   if (subagent)
@@ -1477,6 +1492,8 @@ export const RowView = memo(function RowView({
           <ApprovalDetails approval={row} />
         </Disclosure>
       );
+    case "secret":
+      return <SecretLine secret={row} />;
     case "notice":
       return (
         <p className="flex items-start gap-2 text-[12.5px] text-muted-foreground">

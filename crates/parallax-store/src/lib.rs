@@ -111,6 +111,18 @@ impl Store {
         Ok(Self { conn })
     }
 
+    /// Turns SQLite's `secure_delete` on or off for this connection: on, deleted content is
+    /// overwritten with zeros rather than left in freed pages, as when wiping a secret (PLX-648).
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_secure_delete(&self, on: bool) -> Result<(), StoreError> {
+        self.conn
+            .pragma_update(None, "secure_delete", if on { "ON" } else { "OFF" })?;
+        Ok(())
+    }
+
     /// Starts a read transaction (`BEGIN`), so several reads see one snapshot. The event log's
     /// own paged readers use it so a compact sweep cannot land between their pages (0052).
     ///

@@ -986,6 +986,15 @@ export function createFixtures(now = Date.now()): Fixtures {
       name: "Bash",
       input: { command: "pnpm exec icon-preview --sizes 32,128 build/icon/Assets.car" },
     },
+    // A secret the agent waits on (request_secret, 0063): the card pinned over the composer.
+    {
+      kind: "secretRequested",
+      requestId: uuid(47),
+      label: "Figma access token",
+      reason:
+        "To export the tinted variant's layers from the design file. Make one in Figma under Settings > Security > Personal access tokens, with read access to files.",
+      placeholder: "figd_…",
+    },
   );
 
   // Tahoe's delegated task: its child, on Codex, working in Tahoe's worktree (0063).

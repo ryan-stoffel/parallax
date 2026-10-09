@@ -347,6 +347,7 @@ mod tests {
             encoding: SignatureEncoding::Hex,
             prefix: "sha256=".to_owned(),
             secret: None,
+            secret_ref: None,
         };
         let sent = headers(&[("x-hub-signature-256", &format!("sha256={hex}"))]);
         assert!(verify(&github, "s3cret", &sent, body));
@@ -361,6 +362,7 @@ mod tests {
             encoding: SignatureEncoding::Base64,
             prefix: String::new(),
             secret: None,
+            secret_ref: None,
         };
         let sent = headers(&[("x-signature", &data_encoding::BASE64.encode(tag.as_ref()))]);
         assert!(verify(&base64, "s3cret", &sent, body));

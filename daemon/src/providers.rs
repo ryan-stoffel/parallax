@@ -1570,7 +1570,7 @@ mod tests {
     }
 
     /// A keychain that counts its reads.
-    #[derive(Default)]
+    #[derive(Debug, Default)]
     struct Counting {
         store: MemoryKeyStore,
         reads: std::sync::atomic::AtomicUsize,

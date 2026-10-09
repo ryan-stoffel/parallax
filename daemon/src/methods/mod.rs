@@ -12,7 +12,8 @@
 //! `schedule/*` in `crate::schedules` and `pr/watch`, `pr/unwatch`, and `pr/watches` in
 //! `crate::pr_watch`; PLX-650 `setupScripts`: `repo/scripts` and `repo/saveScripts` in
 //! `crate::setup_scripts`; PLX-648 `delegation`: `task/delegate`, `task/status`, and
-//! `thread/mergeBack` in `crate::delegation`), and `host.rs` advertises the
+//! `thread/mergeBack` in `crate::delegation`; PLX-648 `secrets`: `secret/request` and
+//! `secret/answer` in `crate::secrets`), and `host.rs` advertises the
 //! capability in `initialize`.
 
 mod accounts;
@@ -54,6 +55,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+pub(crate) use accounts::keys::map_keychain_error as keychain_error;
 pub(crate) use agent::check_message;
 pub(crate) use defaults::read_defaults;
 pub(crate) use events::{Cursor, Cursors, Delivery};
@@ -333,6 +335,8 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         TaskDelegate => |p| crate::delegation::delegate(Arc::clone(daemon), p),
         TaskStatus => |p| crate::delegation::status(daemon, p),
         ThreadMergeBack => |p| crate::delegation::merge_back(daemon, p),
+        SecretRequest => |p| crate::secrets::request(daemon, p),
+        SecretAnswer => |p| crate::secrets::answer(daemon, p),
         RepoSaveScripts => |p| crate::setup_scripts::save(daemon, p),
     })
 }

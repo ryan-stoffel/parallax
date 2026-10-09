@@ -204,7 +204,7 @@ fn remove_account(
 /// locked, access was denied, or this OS has no store yet, so the editor can tell that apart from
 /// a bare internal error; anything else stays a plain internal error, since its detail is not
 /// something to show.
-fn map_keychain_error(error: &KeyStoreError) -> ErrorObject {
+pub(crate) fn map_keychain_error(error: &KeyStoreError) -> ErrorObject {
     if error.is_unavailable() {
         ErrorObject::parallax(ErrorKind::KeychainUnavailable, UNAVAILABLE_MESSAGE)
     } else {

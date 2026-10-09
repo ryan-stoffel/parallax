@@ -80,6 +80,7 @@ pub mod remote;
 mod repo;
 pub mod routing;
 mod schedules;
+mod secrets;
 pub mod server;
 #[cfg(unix)]
 pub mod service;
