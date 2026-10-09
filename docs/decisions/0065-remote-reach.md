@@ -57,7 +57,7 @@ Ryan chose all of it for Parallax on 2026-10-09 (PLX-635), with one change from 
 
 ### Mobile
 
-- `apps/mobile`, Expo, on a client package taken out of the renderer (the protocol client and its stores), shared by the desktop renderer, the web client, and mobile. It reaches hosts by the same routes and pairing, queues messages while offline, and gets push and Live Activities through the relay only. PLX-653 is blocked on the relay and on Apple and Google developer accounts.
+- `apps/mobile`, Expo, on a client package taken out of the renderer (the protocol client and its stores), shared by the desktop renderer, the web client, and mobile. It reaches hosts over the tailnet and relay routes only, which have publicly trusted certificates, with the same pairing. Pinning the LAN key would need a native TLS module in React Native, so mobile leaves the LAN route out. It queues messages while offline, and gets push and Live Activities through the relay only. PLX-653 is blocked on the relay and on Apple and Google developer accounts.
 
 ## Consequences
 

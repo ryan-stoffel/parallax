@@ -1,6 +1,6 @@
-# 0060: Provider sessions live across turns, and a restart holds the queue
+# 0060: Provider sessions live across turns, and a restart holds a plain thread's queue
 
-- Status: accepted; supersedes in part [0014](0014-agent-runs.md) (a CLI process per run that exits when its turn ends, and resuming interrupted runs after a restart), [0035](0035-codex-threads.md) (an app-server per run), [0048](0048-durable-queue-and-steer.md) (a restart sends what waits, for plain threads, and `Run::hold`), and [0049](0049-auto-resume-usage-limits.md) (on by default)
+- Status: accepted; supersedes in part [0014](0014-agent-runs.md) (a CLI process per run that exits when its turn ends, and resuming interrupted runs after a restart), [0035](0035-codex-threads.md) (an app-server per run), [0048](0048-durable-queue-and-steer.md) (a restart sends what waits: a plain thread's queue is now held until the user resumes it, while a Project's coordinator and children resume as before; and `Run::hold`), and [0049](0049-auto-resume-usage-limits.md) (on by default)
 - Date: 2026-10-09
 - Issue: PLX-636, for PLX-645
 
