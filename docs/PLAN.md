@@ -99,7 +99,7 @@ Risks:
 
 * Subscription terms. Running consumer subscriptions from a third-party app may break vendor terms, and a public open-source app makes that more visible. Running only the vendors' own CLIs reduces this, and API keys stay as a fallback ([0004](decisions/0004-subscription-providers.md)).
 * Coordinator quality. Weak task specs make workers fail. Start with the strongest model and grade plans by hand.
-* Node.js. Claude, Cursor, and the browser tools need Node 22 or newer on the host ([0053](decisions/0053-cursor-sdk.md), [0061](decisions/0061-claude-agent-sdk.md), [0064](decisions/0064-agent-ui-tools-and-terminals.md)).
+* Node.js. Claude and the browser tools need Node 22.16 or newer on the host, and Cursor 22.13 ([0053](decisions/0053-cursor-sdk.md), [0061](decisions/0061-claude-agent-sdk.md), [0064](decisions/0064-agent-ui-tools-and-terminals.md)).
 * The relay. Parallax Relay is a hosted service Ryan pays for and runs, and it needs his Cloudflare, Apple, and Google accounts ([0065](decisions/0065-remote-reach.md)).
 * The rewrite. Replacing the run actor touches every thread path. Each phase is held to the load budgets and PLX-609's numbers ([0059](decisions/0059-orchestration-rewrite.md)).
 * Three OSes. Each has its own transport, service, secret store, and sandbox, and native Windows can't sandbox Claude workers, which run in WSL2 instead ([0023](decisions/0023-cross-platform.md)).

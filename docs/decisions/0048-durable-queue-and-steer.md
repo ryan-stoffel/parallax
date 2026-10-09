@@ -1,6 +1,6 @@
 # 0048: Waiting messages are stored, and a steer goes into the running turn
 
-- Status: accepted; supersedes in part [0014](0014-agent-runs.md) (waiting messages lived in the run's actor only, and a message sent during a turn went to the CLI at once); superseded in part by [0059](0059-orchestration-rewrite.md) (queued messages are queued runs, with T3 Code's queue commands), [0060](0060-provider-sessions.md) (a restart holds the queue until the user resumes it, and `Run::hold` goes), and [0061](0061-claude-agent-sdk.md) (Claude's steer is a `priority: "now"` message)
+- Status: accepted; supersedes in part [0014](0014-agent-runs.md) (waiting messages lived in the run's actor only, and a message sent during a turn went to the CLI at once); superseded in part by [0059](0059-orchestration-rewrite.md) (queued messages are queued runs, with T3 Code's queue commands), [0060](0060-provider-sessions.md) (after a restart a plain thread's queue waits until the user resumes it, a Project's coordinator and children resume as before, and `Run::hold` goes), and [0061](0061-claude-agent-sdk.md) (Claude's steer is a `priority: "now"` message)
 - Date: 2026-10-03
 - Issue: PLX-370, part of PLX-368
 
