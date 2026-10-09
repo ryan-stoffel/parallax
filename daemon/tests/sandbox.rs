@@ -23,12 +23,18 @@ use plxd::paths::DataDir;
 
 const SECRET: &str = "parallax-sandbox-test-secret";
 
+/// Held for a whole test, since [`a_worker_s_temp_is_its_own`] makes and removes `/tmp/claude`.
+/// Claude Code binds it into a command's sandbox if it exists when the command is wrapped, and
+/// bwrap fails if it is gone by the time bwrap starts (PLX-665).
+static TMP_CLAUDE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test]
 async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_sockets() {
     let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
         eprintln!("skipped: PLX_SANDBOX_CLAUDE doesn't name a Claude Code to test");
         return;
     };
+    let _tmp_claude = TMP_CLAUDE.lock().await;
     let dir = tempfile::tempdir().unwrap();
     // Canonical, since Seatbelt matches real paths and macOS's temp folder is behind a symlink.
     let root = dir.path().canonicalize().unwrap();
@@ -141,6 +147,7 @@ async fn a_worker_s_temp_is_its_own() {
         eprintln!("skipped: PLX_SANDBOX_CLAUDE doesn't name a Claude Code to test");
         return;
     };
+    let _tmp_claude = TMP_CLAUDE.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let home = root.join("home");
