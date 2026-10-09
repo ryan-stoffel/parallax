@@ -86,8 +86,8 @@ const knowledgeSurface = surfaces.find((s) => s.name === "Knowledge")!;
  * while focus is in the panel. Open tabs stay mounted, so a view keeps its state behind another.
  * The top bar keeps the hide button where the main pane shows it while the panel is closed.
  * Expanded, it fills everything right of the sidebar, and `leading` and `topBarClassName` stand in
- * for the hidden main pane's top-left corner. `agents`, `knowledge`, and `files` are those views,
- * such as a Project's, in place of their empty states. `remoteHost` is the open host's name when
+ * for the hidden main pane's top-left corner. `agents`, `knowledge`, `files`, and `changesView` are
+ * those views, such as a Project's, in place of their empty states. `remoteHost` is the open host's name when
  * it's an SSH host. `terminal` draws the Terminal view, told whether it's shown and given its empty
  * state. Each new `browse` opens the Browser view at its url, or at one of `agentTabs`. `pullRequests` are the open thread's
  * linked pull requests (PLX-319): its URLs, the Pull requests view, and each one's view, shown in a
@@ -108,6 +108,7 @@ export function SidePanel({
   remoteHost,
   terminal,
   files,
+  changesView,
   browse,
   changes,
   agentTabs,
@@ -128,6 +129,7 @@ export function SidePanel({
   remoteHost?: string;
   terminal?: (shown: boolean, empty: ReactNode) => ReactNode;
   files?: ReactNode;
+  changesView?: ReactNode;
   browse?: { url?: string; agentTab?: string };
   /** A new request opens the Changes view. */
   changes?: object;
@@ -221,6 +223,8 @@ export function SidePanel({
       terminal(open && s === current, emptyOf(s))
     ) : s.name === "Files" && files ? (
       files
+    ) : s.name === "Changes" && changesView ? (
+      changesView
     ) : s.url && pullRequests ? (
       pullRequests.view(s.url)
     ) : s.name === "Pull requests" && pullRequests?.urls.length ? (

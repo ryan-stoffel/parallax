@@ -41,6 +41,11 @@ export interface ThreadsState {
   runs: Readonly<Record<string, AgentRun>>;
   /** By run id: the permission requests each run waits on (0033's "needs you"). */
   approvals: ApprovalsByRun;
+  /**
+   * By run id: how many times its checkpoints changed since this app connected, a capture or a
+   * revert (0062), so its Changes view knows to reload.
+   */
+  checkpoints: Readonly<Record<string, number>>;
 }
 
 export const emptyThreads: ThreadsState = {
@@ -50,6 +55,7 @@ export const emptyThreads: ThreadsState = {
   titles: {},
   runs: {},
   approvals: {},
+  checkpoints: {},
 };
 
 /** How many permission requests run `runId` waits on. */
@@ -78,6 +84,7 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
         titles: withThreadTitles(titlesOf(action.runs), action.threads),
         runs: byId(action.runs),
         approvals: {},
+        checkpoints: state.checkpoints,
       };
     case "runs":
       return {
@@ -149,6 +156,12 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
         }
         case "thread.deleted":
           return { ...state, threads: state.threads.filter((t) => t.id !== e.runId) };
+        case "thread.checkpoint":
+        case "thread.reverted":
+          return {
+            ...state,
+            checkpoints: { ...state.checkpoints, [e.runId]: (state.checkpoints[e.runId] ?? 0) + 1 },
+          };
         default:
           return state;
       }

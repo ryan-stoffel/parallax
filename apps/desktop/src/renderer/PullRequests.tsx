@@ -490,17 +490,18 @@ export function parseDiff(diff: string): DiffFile[] {
 }
 
 /**
- * One file of the Code tab: a header that folds it, with its path, size, and Viewed, over its
- * lines numbered on both sides. ponytail: every line renders; window them if huge diffs lag.
+ * One file of the Code tab, and of the Changes view (0062): a header that folds it, with its path,
+ * size, and Viewed when `onViewed` is given, over its lines numbered on both sides. ponytail: every
+ * line renders; window them if huge diffs lag.
  */
-function DiffFileView({
+export function DiffFileView({
   file,
-  viewed,
+  viewed = false,
   onViewed,
 }: {
   file: DiffFile;
-  viewed: boolean;
-  onViewed: (viewed: boolean) => void;
+  viewed?: boolean;
+  onViewed?: (viewed: boolean) => void;
 }) {
   const [folded, setFolded] = useState(false);
   const shut = folded || viewed;
@@ -514,7 +515,7 @@ function DiffFileView({
           type="button"
           aria-expanded={!shut}
           aria-label={`${shut ? "Show" : "Hide"} ${file.path}`}
-          onClick={() => (viewed ? onViewed(false) : setFolded(!folded))}
+          onClick={() => (viewed ? onViewed?.(false) : setFolded(!folded))}
           className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-hover"
         >
           <Chevron aria-hidden className="size-4" />
@@ -529,10 +530,12 @@ function DiffFileView({
           <span className="text-added">+{file.added}</span>{" "}
           <span className="text-danger">−{file.removed}</span>
         </span>
-        <label className="flex shrink-0 items-center gap-1.5 text-[12.5px] text-muted-foreground">
-          <input type="checkbox" checked={viewed} onChange={(e) => onViewed(e.target.checked)} />
-          Viewed
-        </label>
+        {onViewed && (
+          <label className="flex shrink-0 items-center gap-1.5 text-[12.5px] text-muted-foreground">
+            <input type="checkbox" checked={viewed} onChange={(e) => onViewed(e.target.checked)} />
+            Viewed
+          </label>
+        )}
       </div>
       {!shut && (
         <div className="code-scroll pb-1 font-mono text-[12px] leading-5">
