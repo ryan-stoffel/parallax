@@ -287,13 +287,13 @@ impl WorktreeManager {
     ///
     /// # Errors
     ///
-    /// [`WorktreeError::Timeout`] or [`WorktreeError::Spawn`].
+    /// [`WorktreeError::GitFailed`], [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`].
     pub async fn delete_ref(
         &self,
         folder: RunFolder<'_>,
         reference: &str,
     ) -> Result<(), WorktreeError> {
-        self.folder_git(folder, &["update-ref", "-d", reference])
+        self.folder_git_ok(folder, &["update-ref", "-d", reference])
             .await
             .map(drop)
     }

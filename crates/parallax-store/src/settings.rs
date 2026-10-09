@@ -39,6 +39,40 @@ const REPO_SCRIPTS: &str = "repo_scripts:";
 const RUNNING_SCRIPTS: &str = "running_scripts";
 
 impl Store {
+    /// The durable rollback step for a thread, as the daemon's JSON.
+    ///
+    /// # Errors
+    /// A database error.
+    pub fn checkpoint_revert(&self, thread: uuid::Uuid) -> Result<Option<String>, StoreError> {
+        self.text(&format!("checkpoint_revert:{thread}"))
+    }
+
+    /// Stores a rollback before provider mutation, or clears it with its completion receipt.
+    ///
+    /// # Errors
+    /// A database error.
+    pub fn set_checkpoint_revert(
+        &self,
+        thread: uuid::Uuid,
+        pending: Option<&str>,
+    ) -> Result<(), StoreError> {
+        self.set_text(&format!("checkpoint_revert:{thread}"), pending)
+    }
+
+    /// Threads with an incomplete rollback, to resume their local steps after a restart.
+    ///
+    /// # Errors
+    /// A database error.
+    pub fn checkpoint_revert_threads(&self) -> Result<Vec<String>, StoreError> {
+        Ok(self
+            .conn
+            .prepare(
+                "SELECT substr(key, 19) FROM host_settings WHERE key GLOB 'checkpoint_revert:*'",
+            )?
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
     /// Whether a run a usage limit stopped waits and resumes, unless the run overrides it
     /// (PLX-371, decision 0049). Off unless set on, as T3 Code's (0060).
     ///

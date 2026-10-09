@@ -1531,10 +1531,12 @@ pub(crate) async fn interrupt(
 pub(crate) async fn revert(
     daemon: Arc<Daemon>,
     id: RunId,
+    command_id: Uuid,
     ordinal: u32,
     restore_files: bool,
 ) -> Result<AgentRun, ErrorObject> {
     ask(&daemon, id, |reply| Command::Revert {
+        command_id,
         ordinal,
         restore_files,
         reply,
@@ -1566,6 +1568,24 @@ pub(crate) async fn queue(
 /// instead ([`wake::catch_up`], PLX-178), which placement's slots (0046) also hold to. Called
 /// once at startup, after [`recover`].
 pub(crate) async fn deliver_queued(daemon: &Arc<Daemon>, cut: Vec<RunId>) {
+    let pending = store(daemon, |db| {
+        db.checkpoint_revert_threads().map_err(|e| store_error(&e))
+    })
+    .await;
+    match pending {
+        Ok(threads) => {
+            for thread in threads {
+                if let Some(id) = Uuid::parse_str(&thread)
+                    .ok()
+                    .and_then(|id| RunId::try_from(id).ok())
+                    && let Err(error) = actor_for(daemon, id).await
+                {
+                    warn!(run = %id, %error.message, "could not resume pending checkpoint revert");
+                }
+            }
+        }
+        Err(error) => warn!(%error.message, "could not list pending checkpoint reverts"),
+    }
     for id in queued_runs(daemon).await {
         if let Err(error) = actor_for(daemon, id).await {
             warn!(run = %id, error = %error.message, "could not send a run's waiting messages");
