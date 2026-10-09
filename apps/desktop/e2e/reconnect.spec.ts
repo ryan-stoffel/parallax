@@ -86,7 +86,8 @@ test("a dropped connection resumes after the last event, with no fresh snapshot"
 
   // The deltas streamed while it was down arrive as events, with every one before them kept.
   await expect.poll(async () => (await sent()).includes("event")).toBe(true);
-  await expect(transcript).toContainText("Delta 30.", { timeout: 20_000 });
+  // Delta 31 is in, so each delta through 30 has the space that follows it.
+  await expect(transcript).toContainText("Delta 31.", { timeout: 20_000 });
   const text = (await transcript.textContent()) ?? "";
   for (let i = 1; i <= 30; i++) expect(text).toContain(`Delta ${i}. `);
   expect(await sent()).not.toContain("snapshot");
