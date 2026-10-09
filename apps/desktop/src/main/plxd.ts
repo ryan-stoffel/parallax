@@ -80,6 +80,10 @@ export function appDataDir(
   return !exists(current) && exists(legacy) ? legacy : current;
 }
 
+/** Whether `plxd service status`'s output says the service is installed and loaded. */
+export const serviceLoaded = (status: string) =>
+  /^installed: true$/m.test(status) && /^loaded: true$/m.test(status);
+
 /** What `<plxd> --version` reports ("plxd 1.2.3" → "1.2.3"), or undefined if it can't run. */
 export async function plxdVersion(plxd: string): Promise<string | undefined> {
   try {

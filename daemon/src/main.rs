@@ -159,7 +159,7 @@ struct ServiceArgs {
 #[derive(Debug, Subcommand)]
 enum ServiceCommand {
     /// Install or update the service, then start or restart it.
-    Install(ServiceOptions),
+    Install(InstallOptions),
     /// Stop the service if it is running, and remove it.
     Uninstall(ServiceOptions),
     /// Report whether the service is installed, loaded, and running.
@@ -176,6 +176,18 @@ struct ServiceOptions {
     /// Override the service's label. For tests: a real install never needs this.
     #[arg(long, value_name = "LABEL", env = SERVICE_LABEL_ENV, default_value = DEFAULT_LABEL, hide = true)]
     label: String,
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[derive(Debug, Args)]
+struct InstallOptions {
+    #[command(flatten)]
+    service: ServiceOptions,
+
+    /// Stop a plxd already serving the data folder outside the service, and hand it over to the
+    /// service, instead of refusing.
+    #[arg(long)]
+    replace: bool,
 }
 
 fn main() -> ExitCode {
@@ -465,12 +477,16 @@ fn service_command(command: ServiceCommand) -> ExitCode {
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn service_install(options: &ServiceOptions) -> ExitCode {
+fn service_install(options: &InstallOptions) -> ExitCode {
+    let InstallOptions {
+        service: options,
+        replace,
+    } = options;
     let data_dir = match resolve_data_dir(options) {
         Ok(data_dir) => data_dir,
         Err(code) => return code,
     };
-    match service::install(&options.label, &data_dir) {
+    match service::install(&options.label, &data_dir, *replace) {
         Ok(service::InstallOutcome::Installed) => {
             println!("installed and started {}", options.label);
             ExitCode::SUCCESS
@@ -695,7 +711,7 @@ mod tests {
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
-    fn service_install_takes_a_data_folder_and_a_label() {
+    fn service_install_takes_a_data_folder_a_label_and_replace() {
         let cli = Cli::try_parse_from([
             "plxd",
             "service",
@@ -704,6 +720,7 @@ mod tests {
             "/tmp/d",
             "--label",
             "io.example.test",
+            "--replace",
         ])
         .unwrap();
         let Command::Service(service) = cli.command else {
@@ -713,10 +730,11 @@ mod tests {
             panic!("expected install, got {:?}", service.command);
         };
         assert_eq!(
-            options.data_dir.as_deref(),
+            options.service.data_dir.as_deref(),
             Some(std::path::Path::new("/tmp/d"))
         );
-        assert_eq!(options.label, "io.example.test");
+        assert_eq!(options.service.label, "io.example.test");
+        assert!(options.replace);
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use super::{
     InstallOutcome, ServiceError, ServiceState, Status, UninstallOutcome, check_label_serves,
-    home_dir, prepare_install, remove_file, run, run_ok, write_file,
+    home_dir, prepare_install, remove_file, run, run_ok, stop_outside_serve, write_file,
 };
 use crate::paths::{DATA_DIR_ENV, DataDir};
 
@@ -91,14 +91,22 @@ fn escape_plist_text(text: &str) -> String {
 /// # Errors
 ///
 /// [`ServiceError::AlreadyRunningOutsideService`] when nothing is loaded under `label` yet, but
-/// something is already answering `data_dir`'s socket: bootstrapping would only start a second
-/// `serve` that fights the first one for the lock. Stop that `serve` first. Other variants for a
-/// filesystem or `launchctl` failure.
-pub fn install(label: &str, data_dir: &DataDir) -> Result<InstallOutcome, ServiceError> {
+/// something is already answering `data_dir`'s socket, unless `replace`: bootstrapping would only
+/// start a second `serve` that fights the first one for the lock. Other variants for a
+/// filesystem or `launchctl` failure, or [`ServiceError::StillRunning`].
+///
+/// With `replace`, that `serve` is stopped after the bootstrap, so an `attach` in between goes
+/// through `launchctl kickstart` rather than starting its own. Until it's gone, the service's
+/// `serve` exits 3 and launchd throttles it; a last `kickstart` starts it at once.
+pub fn install(
+    label: &str,
+    data_dir: &DataDir,
+    replace: bool,
+) -> Result<InstallOutcome, ServiceError> {
     check_label_serves(label, data_dir, DataDir::default_location().ok().as_ref())?;
     let uid = rustix::process::getuid().as_raw();
     let already_loaded = load_state(uid, label)?.loaded();
-    let program = prepare_install(data_dir, already_loaded)?;
+    let (program, outside) = prepare_install(data_dir, already_loaded, replace)?;
     let plist = render_plist(label, &program, data_dir);
     let path = plist_path(label)?;
     write_file(&path, &plist)?;
@@ -116,6 +124,10 @@ pub fn install(label: &str, data_dir: &DataDir) -> Result<InstallOutcome, Servic
         LAUNCHCTL,
         &["bootstrap", &uid_target, &path.display().to_string()],
     )?;
+    if outside {
+        stop_outside_serve(data_dir)?;
+        run_ok(LAUNCHCTL, &["kickstart", &format!("{uid_target}/{label}")])?;
+    }
 
     Ok(if already_loaded {
         InstallOutcome::Reinstalled

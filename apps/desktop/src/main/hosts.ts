@@ -1,9 +1,10 @@
 import { app, ipcMain, powerMonitor, type WebContents } from "electron";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 
 import { ErrorCodes, REQUEST_METHODS, type CliKind } from "../protocol/generated/protocol";
 import {
@@ -50,7 +51,7 @@ import {
   type Command,
   type SshTarget,
 } from "./terminal";
-import { dataDir, findPlxd, replaceServe, plxdVersion } from "./plxd";
+import { dataDir, findPlxd, replaceServe, plxdVersion, serviceLoaded } from "./plxd";
 import { isNightly } from "./updater";
 import { broadcast, perWindow } from "./windows";
 
@@ -616,6 +617,42 @@ function followConnect(on: boolean | undefined, icon?: string): void {
   broadcast("parallax:devices", deviceHosts());
 }
 
+/** Whether the local plxd runs from its login service (`keepServing`), or a handover is running. */
+let serviceState: "unknown" | "handingOver" | "done" = "unknown";
+
+/**
+ * While Connect is on, hands a packaged Mac app's local plxd over to its LaunchAgent (PLX-631).
+ * Until then plxd is the app's child: macOS lists Parallax as running in the background after it
+ * quits, and nothing starts plxd after a restart, so other computers can't reach it. Waits for no
+ * agents to be running, since stopping `serve` ends their runs, and is tried at every discovery
+ * until it's done. The connection reconnects through the LaunchAgent by itself. Linux's AppImage
+ * runs plxd from a temporary mount a service can't point at, so plx-connect installs it there.
+ */
+async function keepServing(): Promise<void> {
+  if (serviceState !== "unknown" || !app.isPackaged || process.platform !== "darwin") return;
+  const plxd = localPlxd();
+  // A translocated app runs from a random path that's gone once it quits.
+  if (!plxd || plxd.includes("/AppTranslocation/")) return;
+  serviceState = "handingOver";
+  try {
+    const run = (...args: string[]) => promisify(execFile)(plxd, args, { timeout: 60_000 });
+    if (!serviceLoaded((await run("service", "status")).stdout)) {
+      const health = await connections.get("local")?.request("host/health", {});
+      if (!health || "error" in health || health.result.runningAgents > 0) {
+        serviceState = "unknown";
+        return;
+      }
+      await run("service", "install", "--replace");
+      console.log("parallax: plxd runs from its login service now");
+    }
+    serviceState = "done";
+  } catch (error) {
+    // Tried again at the next discovery.
+    console.warn("parallax: couldn't hand plxd over to its login service:", error);
+    serviceState = "unknown";
+  }
+}
+
 /** A device's connection, `plxd dial` to its current address, unless it has one or is off. */
 function addDeviceConnection(device: SavedDevice): void {
   const id = deviceHostId(device.id);
@@ -635,6 +672,7 @@ function addDeviceConnection(device: SavedDevice): void {
 async function discover(): Promise<void> {
   const answer = await connections.get("local")?.request("connect/devices", {});
   if (!connectOn || !answer || "error" in answer) return;
+  void keepServing();
   const { devices, changed } = mergeFound(savedDevices(), answer.result.devices);
   if (changed) keepDevices(devices);
   for (const device of devices) addDeviceConnection(device);

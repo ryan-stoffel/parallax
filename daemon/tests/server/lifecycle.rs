@@ -49,6 +49,23 @@ async fn a_second_instance_is_refused_and_the_first_keeps_serving() {
 }
 
 #[tokio::test]
+async fn service_install_replace_stops_the_serve_holding_the_lock() {
+    let dir = temp_dir();
+    let mut plxd = Plxd::start(dir.path()).await;
+    let data_dir = plxd::paths::DataDir::new(dir.path()).unwrap();
+
+    tokio::task::spawn_blocking(move || plxd::service::stop_outside_serve(&data_dir))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(!plxd.is_running());
+    // A free lock is nothing to stop.
+    let data_dir = plxd::paths::DataDir::new(dir.path()).unwrap();
+    plxd::service::stop_outside_serve(&data_dir).unwrap();
+}
+
+#[tokio::test]
 async fn a_stale_socket_is_replaced() {
     let dir = temp_dir();
     let socket = socket_path(dir.path());

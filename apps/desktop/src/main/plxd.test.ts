@@ -7,6 +7,7 @@ import {
   dataDir,
   findPlxd,
   replaceServe,
+  serviceLoaded,
   type ServeSystem,
   type PlxdLookup,
 } from "./plxd";
@@ -118,4 +119,12 @@ test("a replaced serve is waited for until it exits", async () => {
   await replaceServe("/d", "1.0.0", "1.1.0", system);
   // SIGTERM, then liveness checks until the fourth finds it gone.
   expect(vi.mocked(system.kill).mock.calls).toEqual([[42], [42, 0], [42, 0], [42, 0], [42, 0]]);
+});
+
+test("the login service counts as set up only when installed and loaded", () => {
+  const status = (installed: boolean, loaded: boolean) =>
+    `label: io.github.ryan-stoffel.parallax.plxd\nfile: /Users/r/Library/LaunchAgents/x.plist\ninstalled: ${installed}\nloaded: ${loaded}\nrunning: false\npid: -\nanswers initialize: true\n`;
+  expect(serviceLoaded(status(true, true))).toBe(true);
+  expect(serviceLoaded(status(true, false))).toBe(false);
+  expect(serviceLoaded(status(false, false))).toBe(false);
 });
