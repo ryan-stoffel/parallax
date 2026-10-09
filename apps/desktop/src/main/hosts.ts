@@ -723,6 +723,8 @@ async function repointService(): Promise<void> {
       console.log(`parallax: pointed plxd's login service at ${plxd}, from the missing ${program}`);
       return;
     }
+    // Before spawning `--version` twice; `movesServiceBack` checks it again with the rest.
+    if (program !== path.join(homedir(), ".parallax-plxd", "plxd")) return;
     const [theirs, ours] = await Promise.all([plxdVersion(program), plxdVersion(plxd)]);
     // Last before the replace, so an agent has the least time to start in between.
     const health = await connections.get("local")?.request("host/health", {});
