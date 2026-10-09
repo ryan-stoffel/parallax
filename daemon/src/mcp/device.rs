@@ -410,8 +410,20 @@ impl Devices {
                 let devices = ios_devices(ios).await?;
                 let device = devices.into_iter().find(|device| device.id == *id);
                 let device = device.ok_or_else(|| not_found(id))?;
-                let args = ["simctl", "io", id, "screenshot", "--type=png", "-"];
-                (device, run(&ios.xcrun, &args, COMMAND_TIMEOUT).await?)
+                // simctl writes `-` as a file named `-`, not to stdout, so it gets a file.
+                let file = tempfile::Builder::new()
+                    .prefix("plxd-screenshot-")
+                    .suffix(".png")
+                    .tempfile()
+                    .map_err(|error| {
+                        format!("could not make a file for the screenshot: {error}")
+                    })?;
+                let path = file.path().to_string_lossy();
+                let args = ["simctl", "io", id, "screenshot", "--type=png", &path];
+                run(&ios.xcrun, &args, COMMAND_TIMEOUT).await?;
+                let png = std::fs::read(file.path())
+                    .map_err(|error| format!("could not read the screenshot: {error}"))?;
+                (device, png)
             }
             Platform::Android => {
                 let android = self.tools.android.as_ref()?;

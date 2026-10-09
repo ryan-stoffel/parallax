@@ -2167,6 +2167,10 @@ const plxdLabels: Partial<Record<string, string>> = {
   message_agent: "Messaged a subagent",
   cancel_agent: "Stopped a subagent",
   agent_diff: "Read a subagent's diff",
+  device_list: "Listed devices",
+  device_open: "Opened a device",
+  device_screenshot: "Took a device screenshot",
+  device_close: "Closed a device",
 };
 
 /**

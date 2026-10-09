@@ -73,7 +73,7 @@ fn ios(dir: &Path) -> Ios {
         "xcrun",
         r#"case "$2" in
   list) cat "$D/list.json" ;;
-  io) cat "$D/shot.png" ;;
+  io) cp "$D/shot.png" "$6" ;;
 esac"#,
     );
     Ios { xcrun, open: None }
@@ -233,7 +233,7 @@ async fn a_simulator_boots_shows_its_screen_and_shuts_down() {
         metadata["screenshot"],
         json!({"mimeType": "image/png", "width": 1, "height": 2})
     );
-    assert!(calls(&dir).contains("xcrun simctl io SIM-OFF screenshot --type=png -"));
+    assert!(calls(&dir).contains("xcrun simctl io SIM-OFF screenshot --type=png /"));
 
     let error = call(&devices, "device_screenshot", json!({"deviceId": "SIM-ON"}))
         .await
