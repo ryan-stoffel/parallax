@@ -103,7 +103,8 @@ export function serviceStep(
  * Whether `repointService` (hosts.ts) moves plxd's LaunchAgent from `program`, which runs plxd
  * `theirs`, to this app's plxd `ours`: only from the plxd an SSH client's update installed
  * (`~/.parallax-plxd/plxd` under `home`, PLX-642), only to a strictly newer version, and only with
- * no agents running (`agents`, undefined when unknown), since `--replace` restarts `serve`.
+ * no agents running (`agents`, undefined when unknown), since `--replace` restarts `serve`. macOS
+ * only, so the path is POSIX.
  */
 export const movesServiceBack = (
   program: string,
@@ -112,7 +113,7 @@ export const movesServiceBack = (
   ours: string | undefined,
   agents: number | undefined,
 ) =>
-  program === path.join(home, ".parallax-plxd", "plxd") &&
+  program === path.posix.join(home, ".parallax-plxd", "plxd") &&
   theirs !== undefined &&
   ours !== undefined &&
   olderVersion(theirs, ours) &&

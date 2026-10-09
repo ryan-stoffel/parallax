@@ -724,7 +724,7 @@ async function repointService(): Promise<void> {
       return;
     }
     // Before spawning `--version` twice; `movesServiceBack` checks it again with the rest.
-    if (program !== path.join(homedir(), ".parallax-plxd", "plxd")) return;
+    if (program !== path.posix.join(homedir(), ".parallax-plxd", "plxd")) return;
     const [theirs, ours] = await Promise.all([plxdVersion(program), plxdVersion(plxd)]);
     // Last before the replace, so an agent has the least time to start in between.
     const health = await connections.get("local")?.request("host/health", {});
