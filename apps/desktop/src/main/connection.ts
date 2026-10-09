@@ -95,12 +95,14 @@ const MUTATING_METHODS = new Set([
 export const backoffMs = (failures: number) => Math.min(1000 * 2 ** failures, 10_000);
 
 /**
- * Runs `plxd attach` on a macOS or Linux host from PATH, where it may have been added since, else
- * from where Parallax and plx-connect put plxd (PLX-580): `~/.local/bin`, or inside the app in
- * `/Applications` or `~/Applications`, either channel. A computer with Parallax from the dmg has no plxd on PATH. Exits 127 when none is
- * there. It's one argument to ssh, which the host's login shell runs.
+ * Runs `plxd attach` on a macOS or Linux host from `~/.parallax-plxd`, where the app installs plxd
+ * at its own version (`installPlxd`, PLX-642); else from PATH, where it may have been added since;
+ * else from where Parallax and plx-connect put plxd (PLX-580): `~/.local/bin`, or inside the app
+ * in `/Applications` or `~/Applications`, either channel. A computer with Parallax from the dmg
+ * has no plxd on PATH. Exits 127 when none is there. It's one argument to ssh, which the host's
+ * login shell runs.
  */
-export const LOCATE_PLXD = `sh -c 'command -v plxd >/dev/null && exec plxd attach; for p in "$HOME/.local/bin/plxd" "/Applications/Parallax.app/Contents/Resources/plxd" "/Applications/Parallax (Nightly).app/Contents/Resources/plxd" "$HOME/Applications/Parallax.app/Contents/Resources/plxd" "$HOME/Applications/Parallax (Nightly).app/Contents/Resources/plxd"; do [ -x "$p" ] && exec "$p" attach; done; exit 127'`;
+export const LOCATE_PLXD = `sh -c '[ -x "$HOME/.parallax-plxd/plxd" ] && exec "$HOME/.parallax-plxd/plxd" attach; command -v plxd >/dev/null && exec plxd attach; for p in "$HOME/.local/bin/plxd" "/Applications/Parallax.app/Contents/Resources/plxd" "/Applications/Parallax (Nightly).app/Contents/Resources/plxd" "$HOME/Applications/Parallax.app/Contents/Resources/plxd" "$HOME/Applications/Parallax (Nightly).app/Contents/Resources/plxd"; do [ -x "$p" ] && exec "$p" attach; done; exit 127'`;
 
 /**
  * Where a host's Sign in (0007) leaves its ssh master: a Unix socket named by ssh's `%C`, a hash of
@@ -111,8 +113,8 @@ export const LOCATE_PLXD = `sh -c 'command -v plxd >/dev/null && exec plxd attac
 export const SSH_CONTROL_PATH = "~/.ssh/parallax-%C";
 
 /**
- * The command that reaches an SSH host's plxd (0007, 0022): `plxd attach` on its PATH, or with
- * `locate`, `LOCATE_PLXD`. The destination was checked when it was saved (`checkHost`), and `--`
+ * The ssh command that runs `remote` on an SSH host (0007, 0022): by default `plxd attach` on its
+ * PATH, or `[LOCATE_PLXD]`. The destination was checked when it was saved (`checkHost`), and `--`
  * keeps ssh from reading it as an option. `ssh` is the program, which a setting can override
  * (0023).
  * - Never prompts (`BatchMode`), so a password or 2FA host connects only through the master its
@@ -122,7 +124,7 @@ export const SSH_CONTROL_PATH = "~/.ssh/parallax-%C";
 export const sshCommand = (
   destination: string,
   ssh = "ssh",
-  locate = false,
+  remote = ["plxd", "attach"],
   platform = process.platform,
 ) => [
   ssh,
@@ -136,7 +138,7 @@ export const sshCommand = (
     : ["-o", "ControlMaster=no", "-o", `ControlPath=${SSH_CONTROL_PATH}`]),
   "--",
   destination,
-  ...(locate ? [LOCATE_PLXD] : ["plxd", "attach"]),
+  ...remote,
 ];
 
 export type ConnectionOptions = {
@@ -532,7 +534,7 @@ export function exitError(
     if (code === 127 || /not recognized as an internal or external command/.test(stderr)) {
       return error(
         "notFound",
-        `Parallax couldn't find plxd on ${destination}: it isn't on PATH for ssh commands, in ~/.local/bin, or in a Parallax app in Applications. Install Parallax there, or add plxd's folder to PATH in the shell file that ssh commands read.`,
+        `Parallax couldn't find plxd on ${destination}: it isn't on PATH for ssh commands, in ~/.local/bin, or in a Parallax app in Applications. Install plxd from Settings > Connections, or add plxd's folder to PATH in the shell file that ssh commands read.`,
       );
     }
     if (code === 255 && stderr.includes("Could not resolve hostname")) {

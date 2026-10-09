@@ -72,6 +72,7 @@ beforeEach(() => {
   };
   window.parallax = {
     platform: "darwin",
+    version: async () => "0.0.0-local",
     terminalApp: async () => null,
     openTargetIcons: async () => ({}),
     connectionState: async (hostId) => states[hostId]!,
@@ -622,6 +623,27 @@ test("Connections renames this computer", async () => {
   input.value = "macbook";
   await act(async () => input.form!.requestSubmit());
   expect(renameLocal).toHaveBeenCalledWith("macbook");
+});
+
+test("Connections installs plxd on an SSH host without it, in one click", async () => {
+  const installPlxd = vi.fn(async () => undefined);
+  Object.assign(window.parallax, { installPlxd, version: async () => "2610.10903.13317-nightly" });
+  const before = states[mini.id]!;
+  states[mini.id] = {
+    status: "failed",
+    retrying: false,
+    error: { reason: "notFound", message: "Parallax couldn't find plxd on mini.", exitCode: 127 },
+  };
+  try {
+    await renderSettings("connections");
+    expect(document.body.textContent).toContain(
+      "plxd isn't on Mac mini. Install downloads plxd 2610.10903.13317-nightly there from GitHub, checks its SHA256",
+    );
+    await click(button(document.body, "Install plxd"));
+    expect(installPlxd).toHaveBeenCalledWith(mini.id);
+  } finally {
+    states[mini.id] = before;
+  }
 });
 
 test("Typography's sizes and Word wrap are kept, and Advanced takes any font's name", async () => {

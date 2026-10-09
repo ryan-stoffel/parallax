@@ -180,6 +180,12 @@ export interface ParallaxBridge {
    * people, or undefined.
    */
   removeHost(id: string): Promise<string | undefined>;
+  /**
+   * Installs this app's plxd release in `~/.parallax-plxd` on an SSH host, checked against the
+   * release's SHA256 for it, then reconnects to it, from then on (PLX-642). Resolves to an error
+   * for people, or undefined.
+   */
+  installPlxd(id: string): Promise<string | undefined>;
 
   /** Parallax Connect here (0056). Calls `listener` now and on every change. Returns the unsubscribe function. */
   onConnect(listener: (state: ConnectState) => void): () => void;
@@ -363,7 +369,13 @@ export type RegistryAgent = {
 export type TerminalMessage = { type: "data"; data: string } | { type: "exit"; exitCode: number };
 
 /** A host the user added, reached with `ssh <destination> plxd attach` (0022). */
-export type SshHost = { id: string; name: string; destination: string };
+export type SshHost = {
+  id: string;
+  name: string;
+  destination: string;
+  /** Parallax installed plxd there (PLX-642), so it connects through that one from the start. */
+  plxdInstalled?: true;
+};
 
 /** What the Hosts settings edit. The main process checks it and picks the id. */
 export type HostInput = { name: string; destination: string };

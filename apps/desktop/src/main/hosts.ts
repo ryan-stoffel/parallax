@@ -33,7 +33,8 @@ import {
   mergeFound,
   type SavedDevice,
 } from "./connect";
-import { Connection, sshCommand } from "./connection";
+import { Connection, LOCATE_PLXD, sshCommand } from "./connection";
+import { installPlxd } from "./installPlxd";
 import { checkHost, readSettings, writeSettings, type Settings } from "./settings";
 import { sshSuggestions } from "./sshConfig";
 import {
@@ -97,7 +98,7 @@ export function startHosts(): void {
     settingsError = `Parallax can't use ${settingsFile()}, so it won't save over it: ${(error as Error).message.replace(/\.$/, "")}. Fix or remove the file, then restart Parallax.`;
     console.error(settingsError);
   }
-  for (const host of settings.hosts) addSshConnection(host);
+  for (const host of settings.hosts) addSshConnection(host, host.plxdInstalled);
   void findConnect(connectProgram(), homedir()).then((found) => {
     connectInstalled = found;
     broadcast("parallax:connect", connectState());
@@ -126,6 +127,7 @@ export function startHosts(): void {
   ipcMain.handle("parallax:sshSuggestions", () => sshSuggestions(homedir()));
   ipcMain.handle("parallax:saveHost", (_event, input: unknown, id: unknown) => saveHost(input, id));
   ipcMain.handle("parallax:removeHost", (_event, id: unknown) => removeHost(id));
+  ipcMain.handle("parallax:installPlxd", (_event, id: unknown) => installPlxdOn(id));
   ipcMain.handle("parallax:localName", () => localName());
   ipcMain.handle("parallax:renameLocal", (_event, name: unknown) => {
     if (typeof name !== "string") return "invalid name";
@@ -483,15 +485,40 @@ function addConnection(
 }
 
 /**
- * SSH hosts whose `plxd attach` wasn't found, which run `LOCATE_PLXD` instead until the app
- * quits or the host's destination changes.
+ * SSH hosts that run `LOCATE_PLXD` instead of `plxd attach` from PATH: those the app installed plxd
+ * on (`plxdInstalled`, PLX-642), and those where PATH had none, until the app quits or the host's
+ * destination changes.
  */
 const locating = new Set<string>();
 
-function addSshConnection({ id, destination }: SshHost): void {
-  locating.delete(id);
-  addConnection(id, () => sshCommand(destination, settings.ssh, locating.has(id)), {
-    destination,
+/** Starts an SSH host's connection, with `locate` through `LOCATE_PLXD` from the start. */
+function addSshConnection({ id, destination }: SshHost, locate?: boolean): void {
+  if (locate) locating.add(id);
+  else locating.delete(id);
+  addConnection(
+    id,
+    () => sshCommand(destination, settings.ssh, locating.has(id) ? [LOCATE_PLXD] : undefined),
+    { destination },
+  );
+}
+
+/**
+ * `window.parallax.installPlxd`: installs this app's plxd on an SSH host (`installPlxd`), saves
+ * that on the host, then reconnects it through `LOCATE_PLXD`, which runs that one first, from now
+ * on. Resolves to an error for people.
+ */
+async function installPlxdOn(id: unknown): Promise<string | undefined> {
+  const host = typeof id === "string" ? savedHost(id) : undefined;
+  if (!host) return "That host isn't in Parallax anymore.";
+  const error = await installPlxd(host.destination, app.getVersion(), settings.ssh);
+  // Removed or edited meanwhile: its connection isn't this one's to restart.
+  const now = savedHost(host.id);
+  if (error || now?.destination !== host.destination) return error;
+  const installed: SshHost = { ...now, plxdInstalled: true };
+  addSshConnection(installed, true);
+  return saveSettings({
+    ...settings,
+    hosts: settings.hosts.map((h) => (h === now ? installed : h)),
   });
 }
 
@@ -503,7 +530,12 @@ function saveHost(input: unknown, id: unknown): string | undefined {
   if (typeof checked === "string") return checked;
   const old = settings.hosts.find((h) => h.id === id);
   if (id !== undefined && !old) return "That host isn't in Parallax anymore.";
-  const host: SshHost = { id: old?.id ?? randomUUID(), ...checked };
+  const host: SshHost = {
+    id: old?.id ?? randomUUID(),
+    ...checked,
+    // The plxd Parallax installed is on the old destination's host.
+    ...(old?.plxdInstalled && old.destination === checked.destination && { plxdInstalled: true }),
+  };
   const hosts = old ? settings.hosts.map((h) => (h === old ? host : h)) : [...settings.hosts, host];
   const error = saveSettings({ ...settings, hosts });
   if (error) return error;

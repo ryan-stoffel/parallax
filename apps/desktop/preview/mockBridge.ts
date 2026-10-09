@@ -1197,6 +1197,7 @@ export const mockBridge: ParallaxBridge = {
   },
   saveHost: () => delay("Hosts can't be added in the preview."),
   removeHost: () => delay(undefined),
+  installPlxd: () => delay("plxd can't be installed in the preview."),
 
   onConnect: (listener) => {
     listener({ ...connect });

@@ -42,7 +42,7 @@ export function readSettings(file: string): Settings {
     throw new Error("`localName` isn't a string");
   const ids = new Set(["local"]);
   for (const entry of hosts as unknown[]) {
-    const { id, name, destination } = (entry ?? {}) as Record<string, unknown>;
+    const { id, name, destination, plxdInstalled } = (entry ?? {}) as Record<string, unknown>;
     const where = `host ${JSON.stringify(entry)}`;
     if (typeof id !== "string" || !id || ids.has(id)) throw new Error(`${where} has a bad id`);
     ids.add(id);
@@ -52,6 +52,8 @@ export function readSettings(file: string): Settings {
     const checked = checkHost({ name, destination });
     if (typeof checked === "string") throw new Error(`${where}: ${checked}`);
     if (checked.destination !== destination) throw new Error(`${where} has spaces around it`);
+    if (plxdInstalled !== undefined && plxdInstalled !== true)
+      throw new Error(`${where} has a bad plxdInstalled`);
   }
   if (!Array.isArray(devices)) throw new Error("`devices` isn't a list");
   for (const entry of devices as unknown[]) {
