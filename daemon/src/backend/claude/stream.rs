@@ -119,6 +119,8 @@ pub(super) struct TurnDone {
     pub queued: Option<u64>,
     /// The turn's final text, when it succeeded.
     pub result: Option<String>,
+    /// Where the session stood when it ended, for a rewind to it.
+    pub cursor: Option<String>,
 }
 
 /// The state that reading one run's output needs.
@@ -173,6 +175,9 @@ pub(super) struct Translator {
     pub last_failure: Option<Failure>,
     /// The last successful `result`'s text.
     pub last_result: Option<String>,
+    /// The `uuid` of the session's last transcript entry the CLI wrote: its last assistant
+    /// message or tool result outside a subagent, where a rewind resumes ([`Event::TurnCursor`]).
+    cursor: Option<String>,
 }
 
 impl Translator {
@@ -235,6 +240,7 @@ impl Translator {
             usage_message: None,
             last_failure: None,
             last_result: None,
+            cursor: None,
         }
     }
 
@@ -300,6 +306,12 @@ impl Translator {
                 "a line that is not a JSON object".into(),
             )];
         };
+        if matches!(text(&message, "type"), Some("assistant" | "user"))
+            && message.get("parent_tool_use_id").is_none_or(Value::is_null)
+            && let Some(uuid) = text(&message, "uuid")
+        {
+            self.cursor = Some(uuid.to_owned());
+        }
         match text(&message, "type") {
             Some("system") => self.system(&message),
             Some("assistant") => self.assistant(&message),
@@ -715,6 +727,7 @@ impl Translator {
             uuids,
             queued: message.get("queued_turn_count").and_then(Value::as_u64),
             result: if failed { None } else { result },
+            cursor: self.cursor.clone(),
         }));
         steps
     }

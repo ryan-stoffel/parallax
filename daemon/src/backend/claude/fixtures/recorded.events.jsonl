@@ -15,5 +15,6 @@
 {"kind":"text","messageId":"msg_011Cfi4GPuSmHrKPHcFUiM7y","text":"I read README.md (first line: `# demo`) and created notes.txt containing \"hi\"."}
 {"cachedInputTokens":36458,"contextTokens":36809,"contextWindow":200000,"inputTokens":36809,"kind":"requestUsage","model":"claude-haiku-4-5-20251001","outputMs":21513,"outputTokens":1780}
 {"cacheReadTokens":108234,"cacheWriteTokens":47393,"costUsdMicros":95492,"inputTokens":44,"kind":"usage","model":"claude-haiku-4-5","outputTokens":1780}
+{"cursor":"83dcbee9-0e17-466e-9061-0a8a5a576574","kind":"turnCursor","turnId":"01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01"}
 {"kind":"turnFinished","result":"I read README.md (first line: `# demo`) and created notes.txt containing \"hi\".","turnId":"01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01"}
 {"kind":"finished","outcome":{"result":"I read README.md (first line: `# demo`) and created notes.txt containing \"hi\".","status":"completed"},"usageTotals":[{"cacheReadTokens":108234,"cacheWriteTokens":47393,"costUsdMicros":95492,"inputTokens":44,"model":"claude-haiku-4-5","outputTokens":1780}]}

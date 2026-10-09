@@ -689,7 +689,7 @@ fn start(
     }
 }
 
-fn check_working_directory(cwd: &Path) -> Result<(), SpawnError> {
+pub(crate) fn check_working_directory(cwd: &Path) -> Result<(), SpawnError> {
     let bad = |reason: &str| SpawnError::BadWorkingDirectory {
         cwd: cwd.to_owned(),
         reason: reason.to_owned(),

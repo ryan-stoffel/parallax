@@ -1,0 +1,15 @@
+{
+  "name": "parallax-claude-agent-sdk",
+  "private": true,
+  "type": "module",
+  "description": "Parallax's Claude Agent SDK sidecar. plxd starts it; it is not a package anyone installs.",
+  "scripts": {
+    "test": "node --test src/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.16"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.276"
+  }
+}

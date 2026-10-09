@@ -18,6 +18,8 @@ use tokio::sync::mpsc;
 
 use crate::detect;
 
+use super::node_sdk::NodeSdk;
+
 use super::event::todo_status;
 use super::process::{
     CancelPolicy, Exit, Launcher, Output, Process, ProcessSpec, Signals, StdinMode, write_lines,
@@ -179,179 +181,32 @@ impl Backend for CursorSdkBackend {
     }
 }
 
+/// The Cursor SDK the sidecar runs, installed on first use (PLX-626).
+pub(crate) static SDK: NodeSdk = NodeSdk {
+    name: "Cursor SDK",
+    dir: "cursor-sdk",
+    repo: "cursor",
+    pin: "/dependencies/@cursor~1sdk",
+    npm: &["ci", "--omit=dev", "--no-audit", "--no-fund"],
+    node_required: NODE_REQUIRED,
+};
+
 /// Whether the sidecar's files are in the repo or beside `plxd`, installed or not.
 #[must_use]
 pub(crate) fn script_present() -> bool {
-    source_dir().join("src").join("main.mjs").is_file()
+    SDK.script_present()
 }
 
 const NODE_REQUIRED: &str = "Node.js 22.13 or newer is required";
-
-const INSTALLING_NOTE: &str = "Installing the Cursor SDK…";
-
-/// An install in the background, per SDK folder: whether one is running, and why the last failed.
-#[derive(Default)]
-struct InstallState {
-    installing: bool,
-    failure: Option<String>,
-}
-
-static INSTALLS: std::sync::LazyLock<Mutex<HashMap<PathBuf, InstallState>>> =
-    std::sync::LazyLock::new(Mutex::default);
-
-/// Starts [`install`] in the background unless the SDK is installed or installing. With `retry`
-/// false it doesn't start again after a failure, so a probe while offline doesn't run npm each
-/// time; Install retries.
-///
-/// # Errors
-///
-/// When this plxd has no sidecar to install.
-pub(crate) fn start_install(launcher: &Launcher, retry: bool) -> Result<(), String> {
-    if pin(&source_dir()).is_none() {
-        return Err(NO_SIDECAR.into());
-    }
-    let key = installs_dir(launcher);
-    {
-        let mut installs = INSTALLS.lock().unwrap_or_else(PoisonError::into_inner);
-        let state = installs.entry(key.clone()).or_default();
-        if state.installing || installed(launcher).is_some() || (!retry && state.failure.is_some())
-        {
-            return Ok(());
-        }
-        state.installing = true;
-        state.failure = None;
-    }
-    let launcher = launcher.clone();
-    tokio::spawn(async move {
-        let failure = install(&launcher).await.err();
-        let mut installs = INSTALLS.lock().unwrap_or_else(PoisonError::into_inner);
-        *installs.entry(key).or_default() = InstallState {
-            installing: false,
-            failure,
-        };
-    });
-    Ok(())
-}
-
-/// Whether an install is running, and why the last one failed.
-fn install_state(launcher: &Launcher) -> (bool, Option<String>) {
-    INSTALLS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get(&installs_dir(launcher))
-        .map_or((false, None), |state| {
-            (state.installing, state.failure.clone())
-        })
-}
-
-const NO_SIDECAR: &str = "This plxd doesn't include the Cursor SDK sidecar.";
-
-/// Installs the SDK version the sidecar pins into `<data>/tools/cursor-sdk/<version>/` with
-/// `npm ci --omit=dev`, unless it's there, then removes every other version. Returns what went
-/// wrong, for people. [`start_install`] runs it one at a time.
-pub(crate) async fn install(launcher: &Launcher) -> Result<(), String> {
-    let source = source_dir();
-    let pin = pin(&source).ok_or(NO_SIDECAR)?;
-    let root = installs_dir(launcher);
-    let target = root.join(&pin);
-    if !target.is_dir() {
-        if detect::resolve(launcher, "node").is_none() {
-            return Err(format!("{NODE_REQUIRED} to install the Cursor SDK"));
-        }
-        if detect::resolve(launcher, "npm").is_none() {
-            return Err("npm is required to install the Cursor SDK".into());
-        }
-        let failed = |error: std::io::Error| format!("Couldn't install the Cursor SDK: {error}");
-        std::fs::create_dir_all(&root).map_err(failed)?;
-        // Removed on drop, with whatever is still in it.
-        let temp = tempfile::Builder::new()
-            .prefix(".install-")
-            .tempdir_in(&root)
-            .map_err(failed)?;
-        for name in ["package.json", "package-lock.json"] {
-            std::fs::copy(source.join(name), temp.path().join(name)).map_err(failed)?;
-        }
-        let mut spec = ProcessSpec::new("npm", temp.path());
-        spec.args = ["ci", "--omit=dev", "--no-audit", "--no-fund"]
-            .into_iter()
-            .map(Into::into)
-            .collect();
-        let ran = detect::run_spec(launcher, &spec, b"", Duration::from_secs(600))
-            .await
-            .map_err(|error| format!("Couldn't install the Cursor SDK: npm {error}"))?;
-        if ran.exit_code != Some(0) {
-            let why = ran
-                .stderr_tail
-                .trim()
-                .lines()
-                .last()
-                .unwrap_or("npm failed");
-            return Err(format!("Couldn't install the Cursor SDK: {why}"));
-        }
-        std::fs::rename(temp.path(), &target).map_err(failed)?;
-    }
-    remove_others(&root, &pin);
-    Ok(())
-}
-
-/// Removes everything in `root` but `keep`: older versions, and what a stopped install left.
-/// ponytail: a version a running sidecar still holds open on Windows stays until the next install.
-fn remove_others(root: &Path, keep: &str) {
-    for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
-        if entry.file_name() != keep {
-            let _ = std::fs::remove_dir_all(entry.path());
-        }
-    }
-}
-
-/// The installed SDK for the version the sidecar pins, if it's there.
-pub(crate) fn installed(launcher: &Launcher) -> Option<PathBuf> {
-    let dir = installs_dir(launcher).join(pin(&source_dir())?);
-    dir.is_dir().then_some(dir)
-}
 
 /// Whether the user chose Cursor before: some SDK version is installed, or an instance signed in
 /// (`cursor-sdk/<instance>/auth.json`), as with the SDK the app shipped before PLX-626.
 fn chose_cursor(launcher: &Launcher) -> bool {
     let entries = |dir: PathBuf| std::fs::read_dir(dir).into_iter().flatten().flatten();
-    entries(installs_dir(launcher))
+    entries(SDK.installs_dir(launcher))
         .any(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
         || entries(launcher.data_dir().root().join("cursor-sdk"))
             .any(|entry| entry.path().join("auth.json").is_file())
-}
-
-fn installs_dir(launcher: &Launcher) -> PathBuf {
-    launcher.data_dir().tools_dir().join("cursor-sdk")
-}
-
-/// The `@cursor/sdk` version `source`'s package.json pins.
-fn pin(source: &Path) -> Option<String> {
-    let bytes = std::fs::read(source.join("package.json")).ok()?;
-    let value: Value = serde_json::from_slice(&bytes).ok()?;
-    let pin = value.pointer("/dependencies/@cursor~1sdk")?.as_str()?;
-    (!pin.is_empty()
-        && pin
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || ".-".contains(c)))
-    .then(|| pin.to_owned())
-}
-
-/// Copies the shipped `src/` files into `dir`'s when they differ, each by a rename, so an app
-/// update that keeps the SDK version still runs its own sidecar.
-fn sync_sources(source: &Path, dir: &Path) -> std::io::Result<()> {
-    let to = dir.join("src");
-    std::fs::create_dir_all(&to)?;
-    for entry in std::fs::read_dir(source.join("src"))? {
-        let entry = entry?;
-        let want = std::fs::read(entry.path())?;
-        let path = to.join(entry.file_name());
-        if std::fs::read(&path).ok().as_ref() != Some(&want) {
-            let mut temp = tempfile::NamedTempFile::new_in(&to)?;
-            std::io::Write::write_all(&mut temp, &want)?;
-            temp.persist(&path)?;
-        }
-    }
-    Ok(())
 }
 
 /// What a status probe found. `installed` is true when the SDK is, even if Node is not.
@@ -465,18 +320,18 @@ pub(crate) async fn inspect(
 pub(crate) fn unready(launcher: &Launcher, chose: bool) -> Option<Report> {
     if !script_present() {
         return Some(Report {
-            note: Some(NO_SIDECAR.into()),
+            note: Some(SDK.no_sidecar()),
             ..Report::default()
         });
     }
     let has_node = detect::resolve(launcher, "node").is_some();
-    if installed(launcher).is_none() {
+    if SDK.installed(launcher).is_none() {
         if chose || chose_cursor(launcher) {
-            let _ = start_install(launcher, false);
+            let _ = SDK.start_install(launcher, false);
         }
-        let (installing, failure) = install_state(launcher);
+        let (installing, failure) = SDK.install_state(launcher);
         let note = if installing {
-            Some(INSTALLING_NOTE.to_owned())
+            Some(SDK.installing_note())
         } else {
             failure.or_else(|| (!has_node).then(|| NODE_REQUIRED.to_owned()))
         };
@@ -626,7 +481,7 @@ impl CursorAuth {
     ///
     /// When this plxd has no sidecar to install.
     pub fn install(&self) -> Result<(), String> {
-        start_install(&self.launcher, true)
+        SDK.start_install(&self.launcher, true)
     }
 
     /// Forgets the stored login for `instance`.
@@ -1009,19 +864,6 @@ fn instance_paths(launcher: &Launcher, instance: &str) -> (PathBuf, PathBuf) {
     (dir.join("auth.json"), dir.join("agents"))
 }
 
-/// The sidecar's files: `cursor-sdk/` beside `plxd` in the app, else the repo's `sidecar/cursor`.
-fn source_dir() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        let bundled = dir.join("cursor-sdk");
-        if bundled.join("package.json").is_file() {
-            return bundled;
-        }
-    }
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../sidecar/cursor"))
-}
-
 fn override_program(launcher: &Launcher) -> Option<PathBuf> {
     let raw = launcher.base().get("PLXD_CURSOR_SDK")?;
     let path = PathBuf::from(raw);
@@ -1084,7 +926,7 @@ fn str_of<'a>(value: &'a Value, name: &str) -> Option<&'a str> {
 /// `node` and the installed sidecar's `main.mjs`, its files brought up to date. Without the SDK,
 /// it starts installing it for someone who chose Cursor (see [`unready`]).
 fn sidecar(launcher: &Launcher, chose: bool) -> Result<(PathBuf, PathBuf), StartError> {
-    let Some(dir) = installed(launcher) else {
+    let Some(dir) = SDK.installed(launcher) else {
         let why = unready(launcher, chose)
             .and_then(|report| report.note)
             .filter(|note| note != NODE_REQUIRED)
@@ -1093,13 +935,13 @@ fn sidecar(launcher: &Launcher, chose: bool) -> Result<(PathBuf, PathBuf), Start
     };
     let node = detect::resolve(launcher, "node")
         .ok_or_else(|| StartError::Unsupported(format!("{NODE_REQUIRED} to run Cursor")))?;
-    sync_sources(&source_dir(), &dir).map_err(|error| {
+    let script = SDK.main_script(&dir).map_err(|error| {
         StartError::Invalid(format!(
             "couldn't update the Cursor SDK sidecar in {}: {error}",
             dir.display()
         ))
     })?;
-    Ok((node, dir.join("src").join("main.mjs")))
+    Ok((node, script))
 }
 
 fn message_of(value: &Value) -> String {
@@ -1412,9 +1254,9 @@ wait
         assert!(!report.installed && !report.installing);
         assert_eq!(npm_runs(&root), 0, "a probe ran npm");
 
-        super::start_install(&launcher, true).unwrap();
+        super::SDK.start_install(&launcher, true).unwrap();
         settled(&launcher).await;
-        let installed = super::installed(&launcher).unwrap();
+        let installed = super::SDK.installed(&launcher).unwrap();
         assert!(installed.join("node_modules").is_dir());
         assert!(installed.join("package-lock.json").is_file());
     }
@@ -1427,12 +1269,15 @@ wait
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let launcher = npm_launcher(&root, "sleep 0.3; mkdir node_modules");
-        let installs = super::installs_dir(&launcher);
+        let installs = super::SDK.installs_dir(&launcher);
         fs::create_dir_all(installs.join("0.0.1").join("node_modules")).unwrap();
         fs::create_dir_all(installs.join(".install-stopped")).unwrap();
         let report = super::inspect(&launcher, "cursor", &[], Duration::from_secs(5)).await;
         assert!(report.installing, "{report:?}");
-        assert_eq!(report.note.as_deref(), Some(super::INSTALLING_NOTE));
+        assert_eq!(
+            report.note.as_deref(),
+            Some(super::SDK.installing_note().as_str())
+        );
         settled(&launcher).await;
         assert_eq!(npm_runs(&root), 1);
         let left: Vec<_> = fs::read_dir(&installs)
@@ -1441,7 +1286,13 @@ wait
             .collect();
         assert_eq!(
             left,
-            [super::pin(&super::source_dir()).unwrap()],
+            [super::SDK
+                .installed(&launcher)
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()],
             "only the pinned version is left"
         );
     }
@@ -1467,7 +1318,7 @@ wait
         let _ = super::inspect(&launcher, "cursor", &[], Duration::from_secs(5)).await;
         assert_eq!(npm_runs(&root), 1, "a probe retried npm");
 
-        super::start_install(&launcher, true).unwrap();
+        super::SDK.start_install(&launcher, true).unwrap();
         settled(&launcher).await;
         assert_eq!(npm_runs(&root), 2, "Install retries");
     }

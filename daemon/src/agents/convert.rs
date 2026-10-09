@@ -405,6 +405,7 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
         Event::ApprovalRequested(_)
         | Event::ApprovalWithdrawn { .. }
         | Event::RequestUsage(_)
+        | Event::TurnCursor { .. }
         | Event::RateLimit(_)
         | Event::AccountFallback { .. }
         | Event::Finished { .. }

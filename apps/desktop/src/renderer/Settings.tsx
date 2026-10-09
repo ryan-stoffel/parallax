@@ -1282,6 +1282,16 @@ function InstancePane({
                 onSave={(args) => void save({ args: argsOf(args) })}
               />
             </Row>
+            {/* plxd notes the SDK installing, or the Node.js it needs (0061). */}
+            {instance.kind === "claude" && (
+              <Row
+                title="Claude Agent SDK"
+                description={
+                  info.note ??
+                  "Runs Claude Code through the Agent SDK on this host. Needs Node.js 22.16 or newer."
+                }
+              />
+            )}
           </>
         )}
       </Section>
