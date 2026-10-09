@@ -225,6 +225,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         AgentEvents => |p| agent::events(context, p),
         AgentWait => |p| agents::wait::wait(context, p),
         AgentImage => |p| agents::image(daemon, p),
+        AgentAttach => |p| agents::attach(daemon, p),
         AgentDiff => |p| agents::review::diff(daemon, p.run_id),
         AgentFile => |p| agents::review::file(daemon, p),
         AgentFiles => |p| agents::review::files(daemon, p),

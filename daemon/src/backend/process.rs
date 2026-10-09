@@ -473,6 +473,71 @@ impl Launcher {
     }
 }
 
+/// A process [`Launcher::spawn_raw`] started: its stdin and stdout as raw pipes, for a protocol
+/// that isn't lines, such as Chrome's NUL-delimited `DevTools` pipe (PLX-639). Dropping it kills the
+/// process's group, as dropping a [`Process`] does.
+#[cfg(unix)]
+pub struct RawProcess {
+    signals: Signals,
+    /// The write end of its stdin, until taken.
+    pub stdin: Option<StdinPipe>,
+    /// The read end of its stdout, until taken.
+    pub stdout: Option<tokio::net::unix::pipe::Receiver>,
+    stderr: Arc<Mutex<Tail>>,
+}
+
+#[cfg(unix)]
+impl RawProcess {
+    /// The end of its stderr so far, decoded lossily and trimmed.
+    pub fn stderr_tail(&self) -> String {
+        self.stderr
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .text()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RawProcess {
+    fn drop(&mut self) {
+        let _ = self.signals.signal_group(Signal::KILL);
+    }
+}
+
+#[cfg(unix)]
+impl Launcher {
+    /// Starts `spec` as [`Launcher::spawn`] does, with stdin piped whatever `spec.stdin` says,
+    /// but hands back stdout raw. Its stderr's tail is kept, and it is reaped in the background.
+    ///
+    /// # Errors
+    ///
+    /// As [`Launcher::spawn`].
+    pub fn spawn_raw(&self, spec: &ProcessSpec) -> Result<RawProcess, SpawnError> {
+        let spec = ProcessSpec {
+            stdin: StdinMode::Piped,
+            ..spec.clone()
+        };
+        let env = self.environment(&spec);
+        check_working_directory(&spec.cwd)?;
+        let program = find_program(&spec.program, env.get("PATH"))?;
+        let Started {
+            signals,
+            exited: _,
+            stdin,
+            stdout,
+            stderr,
+        } = start(&spec, &program, &env)?;
+        let tail = Arc::new(Mutex::new(Tail::new(spec.limits.stderr_tail_bytes)));
+        tokio::spawn(read_stderr(stderr, Arc::clone(&tail), None));
+        Ok(RawProcess {
+            signals,
+            stdin,
+            stdout: Some(stdout),
+            stderr: tail,
+        })
+    }
+}
+
 /// A process [`start`] started, and its pipes.
 struct Started<O, E> {
     signals: Signals,

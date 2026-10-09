@@ -49,6 +49,7 @@
 mod agents;
 pub mod attach;
 pub mod backend;
+mod browser;
 mod commands;
 mod context;
 mod detect;

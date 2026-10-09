@@ -41,7 +41,9 @@ uuid_v7_id! {
     ImageId
 }
 
-/// An image's file type (PLX-191): the four that Claude and Codex both take.
+/// An image's file type (PLX-191): the four that Claude and Codex both take, plus the types of
+/// what a run's browser tools attach (PLX-639): an `html_render` page and a recording. A message's
+/// images take only the four.
 ///
 /// A newer peer may send a type this version does not know; treat it as unknown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -58,6 +60,12 @@ pub enum ImageMediaType {
     /// WebP.
     #[serde(rename = "image/webp")]
     Webp,
+    /// An `html_render` page (PLX-639).
+    #[serde(rename = "text/html")]
+    Html,
+    /// A browser recording (PLX-639).
+    #[serde(rename = "video/webm")]
+    Webm,
     /// A type this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -1058,6 +1066,25 @@ pub struct AgentImageParams {
     /// The run.
     pub run_id: RunId,
     /// The image.
+    pub image_id: ImageId,
+}
+
+/// Params of `agent/attach`: a page or recording one of a run's tools made, kept with the run's
+/// images (PLX-639). Its result names it for `agent/image`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAttachParams {
+    /// The run.
+    pub run_id: RunId,
+    /// The attachment, of type `text/html` or `video/webm`.
+    pub attachment: PromptImage,
+}
+
+/// Result of `agent/attach`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAttachResult {
+    /// The attachment's id, for `agent/image`.
     pub image_id: ImageId,
 }
 

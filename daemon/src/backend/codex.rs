@@ -133,7 +133,7 @@ pub fn write_images(
             ImageMediaType::Jpeg => "jpg",
             ImageMediaType::Gif => "gif",
             ImageMediaType::Webp => "webp",
-            ImageMediaType::Unknown => "bin",
+            ImageMediaType::Html | ImageMediaType::Webm | ImageMediaType::Unknown => "bin",
         };
         let path = folder.path().join(format!("{n}.{extension}"));
         std::fs::write(&path, bytes)?;

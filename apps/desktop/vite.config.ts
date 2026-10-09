@@ -17,6 +17,8 @@ const csp = (dev: boolean) =>
     dev && "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: https://github.com https://*.githubusercontent.com",
+    // html_render pages (PLX-639), which main serves with a policy of their own.
+    "frame-src plx-render:",
     "object-src 'none'",
     "base-uri 'none'",
   ]
