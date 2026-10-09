@@ -306,16 +306,28 @@ fn start(
     Ok(terminal)
 }
 
+/// Asks for the cursor's position, which a Windows pseudo-console does first, and prints nothing
+/// until it's answered (portable-pty opens it with `PSEUDOCONSOLE_INHERIT_CURSOR`).
+const CURSOR_QUERY: &str = "\x1b[6n";
+
 /// Appends what the terminal prints to its history and sends it to its streams, until it ends.
 fn read(terminal: &Terminal, mut reader: Box<dyn Read + Send>) {
     let mut buffer = vec![0; 64 * 1024];
     let mut pending = Vec::new();
+    let mut started = !cfg!(windows);
     loop {
         match reader.read(&mut buffer) {
             Ok(0) | Err(_) => return,
             Ok(read) => {
                 pending.extend_from_slice(&buffer[..read]);
-                let text = take_text(&mut pending);
+                let mut text = take_text(&mut pending);
+                // plxd answers the pseudo-console's first query itself, at the top left of a new
+                // screen, so it never waits for a client, and a replay never asks a client again.
+                if !started && let Some(at) = text.find(CURSOR_QUERY) {
+                    started = true;
+                    text.replace_range(at..at + CURSOR_QUERY.len(), "");
+                    let _ = terminal.input.send("\x1b[1;1R".to_owned());
+                }
                 if text.is_empty() {
                     continue;
                 }
