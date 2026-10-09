@@ -2726,7 +2726,7 @@ impl Actor {
         Ok((cwd, git_dir))
     }
 
-    async fn failed_to_start(&mut self, message: String) {
+    pub(super) async fn failed_to_start(&mut self, message: String) {
         warn!(run = %self.id, %message, "an agent run's CLI could not start");
         let finished = ParallaxEvent::AgentFinished {
             run_id: self.id,

@@ -860,3 +860,21 @@ test("a stopped recording shows after its call", () => {
   ]);
   expect(of(build(...stop("not json")).items, "recording")).toEqual([]);
 });
+
+test("a script's end replaces its start where it was (PLX-650)", () => {
+  const script = {
+    kind: "thread.script",
+    runId,
+    trigger: "setup",
+    name: "Install",
+    terminalId: "setup-install",
+    blocking: true,
+  } as const;
+  const t = build(
+    at({ ...script, status: "running" }),
+    output({ kind: "text", text: "Hi" }),
+    at({ ...script, status: "failed", exitCode: 3 }),
+  );
+  expect(t.items.map((i) => i.kind)).toEqual(["script", "assistant"]);
+  expect(of(t.items, "script")[0]).toMatchObject({ status: "failed", exitCode: 3, runId });
+});

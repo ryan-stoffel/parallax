@@ -1,0 +1,78 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "repo/scripts",
+    "params": { "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "scripts": [],
+      "fileScripts": [
+        {
+          "id": "install",
+          "name": "Install",
+          "command": "pnpm install",
+          "runOnWorktreeCreate": true,
+          "async": false
+        },
+        { "id": "clean", "name": "Clean", "command": "rm -rf dist", "runOnSettle": true }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "repo/saveScripts",
+    "params": {
+      "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+      "scripts": [
+        {
+          "id": "",
+          "name": "Install",
+          "command": "pnpm install",
+          "runOnWorktreeCreate": true,
+          "async": false
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "scripts": [
+        {
+          "id": "install",
+          "name": "Install",
+          "command": "pnpm install",
+          "runOnWorktreeCreate": true,
+          "async": false
+        }
+      ],
+      "fileError": "parallax.json: missing field `command` at line 1 column 34"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d5c0-0a1b-7c2d-8e3f-4a5b6c7d8e01",
+      "seq": 70,
+      "time": "2026-10-09T12:00:00Z",
+      "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+      "event": {
+        "kind": "thread.script",
+        "runId": "01a0d5c2-2a3b-7c4d-8e5f-6a7b8c9d0e03",
+        "trigger": "setup",
+        "name": "Install",
+        "terminalId": "setup-install",
+        "blocking": true,
+        "status": "failed",
+        "exitCode": 1
+      }
+    }
+  }
+]

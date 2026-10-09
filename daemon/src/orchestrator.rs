@@ -55,6 +55,7 @@ const THREAD_CLEANUP: &str = "thread.cleanup";
 const PROJECT_CLEANUP: &str = "project.cleanup";
 const THREAD_WAKE: &str = "thread.wake";
 const DELEGATED_TASKS_STOP: &str = "delegated-tasks.stop";
+const SETTLE_SCRIPT: &str = "settle-script.run";
 
 /// Effect kinds that may run again after a restart, since each does only what is left to do.
 /// [`recover`] cancels an open effect of any other kind.
@@ -314,6 +315,9 @@ enum Effect {
     /// started, each with its queue held and its own children after it.
     #[serde(rename = "delegated-tasks.stop")]
     DelegatedTasksStop { children: Vec<RunId> },
+    /// A thread settled: its repository's settle script runs in its worktree (PLX-650).
+    #[serde(rename = "settle-script.run")]
+    SettleScript,
 }
 
 impl Effect {
@@ -323,6 +327,7 @@ impl Effect {
             Self::ProjectCleanup { .. } => PROJECT_CLEANUP,
             Self::Wake(_) => THREAD_WAKE,
             Self::DelegatedTasksStop { .. } => DELEGATED_TASKS_STOP,
+            Self::SettleScript => SETTLE_SCRIPT,
         }
     }
 }
@@ -554,7 +559,13 @@ fn decide(thread: Uuid, action: Action, rows: Rows) -> Result<Decision, Refusal>
             if update == ThreadUpdate::default() {
                 return Ok(Decision::default());
             }
-            Ok(change(Change::Update(update)))
+            let settled = update.settled == Some(true);
+            let mut decision = change(Change::Update(update));
+            // A thread that settles runs its settle script (PLX-650).
+            decision
+                .effects
+                .extend(settled.then_some(Effect::SettleScript));
+            Ok(decision)
         }
         Action::Delete { worktree } => {
             if rows.thread.run.is_none() && rows.thread.thread.is_none() {
@@ -891,6 +902,10 @@ async fn perform(
         }
         Effect::Wake(wake) => {
             crate::schedules::deliver(daemon, wake).await;
+            Ok(())
+        }
+        Effect::SettleScript => {
+            crate::setup_scripts::settled(daemon, thread).await;
             Ok(())
         }
         Effect::DelegatedTasksStop { children } => {

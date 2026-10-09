@@ -39,6 +39,8 @@
 //!   that belong to a repo entry, or to a scratch repository for a thread with no repo.
 //! - `images`: the caps and checks for images sent with a prompt or message (PLX-191).
 //! - `terminals`: the terminals plxd runs for its clients, by thread and terminal id (PLX-637).
+//! - `setup_scripts`: a repository's setup and settle scripts, run in a thread's terminals
+//!   (PLX-650).
 //! - [`tailnet`]: Tailscale's view of this node and its peers, and which peers Parallax Connect
 //!   lets in (0056).
 //! - [`remote`]: remote access on the LAN over HTTPS with a pinned key, and its client (PLX-641).
@@ -80,6 +82,7 @@ mod schedules;
 pub mod server;
 #[cfg(unix)]
 pub mod service;
+mod setup_scripts;
 #[cfg(unix)]
 mod spawn;
 mod store;

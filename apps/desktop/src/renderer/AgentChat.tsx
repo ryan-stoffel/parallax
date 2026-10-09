@@ -35,7 +35,9 @@ import {
 } from "lucide-react";
 import {
   createContext,
+  lazy,
   memo,
+  Suspense,
   useCallback,
   useContext,
   useEffect,
@@ -1186,6 +1188,77 @@ function RecordingRow({ recording }: { recording: Extract<Item, { kind: "recordi
   );
 }
 
+// xterm.js loads with the first script terminal shown.
+const TerminalView = lazy(() => import("./Terminal").then((m) => ({ default: m.TerminalView })));
+
+/**
+ * A setup or settle script (PLX-650): running, then done or failed. While it runs or after it
+ * failed, it opens to its plxd terminal, where a failed script's shell stays for a look.
+ */
+function ScriptRow({
+  script,
+  open,
+  onToggle,
+}: {
+  script: Extract<Item, { kind: "script" }>;
+  open: boolean;
+  onToggle: (key: string, open: boolean) => void;
+}) {
+  const links = useContext(ThreadLinksContext);
+  const what = `${script.trigger === "setup" ? "Setup" : "Settle"} script ${script.name}`;
+  const icon =
+    script.status === "running" ? (
+      <Loader {...loaders.working} size={14} />
+    ) : script.status === "done" ? (
+      <Check aria-hidden className="size-3.5 shrink-0" />
+    ) : (
+      <X aria-hidden className="size-3.5 shrink-0 text-danger" />
+    );
+  const detail =
+    script.status === "running"
+      ? script.blocking
+        ? "The agent starts once it finishes."
+        : "Running"
+      : script.status === "done"
+        ? "Done"
+        : (script.error ??
+          (script.exitCode === undefined
+            ? "Its terminal closed first."
+            : `Exited with code ${script.exitCode}.`));
+  const summary = (
+    <>
+      {icon}
+      <span className="truncate">{what}</span>
+      <span
+        className={`truncate ${script.status === "failed" ? "text-danger" : "text-faint-foreground"}`}
+      >
+        {detail}
+      </span>
+    </>
+  );
+  if (script.status === "done" || script.error || !links)
+    return <div className={`${stepRow} text-muted-foreground`}>{summary}</div>;
+  return (
+    <Disclosure id={script.key} open={open} onToggle={onToggle} summary={summary}>
+      <div className="h-60 overflow-hidden rounded-xl border border-border bg-surface py-1.5 pl-3">
+        <Suspense>
+          <TerminalView
+            id={`script:${script.runId}:${script.terminalId}`}
+            target={{
+              hostId: links.hostId,
+              path: links.state.runs[script.runId]?.worktreePath ?? "~",
+              threadId: script.runId,
+              terminalId: script.terminalId,
+            }}
+            label={what}
+            keep
+          />
+        </Suspense>
+      </div>
+    </Disclosure>
+  );
+}
+
 /** A message Parallax or another thread sent, not the user (0025, 0041). */
 const notTheUsers = (row: Extract<Item, { kind: "user" }>) => row.wake || row.from !== undefined;
 
@@ -1361,6 +1434,8 @@ export const RowView = memo(function RowView({
       return <HtmlRenderRow page={row} />;
     case "recording":
       return <RecordingRow recording={row} />;
+    case "script":
+      return <ScriptRow script={row} open={open} onToggle={onToggle} />;
     case "plan":
     case "todo":
       // The turn's plan and its later updates, as lines: the strip shows the whole list.

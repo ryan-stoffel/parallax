@@ -220,14 +220,25 @@ impl Agents {
     }
 
     fn spawn(&self, actor: Actor) -> mpsc::Sender<Command> {
+        let (commands, receiver) = self.register(actor.id());
+        self.run(actor, receiver);
+        commands
+    }
+
+    /// Runs `actor` on its channel from [`Self::register`].
+    fn run(&self, actor: Actor, commands: mpsc::Receiver<Command>) {
+        self.tracker
+            .spawn(actor.run(commands, self.shutdown.clone()));
+    }
+
+    /// Puts run `id`'s command channel in the map, for its actor to run on.
+    fn register(&self, id: RunId) -> (mpsc::Sender<Command>, mpsc::Receiver<Command>) {
         let (commands, receiver) = mpsc::channel(16);
         self.actors
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(actor.id(), commands.clone());
-        self.tracker
-            .spawn(actor.run(receiver, self.shutdown.clone()));
-        commands
+            .insert(id, commands.clone());
+        (commands, receiver)
     }
 
     /// Runs `task` in the background, dropping it when plxd stops.
@@ -1190,21 +1201,52 @@ pub(crate) async fn create_started(
         });
     }
 
+    // A new worktree's setup script starts now, and one that isn't async holds the first turn
+    // (PLX-650).
+    let setup = match created {
+        Some(_) => {
+            crate::setup_scripts::worktree_created(&daemon, run_id, project, &repo_path, &cwd).await
+        }
+        None => None,
+    };
     // A run just created here has no sent turns yet.
     let mut actor = Actor::new(Arc::clone(&daemon), row, worktree, HashMap::new());
     let task = first_prompt(&sent, &prepared.place)?;
     let paths = Some((cwd, git_common_dir));
     actor.attach(None, threads);
-    if actor
-        .launch(prepared, task, images, None, None, paths)
-        .await
-    {
-        actor.record_initial_seen(seen).await;
-    }
-    // The actor owns a live CLI from here on, so it is spawned whatever the snapshot says.
-    let run = actor.snapshot();
-    agents.spawn(actor);
-    let run = run?;
+    let launch = async move |actor: &mut Actor| {
+        if actor
+            .launch(prepared, task, images, None, None, paths)
+            .await
+        {
+            actor.record_initial_seen(seen).await;
+        }
+    };
+    let run = if let Some(setup) = setup {
+        // Its commands wait in its channel until the script ends and its CLI starts or fails.
+        let run = actor.snapshot();
+        let (_, commands) = agents.register(run_id);
+        let daemon = Arc::clone(&daemon);
+        agents.tracker.spawn(async move {
+            // A run plxd stops under is recovered at the next start, as any other.
+            let setup = tokio::select! {
+                ended = setup => ended,
+                () = daemon.agents.shutdown.cancelled() => return,
+            };
+            match setup {
+                Ok(()) => launch(&mut actor).await,
+                Err(message) => actor.failed_to_start(message).await,
+            }
+            daemon.agents.run(actor, commands);
+        });
+        run?
+    } else {
+        launch(&mut actor).await;
+        // The actor owns a live CLI from here on, so it is spawned whatever the snapshot says.
+        let run = actor.snapshot();
+        agents.spawn(actor);
+        run?
+    };
     // A run started in a Project wakes its coordinator, unless the coordinator launched it (0043).
     if mode.is_some() && coordinator_thread.is_none() {
         wake::started(&daemon, &run);

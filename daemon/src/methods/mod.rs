@@ -10,7 +10,8 @@
 //! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`; PLX-370 `queue`: `queue.rs`; PLX-402 `questions`: `question.rs`; PLX-405 `memory`: `memory.rs`; PLX-410 `landing`: `land.rs`; PLX-574 `connect`: `connect/devices` in `connect.rs`; PLX-637 `terminals`: `terminal/*` in
 //! `crate::terminals`; PLX-641 `remote`: `remote/*` in `remote.rs`; 0063 `schedules` and `prWatch`:
 //! `schedule/*` in `crate::schedules` and `pr/watch`, `pr/unwatch`, and `pr/watches` in
-//! `crate::pr_watch`), and `host.rs` advertises the
+//! `crate::pr_watch`; PLX-650 `setupScripts`: `repo/scripts` and `repo/saveScripts` in
+//! `crate::setup_scripts`), and `host.rs` advertises the
 //! capability in `initialize`.
 
 mod accounts;
@@ -327,6 +328,8 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         PrWatch => |p| crate::pr_watch::watch(daemon, p),
         PrUnwatch => |p| crate::pr_watch::unwatch(daemon, p),
         PrWatches => |p| crate::pr_watch::watches(daemon, p),
+        RepoScripts => |p| crate::setup_scripts::scripts(daemon, p),
+        RepoSaveScripts => |p| crate::setup_scripts::save(daemon, p),
     })
 }
 

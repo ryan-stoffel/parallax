@@ -27,6 +27,7 @@ import {
   type EventsEventParams,
   type JsonValue,
   type RemoteSession,
+  type RepoScript,
   type ScheduledTask,
   type LoggedEvent,
   type MemoryScope,
@@ -88,6 +89,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "sendAccount",
     "sendModel",
     "sendOptions",
+    "setupScripts",
     "threadAttention",
     "threadFork",
     "threadLineage",
@@ -381,7 +383,44 @@ let schedules: ScheduledTask[] = [
   },
 ];
 
+// Each repository's saved scripts, and the parallax.json the docs site checks in (PLX-650).
+const repoScripts = new Map<string, RepoScript[]>([
+  [
+    db.repos[1]!.id,
+    [
+      {
+        id: "install",
+        name: "Install",
+        command: "pnpm install --frozen-lockfile",
+        runOnWorktreeCreate: true,
+        async: false,
+      },
+      { id: "clean", name: "Clean", command: "rm -rf dist .astro", runOnSettle: true },
+    ],
+  ],
+]);
+const fileScripts: RepoScript[] = [
+  { id: "dev-server", name: "Dev server", command: "pnpm dev --port 4321" },
+  { id: "link-check", name: "Link check", command: "pnpm lychee docs", runOnSettle: true },
+];
+
 const handlers: { [M in Method]?: Handler<M> } = {
+  "repo/scripts": (p) => ({
+    scripts: repoScripts.get(p.repo) ?? [],
+    fileScripts: p.repo === db.repos[1]!.id ? fileScripts : [],
+  }),
+  "repo/saveScripts": (p) => {
+    const ids = new Set<string>();
+    const scripts = p.scripts.map((script) => {
+      const base = script.name.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "script";
+      let id = base;
+      for (let n = 2; ids.has(id); n++) id = `${base}-${n}`;
+      ids.add(id);
+      return { ...script, id };
+    });
+    repoScripts.set(p.repo, scripts);
+    return { scripts, fileScripts: p.repo === db.repos[1]!.id ? fileScripts : [] };
+  },
   "schedule/list": () => ({ tasks: schedules }),
   "schedule/save": (p) => {
     const task = { ...schedules.find((t) => t.id === p.id)!, ...p, id: p.id! };
@@ -1118,6 +1157,16 @@ function deviceRequest(hostId: string, method: string, params: Record<string, un
   return undefined;
 }
 
+/** What a failed setup script leaves in its shell (PLX-650). */
+const fakeSetup = [
+  "\x1b[1m~/.parallax/worktrees/docs-links\x1b[0m % ( pnpm install --frozen-lockfile\r\n",
+  "Lockfile is up to date, resolution step is skipped\r\n",
+  "Progress: resolved 412, reused 398, downloaded 0, added 0\r\n",
+  "\x1b[31m ERR_PNPM_FETCH_404\x1b[0m GET https://registry.npmjs.org/@docs%2Ftheme: Not Found - 404\r\n",
+  "\r\n",
+  "\x1b[1m~/.parallax/worktrees/docs-links\x1b[0m % ",
+];
+
 /** What `plx-connect add` prints, a line at a time with a pause after each. */
 function fakeAdd(device: TailnetDevice, user: string | undefined): [string, number][] {
   const who = `${user ?? "ryan"}@${device.ip}`;
@@ -1462,6 +1511,12 @@ export const mockBridge: ParallaxBridge = {
   acpRegistry: () => delay([]),
 
   openTerminal: (id, target) => {
+    // A thread's setup script (PLX-650) shows what a failed install leaves in its shell.
+    if ("terminalId" in target && target.terminalId) {
+      for (const [i, data] of fakeSetup.entries())
+        later(80 * (i + 1), () => terminalListeners.get(id)?.({ type: "data", data }));
+      return delay(undefined);
+    }
     if (!("connect" in target)) return delay("Terminals don't run in the preview.");
     const device = tailnet.find((d) => d.ip === target.connect.device)!;
     let wait = 0;

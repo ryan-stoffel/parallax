@@ -202,6 +202,7 @@ pub(crate) fn initialize(
 /// the HTTPS listener serves while it's on.
 /// `schedules` (0063): `schedule/*`, and the webhooks the HTTPS listener serves.
 /// `prWatch` (0063): `pr/watch`, `pr/unwatch`, and `pr/watches`.
+/// `setupScripts` (PLX-650): `repo/scripts`, `repo/saveScripts`, and the `thread.script` event.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -262,6 +263,7 @@ fn capabilities_advertised() -> Capabilities {
         ("sendAccount".to_owned(), serde_json::Map::new()),
         ("sendModel".to_owned(), serde_json::Map::new()),
         ("sendOptions".to_owned(), serde_json::Map::new()),
+        ("setupScripts".to_owned(), serde_json::Map::new()),
         ("terminals".to_owned(), serde_json::Map::new()),
         ("threadAttention".to_owned(), serde_json::Map::new()),
         (

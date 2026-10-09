@@ -96,6 +96,7 @@ export type SettingsSection =
   | "providers"
   | "sourceControl"
   | "schedules"
+  | "scripts"
   | "storage"
   | "connections";
 

@@ -20,10 +20,11 @@ use parallax_protocol::{
     TerminalExitParams, TerminalKey, TerminalOpenParams, TerminalOutputParams,
 };
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::AbortHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
+use uuid::Uuid;
 
 use crate::methods::Reply;
 
@@ -99,7 +100,7 @@ impl Terminals {
                 terminal.resize(size);
                 Arc::clone(terminal)
             } else {
-                let terminal = start(key.clone(), params, size, Arc::clone(&self.open))?;
+                let terminal = start(key.clone(), params, size, Arc::clone(&self.open), &[])?;
                 open.insert(key, Arc::clone(&terminal));
                 terminal
             }
@@ -172,6 +173,50 @@ impl Terminals {
         }
     }
 
+    /// Starts the user's shell in a new terminal `(thread_id, terminal_id)` in `cwd`, in place of
+    /// any with that key, with `env`, and types `command` into it, wrapped as T3 Code's setup
+    /// scripts are so the shell prints a line with its exit code after a per-run token (PLX-650).
+    /// Resolves to that code, or `None` if the terminal ended first. The shell stays open.
+    pub(crate) fn run_script(
+        &self,
+        thread_id: &str,
+        terminal_id: &str,
+        cwd: &str,
+        command: &str,
+        env: &[(&str, &str)],
+    ) -> Result<oneshot::Receiver<Option<i32>>, ErrorObject> {
+        let key = (thread_id.to_owned(), terminal_id.to_owned());
+        let params = TerminalOpenParams {
+            thread_id: key.0.clone(),
+            terminal_id: key.1.clone(),
+            cwd: Some(cwd.to_owned()),
+            command: None,
+            cols: 120,
+            rows: 30,
+        };
+        let size = PtySize {
+            rows: params.rows,
+            cols: params.cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let terminal = start(key.clone(), params, size, Arc::clone(&self.open), env)?;
+        if let Some(old) = lock(&self.open).insert(key, Arc::clone(&terminal)) {
+            old.kill();
+        }
+        let sentinel = format!("__PLX_SCRIPT_DONE_{}__", Uuid::now_v7().simple());
+        // Subscribed before typing, so the line can't pass unseen.
+        let (output, seen, exit) = terminal.subscribe();
+        let _ = terminal
+            .input
+            .send(format!("{}\r", wrap_script(command, &sentinel)));
+        let (done, code) = oneshot::channel();
+        tokio::spawn(async move {
+            let _ = done.send(watch_script(&terminal, output, seen, exit, &sentinel).await);
+        });
+        Ok(code)
+    }
+
     /// `terminal/list`: the running terminals, or one thread's, in no particular order.
     pub(crate) fn list(&self, thread_id: Option<&str>) -> Vec<TerminalKey> {
         lock(&self.open)
@@ -233,6 +278,7 @@ fn start(
     params: TerminalOpenParams,
     size: PtySize,
     open: Open,
+    env: &[(&str, &str)],
 ) -> Result<Arc<Terminal>, ErrorObject> {
     let cwd = params.cwd.filter(|cwd| cwd != "~");
     if let Some(cwd) = &cwd
@@ -271,6 +317,9 @@ fn start(
         builder.cwd(cwd);
     }
     builder.env("TERM", "xterm-256color");
+    for (name, value) in env {
+        builder.env(name, value);
+    }
     // In the C locale, as when launchd starts plxd, zsh counts each byte of a character like a
     // prompt's U+E0A0 as a column, so its line editor draws in the wrong place.
     if ["LC_ALL", "LC_CTYPE", "LANG"]
@@ -470,6 +519,65 @@ async fn stream(
             }
         }
     }
+}
+
+/// `command` as the shell is typed it, as T3 Code's `wrapCommandForCompletion`: run in a block
+/// that closes on its own line, so a trailing comment or heredoc can't swallow the line after it,
+/// then printing `sentinel` and the exit code on a line of their own. Lines end in `\r`, the
+/// Enter key for every shell's line editor. The echoed input never matches: there `sentinel` is
+/// followed by `%s` or `$`, not digits.
+fn wrap_script(command: &str, sentinel: &str) -> String {
+    let body = command.replace("\r\n", "\r").replace('\n', "\r");
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let shell = shell.rsplit('/').next().unwrap_or_default();
+    if cfg!(windows) || shell == "pwsh" || shell == "powershell" {
+        format!(
+            "$global:LASTEXITCODE = $null; & {{\r{body}\r}}; if ($null -ne $LASTEXITCODE) {{ $__plxc = $LASTEXITCODE }} elseif ($?) {{ $__plxc = 0 }} else {{ $__plxc = 1 }}; Write-Host \"{sentinel}$__plxc\""
+        )
+    } else if shell == "fish" {
+        format!("begin\r{body}\rend; printf '\\n{sentinel}%s\\n' $status")
+    } else {
+        format!("( {body}\r); printf '\\n{sentinel}%s\\n' \"$?\"")
+    }
+}
+
+/// Waits for the line [`wrap_script`] prints and returns its exit code, reading what the
+/// terminal printed so far (`seen`) and then its output. `None` once the terminal exits without
+/// it. Keeps only the tail a split line could still need.
+async fn watch_script(
+    terminal: &Arc<Terminal>,
+    mut output: broadcast::Receiver<Output>,
+    mut seen: String,
+    mut exit: Option<i32>,
+    sentinel: &str,
+) -> Option<i32> {
+    loop {
+        if let Some(code) = script_exit(&seen, sentinel) {
+            return Some(code);
+        }
+        if exit.is_some() {
+            return None;
+        }
+        let keep = seen.floor_char_boundary(seen.len().saturating_sub(sentinel.len() + 16));
+        seen.drain(..keep);
+        match output.recv().await {
+            Ok(Output::Data(data)) => seen.push_str(&data),
+            Ok(Output::Exit(code)) => exit = Some(code),
+            Err(broadcast::error::RecvError::Lagged(_)) => {
+                (output, seen, exit) = terminal.subscribe();
+            }
+            Err(broadcast::error::RecvError::Closed) => return None,
+        }
+    }
+}
+
+/// The exit code after `sentinel` in `text`, once its line has ended.
+fn script_exit(text: &str, sentinel: &str) -> Option<i32> {
+    text.match_indices(sentinel).find_map(|(at, _)| {
+        let rest = &text[at + sentinel.len()..];
+        let end = rest.find(['\r', '\n'])?;
+        rest[..end].parse().ok()
+    })
 }
 
 /// `text` in pieces of at most [`MAX_CHUNK`] bytes, cut between characters. At least one, so an

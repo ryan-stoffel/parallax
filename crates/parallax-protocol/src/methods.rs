@@ -63,14 +63,14 @@ use crate::{
     QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
     QueueReorderParams, QueueResult, QueueSteerParams, RemotePairParams, RemotePairResult,
     RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult,
-    RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
-    RepoUpdateResult, ScheduleDeleteResult, ScheduleIdParams, ScheduleListParams,
-    ScheduleListResult, ScheduleSaveParams, ScheduledTask, SubscribeShellParams,
-    SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult, TerminalExitParams,
-    TerminalKey, TerminalListParams, TerminalListResult, TerminalOpenParams, TerminalOutputParams,
-    TerminalResizeParams, TerminalResult, TerminalWriteParams, ThreadArchiveParams,
-    ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams,
-    ThreadHistoryParams, ThreadHistoryResult, ThreadListParams, ThreadListResult,
+    RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoSaveScriptsParams,
+    RepoScriptsParams, RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult,
+    ScheduleIdParams, ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask,
+    SubscribeShellParams, SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult,
+    TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult, TerminalOpenParams,
+    TerminalOutputParams, TerminalResizeParams, TerminalResult, TerminalWriteParams,
+    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
+    ThreadForkParams, ThreadHistoryParams, ThreadHistoryResult, ThreadListParams, ThreadListResult,
     ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
     ThreadUpdateParams, ThreadUpdateResult, UsageDailyParams, UsageDailyResult, UsageGetParams,
     UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
@@ -486,6 +486,12 @@ method_table! {
         PrUnwatch = "pr/unwatch": PrViewParams => PrWatchResult;
         /// `pr/watches`: the run's watched pull requests.
         PrWatches = "pr/watches": PrWatchesParams => PrWatchesResult;
+        /// `repo/scripts`: a repo entry's setup and settle scripts, and those its `parallax.json`
+        /// declares (PLX-650). Fails with `repoNotFound` for an unknown entry. Gated on the
+        /// `setupScripts` capability, like `repo/saveScripts`.
+        RepoScripts = "repo/scripts": RepoScriptsParams => RepoScriptsResult;
+        /// `repo/saveScripts`: replaces a repo entry's scripts.
+        RepoSaveScripts = "repo/saveScripts": RepoSaveScriptsParams => RepoScriptsResult;
         /// `orchestration/dispatch`: runs one command on a thread (0059, PLX-644), idempotent on
         /// its `commandId`. Gated on the `orchestration` capability, like every
         /// `orchestration/*` method.
@@ -669,6 +675,8 @@ mod tests {
                 "pr/watch",
                 "pr/unwatch",
                 "pr/watches",
+                "repo/scripts",
+                "repo/saveScripts",
                 "orchestration/dispatch",
                 "orchestration/subscribeShell",
                 "orchestration/subscribeThread",
