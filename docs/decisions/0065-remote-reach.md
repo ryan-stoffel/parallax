@@ -48,6 +48,9 @@ Ryan chose all of it for Parallax on 2026-10-09 (PLX-635), with one change from 
 ### The web client
 
 - plxd serves the app's renderer build at `/`, with a browser bridge that implements the preload API over `/ws`. Electron-only features (native menus, local file pickers, the updater) are hidden in a browser. The renderer files ship beside plxd in the app bundle and beside the standalone plxd release asset.
+- Built by PLX-651. A second host setting, `remoteWeb` (Settings > Connections > Open in a browser), off by default and in effect only while `remote` is on, has the listener serve `web.html` at `/` and the build's `assets/`, nothing else, with a Content Security Policy header that allows only this origin's scripts and connections and forbids framing. The files hold no secrets and need no session. Everything they reach does.
+- A browser pairs with the code itself, `POST /api/pair/browser` with a `DPoP` proof from a key it can't export, kept in IndexedDB, and gets the same session as `/api/pair/finish`. It skips SPAKE2: a browser checks the certificate itself and can't pin one, and a machine in the middle of a TLS connection the user let through would see everything anyway. A wrong code counts against the same 5 tries. `/ws`, `/api/pair/*`, and `/api/auth/*` refuse a request whose `Origin` isn't `https://<Host>`.
+- plxd reads the files from the app's renderer build, which electron-builder leaves unpacked beside `app.asar` for it, or from `PLXD_WEB_DIR`. Embedding them would add 3.3 MB to plxd. A standalone plxd, without the app, has no web client until the release asset ships the files beside it.
 - A hosted copy of the same client, on the relay's domain, keeps its hosts in the browser and connects to each directly, as app.t3.codes does.
 
 ### The relay

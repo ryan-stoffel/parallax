@@ -96,6 +96,7 @@ test("a browser that hasn't paired gets nothing but the pairing screen", async (
 test("a paired browser lists threads, opens one, and sends a message", async () => {
   const { result } = (await call("remote/pair", {})) as { result: { code: string } };
   await page.getByRole("textbox", { name: "Code" }).fill(result.code);
+  await page.screenshot({ path: test.info().outputPath("web-pairing.png") });
   await page.getByRole("button", { name: "Pair" }).click();
   // The page reloads into the app.
   const state = `window.parallax?.connectionState("local").then((s) => s.status)`;
