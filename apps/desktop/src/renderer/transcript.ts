@@ -378,6 +378,17 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
         else push({ kind: "script", key: key(), runId, ...script });
         break;
       }
+      case "thread.reverted": {
+        // The turns a revert undid leave the conversation (0062): their messages and all after.
+        // The first turn's message has no turn id, so a revert to the start clears everything.
+        const undone = new Set<string>(event.turns);
+        const i =
+          event.ordinal === 0
+            ? 0
+            : items.findIndex((x) => x.kind === "user" && !!x.turnId && undone.has(x.turnId));
+        if (i >= 0) items.splice(i);
+        break;
+      }
       case "agent.output":
         event.items.forEach((item, i) => {
           if (item.kind === "turnStarted") openTurns++;

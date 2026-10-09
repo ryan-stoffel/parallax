@@ -884,3 +884,25 @@ test("a script's end replaces its start where it was (PLX-650)", () => {
   );
   expect(of(restarted.items, "script")).toMatchObject([{ status: "interrupted" }]);
 });
+
+test("a revert drops the turns it undid, from their first message on (0062)", () => {
+  const [kept, undone] = [uuidv7(), uuidv7()];
+  const turn = (turnId: string, text: string) =>
+    output(
+      {
+        kind: "turnStarted",
+        turnId,
+        text,
+        wake: false,
+        images: [],
+        threads: [],
+      } as AgentOutputItem,
+      { kind: "text", text: `Did ${text}` },
+    );
+  const reverted = (ordinal: number, turns: string[]) =>
+    at({ kind: "thread.reverted", runId, ordinal, turns, restoreFiles: true });
+  const t = build(turn(kept, "one"), turn(undone, "two"), reverted(1, [undone]));
+  expect(t.items.map((i) => (i.kind === "user" ? i.text : i.kind))).toEqual(["one", "assistant"]);
+  // Back to the thread's start, whose first message has no turn id: nothing is left.
+  expect(build(turn(kept, "one"), reverted(0, [kept])).items).toEqual([]);
+});
