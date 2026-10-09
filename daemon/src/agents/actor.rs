@@ -1656,6 +1656,18 @@ impl Actor {
         {
             queued.options.permission = None;
         }
+        // Options it may wait with are checked now, as a new process's start would check them,
+        // whether or not an idle session is still up when it arrives.
+        if !self.moves(queued.account.as_ref())
+            && let Some((_, backend)) = self
+                .daemon
+                .agents
+                .backends
+                .by_backend_name(&self.row.fields.backend)
+        {
+            self.changes(queued.options.clone())
+                .check(backend.as_ref())?;
+        }
         let (turn_id, text) = (queued.turn_id, &queued.text);
         if self.accepted() {
             return Err(super::run_accepted(self.id));
@@ -1679,6 +1691,16 @@ impl Actor {
         }
         if delivery != Delivery::Queue {
             return self.steer(queued, delivery == Delivery::Restart).await;
+        }
+        // An idle session that can't take it ends now, and it starts the next process at once,
+        // as it would if the session had already gone.
+        if self.live.is_some()
+            && !self.busy()
+            && self.queued.is_empty()
+            && (!self.live_open() || self.changing(&queued))
+        {
+            self.release();
+            self.drain().await;
         }
         // A running CLI can't change what it runs with, a turn in progress finishes before the
         // next starts, what's sent after a message that waits waits too, so the messages keep

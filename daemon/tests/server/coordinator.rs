@@ -282,10 +282,12 @@ async fn a_coordinators_edit_never_reaches_the_checkout_or_the_integration_branc
 
 #[tokio::test]
 async fn a_new_start_replaces_the_coordinator_only_once_it_stops_running() {
+    // Its first turn runs until the steer reaches it, so the second start finds it running; a
+    // turn that ended would leave it idle (0060), and replaceable.
     let script = vec![
         init("coordinator-1"),
-        Step::EndTurn { result: None },
         Step::AwaitFollowUp,
+        Step::EndTurn { result: None },
         end_turn("Done."),
     ];
     let host = Host::start(temp_dir(), fake(script));
@@ -309,7 +311,10 @@ async fn a_new_start_replaces_the_coordinator_only_once_it_stops_running() {
     );
 
     client
-        .call::<AgentSend>(send_params(first.id, TurnId::generate(), "Wrap up."))
+        .call::<AgentSend>(AgentSendParams {
+            delivery: Some(AgentDelivery::Steer),
+            ..send_params(first.id, TurnId::generate(), "Wrap up.")
+        })
         .await
         .unwrap();
     until(&mut client, updated_to(AgentStatus::Completed)).await;
