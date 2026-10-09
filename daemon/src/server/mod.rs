@@ -546,8 +546,7 @@ impl Server {
         if daemon.store.state() != parallax_protocol::StoreState::Unavailable
             && let Err(error) = async {
                 crate::commands::purge_incomplete(&daemon).await?;
-                crate::orchestrator::recover(&daemon).await?;
-                crate::setup_scripts::recover(&daemon).await
+                crate::orchestrator::recover(&daemon).await
             }
             .await
         {
@@ -559,6 +558,7 @@ impl Server {
             return Err(io::Error::other(error.message));
         }
         agents::recover(&daemon).await;
+        crate::setup_scripts::recover(&daemon).await;
         agents::deliver_queued(&daemon).await;
         crate::methods::land::resume(&daemon).await;
         let compact = {

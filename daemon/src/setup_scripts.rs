@@ -154,9 +154,10 @@ pub(crate) fn release(daemon: &Daemon, run_id: RunId) {
 }
 
 /// At start, before anything runs: every script the last plxd started and never saw end died
-/// with it, so each gets its `interrupted` event.
-pub(crate) async fn recover(daemon: &Daemon) -> Result<(), ErrorObject> {
-    daemon
+/// with it, so each gets its `interrupted` event. One store job, with no process or wait; a
+/// failure is logged and leaves the list for the next start.
+pub(crate) async fn recover(daemon: &Daemon) {
+    let recovered = daemon
         .store
         .run(&CancellationToken::new(), |db| {
             let Some(json) = db.running_scripts().map_err(|e| store_error(&e))? else {
@@ -173,7 +174,10 @@ pub(crate) async fn recover(daemon: &Daemon) -> Result<(), ErrorObject> {
             }
             db.set_running_scripts(None).map_err(|e| store_error(&e))
         })
-        .await
+        .await;
+    if let Err(error) = recovered {
+        warn!(error = %error.message, "could not end the scripts a restart interrupted");
+    }
 }
 
 /// The `settle-script.run` effect: runs thread `thread`'s repository's settle script in its
