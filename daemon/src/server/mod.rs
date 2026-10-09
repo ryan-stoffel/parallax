@@ -3,9 +3,11 @@
 //! [`Server::start`] runs the startup checks in order: the data folder, the instance lock, the old
 //! socket, the new socket, and the store. [`Server::run`] then accepts connections until
 //! [`Shutdown::trigger`] is called, and shuts down gracefully. While the host's `connect` setting
-//! is on, it also accepts this user's other devices over Tailscale ([`tailnet`], 0056).
+//! is on, it also accepts this user's other devices over Tailscale ([`tailnet`], 0056), and while
+//! `remote` is on, clients paired with it over HTTPS ([`remote`], PLX-641).
 
 mod connection;
+pub(crate) mod remote;
 pub(crate) mod setup;
 pub(crate) mod tailnet;
 
@@ -126,6 +128,11 @@ pub struct Config {
     /// How often plxd checks the `connect` setting and Tailscale, to bind or drop the Connect
     /// listener. 10 s by default.
     pub connect_check_interval: Duration,
+    /// The address the remote listener binds instead of every IPv4 address. `None` by default;
+    /// tests bind loopback.
+    pub remote_address: Option<IpAddr>,
+    /// The remote listener's port. 7341 by default.
+    pub remote_port: u16,
 }
 
 impl Config {
@@ -151,6 +158,8 @@ impl Config {
             connect_address: None,
             connect_port: parallax_protocol::CONNECT_PORT,
             connect_check_interval: Duration::from_secs(10),
+            remote_address: None,
+            remote_port: crate::remote::PORT,
         }
     }
 }
@@ -267,6 +276,8 @@ pub(crate) struct Daemon {
     pub connect: tailnet::Connect,
     /// The terminals plxd runs for its clients (PLX-637).
     pub terminals: crate::terminals::Terminals,
+    /// The remote listener's pairing code, tickets, and sessions (PLX-641).
+    pub remote: remote::Remote,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -415,6 +426,7 @@ impl Server {
             commands: crate::commands::Commands::new(),
             connect: tailnet::Connect::new(tailnet, config.connect_port, config.connect_address),
             terminals: crate::terminals::Terminals::default(),
+            remote: remote::Remote::new(config.remote_port, config.remote_address),
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for
@@ -532,6 +544,15 @@ impl Server {
             config.connect_check_interval,
             shutdown.graceful.clone(),
         ));
+        let remote = tokio::spawn(remote::run(
+            tailnet::Serving {
+                daemon: Arc::clone(&daemon),
+                connections: connections.clone(),
+                stop_reading: shutdown.graceful.clone(),
+                abort: abort.clone(),
+            },
+            shutdown.graceful.clone(),
+        ));
         let period = config.socket_check_interval;
         let mut check = time::interval_at(time::Instant::now() + period, period);
         check.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -570,8 +591,9 @@ impl Server {
         drop(listener);
         #[cfg(unix)]
         socket.remove();
-        // Its listener goes with it, before `connections` closes to new ones.
+        // Their listeners go with it, before `connections` closes to new ones.
         let _ = tailnet.await;
+        let _ = remote.await;
         info!("shutting down");
         connections.close();
         daemon.commands.close();
@@ -746,6 +768,7 @@ impl Daemon {
                 None,
             ),
             terminals: crate::terminals::Terminals::default(),
+            remote: remote::Remote::new(crate::remote::PORT, None),
         })
     }
 }

@@ -193,6 +193,8 @@ pub(crate) fn initialize(
 /// `connect` (PLX-574, 0056): `connect`, `deviceName`, and `deviceIcon` in `host/settings`, which
 /// an older plxd would silently ignore, `connect/devices`, and the tailnet listener.
 /// `terminals` (PLX-637): `terminal/*`, the terminals plxd runs for its clients.
+/// `remote` (PLX-641, 0065): `remote` in `host/settings`, `remote/pair`, `remote/sessions`,
+/// `remote/revoke`, and the HTTPS listener.
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -243,6 +245,7 @@ fn capabilities_advertised() -> Capabilities {
         ("pullRequests".to_owned(), serde_json::Map::new()),
         ("queue".to_owned(), serde_json::Map::new()),
         ("questions".to_owned(), serde_json::Map::new()),
+        ("remote".to_owned(), serde_json::Map::new()),
         ("repoRefs".to_owned(), serde_json::Map::new()),
         ("runOptions".to_owned(), serde_json::Map::new()),
         ("sendAccount".to_owned(), serde_json::Map::new()),
@@ -304,7 +307,7 @@ pub(crate) async fn settings(
 }
 
 /// `host/settings/set`: stores the settings it names, then answers with them all. A change to
-/// `connect` wakes the tailnet listener.
+/// `connect` wakes the tailnet listener, and one to `remote` the remote listener.
 pub(crate) async fn set_settings(
     context: &Context,
     params: HostSettingsSetParams,
@@ -313,6 +316,7 @@ pub(crate) async fn set_settings(
         auto_resume,
         clean_worktrees,
         connect,
+        remote,
         device_name,
         device_icon,
     } = params;
@@ -339,6 +343,10 @@ pub(crate) async fn set_settings(
                 db.set_connect(on).map_err(|e| store_error(&e))?;
                 info!(connect = on, "changed the host's Parallax Connect setting");
             }
+            if let Some(on) = remote {
+                db.set_remote(on).map_err(|e| store_error(&e))?;
+                info!(remote = on, "changed the host's remote setting");
+            }
             if let Some(name) = device_name {
                 db.set_device_name(name.as_deref())
                     .map_err(|e| store_error(&e))?;
@@ -352,6 +360,9 @@ pub(crate) async fn set_settings(
         .await?;
     if connect.is_some() {
         context.daemon.connect.changed.notify_one();
+    }
+    if remote.is_some() {
+        context.daemon.remote.changed.notify_one();
     }
     Ok(settings)
 }
@@ -383,6 +394,7 @@ fn read_settings(db: &parallax_store::Store) -> Result<HostSettings, ErrorObject
         auto_resume: db.auto_resume().map_err(|e| store_error(&e))?,
         clean_worktrees: Some(db.clean_worktrees().map_err(|e| store_error(&e))?),
         connect: Some(db.connect().map_err(|e| store_error(&e))?),
+        remote: Some(db.remote().map_err(|e| store_error(&e))?),
         device_name: db.device_name().map_err(|e| store_error(&e))?,
         device_icon: db.device_icon().map_err(|e| store_error(&e))?,
     })

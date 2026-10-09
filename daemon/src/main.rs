@@ -12,6 +12,7 @@ use plxd::attach::{
 use plxd::launch_agent::LaunchAgent;
 use plxd::logging::{self, DEFAULT_LOG_LEVEL, LOG_LEVEL_ENV, LogFilter};
 use plxd::paths::{DATA_DIR_ENV, DataDir};
+use plxd::remote;
 use plxd::server::{self, Config, EXIT_ALREADY_RUNNING, Server, Shutdown, StartError};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use plxd::service::{self, DEFAULT_LABEL, SERVICE_LABEL_ENV};
@@ -32,7 +33,9 @@ enum Command {
     Serve(ServeArgs),
     /// Connect stdin and stdout to plxd's socket or pipe, starting plxd if it isn't running.
     Attach(AttachArgs),
-    /// Connect stdin and stdout to another device's plxd over Tailscale, for Parallax Connect.
+    /// Connect stdin and stdout to another device's plxd over Tailscale, for Parallax Connect, or
+    /// to a computer paired over HTTPS with `--remote`; pair with one with `--pair`, or find
+    /// them with `--discover`.
     Dial(DialArgs),
     /// Turn Parallax Connect on or off. A running plxd follows within 10 seconds.
     Connect(ConnectArgs),
@@ -98,9 +101,33 @@ struct AttachArgs {
 #[derive(Debug, Args)]
 struct DialArgs {
     /// The device's Tailscale IP, with port 7340 unless one is given, such as `100.87.92.42` or
-    /// `[fd7a:115c:a1e0::1]:7340`
-    #[arg(value_name = "ADDR", value_parser = parse_dial_address)]
-    address: SocketAddr,
+    /// `[fd7a:115c:a1e0::1]:7340`. With `--remote`, the paired computer's routes, tried in order,
+    /// each an IP or host name with port 7341 unless one is given
+    #[arg(value_name = "ADDR", required_unless_present = "discover")]
+    addresses: Vec<String>,
+
+    /// Reach a computer paired over HTTPS, whose certificate fingerprint this is (PLX-641)
+    #[arg(long, value_name = "FINGERPRINT", conflicts_with_all = ["pair", "discover"])]
+    remote: Option<String>,
+
+    /// Pair with the computer at the first ADDR that answers, with the code it shows, read from
+    /// the first line of stdin so no other user sees it; print its fingerprint, name, and routes
+    /// as JSON, and exit
+    #[arg(long, conflicts_with = "discover")]
+    pair: bool,
+
+    /// List the computers on this network waiting for a pairing, by name, as JSON, and exit
+    #[arg(long, conflicts_with = "addresses")]
+    discover: bool,
+
+    /// This computer's name, sent with `--pair`
+    #[arg(long, value_name = "NAME")]
+    name: Option<String>,
+
+    /// The data folder, which holds this computer's credentials for paired computers
+    /// [default: ~/.parallax]
+    #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
+    data_dir: Option<PathBuf>,
 }
 
 /// `dial`'s address: an IP and port, or an IP, in brackets or not, with [`CONNECT_PORT`].
@@ -335,6 +362,9 @@ fn attach(args: &AttachArgs) -> ! {
     std::process::exit(code)
 }
 
+/// How long `dial --discover` listens for mDNS advertisements.
+const DISCOVER_WAIT: Duration = Duration::from_secs(3);
+
 /// How long `dial` waits for the device to accept the connection.
 const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -353,7 +383,17 @@ fn dial(args: &DialArgs) -> ! {
             std::process::exit(1);
         }
     };
-    let address = args.address;
+    if args.remote.is_some() || args.pair || args.discover {
+        std::process::exit(runtime.block_on(dial_remote(args, &report)));
+    }
+    let parsed = match args.addresses.as_slice() {
+        [one] => parse_dial_address(one),
+        _ => Err("takes one address without --remote".to_owned()),
+    };
+    let address = parsed.unwrap_or_else(|error| {
+        report(&error);
+        std::process::exit(2)
+    });
     let code = runtime.block_on(async {
         let connecting = tokio::net::TcpStream::connect(address);
         let stream = match tokio::time::timeout(DIAL_TIMEOUT, connecting).await {
@@ -379,6 +419,74 @@ fn dial(args: &DialArgs) -> ! {
         }
     });
     std::process::exit(code)
+}
+
+/// `dial --discover`, `dial --pair`, and `dial --remote` (PLX-641). Exits 4 when no route answered, and
+/// [`remote::EXIT_REFUSED`] when the computer refused this one.
+async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -> i32 {
+    let data_dir = match DataDir::resolve(args.data_dir.as_deref()) {
+        Ok(dir) => dir,
+        Err(error) => {
+            report(&format!("could not find the data folder: {error}"));
+            return 1;
+        }
+    };
+    let exit = |error: &remote::Error| match error {
+        remote::Error::Refused => remote::EXIT_REFUSED,
+        _ => EXIT_UNAVAILABLE.into(),
+    };
+    if args.discover {
+        let found = tokio::task::spawn_blocking(|| remote::discover(DISCOVER_WAIT)).await;
+        return match found {
+            Ok(Ok(found)) => {
+                let json = serde_json::to_string(&found).expect("plain JSON");
+                let _ = writeln!(io::stdout(), "{json}");
+                0
+            }
+            Ok(Err(error)) => {
+                report(&format!("could not look for computers: {error}"));
+                1
+            }
+            Err(error) => {
+                report(&format!("could not look for computers: {error}"));
+                1
+            }
+        };
+    }
+    if args.pair {
+        let mut code = String::new();
+        if io::stdin().read_line(&mut code).is_err() || code.trim().is_empty() {
+            report(&"--pair reads the code from stdin");
+            return 2;
+        }
+        let name = args.name.as_deref().unwrap_or_default();
+        return match remote::pair(&args.addresses, code.trim(), name, data_dir.root()).await {
+            Ok(paired) => {
+                let json = serde_json::to_string(&paired).expect("plain JSON");
+                let _ = writeln!(io::stdout(), "{json}");
+                0
+            }
+            Err(error) => {
+                report(&format!("could not pair: {error}"));
+                exit(&error)
+            }
+        };
+    }
+    let fingerprint = args.remote.as_deref().unwrap_or_default();
+    let socket = match remote::dial(&args.addresses, fingerprint, data_dir.root()).await {
+        Ok(socket) => socket,
+        Err(error) => {
+            report(&format!("could not reach the paired computer: {error}"));
+            return exit(&error);
+        }
+    };
+    match remote::bridge(socket, tokio::io::stdin(), tokio::io::stdout()).await {
+        Ok(()) => 0,
+        Err(error) => {
+            report(&format!("the connection failed: {error}"));
+            1
+        }
+    }
 }
 
 /// Stores the `connect` setting in the data folder's store, for an install script (0056).
@@ -606,7 +714,7 @@ mod tests {
 
     use clap::{CommandFactory, Parser};
 
-    use super::{AttachArgs, Cli, Command, OnOff};
+    use super::{AttachArgs, Cli, Command, OnOff, parse_dial_address};
 
     #[test]
     fn the_command_line_definition_is_valid() {
@@ -679,13 +787,7 @@ mod tests {
 
     #[test]
     fn dial_takes_an_ip_with_the_connect_port_unless_one_is_given() {
-        let address = |text: &str| {
-            let cli = Cli::try_parse_from(["plxd", "dial", text])?;
-            let Command::Dial(args) = cli.command else {
-                panic!("expected dial, got {:?}", cli.command);
-            };
-            Ok::<_, clap::Error>(args.address.to_string())
-        };
+        let address = |text: &str| parse_dial_address(text).map(|a| a.to_string());
         assert_eq!(address("100.87.92.42").unwrap(), "100.87.92.42:7340");
         assert_eq!(address("100.87.92.42:9").unwrap(), "100.87.92.42:9");
         assert_eq!(address("fd7a::1").unwrap(), "[fd7a::1]:7340");
@@ -694,6 +796,27 @@ mod tests {
         for bad in ["macbook", "100.87.92.42:x", ""] {
             assert!(address(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn dial_takes_routes_with_a_fingerprint_or_to_pair_or_discovers() {
+        let dial = |argv: &[&str]| {
+            let cli = Cli::try_parse_from([&["plxd", "dial"], argv].concat())?;
+            let Command::Dial(args) = cli.command else {
+                panic!("expected dial, got {:?}", cli.command);
+            };
+            Ok::<_, clap::Error>(args)
+        };
+        let args = dial(&["--remote", "ab", "192.168.1.20", "100.64.0.2"]).unwrap();
+        assert_eq!(args.addresses, ["192.168.1.20", "100.64.0.2"]);
+        let args = dial(&["--pair", "--name", "laptop", "192.168.1.20"]).unwrap();
+        assert!(args.pair);
+        assert_eq!(args.name.as_deref(), Some("laptop"));
+        assert!(dial(&["--discover"]).unwrap().discover);
+        assert!(dial(&["--remote", "ab", "--pair", "192.168.1.20"]).is_err());
+        assert!(dial(&["--discover", "192.168.1.20"]).is_err());
+        assert!(dial(&["--pair"]).is_err());
+        assert!(dial(&["--remote", "ab"]).is_err());
     }
 
     #[test]

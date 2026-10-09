@@ -77,3 +77,13 @@ test("a device's dial failures name it", () => {
     "signed in to your Tailscale account",
   );
 });
+
+test("a LAN computer's dial failures name it, and a refusal isn't retried", () => {
+  const unreachable = exitError(4, null, "", undefined, "darwin", undefined, "Studio");
+  expect(unreachable.message).toContain("Couldn't reach Studio on this network");
+  const refused = exitError(5, null, "", undefined, "darwin", undefined, "Studio");
+  expect(refused.reason).toBe("refused");
+  expect(refused.message).toBe(
+    "Studio doesn't know this computer anymore. Remove it, then pair again with a new code.",
+  );
+});

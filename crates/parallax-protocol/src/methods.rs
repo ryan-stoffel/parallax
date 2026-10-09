@@ -57,8 +57,9 @@ use crate::{
     ProvidersListParams, ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams,
     PullRequest, QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams,
     QuestionListParams, QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams,
-    QueueListParams, QueueReorderParams, QueueResult, QueueSteerParams, RepoAddParams,
-    RepoAddResult, RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult,
+    QueueListParams, QueueReorderParams, QueueResult, QueueSteerParams, RemotePairParams,
+    RemotePairResult, RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult,
+    RepoAddParams, RepoAddResult, RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult,
     RepoUpdateParams, RepoUpdateResult, TerminalExitParams, TerminalKey, TerminalListParams,
     TerminalListResult, TerminalOpenParams, TerminalOutputParams, TerminalResizeParams,
     TerminalResult, TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult,
@@ -356,6 +357,14 @@ method_table! {
         /// `connect/devices`: this node and the tailnet's other nodes of its Tailscale user, and
         /// whether plxd answers on each (decision 0056). Gated on the `connect` capability.
         ConnectDevices = "connect/devices": ConnectDevicesParams => ConnectDevicesResult;
+        /// `remote/pair`: a new one-time pairing code, which replaces any earlier one (PLX-641,
+        /// 0065). Gated on the `remote` capability, like `remote/sessions` and `remote/revoke`.
+        RemotePair = "remote/pair": RemotePairParams => RemotePairResult;
+        /// `remote/sessions`: the paired clients' sessions.
+        RemoteSessions = "remote/sessions": RemoteSessionsParams => RemoteSessionsResult;
+        /// `remote/revoke`: ends a session and closes its connections. An unknown id changes
+        /// nothing.
+        RemoteRevoke = "remote/revoke": RemoteRevokeParams => RemoteSessionsResult;
         /// `inbox/list`: a Project's inbox, oldest first, and the event log's `seq` from before the
         /// read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
         InboxList = "inbox/list": InboxListParams => InboxListResult;
@@ -563,6 +572,9 @@ mod tests {
                 "host/settings/get",
                 "host/settings/set",
                 "connect/devices",
+                "remote/pair",
+                "remote/sessions",
+                "remote/revoke",
                 "inbox/list",
                 "inbox/seen",
                 "github/install",

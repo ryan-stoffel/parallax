@@ -7,6 +7,7 @@ import { DeviceIcon } from "../DeviceIcon";
 import { localId, useHosts, type Host } from "../hosts";
 import { IconButton } from "../ui";
 import { ConnectSettings } from "./ConnectSettings";
+import { LanSettings } from "./LanSettings";
 import { SshHostDialog } from "./SshHostDialog";
 import {
   PageTitle,
@@ -63,8 +64,8 @@ const tone = (state?: ConnectionState) =>
 
 /**
  * Settings > Connections: this computer, renamable, with its plxd and the app's version; then
- * Parallax Connect and its devices (0056); then the SSH hosts, which can be added, edited, and
- * removed.
+ * Parallax Connect and its devices (0056); then pairing on the same network (PLX-641); then the
+ * SSH hosts, which can be added, edited, and removed.
  */
 export function ConnectionSettings() {
   const hosts = useHosts();
@@ -80,11 +81,12 @@ export function ConnectionSettings() {
   return (
     <>
       <PageTitle title="Connections">
-        Where your agents run: this computer, your other computers through Parallax Connect, and
-        machines you reach over SSH.
+        Where your agents run: this computer, your other computers through Parallax Connect or on
+        the same network, and machines you reach over SSH.
       </PageTitle>
       <LocalHost host={local} />
       <ConnectSettings />
+      <LanSettings />
 
       <Section
         title="SSH hosts"

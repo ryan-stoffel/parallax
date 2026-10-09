@@ -19,6 +19,12 @@ const DEVICE_NAME: &str = "device_name";
 /// The `host_settings` key for this device's Parallax Connect icon (decision 0056).
 const DEVICE_ICON: &str = "device_icon";
 
+/// The `host_settings` key for whether plxd listens for remote clients (PLX-641, 0065).
+const REMOTE: &str = "remote";
+
+/// The `host_settings` key for the remote clients' sessions, as plxd's JSON (PLX-641).
+const REMOTE_SESSIONS: &str = "remote_sessions";
+
 impl Store {
     /// Whether a run a usage limit stopped waits and resumes, unless the run overrides it
     /// (PLX-371, decision 0049). On when never set.
@@ -113,6 +119,42 @@ impl Store {
         self.set_text(DEVICE_ICON, icon)
     }
 
+    /// Whether plxd listens for remote clients (PLX-641, 0065). Off unless set on.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn remote(&self) -> Result<bool, StoreError> {
+        Ok(self.text(REMOTE)?.is_some_and(|value| value == "true"))
+    }
+
+    /// Sets the host's remote setting.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_remote(&self, on: bool) -> Result<(), StoreError> {
+        self.set_flag(REMOTE, on)
+    }
+
+    /// The remote clients' sessions, as plxd stored them, if any.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn remote_sessions(&self) -> Result<Option<String>, StoreError> {
+        self.text(REMOTE_SESSIONS)
+    }
+
+    /// Stores the remote clients' sessions, or forgets them all with `None`.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_remote_sessions(&self, sessions: Option<&str>) -> Result<(), StoreError> {
+        self.set_text(REMOTE_SESSIONS, sessions)
+    }
+
     /// A boolean host setting, on unless stored as `false`.
     fn flag(&self, key: &str) -> Result<bool, StoreError> {
         Ok(self.text(key)?.is_none_or(|value| value != "false"))
@@ -173,6 +215,10 @@ mod tests {
     fn connect_is_off_until_set_on_and_device_details_clear() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("parallax.sqlite3")).unwrap();
+        assert!(!store.connect().unwrap());
+        assert!(!store.remote().unwrap());
+        store.set_remote(true).unwrap();
+        assert!(store.remote().unwrap());
         assert!(!store.connect().unwrap());
         store.set_connect(true).unwrap();
         assert!(store.connect().unwrap());

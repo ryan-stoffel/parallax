@@ -54,6 +54,7 @@ mod provider;
 mod pull_request;
 mod question;
 mod queue;
+mod remote;
 mod review;
 mod terminal;
 mod thread;
@@ -150,6 +151,10 @@ pub use question::{
 pub use queue::{
     AgentDelivery, QueueCancelParams, QueueEditParams, QueueListParams, QueueReorderParams,
     QueueResult, QueueSteerParams, QueuedMessage,
+};
+pub use remote::{
+    RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSession, RemoteSessionsParams,
+    RemoteSessionsResult,
 };
 pub use review::{
     AcceptId, AgentAcceptParams, AgentAcceptResult, AgentDiffFile, AgentDiffParams,

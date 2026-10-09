@@ -16,7 +16,19 @@ export type Settings = {
   localName?: string;
   /** The Parallax Connect devices found so far (0056), oldest first. */
   devices?: SavedDevice[];
+  /** The computers paired on the LAN (PLX-641), oldest first. */
+  lan?: SavedLan[];
 };
+
+/**
+ * A computer paired on the LAN as `settings.json` keeps it: its certificate fingerprint, which
+ * `plxd dial --remote` pins, its name, and its routes, tried in order.
+ */
+export type SavedLan = { fingerprint: string; name: string; routes: string[] };
+
+/** A route `plxd dial` takes: an IP or host name, with a port or not. Never starts with `-`. */
+export const isRoute = (value: unknown): value is string =>
+  typeof value === "string" && /^[\w[][\w.:[\]%-]{0,252}$/.test(value);
 
 /**
  * Reads the settings. A missing file is empty settings. Throws when the file can't be read, isn't
@@ -35,7 +47,7 @@ export function readSettings(file: string): Settings {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new Error("it isn't a JSON object");
   }
-  const { hosts = [], ssh, localName, devices = [] } = raw as Record<string, unknown>;
+  const { hosts = [], ssh, localName, devices = [], lan = [] } = raw as Record<string, unknown>;
   if (!Array.isArray(hosts)) throw new Error("`hosts` isn't a list");
   if (ssh !== undefined && typeof ssh !== "string") throw new Error("`ssh` isn't a string");
   if (localName !== undefined && typeof localName !== "string")
@@ -72,6 +84,21 @@ export function readSettings(file: string): Settings {
       throw new Error(`device ${JSON.stringify(entry)} has a bad name or icon`);
     if ((off !== undefined && off !== true) || (removed !== undefined && removed !== true))
       throw new Error(`device ${JSON.stringify(entry)} has a bad off or removed`);
+  }
+  if (!Array.isArray(lan)) throw new Error("`lan` isn't a list");
+  for (const entry of lan as unknown[]) {
+    const { fingerprint, name, routes } = (entry ?? {}) as Record<string, unknown>;
+    const id = `lan:${String(fingerprint)}`;
+    if (typeof fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(fingerprint) || ids.has(id))
+      throw new Error(`LAN computer ${JSON.stringify(entry)} has a bad fingerprint`);
+    ids.add(id);
+    if (
+      typeof name !== "string" ||
+      !Array.isArray(routes) ||
+      !routes.length ||
+      !routes.every(isRoute)
+    )
+      throw new Error(`LAN computer ${JSON.stringify(entry)} needs a name and routes`);
   }
   return { ...raw, hosts } as Settings;
 }

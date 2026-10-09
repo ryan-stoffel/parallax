@@ -156,6 +156,8 @@ export type ConnectionOptions = {
   destination?: string;
   /** A Parallax Connect device's name, reached with `plxd dial` (0056), which its errors name. */
   device?: string;
+  /** A LAN computer's name, reached with `plxd dial --remote` (PLX-641), which its errors name. */
+  lan?: string;
   /** The app's version, sent in `initialize`. */
   clientVersion: string;
   onState: (state: ConnectionState) => void;
@@ -402,7 +404,15 @@ export class Connection {
     child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
       if (child === this.child)
         this.end(
-          exitError(code, signal, stderr, destination, process.platform, this.options.device),
+          exitError(
+            code,
+            signal,
+            stderr,
+            destination,
+            process.platform,
+            this.options.device,
+            this.options.lan,
+          ),
         );
     });
 
@@ -523,6 +533,7 @@ export class Connection {
       error.reason !== "notFound" &&
       error.reason !== "incompatibleProtocol" &&
       error.reason !== "sshSetup" &&
+      error.reason !== "refused" &&
       error.exitCode !== 2;
     this.setState({ status: "failed", error, retrying });
     if (retrying) this.retryTimer = setTimeout(() => this.connect(), backoffMs(this.failures++));
@@ -568,7 +579,8 @@ const ignore = () => {};
 
 /**
  * Why `plxd attach` exited (0010), ssh for the host at `destination` (0022), or `plxd dial` for
- * the Connect device named `device` (0056), in words that say what to do. ssh exits 255 for its
+ * the Connect device named `device` (0056) or the LAN computer named `lan` (PLX-641), in words
+ * that say what to do. ssh exits 255 for its
  * own errors, and the remote shell 127 for a missing command. The raw stderr rides along for the
  * tooltip.
  */
@@ -579,6 +591,7 @@ export function exitError(
   destination?: string,
   platform = process.platform,
   device?: string,
+  lan?: string,
 ): ConnectionError {
   const details = { exitCode: code, ...(stderr.trim() && { stderr: stderr.trim() }) };
   const error = (reason: ConnectionError["reason"], message: string): ConnectionError => ({
@@ -628,6 +641,16 @@ export function exitError(
     }
     if (code === 4) return error("exited", `plxd couldn't be reached or started on ${destination}`);
   }
+  if (lan !== undefined && code === 4)
+    return error(
+      "exited",
+      `Couldn't reach ${lan} on this network. Check that it's on, on the same network, and that Same network is on there.`,
+    );
+  if (lan !== undefined && code === 5)
+    return error(
+      "refused",
+      `${lan} doesn't know this computer anymore. Remove it, then pair again with a new code.`,
+    );
   if (device !== undefined && code === 4)
     return error(
       "exited",

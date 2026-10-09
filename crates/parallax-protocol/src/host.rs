@@ -107,6 +107,10 @@ pub struct HostSettingsSetParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub connect: Option<bool>,
+    /// The new `remote`, behind the `remote` capability. Absent leaves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub remote: Option<bool>,
     /// The new `deviceName`, behind the `connect` capability. `""` clears it. Control characters
     /// are dropped and the rest trimmed to at most 64 characters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -138,6 +142,11 @@ pub struct HostSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub connect: Option<bool>,
+    /// Whether plxd listens for paired clients over HTTPS on port 7341 (PLX-641, 0065). Off by
+    /// default. An older plxd, without the `remote` capability, leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub remote: Option<bool>,
     /// This device's nickname for Parallax Connect, when one is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

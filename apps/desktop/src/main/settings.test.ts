@@ -49,6 +49,7 @@ test("settings round-trip with keys this doesn't know, and a missing file is no 
 test("a file this can't use as is throws, so a save can't overwrite what the user wrote", () => {
   const good = { id: "h1", name: "Mac mini", destination: "mini" };
   const device = { id: "n1", hostName: "mac-mini", ip: "100.64.0.1", os: "macOS" };
+  const computer = { fingerprint: "ab".repeat(32), name: "Studio", routes: ["192.168.1.20"] };
   const unusable = [
     "{ hosts: ",
     "[]",
@@ -65,10 +66,17 @@ test("a file this can't use as is throws, so a save can't overwrite what the use
     JSON.stringify({ hosts: [], devices: [{ id: "n1", hostName: "mini", ip: "100.64.0.1" }] }),
     JSON.stringify({ hosts: [], devices: [{ ...device, icon: "toaster" }] }),
     JSON.stringify({ hosts: [], devices: [device, device] }),
+    JSON.stringify({ hosts: [], lan: [{ ...computer, fingerprint: "AB" }] }),
+    JSON.stringify({ hosts: [], lan: [{ ...computer, routes: [] }] }),
+    JSON.stringify({ hosts: [], lan: [{ ...computer, routes: ["-oProxyCommand=x"] }] }),
+    JSON.stringify({ hosts: [], lan: [computer, computer] }),
   ];
   for (const text of unusable) {
     const settings = file();
     writeFileSync(settings, text);
     expect(() => readSettings(settings), text).toThrow();
   }
+  const usable = file();
+  writeFileSync(usable, JSON.stringify({ hosts: [], lan: [computer] }));
+  expect(readSettings(usable).lan).toEqual([computer]);
 });

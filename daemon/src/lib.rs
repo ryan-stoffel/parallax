@@ -41,6 +41,7 @@
 //! - `terminals`: the terminals plxd runs for its clients, by thread and terminal id (PLX-637).
 //! - [`tailnet`]: Tailscale's view of this node and its peers, and which peers Parallax Connect
 //!   lets in (0056).
+//! - [`remote`]: remote access on the LAN over HTTPS with a pinned key, and its client (PLX-641).
 //! - [`windows`]: every Win32 call plxd makes, and the only module with `unsafe` code. Windows
 //!   only.
 
@@ -68,6 +69,7 @@ pub mod peer;
 pub mod providers;
 #[cfg(unix)]
 mod public_proxy;
+pub mod remote;
 mod repo;
 pub mod routing;
 pub mod server;
