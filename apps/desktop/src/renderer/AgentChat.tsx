@@ -1192,8 +1192,9 @@ function RecordingRow({ recording }: { recording: Extract<Item, { kind: "recordi
 const TerminalView = lazy(() => import("./Terminal").then((m) => ({ default: m.TerminalView })));
 
 /**
- * A setup or settle script (PLX-650): running, then done or failed. While it runs or after it
- * failed, it opens to its plxd terminal, where a failed script's shell stays for a look.
+ * A setup or settle script (PLX-650): running, then done, failed, stopped with its thread, or
+ * interrupted by a plxd restart. While it runs or after it failed, it opens to its plxd terminal,
+ * where a failed script's shell stays for a look.
  */
 function ScriptRow({
   script,
@@ -1206,13 +1207,16 @@ function ScriptRow({
 }) {
   const links = useContext(ThreadLinksContext);
   const what = `${script.trigger === "setup" ? "Setup" : "Settle"} script ${script.name}`;
+  const failed = script.status === "failed";
   const icon =
     script.status === "running" ? (
       <Loader {...loaders.working} size={14} />
     ) : script.status === "done" ? (
       <Check aria-hidden className="size-3.5 shrink-0" />
-    ) : (
+    ) : failed ? (
       <X aria-hidden className="size-3.5 shrink-0 text-danger" />
+    ) : (
+      <Ban aria-hidden className="size-3.5 shrink-0" />
     );
   const detail =
     script.status === "running"
@@ -1221,23 +1225,27 @@ function ScriptRow({
         : "Running"
       : script.status === "done"
         ? "Done"
-        : (script.error ??
-          (script.exitCode === undefined
-            ? "Its terminal closed first."
-            : `Exited with code ${script.exitCode}.`));
+        : script.status === "cancelled"
+          ? "Stopped."
+          : !failed
+            ? "Interrupted when plxd stopped."
+            : (script.error ??
+              (script.exitCode === undefined
+                ? "Its terminal closed first."
+                : `Exited with code ${script.exitCode}.`));
   const summary = (
     <>
       {icon}
       <span className="truncate">{what}</span>
-      <span
-        className={`truncate ${script.status === "failed" ? "text-danger" : "text-faint-foreground"}`}
-      >
+      <span className={`truncate ${failed ? "text-danger" : "text-faint-foreground"}`}>
         {detail}
       </span>
     </>
   );
-  if (script.status === "done" || script.error || !links)
-    return <div className={`${stepRow} text-muted-foreground`}>{summary}</div>;
+  // Only a running script, or a failed one's shell, still has a terminal to open; opening any
+  // other would start an empty shell under its id.
+  const live = script.status === "running" || (failed && script.exitCode !== undefined);
+  if (!live || !links) return <div className={`${stepRow} text-muted-foreground`}>{summary}</div>;
   return (
     <Disclosure id={script.key} open={open} onToggle={onToggle} summary={summary}>
       <div className="h-60 overflow-hidden rounded-xl border border-border bg-surface py-1.5 pl-3">

@@ -11,16 +11,20 @@
 //!   the orchestrator's `settle-script.run` effect. A thread with no worktree of its own skips it.
 //!
 //! A script runs in the user's shell ([`crate::terminals::Terminals::run_script`]). A clean exit
-//! closes its terminal; any other leaves the shell open with its output. Each start and end is a
-//! `thread.script` event in the thread's own events, which the app shows in the thread.
+//! closes its terminal unless something it started still runs there; any other leaves the shell
+//! open with its output. Stopping or deleting a run a script holds closes the script's terminal
+//! ([`release`]), and the run ends cancelled. Each start and end is a `thread.script` event in the
+//! thread's own events, which the app shows in the thread. The scripts still running are kept in
+//! `host_settings`, so the next start ends each as interrupted ([`recover`]).
 //!
 //! Trust: like T3 Code with `t3.json`, plxd never runs the scripts in a repository's
 //! `parallax.json`. `repo/scripts` lists them, and they run only once the user imports and saves
 //! them with `repo/saveScripts`.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
@@ -28,7 +32,7 @@ use parallax_protocol::{
     ErrorKind, ParallaxEvent, ProjectId, RepoId, RepoSaveScriptsParams, RepoScript,
     RepoScriptsParams, RepoScriptsResult, RunId, ScriptStatus, ScriptTrigger,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -95,35 +99,81 @@ pub(crate) async fn save(
     scripts(daemon, RepoScriptsParams { repo: params.repo }).await
 }
 
+/// The runs whose first turn a blocking setup script holds, with its terminal, for
+/// [`release`].
+pub(crate) type Holds = Mutex<HashMap<RunId, String>>;
+
+/// How a script that holds a run's first turn ended: `Ok` after a clean exit, `Err(None)` when
+/// [`release`] stopped it, else why the run fails.
+pub(crate) type Held = Result<(), Option<String>>;
+
 /// Starts the setup script of the repository at `repo_path`, if it has one, in run `run_id`'s
 /// new worktree `worktree`. For a script that isn't async, returns what the run's first turn
-/// waits for: `Ok` once it exits cleanly, else why the run fails.
+/// waits for.
 pub(crate) async fn worktree_created(
     daemon: &Arc<Daemon>,
     run_id: RunId,
     scope: ProjectId,
     repo_path: &str,
     worktree: &Path,
-) -> Option<impl Future<Output = Result<(), String>> + Send + 'static> {
+) -> Option<impl Future<Output = Held> + Send + 'static> {
     let script = stored(daemon, repo_path)
         .await
         .into_iter()
         .find(|script| script.run_on_worktree_create)?;
     let blocking = script.run_async == Some(false);
     let script = ThreadScript {
-        run_id,
-        scope,
-        trigger: ScriptTrigger::Setup,
-        terminal_id: format!("setup-{}", script.id),
-        blocking,
-        script,
+        started: Started {
+            run_id,
+            scope,
+            trigger: ScriptTrigger::Setup,
+            name: script.name,
+            terminal_id: format!("setup-{}", script.id),
+            blocking,
+        },
+        command: script.command,
     };
     let ended = script.start(daemon, repo_path, worktree).await;
     blocking.then_some(async move {
-        ended
-            .await
-            .unwrap_or_else(|_| Err("plxd stopped before the setup script finished.".to_owned()))
+        ended.await.unwrap_or_else(|_| {
+            Err(Some(
+                "plxd stopped before the setup script finished.".to_owned(),
+            ))
+        })
     })
+}
+
+/// Stops the blocking setup script that holds run `run_id`'s first turn, if one does, by closing
+/// its terminal, so a Stop or delete reaches the run at once and it ends cancelled, as T3's
+/// `worktreeSetupCancel` does.
+pub(crate) fn release(daemon: &Daemon, run_id: RunId) {
+    let held = lock(&daemon.setup_holds).remove(&run_id);
+    if let Some(terminal_id) = held {
+        daemon.terminals.close(run_id.to_string(), terminal_id);
+    }
+}
+
+/// At start, before anything runs: every script the last plxd started and never saw end died
+/// with it, so each gets its `interrupted` event.
+pub(crate) async fn recover(daemon: &Daemon) -> Result<(), ErrorObject> {
+    daemon
+        .store
+        .run(&CancellationToken::new(), |db| {
+            let Some(json) = db.running_scripts().map_err(|e| store_error(&e))? else {
+                return Ok(());
+            };
+            let running: Vec<Started> = serde_json::from_str(&json).unwrap_or_default();
+            for script in running {
+                let scope = script.scope;
+                db.stage(
+                    Timestamp::now(),
+                    Some(scope),
+                    script.event(ScriptStatus::Interrupted, None, None),
+                );
+            }
+            db.set_running_scripts(None).map_err(|e| store_error(&e))
+        })
+        .await
 }
 
 /// The `settle-script.run` effect: runs thread `thread`'s repository's settle script in its
@@ -169,12 +219,15 @@ pub(crate) async fn settled(daemon: &Arc<Daemon>, thread: Uuid) {
     // A thread settles again after it's resumed, and an earlier settle shell may still be busy.
     let suffix = Uuid::now_v7().simple().to_string();
     let script = ThreadScript {
-        run_id,
-        scope,
-        trigger: ScriptTrigger::Settle,
-        terminal_id: format!("settle-{}-{}", script.id, &suffix[suffix.len() - 8..]),
-        blocking: false,
-        script,
+        started: Started {
+            run_id,
+            scope,
+            trigger: ScriptTrigger::Settle,
+            name: script.name,
+            terminal_id: format!("settle-{}-{}", script.id, &suffix[suffix.len() - 8..]),
+            blocking: false,
+        },
+        command: script.command,
     };
     drop(
         script
@@ -183,27 +236,55 @@ pub(crate) async fn settled(daemon: &Arc<Daemon>, thread: Uuid) {
     );
 }
 
-/// A script to run for a thread.
-struct ThreadScript {
+/// A thread's script as its events name it, and as `running_scripts` keeps it until it ends.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+struct Started {
     run_id: RunId,
     scope: ProjectId,
     trigger: ScriptTrigger,
+    name: String,
     terminal_id: String,
     blocking: bool,
-    script: RepoScript,
+}
+
+impl Started {
+    fn event(
+        &self,
+        status: ScriptStatus,
+        exit_code: Option<i32>,
+        error: Option<String>,
+    ) -> ParallaxEvent {
+        ParallaxEvent::ThreadScript {
+            run_id: self.run_id,
+            trigger: self.trigger,
+            name: self.name.clone(),
+            terminal_id: self.terminal_id.clone(),
+            blocking: self.blocking,
+            status,
+            exit_code,
+            error,
+        }
+    }
+}
+
+/// A script to run for a thread.
+struct ThreadScript {
+    started: Started,
+    command: String,
 }
 
 impl ThreadScript {
     /// Starts it in `cwd` and reports it, then reports how it ended and closes its terminal if
-    /// it exited cleanly. The receiver gets `Ok` for a clean exit, else why it failed.
+    /// it exited cleanly with nothing left running there. The receiver gets how it ended.
     async fn start(
         self,
         daemon: &Arc<Daemon>,
         repo_path: &str,
         cwd: &Path,
-    ) -> oneshot::Receiver<Result<(), String>> {
+    ) -> oneshot::Receiver<Held> {
         let (done, ended) = oneshot::channel();
-        let thread = self.run_id.to_string();
+        let script = self.started;
+        let thread = script.run_id.to_string();
         let cwd = cwd.to_string_lossy();
         // Nobody may be attached yet to answer a color probe, so none is advertised (T3).
         let env = [
@@ -213,94 +294,118 @@ impl ThreadScript {
             ("FORCE_COLOR", "0"),
             ("COLORTERM", ""),
         ];
-        let started = daemon.terminals.run_script(
+        let kind = match script.trigger {
+            ScriptTrigger::Setup => "setup",
+            ScriptTrigger::Settle => "settle",
+        };
+        let code = match daemon.terminals.run_script(
             &thread,
-            &self.terminal_id,
+            &script.terminal_id,
             &cwd,
-            &self.script.command,
+            &self.command,
             &env,
-        );
-        let code = match started {
+        ) {
             Ok(code) => code,
             Err(error) => {
                 let message = format!(
-                    "The {} script {} couldn't start: {}",
-                    self.kind(),
-                    self.script.name,
-                    error.message
+                    "The {kind} script {} couldn't start: {}",
+                    script.name, error.message
                 );
-                self.report(daemon, ScriptStatus::Failed, None, Some(error.message))
-                    .await;
-                let _ = done.send(Err(message));
+                report(
+                    daemon,
+                    &script,
+                    ScriptStatus::Failed,
+                    None,
+                    Some(error.message),
+                )
+                .await;
+                let _ = done.send(Err(Some(message)));
                 return ended;
             }
         };
-        self.report(daemon, ScriptStatus::Running, None, None).await;
+        if script.blocking {
+            lock(&daemon.setup_holds).insert(script.run_id, script.terminal_id.clone());
+        }
+        report(daemon, &script, ScriptStatus::Running, None, None).await;
         let daemon = Arc::clone(daemon);
         tokio::spawn(async move {
-            let code = code.await.ok().flatten();
-            if code == Some(0) {
-                daemon.terminals.close(thread, self.terminal_id.clone());
-            }
-            let status = if code == Some(0) {
-                ScriptStatus::Done
-            } else {
-                ScriptStatus::Failed
+            let code = code.await;
+            // `release` took the hold first: the user stopped the run.
+            let released =
+                script.blocking && lock(&daemon.setup_holds).remove(&script.run_id).is_none();
+            let (status, held) = match code {
+                _ if released => (ScriptStatus::Cancelled, Err(None)),
+                Some(0) => (ScriptStatus::Done, Ok(())),
+                Some(code) => (
+                    ScriptStatus::Failed,
+                    Err(Some(format!(
+                        "The {kind} script {} exited with code {code}. Its terminal {} stays open.",
+                        script.name, script.terminal_id
+                    ))),
+                ),
+                None => (
+                    ScriptStatus::Failed,
+                    Err(Some(format!(
+                        "The {kind} script {}'s terminal closed before it finished.",
+                        script.name
+                    ))),
+                ),
             };
-            self.report(&daemon, status, code, None).await;
-            let name = &self.script.name;
-            let kind = self.kind();
-            let _ = done.send(match code {
-                Some(0) => Ok(()),
-                Some(code) => Err(format!(
-                    "The {kind} script {name} exited with code {code}. Its terminal {} stays open.",
-                    self.terminal_id
-                )),
-                None => Err(format!(
-                    "The {kind} script {name}'s terminal closed before it finished."
-                )),
-            });
+            if status == ScriptStatus::Done {
+                let closing = Arc::clone(&daemon);
+                let terminal_id = script.terminal_id.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    closing.terminals.close_idle(&thread, &terminal_id);
+                })
+                .await;
+            }
+            report(&daemon, &script, status, code, None).await;
+            let _ = done.send(held);
         });
         ended
     }
+}
 
-    fn kind(&self) -> &'static str {
-        match self.trigger {
-            ScriptTrigger::Setup => "setup",
-            ScriptTrigger::Settle => "settle",
-        }
+/// Stages `script`'s `thread.script` event, and keeps `running_scripts` in step with it, in one
+/// job on the writer.
+async fn report(
+    daemon: &Daemon,
+    script: &Started,
+    status: ScriptStatus,
+    exit_code: Option<i32>,
+    error: Option<String>,
+) {
+    let script = script.clone();
+    let staged = daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            let mut running: Vec<Started> = db
+                .running_scripts()
+                .map_err(|e| store_error(&e))?
+                .and_then(|json| serde_json::from_str(&json).ok())
+                .unwrap_or_default();
+            running.retain(|other| other != &script);
+            if status == ScriptStatus::Running {
+                running.push(script.clone());
+            }
+            let json = serde_json::to_string(&running).map_err(ErrorObject::internal_error)?;
+            db.set_running_scripts((!running.is_empty()).then_some(json.as_str()))
+                .map_err(|e| store_error(&e))?;
+            db.stage(
+                Timestamp::now(),
+                Some(script.scope),
+                script.event(status, exit_code, error),
+            );
+            Ok(())
+        })
+        .await;
+    if let Err(error) = staged {
+        warn!(error = %error.message, "could not record a thread's script");
     }
+}
 
-    /// Stages its `thread.script` event.
-    async fn report(
-        &self,
-        daemon: &Daemon,
-        status: ScriptStatus,
-        exit_code: Option<i32>,
-        error: Option<String>,
-    ) {
-        let scope = self.scope;
-        let event = ParallaxEvent::ThreadScript {
-            run_id: self.run_id,
-            trigger: self.trigger,
-            name: self.script.name.clone(),
-            terminal_id: self.terminal_id.clone(),
-            blocking: self.blocking,
-            status,
-            exit_code,
-            error,
-        };
-        let staged = daemon
-            .store
-            .run(&CancellationToken::new(), move |db| {
-                db.stage(Timestamp::now(), Some(scope), event);
-                Ok(())
-            })
-            .await;
-        if let Err(error) = staged {
-            warn!(error = %error.message, "could not record a thread's script");
-        }
-    }
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The path of repo entry `repo`.

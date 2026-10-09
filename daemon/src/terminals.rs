@@ -8,6 +8,7 @@
 //! a client sees each byte exactly once.
 
 use std::collections::{HashMap, VecDeque};
+use std::future::Future;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::mpsc as std_mpsc;
@@ -20,7 +21,7 @@ use parallax_protocol::{
     TerminalExitParams, TerminalKey, TerminalOpenParams, TerminalOutputParams,
 };
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc};
 use tokio::task::AbortHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -57,6 +58,11 @@ struct Terminal {
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// The connections it streams to, so opening it again on one replaces that stream.
     streams: Mutex<Vec<Stream>>,
+    /// The program it runs: for a shell, the one its user's `$SHELL` or account names.
+    shell: String,
+    /// Its program's process id and its terminal device, to find what still runs there.
+    pid: Option<u32>,
+    tty: Option<String>,
 }
 
 /// A connection a terminal streams to, and the task that streams it.
@@ -184,7 +190,7 @@ impl Terminals {
         cwd: &str,
         command: &str,
         env: &[(&str, &str)],
-    ) -> Result<oneshot::Receiver<Option<i32>>, ErrorObject> {
+    ) -> Result<impl Future<Output = Option<i32>> + Send + 'static, ErrorObject> {
         let key = (thread_id.to_owned(), terminal_id.to_owned());
         let params = TerminalOpenParams {
             thread_id: key.0.clone(),
@@ -207,14 +213,22 @@ impl Terminals {
         let sentinel = format!("__PLX_SCRIPT_DONE_{}__", Uuid::now_v7().simple());
         // Subscribed before typing, so the line can't pass unseen.
         let (output, seen, exit) = terminal.subscribe();
-        let _ = terminal
-            .input
-            .send(format!("{}\r", wrap_script(command, &sentinel)));
-        let (done, code) = oneshot::channel();
-        tokio::spawn(async move {
-            let _ = done.send(watch_script(&terminal, output, seen, exit, &sentinel).await);
-        });
-        Ok(code)
+        let typed = wrap_script(command, &sentinel, &terminal.shell);
+        let _ = terminal.input.send(format!("{typed}\r"));
+        Ok(async move { watch_script(&terminal, output, seen, exit, &sentinel).await })
+    }
+
+    /// Closes a script's terminal unless something it started still runs there, as T3 Code's
+    /// `closeIdle` keeps a terminal with a running subprocess: any process on its terminal
+    /// device besides its shell. Keeps it when that can't be checked. Blocks on `ps`.
+    pub(crate) fn close_idle(&self, thread_id: &str, terminal_id: &str) {
+        let key = (thread_id.to_owned(), terminal_id.to_owned());
+        let Some(terminal) = lock(&self.open).get(&key).cloned() else {
+            return;
+        };
+        if !busy(&terminal) {
+            self.close(key.0, key.1);
+        }
     }
 
     /// `terminal/list`: the running terminals, or one thread's, in no particular order.
@@ -273,6 +287,10 @@ impl Terminal {
 
 /// Starts `params`' program, or the user's login shell (`PowerShell` on Windows), in a new
 /// pseudo-terminal, with the threads that serve it.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one sequence of steps, each of which must happen before the next"
+)]
 fn start(
     key: Key,
     params: TerminalOpenParams,
@@ -312,6 +330,10 @@ fn start(
         }
         None => CommandBuilder::new_default_prog(),
     };
+    let shell = match &builder.get_argv().first() {
+        Some(program) => program.to_string_lossy().into_owned(),
+        None => builder.get_shell(),
+    };
     // Its home folder when absent.
     if let Some(cwd) = cwd {
         builder.cwd(cwd);
@@ -331,6 +353,15 @@ fn start(
 
     let pair = native_pty_system().openpty(size).map_err(|e| failed(&e))?;
     let mut child = pair.slave.spawn_command(builder).map_err(|e| failed(&e))?;
+    #[cfg(unix)]
+    let tty = pair.master.tty_name().map(|path| {
+        path.to_string_lossy()
+            .trim_start_matches("/dev/")
+            .to_owned()
+    });
+    #[cfg(windows)]
+    let tty = None;
+    let pid = child.process_id();
     drop(pair.slave);
     let reader = pair.master.try_clone_reader().map_err(|e| failed(&e))?;
     let writer = pair.master.take_writer().map_err(|e| failed(&e))?;
@@ -347,6 +378,9 @@ fn start(
         input,
         killer: Mutex::new(child.clone_killer()),
         streams: Mutex::default(),
+        shell,
+        pid,
+        tty,
     });
 
     let (read_done, reading) = std_mpsc::channel::<()>();
@@ -521,16 +555,48 @@ async fn stream(
     }
 }
 
-/// `command` as the shell is typed it, as T3 Code's `wrapCommandForCompletion`: run in a block
+/// Whether a process other than `terminal`'s shell runs on its terminal device outside its
+/// foreground process group, or that can't be told. Once a script's exit line has printed, the
+/// foreground holds only what the shell runs for its prompt, such as a `direnv` hook, while what
+/// the script left running in the background stays outside it.
+#[cfg(unix)]
+fn busy(terminal: &Terminal) -> bool {
+    let (Some(tty), Some(pid)) = (&terminal.tty, terminal.pid) else {
+        return true;
+    };
+    let listed = std::process::Command::new("ps")
+        .args(["-o", "pid=,stat=", "-t", tty])
+        .output();
+    let Ok(listed) = listed else {
+        return true;
+    };
+    let pid = pid.to_string();
+    String::from_utf8_lossy(&listed.stdout).lines().any(|line| {
+        let mut fields = line.split_whitespace();
+        let (Some(other), Some(stat)) = (fields.next(), fields.next()) else {
+            return false;
+        };
+        other != pid && !stat.contains('+')
+    })
+}
+
+// ponytail: Windows has no `ps`, so a clean exit closes the shell there; listing the
+// pseudo-console's processes is PLX-677.
+#[cfg(windows)]
+fn busy(_: &Terminal) -> bool {
+    false
+}
+
+/// `command` as it's typed into `shell`, as T3 Code's `wrapCommandForCompletion` types it: run in a block
 /// that closes on its own line, so a trailing comment or heredoc can't swallow the line after it,
 /// then printing `sentinel` and the exit code on a line of their own. Lines end in `\r`, the
 /// Enter key for every shell's line editor. The echoed input never matches: there `sentinel` is
 /// followed by `%s` or `$`, not digits.
-fn wrap_script(command: &str, sentinel: &str) -> String {
+fn wrap_script(command: &str, sentinel: &str, shell: &str) -> String {
     let body = command.replace("\r\n", "\r").replace('\n', "\r");
-    let shell = std::env::var("SHELL").unwrap_or_default();
-    let shell = shell.rsplit('/').next().unwrap_or_default();
-    if cfg!(windows) || shell == "pwsh" || shell == "powershell" {
+    let shell = shell.rsplit(['/', '\\']).next().unwrap_or_default();
+    let shell = shell.strip_suffix(".exe").unwrap_or(shell);
+    if shell == "pwsh" || shell == "powershell" {
         format!(
             "$global:LASTEXITCODE = $null; & {{\r{body}\r}}; if ($null -ne $LASTEXITCODE) {{ $__plxc = $LASTEXITCODE }} elseif ($?) {{ $__plxc = 0 }} else {{ $__plxc = 1 }}; Write-Host \"{sentinel}$__plxc\""
         )

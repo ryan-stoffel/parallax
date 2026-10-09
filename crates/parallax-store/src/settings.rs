@@ -31,6 +31,9 @@ const REMOTE_SESSIONS: &str = "remote_sessions";
 /// The `host_settings` key prefix for a repository's scripts, before its path (PLX-650).
 const REPO_SCRIPTS: &str = "repo_scripts:";
 
+/// The `host_settings` key for the scripts that are running, which a restart interrupts.
+const RUNNING_SCRIPTS: &str = "running_scripts";
+
 impl Store {
     /// Whether a run a usage limit stopped waits and resumes, unless the run overrides it
     /// (PLX-371, decision 0049). On when never set.
@@ -197,6 +200,24 @@ impl Store {
     /// A database error.
     pub fn set_repo_scripts(&self, path: &str, scripts: Option<&str>) -> Result<(), StoreError> {
         self.set_text(&format!("{REPO_SCRIPTS}{path}"), scripts)
+    }
+
+    /// The setup and settle scripts that started and haven't ended, as plxd's JSON (PLX-650).
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn running_scripts(&self) -> Result<Option<String>, StoreError> {
+        self.text(RUNNING_SCRIPTS)
+    }
+
+    /// Stores the scripts that are running, or none with `None`.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_running_scripts(&self, scripts: Option<&str>) -> Result<(), StoreError> {
+        self.set_text(RUNNING_SCRIPTS, scripts)
     }
 
     /// A boolean host setting, on unless stored as `false`.

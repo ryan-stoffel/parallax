@@ -2726,20 +2726,43 @@ impl Actor {
         Ok((cwd, git_dir))
     }
 
-    pub(super) async fn failed_to_start(&mut self, message: String) {
-        warn!(run = %self.id, %message, "an agent run's CLI could not start");
+    async fn failed_to_start(&mut self, message: String) {
+        self.ended_before_start(AgentOutcome::Failed {
+            failure: AgentFailureKind::SpawnFailed,
+            message,
+        })
+        .await;
+    }
+
+    /// Ends a run whose CLI never started with `outcome`: failed, or cancelled, as when its
+    /// blocking setup script failed or the user stopped it (PLX-650).
+    pub(super) async fn ended_before_start(&mut self, outcome: AgentOutcome) {
+        let message = if let AgentOutcome::Failed { message, .. } = &outcome {
+            Some(message.clone())
+        } else {
+            None
+        };
+        if let Some(message) = &message {
+            warn!(run = %self.id, %message, "an agent run's CLI could not start");
+        } else {
+            info!(run = %self.id, "an agent run was stopped before its CLI started");
+        }
+        let status = if message.is_some() {
+            convert::FAILED
+        } else {
+            convert::CANCELLED
+        };
         let finished = ParallaxEvent::AgentFinished {
             run_id: self.id,
-            outcome: AgentOutcome::Failed {
-                failure: AgentFailureKind::SpawnFailed,
-                message: message.clone(),
-            },
+            outcome,
         };
-        convert::FAILED.clone_into(&mut self.row.state.status);
-        self.row.state.error = Some(message.clone());
+        status.clone_into(&mut self.row.state.status);
+        self.row.state.error.clone_from(&message);
         self.row.state.resume_at = None;
         self.save_with(vec![finished]).await;
-        if self.is_child().await {
+        if let Some(message) = message
+            && self.is_child().await
+        {
             let text = failed_text(&self.row.fields.prompt, &message);
             self.inbox(InboxKind::Failed, text).await;
         }

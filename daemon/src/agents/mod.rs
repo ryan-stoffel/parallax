@@ -68,10 +68,10 @@ use std::time::Duration;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentApproveParams, AgentApproveResult,
-    AgentAttachParams, AgentAttachResult, AgentDelivery, AgentEffort, AgentImageParams,
-    AgentOpenPrResult, AgentOutcome, AgentOutputItem, AgentPermission, AgentRun, AgentSendParams,
-    AgentStartParams, ApprovalId, CoordinatorThreadId, ErrorKind, GitStatus, ImageId,
-    ImageMediaType, ParallaxEvent, PrActParams, PrDiffResult, PrViewParams, ProjectId,
+    AgentAttachParams, AgentAttachResult, AgentDelivery, AgentEffort, AgentFailureKind,
+    AgentImageParams, AgentOpenPrResult, AgentOutcome, AgentOutputItem, AgentPermission, AgentRun,
+    AgentSendParams, AgentStartParams, ApprovalId, CoordinatorThreadId, ErrorKind, GitStatus,
+    ImageId, ImageMediaType, ParallaxEvent, PrActParams, PrDiffResult, PrViewParams, ProjectId,
     ProjectPermission, PromptImage, PullRequest, QueueResult, Role, RunId, TurnId,
 };
 use parallax_store::{RunFields, RunState, StoreError, ThreadFields, WorktreeFields};
@@ -1235,7 +1235,13 @@ pub(crate) async fn create_started(
             };
             match setup {
                 Ok(()) => launch(&mut actor).await,
-                Err(message) => actor.failed_to_start(message).await,
+                Err(Some(message)) => {
+                    let failure = AgentFailureKind::SetupFailed;
+                    actor
+                        .ended_before_start(AgentOutcome::Failed { failure, message })
+                        .await;
+                }
+                Err(None) => actor.ended_before_start(AgentOutcome::Cancelled).await,
             }
             daemon.agents.run(actor, commands);
         });
@@ -1472,6 +1478,8 @@ pub(crate) async fn interrupt(
     id: RunId,
     hold_queue: bool,
 ) -> Result<AgentRun, ErrorObject> {
+    // A blocking setup script would hold the command until it ends (PLX-650).
+    crate::setup_scripts::release(daemon, id);
     ask(daemon, id, |reply| Command::Interrupt { hold_queue, reply }).await
 }
 
@@ -1587,6 +1595,8 @@ pub(crate) async fn cancel(
     if let Some(from) = from {
         sender_exists(&daemon, from).await?;
     }
+    // A blocking setup script would hold the command until it ends (PLX-650).
+    crate::setup_scripts::release(&daemon, id);
     ask(&daemon, id, |reply| Command::Cancel { from, reply }).await
 }
 
@@ -1698,6 +1708,8 @@ pub(crate) async fn delete(
     wait: bool,
     command_id: Option<Uuid>,
 ) -> Result<(), ErrorObject> {
+    // A blocking setup script would hold the command until it ends (PLX-650).
+    crate::setup_scripts::release(daemon, id);
     ask(daemon, id, |reply| Command::Delete {
         wait,
         command_id,

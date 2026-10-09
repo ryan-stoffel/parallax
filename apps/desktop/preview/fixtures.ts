@@ -1022,7 +1022,7 @@ export function createFixtures(now = Date.now()): Fixtures {
     .raw(ago(30), { ...setupScript, runId: docsLinks.id, status: "running" })
     .raw(ago(29), { ...setupScript, runId: docsLinks.id, status: "failed", exitCode: 1 })
     .update(ago(29), { status: "failed", error: linksError })
-    .finish(ago(29), { status: "failed", failure: "spawnFailed", message: linksError });
+    .finish(ago(29), { status: "failed", failure: "setupFailed", message: linksError });
 
   // ---- Questions and the inbox --------------------------------------------------------------
 

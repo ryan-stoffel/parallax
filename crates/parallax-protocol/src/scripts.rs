@@ -90,6 +90,10 @@ pub enum ScriptStatus {
     Done,
     /// It exited with an error, or couldn't start. Its terminal stays open.
     Failed,
+    /// The user stopped its thread while it held the first turn. Its terminal closed.
+    Cancelled,
+    /// plxd stopped while it ran, and its terminal with it.
+    Interrupted,
     /// A status this version does not know yet.
     #[serde(other)]
     #[ts(skip)]

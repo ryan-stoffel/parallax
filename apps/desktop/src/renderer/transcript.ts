@@ -905,6 +905,7 @@ const failures: Record<AgentFailureKind, string> = {
   vendorError: "the provider returned an error",
   crashed: "the CLI crashed",
   spawnFailed: "the CLI didn't start",
+  setupFailed: "the setup script didn't succeed",
   commitFailed: "Parallax couldn't commit its changes",
   internal: "something went wrong in plxd",
 };

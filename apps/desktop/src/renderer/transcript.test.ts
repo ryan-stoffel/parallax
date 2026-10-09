@@ -877,4 +877,10 @@ test("a script's end replaces its start where it was (PLX-650)", () => {
   );
   expect(t.items.map((i) => i.kind)).toEqual(["script", "assistant"]);
   expect(of(t.items, "script")[0]).toMatchObject({ status: "failed", exitCode: 3, runId });
+  // A restart's end replaces a start too, so the row stops spinning.
+  const restarted = build(
+    at({ ...script, status: "running" }),
+    at({ ...script, status: "interrupted" }),
+  );
+  expect(of(restarted.items, "script")).toMatchObject([{ status: "interrupted" }]);
 });

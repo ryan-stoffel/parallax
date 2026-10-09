@@ -2894,7 +2894,7 @@ export type ParallaxEvent = { "kind": "project.created",
  *
  * A newer plxd may send a kind this version does not know; treat it as unknown.
  */
-export type AgentFailureKind = "notSignedIn" | "rateLimited" | "policyViolation" | "unexpectedApiKey" | "vendorError" | "crashed" | "spawnFailed" | "commitFailed" | "internal";
+export type AgentFailureKind = "notSignedIn" | "rateLimited" | "policyViolation" | "unexpectedApiKey" | "vendorError" | "crashed" | "spawnFailed" | "setupFailed" | "commitFailed" | "internal";
 
 /**
  * What `agent/accept` did to the project's repository.
@@ -3449,7 +3449,7 @@ export type RepoId = string;
  *
  * A newer plxd may send a status this version does not know; treat it as unknown.
  */
-export type ScriptStatus = "running" | "done" | "failed";
+export type ScriptStatus = "running" | "done" | "failed" | "cancelled" | "interrupted";
 
 /**
  * When a script ran.

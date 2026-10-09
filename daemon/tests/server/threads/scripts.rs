@@ -219,3 +219,95 @@ async fn a_blocking_setup_script_holds_the_first_turn_and_its_failure_fails_the_
     assert_eq!(terminals.terminals[0].terminal_id, "setup-setup");
     client.delete(run).await.unwrap();
 }
+
+#[tokio::test]
+async fn stop_and_delete_end_a_blocking_setup_at_once() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    save(&mut client, repo.id, vec![setup("sleep 30", Some(false))]).await;
+    client.subscribe(0, Some(scope(repo.id))).await;
+    let running = |run: RunId| {
+        move |event: &EventsEventParams| {
+            matches!(&event.event, ParallaxEvent::ThreadScript { run_id, status: ScriptStatus::Running, .. }
+                if *run_id == run)
+        }
+    };
+
+    let stopped = client
+        .call::<ThreadStart>(start_params(Some(repo.id), "Write some notes"))
+        .await
+        .unwrap()
+        .run
+        .id;
+    client.until(running(stopped)).await;
+    let cancelled = tokio::time::timeout(
+        Duration::from_secs(5),
+        client.call::<AgentCancel>(AgentCancelParams {
+            run_id: stopped,
+            from: None,
+        }),
+    )
+    .await
+    .expect("Stop waited for the script")
+    .unwrap();
+    assert_eq!(cancelled.run.status, AgentStatus::Cancelled);
+    let events = client.until(script_ended(stopped)).await;
+    assert!(matches!(
+        events.last().unwrap().event,
+        ParallaxEvent::ThreadScript {
+            status: ScriptStatus::Cancelled,
+            ..
+        }
+    ));
+
+    let deleted = client
+        .call::<ThreadStart>(start_params(Some(repo.id), "Write more notes"))
+        .await
+        .unwrap()
+        .run
+        .id;
+    client.until(running(deleted)).await;
+    tokio::time::timeout(Duration::from_secs(5), client.delete(deleted))
+        .await
+        .expect("delete waited for the script")
+        .unwrap();
+    let terminals = client
+        .call::<TerminalList>(TerminalListParams { thread_id: None })
+        .await
+        .unwrap();
+    assert!(terminals.terminals.is_empty(), "{terminals:?}");
+}
+
+#[tokio::test]
+async fn a_restart_ends_a_running_script_as_interrupted() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    save(&mut client, repo.id, vec![setup("sleep 30", None)]).await;
+    client.subscribe(0, Some(scope(repo.id))).await;
+    let run = client
+        .call::<ThreadStart>(start_params(Some(repo.id), "Write some notes"))
+        .await
+        .unwrap()
+        .run
+        .id;
+    client
+        .until(|event| matches!(&event.event, ParallaxEvent::ThreadScript { run_id, .. } if *run_id == run))
+        .await;
+    drop(client);
+
+    let host = host.restart(fake(editing())).await;
+    let mut client = host.client().await;
+    client.subscribe(0, Some(scope(repo.id))).await;
+    let events = client.until(script_ended(run)).await;
+    assert!(matches!(
+        events.last().unwrap().event,
+        ParallaxEvent::ThreadScript {
+            status: ScriptStatus::Interrupted,
+            ..
+        }
+    ));
+}
