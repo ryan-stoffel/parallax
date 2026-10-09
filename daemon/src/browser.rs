@@ -408,6 +408,11 @@ impl Browser {
             .map(|_| browser)
     }
 
+    /// Whether the browser has exited.
+    pub(crate) fn closed(&self) -> bool {
+        self.routes().closed.is_some()
+    }
+
     /// Sends `method` to the browser, or to a page's session, and waits for its result.
     ///
     /// # Errors

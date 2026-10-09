@@ -177,6 +177,23 @@ export type ParallaxRequests = {
 	 */
 	"agent/attach": { params: AgentAttachParams, result: AgentAttachResult },
 	/**
+	 * `preview/call`: one of a thread's `preview_*` browser tools (PLX-639), which its
+	 * `plxd mcp` sends here.
+	 */
+	"preview/call": { params: PreviewCallParams, result: PreviewCallResult },
+	/**
+	 * `preview/list`: a thread's browser tabs.
+	 */
+	"preview/list": { params: PreviewListParams, result: PreviewListResult },
+	/**
+	 * `preview/frame`: a tab's newest frame, waiting up to 10 s for a new one.
+	 */
+	"preview/frame": { params: PreviewFrameParams, result: PreviewFrameResult },
+	/**
+	 * `preview/input`: the user's control, mouse, wheel, keys, or address bar on a tab.
+	 */
+	"preview/input": { params: PreviewInputParams, result: PreviewInputResult },
+	/**
 	 * `agent/diff`: the files that differ between a run's base and its latest commit, each
 	 * with its stats and a size-capped unified diff (#157). Gated on the `agentReview`
 	 * capability, like every review method.
@@ -577,6 +594,10 @@ export const REQUEST_METHODS = [
 	"agent/events",
 	"agent/image",
 	"agent/attach",
+	"preview/call",
+	"preview/list",
+	"preview/frame",
+	"preview/input",
 	"agent/diff",
 	"agent/file",
 	"agent/files",
@@ -3419,6 +3440,248 @@ export type AgentAttachResult = {
 	 */
 	imageId: ImageId,
 };
+
+/**
+ * Params of `preview/call`: one of thread `runId`'s `preview_*` tools, as its MCP call named it.
+ */
+export type PreviewCallParams = {
+	/**
+	 * The calling thread.
+	 */
+	runId: RunId,
+	/**
+	 * The tool, such as `preview_click`.
+	 */
+	tool: string,
+	/**
+	 * The tool's arguments.
+	 */
+	arguments: JsonValue,
+};
+
+/**
+ * Result of `preview/call`: what the tool answers the model.
+ */
+export type PreviewCallResult = {
+	/**
+	 * The text, JSON in T3's shape when the tool worked.
+	 */
+	text: string,
+	/**
+	 * A PNG of the page, in base64, when the tool returns one.
+	 */
+	image?: string,
+	/**
+	 * Whether `text` says why the tool failed.
+	 */
+	error?: boolean,
+};
+
+/**
+ * Params of `preview/list`: one thread's tabs.
+ */
+export type PreviewListParams = {
+	/**
+	 * The thread.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Result of `preview/list`.
+ */
+export type PreviewListResult = {
+	/**
+	 * The thread's tabs, oldest first.
+	 */
+	tabs: Array<PreviewTab>,
+};
+
+/**
+ * An agent's browser tab.
+ */
+export type PreviewTab = {
+	/**
+	 * Its id within its thread, such as `tab-1`.
+	 */
+	tabId: string,
+	/**
+	 * The page it shows.
+	 */
+	url: string,
+	/**
+	 * The page's title, when known.
+	 */
+	title: string,
+	/**
+	 * Whether the page is loading.
+	 */
+	loading: boolean,
+	/**
+	 * Whether the user controls it, so the agent's actions wait.
+	 */
+	human: boolean,
+	/**
+	 * Whether the agent is recording it.
+	 */
+	recording: boolean,
+};
+
+/**
+ * Params of `preview/frame`: the tab's newest frame after `after`. plxd waits up to 10 s for
+ * one, then answers with the last.
+ */
+export type PreviewFrameParams = {
+	/**
+	 * The thread.
+	 */
+	runId: RunId,
+	/**
+	 * The tab.
+	 */
+	tabId: string,
+	/**
+	 * The last frame's `seq` the caller has, 0 for none.
+	 */
+	after: number,
+};
+
+/**
+ * Result of `preview/frame`.
+ */
+export type PreviewFrameResult = {
+	/**
+	 * The frame's number, 0 before the first.
+	 */
+	seq: number,
+	/**
+	 * The frame, a JPEG in base64, empty before the first.
+	 */
+	data: string,
+	/**
+	 * The page's width in CSS pixels, which input coordinates use.
+	 */
+	width: number,
+	/**
+	 * The page's height in CSS pixels.
+	 */
+	height: number,
+	/**
+	 * The tab as it stands.
+	 */
+	tab: PreviewTab,
+};
+
+/**
+ * Params of `preview/input`: the user's input to a tab. Anything but handing control back or
+ * sizing the viewport takes control first.
+ */
+export type PreviewInputParams = {
+	/**
+	 * The thread.
+	 */
+	runId: RunId,
+	/**
+	 * The tab.
+	 */
+	tabId: string,
+	/**
+	 * The input.
+	 */
+	input: PreviewInput,
+};
+
+/**
+ * One piece of the user's input. Coordinates are the page's CSS pixels.
+ */
+export type PreviewInput = { "kind": "control",
+	/**
+	 * True to take it.
+	 */
+	take: boolean, } | { "kind": "mouse",
+	/**
+	 * Down, up, or a move.
+	 */
+	event: PreviewMouse,
+	/**
+	 * Where, from the page's left.
+	 */
+	x: number,
+	/**
+	 * Where, from the page's top.
+	 */
+	y: number,
+	/**
+	 * `left`, `middle`, or `right`, for a press or release.
+	 */
+	button?: string,
+	/**
+	 * 1 for a click, 2 for a double-click.
+	 */
+	clickCount?: number,
+	/**
+	 * Alt 1, Control 2, Meta 4, Shift 8, as `DevTools` adds them.
+	 */
+	modifiers: number, } | { "kind": "wheel",
+	/**
+	 * Where, from the page's left.
+	 */
+	x: number,
+	/**
+	 * Where, from the page's top.
+	 */
+	y: number,
+	/**
+	 * How far right, in CSS pixels.
+	 */
+	deltaX: number,
+	/**
+	 * How far down, in CSS pixels.
+	 */
+	deltaY: number, } | { "kind": "key",
+	/**
+	 * True going down, false coming up.
+	 */
+	down: boolean,
+	/**
+	 * The key as the DOM names it, such as `a` or `Enter`.
+	 */
+	key: string,
+	/**
+	 * The physical key, such as `KeyA`.
+	 */
+	code?: string,
+	/**
+	 * What it types, for a key that types.
+	 */
+	text?: string,
+	/**
+	 * Alt 1, Control 2, Meta 4, Shift 8.
+	 */
+	modifiers: number, } | { "kind": "viewport",
+	/**
+	 * The width.
+	 */
+	width: number,
+	/**
+	 * The height.
+	 */
+	height: number, } | { "kind": "navigate",
+	/**
+	 * The page, as the address bar's text.
+	 */
+	url: string,
+};
+
+/**
+ * A mouse event's kind.
+ */
+export type PreviewMouse = "down" | "up" | "move";
+
+/**
+ * Result of `preview/input`.
+ */
+export type PreviewInputResult = Record<symbol, never>;
 
 /**
  * Params of `agent/diff`.

@@ -15,7 +15,7 @@ use plxd::backend::fake::Step;
 use plxd::mcp::question::COORDINATOR_TOOLS;
 use plxd::mcp::thread::{CONTEXT_TOOLS, TOOLS};
 use plxd::mcp::{MAX_CONTEXT_BYTES, MAX_MESSAGE_BYTES, MAX_PATH_BYTES, MAX_TEXT_BYTES};
-use plxd::mcp::{device, html, land};
+use plxd::mcp::{device, html, land, preview};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -216,6 +216,7 @@ async fn a_coordinator_launches_steers_and_records_through_the_thread_tools() {
             land::TOOLS,
             &["memory_read", "memory_propose", "memory_write"],
             html::TOOLS,
+            preview::TOOLS,
             device::TOOLS,
         ]
         .concat()
@@ -373,7 +374,7 @@ async fn the_context_tools_reach_only_the_callers_project() {
     let listed = outside.request("tools/list", json!({})).await;
     assert_eq!(
         listed["result"]["tools"].as_array().unwrap().len(),
-        TOOLS.len() + html::TOOLS.len() + device::TOOLS.len()
+        TOOLS.len() + html::TOOLS.len() + preview::TOOLS.len() + device::TOOLS.len()
     );
     let unknown = outside
         .request(

@@ -173,7 +173,14 @@ impl Tools for Server {
             .memory
             .as_ref()
             .map_or(&[][..], |memory| memory.names());
-        [&tools[..], memory, super::html::TOOLS, device::TOOLS].concat()
+        [
+            &tools[..],
+            memory,
+            super::html::TOOLS,
+            super::preview::TOOLS,
+            device::TOOLS,
+        ]
+        .concat()
     }
 
     fn definitions(&self) -> Value {
@@ -187,6 +194,7 @@ impl Tools for Server {
                 list.extend(memory.definitions());
             }
             list.extend(super::html::definitions());
+            list.extend(super::preview::definitions());
             list.extend(device::definitions());
         }
         tools
@@ -198,6 +206,9 @@ impl Tools for Server {
         }
         if name.starts_with("html_") {
             return super::html::call(&self.binding, name, arguments).await;
+        }
+        if name.starts_with("preview_") {
+            return super::preview::call(&self.binding, name, arguments).await;
         }
         if name.starts_with("memory_") {
             return memory_tool(self, name, arguments).await.map(Reply::from);
@@ -1447,6 +1458,7 @@ mod tests {
         tools.extend(land::definitions(true));
         tools.extend(device::definitions());
         tools.extend(crate::mcp::html::definitions());
+        tools.extend(crate::mcp::preview::definitions());
         for tool in &tools {
             let schema = &tool["inputSchema"];
             assert_eq!(schema["additionalProperties"], false, "{tool}");

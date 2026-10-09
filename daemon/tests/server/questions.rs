@@ -19,7 +19,7 @@ use plxd::backend::fake::Step;
 use plxd::backend::{RunRequest, ToolPolicy};
 use plxd::mcp::question::{CHILD_TOOLS, COORDINATOR_TOOLS};
 use plxd::mcp::thread::{CONTEXT_TOOLS, TOOLS};
-use plxd::mcp::{device, html, land};
+use plxd::mcp::{device, html, land, preview};
 use plxd::paths::DataDir;
 use plxd::routing::BackendRegistry;
 use serde_json::json;
@@ -99,7 +99,7 @@ async fn tool_names(mcp: &mut Mcp) -> Vec<String> {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap().to_owned())
         .collect();
-    let last = [html::TOOLS, device::TOOLS].concat();
+    let last = [html::TOOLS, preview::TOOLS, device::TOOLS].concat();
     let devices = names.split_off(names.len() - last.len());
     assert_eq!(devices, last, "every caller's last tools");
     names

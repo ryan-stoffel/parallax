@@ -67,6 +67,7 @@ mod naming;
 mod orchestrator;
 pub mod paths;
 pub mod peer;
+pub(crate) mod preview;
 pub mod providers;
 #[cfg(unix)]
 mod public_proxy;

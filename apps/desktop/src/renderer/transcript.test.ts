@@ -843,3 +843,20 @@ test("an html_render result adds its page after the call, and a failed one doesn
   ]);
   expect(t.items.map((i) => i.kind)).toEqual(["tool", "htmlRender", "tool"]);
 });
+
+test("a stopped recording shows after its call", () => {
+  const stop = (out: string) => [
+    output({
+      kind: "toolCall",
+      callId: "r1",
+      name: "mcp__plxd__preview_recording_stop",
+      input: {},
+    }),
+    output({ kind: "toolResult", callId: "r1", status: "ok", output: out }),
+  ];
+  const recording = JSON.stringify({ id: "v1", tabId: "tab-1", mimeType: "video/webm" });
+  expect(of(build(...stop(recording)).items, "recording")).toEqual([
+    expect.objectContaining({ runId, attachmentId: "v1" }),
+  ]);
+  expect(of(build(...stop("not json")).items, "recording")).toEqual([]);
+});

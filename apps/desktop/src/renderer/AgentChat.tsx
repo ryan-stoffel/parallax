@@ -78,7 +78,7 @@ import { offlineReason, useConnection } from "./ConnectionStatus";
 import { describeError, githubProblem } from "./errors";
 import { ForkButton, ForkContext, type ForkTarget } from "./Fork";
 import type { Host } from "./hosts";
-import { HtmlRender } from "./HtmlRender";
+import { HtmlRender, pageUrl } from "./HtmlRender";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { Loader, type LoaderStyle } from "./Loader";
 import { locale } from "./locale";
@@ -221,6 +221,7 @@ export function AgentChat({
   subagent,
   onOpenSubagent,
   onSubagents,
+  onPreview,
   forked,
   onFork,
 }: {
@@ -284,6 +285,11 @@ export function AgentChat({
   onOpenSubagent?: (runId: string, callId: string) => void;
   /** Told run `runId`'s own subagents whenever they change, for the top bar's chips. */
   onSubagents?: (runId: string, subagents: NativeSubagent[]) => void;
+  /**
+   * Told when run `runId`'s browser tools (PLX-639) have run, on opening and after each new one,
+   * and whether the newest opened a tab the user should see.
+   */
+  onPreview?: (runId: string, reveal: boolean) => void;
   /** Whether the thread is a fork (0050), whose history copied from the original shows muted. */
   forked?: boolean;
   /**
@@ -540,6 +546,33 @@ export function AgentChat({
     () => onSubagents?.(runId, JSON.parse(native) as NativeSubagent[]),
     [native, onSubagents, runId],
   );
+  // The agent's browser tool calls that have answered (PLX-639). Each new one refreshes the side
+  // panel's agent tabs; a new preview_open, unless it asked for the background, shows its tab.
+  const previews = items.filter(
+    (i) => i.kind === "tool" && i.status && i.name?.startsWith(`${plxdTools}preview_`),
+  );
+  const previewCount = previews.length;
+  const seenPreviews = useRef<number>(undefined);
+  useEffect(() => {
+    const seen = seenPreviews.current;
+    seenPreviews.current = previewCount;
+    if (previewCount === 0 || seen === previewCount) return;
+    // Several calls can answer at once, so any new preview_open counts.
+    const opened =
+      seen !== undefined &&
+      previews
+        .slice(seen)
+        .some(
+          (call) =>
+            call.kind === "tool" &&
+            call.name === `${plxdTools}preview_open` &&
+            call.status === "ok" &&
+            !(isObject(call.input) && call.input["open"] === false),
+        );
+    onPreview?.(runId, opened);
+    // `previews` is new each render; its count says when it changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewCount, onPreview, runId]);
   const subagents = useMemo(
     () =>
       onOpenSubagent && {
@@ -1142,6 +1175,21 @@ function HtmlRenderRow({ page }: { page: Extract<Item, { kind: "htmlRender" }> }
   return hostId ? <HtmlRender hostId={hostId} page={page} /> : null;
 }
 
+/** A browser recording the agent made (PLX-639), from the open host. */
+function RecordingRow({ recording }: { recording: Extract<Item, { kind: "recording" }> }) {
+  const hostId = useContext(ThreadLinksContext)?.hostId;
+  if (!hostId) return null;
+  const src = pageUrl(hostId, recording.runId, recording.attachmentId);
+  return (
+    <video
+      controls
+      src={src}
+      aria-label="The agent's browser recording"
+      className="max-h-96 max-w-full rounded-md border border-border bg-black"
+    />
+  );
+}
+
 /** A message Parallax or another thread sent, not the user (0025, 0041). */
 const notTheUsers = (row: Extract<Item, { kind: "user" }>) => row.wake || row.from !== undefined;
 
@@ -1315,6 +1363,8 @@ export const RowView = memo(function RowView({
       return <ToolCall item={row} live={live} open={open} onToggle={onToggle} />;
     case "htmlRender":
       return <HtmlRenderRow page={row} />;
+    case "recording":
+      return <RecordingRow recording={row} />;
     case "plan":
     case "todo":
       // The turn's plan and its later updates, as lines: the strip shows the whole list.

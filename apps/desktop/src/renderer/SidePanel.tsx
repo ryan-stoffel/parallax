@@ -14,7 +14,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useState, type ComponentProps, type ReactNode } from "react";
 
 import { Browser } from "./Browser";
 import { PanelResize } from "./PanelResize";
@@ -89,7 +89,7 @@ const knowledgeSurface = surfaces.find((s) => s.name === "Knowledge")!;
  * for the hidden main pane's top-left corner. `agents`, `knowledge`, and `files` are those views,
  * such as a Project's, in place of their empty states. `remoteHost` is the open host's name when
  * it's an SSH host. `terminal` draws the Terminal view, told whether it's shown and given its empty
- * state. Each new `browse` opens the Browser view at its url. `pullRequests` are the open thread's
+ * state. Each new `browse` opens the Browser view at its url, or at one of `agentTabs`. `pullRequests` are the open thread's
  * linked pull requests (PLX-319): its URLs, the Pull requests view, and each one's view, shown in a
  * `#n` tab only while the thread links it. Each new `pullRequest` opens that URL's tab, or without
  * one the Pull requests view.
@@ -109,6 +109,7 @@ export function SidePanel({
   terminal,
   files,
   browse,
+  agentTabs,
   pullRequests,
   pullRequest,
   project,
@@ -126,7 +127,9 @@ export function SidePanel({
   remoteHost?: string;
   terminal?: (shown: boolean, empty: ReactNode) => ReactNode;
   files?: ReactNode;
-  browse?: { url: string };
+  browse?: { url?: string; agentTab?: string };
+  /** The open thread's agent browser tabs (PLX-639), for the Browser view. */
+  agentTabs?: ComponentProps<typeof Browser>["agent"];
   pullRequests?: { urls: readonly string[]; list: ReactNode; view: (url: string) => ReactNode };
   pullRequest?: { url?: string };
   /** An open Project, whose home the panel rests on, with Knowledge beside it, and how many
@@ -201,7 +204,7 @@ export function SidePanel({
     s === overview && project ? (
       project.home
     ) : s.name === "Browser" ? (
-      <Browser page={browse} remoteHost={remoteHost} />
+      <Browser page={browse} remoteHost={remoteHost} agent={agentTabs} />
     ) : s.name === "Agents" && agents ? (
       agents
     ) : s.name === "Knowledge" && knowledge ? (
