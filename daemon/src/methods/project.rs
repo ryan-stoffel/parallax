@@ -19,13 +19,13 @@ use parallax_protocol::{
     ProjectFromThreadsResult, ProjectIcon, ProjectId, ProjectListParams, ProjectListResult,
     ProjectPermission, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, RunId,
 };
-use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::Context;
 use crate::agents::{self, coordinator};
 use crate::backend::check_argument;
+use crate::orchestrator::{self, Action, Command, Outcome};
 use crate::repo;
 use crate::server::Daemon;
 use crate::store::{self, store_error};
@@ -441,68 +441,34 @@ pub(crate) async fn delete(
 }
 
 /// Deletes each of `project`'s runs through its actor, as `thread/delete` deletes a thread's,
-/// coordinators first so none starts another run meanwhile. Then, in one store job once no run is
-/// left, deletes the project's row and appends `project.deleted`, and last removes its shared
-/// context folder. It looks again after each pass, for a run a coordinator started while it was
-/// stopping; a worker is recorded only while its scope exists, so none can start after the row
-/// is gone. A crash midway leaves the project listed, and deleting it again finishes the job.
-/// Then it removes the integration worktree, keeping its branch (0045), and the coordinator's
-/// worktree (0042).
-// ponytail: a crash between the row and the worktrees leaves their folders under `integration/`
-// and `coordinators/`; sweep folders with no project at startup if that turns up.
+/// coordinators first so none starts another run meanwhile. Then the orchestrator's
+/// `project.delete` (0059), once no run is left, deletes the project's row and appends
+/// `project.deleted` in one transaction, and its `project.cleanup` effect removes the integration
+/// worktree, keeping its branch (0045), the coordinator's worktree (0042), and its shared context
+/// folder. Each pass looks again, for a run a coordinator started while it was stopping; a worker
+/// is recorded only while its scope exists, so none can start after the row is gone. A crash
+/// midway leaves the project listed, and deleting it again finishes the job. A retry of a delete
+/// that committed answers from its receipt.
 async fn remove(
     daemon: Arc<Daemon>,
     project: ProjectId,
     command_id: Option<Uuid>,
 ) -> Result<ProjectDeleteResult, ErrorObject> {
-    let repo_path = loop {
-        let (runs, repo_path) = daemon
-            .store
-            .run(&CancellationToken::new(), move |store| {
-                let Some(row) = store
-                    .get_project(project.into())
-                    .map_err(|error| store_error(&error))?
-                else {
-                    return Err(ErrorObject::parallax(
-                        ErrorKind::ProjectNotFound,
-                        format!("no project has id {project}"),
-                    ));
-                };
-                let mut runs = store
-                    .list_runs(Some(project.into()))
-                    .map_err(|error| store_error(&error))?;
-                if runs.is_empty() {
-                    store
-                        .delete_project(project.into())
-                        .map_err(|error| store_error(&error))?;
-                    let seq = store.stage(
-                        Timestamp::now(),
-                        None,
-                        ParallaxEvent::ProjectDeleted { project },
-                    );
-                    crate::commands::complete(store, command_id, &ProjectDeleteResult {})?;
-                    info!(%project, seq, "deleted a project");
-                }
-                // A coordinator's thread is its own run (0024).
-                runs.sort_by_key(|run| run.fields.coordinator_thread != Some(run.id));
-                let runs = runs
-                    .into_iter()
-                    .map(|run| {
-                        RunId::try_from(run.id).map_err(|_| {
-                            ErrorObject::internal_error(format!(
-                                "the stored run {} has an invalid id",
-                                run.id
-                            ))
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok((runs, row.repo_path))
-            })
-            .await?;
-        if runs.is_empty() {
-            break repo_path;
-        }
+    if orchestrator::replayed(&daemon, command_id, project, orchestrator::PROJECT_DELETE).await? {
+        return Ok(ProjectDeleteResult {});
+    }
+    // One id for every pass: a busy pass stores nothing.
+    let command_id = Some(command_id.unwrap_or_else(Uuid::now_v7));
+    loop {
+        let command = Command::new(command_id, project, Action::DeleteProject);
+        let runs = match daemon.orchestrator.dispatch(&daemon, command).await? {
+            Outcome::Done(_) => break,
+            Outcome::Busy(runs) => runs,
+        };
         for run in runs {
+            let run = RunId::try_from(run).map_err(|_| {
+                ErrorObject::internal_error(format!("the stored run {run} has an invalid id"))
+            })?;
             match agents::delete(&daemon, run, true, None).await {
                 Ok(()) => {}
                 // Another `project/delete` got to it first.
@@ -513,21 +479,8 @@ async fn remove(
                 Err(error) => return Err(error),
             }
         }
-    };
-    let worktrees = daemon.agents.worktrees();
-    if let Err(error) = worktrees
-        .remove_integration(Path::new(&repo_path), project)
-        .await
-    {
-        warn!(%project, %error, "could not remove the project's integration worktree");
     }
-    if let Err(error) = worktrees
-        .remove_coordinator(Path::new(&repo_path), project)
-        .await
-    {
-        warn!(%project, %error, "could not remove the project's coordinator's worktree");
-    }
-    crate::threads::remove_context(&daemon, project);
+    info!(%project, "deleted a project");
     Ok(ProjectDeleteResult {})
 }
 

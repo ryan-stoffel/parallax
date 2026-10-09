@@ -15,7 +15,7 @@
 //!
 //! The table is compacted on a retention policy (#187, decision 0016): an agent run's events stay
 //! as long as its run row does, now one row per finished turn (0052), while host and project
-//! events with no `run_id` — `project.created`, `context.changed` — are pruned to the newest
+//! events with no `thread_id` — `project.created`, `context.changed` — are pruned to the newest
 //! `host_retention` whenever one is staged. `host_retention` is always at least `retention`
 //! (`EventLog::with` enforces it): a restart only ever reloads the newest `retention` events, and
 //! by pigeonhole every host or project event in that reload is among the newest `retention` host
@@ -40,6 +40,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use jiff::Timestamp;
 use parallax_protocol::{LogId, ParallaxEvent, ProjectId, RunId};
 use parallax_store::{Store, StoreError, StoredEvent};
+use serde_json::value::RawValue;
 use tokio::sync::watch;
 use tracing::{info, warn};
 
@@ -50,10 +51,18 @@ pub(crate) struct Entry {
     pub time: Timestamp,
     pub project: Option<ProjectId>,
     pub event: ParallaxEvent,
-    /// The event's JSON size, for the in-memory replay window's byte bound.
-    pub bytes: usize,
+    /// The event's JSON, serialized once when it was staged or read from the database, which
+    /// every subscriber's frame embeds as it is (0059).
+    pub json: Box<RawValue>,
     /// A compacted turn's first `seq` (`compacted.from`), when the payload has one (PLX-491).
     pub compacted_from: Option<u64>,
+}
+
+impl Entry {
+    /// The event's JSON size, for the in-memory replay window's byte bound.
+    pub fn bytes(&self) -> usize {
+        self.json.get().len()
+    }
 }
 
 /// Why the events after a `seq` can't be replayed.
@@ -73,7 +82,7 @@ pub(crate) struct EventLog {
     /// The in-memory replay window's byte bound (#187): even within `retention`, evicts older
     /// events once their JSON exceeds this many bytes.
     max_bytes: usize,
-    /// How many of the newest host and project events (no `run_id`) the stored log keeps; older
+    /// How many of the newest host and project events (no `thread_id`) the stored log keeps; older
     /// ones are pruned whenever one is staged. Irrelevant for a log with no database.
     host_retention: usize,
     /// The in-memory replay window and `head`, together, so a reader never sees `head` reflect a
@@ -157,7 +166,7 @@ fn evict(
 ) {
     while events.len() > 1 && (events.len() > retention || *bytes > max_bytes) {
         if let Some(evicted) = events.pop_front() {
-            *bytes = bytes.saturating_sub(evicted.bytes);
+            *bytes = bytes.saturating_sub(evicted.bytes());
             *floor = evicted.seq + 1;
         }
     }
@@ -220,7 +229,7 @@ impl EventLog {
         let head = db.event_head()?;
         let events = db
             .latest_events(retention.max(1), max_bytes, |stored| {
-                Arc::new(entry(&stored))
+                Arc::new(entry(stored))
             })?
             .into();
         let reader = match Store::open_read_only(path) {
@@ -258,7 +267,7 @@ impl EventLog {
         // the newest `retention` host and project events, so keeping at least that many host
         // events never lets a restart's window skip one (0016).
         let host_retention = host_retention.max(retention);
-        let mut bytes = events.iter().map(|entry| entry.bytes).sum();
+        let mut bytes = events.iter().map(|entry| entry.bytes()).sum();
         let mut floor = events.front().map_or(head + 1, |entry| entry.seq);
         evict(&mut events, &mut bytes, &mut floor, retention, max_bytes);
         Self {
@@ -340,7 +349,7 @@ impl EventLog {
             floor,
         } = &mut *inner;
         for entry in entries {
-            *bytes += entry.bytes;
+            *bytes += entry.bytes();
             events.push_back(Arc::new(entry));
         }
         *head = last;
@@ -355,7 +364,8 @@ impl EventLog {
         project: Option<ProjectId>,
         event: ParallaxEvent,
     ) -> u64 {
-        let bytes = serde_json::to_string(&event).map_or(0, |json| json.len());
+        let json = raw(&event);
+        let bytes = json.get().len();
         // One lock for reading `head` and publishing, so two callers can't take the same `seq`.
         let mut inner = self.inner();
         let seq = inner.head + 1;
@@ -370,7 +380,7 @@ impl EventLog {
             time,
             project,
             event,
-            bytes,
+            json,
             compacted_from: None,
         }));
         *total += bytes;
@@ -396,7 +406,7 @@ impl EventLog {
             let db = reader.lock().unwrap_or_else(PoisonError::into_inner);
             let (stored, more) = db.run_events(run.into(), after, limit, max_bytes)?;
             let entries = stored
-                .iter()
+                .into_iter()
                 .map(|stored| Arc::new(entry(stored)))
                 .collect();
             return Ok((entries, more));
@@ -409,7 +419,7 @@ impl EventLog {
             .iter()
             .filter(|entry| entry.seq > after && run_of(&entry.event) == Some(run))
         {
-            let size = serde_json::to_string(&entry.event).map_or(0, |json| json.len());
+            let size = entry.bytes();
             if entries.len() >= limit.max(1) || (!entries.is_empty() && bytes + size > max_bytes) {
                 return Ok((entries, true));
             }
@@ -432,7 +442,7 @@ impl EventLog {
             let db = reader.lock().unwrap_or_else(PoisonError::into_inner);
             let (stored, more) = db.run_events_before(run.into(), before, limit, max_bytes)?;
             let entries = stored
-                .iter()
+                .into_iter()
                 .map(|stored| Arc::new(entry(stored)))
                 .collect();
             return Ok((entries, more));
@@ -447,7 +457,7 @@ impl EventLog {
             .rev()
             .filter(|entry| entry.seq < before && run_of(&entry.event) == Some(run))
         {
-            let size = serde_json::to_string(&event.event).map_or(0, |json| json.len());
+            let size = event.bytes();
             if entries.len() >= limit.max(1) || (!entries.is_empty() && bytes + size > max_bytes) {
                 more = true;
                 break;
@@ -473,7 +483,7 @@ impl EventLog {
         events.retain(|entry| {
             let keep = run_of(&entry.event) != Some(run);
             if !keep {
-                *bytes = bytes.saturating_sub(entry.bytes);
+                *bytes = bytes.saturating_sub(entry.bytes());
             }
             keep
         });
@@ -525,20 +535,30 @@ impl EventLog {
 }
 
 /// A stored event as a log entry. A payload this build can't read, such as a newer plxd's kind,
-/// comes back as `ParallaxEvent::Unknown`, keeping its place in the sequence.
-fn entry(stored: &StoredEvent) -> Entry {
+/// comes back as `ParallaxEvent::Unknown`, keeping its place in the sequence, and is delivered
+/// as stored.
+fn entry(stored: StoredEvent) -> Entry {
     let event = serde_json::from_str(&stored.payload).unwrap_or(ParallaxEvent::Unknown);
     let compacted_from = compacted_from(&event);
+    let json = RawValue::from_string(stored.payload).unwrap_or_else(|_| raw(&event));
     Entry {
         seq: stored.seq,
         time: stored.time,
         project: stored
             .project_id
             .and_then(|id| ProjectId::try_from(id).ok()),
-        bytes: stored.payload.len(),
         event,
+        json,
         compacted_from,
     }
+}
+
+/// `event`'s JSON.
+pub(crate) fn raw(event: &ParallaxEvent) -> Box<RawValue> {
+    serde_json::value::to_raw_value(event).unwrap_or_else(|error| {
+        warn!(%error, "could not serialize an event");
+        Box::default()
+    })
 }
 
 #[cfg(test)]

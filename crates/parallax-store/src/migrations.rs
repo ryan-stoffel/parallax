@@ -1,4 +1,6 @@
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
 
 use rusqlite::{Connection, TransactionBehavior, params};
 
@@ -552,7 +554,59 @@ const MIGRATIONS: &[Migration] = &[
         CREATE INDEX command_receipts_run ON command_receipts (run_id, created_at);
         CREATE INDEX command_receipts_age ON command_receipts (created_at);",
     },
+    // The orchestrator's core (0059, PLX-643). `events` names the thread it belongs to
+    // `thread_id` (a run's row, until phase 2 splits threads from runs) and its kind `type`, and
+    // gains the command that staged it and, for phase 2, the run (turn) and node. `events_run`
+    // now indexes `(thread_id, seq)`. `orchestration_receipts` holds a command's outcome,
+    // written with its change; 0052's `command_receipts` stays until its last method moves.
+    // `effects` is the outbox the effect worker runs, one open row per thread at a time, oldest
+    // first: `effects_open` indexes the open rows by `(thread_id, rowid)`, as every index ends
+    // with the rowid.
+    // `projection_meta` is for phase 2's projections.
+    Migration {
+        version: 39,
+        sql: "ALTER TABLE events RENAME COLUMN run_id TO thread_id;
+        ALTER TABLE events RENAME COLUMN kind TO type;
+        ALTER TABLE events ADD COLUMN command_id TEXT;
+        ALTER TABLE events ADD COLUMN run_id TEXT;
+        ALTER TABLE events ADD COLUMN node_id TEXT;
+        CREATE INDEX events_command ON events (command_id, seq) WHERE command_id IS NOT NULL;
+        CREATE TABLE orchestration_receipts (
+            command_id TEXT NOT NULL PRIMARY KEY,
+            thread_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            result_seq INTEGER,
+            error TEXT,
+            at TEXT NOT NULL
+        );
+        CREATE INDEX orchestration_receipts_at ON orchestration_receipts (at);
+        CREATE TABLE effects (
+            id TEXT NOT NULL PRIMARY KEY,
+            command_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            available_at TEXT NOT NULL,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            completed_at TEXT
+        );
+        CREATE INDEX effects_open ON effects (thread_id) WHERE status IN ('pending', 'running');
+        CREATE TABLE projection_meta (
+            name TEXT NOT NULL PRIMARY KEY,
+            schema_version INTEGER NOT NULL,
+            last_seq INTEGER NOT NULL
+        );",
+    },
 ];
+
+/// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a
+/// WAL database consistently where a file copy could miss the WAL (0059). There is no downgrade,
+/// so the copy is the way back. It is `<database>.pre-<version>`, written once.
+const BACKUP_BEFORE: &[i64] = &[39];
 
 /// Bootstraps the `schema_version` table and applies every migration whose
 /// version isn't recorded, in order. A missing version below the newest
@@ -579,6 +633,14 @@ pub(crate) fn run(conn: &mut Connection) -> Result<(), StoreError> {
             found: current,
             supported,
         });
+    }
+
+    if current > 0
+        && let Some(version) = BACKUP_BEFORE
+            .iter()
+            .find(|version| !applied.contains(version))
+    {
+        back_up(conn, *version)?;
     }
 
     for migration in MIGRATIONS.iter().filter(|m| !applied.contains(&m.version)) {
@@ -610,6 +672,24 @@ pub(crate) fn run(conn: &mut Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// Writes `<database>.pre-<version>` with `VACUUM INTO`, unless it exists already: a start that
+/// stopped before the migration committed made it from the same schema. The copy is written
+/// under a name of its own and then renamed, since two connections opening the store at once
+/// can't both write one file.
+fn back_up(conn: &Connection, version: i64) -> Result<(), StoreError> {
+    let Some(path) = conn.path().filter(|path| !path.is_empty()) else {
+        return Ok(());
+    };
+    let backup = format!("{path}.pre-{version}");
+    if Path::new(&backup).exists() {
+        return Ok(());
+    }
+    let partial = format!("{backup}.{}", uuid::Uuid::now_v7());
+    conn.execute("VACUUM INTO ?1", params![partial])?;
+    fs::rename(&partial, &backup)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::MIGRATIONS;
@@ -622,5 +702,54 @@ mod tests {
         let versions: Vec<i64> = MIGRATIONS.iter().map(|m| m.version).collect();
         let expected: Vec<i64> = (1..=i64::try_from(MIGRATIONS.len()).unwrap()).collect();
         assert_eq!(versions, expected);
+    }
+
+    /// An existing store copies itself to `<database>.pre-39` before migration 39, and the copy
+    /// keeps the old schema and rows, while the store's events keep their thread under the new
+    /// column name.
+    #[test]
+    fn an_existing_store_backs_up_before_migration_39() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_version (version INTEGER NOT NULL PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            for migration in MIGRATIONS.iter().filter(|m| m.version < 39) {
+                conn.execute_batch(migration.sql).unwrap();
+                conn.execute(
+                    "INSERT INTO schema_version VALUES (?1, 'then')",
+                    [migration.version],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO events (seq, time, run_id, kind, payload) VALUES (1, 't', 'r', 'k', '{}')",
+                [],
+            )
+            .unwrap();
+        }
+        crate::Store::open(&path).unwrap();
+
+        let backup = rusqlite::Connection::open(dir.path().join("plxd.sqlite3.pre-39")).unwrap();
+        let version: i64 = backup
+            .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 38);
+        let old: String = backup
+            .query_row("SELECT run_id FROM events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(old, "r");
+        let migrated: (String, String) = rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT thread_id, type FROM events", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(migrated, ("r".to_owned(), "k".to_owned()));
     }
 }

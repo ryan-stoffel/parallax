@@ -1,6 +1,6 @@
 //! SQLite-backed storage for Parallax projects, key accounts, agent runs and the images sent to them,
 //! normal threads and their repo entries, Projects' inboxes, landing queues, and their children's
-//! questions, and plxd's event log.
+//! questions, plxd's event log, and its orchestrator's receipts and effects (0059).
 //!
 //! [`Store`] owns one SQLite connection and applies its own versioned
 //! migrations on open. The caller chooses the database path; this crate
@@ -18,6 +18,7 @@ mod images;
 mod inbox;
 mod landings;
 mod migrations;
+mod orchestration;
 mod placements;
 mod project;
 mod questions;
@@ -46,6 +47,7 @@ pub use events::{CompactableTurn, StoredEvent};
 pub use images::StoredImage;
 pub use inbox::InboxItem;
 pub use landings::Landing;
+pub use orchestration::{ClaimedEffect, EffectOutcome, NewEffect, OrchestrationReceipt};
 pub use placements::Placement;
 pub use project::{Project, ProjectEdit, ProjectFields, ProjectIcon};
 pub use questions::Question;

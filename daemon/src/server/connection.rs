@@ -31,8 +31,7 @@ use parallax_protocol::methods::{
     TerminalDetach, TerminalResize, TerminalWrite,
 };
 use parallax_protocol::{
-    ErrorKind, EventsEventParams, EventsResyncParams, TerminalKey, TerminalResizeParams,
-    TerminalWriteParams,
+    ErrorKind, EventsResyncParams, TerminalKey, TerminalResizeParams, TerminalWriteParams,
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf};
 use tokio::sync::mpsc::error::TryRecvError;
@@ -46,7 +45,7 @@ use tracing::{Instrument, debug, debug_span, error, info, warn};
 use super::Daemon;
 use crate::event_log::EventLog;
 use crate::logging::{untrusted, untrusted_id};
-use crate::methods::{self, Context, Cursors, Reply, Session};
+use crate::methods::{self, Context, Cursors, Delivery, Reply, Session};
 
 type InFlight = Arc<Mutex<HashMap<RequestId, CancellationToken>>>;
 
@@ -599,10 +598,15 @@ async fn send_response<W: AsyncWrite + Unpin>(
 // far below the frame limit.
 async fn send_event<W: AsyncWrite + Unpin>(
     sink: &mut FramedWrite<W, FrameCodec>,
-    event: EventsEventParams,
+    event: Delivery,
 ) -> Result<(), FrameError> {
-    let seq = event.seq;
-    let sent = sink.feed(Notification::new::<EventsEvent>(event)).await;
+    let seq = event.entry.seq;
+    let sent = sink
+        .feed(Notification {
+            method: EventsEvent::NAME.to_owned(),
+            params: Some(event.params()),
+        })
+        .await;
     if let Err(FrameError::TooLarge { max_frame_bytes }) = &sent {
         error!(
             seq,
@@ -622,14 +626,14 @@ mod tests {
     use jiff::Timestamp;
     use parallax_protocol::framing::{FrameCodec, FrameError};
     use parallax_protocol::jsonrpc::Message;
-    use parallax_protocol::{EventsEventParams, ParallaxEvent, Project, ProjectId, SubscriptionId};
+    use parallax_protocol::{ParallaxEvent, Project, ProjectId, SubscriptionId};
     use serde_json::{Value, json};
     use tokio::io::{AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
     use tokio::time::timeout;
     use tokio_util::codec::{FramedRead, FramedWrite};
     use tokio_util::sync::CancellationToken;
 
-    use super::{send_event, serve};
+    use super::{Delivery, send_event, serve};
     use crate::server::Daemon;
 
     const PATIENCE: Duration = Duration::from_secs(10);
@@ -838,32 +842,35 @@ mod tests {
     #[tokio::test]
     async fn an_event_too_large_for_a_frame_is_an_error_not_a_gap() {
         let mut sink = FramedWrite::new(tokio::io::sink(), FrameCodec::with_max_frame_bytes(1024));
-        let event = |name: &str| EventsEventParams {
-            subscription: SubscriptionId::generate(),
-            seq: 1,
-            time: Timestamp::now(),
-            project: None,
-            event: ParallaxEvent::ProjectCreated {
-                project: Project {
-                    id: ProjectId::generate(),
-                    name: name.to_owned(),
-                    icon: None,
-                    repo_path: "/src".to_owned(),
-                    branch: None,
-                    coordinator: None,
-                    permission: None,
-                    autonomy: None,
-                    created_at: Timestamp::now(),
-                    updated_at: Timestamp::now(),
-                    base_branch: None,
-                    integration_branch: None,
-                    auto_land: false,
-                    allow_api_keys: None,
-                    max_children: None,
-                    checks: None,
-                    proposed_checks: None,
-                },
+        let log = crate::event_log::EventLog::new(10);
+        let project_created = |name: &str| ParallaxEvent::ProjectCreated {
+            project: Project {
+                id: ProjectId::generate(),
+                name: name.to_owned(),
+                icon: None,
+                repo_path: "/src".to_owned(),
+                branch: None,
+                coordinator: None,
+                permission: None,
+                autonomy: None,
+                created_at: Timestamp::now(),
+                updated_at: Timestamp::now(),
+                base_branch: None,
+                integration_branch: None,
+                auto_land: false,
+                allow_api_keys: None,
+                max_children: None,
+                checks: None,
+                proposed_checks: None,
             },
+        };
+        let event = |name: &str| {
+            let seq = log.append_in_memory(Timestamp::now(), None, project_created(name));
+            Delivery {
+                subscription: SubscriptionId::generate(),
+                entry: log.next(seq - 1, None, |_| true).unwrap().0.unwrap(),
+                view: None,
+            }
         };
         assert!(send_event(&mut sink, event("parallax")).await.is_ok());
         assert!(matches!(

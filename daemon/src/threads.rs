@@ -52,6 +52,7 @@ use uuid::Uuid;
 use crate::agents::convert::{agent_run, option_value};
 use crate::agents::{self, NewFork, NewRun, NewThread, RunOptions};
 use crate::backend::check_argument;
+use crate::orchestrator::{self, Action, Command, Lane};
 use crate::repo;
 use crate::server::Daemon;
 use crate::worktree::valid_branch_slug;
@@ -648,7 +649,7 @@ pub(crate) async fn fork(
     // Share creation's per-id guard so a retry checks its fork identity after any competing
     // creation finishes, and concurrent forks cannot prepare the same scratch repository.
     // Check retries before generic creation compares options, which another backend may filter.
-    let starting = daemon.agents.start_guard(new_run_id).await;
+    let lane = daemon.orchestrator.lane(new_run_id).await;
     if let Some(done) = existing_fork(&daemon, new_run_id, run_id, turn_id, caller).await? {
         return Ok(done);
     }
@@ -708,7 +709,7 @@ pub(crate) async fn fork(
         }),
         explore: false,
     };
-    let created = match agents::create_started(Arc::clone(&daemon), new, &starting).await {
+    let created = match agents::create_started(Arc::clone(&daemon), new, &lane).await {
         Ok(created) => created,
         Err(error) => {
             if let Some(dir) = scratch {
@@ -1067,49 +1068,27 @@ pub(crate) async fn search(
     Ok(ThreadSearchResult { threads })
 }
 
-/// `thread/archive`.
+/// `thread/archive`: the orchestrator's `thread.archive` or `thread.unarchive` (0059).
 pub(crate) async fn archive(
     daemon: &Arc<Daemon>,
     params: ThreadArchiveParams,
+    command_id: Option<Uuid>,
 ) -> Result<ThreadArchiveResult, ErrorObject> {
     let ThreadArchiveParams { run_id, archived } = params;
     if archived {
         daemon.terminals.close_thread(&run_id.to_string());
     }
-    store(daemon, move |db| {
-        let before = db
-            .get_thread(run_id.into())
-            .map_err(|e| store_error(&e))?
-            .ok_or_else(|| thread_not_found(run_id))?;
-        if before.archived == archived {
-            return Ok(ThreadArchiveResult {
-                thread: thread_entry(&before)?,
-            });
-        }
-        let row = db
-            .set_thread_archived(run_id.into(), archived)
-            .map_err(|error| match error {
-                parallax_store::StoreError::NotFound { .. } => thread_not_found(run_id),
-                other => store_error(&other),
-            })?;
-        let thread = thread_entry(&row)?;
-        db.stage(
-            Timestamp::now(),
-            None,
-            ParallaxEvent::ThreadUpdated {
-                thread: thread.clone(),
-            },
-        );
-        Ok(ThreadArchiveResult { thread })
-    })
-    .await
+    let thread = metadata(daemon, command_id, run_id, Action::Archive(archived)).await?;
+    Ok(ThreadArchiveResult { thread })
 }
 
 /// `thread/update`: marks a thread seen or snoozes it (0033), or sets its title or settled flag
-/// (0041), appending `thread.updated` when anything changed.
+/// (0041), through the orchestrator's `thread.metadata.update` (0059), which appends
+/// `thread.updated` when anything changed.
 pub(crate) async fn update(
     daemon: &Arc<Daemon>,
     params: ThreadUpdateParams,
+    command_id: Option<Uuid>,
 ) -> Result<ThreadUpdateResult, ErrorObject> {
     let ThreadUpdateParams {
         run_id,
@@ -1124,26 +1103,24 @@ pub(crate) async fn update(
         title: title.as_deref().map(check_title).transpose()?,
         settled,
     };
-    store(daemon, move |db| {
-        let (row, changed) =
-            db.update_thread(run_id.into(), &update)
-                .map_err(|error| match error {
-                    parallax_store::StoreError::NotFound { .. } => thread_not_found(run_id),
-                    other => store_error(&other),
-                })?;
-        let thread = thread_entry(&row)?;
-        if changed {
-            db.stage(
-                Timestamp::now(),
-                None,
-                ParallaxEvent::ThreadUpdated {
-                    thread: thread.clone(),
-                },
-            );
-        }
-        Ok(ThreadUpdateResult { thread })
-    })
-    .await
+    let thread = metadata(daemon, command_id, run_id, Action::Update(update)).await?;
+    Ok(ThreadUpdateResult { thread })
+}
+
+/// Dispatches a metadata command on thread `run_id` and returns the thread after it.
+async fn metadata(
+    daemon: &Daemon,
+    command_id: Option<Uuid>,
+    run_id: RunId,
+    action: Action,
+) -> Result<Thread, ErrorObject> {
+    let command = Command::new(command_id, run_id, action);
+    let rows = daemon
+        .orchestrator
+        .dispatch(daemon, command)
+        .await?
+        .rows()?;
+    thread_entry(&rows.thread.ok_or_else(|| thread_not_found(run_id))?)
 }
 
 /// After run `run_id`'s thread row changed in this job, stages `thread.updated` if the run is a
@@ -1195,120 +1172,71 @@ pub(crate) async fn update_repo(
 }
 
 /// `thread/delete`: through the run's actor ([`agents::delete`]), which cancels a running CLI,
-/// waits for it to exit, and then calls [`purge`].
+/// waits for it to exit, and then calls [`purge`]. A retry of a delete that committed answers
+/// from its receipt (0059), before and, for one that raced it, after asking the actor.
 pub(crate) async fn delete(
     daemon: &Arc<Daemon>,
     run_id: RunId,
     command_id: Option<Uuid>,
 ) -> Result<ThreadDeleteResult, ErrorObject> {
+    let replayed =
+        || orchestrator::replayed(daemon, command_id, run_id, orchestrator::THREAD_DELETE);
+    if replayed().await? {
+        return Ok(ThreadDeleteResult {});
+    }
     store(daemon, move |db| {
         db.get_thread(run_id.into())
             .map_err(|e| store_error(&e))?
             .ok_or_else(|| thread_not_found(run_id))
     })
     .await?;
-    agents::delete(daemon, run_id, false, command_id)
-        .await
-        .map_err(|error| {
-            let gone = error
+    match agents::delete(daemon, run_id, false, command_id).await {
+        Ok(()) => Ok(ThreadDeleteResult {}),
+        Err(error)
+            if error
                 .parallax_data()
-                .is_some_and(|data| data.kind == ErrorKind::RunNotFound);
-            if gone {
-                thread_not_found(run_id)
+                .is_some_and(|data| data.kind == ErrorKind::RunNotFound) =>
+        {
+            if replayed().await? {
+                Ok(ThreadDeleteResult {})
             } else {
-                error
+                Err(thread_not_found(run_id))
             }
-        })?;
-    Ok(ThreadDeleteResult {})
+        }
+        Err(error) => Err(error),
+    }
 }
 
-/// Deletes run `run_id` once its CLI has exited: its rows and stored events, and for a thread its
-/// thread row and `thread.deleted`, in one transaction, then its terminals, its events in memory, then
-/// `worktree` and its branch, and for a thread with no repo its scratch repository and its own
-/// context folder. A Project's run (`project/delete`, PLX-338) has no thread row and gets no
-/// event of its own. The store clears the run from its children's parent and its forks' origin,
-/// and each such thread gets `thread.updated` (0041). Startup's garbage collection removes a
-/// worktree folder that a crash left behind.
+/// Deletes run `run_id` once its CLI has exited, through the orchestrator's `thread.delete`
+/// (0059) in `lane`, which the actor holds: its rows and stored events, and for a thread its
+/// thread row and `thread.deleted`, in one transaction, then its terminals and its events in
+/// memory. A Project's run (`project/delete`, PLX-338) has no thread row and gets no event of its
+/// own. The store clears the run from its children's parent and its forks' origin, and each such
+/// thread gets `thread.updated` (0041). The `thread.cleanup` effect then removes `worktree` and
+/// its branch, and for a thread with no repo its scratch repository and its own context folder.
 pub(crate) async fn purge(
     daemon: &Arc<Daemon>,
+    lane: &Lane<'_>,
     run_id: RunId,
     worktree: Option<parallax_store::Worktree>,
     command_id: Option<Uuid>,
 ) -> Result<(), ErrorObject> {
-    let thread = store(daemon, move |db| {
-        let id = Uuid::from(run_id);
-        let children: Vec<Uuid> = db
-            .list_threads()
-            .map_err(|e| store_error(&e))?
-            .into_iter()
-            .filter(|thread| {
-                thread.parent == Some(id)
-                    || thread.fields.forked_from.is_some_and(|from| from.run == id)
-            })
-            .map(|thread| thread.id)
-            .collect();
-        let deleted = if let Some(thread) = db.get_thread(id).map_err(|e| store_error(&e))? {
-            let scratch = db
-                .get_repo(thread.repo_id)
-                .map_err(|e| store_error(&e))?
-                .is_some_and(|repo| repo.fields.scratch);
-            db.delete_thread(id).map_err(|e| store_error(&e))?;
-            let repo =
-                RepoId::try_from(thread.repo_id).map_err(|_| corrupt("thread", thread.id))?;
-            db.stage(
-                Timestamp::now(),
-                None,
-                ParallaxEvent::ThreadDeleted { run_id, repo },
-            );
-            Some(scratch)
-        } else {
-            db.delete_run(id).map_err(|e| store_error(&e))?;
-            None
-        };
-        for child in children {
-            if let Some(row) = db.get_thread(child).map_err(|e| store_error(&e))? {
-                db.stage(
-                    Timestamp::now(),
-                    None,
-                    ParallaxEvent::ThreadUpdated {
-                        thread: thread_entry(&row)?,
-                    },
-                );
-            }
-        }
-        crate::commands::complete(db, command_id, &ThreadDeleteResult {})?;
-        Ok(deleted)
-    })
-    .await?;
+    let command = Command::new(command_id, run_id, Action::Delete { worktree });
+    daemon.orchestrator.commit(daemon, lane, command).await?;
     daemon.terminals.close_thread(&run_id.to_string());
     daemon.log.purge_run(run_id);
-    if let Some(worktree) = worktree
-        && let Err(error) = daemon
-            .agents
-            .worktrees()
-            .remove(
-                Path::new(&worktree.repo_path),
-                Path::new(&worktree.path),
-                &worktree.branch,
-            )
-            .await
-    {
-        warn!(run = %run_id, %error, "could not remove a deleted run's worktree");
-    }
-    let Some(scratch) = thread else {
-        info!(run = %run_id, "deleted a project's run");
-        return Ok(());
-    };
-    if scratch {
-        if let Ok(root) = scratch_root(daemon) {
-            remove_scratch(daemon, run_id, &root.join(run_id.to_string()));
-        }
-        if let Ok(scope) = ProjectId::try_from(Uuid::from(run_id)) {
-            remove_context(daemon, scope);
-        }
-    }
-    info!(run = %run_id, "deleted a thread");
+    info!(run = %run_id, "deleted a run");
     Ok(())
+}
+
+/// Removes a deleted thread with no repo's scratch repository and its own context folder.
+pub(crate) fn remove_scratch_and_context(daemon: &Daemon, run_id: RunId) {
+    if let Ok(root) = scratch_root(daemon) {
+        remove_scratch(daemon, run_id, &root.join(run_id.to_string()));
+    }
+    if let Ok(scope) = ProjectId::try_from(Uuid::from(run_id)) {
+        remove_context(daemon, scope);
+    }
 }
 
 /// Removes `scope`'s shared context folder, `context/<scope>`: a deleted thread with no repo's

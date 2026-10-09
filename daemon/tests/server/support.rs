@@ -34,6 +34,19 @@ pub use temp::temp_dir;
 /// How long a test waits for anything before it fails.
 pub const PATIENCE: Duration = Duration::from_secs(10);
 
+/// Waits until `condition` holds, failing after [`PATIENCE`]: for what plxd does after it
+/// answers, such as an effect's cleanup (0059).
+pub async fn eventually(what: &str, mut condition: impl FnMut() -> bool) {
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    while !condition() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting until {what}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 /// Where the server for `data_dir` listens, by the same rule `attach` will use.
 pub fn socket_path(data_dir: &Path) -> PathBuf {
     DataDir::new(data_dir)

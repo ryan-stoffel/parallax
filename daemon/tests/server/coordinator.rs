@@ -32,7 +32,7 @@ use crate::agents::{
     Conn, Host, create, end_turn, fake, fake_backend, git, init, items, project_params, real_repo,
     send_params, subscribe, text, until, updated_to,
 };
-use crate::support::{InProcess, PATIENCE, kind, temp_dir};
+use crate::support::{InProcess, PATIENCE, eventually, kind, temp_dir};
 
 /// The fake backend, keeping every request it is asked to start.
 struct Recording {
@@ -1133,14 +1133,17 @@ async fn deleting_a_project_stops_its_agents_and_removes_everything() {
             .unwrap_err();
         assert_eq!(kind(&events), ErrorKind::RunNotFound);
     }
-    assert!(!worktree.exists(), "the worktree is removed");
-    let branches = git(&repo, &["branch", "--list", &branch]);
-    assert!(branches.is_empty(), "the branch is removed: {branches}");
-    assert!(!context.exists(), "the project's notes are removed");
-    assert!(
-        !coordinator_worktree(&host, project.id).exists(),
-        "the coordinator's worktree is removed"
-    );
+    // The cleanup effects run once the deletes commit (0059).
+    eventually(
+        "the worktrees, the branch, and the project's notes are removed",
+        || {
+            !worktree.exists()
+                && git(&repo, &["branch", "--list", &branch]).is_empty()
+                && !context.exists()
+                && !coordinator_worktree(&host, project.id).exists()
+        },
+    )
+    .await;
     assert!(repo.join("README.md").is_file(), "the repository stays");
 
     let mut replay = host.client().await;

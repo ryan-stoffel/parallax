@@ -19,7 +19,8 @@ use uuid::Uuid;
 use crate::server::Daemon;
 use crate::store::store_error;
 
-/// Methods that keep a receipt when the request carries `commandId`.
+/// Methods that claim a 0052 receipt when the request carries `commandId`, until each becomes an
+/// orchestrator command (0059).
 pub(crate) const RECEIPTED_METHODS: &[&str] = &[
     "agent/approve",
     "agent/commit",
@@ -35,9 +36,11 @@ pub(crate) const RECEIPTED_METHODS: &[&str] = &[
     "land/approve",
     "land/sendBack",
     "project/start",
-    "project/delete",
-    "thread/delete",
 ];
+
+/// Methods whose receipts the orchestrator keeps (0059). Like [`RECEIPTED_METHODS`], they run
+/// to the end when their connection closes.
+const ORCHESTRATED_METHODS: &[&str] = &["project/delete", "thread/delete"];
 
 /// Detached command tasks and in-memory waiters for an in-flight claim.
 pub(crate) struct Commands {
@@ -135,10 +138,10 @@ impl Default for Commands {
     }
 }
 
-/// Whether `method` keeps a receipt.
+/// Whether `method` keeps a receipt, 0052's or the orchestrator's.
 #[must_use]
 pub(crate) fn keeps_receipt(method: &str) -> bool {
-    RECEIPTED_METHODS.contains(&method)
+    RECEIPTED_METHODS.contains(&method) || ORCHESTRATED_METHODS.contains(&method)
 }
 
 /// Takes `commandId` out of `request`'s params so a method that denies unknown fields still

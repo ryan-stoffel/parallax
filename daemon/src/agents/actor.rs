@@ -998,10 +998,17 @@ impl Actor {
             }
         }
         self.flush().await;
-        // Holds off a concurrent create/actor_for retry for this exact run id while its rows are
-        // deleted and this actor is dropped (#110); an unrelated run's own lock is untouched.
-        let _creating = self.daemon.agents.start_guard(self.id).await;
-        crate::threads::purge(&self.daemon, self.id, self.worktree.clone(), command_id).await?;
+        // The thread's lane (0059) holds off a concurrent create/actor_for retry for this run id
+        // while its rows are deleted and this actor is dropped (#110).
+        let lane = self.daemon.orchestrator.lane(self.id).await;
+        crate::threads::purge(
+            &self.daemon,
+            &lane,
+            self.id,
+            self.worktree.clone(),
+            command_id,
+        )
+        .await?;
         self.worktree = None;
         self.daemon.agents.forget(self.id);
         Ok(())

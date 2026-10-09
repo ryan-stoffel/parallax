@@ -1,14 +1,19 @@
 //! `events/subscribe` and `events/unsubscribe`, and the cursors that deliver a connection's
 //! events.
 
+use std::sync::Arc;
+
+use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AgentOutputItem, ErrorKind, EventsEventParams, EventsSubscribeParams, ParallaxEvent, ProjectId,
-    RunId, SubscriptionId,
+    AgentOutputItem, ErrorKind, EventsSubscribeParams, ParallaxEvent, ProjectId, RunId,
+    SubscriptionId,
 };
+use serde::Serialize;
+use serde_json::value::RawValue;
 
 use super::Context;
-use crate::event_log::{EventLog, Gone, run_of};
+use crate::event_log::{Entry, EventLog, Gone, raw, run_of};
 use crate::store::store_error;
 
 /// One subscription's place in the event log.
@@ -34,14 +39,15 @@ impl Cursor {
                     if !items.iter().any(is_approval)))
     }
 
-    /// `event` as this subscription delivers it.
-    fn view(&self, event: &ParallaxEvent) -> ParallaxEvent {
+    /// `event` as this subscription delivers it, when that differs from the event itself: a
+    /// `shell` subscription's `agent.output` cut down to its approval items.
+    fn view(&self, event: &ParallaxEvent) -> Option<Box<RawValue>> {
         match event {
             ParallaxEvent::AgentOutput {
                 run_id,
                 items,
                 compacted,
-            } if self.shell => ParallaxEvent::AgentOutput {
+            } if self.shell => Some(raw(&ParallaxEvent::AgentOutput {
                 run_id: *run_id,
                 items: items
                     .iter()
@@ -49,8 +55,41 @@ impl Cursor {
                     .cloned()
                     .collect(),
                 compacted: compacted.clone(),
-            },
-            event => event.clone(),
+            })),
+            _ => None,
+        }
+    }
+}
+
+/// One event for one subscription.
+#[derive(Debug)]
+pub(crate) struct Delivery {
+    pub subscription: SubscriptionId,
+    pub entry: Arc<Entry>,
+    /// The subscription's own view of the event, when it differs from the entry's JSON.
+    pub view: Option<Box<RawValue>>,
+}
+
+/// `events/event`'s params with the event's JSON embedded as it is, not serialized again.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DeliveryParams<'a> {
+    subscription: SubscriptionId,
+    seq: u64,
+    time: Timestamp,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project: Option<ProjectId>,
+    event: &'a RawValue,
+}
+
+impl Delivery {
+    pub fn params(&self) -> DeliveryParams<'_> {
+        DeliveryParams {
+            subscription: self.subscription,
+            seq: self.entry.seq,
+            time: self.entry.time,
+            project: self.entry.project,
+            event: self.view.as_deref().unwrap_or(&self.entry.json),
         }
     }
 }
@@ -146,7 +185,7 @@ impl Cursors {
     /// # Errors
     ///
     /// The subscription whose next events the log no longer has, which this removes.
-    pub fn next(&mut self, log: &EventLog) -> Result<Option<EventsEventParams>, SubscriptionId> {
+    pub fn next(&mut self, log: &EventLog) -> Result<Option<Delivery>, SubscriptionId> {
         for _ in 0..self.cursors.len() {
             let index = self.turn % self.cursors.len();
             self.turn = self.turn.wrapping_add(1);
@@ -157,13 +196,11 @@ impl Cursors {
                 return Err(self.cursors.remove(index).subscription);
             };
             cursor.after = seq;
-            if let Some(event) = event {
-                return Ok(Some(EventsEventParams {
+            if let Some(entry) = event {
+                return Ok(Some(Delivery {
                     subscription: cursor.subscription,
-                    seq: event.seq,
-                    time: event.time,
-                    project: event.project,
-                    event: cursor.view(&event.event),
+                    view: cursor.view(&entry.event),
+                    entry,
                 }));
             }
         }
@@ -195,7 +232,7 @@ mod tests {
     fn drain(cursors: &mut Cursors, log: &EventLog) -> Vec<(SubscriptionId, u64)> {
         let mut delivered = Vec::new();
         while let Some(event) = cursors.next(log).unwrap() {
-            delivered.push((event.subscription, event.seq));
+            delivered.push((event.subscription, event.entry.seq));
         }
         delivered
     }
@@ -278,7 +315,8 @@ mod tests {
 
         let mut delivered = Vec::new();
         while let Some(event) = cursors.next(&log).unwrap() {
-            delivered.push((event.subscription, event.seq, event.event));
+            let sent: ParallaxEvent = serde_json::from_str(event.params().event.get()).unwrap();
+            delivered.push((event.subscription, event.entry.seq, sent));
         }
         let of = |id| {
             delivered
@@ -316,6 +354,6 @@ mod tests {
         let mut cursors = Cursors::default();
         cursors.add(lagging);
         assert_eq!(cursors.next(&log).unwrap_err(), id);
-        assert_eq!(cursors.next(&log), Ok(None));
+        assert!(matches!(cursors.next(&log), Ok(None)));
     }
 }
