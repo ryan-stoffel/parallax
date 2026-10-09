@@ -51,6 +51,15 @@ enum Command {
     /// runs it.
     #[command(hide = true)]
     AcpLogin(AcpLoginArgs),
+    /// Supervise an SDK's CLI using plxd's process-group / Job Object cleanup.
+    #[command(hide = true)]
+    SdkProcess(SdkProcessArgs),
+}
+
+#[derive(Debug, Args)]
+struct SdkProcessArgs {
+    #[arg(last = true, required = true, value_name = "COMMAND")]
+    command: Vec<std::ffi::OsString>,
 }
 
 #[derive(Debug, Args)]
@@ -229,6 +238,7 @@ fn main() -> ExitCode {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         Command::Service(args) => service_command(args.command),
         Command::Mcp(args) => mcp(&args),
+        Command::SdkProcess(args) => sdk_process(&args),
         Command::AcpLogin(args) => {
             let (program, rest) = args.command.split_first().expect("clap requires a command");
             match plxd::backend::acp::authenticate(program, rest, &args.method) {
@@ -243,6 +253,21 @@ fn main() -> ExitCode {
             }
         }
     }
+}
+
+fn sdk_process(args: &SdkProcessArgs) -> ! {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("SDK process runtime");
+    let (program, rest) = args.command.split_first().expect("clap requires a command");
+    let result = runtime.block_on(plxd::backend::process::sdk_process(program, rest));
+    if let Err(error) = result {
+        eprintln!("plxd sdk-process: {error}");
+        std::process::exit(1);
+    }
+    // The stdin reader may still be blocked, as in attach.
+    std::process::exit(0)
 }
 
 /// Runs `mcp` and exits with `std::process::exit`, for the same reason as [`attach`].

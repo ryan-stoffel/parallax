@@ -6,10 +6,11 @@
 //! turns them on (PLX-249). Each keeps its session's own list, whatever the settings it reads
 //! name in `CLAUDE_CODE_TASK_LIST_ID` (PLX-251). A thread, full Claude Code, asks before a `git
 //! commit` in Accept Edits, and its commit lands once allowed (PLX-276). Each test starts the CLI
-//! through plxd's own Claude backend, so the arguments, the translator that reads the CLI's
-//! `can_use_tool` request, and the driver that writes the `control_response` are the ones a real
-//! run uses. A local fake Messages API asks for the tool calls, so no account or Anthropic
-//! connection is needed. Set `PLX_SANDBOX_CLAUDE` to the CLI under test, as CI's Linux legs do.
+//! through plxd's own Claude backend and the Agent SDK sidecar (0061), so the arguments, the
+//! SDK's `canUseTool`, the translator that reads the CLI's `can_use_tool` request, and the driver
+//! that answers it are the ones a real run uses. A local fake Messages API asks for the tool
+//! calls, so no account or Anthropic connection is needed. Set `PLX_SANDBOX_CLAUDE` to the CLI
+//! under test, as CI's Linux legs do.
 #![cfg(unix)]
 
 #[expect(
@@ -31,7 +32,8 @@ use plxd::backend::process::{Environment, Launcher};
 use plxd::backend::run_temp::RunTemp;
 use plxd::backend::{
     AccountRef, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend, Credential, Decision,
-    Event, Outcome, RunId, RunRequest, Started, ThreadTools, ToolPolicy, ToolStatus,
+    Event, Outcome, Resume, RunId, RunRequest, Started, ThreadTools, ToolPolicy, ToolStatus,
+    TurnId,
 };
 use plxd::paths::DataDir;
 use serde_json::{Value, json};
@@ -68,8 +70,26 @@ fn wrapper() -> &'static Path {
     })
 }
 
+/// The repo's Claude Agent SDK sidecar (0061), which runs the CLI under test. Its SDK must be
+/// installed (`npm ci --omit=dev --omit=optional --omit=peer` in `sidecar/claude`), as CI's Linux
+/// legs do.
+fn sidecar() -> &'static Path {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let main = Path::new(env!("CARGO_MANIFEST_DIR")).join("../sidecar/claude/src/main.mjs");
+        let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join("claude-agent-sdk-sidecar");
+        fs::write(
+            &path,
+            format!("#!/bin/sh\nexec node '{}'\n", main.display()),
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    })
+}
+
 /// plxd's Claude backend, as `serve` builds it, with `data` as plxd's data folder and `home` as
-/// `HOME`, starting `claude` against the fake API at `api`.
+/// `HOME`, starting `claude` against the fake API at `api` through the repo's Agent SDK sidecar.
 fn claude_backend(
     claude: &OsStr,
     api: &str,
@@ -85,6 +105,8 @@ fn claude_backend(
     env.set("TMPDIR", root.join("tmp"));
     env.set(API_ENV, api);
     env.set(CLAUDE_ENV, claude);
+    env.set("PLXD_CLAUDE_SDK", sidecar());
+    env.set("PLXD_CLAUDE_PROCESS", env!("CARGO_BIN_EXE_plxd"));
     ClaudeBackend::new(Launcher::new(DataDir::new(data).unwrap(), env)).with_program(wrapper())
 }
 
@@ -723,4 +745,107 @@ fn files_in(folder: &Path) -> Vec<PathBuf> {
             }
         })
         .collect()
+}
+
+/// A plain no-write run on an API key, asking nothing, that resumes `resume`.
+fn plain(folders: &Folders, resume: Option<Resume>) -> RunRequest {
+    RunRequest {
+        run_id: RunId::generate(),
+        turn_id: Some(TurnId::generate()),
+        cwd: folders.project.clone(),
+        prompt: "Say done.".into(),
+        images: Vec::new(),
+        policy: ToolPolicy::NoWrite,
+        sandbox: None,
+        account: AccountRef {
+            id: "test".into(),
+            credential: Credential::ApiKey(ApiKey::new(KEY.into())),
+        },
+        resume,
+        model: Some("claude-sonnet-4-6".into()),
+        effort: None,
+        permission: None,
+        context_window: None,
+        fast: None,
+        coordinator_tools: None,
+        thread_tools: None,
+        approvals: false,
+        thread: false,
+    }
+}
+
+/// A run's session id and its turn's cursor.
+fn session_and_cursor(events: &[Event]) -> (String, String) {
+    assert_eq!(outcome(events), &done(), "{events:#?}");
+    let session = events.iter().find_map(|event| match event {
+        Event::SessionStarted { session_id, .. } => Some(session_id.clone()),
+        _ => None,
+    });
+    let cursor = events.iter().find_map(|event| match event {
+        Event::TurnCursor { cursor, .. } => Some(cursor.clone()),
+        _ => None,
+    });
+    (session.unwrap(), cursor.unwrap())
+}
+
+/// Through the Agent SDK (0061), a run resumes its session, a fork continues a copy under a new
+/// id (0050), and a rewind resumes at an earlier turn's cursor (0062), so the next message
+/// follows that turn in the transcript.
+#[tokio::test]
+async fn a_session_resumes_forks_and_rewinds_through_the_sdk() {
+    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
+        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
+        return;
+    };
+    let folders = Folders::new();
+    let api = fake_api(Vec::new()).await;
+    let backend = claude_backend(&claude, &api, &folders.root, &folders.home, &folders.data);
+    assert!(backend.rewind());
+    let never = |_: &ApprovalRequest| unreachable!("a plain run asks nothing");
+
+    let (session, first) = session_and_cursor(&drive(&backend, plain(&folders, None), never).await);
+    let resumed = plain(&folders, Some(Resume::new(session.clone())));
+    let (again, _) = session_and_cursor(&drive(&backend, resumed, never).await);
+    assert_eq!(again, session, "a resume continues the session");
+
+    let fork = Resume {
+        fork: true,
+        ..Resume::new(session.clone())
+    };
+    let (forked, _) =
+        session_and_cursor(&drive(&backend, plain(&folders, Some(fork)), never).await);
+    assert_ne!(forked, session, "a fork continues a copy");
+
+    let rewind = Resume {
+        at: Some(first.clone()),
+        ..Resume::new(session.clone())
+    };
+    let rewound = plain(&folders, Some(rewind));
+    let turn = rewound.turn_id.unwrap().to_string();
+    let (after, _) = session_and_cursor(&drive(&backend, rewound, never).await);
+    assert_eq!(after, session);
+    // The rewound turn's message follows the first turn's last entry, not the second turn's.
+    let transcript = find(&folders.home, &format!("{session}.jsonl")).expect("the transcript");
+    let parent = fs::read_to_string(transcript)
+        .unwrap()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|entry| entry["uuid"] == turn.as_str())
+        .map(|entry| entry["parentUuid"].clone());
+    assert_eq!(parent, Some(Value::from(first)));
+}
+
+/// The file named `name` somewhere under `dir`.
+fn find(dir: &Path, name: &str) -> Option<PathBuf> {
+    for entry in fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find(&path, name) {
+                return Some(found);
+            }
+        } else if entry.file_name() == name {
+            return Some(path);
+        }
+    }
+    None
 }

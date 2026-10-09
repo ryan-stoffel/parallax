@@ -239,7 +239,8 @@ struct Stored {
 #[derive(Clone, Debug, Default)]
 struct Found {
     installed: bool,
-    /// Whether Cursor's SDK is installing in the background. Never cached, so a list sees it end.
+    /// Whether a sidecar's SDK (Cursor's, Claude's) is installing in the background. Never cached,
+    /// so a list sees it end.
     installing: bool,
     path: Option<String>,
     version: Option<String>,
@@ -706,6 +707,16 @@ impl Providers {
                 probe_opencode(&self.launcher, entry, &preset, &mut found).await;
             }
             _ => {}
+        }
+        // Claude runs through the Agent SDK sidecar (0061), which needs Node and installs the
+        // SDK on first use.
+        if matches!(preset.driver, Driver::Claude)
+            && let Some(note) = crate::backend::claude::sdk::status(&self.launcher).await
+        {
+            found.installing = crate::backend::claude::sdk::SDK
+                .install_state(&self.launcher)
+                .0;
+            found.note = Some(note);
         }
         found
     }

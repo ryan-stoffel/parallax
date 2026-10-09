@@ -95,8 +95,26 @@ jobs:
           chmod +x "$RUNNER_TEMP/claude"
           echo "PLX_SANDBOX_CLAUDE=$RUNNER_TEMP/claude" >> "$GITHUB_ENV"
 
+      # The tests that run that Claude Code through plxd's backend go through the Agent SDK
+      # sidecar (0061), so they need Node and the SDK the sidecar pins.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: runner.os == 'Linux'
+        with:
+          node-version-file: apps/desktop/.node-version
+
+      - name: Install the Claude Agent SDK sidecar
+        if: runner.os == 'Linux'
+        working-directory: sidecar/claude
+        run: |
+          npm ci --omit=dev --omit=optional --omit=peer --no-audit --no-fund
+
       - name: Lint, type-check, build, and test
         run: scripts/ci/check-rust
+
+      - name: Test the Claude Agent SDK sidecar against the process supervisor
+        if: runner.os == 'Linux'
+        working-directory: sidecar/claude
+        run: node --test src/*.test.mjs
 
       # The Ubuntu images may ship only the ssh client.
       - name: Install sshd

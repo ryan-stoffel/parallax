@@ -1,11 +1,14 @@
-//! The Claude Code backend: runs the user's own signed-in `claude` CLI headless (0004, #116).
+//! The Claude Code backend: runs the user's own signed-in `claude` CLI headless (0004, #116),
+//! through the Claude Agent SDK in plxd's Node sidecar ([`sdk`], 0061).
 //!
 //! # The command
 //!
 //! Every run is `claude -p --output-format stream-json --verbose --input-format stream-json` in
 //! the run's cwd, plus the policy's flags, `--model`, `--effort`, and `--resume <session id>`
-//! (0004 [10]), with `--fork-session` for a fork's first run (0050). Fast mode is `fastMode` in the run's one `--settings`, and a 200k context window
-//! is [`DISABLE_1M_ENV`]:
+//! (0004 [10]), with `--fork-session` for a fork's first run (0050) and `--resume-session-at` for
+//! a rewind (0062). Fast mode is `fastMode` in the run's one `--settings`, and a 200k context
+//! window is [`DISABLE_1M_ENV`]. The sidecar gives these to the SDK as its options, and the SDK
+//! runs the CLI with them:
 //!
 //! - **No-write** is 0004's: [`NO_WRITE_ARGS`], then [`no_write_settings`] as `--settings`, which
 //!   also keeps the file tools out of Claude Code's shared temp folder (PLX-176). As a second
@@ -81,19 +84,20 @@
 //! that puts the CLI's `PATH` back in front, which the CLI reads itself and runs before each
 //! command. The run's driver deletes it once the CLI has exited.
 //!
-//! # Messages go on stdin
+//! # Messages go into the query's prompt
 //!
-//! With `--input-format stream-json`, the prompt and every follow-up are user messages on stdin,
-//! one JSON object per line, as the Agent SDK sends them, with a message's images as base64 image
-//! blocks before its text (PLX-191). The prompt never goes in argv, where
-//! `ps` would show it and `ARG_MAX` would limit it. Each message carries a `uuid`, the turn id,
-//! which the CLI echoes in `result.user_message_uuids`: several messages sent close together can
-//! run as one turn, and those ids say which turns a result ended. A message written mid-turn
-//! joins the running turn after its current tool call (Claude Code 2.1.288), so that is how a
-//! steer reaches it, and plxd holds a queued message until the turn has ended (PLX-370). Once no
-//! turn is outstanding and plxd holds no message for the CLI ([`Run::hold`]), stdin closes and
-//! the CLI exits after its last result, which ends the run; a follow-up sent after that fails
-//! with [`SendError::Finished`](super::SendError::Finished).
+//! The prompt and every follow-up are SDK user messages, one JSON object each, which the sidecar
+//! puts in the query's prompt and the SDK writes on the CLI's stdin, with a message's images as
+//! base64 image blocks before its text (PLX-191). The prompt never goes in argv, where `ps`
+//! would show it and `ARG_MAX` would limit it. Each message carries a `uuid`, the turn id, which
+//! the CLI echoes in `result.user_message_uuids`: several messages sent close together can run as
+//! one turn, and those ids say which turns a result ended. A steer carries `priority: "now"`, as
+//! T3 Code steers, and joins the running turn; plxd holds a queued message until the turn has
+//! ended (PLX-370). Once no turn is outstanding and plxd holds no message for the CLI
+//! ([`Run::hold`](super::Run::hold)), the prompt ends and the CLI exits after its last result,
+//! which ends the run; a follow-up sent after that fails with
+//! [`SendError::Finished`](super::SendError::Finished). Each turn's last transcript entry is
+//! reported as its [`Event::TurnCursor`], which a later run resumes at to rewind (0062).
 //!
 //! # Credentials
 //!
@@ -135,11 +139,12 @@
 //! Accept Edits too, gets [`PROMPT_TOOL_ARGS`], as the Agent SDK passes them for its
 //! `canUseTool` (PLX-222, 0031), when its client answers permission requests
 //! ([`RunRequest::approvals`]). Instead of denying a tool call nobody approved, the CLI writes a
-//! `can_use_tool` control request on stdout and waits. The driver reports it as
-//! [`Event::ApprovalRequested`] and writes the answer that [`Run::answer`] gives as a
-//! `control_response` on stdin, which stays open while a request waits. A
-//! `control_cancel_request` withdraws one, as the CLI's exit withdraws every one left, and any
-//! other control request gets an error response. A sandboxed worker in Accept Edits and every run
+//! `can_use_tool` control request on stdout and waits. The sidecar passes it on, the driver
+//! reports it as [`Event::ApprovalRequested`], and the answer that [`Run::answer`](super::Run::answer) gives goes
+//! back as a `control_response`, which answers the SDK's `canUseTool`; the prompt stays open
+//! while a request waits. A `control_cancel_request` withdraws one, as the CLI's exit withdraws
+//! every one left. The SDK answers any other control request itself, and a test's fake that
+//! passes one on gets an error response. A sandboxed worker in Accept Edits and every run
 //! in Bypass Permissions never ask, a plain no-write run denies what isn't allowed (`dontAsk`),
 //! and a run without `approvals` denies what would prompt, so their CLIs run as before. In Plan,
 //! the plan itself is a request: `ExitPlanMode`'s, which a coordinator and a thread always have
@@ -147,12 +152,13 @@
 //!
 //! # Cancel
 //!
-//! `SIGINT` ends Claude's turn, while `SIGTERM` leaves it unfinished (0004 [11]), so cancel sends
-//! `SIGINT`, closes stdin so the CLI exits after the interrupted turn, and kills the process
-//! group if it is still running after the grace period.
+//! Cancel is the SDK's `interrupt()`, which ends Claude's turn as `SIGINT` did (0004 [11]), then
+//! the end of the prompt, so the CLI exits after the interrupted turn, and the sidecar kills its
+//! process group if it is still running after the grace period.
 
 #[cfg(target_os = "linux")]
 pub mod linux_sandbox;
+pub(crate) mod sdk;
 mod stream;
 #[cfg(all(test, unix))]
 mod tests;
@@ -166,9 +172,9 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use tempfile::TempPath;
-use tokio::io::AsyncWriteExt;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::mpsc;
 
+use self::sdk::{Input, Query};
 pub(crate) use self::stream::micros as usd_micros;
 pub(crate) use self::stream::version as parse_version;
 use self::stream::{Ask, Step, Translator, TurnDone};
@@ -177,15 +183,15 @@ use super::event::{Event, Failure, FailureKind, Outcome, WarningKind, exit_outco
 use super::limits::{self, LimitsProbe};
 use super::namer::{self, NameProbe};
 use super::process::{
-    CancelPolicy, Environment, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, Signal,
-    SpawnError, StdinMode, StdinPipe,
+    CancelPolicy, Environment, Exit, Launcher, Output, OutputLimits, ProcessSpec, SpawnError,
+    StdinMode,
 };
 use super::sandbox::worker_sandbox;
 use super::{
-    AgentEffort, AgentPermission, Answer, AnswerError, ApprovalId, Backend, CancelSwitch,
-    Capabilities, Credential, Decision, EVENT_BUFFER, EventSink, FollowUp, Held, Overrides,
-    PromptImage, Run, RunHandle, RunId, RunRequest, SendError, StartError, Started, ToolPolicy,
-    TurnId, WorkerSandbox, check_argument, prepend_path_line,
+    AgentEffort, AgentPermission, Answer, ApprovalId, Backend, CancelSwitch, Capabilities,
+    Credential, Decision, EVENT_BUFFER, EventSink, FollowUp, Held, Overrides, PromptImage,
+    RunHandle, RunRequest, StartError, Started, ToolPolicy, TurnId, WorkerSandbox, check_argument,
+    prepend_path_line,
 };
 use crate::mcp;
 
@@ -534,7 +540,8 @@ pub fn write_env_file(dir: &Path, path: &OsStr) -> io::Result<TempPath> {
 pub struct ClaudeBackend {
     launcher: Launcher,
     program: OsString,
-    cancel: CancelPolicy,
+    /// How long a cancelled run's CLI has to exit before it is killed.
+    grace: Duration,
     limits: OutputLimits,
     overrides: Overrides,
     project_permissions: &'static [AgentPermission],
@@ -547,7 +554,7 @@ impl ClaudeBackend {
         Self {
             launcher,
             program: PROGRAM.into(),
-            cancel: CancelPolicy::default(),
+            grace: CancelPolicy::default().grace,
             limits: OutputLimits::default(),
             overrides: Overrides::default(),
             project_permissions: PERMISSIONS,
@@ -601,10 +608,10 @@ impl ClaudeBackend {
         }
     }
 
-    /// Cancels with `policy` instead of `SIGINT` and a 10 s grace period.
+    /// Kills a cancelled run's CLI after `grace` instead of 10 s.
     #[must_use]
-    pub fn with_cancel_policy(mut self, policy: CancelPolicy) -> Self {
-        self.cancel = policy;
+    pub fn with_grace(mut self, grace: Duration) -> Self {
+        self.grace = grace;
         self
     }
 
@@ -749,6 +756,10 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
         args.extend(["--resume".into(), resume.session_id.clone().into()]);
         if resume.fork {
             args.push("--fork-session".into());
+        }
+        if let Some(at) = &resume.at {
+            check_argument("rewind cursor", at)?;
+            args.extend(["--resume-session-at".into(), at.into()]);
         }
     }
     Ok(args)
@@ -1016,6 +1027,11 @@ impl Backend for ClaudeBackend {
         true
     }
 
+    /// `resumeSessionAt` with a turn's last transcript entry, as T3 Code rolls a thread back.
+    fn rewind(&self) -> bool {
+        true
+    }
+
     /// `claude -p` in stream-json on the user's login, asked to `initialize`
     /// ([`commands::claude`]).
     fn commands(&self, cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
@@ -1129,26 +1145,25 @@ impl Backend for ClaudeBackend {
             _ => None,
         };
 
-        let process = self.launcher.spawn(&spec)?;
+        let query = Query::open(&self.launcher, &spec, request.run_id)?;
         let switch = CancelSwitch::new();
-        switch.arm(process.signals().clone(), self.cancel);
         let (handle, control) = RunHandle::new(request.run_id, true, switch.clone());
         let (handle, answers) = handle.with_answers();
         let held = handle.held();
-        let stop = Arc::new(Notify::new());
         let baseline = request
             .resume
             .map(|resume| resume.usage_totals)
             .unwrap_or_default();
         let (sink, events) = EventSink::channel(EVENT_BUFFER, baseline);
         let driver = Driver {
-            process,
+            input: query.input(),
+            query,
+            grace: self.grace,
             control,
             answers,
             held,
             sink,
             switch,
-            stop: Arc::clone(&stop),
             translator: Translator::new(request.policy, expected_key_source)
                 .with_coordinator_tools(request.coordinator_tools.is_some())
                 .with_thread(full)
@@ -1164,43 +1179,13 @@ impl Backend for ClaudeBackend {
         let prompt = Message::new(request.turn_id, &request.prompt, &request.images, false);
         tokio::spawn(driver.run(prompt));
         Ok(Started {
-            run: Arc::new(ClaudeRun { handle, stop }),
+            run: Arc::new(handle),
             events,
         })
     }
 }
 
-/// The run's handle: [`RunHandle`], plus closing stdin on cancel so the CLI exits after the
-/// interrupted turn instead of waiting for more input until the grace period ends.
-struct ClaudeRun {
-    handle: RunHandle,
-    stop: Arc<Notify>,
-}
-
-impl Run for ClaudeRun {
-    fn id(&self) -> RunId {
-        self.handle.id()
-    }
-
-    fn send(&self, message: FollowUp) -> Result<(), SendError> {
-        self.handle.send(message)
-    }
-
-    fn cancel(&self) {
-        self.handle.cancel();
-        self.stop.notify_one();
-    }
-
-    fn answer(&self, answer: Answer) -> Result<(), AnswerError> {
-        self.handle.answer(answer)
-    }
-
-    fn hold(&self, held: bool) {
-        self.handle.hold(held);
-    }
-}
-
-/// A user message for the CLI's stdin.
+/// A line for the CLI's stdin, through the query: a user message or a `control_response`.
 #[derive(Debug)]
 struct Message {
     turn_id: Option<TurnId>,
@@ -1215,6 +1200,18 @@ impl Message {
     /// block, since the API refuses a blank one (PLX-193). A `/compact` ([`super::is_compact`])
     /// goes as Claude Code's own command, which compacts the session (PLX-638).
     fn new(turn_id: Option<TurnId>, text: &str, images: &[PromptImage], follow_up: bool) -> Self {
+        Self::with_priority(turn_id, text, images, follow_up, false)
+    }
+
+    /// A message that, with `steer`, goes into the turn running now as the SDK's `priority:
+    /// "now"`, as T3 Code steers (0061).
+    fn with_priority(
+        turn_id: Option<TurnId>,
+        text: &str,
+        images: &[PromptImage],
+        follow_up: bool,
+        steer: bool,
+    ) -> Self {
         let uuid = turn_id.unwrap_or_else(TurnId::generate).to_string();
         let text = if super::is_compact(text, images) {
             "/compact"
@@ -1239,8 +1236,11 @@ impl Message {
             "message": {"role": "user", "content": content},
             "parent_tool_use_id": null,
             "uuid": uuid,
-        })
-        .to_string();
+        });
+        if steer {
+            line["priority"] = "now".into();
+        }
+        let mut line = line.to_string();
         line.push('\n');
         Self {
             turn_id,
@@ -1286,22 +1286,22 @@ fn answer_response(ask: &Ask, decision: Decision) -> Value {
     serde_json::json!({"subtype": "success", "request_id": ask.request_id, "response": response})
 }
 
-/// The result of writing one message to stdin.
+/// The result of handing one message to the query.
 enum Delivery {
     Written(Message),
     Failed(Message),
 }
 
-/// Writes messages to stdin in order, off the driver's loop, so a CLI that stops reading stdin
-/// can't keep the driver from reading its stdout.
+/// Hands messages to the query in order, off the driver's loop, then ends its prompt once the
+/// queue closes, as closing the CLI's stdin did.
 async fn write_messages(
-    mut stdin: StdinPipe,
+    input: Input,
     mut queue: mpsc::UnboundedReceiver<Message>,
     results: mpsc::UnboundedSender<Delivery>,
 ) {
     let mut broken = false;
     while let Some(message) = queue.recv().await {
-        broken = broken || stdin.write_all(message.line.as_bytes()).await.is_err();
+        broken = broken || !input.stdin(&message.line);
         #[cfg(test)]
         if message.follow_up {
             super::report_stall().await;
@@ -1313,9 +1313,10 @@ async fn write_messages(
         };
         let _ = results.send(result);
     }
+    input.end();
 }
 
-/// The CLI's stdin: a queue into [`write_messages`], and its results.
+/// The CLI's input: a queue into [`write_messages`], and its results.
 struct Stdin {
     queue: Option<mpsc::UnboundedSender<Message>>,
     results: mpsc::UnboundedReceiver<Delivery>,
@@ -1325,21 +1326,13 @@ struct Stdin {
 }
 
 impl Stdin {
-    fn start(process: &mut Process) -> Self {
+    fn start(input: Input) -> Self {
         let (results_tx, results) = mpsc::unbounded_channel();
-        let Some(pipe) = process.take_stdin() else {
-            return Self {
-                queue: None,
-                results,
-                writer: None,
-                pending: 0,
-            };
-        };
         let (queue, queue_rx) = mpsc::unbounded_channel();
         Self {
             queue: Some(queue),
             results,
-            writer: Some(tokio::spawn(write_messages(pipe, queue_rx, results_tx))),
+            writer: Some(tokio::spawn(write_messages(input, queue_rx, results_tx))),
             pending: 0,
         }
     }
@@ -1365,16 +1358,19 @@ impl Stdin {
 }
 
 /// One run: forwards the CLI's events, delivers follow-ups, and decides the outcome when the CLI
-/// exits. Cancelling doesn't wait for it: the handle signals the process through the switch.
+/// exits. Cancelling flips the switch, which the driver answers with the SDK's `interrupt()`,
+/// the end of the prompt, and a kill once the grace period has passed.
 struct Driver {
-    process: Process,
+    query: Query,
+    input: Input,
+    /// How long a cancelled CLI has to exit before it is killed.
+    grace: Duration,
     control: mpsc::UnboundedReceiver<FollowUp>,
     answers: mpsc::UnboundedReceiver<Answer>,
     /// While held, plxd has a message waiting for the CLI, so stdin stays open (PLX-370).
     held: Held,
     sink: EventSink,
     switch: CancelSwitch,
-    stop: Arc<Notify>,
     translator: Translator,
     /// Turns the CLI has been sent but hasn't finished, oldest first: their ids and `uuid`s.
     turns: VecDeque<(Option<TurnId>, String)>,
@@ -1390,7 +1386,7 @@ struct Driver {
 
 impl Driver {
     async fn run(mut self, prompt: Message) {
-        let mut stdin = Stdin::start(&mut self.process);
+        let mut stdin = Stdin::start(self.input.clone());
         self.turns.push_back((prompt.turn_id, prompt.uuid.clone()));
         let first = Event::TurnStarted {
             turn_id: prompt.turn_id,
@@ -1403,6 +1399,7 @@ impl Driver {
         }
         let mut control_open = true;
         let mut answers_open = true;
+        let mut interrupted = false;
 
         let exit = loop {
             tokio::select! {
@@ -1427,7 +1424,7 @@ impl Driver {
                         }
                     }
                 }
-                output = self.process.next() => match output {
+                output = self.query.next() => match output {
                     Some(Output::Line(line)) => {
                         if self.violation.is_none() {
                             let steps = self.translator.line(&line);
@@ -1451,11 +1448,12 @@ impl Driver {
                 },
                 follow_up = self.control.recv(), if control_open => match follow_up {
                     Some(follow_up) => {
-                        let message = Message::new(
+                        let message = Message::with_priority(
                             Some(follow_up.turn_id),
                             &follow_up.text,
                             &follow_up.images,
                             true,
+                            follow_up.steer,
                         );
                         let (turn_id, uuid) = (message.turn_id, message.uuid.clone());
                         match stdin.send(message) {
@@ -1470,14 +1468,12 @@ impl Driver {
                     }
                     None => control_open = false,
                 },
-                () = self.stop.notified(), if stdin.is_open() => {
-                    stdin.close();
-                    self.control.close();
+                () = self.switch.cancelled(), if !interrupted => {
+                    interrupted = true;
+                    self.interrupt(&mut stdin);
                 }
                 () = self.sink.closed(), if !self.switch.is_cancelled() => {
                     self.switch.cancel();
-                    stdin.close();
-                    self.control.close();
                 }
                 () = self.held.changed() => {}
             }
@@ -1489,6 +1485,20 @@ impl Driver {
         self.env_file = None;
         let outcome = self.outcome(exit);
         let _ = self.sink.finish(outcome).await;
+    }
+
+    /// Cancels the run: the SDK's `interrupt()` ends the CLI's turn as `SIGINT` did (0004 [11]),
+    /// the prompt ends so the CLI exits after it, and the CLI is killed if it hasn't once the
+    /// grace period has passed.
+    fn interrupt(&mut self, stdin: &mut Stdin) {
+        self.input.interrupt();
+        stdin.close();
+        self.control.close();
+        let (input, grace) = (self.input.clone(), self.grace);
+        tokio::spawn(async move {
+            tokio::time::sleep(grace).await;
+            input.kill();
+        });
     }
 
     /// Withdraws every request the CLI still waited on when it exited, so each one ends in this
@@ -1535,6 +1545,9 @@ impl Driver {
                         if self.unreported.remove(&uuid) {
                             self.emit(Event::TurnStarted { turn_id }).await;
                         }
+                        if let Some(cursor) = done.cursor.clone() {
+                            self.emit(Event::TurnCursor { turn_id, cursor }).await;
+                        }
                         let result = done.result.clone();
                         let failed = self.translator.last_failure.is_some();
                         self.emit(Event::TurnFinished {
@@ -1546,8 +1559,8 @@ impl Driver {
                     }
                 }
                 Step::Violation(failure) => {
-                    // Kill at once, not SIGINT: every moment it runs may bill the wrong account.
-                    let _ = self.process.signals().signal_group(Signal::KILL);
+                    // Kill at once, not interrupt: every moment it runs may bill the wrong account.
+                    self.input.kill();
                     self.violation = Some(failure);
                     stdin.close();
                     self.control.close();

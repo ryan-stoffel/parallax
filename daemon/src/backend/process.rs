@@ -69,6 +69,69 @@ pub async fn write_lines(mut stdin: StdinPipe, mut lines: mpsc::UnboundedReceive
     }
 }
 
+/// The SDK sidecar's child bridge. Reuses the normal supervisor, including cleanup before reap,
+/// Windows Job Objects, bounded output drain, and exactly one exit after stdout and stderr.
+/// Input is JSON lines: base64 `stdin`, `end`, or `kill`. Output is base64 `stdout`, `oversized`,
+/// then `exit {code, signal, stderr}`. Closing the bridge kills the CLI's group.
+///
+/// # Errors
+/// If starting the CLI or writing the bridge's output fails.
+pub async fn sdk_process(program: &OsStr, args: &[OsString]) -> io::Result<()> {
+    use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+
+    #[cfg(windows)]
+    crate::windows::stop_inheriting_handles();
+    let cwd = std::env::current_dir()?;
+    let data = DataDir::resolve(
+        std::env::var_os(crate::paths::DATA_DIR_ENV)
+            .as_deref()
+            .map(Path::new),
+    )?;
+    let launcher = Launcher::new(data, Environment::inherited());
+    let mut spec = ProcessSpec::new(program, cwd);
+    spec.args = args.to_vec();
+    spec.stdin = StdinMode::Piped;
+    let mut process = launcher.spawn(&spec).map_err(io::Error::other)?;
+    let signals = process.signals().clone();
+    let mut stdin = process.take_stdin();
+    tokio::spawn(async move {
+        let mut input = BufReader::new(tokio::io::stdin()).lines();
+        while let Ok(Some(mut line)) = input.next_line().await {
+            let message = serde_json::from_str::<serde_json::Value>(&line);
+            line.zeroize();
+            let Ok(message) = message else { break };
+            if message.get("kill").is_some() {
+                let _ = signals.signal_group(Signal::KILL);
+            } else if message.get("end").is_some() {
+                stdin.take();
+            } else if let Some(encoded) = message.get("stdin").and_then(serde_json::Value::as_str)
+                && let Ok(mut bytes) = data_encoding::BASE64.decode(encoded.as_bytes())
+            {
+                if let Some(pipe) = &mut stdin {
+                    let _ = timeout(Duration::from_secs(5), pipe.write_all(&bytes)).await;
+                }
+                bytes.zeroize();
+            }
+        }
+        let _ = signals.signal_group(Signal::KILL);
+    });
+    let mut stdout = tokio::io::stdout();
+    while let Some(output) = process.next().await {
+        let frame = match output {
+            Output::Line(bytes) => {
+                serde_json::json!({ "stdout": data_encoding::BASE64.encode(&bytes) })
+            }
+            Output::Oversized { bytes } => serde_json::json!({ "oversized": bytes }),
+            Output::Exited(exit) => serde_json::json!({ "exit": {
+                "code": exit.info.code, "signal": exit.info.signal, "stderr": exit.stderr_tail,
+            } }),
+        };
+        stdout.write_all(frame.to_string().as_bytes()).await?;
+        stdout.write_all(b"\n").await?;
+    }
+    stdout.flush().await
+}
+
 /// What [`Signals`] can send. Windows has no signals, so there `INT` and `TERM` send nothing (the
 /// backend closes stdin instead) and `KILL` terminates the process's job (0023). The numbers are
 /// POSIX's.
@@ -689,7 +752,7 @@ fn start(
     }
 }
 
-fn check_working_directory(cwd: &Path) -> Result<(), SpawnError> {
+pub(crate) fn check_working_directory(cwd: &Path) -> Result<(), SpawnError> {
     let bad = |reason: &str| SpawnError::BadWorkingDirectory {
         cwd: cwd.to_owned(),
         reason: reason.to_owned(),

@@ -261,6 +261,7 @@ async fn a_resumed_thread_without_approvals_never_asks_and_declines_what_codex_d
             },
         }],
         fork: false,
+        at: None,
     });
     let events = rest(&mut backend.start(request).unwrap().events).await;
     assert!(

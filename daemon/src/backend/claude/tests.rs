@@ -17,7 +17,7 @@ use super::{
     write_env_file,
 };
 use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
-use crate::backend::process::{CancelPolicy, Environment, Launcher, SpawnError};
+use crate::backend::process::{Environment, Launcher, SpawnError};
 use crate::backend::{
     AccountRef, AgentEffort, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend, Credential,
     Decision, Event, EventStream, FailureKind, FollowUp, ImageMediaType, LimitStatus, LimitWindow,
@@ -33,6 +33,7 @@ const TURN_1: &str = "01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01";
 const TURN_2: &str = "01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e02";
 const OPUS: &str = "claude-opus-4-7";
 const FAKE_CLAUDE: &str = include_str!("fixtures/fake-claude.sh");
+const FAKE_SDK: &str = include_str!("fixtures/fake-sdk.sh");
 
 fn fixture(name: &str) -> &'static str {
     match name {
@@ -96,7 +97,9 @@ fn turn(id: &str) -> TurnId {
     id.parse().unwrap()
 }
 
-/// A fake `claude` on the launcher's `PATH`, in a folder that also holds what it records.
+/// A fake Agent SDK sidecar ([`sdk::OVERRIDE_ENV`](super::sdk::OVERRIDE_ENV)) that replays a
+/// fixture as the `claude` on the launcher's `PATH` would, in a folder that also holds what it
+/// records.
 struct Fake {
     dir: TempDir,
     backend: ClaudeBackend,
@@ -108,13 +111,19 @@ impl Fake {
         let root = dir.path().canonicalize().unwrap();
         let bin = root.join("bin");
         fs::create_dir(&bin).unwrap();
-        let program = bin.join("claude");
-        fs::write(&program, FAKE_CLAUDE).unwrap();
-        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        for (name, script) in [("claude", FAKE_CLAUDE), ("claude-sdk", FAKE_SDK)] {
+            let program = bin.join(name);
+            fs::write(&program, script).unwrap();
+            fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let fixture_path = root.join("fixture.jsonl");
         fs::write(&fixture_path, fixture(fixture_name)).unwrap();
         let base: Environment = [
             ("PATH", format!("{}:/usr/bin:/bin", bin.display())),
+            (
+                super::sdk::OVERRIDE_ENV,
+                bin.join("claude-sdk").display().to_string(),
+            ),
             ("FAKE_CLAUDE_DIR", root.display().to_string()),
             ("FAKE_CLAUDE_FIXTURE", fixture_path.display().to_string()),
             ("SSH_CONNECTION", "10.0.0.2 50000 10.0.0.1 22".into()),
@@ -145,12 +154,27 @@ impl Fake {
         fs::read_to_string(self.root().join(name)).unwrap_or_default()
     }
 
+    /// The last query's `open` line: the CLI's program, arguments, folder, and environment.
+    fn open(&self) -> Value {
+        serde_json::from_str(&self.recorded("open")).unwrap_or_default()
+    }
+
     fn argv(&self) -> Vec<String> {
-        self.recorded("argv").lines().map(str::to_owned).collect()
+        self.open()["args"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|arg| arg.as_str().unwrap().to_owned())
+            .collect()
     }
 
     fn env(&self) -> Vec<String> {
-        self.recorded("env").lines().map(str::to_owned).collect()
+        self.open()["env"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(name, value)| format!("{name}={}", value.as_str().unwrap()))
+            .collect()
     }
 
     /// Checks that no inherited credential reached the CLI. `CLAUDE_CONFIG_DIR` may only have
@@ -318,6 +342,11 @@ async fn a_read_only_run_maps_the_stream_and_uses_the_no_write_policy() {
                 model: Some(OPUS.into()),
                 usage: tokens(12, 180, 14000, 3000, 42_100),
             }),
+            // The turn's last transcript entry, where a rewind resumes (0062).
+            Event::TurnCursor {
+                turn_id: Some(turn(TURN_1)),
+                cursor: "a0000000-0000-4000-8000-000000000004".into(),
+            },
             Event::TurnFinished {
                 turn_id: Some(turn(TURN_1)),
                 result: Some(
@@ -358,8 +387,12 @@ async fn a_read_only_run_maps_the_stream_and_uses_the_no_write_policy() {
         "0004's no-write flags, before its settings"
     );
     let env = fake.env();
-    let working_dir = format!("PWD={}", cwd.display());
-    assert!(env.contains(&working_dir), "{env:?}");
+    assert_eq!(fake.open()["cwd"], cwd.display().to_string());
+    assert_eq!(
+        fake.open()["executable"],
+        fake.root().join("bin/claude").display().to_string(),
+        "the SDK runs the user's own claude"
+    );
     fake.assert_no_inherited_credentials(None);
     assert!(!env.iter().any(|var| var.starts_with("SSH_CONNECTION=")));
     assert!(!env.iter().any(|var| var.starts_with("CLAUDE_ENV_FILE=")));
@@ -1146,6 +1179,30 @@ fn a_forks_first_run_forks_the_session() {
     );
 }
 
+/// A rewind resumes the session at a turn's cursor, dropping what came after (0062).
+#[test]
+fn a_rewind_resumes_at_a_turns_cursor() {
+    let mut request = request(Path::new("/repo"));
+    request.resume = Some(Resume {
+        at: Some("a0000000-0000-4000-8000-000000000063".into()),
+        ..Resume::new(SESSION)
+    });
+    let args: Vec<String> = super::arguments(&request)
+        .unwrap()
+        .into_iter()
+        .map(|arg| arg.into_string().unwrap())
+        .collect();
+    assert_eq!(
+        &args[args.len() - 4..],
+        [
+            "--resume",
+            SESSION,
+            "--resume-session-at",
+            "a0000000-0000-4000-8000-000000000063"
+        ]
+    );
+}
+
 #[tokio::test]
 async fn a_resumed_session_reports_only_what_it_adds() {
     let fake = Fake::new("resume");
@@ -1158,6 +1215,7 @@ async fn a_resumed_session_reports_only_what_it_adds() {
         session_id: SESSION.into(),
         usage_totals: baseline,
         fork: false,
+        at: None,
     });
     let all = run(&fake, request).await;
     assert_eq!(&fake.argv()[fake.argv().len() - 2..], ["--resume", SESSION]);
@@ -1382,33 +1440,23 @@ async fn an_api_key_never_reaches_tracing_output() {
     );
 }
 
-// The fake CLI's own scrubbing of its child's environment stands in for the real CLI's, which
-// is documented (0004 [16]) but not something plxd can verify directly: this proves plxd sets
-// CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 and that a CLI honoring it keeps the key from a subprocess.
+// The CLI keeps the key from its own subprocesses when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set,
+// which is documented (0004 [16]) but not something plxd can verify directly: this proves plxd
+// sets it beside the key it gives the CLI.
 #[tokio::test]
 async fn a_tool_subprocess_the_cli_spawns_never_sees_the_key() {
     let fake = Fake::new("subprocess-env");
     let key = "sk-ant-api03-test-key-not-real";
     run(&fake, api_key_request(&fake.root(), key)).await;
+    let env = fake.env();
     assert!(
-        fake.env().contains(&format!("ANTHROPIC_API_KEY={key}")),
-        "the CLI itself must have had the key, or this test proves nothing: {:?}",
-        fake.env()
-    );
-    let child_env: Vec<String> = fake
-        .recorded("child-env")
-        .lines()
-        .map(str::to_owned)
-        .collect();
-    assert!(
-        !child_env.iter().any(|var| var.contains(key)),
-        "{child_env:?}"
+        env.contains(&format!("ANTHROPIC_API_KEY={key}")),
+        "the CLI itself must have had the key, or this test proves nothing: {env:?}"
     );
     assert!(
-        child_env
-            .iter()
-            .any(|var| var.starts_with("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=")),
-        "the child should still see the flag itself: {child_env:?}"
+        env.iter()
+            .any(|var| var == "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1"),
+        "{env:?}"
     );
 }
 
@@ -1444,6 +1492,8 @@ async fn malformed_lines_warn_and_unknown_types_are_skipped_quietly() {
     );
 }
 
+/// A steer goes into the running turn as the SDK's `priority: "now"` (0061), and the CLI folds it
+/// in.
 #[tokio::test]
 async fn a_follow_up_during_a_turn_that_the_cli_folds_in_finishes_with_it() {
     let fake = Fake::new("follow-up-folded");
@@ -1457,7 +1507,7 @@ async fn a_follow_up_during_a_turn_that_the_cli_folds_in_finishes_with_it() {
         turn_id: turn(TURN_2),
         text: "Fix the tests too.".into(),
         images: Vec::new(),
-        steer: false,
+        steer: true,
     };
     run.send(follow_up.clone()).unwrap();
     run.send(follow_up).unwrap();
@@ -1498,6 +1548,8 @@ async fn a_follow_up_during_a_turn_that_the_cli_folds_in_finishes_with_it() {
     assert_eq!(stdin.len(), 2, "sent once: {stdin:?}");
     assert_eq!(stdin[1]["uuid"], TURN_2);
     assert_eq!(stdin[1]["message"]["content"], "Fix the tests too.");
+    assert_eq!(stdin[1]["priority"], "now");
+    assert_eq!(stdin[0].get("priority"), None, "the prompt isn't a steer");
     assert!(matches!(outcome(&all), Outcome::Completed { .. }));
     assert_eq!(
         run.send(FollowUp {
@@ -1706,6 +1758,7 @@ async fn a_resumed_session_starts_on_images_alone() {
             session_id: SESSION.into(),
             usage_totals: Vec::new(),
             fork: false,
+            at: None,
         }),
         ..request(&fake.root())
     };
@@ -1719,19 +1772,19 @@ async fn a_resumed_session_starts_on_images_alone() {
     );
 }
 
+/// Cancel is the SDK's `interrupt()`, which ends the CLI's turn as `SIGINT` did, then the end of
+/// its prompt.
 #[tokio::test]
-async fn cancel_interrupts_the_cli_with_sigint() {
+async fn cancel_interrupts_the_cli() {
     let fake = Fake::new("cancel");
     let Started { run, mut events } = launch(&fake.backend, request(&fake.root())).await;
     assert!(matches!(
         next(&mut events).await,
         Event::SessionStarted { .. }
     ));
-    // The fake CLI prints `@trap-armed` right after installing its SIGINT trap (fake-claude.sh),
-    // which the translator reports as a malformed line. Waiting for it here is a deterministic
-    // handshake: cancel() below can never race the trap's own installation (#149), unlike waiting
-    // for a wall-clock margin. The fake then blocks reading stdin, which cancel closes after the
-    // SIGINT, so a trap that bash left pending still runs at EOF (PLX-120, cancel.jsonl).
+    // The fake sidecar prints `@trap-armed` once an interrupt would end the query (fake-sdk.sh),
+    // which the translator reports as a malformed line. Waiting for it here keeps cancel() below
+    // from racing it (#149).
     assert!(matches!(
         next(&mut events).await,
         Event::Warning {
@@ -1755,13 +1808,12 @@ async fn cancel_interrupts_the_cli_with_sigint() {
     assert_eq!(fake.recorded("signals"), "SIGINT\n");
 }
 
+/// A CLI that doesn't answer the interrupt is killed, with its process group, once the grace
+/// period has passed.
 #[tokio::test]
-async fn cancel_escalates_to_sigkill_after_the_grace_period() {
+async fn cancel_escalates_to_a_kill_after_the_grace_period() {
     let fake = Fake::new("stubborn");
-    let backend = fake.backend.clone().with_cancel_policy(CancelPolicy {
-        grace: Duration::from_millis(300),
-        ..CancelPolicy::default()
-    });
+    let backend = fake.backend.clone().with_grace(Duration::from_millis(300));
     let Started { run, mut events } = launch(&backend, request(&fake.root())).await;
     assert!(matches!(
         next(&mut events).await,
@@ -3485,4 +3537,144 @@ fn naming_saves_no_session_and_has_no_tools() {
             .any(|arg| arg.contains(r#""autoMemoryEnabled":false"#)),
         "{args:?}"
     );
+}
+
+/// A sidecar that answers each query's prompt at once and ends it when its prompt ends, logging
+/// its own start and end, and that dies when a prompt says `crash`.
+const ANSWERING_SDK: &str = r#"#!/bin/sh
+dir=$FAKE_CLAUDE_DIR
+echo start >> "$dir/starts"
+init='{"type":"system","subtype":"init","session_id":"s","tools":["Read"],"model":"m","permissionMode":"dontAsk","apiKeySource":"none"}'
+result='{"type":"result","subtype":"success","is_error":false,"result":"done","user_message_uuids":[],"queued_turn_count":0}'
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/^{"id":"\([^"]*\)".*/\1/p')
+  case $line in
+    *crash*) echo 'out of memory' >&2; exit 3 ;;
+    *'"stdin":'*) printf '%s %s\n%s %s\n' "$id" "$init" "$id" "$result" ;;
+    *'"type":"end"'*) printf '%s exit {"code":0}\n' "$id" ;;
+  esac
+done
+echo end >> "$dir/starts"
+"#;
+
+fn answering(fake: &Fake) -> ClaudeBackend {
+    let sdk = fake.root().join("bin/answering-sdk");
+    fs::write(&sdk, ANSWERING_SDK).unwrap();
+    fs::set_permissions(&sdk, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut base = Environment::empty();
+    base.set(
+        "PATH",
+        format!("{}:/usr/bin:/bin", fake.root().join("bin").display()),
+    );
+    base.set("FAKE_CLAUDE_DIR", fake.root());
+    base.set(super::sdk::OVERRIDE_ENV, &sdk);
+    ClaudeBackend::new(Launcher::new(
+        DataDir::new(fake.root().join("data")).unwrap(),
+        base,
+    ))
+}
+
+/// One sidecar holds every run's query, as T3 Code's server does (0061), and exits once the last
+/// one is gone.
+#[tokio::test]
+async fn one_sidecar_runs_every_query_and_exits_after_the_last() {
+    let fake = Fake::new("read-only");
+    let backend = answering(&fake);
+    let mut first = backend.start(request(&fake.root())).unwrap();
+    let mut second = backend.start(request(&fake.root())).unwrap();
+    for started in [&mut first, &mut second] {
+        let all = rest(&mut started.events).await;
+        assert_eq!(
+            outcome(&all),
+            &Outcome::Completed {
+                result: Some("done".into())
+            }
+        );
+    }
+    drop((first, second));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while fake.recorded("starts") != "start\nend\n" && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(fake.recorded("starts"), "start\nend\n");
+}
+
+/// A sidecar that dies ends every query it held, with its own stderr, as a CLI that crashed.
+#[tokio::test]
+async fn a_dead_sidecar_fails_every_run_on_it() {
+    let fake = Fake::new("read-only");
+    let backend = answering(&fake);
+    let mut waiting = backend.start(request(&fake.root())).unwrap();
+    let mut crashing = request(&fake.root());
+    crashing.prompt = "crash".into();
+    let mut crashing = backend.start(crashing).unwrap();
+    // The first run's prompt is answered before the second's kills the sidecar, so hold it.
+    waiting.run.hold(true);
+    for started in [&mut crashing, &mut waiting] {
+        let all = rest(&mut started.events).await;
+        let Outcome::Failed(failure) = outcome(&all) else {
+            panic!("{all:?}");
+        };
+        assert_eq!(failure.failure, FailureKind::Crashed, "{failure:?}");
+        assert_eq!(
+            failure.stderr_tail.as_deref(),
+            Some("the Claude Agent SDK sidecar exited: out of memory")
+        );
+    }
+}
+
+/// A launcher whose `PATH` has only `programs`, scripts, and the system's, with no sidecar
+/// override, so the backend installs and runs the real one's files.
+fn installing(fake: &Fake, programs: &[(&str, &str)]) -> ClaudeBackend {
+    let bin = fake.root().join("installing");
+    fs::create_dir_all(&bin).unwrap();
+    fs::copy(fake.root().join("bin/claude"), bin.join("claude")).unwrap();
+    for (name, script) in programs {
+        fs::write(bin.join(name), script).unwrap();
+        fs::set_permissions(bin.join(name), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut base = Environment::empty();
+    base.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
+    base.set("FAKE_CLAUDE_DIR", fake.root());
+    ClaudeBackend::new(Launcher::new(
+        DataDir::new(fake.root().join("data")).unwrap(),
+        base,
+    ))
+}
+
+/// Without Node, a Claude run is refused with what it needs (0061).
+#[test]
+fn a_host_without_node_is_told_claude_needs_it() {
+    let fake = Fake::new("read-only");
+    let backend = installing(&fake, &[]);
+    let Err(StartError::Unsupported(why)) = backend.start(request(&fake.root())) else {
+        panic!("started without Node");
+    };
+    assert_eq!(why, "Node.js 22.16 or newer is required to run Claude");
+}
+
+/// The SDK installs on first use, and a run sent meanwhile waits for it rather than failing.
+#[tokio::test]
+async fn a_run_waits_for_the_sdk_to_install() {
+    let fake = Fake::new("read-only");
+    // `node` stands in for the installed sidecar, whatever script it's given.
+    let backend = installing(
+        &fake,
+        &[
+            ("node", ANSWERING_SDK),
+            ("npm", "#!/bin/sh\nsleep 0.3\nmkdir node_modules\n"),
+        ],
+    );
+    let mut started = backend.start(request(&fake.root())).unwrap();
+    let all = rest(&mut started.events).await;
+    assert_eq!(
+        outcome(&all),
+        &Outcome::Completed {
+            result: Some("done".into())
+        }
+    );
+    let installs = fake.root().join("data/tools/claude-agent-sdk");
+    let versions: Vec<_> = fs::read_dir(&installs).unwrap().flatten().collect();
+    assert_eq!(versions.len(), 1, "{versions:?}");
+    assert!(versions[0].path().join("src/main.mjs").is_file());
 }

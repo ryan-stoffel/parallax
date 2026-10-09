@@ -125,8 +125,8 @@ pub struct ProviderInfo {
     /// Whether its program resolves on the host.
     pub installed: bool,
     /// Whether plxd is installing it in the background: Cursor's SDK after `cursor/install`, or
-    /// on its own for someone who used Cursor before (0053). `note` says so meanwhile, and says
-    /// why if the install fails.
+    /// on its own for someone who used Cursor before (0053), or the Claude Agent SDK for a host
+    /// with Claude Code (0061). `note` says so meanwhile, and says why if the install fails.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub installing: bool,
     /// The program's resolved path, when installed.
