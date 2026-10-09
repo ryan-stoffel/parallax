@@ -253,6 +253,7 @@ async fn events_stream_in_order_and_usage_adds_up() {
         Event::TurnFinished {
             turn_id: None,
             result: Some("The README is one line.".into()),
+            failed: false,
         }
     );
     assert_eq!(
@@ -351,7 +352,8 @@ async fn a_follow_up_becomes_the_next_turn() {
         next(&mut events).await,
         Event::TurnFinished {
             turn_id: None,
-            result: Some("First answer.".into())
+            result: Some("First answer.".into()),
+            failed: false,
         }
     );
     let turn_id = TurnId::generate();
@@ -383,7 +385,8 @@ async fn a_follow_up_becomes_the_next_turn() {
             },
             Event::TurnFinished {
                 turn_id: Some(turn_id),
-                result: Some("Second answer.".into())
+                result: Some("Second answer.".into()),
+                failed: false,
             },
             Event::Finished {
                 outcome: Outcome::Completed {
@@ -480,7 +483,9 @@ async fn turns_finish_in_the_order_they_started() {
     let finished: Vec<(Option<TurnId>, Option<&str>)> = all
         .iter()
         .filter_map(|event| match event {
-            Event::TurnFinished { turn_id, result } => Some((*turn_id, result.as_deref())),
+            Event::TurnFinished {
+                turn_id, result, ..
+            } => Some((*turn_id, result.as_deref())),
             _ => None,
         })
         .collect();

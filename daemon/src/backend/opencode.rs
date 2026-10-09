@@ -1075,6 +1075,7 @@ impl Driver {
             self.emit(event).await;
         }
         let text = self.translator.take_text();
+        let failed = error.is_some();
         let result = if error.is_none() {
             self.results += 1;
             self.last_result.clone_from(&text);
@@ -1082,7 +1083,12 @@ impl Driver {
         } else {
             None
         };
-        self.emit(Event::TurnFinished { turn_id, result }).await;
+        self.emit(Event::TurnFinished {
+            turn_id,
+            result,
+            failed,
+        })
+        .await;
     }
 
     /// Sends the next message once no turn is in flight.

@@ -694,11 +694,12 @@ impl State {
                     format!("an event of kind {:?}", kind.unwrap_or_default()),
                 );
             }
-            Event::TurnFinished { result, .. } => {
+            Event::TurnFinished { result, failed, .. } => {
                 self.last_result.clone_from(&result);
                 Event::TurnFinished {
                     turn_id: self.turns.pop_front().flatten(),
                     result,
+                    failed,
                 }
             }
             Event::Finished { outcome, .. } => {
@@ -897,6 +898,7 @@ fn compile(script: &Script) -> Result<String, String> {
                 let event = Event::TurnFinished {
                     turn_id: None,
                     result: result.clone(),
+                    failed: false,
                 };
                 print_event(&mut out, &event)?;
             }

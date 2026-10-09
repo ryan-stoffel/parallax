@@ -1,0 +1,18 @@
+# Two threads on one app-server (0060): it initializes once, and each line goes to its thread.
+<
+{"id":1,"result":{"userAgent":"plxd/0.160.0","codexHome":"/Users/u/.codex","platformFamily":"unix","platformOs":"macos"}}
+# initialized, then each thread's thread/start
+<
+<
+<
+{"id":2,"result":{"thread":{"id":"t-1"},"model":"gpt-6-sol"}}
+{"id":3,"result":{"thread":{"id":"t-2"},"model":"gpt-6-sol"}}
+# Each thread's turn/start
+<
+<
+{"id":4,"result":{"turn":{"id":"u-1"}}}
+{"id":5,"result":{"turn":{"id":"u-2"}}}
+{"method":"item/completed","params":{"threadId":"t-2","turnId":"u-2","item":{"type":"agentMessage","id":"m-2","text":"Second thread."}}}
+{"method":"item/completed","params":{"threadId":"t-1","turnId":"u-1","item":{"type":"agentMessage","id":"m-1","text":"First thread."}}}
+{"method":"turn/completed","params":{"threadId":"t-1","turn":{"id":"u-1","status":"completed","error":null}}}
+{"method":"turn/completed","params":{"threadId":"t-2","turn":{"id":"u-2","status":"completed","error":null}}}

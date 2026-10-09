@@ -386,7 +386,9 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             cache_write_tokens: delta.usage.cache_write_tokens,
             cost_usd_micros: delta.usage.cost_usd_micros,
         },
-        Event::TurnFinished { turn_id, result } => AgentOutputItem::TurnFinished {
+        Event::TurnFinished {
+            turn_id, result, ..
+        } => AgentOutputItem::TurnFinished {
             turn_id: *turn_id,
             result: result
                 .as_deref()
@@ -661,6 +663,7 @@ mod tests {
             output_item(&Event::TurnFinished {
                 turn_id: None,
                 result: Some(big),
+                failed: false,
             })
         else {
             panic!("a turn finished");

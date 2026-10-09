@@ -21,9 +21,9 @@ const CHECK_EVERY: Duration = Duration::from_secs(60);
 
 impl Actor {
     /// When the actor next checks the stored timer: `resumeAt`, or [`CHECK_EVERY`] from now if
-    /// that is sooner, while the run waits and no CLI, push, or Open PR runs.
+    /// that is sooner, while the run waits and no turn, push, or Open PR runs.
     pub(super) fn resume_due(&self) -> Option<Instant> {
-        if self.row.state.status != WAITING || self.live.is_some() || self.effect.is_some() {
+        if self.row.state.status != WAITING || self.busy() || self.effect.is_some() {
             return None;
         }
         let at = self.row.state.resume_at?;

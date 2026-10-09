@@ -149,14 +149,16 @@ async fn an_approval_round_trips_and_a_follow_up_joins_the_live_thread() {
             &Event::TurnStarted { turn_id: first },
             &Event::TurnFinished {
                 turn_id: first,
-                result: Some("Committed.".into())
+                result: Some("Committed.".into()),
+                failed: false,
             },
             &Event::TurnStarted {
                 turn_id: Some(follow_up)
             },
             &Event::TurnFinished {
                 turn_id: Some(follow_up),
-                result: Some("42ed0b6".into())
+                result: Some("42ed0b6".into()),
+                failed: false,
             },
         ]
     );
@@ -332,7 +334,8 @@ async fn compact_compacts_the_thread_instead_of_starting_a_turn() {
             &Event::ContextCompaction { done: true },
             &Event::TurnFinished {
                 turn_id,
-                result: None
+                result: None,
+                failed: false,
             },
         ]
     );
@@ -445,11 +448,13 @@ async fn a_steer_joins_the_running_turn_and_a_held_thread_stays_open() {
             },
             &Event::TurnFinished {
                 turn_id: first,
-                result: banana.clone()
+                result: banana.clone(),
+                failed: false,
             },
             &Event::TurnFinished {
                 turn_id: Some(steer),
-                result: banana.clone()
+                result: banana.clone(),
+                failed: false,
             },
         ]
     );
@@ -467,6 +472,71 @@ async fn a_steer_joins_the_running_turn_and_a_held_thread_stays_open() {
         json!({"threadId": "t-1", "expectedTurnId": "u-1", "input": [{"type": "text",
                "text": "Change of plan: reply BANANA instead.", "text_elements": []}]})
     );
+}
+
+/// 0060: threads on one login share one app-server, which initializes once and sends each
+/// thread its own lines, and a thread that is done unloads with `thread/unsubscribe`.
+#[tokio::test]
+async fn threads_on_one_login_share_an_app_server_and_unsubscribe_when_done() {
+    let (dir, backend) = fake(include_str!("../fixtures/app-server-shared.jsonl"));
+    let mut runs = Vec::new();
+    for _ in 0..2 {
+        let mut request = request(AgentPermission::Edit);
+        request.approvals = false;
+        runs.push(backend.start(request).unwrap().events);
+    }
+    let mut sessions = Vec::new();
+    for stream in &mut runs {
+        let events = rest(stream).await;
+        let session = events.iter().find_map(|event| match event {
+            Event::SessionStarted { session_id, .. } => Some(session_id.clone()),
+            _ => None,
+        });
+        let text = events.iter().find_map(|event| match event {
+            Event::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        });
+        let expected = match session.as_deref() {
+            Some("t-1") => "First thread.",
+            Some("t-2") => "Second thread.",
+            other => panic!("no thread for {other:?}: {events:?}"),
+        };
+        assert_eq!(text.as_deref(), Some(expected), "{events:?}");
+        assert!(matches!(
+            events.last(),
+            Some(Event::Finished {
+                outcome: Outcome::Completed { .. },
+                ..
+            })
+        ));
+        sessions.extend(session);
+    }
+    sessions.sort();
+    assert_eq!(sessions, ["t-1", "t-2"]);
+
+    // Both unsubscribe, then the last one's leaving closes stdin.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let written = loop {
+        let written: Vec<Value> = fs::read_to_string(dir.path().join("stdin"))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let unsubscribed = written
+            .iter()
+            .filter(|line| line["method"] == "thread/unsubscribe")
+            .count();
+        if unsubscribed == 2 {
+            break written;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "{written:?}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let initialized = written
+        .iter()
+        .filter(|line| line["method"] == "initialize")
+        .count();
+    assert_eq!(initialized, 1, "one app-server: {written:?}");
 }
 
 /// A Project's coordinator runs on app-server as a thread does, with its own tools (0042).

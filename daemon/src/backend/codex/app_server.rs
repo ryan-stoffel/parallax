@@ -2,10 +2,11 @@
 //!
 //! # The command
 //!
-//! `codex app-server` in the run's cwd, which speaks JSON-RPC over stdio, one message per line. It
-//! loads the user's `config.toml`, rules, `AGENTS.md` files, skills, hooks, plugins, and MCP
-//! servers, as `codex` in a terminal does. The driver sends `initialize` and
-//! `initialized`, then `thread/start`, or `thread/resume` with the earlier run's thread id
+//! `codex app-server`, which speaks JSON-RPC over stdio, one message per line. It loads the
+//! user's `config.toml`, rules, `AGENTS.md` files, skills, hooks, plugins, and MCP servers, as
+//! `codex` in a terminal does. Every thread on one login shares one app-server ([`Server`], 0060),
+//! started in the first thread's cwd, which sends `initialize` and `initialized` once. Each thread
+//! then sends `thread/start` with its own cwd, or `thread/resume` with the earlier run's thread id
 //! (`thread/fork` for a fork's first run, 0050), with the model, the context window as
 //! `model_context_window`, the thread's `plxd mcp --thread` server as dotted `mcp_servers.plxd.*`
 //! overrides that join the user's servers, its tools approved without asking (0041), fast mode as
@@ -17,8 +18,10 @@
 //! completed. A steer (PLX-370) is `turn/steer` with the running turn's id, which
 //! codex-cli 0.160.0 adds to that turn's input after its current item; if Codex refuses it, or no
 //! turn runs, it is the next turn instead. Once no turn, steer, or approval request is outstanding
-//! and plxd holds no message for it ([`Run::hold`](super::super::Run::hold)), stdin closes and
-//! app-server exits, which ends the run; `agent/send` then resumes the thread in a new run.
+//! and plxd no longer holds the thread ([`Run::hold`](super::super::Run::hold)), the thread sends
+//! `thread/unsubscribe`, which lets app-server unload it and stop its MCP servers, and the run
+//! ends; `agent/send` then resumes the thread in a new run. app-server exits once its last thread
+//! has left. If it exits first, every thread on it fails.
 //!
 //! # Approval requests
 //!
@@ -43,9 +46,8 @@
 //!
 //! # Cancel
 //!
-//! app-server ignores `SIGINT`, so cancel sends `SIGTERM`, which ends it at once, and kills the
-//! process group if it is still running after the grace period. The thread keeps what it had
-//! written, so a later run resumes it.
+//! Other threads share the process, so cancel sends `turn/interrupt` for the running turn and
+//! leaves the thread at once. The thread keeps what it had written, so a later run resumes it.
 
 #[cfg(all(test, unix))]
 mod tests;
@@ -53,18 +55,18 @@ mod translate;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tempfile::TempDir;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use self::translate::{Ask, Step, Translator, answer_response, refusal};
 use super::{CONFIG_DIR_ENV, CONTEXT_WINDOWS, PROGRAM, effort_level, write_images};
 use crate::backend::event::{Event, Failure, FailureKind, Outcome, WarningKind, exit_outcome};
 use crate::backend::process::{
-    CancelPolicy, Exit, Launcher, Output, Process, ProcessSpec, Signal, SpawnError, StdinMode,
-    write_lines,
+    Exit, Launcher, Output, Process, ProcessSpec, SpawnError, StdinMode, write_lines,
 };
 use crate::backend::{
     AgentPermission, Answer, ApprovalId, CancelSwitch, Credential, Decision, EVENT_BUFFER,
@@ -117,6 +119,7 @@ pub fn mode(
 pub(super) fn start(
     launcher: &Launcher,
     overrides: &Overrides,
+    servers: &Servers,
     request: RunRequest,
 ) -> Result<Started, StartError> {
     if request.prompt.is_empty() && request.images.is_empty() {
@@ -137,14 +140,10 @@ pub(super) fn start(
         .unzip();
 
     let home = overrides.config_home(&request.account.credential);
-    let mut process = launcher.spawn(&spec(launcher, overrides, &request.cwd, home.as_deref()))?;
+    let (server, inbox, key) = Server::join(launcher, overrides, servers, &request.cwd, home)?;
 
+    // A cancel interrupts this thread's turn on the shared app-server, not the process.
     let switch = CancelSwitch::new();
-    let policy = CancelPolicy {
-        signal: Signal::TERM,
-        ..CancelPolicy::default()
-    };
-    switch.arm(process.signals().clone(), policy);
     let (handle, control) = RunHandle::new(request.run_id, true, switch.clone());
     let (handle, answers) = handle.with_answers();
     let held = handle.held();
@@ -158,9 +157,13 @@ pub(super) fn start(
         input: input(&request.prompt, image_paths.as_deref().unwrap_or_default()),
         compact: is_compact(&request.prompt, &request.images),
     };
+    let ready = server.ready.subscribe();
     let driver = Driver {
-        stdin: Stdin::start(&mut process),
-        process,
+        server,
+        inbox,
+        key,
+        ready,
+        closing: false,
         control,
         answers,
         held,
@@ -171,7 +174,6 @@ pub(super) fn start(
         effort,
         thread: Some((thread_method, thread)),
         thread_id: None,
-        next_id: 0,
         requests: HashMap::new(),
         running: None,
         queued: VecDeque::from([first]),
@@ -322,49 +324,254 @@ struct Running {
 /// What one of plxd's requests was, to read its response.
 #[derive(Debug)]
 enum Request {
-    Initialize,
     Thread,
     Turn,
     /// A `turn/steer` with the message it carries, which becomes the next turn if Codex refuses.
     Steer(Turn),
 }
 
-/// Writes lines to app-server's stdin in order, off the driver's loop, so an app-server that
-/// stops reading can't keep the driver from reading its stdout. Dropping the queue closes stdin
-/// once what is queued is written.
-struct Stdin {
-    queue: Option<mpsc::UnboundedSender<String>>,
+/// The app-servers a backend's threads share, one per login's configuration folder (0060). A
+/// server lives while a thread holds it.
+pub(super) type Servers = Arc<Mutex<HashMap<Option<PathBuf>, Weak<Server>>>>;
+
+/// One `codex app-server` that every thread on a login shares, as T3 Code runs one per provider
+/// instance (0060). It sends `initialize` itself, and routes each line it reads to its thread:
+/// a response by its request's id, a notification or server request by its `threadId`. A
+/// notification for no thread, such as `account/rateLimits/updated`, goes to every thread. Once
+/// the last thread leaves, dropping it closes stdin, and app-server exits.
+pub(super) struct Server {
+    /// Writes lines to stdin in order, off the threads' loops, so an app-server that stops
+    /// reading can't keep a thread from reading.
+    stdin: mpsc::UnboundedSender<String>,
+    next_id: AtomicU64,
+    routes: Mutex<Routes>,
+    /// `initialize`'s answer, once it came: threads start once it's `Ok`.
+    ready: watch::Sender<Option<Result<(), String>>>,
+    /// app-server exited, so no new thread joins it.
+    dead: AtomicBool,
 }
 
-impl Stdin {
-    fn start(process: &mut Process) -> Self {
-        let Some(pipe) = process.take_stdin() else {
-            return Self { queue: None };
+/// Where a line goes.
+#[derive(Default)]
+struct Routes {
+    next_key: u64,
+    /// Each thread's inbox, by plxd's key for it.
+    inboxes: HashMap<u64, mpsc::UnboundedSender<Inbound>>,
+    /// Codex's thread ids, once `thread/start` answered.
+    native: HashMap<String, u64>,
+    /// Requests waiting for their answers.
+    requests: HashMap<u64, u64>,
+}
+
+/// What reaches a thread from its app-server.
+enum Inbound {
+    Line(Vec<u8>),
+    Oversized(usize),
+    /// app-server exited, as it did if it did.
+    Exited(Option<Exit>),
+}
+
+/// How a thread left its server.
+enum End {
+    /// It was done, or cancelled.
+    Left,
+    /// app-server exited, as it did if it could tell.
+    Exited(Option<Exit>),
+}
+
+/// `initialize`'s id: the first request a server sends.
+const INITIALIZE: u64 = 1;
+
+impl Server {
+    /// The running server for `home` in `servers`, or a new one started in `cwd`, with a new
+    /// thread's inbox and key.
+    fn join(
+        launcher: &Launcher,
+        overrides: &Overrides,
+        servers: &Servers,
+        cwd: &Path,
+        home: Option<PathBuf>,
+    ) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<Inbound>, u64), SpawnError> {
+        let mut servers = servers.lock().unwrap_or_else(PoisonError::into_inner);
+        servers.retain(|_, server| server.strong_count() > 0);
+        let live = servers
+            .get(&home)
+            .and_then(Weak::upgrade)
+            .filter(|server| !server.dead.load(Ordering::Acquire));
+        let server = if let Some(server) = live {
+            server
+        } else {
+            let server = Self::spawn(launcher, overrides, cwd, home.as_deref())?;
+            servers.insert(home, Arc::downgrade(&server));
+            server
         };
-        let (queue, lines) = mpsc::unbounded_channel();
-        tokio::spawn(write_lines(pipe, lines));
-        Self { queue: Some(queue) }
+        let (inbox, receiver) = mpsc::unbounded_channel();
+        let key = {
+            let mut routes = server.routes.lock().unwrap_or_else(PoisonError::into_inner);
+            routes.next_key += 1;
+            let key = routes.next_key;
+            routes.inboxes.insert(key, inbox);
+            key
+        };
+        Ok((server, receiver, key))
+    }
+
+    fn spawn(
+        launcher: &Launcher,
+        overrides: &Overrides,
+        cwd: &Path,
+        home: Option<&Path>,
+    ) -> Result<Arc<Self>, SpawnError> {
+        let mut process = launcher.spawn(&spec(launcher, overrides, cwd, home))?;
+        let (stdin, lines) = mpsc::unbounded_channel();
+        if let Some(pipe) = process.take_stdin() {
+            tokio::spawn(write_lines(pipe, lines));
+        }
+        let server = Arc::new(Self {
+            stdin,
+            next_id: AtomicU64::new(INITIALIZE),
+            routes: Mutex::default(),
+            ready: watch::Sender::new(None),
+            dead: AtomicBool::new(false),
+        });
+        server.send(
+            &json!({"id": INITIALIZE, "method": "initialize", "params": initialize_params()}),
+        );
+        tokio::spawn(read(Arc::downgrade(&server), process));
+        Ok(server)
     }
 
     fn send(&self, message: &Value) {
-        if let Some(queue) = &self.queue {
-            let _ = queue.send(format!("{message}\n"));
+        let _ = self.stdin.send(format!("{message}\n"));
+    }
+
+    /// Sends request `method` for thread `key`, whose answer goes to it, and returns its id.
+    /// With no `key`, nothing reads the answer.
+    fn request(&self, key: Option<u64>, method: &str, params: &Value) -> u64 {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+        if let Some(key) = key {
+            self.routes().requests.insert(id, key);
+        }
+        self.send(&json!({"id": id, "method": method, "params": params}));
+        id
+    }
+
+    /// Codex's thread `native` is thread `key`'s.
+    fn bind(&self, key: u64, native: String) {
+        self.routes().native.insert(native, key);
+    }
+
+    /// Thread `key` is done: lines for it are dropped from now on.
+    fn leave(&self, key: u64) {
+        let mut routes = self.routes();
+        routes.inboxes.remove(&key);
+        routes.native.retain(|_, owner| *owner != key);
+        routes.requests.retain(|_, owner| *owner != key);
+    }
+
+    fn routes(&self) -> std::sync::MutexGuard<'_, Routes> {
+        self.routes.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Sends `line` where it goes.
+    fn route(&self, line: Vec<u8>) {
+        let Ok(Value::Object(message)) = serde_json::from_slice::<Value>(&line) else {
+            // Every thread's translator warns about it.
+            return self.broadcast(|| Inbound::Line(line.clone()));
+        };
+        let thread = message
+            .get("params")
+            .and_then(|params| params.get("threadId"))
+            .and_then(Value::as_str);
+        let id = message.get("id");
+        let routes = self.routes();
+        let key = match (id, message.get("method"), thread) {
+            (Some(id), None, _) => {
+                let id = id.as_u64();
+                if id == Some(INITIALIZE) {
+                    drop(routes);
+                    return self.initialized(&message);
+                }
+                id.and_then(|id| routes.requests.get(&id).copied())
+            }
+            (_, Some(_), Some(thread)) => routes.native.get(thread).copied(),
+            // A server request for no thread gets one answer, from any thread.
+            (Some(_), Some(_), None) => routes.inboxes.keys().next().copied(),
+            (None, Some(_), None) => {
+                drop(routes);
+                return self.broadcast(|| Inbound::Line(line.clone()));
+            }
+            (None, None, _) => None,
+        };
+        if let Some(inbox) = key.and_then(|key| routes.inboxes.get(&key)) {
+            let _ = inbox.send(Inbound::Line(line));
         }
     }
 
-    fn close(&mut self) {
-        self.queue = None;
+    /// `initialize` answered: sends `initialized`, and lets the threads start.
+    fn initialized(&self, message: &Map<String, Value>) {
+        let ready = match message.get("error") {
+            None => {
+                self.send(&json!({"method": "initialized"}));
+                Ok(())
+            }
+            Some(error) => Err(error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("app-server refused to initialize")
+                .to_owned()),
+        };
+        self.ready.send_replace(Some(ready));
+    }
+
+    fn broadcast(&self, inbound: impl Fn() -> Inbound) {
+        for inbox in self.routes().inboxes.values() {
+            let _ = inbox.send(inbound());
+        }
     }
 }
 
-/// One thread's app-server: forwards its events, runs its turns one at a time, relays approval
-/// requests, and decides the outcome when it exits.
+/// Reads `process`'s output for `server` until it exits, then tells every thread.
+async fn read(server: Weak<Server>, mut process: Process) {
+    loop {
+        let output = process.next().await;
+        let Some(server) = server.upgrade() else {
+            // The last thread left; app-server exits once stdin closes.
+            if matches!(output, Some(Output::Exited(_)) | None) {
+                return;
+            }
+            continue;
+        };
+        match output {
+            Some(Output::Line(line)) => server.route(line),
+            Some(Output::Oversized { bytes }) => server.broadcast(|| Inbound::Oversized(bytes)),
+            exited => {
+                server.dead.store(true, Ordering::Release);
+                let exit = match exited {
+                    Some(Output::Exited(exit)) => Some(exit),
+                    _ => None,
+                };
+                server.broadcast(|| Inbound::Exited(exit.clone()));
+                return;
+            }
+        }
+    }
+}
+
+/// One thread on its shared app-server: forwards its events, runs its turns one at a time,
+/// relays approval requests, and decides the outcome when it leaves.
 struct Driver {
-    process: Process,
-    stdin: Stdin,
+    server: Arc<Server>,
+    /// The lines app-server sends this thread.
+    inbox: mpsc::UnboundedReceiver<Inbound>,
+    /// The server's key for this thread.
+    key: u64,
+    ready: watch::Receiver<Option<Result<(), String>>>,
+    /// The thread is done: it leaves its server.
+    closing: bool,
     control: mpsc::UnboundedReceiver<FollowUp>,
     answers: mpsc::UnboundedReceiver<Answer>,
-    /// While held, plxd has a message waiting for Codex, so stdin stays open (PLX-370).
+    /// While held, plxd keeps the thread loaded for its next turn (0060).
     held: Held,
     sink: EventSink,
     switch: CancelSwitch,
@@ -375,7 +582,6 @@ struct Driver {
     thread: Option<(&'static str, Value)>,
     /// Codex's thread id, once `thread/start` or `thread/resume` answered.
     thread_id: Option<String>,
-    next_id: u64,
     requests: HashMap<u64, Request>,
     /// The turn Codex is running.
     running: Option<Running>,
@@ -401,28 +607,39 @@ impl Driver {
         if let Some(turn_id) = first {
             self.emit(Event::TurnStarted { turn_id }).await;
         }
-        self.request(Request::Initialize, "initialize", &initialize_params());
+        self.on_ready();
         let mut control_open = true;
         let mut answers_open = true;
         let exit = loop {
             tokio::select! {
                 biased;
-                output = self.process.next() => match output {
-                    Some(Output::Line(line)) => {
+                inbound = self.inbox.recv() => match inbound {
+                    Some(Inbound::Line(line)) => {
                         for step in self.translator.line(&line) {
                             self.apply(step).await;
                         }
                     }
-                    Some(Output::Oversized { bytes }) => {
+                    Some(Inbound::Oversized(bytes)) => {
                         self.emit(Event::Warning {
                             warning: WarningKind::OversizedLine,
                             detail: format!("skipped a {bytes}-byte line"),
                         })
                         .await;
                     }
-                    Some(Output::Exited(exit)) => break Some(exit),
-                    None => break None,
+                    Some(Inbound::Exited(exit)) => break End::Exited(exit),
+                    None => break End::Exited(None),
                 },
+                changed = self.ready.changed(), if self.thread.is_some() => {
+                    if changed.is_err() {
+                        self.fail_to_start("Codex's app-server went away".into());
+                    } else {
+                        self.on_ready();
+                    }
+                }
+                () = self.switch.cancelled(), if !self.closing => {
+                    self.interrupt();
+                    self.closing = true;
+                }
                 // Answers before follow-ups: Codex is waiting on them.
                 answer = self.answers.recv(), if answers_open => match answer {
                     Some(answer) => self.answer(&answer),
@@ -434,13 +651,15 @@ impl Driver {
                 },
                 () = self.sink.closed(), if !self.switch.is_cancelled() => {
                     self.switch.cancel();
-                    self.stdin.close();
-                    self.control.close();
                 }
                 () = self.held.changed() => {}
             }
             self.close_when_idle();
+            if self.closing {
+                break End::Left;
+            }
         };
+        self.leave(matches!(exit, End::Exited(_)));
         self.drop_undelivered().await;
         for approval_id in std::mem::take(&mut self.asks).into_keys() {
             self.emit(Event::ApprovalWithdrawn { approval_id }).await;
@@ -451,10 +670,49 @@ impl Driver {
     }
 
     fn request(&mut self, kind: Request, method: &str, params: &Value) {
-        self.next_id += 1;
-        self.requests.insert(self.next_id, kind);
-        self.stdin
-            .send(&json!({"id": self.next_id, "method": method, "params": params}));
+        let id = self.server.request(Some(self.key), method, params);
+        self.requests.insert(id, kind);
+    }
+
+    /// Starts the thread once its server is initialized, or fails it if the server refused.
+    fn on_ready(&mut self) {
+        let ready = self.ready.borrow_and_update().clone();
+        match ready {
+            Some(Ok(())) => {
+                if let Some((method, params)) = self.thread.take() {
+                    self.request(Request::Thread, method, &params);
+                }
+            }
+            Some(Err(message)) => {
+                self.thread = None;
+                self.fail_to_start(message);
+            }
+            None => {}
+        }
+    }
+
+    /// A cancel: interrupts the running turn, which the thread leaves next.
+    fn interrupt(&mut self) {
+        if let (Some(thread_id), Some(turn_id)) = (
+            &self.thread_id,
+            self.running
+                .as_ref()
+                .and_then(|running| running.codex_id.as_ref()),
+        ) {
+            let params = json!({"threadId": thread_id, "turnId": turn_id});
+            self.server.request(None, "turn/interrupt", &params);
+        }
+    }
+
+    /// Leaves the server: unloads the thread with `thread/unsubscribe` unless app-server
+    /// `exited`, which stops its MCP servers (0060).
+    fn leave(&mut self, exited: bool) {
+        self.control.close();
+        self.server.leave(self.key);
+        if !exited && let Some(thread_id) = &self.thread_id {
+            let params = json!({"threadId": thread_id});
+            self.server.request(None, "thread/unsubscribe", &params);
+        }
     }
 
     async fn apply(&mut self, step: Step) {
@@ -483,7 +741,7 @@ impl Driver {
                         interrupt: false,
                     };
                     let result = answer_response(&ask, &deny);
-                    self.stdin.send(&json!({"id": ask.id, "result": result}));
+                    self.server.send(&json!({"id": ask.id, "result": result}));
                 }
             }
             Step::Resolved(id) => {
@@ -498,7 +756,7 @@ impl Driver {
                 }
             }
             Step::Refuse { id, message } => {
-                self.stdin
+                self.server
                     .send(&json!({"id": id, "error": refusal(&message)}));
             }
         }
@@ -510,12 +768,6 @@ impl Driver {
             return;
         };
         match (kind, result) {
-            (Request::Initialize, Ok(_)) => {
-                self.stdin.send(&json!({"method": "initialized"}));
-                if let Some((method, params)) = self.thread.take() {
-                    self.request(Request::Thread, method, &params);
-                }
-            }
             (Request::Thread, Ok(result)) => {
                 let thread_id = result
                     .pointer("/thread/id")
@@ -535,10 +787,11 @@ impl Driver {
                     api_key_source: None,
                 })
                 .await;
+                self.server.bind(self.key, thread_id.clone());
                 self.thread_id = Some(thread_id);
                 self.next_turn().await;
             }
-            (Request::Initialize | Request::Thread, Err(message)) => self.fail_to_start(message),
+            (Request::Thread, Err(message)) => self.fail_to_start(message),
             (Request::Turn, Ok(result)) => {
                 if let Some(running) = &mut self.running {
                     running.codex_id = result
@@ -560,7 +813,13 @@ impl Driver {
                     // The turn it joined has already completed.
                     (_, turn_id) => {
                         let result = None;
-                        self.emit(Event::TurnFinished { turn_id, result }).await;
+                        let failed = false;
+                        self.emit(Event::TurnFinished {
+                            turn_id,
+                            result,
+                            failed,
+                        })
+                        .await;
                     }
                 }
             }
@@ -578,23 +837,33 @@ impl Driver {
 
     /// Ends the running turn, and the turns of the messages steered into it, with `result`.
     async fn finish_running(&mut self, result: Option<String>) {
+        let failed = self.failure.is_some();
         let Some(running) = self.running.take() else {
             let turn_id = None;
-            self.emit(Event::TurnFinished { turn_id, result }).await;
+            self.emit(Event::TurnFinished {
+                turn_id,
+                result,
+                failed,
+            })
+            .await;
             return;
         };
         let turns = std::iter::once(running.turn_id).chain(running.steered.into_iter().map(Some));
         for turn_id in turns {
             let result = result.clone();
-            self.emit(Event::TurnFinished { turn_id, result }).await;
+            self.emit(Event::TurnFinished {
+                turn_id,
+                result,
+                failed,
+            })
+            .await;
         }
     }
 
-    /// The thread couldn't start, so no turn runs: the run fails and app-server exits.
+    /// The thread couldn't start, so no turn runs: the run fails and leaves its server.
     fn fail_to_start(&mut self, message: String) {
         self.failure = Some(Failure::new(super::classify(&message), message));
-        self.stdin.close();
-        self.control.close();
+        self.closing = true;
     }
 
     /// Starts the next queued turn, if the thread is ready and no turn is running.
@@ -678,11 +947,11 @@ impl Driver {
             return;
         };
         let result = answer_response(&ask, &answer.decision);
-        self.stdin.send(&json!({"id": ask.id, "result": result}));
+        self.server.send(&json!({"id": ask.id, "result": result}));
     }
 
-    /// Closes stdin once no turn runs or waits, no steer or request waits on an answer, and plxd
-    /// holds no message for Codex, so app-server exits.
+    /// Leaves the server once no turn runs or waits, no steer or request waits on an answer, and
+    /// plxd no longer holds the thread (0060).
     fn close_when_idle(&mut self) {
         let started = self.thread_id.is_some();
         let steering = self
@@ -697,8 +966,7 @@ impl Driver {
             && self.control.is_empty()
             && !self.held.now()
         {
-            self.stdin.close();
-            self.control.close();
+            self.closing = true;
         }
     }
 
@@ -732,18 +1000,38 @@ impl Driver {
         }
     }
 
-    fn outcome(&mut self, exit: Option<Exit>) -> Outcome {
+    /// How the thread ended, from how it left its server.
+    fn outcome(&mut self, end: End) -> Outcome {
         if self.switch.is_cancelled() {
             return Outcome::Cancelled;
         }
+        let exited = match end {
+            End::Left => None,
+            End::Exited(exit) => Some(exit),
+        };
+        let exit = exited.clone().flatten();
         if let Some(failure) = self.failure.take() {
             return failure.ended(exit.as_ref());
         }
-        let Some(exit) = exit else {
+        let done = self.turns_done > 0 && self.running.is_none();
+        let Some(exited) = exited else {
+            return if done {
+                Outcome::Completed {
+                    result: self.last_result.take(),
+                }
+            } else {
+                Failure::new(
+                    FailureKind::VendorError,
+                    "Codex left a turn unfinished".into(),
+                )
+                .ended(None)
+            };
+        };
+        let Some(exit) = exited else {
             return Failure::new(FailureKind::Internal, "lost track of the process".into())
                 .ended(None);
         };
-        if exit.info.success() && self.turns_done > 0 && self.running.is_none() {
+        if exit.info.success() && done {
             return Outcome::Completed {
                 result: self.last_result.take(),
             };

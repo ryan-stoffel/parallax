@@ -16,7 +16,7 @@ pub struct HostHealthResult {
     pub uptime_seconds: u64,
     /// Whether plxd can read and write its project store.
     pub store: StoreState,
-    /// Agents running on this host. Always 0 before M3.
+    /// Agents with a turn running on this host. An idle session (0060) doesn't count.
     pub running_agents: u32,
     /// How busy the store's job queue is (PLX-445). An older plxd leaves it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]

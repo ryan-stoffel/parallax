@@ -126,6 +126,32 @@ fn decide_changes_only_what_differs() {
     assert_eq!(kind(&missing), ErrorKind::ThreadNotFound);
 }
 
+/// Archive and settle release the thread's live session through `provider-session.detach`
+/// (0060); unarchiving and unsettling don't.
+#[test]
+fn archive_and_settle_detach_the_session() {
+    let id = Uuid::now_v7();
+    let row = thread_row(None, false, false);
+    assert_eq!(
+        decide(id, Action::Archive(true), rows(Some(row.clone()))),
+        Ok(Decision {
+            changes: vec![Change::Archive(true)],
+            effects: vec![Effect::SessionDetach],
+        })
+    );
+    let settle = ThreadUpdate {
+        settled: Some(true),
+        ..ThreadUpdate::default()
+    };
+    assert_eq!(
+        decide(id, Action::Update(settle.clone()), rows(Some(row))),
+        Ok(Decision {
+            changes: vec![Change::Update(settle)],
+            effects: vec![Effect::SessionDetach],
+        })
+    );
+}
+
 /// `project.delete` waits for the Project's runs and, once none is left, removes the row and
 /// enqueues its cleanup.
 #[test]

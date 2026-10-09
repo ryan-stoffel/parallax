@@ -343,14 +343,16 @@ async fn the_stream_becomes_events_the_app_draws() {
             &Event::TurnStarted { turn_id: first },
             &Event::TurnFinished {
                 turn_id: first,
-                result: Some("done".into())
+                result: Some("done".into()),
+                failed: false,
             },
             &Event::TurnStarted {
                 turn_id: Some(follow_up.turn_id)
             },
             &Event::TurnFinished {
                 turn_id: Some(follow_up.turn_id),
-                result: Some("Also done.".into())
+                result: Some("Also done.".into()),
+                failed: false,
             },
         ]
     );
@@ -449,7 +451,8 @@ async fn an_approved_plan_is_built_in_the_same_turn() {
             &Event::TurnStarted { turn_id: turn },
             &Event::TurnFinished {
                 turn_id: turn,
-                result: Some("Added CONTRIBUTING.md.".into())
+                result: Some("Added CONTRIBUTING.md.".into()),
+                failed: false,
             },
         ],
         "the build goes on as the plan's turn"
@@ -484,7 +487,8 @@ async fn a_denied_plan_is_rejected_with_the_users_reason_and_keeps_planning() {
             &Event::TurnStarted { turn_id: turn },
             &Event::TurnFinished {
                 turn_id: turn,
-                result: Some("Planning three sections instead.".into())
+                result: Some("Planning three sections instead.".into()),
+                failed: false,
             },
         ]
     );
@@ -784,14 +788,16 @@ async fn a_steer_cancels_the_running_turn_and_goes_next() {
             &Event::TurnStarted { turn_id: first },
             &Event::TurnFinished {
                 turn_id: first,
-                result: None
+                result: None,
+                failed: false,
             },
             &Event::TurnStarted {
                 turn_id: Some(steer)
             },
             &Event::TurnFinished {
                 turn_id: Some(steer),
-                result: Some("BANANA".into())
+                result: Some("BANANA".into()),
+                failed: false,
             },
         ]
     );

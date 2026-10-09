@@ -56,9 +56,11 @@ const PROJECT_CLEANUP: &str = "project.cleanup";
 const THREAD_WAKE: &str = "thread.wake";
 const DELEGATED_TASKS_STOP: &str = "delegated-tasks.stop";
 const SETTLE_SCRIPT: &str = "settle-script.run";
+const SESSION_DETACH: &str = "provider-session.detach";
 
 /// Effect kinds that may run again after a restart, since each does only what is left to do.
-/// [`recover`] cancels an open effect of any other kind.
+/// [`recover`] cancels an open effect of any other kind, such as `provider-session.detach`,
+/// whose session a restart ended.
 const REPLAY_SAFE: &[&str] = &[
     THREAD_CLEANUP,
     PROJECT_CLEANUP,
@@ -318,6 +320,9 @@ enum Effect {
     /// A thread settled: its repository's settle script runs in its worktree (PLX-650).
     #[serde(rename = "settle-script.run")]
     SettleScript,
+    /// Archive's and settle's release of the thread's live session (0060).
+    #[serde(rename = "provider-session.detach")]
+    SessionDetach,
 }
 
 impl Effect {
@@ -328,6 +333,7 @@ impl Effect {
             Self::Wake(_) => THREAD_WAKE,
             Self::DelegatedTasksStop { .. } => DELEGATED_TASKS_STOP,
             Self::SettleScript => SETTLE_SCRIPT,
+            Self::SessionDetach => SESSION_DETACH,
         }
     }
 }
@@ -510,6 +516,7 @@ fn read(db: &Tx, thread: Uuid, action: &Action) -> Result<Rows, ErrorObject> {
 }
 
 /// Decides what `action` does to `thread`, from `rows` alone.
+#[expect(clippy::too_many_lines, reason = "one arm per command")]
 fn decide(thread: Uuid, action: Action, rows: Rows) -> Result<Decision, Refusal> {
     let rejected = |kind, message: String| Refusal::Rejected(ErrorObject::parallax(kind, message));
     let thread_not_found = || {
@@ -544,7 +551,10 @@ fn decide(thread: Uuid, action: Action, rows: Rows) -> Result<Decision, Refusal>
             if row.archived == archived {
                 return Ok(Decision::default());
             }
-            Ok(change(Change::Archive(archived)))
+            Ok(Decision {
+                changes: vec![Change::Archive(archived)],
+                effects: detach(archived),
+            })
         }
         Action::Update(update) => {
             let row = rows.thread.thread.ok_or_else(thread_not_found)?;
@@ -561,7 +571,9 @@ fn decide(thread: Uuid, action: Action, rows: Rows) -> Result<Decision, Refusal>
             }
             let settled = update.settled == Some(true);
             let mut decision = change(Change::Update(update));
-            // A thread that settles runs its settle script (PLX-650).
+            // A thread that settles releases its session (0060) and runs its settle script
+            // (PLX-650).
+            decision.effects.extend(detach(settled));
             decision
                 .effects
                 .extend(settled.then_some(Effect::SettleScript));
@@ -610,6 +622,15 @@ fn decide(thread: Uuid, action: Action, rows: Rows) -> Result<Decision, Refusal>
                 effects: vec![Effect::ProjectCleanup { repo_path }],
             })
         }
+    }
+}
+
+/// The `provider-session.detach` effect when `release`, as T3 Code's archive and settle enqueue.
+fn detach(release: bool) -> Vec<Effect> {
+    if release {
+        vec![Effect::SessionDetach]
+    } else {
+        Vec::new()
     }
 }
 
@@ -906,6 +927,11 @@ async fn perform(
         }
         Effect::SettleScript => {
             crate::setup_scripts::settled(daemon, thread).await;
+            Ok(())
+        }
+        Effect::SessionDetach => {
+            let run_id = RunId::try_from(thread).map_err(|_| (corrupt(thread).message, true))?;
+            crate::agents::detach(daemon, run_id).await;
             Ok(())
         }
         Effect::DelegatedTasksStop { children } => {

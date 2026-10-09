@@ -195,7 +195,7 @@ impl Agents {
         self.resume_timing
     }
 
-    /// How many runs have a CLI running, for `host/health`.
+    /// How many runs have a turn running, for `host/health`. An idle session doesn't count.
     pub fn running(&self) -> u32 {
         self.running.load(Ordering::Relaxed)
     }
@@ -1517,6 +1517,14 @@ pub(crate) async fn deliver_queued(daemon: &Arc<Daemon>) {
         if let Err(error) = actor_for(daemon, id).await {
             warn!(run = %id, error = %error.message, "could not send a run's waiting messages");
         }
+    }
+}
+
+/// `provider-session.detach` (0060): releases run `id`'s live session. A run with no actor has
+/// none.
+pub(crate) async fn detach(daemon: &Daemon, id: RunId) {
+    if let Some(actor) = daemon.agents.actor(id) {
+        let _ = actor.send(Command::Detach).await;
     }
 }
 

@@ -905,7 +905,7 @@ export type HostHealthResult = {
 	 */
 	store: StoreState,
 	/**
-	 * Agents running on this host. Always 0 before M3.
+	 * Agents with a turn running on this host. An idle session (0060) doesn't count.
 	 */
 	runningAgents: number,
 	/**

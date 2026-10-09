@@ -1536,7 +1536,13 @@ impl Driver {
                             self.emit(Event::TurnStarted { turn_id }).await;
                         }
                         let result = done.result.clone();
-                        self.emit(Event::TurnFinished { turn_id, result }).await;
+                        let failed = self.translator.last_failure.is_some();
+                        self.emit(Event::TurnFinished {
+                            turn_id,
+                            result,
+                            failed,
+                        })
+                        .await;
                     }
                 }
                 Step::Violation(failure) => {

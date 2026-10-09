@@ -129,6 +129,9 @@ pub enum Event {
         /// The turn's final text, when the vendor reports one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         result: Option<String>,
+        /// The turn failed. Its session then ends, and [`Event::Finished`] carries why (0060).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        failed: bool,
     },
     /// A follow-up that [`Run::send`](super::Run::send) accepted never reached the CLI, because
     /// the run ended first. The caller can send it again in a run that resumes this session.

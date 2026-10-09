@@ -769,7 +769,13 @@ impl Driver {
                 if let Request::Prompt(prompt) = &request {
                     let result = None;
                     let turn_id = prompt.turn_id;
-                    self.emit(Event::TurnFinished { turn_id, result }).await;
+                    let failed = true;
+                    self.emit(Event::TurnFinished {
+                        turn_id,
+                        result,
+                        failed,
+                    })
+                    .await;
                 }
                 self.failure = Some(Failure::new(classify(&message), message));
                 self.in_flight = None;
@@ -820,7 +826,13 @@ impl Driver {
                 let result = self.translator.take_text();
                 self.last_result.clone_from(&result);
                 let turn_id = prompt.turn_id;
-                self.emit(Event::TurnFinished { turn_id, result }).await;
+                let failed = false;
+                self.emit(Event::TurnFinished {
+                    turn_id,
+                    result,
+                    failed,
+                })
+                .await;
             }
         }
     }
