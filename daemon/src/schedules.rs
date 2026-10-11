@@ -1108,7 +1108,10 @@ async fn scrub_backup(daemon: &Daemon) -> bool {
         let copied = conn.execute("VACUUM INTO ?1", [rebuilt.to_string_lossy()]);
         drop(conn);
         let replaced = copied.map_err(Failure::from).and_then(|_| {
-            std::fs::File::open(&rebuilt)?.sync_all()?;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&rebuilt)?
+                .sync_all()?;
             std::fs::rename(&rebuilt, &path)?;
             Ok(())
         });
