@@ -21,6 +21,7 @@
 mod webhook;
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -72,6 +73,9 @@ pub(crate) struct Schedules {
     /// Read while a webhook request reads its task's key and then the key's value, and written
     /// to remove a key, so a save that replaces a key never removes it between the two.
     keys: tokio::sync::RwLock<()>,
+    /// Held from staging a new key until the row that names it commits, and while
+    /// [`forget_unused`] removes keys no row names, so it never removes one being staged.
+    staging: tokio::sync::Mutex<()>,
 }
 
 impl Schedules {
@@ -215,8 +219,9 @@ pub(crate) async fn save(
             build(id, checked, existing, new_key, Timestamp::now()).map(|_| legacy)
         })
         .await?;
+    let staging = daemon.schedules.staging.lock().await;
     if let (Some(key), Some(secret)) = (new_key, new_secret(daemon, &mut params).await?) {
-        set_secret(daemon, key, secret).await?;
+        stage_secret(daemon, key, secret).await?;
     }
     let saved = daemon
         .store
@@ -232,13 +237,19 @@ pub(crate) async fn save(
                 db.set_secure_delete(true).map_err(|e| store_error(&e))?;
             }
             put(db, &stored)?;
+            let old_key = old_key.filter(|old| stored.secret_key != Some(*old));
+            change_unused(db, |keys| {
+                keys.retain(|key| Some(*key) != new_key);
+                keys.extend(old_key);
+            })?;
             Ok((stored, old_key))
         })
         .await;
+    drop(staging);
     // Whichever key the row doesn't name goes: the new one if the row failed, else the old.
     let stored = match saved {
         Ok((stored, old_key)) => {
-            if let Some(old_key) = old_key.filter(|old| stored.secret_key != Some(*old)) {
+            if let Some(old_key) = old_key {
                 forget_secret(daemon, old_key).await;
             }
             stored
@@ -258,12 +269,20 @@ pub(crate) async fn save(
     Ok(shown(stored, origin(daemon).await.as_deref()))
 }
 
-/// Keeps `secret` in the keystore under the new `key`.
-async fn set_secret(
+/// Keeps `secret` in the keystore under the new `key`, recorded as unused first, so a crash
+/// before a task's row names it leaves the record for [`forget_unused`]. The caller holds
+/// [`Schedules::staging`] until the row that names it commits and drops the record.
+async fn stage_secret(
     daemon: &Daemon,
     key: AccountId,
     secret: Zeroizing<String>,
 ) -> Result<(), ErrorObject> {
+    daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            change_unused(db, |keys| keys.push(key))
+        })
+        .await?;
     let keys = Arc::clone(&daemon.keys);
     tokio::task::spawn_blocking(move || keys.set(key, &secret))
         .await
@@ -271,67 +290,77 @@ async fn set_secret(
         .map_err(|error| crate::methods::keychain_error(&error))
 }
 
-/// Removes keystore entry `key`, which no task's row names. One that can't be removed now is
-/// recorded, for [`forget_unused`] to remove later.
+/// Removes keystore entry `key`, which is recorded as unused, and then its record. One that can't
+/// be removed now stays recorded, for [`forget_unused`].
 async fn forget_secret(daemon: &Daemon, key: AccountId) {
     if !delete_secret(daemon, key).await {
         warn!(%key, "could not remove an unused webhook secret from the keystore");
-        let recorded = update_unused(daemon, move |keys| {
-            if !keys.contains(&key) {
-                keys.push(key);
-            }
+        return;
+    }
+    let dropped = daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            change_unused(db, |keys| keys.retain(|recorded| *recorded != key))
         })
         .await;
-        if let Err(error) = recorded {
-            warn!(%key, error = %error.message, "could not record an unused webhook secret");
-        }
+    if let Err(error) = dropped {
+        warn!(%key, error = %error.message, "could not drop a removed webhook secret's record");
     }
 }
 
-/// Removes the recorded keystore entries [`forget_secret`] couldn't, keeping those that still
-/// fail. Runs at startup and after each save.
+/// Removes the keystore entries recorded as unused that no task's row names: one a save staged
+/// before a crash, or one [`forget_secret`] couldn't remove. Runs at startup and after each save.
 async fn forget_unused(daemon: &Daemon) {
+    let _staging = daemon.schedules.staging.lock().await;
     let recorded = daemon
         .reader
         .run(&CancellationToken::new(), |db| {
-            db.unused_secret_keys().map_err(|e| store_error(&e))
+            let used: Vec<AccountId> = db
+                .scheduled_tasks()
+                .map_err(|e| store_error(&e))?
+                .into_iter()
+                .filter_map(|(_, payload)| {
+                    serde_json::from_str::<Stored>(&payload).ok()?.secret_key
+                })
+                .collect();
+            Ok((unused(db)?, used))
         })
         .await;
-    let Ok(Some(recorded)) = recorded else {
+    let Ok((recorded, used)) = recorded else {
         return;
     };
-    let mut removed = Vec::new();
-    for key in serde_json::from_str::<Vec<AccountId>>(&recorded).unwrap_or_default() {
-        if delete_secret(daemon, key).await {
-            removed.push(key);
+    let mut dropped = Vec::new();
+    for key in recorded {
+        if used.contains(&key) || delete_secret(daemon, key).await {
+            dropped.push(key);
         }
     }
-    if !removed.is_empty() {
-        let _ = update_unused(daemon, move |keys| {
-            keys.retain(|key| !removed.contains(key));
-        })
-        .await;
+    if !dropped.is_empty() {
+        let _ = daemon
+            .store
+            .run(&CancellationToken::new(), move |db| {
+                change_unused(db, |keys| keys.retain(|key| !dropped.contains(key)))
+            })
+            .await;
     }
 }
 
-/// Changes the recorded unused keystore entries with `change`, in one store job.
-async fn update_unused(
-    daemon: &Daemon,
-    change: impl FnOnce(&mut Vec<AccountId>) + Send + 'static,
-) -> Result<(), ErrorObject> {
-    daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            let stored = db.unused_secret_keys().map_err(|e| store_error(&e))?;
-            let mut keys: Vec<AccountId> = stored
-                .and_then(|stored| serde_json::from_str(&stored).ok())
-                .unwrap_or_default();
-            change(&mut keys);
-            let json = serde_json::to_string(&keys).map_err(ErrorObject::internal_error)?;
-            db.set_unused_secret_keys((!keys.is_empty()).then_some(json.as_str()))
-                .map_err(|e| store_error(&e))
-        })
-        .await
+/// The keystore entries recorded as unused.
+fn unused(db: &Tx) -> Result<Vec<AccountId>, ErrorObject> {
+    Ok(db
+        .unused_secret_keys()
+        .map_err(|e| store_error(&e))?
+        .and_then(|stored| serde_json::from_str(&stored).ok())
+        .unwrap_or_default())
+}
+
+/// Changes the keystore entries recorded as unused with `change`, in the caller's job.
+fn change_unused(db: &Tx, change: impl FnOnce(&mut Vec<AccountId>)) -> Result<(), ErrorObject> {
+    let mut keys = unused(db)?;
+    change(&mut keys);
+    let json = serde_json::to_string(&keys).map_err(ErrorObject::internal_error)?;
+    db.set_unused_secret_keys((!keys.is_empty()).then_some(json.as_str()))
+        .map_err(|e| store_error(&e))
 }
 
 /// Removes keystore entry `key` once no webhook request is between reading it from a row and
@@ -357,6 +386,7 @@ pub(crate) async fn delete(
         .run(&CancellationToken::new(), move |db| {
             let key = read(db, id)?.and_then(|stored| stored.secret_key);
             let deleted = db.delete_scheduled_task(id).map_err(|e| store_error(&e))?;
+            change_unused(db, |keys| keys.extend(key))?;
             Ok((deleted, key))
         })
         .await?;
@@ -997,7 +1027,8 @@ async fn move_old_secrets(daemon: &Daemon) {
             continue;
         }
         let key = AccountId::generate();
-        if let Err(error) = set_secret(daemon, key, Zeroizing::new(secret)).await {
+        let staging = daemon.schedules.staging.lock().await;
+        if let Err(error) = stage_secret(daemon, key, Zeroizing::new(secret)).await {
             warn!(%id, error = %error.message, "could not move a webhook secret to the keystore");
             continue;
         }
@@ -1006,9 +1037,11 @@ async fn move_old_secrets(daemon: &Daemon) {
             .store
             .run(&CancellationToken::new(), move |db| {
                 db.set_secure_delete(true).map_err(|e| store_error(&e))?;
-                put(db, &stored)
+                put(db, &stored)?;
+                change_unused(db, |keys| keys.retain(|staged| *staged != key))
             })
             .await;
+        drop(staging);
         if let Err(error) = saved {
             forget_secret(daemon, key).await;
             warn!(%id, error = %error.message, "could not wipe an old webhook secret from the store");
@@ -1017,7 +1050,7 @@ async fn move_old_secrets(daemon: &Daemon) {
         }
     }
     let wiped = (moved || pending) && wipe_store(daemon).await;
-    if wiped && pending {
+    if wiped && pending && scrub_backup(daemon).await {
         let cleared = daemon
             .store
             .run(&CancellationToken::new(), |db| {
@@ -1028,6 +1061,47 @@ async fn move_old_secrets(daemon: &Daemon) {
             warn!(error = %error.message, "could not record that the store was wiped");
         }
     }
+}
+
+/// The copy of the store migration 41 made (`<database>.pre-41`), which, from a store at 40, kept
+/// its webhook secrets in task rows: it loses them, once, with the wipe. `VACUUM INTO` wrote it,
+/// so it has no freed page or WAL to wipe, and `secure_delete` zeroes the old cells. A rollback
+/// to it then needs its signed webhooks' secrets entered again (0063). Whether it's done, as
+/// with no copy.
+async fn scrub_backup(daemon: &Daemon) -> bool {
+    let mut path = daemon.data_dir.store_file().into_os_string();
+    path.push(".pre-41");
+    let scrubbed = tokio::task::spawn_blocking(move || -> Result<(), rusqlite::Error> {
+        if !Path::new(&path).exists() {
+            return Ok(());
+        }
+        let conn = rusqlite::Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+        )?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+        // A copy made at 39 has no tasks.
+        let tasks: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'scheduled_tasks')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !tasks {
+            return Ok(());
+        }
+        conn.execute_batch(
+            "PRAGMA secure_delete = ON;
+             UPDATE scheduled_tasks SET payload = json_remove(payload, '$.secret')
+                 WHERE json_extract(payload, '$.secret') IS NOT NULL;
+             PRAGMA wal_checkpoint(TRUNCATE);",
+        )
+    })
+    .await;
+    let scrubbed = matches!(scrubbed, Ok(Ok(())));
+    if !scrubbed {
+        warn!("could not remove legacy webhook secrets from the store's pre-41 copy");
+    }
+    scrubbed
 }
 
 /// Rebuilds the database to remove old freed pages and truncates its WAL, after migrating or

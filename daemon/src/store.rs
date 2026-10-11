@@ -56,6 +56,11 @@ const CANCELLED: u8 = 2;
 
 type Job = Box<dyn FnOnce(&mut Tx) + Send>;
 
+/// How long a test holds [`StoreHandle::vacuum`]'s job on the store's thread before it runs, so
+/// a write can arrive while it does.
+#[cfg(test)]
+pub(crate) static VACUUM_HOLD_MS: AtomicU64 = AtomicU64::new(0);
+
 enum Message {
     /// A job and when it was sent.
     Job(Instant, Job),
@@ -557,6 +562,10 @@ impl StoreHandle {
         };
         let (reply, result) = oneshot::channel();
         let job: Job = Box::new(move |tx| {
+            #[cfg(test)]
+            std::thread::sleep(Duration::from_millis(
+                VACUUM_HOLD_MS.load(Ordering::Relaxed),
+            ));
             let _ = reply.send(tx.store.vacuum().map_err(|error| failed(&error)));
         });
         self.counters.sending();

@@ -123,6 +123,16 @@ impl Store {
         Ok(())
     }
 
+    /// Sets how long this connection waits for another's lock before failing with `busy`.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_busy_timeout(&self, timeout: Duration) -> Result<(), StoreError> {
+        self.conn.busy_timeout(timeout)?;
+        Ok(())
+    }
+
     /// Rebuilds the database with `VACUUM`, which leaves no freed page behind, then checkpoints
     /// the WAL and truncates it. Returns whether the checkpoint finished: a reader still on an
     /// older snapshot stops it.

@@ -693,40 +693,38 @@ async fn validation_and_transient_read_errors_preserve_a_secret_ref() {
     );
 }
 
-/// The wipe runs on the store's thread, so a write made while it rebuilds a large store waits for
-/// it and succeeds, where a wipe on its own connection held the lock past the writer's 5 s busy
-/// timeout.
+/// The wipe runs on the store's thread, so a write made while it runs waits for it and succeeds.
+/// Held there 500 ms against a 200 ms busy timeout, a wipe on a connection of its own would fail
+/// the write, as one did on a 1 GB store.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_write_during_the_wipe_of_a_large_store_succeeds() {
-    const GIB_IN_MIB: u32 = 1024;
+async fn a_write_during_the_wipe_waits_and_succeeds() {
+    use std::sync::atomic::Ordering::Relaxed;
     let dir = tempfile::tempdir().unwrap();
-    {
-        let conn = rusqlite::Connection::open(dir.path().join("plxd.sqlite3")).unwrap();
-        conn.execute_batch(&format!(
-            "CREATE TABLE bulk (b BLOB);
-             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < {GIB_IN_MIB})
-             INSERT INTO bulk SELECT randomblob(1048576) FROM n;"
-        ))
-        .unwrap();
-    }
     let daemon = daemon(dir.path());
     daemon
         .store
         .run(&CancellationToken::new(), |db| {
+            db.set_busy_timeout(Duration::from_millis(200))
+                .map_err(|e| store_error(&e))?;
             db.set_wipe_freed_pages(true).map_err(|e| store_error(&e))
         })
         .await
         .unwrap();
+    crate::store::VACUUM_HOLD_MS.store(500, Relaxed);
     let wiping = tokio::spawn({
         let daemon = Arc::clone(&daemon);
         async move { super::move_old_secrets(&daemon).await }
     });
-    // The wipe is the store thread's job by now.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
     let started = std::time::Instant::now();
     let task = save(&daemon, params(HOURLY)).await;
     let waited = started.elapsed();
+    crate::store::VACUUM_HOLD_MS.store(0, Relaxed);
     assert!(task.is_ok(), "{task:?}");
+    assert!(
+        waited >= Duration::from_millis(300),
+        "it queued: {waited:?}"
+    );
     wiping.await.unwrap();
     let pending = daemon
         .reader
@@ -736,7 +734,85 @@ async fn a_write_during_the_wipe_of_a_large_store_succeeds() {
         .await
         .unwrap();
     assert!(!pending, "the wipe finished");
-    println!("a write waited {waited:?} behind the wipe");
+    tracing::debug!(?waited, "a write waited behind the wipe");
+}
+
+/// The store's pre-41 copy loses its legacy webhook secrets with the wipe, and keeps its tasks.
+#[tokio::test]
+async fn the_wipe_scrubs_the_pre_41_copy() {
+    const LEGACY: &str = "plx648-backup-legacy-value";
+    let dir = tempfile::tempdir().unwrap();
+    let backup = dir.path().join("plxd.sqlite3.pre-41");
+    {
+        let conn = rusqlite::Connection::open(&backup).unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TABLE scheduled_tasks (id TEXT NOT NULL PRIMARY KEY, next_run_at TEXT, payload TEXT NOT NULL);
+             INSERT INTO scheduled_tasks VALUES ('t', NULL, '{{\"task\":{{}},\"secret\":\"{LEGACY}\"}}');"
+        ))
+        .unwrap();
+    }
+    let scan = || {
+        let bytes = std::fs::read(&backup).unwrap();
+        bytes
+            .windows(LEGACY.len())
+            .any(|window| window == LEGACY.as_bytes())
+    };
+    assert!(scan(), "the copy holds it");
+    let daemon = daemon(dir.path());
+    daemon
+        .store
+        .run(&CancellationToken::new(), |db| {
+            db.set_wipe_freed_pages(true).map_err(|e| store_error(&e))
+        })
+        .await
+        .unwrap();
+    super::move_old_secrets(&daemon).await;
+    assert!(!scan(), "the copy retains the secret");
+    let payload: String = rusqlite::Connection::open(&backup)
+        .unwrap()
+        .query_row("SELECT payload FROM scheduled_tasks", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(payload, r#"{"task":{}}"#);
+}
+
+/// A crash after a save staged its new key, before the row named it, leaves the key recorded,
+/// and the next start removes it. A recorded key a task's row names stays.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_key_staged_before_a_crash_goes_at_the_next_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let (daemon, keys) = fault_daemon(dir.path());
+    let task = save(&daemon, signed("working-value")).await.unwrap();
+    let id = Uuid::try_parse(&task.id).unwrap();
+    let used = stored(&daemon, id).await.secret_key.unwrap();
+    let staged = parallax_protocol::AccountId::generate();
+    super::stage_secret(
+        &daemon,
+        staged,
+        zeroize::Zeroizing::new("staged-value".into()),
+    )
+    .await
+    .unwrap();
+    // The crash: no row names it. A record of a key in use, which a save never leaves, stays
+    // harmless.
+    daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            super::change_unused(db, |keys| keys.push(used))
+        })
+        .await
+        .unwrap();
+    super::forget_unused(&daemon).await;
+    let values: Vec<String> = keys.values.lock().unwrap().values().cloned().collect();
+    assert_eq!(values, ["working-value"]);
+    let recorded = daemon
+        .reader
+        .run(&CancellationToken::new(), |db| {
+            db.unused_secret_keys().map_err(|e| store_error(&e))
+        })
+        .await
+        .unwrap();
+    assert_eq!(recorded, None);
 }
 
 /// A key a save replaced but couldn't remove is recorded, and a later save removes it.
