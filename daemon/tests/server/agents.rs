@@ -475,9 +475,10 @@ async fn assert_replays(
         .chain(&rest.events)
         .map(|event| event.seq)
         .collect();
+    // The run's own events, which carry its id: not the Project's context or inbox events.
     let run_events: Vec<u64> = events
         .iter()
-        .filter(|event| !matches!(event.event, ParallaxEvent::ContextChanged { .. }))
+        .filter(|event| serde_json::to_value(&event.event).unwrap()["runId"] == run_id.to_string())
         .map(|event| event.seq)
         .collect();
     assert_eq!(paged, run_events);
