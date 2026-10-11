@@ -344,7 +344,28 @@ async fn failed_restore(restart: bool) {
     let worktree = std::path::PathBuf::from(started.worktree_path.unwrap());
     checkpointed(&mut events, thread, 1).await;
     send(&mut client, thread, "two").await;
-    checkpointed(&mut events, thread, 2).await;
+    // The turn's commit holds the real index.lock until its agent.finished, and its checkpoint
+    // can come first.
+    let (mut started, mut finished, mut captured) = (false, false, false);
+    events
+        .until(|event| {
+            match &event.event {
+                ParallaxEvent::AgentOutput { run_id, items, .. } if *run_id == thread => {
+                    started |= items.iter().any(|item| {
+                        matches!(item, parallax_protocol::AgentOutputItem::TurnStarted { text: Some(text), .. } if text == "two")
+                    });
+                }
+                ParallaxEvent::AgentFinished { run_id, .. } if *run_id == thread => {
+                    finished |= started;
+                }
+                ParallaxEvent::ThreadCheckpoint {
+                    run_id, ordinal, ..
+                } if *run_id == thread && *ordinal == 2 => captured = true,
+                _ => {}
+            }
+            finished && captured
+        })
+        .await;
     let git_dir = super::git(&worktree, &["rev-parse", "--absolute-git-dir"]);
     let lock = std::path::Path::new(&git_dir).join("index.lock");
     std::fs::write(&lock, "test lock").unwrap();
