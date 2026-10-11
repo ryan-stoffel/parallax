@@ -737,27 +737,42 @@ async fn a_write_during_the_wipe_waits_and_succeeds() {
     tracing::debug!(?waited, "a write waited behind the wipe");
 }
 
-/// The store's pre-41 copy loses its legacy webhook secrets with the wipe, and keeps its tasks.
+/// The store's pre-41 copy loses its legacy webhook secrets with the wipe, and keeps its tasks:
+/// enough of them to span many pages, whose rebalance on the update frees old cells.
 #[tokio::test]
 async fn the_wipe_scrubs_the_pre_41_copy() {
     const LEGACY: &str = "plx648-backup-legacy-value";
+    const TASKS: usize = 600;
     let dir = tempfile::tempdir().unwrap();
     let backup = dir.path().join("plxd.sqlite3.pre-41");
     {
-        let conn = rusqlite::Connection::open(&backup).unwrap();
-        conn.execute_batch(&format!(
-            "CREATE TABLE scheduled_tasks (id TEXT NOT NULL PRIMARY KEY, next_run_at TEXT, payload TEXT NOT NULL);
-             INSERT INTO scheduled_tasks VALUES ('t', NULL, '{{\"task\":{{}},\"secret\":\"{LEGACY}\"}}');"
-        ))
+        let mut conn = rusqlite::Connection::open(&backup).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE scheduled_tasks (id TEXT NOT NULL PRIMARY KEY, next_run_at TEXT, payload TEXT NOT NULL);",
+        )
         .unwrap();
+        let tx = conn.transaction().unwrap();
+        for i in 0..TASKS {
+            let payload = serde_json::json!({
+                "task": {"title": "x".repeat(200)},
+                "secret": format!("{LEGACY}-{i:04}"),
+            });
+            tx.execute(
+                "INSERT INTO scheduled_tasks VALUES (?1, NULL, ?2)",
+                rusqlite::params![format!("t{i:04}"), payload.to_string()],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
     }
-    let scan = || {
+    let held = || {
         let bytes = std::fs::read(&backup).unwrap();
         bytes
             .windows(LEGACY.len())
-            .any(|window| window == LEGACY.as_bytes())
+            .filter(|window| *window == LEGACY.as_bytes())
+            .count()
     };
-    assert!(scan(), "the copy holds it");
+    assert!(held() >= TASKS, "the copy holds them");
     let daemon = daemon(dir.path());
     daemon
         .store
@@ -767,12 +782,16 @@ async fn the_wipe_scrubs_the_pre_41_copy() {
         .await
         .unwrap();
     super::move_old_secrets(&daemon).await;
-    assert!(!scan(), "the copy retains the secret");
-    let payload: String = rusqlite::Connection::open(&backup)
-        .unwrap()
-        .query_row("SELECT payload FROM scheduled_tasks", [], |row| row.get(0))
+    assert_eq!(held(), 0, "the copy retains secrets");
+    let conn = rusqlite::Connection::open(&backup).unwrap();
+    let (rows, secrets): (usize, usize) = conn
+        .query_row(
+            "SELECT COUNT(*), COUNT(json_extract(payload, '$.secret')) FROM scheduled_tasks",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
         .unwrap();
-    assert_eq!(payload, r#"{"task":{}}"#);
+    assert_eq!((rows, secrets), (TASKS, 0));
 }
 
 /// A crash after a save staged its new key, before the row named it, leaves the key recorded,

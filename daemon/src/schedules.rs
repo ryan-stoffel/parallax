@@ -234,9 +234,10 @@ pub(crate) async fn save(
             let old_key = existing.as_ref().and_then(|stored| stored.secret_key);
             let stored = build(id, params, existing, new_key, Timestamp::now())?;
             if legacy {
-                db.set_secure_delete(true).map_err(|e| store_error(&e))?;
+                put_wiping(db, &stored)?;
+            } else {
+                put(db, &stored)?;
             }
-            put(db, &stored)?;
             let old_key = old_key.filter(|old| stored.secret_key != Some(*old));
             change_unused(db, |keys| {
                 keys.retain(|key| Some(*key) != new_key);
@@ -1036,8 +1037,7 @@ async fn move_old_secrets(daemon: &Daemon) {
         let saved = daemon
             .store
             .run(&CancellationToken::new(), move |db| {
-                db.set_secure_delete(true).map_err(|e| store_error(&e))?;
-                put(db, &stored)?;
+                put_wiping(db, &stored)?;
                 change_unused(db, |keys| keys.retain(|staged| *staged != key))
             })
             .await;
@@ -1064,14 +1064,15 @@ async fn move_old_secrets(daemon: &Daemon) {
 }
 
 /// The copy of the store migration 41 made (`<database>.pre-41`), which, from a store at 40, kept
-/// its webhook secrets in task rows: it loses them, once, with the wipe. `VACUUM INTO` wrote it,
-/// so it has no freed page or WAL to wipe, and `secure_delete` zeroes the old cells. A rollback
-/// to it then needs its signed webhooks' secrets entered again (0063). Whether it's done, as
-/// with no copy.
+/// its webhook secrets in task rows: it loses them, once, with the wipe. The update leaves old
+/// cell content in pages a rebalance freed, so the copy is then rebuilt with `VACUUM INTO` and
+/// put in its place. A rollback to it then needs its signed webhooks' secrets entered again
+/// (0063). Whether it's done, as with no copy.
 async fn scrub_backup(daemon: &Daemon) -> bool {
+    type Failure = Box<dyn std::error::Error + Send + Sync>;
     let mut path = daemon.data_dir.store_file().into_os_string();
     path.push(".pre-41");
-    let scrubbed = tokio::task::spawn_blocking(move || -> Result<(), rusqlite::Error> {
+    let scrubbed = tokio::task::spawn_blocking(move || -> Result<(), Failure> {
         if !Path::new(&path).exists() {
             return Ok(());
         }
@@ -1090,11 +1091,20 @@ async fn scrub_backup(daemon: &Daemon) -> bool {
             return Ok(());
         }
         conn.execute_batch(
-            "PRAGMA secure_delete = ON;
-             UPDATE scheduled_tasks SET payload = json_remove(payload, '$.secret')
-                 WHERE json_extract(payload, '$.secret') IS NOT NULL;
-             PRAGMA wal_checkpoint(TRUNCATE);",
-        )
+            "UPDATE scheduled_tasks SET payload = json_remove(payload, '$.secret')
+                 WHERE json_extract(payload, '$.secret') IS NOT NULL;",
+        )?;
+        let mut rebuilt = path.clone();
+        rebuilt.push(format!(".{}", Uuid::now_v7()));
+        let copied = conn.execute("VACUUM INTO ?1", [rebuilt.to_string_lossy()]);
+        drop(conn);
+        let replaced = copied
+            .map_err(Failure::from)
+            .and_then(|_| Ok(std::fs::rename(&rebuilt, &path)?));
+        if replaced.is_err() {
+            let _ = std::fs::remove_file(&rebuilt);
+        }
+        replaced
     })
     .await;
     let scrubbed = matches!(scrubbed, Ok(Ok(())));
@@ -1236,6 +1246,16 @@ fn read(db: &Tx, id: Uuid) -> Result<Option<Stored>, ErrorObject> {
         .map_err(|e| store_error(&e))?
         .map(|payload| serde_json::from_str(&payload).map_err(ErrorObject::internal_error))
         .transpose()
+}
+
+/// [`put`] over a row with a legacy secret, with `secure_delete` on, so the replaced row's
+/// plaintext doesn't stay in a freed cell. It goes back off after, so later deletes don't zero
+/// pages.
+fn put_wiping(db: &Tx, stored: &Stored) -> Result<(), ErrorObject> {
+    db.set_secure_delete(true).map_err(|e| store_error(&e))?;
+    let put = put(db, stored);
+    let off = db.set_secure_delete(false).map_err(|e| store_error(&e));
+    put.and(off)
 }
 
 fn put(db: &Tx, stored: &Stored) -> Result<(), ErrorObject> {
