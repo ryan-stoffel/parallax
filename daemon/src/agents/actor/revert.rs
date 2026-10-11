@@ -35,32 +35,34 @@ pub(super) enum Rewound {
     Restart,
 }
 
-/// Where the thread with `runs` resumes, when a revert undid a turn newer than the newest kept
-/// one with a cursor. It holds until a turn after the revert reports its own cursor, so a CLI
-/// that failed to start resumes at the same place, even after a restart.
-pub(super) fn rewound(runs: &[ThreadRun]) -> Option<Rewound> {
-    let kept = runs
-        .iter()
-        .filter(|run| run.status != ThreadRunStatus::RolledBack && run.cursor.is_some())
-        .filter(|run| run.ordinal.is_some())
-        .max_by_key(|run| run.ordinal);
-    let undone = runs
-        .iter()
+/// Where the thread with `runs`, in session `session`, resumes after a revert: at the newest kept
+/// turn's cursor in that session, when a rolled-back turn is newer, or in a new session when every
+/// turn was rolled back. `None` is a plain resume, which drops nothing. It holds until a turn
+/// after the revert reports its own cursor, so a CLI that failed to start resumes at the same
+/// place, even after a restart. A cursor from another session, before the thread moved between
+/// providers, never counts: that session's turns are already past.
+pub(super) fn rewound(runs: &[ThreadRun], session: &str) -> Option<Rewound> {
+    let started = || runs.iter().filter(|run| run.ordinal.is_some());
+    let undone = started()
         .filter(|run| run.status == ThreadRunStatus::RolledBack)
         .filter_map(|run| run.ordinal)
         .max()?;
-    if kept.is_some_and(|run| run.ordinal > Some(undone)) {
-        return None;
+    if started().all(|run| run.status == ThreadRunStatus::RolledBack) {
+        return Some(Rewound::Restart);
     }
-    Some(
-        kept.and_then(|run| run.cursor.clone())
-            .map_or(Rewound::Restart, Rewound::At),
-    )
+    started()
+        .filter(|run| run.status != ThreadRunStatus::RolledBack)
+        .filter(|run| run.session_id.as_deref() == Some(session))
+        .filter(|run| run.cursor.is_some())
+        .max_by_key(|run| run.ordinal)
+        .filter(|run| run.ordinal < Some(undone))
+        .and_then(|run| run.cursor.clone())
+        .map(Rewound::At)
 }
 
 impl Actor {
-    /// [`rewound`] for this thread, with its logged output folded first.
-    pub(super) async fn rewound(&mut self) -> Result<Option<Rewound>, ErrorObject> {
+    /// [`rewound`] for this thread in `session`, with its logged output folded first.
+    pub(super) async fn rewound(&mut self, session: &str) -> Result<Option<Rewound>, ErrorObject> {
         self.flush().await;
         let id = self.row.id;
         let runs = self
@@ -70,7 +72,7 @@ impl Actor {
                 crate::graph::runs(db, id)
             })
             .await?;
-        Ok(rewound(&runs))
+        Ok(rewound(&runs, session))
     }
 
     pub(super) async fn load_revert(&mut self) -> Result<(), ErrorObject> {
@@ -289,7 +291,8 @@ mod tests {
 
     use super::{Rewound, rewound};
 
-    fn run(ordinal: u32, status: ThreadRunStatus, cursor: Option<&str>) -> ThreadRun {
+    /// A started run, with the session and cursor its turn ended at, if it reported one.
+    fn run(ordinal: u32, status: ThreadRunStatus, at: Option<(&str, &str)>) -> ThreadRun {
         ThreadRun {
             id: TurnId::generate(),
             status,
@@ -305,8 +308,8 @@ mod tests {
             started_at: None,
             completed_at: None,
             checkpoint: None,
-            cursor: cursor.map(str::to_owned),
-            session_id: None,
+            cursor: at.map(|(_, cursor)| cursor.to_owned()),
+            session_id: at.map(|(session, _)| session.to_owned()),
         }
     }
 
@@ -314,22 +317,46 @@ mod tests {
     fn the_next_run_resumes_where_a_revert_went_back_to_until_a_new_turn_ends() {
         use ThreadRunStatus::{Completed, Failed, RolledBack};
         let mut runs = vec![
-            run(1, Completed, Some("one")),
-            run(2, Completed, Some("two")),
+            run(1, Completed, Some(("a", "one"))),
+            run(2, Completed, Some(("a", "two"))),
         ];
-        assert_eq!(rewound(&runs), None, "no revert");
+        assert_eq!(rewound(&runs, "a"), None, "no revert");
         runs[1].status = RolledBack;
-        assert_eq!(rewound(&runs), Some(Rewound::At("one".to_owned())));
+        assert_eq!(rewound(&runs, "a"), Some(Rewound::At("one".to_owned())));
         // A turn after it that failed before reporting a cursor changes nothing.
         runs.push(run(3, Failed, None));
-        assert_eq!(rewound(&runs), Some(Rewound::At("one".to_owned())));
+        assert_eq!(rewound(&runs, "a"), Some(Rewound::At("one".to_owned())));
         // One that reported its cursor is the session's newest entry: a plain resume follows it.
-        runs.push(run(4, Completed, Some("four")));
-        assert_eq!(rewound(&runs), None);
+        runs.push(run(4, Completed, Some(("a", "four"))));
+        assert_eq!(rewound(&runs, "a"), None);
         // Back to the start, nothing is kept.
         for run in &mut runs {
             run.status = RolledBack;
         }
-        assert_eq!(rewound(&runs), Some(Rewound::Restart));
+        assert_eq!(rewound(&runs, "a"), Some(Rewound::Restart));
+    }
+
+    /// After a revert, a thread that moved to another provider and to Claude session `b`, whose
+    /// first turn reported no cursor, resumes `b` as it is: a turn without a cursor in `b` or one
+    /// in another session drops nothing, and no new session loses the conversation kept so far.
+    #[test]
+    fn a_later_session_resumes_plainly_whatever_a_cursor_of_an_earlier_one_says() {
+        use ThreadRunStatus::{Completed, Interrupted, RolledBack};
+        // A Codex thread (a fork's copied run 1, then turn 2), turn 3 reverted, then Claude.
+        let codex = vec![
+            run(1, Completed, None),
+            run(2, Completed, None),
+            run(3, RolledBack, None),
+            run(4, Interrupted, None),
+        ];
+        assert_eq!(rewound(&codex, "b"), None);
+        // Claude session `a`, a revert to turn 1, then Codex, then Claude session `b`.
+        let moved = vec![
+            run(1, Completed, Some(("a", "one"))),
+            run(2, RolledBack, Some(("a", "two"))),
+            run(3, Completed, None),
+            run(4, Interrupted, None),
+        ];
+        assert_eq!(rewound(&moved, "b"), None);
     }
 }

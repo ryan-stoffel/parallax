@@ -2709,9 +2709,9 @@ impl Actor {
         text: String,
         prepared: &Prepared,
     ) -> Result<(String, Option<Resume>, Option<String>), ErrorObject> {
-        let rewound = match session_id {
-            Some(_) if prepared.resolved.backend().capabilities().resume_at => {
-                self.rewound().await?
+        let rewound = match &session_id {
+            Some(session) if prepared.resolved.backend().capabilities().resume_at => {
+                self.rewound(session).await?
             }
             _ => None,
         };
