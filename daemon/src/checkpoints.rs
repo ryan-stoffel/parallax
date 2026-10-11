@@ -479,9 +479,15 @@ pub(crate) async fn plan_revert(
                     path,
                     git_dir: Some(_),
                     ..
-                }) => db
-                    .worktree_shared(id, &path.to_string_lossy())
-                    .map_err(|error| store_error(&error))?,
+                }) => {
+                    db.worktree_shared(id, &path.to_string_lossy())
+                        .map_err(|error| store_error(&error))?
+                        // Or threads from `task/delegate` and `create_threads` work in it (0063).
+                        || !db
+                            .shared_users(id)
+                            .map_err(|error| store_error(&error))?
+                            .is_empty()
+                }
                 _ => true,
             };
             Ok((folder, crate::graph::runs(db, id)?, shared))

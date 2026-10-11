@@ -669,7 +669,14 @@ pub(crate) async fn merge_back(
     })
     .await?;
     let events = agents::logged_events(daemon, source).await?;
-    let Some(last) = events.last().map(|event| event.seq) else {
+    // Through its last output: an event that isn't the conversation, as a checkpoint captured
+    // after its turn (0062), is nothing new to merge.
+    let Some(last) = events
+        .iter()
+        .rev()
+        .find(|event| matches!(event.event, ParallaxEvent::AgentOutput { .. }))
+        .map(|event| event.seq)
+    else {
         return Err(nothing_new(source));
     };
     // A fork's log starts with the conversation it copied: the delta starts at its own first turn.

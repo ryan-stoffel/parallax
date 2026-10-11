@@ -1848,3 +1848,49 @@ async fn an_agents_own_commit_can_be_committed_and_accepted() {
     );
     host.server.stop().await;
 }
+
+/// The worktree's owner can't restore files while a thread from `create_threads` works in it, so
+/// a revert never deletes that thread's edits (0062, 0063).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_file_revert_refuses_while_a_thread_shares_the_worktree() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let path = worktree(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+    let made = mcp
+        .ok(
+            "create_threads",
+            json!({"threads": [{"prompt": "Keep editing."}]}),
+        )
+        .await;
+    let child: RunId = made["threads"][0]["threadId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    working(&mut client, child).await;
+    steer(&mut client, me, "Finish parent.").await;
+    idle(&mut client, me).await;
+    std::fs::write(path.join("child.txt"), "child work").unwrap();
+    let refused = client
+        .call::<OrchestrationDispatch>(OrchestrationCommand::CheckpointRollback {
+            thread_id: me,
+            ordinal: 1,
+            restore_files: true,
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        refused.message.contains("isolated worktree"),
+        "{}",
+        refused.message
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join("child.txt")).unwrap(),
+        "child work"
+    );
+    host.server.stop().await;
+}
