@@ -250,6 +250,7 @@ diff --git a/apps/desktop/src/renderer/Update.tsx b/apps/desktop/src/renderer/Up
 
 /** Each thread's turns with their checkpoints: the updater thread's, from its log. */
 const checkpointRuns = new Map<string, ThreadRun[]>();
+const sessionOf = (threadId: string) => runOf(threadId)?.sessionId;
 function turnsOf(threadId: string): ThreadRun[] {
   if (db.threads.find((t) => t.id === threadId)?.title !== "Rework the updater") return [];
   if (!checkpointRuns.has(threadId)) {
@@ -265,6 +266,9 @@ function turnsOf(threadId: string): ThreadRun[] {
         ...(turn.text && { text: turn.text }),
         images: 0,
         threads: [],
+        // Where Claude's session stood after the turn, which Edit from here goes back to.
+        cursor: `entry-${i + 1}`,
+        ...(sessionOf(threadId) && { sessionId: sessionOf(threadId) }),
         checkpoint: {
           status: "ready",
           files:

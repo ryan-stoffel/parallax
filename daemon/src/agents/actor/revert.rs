@@ -229,8 +229,8 @@ impl Actor {
             self.id,
             ordinal,
             restore_files,
-            &name,
             capabilities.unwrap_or_default(),
+            self.row.state.session_id.clone(),
         )
         .await?;
         let rewind = if plan.turns > 0 {
@@ -306,6 +306,7 @@ mod tests {
             completed_at: None,
             checkpoint: None,
             cursor: cursor.map(str::to_owned),
+            session_id: None,
         }
     }
 

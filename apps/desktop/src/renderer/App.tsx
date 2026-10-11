@@ -1121,6 +1121,7 @@ export function App() {
               runId={threadRun.id}
               prompt={threadRun.prompt}
               backend={threadRun.backend}
+              sessionId={threadRun.sessionId}
               running={isRunning(threadRun.status)}
               version={threads.state.checkpoints[threadRun.id]}
               unavailable={

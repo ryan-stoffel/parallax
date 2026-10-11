@@ -58,6 +58,8 @@ const runs: ThreadRun[] = [
 ];
 const patch = (path: string) =>
   `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1 @@\n+hi\n`;
+/** `runs`, with where Claude's turn 1 ended, in session `s1`. */
+const cursored = runs.map((r) => (r.id === "t1" ? { ...r, cursor: "c1", sessionId: "s1" } : r));
 let listedRuns = runs;
 let largePatch: string | undefined;
 const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
@@ -141,7 +143,8 @@ test("every turn's diff shows first, then one turn's, with undone turns left out
 test.each(["codex-work", "claude-work"])(
   "Edit from here reverts to the turn before, keeping files, and returns its message: %s",
   async (backend) => {
-    renderPanel({ backend });
+    listedRuns = cursored;
+    renderPanel({ backend, sessionId: "s1", version: 1 });
     const select = document.querySelector("select")!;
     await act(async () => {
       select.value = "2";
@@ -191,6 +194,26 @@ test.each([
   expect(document.querySelector("dialog")!.open).toBe(false);
   expect(request.mock.calls.some(([, method]) => method === "orchestration/dispatch")).toBe(false);
 });
+
+test.each([
+  [
+    runs,
+    "Parallax didn't record where the conversation stood after turn 1, so it can't go back there. Edit from a later turn instead, or start a new thread.",
+  ],
+  [
+    cursored.map((r) => (r.id === "t1" ? { ...r, sessionId: "s0" } : r)),
+    "Turn 1 ran in an earlier session, before this thread moved between providers, so the conversation can't go back there. Edit from a later turn instead, or start a new thread.",
+  ],
+] as const)(
+  "Claude's Edit from here needs a cursor in the thread's session: %#",
+  async (listed, reason) => {
+    listedRuns = [...listed];
+    renderPanel({ backend: "claude-work", sessionId: "s1", version: 1 });
+    await selectTurn(2);
+    expect(button("Edit from here").disabled).toBe(true);
+    expect(button("Edit from here").title).toBe(reason);
+  },
+);
 
 test("ordinal labels survive checkpoint gaps, and rollback never targets an unready checkpoint", async () => {
   listedRuns = [

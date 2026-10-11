@@ -627,6 +627,10 @@ pub enum AgentOutputItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         cursor: Option<String>,
+        /// The vendor session `cursor` is in.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        session_id: Option<String>,
     },
     /// A follow-up never reached the CLI, because the run ended first. Send it again.
     FollowUpDropped {

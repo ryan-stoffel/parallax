@@ -455,8 +455,9 @@ impl Revert {
     }
 }
 
-/// Checks `checkpoint.rollback` to run `ordinal` of thread `thread`, whose backend `backend` can
-/// do `capabilities`, before anything changes. Waits for the thread's captures first.
+/// Checks `checkpoint.rollback` to run `ordinal` of thread `thread`, whose backend can do
+/// `capabilities` and whose session is `session_id`, before anything changes. Waits for the
+/// thread's captures first.
 ///
 /// # Errors
 ///
@@ -466,12 +467,12 @@ pub(crate) async fn plan_revert(
     thread: RunId,
     ordinal: u32,
     restore_files: bool,
-    backend: &str,
     capabilities: Capabilities,
+    session_id: Option<String>,
 ) -> Result<Revert, ErrorObject> {
     let id = Uuid::from(thread);
     wait_captures(daemon, id).await;
-    let (folder, runs, shared) = daemon
+    let (folder, runs, shared, forked) = daemon
         .reader
         .run(&CancellationToken::new(), move |db| {
             let folder = folder(db, id)?;
@@ -491,7 +492,12 @@ pub(crate) async fn plan_revert(
                 }
                 _ => true,
             };
-            Ok((folder, crate::graph::runs(db, id)?, shared))
+            let forked = db
+                .get_thread(id)
+                .map_err(|error| store_error(&error))?
+                .and_then(|thread| thread.fields.forked_from)
+                .is_some();
+            Ok((folder, crate::graph::runs(db, id)?, shared, forked))
         })
         .await?;
     let Some(folder) = folder else {
@@ -502,8 +508,10 @@ pub(crate) async fn plan_revert(
         restore_files,
         capabilities,
         isolated: !shared,
+        session_id,
+        forked,
     };
-    let (turns, undone) = check.run(&runs, backend).map_err(refused)?;
+    let (turns, undone) = check.run(&runs).map_err(refused)?;
     let worktrees = daemon.agents.worktrees();
     if !worktrees
         .has_checkpoint(folder.run_folder(), &reference(id, ordinal))
@@ -537,11 +545,15 @@ struct Check {
     capabilities: Capabilities,
     /// Whether the folder is the thread's own worktree, which no other thread shares.
     isolated: bool,
+    /// The thread's session now, which a cursor must be in.
+    session_id: Option<String>,
+    /// Whether the thread is a fork, whose start is its parent's conversation.
+    forked: bool,
 }
 
 impl Check {
     /// The provider turns a revert drops, and the runs it undoes, or why it is refused.
-    fn run(&self, runs: &[ThreadRun], _backend: &str) -> Result<(u32, Vec<TurnId>), String> {
+    fn run(&self, runs: &[ThreadRun]) -> Result<(u32, Vec<TurnId>), String> {
         let ordinal = self.ordinal;
         if !self.capabilities.rewind {
             return Err("This provider does not support reverting conversation history. Start a new thread instead.".to_owned());
@@ -572,18 +584,8 @@ impl Check {
                 "Turn {ordinal} has no ready checkpoint to revert to."
             ));
         }
-        // A turn from before plxd kept cursors has nowhere to resume at.
-        if self.capabilities.resume_at
-            && ordinal > 0
-            && !started.iter().any(|run| {
-                run.ordinal == Some(ordinal)
-                    && run.status != ThreadRunStatus::RolledBack
-                    && run.cursor.is_some()
-            })
-        {
-            return Err(format!(
-                "Turn {ordinal} ended before Parallax recorded where its conversation stood, so it can't be reverted to. Revert to a later turn or start a new thread."
-            ));
+        if self.capabilities.resume_at {
+            self.resume_point(&started)?;
         }
         let mut turns = 0;
         let mut undone = Vec::new();
@@ -609,6 +611,36 @@ impl Check {
             }
         }
         Ok((turns, undone))
+    }
+}
+
+impl Check {
+    /// Refuses a cursor backend's revert with nowhere to resume (T3 Code's
+    /// `resolveClaudeRollbackResumeSessionAt`): a target turn from before plxd kept cursors, or
+    /// one in an earlier session, before the thread moved between providers, or a fork's start,
+    /// where a new session would lose its parent's conversation.
+    fn resume_point(&self, started: &[&ThreadRun]) -> Result<(), String> {
+        let ordinal = self.ordinal;
+        if ordinal == 0 {
+            return if self.forked {
+                Err("A fork's conversation can't go back to before its own turns. Edit from a later turn instead, or fork the thread again.".to_owned())
+            } else {
+                Ok(())
+            };
+        }
+        let target = started
+            .iter()
+            .find(|run| run.ordinal == Some(ordinal) && run.status != ThreadRunStatus::RolledBack);
+        match target {
+            // The app gives the same reasons before it asks.
+            Some(run) if run.cursor.is_none() => Err(format!(
+                "Parallax didn't record where the conversation stood after turn {ordinal}, so it can't go back there. Edit from a later turn instead, or start a new thread."
+            )),
+            Some(run) if run.session_id != self.session_id => Err(format!(
+                "Turn {ordinal} ran in an earlier session, before this thread moved between providers, so the conversation can't go back there. Edit from a later turn instead, or start a new thread."
+            )),
+            _ => Ok(()),
+        }
     }
 }
 

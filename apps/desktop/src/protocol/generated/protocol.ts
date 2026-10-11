@@ -3200,7 +3200,11 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	 * Where the vendor's session stood when the turn ended, which a revert to this turn
 	 * resumes at (0062): Claude's last transcript entry. Absent for other vendors.
 	 */
-	cursor?: string, } | { "kind": "followUpDropped",
+	cursor?: string,
+	/**
+	 * The vendor session `cursor` is in.
+	 */
+	sessionId?: string, } | { "kind": "followUpDropped",
 	/**
 	 * The follow-up's turn id.
 	 */
@@ -7681,6 +7685,10 @@ export type ThreadRun = {
 	 * Where the vendor's session stood when its turn ended: its `turnFinished` item's `cursor`.
 	 */
 	cursor?: string,
+	/**
+	 * The vendor session `cursor` is in, as its `turnFinished` item has it.
+	 */
+	sessionId?: string,
 };
 
 /**

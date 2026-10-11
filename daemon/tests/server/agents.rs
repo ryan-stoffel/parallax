@@ -653,6 +653,7 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
         turn_id: Some(first),
         result: Some("Second answer.".to_owned()),
         cursor: None,
+        session_id: None,
     }));
     assert!(
         !events.iter().any(committed),
@@ -672,6 +673,7 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
             turn_id: Some(second),
             result: Some("First answer.".to_owned()),
             cursor: None,
+            session_id: None,
         }),
     )
     .await;

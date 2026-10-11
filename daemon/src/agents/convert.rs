@@ -393,8 +393,9 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             result: result
                 .as_deref()
                 .map(|result| truncate(result, MAX_TEXT_ITEM_BYTES)),
-            // The run's actor fills it from the turn's `TurnCursor`, which comes just before.
+            // The run's actor fills them from the turn's `TurnCursor`, which comes just before.
             cursor: None,
+            session_id: None,
         },
         Event::FollowUpDropped { turn_id } => {
             AgentOutputItem::FollowUpDropped { turn_id: *turn_id }

@@ -121,6 +121,10 @@ pub struct ThreadRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub cursor: Option<String>,
+    /// The vendor session `cursor` is in, as its `turnFinished` item has it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub session_id: Option<String>,
 }
 
 /// A turn's checkpoint (0062): a git ref, `refs/parallax/checkpoints/<thread>/<ordinal>`, holding

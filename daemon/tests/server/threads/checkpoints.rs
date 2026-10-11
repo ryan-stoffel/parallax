@@ -2,12 +2,12 @@
 
 use parallax_protocol::methods::{
     OrchestrationDispatch, OrchestrationGetFullThreadDiff, OrchestrationGetTurnDiff,
-    OrchestrationThreadRuns, ThreadStart,
+    OrchestrationThreadRuns, ThreadFork, ThreadStart,
 };
 use parallax_protocol::{
     CheckpointFile, CheckpointStatus, DispatchMode, ErrorKind, EventsEventParams,
-    FullThreadDiffParams, OrchestrationCommand, ParallaxEvent, RunId, ThreadRunStatus,
-    ThreadRunsParams, TurnCheckpoint, TurnDiffParams, TurnId,
+    FullThreadDiffParams, OrchestrationCommand, ParallaxEvent, RunId, ThreadForkParams,
+    ThreadRunStatus, ThreadRunsParams, TurnCheckpoint, TurnDiffParams, TurnId,
 };
 use plxd::backend::fake::Step;
 
@@ -228,12 +228,10 @@ fn cursor(at: &str) -> Step {
     })
 }
 
-/// A revert on a backend that resumes at a cursor changes no session: the next run resumes at
-/// the kept turn's cursor, and after a revert to the thread's start, a new session starts with
-/// only the new message.
-#[tokio::test]
-async fn a_cursor_backend_resumes_where_the_revert_went_back_to() {
-    let requests = std::sync::Arc::default();
+type Requests = std::sync::Arc<std::sync::Mutex<Vec<plxd::backend::RunRequest>>>;
+
+/// A [`CursorRewind`] host whose turns report cursors `c1` and `c2`, in session `cursors-1`.
+fn cursor_host(requests: &Requests) -> Host {
     let mut backends = plxd::routing::BackendRegistry::new();
     backends.register(
         parallax_protocol::Provider::Anthropic,
@@ -248,10 +246,19 @@ async fn a_cursor_backend_resumes_where_the_revert_went_back_to() {
                 end_turn("Turn 2."),
                 Step::AwaitFollowUp,
             ]),
-            requests: std::sync::Arc::clone(&requests),
+            requests: std::sync::Arc::clone(requests),
         }),
     );
-    let host = Host::start(backends);
+    Host::start(backends)
+}
+
+/// A revert on a backend that resumes at a cursor changes no session: the next run resumes at
+/// the kept turn's cursor, and after a revert to the thread's start, a new session starts with
+/// only the new message.
+#[tokio::test]
+async fn a_cursor_backend_resumes_where_the_revert_went_back_to() {
+    let requests = Requests::default();
+    let host = cursor_host(&requests);
     let path = real_repo(host.work.path(), "cursors");
     let mut client = host.client().await;
     let repo = client.add(&path).await;
@@ -271,8 +278,17 @@ async fn a_cursor_backend_resumes_where_the_revert_went_back_to() {
         .await
         .unwrap()
         .runs;
-    let cursors: Vec<_> = listed.iter().map(|run| run.cursor.as_deref()).collect();
-    assert_eq!(cursors, [Some("c1"), Some("c2")]);
+    let cursors: Vec<_> = listed
+        .iter()
+        .map(|run| (run.cursor.as_deref(), run.session_id.as_deref()))
+        .collect();
+    assert_eq!(
+        cursors,
+        [
+            (Some("c1"), Some("cursors-1")),
+            (Some("c2"), Some("cursors-1"))
+        ]
+    );
 
     let rollback = |ordinal| OrchestrationCommand::CheckpointRollback {
         thread_id: thread,
@@ -301,6 +317,68 @@ async fn a_cursor_backend_resumes_where_the_revert_went_back_to() {
         request.prompt.contains("Start over") && !request.prompt.contains("Add a"),
         "{}",
         request.prompt
+    );
+}
+
+/// A fork on a backend that resumes at a cursor can't go back to its start, where a new session
+/// would lose its parent's conversation.
+#[tokio::test]
+async fn a_cursor_backend_fork_refuses_a_revert_to_its_start() {
+    let requests = Requests::default();
+    let host = cursor_host(&requests);
+    let path = real_repo(host.work.path(), "fork");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let mut runs = host.client().await;
+    runs.subscribe(0, Some(scope(repo.id))).await;
+    let parent = client
+        .call::<ThreadStart>(start_params(Some(repo.id), "Add a"))
+        .await
+        .unwrap()
+        .run
+        .id;
+    // Forked once its turn has ended and been checkpointed.
+    let (mut settled, mut captured) = (false, false);
+    runs.until(|event| {
+        match &event.event {
+            ParallaxEvent::AgentUpdated { run_id, state } if *run_id == parent => {
+                settled = state.status == parallax_protocol::AgentStatus::Completed;
+            }
+            ParallaxEvent::ThreadCheckpoint {
+                run_id, ordinal, ..
+            } if *run_id == parent && *ordinal == 1 => captured = true,
+            _ => {}
+        }
+        settled && captured
+    })
+    .await;
+    let fork = client
+        .call::<ThreadFork>(ThreadForkParams {
+            run_id: parent,
+            new_run_id: RunId::generate(),
+            turn_id: None,
+            account: None,
+            model: None,
+            parent: None,
+        })
+        .await
+        .unwrap()
+        .run
+        .id;
+    send(&mut client, fork, "Fork it").await;
+    // Its copied transcript is its run 1, and its own first turn run 2.
+    checkpointed(&mut runs, fork, 2).await;
+    let refused = client
+        .call::<OrchestrationDispatch>(OrchestrationCommand::CheckpointRollback {
+            thread_id: fork,
+            ordinal: 0,
+            restore_files: false,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.message,
+        "A fork's conversation can't go back to before its own turns. Edit from a later turn instead, or fork the thread again."
     );
 }
 

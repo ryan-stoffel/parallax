@@ -16,6 +16,14 @@ const turnsOf = (runs: ThreadRun[]) =>
 
 const ready = (r: ThreadRun) => r.checkpoint?.status === "ready";
 
+/** Why Claude can't go back to the end of turn `r`, in plxd's words, or nothing when it can. */
+const cursorRefusal = (r: ThreadRun, sessionId: string | undefined) =>
+  !r.cursor
+    ? `Parallax didn't record where the conversation stood after turn ${r.ordinal}, so it can't go back there. Edit from a later turn instead, or start a new thread.`
+    : r.sessionId !== sessionId
+      ? `Turn ${r.ordinal} ran in an earlier session, before this thread moved between providers, so the conversation can't go back there. Edit from a later turn instead, or start a new thread.`
+      : undefined;
+
 /**
  * The side panel's Changes view (0062): the open thread's diff across every turn, or one turn's,
  * from the checkpoints plxd captures as each turn ends. A turn's Edit from here reverts the thread
@@ -23,12 +31,15 @@ const ready = (r: ThreadRun) => r.checkpoint?.status === "ready";
  * the composer through `onCompose`. `prompt` is the first turn's message, which plxd keeps with
  * the thread. `version` changes when a checkpoint is captured or the thread reverted, which reloads
  * the turns. `unavailable` says why it can't load, such as a plxd without `checkpoints`.
+ * `sessionId` is the thread's provider session: Claude goes back only to a turn that recorded
+ * where it ended (`cursor`) in that session, as plxd checks.
  */
 export function ChangesPanel({
   hostId,
   runId,
   prompt,
   backend,
+  sessionId,
   running,
   version,
   unavailable,
@@ -38,6 +49,7 @@ export function ChangesPanel({
   runId: string;
   prompt: string;
   backend: string;
+  sessionId?: string;
   running: boolean;
   version?: number;
   unavailable?: string;
@@ -117,7 +129,9 @@ export function ChangesPanel({
         ? "This provider does not support reverting conversation history. Start a new thread instead."
         : previous && !ready(previous)
           ? "The previous turn has no ready checkpoint to revert to."
-          : undefined;
+          : backendKind === "claude" && previous
+            ? cursorRefusal(previous, sessionId)
+            : undefined;
 
   if (unavailable) return <Empty title="Changes aren't available" hint={unavailable} />;
   if (runs && "error" in runs) return <Empty title="Couldn't load the changes" hint={runs.error} />;

@@ -221,7 +221,10 @@ impl<'a> Fold<'a> {
                 run.threads.clone_from(threads);
             }),
             AgentOutputItem::TurnFinished {
-                turn_id, cursor, ..
+                turn_id,
+                cursor,
+                session_id,
+                ..
             } => {
                 // A turn with no id is the first of its CLI: the oldest still open.
                 let at = match turn_id {
@@ -230,6 +233,7 @@ impl<'a> Fold<'a> {
                 };
                 if let Some(at) = at {
                     self.open[at].cursor.clone_from(cursor);
+                    self.open[at].session_id.clone_from(session_id);
                 }
                 self.end_at(at, ThreadRunStatus::Completed)
             }
@@ -488,6 +492,7 @@ impl<'a> Fold<'a> {
             completed_at: None,
             checkpoint: None,
             cursor: None,
+            session_id: None,
         };
         fill(&mut run);
         put_run(self.db, self.thread, &run, Some(self.seq))?;
@@ -613,6 +618,7 @@ fn queued_run(thread: Uuid, position: usize, message: &QueuedMessage, held: bool
         completed_at: None,
         checkpoint: None,
         cursor: None,
+        session_id: None,
     };
     GraphRun {
         id: run.id.into(),

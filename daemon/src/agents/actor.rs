@@ -3246,6 +3246,18 @@ impl Actor {
     /// recorded before its CLI could report the turn, so a transcript rebuilt from the log shows
     /// it (PLX-92), capped like every other text item, the ids of any message's images (PLX-191),
     /// the threads attached to it (PLX-372), and who sent it. Leaves any other item alone.
+    /// Puts the turn's [`Event::TurnCursor`], and the session it is in, on its `TurnFinished`.
+    fn fill_turn_finished(&mut self, item: &mut AgentOutputItem) {
+        if let AgentOutputItem::TurnFinished {
+            cursor, session_id, ..
+        } = item
+            && let Some(taken) = self.cursor.take()
+        {
+            *cursor = Some(taken);
+            session_id.clone_from(&self.row.state.session_id);
+        }
+    }
+
     fn fill_turn_started(&mut self, item: &mut AgentOutputItem) {
         let AgentOutputItem::TurnStarted {
             turn_id,
@@ -3356,9 +3368,7 @@ impl Actor {
                 }
                 if let Some(mut item) = output_item(&event) {
                     self.fill_turn_started(&mut item);
-                    if let AgentOutputItem::TurnFinished { cursor, .. } = &mut item {
-                        *cursor = self.cursor.take();
-                    }
+                    self.fill_turn_finished(&mut item);
                     self.keep_tool_images(&event, &mut item).await;
                     self.push(item).await;
                 }
