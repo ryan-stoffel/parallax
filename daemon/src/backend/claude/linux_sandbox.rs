@@ -547,7 +547,22 @@ fi"#;
         for folder in [&worktree, &context, &git_dir] {
             fs::create_dir_all(folder).unwrap();
         }
-        let base = launcher(root, &[("PATH", INSTALLED_PATH)]);
+        // The SDK sidecar runs the CLI through `plxd sdk-process`. This test binary isn't plxd, so
+        // point it at the plxd cargo built beside it (`target/<profile>/deps/..`).
+        let exe = std::env::current_exe().unwrap();
+        let plxd = exe.parent().and_then(Path::parent).unwrap().join("plxd");
+        assert!(
+            plxd.is_file(),
+            "build plxd first: {} is missing",
+            plxd.display()
+        );
+        let base = launcher(
+            root,
+            &[
+                ("PATH", INSTALLED_PATH),
+                ("PLXD_CLAUDE_PROCESS", plxd.to_str().unwrap()),
+            ],
+        );
         let temp = run_temp::create(base.data_dir()).unwrap();
         let backend = ClaudeBackend::new(base).with_program(wrapper);
         let request = RunRequest {

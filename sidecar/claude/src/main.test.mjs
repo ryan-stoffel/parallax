@@ -65,9 +65,9 @@ test("packaged resources start a query through the real SDK and Rust supervisor"
     const root = path.join(here, "../../..");
     // Execute the release script's actual copy list, so a missing import fails this test.
     const staging = readFileSync(path.join(root, "scripts/ci/package-app"), "utf8")
-      .split("\n").filter((line) => /^(mkdir|cp) .*claude-agent-sdk\//.test(line))
+      .split("\n").filter((line) => /^(mkdir|cp|rm) .*claude-agent-sdk\//.test(line))
       .join("\n").replaceAll("target/package-resources", '"$PLX_TEST_RESOURCES"');
-    assert.ok(staging.includes("main.mjs"), "release staging commands found");
+    assert.ok(staging.includes("claude-agent-sdk/src/"), "release staging commands found");
     execFileSync("sh", ["-eu", "-c", staging], {
       cwd: root, env: { ...process.env, PLX_TEST_RESOURCES: resources },
     });
