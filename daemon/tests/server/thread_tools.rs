@@ -2095,7 +2095,24 @@ async fn a_secret_reaches_only_the_keystore_and_the_agent_gets_a_one_time_ref() 
     assert!(!serde_json::to_string(&events).unwrap().contains(SECRET));
     assert_no_secret_files(host.dir.path(), SECRET, true);
     host.server.stop().await;
+    settle(host.dir.path()).await;
     assert_no_secret_files(host.dir.path(), SECRET, false);
+}
+
+/// Waits until plxd's shutdown stops removing files under `dir`: its tasks drop a little after
+/// it stops, and the last store connection to close deletes the WAL.
+async fn settle(dir: &Path) {
+    let deadline = Instant::now() + PATIENCE;
+    let mut before = files(dir);
+    loop {
+        sleep(Duration::from_millis(200)).await;
+        let now = files(dir);
+        if now == before {
+            return;
+        }
+        assert!(Instant::now() < deadline, "plxd's files never settled");
+        before = now;
+    }
 }
 
 /// A fork omits a pending secret item from the source's completed transcript.
