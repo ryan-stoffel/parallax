@@ -89,3 +89,30 @@ fn a_revert_is_refused_before_anything_changes() {
     let running = vec![run(1, Completed, 0, 10), run(2, Running, 20, 30)];
     assert!(check(1).run(&running, "codex").is_err());
 }
+
+#[test]
+fn a_boundary_inside_a_native_turn_group_is_refused() {
+    use ThreadRunStatus::Completed;
+    for later in [false, true] {
+        let mut runs = vec![run(1, Completed, 0, 10), run(2, Completed, 5, 11)];
+        if later {
+            runs.push(run(3, Completed, 20, 30));
+        }
+        for restore_files in [false, true] {
+            let boundary = Check {
+                restore_files,
+                ..check(1)
+            };
+            assert_eq!(
+                boundary.run(&runs, "codex"),
+                Err("This checkpoint is inside a turn that includes a steered message. Revert to before that turn or after all its messages instead.".to_owned())
+            );
+        }
+        // Whole-group boundaries still count one native turn for the overlapping runs.
+        assert_eq!(
+            check(0).run(&runs, "codex").unwrap().0,
+            if later { 2 } else { 1 }
+        );
+        assert_eq!(check(2).run(&runs, "codex").unwrap().0, u32::from(later));
+    }
+}

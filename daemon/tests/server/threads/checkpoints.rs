@@ -520,3 +520,129 @@ async fn an_unknown_provider_outcome_is_held_across_retry_and_restart() {
     assert_pending_actions(&mut client, thread).await;
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
+
+async fn refused_steered_boundary(later: bool) {
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut backends = plxd::routing::BackendRegistry::new();
+    backends.register(
+        parallax_protocol::Provider::Anthropic,
+        std::sync::Arc::new(CountingRewind {
+            fake: super::fake_backend(vec![
+                init("steered-checkpoint"),
+                Step::Emit(plxd::backend::Event::Text {
+                    message_id: None,
+                    text: "Ready to steer".to_owned(),
+                }),
+                Step::AwaitFollowUp,
+                // The steer starts its graph run well before the native turn ends.
+                Step::SleepMs(100),
+                write("a.txt", "native turn including steer\n"),
+                end_turn("Root."),
+                end_turn("Steered."),
+                Step::AwaitFollowUp,
+                write("b.txt", "later native turn\n"),
+                end_turn("Later."),
+            ]),
+            calls: std::sync::Arc::clone(&calls),
+            uncertain: false,
+        }),
+    );
+    let host = Host::start(backends);
+    let path = real_repo(host.work.path(), "steered-boundary");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let mut events = host.client().await;
+    events.subscribe(0, Some(scope(repo.id))).await;
+    let started = client
+        .call::<ThreadStart>(start_params(Some(repo.id), "Root"))
+        .await
+        .unwrap()
+        .run;
+    let thread = started.id;
+    let worktree = std::path::PathBuf::from(started.worktree_path.unwrap());
+    events.until(|event| matches!(&event.event,
+        ParallaxEvent::AgentOutput { run_id, items, .. } if *run_id == thread && items.iter().any(|item|
+            matches!(item, parallax_protocol::AgentOutputItem::Text { text, .. } if text == "Ready to steer")
+        )
+    )).await;
+    client
+        .call::<OrchestrationDispatch>(OrchestrationCommand::MessageDispatch {
+            thread_id: thread,
+            message_id: TurnId::generate(),
+            text: "Steered".to_owned(),
+            images: Vec::new(),
+            threads: Vec::new(),
+            model: None,
+            effort: None,
+            permission: None,
+            context_window: None,
+            fast: None,
+            account: None,
+            dispatch_mode: DispatchMode::SteerActive {
+                target_run_id: None,
+            },
+        })
+        .await
+        .unwrap();
+    checkpointed(&mut events, thread, 2).await;
+    if later {
+        send(&mut client, thread, "Later").await;
+        checkpointed(&mut events, thread, 3).await;
+    }
+    let params = ThreadRunsParams { thread_id: thread };
+    let before = client
+        .call::<OrchestrationThreadRuns>(params.clone())
+        .await
+        .unwrap()
+        .runs;
+    assert!(before[0].completed_at.unwrap() > before[1].started_at.unwrap());
+    let state = worktree_state(&worktree);
+    for restore_files in [false, true] {
+        let error = client
+            .call::<OrchestrationDispatch>(OrchestrationCommand::CheckpointRollback {
+                thread_id: thread,
+                ordinal: 1,
+                restore_files,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.parallax_data().unwrap().kind,
+            ErrorKind::RevertRefused
+        );
+        assert!(
+            error.message.contains("steered message"),
+            "{}",
+            error.message
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let runs = client.call::<OrchestrationThreadRuns>(params.clone()).await;
+        assert_eq!(runs.unwrap().runs, before);
+        assert_eq!(worktree_state(&worktree), state);
+    }
+    assert_eq!(worktree.join("b.txt").exists(), later);
+}
+
+/// What a refused revert leaves alone: the checkpoint refs, HEAD, status, and the turn's file.
+fn worktree_state(worktree: &std::path::Path) -> [String; 4] {
+    let refs = "refs/parallax/checkpoints/";
+    [
+        super::git(
+            worktree,
+            &["for-each-ref", "--format=%(refname) %(objectname)", refs],
+        ),
+        super::git(worktree, &["rev-parse", "HEAD"]),
+        super::git(worktree, &["status", "--porcelain"]),
+        std::fs::read_to_string(worktree.join("a.txt")).unwrap(),
+    ]
+}
+
+#[tokio::test]
+async fn a_steered_boundary_refuses_without_provider_graph_or_file_mutation() {
+    refused_steered_boundary(false).await;
+}
+
+#[tokio::test]
+async fn a_steered_boundary_with_a_later_turn_refuses_without_mutation() {
+    refused_steered_boundary(true).await;
+}

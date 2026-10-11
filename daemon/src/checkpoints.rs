@@ -575,6 +575,9 @@ impl Check {
                     .and_then(|previous| previous.completed_at)
                     .zip(run.started_at)
                     .is_some_and(|(ended, started)| ended > started);
+                if steered && previous.is_some_and(|run| run.ordinal <= Some(ordinal)) {
+                    return Err("This checkpoint is inside a turn that includes a steered message. Revert to before that turn or after all its messages instead.".to_owned());
+                }
                 if !steered {
                     turns += 1;
                 }
