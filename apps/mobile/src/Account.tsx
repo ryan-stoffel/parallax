@@ -5,8 +5,8 @@
 // account is here because the App Store requires it of an app that makes one.
 import { ClerkProvider, useClerk, useSignIn, useSignUp, useUser } from "@clerk/expo";
 import { tokenCache } from "@clerk/expo/token-cache";
-import { useState, type ReactNode } from "react";
-import { Alert, Pressable, StyleSheet, TextInput, View } from "react-native";
+import { useEffect, useState, type ReactNode } from "react";
+import { Alert, Modal, Pressable, StyleSheet, TextInput, View } from "react-native";
 
 import { font } from "./theme";
 import { Button, T, useColors } from "./ui";
@@ -31,9 +31,16 @@ export function Account() {
   const { signOut } = useClerk();
   const { signIn } = useSignIn();
   const { signUp } = useSignUp();
+  const [open, setOpen] = useState(false);
   const [step, setStep] = useState<Step>("signIn");
   const [form, setForm] = useState({ first: "", last: "", email: "", password: "", code: "" });
   const [busy, setBusy] = useState(false);
+  // Signing in or up finishes the sheet, and a sign-out or deletion starts it over.
+  const signedIn = !!user;
+  useEffect(() => {
+    setOpen(false);
+    setStep("signIn");
+  }, [signedIn]);
   const [error, setError] = useState<string>();
 
   /** Runs Clerk's steps in order, stopping at the first error, which it shows. */
@@ -91,83 +98,102 @@ export function Account() {
 
   const { first, last, email, password, code } = form;
   return (
-    <View style={styles.box}>
-      {step === "signUp" && field("first", "First name")}
-      {step === "signUp" && field("last", "Last name")}
-      {step !== "verify" && field("email", "Email")}
-      {step !== "verify" && field("password", "Password", true)}
-      {step === "verify" && (
-        <>
-          <T muted>Enter the code Clerk sent to {email}.</T>
-          {field("code", "Code")}
-        </>
-      )}
-      {step === "signIn" && (
-        <Button
-          label="Sign in"
-          primary
-          disabled={busy}
-          onPress={() =>
-            void run(
-              () => signIn.password({ identifier: email.trim(), password }),
-              () => signIn.finalize(),
-            )
-          }
-        />
-      )}
-      {step === "signUp" && (
-        <Button
-          label="Create account"
-          primary
-          disabled={busy}
-          onPress={() =>
-            void run(
-              () =>
-                signUp.create({
-                  emailAddress: email.trim(),
-                  password,
-                  firstName: first.trim(),
-                  lastName: last.trim(),
-                }),
-              () => signUp.verifications.sendEmailCode(),
-            ).then((ok) => ok && setStep("verify"))
-          }
-        />
-      )}
-      {step === "verify" && (
-        <Button
-          label="Verify"
-          primary
-          disabled={busy}
-          onPress={() =>
-            void run(
-              () => signUp.verifications.verifyEmailCode({ code: code.trim() }),
-              () => signUp.finalize(),
-            )
-          }
-        />
-      )}
-      {step !== "verify" && (
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => setStep(step === "signIn" ? "signUp" : "signIn")}
-        >
-          <T style={{ fontSize: 14, color: c.accent }}>
-            {step === "signIn" ? "Create an account" : "I have an account"}
-          </T>
-        </Pressable>
-      )}
-      {error && (
-        <T alert style={{ color: c.danger, fontSize: 13 }}>
-          {error}
-        </T>
-      )}
-    </View>
+    <>
+      <Button label="Sign in" onPress={() => setOpen(true)} />
+      <Modal
+        visible={open}
+        presentationStyle="pageSheet"
+        animationType="slide"
+        onRequestClose={() => setOpen(false)}
+      >
+        <View style={[styles.sheet, { backgroundColor: c.background }]}>
+          <View style={styles.row}>
+            <T medium style={{ fontSize: 20, flex: 1 }}>
+              Parallax account
+            </T>
+            <Pressable accessibilityRole="button" onPress={() => setOpen(false)} hitSlop={12}>
+              <T style={{ color: c.accent }}>Close</T>
+            </Pressable>
+          </View>
+          {step === "signUp" && field("first", "First name")}
+          {step === "signUp" && field("last", "Last name")}
+          {step !== "verify" && field("email", "Email")}
+          {step !== "verify" && field("password", "Password", true)}
+          {step === "verify" && (
+            <>
+              <T muted>Enter the code Clerk sent to {email}.</T>
+              {field("code", "Code")}
+            </>
+          )}
+          {step === "signIn" && (
+            <Button
+              label="Continue"
+              primary
+              disabled={busy}
+              onPress={() =>
+                void run(
+                  () => signIn.password({ identifier: email.trim(), password }),
+                  () => signIn.finalize(),
+                )
+              }
+            />
+          )}
+          {step === "signUp" && (
+            <Button
+              label="Create account"
+              primary
+              disabled={busy}
+              onPress={() =>
+                void run(
+                  () =>
+                    signUp.create({
+                      emailAddress: email.trim(),
+                      password,
+                      firstName: first.trim(),
+                      lastName: last.trim(),
+                    }),
+                  () => signUp.verifications.sendEmailCode(),
+                ).then((ok) => ok && setStep("verify"))
+              }
+            />
+          )}
+          {step === "verify" && (
+            <Button
+              label="Verify"
+              primary
+              disabled={busy}
+              onPress={() =>
+                void run(
+                  () => signUp.verifications.verifyEmailCode({ code: code.trim() }),
+                  () => signUp.finalize(),
+                )
+              }
+            />
+          )}
+          {step !== "verify" && (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setStep(step === "signIn" ? "signUp" : "signIn")}
+            >
+              <T style={{ fontSize: 14, color: c.accent }}>
+                {step === "signIn" ? "Create an account" : "I have an account"}
+              </T>
+            </Pressable>
+          )}
+          {error && (
+            <T alert style={{ color: c.danger, fontSize: 13 }}>
+              {error}
+            </T>
+          )}
+        </View>
+      </Modal>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
   box: { gap: 10 },
+  sheet: { flex: 1, padding: 24, gap: 10 },
   row: { flexDirection: "row", gap: 8 },
   input: {
     borderWidth: 1,

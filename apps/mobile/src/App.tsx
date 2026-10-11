@@ -104,6 +104,8 @@ function Connected({ saved }: { saved: Saved }) {
           style={{ backgroundColor: c.background }}
           contentContainerStyle={styles.settings}
           keyboardShouldPersistTaps="handled"
+          automaticallyAdjustKeyboardInsets
+          keyboardDismissMode="interactive"
         >
           <Button label="Done" onPress={() => setSettings(false)} />
           <T medium style={{ fontSize: 20 }}>
