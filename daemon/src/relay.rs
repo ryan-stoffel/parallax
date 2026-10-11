@@ -46,6 +46,9 @@ use crate::server::Daemon;
 /// Where the relay is unless `PLXD_RELAY_URL` says otherwise.
 pub const DEFAULT_URL: &str = "https://relay.parallx.dev";
 
+/// The most plxd corrects its clock by from the relay's: a day, in milliseconds.
+const MAX_CLOCK_OFFSET_MS: i64 = 24 * 60 * 60 * 1000;
+
 /// How often plxd pings the relay. Cloudflare closes a WebSocket idle for 100 s.
 const PING: Duration = Duration::from_mins(1);
 
@@ -634,7 +637,18 @@ async fn connected(daemon: &Arc<Daemon>, stop: &CancellationToken) -> Result<End
     let relay = &daemon.relay;
     let socket = match timed(now_ms() + relay.clock_offset.load(Ordering::Relaxed)).await {
         Err(Error::Clock(relay_ms)) => {
-            let offset = relay_ms - now_ms();
+            // A clock off by more than a day isn't a drift to correct for, and keeps the sums below
+            // from overflowing.
+            let Some(offset) = relay_ms
+                .checked_sub(now_ms())
+                .filter(|offset| offset.abs() <= MAX_CLOCK_OFFSET_MS)
+            else {
+                warn!(
+                    relay_ms,
+                    "the relay's time is over a day from this computer's; not using it"
+                );
+                return Err(Error::Clock(relay_ms));
+            };
             warn!(
                 seconds = offset / 1000,
                 "this computer's clock is off from the relay's; signing with the relay's time"

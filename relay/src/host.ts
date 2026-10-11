@@ -287,7 +287,7 @@ export class HostRelay extends DurableObject<Env> {
     if (!signed) return json(401, { error: "unauthorized" });
     // A signed proof at the wrong time: the relay's clock, so plxd corrects for its own and retries.
     const now = Date.now();
-    if (time < now - PROOF_PAST || time > Math.max(now, last) + PROOF_FUTURE || time <= last) {
+    if (time < now - PROOF_PAST || time > now + PROOF_FUTURE || time <= last) {
       const relayTime = Math.max(now, last + 1);
       // In a header too, which arrives with the status line however the body is split.
       return json(401, { error: "clock_skew", now: relayTime }, { [TIME_HEADER]: String(relayTime) });

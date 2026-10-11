@@ -9,6 +9,7 @@ import type {
 import { statusLabel, useConnection } from "../ConnectionStatus";
 import { localId, useHosts, type Host } from "../hosts";
 import {
+  dangerButton,
   primaryButton,
   quietButton,
   Row,
@@ -45,6 +46,8 @@ export function LanSettings() {
   const [relay, setRelay] = useState<boolean>();
   // The account's computers on the relay, while Reach from anywhere is on.
   const [relayHosts, setRelayHosts] = useState<RelayHost[]>();
+  // The relay host whose Remove is waiting for a second click.
+  const [confirmingRelay, setConfirmingRelay] = useState<string>();
   // The code on show, and how many computers were paired when it was made.
   const [code, setCode] = useState<RemotePairResult & { before: number }>();
   const [status, setStatus] = useState<RemoteSessionsResult>();
@@ -109,6 +112,7 @@ export function LanSettings() {
     void readSessions();
   };
   const removeRelayHost = async (hostId: string) => {
+    setConfirmingRelay(undefined);
     const hosts = await window.parallax.removeRelayHost(hostId);
     if (typeof hosts === "string") return setError(hosts);
     setError(undefined);
@@ -210,16 +214,41 @@ export function LanSettings() {
             <Row
               key={h.hostId}
               title={h.name || "Unnamed computer"}
-              description={`On the relay${h.thisComputer ? ", this computer" : ""}. ${h.online ? "Connected." : "Not connected."}`}
+              description={
+                confirmingRelay === h.hostId
+                  ? "Remove this computer from the relay? It stays off the relay until its Reach from anywhere switch is turned back on."
+                  : `On the relay${h.thisComputer ? ", this computer" : ""}. ${h.online ? "Connected." : "Not connected."}`
+              }
             >
-              <button
-                type="button"
-                className={quietButton}
-                aria-label={`Remove ${h.name || "Unnamed computer"} from the relay`}
-                onClick={() => void removeRelayHost(h.hostId)}
-              >
-                Remove
-              </button>
+              {/* Cancel takes Remove's place and focus, so a double click can't remove. */}
+              {confirmingRelay === h.hostId ? (
+                <>
+                  <button
+                    type="button"
+                    className={dangerButton}
+                    onClick={() => void removeRelayHost(h.hostId)}
+                  >
+                    Remove
+                  </button>
+                  <button
+                    type="button"
+                    autoFocus
+                    className={quietButton}
+                    onClick={() => setConfirmingRelay(undefined)}
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className={quietButton}
+                  aria-label={`Remove ${h.name || "Unnamed computer"} from the relay`}
+                  onClick={() => setConfirmingRelay(h.hostId)}
+                >
+                  Remove
+                </button>
+              )}
             </Row>
           ))}
         {on && status?.listening && (

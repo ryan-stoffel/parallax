@@ -142,6 +142,22 @@ describe("clock skew", () => {
   });
 });
 
+describe("clock creep", () => {
+  it("never accepts a proof more than 30 s ahead of the relay, however many come in a row", async () => {
+    const { host } = await online();
+    let at = Date.now() + 25_000;
+    opened(await hostSocket(host, await hostProof(host, host, at)));
+    for (let i = 0; i < 11; i++) {
+      at += 25_000;
+      const ahead = (await hostSocket(host, await hostProof(host, host, at))) as Response;
+      expect(ahead.status).toBe(401);
+    }
+    const stub = hosts.get(hosts.idFromName(host.id));
+    const last = await runInDurableObject(stub, (_: HostRelay, state) => state.storage.get<number>("lastProof"));
+    expect(last!).toBeLessThanOrEqual(Date.now() + 30_000);
+  });
+});
+
 describe("one user can't reach another user's host", () => {
   it("hides the host and refuses tickets for another user", async () => {
     const { host } = await online("user_listed");
