@@ -138,26 +138,29 @@ test("every turn's diff shows first, then one turn's, with undone turns left out
   expect(paths()).toEqual(["b.txt"]);
 });
 
-test("Edit from here reverts to the turn before, keeping files, and returns its message", async () => {
-  renderPanel({ backend: "codex-work" });
-  const select = document.querySelector("select")!;
-  await act(async () => {
-    select.value = "2";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-  await settle();
-  await act(async () => button("Edit from here").click());
-  expect(document.querySelector("dialog")!.open).toBe(true);
-  await act(async () => button("Revert and keep changes").click());
-  await settle();
-  expect(request).toHaveBeenCalledWith("h", "orchestration/dispatch", {
-    type: "checkpoint.rollback",
-    threadId: "r",
-    ordinal: 1,
-  });
-  expect(compose).toHaveBeenCalledWith("Now b");
-  expect(document.querySelector("dialog")!.open).toBe(false);
-});
+test.each(["codex-work", "claude-work"])(
+  "Edit from here reverts to the turn before, keeping files, and returns its message: %s",
+  async (backend) => {
+    renderPanel({ backend });
+    const select = document.querySelector("select")!;
+    await act(async () => {
+      select.value = "2";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await settle();
+    await act(async () => button("Edit from here").click());
+    expect(document.querySelector("dialog")!.open).toBe(true);
+    await act(async () => button("Revert and keep changes").click());
+    await settle();
+    expect(request).toHaveBeenCalledWith("h", "orchestration/dispatch", {
+      type: "checkpoint.rollback",
+      threadId: "r",
+      ordinal: 1,
+    });
+    expect(compose).toHaveBeenCalledWith("Now b");
+    expect(document.querySelector("dialog")!.open).toBe(false);
+  },
+);
 
 const selectTurn = async (ordinal: number) => {
   await act(async () => {
@@ -171,19 +174,7 @@ const selectTurn = async (ordinal: number) => {
 test.each([
   [{ running: true }, "Interrupt the current turn before reverting checkpoints."],
   [
-    { backend: "claude" },
-    "This provider does not support reverting conversation history. Start a new thread instead.",
-  ],
-  [
     { backend: "cursor" },
-    "This provider does not support reverting conversation history. Start a new thread instead.",
-  ],
-  [
-    { backend: "claude-work" },
-    "This provider does not support reverting conversation history. Start a new thread instead.",
-  ],
-  [
-    { backend: "codex" },
     "This provider does not support reverting conversation history. Start a new thread instead.",
   ],
   [

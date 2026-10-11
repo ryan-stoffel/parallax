@@ -113,7 +113,7 @@ export function ChangesPanel({
   const refusal =
     running || turns.some((t) => ["starting", "running", "waiting"].includes(t.status))
       ? "Interrupt the current turn before reverting checkpoints."
-      : backendKind !== "codex" && backendKind !== "fake"
+      : !["claude", "codex", "fake"].includes(backendKind)
         ? "This provider does not support reverting conversation history. Start a new thread instead."
         : previous && !ready(previous)
           ? "The previous turn has no ready checkpoint to revert to."
