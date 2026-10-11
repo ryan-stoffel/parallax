@@ -639,6 +639,14 @@ impl Actor {
         false
     }
 
+    /// Whether the run has a turn to start once it can: a waiting message, a wake-up, or a usage
+    /// limit's resume.
+    fn wants_slot(&self) -> bool {
+        (!self.queued.is_empty() && !self.queue_held)
+            || self.wakes.due().is_some()
+            || (self.row.state.status == convert::WAITING && self.row.state.resume_at.is_some())
+    }
+
     /// A slot came for the run, which waited in line: it starts what waited. The loop's top gives
     /// back one that nothing took.
     async fn slotted(&mut self, slot: OwnedSemaphorePermit) {
@@ -834,9 +842,13 @@ impl Actor {
         let mut active = Instant::now();
         loop {
             self.deliver().await;
-            // A shared thread holds its slot only while a turn runs (0063).
+            // A shared thread holds its slot only while a turn runs, and waits in line for one
+            // only while it has a turn to start (0063).
             if !self.busy() {
                 self.shared_slot = None;
+            }
+            if self.stopping || !self.wants_slot() {
+                self.slot_wait = None;
             }
             let deadline = self.batch.since.map(|since| since + COALESCE);
             // A turn in progress gets its wake-ups next, once it has settled, and a push or Open
@@ -1222,6 +1234,10 @@ impl Actor {
     /// waiting. Only a project's current coordinator wakes: a replaced one drops them, so a
     /// project never has two live (0024).
     async fn wake(&mut self) {
+        // A shared thread's wake-up waits in line for a slot, and [`Self::slotted`] sends it.
+        if !self.slot_ready().await {
+            return;
+        }
         if self.is_coordinator() {
             let project = self.project.into();
             let current = store(&self.daemon, move |db| {
@@ -4395,6 +4411,45 @@ mod tests {
         actors[held].0.finish(&Outcome::Cancelled).await;
         actors[blocked].0.admit_shared().await.unwrap();
         assert!(daemon.agents.shared_slots.take(RunId::generate()).is_err());
+    }
+
+    /// At the cap, a due wake-up waits in line and stays due, and goes once a slot frees. A run with
+    /// nothing left to start leaves the line.
+    #[tokio::test]
+    async fn a_shared_wake_up_waits_in_line_for_a_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let slots = &daemon.agents.shared_slots;
+        let mut held: Vec<_> = (0..8)
+            .map(|_| slots.take(RunId::generate()).unwrap())
+            .collect();
+        let mut actor = shared_actor(&daemon).await;
+        let run = Arc::new(SessionRun::default());
+        let (_sink, events) = EventSink::channel(4, Vec::new());
+        let mut live = Live::new(run.clone(), events, None);
+        live.settled = Some(tokio::time::Instant::now());
+        actor.live = Some(live);
+        actor.wakes.push(
+            "A task finished.".into(),
+            Vec::new(),
+            None,
+            tokio::time::Instant::now() - Duration::from_secs(5),
+        );
+        actor.wake().await;
+        assert!(actor.slot_wait.is_some(), "it waits in line");
+        assert!(actor.wakes.due().is_some(), "its wake-up stays due");
+        assert!(actor.wants_slot());
+
+        drop(held.pop());
+        let slot = tokio::time::timeout(
+            Duration::from_millis(50),
+            super::slot_came(&mut actor.slot_wait),
+        )
+        .await
+        .expect("the slot comes");
+        actor.slotted(slot).await;
+        assert_eq!(run.sent.lock().unwrap().len(), 1, "the wake-up went");
+        assert!(!actor.wants_slot(), "nothing is left to start");
     }
 
     /// At the cap, a queued message and a usage limit's resume wait in line with no timer and no
