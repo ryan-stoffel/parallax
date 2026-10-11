@@ -703,7 +703,8 @@ const MIGRATIONS: &[Migration] = &[
     },
     // `request_secret` (0063, PLX-648): each one-time secret ref still unused, with the thread
     // that asked for it and when it expires. The value is in the host's keystore under the ref's
-    // id, never here.
+    // id, never here. `wipe_freed_pages` has plxd's next start rebuild the database once, since
+    // a webhook task an older plxd deleted left its secret in a freed page.
     Migration {
         version: 43,
         sql: "CREATE TABLE secret_refs (
@@ -711,7 +712,8 @@ const MIGRATIONS: &[Migration] = &[
             thread_id TEXT NOT NULL,
             expires_at TEXT NOT NULL
         );
-        CREATE INDEX secret_refs_expiry ON secret_refs (expires_at);",
+        CREATE INDEX secret_refs_expiry ON secret_refs (expires_at);
+        INSERT INTO host_settings (key, value) VALUES ('wipe_freed_pages', 'true');",
     },
 ];
 

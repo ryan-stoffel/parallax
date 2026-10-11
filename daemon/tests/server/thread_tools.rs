@@ -1967,7 +1967,12 @@ fn assert_no_secret_files(dir: &Path, secret: &str, live: bool) {
         );
     }
     for file in written {
-        let bytes = std::fs::read(&file).unwrap();
+        // A live daemon can remove a temporary file between the listing and the read. The scan
+        // after shutdown, with nothing running, reads every file that remains.
+        let bytes = match std::fs::read(&file) {
+            Err(error) if live && error.kind() == std::io::ErrorKind::NotFound => continue,
+            read => read.unwrap(),
+        };
         assert!(
             !bytes
                 .windows(secret.len())

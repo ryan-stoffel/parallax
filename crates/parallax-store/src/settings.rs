@@ -38,6 +38,10 @@ const REPO_SCRIPTS: &str = "repo_scripts:";
 /// The `host_settings` key for the scripts that are running, which a restart interrupts.
 const RUNNING_SCRIPTS: &str = "running_scripts";
 
+/// The `host_settings` key migration 43 sets: plxd hasn't yet wiped the freed pages where a plxd
+/// before PLX-648 may have left a webhook secret (0063).
+const WIPE_FREED_PAGES: &str = "wipe_freed_pages";
+
 impl Store {
     /// The durable rollback step for a thread, as the daemon's JSON.
     ///
@@ -277,6 +281,24 @@ impl Store {
     /// A database error.
     pub fn set_running_scripts(&self, scripts: Option<&str>) -> Result<(), StoreError> {
         self.set_text(RUNNING_SCRIPTS, scripts)
+    }
+
+    /// Whether plxd still has to wipe the store's freed pages once (PLX-648).
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn wipe_freed_pages(&self) -> Result<bool, StoreError> {
+        Ok(self.text(WIPE_FREED_PAGES)?.is_some())
+    }
+
+    /// Records whether plxd still has to wipe the store's freed pages.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_wipe_freed_pages(&self, on: bool) -> Result<(), StoreError> {
+        self.set_text(WIPE_FREED_PAGES, on.then_some("true"))
     }
 
     /// A boolean host setting, on unless stored as `false`.

@@ -8,11 +8,14 @@ use jiff::{SignedDuration, Timestamp};
 use parallax_protocol::{
     Schedule, ScheduleRunStatus, ScheduleSaveParams, SignatureEncoding, WebhookSignature,
 };
+#[cfg(unix)]
 use ring::hmac;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use super::{Fired, Trigger, fire, fire_job, hook, next_run, put, read, run, save};
+#[cfg(unix)]
+use super::hook;
+use super::{Fired, Trigger, fire, fire_job, next_run, put, read, run, save};
 use crate::server::Daemon;
 use crate::store::store_error;
 
@@ -355,11 +358,10 @@ async fn a_signed_webhook_fires_its_prompt_with_the_bodys_values() {
     save(&daemon, paused).await.unwrap();
     let (status, _) = hook(&daemon, "POST", &endpoint.path, &headers(&digest), body).await;
     assert_eq!(status, 409, "paused");
-    assert!(
-        stored(&daemon, id).await.keychain,
-        "a save without one keeps it"
-    );
-    let key = parallax_protocol::AccountId::try_from(id).unwrap();
+    let key = stored(&daemon, id)
+        .await
+        .secret_key
+        .expect("a save without one keeps it");
     assert_eq!(
         daemon.keys.get(key).unwrap().as_deref().map(String::as_str),
         Some("s3cret")
@@ -379,6 +381,7 @@ struct FaultKeys {
     values: std::sync::Mutex<HashMap<parallax_protocol::AccountId, String>>,
     fail_read: std::sync::atomic::AtomicBool,
     fail_write: std::sync::atomic::AtomicBool,
+    fail_delete: std::sync::atomic::AtomicBool,
     deletes: std::sync::atomic::AtomicUsize,
 }
 
@@ -419,6 +422,11 @@ impl crate::keystore::KeyStore for FaultKeys {
     ) -> Result<(), crate::keystore::KeyStoreError> {
         self.deletes
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.fail_delete.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(crate::keystore::KeyStoreError::unavailable(
+                "test delete failure",
+            ));
+        }
         self.values.lock().unwrap().remove(&id);
         Ok(())
     }
@@ -429,6 +437,13 @@ fn fault_daemon(dir: &Path) -> (Arc<Daemon>, Arc<FaultKeys>) {
     let keys = Arc::new(FaultKeys::default());
     Arc::get_mut(&mut daemon).unwrap().keys = keys.clone();
     (daemon, keys)
+}
+
+/// The webhook secret the keystore holds for task `id`'s row.
+#[cfg(unix)]
+async fn secret_of(daemon: &Daemon, keys: &FaultKeys, id: Uuid) -> Option<String> {
+    let key = stored(daemon, id).await.secret_key?;
+    keys.values.lock().unwrap().get(&key).cloned()
 }
 
 fn signed(secret: &str) -> ScheduleSaveParams {
@@ -472,24 +487,18 @@ async fn failed_secret_writes_leave_no_task_and_keep_existing_tasks() {
     replacement.id = Some(task.id);
     replacement.title = "Changed".to_owned();
     keys.fail_write.store(true, SeqCst);
-    assert!(save(&daemon, replacement.clone()).await.is_err());
-    assert_eq!(stored(&daemon, id).await.task, before.task);
-    keys.fail_write.store(false, SeqCst);
-    keys.fail_read.store(true, SeqCst);
     assert!(save(&daemon, replacement).await.is_err());
+    assert_eq!(stored(&daemon, id).await.task, before.task);
     assert_eq!(
-        keys.values
-            .lock()
-            .unwrap()
-            .get(&parallax_protocol::AccountId::try_from(id).unwrap())
-            .unwrap(),
-        "working-value"
+        secret_of(&daemon, &keys, id).await.as_deref(),
+        Some("working-value")
     );
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn a_failed_row_write_restores_the_previous_working_secret() {
+async fn a_failed_row_write_keeps_the_previous_working_secret() {
+    use std::sync::atomic::Ordering::SeqCst;
     let dir = tempfile::tempdir().unwrap();
     let (daemon, keys) = fault_daemon(dir.path());
     let task = save(&daemon, signed("working-value")).await.unwrap();
@@ -497,21 +506,35 @@ async fn a_failed_row_write_restores_the_previous_working_secret() {
     let conn = rusqlite::Connection::open(dir.path().join("plxd.sqlite3")).unwrap();
     conn.execute_batch("CREATE TRIGGER reject_schedule BEFORE INSERT ON scheduled_tasks BEGIN SELECT RAISE(FAIL, 'test row failure'); END;").unwrap();
     let mut replacement = signed("replacement-value");
-    replacement.id = Some(task.id);
-    assert!(save(&daemon, replacement).await.is_err());
+    replacement.id = Some(task.id.clone());
+    assert!(save(&daemon, replacement.clone()).await.is_err());
     assert_eq!(
-        keys.values
+        secret_of(&daemon, &keys, id).await.as_deref(),
+        Some("working-value")
+    );
+    assert_eq!(keys.values.lock().unwrap().len(), 1, "the new key goes");
+    // Even when the new key can't be removed, the row still names the old one, untouched.
+    keys.fail_delete.store(true, SeqCst);
+    assert!(save(&daemon, replacement.clone()).await.is_err());
+    assert_eq!(
+        secret_of(&daemon, &keys, id).await.as_deref(),
+        Some("working-value")
+    );
+    keys.fail_delete.store(false, SeqCst);
+    conn.execute_batch("DROP TRIGGER reject_schedule;").unwrap();
+    save(&daemon, replacement).await.unwrap();
+    assert_eq!(
+        secret_of(&daemon, &keys, id).await.as_deref(),
+        Some("replacement-value")
+    );
+    assert!(
+        !keys
+            .values
             .lock()
             .unwrap()
-            .get(&parallax_protocol::AccountId::try_from(id).unwrap())
-            .unwrap(),
-        "working-value"
-    );
-    assert!(save(&daemon, signed("new-value")).await.is_err());
-    assert_eq!(
-        keys.values.lock().unwrap().len(),
-        1,
-        "new task key rolled back"
+            .values()
+            .any(|value| value == "working-value"),
+        "the old key goes once the new one is saved"
     );
 }
 
@@ -529,7 +552,7 @@ async fn legacy_secrets_migrate_and_are_wiped_only_with_a_working_store() {
         .store
         .run(&CancellationToken::new(), move |db| {
             let mut row = read(db, id)?.unwrap();
-            row.keychain = false;
+            row.secret_key = None;
             row.secret = Some(LEGACY.to_owned());
             put(db, &row)
         })
@@ -543,26 +566,62 @@ async fn legacy_secrets_migrate_and_are_wiped_only_with_a_working_store() {
     assert_eq!(status, 503, "{answer}");
     keys.fail_write.store(false, SeqCst);
     super::move_old_secrets(&daemon).await;
-    let row = stored(&daemon, id).await;
-    assert!(row.secret.is_none());
-    assert!(row.keychain);
-    assert_eq!(
-        keys.values
-            .lock()
-            .unwrap()
-            .get(&parallax_protocol::AccountId::try_from(id).unwrap())
-            .unwrap(),
-        LEGACY
+    assert!(stored(&daemon, id).await.secret.is_none());
+    assert_eq!(secret_of(&daemon, &keys, id).await.as_deref(), Some(LEGACY));
+    assert!(
+        !holds(dir.path(), LEGACY),
+        "the store retains migrated plaintext"
     );
-    for name in ["plxd.sqlite3", "plxd.sqlite3-wal"] {
-        let bytes = std::fs::read(dir.path().join(name)).unwrap_or_default();
-        assert!(
-            !bytes
-                .windows(LEGACY.len())
-                .any(|window| window == LEGACY.as_bytes()),
-            "{name} retains migrated plaintext"
-        );
-    }
+}
+
+/// Whether the store's database or WAL file holds `text`.
+fn holds(dir: &Path, text: &str) -> bool {
+    ["plxd.sqlite3", "plxd.sqlite3-wal"].iter().any(|name| {
+        std::fs::read(dir.join(name))
+            .unwrap_or_default()
+            .windows(text.len())
+            .any(|window| window == text.as_bytes())
+    })
+}
+
+/// A task an older plxd deleted, with `secure_delete` off, left its secret in a freed page,
+/// which the first start after migration 43 wipes with no live row to move.
+#[tokio::test]
+async fn the_first_start_wipes_a_deleted_legacy_secret() {
+    const LEGACY: &str = "plx648-deleted-legacy-value";
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = daemon(dir.path());
+    let task = save(&daemon, params(HOURLY)).await.unwrap();
+    let id = Uuid::try_parse(&task.id).unwrap();
+    daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            let mut row = read(db, id)?.unwrap();
+            row.secret = Some(LEGACY.to_owned());
+            put(db, &row)
+        })
+        .await
+        .unwrap();
+    let conn = rusqlite::Connection::open(dir.path().join("plxd.sqlite3")).unwrap();
+    conn.execute_batch(
+        "PRAGMA secure_delete = OFF; DELETE FROM scheduled_tasks; PRAGMA wal_checkpoint(TRUNCATE);",
+    )
+    .unwrap();
+    drop(conn);
+    assert!(holds(dir.path(), LEGACY), "the freed page keeps it");
+    super::move_old_secrets(&daemon).await;
+    assert!(
+        !holds(dir.path(), LEGACY),
+        "the store retains deleted plaintext"
+    );
+    let pending = daemon
+        .reader
+        .run(&CancellationToken::new(), |db| {
+            db.wipe_freed_pages().map_err(|e| store_error(&e))
+        })
+        .await
+        .unwrap();
+    assert!(!pending, "it wipes once");
 }
 
 #[tokio::test]
