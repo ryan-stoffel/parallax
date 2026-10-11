@@ -123,6 +123,21 @@ impl Store {
         Ok(())
     }
 
+    /// Rebuilds the database with `VACUUM`, which leaves no freed page behind, then checkpoints
+    /// the WAL and truncates it. Returns whether the checkpoint finished: a reader still on an
+    /// older snapshot stops it.
+    ///
+    /// # Errors
+    ///
+    /// A database error, such as an open transaction.
+    pub fn vacuum(&self) -> Result<bool, StoreError> {
+        self.conn.execute_batch("VACUUM")?;
+        let busy: i64 = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+        Ok(busy == 0)
+    }
+
     /// Starts a read transaction (`BEGIN`), so several reads see one snapshot. The event log's
     /// own paged readers use it so a compact sweep cannot land between their pages (0052).
     ///

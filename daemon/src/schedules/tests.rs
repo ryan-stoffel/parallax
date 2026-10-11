@@ -598,6 +598,8 @@ async fn the_first_start_wipes_a_deleted_legacy_secret() {
         .run(&CancellationToken::new(), move |db| {
             let mut row = read(db, id)?.unwrap();
             row.secret = Some(LEGACY.to_owned());
+            // As migration 43 marks a store that kept secrets in rows.
+            db.set_wipe_freed_pages(true).map_err(|e| store_error(&e))?;
             put(db, &row)
         })
         .await
@@ -689,4 +691,81 @@ async fn validation_and_transient_read_errors_preserve_a_secret_ref() {
             .unwrap(),
         "ref-test-value"
     );
+}
+
+/// The wipe runs on the store's thread, so a write made while it rebuilds a large store waits for
+/// it and succeeds, where a wipe on its own connection held the lock past the writer's 5 s busy
+/// timeout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_write_during_the_wipe_of_a_large_store_succeeds() {
+    const GIB_IN_MIB: u32 = 1024;
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let conn = rusqlite::Connection::open(dir.path().join("plxd.sqlite3")).unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TABLE bulk (b BLOB);
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < {GIB_IN_MIB})
+             INSERT INTO bulk SELECT randomblob(1048576) FROM n;"
+        ))
+        .unwrap();
+    }
+    let daemon = daemon(dir.path());
+    daemon
+        .store
+        .run(&CancellationToken::new(), |db| {
+            db.set_wipe_freed_pages(true).map_err(|e| store_error(&e))
+        })
+        .await
+        .unwrap();
+    let wiping = tokio::spawn({
+        let daemon = Arc::clone(&daemon);
+        async move { super::move_old_secrets(&daemon).await }
+    });
+    // The wipe is the store thread's job by now.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let started = std::time::Instant::now();
+    let task = save(&daemon, params(HOURLY)).await;
+    let waited = started.elapsed();
+    assert!(task.is_ok(), "{task:?}");
+    wiping.await.unwrap();
+    let pending = daemon
+        .reader
+        .run(&CancellationToken::new(), |db| {
+            db.wipe_freed_pages().map_err(|e| store_error(&e))
+        })
+        .await
+        .unwrap();
+    assert!(!pending, "the wipe finished");
+    println!("a write waited {waited:?} behind the wipe");
+}
+
+/// A key a save replaced but couldn't remove is recorded, and a later save removes it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_replaced_key_that_couldnt_be_removed_goes_later() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let dir = tempfile::tempdir().unwrap();
+    let (daemon, keys) = fault_daemon(dir.path());
+    let task = save(&daemon, signed("old-value")).await.unwrap();
+    let mut replacement = signed("new-value");
+    replacement.id = Some(task.id.clone());
+    keys.fail_delete.store(true, SeqCst);
+    save(&daemon, replacement.clone()).await.unwrap();
+    let held = || {
+        let mut values: Vec<String> = keys.values.lock().unwrap().values().cloned().collect();
+        values.sort();
+        values
+    };
+    assert_eq!(held(), ["new-value", "old-value"]);
+    keys.fail_delete.store(false, SeqCst);
+    save(&daemon, replacement).await.unwrap();
+    assert_eq!(held(), ["new-value"]);
+    let recorded = daemon
+        .reader
+        .run(&CancellationToken::new(), |db| {
+            db.unused_secret_keys().map_err(|e| store_error(&e))
+        })
+        .await
+        .unwrap();
+    assert_eq!(recorded, None);
 }

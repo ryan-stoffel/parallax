@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{info, warn};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -69,6 +69,9 @@ const MAX_QUEUED_DELIVERIES: usize = 20;
 pub(crate) struct Schedules {
     changed: Notify,
     rate: Mutex<HashMap<Uuid, (Instant, u32)>>,
+    /// Read while a webhook request reads its task's key and then the key's value, and written
+    /// to remove a key, so a save that replaces a key never removes it between the two.
+    keys: tokio::sync::RwLock<()>,
 }
 
 impl Schedules {
@@ -250,6 +253,7 @@ pub(crate) async fn save(
     if legacy {
         wipe_store(daemon).await;
     }
+    forget_unused(daemon).await;
     daemon.schedules.changed.notify_one();
     Ok(shown(stored, origin(daemon).await.as_deref()))
 }
@@ -267,13 +271,78 @@ async fn set_secret(
         .map_err(|error| crate::methods::keychain_error(&error))
 }
 
-/// Removes keystore entry `key`, which no task's row names. One that stays is unused.
+/// Removes keystore entry `key`, which no task's row names. One that can't be removed now is
+/// recorded, for [`forget_unused`] to remove later.
 async fn forget_secret(daemon: &Daemon, key: AccountId) {
-    let keys = Arc::clone(&daemon.keys);
-    let removed = tokio::task::spawn_blocking(move || keys.delete(key)).await;
-    if !matches!(removed, Ok(Ok(()))) {
+    if !delete_secret(daemon, key).await {
         warn!(%key, "could not remove an unused webhook secret from the keystore");
+        let recorded = update_unused(daemon, move |keys| {
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        })
+        .await;
+        if let Err(error) = recorded {
+            warn!(%key, error = %error.message, "could not record an unused webhook secret");
+        }
     }
+}
+
+/// Removes the recorded keystore entries [`forget_secret`] couldn't, keeping those that still
+/// fail. Runs at startup and after each save.
+async fn forget_unused(daemon: &Daemon) {
+    let recorded = daemon
+        .reader
+        .run(&CancellationToken::new(), |db| {
+            db.unused_secret_keys().map_err(|e| store_error(&e))
+        })
+        .await;
+    let Ok(Some(recorded)) = recorded else {
+        return;
+    };
+    let mut removed = Vec::new();
+    for key in serde_json::from_str::<Vec<AccountId>>(&recorded).unwrap_or_default() {
+        if delete_secret(daemon, key).await {
+            removed.push(key);
+        }
+    }
+    if !removed.is_empty() {
+        let _ = update_unused(daemon, move |keys| {
+            keys.retain(|key| !removed.contains(key));
+        })
+        .await;
+    }
+}
+
+/// Changes the recorded unused keystore entries with `change`, in one store job.
+async fn update_unused(
+    daemon: &Daemon,
+    change: impl FnOnce(&mut Vec<AccountId>) + Send + 'static,
+) -> Result<(), ErrorObject> {
+    daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            let stored = db.unused_secret_keys().map_err(|e| store_error(&e))?;
+            let mut keys: Vec<AccountId> = stored
+                .and_then(|stored| serde_json::from_str(&stored).ok())
+                .unwrap_or_default();
+            change(&mut keys);
+            let json = serde_json::to_string(&keys).map_err(ErrorObject::internal_error)?;
+            db.set_unused_secret_keys((!keys.is_empty()).then_some(json.as_str()))
+                .map_err(|e| store_error(&e))
+        })
+        .await
+}
+
+/// Removes keystore entry `key` once no webhook request is between reading it from a row and
+/// reading its value. Whether it did.
+async fn delete_secret(daemon: &Daemon, key: AccountId) -> bool {
+    let _removing = daemon.schedules.keys.write().await;
+    let keys = Arc::clone(&daemon.keys);
+    matches!(
+        tokio::task::spawn_blocking(move || keys.delete(key)).await,
+        Ok(Ok(()))
+    )
 }
 
 /// `schedule/delete`.
@@ -313,6 +382,7 @@ pub(crate) async fn run_now(
 /// The timer: see the module documentation. Returns when `stop` is cancelled.
 pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
     move_old_secrets(&daemon).await;
+    forget_unused(&daemon).await;
     loop {
         let next = daemon
             .reader
@@ -613,6 +683,7 @@ pub(crate) async fn hook(
     let Ok(id) = task_id(id) else {
         return not_found;
     };
+    let reading = daemon.schedules.keys.read().await;
     let stored = daemon
         .reader
         .run(&CancellationToken::new(), move |db| read(db, id))
@@ -650,6 +721,7 @@ pub(crate) async fn hook(
             return (401, json!({ "error": "invalid_signature" }));
         }
     }
+    drop(reading);
     // Without the token, which would otherwise reach the prompt through `{{request}}`.
     let path = format!("{}{id}", webhook::PREFIX);
     let request = webhook::Request {
@@ -885,8 +957,9 @@ fn new_secret_given(params: &ScheduleSaveParams) -> bool {
 
 /// Moves the webhook secrets a plxd before PLX-648 kept in their tasks' rows to the keystore, and
 /// wipes them from the store: the update runs with `secure_delete` on, and [`wipe_store`] then
-/// rebuilds the database and empties its WAL. The first start after migration 43 wipes even with
-/// nothing to move, since a task deleted before then left its secret in a freed page. On a host
+/// rebuilds the database and empties its WAL. A store migration 43 marked, one that kept secrets
+/// in rows, is wiped even with nothing to move, since a task deleted before then left its secret
+/// in a freed page. On a host
 /// with no keystore the secrets stay put, and those tasks' signed requests are refused.
 async fn move_old_secrets(daemon: &Daemon) {
     let (old, pending) = daemon
@@ -957,27 +1030,31 @@ async fn move_old_secrets(daemon: &Daemon) {
     }
 }
 
-/// Rebuilds the database to remove old freed pages, then truncates its WAL after migrating or
-/// replacing legacy plaintext. This runs outside a writer transaction because VACUUM requires it.
-/// Returns whether it did both.
+/// Rebuilds the database to remove old freed pages and truncates its WAL, after migrating or
+/// replacing legacy plaintext. It runs on the store's thread, so writes wait for it rather than
+/// fail. Returns whether it did both.
 async fn wipe_store(daemon: &Daemon) -> bool {
-    let path = daemon.data_dir.store_file();
-    let wiped = tokio::task::spawn_blocking(move || -> Result<(), rusqlite::Error> {
-        let conn = rusqlite::Connection::open(path)?;
-        conn.busy_timeout(Duration::from_secs(5))?;
-        conn.execute_batch("VACUUM")?;
-        let busy: i64 = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
-        if busy != 0 {
-            return Err(rusqlite::Error::ExecuteReturnedResults);
+    info!("wiping the store's freed pages of legacy webhook secrets");
+    let started = Instant::now();
+    let wiped = daemon.store.vacuum().await;
+    let elapsed_ms = started.elapsed().as_millis();
+    match wiped {
+        Ok(true) => {
+            info!(elapsed_ms, "wiped the store's freed pages and WAL");
+            true
         }
-        Ok(())
-    })
-    .await;
-    let wiped = matches!(wiped, Ok(Ok(())));
-    if !wiped {
-        warn!("could not wipe database pages and WAL after moving a legacy webhook secret");
+        Ok(false) => {
+            warn!(
+                elapsed_ms,
+                "wiped the store's freed pages, but a reader kept its WAL"
+            );
+            false
+        }
+        Err(error) => {
+            warn!(elapsed_ms, error = %error.message, "could not wipe the store's freed pages");
+            false
+        }
     }
-    wiped
 }
 
 /// Takes the save's new webhook secret out of `params`: its `secret`, or the value of its

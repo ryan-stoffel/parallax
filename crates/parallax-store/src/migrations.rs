@@ -703,8 +703,9 @@ const MIGRATIONS: &[Migration] = &[
     },
     // `request_secret` (0063, PLX-648): each one-time secret ref still unused, with the thread
     // that asked for it and when it expires. The value is in the host's keystore under the ref's
-    // id, never here. `wipe_freed_pages` has plxd's next start rebuild the database once, since
-    // a webhook task an older plxd deleted left its secret in a freed page.
+    // id, never here. A store that ran 40 to 42, which kept webhook secrets in task rows, gets
+    // `wipe_freed_pages`, so plxd's next start rebuilds it once: a task deleted then left its
+    // secret in a freed page. `migrating_from` is the version the store had (see `run`).
     Migration {
         version: 43,
         sql: "CREATE TABLE secret_refs (
@@ -713,7 +714,8 @@ const MIGRATIONS: &[Migration] = &[
             expires_at TEXT NOT NULL
         );
         CREATE INDEX secret_refs_expiry ON secret_refs (expires_at);
-        INSERT INTO host_settings (key, value) VALUES ('wipe_freed_pages', 'true');",
+        INSERT INTO host_settings (key, value)
+            SELECT 'wipe_freed_pages', 'true' FROM migrating_from WHERE version BETWEEN 40 AND 42;",
     },
 ];
 
@@ -771,6 +773,11 @@ pub(crate) fn run(conn: &mut Connection) -> Result<(), StoreError> {
         .prepare("SELECT version FROM schema_version")?
         .query_map([], |row| row.get(0))?
         .collect::<Result<_, _>>()?;
+    // The version the store had, for a migration that depends on it, as 43 does.
+    tx.execute(
+        "CREATE TEMP TABLE migrating_from AS SELECT ?1 AS version",
+        params![applied.last().copied().unwrap_or(0)],
+    )?;
     for migration in MIGRATIONS.iter().filter(|m| !applied.contains(&m.version)) {
         tx.execute_batch(migration.sql)?;
         tx.execute(
@@ -778,6 +785,7 @@ pub(crate) fn run(conn: &mut Connection) -> Result<(), StoreError> {
             params![migration.version, timestamp::now()],
         )?;
     }
+    tx.execute_batch("DROP TABLE temp.migrating_from")?;
     tx.commit()?;
 
     Ok(())
@@ -869,6 +877,39 @@ mod tests {
             })
             .unwrap();
         assert_eq!(migrated, ("r".to_owned(), "k".to_owned()));
+    }
+
+    /// Only a store that ran migrations 40 to 42, which kept webhook secrets in task rows, is
+    /// marked for the one-time wipe at migration 43: not a new store or one from before 40.
+    #[test]
+    fn only_a_store_that_had_schedules_is_marked_for_the_wipe() {
+        let marked = |from: i64| {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("plxd.sqlite3");
+            {
+                let conn = rusqlite::Connection::open(&path).unwrap();
+                conn.execute_batch(
+                    "CREATE TABLE schema_version (version INTEGER NOT NULL PRIMARY KEY, applied_at TEXT NOT NULL);",
+                )
+                .unwrap();
+                for migration in MIGRATIONS.iter().filter(|m| m.version <= from) {
+                    conn.execute_batch(migration.sql).unwrap();
+                    conn.execute(
+                        "INSERT INTO schema_version VALUES (?1, 'then')",
+                        [migration.version],
+                    )
+                    .unwrap();
+                }
+            }
+            crate::Store::open(&path)
+                .unwrap()
+                .wipe_freed_pages()
+                .unwrap()
+        };
+        assert!(!marked(0), "a new store");
+        assert!(!marked(39), "a store from before schedules");
+        assert!(marked(40));
+        assert!(marked(42));
     }
 
     /// A backup that fails partway, here on a corrupt page, leaves no partial copy or journal

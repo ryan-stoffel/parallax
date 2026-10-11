@@ -549,6 +549,24 @@ impl StoreHandle {
         })
     }
 
+    /// Runs [`Store::vacuum`] on the store's thread, outside a transaction as `VACUUM` needs, so
+    /// writes queue behind it rather than fail on its lock.
+    pub async fn vacuum(&self) -> Result<bool, ErrorObject> {
+        let State::Open { jobs, .. } = &self.state else {
+            return Err(unavailable());
+        };
+        let (reply, result) = oneshot::channel();
+        let job: Job = Box::new(move |tx| {
+            let _ = reply.send(tx.store.vacuum().map_err(|error| failed(&error)));
+        });
+        self.counters.sending();
+        if jobs.send(Message::Job(Instant::now(), job)).is_err() {
+            self.counters.unsent();
+            return Err(unavailable());
+        }
+        result.await.unwrap_or_else(|_| Err(unavailable()))
+    }
+
     /// Stores and publishes one event in a job of its own, and returns its `seq`. With the store
     /// unavailable, the event goes to the in-memory log. An event that can't be stored is logged
     /// and dropped, and the head is returned. For tests: plxd's own events go in their rows' jobs.

@@ -42,6 +42,10 @@ const RUNNING_SCRIPTS: &str = "running_scripts";
 /// before PLX-648 may have left a webhook secret (0063).
 const WIPE_FREED_PAGES: &str = "wipe_freed_pages";
 
+/// The `host_settings` key for the keystore entries of replaced or deleted webhook secrets that
+/// plxd couldn't remove yet, as plxd's JSON (PLX-648).
+const UNUSED_SECRET_KEYS: &str = "unused_secret_keys";
+
 impl Store {
     /// The durable rollback step for a thread, as the daemon's JSON.
     ///
@@ -299,6 +303,24 @@ impl Store {
     /// A database error.
     pub fn set_wipe_freed_pages(&self, on: bool) -> Result<(), StoreError> {
         self.set_text(WIPE_FREED_PAGES, on.then_some("true"))
+    }
+
+    /// The keystore entries plxd still has to remove, as plxd's JSON (PLX-648).
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn unused_secret_keys(&self) -> Result<Option<String>, StoreError> {
+        self.text(UNUSED_SECRET_KEYS)
+    }
+
+    /// Stores the keystore entries plxd still has to remove, or none with `None`.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_unused_secret_keys(&self, keys: Option<&str>) -> Result<(), StoreError> {
+        self.set_text(UNUSED_SECRET_KEYS, keys)
     }
 
     /// A boolean host setting, on unless stored as `false`.
