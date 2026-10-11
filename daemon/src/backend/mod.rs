@@ -121,12 +121,6 @@ pub trait Backend: Send + Sync {
         false
     }
 
-    /// Whether a run can rewind its session: [`Resume::at`] works, and turns report
-    /// [`Event::TurnCursor`]s to resume at (0062, T3 Code's `canRollbackThread`). Not by default.
-    fn rewind(&self) -> bool {
-        false
-    }
-
     /// Starts the CLI in `cwd` to list its own slash commands and skills (PLX-359), with the
     /// program and environment a thread on the user's own login gets, for
     /// [`commands::list`]. `None` for a backend with no list, the default.
@@ -465,7 +459,7 @@ pub struct Resume {
     /// (0050). Only a backend whose [`Capabilities::fork`] is set gets it.
     pub fork: bool,
     /// Resume only up to this position, an [`Event::TurnCursor`] of the session, dropping what
-    /// came after: a rewind (0062). Only a backend that can [`Backend::rewind`] gets it.
+    /// came after: a rewind (0062). Only Claude reads it.
     pub at: Option<String>,
 }
 

@@ -138,7 +138,7 @@ pub enum Event {
     /// Where the session stood when a turn ended, which a later run resumes at with
     /// [`Resume::at`](super::Resume::at) to rewind to that turn's end, dropping what came after
     /// (0062): the `uuid` of Claude's last transcript entry. Comes before the turn's
-    /// [`Event::TurnFinished`], from a backend that can [`rewind`](super::Backend::rewind).
+    /// [`Event::TurnFinished`], from Claude only.
     TurnCursor {
         /// The turn's id, as its [`Event::TurnStarted`] had it.
         #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1027,11 +1027,6 @@ impl Backend for ClaudeBackend {
         true
     }
 
-    /// `resumeSessionAt` with a turn's last transcript entry, as T3 Code rolls a thread back.
-    fn rewind(&self) -> bool {
-        true
-    }
-
     /// `claude -p` in stream-json on the user's login, asked to `initialize`
     /// ([`commands::claude`]).
     fn commands(&self, cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {

@@ -800,7 +800,6 @@ async fn a_session_resumes_forks_and_rewinds_through_the_sdk() {
     let folders = Folders::new();
     let api = fake_api(Vec::new()).await;
     let backend = claude_backend(&claude, &api, &folders.root, &folders.home, &folders.data);
-    assert!(backend.rewind());
     let never = |_: &ApprovalRequest| unreachable!("a plain run asks nothing");
 
     let (session, first) = session_and_cursor(&drive(&backend, plain(&folders, None), never).await);
