@@ -97,7 +97,8 @@
 //! ([`Run::hold`](super::Run::hold)), the prompt ends and the CLI exits after its last result,
 //! which ends the run; a follow-up sent after that fails with
 //! [`SendError::Finished`](super::SendError::Finished). Each turn's last transcript entry is
-//! reported as its [`Event::TurnCursor`], which a later run resumes at to rewind (0062).
+//! reported as its [`Event::TurnCursor`]. A revert leaves the session as it is, and the next run
+//! resumes at the kept turn's cursor ([`Backend::rewind`], 0062).
 //!
 //! # Credentials
 //!
@@ -1004,10 +1005,20 @@ impl Backend for ClaudeBackend {
         Capabilities {
             worker_sandbox: cfg!(any(target_os = "macos", target_os = "linux")),
             fork: true,
-            // ponytail: refused until PLX-646's Agent SDK adapter implements `rewind` with
-            // `resumeSessionAt`.
-            rewind: false,
+            rewind: true,
+            resume_at: true,
         }
+    }
+
+    /// Keeps the session as it is, as T3 Code's Claude adapter does: the next run resumes it at
+    /// the kept turn's cursor with `resumeSessionAt` ([`super::Resume::at`]), or starts a new
+    /// one when the revert kept no turn. A fork would give every message a new id, so the
+    /// cursors plxd keeps for the turns before it would no longer match.
+    fn rewind(
+        &self,
+        rewind: super::Rewind,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<String, String>> + Send>> {
+        Box::pin(std::future::ready(Ok(rewind.session_id)))
     }
 
     fn efforts(&self) -> &'static [AgentEffort] {

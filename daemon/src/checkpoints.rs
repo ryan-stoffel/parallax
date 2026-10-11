@@ -38,6 +38,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use crate::backend::Capabilities;
 use crate::server::Daemon;
 use crate::store::store_error;
 use crate::worktree::{DiffFormat, RunFolder, parse_numstat_z};
@@ -454,8 +455,8 @@ impl Revert {
     }
 }
 
-/// Checks `checkpoint.rollback` to run `ordinal` of thread `thread`, whose backend `backend`
-/// can rewind when `can_rewind`, before anything changes. Waits for the thread's captures first.
+/// Checks `checkpoint.rollback` to run `ordinal` of thread `thread`, whose backend `backend` can
+/// do `capabilities`, before anything changes. Waits for the thread's captures first.
 ///
 /// # Errors
 ///
@@ -466,7 +467,7 @@ pub(crate) async fn plan_revert(
     ordinal: u32,
     restore_files: bool,
     backend: &str,
-    can_rewind: bool,
+    capabilities: Capabilities,
 ) -> Result<Revert, ErrorObject> {
     let id = Uuid::from(thread);
     wait_captures(daemon, id).await;
@@ -499,7 +500,7 @@ pub(crate) async fn plan_revert(
     let check = Check {
         ordinal,
         restore_files,
-        can_rewind,
+        capabilities,
         isolated: !shared,
     };
     let (turns, undone) = check.run(&runs, backend).map_err(refused)?;
@@ -531,7 +532,9 @@ fn refused(why: String) -> ErrorObject {
 struct Check {
     ordinal: u32,
     restore_files: bool,
-    can_rewind: bool,
+    /// The backend's: whether it rewinds, and whether it does so by resuming at the kept turn's
+    /// cursor.
+    capabilities: Capabilities,
     /// Whether the folder is the thread's own worktree, which no other thread shares.
     isolated: bool,
 }
@@ -540,7 +543,7 @@ impl Check {
     /// The provider turns a revert drops, and the runs it undoes, or why it is refused.
     fn run(&self, runs: &[ThreadRun], _backend: &str) -> Result<(u32, Vec<TurnId>), String> {
         let ordinal = self.ordinal;
-        if !self.can_rewind {
+        if !self.capabilities.rewind {
             return Err("This provider does not support reverting conversation history. Start a new thread instead.".to_owned());
         }
         if self.restore_files && !self.isolated {
@@ -567,6 +570,19 @@ impl Check {
         {
             return Err(format!(
                 "Turn {ordinal} has no ready checkpoint to revert to."
+            ));
+        }
+        // A turn from before plxd kept cursors has nowhere to resume at.
+        if self.capabilities.resume_at
+            && ordinal > 0
+            && !started.iter().any(|run| {
+                run.ordinal == Some(ordinal)
+                    && run.status != ThreadRunStatus::RolledBack
+                    && run.cursor.is_some()
+            })
+        {
+            return Err(format!(
+                "Turn {ordinal} ended before Parallax recorded where its conversation stood, so it can't be reverted to. Revert to a later turn or start a new thread."
             ));
         }
         let mut turns = 0;

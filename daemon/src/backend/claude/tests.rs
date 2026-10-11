@@ -21,9 +21,9 @@ use crate::backend::process::{Environment, Launcher, SpawnError};
 use crate::backend::{
     AccountRef, AgentEffort, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend, Credential,
     Decision, Event, EventStream, FailureKind, FollowUp, ImageMediaType, LimitStatus, LimitWindow,
-    ModelUsage, Outcome, PromptImage, Resume, RunId, RunRequest, SendError, StartError, Started,
-    SubagentStatus, ThreadTools, TodoItem, TodoStatus, ToolPolicy, ToolStatus, TurnId, Usage,
-    WarningKind, WorkerSandbox,
+    ModelUsage, Outcome, PromptImage, Resume, Rewind, RunId, RunRequest, SendError, StartError,
+    Started, SubagentStatus, ThreadTools, TodoItem, TodoStatus, ToolPolicy, ToolStatus, TurnId,
+    Usage, WarningKind, WorkerSandbox,
 };
 use crate::mcp;
 use crate::paths::DataDir;
@@ -1208,6 +1208,43 @@ fn a_rewind_resumes_at_a_turns_cursor() {
             "--resume-session-at",
             "a0000000-0000-4000-8000-000000000063"
         ]
+    );
+}
+
+/// Through the SDK sidecar's fake, a revert keeps the session (0062): `rewind` returns it, and the
+/// next run resumes it at the cursor the kept turn reported.
+#[tokio::test]
+async fn a_revert_resumes_the_session_at_the_kept_turns_cursor() {
+    let fake = Fake::new("read-only");
+    let cwd = fake.root();
+    let capabilities = fake.backend.capabilities();
+    assert!(capabilities.rewind && capabilities.resume_at);
+    let first = run(&fake, request(&cwd)).await;
+    let cursor = first
+        .iter()
+        .find_map(|event| match event {
+            Event::TurnCursor { cursor, .. } => Some(cursor.clone()),
+            _ => None,
+        })
+        .expect("the turn's cursor");
+    let rewind = Rewind {
+        session_id: SESSION.into(),
+        cwd: cwd.clone(),
+        turns: 1,
+    };
+    let session = fake.backend.rewind(rewind).await.unwrap();
+    assert_eq!(session, SESSION);
+
+    let mut next = request(&cwd);
+    next.resume = Some(Resume {
+        at: Some(cursor.clone()),
+        ..Resume::new(session)
+    });
+    run(&fake, next).await;
+    let argv = fake.argv();
+    assert_eq!(
+        &argv[argv.len() - 4..],
+        ["--resume", SESSION, "--resume-session-at", cursor.as_str()]
     );
 }
 

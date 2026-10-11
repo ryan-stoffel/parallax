@@ -224,6 +224,7 @@ mod tests {
         AgentOutputItem::TurnFinished {
             turn_id: Some(TurnId::generate()),
             result: Some("Hello".to_owned()),
+            cursor: None,
         }
     }
 

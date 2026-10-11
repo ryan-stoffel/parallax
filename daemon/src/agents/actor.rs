@@ -544,6 +544,9 @@ pub(super) struct Actor {
     /// messages' `TurnStarted` names them or they're dropped (0041). A waiting message's sender is
     /// stored with it (PLX-370), and [`Self::load_queue`] puts it back here.
     senders: HashMap<TurnId, RunId>,
+    /// The cursor of the turn the live CLI is finishing ([`Event::TurnCursor`]), until its
+    /// `TurnFinished` item carries it.
+    cursor: Option<String>,
 }
 
 impl Actor {
@@ -591,6 +594,7 @@ impl Actor {
             approvals: Approvals::default(),
             pr_calls: HashSet::new(),
             senders: HashMap::new(),
+            cursor: None,
         }
     }
 
@@ -2531,7 +2535,7 @@ impl Actor {
             .await?;
         let message = text;
         let opening = self.opening(session_id, from, sent, &prepared).await;
-        let (prompt, resume, from) = match opening {
+        let (prompt, resume, handoff) = match opening {
             Ok(opening) => opening,
             Err(error) => {
                 self.move_back(moved_from).await;
@@ -2550,7 +2554,7 @@ impl Actor {
             .launch(prepared, prompt, images, Some(turn_id), resume, paths)
             .await
         {
-            if fresh {
+            if let Some(from) = handoff {
                 self.push(AgentOutputItem::Notice {
                     detail: handoff_notice(&from, &to),
                 })
@@ -2693,20 +2697,39 @@ impl Actor {
     }
 
     /// The first message and the session of the run's next CLI, on `prepared`'s backend, and the
-    /// backend the conversation so far ran on: `text` with the run's session `session_id` to
-    /// resume, or with a fork's parent session to fork ([`Actor::fork_source`]), or else a new
-    /// session told the conversation so far, which ran on `from`, or for a fork's first message
-    /// on its parent's backend.
+    /// backend a handoff's conversation ran on: `text` with the run's session `session_id` to
+    /// resume, where a revert went back to ([`revert::rewound`]), or with a fork's parent session
+    /// to fork ([`Actor::fork_source`]), or else a new session: told the conversation so far,
+    /// which ran on `from`, or for a fork's first message on its parent's backend, or told
+    /// nothing after a revert to the thread's start.
     async fn opening(
         &mut self,
         session_id: Option<String>,
         mut from: String,
         text: String,
         prepared: &Prepared,
-    ) -> Result<(String, Option<Resume>, String), ErrorObject> {
+    ) -> Result<(String, Option<Resume>, Option<String>), ErrorObject> {
+        let rewound = match session_id {
+            Some(_) if prepared.resolved.backend().capabilities().resume_at => {
+                self.rewound().await?
+            }
+            _ => None,
+        };
+        if rewound == Some(revert::Rewound::Restart) {
+            info!(run = %self.id, "starting a new session for a thread reverted to its start");
+            let prompt = self.first_message(&text, &prepared.place).await?;
+            return Ok((prompt, None, None));
+        }
         if let Some(session_id) = session_id {
             info!(run = %self.id, "resuming an agent run's session");
-            return Ok((text, Some(self.resume_of(session_id).await?), from));
+            let resume = Resume {
+                at: match rewound {
+                    Some(revert::Rewound::At(at)) => Some(at),
+                    _ => None,
+                },
+                ..self.resume_of(session_id).await?
+            };
+            return Ok((text, Some(resume), None));
         }
         if let Some(source) = self.fork_source(&prepared.resolved).await? {
             from = source.backend;
@@ -2716,13 +2739,13 @@ impl Actor {
                     fork: true,
                     ..self.resume_of(session_id).await?
                 };
-                return Ok((text, Some(resume), from));
+                return Ok((text, Some(resume), None));
             }
         }
         let to = prepared.resolved.backend().name();
         info!(run = %self.id, from, to, "starting a new session for an agent run");
         let prompt = self.handoff_prompt(&from, &text, &prepared.place).await?;
-        Ok((prompt, None, from))
+        Ok((prompt, None, Some(from)))
     }
 
     /// The parent of a fork that has sent nothing yet (0050), for its first CLI on `resolved`'s
@@ -2826,7 +2849,13 @@ impl Actor {
                 cap: handoff::HANDOFF_BYTES,
             },
         );
-        let message = handoff_message(from, &conversation, text);
+        self.first_message(&handoff_message(from, &conversation, text), place)
+            .await
+    }
+
+    /// `message` as a new session's first message: after what the run's first message says about
+    /// where the agent is and what it may do, if anything.
+    async fn first_message(&self, message: &str, place: &Place) -> Result<String, ErrorObject> {
         match place {
             Place::Coordinator { repo } => {
                 let project = self.project.into();
@@ -2835,12 +2864,12 @@ impl Actor {
                 })
                 .await?;
                 Ok(super::coordinator::first_message(
-                    &message,
+                    message,
                     &repo.to_string_lossy(),
                     autonomy,
                 ))
             }
-            Place::Worker { .. } => super::first_prompt(&message, place),
+            Place::Worker { .. } => super::first_prompt(message, place),
         }
     }
 
@@ -3322,8 +3351,14 @@ impl Actor {
                     return;
                 }
                 let created = self.created_prs(&event);
+                if let Event::TurnCursor { cursor, .. } = &event {
+                    self.cursor = Some(cursor.clone());
+                }
                 if let Some(mut item) = output_item(&event) {
                     self.fill_turn_started(&mut item);
+                    if let AgentOutputItem::TurnFinished { cursor, .. } = &mut item {
+                        *cursor = self.cursor.take();
+                    }
                     self.keep_tool_images(&event, &mut item).await;
                     self.push(item).await;
                 }

@@ -2,6 +2,7 @@ use jiff::Timestamp;
 use parallax_protocol::{CheckpointStatus, ThreadRun, ThreadRunStatus, TurnCheckpoint, TurnId};
 
 use super::{Check, SHARED};
+use crate::backend::Capabilities;
 
 /// A started run that ran from `start` to `end` seconds, with a ready checkpoint.
 fn run(ordinal: u32, status: ThreadRunStatus, start: i64, end: i64) -> ThreadRun {
@@ -23,6 +24,7 @@ fn run(ordinal: u32, status: ThreadRunStatus, start: i64, end: i64) -> ThreadRun
             status: CheckpointStatus::Ready,
             files: Vec::new(),
         }),
+        cursor: None,
     }
 }
 
@@ -30,7 +32,10 @@ fn check(ordinal: u32) -> Check {
     Check {
         ordinal,
         restore_files: true,
-        can_rewind: true,
+        capabilities: Capabilities {
+            rewind: true,
+            ..Capabilities::default()
+        },
         isolated: true,
     }
 }
@@ -60,7 +65,7 @@ fn a_revert_is_refused_before_anything_changes() {
     use ThreadRunStatus::{Completed, RolledBack, Running};
     let runs = vec![run(1, Completed, 0, 10), run(2, RolledBack, 20, 30)];
     let no_rewind = Check {
-        can_rewind: false,
+        capabilities: Capabilities::default(),
         ..check(1)
     };
     assert_eq!(
@@ -115,4 +120,28 @@ fn a_boundary_inside_a_native_turn_group_is_refused() {
         );
         assert_eq!(check(2).run(&runs, "codex").unwrap().0, u32::from(later));
     }
+}
+
+#[test]
+fn a_cursor_backend_reverts_only_to_a_turn_with_a_cursor() {
+    use ThreadRunStatus::Completed;
+    let mut runs = vec![run(1, Completed, 0, 10), run(2, Completed, 20, 30)];
+    runs[1].cursor = Some("entry-2".to_owned());
+    let claude = |ordinal| Check {
+        capabilities: Capabilities {
+            rewind: true,
+            resume_at: true,
+            ..Capabilities::default()
+        },
+        ..check(ordinal)
+    };
+    // Turn 1 ended before plxd kept cursors: nothing says where its conversation ended.
+    assert_eq!(
+        claude(1).run(&runs, "claude"),
+        Err("Turn 1 ended before Parallax recorded where its conversation stood, so it can't be reverted to. Revert to a later turn or start a new thread.".to_owned())
+    );
+    assert!(claude(2).run(&runs, "claude").is_ok());
+    // The thread's start needs none, and a backend without cursors never does.
+    assert!(claude(0).run(&runs, "claude").is_ok());
+    assert!(check(1).run(&runs, "codex").is_ok());
 }

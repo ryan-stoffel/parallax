@@ -283,6 +283,7 @@ impl Backend for FakeBackend {
             worker_sandbox: true,
             fork: true,
             rewind: true,
+            resume_at: false,
         }
     }
 

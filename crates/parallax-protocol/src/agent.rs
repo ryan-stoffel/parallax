@@ -622,6 +622,11 @@ pub enum AgentOutputItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         result: Option<String>,
+        /// Where the vendor's session stood when the turn ended, which a revert to this turn
+        /// resumes at (0062): Claude's last transcript entry. Absent for other vendors.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        cursor: Option<String>,
     },
     /// A follow-up never reached the CLI, because the run ended first. Send it again.
     FollowUpDropped {

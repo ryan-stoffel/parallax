@@ -164,7 +164,9 @@ pub trait Backend: Send + Sync {
     /// Drops a thread's newest turns from its conversation, so its next turn continues from the
     /// one before them (0062, T3 Code's `rollbackThread`), and returns the session id that turn
     /// resumes. Called with no live session on the thread. Only a backend whose
-    /// [`Capabilities::rewind`] is set gets it; the default refuses.
+    /// [`Capabilities::rewind`] is set gets it; the default refuses. A backend with
+    /// [`Capabilities::resume_at`] can leave its session as it is: the next run resumes it at the
+    /// kept turn's cursor, or starts a new one when no turn is kept.
     fn rewind(
         &self,
         _rewind: Rewind,
@@ -485,7 +487,8 @@ pub struct Resume {
     /// (0050). Only a backend whose [`Capabilities::fork`] is set gets it.
     pub fork: bool,
     /// Resume only up to this position, an [`Event::TurnCursor`] of the session, dropping what
-    /// came after: a rewind (0062). Only Claude reads it.
+    /// came after: a rewind (0062). Only a backend whose [`Capabilities::resume_at`] is set
+    /// gets it.
     pub at: Option<String>,
 }
 
@@ -647,6 +650,10 @@ impl Drop for ApiKey {
 
 /// What a backend can do.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent things a backend can do, not states of one thing"
+)]
 pub struct Capabilities {
     /// It enforces the worker sandbox (0013) for a [`ToolPolicy::WorkspaceWrite`] run on this
     /// OS, so M3's runner may start workers on it. Cursor never does: it runs only threads
@@ -656,6 +663,9 @@ pub struct Capabilities {
     pub fork: bool,
     /// [`Backend::rewind`] works (T3 Code's `canRollbackThread`, 0062).
     pub rewind: bool,
+    /// Each turn reports where it ended ([`Event::TurnCursor`]) and [`Resume::at`] works, so a
+    /// rewind takes effect when the next run resumes at the kept turn's cursor (Claude, 0062).
+    pub resume_at: bool,
 }
 
 /// Why a run could not start.

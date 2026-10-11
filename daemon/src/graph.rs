@@ -12,7 +12,8 @@
 //! too, which a sidebar reads while they wait. `queue.updated` writes the queued runs.
 //!
 //! A run that ends `completed`, `interrupted`, or `cancelled` is in [`Folded::ended`], for its
-//! checkpoint (0062). `thread.checkpoint` writes a run's checkpoint onto it, and
+//! checkpoint (0062). `turnFinished` keeps the vendor's cursor on its run, where a revert to it
+//! resumes. `thread.checkpoint` writes a run's checkpoint onto it, and
 //! `thread.reverted` marks the runs a revert undid `rolledBack`, their checkpoints `stale`.
 //!
 //! [`import`] folds a thread's stored events the first time the thread is touched after the
@@ -219,12 +220,17 @@ impl<'a> Fold<'a> {
                 run.images = u32::try_from(images.len()).unwrap_or(u32::MAX);
                 run.threads.clone_from(threads);
             }),
-            AgentOutputItem::TurnFinished { turn_id, .. } => {
+            AgentOutputItem::TurnFinished {
+                turn_id, cursor, ..
+            } => {
                 // A turn with no id is the first of its CLI: the oldest still open.
                 let at = match turn_id {
                     Some(id) => self.open.iter().position(|run| run.id == *id),
                     None => (!self.open.is_empty()).then_some(0),
                 };
+                if let Some(at) = at {
+                    self.open[at].cursor.clone_from(cursor);
+                }
                 self.end_at(at, ThreadRunStatus::Completed)
             }
             AgentOutputItem::FollowUpDropped { turn_id } => {
@@ -481,6 +487,7 @@ impl<'a> Fold<'a> {
             started_at: Some(self.time),
             completed_at: None,
             checkpoint: None,
+            cursor: None,
         };
         fill(&mut run);
         put_run(self.db, self.thread, &run, Some(self.seq))?;
@@ -605,6 +612,7 @@ fn queued_run(thread: Uuid, position: usize, message: &QueuedMessage, held: bool
         started_at: None,
         completed_at: None,
         checkpoint: None,
+        cursor: None,
     };
     GraphRun {
         id: run.id.into(),

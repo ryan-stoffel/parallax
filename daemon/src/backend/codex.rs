@@ -186,6 +186,7 @@ impl Backend for CodexBackend {
             worker_sandbox: false,
             fork: true,
             rewind: true,
+            resume_at: false,
         }
     }
 

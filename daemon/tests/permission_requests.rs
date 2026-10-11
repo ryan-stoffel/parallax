@@ -790,7 +790,7 @@ fn session_and_cursor(events: &[Event]) -> (String, String) {
 
 /// Through the Agent SDK (0061), a run resumes its session, a fork continues a copy under a new
 /// id (0050), and a rewind resumes at an earlier turn's cursor (0062), so the next message
-/// follows that turn in the transcript.
+/// follows that turn in the transcript, and a plain resume after that follows the rewound turn.
 #[tokio::test]
 async fn a_session_resumes_forks_and_rewinds_through_the_sdk() {
     let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
@@ -821,17 +821,31 @@ async fn a_session_resumes_forks_and_rewinds_through_the_sdk() {
     };
     let rewound = plain(&folders, Some(rewind));
     let turn = rewound.turn_id.unwrap().to_string();
-    let (after, _) = session_and_cursor(&drive(&backend, rewound, never).await);
+    let (after, rewound_end) = session_and_cursor(&drive(&backend, rewound, never).await);
     assert_eq!(after, session);
-    // The rewound turn's message follows the first turn's last entry, not the second turn's.
     let transcript = find(&folders.home, &format!("{session}.jsonl")).expect("the transcript");
-    let parent = fs::read_to_string(transcript)
-        .unwrap()
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .find(|entry| entry["uuid"] == turn.as_str())
-        .map(|entry| entry["parentUuid"].clone());
-    assert_eq!(parent, Some(Value::from(first)));
+    let parent = |turn: &str| {
+        fs::read_to_string(&transcript)
+            .unwrap()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find(|entry| entry["uuid"] == turn)
+            .map(|entry| entry["parentUuid"].clone())
+    };
+    // The rewound turn's message follows the first turn's last entry, not the second turn's.
+    assert_eq!(parent(&turn), Some(Value::from(first)));
+
+    // A plain resume after it continues from the rewound turn, so plxd stops passing a cursor
+    // once a turn after the revert has reported its own.
+    let plain_resume = plain(&folders, Some(Resume::new(session.clone())));
+    let mut entry = Some(Value::from(plain_resume.turn_id.unwrap().to_string()));
+    session_and_cursor(&drive(&backend, plain_resume, never).await);
+    let mut ancestors = Vec::new();
+    while let Some(Value::String(uuid)) = entry {
+        entry = parent(&uuid);
+        ancestors.push(uuid);
+    }
+    assert!(ancestors.contains(&rewound_end), "{ancestors:?}");
 }
 
 /// The file named `name` somewhere under `dir`.

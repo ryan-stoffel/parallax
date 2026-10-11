@@ -189,6 +189,121 @@ async fn each_turn_is_checkpointed_diffed_and_revertible_with_its_files() {
     assert!(!diff(&mut client, thread, 0, 3).await.contains("b.txt"));
 }
 
+/// The fake CLI as a backend that resumes at a turn's cursor, as Claude does (0062), keeping the
+/// requests it got.
+struct CursorRewind {
+    fake: plxd::backend::fake::FakeBackend,
+    requests: std::sync::Arc<std::sync::Mutex<Vec<plxd::backend::RunRequest>>>,
+}
+
+impl plxd::backend::Backend for CursorRewind {
+    fn name(&self) -> &str {
+        self.fake.name()
+    }
+    fn capabilities(&self) -> plxd::backend::Capabilities {
+        plxd::backend::Capabilities {
+            resume_at: true,
+            ..self.fake.capabilities()
+        }
+    }
+    fn start(
+        &self,
+        request: plxd::backend::RunRequest,
+    ) -> Result<plxd::backend::Started, plxd::backend::StartError> {
+        self.requests.lock().unwrap().push(request.clone());
+        self.fake.start(request)
+    }
+    fn rewind(
+        &self,
+        rewind: plxd::backend::Rewind,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send>> {
+        self.fake.rewind(rewind)
+    }
+}
+
+fn cursor(at: &str) -> Step {
+    Step::Emit(plxd::backend::Event::TurnCursor {
+        turn_id: None,
+        cursor: at.to_owned(),
+    })
+}
+
+/// A revert on a backend that resumes at a cursor changes no session: the next run resumes at
+/// the kept turn's cursor, and after a revert to the thread's start, a new session starts with
+/// only the new message.
+#[tokio::test]
+async fn a_cursor_backend_resumes_where_the_revert_went_back_to() {
+    let requests = std::sync::Arc::default();
+    let mut backends = plxd::routing::BackendRegistry::new();
+    backends.register(
+        parallax_protocol::Provider::Anthropic,
+        std::sync::Arc::new(CursorRewind {
+            fake: super::fake_backend(vec![
+                init("cursors-1"),
+                write("a.txt", "one\n"),
+                cursor("c1"),
+                end_turn("Turn 1."),
+                Step::AwaitFollowUp,
+                cursor("c2"),
+                end_turn("Turn 2."),
+                Step::AwaitFollowUp,
+            ]),
+            requests: std::sync::Arc::clone(&requests),
+        }),
+    );
+    let host = Host::start(backends);
+    let path = real_repo(host.work.path(), "cursors");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let mut runs = host.client().await;
+    runs.subscribe(0, Some(scope(repo.id))).await;
+    let thread = client
+        .call::<ThreadStart>(start_params(Some(repo.id), "Add a"))
+        .await
+        .unwrap()
+        .run
+        .id;
+    checkpointed(&mut runs, thread, 1).await;
+    send(&mut client, thread, "Add b").await;
+    checkpointed(&mut runs, thread, 2).await;
+    let listed = client
+        .call::<OrchestrationThreadRuns>(ThreadRunsParams { thread_id: thread })
+        .await
+        .unwrap()
+        .runs;
+    let cursors: Vec<_> = listed.iter().map(|run| run.cursor.as_deref()).collect();
+    assert_eq!(cursors, [Some("c1"), Some("c2")]);
+
+    let rollback = |ordinal| OrchestrationCommand::CheckpointRollback {
+        thread_id: thread,
+        ordinal,
+        restore_files: false,
+    };
+    client
+        .call::<OrchestrationDispatch>(rollback(1))
+        .await
+        .unwrap();
+    send(&mut client, thread, "Carry on").await;
+    checkpointed(&mut runs, thread, 3).await;
+    let resume = requests.lock().unwrap()[1].resume.clone().unwrap();
+    assert_eq!(resume.session_id, "cursors-1");
+    assert_eq!(resume.at.as_deref(), Some("c1"));
+
+    client
+        .call::<OrchestrationDispatch>(rollback(0))
+        .await
+        .unwrap();
+    send(&mut client, thread, "Start over").await;
+    checkpointed(&mut runs, thread, 4).await;
+    let request = requests.lock().unwrap()[2].clone();
+    assert_eq!(request.resume, None);
+    assert!(
+        request.prompt.contains("Start over") && !request.prompt.contains("Add a"),
+        "{}",
+        request.prompt
+    );
+}
+
 /// Counts provider mutations independently of graph events.
 struct CountingRewind {
     fake: plxd::backend::fake::FakeBackend,
