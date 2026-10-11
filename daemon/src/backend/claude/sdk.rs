@@ -397,7 +397,7 @@ impl Query {
                 .base()
                 .get("PLXD_CLAUDE_PROCESS")
                 .map(PathBuf::from)
-                .map_or_else(own_exe, Ok)
+                .map_or_else(crate::paths::own_exe, Ok)
                 .map_err(super::super::process::SpawnError::Io)?;
             map.serialize_entry("supervisor", &supervisor.to_string_lossy())
                 .map_err(invalid)?;
@@ -485,36 +485,6 @@ impl Drop for Query {
     }
 }
 
-/// plxd's own executable, which the sidecar runs each CLI through as `plxd sdk-process`. On Linux
-/// `/proc/<pid>/exe`, which still runs this binary after a self-update renamed a new one over it,
-/// where `current_exe` reads `… (deleted)`.
-fn own_exe() -> std::io::Result<PathBuf> {
-    if cfg!(target_os = "linux") {
-        Ok(PathBuf::from(format!("/proc/{}/exe", std::process::id())))
-    } else {
-        std::env::current_exe()
-    }
-}
-
 fn invalid(error: impl std::fmt::Display) -> StartError {
     StartError::Invalid(format!("couldn't write the Claude query: {error}"))
-}
-
-#[cfg(all(test, target_os = "linux"))]
-mod tests {
-    /// The sidecar's copy of the path runs this very binary, as `/proc/<pid>/exe` does even once a
-    /// self-update deleted the file it was started from.
-    #[test]
-    fn own_exe_runs_this_binary_from_another_process() {
-        let exe = super::own_exe().unwrap();
-        assert!(exe.starts_with("/proc"), "{}", exe.display());
-        let listed = std::process::Command::new(&exe)
-            .args(["--list", "own_exe_runs_this_binary"])
-            .output()
-            .unwrap();
-        assert!(
-            String::from_utf8_lossy(&listed.stdout).contains("own_exe_runs_this_binary"),
-            "{listed:?}"
-        );
-    }
 }

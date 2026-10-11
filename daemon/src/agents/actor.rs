@@ -460,9 +460,10 @@ impl Live {
     }
 }
 
-/// plxd's own executable, which serves `plxd mcp` to a run's CLI.
+/// plxd's own executable, which serves `plxd mcp` to a run's CLI, even after a self-update
+/// renamed a new one over it ([`crate::paths::own_exe`]).
 fn plxd_program() -> Result<PathBuf, String> {
-    std::env::current_exe()
+    crate::paths::own_exe()
         .map_err(|error| format!("could not find plxd's own executable: {error}"))
 }
 

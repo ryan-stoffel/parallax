@@ -422,6 +422,26 @@ fn plain_name(name: &OsStr) -> bool {
             .any(|reserved| stem.eq_ignore_ascii_case(reserved))
 }
 
+/// plxd's own executable, for a process plxd starts to run it, such as a run's `plxd mcp`. On
+/// Linux `/proc/<pid>/exe`, which still runs this binary after a self-update renamed a new one
+/// over it, where `current_exe` reads `… (deleted)`. It lives as long as this process does.
+///
+/// # Errors
+///
+/// If `current_exe` can't tell, off Linux.
+pub fn own_exe() -> io::Result<PathBuf> {
+    if cfg!(target_os = "linux") {
+        Ok(proc_exe(std::process::id()))
+    } else {
+        std::env::current_exe()
+    }
+}
+
+/// Process `pid`'s executable, as Linux's `/proc` names it.
+fn proc_exe(pid: u32) -> PathBuf {
+    PathBuf::from(format!("/proc/{pid}/exe"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{DataDir, pick_default};
@@ -649,5 +669,54 @@ mod tests {
         assert_eq!(pick_default(default.clone(), Some(legacy.clone())), legacy);
         std::fs::create_dir(&default).unwrap();
         assert_eq!(pick_default(default.clone(), Some(legacy)), default);
+    }
+
+    /// A process started from `own_exe`'s path runs this very binary.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn own_exe_runs_this_binary_from_another_process() {
+        let exe = super::own_exe().unwrap();
+        assert!(exe.starts_with("/proc"), "{}", exe.display());
+        let listed = std::process::Command::new(&exe)
+            .args(["--list", "own_exe_runs_this_binary"])
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&listed.stdout).contains("own_exe_runs_this_binary"),
+            "{listed:?}"
+        );
+    }
+
+    /// A self-update renames the new binary over the running one (PLX-704). The running
+    /// process's path then reads `… (deleted)`, and its `/proc` path still runs it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_binary_renamed_over_still_runs_from_its_proc_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let plxd = dir.path().join("plxd");
+        // A shell, which works under any name, waiting on its stdin.
+        std::fs::copy("/bin/sh", &plxd).unwrap();
+        let mut running = std::process::Command::new(&plxd)
+            .args(["-c", "read line"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let update = dir.path().join("plxd.new");
+        std::fs::write(&update, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::rename(&update, &plxd).unwrap();
+
+        let exe = super::proc_exe(running.id());
+        let target = std::fs::read_link(&exe).unwrap();
+        let ran = std::process::Command::new(&exe)
+            .args(["-c", "exit 0"])
+            .status();
+        running.kill().unwrap();
+        running.wait().unwrap();
+        assert!(
+            target.to_string_lossy().ends_with(" (deleted)"),
+            "{}",
+            target.display()
+        );
+        assert!(ran.unwrap().success());
     }
 }
