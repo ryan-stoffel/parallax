@@ -6,13 +6,13 @@
 export type VerifyOptions = {
   /** The instance's Frontend API URL, which tokens carry as `iss`: `https://clerk.parallx.dev`. */
   issuer: string;
-  /** The OAuth applications whose access tokens count, by `client_id`. None by default. */
-  clientIds?: readonly string[];
+  /** The OAuth applications whose access tokens count, by `client_id`. `[]` accepts none. */
+  clientIds: readonly string[];
   /**
-   * The origins a browser's session token may come from (its `azp`). A token without `azp`, as
-   * native apps send, passes. Unset, any origin passes.
+   * The origins a browser's session token may come from (its `azp`). `[]` accepts no browser. A
+   * session token without `azp`, as Clerk's native SDKs send, passes.
    */
-  authorizedParties?: readonly string[];
+  authorizedParties: readonly string[];
   /** For tests: what fetches the JWKS, and the time in ms. */
   fetch?: typeof fetch;
   now?: number;
@@ -23,11 +23,14 @@ export type Verified = { userId: string; sessionId?: string; clientId?: string }
 
 type Claims = Record<string, unknown>;
 
-// Signing keys by JWKS URL, and when each was fetched.
-const keySets = new Map<string, { at: number; keys: Map<string, CryptoKey> }>();
+type KeySet = { ttl: number; keys: Map<string, CryptoKey> };
+// Signing keys by JWKS URL: when each fetch started, and the fetch, which concurrent checks share.
+const keySets = new Map<string, { at: number; set: Promise<KeySet> }>();
 // A token naming a key the cached set lacks refetches it, at most this often, since Clerk rotates
 // keys rarely and a forged kid shouldn't make every request fetch.
 const REFETCH_MS = 60_000;
+// How long a JWKS is kept when its response sets no `max-age`.
+const TTL_MS = 60 * 60_000;
 // Clock skew allowed on `exp` and `nbf`.
 const SKEW_S = 5;
 
@@ -63,50 +66,66 @@ export async function verifyClerkToken(token: string, options: VerifyOptions): P
   // An OAuth access token names its application (RFC 9068), a session token its session.
   const clientId = claims["client_id"];
   if (typeof clientId === "string") {
-    if (!options.clientIds?.includes(clientId)) throw new Error("Unknown OAuth application.");
+    if (!options.clientIds.includes(clientId)) throw new Error("Unknown OAuth application.");
     return { userId, clientId };
   }
   const sessionId = claims["sid"];
   if (typeof sessionId !== "string") throw new Error("Neither a session nor an OAuth token.");
   const azp = claims["azp"];
-  if (
-    typeof azp === "string" &&
-    options.authorizedParties &&
-    !options.authorizedParties.includes(azp)
-  )
+  if (typeof azp === "string" && !options.authorizedParties.includes(azp))
     throw new Error("Unexpected origin.");
   return { userId, sessionId };
 }
 
-/** The instance's key named `kid`, from the cached JWKS or a fresh one. */
+/**
+ * The instance's key named `kid`, from the cached JWKS, or a fresh one once the cache expires or
+ * when it lacks `kid`.
+ */
 async function signingKey(options: VerifyOptions, kid: string): Promise<CryptoKey> {
   const url = `${options.issuer}/.well-known/jwks.json`;
   const now = options.now ?? Date.now();
-  let cached = keySets.get(url);
-  if (!cached?.keys.has(kid) && (!cached || now - cached.at >= REFETCH_MS)) {
-    const res = await (options.fetch ?? fetch)(url);
-    if (!res.ok) throw new Error(`JWKS answered ${res.status}.`);
-    const { keys } = (await res.json()) as { keys?: (JsonWebKey & { kid?: string })[] };
-    const imported = new Map<string, CryptoKey>();
-    for (const jwk of keys ?? []) {
-      if (jwk.kty !== "RSA" || !jwk.kid) continue;
-      imported.set(
-        jwk.kid,
-        await crypto.subtle.importKey(
-          "jwk",
-          jwk,
-          { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-          false,
-          ["verify"],
-        ),
-      );
-    }
-    cached = { at: now, keys: imported };
-    keySets.set(url, cached);
+  const refetch = () => {
+    const entry = { at: now, set: loadKeys(options, url) };
+    keySets.set(url, entry);
+    // A failed fetch isn't cached: the next check tries again.
+    entry.set.catch(() => keySets.get(url) === entry && keySets.delete(url));
+    return entry;
+  };
+  let entry = keySets.get(url) ?? refetch();
+  const cached = await entry.set;
+  let keys = cached.keys;
+  if (now - entry.at >= cached.ttl || (!keys.has(kid) && now - entry.at >= REFETCH_MS)) {
+    // Checks that waited on the same set share one refetch.
+    const latest = keySets.get(url);
+    entry = latest && latest !== entry ? latest : refetch();
+    ({ keys } = await entry.set);
   }
-  const key = cached.keys.get(kid);
+  const key = keys.get(kid);
   if (!key) throw new Error("Unknown signing key.");
   return key;
+}
+
+async function loadKeys(options: VerifyOptions, url: string): Promise<KeySet> {
+  const res = await (options.fetch ?? fetch)(url);
+  if (!res.ok) throw new Error(`JWKS answered ${res.status}.`);
+  const maxAge = /max-age=(\d+)/.exec(res.headers.get("cache-control") ?? "")?.[1];
+  const ttl = maxAge ? Math.max(Number(maxAge) * 1000, REFETCH_MS) : TTL_MS;
+  const { keys } = (await res.json()) as { keys?: (JsonWebKey & { kid?: string })[] };
+  const imported = new Map<string, CryptoKey>();
+  for (const jwk of keys ?? []) {
+    if (jwk.kty !== "RSA" || !jwk.kid) continue;
+    imported.set(
+      jwk.kid,
+      await crypto.subtle.importKey(
+        "jwk",
+        jwk,
+        { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+        false,
+        ["verify"],
+      ),
+    );
+  }
+  return { ttl, keys: imported };
 }
 
 function bytes(base64url: string): Uint8Array<ArrayBuffer> {

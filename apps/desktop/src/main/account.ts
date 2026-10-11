@@ -77,13 +77,17 @@ function bringForward() {
  * Starts the Parallax account (0067): Clerk's OAuth sign-in with PKCE, run from the main process,
  * so the renderer only ever sees the profile. The browser signs in on Clerk's page and comes back
  * to a loopback callback (loopback.ts). The refresh token is kept in one file in userData,
- * encrypted with the OS keychain; where the OS has none (some Linux desktops), the session lives
- * in memory and ends with the app. Call once the app is ready, as safeStorage needs.
+ * encrypted with the OS keychain; where the OS has none (Linux without a keyring), the session
+ * lives in memory and ends with the app. Call once the app is ready, as safeStorage needs.
  */
 export function startAccount() {
   const api = frontendApi(PUBLISHABLE_KEY);
   const file = path.join(app.getPath("userData"), "account");
-  const persist = safeStorage.isEncryptionAvailable();
+  // Linux without a keyring falls back to `basic_text`, a hardcoded password: as good as plain
+  // text for a refresh token that never expires, so the session stays in memory there.
+  const persist =
+    safeStorage.isEncryptionAvailable() &&
+    (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text");
 
   let session: Session | undefined;
   try {
@@ -94,11 +98,11 @@ export function startAccount() {
   }
   const save = (next: Session | undefined) => {
     session = next;
-    if (!persist) return;
-    if (next)
+    if (next && persist)
       fs.writeFileSync(file, safeStorage.encryptString(JSON.stringify(next)), { mode: 0o600 });
-    // Also clears a Supabase session left by an older build (0037).
-    else fs.rmSync(file, { force: true });
+    // Also clears a Supabase session left by an older build (0037), or one an older build saved
+    // with `basic_text`.
+    else if (!next) fs.rmSync(file, { force: true });
   };
   if (!session) save(undefined);
 

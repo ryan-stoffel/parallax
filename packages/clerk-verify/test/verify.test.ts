@@ -21,7 +21,10 @@ async function instance(issuer: string) {
     fetch: (async (url: string) => {
       assert.equal(url, `${issuer}/.well-known/jwks.json`);
       fetches++;
-      return Response.json({ keys: [jwk] });
+      return Response.json(
+        { keys: [jwk] },
+        { headers: { "cache-control": "public, max-age=600" } },
+      );
     }) as typeof fetch,
   };
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -88,4 +91,32 @@ test("refuses forged, expired, foreign, and unknown tokens", async () => {
     "Neither a session nor an OAuth token.",
   );
   await refuses("not.a-jwt", "Not a JWT.");
+});
+
+test("one JWKS fetch at a time; forged kids refetch once a minute; the cache expires", async () => {
+  const issuer = "https://clerk.three.test";
+  const { options, sign, fetches } = await instance(issuer);
+  const good = await sign({ iss: issuer, sub: "user_1", sid: "sess_1", exp: now + 3600 });
+  const forged = await sign(
+    { iss: issuer, sub: "user_1", sid: "sess_1", exp: now + 3600 },
+    {
+      alg: "RS256",
+      kid: "forged",
+    },
+  );
+  const at = (ms: number) => ({ ...options, now: Date.now() + ms });
+  const all = (token: string, ms: number) =>
+    Promise.allSettled(Array.from({ length: 50 }, () => verifyClerkToken(token, at(ms))));
+
+  await all(good, 0);
+  assert.equal(fetches(), 1);
+  await all(forged, 1_000);
+  assert.equal(fetches(), 1);
+  await all(forged, 61_000);
+  assert.equal(fetches(), 2);
+  await verifyClerkToken(good, at(62_000));
+  assert.equal(fetches(), 2);
+  // The response's max-age, 10 minutes, ends the cache.
+  await verifyClerkToken(good, at(61_000 + 600_000));
+  assert.equal(fetches(), 3);
 });

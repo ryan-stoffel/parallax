@@ -26,8 +26,10 @@ const electron = vi.hoisted(() => {
     ipcMain: {
       handle: (channel: string, h: (...args: unknown[]) => unknown) => handlers.set(channel, h),
     },
+    backend: "gnome_libsecret",
     safeStorage: {
       isEncryptionAvailable: () => true,
+      getSelectedStorageBackend: () => electron.backend,
       encryptString: (text: string) => Buffer.from(`enc:${Buffer.from(text).toString("base64")}`),
       decryptString: (data: Buffer) =>
         Buffer.from(data.toString().replace(/^enc:/, ""), "base64").toString(),
@@ -261,4 +263,27 @@ test("an unreadable or older (Supabase) session file is signed out, and removed"
   startAccount();
   expect(await call("parallax:profile")).toBeNull();
   expect(fs.existsSync(savedFile())).toBe(false);
+});
+
+test("Linux's basic_text backend, a hardcoded password, keeps the session in memory", async () => {
+  const platform = process.platform;
+  Object.defineProperty(process, "platform", { value: "linux" });
+  electron.backend = "basic_text";
+  try {
+    // A file an older build saved that way is removed.
+    fs.writeFileSync(savedFile(), electron.safeStorage.encryptString('{"refreshToken":"rt0"}'));
+    startAccount();
+    expect(fs.existsSync(savedFile())).toBe(false);
+
+    const answer = call("parallax:signIn", false);
+    await vi.waitFor(() => expect(electron.opened).toHaveLength(1));
+    await signInInBrowser(electron.opened[0]!);
+    await expect(answer).resolves.toBeUndefined();
+    expect(published.at(-1)).toMatchObject({ email: "ryan@example.com" });
+    expect(fs.existsSync(savedFile())).toBe(false);
+    await call("parallax:signOut");
+  } finally {
+    Object.defineProperty(process, "platform", { value: platform });
+    electron.backend = "gnome_libsecret";
+  }
 });
