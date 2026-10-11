@@ -773,6 +773,14 @@ async fn the_wipe_scrubs_the_pre_41_copy() {
             .count()
     };
     assert!(held() >= TASKS, "the copy holds them");
+    // What a rebuild a crash cut short left.
+    let leftovers = [
+        dir.path().join("plxd.sqlite3.pre-41.rebuild"),
+        dir.path().join("plxd.sqlite3.pre-41.rebuild-journal"),
+    ];
+    for leftover in &leftovers {
+        std::fs::write(leftover, "partial").unwrap();
+    }
     let daemon = daemon(dir.path());
     daemon
         .store
@@ -783,6 +791,7 @@ async fn the_wipe_scrubs_the_pre_41_copy() {
         .unwrap();
     super::move_old_secrets(&daemon).await;
     assert_eq!(held(), 0, "the copy retains secrets");
+    assert!(leftovers.iter().all(|leftover| !leftover.exists()));
     let conn = rusqlite::Connection::open(&backup).unwrap();
     let (rows, secrets): (usize, usize) = conn
         .query_row(

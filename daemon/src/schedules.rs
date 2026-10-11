@@ -1065,9 +1065,10 @@ async fn move_old_secrets(daemon: &Daemon) {
 
 /// The copy of the store migration 41 made (`<database>.pre-41`), which, from a store at 40, kept
 /// its webhook secrets in task rows: it loses them, once, with the wipe. The update leaves old
-/// cell content in pages a rebalance freed, so the copy is then rebuilt with `VACUUM INTO` and
-/// put in its place. A rollback to it then needs its signed webhooks' secrets entered again
-/// (0063). Whether it's done, as with no copy.
+/// cell content in pages a rebalance freed, so the copy is then rebuilt with `VACUUM INTO` under
+/// a fixed name, cleared first of what a crash left, synced, and put in its place. A rollback to
+/// it then needs its signed webhooks' secrets entered again (0063). Whether it's done, as with no
+/// copy.
 async fn scrub_backup(daemon: &Daemon) -> bool {
     type Failure = Box<dyn std::error::Error + Send + Sync>;
     let mut path = daemon.data_dir.store_file().into_os_string();
@@ -1095,14 +1096,24 @@ async fn scrub_backup(daemon: &Daemon) -> bool {
                  WHERE json_extract(payload, '$.secret') IS NOT NULL;",
         )?;
         let mut rebuilt = path.clone();
-        rebuilt.push(format!(".{}", Uuid::now_v7()));
+        rebuilt.push(".rebuild");
+        let mut journal = rebuilt.clone();
+        journal.push("-journal");
+        let remove = || {
+            let _ = std::fs::remove_file(&rebuilt);
+            let _ = std::fs::remove_file(&journal);
+        };
+        // What a rebuild a crash cut short left.
+        remove();
         let copied = conn.execute("VACUUM INTO ?1", [rebuilt.to_string_lossy()]);
         drop(conn);
-        let replaced = copied
-            .map_err(Failure::from)
-            .and_then(|_| Ok(std::fs::rename(&rebuilt, &path)?));
+        let replaced = copied.map_err(Failure::from).and_then(|_| {
+            std::fs::File::open(&rebuilt)?.sync_all()?;
+            std::fs::rename(&rebuilt, &path)?;
+            Ok(())
+        });
         if replaced.is_err() {
-            let _ = std::fs::remove_file(&rebuilt);
+            remove();
         }
         replaced
     })
