@@ -225,18 +225,7 @@ impl<'a> Fold<'a> {
                 cursor,
                 session_id,
                 ..
-            } => {
-                // A turn with no id is the first of its CLI: the oldest still open.
-                let at = match turn_id {
-                    Some(id) => self.open.iter().position(|run| run.id == *id),
-                    None => (!self.open.is_empty()).then_some(0),
-                };
-                if let Some(at) = at {
-                    self.open[at].cursor.clone_from(cursor);
-                    self.open[at].session_id.clone_from(session_id);
-                }
-                self.end_at(at, ThreadRunStatus::Completed)
-            }
+            } => self.finish_turn(*turn_id, cursor.as_ref(), session_id.as_ref()),
             AgentOutputItem::FollowUpDropped { turn_id } => {
                 let at = self.open.iter().position(|run| run.id == *turn_id);
                 self.end_at(at, ThreadRunStatus::Cancelled)
@@ -312,6 +301,25 @@ impl<'a> Fold<'a> {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Ends turn `turn_id`'s open run `completed`, keeping where the vendor's session stood.
+    fn finish_turn(
+        &mut self,
+        turn_id: Option<TurnId>,
+        cursor: Option<&String>,
+        session_id: Option<&String>,
+    ) -> Result<(), StoreError> {
+        // A turn with no id is the first of its CLI: the oldest still open.
+        let at = match turn_id {
+            Some(id) => self.open.iter().position(|run| run.id == id),
+            None => (!self.open.is_empty()).then_some(0),
+        };
+        if let Some(at) = at {
+            self.open[at].cursor = cursor.cloned();
+            self.open[at].session_id = session_id.cloned();
+        }
+        self.end_at(at, ThreadRunStatus::Completed)
     }
 
     /// Ends the open run at `at`, if there is one, with `status`.
