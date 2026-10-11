@@ -219,6 +219,39 @@ jobs:
           electron_config_cache: ${{ runner.temp }}/electron
         run: scripts/ci/launch-app
 
+  # The mobile app (PLX-653): type check and unit tests only. Its native build needs Xcode and runs
+  # by hand in the iOS Simulator.
+  mobile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: apps/desktop/.node-version
+
+      - name: Install pnpm
+        id: pnpm
+        working-directory: apps/mobile
+        run: |
+          corepack enable
+          echo "store=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm.outputs.store }}
+          key: pnpm-mobile-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/mobile/pnpm-lock.yaml') }}
+          restore-keys: pnpm-mobile-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Install, type check, and test
+        run: scripts/ci/check-mobile
+
   # The app against a plxd running its fake backend, with Playwright (PLX-16), on the OSes the app
   # job covers, with the plxd the rust job built for that OS (PLX-25).
   e2e:
@@ -379,7 +412,7 @@ jobs:
   # Branch protection requires this job's name, ci, as the only check (#6). Renaming it blocks every merge.
   ci:
     if: always()
-    needs: [actionlint, app, e2e, load, rust]
+    needs: [actionlint, app, e2e, load, mobile, rust]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

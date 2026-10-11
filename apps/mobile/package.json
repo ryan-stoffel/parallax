@@ -1,0 +1,29 @@
+{
+  "name": "parallax-mobile",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "ios": "expo run:ios",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@clerk/expo": "^4.10.1",
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "expo": "~57.0.27",
+    "expo-file-system": "~57.0.7",
+    "expo-notifications": "~57.0.22",
+    "expo-secure-store": "~57.0.4",
+    "react": "19.2.3",
+    "react-native": "0.86.3"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.3"
+  },
+  "packageManager": "pnpm@11.10.0"
+}

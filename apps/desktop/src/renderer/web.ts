@@ -1,7 +1,7 @@
 // The web client's entry (PLX-651): plxd serves web.html at `/` of its HTTPS listener. A browser
 // that hasn't paired gets the pairing screen; one that has gets the app, on webBridge.ts.
 
-import { pair, savedSession, webBridge, WebHost } from "./webBridge";
+import { openSocket, pair, savedSession, webBridge, WebHost } from "./webBridge";
 
 async function start(): Promise<void> {
   const descriptor = await fetch("/.well-known/parallax")
@@ -9,7 +9,7 @@ async function start(): Promise<void> {
     .catch(() => ({ name: "Parallax" }));
   const session = await savedSession().catch(() => undefined);
   if (!session) return showPairing(descriptor.name);
-  const host = new WebHost(session);
+  const host = new WebHost(openSocket(session));
   window.parallax = webBridge(host, descriptor.name);
   void host.connect();
   // Wakes a socket a sleeping phone or tab may have lost.

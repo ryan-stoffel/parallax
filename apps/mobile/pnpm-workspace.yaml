@@ -1,0 +1,13 @@
+# One package, as apps/desktop is (0022). Expo's native autolinking and Metro expect a flat
+# node_modules.
+nodeLinker: hoisted
+
+# Neither needs its install script: core-js only prints a banner, and browser-tabs-lock (Clerk's)
+# has nothing to build.
+allowBuilds:
+  browser-tabs-lock: false
+  core-js: false
+
+# Clerk's React SDK imports react-dom, which must be the same version as react.
+overrides:
+  react-dom: 19.2.3

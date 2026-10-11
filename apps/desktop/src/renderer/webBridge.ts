@@ -163,9 +163,25 @@ type Watch = {
 };
 
 /**
- * The connection to the serving plxd: JSON-RPC over `/ws`, one message per frame, kept alive with
- * heartbeats and reconnected with backoff, as connection.ts does for `plxd attach`. A refused
- * ticket means the session was revoked, so the page goes back to pairing.
+ * Opens plxd's `/ws` with a new ticket, or says why it can't: `revoked` only when plxd doesn't
+ * know the session anymore, else an error for people.
+ */
+export type OpenSocket = () => Promise<WebSocket | { error: string }>;
+
+/** `OpenSocket` for this browser's `session`, to the plxd that served the page. */
+export const openSocket =
+  (session: Session): OpenSocket =>
+  async () => {
+    const answer = await ticket(session);
+    if ("error" in answer) return answer;
+    return new WebSocket(`wss://${location.host}/ws?wsTicket=${answer.ticket}`);
+  };
+
+/**
+ * The connection to one plxd: JSON-RPC over `/ws`, one message per frame, kept alive with
+ * heartbeats and reconnected with backoff, as connection.ts does for `plxd attach`. A revoked
+ * session calls `signedOut`, which by default sends the page back to pairing. The mobile app
+ * (apps/mobile) uses it too, with its own `open`.
  */
 export class WebHost {
   state: ConnectionState = { status: "connecting" };
@@ -186,20 +202,21 @@ export class WebHost {
   readonly terminalListeners = new Map<string, (message: TerminalMessage) => void>();
 
   constructor(
-    private readonly session: Session,
-    private readonly signedOut = () => location.reload(),
+    private readonly open: OpenSocket,
+    private readonly signedOut = async () => {
+      await forget();
+      location.reload();
+    },
   ) {}
 
   async connect(): Promise<void> {
     clearTimeout(this.retryTimer);
     this.setState({ status: "connecting" });
-    const answer = await ticket(this.session);
-    if ("error" in answer) {
-      if (answer.error !== "revoked") return this.fail(answer.error);
-      await forget();
+    const socket = await this.open();
+    if ("error" in socket) {
+      if (socket.error !== "revoked") return this.fail(socket.error);
       return this.signedOut();
     }
-    const socket = new WebSocket(`wss://${location.host}/ws?wsTicket=${answer.ticket}`);
     this.socket = socket;
     socket.onmessage = (event) => {
       if (socket !== this.socket) return;

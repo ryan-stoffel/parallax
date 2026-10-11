@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "Parallax",
+    "slug": "parallax",
+    "scheme": "parallax",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "icon": "../../design/icon/masters/Parallax-dark-full-1024.png",
+    "ios": {
+      "bundleIdentifier": "dev.parallax.mobile",
+      "deploymentTarget": "17.0",
+      "icon": "../../design/icon/Parallax.icon",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        },
+        "NSLocalNetworkUsageDescription": "Parallax connects to your computers on this network.",
+        "NSBonjourServices": [
+          "_parallax._tcp"
+        ],
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "plugins": [
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "./assets/fonts/Sora_400Regular.ttf",
+            "./assets/fonts/Sora_500Medium.ttf"
+          ]
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": false
+        }
+      ],
+      "expo-notifications",
+      [
+        "@clerk/expo",
+        {
+          "appleSignIn": false
+        }
+      ]
+    ],
+    "experiments": {
+      "tsconfigPaths": false
+    }
+  }
+}
