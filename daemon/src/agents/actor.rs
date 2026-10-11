@@ -657,7 +657,7 @@ impl Actor {
             self.check_resume().await;
         }
         let woken = self.wakes.due().is_some_and(|at| at <= Instant::now());
-        if woken && !self.busy() && self.effect.is_none() {
+        if woken && !self.busy() && self.effect.is_none() && self.pending_revert.is_none() {
             self.wake().await;
         }
     }
@@ -853,15 +853,12 @@ impl Actor {
             let deadline = self.batch.since.map(|since| since + COALESCE);
             // A turn in progress gets its wake-ups next, once it has settled, and a push or Open
             // PR once it's done.
-            let wake_at = self
-                .wakes
-                .due()
-                .filter(|_| {
-                    !self.busy()
-                        && self.effect.is_none()
-                        && self.pending_revert.is_none()
-                        && self.slot_wait.is_none()
-                });
+            let wake_at = self.wakes.due().filter(|_| {
+                !self.busy()
+                    && self.effect.is_none()
+                    && self.pending_revert.is_none()
+                    && self.slot_wait.is_none()
+            });
             let expire_at = self.approvals.due();
             let resume_at = self.resume_due();
             let release_at = self.release_due();
@@ -2046,6 +2043,8 @@ impl Actor {
         &mut self,
         queued: &Queued,
     ) -> Result<Result<Vec<(Uuid, u64)>, SendError>, ErrorObject> {
+        // A turn a shared thread can't start takes no checkpoint (0063).
+        self.admit_shared().await?;
         self.checkpoint_before_turn().await;
         if self.is_coordinator() && !self.busy() {
             let project = super::integration(&self.daemon, self.project).await?;
@@ -2056,7 +2055,6 @@ impl Actor {
             }
         }
         let (follow_up, seen) = queued.follow_up(&self.daemon, self.id).await?;
-        self.admit_shared().await?;
         Ok(match &self.live {
             Some(live) => live.run.send(follow_up).map(|()| seen),
             None => Err(SendError::Finished),
