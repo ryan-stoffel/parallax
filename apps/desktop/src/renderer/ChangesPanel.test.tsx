@@ -7,6 +7,16 @@ import type { ParallaxBridge, WatchMessage } from "../preload/bridge";
 import type { ThreadRun } from "../protocol/generated/protocol";
 import { ChangesPanel } from "./ChangesPanel";
 
+vi.mock("./providers", () => ({
+  useProviders: () => ({
+    providers: [
+      { instance: { id: "codex-work", kind: "codex" } },
+      { instance: { id: "claude-work", kind: "claude" } },
+      { instance: { id: "codex", kind: "claude" } },
+    ],
+  }),
+}));
+
 // Give the real virtualizer a viewport and row heights in happy-dom, which has no layout.
 vi.mock("@tanstack/react-virtual", async (original) => {
   const actual = await original<typeof import("@tanstack/react-virtual")>();
@@ -82,7 +92,7 @@ beforeEach(async () => {
           hostId="h"
           runId="r"
           prompt="Add a"
-          backend="codex"
+          backend="fake"
           running={false}
           onCompose={compose}
           {...props}
@@ -129,6 +139,7 @@ test("every turn's diff shows first, then one turn's, with undone turns left out
 });
 
 test("Edit from here reverts to the turn before, keeping files, and returns its message", async () => {
+  renderPanel({ backend: "codex-work" });
   const select = document.querySelector("select")!;
   await act(async () => {
     select.value = "2";
@@ -165,6 +176,18 @@ test.each([
   ],
   [
     { backend: "cursor" },
+    "This provider does not support reverting conversation history. Start a new thread instead.",
+  ],
+  [
+    { backend: "claude-work" },
+    "This provider does not support reverting conversation history. Start a new thread instead.",
+  ],
+  [
+    { backend: "codex" },
+    "This provider does not support reverting conversation history. Start a new thread instead.",
+  ],
+  [
+    { backend: "unknown-instance" },
     "This provider does not support reverting conversation history. Start a new thread instead.",
   ],
 ] as const)("unavailable rollback is disabled and explained: %s", async (props, reason) => {

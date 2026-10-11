@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ThreadRun } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { ChangesDiff } from "./ChangesDiff";
+import { useProviders } from "./providers";
 import { ConfirmDialog } from "./ui";
 
 /** A diff as plxd sent it, or why it couldn't. */
@@ -42,6 +43,9 @@ export function ChangesPanel({
   unavailable?: string;
   onCompose: (text: string) => void;
 }) {
+  const providers = useProviders(hostId);
+  const backendKind =
+    providers?.providers.find((p) => p.instance.id === backend)?.instance.kind ?? backend;
   const [runs, setRuns] = useState<ThreadRun[] | { error: string }>();
   // The turn shown by its ordinal, or every turn.
   const [shownTurn, setShownTurn] = useState<number | "all">("all");
@@ -109,7 +113,7 @@ export function ChangesPanel({
   const refusal =
     running || turns.some((t) => ["starting", "running", "waiting"].includes(t.status))
       ? "Interrupt the current turn before reverting checkpoints."
-      : backend !== "codex" && backend !== "fake"
+      : backendKind !== "codex" && backendKind !== "fake"
         ? "This provider does not support reverting conversation history. Start a new thread instead."
         : previous && !ready(previous)
           ? "The previous turn has no ready checkpoint to revert to."
