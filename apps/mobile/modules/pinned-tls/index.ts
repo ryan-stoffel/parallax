@@ -5,6 +5,7 @@ type SocketEvent = { id: string; type: "open" | "message" | "close"; data?: stri
 
 const native = requireNativeModule<{
   randomBytes(count: number): Uint8Array;
+  privateFile(name: string): string;
   request(
     url: string,
     method: string,
@@ -20,6 +21,9 @@ const native = requireNativeModule<{
 }>("PinnedTls");
 
 export const randomBytes = (count: number) => native.randomBytes(count);
+
+/** The `file://` URL of `name` in a folder of Application Support kept out of backups. */
+export const privateFile = (name: string) => native.privateFile(name);
 
 /** The computers showing a pairing code on this network, by name, found over mDNS in `seconds`. */
 export const discover = (seconds: number) => native.discover(seconds);

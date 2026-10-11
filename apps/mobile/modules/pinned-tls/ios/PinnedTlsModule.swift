@@ -1,6 +1,7 @@
 // HTTPS requests and a WebSocket to plxd's remote listener (0065), whose certificate is its own
 // self-signed one: trusted only when its SHA-256 matches the fingerprint pairing pinned. React
-// Native's fetch and WebSocket can't pin a certificate, so the app reaches plxd through this.
+// Native's fetch and WebSocket can't pin a certificate, so the app reaches plxd through this. It
+// also finds hosts over mDNS, and supplies secure random bytes and a backup-free file location.
 import CryptoKit
 import ExpoModulesCore
 import Foundation
@@ -33,6 +34,12 @@ private final class Pinning: NSObject, URLSessionWebSocketDelegate {
     }
   }
 
+  /// plxd never redirects, and a redirect could carry the `DPoP` header elsewhere.
+  func urlSession(
+    _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
+  ) { completionHandler(nil) }
+
   func urlSession(
     _ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol: String?
   ) { opened?() }
@@ -63,6 +70,8 @@ private final class Resolver: NSObject, NetServiceDelegate {
   }
 }
 
+private struct RandomFailed: Error {}
+
 public class PinnedTlsModule: Module {
   private var sockets: [String: (task: URLSessionWebSocketTask, session: URLSession)] = [:]
   private let lock = NSLock()
@@ -72,10 +81,27 @@ public class PinnedTlsModule: Module {
     Events("onSocket")
 
     /// `count` bytes from the system's secure random generator, for `crypto.getRandomValues`.
-    Function("randomBytes") { (count: Int) -> Data in
+    Function("randomBytes") { (count: Int) throws -> Data in
       var bytes = Data(count: count)
-      _ = bytes.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, count, $0.baseAddress!) }
+      let status = bytes.withUnsafeMutableBytes {
+        SecRandomCopyBytes(kSecRandomDefault, count, $0.baseAddress!)
+      }
+      // Zeros would make a guessable SPAKE2 scalar and DPoP key.
+      guard status == errSecSuccess else { throw RandomFailed() }
       return bytes
+    }
+
+    /// The URL of file `name` in Application Support/Parallax, a folder kept out of backups: the
+    /// outbox's, whose messages belong to this phone's pairing.
+    Function("privateFile") { (name: String) throws -> String in
+      var folder = try FileManager.default.url(
+        for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true
+      ).appendingPathComponent("Parallax", isDirectory: true)
+      try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+      var values = URLResourceValues()
+      values.isExcludedFromBackup = true
+      try folder.setResourceValues(values)
+      return folder.appendingPathComponent(name).absoluteString
     }
 
     /// The computers advertising `_parallax._tcp` while they show a pairing code (0065), found in

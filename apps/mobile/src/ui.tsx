@@ -1,10 +1,14 @@
 // The app's small shared pieces: the colors for the system's appearance, the Parallax mark, a
-// button, and the transcript's text, with code in the desktop's monospace boxes.
+// button, the transcript's text, with code in the desktop's monospace boxes, and swipe-back.
+import { useRef, type ReactNode } from "react";
 import {
+  Animated,
+  PanResponder,
   Pressable,
   StyleSheet,
   Text,
   useColorScheme,
+  useWindowDimensions,
   View,
   type TextProps,
   type TextStyle,
@@ -132,6 +136,34 @@ export function Markdown({ text }: { text: string }) {
         ) : null,
       )}
     </View>
+  );
+}
+
+/**
+ * A pushed screen that a drag from the left edge takes back, as iOS's own stacks do: past a third
+ * of the width, or flicked, it slides away and calls `onBack`.
+ */
+export function SwipeBack({ onBack, children }: { onBack: () => void; children: ReactNode }) {
+  const { width } = useWindowDimensions();
+  const x = useRef(new Animated.Value(0)).current;
+  const pan = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponderCapture: (_, g) => g.x0 < 24 && g.dx > 8 && Math.abs(g.dy) < g.dx,
+      onPanResponderMove: (_, g) => x.setValue(Math.max(0, g.dx)),
+      onPanResponderRelease: (_, g) => {
+        const back = g.dx > width / 3 || g.vx > 0.5;
+        Animated.timing(x, {
+          toValue: back ? width : 0,
+          duration: 180,
+          useNativeDriver: true,
+        }).start(() => back && onBack());
+      },
+    }),
+  ).current;
+  return (
+    <Animated.View style={{ flex: 1, transform: [{ translateX: x }] }} {...pan.panHandlers}>
+      {children}
+    </Animated.View>
   );
 }
 

@@ -2,11 +2,13 @@
 // to its plxd, which is the desktop's WebHost over a pinned socket. `window.parallax` answers for
 // it as the web client's bridge does, so the desktop's threads and transcript hooks run unchanged.
 
+import { File } from "expo-file-system";
 import * as SecureStore from "expo-secure-store";
 
 import type { ParallaxBridge } from "../../desktop/src/preload/bridge";
 import { WebHost } from "../../desktop/src/renderer/webBridge";
-import { PinnedSocket, request } from "../modules/pinned-tls";
+import { PinnedSocket, privateFile, request } from "../modules/pinned-tls";
+import type { Outgoing } from "./outbox";
 import {
   base64url,
   confirmation,
@@ -34,14 +36,32 @@ export interface Saved {
   key: string;
 }
 
-const keychain = { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK };
+// Never restored to another phone from a backup, so the session stays bound to this one.
+const keychain = { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY };
 
 export async function loadSaved(): Promise<Saved | null> {
   const raw = await SecureStore.getItemAsync(KEY, keychain);
   return raw ? (JSON.parse(raw) as Saved) : null;
 }
 
-export const forget = () => SecureStore.deleteItemAsync(KEY, keychain);
+/** The outbox (outbox.ts) of the paired computer, out of backups, as its credential is. */
+const outboxFile = new File(privateFile("outbox.json"));
+
+export function loadOutbox(): Outgoing[] {
+  try {
+    return outboxFile.exists ? (JSON.parse(outboxFile.textSync()) as Outgoing[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export const saveOutbox = (messages: Outgoing[]) => outboxFile.write(JSON.stringify(messages));
+
+/** Forgets the paired computer, and the messages that were waiting to reach it. */
+export async function forget() {
+  if (outboxFile.exists) outboxFile.delete();
+  await SecureStore.deleteItemAsync(KEY, keychain);
+}
 
 /** `route` with plxd's port when it has none: `10.0.0.2` is `10.0.0.2:7341`. */
 export const withPort = (route: string) => (route.includes(":") ? route : `${route}:${PORT}`);
@@ -102,6 +122,8 @@ export async function pair(route: string, code: string, label: string): Promise<
     token: String(finished["accessToken"]),
     key: base64url(secret),
   };
+  // Anything still waiting was for the computer paired before.
+  if (outboxFile.exists) outboxFile.delete();
   await SecureStore.setItemAsync(KEY, JSON.stringify(saved), keychain);
   return saved;
 }

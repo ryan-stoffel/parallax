@@ -9,7 +9,6 @@
     "icon": "../../design/icon/masters/Parallax-dark-full-1024.png",
     "ios": {
       "bundleIdentifier": "dev.parallax.mobile",
-      "deploymentTarget": "17.0",
       "icon": "../../design/icon/Parallax.icon",
       "supportsTablet": false,
       "infoPlist": {
@@ -39,13 +38,7 @@
           "faceIDPermission": false
         }
       ],
-      "expo-notifications",
-      [
-        "@clerk/expo",
-        {
-          "appleSignIn": false
-        }
-      ]
+      "expo-notifications"
     ],
     "experiments": {
       "tsconfigPaths": false

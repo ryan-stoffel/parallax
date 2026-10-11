@@ -26,7 +26,7 @@ import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
 import { HOST } from "./host";
 import type { Outbox } from "./outbox";
 import { font } from "./theme";
-import { Button, Markdown, T, useColors } from "./ui";
+import { Button, Markdown, SwipeBack, T, useColors } from "./ui";
 
 /** What a tool call or permission request is about, in a few words: its command, file, or url. */
 const about = (input: Parameters<typeof field>[0]) =>
@@ -136,12 +136,15 @@ export function ThreadScreen({
   runId,
   title,
   connected,
+  status,
   outbox,
   onBack,
 }: {
   runId: string;
   title: string;
   connected: boolean;
+  /** Why the host isn't connected, for people, or undefined while it is. */
+  status?: string;
   outbox: Outbox;
   onBack: () => void;
 }) {
@@ -163,101 +166,108 @@ export function ThreadScreen({
   }
 
   return (
-    <KeyboardAvoidingView behavior="padding" style={{ flex: 1, backgroundColor: c.background }}>
-      <View style={[styles.header, { borderColor: c.border }]}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-          onPress={onBack}
-          hitSlop={12}
-        >
-          <T style={{ fontSize: 30, lineHeight: 32, color: c.accent }}>‹</T>
-        </Pressable>
-        <T medium numberOfLines={1} style={{ flex: 1 }}>
-          {title}
-        </T>
-      </View>
-      <FlatList
-        inverted
-        data={[...transcript.items].reverse()}
-        keyExtractor={(i) => i.key}
-        contentContainerStyle={styles.transcript}
-        accessibilityLabel="Transcript"
-        ListHeaderComponent={
-          <View style={{ gap: 14, marginTop: 14 }}>
-            {queue.map((m) => (
-              <View key={m.id} style={{ alignItems: "flex-end", gap: 4 }}>
-                <View style={[styles.bubble, { backgroundColor: c.selected, opacity: 0.6 }]}>
-                  <T>{m.text}</T>
-                </View>
-                <T muted style={{ fontSize: 12 }}>
-                  Queued
-                </T>
-              </View>
-            ))}
-            {pending.map((m) => (
-              <View key={m.id} style={{ alignItems: "flex-end", gap: 4 }}>
-                <View style={[styles.bubble, { backgroundColor: c.selected, opacity: 0.6 }]}>
-                  <T>{m.text}</T>
-                </View>
-                <T muted style={{ fontSize: 12 }}>
-                  {connected ? "Sending…" : "Waiting for connection"}
-                  {m.steer ? " · steer" : ""}
-                </T>
-              </View>
-            ))}
-            {working && (
-              <View style={styles.working}>
-                <ActivityIndicator size="small" color={c.accent} />
-                <T muted style={styles.small}>
-                  Working
-                </T>
-              </View>
-            )}
-            {error && (
-              <T alert style={{ ...styles.small, color: c.danger }}>
-                {error}
-              </T>
-            )}
-          </View>
-        }
-        renderItem={({ item }) => (
-          <View style={{ marginTop: 14 }}>
-            <Row item={item} runId={runId} />
-          </View>
-        )}
-      />
-      <View style={[styles.composer, { borderColor: c.border, backgroundColor: c.surface }]}>
-        <TextInput
-          accessibilityLabel="Message"
-          multiline
-          value={text}
-          onChangeText={setText}
-          placeholder="Reply, add detail, or steer what it does next"
-          placeholderTextColor={c.faintForeground}
-          style={[styles.input, { color: c.foreground }]}
-        />
-        <View style={styles.actions}>
-          {working && (
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => send(true)}
-              style={[styles.steer, { borderColor: c.border }]}
-            >
-              <T style={{ fontSize: 14 }}>Steer now</T>
-            </Pressable>
-          )}
+    <SwipeBack onBack={onBack}>
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1, backgroundColor: c.background }}>
+        <View style={[styles.header, { borderColor: c.border }]}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={working ? "Queue" : "Send"}
-            onPress={() => send(false)}
-            style={[styles.send, { backgroundColor: c.accent, opacity: text.trim() ? 1 : 0.4 }]}
+            accessibilityLabel="Back"
+            onPress={onBack}
+            hitSlop={12}
           >
-            <T style={{ color: "#ffffff", fontSize: 18, lineHeight: 20 }}>↑</T>
+            <T style={{ fontSize: 30, lineHeight: 32, color: c.accent }}>‹</T>
           </Pressable>
+          <T medium numberOfLines={1} style={{ flex: 1 }}>
+            {title}
+          </T>
         </View>
-      </View>
-    </KeyboardAvoidingView>
+        {status && (
+          <T muted style={{ ...styles.small, paddingHorizontal: 20, paddingTop: 6 }}>
+            {status}
+          </T>
+        )}
+        <FlatList
+          inverted
+          data={[...transcript.items].reverse()}
+          keyExtractor={(i) => i.key}
+          contentContainerStyle={styles.transcript}
+          accessibilityLabel="Transcript"
+          ListHeaderComponent={
+            <View style={{ gap: 14, marginTop: 14 }}>
+              {queue.map((m) => (
+                <View key={m.id} style={{ alignItems: "flex-end", gap: 4 }}>
+                  <View style={[styles.bubble, { backgroundColor: c.selected, opacity: 0.6 }]}>
+                    <T>{m.text}</T>
+                  </View>
+                  <T muted style={{ fontSize: 12 }}>
+                    Queued
+                  </T>
+                </View>
+              ))}
+              {pending.map((m) => (
+                <View key={m.id} style={{ alignItems: "flex-end", gap: 4 }}>
+                  <View style={[styles.bubble, { backgroundColor: c.selected, opacity: 0.6 }]}>
+                    <T>{m.text}</T>
+                  </View>
+                  <T muted style={{ fontSize: 12 }}>
+                    {connected ? "Sending…" : "Waiting for connection"}
+                    {m.steer ? " · steer" : ""}
+                  </T>
+                </View>
+              ))}
+              {working && (
+                <View style={styles.working}>
+                  <ActivityIndicator size="small" color={c.accent} />
+                  <T muted style={styles.small}>
+                    Working
+                  </T>
+                </View>
+              )}
+              {error && (
+                <T alert style={{ ...styles.small, color: c.danger }}>
+                  {error}
+                </T>
+              )}
+            </View>
+          }
+          renderItem={({ item }) => (
+            <View style={{ marginTop: 14 }}>
+              <Row item={item} runId={runId} />
+            </View>
+          )}
+        />
+        <View style={[styles.composer, { borderColor: c.border, backgroundColor: c.surface }]}>
+          <TextInput
+            accessibilityLabel="Message"
+            multiline
+            value={text}
+            onChangeText={setText}
+            placeholder="Reply, add detail, or steer what it does next"
+            placeholderTextColor={c.faintForeground}
+            style={[styles.input, { color: c.foreground }]}
+          />
+          <View style={styles.actions}>
+            {working && (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => send(true)}
+                style={[styles.steer, { borderColor: c.border }]}
+              >
+                <T style={{ fontSize: 14 }}>Steer now</T>
+              </Pressable>
+            )}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={working ? "Queue" : "Send"}
+              onPress={() => send(false)}
+              style={[styles.send, { backgroundColor: c.accent, opacity: text.trim() ? 1 : 0.4 }]}
+            >
+              <T style={{ color: "#ffffff", fontSize: 18, lineHeight: 20 }}>↑</T>
+            </Pressable>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </SwipeBack>
   );
 }
 

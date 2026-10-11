@@ -5,7 +5,7 @@ Pod::Spec.new do |s|
   s.author         = 'Parallax'
   s.homepage       = 'https://github.com/ryan-stoffel/parallax'
   s.license        = 'MIT'
-  s.platforms      = { :ios => '17.0' }
+  s.platforms      = { :ios => '16.4' }
   s.source         = { git: '' }
   s.static_framework = true
   s.dependency 'ExpoModulesCore'

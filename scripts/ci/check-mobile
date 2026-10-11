@@ -1,7 +1,9 @@
 #!/bin/sh
 set -eu
 
-# The mobile app (PLX-653): type check and unit tests. No simulator: the native build needs Xcode.
+# The mobile app (PLX-653): type check, unit tests, and Metro's iOS bundle, which fails on an import
+# the shared desktop files make that the phone can't resolve. No simulator: the native build needs
+# Xcode.
 cd "$(dirname "$0")/../../apps/mobile"
 set -x
 
@@ -10,3 +12,6 @@ pnpm --version
 pnpm install --frozen-lockfile
 pnpm check
 pnpm test
+out=$(mktemp -d)
+pnpm exec expo export --platform ios --output-dir "$out"
+rm -rf "$out"

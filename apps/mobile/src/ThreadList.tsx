@@ -66,7 +66,11 @@ export function ThreadList({
         contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 }}
         ListEmptyComponent={
           <T muted style={{ padding: 12 }}>
-            {view.loading ? "Loading…" : "No threads yet. Start one on your computer."}
+            {status
+              ? "Offline"
+              : view.loading
+                ? "Loading…"
+                : "No threads yet. Start one on your computer."}
           </T>
         }
         renderItem={({ item: t }) => {
