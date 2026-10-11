@@ -29,6 +29,9 @@ const REMOTE: &str = "remote";
 /// The `host_settings` key for whether the remote listener serves the web client (PLX-651).
 const REMOTE_WEB: &str = "remote_web";
 
+/// The `host_settings` key for whether plxd keeps a connection to Parallax Relay (PLX-652, 0068).
+const RELAY: &str = "relay";
+
 /// The `host_settings` key for the remote clients' sessions, as plxd's JSON (PLX-641).
 const REMOTE_SESSIONS: &str = "remote_sessions";
 
@@ -230,6 +233,25 @@ impl Store {
     /// A database error.
     pub fn set_remote_web(&self, on: bool) -> Result<(), StoreError> {
         self.set_flag(REMOTE_WEB, on)
+    }
+
+    /// Whether plxd keeps a connection to Parallax Relay while `remote` is on (PLX-652, 0068). Off
+    /// unless set on.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn relay(&self) -> Result<bool, StoreError> {
+        Ok(self.text(RELAY)?.is_some_and(|value| value == "true"))
+    }
+
+    /// Sets the host's relay setting.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_relay(&self, on: bool) -> Result<(), StoreError> {
+        self.set_flag(RELAY, on)
     }
 
     /// The remote clients' sessions, as plxd stored them, if any.

@@ -61,23 +61,23 @@ use crate::{
     ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, PullRequest,
     QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
     QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
-    QueueReorderParams, QueueResult, QueueSteerParams, RemotePairParams, RemotePairResult,
-    RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult,
-    RepoFilesParams, RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoSaveScriptsParams,
-    RepoScriptsParams, RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult,
-    ScheduleIdParams, ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask,
-    SecretAnswerParams, SecretAnswerResult, SecretRequestParams, SecretRequestResult,
-    SubscribeShellParams, SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult,
-    TaskDelegateParams, TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams,
-    TerminalListResult, TerminalOpenParams, TerminalOutputParams, TerminalResizeParams,
-    TerminalResult, TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult,
-    ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams,
-    ThreadHistoryResult, ThreadListParams, ThreadListResult, ThreadMergeBackParams,
-    ThreadMergeBackResult, ThreadRunsParams, ThreadRunsResult, ThreadSearchParams,
-    ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
-    ThreadUpdateResult, TurnDiffParams, TurnDiffResult, UsageDailyParams, UsageDailyResult,
-    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams,
-    UsageLimitsResult,
+    QueueReorderParams, QueueResult, QueueSteerParams, RelayHostsParams, RelayHostsResult,
+    RelayRegisterParams, RelayRemoveParams, RemotePairParams, RemotePairResult, RemoteRevokeParams,
+    RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult, RepoFilesParams,
+    RepoFilesResult, RepoRefsParams, RepoRefsResult, RepoSaveScriptsParams, RepoScriptsParams,
+    RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult, ScheduleIdParams,
+    ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask, SecretAnswerParams,
+    SecretAnswerResult, SecretRequestParams, SecretRequestResult, SubscribeShellParams,
+    SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult, TaskDelegateParams,
+    TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult,
+    TerminalOpenParams, TerminalOutputParams, TerminalResizeParams, TerminalResult,
+    TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams, ThreadHistoryResult,
+    ThreadListParams, ThreadListResult, ThreadMergeBackParams, ThreadMergeBackResult,
+    ThreadRunsParams, ThreadRunsResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams,
+    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams, TurnDiffResult,
+    UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult, UsageHistoryParams,
+    UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -390,6 +390,15 @@ method_table! {
         /// `remote/revoke`: ends a session and closes its connections. An unknown id changes
         /// nothing.
         RemoteRevoke = "remote/revoke": RemoteRevokeParams => RemoteSessionsResult;
+        /// `relay/register`: registers this host with Parallax Relay under the user of a Clerk
+        /// session token, signed with the host key (PLX-652, 0068). Gated on the `relay`
+        /// capability.
+        RelayRegister = "relay/register": RelayRegisterParams => RemoteSessionsResult;
+        /// `relay/hosts`: the hosts the signed-in user has on Parallax Relay (PLX-652, 0068).
+        RelayHosts = "relay/hosts": RelayHostsParams => RelayHostsResult;
+        /// `relay/remove`: removes one of the user's hosts from the relay, freeing its place, and
+        /// answers with the rest.
+        RelayRemove = "relay/remove": RelayRemoveParams => RelayHostsResult;
         /// `inbox/list`: a Project's inbox, oldest first, and the event log's `seq` from before the
         /// read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
         InboxList = "inbox/list": InboxListParams => InboxListResult;
@@ -672,6 +681,9 @@ mod tests {
                 "remote/pair",
                 "remote/sessions",
                 "remote/revoke",
+                "relay/register",
+                "relay/hosts",
+                "relay/remove",
                 "inbox/list",
                 "inbox/seen",
                 "github/install",

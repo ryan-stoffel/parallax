@@ -866,7 +866,7 @@ impl Serving {
                     _ if request.too_large => (413, json!({ "error": "body_too_large" })),
                     (method, hook) if hook.starts_with("/api/hooks/") => {
                         let Request { path, headers, body, .. } = &request;
-                        crate::schedules::hook(&daemon, method, path, headers, body).await
+                        crate::schedules::hook(&daemon, method, path, headers, body, None).await
                     }
                     _ => (404, json!({ "error": "not_found" })),
                 };
@@ -1434,8 +1434,8 @@ fn clean_name(name: &str) -> String {
 }
 
 /// Where a client can reach this host, best first: its LAN address, the one its default route
-/// leaves from, then its Tailscale address. Each an IP, with the port when it isn't
-/// [`remote::PORT`].
+/// leaves from, then its Tailscale address, each an IP, with the port when it isn't
+/// [`remote::PORT`], then `relay:<hostId>` while plxd is connected to the relay (PLX-652).
 pub(crate) async fn routes(daemon: &Daemon) -> Vec<String> {
     let remote = &daemon.remote;
     let route = |ip: IpAddr| {
@@ -1445,8 +1445,9 @@ pub(crate) async fn routes(daemon: &Daemon) -> Vec<String> {
             SocketAddr::new(ip, remote.port).to_string()
         }
     };
+    let relay = daemon.relay.route();
     if let Some(ip) = remote.address {
-        return vec![route(ip)];
+        return std::iter::once(route(ip)).chain(relay).collect();
     }
     let mut routes = Vec::new();
     // Connecting a UDP socket sends nothing; it only picks the address a packet would leave from.
@@ -1472,6 +1473,7 @@ pub(crate) async fn routes(daemon: &Daemon) -> Vec<String> {
     {
         routes.push(route(ip));
     }
+    routes.extend(relay);
     routes
 }
 
@@ -1496,6 +1498,7 @@ pub(crate) fn listed_with_status(
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone(),
+        relay: Some(daemon.relay.status()),
     }
 }
 

@@ -1,0 +1,5 @@
+# One package, not a workspace. pnpm 11 reads these settings only from here.
+allowBuilds:
+  # wrangler and the test pool bundle the Worker with esbuild and run it in workerd.
+  esbuild: true
+  workerd: true

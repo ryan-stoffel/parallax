@@ -26,6 +26,7 @@ import {
   type Capabilities,
   type EventsEventParams,
   type JsonValue,
+  type RelayHost,
   type RemoteSession,
   type RepoScript,
   type ScheduledTask,
@@ -449,7 +450,25 @@ const threadResult = (runId: string, change: Partial<Thread> = {}) => {
 
 // Remote pairing (PLX-641): this computer's switch and the sessions of computers paired with it,
 // and the computers this app paired with.
-const lan = { on: false, sessions: [] as RemoteSession[], hosts: [] as LanHost[] };
+const lan = { on: false, relay: false, sessions: [] as RemoteSession[], hosts: [] as LanHost[] };
+let relayHosts: RelayHost[] = [
+  {
+    hostId: "tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE",
+    name: "macbook",
+    online: true,
+    thisComputer: true,
+  },
+  {
+    hostId: "alfEbFC1hWlmHpbBo55sMKZ0PQ_RqGqTzdoMYJy-m6o",
+    name: "macbook",
+    online: false,
+    thisComputer: false,
+  },
+];
+const relayStatus = () => ({
+  connected: true,
+  hookUrl: "https://relay.parallx.dev/v1/hooks/tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE",
+});
 const hostsListeners = new Set<(hosts: LanHost[]) => void>();
 const isLanHost = (hostId: string) => lan.hosts.some((h) => h.id === hostId);
 
@@ -559,14 +578,17 @@ const handlers: { [M in Method]?: Handler<M> } = {
     autoResume: true,
     connect: !!connect.on,
     remote: lan.on,
+    relay: lan.relay,
     deviceIcon: connect.icon,
   }),
   "host/settings/set": (p) => {
     lan.on = p.remote ?? lan.on;
+    lan.relay = p.relay ?? lan.relay;
     return {
       autoResume: p.autoResume ?? true,
       connect: p.connect ?? !!connect.on,
       remote: lan.on,
+      relay: lan.relay,
       deviceIcon: connect.icon,
     };
   },
@@ -588,6 +610,7 @@ const handlers: { [M in Method]?: Handler<M> } = {
     sessions: lan.sessions,
     listening: lan.on,
     pairing: lan.on && !lan.sessions.length,
+    ...(lan.relay && { relay: relayStatus() }),
   }),
   "remote/revoke": (p) => {
     lan.sessions = lan.sessions.filter((s) => s.id !== p.id);
@@ -1619,6 +1642,12 @@ export const mockBridge: ParallaxBridge = {
     lan.hosts.push({ id: "lan:studio", name: "studio", routes: [first, "100.74.190.83"] });
     for (const l of hostsListeners) l([...lan.hosts]);
     return undefined;
+  },
+  registerRelay: () => delay(undefined, 400),
+  relayHosts: () => delay([...relayHosts], 300),
+  removeRelayHost: (hostId) => {
+    relayHosts = relayHosts.filter((h) => h.hostId !== hostId);
+    return delay([...relayHosts], 300);
   },
 
   onConnect: (listener) => {

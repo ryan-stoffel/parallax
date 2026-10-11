@@ -539,6 +539,9 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     installPlxd: async () => NOT_HERE,
     discoverLan: async () => NOT_HERE,
     pairLan: async () => NOT_HERE,
+    registerRelay: async () => NOT_HERE,
+    relayHosts: async () => NOT_HERE,
+    removeRelayHost: async () => NOT_HERE,
 
     onConnect: (listener) => (listener({ icon: "laptop", channel: "stable" }), () => {}),
     installConnect: async () => NOT_HERE,

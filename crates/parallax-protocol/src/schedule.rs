@@ -120,7 +120,8 @@ pub enum ScheduleRunStatus {
 pub struct ScheduleWebhook {
     /// `/api/hooks/<id>/<token>`. The token is the secret part, so share it only with the sender.
     pub path: String,
-    /// The full URL on this host's LAN address, while remote access is on.
+    /// The full URL: through Parallax Relay while plxd is connected to it (PLX-652), else on
+    /// this host's LAN address while remote access is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub url: Option<String>,

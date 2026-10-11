@@ -7,7 +7,12 @@ import { homedir, hostname } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { ErrorCodes, REQUEST_METHODS, type CliKind } from "../protocol/generated/protocol";
+import {
+  ErrorCodes,
+  REQUEST_METHODS,
+  type CliKind,
+  type RelayHost,
+} from "../protocol/generated/protocol";
 import {
   HOME_VARS,
   NPM_INSTALLS,
@@ -34,6 +39,7 @@ import {
   mergeFound,
   type SavedDevice,
 } from "./connect";
+import type { Account } from "./account";
 import { Connection, LOCATE_PLXD, sshCommand } from "./connection";
 import { HostUpdater } from "./hostUpdate";
 import { installPlxd } from "./installPlxd";
@@ -109,7 +115,8 @@ const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
  * Connects to the local plxd, as host id `local`, and to every saved SSH host at once, and
  * serves the `window.parallax` calls that reach plxd or edit the hosts.
  */
-export function startHosts(): void {
+export function startHosts(signedIn?: Account): void {
+  account = signedIn;
   initialServiceCheck = repointService();
   hostUpdater = new HostUpdater({
     packaged: app.isPackaged && !process.env["PLXD_PATH"],
@@ -183,6 +190,11 @@ export function startHosts(): void {
     pairLan(target, code),
   );
   ipcMain.handle("parallax:localName", () => localName());
+  ipcMain.handle("parallax:registerRelay", () => registerRelay());
+  ipcMain.handle("parallax:relayHosts", () => relayHosts());
+  ipcMain.handle("parallax:removeRelayHost", (_event, hostId: unknown) =>
+    typeof hostId === "string" ? relayHosts(hostId) : "invalid host",
+  );
   ipcMain.handle("parallax:renameLocal", (_event, name: unknown) => {
     if (typeof name !== "string") return "invalid name";
     const label = name
@@ -615,7 +627,17 @@ async function replaceOtherServe(running: string): Promise<boolean> {
 function addConnection(
   hostId: string,
   command: () => string[] | undefined,
-  { destination, device, lan }: { destination?: string; device?: string; lan?: string } = {},
+  {
+    destination,
+    device,
+    lan,
+    env,
+  }: {
+    destination?: string;
+    device?: string;
+    lan?: string;
+    env?: () => Record<string, string> | undefined;
+  } = {},
 ) {
   connections.get(hostId)?.dispose();
   const created = new Connection({
@@ -623,6 +645,7 @@ function addConnection(
     ...(destination !== undefined && { destination }),
     ...(device !== undefined && { device }),
     ...(lan !== undefined && { lan }),
+    ...(env !== undefined && { env }),
     clientVersion: app.getVersion(),
     ...(hostId === "local" && { replaceDaemon: replaceOtherServe }),
     onState: (state) => {
@@ -796,8 +819,48 @@ function addLanConnection({ fingerprint, name, routes }: SavedLan): void {
         ? undefined
         : [plxd, "dial", "--remote", fingerprint, "--", ...routes];
     },
-    { lan: name },
+    { lan: name, env: relayEnv },
   );
+}
+
+/** The signed-in Parallax account, whose token reaches plxd only, never a renderer. */
+let account: Account | undefined;
+
+/** `plxd dial`'s sign-in for a `relay:` route (PLX-652), while one is fresh. */
+function relayEnv(): Record<string, string> | undefined {
+  const token = account?.currentToken();
+  return token ? { PLXD_RELAY_TOKEN: token } : undefined;
+}
+
+/**
+ * `window.parallax.relayHosts` and `removeRelayHost`: the signed-in account's hosts on Parallax
+ * Relay, after removing `remove` if given (PLX-652). Main sends the account's token to plxd, which
+ * asks the relay. Answers the hosts, or why not.
+ */
+async function relayHosts(remove?: string): Promise<RelayHost[] | string> {
+  const token = await account?.accessToken();
+  if (!token) return "Sign in to Parallax in Settings > Account first.";
+  const local = connections.get("local");
+  const answer = remove
+    ? await local?.request("relay/remove", { token, hostId: remove })
+    : await local?.request("relay/hosts", { token });
+  if (!answer) return "Parallax isn't connected to this computer's plxd.";
+  return "error" in answer ? answer.error.message : answer.result.hosts;
+}
+
+/**
+ * `window.parallax.registerRelay`: registers this computer's plxd with Parallax Relay under the
+ * signed-in account (PLX-652). Main sends the account's token straight to plxd. Answers why not.
+ */
+async function registerRelay(): Promise<string | undefined> {
+  const token = await account?.accessToken();
+  if (!token) return "Sign in to Parallax in Settings > Account first.";
+  const answer = await connections.get("local")?.request("relay/register", { token });
+  return !answer
+    ? "Parallax isn't connected to this computer's plxd."
+    : "error" in answer
+      ? answer.error.message
+      : undefined;
 }
 
 /** The hosts the last `discoverLan` found, by the id the renderer picks one with. */

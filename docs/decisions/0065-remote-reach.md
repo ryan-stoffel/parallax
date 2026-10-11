@@ -1,6 +1,6 @@
 # 0065: Parallax is reachable from any device, through LAN pairing, SSH install, a web client, a hosted relay, and a mobile app
 
-- Status: accepted; amends PLAN.md's non-goal on hosted services, extends [0007](0007-editor-plxd-protocol.md) (a WebSocket transport beside `plxd attach`) and [0056](0056-parallax-connect.md), and records PLX-642's SSH install, and builds on [0037](0037-accounts.md)'s accounts
+- Status: accepted; its relay section is replaced by [0068](0068-relay.md); amends PLAN.md's non-goal on hosted services, extends [0007](0007-editor-plxd-protocol.md) (a WebSocket transport beside `plxd attach`) and [0056](0056-parallax-connect.md), and records PLX-642's SSH install, and builds on [0037](0037-accounts.md)'s accounts
 - Date: 2026-10-09
 - Issue: PLX-636, for PLX-641, PLX-642, PLX-651, PLX-652, and PLX-653
 
@@ -25,7 +25,7 @@ Ryan chose all of it for Parallax on 2026-10-09 (PLX-635), with one change from 
 
 ### An HTTP and WebSocket listener in plxd
 
-- A host setting, `remote`, off by default, opens a listener on port 7341. It binds every IPv4 address and closes, before reading anything, any connection from outside private, link-local, loopback, and CGNAT (tailnet) ranges. The pinned key and a paired session decide who gets in, so binding every address costs nothing that choosing addresses would save. It speaks only HTTPS, on loopback too: `tailscale serve` reaches it as `https+insecure://localhost:7341` (PLX-651), and the relay's `cloudflared` can do the same (PLX-652). It serves `/ws` (0007's JSON-RPC, one message per WebSocket frame, the same methods and limits as a socket connection), `/oauth/token`, the web client's files, `/api/hooks` ([0063](0063-schedules-pr-watches-and-delegation.md)), and `/mcp`.
+- A host setting, `remote`, off by default, opens a listener on port 7341. It binds every IPv4 address and closes, before reading anything, any connection from outside private, link-local, loopback, and CGNAT (tailnet) ranges. The pinned key and a paired session decide who gets in, so binding every address costs nothing that choosing addresses would save. It speaks only HTTPS, on loopback too: `tailscale serve` reaches it as `https+insecure://localhost:7341` (PLX-651), and the relay's streams end there too (PLX-652, [0068](0068-relay.md)). It serves `/ws` (0007's JSON-RPC, one message per WebSocket frame, the same methods and limits as a socket connection), `/oauth/token`, the web client's files, `/api/hooks` ([0063](0063-schedules-pr-watches-and-delegation.md)), and `/mcp`.
 - **TLS with a pinned key**, Parallax's own, in place of T3's plain LAN HTTP. When `remote` is first turned on, plxd generates a self-signed certificate (ECDSA P-256), kept in its data folder. Pairing vouches for the certificate's SHA-256 fingerprint without showing it (below), and the client pins it for that host: the LAN route is used only when the presented certificate matches, and nothing is sent before that. A new key needs a new pairing.
 - WebSocket support comes from `tokio-tungstenite`, TLS from `rustls` with the `ring` provider, and the certificate from `rcgen`. The handful of HTTP routes are plxd's own code. Tailnet and relay routes get publicly trusted HTTPS from `tailscale serve` and the relay's tunnel, as in T3. PLX-641 and PLX-651 measure the binary size these add.
 - A browser can't pin a key, so the web client reaches plxd over the tailnet or relay routes. On the LAN, a browser works only after the user trusts plxd's certificate in the OS.
@@ -55,10 +55,7 @@ Ryan chose all of it for Parallax on 2026-10-09 (PLX-635), with one change from 
 
 ### The relay
 
-- **Parallax Relay** is a hosted service, separate from Parallax Connect (0056, Tailscale). Sign-in is the Parallax account, in Clerk as in T3 ([0067](0067-clerk-accounts.md), which replaced 0037's Supabase).
-- It does what T3 Connect does: a managed Cloudflare tunnel per host (plxd runs a pinned `cloudflared`, downloaded on first use), a bootstrap credential bound to the client's DPoP key, and no data path after bootstrap. It forwards webhooks at `/v1/hooks/<hostId>/<hookId>/<token>`, holds them up to 24 hours and 1 MiB in a Durable Object per host while plxd is offline if the user opts in, and plxd asks for held ones when its tunnel reconnects. plxd publishes each thread's activity (working, needs you, done, failed), signed with a host key, and the relay sends APNs and FCM pushes.
-- It runs as T3's does: a Cloudflare Worker with Postgres and queues, and a Durable Object per host for held webhooks, in `infra/relay/`.
-- It needs Ryan's accounts: Cloudflare, a domain, Apple push credentials, and Firebase. PLX-652 is blocked on them.
+- Replaced by [0068](0068-relay.md): Parallax Relay passes plxd's own TLS between a client and its host on Cloudflare Workers and Durable Objects, with Clerk sign-in (0067), instead of a managed tunnel.
 
 ### Mobile
 

@@ -116,6 +116,24 @@ jobs:
         working-directory: sidecar/claude
         run: node --test src/*.test.mjs
 
+      # plxd behind the relay under `wrangler dev`, end to end (PLX-652): pairing and a session
+      # through it, and webhooks forwarded and held. Reuses check-rust's test build.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: matrix.os == 'ubuntu-24.04'
+        with:
+          node-version-file: apps/desktop/.node-version
+
+      - name: Test plxd through the relay
+        if: matrix.os == 'ubuntu-24.04'
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+          WRANGLER_SEND_METRICS: "false"
+        working-directory: relay
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          node scripts/e2e.mjs cargo test -p plxd --test server --locked relay::
+
       # The Ubuntu images may ship only the ssh client.
       - name: Install sshd
         if: runner.os == 'Linux'
@@ -163,6 +181,32 @@ jobs:
           path: target/debug/plxd${{ runner.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: error
           retention-days: 7
+
+  # Parallax Relay's Worker (PLX-652, 0068): type-checked, and its tests run in Miniflare. Nothing
+  # here deploys it.
+  relay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: apps/desktop/.node-version
+
+      - name: Install, type-check, and test
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm check
+          pnpm test
 
   # The desktop app on every OS it ships to (0022): checked, built, then launched (PLX-84).
   app:
@@ -412,7 +456,7 @@ jobs:
   # Branch protection requires this job's name, ci, as the only check (#6). Renaming it blocks every merge.
   ci:
     if: always()
-    needs: [actionlint, app, e2e, load, mobile, rust]
+    needs: [actionlint, app, e2e, load, mobile, relay, rust]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

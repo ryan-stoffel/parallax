@@ -419,6 +419,21 @@ export type ParallaxRequests = {
 	 */
 	"remote/revoke": { params: RemoteRevokeParams, result: RemoteSessionsResult },
 	/**
+	 * `relay/register`: registers this host with Parallax Relay under the user of a Clerk
+	 * session token, signed with the host key (PLX-652, 0068). Gated on the `relay`
+	 * capability.
+	 */
+	"relay/register": { params: RelayRegisterParams, result: RemoteSessionsResult },
+	/**
+	 * `relay/hosts`: the hosts the signed-in user has on Parallax Relay (PLX-652, 0068).
+	 */
+	"relay/hosts": { params: RelayHostsParams, result: RelayHostsResult },
+	/**
+	 * `relay/remove`: removes one of the user's hosts from the relay, freeing its place, and
+	 * answers with the rest.
+	 */
+	"relay/remove": { params: RelayRemoveParams, result: RelayHostsResult },
+	/**
 	 * `inbox/list`: a Project's inbox, oldest first, and the event log's `seq` from before the
 	 * read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
 	 */
@@ -753,6 +768,9 @@ export const REQUEST_METHODS = [
 	"remote/pair",
 	"remote/sessions",
 	"remote/revoke",
+	"relay/register",
+	"relay/hosts",
+	"relay/remove",
 	"inbox/list",
 	"inbox/seen",
 	"github/install",
@@ -5691,6 +5709,12 @@ export type HostSettings = {
 	 */
 	remoteWeb?: boolean,
 	/**
+	 * Whether plxd keeps a connection to Parallax Relay while `remote` is on, so this user's
+	 * other devices reach it from anywhere and its webhooks have a public URL (PLX-652, 0068).
+	 * Off by default. An older plxd, without the `relay` capability, leaves it out.
+	 */
+	relay?: boolean,
+	/**
 	 * This device's nickname for Parallax Connect, when one is set.
 	 */
 	deviceName?: string,
@@ -5729,6 +5753,10 @@ export type HostSettingsSetParams = {
 	 * The new `remoteWeb`, behind the `remoteWeb` capability. Absent leaves it.
 	 */
 	remoteWeb?: boolean,
+	/**
+	 * The new `relay`, behind the `relay` capability. Absent leaves it.
+	 */
+	relay?: boolean,
 	/**
 	 * The new `deviceName`, behind the `connect` capability. `""` clears it. Control characters
 	 * are dropped and the rest trimmed to at most 64 characters.
@@ -5877,6 +5905,28 @@ export type RemoteSessionsResult = {
 	 * Why it isn't while `remote` is on, such as the port being in use by another program.
 	 */
 	problem?: string,
+	/**
+	 * The relay connection while `relay` is on (PLX-652, 0068). An older plxd leaves it out.
+	 */
+	relay?: RelayStatus,
+};
+
+/**
+ * plxd's connection to Parallax Relay (PLX-652, 0068).
+ */
+export type RelayStatus = {
+	/**
+	 * Whether plxd is connected and the relay accepted its host key.
+	 */
+	connected: boolean,
+	/**
+	 * Where webhooks reach this host through the relay, to be followed by `/<hookId>/<token>`.
+	 */
+	hookUrl?: string,
+	/**
+	 * Why it isn't connected, such as this host not being registered yet.
+	 */
+	problem?: string,
 };
 
 /**
@@ -5905,6 +5955,73 @@ export type RemoteRevokeParams = {
 	 * The session's id, from `remote/sessions`.
 	 */
 	id: string,
+};
+
+/**
+ * Params of `relay/register`: registers this host with Parallax Relay under the signed-in user.
+ */
+export type RelayRegisterParams = {
+	/**
+	 * The user's Clerk session token. plxd sends it to the relay once and keeps nothing of it.
+	 */
+	token: string,
+};
+
+/**
+ * Params of `relay/hosts`: the hosts the signed-in user has on Parallax Relay.
+ */
+export type RelayHostsParams = {
+	/**
+	 * The user's Clerk session token. plxd sends it to the relay and keeps nothing of it.
+	 */
+	token: string,
+};
+
+/**
+ * Result of `relay/hosts` and `relay/remove`.
+ */
+export type RelayHostsResult = {
+	/**
+	 * The user's hosts on the relay.
+	 */
+	hosts: Array<RelayHost>,
+};
+
+/**
+ * A host the signed-in user has on Parallax Relay.
+ */
+export type RelayHost = {
+	/**
+	 * Its relay id.
+	 */
+	hostId: string,
+	/**
+	 * Its name, as it registered.
+	 */
+	name: string,
+	/**
+	 * Whether it is connected to the relay now.
+	 */
+	online: boolean,
+	/**
+	 * Whether it is the plxd that answered: this computer.
+	 */
+	thisComputer: boolean,
+};
+
+/**
+ * Params of `relay/remove`: removes one of the signed-in user's hosts from Parallax Relay,
+ * which frees its place: an account holds 10.
+ */
+export type RelayRemoveParams = {
+	/**
+	 * The user's Clerk session token.
+	 */
+	token: string,
+	/**
+	 * The host's relay id.
+	 */
+	hostId: string,
 };
 
 /**
@@ -6942,7 +7059,8 @@ export type ScheduleWebhook = {
 	 */
 	path: string,
 	/**
-	 * The full URL on this host's LAN address, while remote access is on.
+	 * The full URL: through Parallax Relay while plxd is connected to it (PLX-652), else on
+	 * this host's LAN address while remote access is on.
 	 */
 	url?: string,
 	/**

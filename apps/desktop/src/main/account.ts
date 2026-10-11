@@ -73,6 +73,12 @@ function bringForward() {
   app.focus({ steal: true });
 }
 
+/** The account's access token, for Parallax Relay (PLX-652). Main only: it never reaches a renderer. */
+export type Account = {
+  accessToken(): Promise<string | undefined>;
+  currentToken(): string | undefined;
+};
+
 /**
  * Starts the Parallax account (0067): Clerk's OAuth sign-in with PKCE, run from the main process,
  * so the renderer only ever sees the profile. The browser signs in on Clerk's page and comes back
@@ -80,7 +86,7 @@ function bringForward() {
  * encrypted with the OS keychain; where the OS has none (Linux without a keyring), the session
  * lives in memory and ends with the app. Call once the app is ready, as safeStorage needs.
  */
-export function startAccount() {
+export function startAccount(): Account {
   const api = frontendApi(PUBLISHABLE_KEY);
   const file = path.join(app.getPath("userData"), "account");
   // Linux without a keyring falls back to `basic_text`, a hardcoded password: as good as plain
@@ -297,4 +303,14 @@ export function startAccount() {
         signal: AbortSignal.timeout(10_000),
       }).catch(() => undefined);
   });
+
+  return {
+    accessToken,
+    /** The access token while it's fresh, for a call that can't wait; else starts a refresh. */
+    currentToken(): string | undefined {
+      if (access && access.expiresAt - 60_000 > Date.now()) return access.token;
+      void accessToken();
+      return undefined;
+    },
+  };
 }

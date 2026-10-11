@@ -33,6 +33,7 @@ mod projects;
 mod pull_requests;
 mod questions;
 mod queue;
+mod relay;
 mod remote;
 mod requests;
 mod support;

@@ -401,11 +401,10 @@ void app.whenReady().then(async () => {
   const languages = app.getPreferredSystemLanguages().filter((tag) => validLocale(tag));
   if (languages.length > 0)
     browserSession.setUserAgent(browserSession.getUserAgent(), languages.join(","));
-  startHosts();
+  startHosts(startAccount());
   startStorage();
   // Under `pnpm dev`, Update follows main (scripts/channels.mjs). Nightly and stable are tags on it.
   if (!updater) process.send?.({ channel: "nightly" });
-  startAccount();
   createWindow();
   // The on-device thread namer's model, which earlier versions downloaded: plxd names threads
   // now (0058). Reclaims its 469 MB without holding up the window.

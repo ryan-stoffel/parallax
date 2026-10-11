@@ -25,9 +25,9 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::connect::free_port;
 use crate::support::{Client, InProcess, PATIENCE, temp_dir};
 
-const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+pub(crate) const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
-async fn set_remote(client: &mut Client, on: bool) {
+pub(crate) async fn set_remote(client: &mut Client, on: bool) {
     let settings = client
         .call::<HostSettingsSet>(HostSettingsSetParams {
             remote: Some(on),
@@ -39,7 +39,7 @@ async fn set_remote(client: &mut Client, on: bool) {
 }
 
 /// Waits until something accepts at `port`, or stops accepting.
-async fn wait_listening(port: u16, listening: bool) {
+pub(crate) async fn wait_listening(port: u16, listening: bool) {
     let deadline = Instant::now() + PATIENCE;
     while TcpStream::connect((LOOPBACK, port)).await.is_ok() != listening {
         assert!(Instant::now() < deadline, "the listener never changed");
@@ -48,7 +48,7 @@ async fn wait_listening(port: u16, listening: bool) {
 }
 
 /// A new pairing code, as the host shows it.
-async fn new_code(client: &mut Client) -> String {
+pub(crate) async fn new_code(client: &mut Client) -> String {
     let answer = client
         .call::<RemotePair>(RemotePairParams {})
         .await
@@ -69,12 +69,16 @@ fn wrong(code: &str) -> String {
 }
 
 /// An app's connection to a paired host: lines in and out, as `plxd dial` bridges them.
-struct App {
+pub(crate) struct App {
     lines: tokio::io::Lines<BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>>,
     writer: tokio::io::WriteHalf<tokio::io::DuplexStream>,
 }
 
-async fn open(routes: &[String], fingerprint: &str, data_dir: &Path) -> Result<App, remote::Error> {
+pub(crate) async fn open(
+    routes: &[String],
+    fingerprint: &str,
+    data_dir: &Path,
+) -> Result<App, remote::Error> {
     let socket = remote::dial(routes, fingerprint, data_dir).await?;
     let (app, stdio) = duplex(64 * 1024);
     let (input, output) = tokio::io::split(stdio);
@@ -87,7 +91,7 @@ async fn open(routes: &[String], fingerprint: &str, data_dir: &Path) -> Result<A
 }
 
 impl App {
-    async fn initialize(&mut self) -> Value {
+    pub(crate) async fn initialize(&mut self) -> Value {
         let request = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol":{"min":1,"max":1},"client":{"name":"test","version":"0"},"capabilities":{}}}"#;
         self.writer
             .write_all(format!("{request}\n").as_bytes())
@@ -340,7 +344,8 @@ async fn https(
     (response.code.unwrap(), headers, answer[length..].to_vec())
 }
 
-type WebSocket = tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<TcpStream>>;
+type WebSocket =
+    tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<plxd::relay::Stream>>;
 
 /// A WebSocket to `/ws` with `ticket`, sent from `origin`, once it has initialized.
 async fn web_socket(

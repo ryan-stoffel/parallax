@@ -275,6 +275,7 @@ async fn the_timer_fires_a_task_when_it_comes_due() {
 
 #[cfg(unix)]
 #[tokio::test]
+#[expect(clippy::too_many_lines, reason = "one webhook told step by step")]
 async fn a_signed_webhook_fires_its_prompt_with_the_bodys_values() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = daemon(dir.path());
@@ -327,16 +328,28 @@ async fn a_signed_webhook_fires_its_prompt_with_the_bodys_values() {
         ])
     };
     let wrong = format!("{}nope", endpoint.path);
-    let (status, _) = hook(&daemon, "POST", &wrong, &headers(&digest), body).await;
+    let (status, _) = hook(&daemon, "POST", &wrong, &headers(&digest), body, None).await;
     assert_eq!(status, 404, "a wrong token");
-    let (status, _) = hook(&daemon, "POST", &endpoint.path, &headers("00"), body).await;
+    let (status, _) = hook(&daemon, "POST", &endpoint.path, &headers("00"), body, None).await;
     assert_eq!(status, 401, "a wrong signature");
     assert!(wakes(dir.path(), id).is_empty());
 
     let path = format!("{}?source=ci", endpoint.path);
-    let (status, answer) = hook(&daemon, "POST", &path, &headers(&digest), body).await;
-    assert_eq!(status, 202, "{answer}");
-    assert!(answer["deliveryId"].is_string());
+    // The relay's delivery id keys the fire, so a request it delivers again fires once (PLX-652).
+    let delivery = Uuid::new_v4();
+    for _ in 0..2 {
+        let (status, answer) = hook(
+            &daemon,
+            "POST",
+            &path,
+            &headers(&digest),
+            body,
+            Some(delivery),
+        )
+        .await;
+        assert_eq!(status, 202, "{answer}");
+        assert_eq!(answer["deliveryId"], delivery.to_string());
+    }
     let sent = wakes(dir.path(), id);
     assert_eq!(sent.len(), 1);
     assert!(
@@ -356,7 +369,15 @@ async fn a_signed_webhook_fires_its_prompt_with_the_bodys_values() {
     paused.id = Some(task.id.clone());
     paused.enabled = false;
     save(&daemon, paused).await.unwrap();
-    let (status, _) = hook(&daemon, "POST", &endpoint.path, &headers(&digest), body).await;
+    let (status, _) = hook(
+        &daemon,
+        "POST",
+        &endpoint.path,
+        &headers(&digest),
+        body,
+        None,
+    )
+    .await;
     assert_eq!(status, 409, "paused");
     let key = stored(&daemon, id)
         .await
@@ -562,7 +583,15 @@ async fn legacy_secrets_migrate_and_are_wiped_only_with_a_working_store() {
     super::move_old_secrets(&daemon).await;
     assert_eq!(stored(&daemon, id).await.secret.as_deref(), Some(LEGACY));
     let endpoint = task.webhook.unwrap();
-    let (status, answer) = hook(&daemon, "POST", &endpoint.path, &HashMap::new(), b"{}").await;
+    let (status, answer) = hook(
+        &daemon,
+        "POST",
+        &endpoint.path,
+        &HashMap::new(),
+        b"{}",
+        None,
+    )
+    .await;
     assert_eq!(status, 503, "{answer}");
     keys.fail_write.store(false, SeqCst);
     super::move_old_secrets(&daemon).await;

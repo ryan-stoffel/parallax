@@ -20,3 +20,6 @@ apps/desktop/release/
 
 # Python
 __pycache__/
+
+# Parallax Relay
+relay/.wrangler/

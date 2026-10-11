@@ -163,6 +163,10 @@ pub struct HostSettingsSetParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub remote_web: Option<bool>,
+    /// The new `relay`, behind the `relay` capability. Absent leaves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub relay: Option<bool>,
     /// The new `deviceName`, behind the `connect` capability. `""` clears it. Control characters
     /// are dropped and the rest trimmed to at most 64 characters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -211,6 +215,12 @@ pub struct HostSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub remote_web: Option<bool>,
+    /// Whether plxd keeps a connection to Parallax Relay while `remote` is on, so this user's
+    /// other devices reach it from anywhere and its webhooks have a public URL (PLX-652, 0068).
+    /// Off by default. An older plxd, without the `relay` capability, leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub relay: Option<bool>,
     /// This device's nickname for Parallax Connect, when one is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

@@ -77,6 +77,7 @@ pub(crate) mod preview;
 pub mod providers;
 #[cfg(unix)]
 mod public_proxy;
+pub mod relay;
 pub mod remote;
 mod repo;
 pub mod routing;

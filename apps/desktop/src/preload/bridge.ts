@@ -11,6 +11,7 @@ import type {
   ThreadSnapshot,
   ParallaxRequests,
   ProviderKind,
+  RelayHost,
 } from "../protocol/generated/protocol";
 
 /** The Appearance setting: follow the OS, or force a theme. */
@@ -238,6 +239,18 @@ export interface ParallaxBridge {
     target: { found: string } | { address: string },
     code: string,
   ): Promise<string | undefined>;
+  /**
+   * Registers this computer's plxd with Parallax Relay under the signed-in account (PLX-652).
+   * Main sends the account's token to plxd itself. Resolves to an error for people, or undefined.
+   */
+  registerRelay(): Promise<string | undefined>;
+  /**
+   * The signed-in account's hosts on Parallax Relay (PLX-652), or why not, for people. Main sends
+   * the token to plxd, which asks the relay.
+   */
+  relayHosts(): Promise<RelayHost[] | string>;
+  /** Removes one of the account's hosts from the relay, freeing its place, and answers the rest. */
+  removeRelayHost(hostId: string): Promise<RelayHost[] | string>;
 
   /** Parallax Connect here (0056). Calls `listener` now and on every change. Returns the unsubscribe function. */
   onConnect(listener: (state: ConnectState) => void): () => void;
@@ -525,6 +538,10 @@ export const withheldMethods = [
   "project/fromThreads",
   "question/ask",
   "question/escalate",
+  // Carry the account's token, which only main may send (PLX-652): see `registerRelay`.
+  "relay/register",
+  "relay/hosts",
+  "relay/remove",
   "terminal/open",
   "terminal/close",
 ] as const satisfies readonly (keyof ParallaxRequests)[];

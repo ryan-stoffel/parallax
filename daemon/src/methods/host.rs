@@ -201,6 +201,8 @@ pub(crate) fn initialize(
 /// `remote/revoke`, and the HTTPS listener.
 /// `remoteWeb` (PLX-651): `remoteWeb` in `host/settings`, and the web client and browser pairing
 /// the HTTPS listener serves while it's on.
+/// `relay` (PLX-652, 0068): `relay` in `host/settings`, `relay/register`, `relay/hosts`,
+/// `relay/remove`, and `relay` in `remote/sessions`.
 /// `schedules` (0063): `schedule/*`, and the webhooks the HTTPS listener serves.
 /// `prWatch` (0063): `pr/watch`, `pr/unwatch`, and `pr/watches`.
 /// `setupScripts` (PLX-650): `repo/scripts`, `repo/saveScripts`, and the `thread.script` event.
@@ -268,6 +270,7 @@ fn capabilities_advertised() -> Capabilities {
         ("questions".to_owned(), serde_json::Map::new()),
         ("remote".to_owned(), serde_json::Map::new()),
         ("remoteWeb".to_owned(), serde_json::Map::new()),
+        ("relay".to_owned(), serde_json::Map::new()),
         ("repoRefs".to_owned(), serde_json::Map::new()),
         ("runOptions".to_owned(), serde_json::Map::new()),
         ("schedules".to_owned(), serde_json::Map::new()),
@@ -332,7 +335,8 @@ pub(crate) async fn settings(
 }
 
 /// `host/settings/set`: stores the settings it names, then answers with them all. A change to
-/// `connect` wakes the tailnet listener, and one to `remote` the remote listener.
+/// `connect` wakes the tailnet listener, one to `remote` the remote listener, and one to `remote`
+/// or `relay` the relay connection.
 pub(crate) async fn set_settings(
     context: &Context,
     params: HostSettingsSetParams,
@@ -344,6 +348,7 @@ pub(crate) async fn set_settings(
         connect,
         remote,
         remote_web,
+        relay,
         device_name,
         device_icon,
     } = params;
@@ -386,6 +391,10 @@ pub(crate) async fn set_settings(
                 db.set_remote_web(on).map_err(|e| store_error(&e))?;
                 info!(remote_web = on, "changed the host's web client setting");
             }
+            if let Some(on) = relay {
+                db.set_relay(on).map_err(|e| store_error(&e))?;
+                info!(relay = on, "changed the host's relay setting");
+            }
             if let Some(name) = device_name {
                 db.set_device_name(name.as_deref())
                     .map_err(|e| store_error(&e))?;
@@ -402,6 +411,9 @@ pub(crate) async fn set_settings(
     }
     if remote.is_some() {
         context.daemon.remote.changed.notify_one();
+    }
+    if remote.is_some() || relay.is_some() {
+        context.daemon.relay.changed.notify_one();
     }
     if remote_web == Some(false) {
         crate::server::remote::close_browsers(&context.daemon).await;
@@ -439,6 +451,7 @@ fn read_settings(db: &parallax_store::Store) -> Result<HostSettings, ErrorObject
         connect: Some(db.connect().map_err(|e| store_error(&e))?),
         remote: Some(db.remote().map_err(|e| store_error(&e))?),
         remote_web: Some(db.remote_web().map_err(|e| store_error(&e))?),
+        relay: Some(db.relay().map_err(|e| store_error(&e))?),
         device_name: db.device_name().map_err(|e| store_error(&e))?,
         device_icon: db.device_icon().map_err(|e| store_error(&e))?,
     })

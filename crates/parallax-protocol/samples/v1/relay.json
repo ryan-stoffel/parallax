@@ -1,0 +1,82 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "host/settings/set",
+    "params": { "relay": true }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": { "autoResume": true, "cleanWorktrees": true, "connect": false, "remote": true, "relay": true }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "relay/register",
+    "params": { "token": "<clerk session token>" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "sessions": [],
+      "listening": true,
+      "pairing": false,
+      "relay": {
+        "connected": true,
+        "hookUrl": "https://relay.parallx.dev/v1/hooks/tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "remote/sessions",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "sessions": [],
+      "listening": true,
+      "pairing": false,
+      "relay": {
+        "connected": false,
+        "problem": "This computer isn't registered with the relay yet. Sign in to Parallax to register it."
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "relay/hosts",
+    "params": { "token": "<clerk session token>" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "hosts": [
+        { "hostId": "tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE", "name": "Ryan's Mac Mini", "online": true, "thisComputer": true },
+        { "hostId": "alfEbFC1hWlmHpbBo55sMKZ0PQ_RqGqTzdoMYJy-m6o", "name": "Ryan's Mac Mini", "online": false, "thisComputer": false }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "relay/remove",
+    "params": { "token": "<clerk session token>", "hostId": "alfEbFC1hWlmHpbBo55sMKZ0PQ_RqGqTzdoMYJy-m6o" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": {
+      "hosts": [
+        { "hostId": "tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE", "name": "Ryan's Mac Mini", "online": true, "thisComputer": true }
+      ]
+    }
+  }
+]

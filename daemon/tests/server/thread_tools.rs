@@ -1897,7 +1897,7 @@ async fn a_file_revert_refuses_while_a_thread_shares_the_worktree() {
 
 /// A keystore in memory, so a test never touches the real one.
 #[derive(Debug, Default)]
-struct Keys(Mutex<std::collections::HashMap<parallax_protocol::AccountId, String>>);
+pub(crate) struct Keys(Mutex<std::collections::HashMap<parallax_protocol::AccountId, String>>);
 
 impl plxd::keystore::KeyStore for Keys {
     fn set(

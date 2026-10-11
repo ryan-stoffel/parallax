@@ -67,6 +67,9 @@ pub const CODE_LENGTH: usize = 6;
 /// How many wrong codes lock a pairing code for good.
 pub const MAX_WRONG_CODES: u32 = 5;
 
+/// A route through Parallax Relay starts with this, then the host's relay id (PLX-652).
+pub const RELAY_ROUTE: &str = "relay:";
+
 /// The mDNS service a host advertises while it waits for a pairing.
 pub const SERVICE_TYPE: &str = "_parallax._tcp.local.";
 
@@ -85,7 +88,7 @@ pub fn websocket_config() -> WebSocketConfig {
         .max_frame_size(Some(max))
 }
 
-fn provider() -> Arc<CryptoProvider> {
+pub(crate) fn provider() -> Arc<CryptoProvider> {
     Arc::new(rustls::crypto::ring::default_provider())
 }
 
@@ -232,7 +235,9 @@ fn create_once(path: &Path, bytes: &[u8]) -> io::Result<Vec<u8>> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    // Unique per call, since two threads of one plxd may create the key at once (PLX-652).
+    let unique = format!("tmp-{}-{}", std::process::id(), random_token(6));
+    let temporary = path.with_extension(unique);
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -303,6 +308,13 @@ impl HostKey {
             certificate: CertificateDer::from(certificate.to_vec()),
             key: PrivatePkcs8KeyDer::from(key.to_vec()),
         })
+    }
+
+    /// The certificate's key as a signer, which is this host's identity on Parallax Relay
+    /// (PLX-652). `None` if it isn't a P-256 key, which every plxd makes.
+    #[must_use]
+    pub fn signer(&self) -> Option<DpopKey> {
+        DpopKey::from_pkcs8(self.key.secret_pkcs8_der())
     }
 
     /// The TLS server's configuration: this certificate, TLS 1.3 (the only version built), no
@@ -412,10 +424,24 @@ impl DpopKey {
     }
 
     /// The public key's `x` and `y`, in base64url.
-    fn coordinates(&self) -> (String, String) {
+    pub(crate) fn coordinates(&self) -> (String, String) {
         // An uncompressed point: 0x04, then 32 bytes of x and 32 of y.
         let point = self.pair.public_key().as_ref();
         (base64url(&point[1..33]), base64url(&point[33..]))
+    }
+
+    /// An ES256 signature of `message`: `r` then `s`, 32 bytes each.
+    ///
+    /// # Panics
+    ///
+    /// If signing fails, which ring does only without random numbers.
+    #[must_use]
+    pub fn sign(&self, message: &[u8]) -> Vec<u8> {
+        self.pair
+            .sign(&SystemRandom::new(), message)
+            .expect("signing with the OS's random numbers")
+            .as_ref()
+            .to_vec()
     }
 
     /// The public key's JWK thumbprint (RFC 7638), which a session is bound to.
@@ -452,11 +478,7 @@ impl DpopKey {
             base64url(header.to_string().as_bytes()),
             base64url(claims.to_string().as_bytes())
         );
-        let signature = self
-            .pair
-            .sign(&SystemRandom::new(), input.as_bytes())
-            .expect("signing with the OS's random numbers");
-        format!("{input}.{}", base64url(signature.as_ref()))
+        format!("{input}.{}", base64url(&self.sign(input.as_bytes())))
     }
 }
 
@@ -569,8 +591,8 @@ pub fn verify_proof(
     })
 }
 
-/// Whether `text` is a route: an IP or host name, with a port or not, that no command line can
-/// read as an option.
+/// Whether `text` is a route: an IP or host name, with a port or not, or `relay:<hostId>`
+/// (PLX-652), that no command line can read as an option.
 #[must_use]
 pub fn is_route(text: &str) -> bool {
     !text.is_empty()
@@ -578,13 +600,18 @@ pub fn is_route(text: &str) -> bool {
         && !text.starts_with('-')
         && text
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"-._:[]%".contains(&b))
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.:[]%".contains(&b))
 }
 
 /// A route as `connect` takes it: an address or host name with a port, [`PORT`] unless one is
 /// given.
 #[must_use]
 pub fn with_port(route: &str) -> String {
+    // A relay route's TLS and HTTP run inside the relay's stream, where this name is only what
+    // the `Host` header and `DPoP` proofs carry. It connects to nothing.
+    if let Some(host_id) = route.strip_prefix(RELAY_ROUTE) {
+        return format!("{host_id}.relay");
+    }
     if route.parse::<SocketAddr>().is_ok() {
         return route.to_owned();
     }
@@ -658,6 +685,10 @@ pub enum Error {
     /// An answer that isn't what plxd sends.
     #[error("{0}")]
     Protocol(String),
+    /// Parallax Relay refused plxd's signed time as too far from its own clock, which it sent,
+    /// in milliseconds since the epoch (PLX-652).
+    #[error("this computer's clock is too far off the relay's; set it to the right time")]
+    Clock(i64),
 }
 
 /// The token a paired client keeps for a host, with its `DPoP` key.
@@ -683,7 +714,10 @@ fn credential_path(data_dir: &Path, fingerprint: &str) -> PathBuf {
 /// # Panics
 ///
 /// Never: `parallax` is a valid server name.
-pub async fn open(route: &str, pin: Option<&str>) -> Result<(TlsStream<TcpStream>, String), Error> {
+pub async fn open(
+    route: &str,
+    pin: Option<&str>,
+) -> Result<(TlsStream<crate::relay::Stream>, String), Error> {
     let provider = provider();
     let seen = Arc::new(Mutex::new(None));
     let verifier = Pinned {
@@ -697,11 +731,16 @@ pub async fn open(route: &str, pin: Option<&str>) -> Result<(TlsStream<TcpStream
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth();
-    let tcp = TcpStream::connect(with_port(route)).await?;
-    let _ = tcp.set_nodelay(true);
+    let stream: crate::relay::Stream = if let Some(host_id) = route.strip_prefix(RELAY_ROUTE) {
+        Box::new(crate::relay::open_stream(host_id).await?)
+    } else {
+        let tcp = TcpStream::connect(with_port(route)).await?;
+        let _ = tcp.set_nodelay(true);
+        Box::new(tcp)
+    };
     let name = ServerName::try_from("parallax").expect("a DNS name");
     let tls = tokio_rustls::TlsConnector::from(Arc::new(config))
-        .connect(name, tcp)
+        .connect(name, stream)
         .await
         .map_err(|error| {
             let pinned = error
@@ -970,7 +1009,7 @@ pub async fn dial(
     routes: &[String],
     fingerprint: &str,
     data_dir: &Path,
-) -> Result<WebSocketStream<TlsStream<TcpStream>>, Error> {
+) -> Result<WebSocketStream<TlsStream<crate::relay::Stream>>, Error> {
     let credential: Credential = match fs::read(credential_path(data_dir, fingerprint)) {
         Ok(bytes) => json(&bytes)?,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(Error::Refused),
@@ -999,7 +1038,7 @@ async fn dial_at(
     fingerprint: &str,
     token: &str,
     key: &DpopKey,
-) -> Result<WebSocketStream<TlsStream<TcpStream>>, Error> {
+) -> Result<WebSocketStream<TlsStream<crate::relay::Stream>>, Error> {
     let path = "/api/auth/websocket-ticket";
     let proof = key.proof("POST", &url(route, path), Some(token));
     let authorization = format!("DPoP {token}");
@@ -1091,6 +1130,20 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_threads_making_the_key_at_once_keep_the_same_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("remote-key");
+        let made: Vec<_> = (0..8)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || HostKey::load_or_create(&path).unwrap().fingerprint)
+            })
+            .collect();
+        let made: Vec<String> = made.into_iter().map(|t| t.join().unwrap()).collect();
+        assert!(made.iter().all(|fp| *fp == made[0]), "{made:?}");
+    }
 
     #[test]
     fn codes_use_the_alphabet_and_read_in_two_halves() {

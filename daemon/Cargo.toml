@@ -55,6 +55,9 @@ getrandom = "0.4"
 # Pairing with a short code: SPAKE2 vouches for the host's certificate, and mDNS finds hosts
 # waiting to pair. Both pure Rust.
 spake2 = "0.4"
+# Parallax Relay (PLX-652): the relay's public certificate, checked against Mozilla's roots, the
+# same on every OS.
+webpki-roots = "1"
 mdns-sd = { version = "0.21", default-features = false }
 
 [target.'cfg(unix)'.dependencies]

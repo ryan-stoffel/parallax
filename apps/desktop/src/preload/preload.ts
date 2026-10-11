@@ -106,6 +106,9 @@ const bridge: ParallaxBridge = {
   installPlxd: (id) => ipcRenderer.invoke("parallax:installPlxd", id),
   discoverLan: () => ipcRenderer.invoke("parallax:discoverLan"),
   pairLan: (target, code) => ipcRenderer.invoke("parallax:pairLan", target, code),
+  registerRelay: () => ipcRenderer.invoke("parallax:registerRelay"),
+  relayHosts: () => ipcRenderer.invoke("parallax:relayHosts"),
+  removeRelayHost: (hostId) => ipcRenderer.invoke("parallax:removeRelayHost", hostId),
 
   onConnect: (listener) => follow("parallax:connect", listener),
   installConnect: () => ipcRenderer.invoke("parallax:installConnect"),

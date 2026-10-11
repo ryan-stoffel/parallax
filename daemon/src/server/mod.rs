@@ -142,6 +142,8 @@ pub struct Config {
     /// Where API keys and secrets live. `None`, the default, is this OS's keystore
     /// ([`keystore::system_store`]); tests use one in memory.
     pub keys: Option<Arc<dyn KeyStore>>,
+    /// Parallax Relay's URL (PLX-652). `PLXD_RELAY_URL` when set, else relay.parallx.dev.
+    pub relay_url: String,
 }
 
 impl Config {
@@ -181,6 +183,7 @@ impl Config {
                     Some(resources.join("dist").join("renderer"))
                 }),
             keys: None,
+            relay_url: crate::relay::url(),
         }
     }
 }
@@ -303,6 +306,8 @@ pub(crate) struct Daemon {
     pub(crate) setup_holds: crate::setup_scripts::Holds,
     /// The remote listener's pairing code, tickets, and sessions (PLX-641).
     pub remote: remote::Remote,
+    /// The connection to Parallax Relay (PLX-652).
+    pub relay: crate::relay::Relay,
     /// Agents' browser tabs (PLX-639).
     pub previews: crate::preview::Previews,
     /// The scheduled tasks' timer and webhook rate limits (0063).
@@ -470,6 +475,7 @@ impl Server {
                 config.remote_web_dir.clone(),
                 config.remote_code_lifetime,
             ),
+            relay: crate::relay::Relay::new(config.relay_url.clone()),
             schedules: crate::schedules::Schedules::default(),
             pr_watches: crate::pr_watch::Watches::default(),
             self_update: crate::self_update::SelfUpdate::new(launcher.clone()),
@@ -602,6 +608,10 @@ impl Server {
             Arc::clone(&daemon),
             shutdown.graceful.clone(),
         ));
+        let relay = tokio::spawn(crate::relay::run(
+            Arc::clone(&daemon),
+            shutdown.graceful.clone(),
+        ));
         // A `host/update` handover shuts the server down as a signal would (PLX-700).
         let handover = {
             let restart = daemon.self_update.restart.clone();
@@ -707,6 +717,7 @@ impl Server {
         let _ = effects.await;
         let _ = schedules.await;
         let _ = pr_watches.await;
+        let _ = relay.await;
         let _ = handover.await;
         let _ = secrets.await;
         daemon.store.stop().await;
@@ -863,6 +874,7 @@ impl Daemon {
             terminals: crate::terminals::Terminals::default(),
             setup_holds: crate::setup_scripts::Holds::default(),
             remote: remote::Remote::new(crate::remote::PORT, None, None, remote::CODE_LIFETIME),
+            relay: crate::relay::Relay::new(crate::relay::DEFAULT_URL.to_owned()),
             schedules: crate::schedules::Schedules::default(),
             pr_watches: crate::pr_watch::Watches::default(),
             self_update: crate::self_update::SelfUpdate::new(launcher),

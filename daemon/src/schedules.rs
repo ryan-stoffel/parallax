@@ -189,6 +189,28 @@ pub(crate) async fn list(daemon: &Daemon) -> Result<ScheduleListResult, ErrorObj
 /// has no store yet (PLX-23).
 const KEYSTORE: bool = cfg!(any(target_os = "macos", target_os = "linux"));
 
+/// The relay's keys for the webhook URLs plxd serves: each task's `<id>/<token>` hashed with
+/// SHA-256, in base64url. The relay answers any other URL 404, without counting or holding it
+/// (PLX-652, 0068).
+pub(crate) async fn hook_keys(daemon: &Daemon) -> Vec<String> {
+    let rows = daemon
+        .reader
+        .run(&CancellationToken::new(), |db| {
+            db.scheduled_tasks().map_err(|e| store_error(&e))
+        })
+        .await
+        .unwrap_or_default();
+    rows.into_iter()
+        .filter_map(|(_, payload)| {
+            let stored = serde_json::from_str::<Stored>(&payload).ok()?;
+            let url = format!("{}/{}", stored.task.id, stored.token?);
+            Some(crate::remote::base64url(&crate::remote::sha256(
+                url.as_bytes(),
+            )))
+        })
+        .collect()
+}
+
 /// `schedule/save`: creates a task, or replaces one, keeping its run history, its webhook token,
 /// and, when the save names no secret, its webhook secret. A new secret goes to the keystore
 /// before the row, and a `secretRef` is used up only once the save has passed its checks.
@@ -267,6 +289,7 @@ pub(crate) async fn save(
     }
     forget_unused(daemon).await;
     daemon.schedules.changed.notify_one();
+    daemon.relay.hooks_changed.notify_one();
     Ok(shown(stored, origin(daemon).await.as_deref()))
 }
 
@@ -395,6 +418,7 @@ pub(crate) async fn delete(
         forget_secret(daemon, key).await;
     }
     daemon.schedules.changed.notify_one();
+    daemon.relay.hooks_changed.notify_one();
     Ok(ScheduleDeleteResult { deleted })
 }
 
@@ -695,13 +719,15 @@ async fn send(
 }
 
 /// A webhook request to `path`, `/api/hooks/<id>/<token>` with its query, from the remote
-/// listener: its status and JSON answer, as T3's `webhookRoute`.
+/// listener or the relay: its status and JSON answer, as T3's `webhookRoute`. The relay's
+/// `delivery` id keys the fire, so a request it delivers again fires once (PLX-652).
 pub(crate) async fn hook(
     daemon: &Daemon,
     method: &str,
     path: &str,
     headers: &HashMap<String, String>,
     body: &[u8],
+    delivery: Option<Uuid>,
 ) -> (u16, Value) {
     let not_found = (404, json!({ "error": "hook_not_found" }));
     let (route, query) = path.split_once('?').unwrap_or((path, ""));
@@ -766,7 +792,7 @@ pub(crate) async fn hook(
     if prompt.len() > MAX_PROMPT_BYTES {
         prompt.truncate(prompt.floor_char_boundary(MAX_PROMPT_BYTES));
     }
-    let delivery = Uuid::now_v7();
+    let delivery = delivery.unwrap_or_else(Uuid::now_v7);
     match fire(daemon, id, Trigger::Webhook { delivery, prompt }).await {
         Ok(Fired::Sent(_)) => (202, json!({ "deliveryId": delivery.to_string() })),
         Ok(Fired::Disabled | Fired::Skipped) => (409, json!({ "error": "hook_disabled" })),
@@ -1215,8 +1241,8 @@ fn same_trigger(a: &Schedule, b: &Schedule) -> bool {
     }
 }
 
-/// `stored` as the protocol shows it, with its webhook's path and, while remote access is on,
-/// its URL at `origin`.
+/// `stored` as the protocol shows it, with its webhook's path and, while it has one, its URL under
+/// `origin`.
 fn shown(stored: Stored, origin: Option<&str>) -> ScheduledTask {
     let Stored {
         mut task,
@@ -1227,7 +1253,7 @@ fn shown(stored: Stored, origin: Option<&str>) -> ScheduledTask {
     if let Some(token) = token {
         let path = format!("{}{}/{token}", webhook::PREFIX, task.id);
         task.webhook = Some(ScheduleWebhook {
-            url: origin.map(|origin| format!("{origin}{path}")),
+            url: origin.map(|origin| format!("{origin}/{}/{token}", task.id)),
             path,
             has_secret: secret_key.is_some(),
         });
@@ -1235,8 +1261,13 @@ fn shown(stored: Stored, origin: Option<&str>) -> ScheduledTask {
     task
 }
 
-/// `https://<LAN address>:<port>` while the remote listener is on.
+/// Where webhook URLs start, before `/<id>/<token>`: the relay's public URL for this host while
+/// plxd is connected to it (PLX-652), else `https://<LAN address>:<port>/api/hooks` while the
+/// remote listener is on.
 async fn origin(daemon: &Daemon) -> Option<String> {
+    if let Some(url) = daemon.relay.status().hook_url {
+        return Some(url);
+    }
     if !daemon
         .remote
         .listening
@@ -1248,10 +1279,11 @@ async fn origin(daemon: &Daemon) -> Option<String> {
         .await
         .into_iter()
         .next()?;
+    let prefix = webhook::PREFIX.trim_end_matches('/');
     Some(if route.contains(':') {
-        format!("https://{route}")
+        format!("https://{route}{prefix}")
     } else {
-        format!("https://{route}:{}", daemon.remote.port)
+        format!("https://{route}:{}{prefix}", daemon.remote.port)
     })
 }
 

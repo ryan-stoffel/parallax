@@ -49,6 +49,75 @@ pub struct RemoteSessionsResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub problem: Option<String>,
+    /// The relay connection while `relay` is on (PLX-652, 0068). An older plxd leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub relay: Option<RelayStatus>,
+}
+
+/// plxd's connection to Parallax Relay (PLX-652, 0068).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayStatus {
+    /// Whether plxd is connected and the relay accepted its host key.
+    pub connected: bool,
+    /// Where webhooks reach this host through the relay, to be followed by `/<hookId>/<token>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub hook_url: Option<String>,
+    /// Why it isn't connected, such as this host not being registered yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub problem: Option<String>,
+}
+
+/// Params of `relay/hosts`: the hosts the signed-in user has on Parallax Relay.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayHostsParams {
+    /// The user's Clerk session token. plxd sends it to the relay and keeps nothing of it.
+    pub token: String,
+}
+
+/// Params of `relay/remove`: removes one of the signed-in user's hosts from Parallax Relay,
+/// which frees its place: an account holds 10.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayRemoveParams {
+    /// The user's Clerk session token.
+    pub token: String,
+    /// The host's relay id.
+    pub host_id: String,
+}
+
+/// Result of `relay/hosts` and `relay/remove`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayHostsResult {
+    /// The user's hosts on the relay.
+    pub hosts: Vec<RelayHost>,
+}
+
+/// A host the signed-in user has on Parallax Relay.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayHost {
+    /// Its relay id.
+    pub host_id: String,
+    /// Its name, as it registered.
+    pub name: String,
+    /// Whether it is connected to the relay now.
+    pub online: bool,
+    /// Whether it is the plxd that answered: this computer.
+    pub this_computer: bool,
+}
+
+/// Params of `relay/register`: registers this host with Parallax Relay under the signed-in user.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayRegisterParams {
+    /// The user's Clerk session token. plxd sends it to the relay once and keeps nothing of it.
+    pub token: String,
 }
 
 /// A paired client's session.

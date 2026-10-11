@@ -169,8 +169,14 @@ export type ConnectionOptions = {
   onState: (state: ConnectionState) => void;
   /** Checks the local running version before exposing it. True reconnects after replacement. */
   replaceDaemon?: (version: string) => Promise<boolean>;
+  /** More environment for plxd, asked on every attempt: a relay route's sign-in (PLX-652). */
+  env?: () => Record<string, string> | undefined;
   /** Starts `plxd attach`. Tests pass a fake. */
-  spawn?: (file: string, args: string[]) => ChildProcessWithoutNullStreams;
+  spawn?: (
+    file: string,
+    args: string[],
+    env?: Record<string, string>,
+  ) => ChildProcessWithoutNullStreams;
 };
 
 type Subscription = {
@@ -413,7 +419,7 @@ export class Connection {
     const { destination } = this.options;
     this.setState({ status: "connecting" });
 
-    const child = (this.options.spawn ?? spawnAttach)(file, args);
+    const child = (this.options.spawn ?? spawnAttach)(file, args, this.options.env?.());
     const client = new RpcClient((line) => child.stdin.write(line), {
       onNotification: (method, params) => this.onNotification(method, params),
       onFatal: (message) => this.end({ reason: "protocolError", message }),
@@ -709,8 +715,16 @@ function withCommandId<M extends keyof ParallaxRequests>(
   return { ...(params as object), commandId: crypto.randomUUID() } as ParallaxRequests[M]["params"];
 }
 
-function spawnAttach(file: string, args: string[]): ChildProcessWithoutNullStreams {
-  return spawn(file, args, { stdio: "pipe", windowsHide: true });
+function spawnAttach(
+  file: string,
+  args: string[],
+  env?: Record<string, string>,
+): ChildProcessWithoutNullStreams {
+  return spawn(file, args, {
+    stdio: "pipe",
+    windowsHide: true,
+    ...(env && { env: { ...process.env, ...env } }),
+  });
 }
 
 const ignore = () => {};

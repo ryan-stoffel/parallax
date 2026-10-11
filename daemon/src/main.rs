@@ -456,6 +456,10 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
             return 1;
         }
     };
+    // A `relay:` route signs in to the relay with the app's Clerk session (PLX-652).
+    if let Ok(token) = std::env::var("PLXD_RELAY_TOKEN") {
+        plxd::relay::sign_in(plxd::relay::url(), token);
+    }
     let exit = |error: &remote::Error| match error {
         remote::Error::Refused => remote::EXIT_REFUSED,
         _ => EXIT_UNAVAILABLE.into(),

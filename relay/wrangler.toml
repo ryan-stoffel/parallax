@@ -1,0 +1,54 @@
+# Parallax Relay (PLX-652, decision 0068). README.md has the deploy steps and what they need.
+#
+# The top level is production. It sets no Clerk instance, so a deploy refuses every token until
+# production's values are added below. `pnpm dev` runs `[env.dev]`, against Clerk's development
+# instance.
+name = "parallax-relay"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+# relay.parallx.dev, once the parallx.dev zone is on the Cloudflare account, and no workers.dev URL.
+routes = [{ pattern = "relay.parallx.dev", custom_domain = true }]
+workers_dev = false
+
+[[durable_objects.bindings]]
+name = "HOSTS"
+class_name = "HostRelay"
+
+[[durable_objects.bindings]]
+name = "USERS"
+class_name = "UserAccount"
+
+# Anonymous requests per address and host, before they reach a host's object.
+[[ratelimits]]
+name = "ANON"
+namespace_id = "6520"
+simple = { limit = 120, period = 60 }
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["HostRelay", "UserAccount"]
+
+# Clerk's development instance (0067), for `wrangler dev`. Its issuer and JWKS are public.
+[env.dev]
+workers_dev = true
+routes = []
+
+[env.dev.vars]
+CLERK_ISSUER = "https://adjusted-mastodon-8705.clerk.accounts.dev"
+CLERK_JWKS_URL = "https://adjusted-mastodon-8705.clerk.accounts.dev/.well-known/jwks.json"
+# The desktop app's OAuth application, whose access tokens the relay accepts.
+CLERK_CLIENT_IDS = "SXDueyOLOJ2v4Vmq"
+
+[[env.dev.durable_objects.bindings]]
+name = "HOSTS"
+class_name = "HostRelay"
+
+[[env.dev.durable_objects.bindings]]
+name = "USERS"
+class_name = "UserAccount"
+
+[[env.dev.ratelimits]]
+name = "ANON"
+namespace_id = "6520"
+simple = { limit = 120, period = 60 }

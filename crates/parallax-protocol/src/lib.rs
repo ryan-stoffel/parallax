@@ -177,8 +177,9 @@ pub use queue::{
     QueueResult, QueueSteerParams, QueuedMessage,
 };
 pub use remote::{
-    RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSession, RemoteSessionsParams,
-    RemoteSessionsResult,
+    RelayHost, RelayHostsParams, RelayHostsResult, RelayRegisterParams, RelayRemoveParams,
+    RelayStatus, RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSession,
+    RemoteSessionsParams, RemoteSessionsResult,
 };
 pub use review::{
     AcceptId, AgentAcceptParams, AgentAcceptResult, AgentDiffFile, AgentDiffParams,

@@ -23,7 +23,7 @@ Goals:
 
 Non-goals:
 
-* A hosted cloud service, except Parallax accounts ([0067](decisions/0067-clerk-accounts.md)) and Parallax Relay for remote access, webhooks, and push ([0065](decisions/0065-remote-reach.md))
+* A hosted cloud service, except Parallax accounts ([0067](decisions/0067-clerk-accounts.md)) and Parallax Relay for remote access, webhooks, and push ([0068](decisions/0068-relay.md))
 * An editor. The Code - OSS fork was dropped ([0020](decisions/0020-drop-the-editor-fork.md)).
 * Slack triggers
 
