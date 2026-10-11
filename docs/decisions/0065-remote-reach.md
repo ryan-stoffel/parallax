@@ -62,11 +62,11 @@ Ryan chose all of it for Parallax on 2026-10-09 (PLX-635), with one change from 
 
 ### Mobile
 
-- `apps/mobile`, Expo, on a client package taken out of the renderer (the protocol client and its stores), shared by the desktop renderer, the web client, and mobile. It reaches hosts over the tailnet and relay routes only, which have publicly trusted certificates, with the same pairing. Pinning the LAN key would need a native TLS module in React Native, so mobile leaves the LAN route out. It queues messages while offline, and gets push and Live Activities through the relay only. PLX-653 is blocked on the relay and on Apple and Google developer accounts.
+- `apps/mobile`, Expo, iOS first. It runs the renderer's client code itself rather than a copy (the generated protocol, `WebHost`, and the threads and transcript hooks), which Metro reads from `apps/desktop/src`; no separate package was needed. Amended 2026-10-11 by PLX-653, on Ryan's call: mobile does take the LAN route. A small native module (`apps/mobile/modules/pinned-tls`) does HTTPS and the WebSocket over URLSession, trusting only the pinned fingerprint, and the phone pairs as `plxd dial` does, with SPAKE2 vouching for the certificate it reached, not as a browser does. It finds hosts over mDNS or by a typed address, keeps its DPoP key and session in the Keychain, and tries the routes plxd reports, tailnet included, against the same pin. It queues messages while offline, and gets push and Live Activities through the relay only. Push waits on the relay (PLX-652) and Ryan's APNs key.
 
 ## Consequences
 
 - PLAN.md's non-goal changes: a hosted service is in scope for remote access, webhooks, and push.
 - plxd gains a network listener that isn't Tailscale-checked. It is off by default, every connection needs a paired, DPoP-bound session, and LAN traffic is TLS with a pinned key, unlike T3's plain HTTP. plxd gains `rustls`, `rcgen`, and `ring` for TLS and DPoP, `tokio-tungstenite`, `spake2`, and `mdns-sd`. On macOS arm64 they add 2.46 MB (+14.9%) to the release binary: about 1.86 MB for TLS, DPoP, and the WebSocket, and 0.6 MB for SPAKE2 and mDNS. ring's build needs a C compiler, as the bundled SQLite already does, and clang on Windows arm64.
 - The relay is infrastructure Ryan pays for and operates, with its own uptime and security. Running it is part of shipping.
-- The app's protocol client and stores become one package that Electron, the browser, and React Native share.
+- Electron, the browser, and React Native share the renderer's protocol client and stores from its own source.
