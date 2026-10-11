@@ -31,8 +31,8 @@ Clerk offers three ways in for a desktop app:
 - **Verifying tokens.** `packages/clerk-verify` (`verifyClerkToken`) checks a Clerk JWT against the instance's JWKS with WebCrypto only, so it runs in Workers, Node, and browsers.
   - It accepts a session token from Clerk's web or Expo SDK (`sid`) and an OAuth access token (`client_id`), and returns the user id.
   - The caller must pass both allow lists: `authorizedParties` for a browser session token's `azp`, and `clientIds` for OAuth applications. A session token without `azp`, as native SDKs send, passes.
-  - It checks `alg` (RS256 only), the signature, `iss`, `exp`, and `nbf`.
-  - Keys are cached for the response's `max-age`, or an hour. A token naming an unknown `kid` refetches them at most once a minute, and checks that run at the same time share one fetch. The relay imports it, and shared TypeScript for other surfaces goes in `packages/` too.
+  - It checks `alg` (RS256 only), the signature, `iss`, `exp`, and `nbf`. It refuses any token with `aud`, which Clerk's session and OAuth tokens don't carry, since one that has it was meant for another service.
+  - Keys are cached for the response's `max-age`, or an hour. A token naming an unknown `kid` refetches them at most once a minute, and checks that run at the same time share one fetch. While the JWKS is down, the keys already fetched keep working. The relay imports it, and shared TypeScript for other surfaces goes in `packages/` too.
 
 ## Consequences
 

@@ -14,6 +14,7 @@ async function instance(issuer: string) {
   );
   const jwk = { ...(await crypto.subtle.exportKey("jwk", pair.publicKey)), kid: "ins_1" };
   let fetches = 0;
+  let down = false;
   const options: VerifyOptions = {
     issuer,
     clientIds: ["desktop"],
@@ -21,6 +22,7 @@ async function instance(issuer: string) {
     fetch: (async (url: string) => {
       assert.equal(url, `${issuer}/.well-known/jwks.json`);
       fetches++;
+      if (down) return new Response(null, { status: 503 });
       return Response.json(
         { keys: [jwk] },
         { headers: { "cache-control": "public, max-age=600" } },
@@ -37,7 +39,7 @@ async function instance(issuer: string) {
     );
     return `${signed}.${Buffer.from(signature).toString("base64url")}`;
   };
-  return { options, sign, fetches: () => fetches };
+  return { options, sign, fetches: () => fetches, setDown: (value: boolean) => (down = value) };
 }
 
 const now = Math.floor(Date.now() / 1000);
@@ -83,6 +85,10 @@ test("refuses forged, expired, foreign, and unknown tokens", async () => {
   await refuses(await sign({ ...good, iss: "https://clerk.evil.test" }), "Wrong issuer.");
   await refuses(await sign({ ...good, azp: "https://evil.test" }), "Unexpected origin.");
   await refuses(
+    await sign({ ...good, aud: "https://api.other.test" }),
+    "Meant for another audience.",
+  );
+  await refuses(
     await sign({ iss: issuer, sub: "user_1", client_id: "someone-else", exp: now + 60 }),
     "Unknown OAuth application.",
   );
@@ -119,4 +125,28 @@ test("one JWKS fetch at a time; forged kids refetch once a minute; the cache exp
   // The response's max-age, 10 minutes, ends the cache.
   await verifyClerkToken(good, at(61_000 + 600_000));
   assert.equal(fetches(), 3);
+});
+
+test("while the JWKS is down, a forged kid can't drop the keys already fetched", async () => {
+  const issuer = "https://clerk.four.test";
+  const { options, sign, fetches, setDown } = await instance(issuer);
+  const claims = { iss: issuer, sub: "user_1", sid: "sess_1", exp: now + 3600 };
+  const good = await sign(claims);
+  const forged = await sign(claims, { alg: "RS256", kid: "forged" });
+  const at = (ms: number) => ({ ...options, now: Date.now() + ms });
+
+  await verifyClerkToken(good, at(0));
+  setDown(true);
+  await assert.rejects(verifyClerkToken(forged, at(61_000)), { message: "Unknown signing key." });
+  assert.equal(fetches(), 2);
+  assert.deepEqual(await verifyClerkToken(good, at(62_000)), {
+    userId: "user_1",
+    sessionId: "sess_1",
+  });
+  // Retried a minute later, not on every check.
+  await assert.rejects(verifyClerkToken(forged, at(63_000)), { message: "Unknown signing key." });
+  assert.equal(fetches(), 2);
+  await verifyClerkToken(good, at(122_000));
+  assert.equal(fetches(), 3);
+  setDown(false);
 });

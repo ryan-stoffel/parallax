@@ -60,6 +60,9 @@ export async function verifyClerkToken(token: string, options: VerifyOptions): P
     throw new Error("Expired.");
   if (typeof claims["nbf"] === "number" && claims["nbf"] - SKEW_S > now)
     throw new Error("Not valid yet.");
+  // Clerk's session and OAuth tokens carry no `aud`. One that does, such as a JWT template's or an
+  // OAuth token for an API's audience, was meant for another service.
+  if ("aud" in claims) throw new Error("Meant for another audience.");
   const userId = claims["sub"];
   if (typeof userId !== "string" || !userId) throw new Error("No user.");
 
@@ -84,11 +87,17 @@ export async function verifyClerkToken(token: string, options: VerifyOptions): P
 async function signingKey(options: VerifyOptions, kid: string): Promise<CryptoKey> {
   const url = `${options.issuer}/.well-known/jwks.json`;
   const now = options.now ?? Date.now();
-  const refetch = () => {
-    const entry = { at: now, set: loadKeys(options, url) };
+  const refetch = (previous?: Promise<KeySet>) => {
+    const set = loadKeys(options, url).catch(async (error: unknown) => {
+      // While the JWKS is down, the keys already fetched still count, and it's retried in a
+      // minute, so a forged kid can't make good tokens fail.
+      if (!previous) throw error;
+      return { ttl: REFETCH_MS, keys: (await previous).keys };
+    });
+    const entry = { at: now, set };
     keySets.set(url, entry);
-    // A failed fetch isn't cached: the next check tries again.
-    entry.set.catch(() => keySets.get(url) === entry && keySets.delete(url));
+    // A first fetch that failed isn't cached: the next check tries again.
+    set.catch(() => keySets.get(url) === entry && keySets.delete(url));
     return entry;
   };
   let entry = keySets.get(url) ?? refetch();
@@ -97,7 +106,7 @@ async function signingKey(options: VerifyOptions, kid: string): Promise<CryptoKe
   if (now - entry.at >= cached.ttl || (!keys.has(kid) && now - entry.at >= REFETCH_MS)) {
     // Checks that waited on the same set share one refetch.
     const latest = keySets.get(url);
-    entry = latest && latest !== entry ? latest : refetch();
+    entry = latest && latest !== entry ? latest : refetch(entry.set);
     ({ keys } = await entry.set);
   }
   const key = keys.get(kid);
