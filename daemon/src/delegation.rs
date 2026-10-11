@@ -9,8 +9,8 @@
 //! thread (a Project's coordinator) can't share its workspace, and the owner must be running a
 //! turn, as T3's must. Only threads in a repo entry share theirs: a Project's runs
 //! start children through their coordinator. At most [`MAX_SHARED_RUNNING`] such threads run at
-//! once on a host. A shared worktree is never removed while a thread works in it ([`busy_users`]
-//! for Accept, [`on_delete`] for Delete).
+//! once on a host ([`Slots`]). A shared worktree is never removed while a thread works in it
+//! ([`busy_users`] for Accept, [`on_delete`] for Delete).
 //!
 //! `task/status` reads a task and records what its parent did with it: read its result, which
 //! acknowledges it, cancelled it, which disposes of it, or stopped waiting on it, which turns
@@ -20,7 +20,9 @@
 //! carries the source's conversation since the fork, or all of it for a child, through the
 //! attached-thread path (0047), and recording what that message read consumes the transfer.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
@@ -31,6 +33,7 @@ use parallax_protocol::{
 };
 use parallax_store::{Lineage, Store, ThreadFields};
 use serde::{Deserialize, Serialize};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -46,19 +49,95 @@ const MERGE_BACK: &str = "merge_back";
 
 /// The most threads in shared worktrees, delegated tasks and `create_threads` threads, that run
 /// at once on a host: a departure from T3, which has no cap, for the host's memory (0063).
-pub(crate) const MAX_SHARED_RUNNING: u8 = 8;
+const MAX_SHARED_RUNNING: u8 = 8;
 
-const CAPACITY_MESSAGE: &str =
-    "8 threads already run in shared worktrees on this host; wait for one to end, then try again";
-
-/// The refusal for a shared thread's turn while [`MAX_SHARED_RUNNING`] run.
-pub(crate) fn capacity_error() -> ErrorObject {
-    ErrorObject::parallax(ErrorKind::RunNotResumable, CAPACITY_MESSAGE)
+/// Why a shared thread can't start a turn now.
+fn capacity_error() -> ErrorObject {
+    ErrorObject::parallax(
+        ErrorKind::RunNotResumable,
+        format!(
+            "{MAX_SHARED_RUNNING} threads already run in shared worktrees on this host, the most \
+             at once; wait for one to end, through its wake-up or task_status, then try again"
+        ),
+    )
 }
 
-/// Whether `error` is [`capacity_error`].
-pub(crate) fn at_capacity(error: &ErrorObject) -> bool {
-    error.message == CAPACITY_MESSAGE
+/// The host's [`MAX_SHARED_RUNNING`] slots for turns of threads in shared worktrees (0063), the
+/// one count of them. A turn holds one from its start to its end. A new thread reserves its first
+/// turn's slot when it is made, so a full host refuses it then. A turn that can wait, a queued
+/// message, a wake-up, or a resume, joins one line, and a freed slot goes to the turn that has
+/// waited longest: Tokio's semaphore hands released permits to its waiters in order, and
+/// `try_acquire` takes only what none of them waits for.
+pub(crate) struct Slots {
+    free: Arc<Semaphore>,
+    /// How many turns wait in line.
+    waiting: Arc<AtomicUsize>,
+    /// The slots new threads reserved, until their first turn takes them.
+    reserved: Mutex<HashMap<RunId, OwnedSemaphorePermit>>,
+}
+
+impl Default for Slots {
+    fn default() -> Self {
+        Self {
+            free: Arc::new(Semaphore::new(usize::from(MAX_SHARED_RUNNING))),
+            waiting: Arc::default(),
+            reserved: Mutex::default(),
+        }
+    }
+}
+
+impl Slots {
+    /// `run`'s reserved slot, else a free one no turn waits for, else the refusal.
+    pub(crate) fn take(&self, run: RunId) -> Result<OwnedSemaphorePermit, ErrorObject> {
+        if let Some(slot) = self.reserved().remove(&run) {
+            return Ok(slot);
+        }
+        Arc::clone(&self.free)
+            .try_acquire_owned()
+            .map_err(|_| capacity_error())
+    }
+
+    /// A place in line, which resolves to a slot. Dropping it leaves the line.
+    pub(crate) fn wait(
+        &self,
+    ) -> impl Future<Output = OwnedSemaphorePermit> + Send + Sync + 'static {
+        struct InLine(Arc<AtomicUsize>);
+        impl Drop for InLine {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+        self.waiting.fetch_add(1, Ordering::Relaxed);
+        let in_line = InLine(Arc::clone(&self.waiting));
+        let free = Arc::clone(&self.free);
+        async move {
+            let _in_line = in_line;
+            free.acquire_owned()
+                .await
+                .expect("the slots are never closed")
+        }
+    }
+
+    /// Whether a turn waits in line, so one that holds a slot gives it up before its next turn.
+    pub(crate) fn contended(&self) -> bool {
+        self.waiting.load(Ordering::Relaxed) > 0
+    }
+
+    /// Reserves `slot` for `run`'s next turn.
+    pub(crate) fn reserve(&self, run: RunId, slot: OwnedSemaphorePermit) {
+        self.reserved().insert(run, slot);
+    }
+
+    /// Frees `run`'s reservation, if its turn never took it.
+    pub(crate) fn unreserve(&self, run: RunId) {
+        self.reserved().remove(&run);
+    }
+
+    fn reserved(&self) -> std::sync::MutexGuard<'_, HashMap<RunId, OwnedSemaphorePermit>> {
+        self.reserved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 /// A lineage row's payload: the worktree the thread works in, and for a delegated task, how its
@@ -134,6 +213,16 @@ pub(crate) async fn delegate(
         delivery: TaskDelivery::Pending,
     });
     let (row, scope, inserted) = store(&daemon, move |db| claim(db, run_id, owner, task)).await?;
+    // A new thread's first turn takes its slot now, or the thread isn't made.
+    if inserted {
+        match daemon.agents.shared_slots.take(run_id) {
+            Ok(slot) => daemon.agents.shared_slots.reserve(run_id, slot),
+            Err(error) => {
+                forget(&daemon, run_id, inserted).await;
+                return Err(error);
+            }
+        }
+    }
     let options = match inherit(&row, account.as_ref(), model, effort, permission) {
         Ok(options) => options,
         Err(error) => {
@@ -283,13 +372,6 @@ fn claim(
         Some(_) => return conflict("exists in another thread's workspace"),
         None if retry => return conflict("exists and isn't a thread in a shared workspace"),
         None => {
-            if db.running_shared_threads().map_err(error)? >= u64::from(MAX_SHARED_RUNNING) {
-                return Err(ErrorObject::invalid_params(format!(
-                    "{MAX_SHARED_RUNNING} threads already run in shared worktrees on this host, \
-                     the most at once; wait for one to end, through its wake-up or \
-                     task_status, then try again"
-                )));
-            }
             let lineage = Lineage {
                 relationship: task.map(|_| SUBAGENT.to_owned()),
                 workspace_of: root,
@@ -305,11 +387,13 @@ fn claim(
     Ok((row, scope, inserted))
 }
 
-/// Drops the lineage `delegate` `inserted` for `run_id` when no run was made for it.
+/// Drops the lineage `delegate` `inserted` for `run_id`, and its slot, when no run was made for
+/// it.
 async fn forget(daemon: &Daemon, run_id: RunId, inserted: bool) {
     if !inserted {
         return;
     }
+    daemon.agents.shared_slots.unreserve(run_id);
     let _ = store(daemon, move |db| {
         if db
             .get_run(run_id.into())

@@ -7,14 +7,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use parallax_protocol::methods::{
-    AgentAccept, AgentEvents, AgentList, AgentSend, AgentWait, OrchestrationDispatch, RepoAdd,
-    TaskDelegate, ThreadDelete, ThreadList, ThreadStart,
+    AgentAccept, AgentCommit, AgentEvents, AgentList, AgentSend, AgentWait, OrchestrationDispatch,
+    RepoAdd, TaskDelegate, ThreadDelete, ThreadList, ThreadStart,
 };
 use parallax_protocol::{
-    AcceptId, AccountChoice, AgentAcceptParams, AgentDelivery, AgentEventsParams, AgentListParams,
-    AgentOutputItem, AgentPermission, AgentSendParams, AgentStatus, AgentWaitParams,
-    AgentWaitUntil, ErrorKind, OrchestrationCommand, ParallaxEvent, RepoAddParams, RepoId, RunId,
-    TaskDelegateParams, Thread, ThreadDeleteParams, ThreadListParams, ThreadStartParams, TurnId,
+    AcceptId, AccountChoice, AgentAcceptParams, AgentCommitParams, AgentDelivery,
+    AgentEventsParams, AgentListParams, AgentOutputItem, AgentPermission, AgentSendParams,
+    AgentStatus, AgentWaitParams, AgentWaitUntil, ErrorKind, OrchestrationCommand, ParallaxEvent,
+    RepoAddParams, RepoId, RunId, TaskDelegateParams, Thread, ThreadDeleteParams, ThreadListParams,
+    ThreadStartParams, TurnId,
 };
 use plxd::backend::fake::Step;
 use plxd::mcp::MAX_CALLS;
@@ -27,7 +28,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::time::{Instant, sleep};
 
-use crate::agents::{Conn, Host, end_turn, fake, init, real_repo, text};
+use crate::agents::{Conn, Host, end_turn, fake, git, init, real_repo, text};
 use crate::mcp::{Mcp, mcp_command};
 use crate::support::{PATIENCE, temp_dir};
 
@@ -1687,4 +1688,163 @@ async fn resumed_children_obey_host_cap() {
         children_running <= 8,
         "Resuming children bypassed the host cap"
     );
+}
+
+/// [`steered`], with its session kept up afterward, idle, for another turn.
+fn kept() -> Vec<Step> {
+    let mut steps = steered();
+    steps.extend([Step::AwaitFollowUp, end_turn("Again.")]);
+    steps
+}
+
+/// The children of `me` that are starting or running.
+async fn running_children(client: &mut Conn, me: RunId) -> usize {
+    client
+        .call::<AgentList>(AgentListParams { project: None })
+        .await
+        .unwrap()
+        .runs
+        .iter()
+        .filter(|run| {
+            run.id != me && matches!(run.status, AgentStatus::Starting | AgentStatus::Running)
+        })
+        .count()
+}
+
+/// A steer into a shared thread's idle session starts a turn, so it takes a slot too (0063).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_steer_into_an_idle_shared_session_obeys_the_host_cap() {
+    let host = Host::start(temp_dir(), fake(kept()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+    let mut make = async |name: &str| -> Vec<RunId> {
+        let prompts: Vec<Value> = (0..8)
+            .map(|i| json!({"prompt": format!("{name} {i}")}))
+            .collect();
+        let made = mcp.ok("create_threads", json!({"threads": prompts})).await;
+        made["threads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["threadId"].as_str().unwrap().parse().unwrap())
+            .collect()
+    };
+    let old = make("Old").await;
+    for &child in &old {
+        working(&mut client, child).await;
+        steer(&mut client, child, "Finish old child.").await;
+        idle(&mut client, child).await;
+    }
+    for child in make("New").await {
+        working(&mut client, child).await;
+    }
+    // The last to settle keeps its idle session.
+    let refused = client
+        .call::<AgentSend>(AgentSendParams {
+            run_id: old[7],
+            turn_id: TurnId::generate(),
+            text: "Steer the idle child.".into(),
+            from: None,
+            images: Vec::new(),
+            threads: Vec::new(),
+            model: None,
+            effort: None,
+            permission: None,
+            context_window: None,
+            fast: None,
+            account: None,
+            delivery: Some(AgentDelivery::Steer),
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        refused
+            .message
+            .contains("threads already run in shared worktrees"),
+        "{}",
+        refused.message
+    );
+    assert_eq!(running_children(&mut client, me).await, 8);
+    host.server.stop().await;
+}
+
+/// An agent's own `git commit` becomes the run's commit at `agent/commit`, so a shared worktree
+/// it moved can be reviewed and accepted (0063).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agents_own_commit_can_be_committed_and_accepted() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let path = worktree(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+    let made = mcp
+        .ok(
+            "create_threads",
+            json!({"threads": [{"prompt": "Commit later."}]}),
+        )
+        .await;
+    let child: RunId = made["threads"][0]["threadId"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    working(&mut client, child).await;
+    std::fs::write(path.join("parent.txt"), "parent change").unwrap();
+    steer(&mut client, me, "Finish parent.").await;
+    idle(&mut client, me).await;
+    std::fs::write(path.join("child.txt"), "child change").unwrap();
+    git(&path, &["add", "-A"]);
+    git(
+        &path,
+        &[
+            "-c",
+            "user.name=Child",
+            "-c",
+            "user.email=child@example.com",
+            "commit",
+            "-m",
+            "Child's own commit",
+        ],
+    );
+    let head = git(&path, &["rev-parse", "HEAD"]);
+    steer(&mut client, child, "Finish child.").await;
+    idle(&mut client, child).await;
+    let accept = |id| AgentAcceptParams {
+        run_id: me,
+        id,
+        commit: None,
+    };
+    let refused = client
+        .call::<AgentAccept>(accept(AcceptId::generate()))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.parallax_data().unwrap().kind,
+        ErrorKind::MergeRefused
+    );
+    client
+        .call::<AgentCommit>(AgentCommitParams {
+            run_id: me,
+            message: "Take the child's commit".into(),
+        })
+        .await
+        .unwrap();
+    let accepted = client
+        .call::<AgentAccept>(accept(AcceptId::generate()))
+        .await
+        .unwrap();
+    assert_eq!(
+        accepted.run.diff.map(|diff| diff.commit).as_deref(),
+        Some(head.as_str())
+    );
+    assert!(
+        path.join("child.txt").is_file(),
+        "the shared worktree stays"
+    );
+    host.server.stop().await;
 }

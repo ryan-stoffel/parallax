@@ -119,22 +119,6 @@ impl Store {
         rows.map(|id| Ok(Uuid::parse_str(&id?)?)).collect()
     }
 
-    /// How many threads in another's workspace are starting, running, or reserved before their
-    /// run is created, host-wide. Counting reservations keeps concurrent claims within the cap.
-    ///
-    /// # Errors
-    ///
-    /// A database error.
-    pub fn running_shared_threads(&self) -> Result<u64, StoreError> {
-        Ok(self
-            .conn
-            .prepare_cached(
-                "SELECT COUNT(*) FROM thread_lineage AS l LEFT JOIN runs AS r ON r.id = l.thread_id
-             WHERE r.id IS NULL OR r.status IN ('starting', 'running')",
-            )?
-            .query_row([], |row| row.get(0))?)
-    }
-
     /// Records a pending context transfer `id` of `kind` from `source`, through its `seq`, to
     /// `target`'s next message.
     ///
@@ -202,17 +186,11 @@ mod tests {
         };
         store.put_lineage(child, &lineage).unwrap();
         assert_eq!(store.lineage(child).unwrap().as_ref(), Some(&lineage));
-        assert_eq!(
-            store.running_shared_threads().unwrap(),
-            1,
-            "a reserved slot counts before creating its run"
-        );
         lineage.payload = r#"{"delivery":"acknowledged"}"#.to_owned();
         store.put_lineage(child, &lineage).unwrap();
         assert_eq!(store.lineage(child).unwrap(), Some(lineage));
         store.delete_lineage(child).unwrap();
         assert_eq!(store.lineage(child).unwrap(), None);
-        assert_eq!(store.running_shared_threads().unwrap(), 0);
     }
 
     /// A transfer stays pending until the target's attached cursor for its source reaches its

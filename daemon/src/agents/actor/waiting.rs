@@ -27,6 +27,7 @@ impl Actor {
             || self.busy()
             || self.effect.is_some()
             || self.pending_revert.is_some()
+            || self.slot_wait.is_some()
         {
             return None;
         }
@@ -45,6 +46,7 @@ impl Actor {
             .state
             .resume_at
             .is_some_and(|at| at <= Timestamp::now())
+            && self.slot_ready().await
         {
             self.resume_when_due().await;
         }
@@ -172,12 +174,6 @@ impl Actor {
             )
             .await;
         if let Err(error) = resumed {
-            if crate::delegation::at_capacity(&error) {
-                self.row.state.resume_at =
-                    Some(Timestamp::now() + jiff::SignedDuration::from_secs(1));
-                self.save().await;
-                return;
-            }
             warn!(run = %self.id, error = %error.message, "could not resume a run after its usage limit");
             self.row.state.error = Some(error.message);
             self.stop_waiting(convert::FAILED).await;

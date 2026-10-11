@@ -64,7 +64,7 @@ use parallax_store::{
     QueuedRow, Run as RunRow, RunAccept, SessionModelUsage, StoredImage, Worktree,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{OwnedSemaphorePermit, mpsc, oneshot};
 use tokio::task::{JoinError, JoinHandle};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
@@ -90,7 +90,7 @@ use crate::backend::{
 use crate::routing;
 use crate::server::Daemon;
 use crate::store::Tx;
-use crate::worktree::github_pr_urls;
+use crate::worktree::{RunFolder, github_pr_urls};
 
 mod git;
 mod placed;
@@ -491,10 +491,13 @@ pub(super) struct Actor {
     /// The run's worktree, until `agent/accept` removes it.
     worktree: Option<Worktree>,
     live: Option<Live>,
-    /// A shared thread's place under the host's cap (0063), held from a turn's start to its end.
-    shared_slot: Option<tokio::sync::OwnedSemaphorePermit>,
-    /// When a turn the cap held back tries again.
-    capacity_retry: Option<Instant>,
+    /// Whether the run is a thread in another's worktree, whose turns take the host's shared
+    /// slots (0063), once read.
+    shared: Option<bool>,
+    /// A shared thread's slot, held from a turn's start to its end.
+    shared_slot: Option<OwnedSemaphorePermit>,
+    /// The run's place in line for a slot, for a turn that waits for one.
+    slot_wait: Option<SlotWait>,
     /// The push or Open PR running for the run, off this loop (PLX-458).
     effect: Option<JoinHandle<Finished>>,
     batch: Batch,
@@ -565,8 +568,9 @@ impl Actor {
             row,
             worktree,
             live: None,
+            shared: None,
             shared_slot: None,
-            capacity_retry: None,
+            slot_wait: None,
             effect: None,
             batch: Batch::default(),
             turns,
@@ -589,28 +593,65 @@ impl Actor {
         }
     }
 
-    /// Reserve before any shared child's process or idle-session turn reaches a backend.
-    async fn admit_shared(&mut self) -> Result<(), ErrorObject> {
-        if self.shared_slot.is_some() {
-            return Ok(());
+    /// Whether the run is a thread in another's worktree (0063). One plxd can't read counts as
+    /// not, as its turn then fails on its own.
+    async fn is_shared(&mut self) -> bool {
+        if let Some(shared) = self.shared {
+            return shared;
         }
         let id = self.id;
-        let shared = store(&self.daemon, move |db| {
+        let read = store(&self.daemon, move |db| {
             Ok(db
                 .lineage(id.into())
                 .map_err(|e| store_error(&e))?
                 .is_some_and(|lineage| lineage.workspace_of.is_some()))
         })
-        .await?;
-        if shared {
-            self.shared_slot = Some(
-                Arc::clone(&self.daemon.agents.shared_slots)
-                    .try_acquire_owned()
-                    .map_err(|_| crate::delegation::capacity_error())?,
-            );
+        .await;
+        match read {
+            Ok(shared) => *self.shared.insert(shared),
+            Err(error) => {
+                warn!(run = %self.id, error = %error.message, "could not read whether a run shares a worktree");
+                false
+            }
         }
-        self.capacity_retry = None;
+    }
+
+    /// Takes a shared thread's slot for a turn that can't wait for one: its reservation or a
+    /// free slot, else the refusal (0063).
+    async fn admit_shared(&mut self) -> Result<(), ErrorObject> {
+        if self.shared_slot.is_none() && self.is_shared().await {
+            self.shared_slot = Some(self.daemon.agents.shared_slots.take(self.id)?);
+        }
         Ok(())
+    }
+
+    /// Whether a turn that can wait, a queued message, a wake-up, or a usage limit's resume, can
+    /// start now. With no slot for it, the run joins the line, and [`Self::slotted`] starts it
+    /// once one comes.
+    pub(super) async fn slot_ready(&mut self) -> bool {
+        if self.slot_wait.is_some() {
+            return false;
+        }
+        if self.admit_shared().await.is_ok() {
+            return true;
+        }
+        self.slot_wait = Some(Box::pin(self.daemon.agents.shared_slots.wait()));
+        false
+    }
+
+    /// A slot came for the run, which waited in line: it starts what waited. The loop's top gives
+    /// back one that nothing took.
+    async fn slotted(&mut self, slot: OwnedSemaphorePermit) {
+        self.slot_wait = None;
+        self.shared_slot = Some(slot);
+        self.deliver().await;
+        if !self.busy() {
+            self.check_resume().await;
+        }
+        let woken = self.wakes.due().is_some_and(|at| at <= Instant::now());
+        if woken && !self.busy() && self.effect.is_none() {
+            self.wake().await;
+        }
     }
 
     pub fn id(&self) -> RunId {
@@ -793,18 +834,25 @@ impl Actor {
         let mut active = Instant::now();
         loop {
             self.deliver().await;
+            // A shared thread holds its slot only while a turn runs (0063).
+            if !self.busy() {
+                self.shared_slot = None;
+            }
             let deadline = self.batch.since.map(|since| since + COALESCE);
             // A turn in progress gets its wake-ups next, once it has settled, and a push or Open
             // PR once it's done.
             let wake_at = self
                 .wakes
                 .due()
-                .filter(|_| !self.busy() && self.effect.is_none() && self.pending_revert.is_none()
-                    && self.capacity_retry.is_none());
+                .filter(|_| {
+                    !self.busy()
+                        && self.effect.is_none()
+                        && self.pending_revert.is_none()
+                        && self.slot_wait.is_none()
+                });
             let expire_at = self.approvals.due();
             let resume_at = self.resume_due();
             let release_at = self.release_due();
-            let capacity_at = self.capacity_retry;
             let idle_at = (!self.stopping && self.idle()).then_some(active + IDLE);
             tokio::select! {
                 // Shutdown, then a command, then the due flush, and only then another backend
@@ -844,9 +892,6 @@ impl Actor {
                 () = sleep_until(release_at.unwrap_or_else(Instant::now)), if release_at.is_some() => {
                     self.release_idle();
                 }
-                () = sleep_until(capacity_at.unwrap_or_else(Instant::now)), if capacity_at.is_some() => {
-                    self.capacity_retry = None;
-                }
                 // Stopping frees what the actor holds, its `turns` above all (PLX-459).
                 () = sleep_until(idle_at.unwrap_or_else(Instant::now)), if idle_at.is_some() => {
                     if self.daemon.agents.retire(self.id, &commands) {
@@ -854,6 +899,7 @@ impl Actor {
                         return;
                     }
                 }
+                slot = slot_came(&mut self.slot_wait) => self.slotted(slot).await,
                 finished = effect_done(&mut self.effect) => self.finish_effect(finished).await,
                 event = next_event(&mut self.live) => self.on_event(event).await,
             }
@@ -885,6 +931,7 @@ impl Actor {
             && self.wakes.is_empty()
             && self.approvals.due().is_none()
             && self.resume_due().is_none()
+            && self.slot_wait.is_none()
     }
 
     #[expect(clippy::too_many_lines, reason = "one arm per command")]
@@ -1241,9 +1288,6 @@ impl Actor {
                 wake::deliver(&self.daemon, self.id, questions).await;
             }
             Ok(_) => self.pause_wakes(true).await,
-            Err(error) if crate::delegation::at_capacity(&error) => {
-                self.capacity_retry = Some(Instant::now() + Duration::from_secs(1));
-            }
             Err(error) => {
                 warn!(run = %self.id, error = %error.message, "could not wake a parent");
                 self.pause_wakes(true).await;
@@ -1911,6 +1955,10 @@ impl Actor {
         let (mut steer, seen) = queued.follow_up(&self.daemon, self.id).await?;
         steer.steer = true;
         let busy = self.busy();
+        // Into an idle session, it starts a turn, which takes a slot.
+        if !busy && self.live_open() {
+            self.admit_shared().await?;
+        }
         let sent = self.live.as_ref().map(|live| {
             if live.released {
                 Err(SendError::Finished)
@@ -1993,14 +2041,10 @@ impl Actor {
         }
         let (follow_up, seen) = queued.follow_up(&self.daemon, self.id).await?;
         self.admit_shared().await?;
-        let handed = match &self.live {
+        Ok(match &self.live {
             Some(live) => live.run.send(follow_up).map(|()| seen),
             None => Err(SendError::Finished),
-        };
-        if handed.is_err() && !self.busy() {
-            self.shared_slot = None;
-        }
-        Ok(handed)
+        })
     }
 
     /// Records `queued`, which the live CLI has taken.
@@ -2068,7 +2112,7 @@ impl Actor {
     /// in progress, the next message that doesn't change what it runs with, as its next turn.
     /// One that does releases an idle session, so the next process can take it.
     async fn deliver(&mut self) {
-        if self.stopping || self.queue_held || self.pending_revert.is_some() || self.capacity_retry.is_some() {
+        if self.stopping || self.queue_held || self.pending_revert.is_some() {
             return;
         }
         if self.live.is_none() && self.effect.is_none() {
@@ -2085,16 +2129,15 @@ impl Actor {
                 }
                 break;
             }
+            if !self.slot_ready().await {
+                break;
+            }
             // At least once (0048): the CLI gets the message before its stored row is deleted,
             // so a crash between the two resends it once after a restart, as `record_turn` does,
             // rather than losing it.
             let handed = match self.hand_over(&next).await {
                 Ok(handed) => handed,
                 Err(error) => {
-                    if crate::delegation::at_capacity(&error) {
-                        self.capacity_retry = Some(Instant::now() + Duration::from_secs(1));
-                        break;
-                    }
                     self.queued.pop_front();
                     self.dropped(next.turn_id, &error.message).await;
                     self.save_queue().await;
@@ -2123,11 +2166,13 @@ impl Actor {
     /// changes; those after it wait for that process in turn. A message that can't be sent is
     /// dropped, and the transcript says why, and the next is tried.
     async fn send_queued(&mut self) {
-        while self.live.is_none() {
+        while self.live.is_none() && !self.queued.is_empty() {
+            if !self.slot_ready().await {
+                return;
+            }
             let Some(next) = self.queued.pop_front() else {
                 return;
             };
-            let retry = next.clone();
             let Queued {
                 turn_id,
                 text,
@@ -2150,11 +2195,6 @@ impl Actor {
                         .clone()
                         .unwrap_or_else(|| "its CLI didn't start".to_owned()),
                 ),
-                Err(error) if crate::delegation::at_capacity(&error) => {
-                    self.queued.push_front(retry);
-                    self.capacity_retry = Some(Instant::now() + Duration::from_secs(1));
-                    return;
-                }
                 Err(error) => Some(error.message),
             };
             if let Some(why) = why {
@@ -2412,6 +2452,8 @@ impl Actor {
             Ok(run) => return Ok(run),
             Err(message) => message,
         };
+        // A new process starts a turn, which takes a slot (0063).
+        self.admit_shared().await?;
         let session_id = self.row.state.session_id.clone();
         // The session belongs to the account the run was on when it ended, after any fallback,
         // not to whatever the worker role's default is now.
@@ -2507,9 +2549,6 @@ impl Actor {
         } else {
             self.row.state.session_id = old_session;
             self.move_back(moved_from).await;
-            if self.capacity_retry.is_some() {
-                return Err(crate::delegation::capacity_error());
-            }
         }
         self.snapshot()
     }
@@ -2928,6 +2967,11 @@ impl Actor {
         resume: Option<Resume>,
         paths: Option<(PathBuf, PathBuf)>,
     ) -> bool {
+        // A new thread's first turn takes the slot it reserved when it was made (0063).
+        if let Err(error) = self.admit_shared().await {
+            self.failed_to_start(error.message).await;
+            return false;
+        }
         self.checkpoint_before_turn().await;
         let Prepared {
             resolved,
@@ -2957,14 +3001,6 @@ impl Actor {
                 return false;
             }
         };
-        if let Err(error) = self.admit_shared().await {
-            if crate::delegation::at_capacity(&error) && turn_id.is_some() {
-                self.capacity_retry = Some(Instant::now() + Duration::from_secs(1));
-            } else {
-                self.failed_to_start(error.message).await;
-            }
-            return false;
-        }
         let account_id = resolved.account_id();
         let request = RunRequest {
             run_id: self.id,
@@ -3326,6 +3362,10 @@ impl Actor {
             self.release();
             return;
         }
+        // The next turn waits its turn behind any already in line for a slot (0063).
+        if self.daemon.agents.shared_slots.contended() {
+            self.shared_slot = None;
+        }
         // Boxed: delivering can start a process, whose start can drain this one's events.
         Box::pin(self.deliver()).await;
         if self.in_flight == 0 {
@@ -3512,7 +3552,7 @@ impl Actor {
 
     /// Commits whatever the run changed in its worktree, on its branch, with `message`, and
     /// measures the branch against the worktree's base. `None` when there was nothing new to
-    /// commit.
+    /// commit and `HEAD` is still the base or the run's recorded commit.
     async fn commit(&self, message: &str) -> Result<Option<DiffSummary>, String> {
         let Some(worktree) = &self.worktree else {
             return Err("the run was accepted, and its worktree is gone".to_owned());
@@ -3530,15 +3570,26 @@ impl Actor {
             .commit_all(path, git_dir, Path::new(&worktree.repo_path), message)
             .await
             .map_err(|error| error.to_string())?;
-        let Some(commit) = commit else {
-            return Ok(None);
+        // With nothing to commit, a `HEAD` an agent's own `git commit` moved is the run's new
+        // commit, to review and accept.
+        let sha = if let Some(commit) = commit {
+            commit.sha
+        } else {
+            let head = worktrees
+                .head(RunFolder::Worktree { path, git_dir })
+                .await
+                .map_err(|error| error.to_string())?;
+            if head == worktree.base || self.row.state.commit_sha.as_ref() == Some(&head) {
+                return Ok(None);
+            }
+            head
         };
         let stat = worktrees
             .diff_stat(path, git_dir, &worktree.base)
             .await
             .map_err(|error| error.to_string())?;
         Ok(Some(DiffSummary {
-            commit: commit.sha,
+            commit: sha,
             files: stat.files,
             insertions: stat.insertions,
             deletions: stat.deletions,
@@ -3798,6 +3849,17 @@ pub(super) fn backend_name(backend: &str) -> &str {
 async fn next_event(live: &mut Option<Live>) -> Option<Event> {
     match live {
         Some(live) => live.events.next().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// A run's place in line for a shared slot (0063).
+type SlotWait = std::pin::Pin<Box<dyn Future<Output = OwnedSemaphorePermit> + Send + Sync>>;
+
+/// The slot the run waited in line for, once it comes; never while it isn't in line.
+async fn slot_came(wait: &mut Option<SlotWait>) -> OwnedSemaphorePermit {
+    match wait {
+        Some(wait) => wait.await,
         None => std::future::pending().await,
     }
 }
@@ -4332,45 +4394,63 @@ mod tests {
         let held = actors.iter().position(|(_, admitted)| *admitted).unwrap();
         actors[held].0.finish(&Outcome::Cancelled).await;
         actors[blocked].0.admit_shared().await.unwrap();
-        assert_eq!(daemon.agents.shared_slots.available_permits(), 0);
+        assert!(daemon.agents.shared_slots.take(RunId::generate()).is_err());
     }
 
+    /// At the cap, a queued message and a usage limit's resume wait in line with no timer and no
+    /// write, and a freed slot goes to the run that waited longest.
     #[tokio::test]
-    async fn shared_idle_handoff_keeps_queued_messages_and_usage_retries_at_capacity() {
+    async fn shared_turns_wait_in_line_for_a_slot() {
         use super::convert;
         let dir = tempfile::tempdir().unwrap();
         let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
-        let mut actor = shared_actor(&daemon).await;
-        let run = Arc::new(SessionRun::default());
-        let (_sink, events) = EventSink::channel(4, Vec::new());
-        let mut live = Live::new(run.clone(), events, None);
-        live.settled = Some(tokio::time::Instant::now());
-        actor.live = Some(live);
-        let held = Arc::clone(&daemon.agents.shared_slots)
-            .acquire_many_owned(8)
-            .await
-            .unwrap();
+        let slots = &daemon.agents.shared_slots;
+        let mut held: Vec<_> = (0..8)
+            .map(|_| slots.take(RunId::generate()).unwrap())
+            .collect();
+        let idle_session = |actor: &mut Actor| {
+            let run = Arc::new(SessionRun::default());
+            let (_sink, events) = EventSink::channel(4, Vec::new());
+            let mut live = Live::new(run.clone(), events, None);
+            live.settled = Some(tokio::time::Instant::now());
+            actor.live = Some(live);
+            run
+        };
+        let mut first = shared_actor(&daemon).await;
+        let run = idle_session(&mut first);
         let turn = TurnId::generate();
-        let queued = message(turn, "Keep this message", RunOptions::default());
-        assert!(crate::delegation::at_capacity(
-            &actor.hand_over(&queued).await.unwrap_err()
-        ));
-        actor.queued.push_back(queued);
-        actor.deliver().await;
-        assert_eq!(actor.queued.front().unwrap().turn_id, turn);
+        first
+            .queued
+            .push_back(message(turn, "Keep this message", RunOptions::default()));
+        first.deliver().await;
+        assert_eq!(first.queued.front().unwrap().turn_id, turn);
         assert!(run.sent.lock().unwrap().is_empty());
+        assert!(first.slot_wait.is_some(), "it waits in line");
 
-        actor.row.state.status = convert::WAITING.into();
-        actor.row.state.auto_resume = Some(true);
-        actor.row.state.resume_at = Some(jiff::Timestamp::now());
-        actor.check_resume().await;
-        assert_eq!(actor.row.state.status, convert::WAITING);
-        assert!(actor.row.state.resume_at.unwrap() > jiff::Timestamp::now());
-        assert!(run.sent.lock().unwrap().is_empty());
-        drop(held);
-        actor.capacity_retry = None;
-        actor.deliver().await;
-        assert!(actor.queued.is_empty());
+        let mut second = shared_actor(&daemon).await;
+        let due = jiff::Timestamp::now();
+        second.row.state.status = convert::WAITING.into();
+        second.row.state.auto_resume = Some(true);
+        second.row.state.resume_at = Some(due);
+        second.check_resume().await;
+        assert_eq!(second.row.state.status, convert::WAITING);
+        assert_eq!(second.row.state.resume_at, Some(due), "nothing is saved");
+        assert!(second.slot_wait.is_some());
+        assert!(second.resume_due().is_none(), "no timer while it waits");
+
+        drop(held.pop());
+        let wait = Duration::from_millis(50);
+        let slot = tokio::time::timeout(wait, super::slot_came(&mut first.slot_wait))
+            .await
+            .expect("the first in line gets the slot");
+        assert!(
+            tokio::time::timeout(wait, super::slot_came(&mut second.slot_wait))
+                .await
+                .is_err(),
+            "the second waits for the next"
+        );
+        first.slotted(slot).await;
+        assert!(first.queued.is_empty());
         assert_eq!(*run.sent.lock().unwrap(), [turn]);
     }
 
