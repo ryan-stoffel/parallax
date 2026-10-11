@@ -16,3 +16,9 @@ cd ../../packages/plx-connect
 npm ci
 npm run check
 npm test
+
+# clerk-verify, the Parallax account token check the relay shares (0067).
+cd ../clerk-verify
+npm ci
+npm run check
+npm test

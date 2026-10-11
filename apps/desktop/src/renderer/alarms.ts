@@ -280,7 +280,7 @@ export function useHostUpdateAlarms(hosts: Host[]) {
   );
 }
 
-/** A notification when the user signs in to or out of their Parallax account (0037). */
+/** A notification when the user signs in to or out of their Parallax account (0067). */
 export function useAccountAlarms() {
   useEffect(() => {
     let last: Profile | null | undefined;

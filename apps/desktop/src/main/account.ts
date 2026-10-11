@@ -1,63 +1,56 @@
-import { AuthClient, type SupportedStorage, type User } from "@supabase/auth-js";
 import { app, BrowserWindow, ipcMain, safeStorage, shell } from "electron";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
 import type { Profile } from "../preload/bridge";
-import { serveSignIn, type Answer, type SignInPage } from "./loopback";
+import { serveCallback, type Callback } from "./loopback";
 import { broadcast } from "./windows";
 
-// The Supabase project that holds Parallax accounts (0037). Both values are public: the key only
-// names the project. PLX_SUPABASE_URL and PLX_SUPABASE_KEY point a dev build at another project.
-const SUPABASE_URL = process.env["PLX_SUPABASE_URL"] ?? "https://hkfrqrikselgxhoswgtk.supabase.co";
-const SUPABASE_KEY =
-  process.env["PLX_SUPABASE_KEY"] ?? "sb_publishable_YYLxUEvqEOWBt000SGDoiA_i5_vhanC";
+// The Clerk instance that holds Parallax accounts (0067), named by its publishable key, and the
+// app's OAuth application there. Both are public. PLX_CLERK_PUBLISHABLE_KEY and
+// PLX_CLERK_CLIENT_ID point a dev build at another instance.
+const PUBLISHABLE_KEY =
+  process.env["PLX_CLERK_PUBLISHABLE_KEY"] ??
+  "pk_test_YWRqdXN0ZWQtbWFzdG9kb24tODcwNS5jbGVyay5hY2NvdW50cy5kZXYk";
+const CLIENT_ID = process.env["PLX_CLERK_CLIENT_ID"] ?? "SXDueyOLOJ2v4Vmq";
+const SCOPES = "profile email offline_access";
+
+/** The Frontend API a publishable key names: `pk_test_` or `pk_live_`, then base64 of `<host>$`. */
+export function frontendApi(publishableKey: string): string {
+  const encoded = publishableKey.replace(/^pk_(test|live)_/, "");
+  return `https://${Buffer.from(encoded, "base64").toString().replace(/\$$/, "")}`;
+}
 
 /**
- * The session's storage: one file in userData, encrypted with the OS keychain. Where the OS has
- * no keychain (some Linux desktops), the session lives in memory and ends with the app.
+ * Clerk's hosted Account Portal for a Frontend API: `accounts.<domain>` beside `clerk.<domain>`,
+ * or `<slug>.accounts.dev` for a development instance's `<slug>.clerk.accounts.dev`.
  */
-function encryptedStorage(file: string): SupportedStorage {
-  const persist = safeStorage.isEncryptionAvailable();
-  let items: Record<string, string> = {};
-  try {
-    if (persist) items = JSON.parse(safeStorage.decryptString(fs.readFileSync(file)));
-  } catch {
-    // None yet, or unreadable: signed out.
+export function accountPortal(api: string): string {
+  return api
+    .replace("://clerk.", "://accounts.")
+    .replace(/\.clerk\.accounts\.dev$/, ".accounts.dev");
+}
+
+/** What Clerk's userinfo says of the user (OpenID Connect claims), as much as the app shows. */
+type User = {
+  email?: string;
+  given_name?: string;
+  family_name?: string;
+  picture?: string;
+};
+
+/** What the app keeps, encrypted: the refresh token, and the user, to show before Clerk answers. */
+type Session = { refreshToken: string; user: User };
+
+/** A failed call to Clerk. `revoked` if Clerk refused the refresh token itself. */
+class ClerkError extends Error {
+  constructor(
+    message: string,
+    readonly revoked = false,
+  ) {
+    super(message);
   }
-  const save = () => {
-    if (persist)
-      fs.writeFileSync(file, safeStorage.encryptString(JSON.stringify(items)), { mode: 0o600 });
-  };
-  return {
-    getItem: (key) => items[key] ?? null,
-    setItem: (key, value) => {
-      items[key] = value;
-      save();
-    },
-    removeItem: (key) => {
-      delete items[key];
-      save();
-    },
-  };
-}
-
-/**
- * The first and last name the user gave, at sign-up or in Settings > Account, or else their
- * provider's, split at its first space: GitHub and Google send `full_name`.
- */
-export function namesOf(meta: Record<string, unknown>): Pick<Profile, "firstName" | "lastName"> {
-  const text = (key: string) => (typeof meta[key] === "string" ? meta[key].trim() : "");
-  if (text("first_name") || text("last_name"))
-    return { firstName: text("first_name"), lastName: text("last_name") };
-  const [firstName = "", ...rest] = (text("full_name") || text("name")).split(/\s+/);
-  return { firstName, lastName: rest.join(" ") };
-}
-
-/** The provider's picture's https URL, if it sent one. */
-function pictureUrl(meta: Record<string, unknown>): string | undefined {
-  const url = meta["avatar_url"] ?? meta["picture"];
-  return typeof url === "string" && url.startsWith("https://") ? url : undefined;
 }
 
 /** A picture as a data: URL, since the renderer's CSP loads no remote images. */
@@ -81,93 +74,196 @@ function bringForward() {
 }
 
 /**
- * Starts the Parallax account (0037): a Supabase Auth session kept in the main process, so the
- * renderer only ever sees the profile. Signing in happens on a page in the system browser that
- * main serves on loopback (loopback.ts), with PKCE. Call once the app is ready, as safeStorage
- * needs.
+ * Starts the Parallax account (0067): Clerk's OAuth sign-in with PKCE, run from the main process,
+ * so the renderer only ever sees the profile. The browser signs in on Clerk's page and comes back
+ * to a loopback callback (loopback.ts). The refresh token is kept in one file in userData,
+ * encrypted with the OS keychain; where the OS has none (some Linux desktops), the session lives
+ * in memory and ends with the app. Call once the app is ready, as safeStorage needs.
  */
 export function startAccount() {
-  const auth = new AuthClient({
-    url: `${SUPABASE_URL}/auth/v1`,
-    headers: { apikey: SUPABASE_KEY },
-    storage: encryptedStorage(path.join(app.getPath("userData"), "account")),
-    flowType: "pkce",
-    detectSessionInUrl: false,
-    // Each redirect carries its PKCE flow id, so a sign-up's email link and an OAuth sign-in
-    // started on the same page each trade their code with their own verifier. Sign-up has no
-    // other way to name its flow. Experimental in auth-js: recheck it on upgrades (PLX-300).
-    experimental: { appendPkceFlowIdToRedirects: true },
-  });
+  const api = frontendApi(PUBLISHABLE_KEY);
+  const file = path.join(app.getPath("userData"), "account");
+  const persist = safeStorage.isEncryptionAvailable();
 
-  // Undefined until auth-js reads the stored session, so a signed-in user never looks signed out.
-  let profile: Profile | null | undefined;
+  let session: Session | undefined;
+  try {
+    const saved = persist && JSON.parse(safeStorage.decryptString(fs.readFileSync(file)));
+    if (typeof saved?.refreshToken === "string" && saved.user) session = saved;
+  } catch {
+    // None yet, or unreadable: signed out.
+  }
+  const save = (next: Session | undefined) => {
+    session = next;
+    if (!persist) return;
+    if (next)
+      fs.writeFileSync(file, safeStorage.encryptString(JSON.stringify(next)), { mode: 0o600 });
+    // Also clears a Supabase session left by an older build (0037).
+    else fs.rmSync(file, { force: true });
+  };
+  if (!session) save(undefined);
+
+  // The current access token, a JWT good for a day, kept in memory only.
+  let access: { token: string; expiresAt: number } | undefined;
+  // Counts sign-ins and sign-outs, so an answer from Clerk for an earlier account is dropped.
+  let epoch = 0;
+
+  /** Calls Clerk's token endpoint as the app's public client: an access token, maybe a refresh one. */
+  async function token(params: Record<string, string>) {
+    const res = await fetch(`${api}/oauth/token`, {
+      method: "POST",
+      body: new URLSearchParams({ client_id: CLIENT_ID, ...params }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!res.ok || typeof body["access_token"] !== "string") {
+      const why = [body["error_description"], body["error"]].find((v) => typeof v === "string");
+      throw new ClerkError(
+        why ?? `Clerk answered ${res.status}.`,
+        body["error"] === "invalid_grant",
+      );
+    }
+    const expiresIn = typeof body["expires_in"] === "number" ? body["expires_in"] : 3600;
+    return {
+      access: { token: body["access_token"], expiresAt: Date.now() + expiresIn * 1000 },
+      refreshToken: typeof body["refresh_token"] === "string" ? body["refresh_token"] : undefined,
+    };
+  }
+
+  // One refresh at a time: Clerk may rotate the refresh token on each use.
+  let refreshing: Promise<string | undefined> | undefined;
+  /** A current access token, refreshed a minute before it expires, or undefined signed out. */
+  function accessToken(): Promise<string | undefined> {
+    if (access && access.expiresAt - 60_000 > Date.now()) return Promise.resolve(access.token);
+    refreshing ??= (async () => {
+      const held = epoch;
+      if (!session) return undefined;
+      try {
+        const fresh = await token({
+          grant_type: "refresh_token",
+          refresh_token: session.refreshToken,
+        });
+        if (epoch !== held || !session) return undefined;
+        access = fresh.access;
+        if (fresh.refreshToken) save({ ...session, refreshToken: fresh.refreshToken });
+        return access.token;
+      } catch (error) {
+        // Revoked, such as by signing out everywhere: signed out here too.
+        if (error instanceof ClerkError && error.revoked && epoch === held) {
+          epoch++;
+          save(undefined);
+          publish(null);
+        }
+        return undefined;
+      }
+    })().finally(() => (refreshing = undefined));
+    return refreshing;
+  }
+
+  async function userinfo(bearer: string): Promise<User> {
+    const res = await fetch(`${api}/oauth/userinfo`, {
+      headers: { authorization: `Bearer ${bearer}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) throw new ClerkError(`Clerk answered ${res.status}.`);
+    const { email, given_name, family_name, picture } = (await res.json()) as User;
+    return { email, given_name, family_name, picture };
+  }
+
+  let profile: Profile | null = null;
   const publish = (next: Profile | null) => {
     profile = next;
     broadcast("parallax:profile", profile);
   };
-  // The last picture fetched, so an hourly token refresh doesn't fetch it again.
+  // The last picture fetched, so a profile refresh doesn't fetch it again.
   let picture: { url: string; data: string | undefined } | undefined;
   // Each change gets a number, so a slow picture fetch never overwrites a newer profile.
   let changes = 0;
-  auth.onAuthStateChange((_event, session) => {
+  function show(user: User) {
     const change = ++changes;
-    const user: User | undefined = session?.user;
-    if (!user) return publish(null);
-    const names = namesOf(user.user_metadata);
-    const name = [names.firstName, names.lastName].filter(Boolean).join(" ");
-    const shown = { ...names, name, email: user.email ?? "" };
-    const url = pictureUrl(user.user_metadata);
+    const firstName = user.given_name?.trim() ?? "";
+    const lastName = user.family_name?.trim() ?? "";
+    const name = [firstName, lastName].filter(Boolean).join(" ");
+    const shown = { firstName, lastName, name, email: user.email ?? "" };
+    const url = user.picture?.startsWith("https://") ? user.picture : undefined;
     if (!url || url === picture?.url) return publish({ ...shown, picture: url && picture?.data });
-    // The name now, the picture once it's here. Not awaited: auth-js holds a lock while this runs.
+    // The name now, the picture once it's here.
     publish(shown);
     void fetchPicture(url).then((data) => {
       picture = { url, data };
       if (change === changes) publish({ ...shown, picture: data });
     });
+  }
+
+  // When the profile last came from Clerk, so focusing the window refreshes it at most once a
+  // minute: a name or picture changed on Clerk's page, or on another device, shows on return.
+  let fetchedAt = 0;
+  async function refreshProfile() {
+    fetchedAt = Date.now();
+    const held = epoch;
+    const bearer = await accessToken();
+    if (!bearer || epoch !== held) return;
+    try {
+      const user = await userinfo(bearer);
+      if (epoch !== held || !session) return;
+      save({ ...session, user });
+      show(user);
+    } catch {
+      // Offline, or Clerk is down: the saved profile stays.
+    }
+  }
+  if (session) {
+    show(session.user);
+    void refreshProfile();
+  }
+  app.on("browser-window-focus", () => {
+    if (session && Date.now() - fetchedAt > 60_000) void refreshProfile();
   });
 
-  // The open sign-in page, if any.
-  let page: SignInPage | undefined;
+  // The sign-in waiting for the browser, if any.
+  let page: Callback | undefined;
 
   ipcMain.handle("parallax:profile", () => profile);
 
   ipcMain.handle("parallax:signIn", async (_event, create: boolean) => {
-    // One page at a time, so a late one can't switch accounts.
+    // One sign-in at a time, so a late one can't switch accounts.
     page?.close();
-    const signedIn = (error: { message: string } | null): Answer =>
-      error ? { error: error.message } : { signedIn: true };
-    const current = await serveSignIn({
-      oauthUrl: async (provider, redirectTo) => {
-        const { data, error } = await auth.signInWithOAuth({
-          provider,
-          options: { redirectTo, skipBrowserRedirect: true },
-        });
-        return error ? { error: error.message } : data.url;
-      },
-      signIn: async (email, password) =>
-        signedIn((await auth.signInWithPassword({ email, password })).error),
-      signUp: async (account, redirectTo) => {
-        const { data, error } = await auth.signUp({
-          email: account.email,
-          password: account.password,
-          options: {
-            emailRedirectTo: redirectTo,
-            data: { first_name: account.firstName.trim(), last_name: account.lastName.trim() },
-          },
-        });
-        if (error || data.session) return signedIn(error);
-        // The link comes back to this page, which waits an hour, as long as Supabase's links last
-        // by default. A later click still confirms the account.
-        return { note: `Check ${account.email} for a link to confirm your account.` };
-      },
-      exchange: async (code, flowId) =>
-        signedIn((await auth.exchangeCodeForSession(code, flowId ? { flowId } : undefined)).error),
+    const verifier = randomBytes(32).toString("base64url");
+    const state = randomBytes(16).toString("base64url");
+    const current = await serveCallback(state, async (code) => {
+      const fresh = await token({
+        grant_type: "authorization_code",
+        code,
+        code_verifier: verifier,
+        redirect_uri: current.redirectUri,
+      });
+      if (!fresh.refreshToken) return "Clerk sent no refresh token.";
+      const user = await userinfo(fresh.access.token);
+      if (page !== current) return "Sign-in was cancelled.";
+      epoch++;
+      access = fresh.access;
+      save({ refreshToken: fresh.refreshToken, user });
+      fetchedAt = Date.now();
+      show(user);
+      return undefined;
     });
     page = current;
-    const url = new URL(current.url);
-    if (create) url.searchParams.set("create", "");
+
+    const authorize = new URL(`${api}/oauth/authorize`);
+    authorize.search = new URLSearchParams({
+      response_type: "code",
+      client_id: CLIENT_ID,
+      redirect_uri: current.redirectUri,
+      scope: SCOPES,
+      state,
+      code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+      code_challenge_method: "S256",
+    }).toString();
+    // Create an account starts on Clerk's sign-up page, which then continues the same sign-in.
+    const url = create
+      ? `${accountPortal(api)}/sign-up?redirect_url=${encodeURIComponent(authorize.href)}`
+      : authorize.href;
     try {
-      await shell.openExternal(url.href);
+      await shell.openExternal(url);
     } catch (error) {
       current.close();
       return `Couldn't open your browser: ${(error as Error).message}`;
@@ -178,19 +274,23 @@ export function startAccount() {
     return error;
   });
 
-  // Settings > Account's name. Saved where sign-up keeps it, which a provider's sign-in leaves
-  // alone; the profile republishes when Supabase answers.
-  ipcMain.handle("parallax:saveName", async (_event, firstName: unknown, lastName: unknown) => {
-    if (typeof firstName !== "string" || typeof lastName !== "string") return "Enter a name.";
-    const { error } = await auth.updateUser({
-      data: { first_name: firstName.trim(), last_name: lastName.trim() },
-    });
-    return error?.message;
-  });
+  // Settings > Account's name and picture are edited on Clerk's account page, since an OAuth
+  // token can't change the user. Coming back to the app shows the change.
+  ipcMain.handle("parallax:editProfile", () => shell.openExternal(`${accountPortal(api)}/user`));
 
   ipcMain.handle("parallax:signOut", async () => {
     page?.close();
-    // Local: other devices stay signed in.
-    await auth.signOut({ scope: "local" });
+    const held = session;
+    epoch++;
+    save(undefined);
+    access = undefined;
+    publish(null);
+    // Revokes this computer's refresh token only: other devices stay signed in.
+    if (held)
+      await fetch(`${api}/oauth/token/revoke`, {
+        method: "POST",
+        body: new URLSearchParams({ client_id: CLIENT_ID, token: held.refreshToken }),
+        signal: AbortSignal.timeout(10_000),
+      }).catch(() => undefined);
   });
 }

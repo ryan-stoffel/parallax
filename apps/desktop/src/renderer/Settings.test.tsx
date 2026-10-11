@@ -767,38 +767,26 @@ test("the last provider on can't be turned off", async () => {
   localStorage.removeItem("parallax.disabledProviders");
 });
 
-test("Account saves a changed name, and shows main's answer when it fails", async () => {
+test("Account's Edit opens the name on Clerk, and shows the name main publishes", async () => {
   let publish = (_profile: Profile | null) => {};
   const ryan = { name: "Ryan Stoffel", firstName: "Ryan", lastName: "Stoffel", email: "r@x.dev" };
-  const saveName = vi.fn(async () => "Network error" as string | undefined);
+  const editProfile = vi.fn(async () => {});
   Object.assign(window.parallax, {
     onProfile: (listener: (profile: Profile | null) => void) => {
       publish = listener;
       listener(ryan);
       return () => {};
     },
-    saveName,
+    editProfile,
   });
   await renderSettings("account");
-  const first = document.querySelector<HTMLInputElement>('input[aria-label="First name"]')!;
-  const save = button(section("Account settings"), "Save");
-  expect(first.value).toBe("Ryan");
-  expect(save.disabled).toBe(true);
+  expect(section("Account settings").textContent).toContain("Ryan Stoffel");
+  await click(button(section("Account settings"), "Edit"));
+  expect(editProfile).toHaveBeenCalledOnce();
 
-  change(first, " Ry ");
-  expect(save.disabled).toBe(false);
-  await click(save);
-  expect(saveName).toHaveBeenCalledWith(" Ry ", "Stoffel");
-  expect(section("Account settings").textContent).toContain("Network error");
-
-  // Once main publishes the saved name, the fields start over from it.
-  saveName.mockResolvedValue(undefined);
-  await click(save);
+  // Back from the browser, main publishes the changed name.
   act(() => publish({ ...ryan, name: "Ry Stoffel", firstName: "Ry" }));
-  expect(document.querySelector<HTMLInputElement>('input[aria-label="First name"]')!.value).toBe(
-    "Ry",
-  );
-  expect(button(section("Account settings"), "Save").disabled).toBe(true);
+  expect(section("Account settings").textContent).toContain("Ry Stoffel");
   expect(section("Profile").querySelector("h2")!.textContent).toBe("Ry Stoffel");
 });
 

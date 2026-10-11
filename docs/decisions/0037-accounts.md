@@ -1,6 +1,6 @@
 # 0037: Parallax accounts live in Supabase Auth
 
-- Status: accepted
+- Status: superseded by [0067](0067-clerk-accounts.md) (Clerk)
 - Date: 2026-10-01
 - Issue: PLX-273
 

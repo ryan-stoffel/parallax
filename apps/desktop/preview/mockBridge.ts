@@ -1612,7 +1612,7 @@ export const mockBridge: ParallaxBridge = {
     return noop;
   },
   signIn: () => delay(undefined),
-  saveName: () => delay(undefined),
+  editProfile: () => delay(undefined),
   signOut: () => delay(undefined),
 
   storage: () =>

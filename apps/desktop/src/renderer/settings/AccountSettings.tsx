@@ -14,16 +14,7 @@ import {
   Trophy,
   type LucideIcon,
 } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-  type FormEvent,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { Profile } from "../../preload/bridge";
 import type { UsageHour } from "../../protocol/generated/protocol";
@@ -56,15 +47,13 @@ const hourName = () => new Intl.DateTimeFormat("en", { hour: "numeric", ...hourC
 
 const card = "rounded-2xl border border-border bg-surface";
 const heading = "text-[12.5px] font-medium text-muted-foreground";
-const nameField =
-  "w-32 rounded-md border border-border bg-background px-2.5 py-1 text-[13px] placeholder:text-faint-foreground";
 const outlineButton =
   "flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5";
 
 /**
- * Settings > Account, which the sidebar's Profile button opens: the Parallax account (0037) and
+ * Settings > Account, which the sidebar's Profile button opens: the Parallax account (0067) and
  * what every host's agents add up to, then the account's settings. Signed out, the card offers
- * Sign in and Create an account, which open the sign-in page in the browser. Share copies the
+ * Sign in and Create an account, which open Clerk's sign-in page in the browser. Share copies the
  * card as a picture.
  */
 export function AccountSettings({ listed }: { listed: { host: Host; view: ThreadsView }[] }) {
@@ -110,9 +99,7 @@ export function AccountSettings({ listed }: { listed: { host: Host; view: Thread
       )}
       <Heatmap activity={activity} now={now} />
       <Tokens hosts={hosts} usage={usage} now={now} />
-      {profile && (
-        <AccountRows key={`${profile.firstName}\n${profile.lastName}`} profile={profile} />
-      )}
+      {profile && <AccountRows profile={profile} />}
     </div>
   );
 }
@@ -623,61 +610,27 @@ function Tokens({
 }
 
 /**
- * The account's settings: its name, which saves through main (0037), its email, and Sign out.
- * Keyed by the saved name, so a saved or changed name starts the fields over.
+ * The account's settings: its name, which Edit changes on Clerk's account page in the browser
+ * (0067), its email, and Sign out.
  */
 function AccountRows({ profile }: { profile: Profile }) {
-  const [firstName, setFirstName] = useState(profile.firstName);
-  const [lastName, setLastName] = useState(profile.lastName);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string>();
-  const changed = firstName.trim() !== profile.firstName || lastName.trim() !== profile.lastName;
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!changed || !firstName.trim() || saving) return;
-    setSaving(true);
-    setError(undefined);
-    const answer = await window.parallax.saveName(firstName, lastName);
-    // Once saved, the new profile remounts these rows.
-    setSaving(false);
-    setError(answer);
-  };
-
   return (
     <Section title="Account settings">
-      <form onSubmit={(e) => void save(e)} className={`flex-wrap ${settingRow}`}>
+      <div className={settingRow}>
         <div className="min-w-0">
           <span className="block text-[13px] font-medium">Name</span>
-          <span role="status" className="block text-[12.5px] text-muted-foreground">
-            {error ?? "Shown on your profile and in the sidebar."}
+          <span className="block truncate text-[12.5px] text-muted-foreground">
+            {profile.name || "Shown on your profile and in the sidebar."}
           </span>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <input
-            aria-label="First name"
-            placeholder="First name"
-            autoComplete="given-name"
-            value={firstName}
-            onChange={(e) => setFirstName(e.target.value)}
-            className={nameField}
-          />
-          <input
-            aria-label="Last name"
-            placeholder="Last name"
-            autoComplete="family-name"
-            value={lastName}
-            onChange={(e) => setLastName(e.target.value)}
-            className={nameField}
-          />
-          <button
-            type="submit"
-            disabled={!changed || !firstName.trim() || saving}
-            className={primaryButton}
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
-        </div>
-      </form>
+        <button
+          type="button"
+          onClick={() => void window.parallax.editProfile()}
+          className={outlineButton}
+        >
+          Edit
+        </button>
+      </div>
       <div className={settingRow}>
         <div className="min-w-0">
           <span className="block text-[13px] font-medium">Email</span>

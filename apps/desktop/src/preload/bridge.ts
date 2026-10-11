@@ -323,21 +323,21 @@ export interface ParallaxBridge {
   selectTerminalApp(path: string): Promise<string | null>;
 
   /**
-   * Calls `listener` with the signed-in Parallax account (0037), or null, now and on every
+   * Calls `listener` with the signed-in Parallax account (0067), or null, now and on every
    * change. Returns the unsubscribe function.
    */
   onProfile(listener: (profile: Profile | null) => void): () => void;
   /**
-   * Opens the Parallax sign-in page in the system browser, on Create an account if `create`.
-   * Settles once the page signs the app in, another sign-in replaces it, or it times out. Resolves
-   * to an error for people, or undefined.
+   * Opens Clerk's sign-in page in the system browser, or its sign-up page if `create`. Settles once
+   * the browser signs the app in, another sign-in replaces it, or it times out. Resolves to an
+   * error for people, or undefined.
    */
   signIn(create: boolean): Promise<string | undefined>;
   /**
-   * Saves the account's first and last name, trimmed. Resolves to an error for people, or undefined
-   * once saved, after which `onProfile` hears the new name.
+   * Opens the account's page on Clerk in the system browser, where its name and picture change.
+   * `onProfile` hears the change once the app's window is focused again.
    */
-  saveName(firstName: string, lastName: string): Promise<string | undefined>;
+  editProfile(): Promise<void>;
   /** Signs out on this computer. */
   signOut(): Promise<void>;
 

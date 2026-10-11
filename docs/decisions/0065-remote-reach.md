@@ -55,7 +55,7 @@ Ryan chose all of it for Parallax on 2026-10-09 (PLX-635), with one change from 
 
 ### The relay
 
-- **Parallax Relay** is a hosted service, separate from Parallax Connect (0056, Tailscale). Sign-in is the Parallax account (0037, Supabase), in place of T3's Clerk.
+- **Parallax Relay** is a hosted service, separate from Parallax Connect (0056, Tailscale). Sign-in is the Parallax account, in Clerk as in T3 ([0067](0067-clerk-accounts.md), which replaced 0037's Supabase).
 - It does what T3 Connect does: a managed Cloudflare tunnel per host (plxd runs a pinned `cloudflared`, downloaded on first use), a bootstrap credential bound to the client's DPoP key, and no data path after bootstrap. It forwards webhooks at `/v1/hooks/<hostId>/<hookId>/<token>`, holds them up to 24 hours and 1 MiB in a Durable Object per host while plxd is offline if the user opts in, and plxd asks for held ones when its tunnel reconnects. plxd publishes each thread's activity (working, needs you, done, failed), signed with a host key, and the relay sends APNs and FCM pushes.
 - It runs as T3's does: a Cloudflare Worker with Postgres and queues, and a Durable Object per host for held webhooks, in `infra/relay/`.
 - It needs Ryan's accounts: Cloudflare, a domain, Apple push credentials, and Firebase. PLX-652 is blocked on them.

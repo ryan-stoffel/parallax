@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import type { Profile } from "../preload/bridge";
 import type { AgentRun } from "../protocol/generated/protocol";
 
-/** The signed-in Parallax account (0037), kept current. Null when signed out, undefined until known. */
+/** The signed-in Parallax account (0067), kept current. Null when signed out, undefined until known. */
 export function useProfile(): Profile | null | undefined {
   const [profile, setProfile] = useState<Profile | null>();
   useEffect(() => window.parallax.onProfile(setProfile), []);

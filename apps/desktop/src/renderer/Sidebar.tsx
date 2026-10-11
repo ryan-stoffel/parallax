@@ -1052,7 +1052,7 @@ function RepoFilterMenu({
 
 /**
  * The footer's buttons: Profile, which opens Settings > Account and shows the account's picture or
- * initials (0037), Settings, Pull requests, Usage, and Update when `updatable` (Update.tsx).
+ * initials (0067), Settings, Pull requests, Usage, and Update when `updatable` (Update.tsx).
  */
 function Footer({
   onOpenSettings,
