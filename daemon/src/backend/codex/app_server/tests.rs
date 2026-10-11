@@ -195,12 +195,13 @@ async fn an_approval_round_trips_and_a_follow_up_joins_the_live_thread() {
         })
     );
 
-    assert_manual_writes(&dir);
+    assert_manual_writes(&dir).await;
 }
 
-/// What plxd wrote to the Manual thread's app-server, and how it started it.
-fn assert_manual_writes(dir: &TempDir) {
-    let written = written(dir);
+/// What plxd wrote to the Manual thread's app-server, and how it started it. Its last write,
+/// `thread/unsubscribe` as it leaves, can follow the stream's end.
+async fn assert_manual_writes(dir: &TempDir) {
+    let written = written_at_least(dir, 7).await;
     let methods: Vec<&str> = written
         .iter()
         .map(|line| line["method"].as_str().unwrap_or("(response)"))
@@ -213,7 +214,8 @@ fn assert_manual_writes(dir: &TempDir) {
             "thread/start",
             "turn/start",
             "(response)",
-            "turn/start"
+            "turn/start",
+            "thread/unsubscribe"
         ]
     );
     assert_eq!(

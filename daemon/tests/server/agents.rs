@@ -512,11 +512,12 @@ async fn a_worker_edits_its_worktree_writes_shared_context_commits_and_replays()
     let worktree = PathBuf::from(started.worktree_path.clone().expect("a worktree"));
     assert!(branch.starts_with("parallax/"), "{branch}");
 
-    let mut context_changed = false;
+    let (mut context_changed, mut checkpoint) = (false, false);
     let mut is_done = updated_to(AgentStatus::Completed);
-    let events = until(&mut client, |event| {
+    let mut events = until(&mut client, |event| {
         context_changed |=
             matches!(&event.event, ParallaxEvent::ContextChanged { file } if file.path == "notes.md");
+        checkpoint |= matches!(event.event, ParallaxEvent::ThreadCheckpoint { .. });
         is_done(event)
     })
     .await;
@@ -564,11 +565,17 @@ async fn a_worker_edits_its_worktree_writes_shared_context_commits_and_replays()
         std::fs::read_to_string(&note).unwrap(),
         "Build with cargo.\n"
     );
-    if !context_changed {
-        until(&mut client, |event| {
-            matches!(&event.event, ParallaxEvent::ContextChanged { file } if file.path == "notes.md")
-        })
-        .await;
+    // The turn's checkpoint is a run event that can follow its end (0062), so the replay waits
+    // for it too.
+    if !(context_changed && checkpoint) {
+        events.extend(
+            until(&mut client, |event| {
+                context_changed |= matches!(&event.event, ParallaxEvent::ContextChanged { file } if file.path == "notes.md");
+                checkpoint |= matches!(event.event, ParallaxEvent::ThreadCheckpoint { .. });
+                context_changed && checkpoint
+            })
+            .await,
+        );
     }
 
     assert_replays(&host, project.id, params.run_id, &events).await;
