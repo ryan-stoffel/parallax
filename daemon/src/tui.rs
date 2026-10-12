@@ -6,9 +6,11 @@
 //! - Threads come from `orchestration/subscribeShell`; ← on an empty prompt or `/threads` lists
 //!   them.
 //! - The open thread is `orchestration/subscribeThread`, folded by [`transcript`].
-//! - A message is `message.dispatch`, queued after the turn under way, carrying any `/model`,
-//!   `/effort`, or Shift+Tab change made since the last one, as the app's composer does. The
-//!   first message of a new thread is `thread/start`. Esc is `run.interrupt`.
+//! - A message is `message.dispatch`, queued after the turn under way, carrying any `/provider`,
+//!   `/model`, `/effort`, or `/mode` change made since the last one, as the app's composer does.
+//!   The first message of a new thread is `thread/start`. Esc is `run.interrupt`.
+//! - Typing `/` lists the commands; ↑↓ and Enter run one. Commands that choose something open a
+//!   list below the prompt, which ↑↓ and Enter pick from.
 //! - `host/health` every 10 s keeps the connection open and finds one that dropped; its
 //!   replacement subscribes again from fresh snapshots.
 
@@ -20,15 +22,16 @@ use std::time::{Duration, Instant};
 
 use parallax_protocol::methods::{
     AccountsDefaultsGet, AgentApprove, EventsUnsubscribe, HostHealth, OrchestrationDispatch,
-    OrchestrationSubscribeShell, OrchestrationSubscribeThread, ProvidersList, ThreadStart,
-    ThreadUpdate,
+    OrchestrationSubscribeShell, OrchestrationSubscribeThread, ProvidersList, RequestMethod,
+    ThreadStart, ThreadUpdate,
 };
 use parallax_protocol::{
     AccountChoice, AccountsDefaultsGetParams, AgentApprovalAnswer, AgentApproveParams, AgentEffort,
     AgentPermission, AgentRun, AgentStatus, AgentToolStatus, DispatchMode, EventsEventParams,
     EventsUnsubscribeParams, HostHealthParams, LoggedEvent, OrchestrationCommand, ParallaxEvent,
-    Project, ProvidersListParams, Repo, RepoId, RunId, SubscribeShellParams, SubscribeThreadParams,
-    SubscriptionId, Thread, ThreadStartParams, ThreadUpdateParams, TurnId,
+    Project, ProviderInfo, ProviderKind, ProvidersListParams, Repo, RepoId, RunId,
+    SubscribeShellParams, SubscribeThreadParams, SubscriptionId, Thread, ThreadStartParams,
+    ThreadUpdateParams, TurnId,
 };
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
@@ -45,8 +48,15 @@ use crate::peer::{Incoming, Plxd};
 /// dropped connection comes back before anyone wonders.
 const HEALTH: Duration = Duration::from_secs(10);
 
+/// The longest a call may take. Keys wait while one runs, so a plxd that stops answering
+/// without closing the connection must not hold the screen, and Ctrl-C, for longer.
+const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// How often the screen redraws on its own while a turn runs, for the spinner and its timer.
 const FRAME: Duration = Duration::from_millis(120);
+
+/// The most rows a list below the prompt shows at once; ↑↓ scroll the rest.
+const MENU_ROWS: usize = 10;
 
 /// The app's mark, `ParallaxMark`, in dark mode: its two circles and their overlap.
 const MARK_BLUE: [u8; 3] = [0x2b, 0x5c, 0xff];
@@ -67,19 +77,22 @@ const COMMANDS: [(&str, &str); 9] = [
         "/new",
         "start a new thread here, or in the repo or Space named",
     ),
-    ("/threads", "switch threads, Spaces, and Projects (also ←)"),
     (
-        "/model",
-        "list models, or use the one named from the next message",
+        "/threads",
+        "switch to another thread, Space, or Project (also ←)",
     ),
     (
-        "/effort",
-        "low, medium, high, xhigh, or max, from the next message",
+        "/provider",
+        "choose who runs it: Claude, Codex, Cursor, and the rest",
+    ),
+    ("/model", "choose one of the provider's models"),
+    ("/effort", "choose how hard it thinks"),
+    (
+        "/mode",
+        "choose what it may do without asking (also Shift+Tab)",
     ),
     ("/stop", "stop the turn under way (also Esc)"),
-    ("/clear", "start a new thread, as /new"),
-    ("/resume", "switch threads, as /threads"),
-    ("/help", "show commands and keys"),
+    ("/help", "show the keys"),
     ("/quit", "leave (also Ctrl-C twice, or Ctrl-D)"),
 ];
 
@@ -90,6 +103,49 @@ const MODES: [(AgentPermission, &str); 5] = [
     (AgentPermission::Plan, "plan mode"),
     (AgentPermission::Manual, "ask first"),
     (AgentPermission::Bypass, "bypass permissions"),
+];
+
+/// The models the app's picker offers Claude and Codex ahead of what plxd finds, which for them
+/// is nothing: the catalog in `apps/desktop/src/renderer/models.ts`. Keep the two in step.
+const CATALOG: [(ProviderKind, &str, &str); 21] = [
+    (ProviderKind::Claude, "claude-opus-5-5", "Claude Opus 5.5"),
+    (
+        ProviderKind::Claude,
+        "claude-sonnet-5-5",
+        "Claude Sonnet 5.5",
+    ),
+    (ProviderKind::Claude, "claude-fable-5-1", "Claude Fable 5.1"),
+    (ProviderKind::Claude, "claude-fable-5", "Claude Fable 5"),
+    (ProviderKind::Claude, "claude-opus-5", "Claude Opus 5"),
+    (ProviderKind::Claude, "claude-opus-4-8", "Claude Opus 4.8"),
+    (ProviderKind::Claude, "claude-opus-4-7", "Claude Opus 4.7"),
+    (ProviderKind::Claude, "claude-opus-4-6", "Claude Opus 4.6"),
+    (ProviderKind::Claude, "claude-opus-4-5", "Claude Opus 4.5"),
+    (ProviderKind::Claude, "claude-sonnet-5", "Claude Sonnet 5"),
+    (
+        ProviderKind::Claude,
+        "claude-sonnet-4-6",
+        "Claude Sonnet 4.6",
+    ),
+    (ProviderKind::Claude, "claude-haiku-5-5", "Claude Haiku 5.5"),
+    (ProviderKind::Claude, "claude-haiku-4-5", "Claude Haiku 4.5"),
+    (ProviderKind::Codex, "gpt-6.1-sol", "GPT-6.1 Sol"),
+    (ProviderKind::Codex, "gpt-6-astra", "GPT-6 Astra"),
+    (ProviderKind::Codex, "gpt-6-sol", "GPT-6 Sol"),
+    (ProviderKind::Codex, "gpt-6-luna", "GPT-6 Luna"),
+    (ProviderKind::Codex, "gpt-5.6-sol", "GPT-5.6 Sol"),
+    (ProviderKind::Codex, "gpt-5.6-terra", "GPT-5.6 Terra"),
+    (ProviderKind::Codex, "gpt-5.6-luna", "GPT-5.6 Luna"),
+    (ProviderKind::Codex, "gpt-5.5", "GPT-5.5"),
+];
+
+/// The efforts `/effort` offers, lowest first.
+const EFFORTS: [AgentEffort; 5] = [
+    AgentEffort::Low,
+    AgentEffort::Medium,
+    AgentEffort::High,
+    AgentEffort::Xhigh,
+    AgentEffort::Max,
 ];
 
 /// Shows Parallax in this terminal until the user quits.
@@ -104,7 +160,7 @@ pub async fn run(plxd: Plxd) -> Result<(), String> {
     // Before the terminal changes, so an unreachable plxd is a plain error.
     app.subscribe_shell().await?;
     app.draft = app.cwd_repo();
-    app.load_models().await;
+    app.load_providers().await;
     let (sender, mut keys) = mpsc::unbounded_channel();
     // crossterm reads keys blocking; the thread ends with the process.
     std::thread::spawn(move || {
@@ -120,12 +176,47 @@ pub async fn run(plxd: Plxd) -> Result<(), String> {
     result
 }
 
-/// A row of the thread list.
-enum Row {
-    /// A repo or Space: Enter starts a thread in it. `None` is the threads with no repo.
-    Group { repo: Option<RepoId>, name: String },
-    /// A thread, or a Project's coordinator.
-    Run { run: RunId, label: String },
+/// What picking a row of a list does.
+#[derive(Clone)]
+enum Pick {
+    /// Opens a thread, or a Project's coordinator.
+    Run(RunId),
+    /// Starts a thread in this repo or Space, or with `None`, in none.
+    Group(Option<RepoId>),
+    Provider(String),
+    Model(String),
+    Effort(AgentEffort),
+    Mode(AgentPermission),
+}
+
+/// A row of a list.
+struct Item {
+    label: String,
+    detail: String,
+    /// A heading row, such as a repo above its threads.
+    heading: bool,
+    /// What the next message uses now.
+    current: bool,
+    pick: Pick,
+}
+
+/// A list to pick from, below the prompt.
+struct Menu {
+    title: &'static str,
+    items: Vec<Item>,
+    selected: usize,
+}
+
+impl Menu {
+    /// A list that starts on its current row, or its first.
+    fn new(title: &'static str, items: Vec<Item>) -> Self {
+        let selected = items.iter().position(|item| item.current).unwrap_or(0);
+        Self {
+            title,
+            items,
+            selected,
+        }
+    }
 }
 
 /// The open thread.
@@ -139,10 +230,10 @@ struct App {
     plxd: Plxd,
     /// The mark, drawn once.
     logo: Vec<Vec<Span<'static>>>,
-    /// The backend new threads run on, from the host's defaults.
+    /// The provider new threads run on, from the host's defaults.
     default_backend: Option<String>,
-    /// Models' names by id, as their providers give them.
-    model_names: HashMap<String, String>,
+    /// The host's providers and their models.
+    providers: Vec<ProviderInfo>,
     shell: Option<SubscriptionId>,
     projects: Vec<Project>,
     repos: Vec<Repo>,
@@ -151,13 +242,17 @@ struct App {
     open: Option<Open>,
     /// With no thread open, the next message starts one in this repo or Space, or in none.
     draft: Option<RepoId>,
-    /// The thread list's selected row, while it shows.
-    picker: Option<usize>,
+    /// The list showing below the prompt, if one is.
+    menu: Option<Menu>,
     input: String,
-    /// Messages sent from here, oldest first, and the one Up recalled.
+    /// The highlighted command while `/` lists them.
+    slash: usize,
+    /// Messages sent from here, oldest first; the one Up recalled; and what was typed before.
     history: Vec<String>,
     recalled: Option<usize>,
-    /// What the next message changes: `/model`, `/effort`, Shift+Tab.
+    typed: String,
+    /// What the next message changes: `/provider`, `/model`, `/effort`, `/mode`.
+    provider: Option<String>,
     model: Option<String>,
     effort: Option<AgentEffort>,
     permission: Option<AgentPermission>,
@@ -165,7 +260,7 @@ struct App {
     choice: usize,
     /// Lines scrolled up from the transcript's end.
     scroll: u16,
-    /// A command's answer, shown above the prompt until the next message.
+    /// `/help`'s keys, shown above the prompt until the next message.
     notice: Option<String>,
     /// The last error, until the next key.
     error: Option<String>,
@@ -184,7 +279,7 @@ impl App {
             plxd,
             logo: logo(),
             default_backend: None,
-            model_names: HashMap::new(),
+            providers: Vec::new(),
             shell: None,
             projects: Vec::new(),
             repos: Vec::new(),
@@ -192,10 +287,13 @@ impl App {
             runs: HashMap::new(),
             open: None,
             draft: None,
-            picker: None,
+            menu: None,
             input: String::new(),
+            slash: 0,
             history: Vec::new(),
             recalled: None,
+            typed: String::new(),
+            provider: None,
             model: None,
             effort: None,
             permission: None,
@@ -244,7 +342,7 @@ impl App {
                 }
                 _ = frames.tick() => self.tick(),
                 _ = health.tick() => {
-                    if let Err(error) = self.plxd.call::<HostHealth>(HostHealthParams {}).await {
+                    if let Err(error) = self.call::<HostHealth>(HostHealthParams {}).await {
                         self.error = Some(error);
                         self.dirty = true;
                     }
@@ -252,6 +350,13 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Sends one request, giving up after [`CALL_TIMEOUT`], which cancels it.
+    async fn call<M: RequestMethod>(&self, params: M::Params) -> Result<M::Result, String> {
+        tokio::time::timeout(CALL_TIMEOUT, self.plxd.call::<M>(params))
+            .await
+            .map_err(|_| format!("plxd didn't answer {} within {CALL_TIMEOUT:?}", M::NAME))?
     }
 
     /// Moves the spinner and the turn's timer.
@@ -276,7 +381,6 @@ impl App {
 
     async fn subscribe_shell(&mut self) -> Result<(), String> {
         let subscribed = self
-            .plxd
             .call::<OrchestrationSubscribeShell>(SubscribeShellParams::default())
             .await?;
         self.shell = Some(subscribed.subscription);
@@ -287,6 +391,26 @@ impl App {
             self.runs = shell.runs.into_iter().map(|run| (run.id, run)).collect();
         }
         Ok(())
+    }
+
+    /// Reads the host's default provider, and its providers and their models. Without them,
+    /// models show by id and the lists are empty.
+    async fn load_providers(&mut self) {
+        let defaults = self
+            .call::<AccountsDefaultsGet>(AccountsDefaultsGetParams {})
+            .await;
+        if let Ok(defaults) = defaults
+            && let Some(AccountChoice::Subscription { backend }) = defaults.worker
+        {
+            self.default_backend = Some(backend);
+        }
+        match self
+            .call::<ProvidersList>(ProvidersListParams { refresh: false })
+            .await
+        {
+            Ok(listed) => self.providers = listed.providers,
+            Err(error) => self.error = Some(error),
+        }
     }
 
     /// The repo plxd knows at this process's folder, so `plxd tui` in a checkout starts its
@@ -303,7 +427,6 @@ impl App {
     async fn close(&mut self) {
         if let Some(subscription) = self.open.take().and_then(|open| open.subscription) {
             let _ = self
-                .plxd
                 .call::<EventsUnsubscribe>(EventsUnsubscribeParams { subscription })
                 .await;
         }
@@ -315,7 +438,6 @@ impl App {
     async fn open(&mut self, run: RunId) -> Result<(), String> {
         self.close().await;
         let subscribed = self
-            .plxd
             .call::<OrchestrationSubscribeThread>(SubscribeThreadParams {
                 thread_id: run,
                 after_seq: None,
@@ -334,7 +456,6 @@ impl App {
         });
         // As the app does on opening a thread. A coordinator isn't a thread, and fails.
         let _ = self
-            .plxd
             .call::<ThreadUpdate>(ThreadUpdateParams {
                 run_id: run,
                 seen: true,
@@ -411,6 +532,9 @@ impl App {
                     run.status = state.status;
                     run.error = state.error;
                     run.account_id = state.account_id;
+                    if let Some(backend) = state.backend {
+                        run.backend = backend;
+                    }
                     run.model = state.model;
                     run.effort = state.effort;
                     run.permission = state.permission;
@@ -438,11 +562,30 @@ impl App {
         }
         self.quitting = false;
         self.error = None;
-        if self.picker.is_some() {
-            return self.picker_key(key.code).await;
+        if self.menu.is_some() {
+            return self.menu_key(key.code).await;
         }
         if let Some(pending) = self.pending().cloned() {
             return self.approval_key(key.code, &pending).await;
+        }
+        let commands = self.suggestions();
+        if !commands.is_empty() {
+            let last = commands.len() - 1;
+            match key.code {
+                KeyCode::Up => return self.slash = self.slash.saturating_sub(1),
+                KeyCode::Down => return self.slash = (self.slash + 1).min(last),
+                KeyCode::Tab => {
+                    self.input = format!("{} ", commands[self.slash.min(last)].0);
+                    return;
+                }
+                KeyCode::Enter => {
+                    let name = commands[self.slash.min(last)].0;
+                    self.input.clear();
+                    self.slash = 0;
+                    return self.command(name, "").await;
+                }
+                _ => {}
+            }
         }
         match key.code {
             KeyCode::Esc if self.working_since.is_some() => self.stop().await,
@@ -450,7 +593,7 @@ impl App {
                 self.input.clear();
                 self.notice = None;
             }
-            KeyCode::Left if self.input.is_empty() => self.picker = Some(self.selected_row()),
+            KeyCode::Left if self.input.is_empty() => self.menu = Some(self.threads_menu()),
             KeyCode::BackTab => self.cycle_mode(),
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => self.input.push('\n'),
             // A trailing backslash continues the message on a new line, as in Claude Code.
@@ -459,36 +602,42 @@ impl App {
                 self.input.push('\n');
             }
             KeyCode::Enter => self.submit().await,
-            KeyCode::Tab if self.input.starts_with('/') => {
-                if let Some((name, _)) = self.suggestions().first() {
-                    self.input = format!("{name} ");
-                }
-            }
             KeyCode::Up if !self.input.contains('\n') => self.recall(true),
             KeyCode::Down if !self.input.contains('\n') => self.recall(false),
             KeyCode::PageUp => self.scroll = self.scroll.saturating_add(10),
             KeyCode::PageDown => self.scroll = self.scroll.saturating_sub(10),
             KeyCode::Backspace => {
                 self.input.pop();
+                self.slash = 0;
             }
-            KeyCode::Char(c) => self.input.push(c),
+            KeyCode::Char(c) => {
+                self.input.push(c);
+                self.slash = 0;
+            }
             _ => {}
         }
     }
 
-    /// Steps through the messages sent from here: older with `back`, newer otherwise.
+    /// Steps through the messages sent from here: older with `back`, newer otherwise. Past the
+    /// newest, what was typed before comes back.
     fn recall(&mut self, back: bool) {
-        let last = self.history.len().checked_sub(1);
-        self.recalled = match (self.recalled, back) {
-            (None, true) => last,
-            (Some(i), true) => Some(i.saturating_sub(1)),
-            (Some(i), false) if Some(i) < last => Some(i + 1),
-            _ => None,
+        let Some(last) = self.history.len().checked_sub(1) else {
+            return;
         };
-        self.input = self
-            .recalled
-            .map(|i| self.history[i].clone())
-            .unwrap_or_default();
+        self.recalled = match (self.recalled, back) {
+            (None, true) => {
+                self.typed = std::mem::take(&mut self.input);
+                Some(last)
+            }
+            (None, false) => return,
+            (Some(i), true) => Some(i.saturating_sub(1)),
+            (Some(i), false) if i < last => Some(i + 1),
+            (Some(_), false) => None,
+        };
+        self.input = match self.recalled {
+            Some(i) => self.history[i].clone(),
+            None => std::mem::take(&mut self.typed),
+        };
     }
 
     fn cycle_mode(&mut self) {
@@ -504,43 +653,59 @@ impl App {
             .unwrap_or(AgentPermission::Edit)
     }
 
-    async fn picker_key(&mut self, code: KeyCode) {
-        let rows = self.rows();
-        let Some(selected) = self.picker else { return };
+    async fn menu_key(&mut self, code: KeyCode) {
+        let Some(menu) = &mut self.menu else { return };
+        let last = menu.items.len().saturating_sub(1);
         match code {
-            KeyCode::Esc | KeyCode::Left | KeyCode::Right => self.picker = None,
-            KeyCode::Up | KeyCode::Char('k') => self.picker = Some(selected.saturating_sub(1)),
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.picker = Some((selected + 1).min(rows.len().saturating_sub(1)));
-            }
-            KeyCode::Enter => match rows.get(selected) {
-                Some(Row::Run { run, .. }) => {
-                    let run = *run;
-                    match self.open(run).await {
-                        Ok(()) => self.picker = None,
-                        Err(error) => self.error = Some(error),
-                    }
+            KeyCode::Esc | KeyCode::Left => self.menu = None,
+            KeyCode::Up => menu.selected = menu.selected.saturating_sub(1),
+            KeyCode::Down => menu.selected = (menu.selected + 1).min(last),
+            KeyCode::PageUp => menu.selected = menu.selected.saturating_sub(MENU_ROWS),
+            KeyCode::PageDown => menu.selected = (menu.selected + MENU_ROWS).min(last),
+            KeyCode::Enter => {
+                let pick = menu.items.get(menu.selected).map(|item| item.pick.clone());
+                self.menu = None;
+                if let Some(pick) = pick {
+                    self.pick(pick).await;
                 }
-                Some(Row::Group { repo, .. }) => {
-                    let repo = *repo;
+            }
+            // In the thread list: a new thread in the selected row's repo or Space.
+            KeyCode::Char('n') => {
+                let group = menu.items[..=menu.selected.min(last)]
+                    .iter()
+                    .rev()
+                    .find_map(|item| match item.pick {
+                        Pick::Group(repo) => Some(repo),
+                        _ => None,
+                    });
+                if let Some(repo) = group {
+                    self.menu = None;
                     self.new_thread(repo).await;
                 }
-                None => {}
-            },
-            KeyCode::Char('n') => {
-                // The selected group's, or the selected thread's.
-                let repo = rows
-                    .iter()
-                    .take(selected + 1)
-                    .rev()
-                    .find_map(|row| match row {
-                        Row::Group { repo, .. } => Some(*repo),
-                        Row::Run { .. } => None,
-                    })
-                    .flatten();
-                self.new_thread(repo).await;
             }
             _ => {}
+        }
+    }
+
+    async fn pick(&mut self, pick: Pick) {
+        match pick {
+            Pick::Run(run) => {
+                if let Err(error) = self.open(run).await {
+                    self.error = Some(error);
+                }
+            }
+            Pick::Group(repo) => self.new_thread(repo).await,
+            Pick::Provider(id) => {
+                // Another provider's models differ, so a model chosen for the last one goes.
+                if self.provider() != Some(id.as_str()) {
+                    self.model = None;
+                }
+                let thread_has_it = self.open_run().is_some_and(|run| run.backend == id);
+                self.provider = (!thread_has_it).then_some(id);
+            }
+            Pick::Model(id) => self.model = Some(id),
+            Pick::Effort(effort) => self.effort = Some(effort),
+            Pick::Mode(mode) => self.permission = Some(mode),
         }
     }
 
@@ -570,7 +735,6 @@ impl App {
             return;
         };
         let answered = self
-            .plxd
             .call::<AgentApprove>(AgentApproveParams {
                 run_id,
                 approval_id: pending.approval_id,
@@ -594,7 +758,6 @@ impl App {
     async fn new_thread(&mut self, repo: Option<RepoId>) {
         self.close().await;
         self.draft = repo;
-        self.picker = None;
     }
 
     async fn submit(&mut self) {
@@ -605,11 +768,16 @@ impl App {
         self.recalled = None;
         if text.starts_with('/') {
             self.input.clear();
-            return self.command(&text).await;
+            let (name, argument) = text.split_once(' ').unwrap_or((&text, ""));
+            return self.command(name, argument.trim()).await;
         }
         self.notice = None;
+        let account = self
+            .provider
+            .clone()
+            .map(|backend| AccountChoice::Subscription { backend });
         let sent = if let Some(thread_id) = self.open.as_ref().map(|open| open.run) {
-            self.dispatch(OrchestrationCommand::MessageDispatch {
+            self.call::<OrchestrationDispatch>(OrchestrationCommand::MessageDispatch {
                 thread_id,
                 message_id: TurnId::generate(),
                 text: text.clone(),
@@ -620,27 +788,28 @@ impl App {
                 permission: self.permission,
                 context_window: None,
                 fast: None,
-                account: None,
+                account,
                 dispatch_mode: DispatchMode::QueueAfterActive,
             })
             .await
+            .map(drop)
         } else {
-            self.start(self.draft, text.clone()).await
+            self.start(self.draft, text.clone(), account).await
         };
         match sent {
             Ok(()) => {
                 self.history.push(text);
                 self.input.clear();
                 self.scroll = 0;
-                (self.model, self.effort, self.permission) = (None, None, None);
+                (self.provider, self.model, self.effort, self.permission) =
+                    (None, None, None, None);
             }
             Err(error) => self.error = Some(error),
         }
     }
 
-    async fn command(&mut self, line: &str) {
-        let (name, argument) = line.split_once(' ').unwrap_or((line, ""));
-        let argument = argument.trim();
+    /// Runs a slash command. One that chooses something, run without `argument`, opens its list.
+    async fn command(&mut self, name: &str, argument: &str) {
         match name {
             "/new" | "/clear" => {
                 let named = (!argument.is_empty()).then(|| {
@@ -663,76 +832,216 @@ impl App {
                 let repo = repo.filter(|id| !self.repo(*id).is_some_and(|repo| repo.scratch));
                 self.new_thread(repo).await;
             }
-            "/threads" | "/resume" => self.picker = Some(self.selected_row()),
-            "/model" if argument.is_empty() => self.list_models().await,
-            "/model" => {
-                self.model = Some(argument.to_owned());
-                self.notice = Some(format!("Model {argument} from the next message."));
+            "/threads" | "/resume" => self.menu = Some(self.threads_menu()),
+            "/provider" | "/model" => {
+                self.load_providers().await;
+                let menu = if name == "/provider" {
+                    self.providers_menu()
+                } else {
+                    self.models_menu()
+                };
+                self.choose(menu, argument).await;
             }
-            "/effort" => match serde_json::from_value::<AgentEffort>(argument.into()) {
-                Ok(effort) if effort != AgentEffort::Unknown => {
-                    self.effort = Some(effort);
-                    self.notice = Some(format!("Effort {argument} from the next message."));
-                }
-                _ => self.error = Some("effort is low, medium, high, xhigh, or max".to_owned()),
-            },
+            "/effort" => {
+                let menu = Ok(self.efforts_menu());
+                self.choose(menu, argument).await;
+            }
+            "/mode" => {
+                let menu = Ok(self.modes_menu());
+                self.choose(menu, argument).await;
+            }
             "/stop" => self.stop().await,
             "/help" => {
-                let mut help: Vec<String> = COMMANDS
-                    .iter()
-                    .map(|(name, what)| format!("{name:<10} {what}"))
-                    .collect();
-                help.push(String::new());
-                help.push(
-                    "Shift+Tab mode · \\ or Alt+Enter new line · ↑↓ history · PgUp/PgDn scroll"
-                        .to_owned(),
+                self.notice = Some(
+                    [
+                        "/ lists commands: ↑↓ choose, Enter runs, Tab completes",
+                        "← on an empty prompt lists threads; n there starts one",
+                        "Shift+Tab mode · Esc interrupts · \\ or Alt+Enter new line",
+                        "↑↓ history · PgUp/PgDn scroll · Ctrl-C twice quits",
+                    ]
+                    .join("\n"),
                 );
-                self.notice = Some(help.join("\n"));
             }
             "/quit" | "/exit" => self.done = true,
-            _ => self.error = Some(format!("{name} isn't a command; /help lists them")),
+            _ => self.error = Some(format!("{name} isn't a command; type / to list them")),
         }
     }
 
-    /// Lists the models of the open thread's backend, or of every signed-in one.
-    async fn list_models(&mut self) {
-        let listed = self
-            .plxd
-            .call::<ProvidersList>(ProvidersListParams { refresh: false })
-            .await;
-        let providers = match listed {
-            Ok(listed) => listed.providers,
+    /// Opens `menu`, or with `argument`, picks its row whose label or id is that.
+    async fn choose(&mut self, menu: Result<Menu, String>, argument: &str) {
+        let menu = match menu {
+            Ok(menu) => menu,
             Err(error) => {
                 self.error = Some(error);
                 return;
             }
         };
-        let backend = self.open_run().map(|run| run.backend.clone());
-        let lines: Vec<String> = providers
+        if argument.is_empty() {
+            self.menu = Some(menu);
+            return;
+        }
+        let named = menu.items.into_iter().find(|item| {
+            item.label.eq_ignore_ascii_case(argument) || item.detail.eq_ignore_ascii_case(argument)
+        });
+        match named {
+            Some(item) => self.pick(item.pick).await,
+            None => self.error = Some(format!("{} has no {argument}", menu.title)),
+        }
+    }
+
+    /// The thread list: each Project's coordinator, then each repo and Space with its threads,
+    /// newest first.
+    fn threads_menu(&self) -> Menu {
+        let open = self.open.as_ref().map(|open| open.run);
+        let run_item = |run: RunId, label: String| Item {
+            label,
+            detail: if self.working(run) {
+                "● working".to_owned()
+            } else {
+                String::new()
+            },
+            heading: false,
+            current: Some(run) == open,
+            pick: Pick::Run(run),
+        };
+        let mut items: Vec<Item> = self
+            .projects
             .iter()
-            .filter(|provider| match &backend {
-                Some(backend) => provider.instance.id == *backend,
-                None => provider.signed_in == Some(true),
-            })
-            .flat_map(|provider| {
-                provider
-                    .models
-                    .iter()
-                    .map(move |model| format!("{:<12} {}", provider.instance.id, model.id))
+            .filter_map(|project| {
+                let run = project.coordinator?;
+                Some(run_item(run, format!("◆ {}", project.name)))
             })
             .collect();
-        self.notice = Some(if lines.is_empty() {
-            "No models listed. /model <id> still sends one.".to_owned()
-        } else {
-            format!("{}\n\n/model <id> to use one.", lines.join("\n"))
-        });
+        for repo in &self.repos {
+            let mut threads: Vec<&Thread> = self
+                .threads
+                .iter()
+                .filter(|thread| thread.repo == repo.id && !thread.archived)
+                .collect();
+            threads.sort_by_key(|thread| {
+                std::cmp::Reverse(thread.last_prompt_at.unwrap_or(thread.created_at))
+            });
+            items.push(Item {
+                label: group_name(repo),
+                detail: "n for a new thread here".to_owned(),
+                heading: true,
+                current: false,
+                pick: Pick::Group((!repo.scratch).then_some(repo.id)),
+            });
+            items.extend(
+                threads
+                    .into_iter()
+                    .map(|thread| run_item(thread.id, format!("  {}", self.title(thread.id)))),
+            );
+        }
+        Menu::new("Threads", items)
+    }
+
+    /// The host's enabled providers, signed in first.
+    fn providers_menu(&self) -> Result<Menu, String> {
+        let now = self.provider();
+        let mut items: Vec<(bool, Item)> = self
+            .providers
+            .iter()
+            .filter(|provider| provider.instance.enabled && provider.installed)
+            .map(|provider| {
+                let signed_in = provider.signed_in == Some(true);
+                let detail = match (&provider.account, provider.signed_in) {
+                    (Some(account), Some(true)) => format!("{} · {account}", provider.instance.id),
+                    (None, Some(true)) => provider.instance.id.clone(),
+                    (_, Some(false)) => format!("{} · not signed in", provider.instance.id),
+                    (_, None) => format!("{} · sign-in unknown", provider.instance.id),
+                };
+                let item = Item {
+                    label: provider.instance.name.clone(),
+                    detail,
+                    heading: false,
+                    current: now == Some(provider.instance.id.as_str()),
+                    pick: Pick::Provider(provider.instance.id.clone()),
+                };
+                (signed_in, item)
+            })
+            .collect();
+        if items.is_empty() {
+            return Err("plxd lists no installed providers".to_owned());
+        }
+        items.sort_by_key(|(signed_in, _)| !signed_in);
+        Ok(Menu::new(
+            "Provider",
+            items.into_iter().map(|(_, item)| item).collect(),
+        ))
+    }
+
+    /// The models of the provider the next message runs on: the ones plxd found, then the
+    /// user's own.
+    fn models_menu(&self) -> Result<Menu, String> {
+        let Some(id) = self.provider() else {
+            return Err("choose a provider with /provider first".to_owned());
+        };
+        let provider = self
+            .providers
+            .iter()
+            .find(|provider| provider.instance.id == id)
+            .ok_or_else(|| format!("plxd doesn't list the provider {id}"))?;
+        let now = self.model_id();
+        let items: Vec<Item> = models(provider)
+            .into_iter()
+            .map(|(id, name)| Item {
+                current: now.as_deref() == Some(id.as_str()),
+                label: name,
+                detail: id.clone(),
+                heading: false,
+                pick: Pick::Model(id),
+            })
+            .collect();
+        if items.is_empty() {
+            return Err(format!(
+                "{} lists no models; /model <id> sends one",
+                provider.instance.name
+            ));
+        }
+        Ok(Menu::new("Model", items))
+    }
+
+    fn efforts_menu(&self) -> Menu {
+        let now = self.effort.or_else(|| self.open_run()?.effort);
+        let items = EFFORTS
+            .iter()
+            .map(|&effort| Item {
+                label: effort_name(effort).to_owned(),
+                detail: String::new(),
+                heading: false,
+                current: now == Some(effort),
+                pick: Pick::Effort(effort),
+            })
+            .collect();
+        Menu::new("Effort", items)
+    }
+
+    fn modes_menu(&self) -> Menu {
+        let now = self.mode();
+        let items = MODES
+            .iter()
+            .map(|&(mode, name)| Item {
+                label: name.to_owned(),
+                detail: String::new(),
+                heading: false,
+                current: now == mode,
+                pick: Pick::Mode(mode),
+            })
+            .collect();
+        Menu::new("Mode", items)
     }
 
     /// Starts a thread with the host's defaults and the changes made here, asking here before
     /// tools run, as the app's threads do.
-    async fn start(&mut self, repo: Option<RepoId>, prompt: String) -> Result<(), String> {
+    async fn start(
+        &mut self,
+        repo: Option<RepoId>,
+        prompt: String,
+        account: Option<AccountChoice>,
+    ) -> Result<(), String> {
         let started = self
-            .plxd
             .call::<ThreadStart>(ThreadStartParams {
                 run_id: RunId::generate(),
                 repo,
@@ -741,7 +1050,7 @@ impl App {
                 notify: None,
                 title: None,
                 prompt,
-                account: None,
+                account,
                 model: self.model.clone(),
                 effort: self.effort,
                 permission: self.permission,
@@ -773,59 +1082,9 @@ impl App {
             thread_id,
             hold_queue: false,
         };
-        if let Err(error) = self.dispatch(command).await {
+        if let Err(error) = self.call::<OrchestrationDispatch>(command).await {
             self.error = Some(error);
         }
-    }
-
-    async fn dispatch(&self, command: OrchestrationCommand) -> Result<(), String> {
-        self.plxd
-            .call::<OrchestrationDispatch>(command)
-            .await
-            .map(drop)
-    }
-
-    /// The thread list: each Project's coordinator, then each repo and Space with its threads,
-    /// newest first.
-    fn rows(&self) -> Vec<Row> {
-        let mut rows: Vec<Row> = self
-            .projects
-            .iter()
-            .filter_map(|project| {
-                Some(Row::Run {
-                    run: project.coordinator?,
-                    label: format!("◆ {}", project.name),
-                })
-            })
-            .collect();
-        for repo in &self.repos {
-            let mut threads: Vec<&Thread> = self
-                .threads
-                .iter()
-                .filter(|thread| thread.repo == repo.id && !thread.archived)
-                .collect();
-            threads.sort_by_key(|thread| {
-                std::cmp::Reverse(thread.last_prompt_at.unwrap_or(thread.created_at))
-            });
-            rows.push(Row::Group {
-                repo: (!repo.scratch).then_some(repo.id),
-                name: group_name(repo),
-            });
-            rows.extend(threads.into_iter().map(|thread| Row::Run {
-                run: thread.id,
-                label: self.title(thread.id),
-            }));
-        }
-        rows
-    }
-
-    /// The thread list's row for the open thread, or the first.
-    fn selected_row(&self) -> usize {
-        let open = self.open.as_ref().map(|open| open.run);
-        self.rows()
-            .iter()
-            .position(|row| matches!(row, Row::Run { run, .. } if Some(*run) == open))
-            .unwrap_or(0)
     }
 
     fn open_run(&self) -> Option<&AgentRun> {
@@ -839,6 +1098,52 @@ impl App {
 
     fn repo(&self, id: RepoId) -> Option<&Repo> {
         self.repos.iter().find(|repo| repo.id == id)
+    }
+
+    /// The provider the next message runs on: a `/provider` change, the thread's own, or the
+    /// host's default.
+    fn provider(&self) -> Option<&str> {
+        self.provider
+            .as_deref()
+            .or_else(|| self.open_run().map(|run| run.backend.as_str()))
+            .or(self.default_backend.as_deref())
+    }
+
+    /// A provider's name, such as Claude Code, or its id when plxd doesn't list it.
+    fn provider_name(&self, id: &str) -> String {
+        self.providers
+            .iter()
+            .find(|provider| provider.instance.id == id)
+            .map_or_else(|| id.to_owned(), |provider| provider.instance.name.clone())
+    }
+
+    /// The model the next message runs on: a `/model` change, or, on the thread's own provider,
+    /// the thread's model or the one its session last reported.
+    fn model_id(&self) -> Option<String> {
+        if self.model.is_some() || self.provider.is_some() {
+            return self.model.clone();
+        }
+        let open = self.open.as_ref()?;
+        self.open_run()?
+            .model
+            .clone()
+            .or_else(|| open.transcript.model.clone())
+    }
+
+    /// [`Self::model_id`] by its provider's name for it, or the provider's default.
+    fn model_label(&self) -> String {
+        match self.model_id() {
+            Some(id) => self
+                .providers
+                .iter()
+                .flat_map(models)
+                .find(|(held, _)| *held == id)
+                .map_or(id, |(_, name)| name),
+            None => match self.provider() {
+                Some(provider) => format!("{} default model", self.provider_name(provider)),
+                None => "default model".to_owned(),
+            },
+        }
     }
 
     /// A thread's title, or its prompt's first line.
@@ -868,71 +1173,26 @@ impl App {
         repo.map_or_else(|| "Chats".to_owned(), group_name)
     }
 
+    /// Whether `run`'s turn is under way. A run waiting out a usage limit isn't.
     fn working(&self, run: RunId) -> bool {
-        self.runs.get(&run).is_some_and(|run| {
-            matches!(
-                run.status,
-                AgentStatus::Starting | AgentStatus::Running | AgentStatus::Waiting
-            )
-        })
+        self.runs
+            .get(&run)
+            .is_some_and(|run| matches!(run.status, AgentStatus::Starting | AgentStatus::Running))
     }
 
-    /// The slash commands that start with what's typed.
+    /// The slash commands that start with what's typed, while only a command is typed.
     fn suggestions(&self) -> Vec<(&'static str, &'static str)> {
         if !self.input.starts_with('/') || self.input.contains(' ') {
             return Vec::new();
         }
-        COMMANDS
+        let mut matches: Vec<_> = COMMANDS
             .iter()
             .filter(|(name, _)| name.starts_with(self.input.as_str()))
             .copied()
-            .collect()
-    }
-
-    /// Reads the host's default backend and its models' names. Without them, models show by id.
-    async fn load_models(&mut self) {
-        let defaults = self
-            .plxd
-            .call::<AccountsDefaultsGet>(AccountsDefaultsGetParams {})
-            .await;
-        if let Ok(defaults) = defaults
-            && let Some(AccountChoice::Subscription { backend }) = defaults.worker
-        {
-            self.default_backend = Some(backend);
-        }
-        let listed = self
-            .plxd
-            .call::<ProvidersList>(ProvidersListParams { refresh: false })
-            .await;
-        if let Ok(listed) = listed {
-            self.model_names = listed
-                .providers
-                .into_iter()
-                .flat_map(|provider| provider.models)
-                .map(|model| (model.id, model.name))
-                .collect();
-        }
-    }
-
-    /// The model the next message runs on, by its provider's name for it: a `/model` change,
-    /// the thread's own, or the one its session last reported. Otherwise the backend's default.
-    fn model_label(&self) -> String {
-        let id = self
-            .model
-            .clone()
-            .or_else(|| self.open_run()?.model.clone())
-            .or_else(|| self.open.as_ref()?.transcript.model.clone());
-        match id {
-            Some(id) => self.model_names.get(&id).cloned().unwrap_or(id),
-            None => format!("{} default model", self.backend().unwrap_or("host")),
-        }
-    }
-
-    /// The open thread's backend, or the one new threads run on.
-    fn backend(&self) -> Option<&str> {
-        self.open_run()
-            .map(|run| run.backend.as_str())
-            .or(self.default_backend.as_deref())
+            .collect();
+        // `/mode` typed in full is `/mode`, though `/model` starts with it too.
+        matches.sort_by_key(|(name, _)| *name != self.input);
+        matches
     }
 
     fn draw(&self, frame: &mut Frame) {
@@ -948,10 +1208,10 @@ impl App {
             None => self.input_lines(area.width).len(),
         };
         let suggestions = self.suggestions();
-        let below = if suggestions.is_empty() {
-            2
-        } else {
-            suggestions.len()
+        let below = match &self.menu {
+            Some(menu) => menu.items.len().min(MENU_ROWS) + 1,
+            None if !suggestions.is_empty() => suggestions.len(),
+            None => 2,
         };
         let rows = |n: usize| Constraint::Length(u16::try_from(n).unwrap_or(u16::MAX));
         let [
@@ -974,10 +1234,7 @@ impl App {
             rows(below),
         ])
         .areas(area);
-        match self.picker {
-            Some(selected) => self.draw_picker(frame, body, selected),
-            None => self.draw_transcript(frame, body),
-        }
+        self.draw_transcript(frame, body);
         if let Some(text) = &self.notice {
             let lines: Vec<Line> = text
                 .lines()
@@ -1004,30 +1261,37 @@ impl App {
             Some(pending) => self.draw_approval(frame, prompt, pending),
             None => self.draw_prompt(frame, prompt),
         }
-        if suggestions.is_empty() {
+        if let Some(menu) = &self.menu {
+            draw_menu(frame, footer, menu);
+        } else if suggestions.is_empty() {
             self.draw_footer(frame, footer);
         } else {
+            let selected = self.slash.min(suggestions.len() - 1);
             let lines: Vec<Line> = suggestions
                 .into_iter()
-                .map(|(name, what)| {
-                    Line::from(vec![
+                .enumerate()
+                .map(|(i, (name, what))| {
+                    let line = Line::from(vec![
                         Span::from(format!("{name:<10} ")).fg(BLUE),
                         Span::from(what).dark_gray(),
-                    ])
+                    ]);
+                    if i == selected {
+                        line.bold().reversed()
+                    } else {
+                        line
+                    }
                 })
                 .collect();
             frame.render_widget(Paragraph::new(lines), footer);
         }
     }
 
-    /// The header: the mark beside the version, the model, the account and mode, and where the
-    /// thread works.
+    /// The header: the mark beside the version, the model, the provider and mode, and where
+    /// the thread works.
     fn header(&self) -> Vec<Line<'static>> {
-        let account = self
-            .open_run()
-            .map(|run| run.account_id.clone())
-            .or_else(|| self.default_backend.clone())
-            .unwrap_or_else(|| "host defaults".to_owned());
+        let provider = self
+            .provider()
+            .map_or_else(|| "host default".to_owned(), |id| self.provider_name(id));
         let title = match &self.open {
             Some(open) => self.title(open.run),
             None => "new thread".to_owned(),
@@ -1047,9 +1311,9 @@ impl App {
                 ))
                 .dark_gray(),
             ],
-            vec![Span::from(format!("{account} · {}", mode_name(self.mode()))).dark_gray()],
+            vec![Span::from(format!("{provider} · {}", mode_name(self.mode()))).dark_gray()],
             vec![Span::from(format!("{} › {title}", self.place())).dark_gray()],
-            vec![Span::from("/help for commands · ← for threads").dark_gray()],
+            vec![Span::from("/ for commands · ← for threads").dark_gray()],
             vec![],
         ];
         self.logo
@@ -1083,50 +1347,21 @@ impl App {
         frame.render_widget(paragraph.scroll((top, 0)), area);
     }
 
-    fn draw_picker(&self, frame: &mut Frame, area: Rect, selected: usize) {
-        let mut lines = vec![
-            Line::from(vec![
-                Span::from("Threads  ").bold(),
-                Span::from("↑↓ select · enter open · n new here · esc back").dark_gray(),
-            ]),
-            Line::default(),
-        ];
-        for (i, row) in self.rows().into_iter().enumerate() {
-            let pointer = Span::from(if i == selected { "❯ " } else { "  " }).fg(BLUE);
-            let line = match row {
-                Row::Group { name, .. } => Line::from(vec![pointer, Span::from(name).bold()]),
-                Row::Run { run, label } => {
-                    let mut spans = vec![pointer, Span::from(format!("  {label}"))];
-                    if self.working(run) {
-                        spans.push(Span::from("  ● working").fg(CORAL));
-                    }
-                    if self.open.as_ref().is_some_and(|open| open.run == run) {
-                        spans.push(Span::from("  (open)").dark_gray());
-                    }
-                    Line::from(spans)
-                }
-            };
-            lines.push(if i == selected { line.bold() } else { line });
-        }
-        // Keeps the selected row on screen.
-        let skip = (selected + 3).saturating_sub(usize::from(area.height));
-        let shown: Vec<Line> = lines.into_iter().skip(skip).collect();
-        frame.render_widget(Paragraph::new(shown), area);
-    }
-
     /// Above the prompt: what the next message changes on the left, the effort on the right.
     fn draw_meta(&self, frame: &mut Frame, area: Rect) {
         let changes: Vec<String> = [
-            self.model.as_ref().map(|model| format!("model {model}")),
+            self.provider.as_deref().map(|id| self.provider_name(id)),
+            self.model.as_ref().map(|_| self.model_label()),
             self.effort
-                .map(|effort| format!("effort {}", effort_name(effort))),
+                .map(|effort| format!("{} effort", effort_name(effort))),
+            self.permission.map(|mode| mode_name(mode).to_owned()),
         ]
         .into_iter()
         .flatten()
         .collect();
         if !changes.is_empty() {
             let left = format!("next message: {}", changes.join(" · "));
-            frame.render_widget(Paragraph::new(left).dark_gray(), area);
+            frame.render_widget(Paragraph::new(left).fg(BLUE), area);
         }
         let effort = self
             .effort
@@ -1223,8 +1458,13 @@ impl App {
             .map_or(0, |(tokens, window)| tokens * 100 / window.max(1));
         let cost = transcript.map_or(0, |transcript| transcript.cost_micros);
         let dot = || Span::from(" · ").dark_gray();
+        let provider = self
+            .provider()
+            .map_or_else(|| "host default".to_owned(), |id| self.provider_name(id));
         let first = Line::from(vec![
             Span::from(self.model_label()).bold(),
+            dot(),
+            Span::from(provider),
             dot(),
             Span::from(self.place()).fg(Color::Green),
             dot(),
@@ -1236,17 +1476,73 @@ impl App {
                 cost % 1_000_000 / 10_000
             )),
         ]);
-        let name = mode_name(self.mode());
         let second = if self.quitting {
             Line::from("Press Ctrl-C again to exit").dark_gray()
         } else {
             Line::from(vec![
-                Span::from(format!("▸▸ {name} on ")).fg(CORAL),
-                Span::from("(shift+tab to cycle) · ← for threads").dark_gray(),
+                Span::from(format!("▸▸ {} on ", mode_name(self.mode()))).fg(CORAL),
+                Span::from("(shift+tab to cycle) · / for commands · ← for threads").dark_gray(),
             ])
         };
         frame.render_widget(Paragraph::new(vec![first, second]), area);
     }
+}
+
+/// A provider's models as (id, name), as the app's picker lists them: the [`CATALOG`]'s for its
+/// kind, then the ones plxd found, then the user's own, each id once.
+fn models(provider: &ProviderInfo) -> Vec<(String, String)> {
+    let kind = provider.instance.kind;
+    let catalog = CATALOG
+        .iter()
+        .filter(|(of, ..)| *of == kind)
+        .map(|(_, id, name)| ((*id).to_owned(), (*name).to_owned()));
+    let found = provider
+        .models
+        .iter()
+        .chain(&provider.instance.models)
+        .map(|model| (model.id.clone(), model.name.clone()));
+    let mut seen = std::collections::HashSet::new();
+    catalog
+        .chain(found)
+        .filter(|(id, _)| seen.insert(id.clone()))
+        .collect()
+}
+
+/// A list below the prompt: its title and keys, then up to [`MENU_ROWS`] rows around the
+/// selected one, with `❯` at the selected and `✓` at the current.
+fn draw_menu(frame: &mut Frame, area: Rect, menu: &Menu) {
+    let mut lines = vec![Line::from(vec![
+        Span::from(format!("{}  ", menu.title)).bold(),
+        Span::from("↑↓ choose · enter pick · esc close").dark_gray(),
+    ])];
+    let first = menu
+        .selected
+        .saturating_sub(MENU_ROWS - 1)
+        .min(menu.items.len().saturating_sub(MENU_ROWS));
+    let width = menu
+        .items
+        .iter()
+        .map(|item| item.label.chars().count())
+        .max()
+        .unwrap_or(0);
+    for (i, item) in menu.items.iter().enumerate().skip(first).take(MENU_ROWS) {
+        let selected = i == menu.selected;
+        let mut label = Span::from(format!("{:<width$}", item.label));
+        if item.heading {
+            label = label.bold();
+        }
+        let mut line = Line::from(vec![
+            Span::from(if selected { "❯ " } else { "  " }).fg(BLUE),
+            label,
+            Span::from(if item.current { " ✓" } else { "  " }).fg(Color::Green),
+            Span::from(format!("  {}", item.detail)).dark_gray(),
+        ]);
+        if selected {
+            line = line.fg(BLUE).bold();
+        }
+        lines.push(line);
+    }
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 /// The app's mark in [`LOGO_PIXELS`] square pixels, two to a terminal row with `▀` and `▄`.
@@ -1379,5 +1675,60 @@ fn upsert<T>(items: &mut Vec<T>, new: T, same: impl Fn(&T, &T) -> bool) {
     match items.iter_mut().find(|held| same(held, &new)) {
         Some(held) => *held = new,
         None => items.push(new),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use parallax_protocol::ClientInfo;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent};
+
+    use super::App;
+    use crate::peer::Plxd;
+
+    /// An app whose plxd is never reached: these keys make no calls.
+    fn app() -> App {
+        App::new(Plxd::new(|| async {
+            Err::<(tokio::io::DuplexStream, ClientInfo), String>("no plxd in tests".to_owned())
+        }))
+    }
+
+    async fn press(app: &mut App, codes: &[KeyCode]) {
+        for &code in codes {
+            app.key(KeyEvent::from(code)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn history_keeps_what_was_typed() {
+        let mut app = app();
+        app.input = "draft".to_owned();
+        press(&mut app, &[KeyCode::Down, KeyCode::Up]).await;
+        assert_eq!(app.input, "draft", "no history: the arrows change nothing");
+
+        app.history = vec!["one".to_owned(), "two".to_owned()];
+        press(&mut app, &[KeyCode::Up, KeyCode::Up]).await;
+        assert_eq!(app.input, "one");
+        press(&mut app, &[KeyCode::Down, KeyCode::Down]).await;
+        assert_eq!(app.input, "draft", "past the newest, the draft comes back");
+    }
+
+    #[tokio::test]
+    async fn enter_runs_the_highlighted_command() {
+        let mut app = app();
+        press(
+            &mut app,
+            &[KeyCode::Char('/'), KeyCode::Down, KeyCode::Enter],
+        )
+        .await;
+        assert_eq!(app.input, "");
+        assert_eq!(app.menu.as_ref().map(|menu| menu.title), Some("Threads"));
+
+        app.menu = None;
+        for c in "/mode".chars() {
+            press(&mut app, &[KeyCode::Char(c)]).await;
+        }
+        press(&mut app, &[KeyCode::Enter]).await;
+        assert_eq!(app.menu.as_ref().map(|menu| menu.title), Some("Mode"));
     }
 }

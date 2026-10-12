@@ -196,36 +196,13 @@ impl Transcript {
                 call_id,
                 name,
                 input,
-            } => entries.push(Entry::Tool {
-                call_id: call_id.clone(),
-                name: name.clone(),
-                detail: detail(input),
-                status: None,
-                output: None,
-            }),
+            } => tool_call(entries, call_id, name, input),
             AgentOutputItem::ToolResult {
                 call_id,
                 status,
                 output,
                 ..
-            } => {
-                let call = entries.iter_mut().rev().find_map(|entry| match entry {
-                    Entry::Tool {
-                        call_id: id,
-                        status,
-                        output,
-                        ..
-                    } if id == call_id => Some((status, output)),
-                    _ => None,
-                });
-                if let Some((held, shown)) = call {
-                    *held = Some(*status);
-                    *shown = output.as_deref().map(first_line);
-                }
-            }
-            AgentOutputItem::SessionStarted {
-                model: Some(model), ..
-            } => self.model = Some(model.clone()),
+            } => tool_result(entries, call_id, *status, output.as_deref()),
             AgentOutputItem::Notice { detail } => entries.push(Entry::Note(detail.clone())),
             AgentOutputItem::ApprovalRequested {
                 approval_id,
@@ -253,6 +230,55 @@ impl Transcript {
             } => self.cost_micros += cost_usd_micros.unwrap_or(0),
             _ => {}
         }
+    }
+}
+
+/// Adds a tool call's row. Claude announces a call with a null input as its block starts, then
+/// repeats it whole (PLX-714): the whole call fills in the announced row.
+fn tool_call(entries: &mut Vec<Entry>, call_id: &str, name: &str, input: &Value) {
+    let announced = entries.iter_mut().rev().find_map(|entry| match entry {
+        Entry::Tool {
+            call_id: id,
+            name,
+            detail,
+            ..
+        } if id == call_id => Some((name, detail)),
+        _ => None,
+    });
+    match announced {
+        Some((held, shown)) => {
+            name.clone_into(held);
+            *shown = detail(input);
+        }
+        None => entries.push(Entry::Tool {
+            call_id: call_id.to_owned(),
+            name: name.to_owned(),
+            detail: detail(input),
+            status: None,
+            output: None,
+        }),
+    }
+}
+
+/// Marks a tool call's row with how it ended and the first line it returned.
+fn tool_result(
+    entries: &mut [Entry],
+    call_id: &str,
+    status: AgentToolStatus,
+    output: Option<&str>,
+) {
+    let call = entries.iter_mut().rev().find_map(|entry| match entry {
+        Entry::Tool {
+            call_id: id,
+            status,
+            output,
+            ..
+        } if id == call_id => Some((status, output)),
+        _ => None,
+    });
+    if let Some((held, shown)) = call {
+        *held = Some(status);
+        *shown = output.map(first_line);
     }
 }
 
@@ -375,6 +401,8 @@ mod tests {
         transcript.apply([output(
             2,
             json!([
+                // Announced, then whole, as Claude sends a call.
+                {"kind": "toolCall", "callId": "c1", "name": "Bash", "input": null},
                 {"kind": "toolCall", "callId": "c1", "name": "Bash", "input": {"command": "ls\n-la"}},
                 {"kind": "approvalRequested", "approvalId": APPROVAL, "toolName": "Bash",
                  "input": {"command": "rm -rf build"}, "expiresAt": "2026-10-12T01:00:00Z"},
