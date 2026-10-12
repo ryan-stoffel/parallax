@@ -1611,7 +1611,9 @@ test("an open thread's composer picks within its provider and sends only what ch
     "Codex is unavailable in this thread. Start a new thread to switch providers.",
   );
 
-  await act(async () => listed.find((m) => m.textContent?.startsWith("Claude Sonnet 5"))!.click());
+  await act(async () =>
+    listed.find((m) => m.textContent?.startsWith("Claude Sonnet 5.5"))!.click(),
+  );
   const set = (el: HTMLInputElement, value: string) =>
     act(() => {
       Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value")!.set!.call(el, value);
@@ -1625,7 +1627,7 @@ test("an open thread's composer picks within its provider and sends only what ch
   // Access is still the run's, so it isn't sent.
   expect(onSend).toHaveBeenCalledWith(
     "Just the summary",
-    { model: "claude-sonnet-5", effort: "low" },
+    { model: "claude-sonnet-5-5", effort: "low" },
     [],
     [],
   );

@@ -8,16 +8,19 @@ import type {
 import { useProviders } from "./providers";
 import { merged, stored } from "./stored";
 
-// The models each worker backend's CLI took on 2026-09-29, and what to send for each. A
-// placeholder until plxd reports them per host. Sources:
-// - Claude Code 2.1.283: the full names its aliases (opus, fable, sonnet, haiku) resolve to in
-//   its baked-in model catalog. `--model` takes these as they are.
+// The models each worker backend's CLI took on 2026-10-12, and what to send for each. A
+// placeholder until plxd reports them per host (PLX-154). Sources:
+// - Claude Code 2.1.295: the models its `initialize` control response lists, which T3 Code's
+//   catalog matches, plus Opus 4.5. `--model` takes these ids as they are. List a longer id
+//   before the shorter one it extends (`claude-opus-5-5`, then `claude-opus-5`): `knownModel`
+//   matches a dated id by prefix.
 // - codex-cli 0.159.3: the slugs ~/.codex/models_cache.json listed (visibility "list") on
 //   2026-10-02, which `-m` takes.
 // - Cursor Agent 2026.10.01-14929f9: a model of each family `agent models` listed on 2026-10-01,
 //   by the ids `--model` takes, effort included (0036).
-// Context windows and fast mode, checked on Claude Code 2.1.286 and codex-cli 0.159.3: Claude's
-// models but Haiku run 1M natively and can be capped at 200K, and only Opus 5.5 has fast mode.
+// Context windows and fast mode, checked on Claude Code 2.1.295 and codex-cli 0.159.3: Claude's
+// models run 1M natively and can be capped at 200K, but Opus 4.6, Opus 4.5, Sonnet 4.6, and
+// Haiku 4.5 have 200K only, and only Opus 5.5, Opus 5, and Opus 4.8 have fast mode.
 // Codex's catalog gives every model 272K by default and all but GPT-5.5 up to 872K, and every one
 // the Fast service tier.
 // Cursor's backend maps neither, so its models offer none.
@@ -55,8 +58,41 @@ export const models: Model[] = [
     contexts: claude1M,
     fast: true,
   },
+  {
+    id: "claude-sonnet-5-5",
+    name: "Claude Sonnet 5.5",
+    provider: "claude",
+    isNew: true,
+    contexts: claude1M,
+  },
   { id: "claude-fable-5-1", name: "Claude Fable 5.1", provider: "claude", contexts: claude1M },
+  { id: "claude-fable-5", name: "Claude Fable 5", provider: "claude", contexts: claude1M },
+  {
+    id: "claude-opus-5",
+    name: "Claude Opus 5",
+    provider: "claude",
+    contexts: claude1M,
+    fast: true,
+  },
+  {
+    id: "claude-opus-4-8",
+    name: "Claude Opus 4.8",
+    provider: "claude",
+    contexts: claude1M,
+    fast: true,
+  },
+  { id: "claude-opus-4-7", name: "Claude Opus 4.7", provider: "claude", contexts: claude1M },
+  { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "claude", contexts: [200_000] },
+  { id: "claude-opus-4-5", name: "Claude Opus 4.5", provider: "claude", contexts: [200_000] },
   { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "claude", contexts: claude1M },
+  { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "claude", contexts: [200_000] },
+  {
+    id: "claude-haiku-5-5",
+    name: "Claude Haiku 5.5",
+    provider: "claude",
+    isNew: true,
+    contexts: claude1M,
+  },
   { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "claude", contexts: [200_000] },
   {
     id: "gpt-6.1-sol",

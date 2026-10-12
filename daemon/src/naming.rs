@@ -116,7 +116,7 @@ fn limit(message: &str) -> String {
 /// GPT-6 Luna for Codex. `None` for any other kind.
 fn default_model(kind: ProviderKind) -> Option<&'static str> {
     match kind {
-        ProviderKind::Claude => Some("claude-haiku-4-5"),
+        ProviderKind::Claude => Some("claude-haiku-5-5"),
         ProviderKind::Codex => Some("gpt-6-luna"),
         _ => None,
     }

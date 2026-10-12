@@ -332,7 +332,7 @@ pub struct ThreadStartParams {
 
 /// The model that names a new thread, as `thread/start`'s `naming` (0058). When its instance
 /// can't name threads on the host, plxd uses the default model of the thread's own instance:
-/// `claude-haiku-4-5` for Claude Code, `gpt-6-luna` for Codex.
+/// `claude-haiku-5-5` for Claude Code, `gpt-6-luna` for Codex.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadNaming {

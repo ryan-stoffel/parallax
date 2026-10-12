@@ -366,9 +366,9 @@ const EFFORTS: &[AgentEffort] = &[
     AgentEffort::Max,
 ];
 
-/// The context windows a run may ask for, in tokens. Claude Code 2.1.286 runs Opus 5.5, Fable
-/// 5.1, and Sonnet 5 with 1M by default, which [`DISABLE_1M_ENV`] caps at 200k; Haiku 4.5 has
-/// only 200k. So 1M passes nothing.
+/// The context windows a run may ask for, in tokens. Claude Code 2.1.295 runs most models with 1M
+/// by default, which [`DISABLE_1M_ENV`] caps at 200k; Opus 4.6, Opus 4.5, Sonnet 4.6, and Haiku
+/// 4.5 have only 200k. So 1M passes nothing.
 const CONTEXT_WINDOWS: &[u32] = &[200_000, 1_000_000];
 
 /// Set to `1` for a run that asks for a 200k context window.
