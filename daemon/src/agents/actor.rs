@@ -18,11 +18,11 @@
 //! The CLI is the thread's session (0060): [`Run::hold`] keeps it open after its turn, so a
 //! follow-up goes to the live process. A turn settles once the last one in flight ends with
 //! nothing waiting: its commit, `agent.finished`, and wake-ups run then, while the process stays
-//! up. The session is released [`SESSION_IDLE`] after that, later while its tool calls or
-//! subagents are still open, up to [`SESSION_MAX_PIN`], or sooner once more than the host's
-//! [`super::MAX_IDLE_SESSIONS`] are idle and it is the least recently used, or at once on archive,
-//! settle, Accept, a Project join, its coordinator's replacement, or a failed turn, which ends its
-//! process so its `Finished` says why.
+//! up. The session is released [`SESSION_IDLE`] after that, later while its tool calls,
+//! background commands, or subagents are still open, up to [`SESSION_MAX_PIN`], or sooner once
+//! more than the host's [`super::MAX_IDLE_SESSIONS`] with none open are idle and it is the least
+//! recently used, or at once on archive, settle, Accept, a Project join, its coordinator's
+//! replacement, or a failed turn, which ends its process so its `Finished` says why.
 //!
 //! A message sent while its CLI works on a turn waits in the run's queue (PLX-370, decision
 //! 0048), stored so a restart keeps it, until the turn ends; then it goes to the same CLI. A
@@ -108,8 +108,8 @@ pub(super) const IDLE: Duration = Duration::from_mins(10);
 /// How long a session with no turn stays open, as T3 Code's `DEFAULT_IDLE_TIMEOUT_MS` (0060).
 pub(super) const SESSION_IDLE: Duration = Duration::from_mins(30);
 
-/// The longest open tool calls or subagents defer an idle session's release, one
-/// [`SESSION_IDLE`] at a time, as T3 Code's `DEFAULT_MAX_IDLE_PIN_MS`.
+/// The longest open tool calls, background commands, or subagents defer an idle session's
+/// release, one [`SESSION_IDLE`] at a time, as T3 Code's `DEFAULT_MAX_IDLE_PIN_MS`.
 const SESSION_MAX_PIN: Duration = Duration::from_hours(4);
 
 /// An `agent.output` is sent early once its items reach about this many bytes.
@@ -521,8 +521,8 @@ pub(super) struct Actor {
     /// Turns the live CLI has been given and hasn't finished: while there are any, a queued
     /// message waits.
     in_flight: usize,
-    /// The live CLI's tool calls with no result and subagents not finished, which defer its
-    /// session's release (0060).
+    /// The live CLI's tool calls with no result and background tasks not ended, which defer its
+    /// session's release (0060, PLX-725).
     open_work: HashSet<String>,
     /// Messages the live CLI took and hasn't started a turn for: one it drops instead, as a CLI
     /// that exits first does, waits again for the next CLI.
@@ -729,8 +729,8 @@ impl Actor {
         live.release_at
     }
 
-    /// An idle session's window passed: releases it, unless its tool calls or subagents are
-    /// still open, which defer it one more window, up to [`SESSION_MAX_PIN`] after it settled,
+    /// An idle session's window passed: releases it, unless its [`Self::open_work`] is still
+    /// open, which defers it one more window, up to [`SESSION_MAX_PIN`] after it settled,
     /// as T3 Code does.
     fn release_idle(&mut self) {
         let now = Instant::now();
@@ -760,18 +760,26 @@ impl Actor {
             live.settled = Some(now);
             live.release_at = Some(now + SESSION_IDLE);
             self.daemon.agents.running.fetch_sub(1, Ordering::Relaxed);
-            // Past the host's cap, the least recently used idle session goes.
-            if !live.released
-                && let Some(oldest) = self.daemon.agents.idle.push(self.id)
-            {
-                let daemon = Arc::clone(&self.daemon);
-                info!(run = %oldest, "releasing the least recently used idle session");
-                self.daemon
-                    .agents
-                    .background(async move { super::detach(&daemon, oldest).await });
+            if self.open_work.is_empty() {
+                self.count_idle();
             }
         }
         self.finish(&Outcome::Completed { result }).await;
+    }
+
+    /// Counts the idle session toward the host's cap, which it can take past (0060): then the
+    /// least recently used idle session goes. One with open work isn't counted until it ends, so
+    /// the cap never releases it, and [`Self::release_idle`] bounds how long it stays.
+    fn count_idle(&self) {
+        if self.live.as_ref().is_some_and(|live| !live.released)
+            && let Some(oldest) = self.daemon.agents.idle.push(self.id)
+        {
+            let daemon = Arc::clone(&self.daemon);
+            info!(run = %oldest, "releasing the least recently used idle session");
+            self.daemon
+                .agents
+                .background(async move { super::detach(&daemon, oldest).await });
+        }
     }
 
     /// A turn started in an idle session: it counts as running again.
@@ -3450,23 +3458,35 @@ impl Actor {
         }
     }
 
-    /// Keeps [`Self::open_work`]: a tool call until its result, and a subagent until it
-    /// finishes.
+    /// Keeps [`Self::open_work`]: a tool call until its result, and a background command or
+    /// subagent until it ends (PLX-725), long after its call's result. An idle session whose last
+    /// open work ends counts toward the host's cap from then.
     fn track_work(&mut self, event: &Event) {
-        match event {
+        let ended = match event {
             Event::ToolCall { call_id, .. } => {
                 self.open_work.insert(call_id.clone());
+                false
             }
-            Event::ToolResult { call_id, .. } => {
-                self.open_work.remove(call_id);
+            Event::ToolResult { call_id, .. } => self.open_work.remove(call_id),
+            Event::BackgroundTask {
+                task_id,
+                running: true,
+            } => {
+                self.open_work.insert(format!("task:{task_id}"));
+                false
             }
-            Event::Subagent { call_id, .. } => {
-                self.open_work.insert(format!("subagent:{call_id}"));
-            }
-            Event::SubagentFinished { call_id, .. } => {
-                self.open_work.remove(&format!("subagent:{call_id}"));
-            }
-            _ => {}
+            Event::BackgroundTask {
+                task_id,
+                running: false,
+            } => self.open_work.remove(&format!("task:{task_id}")),
+            _ => false,
+        };
+        let settled = self
+            .live
+            .as_ref()
+            .is_some_and(|live| live.settled.is_some());
+        if ended && settled && self.open_work.is_empty() {
+            self.count_idle();
         }
     }
 
@@ -4630,6 +4650,62 @@ mod tests {
             "released once the pin's limit passed"
         );
         assert_eq!(actor.release_due(), None);
+    }
+
+    /// PLX-725: a background command keeps its idle session up and out of the host's cap after
+    /// its tool call's result, until its `task_notification`; then the session is released.
+    #[tokio::test]
+    async fn a_background_command_keeps_its_idle_session_until_it_ends() {
+        use crate::backend::ToolStatus;
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let (mut row, worktree) = fake_row_and_worktree();
+        // Nothing to commit.
+        row.fields.checkout = true;
+        let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
+        let run = Arc::new(SessionRun::default());
+        run.hold(true);
+        let (_sink, events) = EventSink::channel(4, Vec::new());
+        actor.live = Some(Live::new(run.clone(), events, None));
+        actor.in_flight = 1;
+        let task = |running| Event::BackgroundTask {
+            task_id: "task-1".to_owned(),
+            running,
+        };
+        let counted = |actor: &Actor| daemon.agents.idle.0.lock().unwrap().contains(&actor.id);
+        let held = || run.held.load(std::sync::atomic::Ordering::SeqCst);
+
+        let started = [
+            Event::ToolCall {
+                call_id: "call-1".to_owned(),
+                name: "Bash".to_owned(),
+                input: serde_json::json!({ "command": "npm run dev", "run_in_background": true }),
+            },
+            task(true),
+            Event::ToolResult {
+                call_id: "call-1".to_owned(),
+                status: ToolStatus::Ok,
+                output: Some("Command running in background".to_owned()),
+                images: Vec::new(),
+            },
+            Event::TurnFinished {
+                turn_id: None,
+                result: Some("Started it.".to_owned()),
+                failed: false,
+            },
+        ];
+        for event in started {
+            actor.on_event(Some(event)).await;
+        }
+        assert!(!actor.busy(), "settled");
+        assert!(!counted(&actor), "the cap can't release it");
+        actor.release_idle();
+        assert!(held(), "its window passing defers the release");
+
+        actor.on_event(Some(task(false))).await;
+        assert!(counted(&actor), "counted toward the cap once it ended");
+        actor.release_idle();
+        assert!(!held(), "released once its window passes");
     }
 
     /// 0060: a failed turn releases its session, so the CLI exits and its `Finished` says why.

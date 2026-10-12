@@ -355,28 +355,29 @@ impl Translator {
                 {
                     self.subagents.insert(id.to_owned());
                 }
-                Vec::new()
+                task(message, true).into_iter().collect()
             }
             Some("task_notification") => {
-                let Some(call_id) = text(message, "tool_use_id") else {
-                    return Vec::new();
-                };
-                if !self.subagents.remove(call_id) {
-                    return Vec::new();
+                let mut steps = Vec::new();
+                if let Some(call_id) = text(message, "tool_use_id")
+                    && self.subagents.remove(call_id)
+                {
+                    let status = match text(message, "status") {
+                        Some("completed") => SubagentStatus::Completed,
+                        Some("failed") => SubagentStatus::Failed,
+                        Some("stopped") => SubagentStatus::Stopped,
+                        _ => SubagentStatus::Unknown,
+                    };
+                    steps.push(Step::Emit(Event::SubagentFinished {
+                        call_id: call_id.to_owned(),
+                        status,
+                        summary: text(message, "summary")
+                            .filter(|summary| !summary.is_empty())
+                            .map(str::to_owned),
+                    }));
                 }
-                let status = match text(message, "status") {
-                    Some("completed") => SubagentStatus::Completed,
-                    Some("failed") => SubagentStatus::Failed,
-                    Some("stopped") => SubagentStatus::Stopped,
-                    _ => SubagentStatus::Unknown,
-                };
-                vec![Step::Emit(Event::SubagentFinished {
-                    call_id: call_id.to_owned(),
-                    status,
-                    summary: text(message, "summary")
-                        .filter(|summary| !summary.is_empty())
-                        .map(str::to_owned),
-                })]
+                steps.extend(task(message, false));
+                steps
             }
             Some("status") if text(message, "status") == Some("compacting") => {
                 self.request_usage = None;
@@ -882,6 +883,13 @@ impl Translator {
             resets_at: info.get("resetsAt").and_then(timestamp),
         }))]
     }
+}
+
+/// The [`Event::BackgroundTask`] for a `task_started` (`running`) or a `task_notification`, when it
+/// names its task.
+fn task(message: &Map<String, Value>, running: bool) -> Option<Step> {
+    let task_id = text(message, "task_id")?.to_owned();
+    Some(Step::Emit(Event::BackgroundTask { task_id, running }))
 }
 
 /// `steps`, with each event wrapped as a subagent's when `message` came from one of the agent's

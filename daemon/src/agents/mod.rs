@@ -130,7 +130,8 @@ pub(crate) struct Agents {
 pub(super) const MAX_IDLE_SESSIONS: usize = 5;
 
 /// The runs whose live sessions are idle, least recently used first. A running turn is never here,
-/// so the cap never releases one.
+/// nor a session with open work such as a background command (PLX-725), so the cap never releases
+/// one.
 #[derive(Default)]
 pub(super) struct IdleSessions(Mutex<VecDeque<RunId>>);
 

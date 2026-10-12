@@ -3523,13 +3523,20 @@ fn a_subagent_s_lines_are_tagged_with_the_call_that_started_it() {
 }
 
 /// PLX-382: a background command's `task_notification` names no subagent, so it ends none.
+/// PLX-725: it runs as a background task from its `task_started` to its `task_notification`.
 #[test]
 fn only_a_subagent_s_task_notification_ends_a_subagent() {
     let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
     let started = br#"{"type":"system","subtype":"task_started","task_id":"b1","tool_use_id":"toolu_bash","description":"sleep","task_type":"local_bash"}"#;
     let ended = br#"{"type":"system","subtype":"task_notification","task_id":"b1","tool_use_id":"toolu_bash","status":"completed","summary":"done"}"#;
-    assert_eq!(translator.line(started), []);
-    assert_eq!(translator.line(ended), []);
+    let task = |running| {
+        Step::Emit(Event::BackgroundTask {
+            task_id: "b1".into(),
+            running,
+        })
+    };
+    assert_eq!(translator.line(started), [task(true)]);
+    assert_eq!(translator.line(ended), [task(false)]);
 }
 
 /// A real session, recorded with `PLXD_RECORD_CLI` (PLX-493), replays to its snapshot: thinking
