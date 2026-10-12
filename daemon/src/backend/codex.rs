@@ -187,6 +187,8 @@ impl Backend for CodexBackend {
             fork: true,
             rewind: true,
             resume_at: false,
+            // Each `turn/start` takes a model and mode ([`app_server`]).
+            switch_in_session: true,
         }
     }
 

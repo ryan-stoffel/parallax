@@ -17,13 +17,15 @@
 //! that is exactly `/compact` ([`is_compact`], PLX-638) is `thread/compact/start` instead, which
 //! Codex runs as a turn with a `contextCompaction` item.
 //! Each follow-up is a later turn in the same process, sent once the turn before it has
-//! completed. A steer (PLX-370) is `turn/steer` with the running turn's id, which
-//! codex-cli 0.160.0 adds to that turn's input after its current item; if Codex refuses it, or no
-//! turn runs, it is the next turn instead. Once no turn, steer, or approval request is outstanding
-//! and plxd no longer holds the thread ([`Run::hold`](super::super::Run::hold)), the thread sends
-//! `thread/unsubscribe`, which lets app-server unload it and stop its MCP servers, and the run
-//! ends; `agent/send` then resumes the thread in a new run. app-server exits once its last thread
-//! has left. If it exits first, every thread on it fails.
+//! completed, with any new model or mode ([`turn_settings`]) on its `turn/start`, which keeps
+//! them for the turns after it, as T3 Code does (PLX-727). A steer (PLX-370) is `turn/steer`
+//! with the running turn's id, which codex-cli 0.160.0 adds to that turn's input after its
+//! current item; if Codex refuses it, or no turn runs, it is the next turn instead. Once no turn,
+//! steer, or approval request is outstanding and plxd no longer holds the thread
+//! ([`Run::hold`](super::super::Run::hold)), the thread sends `thread/unsubscribe`, which lets
+//! app-server unload it and stop its MCP servers, and the run ends; `agent/send` then resumes
+//! the thread in a new run. app-server exits once its last thread has left. If it exits first,
+//! every thread on it fails.
 //!
 //! # Approval requests
 //!
@@ -155,6 +157,7 @@ pub(super) fn start(
         id: request.turn_id,
         input: input(&request.prompt, &image_paths),
         compact: is_compact(&request.prompt, &request.images),
+        settings: serde_json::Map::new(),
     };
     let fallback = request
         .resume
@@ -241,12 +244,7 @@ pub(super) fn initialize_params() -> Value {
 /// first run, and its params: the cwd,
 /// the mode ([`mode`]), the model, the context window, the Parallax MCP server, and fast mode.
 fn thread_params(request: &RunRequest) -> Result<(&'static str, Value), StartError> {
-    let (mut approval_policy, sandbox, mut reviewer) = mode(request.permission)?;
-    // A client that can't show a request: Codex's own sandbox holds the thread, and nothing asks,
-    // as a Claude thread without `approvals` keeps its sandbox (0034).
-    if !request.approvals {
-        (approval_policy, reviewer) = ("never", None);
-    }
+    let (approval_policy, sandbox, reviewer) = policy(request.permission, request.approvals)?;
     if let Some(model) = &request.model {
         check_argument("model", model)?;
     }
@@ -317,6 +315,49 @@ fn thread_params(request: &RunRequest) -> Result<(&'static str, Value), StartErr
     Ok((thread_method, thread))
 }
 
+/// [`mode`] for a thread whose client answers requests when `approvals` is set. One that can't
+/// show a request: Codex's own sandbox holds the thread, and nothing asks, as a Claude thread
+/// without `approvals` keeps its sandbox (0034).
+fn policy(
+    permission: Option<AgentPermission>,
+    approvals: bool,
+) -> Result<(&'static str, &'static str, Option<&'static str>), StartError> {
+    let (approval_policy, sandbox, reviewer) = mode(permission)?;
+    Ok(if approvals {
+        (approval_policy, sandbox, reviewer)
+    } else {
+        ("never", sandbox, None)
+    })
+}
+
+/// A follow-up's new `model` and mode in `turn/start`'s params, which T3 Code's
+/// `buildCodexTurnStartParams` sends: the approval policy, the sandbox as a `sandboxPolicy`, and
+/// the reviewer, always set, so a turn that leaves Auto doesn't keep `auto_review`.
+fn turn_settings(
+    model: Option<String>,
+    permission: Option<AgentPermission>,
+    approvals: bool,
+) -> Result<serde_json::Map<String, Value>, StartError> {
+    let mut settings = serde_json::Map::new();
+    if let Some(model) = model {
+        settings.insert("model".into(), model.into());
+    }
+    if let Some(permission) = permission {
+        let (approval_policy, sandbox, reviewer) = policy(Some(permission), approvals)?;
+        let sandbox = match sandbox {
+            "danger-full-access" => "dangerFullAccess",
+            _ => "workspaceWrite",
+        };
+        settings.insert("approvalPolicy".into(), approval_policy.into());
+        settings.insert("sandboxPolicy".into(), json!({"type": sandbox}));
+        settings.insert(
+            "approvalsReviewer".into(),
+            reviewer.unwrap_or("user").into(),
+        );
+    }
+    Ok(settings)
+}
+
 /// A turn's `input`: its images as `localImage` files, then its text, if any.
 fn input(text: &str, images: &[PathBuf]) -> Value {
     let images = images
@@ -327,13 +368,14 @@ fn input(text: &str, images: &[PathBuf]) -> Value {
     images.chain(text).collect()
 }
 
-/// A turn to start: the caller's id for it and its input, or a `/compact` (PLX-638), which
-/// compacts the thread instead.
+/// A turn to start: the caller's id for it, its input, and the new model or mode it starts with
+/// ([`turn_settings`]), or a `/compact` (PLX-638), which compacts the thread instead.
 #[derive(Debug)]
 struct Turn {
     id: Option<TurnId>,
     input: Value,
     compact: bool,
+    settings: serde_json::Map<String, Value>,
 }
 
 /// The turn Codex is running: its caller's id, if it has one, Codex's own once `turn/start` has
@@ -1107,6 +1149,9 @@ impl Driver {
             if let Some(effort) = self.effort {
                 params["effort"] = effort.into();
             }
+            for (key, value) in turn.settings {
+                params[key] = value;
+            }
             ("turn/start", params)
         };
         self.request(Request::Turn, method, &params);
@@ -1128,10 +1173,22 @@ impl Driver {
                 Vec::new()
             }
         };
+        let settings = match turn_settings(follow_up.model, follow_up.permission, self.approvals) {
+            Ok(settings) => settings,
+            Err(error) => {
+                self.emit(Event::Warning {
+                    warning: WarningKind::Other,
+                    detail: format!("could not change the thread's model or mode: {error}"),
+                })
+                .await;
+                serde_json::Map::new()
+            }
+        };
         let turn = Turn {
             id: Some(follow_up.turn_id),
             input: input(&follow_up.text, &paths),
             compact: is_compact(&follow_up.text, &follow_up.images),
+            settings,
         };
         if !follow_up.steer {
             self.queued.push_back(turn);

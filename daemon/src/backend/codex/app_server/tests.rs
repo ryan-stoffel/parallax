@@ -120,6 +120,8 @@ async fn an_approval_round_trips_and_a_follow_up_joins_the_live_thread() {
             text: "What's the hash?".into(),
             images: Vec::new(),
             steer: false,
+            model: None,
+            permission: None,
         })
         .unwrap();
     started
@@ -196,6 +198,94 @@ async fn an_approval_round_trips_and_a_follow_up_joins_the_live_thread() {
     );
 
     assert_manual_writes(&dir).await;
+}
+
+/// PLX-727: a follow-up's new model and mode go on its own `turn/start`, in the same thread, as
+/// T3 Code sends them.
+#[tokio::test]
+async fn a_follow_up_changes_the_model_and_mode_on_its_turn_start() {
+    let (dir, backend) = fake(include_str!("../fixtures/app-server-manual.jsonl"));
+    let started = backend.start(request(AgentPermission::Manual)).unwrap();
+    let mut stream = started.events;
+    let asked = loop {
+        if let Event::ApprovalRequested(asked) = next(&mut stream).await {
+            break asked;
+        }
+    };
+    started
+        .run
+        .send(FollowUp {
+            turn_id: TurnId::generate(),
+            text: "What's the hash?".into(),
+            images: Vec::new(),
+            steer: false,
+            model: Some("gpt-6-terra".into()),
+            permission: Some(AgentPermission::Bypass),
+        })
+        .unwrap();
+    started
+        .run
+        .answer(Answer {
+            approval_id: asked.approval_id,
+            decision: Decision::Allow {
+                input: None,
+                always: true,
+            },
+        })
+        .unwrap();
+    rest(&mut stream).await;
+
+    let written = written_at_least(&dir, 7).await;
+    let methods: Vec<&str> = written
+        .iter()
+        .map(|line| line["method"].as_str().unwrap_or("(response)"))
+        .collect();
+    assert_eq!(
+        methods,
+        [
+            "initialize",
+            "initialized",
+            "thread/start",
+            "turn/start",
+            "(response)",
+            "turn/start",
+            "thread/unsubscribe"
+        ],
+        "the same thread, with no resume"
+    );
+    let turn = &written[5]["params"];
+    assert_eq!(turn["model"], "gpt-6-terra");
+    assert_eq!(turn["approvalPolicy"], "never");
+    assert_eq!(turn["sandboxPolicy"], json!({"type": "dangerFullAccess"}));
+    assert_eq!(turn["approvalsReviewer"], "user");
+    assert_eq!(turn["effort"], "high", "the effort stays");
+    assert!(
+        written[3]["params"].get("model").is_none(),
+        "the first turn keeps the thread's"
+    );
+}
+
+/// A mode on `turn/start` is [`super::mode`]'s, with the reviewer always set, and a thread
+/// without approvals never asks.
+#[test]
+fn turn_settings_carry_the_mode_and_reset_the_reviewer() {
+    use super::turn_settings;
+    assert!(turn_settings(None, None, true).unwrap().is_empty());
+    assert_eq!(
+        Value::from(turn_settings(Some("gpt-6-sol".into()), None, true).unwrap()),
+        json!({"model": "gpt-6-sol"})
+    );
+    assert_eq!(
+        Value::from(turn_settings(None, Some(AgentPermission::Auto), true).unwrap()),
+        json!({"approvalPolicy": "on-request", "sandboxPolicy": {"type": "workspaceWrite"},
+               "approvalsReviewer": "auto_review"})
+    );
+    assert_eq!(
+        Value::from(turn_settings(None, Some(AgentPermission::Edit), false).unwrap()),
+        json!({"approvalPolicy": "never", "sandboxPolicy": {"type": "workspaceWrite"},
+               "approvalsReviewer": "user"})
+    );
+    assert!(turn_settings(None, Some(AgentPermission::Plan), true).is_err());
 }
 
 /// What plxd wrote to the Manual thread's app-server, and how it started it. Its last write,
@@ -463,6 +553,8 @@ async fn a_steer_joins_the_running_turn_and_a_held_thread_stays_open() {
             text: "Change of plan: reply BANANA instead.".into(),
             images: Vec::new(),
             steer: true,
+            model: None,
+            permission: None,
         })
         .unwrap();
     let turn_done = loop {

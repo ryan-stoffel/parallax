@@ -1185,6 +1185,8 @@ wait
                 text: "and the tests".into(),
                 images: Vec::new(),
                 steer: false,
+                model: None,
+                permission: None,
             })
             .unwrap();
         let mut events = started.events;

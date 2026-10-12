@@ -1161,6 +1161,8 @@ async fn a_result_without_ids_or_a_queue_count_ends_every_turn() {
         text: "Fix the tests too.".into(),
         images: Vec::new(),
         steer: false,
+        model: None,
+        permission: None,
     })
     .unwrap();
     let all = rest(&mut events).await;
@@ -1655,6 +1657,8 @@ async fn a_follow_up_during_a_turn_that_the_cli_folds_in_finishes_with_it() {
         text: "Fix the tests too.".into(),
         images: Vec::new(),
         steer: true,
+        model: None,
+        permission: None,
     };
     run.send(follow_up.clone()).unwrap();
     run.send(follow_up).unwrap();
@@ -1704,6 +1708,8 @@ async fn a_follow_up_during_a_turn_that_the_cli_folds_in_finishes_with_it() {
             text: "too late".into(),
             images: Vec::new(),
             steer: false,
+            model: None,
+            permission: None,
         }),
         Err(SendError::Finished)
     );
@@ -1723,6 +1729,8 @@ async fn a_follow_up_can_be_its_own_turn_and_stdin_waits_for_it() {
         text: "And now the docs.".into(),
         images: Vec::new(),
         steer: false,
+        model: None,
+        permission: None,
     })
     .unwrap();
     let all = rest(&mut events).await;
@@ -1793,6 +1801,8 @@ async fn a_follow_up_answered_before_its_write_is_reported_still_ends() {
         text: "And now the docs.".into(),
         images: Vec::new(),
         steer: false,
+        model: None,
+        permission: None,
     })
     .unwrap();
     let all = rest(&mut events).await;
@@ -1867,6 +1877,8 @@ async fn images_go_before_the_text_as_base64_blocks_and_a_message_of_images_alon
         text: String::new(),
         images: vec![gif],
         steer: false,
+        model: None,
+        permission: None,
     })
     .unwrap();
     rest(&mut events).await;
@@ -3066,6 +3078,8 @@ async fn an_approved_plan_lets_a_coordinator_leave_plan_mode() {
         text: "Go ahead.".into(),
         images: Vec::new(),
         steer: false,
+        model: None,
+        permission: None,
     })
     .unwrap();
     let all = rest(&mut events).await;
@@ -3359,6 +3373,8 @@ async fn a_plan_worker_hands_its_plan_over_and_leaves_plan_mode_only_once_allowe
             text: "Go ahead.".into(),
             images: Vec::new(),
             steer: false,
+            model: None,
+            permission: None,
         })
         .unwrap();
         let all = rest(&mut events).await;
@@ -3514,6 +3530,8 @@ async fn a_held_cli_waits_after_its_turn_for_the_next_message() {
         text: "And now the docs.".into(),
         images: Vec::new(),
         steer: false,
+        model: None,
+        permission: None,
     })
     .unwrap();
     run.hold(false);

@@ -220,6 +220,8 @@ async fn approved() -> (Fake, Vec<Event>, FollowUp) {
         text: "And one more thing.".into(),
         images: Vec::new(),
         steer: false,
+        model: None,
+        permission: None,
     };
     let events = run(&fake, fake.request(), allow, Some(follow_up.clone())).await;
     (fake, events, follow_up)
@@ -762,6 +764,8 @@ async fn a_steer_cancels_the_running_turn_and_goes_next() {
             text: "Change of plan: reply BANANA instead.".into(),
             images: Vec::new(),
             steer: true,
+            model: None,
+            permission: None,
         })
         .unwrap();
     loop {

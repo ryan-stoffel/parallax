@@ -1020,6 +1020,7 @@ impl Backend for ClaudeBackend {
             fork: true,
             rewind: true,
             resume_at: true,
+            switch_in_session: false,
         }
     }
 

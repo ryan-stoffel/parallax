@@ -310,6 +310,8 @@ async fn cancel_mid_stream_interrupts_the_cli() {
             text: "too late".into(),
             images: Vec::new(),
             steer: false,
+            model: None,
+            permission: None,
         }),
         Err(SendError::Finished)
     );
@@ -362,6 +364,8 @@ async fn a_follow_up_becomes_the_next_turn() {
         text: "Now the \"tests\",\nplease.".into(),
         images: Vec::new(),
         steer: false,
+        model: None,
+        permission: None,
     };
     run.send(follow_up.clone()).unwrap();
     run.send(follow_up.clone()).unwrap();
@@ -413,6 +417,8 @@ async fn a_follow_up_the_cli_never_read_is_reported_dropped() {
         text: "one more thing".into(),
         images: Vec::new(),
         steer: false,
+        model: None,
+        permission: None,
     });
     let all = rest(&mut events).await;
     assert_eq!(outcome(&all), &Outcome::Cancelled);
@@ -432,6 +438,8 @@ async fn a_follow_up_the_cli_never_read_is_reported_dropped() {
             text: "one more thing".into(),
             images: Vec::new(),
             steer: false,
+            model: None,
+            permission: None,
         }),
         Err(SendError::Finished),
         "a retry must not claim the dropped message arrived"
@@ -476,6 +484,8 @@ async fn turns_finish_in_the_order_they_started() {
             text: text.into(),
             images: Vec::new(),
             steer: false,
+            model: None,
+            permission: None,
         })
         .unwrap();
     }
@@ -592,6 +602,8 @@ async fn a_backend_without_follow_ups_refuses_them_and_closes_stdin() {
             text: "hi".into(),
             images: Vec::new(),
             steer: false,
+            model: None,
+            permission: None,
         }),
         Err(SendError::Unsupported)
     );
@@ -866,6 +878,8 @@ async fn a_withdrawn_request_takes_no_answer() {
         text: "Next.".into(),
         images: Vec::new(),
         steer: false,
+        model: None,
+        permission: None,
     })
     .unwrap();
     let all = rest(&mut events).await;

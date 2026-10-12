@@ -529,6 +529,12 @@ pub struct FollowUp {
     /// Cursor, which can't, by cancelling the turn and sending the message. With no turn
     /// running it is the next turn, as any follow-up is.
     pub steer: bool,
+    /// The model this turn and the next run on, for a backend with
+    /// [`Capabilities::switch_in_session`]. `None` keeps the session's.
+    pub model: Option<String>,
+    /// The mode this turn and the next run in, as [`FollowUp::model`]. Only a value in
+    /// [`Backend::permissions`].
+    pub permission: Option<AgentPermission>,
 }
 
 #[cfg(test)]
@@ -677,6 +683,10 @@ pub struct Capabilities {
     /// Each turn reports where it ended ([`Event::TurnCursor`]) and [`Resume::at`] works, so a
     /// rewind takes effect when the next run resumes at the kept turn's cursor (Claude, 0062).
     pub resume_at: bool,
+    /// A live session takes a new model or mode on its next turn ([`FollowUp::model`],
+    /// [`FollowUp::permission`]), so changing them doesn't restart its CLI (T3 Code's
+    /// `supportsModelSwitchInSession` and `supportsRuntimeModeSwitchInSession`, Codex).
+    pub switch_in_session: bool,
 }
 
 /// Why a run could not start.
@@ -1066,6 +1076,8 @@ mod tests {
             text: "and the tests".into(),
             images: Vec::new(),
             steer: false,
+            model: None,
+            permission: None,
         };
         handle.send(turn.clone()).unwrap();
         handle.send(turn.clone()).unwrap();
@@ -1085,6 +1097,8 @@ mod tests {
                 text: "late".into(),
                 images: Vec::new(),
                 steer: false,
+                model: None,
+                permission: None,
             }),
             Err(SendError::Finished)
         );
@@ -1104,6 +1118,8 @@ mod tests {
                 text: "hi".into(),
                 images: Vec::new(),
                 steer: false,
+                model: None,
+                permission: None,
             }),
             Err(SendError::Unsupported)
         );

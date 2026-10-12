@@ -284,6 +284,7 @@ impl Backend for FakeBackend {
             fork: true,
             rewind: true,
             resume_at: false,
+            switch_in_session: false,
         }
     }
 
