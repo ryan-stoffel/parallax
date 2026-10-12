@@ -1115,7 +1115,7 @@ function PlaceRail({
             {asks}
           </span>
         ),
-        inboxWords,
+        inboxWords ?? "",
       )}
       {spaces.length > 0 && rule("spaces")}
       {spaces.map(place)}

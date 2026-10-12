@@ -2443,9 +2443,10 @@ test("the rail of places lists Inbox, Spaces, repos, and No repo, filters the li
     [...rail()!.querySelectorAll<HTMLButtonElement>("button")].find(
       (b) => b.getAttribute("aria-label")?.split(",")[0] === name,
     );
-  // The thread finished unseen, so parallax and Inbox say so. Neither Project's folder is listed.
+  // The thread finished unseen, so parallax says so; Inbox speaks only of what needs the user.
+  // Neither Project's folder is listed.
   expect([...rail()!.querySelectorAll("button")].map((b) => b.getAttribute("aria-label"))).toEqual([
-    "Inbox, done",
+    "Inbox",
     "Reading",
     "parallax, done",
     "No repo",
