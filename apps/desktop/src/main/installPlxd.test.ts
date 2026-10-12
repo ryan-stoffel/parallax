@@ -18,7 +18,9 @@ import { LOCATE_PLXD } from "./connection";
 import { installPlxd } from "./installPlxd";
 
 // A fake ssh runs the remote command here, as the host's login shell would, with its own HOME and
-// a fake curl that serves `release/` in place of GitHub's release downloads.
+// a fake curl that serves `release/` in place of GitHub's release downloads. It clears
+// PLXD_DATA_DIR, which a Parallax agent has set to the real data folder: the script would stop
+// that folder's plxd (PLX-723).
 const VERSION = "2610.10903.13317-nightly";
 const target = `${process.platform === "darwin" ? "mac" : "linux"}-${process.arch}`;
 const ASSET = `parallax-plxd-${VERSION}-${target}`;
@@ -43,7 +45,7 @@ beforeEach(() => {
   script(
     ssh,
     `while [ "$1" != -- ]; do shift; done; shift 2
-HOME='${home}' PATH='${root}/bin':$PATH exec sh -c "$*"`,
+PLXD_DATA_DIR= HOME='${home}' PATH='${root}/bin':$PATH exec sh -c "$*"`,
   );
   script(
     path.join(root, "bin", "curl"),
