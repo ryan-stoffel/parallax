@@ -312,6 +312,19 @@ test("an assistant message renders Markdown, but never raw HTML or images", () =
   expect(links[1]!.hasAttribute("href")).toBe(false);
 });
 
+test("an assistant message typesets LaTeX, and keeps invalid LaTeX as its source", () => {
+  row({
+    kind: "assistant",
+    key: "a",
+    text: "Inline $x^2$ and $2 \\times 3$.\n\n$$\n\\int_0^1 x\\,dx = \\frac{1}{2}\n$$\n\nBad: $\\frac{1$",
+  });
+  expect(document.querySelectorAll(".katex").length).toBeGreaterThanOrEqual(3);
+  expect(document.querySelector(".katex-display")).not.toBeNull();
+  // Display math isn't a code block, so it has no Copy button.
+  expect(document.querySelector('button[aria-label="Copy code"]')).toBeNull();
+  expect(document.querySelector(".katex-error")).not.toBeNull();
+});
+
 test("a streaming message renders as the whole text does, at every line", () => {
   // Past SPLIT_FROM, so each reply renders block by block.
   const lead = "A long reply opens with a paragraph. ".repeat(30) + "\n\n";

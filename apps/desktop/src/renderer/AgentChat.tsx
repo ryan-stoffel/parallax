@@ -50,7 +50,9 @@ import {
 } from "react";
 import Markdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 
 import type { RpcError } from "../preload/bridge";
 import type {
@@ -2443,7 +2445,14 @@ const markdownComponents: Components = {
 // drawn by DiffLines instead. Built once: react-markdown runs its plugins' setup on every render,
 // and rehype-highlight's registers 37 languages each time.
 const highlighter = rehypeHighlight({ detect: false, plainText: ["diff", "patch"] });
-const highlight: ComponentProps<typeof Markdown>["rehypePlugins"] = [() => highlighter];
+// Typesets $...$ and $$...$$ with KaTeX, which needs no network. Its output is plain elements, and
+// invalid LaTeX stays as its source text.
+const typeset = rehypeKatex({ strict: "ignore" });
+// Typesetting runs first, so math never reaches the code block renderer.
+const highlight: ComponentProps<typeof Markdown>["rehypePlugins"] = [
+  () => typeset,
+  () => highlighter,
+];
 
 /** A Markdown tree node's text, as a code block's, for Copy. */
 type TextNode = { value?: string; children?: TextNode[] };
@@ -2473,7 +2482,7 @@ export const MarkdownText = memo(function MarkdownText({
   );
 });
 
-const gfm = [remarkGfm];
+const gfm = [remarkGfm, remarkMath];
 
 /**
  * A streaming agent message, rendered as MarkdownText renders it, but block by block: an

@@ -1,10 +1,11 @@
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
 
 // The parser MarkdownText renders with (react-markdown runs remark-parse and its remark plugins),
 // without the HTML, highlighting, and React steps after it.
-const parser = unified().use(remarkParse).use(remarkGfm).freeze();
+const parser = unified().use(remarkParse).use(remarkGfm).use(remarkMath).freeze();
 
 /**
  * The length from which a streaming message renders block by block. Measured in the built app,

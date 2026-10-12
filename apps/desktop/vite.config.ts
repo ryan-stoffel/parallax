@@ -18,6 +18,8 @@ const csp = (dev: boolean) =>
     "default-src 'self'",
     dev && "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline'",
+    // KaTeX's fonts, which Vite inlines as data: URLs when small.
+    "font-src 'self' data:",
     "img-src 'self' data: https://github.com https://*.githubusercontent.com",
     // html_render pages (PLX-639), which main serves with a policy of their own, and browser
     // recordings.
