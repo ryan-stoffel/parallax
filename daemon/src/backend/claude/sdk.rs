@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
@@ -380,13 +381,16 @@ pub(super) struct Query {
 }
 
 impl Query {
-    /// Starts the query `id` running `spec`'s program, arguments, working directory, and
-    /// environment, as [`Launcher::spawn`] would start the CLI.
-    pub fn open(launcher: &Launcher, spec: &ProcessSpec, id: RunId) -> Result<Self, StartError> {
+    /// Starts a query for run `run` running `spec`'s program, arguments, working directory, and
+    /// environment, as [`Launcher::spawn`] would start the CLI. Each query gets its own id, since
+    /// a thread starts every session under one run id: a cancelled session's late kill must not
+    /// reach the next one (PLX-712).
+    pub fn open(launcher: &Launcher, spec: &ProcessSpec, run: RunId) -> Result<Self, StartError> {
+        static OPENED: AtomicU64 = AtomicU64::new(0);
         let env = launcher.environment(spec);
         check_working_directory(&spec.cwd)?;
         let program = find_program(&spec.program, env.get("PATH"))?;
-        let id: Arc<str> = id.to_string().into();
+        let id: Arc<str> = format!("{run}.{}", OPENED.fetch_add(1, Ordering::Relaxed)).into();
         let mut frame = Vec::new();
         {
             let mut serializer = serde_json::Serializer::new(&mut frame);

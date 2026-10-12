@@ -1226,6 +1226,30 @@ test("Stop leaves a follow-up the agent hasn't started out of the box, for its h
   );
 });
 
+test("a message sent from here that a revert undid leaves, with no working row (PLX-712)", async () => {
+  const { request, emit } = fakeBridge(8);
+  await renderChat();
+  type("Change a.txt to 2.");
+  await act(async () => {
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  const { turnId } = sendCalls(request)[0]![2] as { turnId: string };
+  const events: ParallaxEvent[] = [
+    {
+      kind: "agent.output",
+      runId,
+      items: [{ kind: "turnStarted", turnId, text: "Change a.txt to 2." }],
+    },
+    { kind: "agent.finished", runId, outcome: { status: "completed" } },
+    { kind: "thread.reverted", runId, ordinal: 1, turns: [turnId], restoreFiles: true },
+  ];
+  for (const [i, event] of events.entries())
+    emit({ type: "event", event: { subscription: "s", seq: 50 + i, time: "", event } });
+  await settle();
+  expect(transcriptText()).not.toContain("Change a.txt to 2.");
+  expect(transcriptText()).not.toContain("Working");
+});
+
 test("a message a finished run couldn't take goes back in the box, with no loader", async () => {
   const send = async (text: string) => {
     type(text);

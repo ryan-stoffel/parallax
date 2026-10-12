@@ -1876,6 +1876,44 @@ async fn cancel_escalates_to_a_kill_after_the_grace_period() {
     );
 }
 
+/// A revert ends a thread's live session, which exits at the interrupt, and the next turn starts
+/// a new session under the same run id (PLX-712). The cancelled session's grace-period kill must
+/// not reach it, even when its turn outlasts the grace period.
+#[tokio::test]
+async fn a_cancelled_sessions_kill_spares_the_next_session_of_its_run() {
+    let fake = Fake::new("cancel");
+    let backend = fake.backend.clone().with_grace(Duration::from_millis(300));
+    let first = request(&fake.root());
+    let run_id = first.run_id;
+    let Started { run, mut events } = launch(&backend, first).await;
+    assert!(matches!(
+        next(&mut events).await,
+        Event::SessionStarted { .. }
+    ));
+    // `@trap-armed`: an interrupt ends the query from here.
+    assert!(matches!(next(&mut events).await, Event::Warning { .. }));
+    assert!(matches!(next(&mut events).await, Event::Text { .. }));
+    run.cancel();
+    assert_eq!(outcome(&rest(&mut events).await), &Outcome::Cancelled);
+
+    let slow =
+        fixture("read-only").replace("\n{\"type\":\"result\"", "\n@sleep 1\n{\"type\":\"result\"");
+    fs::write(fake.root().join("fixture.jsonl"), slow).unwrap();
+    let second = RunRequest {
+        run_id,
+        ..request(&fake.root())
+    };
+    let Started {
+        run: _run,
+        mut events,
+    } = launch(&backend, second).await;
+    let all = rest(&mut events).await;
+    assert!(
+        matches!(outcome(&all), Outcome::Completed { .. }),
+        "{all:?}"
+    );
+}
+
 #[tokio::test]
 async fn bad_requests_are_refused_before_spawning() {
     let fake = Fake::new("read-only");

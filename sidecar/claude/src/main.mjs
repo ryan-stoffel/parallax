@@ -1,6 +1,6 @@
 /**
  * Parallax's Claude Agent SDK sidecar (0061). plxd starts one and speaks lines with it on stdio.
- * It holds every Claude run's live `query()`, keyed by plxd's run id.
+ * It holds every Claude session's live `query()`, keyed by an id plxd gives each one.
  *
  * In, one JSON object per line:
  *   {"id", "type": "open", "executable", "args", "cwd", "env", "supervisor"}  starts a query that runs

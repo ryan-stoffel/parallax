@@ -14,7 +14,7 @@
 #   @ignore-int    an interrupt does nothing, as an interrupt the CLI never answers
 #   @hang          wait until the query is killed or exits on an interrupt
 # Every other line is the CLI's stdout. An interrupt otherwise exits as SIGINT did, by signal 2,
-# and a kill by signal 9.
+# and a kill by signal 9. A frame for another query's id is ignored, as the sidecar ignores it.
 
 dir=$FAKE_CLAUDE_DIR
 
@@ -28,6 +28,7 @@ finish() {
 # the query has exited, 3 for an interrupt it ignored.
 frame() {
   IFS= read -r line || { finish null 9; return 2; }
+  case $line in '{"id":"'"$id"'",'*) ;; *) return 3 ;; esac
   case $line in
     *'"stdin":'*)
       printf '%s\n' "$line" | sed 's/^{"id":"[^"]*","stdin":\(.*\)}$/\1/' >> "$dir/stdin"

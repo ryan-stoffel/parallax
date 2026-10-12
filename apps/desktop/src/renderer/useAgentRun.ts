@@ -181,9 +181,17 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
       }
       pages.current?.events.push(message.event);
       setTranscript((prev) => applyEvents(prev, [message.event], runId));
-      if (event.kind === "thread.reverted" && event.runId === runId && pages.current) {
+      if (event.kind === "thread.reverted" && event.runId === runId) {
+        // A message sent from here whose turn the revert undid would otherwise show as on its
+        // way, under a working row that never ends (PLX-712).
+        setSent((prev) => {
+          if (!event.turns.some((id) => prev.has(id))) return prev;
+          const next = new Map(prev);
+          for (const id of event.turns) next.delete(id);
+          return next;
+        });
         const p = pages.current;
-        void fill(p, rebuild(emptyTranscript, p.events, runId));
+        if (p) void fill(p, rebuild(emptyTranscript, p.events, runId));
       }
     });
     return () => {
