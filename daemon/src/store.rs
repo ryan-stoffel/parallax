@@ -25,7 +25,7 @@ use std::ops::{Deref, DerefMut};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
-use std::sync::mpsc;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -49,6 +49,9 @@ use uuid::Uuid;
 use crate::agents::convert::{option_name, option_value};
 use crate::event_log::{Entry, EventLog, kind_of, run_of};
 use crate::repo;
+
+/// How often, at most, the checkpointer syncs the writer's WAL into the database file.
+const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(1);
 
 const QUEUED: u8 = 0;
 const STARTED: u8 = 1;
@@ -146,6 +149,8 @@ pub(crate) struct Tx {
     /// Set by a job that copies a fork's transcript: the runs it ends get no checkpoint (0062),
     /// since the fork's worktree never held them. Cleared when the job ends.
     pub copying: bool,
+    /// Wakes the checkpointer after each commit, on a writer that has one ([`checkpointer`]).
+    checkpoints: Option<mpsc::SyncSender<()>>,
     /// Whether this job has enqueued an effect, for the job to tell its caller, who wakes the
     /// effect worker once it commits, as `agents::store` does. Cleared as each job starts.
     pub effects: bool,
@@ -179,6 +184,7 @@ impl Tx {
             imported: HashSet::new(),
             importing: Vec::new(),
             copying: false,
+            checkpoints: None,
             effects: false,
         }
     }
@@ -327,6 +333,9 @@ impl Tx {
             )),
             Ok(value) => match self.store.commit() {
                 Ok(()) => {
+                    if let Some(wake) = &self.checkpoints {
+                        let _ = wake.try_send(());
+                    }
                     self.begun = None;
                     self.command_id = None;
                     self.importing.clear();
@@ -404,13 +413,12 @@ impl StoreHandle {
         });
         let memory = || Arc::new(EventLog::new_bounded(retention, max_bytes));
         match opened {
-            Ok((store, log)) => Self::start(
-                path,
-                Tx::new(store, Some(Arc::clone(&log))),
-                "plxd-store",
-                log,
-            )
-            .unwrap_or_else(|| Self::unavailable(memory())),
+            Ok((store, log)) => {
+                let mut tx = Tx::new(store, Some(Arc::clone(&log)));
+                tx.checkpoints = checkpointer(path, &tx.store);
+                Self::start(path, tx, "plxd-store", log)
+                    .unwrap_or_else(|| Self::unavailable(memory()))
+            }
             Err(error) => {
                 error!(path = %path.display(), %error, "could not open the project store; keeping events in memory only");
                 Self::unavailable(memory())
@@ -682,6 +690,44 @@ fn run(mut tx: Tx, queue: &mpsc::Receiver<Message>, counters: &QueueCounters) {
             if tx.log.is_some() {
                 tx.roll_back();
             }
+        }
+    }
+}
+
+/// Starts the thread that checkpoints the writer's WAL on a connection of its own, and turns off
+/// the writer's own checkpoints. SQLite's automatic one runs inside the COMMIT that takes the WAL
+/// past 1000 pages and syncs the database file there, which held every queued write, and so every
+/// event's delivery, for up to 450 ms on CI's Linux runners (PLX-683). Returns what the writer
+/// wakes it with, or `None`, leaving the writer's checkpoints on, if it can't start.
+fn checkpointer(path: &Path, writer: &Store) -> Option<mpsc::SyncSender<()>> {
+    let store = Store::open_read_only(path)
+        .inspect_err(|error| warn!(%error, "could not open the project store's checkpointer"))
+        .ok()?;
+    let (wake, woken) = mpsc::sync_channel(1);
+    thread::Builder::new()
+        .name("plxd-store-checkpoint".to_owned())
+        .spawn(move || checkpoints(&store, &woken))
+        .inspect_err(|error| warn!(%error, "could not start the project store's checkpointer"))
+        .ok()?;
+    writer
+        .stop_auto_checkpoints()
+        .inspect_err(|error| warn!(%error, "could not move the project store's checkpoints"))
+        .ok()?;
+    Some(wake)
+}
+
+/// Checkpoints [`CHECKPOINT_INTERVAL`] after a commit wakes it, so the commits in between share
+/// one sync. Ends when the writer's thread does.
+fn checkpoints(store: &Store, woken: &mpsc::Receiver<()>) {
+    while woken.recv().is_ok() {
+        let due = Instant::now() + CHECKPOINT_INTERVAL;
+        while let Some(left) = due.checked_duration_since(Instant::now()) {
+            if let Err(RecvTimeoutError::Disconnected) = woken.recv_timeout(left) {
+                return;
+            }
+        }
+        if let Err(error) = store.checkpoint() {
+            warn!(%error, "could not checkpoint the project store's WAL");
         }
     }
 }
@@ -1433,6 +1479,34 @@ mod tests {
         );
         store.stop().await;
         reader.stop().await;
+    }
+
+    /// A commit leaves its pages in the WAL, and the checkpointer, not the writer, copies them into
+    /// the database file soon after (PLX-683).
+    #[tokio::test]
+    async fn the_checkpointer_copies_a_commit_into_the_database_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        let store = open(&path);
+        let len = || std::fs::metadata(&path).unwrap().len();
+        let before = len();
+        store
+            .run(&CancellationToken::new(), |db| {
+                for _ in 0..500 {
+                    db.stage(Timestamp::now(), None, ParallaxEvent::Unknown);
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        for _ in 0..50 {
+            if len() > before {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(len() > before, "the database file stayed at {before} bytes");
+        store.stop().await;
     }
 
     /// A database from a newer build: the writer won't open it, so the reader doesn't either and

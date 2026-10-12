@@ -148,6 +148,30 @@ impl Store {
         Ok(busy == 0)
     }
 
+    /// Stops this connection's commits from checkpointing the WAL (`wal_autocheckpoint = 0`), for
+    /// a writer whose checkpoints [`Store::checkpoint`] runs on another connection instead.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn stop_auto_checkpoints(&self) -> Result<(), StoreError> {
+        self.conn.pragma_update(None, "wal_autocheckpoint", 0)?;
+        Ok(())
+    }
+
+    /// Copies the WAL's committed pages into the database file and syncs it, without waiting for
+    /// or blocking the writer or readers (`wal_checkpoint(PASSIVE)`). Pages a reader still needs
+    /// wait for the next one.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn checkpoint(&self) -> Result<(), StoreError> {
+        self.conn
+            .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()))?;
+        Ok(())
+    }
+
     /// Starts a read transaction (`BEGIN`), so several reads see one snapshot. The event log's
     /// own paged readers use it so a compact sweep cannot land between their pages (0052).
     ///
