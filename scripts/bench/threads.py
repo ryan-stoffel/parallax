@@ -4,8 +4,15 @@
     scripts/bench/threads.py <plxd binary> <repo path> [threads] [model]
 
 Runs `plxd serve` in a temporary data folder, adds a fresh clone of the repo, sends N `thread/start` requests at
-the same moment, and reports per-thread start latency (request to response), time to first text,
-and time to the first turn's end, plus plxd's CPU time. Needs a signed-in `claude` CLI.
+the same moment, and reports per-thread start latency (request to response), time to the CLI's
+session start, time to first text, and time to the first turn's end, plus plxd's CPU time. Needs a
+signed-in `claude` CLI.
+
+Session start is plxd, the Claude sidecar, and the CLI starting up, with no model time in it; the
+time from there to first text is the model's. The bench first starts N bare `claude` CLIs at once
+in the same clone, as T3 Code runs them, and fails when plxd's median session start is more than
+`overhead_budget` behind theirs (PLX-711). Comparing within one run keeps the check steady on a
+busy machine.
 """
 
 import asyncio
@@ -21,6 +28,37 @@ import time
 import uuid
 
 PROMPT = "Reply with the numbers 1 to 40, one per line, and nothing else. Do not use any tools."
+
+
+def overhead_budget(count):
+    """The most plxd's median session start may trail a bare CLI's, in seconds. An idle M-series
+    Mac measured 0.19 s for 1 thread and 0.62 s for 20, most of it plxd's `thread/start` (PLX-711)."""
+    return 0.5 + 0.02 * count
+
+
+async def bare_sessions(count, model, cwd):
+    """Starts `count` bare `claude` CLIs at once in `cwd`, each sent the prompt, and returns each
+    one's time to its `system/init`, killing it there."""
+
+    async def one():
+        cli = await asyncio.create_subprocess_exec(
+            "claude", "--output-format", "stream-json", "--verbose", "--input-format", "stream-json",
+            "--model", model, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, limit=64 << 20,
+        )
+        message = {"type": "user", "message": {"role": "user", "content": PROMPT}}
+        cli.stdin.write(json.dumps(message).encode() + b"\n")
+        try:
+            while line := await cli.stdout.readline():
+                if json.loads(line).get("subtype") == "init":
+                    return time.monotonic() - t0
+        finally:
+            cli.kill()
+            await cli.wait()
+        raise RuntimeError("a bare claude exited before its session started")
+
+    t0 = time.monotonic()
+    return await asyncio.gather(*(one() for _ in range(count)))
 
 
 def uuid7() -> str:
@@ -84,6 +122,7 @@ def pct(values, p):
 
 
 async def main():
+    over = False
     plxd, source = sys.argv[1], os.path.abspath(sys.argv[2])
     count = int(sys.argv[3]) if len(sys.argv) > 3 else 20
     model = sys.argv[4] if len(sys.argv) > 4 else "claude-haiku-4-5"
@@ -96,6 +135,10 @@ async def main():
     try:
         socket = os.path.join(data, "plxd.sock")
         client = await connect(socket)
+        # Install the Claude Agent SDK before timing, so no thread waits for npm.
+        while any(p.get("installing") for p in (await client.call("providers/list", {}))["providers"]):
+            await asyncio.sleep(0.5)
+        bare = statistics.median(await bare_sessions(count, model, repo))
         added = await client.call("repo/add", {"id": uuid7(), "path": repo})
         scope = added["repo"]["id"]
         await client.call("events/subscribe", {"after": 0, "project": scope})
@@ -128,6 +171,8 @@ async def main():
                 continue
             output_events += 1
             for item in event["items"]:
+                if item["kind"] == "sessionStarted":
+                    run.setdefault("session", at - t0)
                 if item["kind"] in ("text", "textDelta"):
                     run.setdefault("first", at - t0)
                 if item["kind"] == "turnFinished" and "done" not in run:
@@ -143,18 +188,28 @@ async def main():
         print(f"threads={count} model={model} wall={wall:.2f}s plxd_cpu={cpu} output_events={output_events}")
         if failed:
             print(f"finished early: {failed[:3]}")
-        for key, label in (("start", "thread/start"), ("first", "first text"), ("done", "turn done")):
+        rows = (("start", "thread/start"), ("session", "session start"), ("first", "first text"),
+                ("done", "turn done"))
+        for key, label in rows:
             values = [r[key] for r in runs.values() if key in r]
             if values:
                 print(
                     f"{label:>13}: p50={statistics.median(values):6.2f}s "
                     f"p90={pct(values, 90):6.2f}s max={max(values):6.2f}s n={len(values)}"
                 )
+        sessions = [r["session"] for r in runs.values() if "session" in r]
+        overhead = statistics.median(sessions) - bare if sessions else float("inf")
+        print(f"  bare claude: session start p50={bare:6.2f}s, plxd's overhead {overhead:.2f}s")
+        if overhead > overhead_budget(count):
+            print(f"FAIL: plxd's session start overhead is over its {overhead_budget(count):.2f}s budget")
+            over = True
     finally:
         daemon.terminate()
         daemon.wait()
         shutil.rmtree(data, ignore_errors=True)
         shutil.rmtree(repo, ignore_errors=True)
+    if over:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
