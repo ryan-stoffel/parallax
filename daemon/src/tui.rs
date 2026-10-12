@@ -640,10 +640,38 @@ impl App {
         };
     }
 
+    /// Moves to the next mode the provider runs.
     fn cycle_mode(&mut self) {
-        let now = self.mode();
-        let at = MODES.iter().position(|(mode, _)| *mode == now).unwrap_or(0);
-        self.permission = Some(MODES[(at + 1) % MODES.len()].0);
+        let modes = self.modes();
+        let at = modes.iter().position(|mode| *mode == self.mode());
+        self.permission = modes
+            .get(at.map_or(0, |at| (at + 1) % modes.len()))
+            .copied();
+    }
+
+    /// The modes the provider runs, in [`MODES`]' order: all of them when plxd doesn't say.
+    fn modes(&self) -> Vec<AgentPermission> {
+        let runs = self
+            .provider_info()
+            .map(|provider| provider.permissions.as_slice())
+            .filter(|permissions| !permissions.is_empty());
+        MODES
+            .iter()
+            .map(|(mode, _)| *mode)
+            .filter(|mode| runs.is_none_or(|runs| runs.contains(mode)))
+            .collect()
+    }
+
+    /// Whether the provider takes an effort; true when plxd doesn't say.
+    fn takes_effort(&self) -> bool {
+        self.provider_info().is_none_or(|provider| provider.efforts)
+    }
+
+    fn provider_info(&self) -> Option<&ProviderInfo> {
+        let id = self.provider()?;
+        self.providers
+            .iter()
+            .find(|provider| provider.instance.id == id)
     }
 
     /// The mode the next message runs in.
@@ -671,17 +699,18 @@ impl App {
             }
             // In the thread list: a new thread in the selected row's repo or Space.
             KeyCode::Char('n') => {
-                let group = menu.items[..=menu.selected.min(last)]
+                let repo = menu
+                    .items
                     .iter()
+                    .take(menu.selected + 1)
                     .rev()
                     .find_map(|item| match item.pick {
                         Pick::Group(repo) => Some(repo),
                         _ => None,
-                    });
-                if let Some(repo) = group {
-                    self.menu = None;
-                    self.new_thread(repo).await;
-                }
+                    })
+                    .flatten();
+                self.menu = None;
+                self.new_thread(repo).await;
             }
             _ => {}
         }
@@ -690,6 +719,9 @@ impl App {
     async fn pick(&mut self, pick: Pick) {
         match pick {
             Pick::Run(run) => {
+                // What was chosen for one thread doesn't follow to another.
+                (self.provider, self.model, self.effort, self.permission) =
+                    (None, None, None, None);
                 if let Err(error) = self.open(run).await {
                     self.error = Some(error);
                 }
@@ -702,6 +734,13 @@ impl App {
                 }
                 let thread_has_it = self.open_run().is_some_and(|run| run.backend == id);
                 self.provider = (!thread_has_it).then_some(id);
+                // Nor do a mode or an effort it can't run.
+                if !self.modes().contains(&self.mode()) {
+                    self.permission = self.modes().first().copied();
+                }
+                if !self.takes_effort() {
+                    self.effort = None;
+                }
             }
             Pick::Model(id) => self.model = Some(id),
             Pick::Effort(effort) => self.effort = Some(effort),
@@ -833,6 +872,17 @@ impl App {
                 self.new_thread(repo).await;
             }
             "/threads" | "/resume" => self.menu = Some(self.threads_menu()),
+            // An id the provider doesn't list still goes, as the app's custom models do.
+            "/model" if !argument.is_empty() => {
+                let listed = self.provider_info().map(models).unwrap_or_default();
+                let id = listed
+                    .into_iter()
+                    .find(|(id, name)| {
+                        id.eq_ignore_ascii_case(argument) || name.eq_ignore_ascii_case(argument)
+                    })
+                    .map_or_else(|| argument.to_owned(), |(id, _)| id);
+                self.model = Some(id);
+            }
             "/provider" | "/model" => {
                 self.load_providers().await;
                 let menu = if name == "/provider" {
@@ -843,7 +893,7 @@ impl App {
                 self.choose(menu, argument).await;
             }
             "/effort" => {
-                let menu = Ok(self.efforts_menu());
+                let menu = self.efforts_menu();
                 self.choose(menu, argument).await;
             }
             "/mode" => {
@@ -912,6 +962,16 @@ impl App {
                 Some(run_item(run, format!("◆ {}", project.name)))
             })
             .collect();
+        // plxd makes the entry for threads with no repo on first use; until then, offer it.
+        if !self.repos.iter().any(|repo| repo.scratch) {
+            items.push(Item {
+                label: "Chats".to_owned(),
+                detail: "n for a new thread here".to_owned(),
+                heading: true,
+                current: false,
+                pick: Pick::Group(None),
+            });
+        }
         for repo in &self.repos {
             let mut threads: Vec<&Thread> = self
                 .threads
@@ -1003,7 +1063,13 @@ impl App {
         Ok(Menu::new("Model", items))
     }
 
-    fn efforts_menu(&self) -> Menu {
+    fn efforts_menu(&self) -> Result<Menu, String> {
+        if !self.takes_effort() {
+            let provider = self
+                .provider()
+                .map_or_else(String::new, |id| self.provider_name(id));
+            return Err(format!("{provider} doesn't take an effort"));
+        }
         let now = self.effort.or_else(|| self.open_run()?.effort);
         let items = EFFORTS
             .iter()
@@ -1015,15 +1081,16 @@ impl App {
                 pick: Pick::Effort(effort),
             })
             .collect();
-        Menu::new("Effort", items)
+        Ok(Menu::new("Effort", items))
     }
 
     fn modes_menu(&self) -> Menu {
         let now = self.mode();
-        let items = MODES
-            .iter()
-            .map(|&(mode, name)| Item {
-                label: name.to_owned(),
+        let items = self
+            .modes()
+            .into_iter()
+            .map(|mode| Item {
+                label: mode_name(mode).to_owned(),
                 detail: String::new(),
                 heading: false,
                 current: now == mode,
@@ -1711,6 +1778,14 @@ mod tests {
         assert_eq!(app.input, "one");
         press(&mut app, &[KeyCode::Down, KeyCode::Down]).await;
         assert_eq!(app.input, "draft", "past the newest, the draft comes back");
+    }
+
+    #[tokio::test]
+    async fn a_new_thread_from_an_empty_thread_list() {
+        let mut app = app();
+        press(&mut app, &[KeyCode::Left, KeyCode::Char('n')]).await;
+        assert!(app.menu.is_none());
+        assert_eq!(app.draft, None, "Chats, before plxd made its entry");
     }
 
     #[tokio::test]
