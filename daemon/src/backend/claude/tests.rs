@@ -1265,6 +1265,7 @@ async fn a_resumed_session_reports_only_what_it_adds() {
         usage_totals: baseline,
         fork: false,
         at: None,
+        fallback: None,
     });
     let all = run(&fake, request).await;
     assert_eq!(&fake.argv()[fake.argv().len() - 2..], ["--resume", SESSION]);
@@ -1808,6 +1809,7 @@ async fn a_resumed_session_starts_on_images_alone() {
             usage_totals: Vec::new(),
             fork: false,
             at: None,
+            fallback: None,
         }),
         ..request(&fake.root())
     };

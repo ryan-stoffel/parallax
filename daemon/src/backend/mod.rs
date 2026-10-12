@@ -122,6 +122,12 @@ pub trait Backend: Send + Sync {
         false
     }
 
+    /// Whether a run whose session can't be resumed starts a new one with
+    /// [`Resume::fallback`] instead of failing (T3 Code, PLX-728). Not by default.
+    fn resume_fallback(&self) -> bool {
+        false
+    }
+
     /// Starts the CLI in `cwd` to list its own slash commands and skills (PLX-359), with the
     /// program and environment a thread on the user's own login gets, for
     /// [`commands::list`]. `None` for a backend with no list, the default.
@@ -490,6 +496,10 @@ pub struct Resume {
     /// came after: a rewind (0062). Only a backend whose [`Capabilities::resume_at`] is set
     /// gets it.
     pub at: Option<String>,
+    /// The first message of a new session to start in place of this one, once, if it can't be
+    /// resumed: the conversation so far, then the run's message. Only a backend whose
+    /// [`Backend::resume_fallback`] is set gets it.
+    pub fallback: Option<String>,
 }
 
 impl Resume {
@@ -500,6 +510,7 @@ impl Resume {
             usage_totals: Vec::new(),
             fork: false,
             at: None,
+            fallback: None,
         }
     }
 }
@@ -935,6 +946,11 @@ impl EventSink {
             _ => {}
         }
         self.send(event).await
+    }
+
+    /// Starts the usage totals over, for a run whose session was replaced by a new one.
+    pub fn restart_usage(&mut self) {
+        self.usage = CumulativeUsage::new();
     }
 
     /// Takes a running total that the vendor reported for `model`, such as Codex's

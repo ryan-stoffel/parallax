@@ -1,0 +1,15 @@
+# A thread whose resume fails: plxd starts a new thread once, with the fallback prompt
+# (PLX-728).
+<
+{"id":1,"result":{"userAgent":"plxd/0.160.0","codexHome":"/Users/u/.codex","platformFamily":"unix","platformOs":"macos"}}
+<
+# thread/resume
+<
+{"id":2,"error":{"code":-32600,"message":"no rollout found for thread id t-0"}}
+# thread/start
+<
+{"id":3,"result":{"thread":{"id":"t-1"},"model":"gpt-6-sol"}}
+<
+{"id":4,"result":{"turn":{"id":"u-1"}}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"t-1","turnId":"u-1","tokenUsage":{"total":{"totalTokens":1700,"inputTokens":1500,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":200,"reasoningOutputTokens":0},"last":{"totalTokens":1700,"inputTokens":1500,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":200,"reasoningOutputTokens":0},"modelContextWindow":258400}}}
+{"method":"turn/completed","params":{"threadId":"t-1","turn":{"id":"u-1","status":"completed","error":null}}}

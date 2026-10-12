@@ -571,6 +571,7 @@ async fn a_resumed_session_reports_only_its_own_usage() {
         usage_totals: vec![opus(1000)],
         fork: false,
         at: None,
+        fallback: None,
     });
     let mut events = launch(&backend, resumed).await.events;
     let all = rest(&mut events).await;

@@ -264,6 +264,7 @@ async fn a_resumed_thread_without_approvals_never_asks_and_declines_what_codex_d
         }],
         fork: false,
         at: None,
+        fallback: None,
     });
     let events = rest(&mut backend.start(request).unwrap().events).await;
     assert!(
@@ -309,6 +310,56 @@ async fn a_resumed_thread_without_approvals_never_asks_and_declines_what_codex_d
     );
     assert_eq!(written[5]["id"], 1);
     assert_eq!(written[5]["error"]["code"], -32601);
+}
+
+/// A thread whose resume fails starts a new one once, with the fallback prompt, and counts the
+/// new thread's usage from zero (PLX-728).
+#[tokio::test]
+async fn a_failed_resume_starts_a_new_thread_with_the_fallback() {
+    let (dir, backend) = fake(include_str!("../fixtures/app-server-resume-fallback.jsonl"));
+    let mut request = request(AgentPermission::Edit);
+    request.resume = Some(Resume {
+        usage_totals: vec![ModelUsage {
+            model: None,
+            usage: Usage {
+                input_tokens: 1000,
+                ..Usage::default()
+            },
+        }],
+        fallback: Some("The conversation so far, then the message.".into()),
+        ..Resume::new("t-0")
+    });
+    let events = rest(&mut backend.start(request).unwrap().events).await;
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Event::SessionStarted { session_id, .. } if session_id == "t-1"
+    )));
+    let added: u64 = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Usage(delta) => Some(delta.usage.input_tokens),
+            _ => None,
+        })
+        .sum();
+    assert_eq!(added, 1500, "all of the new thread's usage");
+    assert!(matches!(
+        events.last(),
+        Some(Event::Finished {
+            outcome: Outcome::Completed { .. },
+            ..
+        })
+    ));
+
+    let written = written(&dir);
+    assert_eq!(written[2]["method"], "thread/resume");
+    assert_eq!(written[3]["method"], "thread/start");
+    assert!(written[3]["params"].get("threadId").is_none());
+    assert!(written[3]["params"].get("excludeTurns").is_none());
+    assert_eq!(written[4]["method"], "turn/start");
+    assert_eq!(
+        written[4]["params"]["input"][0]["text"],
+        "The conversation so far, then the message."
+    );
 }
 
 /// A `/compact` (PLX-638) compacts the thread with `thread/compact/start` instead of starting a

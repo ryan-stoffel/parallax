@@ -12,8 +12,10 @@
 //! overrides that join the user's servers, its tools approved without asking (0041), fast mode as
 //! the `priority` service tier, and the mode's approval policy and sandbox ([`mode`]). The prompt
 //! is the first `turn/start`, as written, with its images as `localImage` files ([`write_images`])
-//! and the effort. A turn that is exactly `/compact` ([`is_compact`], PLX-638) is
-//! `thread/compact/start` instead, which Codex runs as a turn with a `contextCompaction` item.
+//! and the effort. If `thread/resume` fails, the thread sends `thread/start` once instead, with
+//! [`Resume::fallback`](super::super::Resume::fallback) as the prompt (T3 Code, PLX-728). A turn
+//! that is exactly `/compact` ([`is_compact`], PLX-638) is `thread/compact/start` instead, which
+//! Codex runs as a turn with a `contextCompaction` item.
 //! Each follow-up is a later turn in the same process, sent once the turn before it has
 //! completed. A steer (PLX-370) is `turn/steer` with the running turn's id, which
 //! codex-cli 0.160.0 adds to that turn's input after its current item; if Codex refuses it, or no
@@ -148,16 +150,30 @@ pub(super) fn start(
     let (handle, control) = RunHandle::new(request.run_id, true, switch.clone());
     let (handle, answers) = handle.with_answers();
     let held = handle.held();
+    let image_paths = image_paths.unwrap_or_default();
+    let first = Turn {
+        id: request.turn_id,
+        input: input(&request.prompt, &image_paths),
+        compact: is_compact(&request.prompt, &request.images),
+    };
+    let fallback = request
+        .resume
+        .as_ref()
+        .filter(|_| thread_method == "thread/resume" && !first.compact)
+        .and_then(|resume| resume.fallback.as_deref())
+        .map(|prompt| {
+            let mut params = thread.clone();
+            if let Some(params) = params.as_object_mut() {
+                params.remove("threadId");
+                params.remove("excludeTurns");
+            }
+            (params, input(prompt, &image_paths))
+        });
     let baseline = request
         .resume
         .map(|resume| resume.usage_totals)
         .unwrap_or_default();
     let (sink, events) = EventSink::channel(EVENT_BUFFER, baseline);
-    let first = Turn {
-        id: request.turn_id,
-        input: input(&request.prompt, image_paths.as_deref().unwrap_or_default()),
-        compact: is_compact(&request.prompt, &request.images),
-    };
     let ready = server.ready.subscribe();
     let driver = Driver {
         server,
@@ -174,6 +190,7 @@ pub(super) fn start(
         approvals: request.approvals,
         effort,
         thread: Some((thread_method, thread)),
+        fallback,
         thread_id: None,
         requests: HashMap::new(),
         running: None,
@@ -762,6 +779,9 @@ struct Driver {
     effort: Option<&'static str>,
     /// `thread/start` or `thread/resume` and its params, until it is sent.
     thread: Option<(&'static str, Value)>,
+    /// `thread/start`'s params and the first turn's input, for a new thread if `thread/resume`
+    /// fails.
+    fallback: Option<(Value, Value)>,
     /// Codex's thread id, once `thread/start` or `thread/resume` answered.
     thread_id: Option<String>,
     requests: HashMap<u64, Request>,
@@ -973,7 +993,18 @@ impl Driver {
                 self.thread_id = Some(thread_id);
                 self.next_turn().await;
             }
-            (Request::Thread, Err(message)) => self.fail_to_start(message),
+            (Request::Thread, Err(message)) => match self.fallback.take() {
+                Some((params, input)) => {
+                    tracing::warn!(%message, "could not resume a Codex thread; starting a new one");
+                    // The new thread counts its usage from zero.
+                    self.sink.restart_usage();
+                    if let Some(first) = self.queued.front_mut() {
+                        first.input = input;
+                    }
+                    self.request(Request::Thread, "thread/start", &params);
+                }
+                None => self.fail_to_start(message),
+            },
             (Request::Turn, Ok(result)) => {
                 if let Some(running) = &mut self.running {
                     running.codex_id = result

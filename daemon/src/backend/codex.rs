@@ -215,6 +215,11 @@ impl Backend for CodexBackend {
         true
     }
 
+    /// A failed `thread/resume` starts a new thread ([`app_server`]).
+    fn resume_fallback(&self) -> bool {
+        true
+    }
+
     /// `codex app-server` on the default login, asked for `skills/list` ([`commands::codex`]).
     fn commands(&self, cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
         let home = self.overrides.home.as_deref();
