@@ -73,7 +73,9 @@ pub enum Event {
         /// The tool, in the vendor's naming, such as `Read`, `command_execution`, or
         /// `mcp__plxd__plan`.
         name: String,
-        /// The tool's input, as the vendor sent it.
+        /// The tool's input, as the vendor sent it. Null when the call is announced before its
+        /// input: Claude's starts with its block, and the whole message repeats it with the
+        /// input (PLX-714).
         #[serde(default)]
         input: serde_json::Value,
     },

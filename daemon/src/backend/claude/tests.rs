@@ -380,8 +380,8 @@ async fn a_read_only_run_maps_the_stream_and_uses_the_no_write_policy() {
     assert_eq!(
         expected.join(" "),
         "-p --output-format stream-json --verbose --input-format stream-json \
-         --thinking adaptive --thinking-display summarized",
-        "every run has T3 Code's summarized thinking (PLX-713)"
+         --thinking adaptive --thinking-display summarized --include-partial-messages",
+        "every run has T3 Code's summarized thinking (PLX-713) and partial messages (PLX-714)"
     );
     let mut settings = no_write_settings();
     settings["showThinkingSummaries"] = true.into();
@@ -3531,7 +3531,8 @@ fn only_a_subagent_s_task_notification_ends_a_subagent() {
 }
 
 /// A real session, recorded with `PLXD_RECORD_CLI` (PLX-493), replays to its snapshot: thinking
-/// summaries (PLX-713), a subagent's tool call, a Write that asks first, and the reply.
+/// summaries (PLX-713), a subagent's tool call, a Write that asks first, and the streamed reply
+/// (PLX-714).
 #[tokio::test]
 async fn a_recorded_session_replays_to_its_snapshot() {
     let fake = Fake::new("recorded");
@@ -3579,6 +3580,41 @@ fn compact_goes_as_claude_codes_own_command() {
         [
             Step::Emit(Event::ContextCompaction { done: false }),
             Step::Emit(Event::ContextCompaction { done: true }),
+        ]
+    );
+}
+
+/// PLX-714: with partial messages, the reply's text streams as deltas under its message's id,
+/// and a tool call shows as its block starts, without its input. Thinking and tool input wait
+/// for their whole message, and a subagent's stream is skipped.
+#[test]
+fn partial_messages_stream_the_reply_text() {
+    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
+    translator.line(&init_line(r#"["Read"]"#));
+    let lines: [&[u8]; 6] = [
+        br#"{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg_1"}},"parent_tool_use_id":null}"#,
+        br#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Hm"}},"parent_tool_use_id":null}"#,
+        br#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hi"}},"parent_tool_use_id":null}"#,
+        br#"{"type":"stream_event","event":{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_2","name":"Write","input":{}}},"parent_tool_use_id":null}"#,
+        br#"{"type":"stream_event","event":{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{"}},"parent_tool_use_id":null}"#,
+        br#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"sub"}},"parent_tool_use_id":"toolu_1"}"#,
+    ];
+    let steps: Vec<Step> = lines
+        .into_iter()
+        .flat_map(|line| translator.line(line))
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            Step::Emit(Event::TextDelta {
+                message_id: Some("msg_1".into()),
+                text: "Hi".into(),
+            }),
+            Step::Emit(Event::ToolCall {
+                call_id: "toolu_2".into(),
+                name: "Write".into(),
+                input: Value::Null,
+            }),
         ]
     );
 }

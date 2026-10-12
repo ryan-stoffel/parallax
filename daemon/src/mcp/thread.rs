@@ -973,7 +973,8 @@ impl Render {
                 result.trim().clone_into(&mut self.last_reply);
                 format!("Agent:\n{}\n\n", clip(&self.last_reply, ITEM_BYTES))
             }
-            AgentOutputItem::ToolCall { name, input, .. } => {
+            // A call announced before its input (PLX-714) shows once it repeats with it.
+            AgentOutputItem::ToolCall { name, input, .. } if !input.is_null() => {
                 format!("[tool {name}: {}]\n", clip(&input.to_string(), TOOL_BYTES))
             }
             AgentOutputItem::ToolResult { status, output, .. } => {

@@ -111,7 +111,8 @@ fn compact_one_job(tx: &mut Tx, floor: u64, after: u64) -> Result<Option<u64>, E
     Ok(Some(turn.last))
 }
 
-/// Merges consecutive text deltas and drops deltas that a whole `text` repeats. Tool calls and
+/// Merges consecutive text deltas, drops deltas that a whole `text` repeats, and drops a tool
+/// call announced without its input (PLX-714) once the call repeats with it. Tool calls and
 /// results stay.
 pub(crate) fn compact_items(items: Vec<AgentOutputItem>) -> Vec<AgentOutputItem> {
     drop_repeated_deltas(merge_consecutive_deltas(items))
@@ -139,19 +140,38 @@ fn merge_consecutive_deltas(items: Vec<AgentOutputItem>) -> Vec<AgentOutputItem>
 }
 
 fn drop_repeated_deltas(items: Vec<AgentOutputItem>) -> Vec<AgentOutputItem> {
-    let mut out = Vec::new();
+    let mut out: Vec<AgentOutputItem> = Vec::new();
     for item in items {
         if let AgentOutputItem::Text { message_id, text } = &item {
-            // Keep identified deltas to preserve the message position across intervening tools.
-            // Without a message id, the renderer only replaces the immediately preceding
-            // partial message. Earlier deltas separated by tools are distinct messages.
-            if message_id.is_none()
-                && matches!(out.last(), Some(AgentOutputItem::TextDelta {
-                    message_id: None, text: delta,
-                }) if text.starts_with(delta.as_str()))
+            // The whole text takes its deltas' place, where the renderer puts it: an identified
+            // message's, across intervening items such as tools; without a message id, only the
+            // partial message just before, since earlier deltas separated by tools are distinct
+            // messages.
+            let at = match message_id {
+                Some(_) => out.iter().rposition(|prev| {
+                    matches!(prev, AgentOutputItem::TextDelta { message_id: id, .. } if id == message_id)
+                }),
+                None => out.len().checked_sub(1).filter(|&last| {
+                    matches!(&out[last], AgentOutputItem::TextDelta { message_id: None, .. })
+                }),
+            };
+            if let Some(at) = at
+                && matches!(&out[at], AgentOutputItem::TextDelta { text: delta, .. }
+                    if text.starts_with(delta.as_str()))
             {
-                out.pop();
+                out[at] = item;
+                continue;
             }
+        }
+        // The whole call takes its announcement's place, as the renderer replaces it.
+        if let AgentOutputItem::ToolCall { call_id, .. } = &item
+            && let Some(at) = out.iter().rposition(|prev| {
+                matches!(prev, AgentOutputItem::ToolCall { call_id: id, input, .. }
+                    if id == call_id && input.is_null())
+            })
+        {
+            out[at] = item;
+            continue;
         }
         out.push(item);
     }
@@ -264,8 +284,10 @@ mod tests {
         );
     }
 
+    /// The renderer puts an identified message where its deltas started, so the whole text
+    /// replaces them there, and a compacted turn holds the text once.
     #[test]
-    fn identified_text_keeps_its_position_before_intervening_tools() {
+    fn identified_text_takes_its_deltas_place_before_intervening_tools() {
         let delta = AgentOutputItem::TextDelta {
             message_id: Some("m1".to_owned()),
             text: "Hi".to_owned(),
@@ -280,8 +302,29 @@ mod tests {
             input: serde_json::json!({}),
         };
         assert_eq!(
-            compact_items(vec![delta.clone(), call.clone(), whole.clone()]),
-            [delta, call, whole]
+            compact_items(vec![delta, call.clone(), whole.clone()]),
+            [whole, call]
+        );
+    }
+
+    /// PLX-714: Claude's call announced without its input gives its place to the whole call.
+    #[test]
+    fn an_announced_tool_call_gives_its_place_to_the_whole_call() {
+        let call = |input: serde_json::Value| AgentOutputItem::ToolCall {
+            call_id: "c1".to_owned(),
+            name: "Write".to_owned(),
+            input,
+        };
+        let whole = call(serde_json::json!({"file_path": "a"}));
+        let end = turn_finished();
+        assert_eq!(
+            compact_items(vec![
+                call(serde_json::Value::Null),
+                delta("x"),
+                whole.clone(),
+                end.clone()
+            ]),
+            [whole, delta("x"), end]
         );
     }
 

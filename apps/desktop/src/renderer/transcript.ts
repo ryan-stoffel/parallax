@@ -651,7 +651,13 @@ function applyOutput(
         ? (input as { runId?: unknown } | null | undefined)?.runId
         : undefined;
       const subagent = typeof runId === "string" ? subagentTitle(items, runId) : undefined;
-      items.push({ kind: "tool", key, callId, name, input, ...(subagent && { subagent }) });
+      // Claude announces a call as its block starts, with a null input, then repeats it whole
+      // (PLX-714): the whole call fills in the announced row.
+      const at = items.findLastIndex((x) => x.kind === "tool" && x.callId === callId);
+      const prev = items[at];
+      const row = { callId, name, input, ...(subagent && { subagent }) };
+      if (prev?.kind === "tool") items[at] = { ...prev, ...row };
+      else items.push({ kind: "tool", key, ...row });
       break;
     }
     case "toolResult": {

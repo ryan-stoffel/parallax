@@ -1026,3 +1026,14 @@ test("waiting secrets count as needs-you requests and resolutions remove them", 
     ])[runId]?.items,
   ).toEqual([]);
 });
+
+test("a tool call announced without its input fills in when it repeats whole (PLX-714)", () => {
+  const t = build(
+    output({ kind: "toolCall", callId: "c1", name: "Write", input: null }),
+    output({ kind: "toolCall", callId: "c1", name: "Write", input: { file_path: "a.txt" } }),
+    output({ kind: "toolResult", callId: "c1", status: "ok" }),
+  );
+  const tools = of(t.items, "tool");
+  expect(tools).toHaveLength(1);
+  expect(tools[0]).toMatchObject({ callId: "c1", input: { file_path: "a.txt" }, status: "ok" });
+});

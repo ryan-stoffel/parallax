@@ -4,11 +4,11 @@
 //! # The command
 //!
 //! Every run is `claude -p --output-format stream-json --verbose --input-format stream-json
-//! --thinking adaptive --thinking-display summarized` in the run's cwd, plus the policy's flags,
-//! `--model`, `--effort`, and `--resume <session id>` (0004 [10]), with `--fork-session` for a
-//! fork's first run (0050) and `--resume-session-at` for a rewind (0062). The run's one
-//! `--settings` holds `showThinkingSummaries`, which with the thinking flags gets T3 Code's
-//! thinking summaries, and fast mode as `fastMode`. A 200k context window is
+//! --thinking adaptive --thinking-display summarized --include-partial-messages` in the run's cwd,
+//! plus the policy's flags, `--model`, `--effort`, and `--resume <session id>` (0004 [10]), with
+//! `--fork-session` for a fork's first run (0050) and `--resume-session-at` for a rewind (0062).
+//! The run's one `--settings` holds `showThinkingSummaries`, which with the thinking flags gets
+//! T3 Code's thinking summaries, and fast mode as `fastMode`. A 200k context window is
 //! [`DISABLE_1M_ENV`]. The sidecar gives these to the SDK as its options, and the SDK runs the
 //! CLI with them:
 //!
@@ -202,7 +202,8 @@ use crate::mcp;
 pub const PROGRAM: &str = "claude";
 
 /// The arguments every run starts with. Thinking is T3 Code's: adaptive, with its summaries in
-/// the `thinking` blocks, which otherwise come empty (PLX-713).
+/// the `thinking` blocks, which otherwise come empty (PLX-713). Partial messages stream the
+/// reply's text as T3 Code's do (PLX-714).
 pub const BASE_ARGS: &[&str] = &[
     "-p",
     "--output-format",
@@ -214,6 +215,7 @@ pub const BASE_ARGS: &[&str] = &[
     "adaptive",
     "--thinking-display",
     "summarized",
+    "--include-partial-messages",
 ];
 
 /// [`ToolPolicy::NoWrite`]'s fixed arguments for a run that isn't a coordinator, as 0004 has

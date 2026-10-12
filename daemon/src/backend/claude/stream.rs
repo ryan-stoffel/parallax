@@ -55,7 +55,6 @@ const IGNORED_TYPES: &[&str] = &[
     "conversation_reset",
     "keep_alive",
     "prompt_suggestion",
-    "stream_event",
     "tool_progress",
     "tool_use_summary",
 ];
@@ -169,6 +168,8 @@ pub(super) struct Translator {
     speed: Option<(u64, u64)>,
     /// The request whose usage was last sent, as each of its content blocks repeats it.
     usage_message: Option<String>,
+    /// The id of the message streaming now, from its `message_start`, for its text deltas.
+    streaming: Option<String>,
     /// The CLI resumed a session, whose running totals include turns from before this process.
     resumed: bool,
     /// The last `result`'s failure, if it was one.
@@ -238,6 +239,7 @@ impl Translator {
             speed: None,
             resumed: false,
             usage_message: None,
+            streaming: None,
             last_failure: None,
             last_result: None,
             cursor: None,
@@ -318,6 +320,7 @@ impl Translator {
             Some("user") => self.user(&message),
             Some("result") => self.result(&message),
             Some("rate_limit_event") => self.rate_limit(&message),
+            Some("stream_event") => self.stream_event(&message),
             Some("control_request") if self.prompts => self.control_request(&message),
             Some("control_cancel_request") if self.prompts => text(&message, "request_id")
                 .map(|id| Step::Withdraw(id.to_owned()))
@@ -595,6 +598,57 @@ impl Translator {
             }
         }
         in_subagent(message, text(inner, "model"), steps)
+    }
+
+    /// A partial message (`--include-partial-messages`, PLX-714): its text as it streams, as
+    /// deltas the whole `assistant` message replaces, and each tool call as its block starts,
+    /// with a null input the whole message's call replaces. Other blocks wait for that message,
+    /// and a subagent's are skipped, as T3 Code skips them.
+    fn stream_event(&mut self, message: &Map<String, Value>) -> Vec<Step> {
+        let Some(event) = message.get("event").and_then(Value::as_object) else {
+            return Vec::new();
+        };
+        if !self.verified
+            || message
+                .get("parent_tool_use_id")
+                .is_some_and(|id| !id.is_null())
+        {
+            return Vec::new();
+        }
+        match text(event, "type") {
+            Some("message_start") => {
+                self.streaming = event
+                    .get("message")
+                    .and_then(|inner| text(inner.as_object()?, "id"))
+                    .map(str::to_owned);
+                Vec::new()
+            }
+            Some("content_block_start") => {
+                let block = event.get("content_block").and_then(Value::as_object);
+                match block.and_then(|b| Some((text(b, "type")?, text(b, "id")?, text(b, "name")?)))
+                {
+                    Some(("tool_use", id, name)) => vec![Step::Emit(Event::ToolCall {
+                        call_id: id.to_owned(),
+                        name: name.to_owned(),
+                        input: Value::Null,
+                    })],
+                    _ => Vec::new(),
+                }
+            }
+            Some("content_block_delta") => {
+                let delta = event.get("delta").and_then(Value::as_object);
+                match delta.and_then(|delta| Some((text(delta, "type")?, text(delta, "text")?))) {
+                    Some(("text_delta", text)) if !text.is_empty() => {
+                        vec![Step::Emit(Event::TextDelta {
+                            message_id: self.streaming.clone(),
+                            text: text.to_owned(),
+                        })]
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            _ => Vec::new(),
+        }
     }
 
     fn user(&mut self, message: &Map<String, Value>) -> Vec<Step> {

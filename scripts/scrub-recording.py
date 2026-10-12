@@ -72,6 +72,10 @@ def scrub_line(d: dict):
         d["slash_commands"] = d["skills"] = d["plugins"] = []
     if d.get("type") == "system" and d.get("subtype") == "commands_changed":
         d["commands"] = []
+    # A tool input's partial JSON splits paths across lines, past scrub_text. plxd ignores it.
+    if d.get("type") == "stream_event" and \
+            d.get("event", {}).get("delta", {}).get("type") == "input_json_delta":
+        return None
     # ACP (Cursor): the user's global and user commands.
     update = params.get("update", {}) if isinstance(params, dict) else {}
     if update.get("sessionUpdate") == "available_commands_update":
