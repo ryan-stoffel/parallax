@@ -685,6 +685,71 @@ body {
   padding-left: 0;
 }
 
+/* The rail of places (Sidebar.tsx), Spring: opening, its width overshoots and its places bounce in
+   from the left one after another, then their dots pop; closing, they shrink away last first and
+   it narrows. Sidebar.tsx's railOpenMs and railCloseMs match these. Under reduced motion it simply
+   shows or hides. */
+/* The sidebar widens by the rail's width, so the list keeps its own, and moves with the rail while
+   it opens or closes, never while it's dragged. */
+#sidebar:has(.place-rail:not([data-motion="out"])) {
+  width: calc(var(--sidebar-w) + 46px);
+}
+#sidebar:has(.place-rail[data-motion="in"]) {
+  transition: width 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+#sidebar:has(.place-rail[data-motion="out"]) {
+  transition: width 0.25s ease-in 0.15s;
+}
+.place-rail[data-motion="in"] {
+  animation: rail-open 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.place-rail[data-motion="in"] > * {
+  animation: rail-place-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) calc(sibling-index() * 35ms) both;
+}
+.place-rail[data-motion="in"] [data-badge] {
+  animation: rail-badge 0.45s cubic-bezier(0.3, 1.8, 0.5, 1) 0.5s both;
+}
+.place-rail[data-motion="out"] {
+  animation: rail-close 0.25s ease-in 0.15s both;
+}
+.place-rail[data-motion="out"] > * {
+  animation: rail-place-out 0.22s ease-in calc((sibling-count() - sibling-index()) * 20ms) both;
+}
+@keyframes rail-open {
+  from {
+    width: 0;
+  }
+}
+@keyframes rail-close {
+  to {
+    width: 0;
+  }
+}
+@keyframes rail-place-in {
+  from {
+    opacity: 0;
+    transform: translateX(-16px) scale(0.4);
+  }
+}
+@keyframes rail-place-out {
+  to {
+    opacity: 0;
+    transform: translateX(-14px) scale(0.5);
+  }
+}
+@keyframes rail-badge {
+  from {
+    transform: scale(0);
+  }
+}
+:root.reduce-motion .place-rail,
+:root.reduce-motion .place-rail * {
+  animation: none;
+}
+:root.reduce-motion #sidebar {
+  transition: none;
+}
+
 /* The Usage page (UsagePage.tsx): bars rise from the baseline, --delay apart, and meters fill
    from the left, as they appear. Under reduced motion they are simply there. */
 /* A bar springs up from the baseline, a little past its height and back. */

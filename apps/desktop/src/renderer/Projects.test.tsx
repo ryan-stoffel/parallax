@@ -24,7 +24,7 @@ import type {
   Thread,
 } from "../protocol/generated/protocol";
 import { App } from "./App";
-import { collapsedProjects, collapsedThreads } from "./Sidebar";
+import { collapsedProjects, collapsedThreads, placeRail } from "./Sidebar";
 import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
 import { fakeWatch } from "./fakeWatch";
 
@@ -97,6 +97,7 @@ beforeEach(() => {
   sidebarPrefs.set(sidebarDefaults);
   collapsedProjects.set(false);
   collapsedThreads.set(false);
+  placeRail.set(true);
   popoverSources = [];
   listeners = new Set();
   capabilities = {};
@@ -2428,6 +2429,52 @@ test("search, the repo filter, and Mod+number cover both sections, and a collaps
   await keyDown({ key: "1", code: "Digit1", metaKey: true });
   await settle();
   expect(crumbs()).toEqual(["This Mac", "parallax", "Fix the flaky test"]);
+});
+
+test("the rail of places lists Inbox, Spaces, repos, and No repo, filters the list, and hides from the footer", async () => {
+  const space: Repo = { ...repo("Reading", "/data/spaces/s1"), id: "s1", space: true };
+  withThread();
+  answers["thread/list"] = () => ({
+    result: { repos: [parallax, space], threads: [flaky], seq: 7 },
+  });
+  await renderApp();
+  const rail = () => document.querySelector('#sidebar [role="group"][aria-label="Places"]');
+  const place = (name: string) =>
+    [...rail()!.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.getAttribute("aria-label")?.split(",")[0] === name,
+    );
+  // The thread finished unseen, so parallax and Inbox say so. Neither Project's folder is listed.
+  expect([...rail()!.querySelectorAll("button")].map((b) => b.getAttribute("aria-label"))).toEqual([
+    "Inbox, done",
+    "Reading",
+    "parallax, done",
+    "No repo",
+    "New Space or repository",
+  ]);
+  expect(place("Reading")!.className).toContain("rounded-full");
+  expect(place("parallax")!.className).toContain("rounded-lg");
+
+  await click(place("Reading"));
+  expect(place("Reading")!.getAttribute("aria-pressed")).toBe("true");
+  expect(sidebarTitles()).toEqual([]);
+  await click(place("parallax"));
+  expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
+  await click(place("No repo"));
+  expect(sidebarTitles()).toEqual(["photon", "ember"]);
+  await click(place("Inbox"));
+  expect(sidebarTitles()).toEqual(["photon", "ember", "Fix the flaky test"]);
+
+  // Under reduced motion the toggle hides and shows at once, and the choice is kept.
+  document.documentElement.classList.add("reduce-motion");
+  onTestFinished(() => document.documentElement.classList.remove("reduce-motion"));
+  const toggle = (label: string) =>
+    document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${label}"]`);
+  await click(toggle("Hide places"));
+  expect(rail()).toBeNull();
+  expect(localStorage.getItem("parallax:placeRail")).toBe("false");
+  await click(toggle("Show places"));
+  expect(rail()).not.toBeNull();
+  expect(localStorage.getItem("parallax:placeRail")).toBe("true");
 });
 
 test("Delete… asks first, shows plxd's error in the dialog, then deletes the open Project and leaves its page", async () => {

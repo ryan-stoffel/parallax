@@ -10,6 +10,7 @@ import {
   ChevronDown,
   Columns2,
   ChevronRight,
+  ChevronsLeft,
   CircleAlert,
   CircleCheck,
   CirclePause,
@@ -23,6 +24,7 @@ import {
   GitMerge,
   GitPullRequest,
   HardDrive,
+  Inbox,
   Keyboard,
   ListFilter,
   LoaderCircle,
@@ -98,6 +100,7 @@ import { stored } from "./stored";
 import { dragThread } from "./threadDrag";
 import {
   asksOf,
+  isRepository,
   projectRuns,
   threadProjects,
   type ForkChoice,
@@ -143,7 +146,7 @@ interface SidebarProps {
 /**
  * The left column. Its top row holds the macOS traffic lights, then the toggle at the same
  * spot the main pane shows it while this column is hidden, then the app's mark and name, which
- * open a new thread.
+ * open a new thread. `width` is the list's; the rail of places adds its own (index.css).
  */
 export function Sidebar({
   open,
@@ -158,8 +161,8 @@ export function Sidebar({
       id="sidebar"
       aria-label="Sidebar"
       hidden={!open}
-      style={{ width }}
-      className="relative flex min-w-0 shrink-0 flex-col border-r border-border bg-sidebar"
+      style={{ "--sidebar-w": `${width}px` } as CSSProperties}
+      className="relative flex w-(--sidebar-w) min-w-0 shrink-0 flex-col border-r border-border bg-sidebar"
     >
       {onResize && <PanelResize side="left" width={width} onResize={onResize} />}
       <TopBar className="traffic-light-inset">
@@ -259,10 +262,7 @@ export function RepoIcon({ repo }: { repo?: Repo }) {
   if (!repo || repo.scratch)
     return <SquareDashed aria-hidden className="size-4 shrink-0 text-faint-foreground" />;
   if (repo.icon) return <ProjectIcon icon={repo.icon} className="size-4 shrink-0" />;
-  const palette = iconColors.slice(1);
-  let hash = 0;
-  for (let i = 0; i < repo.name.length; i++) hash = (hash * 31 + repo.name.charCodeAt(i)) | 0;
-  const color = palette[Math.abs(hash) % palette.length]!.text;
+  const color = repoColor(repo);
   return (
     <span
       aria-hidden
@@ -272,6 +272,14 @@ export function RepoIcon({ repo }: { repo?: Repo }) {
       <span data-initials={initials(repo.name)} className="before:content-[attr(data-initials)]" />
     </span>
   );
+}
+
+/** The text color of a repo with no icon of its own, picked from its name. */
+function repoColor(repo: Repo): string {
+  const palette = iconColors.slice(1);
+  let hash = 0;
+  for (let i = 0; i < repo.name.length; i++) hash = (hash * 31 + repo.name.charCodeAt(i)) | 0;
+  return palette[Math.abs(hash) % palette.length]!.text;
 }
 
 // How long a pointer rests on a thread before its card shows. Moving to another thread while
@@ -285,6 +293,13 @@ const filterKey = "parallax:repoFilter";
 export const collapsedProjects = stored("parallax:projectsCollapsed", false, (raw) => raw === true);
 /** Whether the Threads section is collapsed. */
 export const collapsedThreads = stored("parallax:threadsCollapsed", false, (raw) => raw === true);
+/** Whether the rail of places shows beside the list (PLX-739). */
+export const placeRail = stored("parallax:placeRail", true, (raw, fallback) =>
+  typeof raw === "boolean" ? raw : fallback,
+);
+// How long the rail's Spring motion runs each way, as index.css times it.
+const railOpenMs = 1000;
+const railCloseMs = 400;
 
 /** A sidebar setting kept in localStorage, or null while there is none or storage is off. */
 function readStored(key: string): string | null {
@@ -360,6 +375,26 @@ export function ThreadList({
   };
   const collapsed = collapsedProjects.use();
   const threadsCollapsed = collapsedThreads.use();
+  const railShown = placeRail.use();
+  // The rail's Spring motion while it plays: opening, or closing before it hides.
+  const [railMotion, setRailMotion] = useState<"in" | "out">();
+  const toggleRail = () => {
+    if (railMotion) return;
+    const still = document.documentElement.classList.contains("reduce-motion");
+    if (!railShown) placeRail.set(true);
+    if (still) {
+      if (railShown) placeRail.set(false);
+      return;
+    }
+    setRailMotion(railShown ? "out" : "in");
+    window.setTimeout(
+      () => {
+        if (railShown) placeRail.set(false);
+        setRailMotion(undefined);
+      },
+      railShown ? railCloseMs : railOpenMs,
+    );
+  };
   const { workingSection, pageArchived } = sidebarPrefs.use();
   // The Working drawer starts open, so a thread that just left the list stays in view.
   const [workingOpen, setWorkingOpen] = useState(true);
@@ -429,6 +464,14 @@ export function ThreadList({
   const pool = shown.filter((i) => i.kind === "thread" && !isArchived(i) && !isSnoozed(i));
   const snoozedItems = shown.filter((i) => !isArchived(i) && isSnoozed(i));
   const archived = shown.filter(isArchived);
+  // What each place asks of the user, for the rail: its live rows' attentions, by filter key.
+  const placeAttentions = new Map<RepoFilter, Attention[]>();
+  for (const i of items) {
+    if (isArchived(i) || isSnoozed(i)) continue;
+    const key: RepoFilter = !i.repo || i.repo.scratch ? "none" : `${i.host.id}/${i.repo.id}`;
+    for (const k of ["all", key] as const)
+      placeAttentions.set(k, [...(placeAttentions.get(k) ?? []), i.attention]);
+  }
   // The Projects section shows once any host has a Project, even while search or the filter hides
   // them all.
   const hasProjects = items.some((i) => i.kind === "project");
@@ -662,95 +705,110 @@ export function ThreadList({
 
   return (
     <>
-      <div className="flex items-center gap-1 px-2">
-        <label className="flex min-w-0 flex-1 items-center gap-2 rounded-lg bg-hover px-2.5 py-1.5 focus-within:outline-2 focus-within:outline-ring">
-          <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
-          <input
-            type="search"
-            aria-label="Search threads and Projects"
-            placeholder="Search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Escape" && setQuery("")}
-            className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
-          />
-        </label>
-        <RepoFilterMenu hosts={hosts} filter={filter} onFilter={setFilter} many={many} />
-        <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
-          <FolderPlus />
-        </IconButton>
-        <IconButton label="New thread" command="newThread" onClick={onNewThread}>
-          <SquarePen />
-        </IconButton>
-      </div>
-      <div onScroll={hideCard} className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        {errors.map((e) => (
-          <p key={e} role="alert" className="px-2 pb-1 text-[12px] text-danger">
-            {e}
-          </p>
-        ))}
-        {split && (
-          <SplitGroup
-            split={split}
+      <div className="flex min-h-0 flex-1">
+        {(railShown || railMotion) && (
+          <PlaceRail
             hosts={hosts}
-            selection={selection}
-            hostId={host.id}
-            onOpen={(threadId) => onSelect(split.hostId, { kind: "thread", threadId })}
-            onClose={onClosePane}
+            filter={filter}
+            onFilter={setFilter}
+            attentions={(key) => placeAttentions.get(key) ?? []}
+            many={many}
+            motion={railMotion}
+            onAdd={() => addDialog.current?.open()}
           />
         )}
-        {hasProjects && (
-          <>
-            {/* The heading holds only its toggle, so its name is just "Projects". */}
-            <div className={sectionHeading}>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex items-center gap-1 px-2">
+            <label className="flex min-w-0 flex-1 items-center gap-2 rounded-lg bg-hover px-2.5 py-1.5 focus-within:outline-2 focus-within:outline-ring">
+              <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+              <input
+                type="search"
+                aria-label="Search threads and Projects"
+                placeholder="Search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Escape" && setQuery("")}
+                className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
+              />
+            </label>
+            <RepoFilterMenu hosts={hosts} filter={filter} onFilter={setFilter} many={many} />
+            <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
+              <FolderPlus />
+            </IconButton>
+            <IconButton label="New thread" command="newThread" onClick={onNewThread}>
+              <SquarePen />
+            </IconButton>
+          </div>
+          <div onScroll={hideCard} className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+            {errors.map((e) => (
+              <p key={e} role="alert" className="px-2 pb-1 text-[12px] text-danger">
+                {e}
+              </p>
+            ))}
+            {split && (
+              <SplitGroup
+                split={split}
+                hosts={hosts}
+                selection={selection}
+                hostId={host.id}
+                onOpen={(threadId) => onSelect(split.hostId, { kind: "thread", threadId })}
+                onClose={onClosePane}
+              />
+            )}
+            {hasProjects && (
+              <>
+                {/* The heading holds only its toggle, so its name is just "Projects". */}
+                <div className={sectionHeading}>
+                  <SectionToggle
+                    label="Projects"
+                    collapsed={collapsed}
+                    controls={projectsId}
+                    onToggle={() => collapsedProjects.set(!collapsed)}
+                  />
+                </div>
+                <div id={projectsId} hidden={collapsed}>
+                  <ul aria-label="Projects" className="flex flex-col gap-0.5">
+                    {projects.map((i) => row(i))}
+                  </ul>
+                  {projects.length === 0 && <p className={emptyNote}>Nothing matches</p>}
+                </div>
+              </>
+            )}
+            <div className={`${sectionHeading} ${hasProjects ? "mt-2" : ""}`}>
               <SectionToggle
-                label="Projects"
-                collapsed={collapsed}
-                controls={projectsId}
-                onToggle={() => collapsedProjects.set(!collapsed)}
+                label="Threads"
+                collapsed={threadsCollapsed}
+                controls={threadsId}
+                onToggle={() => collapsedThreads.set(!threadsCollapsed)}
               />
             </div>
-            <div id={projectsId} hidden={collapsed}>
-              <ul aria-label="Projects" className="flex flex-col gap-0.5">
-                {projects.map((i) => row(i))}
+            <div id={threadsId} hidden={threadsCollapsed}>
+              <ul aria-label="Threads" className="flex flex-col gap-0.5">
+                {topThreads.map((i) => tree(i, false))}
               </ul>
-              {projects.length === 0 && <p className={emptyNote}>Nothing matches</p>}
+              {topThreads.length === 0 && workingTops.length === 0 && (
+                <p className={emptyNote}>
+                  {q || filter !== "all" ? "Nothing matches" : "No threads yet"}
+                </p>
+              )}
             </div>
-          </>
-        )}
-        <div className={`${sectionHeading} ${hasProjects ? "mt-2" : ""}`}>
-          <SectionToggle
-            label="Threads"
-            collapsed={threadsCollapsed}
-            controls={threadsId}
-            onToggle={() => collapsedThreads.set(!threadsCollapsed)}
+          </div>
+          <Drawer
+            label="Working"
+            items={workingTops}
+            row={(item) => tree(item, false)}
+            defaultOpen
+            onOpenChange={setWorkingOpen}
+          />
+          <Drawer label="Snoozed" items={snoozedItems} row={row} />
+          <Drawer
+            label="Archived"
+            items={archived}
+            row={row}
+            pageSize={pageArchived ? archivePageSize : undefined}
           />
         </div>
-        <div id={threadsId} hidden={threadsCollapsed}>
-          <ul aria-label="Threads" className="flex flex-col gap-0.5">
-            {topThreads.map((i) => tree(i, false))}
-          </ul>
-          {topThreads.length === 0 && workingTops.length === 0 && (
-            <p className={emptyNote}>
-              {q || filter !== "all" ? "Nothing matches" : "No threads yet"}
-            </p>
-          )}
-        </div>
       </div>
-      <Drawer
-        label="Working"
-        items={workingTops}
-        row={(item) => tree(item, false)}
-        defaultOpen
-        onOpenChange={setWorkingOpen}
-      />
-      <Drawer label="Snoozed" items={snoozedItems} row={row} />
-      <Drawer
-        label="Archived"
-        items={archived}
-        row={row}
-        pageSize={pageArchived ? archivePageSize : undefined}
-      />
       <RowCard ref={card} />
       <AddDialog
         ref={addDialog}
@@ -777,7 +835,12 @@ export function ThreadList({
       </ConfirmDialog>
       <div className="border-t border-border p-2">
         <ConnectionStatus hostId={host.id} />
-        <Footer onOpenSettings={onOpenSettings} onOpenPullRequests={onOpenPullRequests} />
+        <Footer
+          onOpenSettings={onOpenSettings}
+          onOpenPullRequests={onOpenPullRequests}
+          railShown={railShown && railMotion !== "out"}
+          onToggleRail={toggleRail}
+        />
       </div>
     </>
   );
@@ -897,6 +960,145 @@ function Drawer<T>({
         </button>
       )}
     </details>
+  );
+}
+
+// A place's dot: its most urgent attention, or none while it's settled.
+const attentionDot: Partial<Record<Attention, string>> = {
+  needsYou: "bg-warning",
+  failed: "bg-danger",
+  done: "bg-added",
+  working: "bg-working",
+};
+const attentionWords: Partial<Record<Attention, string>> = {
+  needsYou: "needs you",
+  failed: "failed",
+  done: "done",
+  working: "working",
+};
+
+/**
+ * The rail of places (PLX-739) on the sidebar's left edge: Inbox, which is every thread, then each
+ * host's Spaces as circles, its repositories as rounded squares, No repo while it has threads, and
+ * a button that adds one. Picking a place sets the Repos filter. A place's dot is its most urgent
+ * attention, and Inbox counts what needs the user. `motion` plays the Spring opening or closing
+ * (index.css).
+ */
+function PlaceRail({
+  hosts,
+  filter,
+  onFilter,
+  attentions,
+  many,
+  motion,
+  onAdd,
+}: {
+  hosts: HostThreads[];
+  filter: RepoFilter;
+  onFilter: (filter: RepoFilter) => void;
+  attentions: (key: RepoFilter) => Attention[];
+  many: boolean;
+  motion?: "in" | "out";
+  onAdd: () => void;
+}) {
+  const places = hosts.flatMap(({ host, view }) =>
+    view.state.repos.filter((r) => !r.scratch).map((repo) => ({ host, repo })),
+  );
+  const asks = attentions("all").filter((a) => a === "needsYou" || a === "failed").length;
+  const tile = (
+    key: RepoFilter,
+    name: string,
+    round: boolean,
+    color: string,
+    glyph: ReactNode,
+    badge?: ReactNode,
+  ) => {
+    const urgent = mostUrgent(attentions(key));
+    const label = [name, attentionWords[urgent]].filter(Boolean).join(", ");
+    return (
+      <button
+        key={key}
+        type="button"
+        aria-label={label}
+        title={label}
+        aria-pressed={filter === key}
+        onClick={() => onFilter(key)}
+        className={`relative grid size-[30px] shrink-0 place-items-center bg-current/12 ring-current ring-offset-2 ring-offset-sidebar hover:bg-current/20 aria-pressed:ring-[1.5px] aria-pressed:before:absolute aria-pressed:before:top-1.5 aria-pressed:before:-left-2 aria-pressed:before:h-[18px] aria-pressed:before:w-[3px] aria-pressed:before:rounded-r-full aria-pressed:before:bg-foreground [&_svg]:size-4 ${round ? "rounded-full" : "rounded-lg"} ${color}`}
+      >
+        {glyph}
+        {badge ??
+          (attentionDot[urgent] && (
+            <span
+              aria-hidden
+              data-badge
+              className={`absolute -top-[3px] -right-[3px] box-content size-2 rounded-full border-2 border-sidebar ${attentionDot[urgent]}`}
+            />
+          ))}
+      </button>
+    );
+  };
+  const place = ({ host, repo }: (typeof places)[number]) =>
+    tile(
+      `${host.id}/${repo.id}`,
+      many ? `${repo.name} on ${host.name}` : repo.name,
+      !!repo.space,
+      repo.icon?.image
+        ? "text-muted-foreground"
+        : repo.icon
+          ? iconLook(repo.icon).color
+          : repoColor(repo),
+      repo.icon ? (
+        <ProjectIcon icon={repo.icon} />
+      ) : (
+        <span aria-hidden className="text-[10px] leading-none font-bold">
+          {initials(repo.name)}
+        </span>
+      ),
+    );
+  const spaces = places.filter((p) => p.repo.space);
+  const repos = places.filter((p) => isRepository(p.repo));
+  const rule = (key: string) => (
+    <span key={key} aria-hidden className="h-px w-5 shrink-0 bg-border" />
+  );
+  return (
+    <div
+      role="group"
+      aria-label="Places"
+      data-motion={motion}
+      className="place-rail flex w-[46px] shrink-0 flex-col items-center gap-[7px] overflow-y-auto border-r border-border pt-1 pb-2.5 [scrollbar-width:none]"
+    >
+      {tile(
+        "all",
+        "Inbox",
+        false,
+        "text-muted-foreground",
+        <Inbox aria-hidden />,
+        asks > 0 && (
+          <span
+            aria-hidden
+            data-badge
+            className="absolute -top-1 -right-1 box-content h-3.5 min-w-3.5 rounded-full border-2 border-sidebar bg-warning px-0.5 text-center text-[9px] leading-3.5 font-bold text-white"
+          >
+            {asks}
+          </span>
+        ),
+      )}
+      {spaces.length > 0 && rule("spaces")}
+      {spaces.map(place)}
+      {repos.length > 0 && rule("repos")}
+      {repos.map(place)}
+      {attentions("none").length > 0 &&
+        tile("none", "No repo", false, "text-faint-foreground", <SquareDashed aria-hidden />)}
+      <button
+        type="button"
+        aria-label="New Space or repository"
+        title="New Space or repository"
+        onClick={onAdd}
+        className="grid size-[30px] shrink-0 place-items-center rounded-lg border border-dashed border-border text-faint-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
+      >
+        <Plus aria-hidden />
+      </button>
+    </div>
   );
 }
 
@@ -1164,16 +1366,33 @@ function RepoFilterMenu({
 }
 
 /**
- * The footer's buttons: Profile, which opens Settings > Account and shows the account's picture or
- * initials (0067), Settings, Pull requests, Usage, and Update when `updatable` (Update.tsx).
+ * The footer's buttons: the rail of places' toggle first, so it keeps its spot whether the rail
+ * shows or not (PLX-739), then Profile, which opens Settings > Account and shows the account's
+ * picture or initials (0067), Settings, Pull requests, Usage, and Update when `updatable`
+ * (Update.tsx).
  */
 function Footer({
   onOpenSettings,
   onOpenPullRequests,
-}: Pick<ThreadListProps, "onOpenSettings" | "onOpenPullRequests">) {
+  railShown,
+  onToggleRail,
+}: Pick<ThreadListProps, "onOpenSettings" | "onOpenPullRequests"> & {
+  railShown: boolean;
+  onToggleRail: () => void;
+}) {
   const profile = useProfile();
   return (
     <div className="flex items-center gap-1">
+      <IconButton
+        label={railShown ? "Hide places" : "Show places"}
+        aria-expanded={railShown}
+        onClick={onToggleRail}
+      >
+        <ChevronsLeft
+          className={`motion-safe:transition-transform motion-safe:duration-300 motion-safe:ease-[cubic-bezier(.34,1.56,.64,1)] ${railShown ? "" : "rotate-180"}`}
+        />
+      </IconButton>
+      <span aria-hidden className="mx-0.5 h-4 w-px bg-border" />
       <IconButton
         label={profile ? profile.name || profile.email : "Profile"}
         onClick={() => onOpenSettings("account")}
