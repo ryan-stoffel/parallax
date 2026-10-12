@@ -3,11 +3,12 @@
 //!
 //! # The command
 //!
-//! Every run is `claude -p --output-format stream-json --verbose --input-format stream-json` in
-//! the run's cwd, plus the policy's flags, `--model`, `--effort`, and `--resume <session id>`
-//! (0004 [10]), with `--fork-session` for a fork's first run (0050) and `--resume-session-at` for
-//! a rewind (0062). Fast mode is `fastMode` in the run's one `--settings`, and a 200k context
-//! window is [`DISABLE_1M_ENV`]. The sidecar gives these to the SDK as its options, and the SDK
+//! Every run is `claude -p --output-format stream-json --verbose --input-format stream-json
+//! --thinking adaptive --thinking-display summarized` in the run's cwd, plus the policy's flags,
+//! `--model`, `--effort`, and `--resume <session id>` (0004 [10]), with `--fork-session` for a
+//! fork's first run (0050) and `--resume-session-at` for a rewind (0062). The run's one
+//! `--settings` holds `showThinkingSummaries`, which with the thinking flags gets T3 Code's
+//! thinking summaries, and fast mode as `fastMode`. A 200k context window is [`DISABLE_1M_ENV`]. The sidecar gives these to the SDK as its options, and the SDK
 //! runs the CLI with them:
 //!
 //! - **No-write** is 0004's: [`NO_WRITE_ARGS`], then [`no_write_settings`] as `--settings`, which
@@ -199,7 +200,8 @@ use crate::mcp;
 /// The CLI's program name, looked up on the launcher's `PATH`.
 pub const PROGRAM: &str = "claude";
 
-/// The arguments every run starts with.
+/// The arguments every run starts with. Thinking is T3 Code's: adaptive, with its summaries in
+/// the `thinking` blocks, which otherwise come empty (PLX-713).
 pub const BASE_ARGS: &[&str] = &[
     "-p",
     "--output-format",
@@ -207,6 +209,10 @@ pub const BASE_ARGS: &[&str] = &[
     "--verbose",
     "--input-format",
     "stream-json",
+    "--thinking",
+    "adaptive",
+    "--thinking-display",
+    "summarized",
 ];
 
 /// [`ToolPolicy::NoWrite`]'s fixed arguments for a run that isn't a coordinator, as 0004 has
@@ -677,8 +683,10 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
         ToolPolicy::WorkspaceWrite => WORKSPACE_WRITE_ARGS,
     };
     let mut args: Vec<OsString> = BASE_ARGS.iter().chain(policy).map(Into::into).collect();
-    // Headless Claude Code turns fast mode on only when the flag settings opt in.
+    // Headless Claude Code turns fast mode on, and shows thinking summaries, only when the flag
+    // settings opt in.
     let settings = |mut settings: Value| -> OsString {
+        settings["showThinkingSummaries"] = true.into();
         if let Some(fast) = request.fast {
             settings["fastMode"] = fast.into();
         }

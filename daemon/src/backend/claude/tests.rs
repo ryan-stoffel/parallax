@@ -376,15 +376,16 @@ async fn a_read_only_run_maps_the_stream_and_uses_the_no_write_policy() {
         ]
     );
 
-    let mut expected: Vec<&str> = vec![
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--input-format",
-        "stream-json",
-    ];
-    let settings = no_write_settings().to_string();
+    let mut expected: Vec<&str> = super::BASE_ARGS.to_vec();
+    assert_eq!(
+        expected.join(" "),
+        "-p --output-format stream-json --verbose --input-format stream-json \
+         --thinking adaptive --thinking-display summarized",
+        "every run has T3 Code's summarized thinking (PLX-713)"
+    );
+    let mut settings = no_write_settings();
+    settings["showThinkingSummaries"] = true.into();
+    let settings = settings.to_string();
     expected.extend(NO_WRITE_ARGS);
     expected.extend(["--settings", &settings]);
     assert_eq!(fake.argv(), expected);
@@ -441,6 +442,7 @@ fn a_no_write_run_cannot_read_claudes_shared_temp_folder() {
                 format!("Read(//private/tmp/claude-{uid}/**)"),
             ]},
             "env": {"CLAUDE_CODE_TASK_LIST_ID": ""},
+            "showThinkingSummaries": true,
         })
     );
 }
@@ -493,7 +495,8 @@ fn assert_worker_invocation(fake: &Fake) {
     let cwd = fake.root().display().to_string();
     let mut expected: Vec<&str> = WORKSPACE_WRITE_ARGS.to_vec();
     expected.extend(["--permission-mode", "acceptEdits", "--settings"]);
-    assert_eq!(argv[6..6 + expected.len()], expected);
+    let base = super::BASE_ARGS.len();
+    assert_eq!(argv[base..base + expected.len()], expected);
     assert_eq!(
         WORKSPACE_WRITE_ARGS.join(" "),
         "--restricted --tools Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,\
@@ -502,7 +505,7 @@ fn assert_worker_invocation(fake: &Fake) {
     );
     assert_eq!(WORKER_TOOL_LIST, WORKER_TOOLS.join(","));
 
-    let settings: Value = serde_json::from_str(&argv[6 + expected.len()]).unwrap();
+    let settings: Value = serde_json::from_str(&argv[base + expected.len()]).unwrap();
     let mut deny_read: Vec<String> = worker_sandbox(Path::new(&cwd))
         .unreadable
         .iter()
@@ -559,10 +562,11 @@ fn assert_worker_invocation(fake: &Fake) {
                 ]},
             },
             "env": {"CLAUDE_CODE_TASK_LIST_ID": ""},
+            "showThinkingSummaries": true,
         })
     );
     assert_eq!(
-        argv[7 + expected.len()..],
+        argv[base + 1 + expected.len()..],
         [
             "--add-dir",
             "/Users/u/Library/Application Support/parallax/context/p",
@@ -753,7 +757,7 @@ fn a_worker_s_permission_picks_its_mode_inside_the_same_sandbox_but_bypass() {
     // None of the sandbox's settings, only its task list's (PLX-251).
     assert_eq!(
         after(&bypass, "--settings"),
-        r#"{"env":{"CLAUDE_CODE_TASK_LIST_ID":""}}"#
+        r#"{"env":{"CLAUDE_CODE_TASK_LIST_ID":""},"showThinkingSummaries":true}"#
     );
     assert_eq!(
         bypass.iter().filter(|arg| *arg == "--add-dir").count(),
@@ -2409,7 +2413,7 @@ fn a_thread_is_full_claude_code_in_every_mode() {
         let settings = args.iter().position(|arg| arg == "--settings").unwrap();
         assert_eq!(
             args[settings + 1],
-            r#"{"env":{"CLAUDE_CODE_TASK_LIST_ID":""}}"#
+            r#"{"env":{"CLAUDE_CODE_TASK_LIST_ID":""},"showThinkingSummaries":true}"#
         );
         let asks = permission != Some(AgentPermission::Bypass);
         assert_eq!(super::prompts(&request), asks, "{permission:?}");
@@ -3526,8 +3530,8 @@ fn only_a_subagent_s_task_notification_ends_a_subagent() {
     assert_eq!(translator.line(ended), []);
 }
 
-/// A real session, recorded with `PLXD_RECORD_CLI` (PLX-493), replays to its snapshot: a
-/// subagent's tool call, a Write that asks first, and the reply.
+/// A real session, recorded with `PLXD_RECORD_CLI` (PLX-493), replays to its snapshot: thinking
+/// summaries (PLX-713), a subagent's tool call, a Write that asks first, and the reply.
 #[tokio::test]
 async fn a_recorded_session_replays_to_its_snapshot() {
     let fake = Fake::new("recorded");
@@ -3535,7 +3539,7 @@ async fn a_recorded_session_replays_to_its_snapshot() {
         policy: ToolPolicy::WorkspaceWrite,
         sandbox: Some(worker_sandbox(&fake.root())),
         permission: Some(AgentPermission::Manual),
-        model: Some("claude-haiku-4-5".into()),
+        model: Some("claude-haiku-5-5".into()),
         approvals: true,
         thread: true,
         ..request(&fake.root())

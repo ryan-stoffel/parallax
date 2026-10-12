@@ -426,7 +426,9 @@ async fn start_sends_no_write_to_the_backend_for_a_coordinator() {
     let sent = &backend.calls()[0];
     assert_eq!(sent.policy, ToolPolicy::NoWrite);
     assert_eq!(sent.sandbox, None, "a coordinator gets no worker sandbox");
-    let settings = claude::no_write_settings().to_string();
+    let mut settings = claude::no_write_settings();
+    settings["showThinkingSummaries"] = true.into();
+    let settings = settings.to_string();
     let mut expected: Vec<&str> = claude::BASE_ARGS.to_vec();
     expected.extend(claude::NO_WRITE_ARGS);
     expected.extend(["--settings", &settings]);
@@ -494,7 +496,7 @@ async fn a_coordinator_gets_plxds_mcp_tools_on_claude_codes_own_configuration() 
         "--allowedTools".to_owned(),
         "mcp__plxd,TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate".to_owned(),
         "--settings".to_owned(),
-        r#"{"env":{"CLAUDE_CODE_TASK_LIST_ID":""}}"#.to_owned(),
+        r#"{"env":{"CLAUDE_CODE_TASK_LIST_ID":""},"showThinkingSummaries":true}"#.to_owned(),
     ]);
     assert_eq!(args, expected);
 }

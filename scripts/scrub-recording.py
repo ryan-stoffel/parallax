@@ -70,6 +70,8 @@ def scrub_line(d: dict):
                       if not t.startswith("mcp__") or t.split("__")[1] in OWN_SERVERS]
         d["mcp_servers"] = [s for s in d.get("mcp_servers", []) if s["name"] in OWN_SERVERS]
         d["slash_commands"] = d["skills"] = d["plugins"] = []
+    if d.get("type") == "system" and d.get("subtype") == "commands_changed":
+        d["commands"] = []
     # ACP (Cursor): the user's global and user commands.
     update = params.get("update", {}) if isinstance(params, dict) else {}
     if update.get("sessionUpdate") == "available_commands_update":
