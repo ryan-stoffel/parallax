@@ -8,8 +8,9 @@
 //! `--model`, `--effort`, and `--resume <session id>` (0004 [10]), with `--fork-session` for a
 //! fork's first run (0050) and `--resume-session-at` for a rewind (0062). The run's one
 //! `--settings` holds `showThinkingSummaries`, which with the thinking flags gets T3 Code's
-//! thinking summaries, and fast mode as `fastMode`. A 200k context window is [`DISABLE_1M_ENV`]. The sidecar gives these to the SDK as its options, and the SDK
-//! runs the CLI with them:
+//! thinking summaries, and fast mode as `fastMode`. A 200k context window is
+//! [`DISABLE_1M_ENV`]. The sidecar gives these to the SDK as its options, and the SDK runs the
+//! CLI with them:
 //!
 //! - **No-write** is 0004's: [`NO_WRITE_ARGS`], then [`no_write_settings`] as `--settings`, which
 //!   also keeps the file tools out of Claude Code's shared temp folder (PLX-176). As a second
