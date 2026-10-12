@@ -1189,7 +1189,7 @@ fn turn_events(all: &[Event]) -> Vec<(&'static str, Option<TurnId>, Option<Strin
 }
 
 /// PLX-724: a task notification Claude answers without a model turn, as on a resume, ends none
-/// of plxd's turns, though it echoes another message and counts the prompt as queued.
+/// of plxd's turns, though it echoes the prompt's uuid.
 #[tokio::test]
 async fn a_zero_turn_task_notification_ends_no_turn() {
     let fake = Fake::new("task-notification");

@@ -989,7 +989,9 @@ fn signed_out(result: &str) -> bool {
 
 /// The `uuid`s of the user messages a `result`'s turn consumed, oldest first. A task notification
 /// Claude answered without a model turn, as on a resume, answers none, whatever it echoes: T3
-/// Code drops it too (PLX-724).
+/// Code drops it too (PLX-724). If it is the only result that ever names plxd's prompt, as when a
+/// wake fails before any model turn, that turn stays running until Stop or the CLI's exit, as in
+/// T3 Code.
 fn answered(message: &Map<String, Value>, origin: Option<&str>) -> Vec<String> {
     if origin == Some("task-notification")
         && message.get("num_turns").and_then(Value::as_u64) == Some(0)
