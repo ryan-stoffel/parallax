@@ -6,6 +6,7 @@ import {
   FolderGit2,
   FolderKanban,
   FolderOpen,
+  MessagesSquare,
   Search,
 } from "lucide-react";
 import {
@@ -33,14 +34,17 @@ import type { Workspace, WorkspaceSource } from "./WorkspaceMenu";
 /** A key in a palette's footer of keys. */
 const kbd = "rounded-md bg-selected px-1.5 py-0.5 font-sans text-[11.5px] text-foreground";
 
-type Step = { kind: "menu" | WorkspaceSource | "project" } | { kind: "cloneTo"; slug: string };
+type Step =
+  | { kind: "menu" | WorkspaceSource | "project" | "space" }
+  | { kind: "cloneTo"; slug: string };
 
 /** Opens the palette, at its menu or straight at Create Project. */
 export type AddDialogHandle = { open: (start?: "project") => void };
 
 /**
  * The sidebar's add palette, a native modal <dialog> laid out like a command palette. Its menu
- * offers New repository, Local folder, Clone from GitHub, and New Project, and each opens a step
+ * offers New repository, Local folder, Clone from GitHub, New Project, and, where the host has
+ * Spaces, New Space, and each opens a step
  * of its own in the same dialog; Back returns to the step before. The first three make a
  * repository on this computer and register it with its plxd (`repo/add`), then close, or, when
  * Create Project's Workspace menu asked for it, return there with it chosen.
@@ -51,6 +55,7 @@ export function AddDialog({
   hostId,
   repos,
   create,
+  createSpace,
   onCreated,
 }: {
   ref: Ref<AddDialogHandle>;
@@ -61,6 +66,8 @@ export function AddDialog({
   repos: Repo[];
   /** Creates a Project on the open host. */
   create: ThreadsView["createProject"];
+  /** Creates a Space on the open host, or undefined where its plxd has none. */
+  createSpace?: ThreadsView["createSpace"];
   onCreated: (hostId: string, project: Project) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -107,7 +114,15 @@ export function AddDialog({
       className="mx-auto mt-[14vh] w-[36rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-border bg-surface p-0 text-foreground shadow-composer backdrop:bg-black/50"
     >
       {step.kind === "menu" && (
-        <MenuStep key={session} onBack={back} onPick={(kind) => push({ kind })} />
+        <MenuStep
+          key={session}
+          spaces={!!createSpace}
+          onBack={back}
+          onPick={(kind) => push({ kind })}
+        />
+      )}
+      {step.kind === "space" && createSpace && (
+        <SpaceStep onBack={back} create={createSpace} onDone={() => dialog.current?.close()} />
       )}
       {step.kind === "create" && <CreateStep {...steps} />}
       {step.kind === "browse" && <FolderStep {...steps} />}
@@ -138,46 +153,60 @@ export function AddDialog({
 
 type StepProps = { onBack: () => void; onAdded: (repo: Repo) => void };
 
-const menu: { kind: WorkspaceSource | "project"; name: string; detail: string; icon: ReactNode }[] =
-  [
-    {
-      kind: "create",
-      name: "New repository",
-      detail: "Start an empty repository in ~/.parallax/projects",
-      icon: <FolderGit2 />,
-    },
-    {
-      kind: "browse",
-      name: "Local folder",
-      detail: "Add a repository that's already on this computer",
-      icon: <FolderOpen />,
-    },
-    {
-      kind: "clone",
-      name: "Clone from GitHub",
-      detail: "Clone a repository by its owner/name",
-      icon: <GitHubLogo />,
-    },
-    {
-      kind: "project",
-      name: "New Project",
-      detail: "A focused chat where agents coordinate work",
-      icon: <FolderKanban />,
-    },
-  ];
+const menu: {
+  kind: WorkspaceSource | "project" | "space";
+  name: string;
+  detail: string;
+  icon: ReactNode;
+}[] = [
+  {
+    kind: "create",
+    name: "New repository",
+    detail: "Start an empty repository in ~/.parallax/projects",
+    icon: <FolderGit2 />,
+  },
+  {
+    kind: "browse",
+    name: "Local folder",
+    detail: "Add a repository that's already on this computer",
+    icon: <FolderOpen />,
+  },
+  {
+    kind: "clone",
+    name: "Clone from GitHub",
+    detail: "Clone a repository by its owner/name",
+    icon: <GitHubLogo />,
+  },
+  {
+    kind: "project",
+    name: "New Project",
+    detail: "A focused chat where agents coordinate work",
+    icon: <FolderKanban />,
+  },
+  {
+    kind: "space",
+    name: "New Space",
+    detail: "A group of chats with no repository",
+    icon: <MessagesSquare />,
+  },
+];
 
 /** The palette's first step: what to add, searchable. */
 function MenuStep({
+  spaces,
   onBack,
   onPick,
 }: {
+  spaces: boolean;
   onBack: () => void;
-  onPick: (kind: WorkspaceSource | "project") => void;
+  onPick: (kind: WorkspaceSource | "project" | "space") => void;
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const q = query.trim().toLowerCase();
-  const shown = menu.filter((m) => `${m.name} ${m.detail}`.toLowerCase().includes(q));
+  const shown = menu.filter(
+    (m) => (spaces || m.kind !== "space") && `${m.name} ${m.detail}`.toLowerCase().includes(q),
+  );
   const list = useList(shown.length, active, setActive);
   return (
     <>
@@ -209,11 +238,70 @@ function MenuStep({
           list={list}
           label="Add"
           options={shown.map((m) => ({ id: m.kind, ...m }))}
-          onPick={(o) => onPick(o.id as WorkspaceSource | "project")}
+          onPick={(o) => onPick(o.id as WorkspaceSource | "project" | "space")}
         />
         {shown.length === 0 && <Note>Nothing matches</Note>}
       </Body>
       <Footer keys={[navigate, ["Enter", "Pick"], close]} />
+    </>
+  );
+}
+
+/** New Space: a name, then `space/create`, and the palette closes. */
+function SpaceStep({
+  onBack,
+  create,
+  onDone,
+}: {
+  onBack: () => void;
+  create: (name: string) => Promise<string | undefined>;
+  onDone: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const trimmed = name.trim();
+  const submit = async () => {
+    if (!trimmed || busy) return;
+    setBusy(true);
+    const failed = await create(trimmed);
+    setBusy(false);
+    if (failed) setError(failed);
+    else onDone();
+  };
+  return (
+    <>
+      <Header
+        onBack={onBack}
+        action={
+          <Action
+            label={busy ? "Creating…" : "Create"}
+            keys="Enter"
+            disabled={!trimmed || busy}
+            onClick={() => void submit()}
+          />
+        }
+      >
+        <input
+          ref={autofocus}
+          aria-label="Space name"
+          placeholder="Space name"
+          value={name}
+          autoComplete="off"
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            e.preventDefault();
+            void submit();
+          }}
+          className={field}
+        />
+      </Header>
+      <Body>
+        <Note>A Space groups chats that need no repository.</Note>
+        <Problem error={error} />
+      </Body>
+      <Footer keys={[["Enter", "Create"], close]} />
     </>
   );
 }

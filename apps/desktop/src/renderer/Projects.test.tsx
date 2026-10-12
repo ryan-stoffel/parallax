@@ -2080,9 +2080,6 @@ const projectsSection = () =>
 const newProjectButtons = () => [
   ...document.querySelectorAll('#sidebar button[aria-label="New project"]'),
 ];
-/** Whether `button` sits beside the Projects heading, outside it, so the heading's name is just "Projects". */
-const besideProjectsHeading = (button: Element) =>
-  !button.closest("h2") && button.previousElementSibling?.textContent === "Projects";
 const statusOf = (title: string) =>
   [...document.querySelectorAll("#sidebar li[data-kind]")]
     .find((li) => li.querySelector("[data-title]")?.textContent === title)
@@ -2094,13 +2091,12 @@ const deleteDialog = () =>
     d.querySelector("h2")?.textContent?.startsWith("Delete this"),
   )!;
 
-test("Projects sit in a collapsible section above Threads, with New project beside its heading, and stay collapsed after a reload", async () => {
+test("Projects sit in a collapsible section above Threads, with no button beside its heading, and stay collapsed after a reload", async () => {
   withThread();
   await renderApp();
   expect(sectionHeadings()).toEqual(["Projects", "Threads"]);
   expect(sidebarTitles()).toEqual(["photon", "ember", "Fix the flaky test"]);
-  expect(newProjectButtons()).toHaveLength(1);
-  expect(besideProjectsHeading(newProjectButtons()[0]!)).toBe(true);
+  expect(newProjectButtons()).toHaveLength(0);
 
   await click(projectsToggle());
   expect(projectsToggle().getAttribute("aria-expanded")).toBe("false");
@@ -2383,7 +2379,7 @@ test("with no Projects, Threads is the only section, and the toolbar's one butto
     }),
   );
   expect(sectionHeadings()).toEqual(["Projects", "Threads"]);
-  expect(besideProjectsHeading(newProjectButtons()[0]!)).toBe(true);
+  expect(newProjectButtons()).toHaveLength(0);
 });
 
 test("a Project row is one line, with no repo line, and its agents in its tooltip", async () => {
@@ -2810,6 +2806,23 @@ test("a new Needs you item notifies with Open Project, from the OS while the win
   expect(groupTitles("Waiting on you")).toEqual(["Write the docs"]);
   expect(childButton("Write the docs")!.textContent).toContain("asks which tone");
   act(() => toast()!.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click());
+});
+
+test("with spaces, the add palette offers New Space, which creates one and closes", async () => {
+  capabilities = { spaces: {} };
+  answers["space/create"] = (p) => {
+    const { id, name } = p as { id: string; name: string };
+    return { result: { repo: { ...repo(name, `/data/spaces/${id}`), id, space: true } } };
+  };
+  await renderApp();
+  await openPalette();
+  expect(paletteOptions()).toHaveLength(5);
+  await click(paletteOption("New Space"));
+  typeInto(dialog().querySelector("input")!, " Research ");
+  press("Enter");
+  await settle();
+  expect(calls("space/create")).toEqual([{ id: expect.any(String), name: "Research" }]);
+  expect(dialog().open).toBe(false);
 });
 
 test("with spaces, New Space makes a Space, and its row in the Repos filter renames and deletes it", async () => {

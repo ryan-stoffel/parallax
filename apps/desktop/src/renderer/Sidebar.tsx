@@ -701,16 +701,13 @@ export function ThreadList({
         {hasProjects && (
           <>
             {/* The heading holds only its toggle, so its name is just "Projects". */}
-            <div className={`${sectionHeading} pr-0`}>
+            <div className={sectionHeading}>
               <SectionToggle
                 label="Projects"
                 collapsed={collapsed}
                 controls={projectsId}
                 onToggle={() => collapsedProjects.set(!collapsed)}
               />
-              <IconButton label="New project" onClick={() => addDialog.current?.open("project")}>
-                <Plus />
-              </IconButton>
             </div>
             <div id={projectsId} hidden={collapsed}>
               <ul aria-label="Projects" className="flex flex-col gap-0.5">
@@ -760,6 +757,7 @@ export function ThreadList({
         hostId={host.id}
         repos={open?.state.repos ?? []}
         create={open?.createProject ?? (async () => "Not connected")}
+        createSpace={open && "spaces" in open.capabilities ? open.createSpace : undefined}
         onCreated={(hostId, project) => onOpenProject(hostId, project.id)}
       />
       <ConfirmDialog
