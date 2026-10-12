@@ -1,6 +1,7 @@
 # Reverting the newest two turns of an unloaded thread with paginated history: plxd reads the
 # thread, loads it, pages its turns newest first, reverts before the older of the two, and
-# unloads it.
+# unloads it. Each answer comes after the fake reads its request, since plxd drops an answer
+# to an id it hasn't sent yet.
 <
 {"id":1,"result":{"userAgent":"plxd/0.160.0","codexHome":"/Users/u/.codex","platformFamily":"unix","platformOs":"macos"}}
 <
@@ -11,6 +12,7 @@
 <
 {"method":"item/tool/requestUserInput","id":0,"params":{"threadId":"t-9","turnId":"u-9","itemId":"q","questions":[],"isBlocking":true,"autoResolutionMs":null}}
 {"id":4,"result":{"data":[{"id":"u-3","items":[],"status":"completed"},{"id":"u-2","items":[],"status":"completed"}],"nextCursor":"c-1"}}
+<
 <
 {"id":5,"result":{"thread":{"id":"t-0","status":{"type":"idle"},"turns":[]}}}
 <
