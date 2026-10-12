@@ -2485,7 +2485,36 @@ export const MarkdownText = memo(function MarkdownText({
   );
 });
 
-const gfm = [remarkGfm, remarkMath];
+type MathNode = {
+  type: string;
+  children?: MathNode[];
+  position?: { start: { offset?: number } };
+  data?: { hProperties?: { className?: string[] } };
+};
+
+/**
+ * remark-math reads `$$...$$` within a line as inline math, which typesets small and cramped.
+ * Models write display equations that way, so mark those as display math.
+ */
+function displayDoubleDollar() {
+  return (tree: MathNode, file: { value: unknown }) => {
+    const source = String(file.value);
+    const walk = (node: MathNode) => {
+      const props = node.data?.hProperties;
+      if (
+        node.type === "inlineMath" &&
+        props &&
+        source.startsWith("$$", node.position?.start.offset)
+      ) {
+        props.className = ["language-math", "math-display"];
+      }
+      node.children?.forEach(walk);
+    };
+    walk(tree);
+  };
+}
+
+const gfm = [remarkGfm, remarkMath, displayDoubleDollar];
 
 /**
  * A streaming agent message, rendered as MarkdownText renders it, but block by block: an

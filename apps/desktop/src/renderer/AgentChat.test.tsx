@@ -325,6 +325,12 @@ test("an assistant message typesets LaTeX, and keeps invalid LaTeX as its source
   expect(document.querySelector(".katex-error")).not.toBeNull();
 });
 
+test("$$...$$ within a line typesets as display math, and $...$ stays inline", () => {
+  row({ kind: "assistant", key: "a", text: "Inline $x$.\n\n$$ F'(s) = \\frac{-2s}{(s^2+1)^2} $$" });
+  expect(document.querySelectorAll(".katex-display")).toHaveLength(1);
+  expect(document.querySelectorAll(".katex")).toHaveLength(2);
+});
+
 test("a streaming message marks its markdown, so unfinished LaTeX stays hidden until it ends", () => {
   const unfinished = "Setup:\n\n$$\n\\begin{aligned} x &= \\frac{1";
   row({ kind: "assistant", key: "a", text: unfinished, partial: true });
