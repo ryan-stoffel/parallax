@@ -404,7 +404,7 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             detail: truncate(detail, MAX_TEXT_ITEM_BYTES),
         },
         Event::Subagent { .. } | Event::SubagentFinished { .. } => return subagent_item(event),
-        // The run's actor reports permission requests, with when they expire and how they end.
+        // The run's actor reports permission requests and how they end.
         Event::ApprovalRequested(_)
         | Event::ApprovalWithdrawn { .. }
         | Event::RequestUsage(_)
@@ -449,12 +449,9 @@ fn subagent_item(event: &Event) -> Option<AgentOutputItem> {
     })
 }
 
-/// The transcript item for a permission request that plxd denies at `expires_at` if nobody
-/// answers it (PLX-222).
-pub(super) fn approval_requested(
-    request: &ApprovalRequest,
-    expires_at: Timestamp,
-) -> AgentOutputItem {
+/// The transcript item for a permission request (PLX-222). It waits for an answer with no timer
+/// (PLX-726), so `expiresAt` is the latest time there is.
+pub(super) fn approval_requested(request: &ApprovalRequest) -> AgentOutputItem {
     let capped = |text: Option<&str>| text.map(|text| truncate(text, MAX_TEXT_ITEM_BYTES));
     AgentOutputItem::ApprovalRequested {
         approval_id: request.approval_id,
@@ -471,7 +468,7 @@ pub(super) fn approval_requested(
             .map(|rule| truncate(rule, MAX_ALWAYS_ALLOW_RULE_BYTES))
             .collect(),
         interactive: request.interactive,
-        expires_at,
+        expires_at: Timestamp::MAX,
     }
 }
 
@@ -529,13 +526,12 @@ mod tests {
             always_allow: (0..100).map(|n| format!("Bash(make {n}:*)")).collect(),
             interactive: true,
         };
-        let expires_at = jiff::Timestamp::now();
         let AgentOutputItem::ApprovalRequested {
             input,
             reason,
             always_allow,
             ..
-        } = approval_requested(&request, expires_at)
+        } = approval_requested(&request)
         else {
             panic!("a permission request");
         };
@@ -546,9 +542,7 @@ mod tests {
             input: json!({"plan": "p".repeat(MAX_APPROVAL_INPUT_BYTES)}),
             ..request.clone()
         };
-        let AgentOutputItem::ApprovalRequested { input, .. } =
-            approval_requested(&huge, expires_at)
-        else {
+        let AgentOutputItem::ApprovalRequested { input, .. } = approval_requested(&huge) else {
             panic!("a permission request");
         };
         assert_eq!(input["truncated"], true);

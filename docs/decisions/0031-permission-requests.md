@@ -1,6 +1,6 @@
 # 0031: Claude Code's permission requests reach the app over stdio
 
-- Status: accepted; supersedes in part [0027](0027-claude-permission-modes.md) (headless Manual denies every request that would prompt), for runs whose client asks for the channel, and [0013](0013-worker-sandbox.md) (a worker's tools), for a worker in Plan that asks ([Plan mode and `ExitPlanMode`](#plan-mode-and-exitplanmode), PLX-243); a normal thread asks in Accept Edits too since [0034](0034-threads-are-full-claude-code.md); superseded in part by [0059](0059-orchestration-rewrite.md) (requests are runtime requests, and only a Project child's keep the 30-minute deny) and [0061](0061-claude-agent-sdk.md) (Claude's requests come through the Agent SDK's `canUseTool`)
+- Status: accepted; supersedes in part [0027](0027-claude-permission-modes.md) (headless Manual denies every request that would prompt), for runs whose client asks for the channel, and [0013](0013-worker-sandbox.md) (a worker's tools), for a worker in Plan that asks ([Plan mode and `ExitPlanMode`](#plan-mode-and-exitplanmode), PLX-243); a normal thread asks in Accept Edits too since [0034](0034-threads-are-full-claude-code.md); superseded in part by [0059](0059-orchestration-rewrite.md) (requests are runtime requests, and only a Project child's keep the 30-minute deny) and [0061](0061-claude-agent-sdk.md) (Claude's requests come through the Agent SDK's `canUseTool`); since PLX-726 no request has a timeout
 - Date: 2026-10-01
 - Issue: PLX-222; PLX-243 for a worker's `ExitPlanMode`
 
@@ -19,7 +19,7 @@ The shapes below come from reading Claude Code 2.1.286's bundled source, its `--
 
 ### Only when the client answers
 
-A run uses the channel only when the client that started it asks for it with `approvals: true` on `agent/start`, `thread/start`, or `project/start` (a coordinator's start-over is `project/start` too). A client sets it only when it can show and answer permission requests. Without it, a run's arguments and behavior are exactly what they were before this record: Manual and Auto deny what would prompt. Without the flag, every Manual run would wait up to 30 minutes on a client that can't answer, such as an app from before PLX-196, or an older app against a newer `plxd` on an SSH host, which updates separately.
+A run uses the channel only when the client that started it asks for it with `approvals: true` on `agent/start`, `thread/start`, or `project/start` (a coordinator's start-over is `project/start` too). A client sets it only when it can show and answer permission requests. Without it, a run's arguments and behavior are exactly what they were before this record: Manual and Auto deny what would prompt. Without the flag, every Manual run would wait on a client that can't answer, such as an app from before PLX-196, or an older app against a newer `plxd` on an SSH host, which updates separately.
 
 - plxd stores the flag with the run, so every launch keeps it: `agent/send` resuming a run whose CLI exited, a coordinator's wake-up (0025), and a resume after a restart. It is part of the start methods' idempotent params, and a retry without it gets `idConflict`. `AgentRun.approvals` reports it, absent when false, so a client can tell whether a run asks, and repeat the flag on a retry.
 - A run a coordinator spawns (`agent/start` with its `coordinatorThread`, as `plxd mcp` sends it) gets its coordinator's flag, as it gets its coordinator's mode (0027). Claude Code's own subagents inside a coordinator's CLI share its channel.
@@ -77,7 +77,7 @@ What plxd answers, as the SDK does:
 
 - `approvalId` is plxd's, generated when the CLI asks. Every field after `input` is optional. `callId` matches the `toolCall` item. `subagent` is Claude Code's id for one of the agent's own subagents. `alwaysAllow` lists the rules `always` adds and is absent when none are offered. `interactive` marks a question for the user rather than one action to allow, such as `ExitPlanMode`'s plan.
 - `input` is capped at 256 KiB of JSON, not a tool call's 32 KiB, so a long plan shows whole. Past that it is `{"truncated": true, "bytes": n}`, and an allow still runs the full input the CLI asked with.
-- `decision` is `allowed`, `denied`, `expired`, or `withdrawn`. `by` is `user`, `timeout`, `cancel` (`agent/cancel` or `thread/delete`), `stop` (plxd stopping), or `agent` (the CLI). `message` is the user's own message with a denial.
+- `decision` is `allowed`, `denied`, `expired` (only from a plxd before PLX-726), or `withdrawn`. `by` is `user`, `timeout` (likewise), `cancel` (`agent/cancel` or `thread/delete`), `stop` (plxd stopping), or `agent` (the CLI). `message` is the user's own message with a denial.
 - A request is pending until its `approvalResolved`, or until the run's next `agent.finished`, whichever comes first. plxd logs a resolution for every request it can, but a crash leaves none; the `agent.finished {interrupted}` that the next start logs ends it.
 
 `agent/approve` answers one:
@@ -89,7 +89,7 @@ What plxd answers, as the SDK does:
 
 - `input` (a JSON object, at most 1 MiB) and `always` go only with `allow`, and `always` only to a request whose `alwaysAllow` isn't empty. `message` (at most 64 KiB) goes only with `deny`. Anything else is `invalidParams`.
 - In a worker or a normal thread (`workspaceWrite`), an edited `input` must keep the request's `file_path`, `notebook_path`, and `path` as they were, none added or dropped, or the answer is `invalidParams`. No test shows that Claude Code holds an edited input to `--restricted`'s confinement to the worktree, so plxd doesn't rely on it: an edit can change what a file tool does, never which file. The same goes for `ExitPlanMode`'s `planFilePath` (PLX-243). An edit may leave it out, as a client that sends back only the edited `plan` does, but not change or add one.
-- The result is the resolution, `{"decision","by","always"?,"message"?}`. It is idempotent: answering a request that already ended changes nothing and returns how it ended, which may be another answer, a timeout, or a cancel.
+- The result is the resolution, `{"decision","by","always"?,"message"?}`. It is idempotent: answering a request that already ended changes nothing and returns how it ended, which may be another answer, a cancel, or a withdrawal.
 - A request this plxd never saw, including one from before it started or any for a run without `approvals`, is the new error kind `approvalNotFound`.
 
 ### Compatibility
@@ -100,7 +100,7 @@ What plxd answers, as the SDK does:
 
 ### When nobody answers
 
-- **A timeout of 30 minutes.** plxd then denies the request, telling the agent that nobody answered in time, to carry on without it if it can, and to say what it needed. The turn goes on, so the agent can finish or ask in its reply. It's `Config::approval_timeout`, which tests shorten.
+- **No timeout** (PLX-726). A request waits until it's answered, as T3 Code's does, so a thread left alone doesn't carry on without the permission it asked for. `expiresAt` is the latest time there is. Before PLX-726, plxd denied a request after 30 minutes, logged `expired`, `by: timeout`.
 - **`agent/cancel`, `thread/delete`, or plxd stopping** deny every waiting request with `interrupt: true` before the CLI is stopped, logged `by: cancel` or `by: stop`.
 - **The CLI exiting** with a request waiting resolves it `withdrawn`, `by: agent`. The backend withdraws what waits before its run's `Finished`, so after an account fallback (#119) each attempt's requests end before the next attempt runs. An answer that finds the CLI that asked already exited withdraws the request at once.
 
@@ -131,13 +131,13 @@ Out of scope. `codex exec` runs with approval policy `never` (0004, 0013) and ha
 | An MCP prompt tool served by `plxd mcp` | An MCP server inside every sandboxed worker and its tool in the `system/init` check; it can't carry `ExitPlanMode` or other questions; and the answer would need a path from the app to that server's process. |
 | `approval.*` events instead of `agent.output` items | The transcript already reads `agent.output` in order; a separate kind would need the app to merge two streams, and the samples to cover two more event kinds. |
 | The backend keeps the timeout | Each backend would repeat it, and the actor already owns the run's log and its commands. |
-| No timeout, only a pending state | A Manual coordinator woken at night (0025) would hold its turn until someone looks. |
+| No timeout, only a pending state | A Manual coordinator woken at night (0025) would hold its turn until someone looks. Chosen in PLX-726: a turn that waits beats one that goes on without the permission it asked for, and T3 Code waits too. |
 
 ## Consequences
 
 - Manual, Auto's undecided calls, and Plan's plan approval work in every Claude thread a client starts with `approvals`, coordinators and their subagents included. PLX-196 builds the card from `approvalRequested`, pins it while it is pending, and turns the flag on. Until then, no run asks.
 - A person can now approve what headless Claude Code used to deny for a worker: writes to its own settings, git, and tool-configuration files inside its worktree, which `--restricted` lets only a person or the permission handler approve. Paths outside the worktree stay a hard deny under `--restricted`, no approval adds a directory, and no edited input moves a request to another path. Sandboxed commands still can't reach other hosts' ask: the worker's `strictAllowlist` denies them without asking.
-- A run in Manual waits on the user between tool calls, up to 30 minutes each.
+- A run in Manual waits on the user between tool calls, as long as it takes (PLX-726).
 - After approving a plan, a coordinator's or a worker's later turns in the same CLI process run in Manual; a resumed one plans again. Moving the run's stored mode on approval is a follow-up for the plan card (PLX-220).
 - A Manual worker asks before it edits a file, but runs Bash without asking: its settings allow `Bash`, which the sandbox confines (0013). A Manual coordinator has no sandbox, so it asks before Bash too.
 

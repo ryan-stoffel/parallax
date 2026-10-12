@@ -108,9 +108,6 @@ pub struct Config {
     /// default, is plxd's own with the login shell's `PATH` and the usual install folders filled in
     /// (#96, decision 0014, PLX-323).
     pub agent_environment: Option<Environment>,
-    /// How long a run's permission request waits for an answer before plxd denies it (PLX-222,
-    /// decision 0031). 30 minutes by default.
-    pub approval_timeout: Duration,
     /// The most a run a usage limit stopped resumes past its reset, at random (PLX-371, decision
     /// 0049). 60 seconds by default.
     pub resume_jitter: Duration,
@@ -162,7 +159,6 @@ impl Config {
             outbound_queue: 32,
             backends: None,
             agent_environment: None,
-            approval_timeout: agents::APPROVAL_TIMEOUT,
             resume_jitter: agents::ResumeTiming::default().jitter,
             resume_backoff: agents::ResumeTiming::default().backoff,
             tailnet: None,
@@ -455,12 +451,10 @@ impl Server {
             keys,
             data_dir: data_dir.clone(),
             context: ContextIndex::default(),
-            agents: Agents::new(backends, worktrees)
-                .with_approval_timeout(config.approval_timeout)
-                .with_resume_timing(agents::ResumeTiming {
-                    jitter: config.resume_jitter,
-                    backoff: config.resume_backoff,
-                }),
+            agents: Agents::new(backends, worktrees).with_resume_timing(agents::ResumeTiming {
+                jitter: config.resume_jitter,
+                backoff: config.resume_backoff,
+            }),
             cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher.clone()),
             previews: crate::preview::Previews::new(launcher.clone()),
             providers,

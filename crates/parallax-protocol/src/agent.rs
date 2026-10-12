@@ -712,7 +712,8 @@ pub enum AgentOutputItem {
         /// such as `ExitPlanMode`'s plan: show its input in full.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         interactive: bool,
-        /// When plxd denies it if nobody has answered, in RFC 3339 UTC.
+        /// When plxd denies it if nobody has answered, in RFC 3339 UTC. Since PLX-726 a request
+        /// waits until it's answered, so plxd sends the latest time there is.
         expires_at: Timestamp,
     },
     /// How a permission request ended (PLX-222, decision 0031).

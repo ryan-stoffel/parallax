@@ -1,9 +1,7 @@
 //! Permission requests end to end (PLX-222, decision 0031): `agent/approve` against an in-process
 //! plxd whose backend is the fake CLI, which asks and prints the answer it gets as JSON.
 
-use std::time::Duration;
-
-use jiff::{SignedDuration, Timestamp};
+use jiff::Timestamp;
 use parallax_protocol::jsonrpc::INVALID_PARAMS;
 use parallax_protocol::methods::{
     AgentApprove, AgentCancel, AgentEvents, AgentStart, EventsSubscribe, ProjectStart, RepoAdd,
@@ -23,15 +21,11 @@ use crate::agents::{
 };
 use crate::support::{InProcess, kind, temp_dir};
 
-/// Long enough that no request expires during a test that doesn't wait for it.
-const NEVER: Duration = Duration::from_mins(10);
-
-/// A host whose runs play `steps`, and whose permission requests expire after `timeout`.
-fn host(steps: Vec<Step>, timeout: Duration) -> Host {
+/// A host whose runs play `steps`.
+fn host(steps: Vec<Step>) -> Host {
     let dir = temp_dir();
     let mut config = InProcess::config(dir.path());
     config.backends = Some(fake(steps));
-    config.approval_timeout = timeout;
     let server = InProcess::start(config);
     Host { dir, server }
 }
@@ -192,7 +186,7 @@ async fn logged(client: &mut Conn, run_id: RunId) -> Vec<AgentOutputItem> {
 
 #[tokio::test]
 async fn an_allowed_request_reaches_the_cli_and_its_answer_is_logged_once() {
-    let host = host(asking(bash()), NEVER);
+    let host = host(asking(bash()));
     let (mut client, run_id, approval_id) = start(&host).await;
     let asked = logged(&mut client, run_id)
         .await
@@ -216,11 +210,7 @@ async fn an_allowed_request_reaches_the_cli_and_its_answer_is_logged_once() {
     assert_eq!(call_id.as_deref(), Some("toolu_1"));
     assert_eq!(always_allow, ["Bash(pnpm test:*)"]);
     assert!(!interactive);
-    let left = expires_at.duration_since(Timestamp::now());
-    assert!(
-        left > SignedDuration::from_secs(500) && left <= SignedDuration::from_secs(600),
-        "{left:?}"
-    );
+    assert_eq!(expires_at, Timestamp::MAX, "no timer denies it (PLX-726)");
 
     let allow = AgentApproveParams {
         always: true,
@@ -265,7 +255,7 @@ async fn a_run_started_without_approvals_never_asks_outside_a_project() {
         Step::RequestApproval(bash()),
         end_turn("Done."),
     ];
-    let host = host(script, NEVER);
+    let host = host(script);
     let (mut in_project, child) = start_run(&host, false).await;
     until(&mut in_project, |event| !requested(event).is_empty()).await;
     in_project
@@ -309,7 +299,7 @@ async fn a_run_started_without_approvals_never_asks_outside_a_project() {
 
 #[tokio::test]
 async fn a_denied_request_tells_the_agent_why() {
-    let host = host(asking(edit()), NEVER);
+    let host = host(asking(edit()));
     let (mut client, run_id, approval_id) = start(&host).await;
     let invalid = [
         AgentApproveParams {
@@ -375,7 +365,7 @@ async fn a_denied_request_tells_the_agent_why() {
 
 #[tokio::test]
 async fn an_edited_input_replaces_the_one_asked_with() {
-    let host = host(asking(bash()), NEVER);
+    let host = host(asking(bash()));
     let (mut client, run_id, approval_id) = start(&host).await;
     let edited = json!({"command": "pnpm test parser"});
     let allow = AgentApproveParams {
@@ -394,7 +384,7 @@ async fn an_edited_input_replaces_the_one_asked_with() {
 /// edit can't take it past its sandbox, whatever Claude Code does with an edited input.
 #[tokio::test]
 async fn a_workers_edit_keeps_the_paths_it_asked_about() {
-    let host = host(asking(edit()), NEVER);
+    let host = host(asking(edit()));
     let (mut client, run_id, approval_id) = start(&host).await;
     for moved in [
         json!({"file_path": "/etc/hosts"}),
@@ -433,7 +423,7 @@ async fn a_workers_edited_plan_may_drop_its_plan_file_but_not_move_it() {
         always_allow: Vec::new(),
         interactive: true,
     };
-    let host = host(asking(plan), NEVER);
+    let host = host(asking(plan));
     let (mut client, run_id, approval_id) = start(&host).await;
     let moved = AgentApproveParams {
         input: Some(json!({"plan": "1. Add a README.", "planFilePath": "/u/.zshenv"})),
@@ -455,41 +445,13 @@ async fn a_workers_edited_plan_may_drop_its_plan_file_but_not_move_it() {
 }
 
 #[tokio::test]
-async fn a_request_nobody_answers_expires_and_the_agent_is_told() {
-    let host = host(asking(bash()), Duration::from_millis(300));
-    let (mut client, run_id, approval_id) = start(&host).await;
-    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
-    assert_eq!(
-        resolutions(&events),
-        [resolved(
-            approval_id,
-            AgentApprovalDecision::Expired,
-            AgentApprovalBy::Timeout
-        )]
-    );
-    let printed = printed(&events);
-    assert_eq!(printed.len(), 1, "{printed:?}");
-    assert_eq!(printed[0]["decision"], "deny");
-    assert_eq!(printed[0]["interrupt"], false);
-    assert!(
-        printed[0]["message"].as_str().unwrap().contains("in time"),
-        "{printed:?}"
-    );
-    let late = answer(run_id, approval_id, AgentApprovalAnswer::Allow);
-    assert_eq!(
-        client.call::<AgentApprove>(late).await.unwrap(),
-        result(AgentApprovalDecision::Expired, AgentApprovalBy::Timeout)
-    );
-}
-
-#[tokio::test]
 async fn cancelling_the_run_denies_what_waits() {
     let script = vec![
         init("approval-1"),
         Step::RequestApproval(bash()),
         Step::Hang,
     ];
-    let host = host(script, NEVER);
+    let host = host(script);
     let (mut client, run_id, approval_id) = start(&host).await;
     client
         .call::<AgentCancel>(AgentCancelParams { run_id, from: None })
@@ -509,7 +471,7 @@ async fn cancelling_the_run_denies_what_waits() {
 
 #[tokio::test]
 async fn a_reopened_chat_finds_a_pending_request_and_then_its_answer() {
-    let host = host(asking(bash()), NEVER);
+    let host = host(asking(bash()));
     let (mut client, run_id, approval_id) = start(&host).await;
     let mut reopened = host.client().await;
     let before = logged(&mut reopened, run_id).await;
@@ -550,7 +512,7 @@ async fn a_request_the_cli_withdraws_or_leaves_behind_is_withdrawn() {
         Step::RequestApproval(edit()),
         end_turn("Done."),
     ];
-    let host = host(script, NEVER);
+    let host = host(script);
     let (mut client, run_id) = start_worker(&host).await;
     let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
     let asked: Vec<ApprovalId> = events.iter().flat_map(requested).collect();
@@ -586,7 +548,7 @@ async fn stopping_plxd_denies_what_waits() {
         Step::RequestApproval(bash()),
         Step::Hang,
     ];
-    let host = host(script, NEVER);
+    let host = host(script);
     let (client, run_id, approval_id) = start(&host).await;
     drop(client);
     let host = host.restart(fake(Vec::new())).await;
@@ -620,7 +582,7 @@ async fn a_coordinator_asks_too() {
         always_allow: Vec::new(),
         interactive: true,
     };
-    let host = host(asking(plan), NEVER);
+    let host = host(asking(plan));
     let mut client = host.client().await;
     let project = create(&mut client, project_params(host.dir.path())).await;
     subscribe(&mut client, project.id, 0).await;
@@ -696,7 +658,7 @@ fn is_approval(item: &AgentOutputItem) -> bool {
 
 #[tokio::test]
 async fn run_and_shell_subscriptions_get_only_their_part_of_the_scope() {
-    let host = host(asking(bash()), NEVER);
+    let host = host(asking(bash()));
     let mut client = host.client().await;
     let project = create(&mut client, project_params(host.dir.path())).await;
     subscribe(&mut client, project.id, 0).await;

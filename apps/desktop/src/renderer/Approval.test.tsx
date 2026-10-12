@@ -343,7 +343,7 @@ test("approvalNotFound reads as no longer waiting, not as a failure, and Dismiss
   await click(inCard("Approve"));
   expect(pinned()!.querySelector('[role="alert"]')).toBeNull();
   expect(pinned()!.textContent).toContain(
-    "This request is no longer waiting. It timed out or was withdrawn before your answer reached it.",
+    "This request is no longer waiting. It ended before your answer reached it.",
   );
   expect(document.getElementById(card()!.getAttribute("aria-describedby")!)!.textContent).toBe(
     "No longer waiting",

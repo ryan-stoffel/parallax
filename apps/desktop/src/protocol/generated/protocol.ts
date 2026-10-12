@@ -3312,7 +3312,8 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	 */
 	interactive?: boolean,
 	/**
-	 * When plxd denies it if nobody has answered, in RFC 3339 UTC.
+	 * When plxd denies it if nobody has answered, in RFC 3339 UTC. Since PLX-726 a request
+	 * waits until it's answered, so plxd sends the latest time there is.
 	 */
 	expiresAt: string, } | { "kind": "approvalResolved",
 	/**

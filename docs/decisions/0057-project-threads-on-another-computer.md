@@ -98,7 +98,7 @@ The device runs the child as an ordinary thread, because only it has the reposit
 
 Deleting a Project deletes its remote children the same way and is refused while a device with one can't be reached. Deleting a run or a Project also removes its `refs/parallax/remote/*` refs. A device that is gone for good would leave a Project undeletable, so `thread/delete` and `project/delete` take `deleteAnyway`: the home plxd drops its rows and refs without the device and says the device keeps its threads and worktrees. The app offers it in the offline error.
 
-**Approvals.** An Auto-mode request the classifier won't decide goes to the device's inbox. The user answers it where the app shows that device's Needs you. 0031's 30-minute limit still denies it. The coordinator can't answer it.
+**Approvals.** An Auto-mode request the classifier won't decide goes to the device's inbox. The user answers it where the app shows that device's Needs you. It waits until someone answers it (PLX-726). The coordinator can't answer it.
 
 **`ask` and memory.** A remote child has none until PR 8. A child never waits on a question (0042), so it goes on with what it assumed. PR 8 binds a `plxd mcp` on the device to the home plxd, which needs the home plxd's `connect` on.
 

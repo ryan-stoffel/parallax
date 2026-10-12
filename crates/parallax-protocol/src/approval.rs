@@ -45,7 +45,8 @@ pub enum AgentApprovalDecision {
     Allowed,
     /// It may not: the user said no, or the run was cancelled or stopped while it waited.
     Denied,
-    /// Nobody answered before `expiresAt`, so plxd denied it.
+    /// Nobody answered before `expiresAt`, so plxd denied it. Only a plxd from before PLX-726
+    /// sends it.
     Expired,
     /// The CLI stopped waiting for an answer, because its turn was interrupted or it exited.
     Withdrawn,
@@ -63,7 +64,7 @@ pub enum AgentApprovalDecision {
 pub enum AgentApprovalBy {
     /// The user, through `agent/approve`.
     User,
-    /// plxd, once the request expired.
+    /// plxd, once the request expired. Only a plxd from before PLX-726 sends it.
     Timeout,
     /// `agent/cancel`, or `thread/delete`, stopping the run.
     Cancel,

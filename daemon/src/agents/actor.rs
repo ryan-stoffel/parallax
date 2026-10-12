@@ -11,9 +11,8 @@
 //! cancel lets it finish, since a push stopped halfway leaves `origin` in a state nobody knows.
 //!
 //! It also keeps the permission requests its CLI waits on (PLX-222, decision 0031): it logs each
-//! one with when it expires, passes `agent/approve`'s answer to the CLI, denies one nobody
-//! answered in time, and logs how each one ended, including when a cancel, a stop, or the CLI's
-//! exit ends it first.
+//! one, passes `agent/approve`'s answer to the CLI, and logs how each one ended, including when a
+//! cancel, a stop, or the CLI's exit ends it first. A request has no timer (PLX-726).
 //!
 //! The CLI is the thread's session (0060): [`Run::hold`] keeps it open after its turn, so a
 //! follow-up goes to the live process. A turn settles once the last one in flight ends with
@@ -872,7 +871,6 @@ impl Actor {
                     && self.pending_revert.is_none()
                     && self.slot_wait.is_none()
             });
-            let expire_at = self.approvals.due();
             let resume_at = self.resume_due();
             let release_at = self.release_due();
             let idle_at = (!self.stopping && self.idle()).then_some(active + IDLE);
@@ -904,9 +902,6 @@ impl Actor {
                 }
                 () = sleep_until(wake_at.unwrap_or_else(Instant::now)), if wake_at.is_some() => {
                     self.wake().await;
-                }
-                () = sleep_until(expire_at.unwrap_or_else(Instant::now)), if expire_at.is_some() => {
-                    self.expire_approvals().await;
                 }
                 () = sleep_until(resume_at.unwrap_or_else(Instant::now)), if resume_at.is_some() => {
                     self.check_resume().await;
@@ -951,7 +946,7 @@ impl Actor {
             && (self.queued.is_empty() || self.queue_held)
             && self.handed.is_empty()
             && self.wakes.is_empty()
-            && self.approvals.due().is_none()
+            && self.approvals.is_empty()
             && self.resume_due().is_none()
             && self.slot_wait.is_none()
     }
@@ -1802,25 +1797,6 @@ impl Actor {
             Lookup::Pending { .. } | Lookup::Unknown => Err(ErrorObject::internal_error(format!(
                 "permission request {approval_id} was left unresolved"
             ))),
-        }
-    }
-
-    /// Denies every permission request nobody answered in time (PLX-222).
-    async fn expire_approvals(&mut self) {
-        for approval_id in self.approvals.expired(Instant::now()) {
-            info!(run = %self.id, approval = %approval_id, "a permission request expired");
-            if let Some(live) = &self.live {
-                let decision = Decision::Deny {
-                    message: approvals::EXPIRED.to_owned(),
-                    interrupt: false,
-                };
-                let _ = live.run.answer(Answer {
-                    approval_id,
-                    decision,
-                });
-            }
-            let expired = ended(AgentApprovalDecision::Expired, AgentApprovalBy::Timeout);
-            self.resolve_approval(approval_id, expired).await;
         }
     }
 
@@ -3358,17 +3334,10 @@ impl Actor {
                 }
             }
             Event::ApprovalRequested(request) => {
-                let timeout = self.daemon.agents.approval_timeout();
                 let offers_always = !request.always_allow.is_empty();
-                let deadline = Instant::now() + timeout;
                 self.approvals
-                    .add(request.approval_id, deadline, offers_always, &request.input);
-                let expires_at = jiff::SignedDuration::try_from(timeout)
-                    .ok()
-                    .and_then(|timeout| jiff::Timestamp::now().checked_add(timeout).ok())
-                    .unwrap_or(jiff::Timestamp::MAX);
-                self.push(convert::approval_requested(request, expires_at))
-                    .await;
+                    .add(request.approval_id, offers_always, &request.input);
+                self.push(convert::approval_requested(request)).await;
                 self.inbox_approval(&request.tool_name).await;
             }
             Event::ApprovalWithdrawn { approval_id } => {

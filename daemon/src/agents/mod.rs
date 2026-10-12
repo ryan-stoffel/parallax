@@ -11,8 +11,8 @@
 //!
 //! A run whose client started it with `approvals`, and every run in a Project, its coordinator
 //! included, lets its CLI ask before a tool call (PLX-222, decisions 0031 and 0042). It logs the
-//! request, takes `agent/approve`'s answer, and denies it itself when nobody answers in time
-//! ([`approvals`]). Every launch of the run, a resume included, keeps the flag.
+//! request and takes `agent/approve`'s answer, waiting as long as it takes ([`approvals`]). Every
+//! launch of the run, a resume included, keeps the flag.
 //!
 //! A run outlives its CLI processes: `agent/send` to a run whose CLI has ended resumes the
 //! vendor session in the same worktree. When plxd stops, running CLIs are cancelled and their
@@ -83,7 +83,6 @@ use uuid::Uuid;
 
 use self::actor::{Actor, Command, Queued};
 pub(crate) use self::actor::{Delivery, GitAction, QueueOp, logged_events, session_account};
-pub(crate) use self::approvals::APPROVAL_TIMEOUT;
 pub(crate) use self::convert::NO_WRITE;
 pub(crate) use self::convert::agent_run as snapshot;
 use self::convert::{
@@ -109,8 +108,6 @@ pub(crate) struct Agents {
     running: AtomicU32,
     tracker: TaskTracker,
     shutdown: CancellationToken,
-    /// How long a run's permission request waits for an answer (PLX-222).
-    approval_timeout: Duration,
     /// When a run a usage limit stopped resumes (PLX-371).
     resume_timing: ResumeTiming,
     /// Wakes the dispatcher of children waiting to be placed (PLX-413, [`placement`]).
@@ -197,26 +194,12 @@ impl Agents {
             running: AtomicU32::new(0),
             tracker: TaskTracker::new(),
             shutdown: CancellationToken::new(),
-            approval_timeout: APPROVAL_TIMEOUT,
             resume_timing: ResumeTiming::default(),
             placement: tokio::sync::Notify::new(),
             placing: tokio::sync::Mutex::new(()),
             idle: IdleSessions::default(),
             shared_slots: crate::delegation::Slots::default(),
         }
-    }
-
-    /// Denies a permission request nobody answered after `timeout` instead of
-    /// [`APPROVAL_TIMEOUT`].
-    #[must_use]
-    pub fn with_approval_timeout(mut self, timeout: Duration) -> Self {
-        self.approval_timeout = timeout;
-        self
-    }
-
-    /// How long a permission request waits for an answer.
-    pub(super) fn approval_timeout(&self) -> Duration {
-        self.approval_timeout
     }
 
     /// Resumes runs a usage limit stopped with `timing` instead of the default.

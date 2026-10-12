@@ -60,7 +60,7 @@ export type Choice = "allow" | "always" | "deny";
 export type AnswerState =
   | { state: "answering"; choice: Choice }
   | { state: "failed"; choice: Choice; error: string }
-  /** `agent/approve` found no such request: it timed out or was withdrawn meanwhile. */
+  /** `agent/approve` found no such request: it ended meanwhile. */
   | { state: "gone" }
   | { state: "answered"; resolved: ApprovalResolution };
 
@@ -173,7 +173,7 @@ export function outcomeOf({ request, resolved }: Approval, now = Date.now()): Ou
     return {
       ...quiet,
       verb: plan ? "Plan no longer waiting" : "No longer waiting",
-      who: "It timed out or was withdrawn before your answer reached it.",
+      who: "It ended before your answer reached it.",
     };
   const { decision, by, always } = resolved;
   if (decision === "allowed")
@@ -751,8 +751,7 @@ function Problem({ state }: { state?: AnswerState }) {
   if (state?.state === "gone")
     return (
       <p className="text-[12.5px] text-muted-foreground">
-        This request is no longer waiting. It timed out or was withdrawn before your answer reached
-        it.
+        This request is no longer waiting. It ended before your answer reached it.
       </p>
     );
   return null;
@@ -897,7 +896,7 @@ function PlanApprovalCard({
                   Your answer didn't reach the agent: {state.error}
                 </span>
               ) : state?.state === "gone" ? (
-                "No longer waiting: it timed out or was withdrawn."
+                "No longer waiting: it ended."
               ) : (
                 <span className="tabular-nums">{statusText(state, count, true)}</span>
               )}
