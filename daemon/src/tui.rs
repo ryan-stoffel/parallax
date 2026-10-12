@@ -4,7 +4,7 @@
 //! are the app's, live, both ways.
 //!
 //! - Threads come from `orchestration/subscribeShell`; ← on an empty prompt or `/threads` opens
-//!   them in a sidebar, as the app lists them.
+//!   them in a sidebar, by repo and Space, as the app lists them.
 //! - The open thread is `orchestration/subscribeThread`, folded by [`transcript`] and drawn by
 //!   [`draw`], with each run of tool calls folded into one line that a click opens.
 //! - A message is `message.dispatch`, queued after the turn under way, carrying any `/provider`,
@@ -82,7 +82,7 @@ const COMMANDS: [(&str, &str); 9] = [
     ),
     (
         "/threads",
-        "open the sidebar of threads, Spaces, and Projects (also ←)",
+        "open the sidebar of threads by repo and Space (also ←)",
     ),
     (
         "/provider",
@@ -1105,8 +1105,8 @@ impl App {
         }
     }
 
-    /// The sidebar, as the app lists threads: each Project's coordinator, then each repo and
-    /// Space with its threads, newest first, each with its age.
+    /// The sidebar, as the app lists threads: each repo and Space with its threads, newest
+    /// first, each with its age. Projects' coordinators aren't threads, and stay out.
     fn threads_menu(&self) -> Menu {
         let open = self.open.as_ref().map(|open| open.run);
         let now = jiff::Timestamp::now();
@@ -1127,19 +1127,6 @@ impl App {
             pick: Pick::Group(repo),
         };
         let mut items: Vec<Item> = Vec::new();
-        let coordinators: Vec<Item> = self
-            .projects
-            .iter()
-            .filter_map(|project| {
-                let run = project.coordinator?;
-                let at = self.runs.get(&run).map(|run| run.updated_at);
-                Some(run_item(run, project.name.clone(), at))
-            })
-            .collect();
-        if !coordinators.is_empty() {
-            items.push(heading("Projects".to_owned(), String::new(), None));
-            items.extend(coordinators);
-        }
         // plxd makes the entry for threads with no repo on first use; until then, offer it.
         if !self.repos.iter().any(|repo| repo.scratch) {
             items.push(heading("Chats".to_owned(), String::new(), None));
