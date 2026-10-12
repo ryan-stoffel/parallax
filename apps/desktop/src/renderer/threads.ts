@@ -479,8 +479,11 @@ export interface ThreadsView {
   update: (runId: string, change: ThreadChange) => Promise<string | undefined>;
   /** Sets a repo entry's icon. Resolves to an error message, or undefined. */
   updateRepo: (repo: string, icon: ProjectIconValue) => Promise<string | undefined>;
-  /** Makes a Space (0069), on a plxd with `spaces`. Resolves to an error message, or undefined. */
-  createSpace: (name: string) => Promise<string | undefined>;
+  /**
+   * Makes a Space (0069), with `icon` if one was chosen, on a plxd with `spaces`. Resolves to an
+   * error message, or undefined.
+   */
+  createSpace: (name: string, icon?: ProjectIconValue) => Promise<string | undefined>;
   /** Renames a Space. Resolves to an error message, or undefined. */
   renameSpace: (space: string, name: string) => Promise<string | undefined>;
   /** Deletes a Space and its chats. Resolves to an error message, or undefined. */
@@ -767,11 +770,12 @@ export function useThreads(
         return undefined;
       },
 
-      async createSpace(name: string) {
+      async createSpace(name: string, icon?: ProjectIconValue) {
         // A fresh id is safe to retry with: plxd returns the Space an id already made.
         const answer = await window.parallax.request(hostId, "space/create", {
           id: uuidv7(),
           name,
+          ...(icon && { icon }),
         });
         if ("error" in answer) return describeError(answer.error);
         dispatch({ type: "event", event: { kind: "repo.added", repo: answer.result.repo } });

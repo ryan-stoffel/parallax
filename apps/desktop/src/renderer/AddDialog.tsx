@@ -22,11 +22,17 @@ import {
 import { flushSync } from "react-dom";
 
 import { githubSlug, isFolderName, type FolderListing } from "../preload/bridge";
-import type { Project, Repo } from "../protocol/generated/protocol";
+import type {
+  Project,
+  ProjectIcon as ProjectIconValue,
+  Repo,
+} from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { localId, type Host } from "./hosts";
+import { IconPicker } from "./IconPicker";
 import { GitHubLogo } from "./logos";
 import { NewProjectForm } from "./NewProjectForm";
+import { ProjectIcon } from "./Sidebar";
 import type { ThreadsView } from "./threads";
 import { uuidv7 } from "./uuidv7";
 import type { Workspace, WorkspaceSource } from "./WorkspaceMenu";
@@ -56,6 +62,7 @@ export function AddDialog({
   repos,
   create,
   createSpace,
+  iconImageBytes,
   onCreated,
 }: {
   ref: Ref<AddDialogHandle>;
@@ -68,6 +75,8 @@ export function AddDialog({
   create: ThreadsView["createProject"];
   /** Creates a Space on the open host, or undefined where its plxd has none. */
   createSpace?: ThreadsView["createSpace"];
+  /** The open host's `iconImages` cap, or none where its plxd keeps no icon images. */
+  iconImageBytes?: number;
   onCreated: (hostId: string, project: Project) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -122,7 +131,12 @@ export function AddDialog({
         />
       )}
       {step.kind === "space" && createSpace && (
-        <SpaceStep onBack={back} create={createSpace} onDone={() => dialog.current?.close()} />
+        <SpaceStep
+          onBack={back}
+          create={createSpace}
+          maxImageBytes={iconImageBytes}
+          onDone={() => dialog.current?.close()}
+        />
       )}
       {step.kind === "create" && <CreateStep {...steps} />}
       {step.kind === "browse" && <FolderStep {...steps} />}
@@ -247,16 +261,20 @@ function MenuStep({
   );
 }
 
-/** New Space: a name, then `space/create`, and the palette closes. */
+/** New Space: an icon and a name, then `space/create`, and the palette closes. */
 function SpaceStep({
   onBack,
   create,
+  maxImageBytes,
   onDone,
 }: {
   onBack: () => void;
-  create: (name: string) => Promise<string | undefined>;
+  create: ThreadsView["createSpace"];
+  maxImageBytes?: number;
   onDone: () => void;
 }) {
+  const pickerId = useId();
+  const [icon, setIcon] = useState<ProjectIconValue>();
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -264,7 +282,7 @@ function SpaceStep({
   const submit = async () => {
     if (!trimmed || busy) return;
     setBusy(true);
-    const failed = await create(trimmed);
+    const failed = await create(trimmed, icon);
     setBusy(false);
     if (failed) setError(failed);
     else onDone();
@@ -282,6 +300,16 @@ function SpaceStep({
           />
         }
       >
+        <button
+          type="button"
+          popoverTarget={pickerId}
+          aria-haspopup="dialog"
+          aria-label="Choose icon"
+          title="Choose icon"
+          className="grid size-7 shrink-0 place-items-center rounded-md border border-border hover:bg-hover"
+        >
+          <ProjectIcon icon={icon} className="size-4" />
+        </button>
         <input
           ref={autofocus}
           aria-label="Space name"
@@ -301,6 +329,7 @@ function SpaceStep({
         <Note>A Space groups chats that need no repository.</Note>
         <Problem error={error} />
       </Body>
+      <IconPicker id={pickerId} value={icon} onPick={setIcon} maxImageBytes={maxImageBytes} />
       <Footer keys={[["Enter", "Create"], close]} />
     </>
   );

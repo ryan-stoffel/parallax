@@ -49,6 +49,7 @@ import {
   useState,
   type ComponentProps,
   type ComponentType,
+  type CSSProperties,
   type ReactNode,
   type RefObject,
   type SVGProps,
@@ -758,6 +759,7 @@ export function ThreadList({
         repos={open?.state.repos ?? []}
         create={open?.createProject ?? (async () => "Not connected")}
         createSpace={open && "spaces" in open.capabilities ? open.createSpace : undefined}
+        iconImageBytes={open?.iconImageBytes}
         onCreated={(hostId, project) => onOpenProject(hostId, project.id)}
       />
       <ConfirmDialog
@@ -1034,13 +1036,21 @@ function RepoFilterMenu({
         )}
         {repos.map(({ host, view, repo }) => {
           const key = `${host.id}/${repo.id}` as const;
+          const canEdit = repo.space && "spaces" in view.capabilities;
+          const canIcon = "threadAttention" in view.capabilities;
+          // Room for the hover actions, which the row makes by pushing its content left.
+          const actions = (canEdit ? 2 : 0) + (canIcon ? 1 : 0);
           return (
-            <div key={key} className="group/repo relative">
+            <div
+              key={key}
+              style={{ "--actions": `${actions * 1.5 + 0.5}rem` } as CSSProperties}
+              className="group/repo relative"
+            >
               <button
                 type="button"
                 role="menuitemradio"
                 aria-checked={filter === key}
-                className={`${menuItem} pr-8`}
+                className={`${menuItem} group-focus-within/repo:pr-(--actions) group-hover/repo:pr-(--actions)`}
                 onClick={() => choose(key)}
               >
                 <RepoIcon repo={repo} />
@@ -1049,7 +1059,7 @@ function RepoFilterMenu({
                 {check(filter === key)}
               </button>
               <div className="absolute top-1/2 right-1 flex -translate-y-1/2 gap-0.5 opacity-0 group-hover/repo:opacity-100 focus-within:opacity-100">
-                {repo.space && "spaces" in view.capabilities && (
+                {canEdit && (
                   <>
                     <button
                       type="button"
@@ -1071,7 +1081,7 @@ function RepoFilterMenu({
                     </button>
                   </>
                 )}
-                {"threadAttention" in view.capabilities && (
+                {canIcon && (
                   <button
                     type="button"
                     aria-label={`Change ${repo.name}'s icon`}

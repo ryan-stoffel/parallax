@@ -2819,9 +2819,14 @@ test("with spaces, the add palette offers New Space, which creates one and close
   expect(paletteOptions()).toHaveLength(5);
   await click(paletteOption("New Space"));
   typeInto(dialog().querySelector("input")!, " Research ");
+  await openDialogPicker();
+  await pickColor(dialog(), "Teal");
+  await pickIcon(dialog(), "Rocket");
   press("Enter");
   await settle();
-  expect(calls("space/create")).toEqual([{ id: expect.any(String), name: "Research" }]);
+  expect(calls("space/create")).toEqual([
+    { id: expect.any(String), name: "Research", icon: { name: "rocket", color: "teal" } },
+  ]);
   expect(dialog().open).toBe(false);
 });
 
