@@ -672,6 +672,10 @@ impl ClaudeBackend {
 /// worker has no usable [`WorkerSandbox`], or if a no-write run other than a coordinator asks for
 /// a permission.
 /// [`StartError::Unsupported`] for an effort or permission this version doesn't know.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one flag group per run kind, read in order"
+)]
 pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
     let coordinator = request.coordinator_tools.is_some();
     if coordinator && request.policy != ToolPolicy::NoWrite {
@@ -751,6 +755,9 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
         for dir in &sandbox.writable {
             args.extend(["--add-dir".into(), dir.into()]);
         }
+    }
+    if unsandboxed {
+        args.extend(["--append-system-prompt".into(), super::MATH_FORMAT.into()]);
     }
     if coordinator || unsandboxed {
         // Full Claude Code loads the user's and the project's settings, whose `env` could share

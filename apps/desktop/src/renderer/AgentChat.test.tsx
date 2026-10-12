@@ -325,6 +325,18 @@ test("an assistant message typesets LaTeX, and keeps invalid LaTeX as its source
   expect(document.querySelector(".katex-error")).not.toBeNull();
 });
 
+test("a streaming message marks its markdown, so unfinished LaTeX stays hidden until it ends", () => {
+  const unfinished = "Setup:\n\n$$\n\\begin{aligned} x &= \\frac{1";
+  row({ kind: "assistant", key: "a", text: unfinished, partial: true });
+  expect(document.querySelector(".markdown.streaming .katex-error")).not.toBeNull();
+  act(() => unmount());
+  row({ kind: "assistant", key: "a", text: unfinished.padEnd(SPLIT_FROM, " "), partial: true });
+  expect(document.querySelector(".markdown.streaming")).not.toBeNull();
+  act(() => unmount());
+  row({ kind: "assistant", key: "a", text: unfinished, partial: false });
+  expect(document.querySelector(".markdown.streaming")).toBeNull();
+});
+
 test("a streaming message renders as the whole text does, at every line", () => {
   // Past SPLIT_FROM, so each reply renders block by block.
   const lead = "A long reply opens with a paragraph. ".repeat(30) + "\n\n";
@@ -360,7 +372,10 @@ test("a streaming message renders as the whole text does, at every line", () => 
     return (text: string, partial: boolean) => {
       const row: Item = { kind: "assistant", key: "a", text, partial };
       act(() => root.render(<RowView row={row} live={false} open={false} onToggle={() => {}} />));
-      return container.innerHTML.replaceAll(">\n<", "><");
+      // A streaming message differs only by its class, which hides LaTeX still arriving.
+      return container.innerHTML
+        .replaceAll(">\n<", "><")
+        .replace('"markdown streaming"', '"markdown"');
     };
   };
   for (const reply of replies.map((r) => lead + r)) {

@@ -2625,6 +2625,30 @@ fn a_full_thread_gets_its_thread_tools_beside_the_users_mcp_servers() {
     assert!(!args.contains(&"--mcp-config".into()));
 }
 
+/// PLX-730: a thread's agent is told to write math as LaTeX, which the app typesets.
+#[test]
+fn a_thread_is_told_to_write_math_as_latex() {
+    let cwd = Path::new("/repo");
+    let mut thread = request(cwd);
+    thread.policy = ToolPolicy::WorkspaceWrite;
+    thread.sandbox = Some(worker_sandbox(cwd));
+    thread.approvals = true;
+    thread.thread = true;
+    let args = super::arguments(&thread).unwrap();
+    let at = args
+        .iter()
+        .position(|arg| arg == "--append-system-prompt")
+        .unwrap();
+    assert_eq!(args[at + 1], crate::backend::MATH_FORMAT);
+    // A sandboxed thread keeps the sandbox's own prompt.
+    thread.approvals = false;
+    assert!(
+        !super::arguments(&thread)
+            .unwrap()
+            .contains(&"--append-system-prompt".into())
+    );
+}
+
 /// 0027: a coordinator and a bypass worker are full Claude Code, so their init may list any
 /// tool, another MCP server's included, in the mode they asked for. Without plxd's tools a
 /// no-write run keeps its read tools.

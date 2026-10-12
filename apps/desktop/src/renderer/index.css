@@ -468,6 +468,11 @@ body {
   vertical-align: -0.1em;
   accent-color: var(--accent);
 }
+/* Math still arriving is incomplete LaTeX: it appears once it typesets, or when the message ends. */
+.markdown.streaming .katex-error {
+  display: none;
+}
+
 .markdown a {
   color: var(--accent);
   text-underline-offset: 2px;
