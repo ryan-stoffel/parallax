@@ -284,7 +284,10 @@ function repoColor(repo: Repo): string {
 // one shows switches at once.
 const cardDelay = 450;
 
-/** The Repos filter's choice: every repo, No Repo's threads, or one repo by host and id. */
+/**
+ * The place the list shows, which the rail and the place menu pick (PLX-739): every place, No
+ * Repo's threads, or one repo or Space by host and id.
+ */
 type RepoFilter = "all" | "none" | `${string}/${string}`;
 const filterKey = "parallax:repoFilter";
 /** Whether the Projects section is collapsed. */
@@ -333,8 +336,8 @@ type Item = (
 };
 
 /**
- * Search, the Repos filter, a menu to create a Project or add a repository, and New thread, then
- * every host's Projects and threads, each in a collapsible section, most recently active first
+ * The rail of places and the place menu, which pick the place the list shows (PLX-739), New
+ * thread, and search, then every host's Projects and threads, each in a collapsible section, most recently active first
  * (0033). A thread row shows its repo, how long ago it was prompted or what it asks of the user,
  * its title, branch, and provider. A thread's children (0041) nest under it, collapsed behind
  * their count and most urgent status, but a Project's children show only inside it, its row
@@ -366,9 +369,18 @@ export function ThreadList({
   const [deleteError, setDeleteError] = useState<string>();
   const [actionError, setActionError] = useState<string>();
   const [query, setQuery] = useState("");
-  const [filter, setFilterState] = useState<RepoFilter>(
+  const [chosen, setFilterState] = useState<RepoFilter>(
     () => (readStored(filterKey) as RepoFilter | null) ?? "all",
   );
+  // A place that's gone, deleted or not loaded yet, shows Inbox, keeping the choice for its return.
+  const filter: RepoFilter =
+    chosen === "all" ||
+    chosen === "none" ||
+    hosts.some(({ host: h, view }) =>
+      view.state.repos.some((r) => !r.scratch && `${h.id}/${r.id}` === chosen),
+    )
+      ? chosen
+      : "all";
   const setFilter = (next: RepoFilter) => {
     setFilterState(next);
     saveStored(filterKey, next);
@@ -1008,7 +1020,7 @@ function PlaceGlyph({ repo }: { repo: Repo }) {
 /**
  * The rail of places (PLX-739) on the sidebar's left edge: Inbox, which is every thread, then each
  * host's Spaces as circles, its repositories as rounded squares, No repo while it has threads, and
- * a button that adds one. Picking a place sets the Repos filter. A place's dot is its most urgent
+ * a button that adds one. Picking a place shows its threads, as the place menu does. A place's dot is its most urgent
  * attention, and Inbox counts what needs the user. `motion` plays the Spring opening or closing
  * (index.css).
  */
@@ -1232,6 +1244,14 @@ function PlaceMenu({
     <button
       type="button"
       role="menuitemradio"
+      aria-label={[
+        label,
+        key === "all"
+          ? asks > 0 && `${asks} need${asks === 1 ? "s" : ""} you`
+          : attentionWords[mostUrgent(attentions(key))],
+      ]
+        .filter(Boolean)
+        .join(", ")}
       aria-checked={filter === key}
       className={`${menuItem} ${extra ?? ""}`}
       onClick={() => choose(key)}
@@ -1318,6 +1338,7 @@ function PlaceMenu({
         type="button"
         aria-label={`Place: ${name}`}
         title="Switch place"
+        aria-haspopup="menu"
         popoverTarget={menuId}
         className="mr-auto flex min-w-0 items-center gap-2 rounded-md py-0.5 pr-1.5 pl-1 hover:bg-hover"
       >
@@ -1346,7 +1367,7 @@ function PlaceMenu({
         className={`${menuPanel("start")} w-64 p-1`}
       >
         {item("all", "Inbox", inboxTile(row))}
-        <div className="my-1 h-px bg-border" />
+        <div role="separator" className="my-1 h-px bg-border" />
         {group(
           "Spaces",
           places.filter((p) => p.repo.space),
@@ -1357,7 +1378,7 @@ function PlaceMenu({
         )}
         {(attentions("none").length > 0 || filter === "none") &&
           item("none", "No repo", noRepoTile(row))}
-        <div className="my-1 h-px bg-border" />
+        <div role="separator" className="my-1 h-px bg-border" />
         <button
           type="button"
           role="menuitem"

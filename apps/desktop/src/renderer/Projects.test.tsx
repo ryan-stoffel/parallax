@@ -2924,8 +2924,24 @@ test("with spaces, a Space's row in the place menu renames and deletes it", asyn
   expect(calls("repo/update")).toEqual([{ repo: "s1", name: "Notes" }]);
   expect(filter().textContent).toContain("Notes");
 
+  // Deleting the Space the list shows leaves Inbox showing, checked on the rail and in the menu.
+  const choice = (name: string) =>
+    [...filter().querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find(
+      (b) => b.querySelector("[data-name]")?.textContent === name,
+    );
+  await click(choice("Notes"));
+  expect(choice("Notes")!.getAttribute("aria-checked")).toBe("true");
   await click(press("Delete Notes"));
   await submit(spaceDialog("Delete Notes"));
   expect(calls("space/delete")).toEqual([{ space: "s1" }]);
   expect(filter().textContent).not.toContain("Notes");
+  expect(
+    document.querySelector('#sidebar button[aria-haspopup="menu"]')!.getAttribute("aria-label"),
+  ).toBe("Place: Inbox");
+  expect(choice("Inbox")!.getAttribute("aria-checked")).toBe("true");
+  expect(
+    document
+      .querySelector('#sidebar [aria-label="Places"] button[aria-pressed="true"]')!
+      .getAttribute("aria-label"),
+  ).toBe("Inbox");
 });

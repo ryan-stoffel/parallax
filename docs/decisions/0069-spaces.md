@@ -13,7 +13,7 @@ Every chat with no repository lands in one "No Repo" group, and a Project needs 
 - **A Space is a repo entry** ([0017](0017-normal-threads.md)) with `space: true`. plxd makes its repository, a `git init` with one empty commit as for a scratch thread, at `<data folder>/spaces/<id>`, and the entry's `path` is that folder.
 - **A chat in a Space is an ordinary thread** started with the Space's id as its `repo`. It runs in its own worktree of the Space's repository, and the Space's chats share one context folder, `context/<id>`, as threads in a repository do.
 - **Methods**, behind the `spaces` capability: `space/create {id, name, icon?}` is idempotent on `id` and appends `repo.added`. `repo/update` takes an optional `name`, for a Space only, next to its icon. `space/delete {space}` deletes each chat as `thread/delete` does, then the entry and its folders, and appends `repo.removed`. Deleting again finishes a delete that stopped partway.
-- **The app** lists Spaces in the Repos filter, with New Space, Rename, and Delete. New Thread offers each Space beside the repositories, with no branch, checkout, or Open PR controls. Anywhere the app lists repositories to work in, a Space is left out.
+- **The app** lists Spaces on the rail and in the place menu (amended 2026-10-12, PLX-739), with Rename and Delete, and makes them from the add palette's New Space. New Thread offers each Space beside the repositories, with no branch, checkout, or Open PR controls. Anywhere the app lists repositories to work in, a Space is left out.
 
 ## Rejected
 
