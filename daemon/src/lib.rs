@@ -96,6 +96,7 @@ pub mod tailnet;
 mod terminals;
 mod threads;
 pub mod transport;
+pub mod tui;
 pub mod usage;
 #[cfg(windows)]
 pub mod windows;

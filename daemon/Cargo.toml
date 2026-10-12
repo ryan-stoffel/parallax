@@ -59,6 +59,9 @@ spake2 = "0.4"
 # same on every OS.
 webpki-roots = "1"
 mdns-sd = { version = "0.21", default-features = false }
+# `plxd tui` (PLX-740), on crossterm, which it re-exports. `line_count` scrolls a wrapped
+# transcript to its end.
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
 
 [target.'cfg(unix)'.dependencies]
 # `net` for the browser proxy's view of this machine's own addresses (PLX-639).

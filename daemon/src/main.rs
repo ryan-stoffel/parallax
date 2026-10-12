@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use parallax_protocol::{CONNECT_PORT, RunId};
+use parallax_protocol::{CONNECT_PORT, ClientInfo, RunId};
 use plxd::attach::{
     self, DEFAULT_CONNECT_TIMEOUT, EXIT_UNAVAILABLE, MAX_CONNECT_TIMEOUT, Options, report,
 };
@@ -39,6 +39,9 @@ enum Command {
     Dial(DialArgs),
     /// Turn Parallax Connect on or off. A running plxd follows within 10 seconds.
     Connect(ConnectArgs),
+    /// Use Parallax in this terminal: the same threads, Spaces, and Projects as the app, live.
+    /// Starts plxd if it isn't running.
+    Tui(TuiArgs),
     /// Manage the per-user service that keeps plxd running: a `LaunchAgent` on macOS, a systemd
     /// user unit on Linux.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -105,6 +108,13 @@ struct AttachArgs {
     /// How long to wait for plxd to accept a connection, including starting it [default: 10]
     #[arg(long, value_name = "SECONDS", value_parser = parse_seconds)]
     connect_timeout: Option<Duration>,
+}
+
+#[derive(Debug, Args)]
+struct TuiArgs {
+    /// The data folder [default: ~/.parallax]
+    #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
+    data_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -235,6 +245,7 @@ fn main() -> ExitCode {
         Command::Attach(args) => attach(&args),
         Command::Dial(args) => dial(&args),
         Command::Connect(args) => connect(&args),
+        Command::Tui(args) => tui(&args),
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         Command::Service(args) => service_command(args.command),
         Command::Mcp(args) => mcp(&args),
@@ -306,6 +317,78 @@ fn mcp(args: &McpArgs) -> ! {
         std::process::exit(1);
     }
     std::process::exit(0)
+}
+
+/// Runs `tui` and exits with `std::process::exit`, since the thread reading keys never returns.
+/// It starts plxd as `attach` does, then its client opens connections of its own.
+fn tui(args: &TuiArgs) -> ! {
+    let report = |message: &dyn std::fmt::Display| {
+        let _ = writeln!(io::stderr(), "plxd tui: {message}");
+    };
+    let exit = |message: &dyn std::fmt::Display, code: u8| -> ! {
+        report(message);
+        std::process::exit(code.into())
+    };
+    let data_dir = DataDir::resolve(args.data_dir.as_deref()).unwrap_or_else(|error| {
+        exit(
+            &format!("could not find the data folder: {error}"),
+            EXIT_UNAVAILABLE,
+        )
+    });
+    let socket = data_dir.socket_path().unwrap_or_else(|error| {
+        exit(
+            &format!("could not find plxd's socket: {error}"),
+            EXIT_UNAVAILABLE,
+        )
+    });
+    let program = std::env::current_exe().unwrap_or_else(|error| {
+        exit(
+            &format!("could not find plxd's own executable: {error}"),
+            EXIT_UNAVAILABLE,
+        )
+    });
+    let options = Options {
+        program,
+        connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+        launch_agent: LaunchAgent::installed_for(&data_dir),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap_or_else(|error| exit(&format!("could not start the runtime: {error}"), 1));
+    // Windows' pipe client connects inside the runtime, as in `attach`.
+    let entered = runtime.enter();
+    let first =
+        attach::connect(&data_dir, &options).unwrap_or_else(|error| exit(&error, EXIT_UNAVAILABLE));
+    // The client's first connection is that one; later ones, after a drop, are new.
+    let first = std::sync::Mutex::new(Some(first));
+    let plxd = plxd::peer::Plxd::new(move || {
+        let first = first.lock().ok().and_then(|mut first| first.take());
+        let socket = socket.path.clone();
+        async move {
+            let stream = match first {
+                #[cfg(unix)]
+                Some(stream) => stream
+                    .set_nonblocking(true)
+                    .and_then(|()| tokio::net::UnixStream::from_std(stream)),
+                #[cfg(windows)]
+                Some(stream) => Ok(stream),
+                None => plxd::transport::connect(&socket).await,
+            }
+            .map_err(|error| format!("could not reach plxd at {}: {error}", socket.display()))?;
+            let client = ClientInfo {
+                name: "plxd tui".to_owned(),
+                version: plxd::version().to_owned(),
+                machine_id: None,
+            };
+            Ok((stream, client))
+        }
+    });
+    drop(entered);
+    match runtime.block_on(plxd::tui::run(plxd)) {
+        Ok(()) => std::process::exit(0),
+        Err(error) => exit(&error, 1),
+    }
 }
 
 /// Runs `attach` and exits, with `std::process::exit`: the thread that reads stdin blocks until
