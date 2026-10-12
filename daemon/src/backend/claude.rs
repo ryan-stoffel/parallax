@@ -93,7 +93,9 @@
 //! base64 image blocks before its text (PLX-191). The prompt never goes in argv, where `ps`
 //! would show it and `ARG_MAX` would limit it. Each message carries a `uuid`, the turn id, which
 //! the CLI echoes in `result.user_message_uuids`: several messages sent close together can run as
-//! one turn, and those ids say which turns a result ended. A steer carries `priority: "now"`, as
+//! one turn, and those ids say which turns a result ended. A turn the CLI starts itself, for a
+//! task notification or a background task's end, ends none of them; while none is outstanding,
+//! it is reported as a turn with no id (PLX-724). A steer carries `priority: "now"`, as
 //! T3 Code steers, and joins the running turn; plxd holds a queued message until the turn has
 //! ended (PLX-370). Once no turn is outstanding and plxd holds no message for the CLI
 //! ([`Run::hold`](super::Run::hold)), the prompt ends and the CLI exits after its last result,
@@ -1194,6 +1196,7 @@ impl Backend for ClaudeBackend {
                 .with_resumed(resumed),
             turns: VecDeque::new(),
             unreported: HashSet::new(),
+            woke: false,
             asks: HashMap::new(),
             violation: None,
             env_file,
@@ -1399,6 +1402,9 @@ struct Driver {
     /// The `uuid`s of follow-ups in `turns` with no `TurnStarted` yet: the writer hasn't reported
     /// them written, and the CLI hasn't answered them (PLX-523).
     unreported: HashSet<String>,
+    /// Whether the CLI started a turn itself while none of plxd's was outstanding, until its
+    /// result (PLX-724).
+    woke: bool,
     /// Permission requests the CLI waits on (PLX-222).
     asks: HashMap<ApprovalId, Ask>,
     violation: Option<Failure>,
@@ -1535,7 +1541,9 @@ impl Driver {
         for step in steps {
             // Turns finish in order, so a turn's content while the oldest outstanding turn is an
             // unreported follow-up is that follow-up's: its TurnStarted goes first (PLX-523).
-            // Events outside a turn, such as a warning or a rate limit, don't start it.
+            // Events outside a turn, such as a warning or a rate limit, don't start it. Content
+            // with no turn outstanding is a turn the CLI started itself, such as for a background
+            // task's end, which shows the thread running until its result (PLX-724).
             if matches!(
                 step,
                 Step::Emit(
@@ -1545,10 +1553,15 @@ impl Driver {
                         | Event::ToolCall { .. }
                         | Event::ToolResult { .. }
                 ) | Step::Ask(..)
-            ) && let Some((turn_id, uuid)) = self.turns.front().cloned()
-                && self.unreported.remove(&uuid)
-            {
-                self.emit(Event::TurnStarted { turn_id }).await;
+            ) {
+                if let Some((turn_id, uuid)) = self.turns.front().cloned()
+                    && self.unreported.remove(&uuid)
+                {
+                    self.emit(Event::TurnStarted { turn_id }).await;
+                } else if self.turns.is_empty() && !self.woke {
+                    self.woke = true;
+                    self.emit(Event::TurnStarted { turn_id: None }).await;
+                }
             }
             match step {
                 Step::Emit(event) => self.emit(event).await,
@@ -1562,7 +1575,14 @@ impl Driver {
                     }
                 }
                 Step::TurnDone(done) => {
-                    for (turn_id, uuid) in self.finish_turns(&done) {
+                    let woke = std::mem::take(&mut self.woke);
+                    let mut finished = self.finish_turns(&done);
+                    // A message sent during the CLI's own turn is outstanding still, and its
+                    // result ends the thread's run instead.
+                    if woke && finished.is_empty() && self.turns.is_empty() {
+                        finished.push((None, String::new()));
+                    }
+                    for (turn_id, uuid) in finished {
                         // Answered before the writer reported writing it.
                         if self.unreported.remove(&uuid) {
                             self.emit(Event::TurnStarted { turn_id }).await;
@@ -1628,7 +1648,8 @@ impl Driver {
     }
 
     /// The turns a `result` ended, oldest first, with their `uuid`s. Turns finish in the order
-    /// they started, so a result ends every outstanding turn up to the newest one it names.
+    /// they started, so a result ends every outstanding turn up to the newest one it names. A
+    /// turn the CLI started itself that names none ends none (PLX-724).
     fn finish_turns(&mut self, done: &TurnDone) -> Vec<(Option<TurnId>, String)> {
         let named = self
             .turns
@@ -1636,6 +1657,7 @@ impl Driver {
             .rposition(|(_, uuid)| done.uuids.contains(uuid));
         let count = match (named, done.queued) {
             (Some(index), _) => index + 1,
+            (None, _) if done.foreign => 0,
             // With no ids to go by and nothing queued, or no count either, every turn sent so far
             // is taken as done. At worst a folded follow-up finishes early; ending only one turn
             // could leave stdin open and the run waiting forever.

@@ -42,11 +42,12 @@ pub enum Event {
         api_key_source: Option<String>,
     },
     /// The CLI took a turn's message: the run's prompt, or a follow-up. Turns finish in the order
-    /// they started, so a follow-up sent during a turn starts before that turn finishes.
+    /// they started, so a follow-up sent during a turn starts before that turn finishes. Claude
+    /// also starts turns itself while idle, for a background task's end (PLX-724).
     TurnStarted {
         /// The caller's id for the turn: [`RunRequest::turn_id`](super::RunRequest::turn_id) for
         /// the prompt's turn, or [`FollowUp::turn_id`](super::FollowUp::turn_id). Absent when the
-        /// caller gave the prompt's turn no id.
+        /// caller gave the prompt's turn no id, or the CLI started the turn itself.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<TurnId>,
     },

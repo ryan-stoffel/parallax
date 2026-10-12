@@ -4726,6 +4726,49 @@ mod tests {
         assert!(actor.busy(), "the turn ends with the CLI's exit");
     }
 
+    /// PLX-724: a turn Claude starts itself in an idle session, which has no id, shows the run
+    /// running until its result, which settles it again with the CLI still up.
+    #[tokio::test]
+    async fn a_turn_claude_starts_while_idle_runs_until_its_result() {
+        use super::convert;
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let (mut row, worktree) = fake_row_and_worktree();
+        // Nothing to commit.
+        row.fields.checkout = true;
+        let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
+        let run = Arc::new(SessionRun::default());
+        run.hold(true);
+        let (_sink, events) = EventSink::channel(4, Vec::new());
+        actor.live = Some(Live::new(run.clone(), events, None));
+        actor.in_flight = 1;
+        let finished = |result: &str| {
+            Some(Event::TurnFinished {
+                turn_id: None,
+                result: Some(result.to_owned()),
+                failed: false,
+            })
+        };
+        actor.on_event(finished("Started the build.")).await;
+        assert_eq!(actor.row.state.status, convert::COMPLETED);
+
+        actor
+            .on_event(Some(Event::TurnStarted { turn_id: None }))
+            .await;
+        assert!(actor.busy());
+        assert_eq!(actor.row.state.status, convert::RUNNING);
+        assert_eq!(
+            actor.release_due(),
+            None,
+            "a running session isn't released"
+        );
+
+        actor.on_event(finished("The build passed.")).await;
+        assert!(!actor.busy(), "settled");
+        assert_eq!(actor.row.state.status, convert::COMPLETED);
+        assert!(actor.live.is_some(), "the CLI stays up");
+    }
+
     /// Codex-style deltas in one batch join while they follow one another for the same message,
     /// never across another item or message, so each message's text reads the same (PLX-449).
     #[tokio::test]

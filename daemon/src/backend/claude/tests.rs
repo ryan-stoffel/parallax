@@ -54,6 +54,9 @@ fn fixture(name: &str) -> &'static str {
         "cancel" => include_str!("fixtures/cancel.jsonl"),
         "stubborn" => include_str!("fixtures/stubborn.jsonl"),
         "follow-up-no-echo" => include_str!("fixtures/follow-up-no-echo.jsonl"),
+        "task-notification" => include_str!("fixtures/task-notification.jsonl"),
+        "foreign-result" => include_str!("fixtures/foreign-result.jsonl"),
+        "wake" => include_str!("fixtures/wake.jsonl"),
         "provider" => include_str!("fixtures/provider.jsonl"),
         "subprocess-env" => include_str!("fixtures/subprocess-env.jsonl"),
         "scrub-mode" => include_str!("fixtures/scrub-mode.jsonl"),
@@ -1170,6 +1173,100 @@ async fn a_result_without_ids_or_a_queue_count_ends_every_turn() {
         .collect();
     assert_eq!(finished, [Some(turn(TURN_1)), Some(turn(TURN_2))]);
     assert!(matches!(outcome(&all), Outcome::Completed { .. }));
+}
+
+/// The turns a run's events started and finished, with each finished turn's result.
+fn turn_events(all: &[Event]) -> Vec<(&'static str, Option<TurnId>, Option<String>)> {
+    all.iter()
+        .filter_map(|event| match event {
+            Event::TurnStarted { turn_id } => Some(("started", *turn_id, None)),
+            Event::TurnFinished {
+                turn_id, result, ..
+            } => Some(("finished", *turn_id, result.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// PLX-724: a task notification Claude answers without a model turn, as on a resume, ends none
+/// of plxd's turns, though it echoes another message and counts the prompt as queued.
+#[tokio::test]
+async fn a_zero_turn_task_notification_ends_no_turn() {
+    let fake = Fake::new("task-notification");
+    let Started {
+        run: _run,
+        mut events,
+    } = launch(&fake.backend, request(&fake.root())).await;
+    let all = rest(&mut events).await;
+    assert_eq!(
+        turn_events(&all),
+        [(
+            "finished",
+            Some(turn(TURN_1)),
+            Some("Picking up where I left off.".into())
+        )]
+    );
+}
+
+/// PLX-724: a result for a turn Claude started itself names no message, and ends none of
+/// plxd's turns, where a human turn's result with no ids would end them all.
+#[tokio::test]
+async fn a_turn_claude_started_ends_none_of_plxds() {
+    let fake = Fake::new("foreign-result");
+    let Started {
+        run: _run,
+        mut events,
+    } = launch(&fake.backend, request(&fake.root())).await;
+    let all = rest(&mut events).await;
+    assert_eq!(
+        turn_events(&all),
+        [(
+            "finished",
+            Some(turn(TURN_1)),
+            Some("Fixed the parser.".into())
+        )]
+    );
+}
+
+/// PLX-724: a turn Claude starts in an idle session is a turn with no id, from its first output
+/// to its result, so the run shows running while it streams.
+#[tokio::test]
+async fn a_turn_claude_starts_while_idle_runs_until_its_result() {
+    let fake = Fake::new("wake");
+    let Started { run, mut events } = launch(&fake.backend, request(&fake.root())).await;
+    run.hold(true);
+    let mut seen = Vec::new();
+    loop {
+        let event = next(&mut events).await;
+        let done = matches!(event, Event::TurnFinished { turn_id: None, .. });
+        seen.push(event);
+        if done {
+            break;
+        }
+    }
+    run.hold(false);
+    let all = rest(&mut events).await;
+    assert!(matches!(outcome(&all), Outcome::Completed { .. }));
+    assert_eq!(
+        turn_events(&seen),
+        [
+            (
+                "finished",
+                Some(turn(TURN_1)),
+                Some("Started the build in the background.".into())
+            ),
+            ("started", None, None),
+            ("finished", None, Some("The build passed.".into())),
+        ]
+    );
+    let wake = seen
+        .iter()
+        .position(|event| *event == Event::TurnStarted { turn_id: None })
+        .unwrap();
+    assert!(
+        matches!(&seen[wake + 1], Event::Text { text, .. } if text == "The build passed."),
+        "the turn starts before its output: {seen:?}"
+    );
 }
 
 /// A fork's first run continues a copy of the parent's session (0050).

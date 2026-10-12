@@ -120,6 +120,9 @@ pub(super) struct TurnDone {
     pub result: Option<String>,
     /// Where the session stood when it ended, for a rewind to it.
     pub cursor: Option<String>,
+    /// The CLI started the turn itself, for a task notification or a wake, not for a message
+    /// (PLX-724): its `origin` is set and isn't `human`.
+    pub foreign: bool,
 }
 
 /// The state that reading one run's output needs.
@@ -804,22 +807,16 @@ impl Translator {
         }
         self.turn_error = None;
         self.limit_rejected = false;
-        let uuids = match message.get("user_message_uuids").and_then(Value::as_array) {
-            Some(uuids) => uuids
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect(),
-            None => text(message, "user_message_uuid")
-                .map(str::to_owned)
-                .into_iter()
-                .collect(),
-        };
+        let origin = message
+            .get("origin")
+            .and_then(Value::as_object)
+            .and_then(|origin| text(origin, "kind"));
         steps.push(Step::TurnDone(TurnDone {
-            uuids,
+            uuids: answered(message, origin),
             queued: message.get("queued_turn_count").and_then(Value::as_u64),
             result: if failed { None } else { result },
             cursor: self.cursor.clone(),
+            foreign: origin.is_some_and(|kind| kind != "human"),
         }));
         steps
     }
@@ -988,6 +985,28 @@ fn api_error_kind(error: &str) -> FailureKind {
 fn signed_out(result: &str) -> bool {
     let result = result.to_ascii_lowercase();
     result.contains("not logged in") || result.contains("/login")
+}
+
+/// The `uuid`s of the user messages a `result`'s turn consumed, oldest first. A task notification
+/// Claude answered without a model turn, as on a resume, answers none, whatever it echoes: T3
+/// Code drops it too (PLX-724).
+fn answered(message: &Map<String, Value>, origin: Option<&str>) -> Vec<String> {
+    if origin == Some("task-notification")
+        && message.get("num_turns").and_then(Value::as_u64) == Some(0)
+    {
+        return Vec::new();
+    }
+    match message.get("user_message_uuids").and_then(Value::as_array) {
+        Some(uuids) => uuids
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        None => text(message, "user_message_uuid")
+            .map(str::to_owned)
+            .into_iter()
+            .collect(),
+    }
 }
 
 /// The allow rules among a `can_use_tool` request's `permission_suggestions`, as updates that
