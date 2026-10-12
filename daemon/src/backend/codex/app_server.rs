@@ -997,7 +997,7 @@ impl Driver {
                 Some((params, input)) => {
                     tracing::warn!(%message, "could not resume a Codex thread; starting a new one");
                     // The new thread counts its usage from zero.
-                    self.sink.restart_usage();
+                    self.sink.reset_usage(Vec::new());
                     if let Some(first) = self.queued.front_mut() {
                         first.input = input;
                     }

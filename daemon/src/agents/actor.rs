@@ -2724,6 +2724,8 @@ impl Actor {
         }
         if let Some(session_id) = session_id {
             info!(run = %self.id, "resuming an agent run's session");
+            // ponytail: every Codex resume reads the run's whole log for a fallback it rarely
+            // uses; build it only after `thread/resume` fails if long threads make this slow.
             let fallback = if prepared.resolved.backend().resume_fallback() {
                 Some(self.handoff_prompt(&from, &text, &prepared.place).await?)
             } else {

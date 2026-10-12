@@ -526,6 +526,7 @@ async fn drive_with_fallback(
         {
             break failure.clone();
         }
+        restart_on_new_session(&mut sink, &request, &event);
         if sink.emit(event).await.is_err() {
             return;
         }
@@ -566,9 +567,22 @@ async fn drive_with_fallback(
     }
     let mut fallback_events = started.events;
     while let Some(event) = fallback_events.next().await {
+        restart_on_new_session(&mut sink, &request, &event);
         if sink.emit(event).await.is_err() {
             return;
         }
+    }
+}
+
+/// Starts `sink`'s usage over when `event` starts a session other than the one `request`
+/// resumes, such as a new Codex thread after a failed resume (PLX-728), so `Finished` reports
+/// only that session's totals.
+fn restart_on_new_session(sink: &mut EventSink, request: &RunRequest, event: &Event) {
+    if let (Event::SessionStarted { session_id, .. }, Some(resume)) = (event, &request.resume)
+        && !resume.fork
+        && *session_id != resume.session_id
+    {
+        sink.reset_usage(Vec::new());
     }
 }
 

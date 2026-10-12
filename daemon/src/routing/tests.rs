@@ -8,7 +8,7 @@ use parallax_protocol::{AccountChoice, AccountId, Provider, Role};
 use super::{BackendRegistry, Defaults, KeyAccounts, RoutingError, resolve, start};
 use crate::backend::{
     AccountRef, Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER, Event, EventSink,
-    EventStream, Failure, FailureKind, ModelUsage, Outcome, RunHandle, RunId, RunRequest,
+    EventStream, Failure, FailureKind, ModelUsage, Outcome, Resume, RunHandle, RunId, RunRequest,
     StartError, Started, ThreadTools, ToolPolicy, Usage, WorkerSandbox, claude,
 };
 use crate::keystore::{KeyStore, MemoryKeyStore};
@@ -802,6 +802,46 @@ async fn usage_after_a_fallback_is_isolated_to_the_new_account() {
             },
         ],
         "Finished must total only the fallback account's own usage, not both attempts'"
+    );
+}
+
+/// A resumed run that starts a new session, as a Codex thread whose resume failed does (PLX-728),
+/// totals only the new session's usage, not the resumed one's added in.
+#[tokio::test]
+async fn a_new_session_in_place_of_the_resumed_one_totals_only_its_own_usage() {
+    let backend = Arc::new(ScriptedBackend::new(vec![vec![
+        Event::SessionStarted {
+            session_id: "t-1".into(),
+            model: None,
+            api_key_source: None,
+        },
+        usage_event(1500),
+        finished(Outcome::Completed { result: None }),
+    ]]));
+    let resolved = resolved_subscription(backend.clone());
+    let accounts = accounts_with_fallback(AccountId::generate());
+    let keys: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
+    let mut request = request(&root());
+    request.resume = Some(Resume {
+        usage_totals: vec![ModelUsage {
+            model: None,
+            usage: usage(1000),
+        }],
+        ..Resume::new("t-0")
+    });
+
+    let mut started = start(keys, &accounts, resolved, request).unwrap();
+    let events = rest(&mut started.events).await;
+
+    assert_eq!(
+        events.last(),
+        Some(&Event::Finished {
+            outcome: Outcome::Completed { result: None },
+            usage_totals: vec![ModelUsage {
+                model: None,
+                usage: usage(1500)
+            }],
+        })
     );
 }
 

@@ -948,11 +948,6 @@ impl EventSink {
         self.send(event).await
     }
 
-    /// Starts the usage totals over, for a run whose session was replaced by a new one.
-    pub fn restart_usage(&mut self) {
-        self.usage = CumulativeUsage::new();
-    }
-
     /// Takes a running total that the vendor reported for `model`, such as Codex's
     /// `turn.completed.usage`, and sends the [`Event::Usage`] delta since the last one, if any.
     ///
