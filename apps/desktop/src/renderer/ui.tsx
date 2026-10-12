@@ -594,7 +594,10 @@ export function Tooltips() {
       timer = setTimeout(
         () => {
           if (!el.isConnected) return;
-          const r = el.getBoundingClientRect();
+          // A `display: contents` element has no box of its own, so measure what it holds.
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          const r = (el.getClientRects().length ? el : range).getBoundingClientRect();
           const above = r.bottom + 40 > window.innerHeight;
           setTip({
             text,
