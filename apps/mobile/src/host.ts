@@ -25,7 +25,7 @@ export const HOST = "local";
 const PORT = 7341;
 const KEY = "host";
 
-/** A paired computer: its name, its certificate's fingerprint, where it listens, and the session. */
+/** A paired computer: its name, certificate fingerprint, where it listens, and the session. */
 export interface Saved {
   name: string;
   fingerprint: string;
@@ -37,7 +37,7 @@ export interface Saved {
 }
 
 // Never restored to another phone from a backup, so the session stays bound to this one.
-const keychain = { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY };
+export const keychain = { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY };
 
 export async function loadSaved(): Promise<Saved | null> {
   const raw = await SecureStore.getItemAsync(KEY, keychain);
@@ -91,7 +91,8 @@ export async function pair(route: string, code: string, label: string): Promise<
     undefined,
   ).catch(() => {
     throw new Error(
-      `Couldn't reach Parallax at ${withPort(route)}. Check the address and that Remote access is on.`,
+      `Couldn't reach Parallax at ${withPort(route)}. ` +
+        "Check the address and that Remote access is on.",
     );
   });
   const fp = seen.fingerprint;

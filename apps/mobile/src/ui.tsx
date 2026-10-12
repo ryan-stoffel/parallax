@@ -95,7 +95,8 @@ export function T({
 
 /**
  * Markdown as the transcript needs it on a phone: fenced code in a box, `inline code`, and
- * **bold**. ponytail: no tables, lists, or links styling; add a renderer when transcripts need them.
+ * **bold**. ponytail: no tables, lists, or link styling; add a renderer when transcripts need
+ * them.
  */
 export function Markdown({ text }: { text: string }) {
   const c = useColors();
@@ -146,18 +147,19 @@ export function Markdown({ text }: { text: string }) {
 export function SwipeBack({ onBack, children }: { onBack: () => void; children: ReactNode }) {
   const { width } = useWindowDimensions();
   const x = useRef(new Animated.Value(0)).current;
+  const settle = (back: boolean) =>
+    Animated.timing(x, { toValue: back ? width : 0, duration: 180, useNativeDriver: true }).start(
+      () => back && onBack(),
+    );
   const pan = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponderCapture: (_, g) => g.x0 < 24 && g.dx > 8 && Math.abs(g.dy) < g.dx,
+      // Where the touch began: `x0` is still 0 until the responder is granted.
+      onMoveShouldSetPanResponderCapture: (_, g) =>
+        g.moveX - g.dx < 24 && g.dx > 8 && Math.abs(g.dy) < g.dx,
       onPanResponderMove: (_, g) => x.setValue(Math.max(0, g.dx)),
-      onPanResponderRelease: (_, g) => {
-        const back = g.dx > width / 3 || g.vx > 0.5;
-        Animated.timing(x, {
-          toValue: back ? width : 0,
-          duration: 180,
-          useNativeDriver: true,
-        }).start(() => back && onBack());
-      },
+      onPanResponderRelease: (_, g) => settle(g.dx > width / 3 || g.vx > 0.5),
+      // A native view took the gesture over: slide back.
+      onPanResponderTerminate: () => settle(false),
     }),
   ).current;
   return (

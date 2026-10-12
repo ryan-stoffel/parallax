@@ -41,6 +41,7 @@ function Connected({ saved }: { saved: Saved }) {
   const [openId, setOpenId] = useState<string>();
   const [settings, setSettings] = useState(false);
   const [push, setPush] = useState<string>();
+  const [drafts] = useState(() => new Map<string, string>());
   const connected = state.status === "connected";
   const view = useThreads(HOST, connected ? state.capabilities : undefined, undefined, () => {});
 
@@ -143,6 +144,7 @@ function Connected({ saved }: { saved: Saved }) {
         connected={connected}
         status={status}
         outbox={outbox}
+        drafts={drafts}
         onBack={() => setOpenId(undefined)}
       />
     );

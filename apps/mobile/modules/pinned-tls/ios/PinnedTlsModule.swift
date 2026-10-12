@@ -36,8 +36,9 @@ private final class Pinning: NSObject, URLSessionWebSocketDelegate {
 
   /// plxd never redirects, and a redirect could carry the `DPoP` header elsewhere.
   func urlSession(
-    _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
+    _ session: URLSession, task: URLSessionTask,
+    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+    completionHandler: @escaping (URLRequest?) -> Void
   ) { completionHandler(nil) }
 
   func urlSession(
@@ -111,7 +112,8 @@ public class PinnedTlsModule: Module {
       var resolving: [String: (NetService, Resolver)] = [:]
       browser.browseResultsChangedHandler = { results, _ in
         for result in results {
-          guard case .service(let name, let type, let domain, _) = result.endpoint, resolving[name] == nil
+          guard case .service(let name, let type, let domain, _) = result.endpoint,
+            resolving[name] == nil
           else { continue }
           let service = NetService(domain: domain, type: type, name: name)
           let resolver = Resolver()
@@ -131,9 +133,12 @@ public class PinnedTlsModule: Module {
       }
     }
 
-    /// One request: its status, its body as text, and the fingerprint of the certificate it reached.
+    /// One request: its status, its body as text, and the fingerprint of the certificate reached.
     AsyncFunction("request") {
-      (url: String, method: String, headers: [String: String], body: String?, pin: String?, promise: Promise) in
+      (
+        url: String, method: String, headers: [String: String], body: String?, pin: String?,
+        promise: Promise
+      ) in
       guard let target = URL(string: url) else {
         return promise.reject("ERR_URL", "not a URL: \(url)")
       }
@@ -198,7 +203,8 @@ public class PinnedTlsModule: Module {
         sendEvent("onSocket", ["id": id, "type": "message", "data": text])
         receive(id, task)
       case .success(.data(let data)):
-        sendEvent("onSocket", ["id": id, "type": "message", "data": String(decoding: data, as: UTF8.self)])
+        let text = String(decoding: data, as: UTF8.self)
+        sendEvent("onSocket", ["id": id, "type": "message", "data": text])
         receive(id, task)
       case .success:
         receive(id, task)

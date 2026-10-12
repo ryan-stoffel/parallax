@@ -65,7 +65,7 @@ export function spake(code: string, fingerprint: string) {
   };
 }
 
-/** Proof that `role` holds the SPAKE2 `key`, over the certificate it saw and the DPoP key's thumbprint. */
+/** Proof that `role` holds the SPAKE2 `key`, over the certificate seen and the DPoP thumbprint. */
 export const confirmation = (
   key: Uint8Array,
   role: "client" | "host",

@@ -138,6 +138,7 @@ export function ThreadScreen({
   connected,
   status,
   outbox,
+  drafts,
   onBack,
 }: {
   runId: string;
@@ -146,11 +147,18 @@ export function ThreadScreen({
   /** Why the host isn't connected, for people, or undefined while it is. */
   status?: string;
   outbox: Outbox;
+  /** Unsent text, by thread. */
+  drafts: Map<string, string>;
   onBack: () => void;
 }) {
   const c = useColors();
   const { transcript, error, queue } = useAgentRun(HOST, runId, connected);
-  const [text, setText] = useState("");
+  const [text, setText] = useState(drafts.get(runId) ?? "");
+  // The draft outlives this screen, so going back and returning keeps it.
+  const edit = (next: string) => {
+    setText(next);
+    drafts.set(runId, next);
+  };
   const waiting = useSyncExternalStore(
     (listener) => outbox.subscribe(listener),
     () => outbox.messages,
@@ -162,7 +170,7 @@ export function ThreadScreen({
   function send(steer: boolean) {
     if (!text.trim()) return;
     outbox.add({ id: uuidv7(), threadId: runId, text: text.trim(), steer });
-    setText("");
+    edit("");
   }
 
   return (
@@ -241,7 +249,7 @@ export function ThreadScreen({
             accessibilityLabel="Message"
             multiline
             value={text}
-            onChangeText={setText}
+            onChangeText={edit}
             placeholder="Reply, add detail, or steer what it does next"
             placeholderTextColor={c.faintForeground}
             style={[styles.input, { color: c.foreground }]}

@@ -4,7 +4,7 @@ import { Outbox, type Outgoing, type Sent } from "./outbox";
 
 const message = (id: string): Outgoing => ({ id, threadId: "t", text: id, steer: false });
 
-test("messages wait while offline and go in order once connected, and a refused one leaves", async () => {
+test("messages wait offline, go in order once connected, and a refused one leaves", async () => {
   let online = false;
   const tried: string[] = [];
   const saved: string[][] = [];

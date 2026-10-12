@@ -1,18 +1,27 @@
 // Sign-in with Clerk (PLX-702, 0067), which App.tsx bundles only when the build sets
 // EXPO_PUBLIC_CLERK=1. Pairing doesn't need it; the relay (PLX-652) will. Clerk's JS only:
-// package.json keeps its native module and UI out of the build, which would add about 23 MB. The Clerk app asks for an email and a
-// password, and a sign-up for a first and last name and the code Clerk emails. Deleting the
-// account is here because the App Store requires it of an app that makes one.
+// package.json keeps its native module and UI out of the build, which would add about 23 MB.
+// The Clerk app asks for an email and a password, and a sign-up for a first and last name and
+// the code Clerk emails. Deleting the account is here because the App Store requires it of an
+// app that makes one.
 import { ClerkProvider, useClerk, useSignIn, useSignUp, useUser } from "@clerk/expo";
-import { tokenCache } from "@clerk/expo/token-cache";
+import * as SecureStore from "expo-secure-store";
 import { useEffect, useState, type ReactNode } from "react";
 import { Alert, Modal, Pressable, StyleSheet, TextInput, View } from "react-native";
 
+import { keychain } from "./host";
 import { font } from "./theme";
 import { Button, T, useColors } from "./ui";
 
-/** The development instance's publishable key, which is public (apps/desktop/src/main/account.ts). */
+/** The development instance's publishable key, which is public (desktop: main/account.ts). */
 const PUBLISHABLE_KEY = "pk_test_YWRqdXN0ZWQtbWFzdG9kb24tODcwNS5jbGVyay5hY2NvdW50cy5kZXYk";
+
+/** Clerk's client token, in the Keychain on this phone only, as host.ts keeps plxd's. */
+const tokenCache = {
+  getToken: (key: string) => SecureStore.getItemAsync(key, keychain),
+  saveToken: (key: string, token: string) => SecureStore.setItemAsync(key, token, keychain),
+  clearToken: (key: string) => SecureStore.deleteItemAsync(key, keychain),
+};
 
 export function AccountProvider({ children }: { children: ReactNode }) {
   return (
@@ -97,6 +106,11 @@ export function Account() {
     );
 
   const { first, last, email, password, code } = form;
+  // Closing starts over, rather than reopening on a code that may have expired.
+  const close = () => {
+    setOpen(false);
+    setStep("signIn");
+  };
   return (
     <>
       <Button label="Sign in" onPress={() => setOpen(true)} />
@@ -104,14 +118,14 @@ export function Account() {
         visible={open}
         presentationStyle="pageSheet"
         animationType="slide"
-        onRequestClose={() => setOpen(false)}
+        onRequestClose={close}
       >
         <View style={[styles.sheet, { backgroundColor: c.background }]}>
           <View style={styles.row}>
             <T medium style={{ fontSize: 20, flex: 1 }}>
               Parallax account
             </T>
-            <Pressable accessibilityRole="button" onPress={() => setOpen(false)} hitSlop={12}>
+            <Pressable accessibilityRole="button" onPress={close} hitSlop={12}>
               <T style={{ color: c.accent }}>Close</T>
             </Pressable>
           </View>
