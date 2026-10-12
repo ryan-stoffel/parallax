@@ -697,10 +697,19 @@ mod tests {
         // A shell, which works under any name, waiting on its stdin.
         std::fs::copy("/bin/sh", &plxd).unwrap();
         let mut running = std::process::Command::new(&plxd)
-            .args(["-c", "read line"])
+            .args(["-c", "echo ready; read line"])
             .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
             .spawn()
             .unwrap();
+        // Wait until the child runs as the shell, not the forked test binary.
+        let mut ready = String::new();
+        std::io::BufRead::read_line(
+            &mut std::io::BufReader::new(running.stdout.take().unwrap()),
+            &mut ready,
+        )
+        .unwrap();
+        assert_eq!(ready, "ready\n");
         let update = dir.path().join("plxd.new");
         std::fs::write(&update, "#!/bin/sh\nexit 1\n").unwrap();
         std::fs::rename(&update, &plxd).unwrap();
