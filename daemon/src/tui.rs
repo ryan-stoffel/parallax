@@ -27,11 +27,11 @@ use parallax_protocol::methods::{
 };
 use parallax_protocol::{
     AccountChoice, AccountsDefaultsGetParams, AgentApprovalAnswer, AgentApproveParams, AgentEffort,
-    AgentPermission, AgentRun, AgentStatus, AgentToolStatus, DispatchMode, EventsEventParams,
-    EventsUnsubscribeParams, HostHealthParams, LoggedEvent, OrchestrationCommand, ParallaxEvent,
-    Project, ProviderInfo, ProviderKind, ProvidersListParams, Repo, RepoId, RunId,
-    SubscribeShellParams, SubscribeThreadParams, SubscriptionId, Thread, ThreadStartParams,
-    ThreadUpdateParams, TurnId,
+    AgentPermission, AgentRun, AgentStatus, AgentToolStatus, ApprovalId, DispatchMode,
+    EventsEventParams, EventsUnsubscribeParams, HostHealthParams, LoggedEvent,
+    OrchestrationCommand, ParallaxEvent, Project, ProviderInfo, ProviderKind, ProvidersListParams,
+    Repo, RepoId, RunId, SubscribeShellParams, SubscribeThreadParams, SubscriptionId, Thread,
+    ThreadStartParams, ThreadUpdateParams, TurnId,
 };
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
@@ -256,8 +256,10 @@ struct App {
     model: Option<String>,
     effort: Option<AgentEffort>,
     permission: Option<AgentPermission>,
-    /// The highlighted answer to a permission request.
+    /// The highlighted answer, and the permission request it's for. Another request starts on
+    /// Yes.
     choice: usize,
+    choice_for: Option<ApprovalId>,
     /// Lines scrolled up from the transcript's end.
     scroll: u16,
     /// `/help`'s keys, shown above the prompt until the next message.
@@ -298,6 +300,7 @@ impl App {
             effort: None,
             permission: None,
             choice: 0,
+            choice_for: None,
             scroll: 0,
             notice: None,
             error: None,
@@ -728,19 +731,10 @@ impl App {
             }
             Pick::Group(repo) => self.new_thread(repo).await,
             Pick::Provider(id) => {
-                // Another provider's models differ, so a model chosen for the last one goes.
-                if self.provider() != Some(id.as_str()) {
-                    self.model = None;
-                }
+                let before = self.provider().map(str::to_owned);
                 let thread_has_it = self.open_run().is_some_and(|run| run.backend == id);
                 self.provider = (!thread_has_it).then_some(id);
-                // Nor do a mode or an effort it can't run.
-                if !self.modes().contains(&self.mode()) {
-                    self.permission = self.modes().first().copied();
-                }
-                if !self.takes_effort() {
-                    self.effort = None;
-                }
+                self.fit_provider(before.as_deref());
             }
             Pick::Model(id) => self.model = Some(id),
             Pick::Effort(effort) => self.effort = Some(effort),
@@ -750,21 +744,23 @@ impl App {
 
     async fn approval_key(&mut self, code: KeyCode, pending: &Pending) {
         let answers = if pending.always { 3 } else { 2 };
+        let choice = self.choice(pending);
         let answer = match code {
             KeyCode::Up => {
-                self.choice = self.choice.saturating_sub(1);
+                (self.choice, self.choice_for) =
+                    (choice.saturating_sub(1), Some(pending.approval_id));
                 return;
             }
             KeyCode::Down => {
-                self.choice = (self.choice + 1).min(answers - 1);
+                (self.choice, self.choice_for) =
+                    ((choice + 1).min(answers - 1), Some(pending.approval_id));
                 return;
             }
-            KeyCode::Enter => self.choice,
+            KeyCode::Enter => choice,
             KeyCode::Esc => answers - 1,
             KeyCode::Char(c @ '1'..='3') => (c as usize - '1' as usize).min(answers - 1),
             _ => return,
         };
-        self.choice = 0;
         let (decision, always) = match (answer, pending.always) {
             (0, _) => (AgentApprovalAnswer::Allow, false),
             (1, true) => (AgentApprovalAnswer::Allow, true),
@@ -788,6 +784,15 @@ impl App {
         }
     }
 
+    /// The highlighted answer to `pending`: Yes until the arrows move it.
+    fn choice(&self, pending: &Pending) -> usize {
+        if self.choice_for == Some(pending.approval_id) {
+            self.choice
+        } else {
+            0
+        }
+    }
+
     /// The open thread's oldest permission request.
     fn pending(&self) -> Option<&Pending> {
         self.open.as_ref()?.transcript.pending.first()
@@ -795,8 +800,25 @@ impl App {
 
     /// Leaves the open thread for a new one in `repo`, which the next message starts.
     async fn new_thread(&mut self, repo: Option<RepoId>) {
+        let before = self.provider().map(str::to_owned);
         self.close().await;
         self.draft = repo;
+        // A new thread runs on the host's default, unless /provider chose another.
+        self.fit_provider(before.as_deref());
+    }
+
+    /// After the provider the next message runs on changed from `before`: drops a model chosen
+    /// for that one, and a mode or an effort this one can't run.
+    fn fit_provider(&mut self, before: Option<&str>) {
+        if self.provider() != before {
+            self.model = None;
+        }
+        if !self.modes().contains(&self.mode()) {
+            self.permission = self.modes().first().copied();
+        }
+        if !self.takes_effort() {
+            self.effort = None;
+        }
     }
 
     async fn submit(&mut self) {
@@ -1506,7 +1528,7 @@ impl App {
             Line::from("Do you want to proceed?"),
         ];
         for (i, answer) in answers.iter().enumerate() {
-            lines.push(if i == self.choice {
+            lines.push(if i == self.choice(pending) {
                 Line::from(format!("❯ {}. {answer}", i + 1)).fg(BLUE).bold()
             } else {
                 Line::from(format!("  {}. {answer}", i + 1))
@@ -1747,7 +1769,7 @@ fn upsert<T>(items: &mut Vec<T>, new: T, same: impl Fn(&T, &T) -> bool) {
 
 #[cfg(test)]
 mod tests {
-    use parallax_protocol::ClientInfo;
+    use parallax_protocol::{AgentEffort, AgentPermission, ClientInfo, ProviderInfo};
     use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
     use super::App;
@@ -1786,6 +1808,34 @@ mod tests {
         press(&mut app, &[KeyCode::Left, KeyCode::Char('n')]).await;
         assert!(app.menu.is_none());
         assert_eq!(app.draft, None, "Chats, before plxd made its entry");
+    }
+
+    #[test]
+    fn a_new_provider_drops_what_it_cant_run() {
+        let provider = |id: &str, permissions: &[&str]| -> ProviderInfo {
+            serde_json::from_value(serde_json::json!({
+                "instance": {"id": id, "kind": id, "name": id, "enabled": true, "args": [],
+                             "env": [], "models": []},
+                "installed": true, "installing": false, "models": [],
+                "permissions": permissions, "efforts": true, "coordinator": false, "loginEnv": [],
+            }))
+            .unwrap()
+        };
+        let mut app = app();
+        app.providers = vec![
+            provider("claude", &["edit", "plan"]),
+            provider("codex", &["edit", "auto"]),
+        ];
+        app.default_backend = Some("codex".to_owned());
+        app.model = Some("claude-opus-5".to_owned());
+        app.effort = Some(AgentEffort::High);
+        app.permission = Some(AgentPermission::Plan);
+
+        // As after /new from a Claude thread, onto the host's default, Codex.
+        app.fit_provider(Some("claude"));
+        assert_eq!(app.model, None);
+        assert_eq!(app.permission, Some(AgentPermission::Edit));
+        assert_eq!(app.effort, Some(AgentEffort::High));
     }
 
     #[tokio::test]
