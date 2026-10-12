@@ -1914,12 +1914,13 @@ impl Actor {
         if delivery != Delivery::Queue {
             return self.steer(queued, delivery == Delivery::Restart).await;
         }
+        let restarting = self.live.is_some() && self.restarting(&queued).await;
         // An idle session that can't take it ends now, and it starts the next process at once,
         // as it would if the session had already gone.
         if self.live.is_some()
             && !self.busy()
             && self.queued.is_empty()
-            && (!self.live_open() || self.restarting(&queued))
+            && (!self.live_open() || restarting)
         {
             self.end_session().await;
         }
@@ -1927,10 +1928,7 @@ impl Actor {
         // progress finishes before the next starts, what's sent after a message that waits waits
         // too, so the messages keep their order, and a released CLI takes no more.
         if self.live.is_some()
-            && (!self.live_open()
-                || self.restarting(&queued)
-                || self.in_flight > 0
-                || !self.queued.is_empty())
+            && (!self.live_open() || restarting || self.in_flight > 0 || !self.queued.is_empty())
         {
             return self.queue(queued).await;
         }
@@ -2070,32 +2068,35 @@ impl Actor {
             }
         }
         let (mut follow_up, seen) = queued.follow_up(&self.daemon, self.id).await?;
-        // A new model or mode the session takes on this turn ([`Actor::restarting`]).
-        let changes = self.changes(queued.options.clone());
-        if changes != RunOptions::default()
+        // A new model or mode the session takes on this turn ([`Actor::restarting`]), which the
+        // run keeps once the CLI has the message.
+        let mut changes = self.changes(queued.options.clone());
+        if changes != RunOptions::default() {
+            changes = self.in_project_mode(changes).await.unwrap_or_default();
+        }
+        follow_up.model.clone_from(&changes.model);
+        follow_up.permission = changes.permission;
+        let sent = match &self.live {
+            Some(live) => live.run.send(follow_up),
+            None => Err(SendError::Finished),
+        };
+        if sent.is_ok()
+            && changes != RunOptions::default()
             && let Some((_, backend)) = self
                 .daemon
                 .agents
                 .backends
                 .by_backend_name(&self.row.fields.backend)
+            && let Err(error) = self.store_options(backend.as_ref(), changes).await
         {
-            let (model, permission) = (
-                self.row.fields.model.clone(),
-                self.row.fields.permission.clone(),
+            // The CLI has the message, so it isn't dropped; the next process may run without them.
+            warn!(
+                run = %self.id,
+                error = %error.message,
+                "could not store the model or mode a message changed"
             );
-            self.store_options(backend.as_ref(), changes).await?;
-            let fields = &self.row.fields;
-            follow_up.model = fields.model.clone().filter(|_| fields.model != model);
-            follow_up.permission = fields
-                .permission
-                .as_deref()
-                .filter(|_| fields.permission != permission)
-                .and_then(option_value);
         }
-        Ok(match &self.live {
-            Some(live) => live.run.send(follow_up).map(|()| seen),
-            None => Err(SendError::Finished),
-        })
+        Ok(sent.map(|()| seen))
     }
 
     /// Records `queued`, which the live CLI has taken.
@@ -2129,28 +2130,52 @@ impl Actor {
     /// so it waits for the CLI to exit. A backend with [`Capabilities::switch_in_session`] takes
     /// a new model or mode on its next turn instead (PLX-727), but not on a `/compact`, which is
     /// no turn of its own there, and not a new mode on a thread without approvals, whose
-    /// Parallax tools depend on the mode its CLI started in.
+    /// Parallax tools depend on the mode its CLI started in. In a Project, the new mode is the
+    /// Project's as it is now ([`Actor::in_project_mode`]).
     ///
     /// [`Capabilities::switch_in_session`]: crate::backend::Capabilities::switch_in_session
-    fn restarting(&self, queued: &Queued) -> bool {
+    async fn restarting(&self, queued: &Queued) -> bool {
+        if self.moves(queued.account.as_ref()) {
+            return true;
+        }
         let changes = self.changes(queued.options.clone());
+        if changes == RunOptions::default() {
+            return false;
+        }
+        let Some(changes) = self.in_project_mode(changes).await else {
+            return true;
+        };
         let others = RunOptions {
             model: None,
             permission: None,
             ..changes.clone()
         };
-        if self.moves(queued.account.as_ref()) || others != RunOptions::default() {
-            return true;
+        others != RunOptions::default()
+            || is_compact(&queued.text, &queued.images)
+            || (changes.permission.is_some() && !self.row.fields.approvals)
+            || !self
+                .daemon
+                .agents
+                .backends
+                .by_backend_name(&self.row.fields.backend)
+                .is_some_and(|(_, backend)| backend.capabilities().switch_in_session)
+    }
+
+    /// `changes`, with a run in a Project taking the Project's mode as it is now, which
+    /// `project/update` may have changed since the run's CLI started, as [`Actor::store_options`]
+    /// stores it. `None` when that mode can't be read or mapped, so a new process reports why.
+    async fn in_project_mode(&self, mut changes: RunOptions) -> Option<RunOptions> {
+        if let Some(mode) = super::project_mode(&self.daemon, self.project).await.ok()? {
+            let (_, backend) = self
+                .daemon
+                .agents
+                .backends
+                .by_backend_name(&self.row.fields.backend)?;
+            let permission = super::in_mode(backend.as_ref(), mode).ok()?;
+            changes.permission =
+                Some(permission).filter(|&p| option_name(p) != self.row.fields.permission);
         }
-        changes != RunOptions::default()
-            && (is_compact(&queued.text, &queued.images)
-                || (changes.permission.is_some() && !self.row.fields.approvals)
-                || !self
-                    .daemon
-                    .agents
-                    .backends
-                    .by_backend_name(&self.row.fields.backend)
-                    .is_some_and(|(_, backend)| backend.capabilities().switch_in_session))
+        Some(changes)
     }
 
     /// Of `options`, those that differ from the run's.
@@ -2201,7 +2226,7 @@ impl Actor {
             let Some(next) = self.queued.front().cloned() else {
                 break;
             };
-            if self.restarting(&next) {
+            if self.restarting(&next).await {
                 // It needs a new process: the idle session goes, then it starts one.
                 if !self.busy() {
                     self.release();
@@ -4795,7 +4820,7 @@ mod tests {
         let claude = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
         for change in [&terra, &bypass] {
             let queued = message(TurnId::generate(), "Next", change.clone());
-            assert!(claude.restarting(&queued), "{change:?}");
+            assert!(claude.restarting(&queued).await, "{change:?}");
         }
 
         let (mut row, worktree) = fake_row_and_worktree();
@@ -4841,6 +4866,57 @@ mod tests {
                 (None, Some(AgentPermission::Bypass))
             ],
             "each turn carries only what changed"
+        );
+    }
+
+    /// PLX-727: a Codex thread without approvals that started in Bypass, whose Project has since
+    /// moved to Auto, restarts for a model change, since the Project's mode comes with it and its
+    /// Parallax tools depend on the mode its CLI started in.
+    #[tokio::test]
+    async fn a_project_mode_change_without_approvals_restarts_a_codex_session() {
+        use crate::backend::codex::CodexBackend;
+        use crate::backend::process::{Environment, Launcher};
+        use crate::paths::DataDir;
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
+        let launcher = Launcher::new(
+            DataDir::new(dir.path().join("cli")).unwrap(),
+            Environment::default(),
+        );
+        daemon
+            .agents
+            .backends
+            .set(Arc::new(CodexBackend::new(launcher)));
+        let (mut row, worktree) = fake_row_and_worktree();
+        row.fields.backend = "codex".to_owned();
+        row.fields.permission = Some("bypass".to_owned());
+        let project = row.fields.project_id;
+        super::store(&daemon, move |db| {
+            let fields = parallax_store::ProjectFields {
+                name: "app".to_owned(),
+                repo_path: "/src/app".to_owned(),
+                icon: None,
+                permission: "auto".to_owned(),
+                autonomy: "routine".to_owned(),
+                base_branch: None,
+            };
+            db.create_project(project, &fields)
+                .map_err(|e| super::store_error(&e))?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
+        let terra = RunOptions {
+            model: Some("gpt-6-terra".to_owned()),
+            ..RunOptions::default()
+        };
+        let queued = message(TurnId::generate(), "Next", terra);
+        assert!(actor.restarting(&queued).await, "Bypass to Auto");
+        actor.row.fields.permission = Some("auto".to_owned());
+        assert!(
+            !actor.restarting(&queued).await,
+            "in the Project's mode, the model changes in session"
         );
     }
 
