@@ -1,6 +1,7 @@
 //! The open thread in `plxd tui`: its events folded into what the screen shows, as the app's
 //! `transcript.ts` folds them, without images, subagents, or diffs.
 
+use jiff::Timestamp;
 use parallax_protocol::{
     AgentOutcome, AgentOutputItem, AgentToolStatus, ApprovalId, LoggedEvent, ParallaxEvent, RunId,
 };
@@ -42,6 +43,8 @@ pub enum Entry {
     },
     /// A notice from the vendor, a wake-up, or a failure.
     Note(String),
+    /// A turn ended: how long it took, from its start to its end as plxd logged them, and when.
+    Done { secs: u64, at: Timestamp },
 }
 
 /// A permission request the thread waits on.
@@ -131,11 +134,25 @@ impl Transcript {
         self.cost_micros = 0;
         self.model = None;
         let events = std::mem::take(&mut self.events);
+        let mut started = None;
         for event in &events {
             match &event.event {
                 ParallaxEvent::AgentOutput { items, .. } => {
                     for item in items {
                         self.fold_item(item);
+                        match item {
+                            AgentOutputItem::TurnStarted { .. } => started = Some(event.time),
+                            AgentOutputItem::TurnFinished { .. } => {
+                                if let Some(start) = started.take() {
+                                    let secs = event.time.duration_since(start).as_secs();
+                                    self.entries.push(Entry::Done {
+                                        secs: u64::try_from(secs).unwrap_or(0),
+                                        at: event.time,
+                                    });
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 // A request is pending until its run's next `agent.finished`.
@@ -333,7 +350,9 @@ mod tests {
     }
 
     fn event(seq: u64, event: Value) -> LoggedEvent {
-        let mut logged = json!({"seq": seq, "time": "2026-10-12T00:00:00Z"});
+        // A second per seq, so a turn's length shows.
+        let time = format!("2026-10-12T00:00:{:02}Z", seq % 60);
+        let mut logged = json!({"seq": seq, "time": time});
         logged["event"] = event;
         serde_json::from_value(logged).unwrap()
     }
@@ -375,6 +394,22 @@ mod tests {
                 Entry::User("Again".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn a_finished_turn_says_how_long_it_took() {
+        let mut transcript = Transcript::new(None);
+        transcript.apply([
+            output(
+                2,
+                json!([{"kind": "turnStarted"}, {"kind": "text", "text": "Hi"}]),
+            ),
+            output(13, json!([{"kind": "turnFinished"}])),
+        ]);
+        let Some(Entry::Done { secs, .. }) = transcript.entries.last() else {
+            panic!("{:?}", transcript.entries);
+        };
+        assert_eq!(*secs, 11);
     }
 
     #[test]

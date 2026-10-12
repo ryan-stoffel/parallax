@@ -3,45 +3,53 @@
 //! another client of the plxd the app attaches to, so its threads, Spaces, Projects, and messages
 //! are the app's, live, both ways.
 //!
-//! - Threads come from `orchestration/subscribeShell`; ← on an empty prompt or `/threads` lists
-//!   them.
-//! - The open thread is `orchestration/subscribeThread`, folded by [`transcript`].
+//! - Threads come from `orchestration/subscribeShell`; ← on an empty prompt or `/threads` opens
+//!   them in a sidebar, as the app lists them.
+//! - The open thread is `orchestration/subscribeThread`, folded by [`transcript`] and drawn by
+//!   [`draw`], with each run of tool calls folded into one line that a click opens.
 //! - A message is `message.dispatch`, queued after the turn under way, carrying any `/provider`,
 //!   `/model`, `/effort`, or `/mode` change made since the last one, as the app's composer does.
-//!   The first message of a new thread is `thread/start`. Esc is `run.interrupt`.
-//! - Typing `/` lists the commands; ↑↓ and Enter run one. Commands that choose something open a
-//!   list below the prompt, which ↑↓ and Enter pick from.
+//!   The first message of a new thread is `thread/start`: in the git checkout `plxd tui` ran in,
+//!   in place, as Claude Code works; otherwise in a repo, Space, or Chats. Esc is
+//!   `run.interrupt`.
+//! - While a turn runs, the terminal's own progress bar moves (`OSC 9;4`), as for Claude Code.
 //! - `host/health` every 10 s keeps the connection open and finds one that dropped; its
 //!   replacement subscribes again from fresh snapshots.
 
+mod draw;
 mod markdown;
 mod transcript;
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use parallax_protocol::methods::{
     AccountsDefaultsGet, AgentApprove, EventsUnsubscribe, HostHealth, OrchestrationDispatch,
-    OrchestrationSubscribeShell, OrchestrationSubscribeThread, ProvidersList, RequestMethod,
-    ThreadStart, ThreadUpdate,
+    OrchestrationSubscribeShell, OrchestrationSubscribeThread, ProvidersList, RepoAdd,
+    RequestMethod, ThreadStart, ThreadUpdate,
 };
 use parallax_protocol::{
     AccountChoice, AccountsDefaultsGetParams, AgentApprovalAnswer, AgentApproveParams, AgentEffort,
-    AgentPermission, AgentRun, AgentStatus, AgentToolStatus, ApprovalId, DispatchMode,
-    EventsEventParams, EventsUnsubscribeParams, HostHealthParams, LoggedEvent,
-    OrchestrationCommand, ParallaxEvent, Project, ProviderInfo, ProviderKind, ProvidersListParams,
-    Repo, RepoId, RunId, SubscribeShellParams, SubscribeThreadParams, SubscriptionId, Thread,
-    ThreadStartParams, ThreadUpdateParams, TurnId,
+    AgentPermission, AgentRun, AgentStatus, ApprovalId, DispatchMode, EventsEventParams,
+    EventsUnsubscribeParams, HostHealthParams, LoggedEvent, OrchestrationCommand, ParallaxEvent,
+    Project, ProviderInfo, ProviderKind, ProvidersListParams, Repo, RepoAddParams, RepoId, RunId,
+    SubscribeShellParams, SubscribeThreadParams, SubscriptionId, Thread, ThreadStartParams,
+    ThreadUpdateParams, TurnId,
 };
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
-use ratatui::style::{Color, Style, Stylize as _};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph, Wrap};
-use ratatui::{DefaultTerminal, Frame};
+use ratatui::DefaultTerminal;
+use ratatui::crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+use ratatui::crossterm::execute;
+use ratatui::layout::{Position, Rect};
+use ratatui::text::Span;
 use tokio::sync::mpsc;
 
-use self::transcript::{Entry, Pending, Transcript};
+use self::transcript::{Pending, Transcript};
 use crate::peer::{Incoming, Plxd};
 
 /// How often `host/health` goes out: well under plxd's 90 s idle timeout, and soon enough that a
@@ -58,18 +66,13 @@ const FRAME: Duration = Duration::from_millis(120);
 /// The most rows a list below the prompt shows at once; ↑↓ scroll the rest.
 const MENU_ROWS: usize = 10;
 
-/// The app's mark, `ParallaxMark`, in dark mode: its two circles and their overlap.
-const MARK_BLUE: [u8; 3] = [0x2b, 0x5c, 0xff];
-const MARK_CORAL: [u8; 3] = [0xff, 0x4a, 0x1f];
-const MARK_OVERLAP: [u8; 3] = [0xe4, 0xe4, 0xe7];
-const BLUE: Color = Color::Rgb(MARK_BLUE[0], MARK_BLUE[1], MARK_BLUE[2]);
-const CORAL: Color = Color::Rgb(MARK_CORAL[0], MARK_CORAL[1], MARK_CORAL[2]);
+/// Lines a wheel step scrolls.
+const WHEEL: u16 = 3;
 
-/// The logo's width and height in pixels: 14 columns, and 7 rows of two pixels each.
-const LOGO_PIXELS: u16 = 14;
-
-/// The spinner's frames, Claude Code's.
-const SPINNER: [&str; 6] = ["·", "✢", "✳", "✶", "✻", "✽"];
+/// The terminal's progress bar, `OSC 9;4`: moving while a turn runs, as Ghostty, Windows
+/// Terminal, and others show it for Claude Code, and cleared after. Others ignore it.
+const PROGRESS_ON: &str = "\x1b]9;4;3\x07";
+const PROGRESS_OFF: &str = "\x1b]9;4;0\x07";
 
 /// The slash commands, with what each does.
 const COMMANDS: [(&str, &str); 9] = [
@@ -79,7 +82,7 @@ const COMMANDS: [(&str, &str); 9] = [
     ),
     (
         "/threads",
-        "switch to another thread, Space, or Project (also ←)",
+        "open the sidebar of threads, Spaces, and Projects (also ←)",
     ),
     (
         "/provider",
@@ -159,7 +162,7 @@ pub async fn run(plxd: Plxd) -> Result<(), String> {
     let mut app = App::new(plxd);
     // Before the terminal changes, so an unreachable plxd is a plain error.
     app.subscribe_shell().await?;
-    app.draft = app.cwd_repo();
+    app.draft = app.cwd_draft();
     app.load_providers().await;
     let (sender, mut keys) = mpsc::unbounded_channel();
     // crossterm reads keys blocking; the thread ends with the process.
@@ -171,9 +174,32 @@ pub async fn run(plxd: Plxd) -> Result<(), String> {
         }
     });
     let mut terminal = ratatui::init();
+    // Clicks open tool calls and threads, and the wheel scrolls. Shift+drag still selects text.
+    let _ = execute!(std::io::stdout(), EnableMouseCapture);
     let result = app.run(&mut terminal, &mut keys, &mut incoming).await;
+    let _ = execute!(std::io::stdout(), DisableMouseCapture);
+    progress(false);
     ratatui::restore();
     result
+}
+
+/// Starts or clears the terminal's progress bar.
+fn progress(on: bool) {
+    let mut stdout = std::io::stdout();
+    let _ = stdout.write_all(if on { PROGRESS_ON } else { PROGRESS_OFF }.as_bytes());
+    let _ = stdout.flush();
+}
+
+/// Where a new thread starts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Draft {
+    /// With no repo: Chats.
+    Chats,
+    /// A repo or Space, in a worktree of its own, as the app starts one.
+    Repo(RepoId),
+    /// The git checkout `plxd tui` ran in, worked in place, as Claude Code works in its folder.
+    /// The first message adds it to plxd if plxd doesn't list it yet.
+    Here(PathBuf),
 }
 
 /// What picking a row of a list does.
@@ -192,15 +218,18 @@ enum Pick {
 /// A row of a list.
 struct Item {
     label: String,
+    /// A model's id, a provider's account, a thread's age, or a repo's folder.
     detail: String,
     /// A heading row, such as a repo above its threads.
     heading: bool,
-    /// What the next message uses now.
+    /// What the next message uses now, or the open thread.
     current: bool,
+    /// A thread whose turn is under way.
+    working: bool,
     pick: Pick,
 }
 
-/// A list to pick from, below the prompt.
+/// A list to pick from: the sidebar for threads, below the prompt for the rest.
 struct Menu {
     title: &'static str,
     items: Vec<Item>,
@@ -217,6 +246,10 @@ impl Menu {
             selected,
         }
     }
+
+    fn sidebar(&self) -> bool {
+        self.title == "Threads"
+    }
 }
 
 /// The open thread.
@@ -226,6 +259,22 @@ struct Open {
     transcript: Transcript,
 }
 
+/// Where the last frame drew what a click can land on.
+#[derive(Default)]
+struct Hits {
+    /// The transcript's area and the content row at its top.
+    transcript: Rect,
+    top: u16,
+    /// Each run of tool calls: its first content row, the row after its last, and its key.
+    tools: Vec<(u16, u16, usize)>,
+    /// The sidebar's area, and the item each of its rows shows.
+    sidebar: Option<(Rect, Vec<(u16, usize)>)>,
+}
+
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent bits of screen state"
+)]
 struct App {
     plxd: Plxd,
     /// The mark, drawn once.
@@ -240,10 +289,17 @@ struct App {
     threads: Vec<Thread>,
     runs: HashMap<RunId, AgentRun>,
     open: Option<Open>,
-    /// With no thread open, the next message starts one in this repo or Space, or in none.
-    draft: Option<RepoId>,
-    /// The list showing below the prompt, if one is.
+    /// With no thread open, where the next message starts one.
+    draft: Draft,
+    /// Why the folder `plxd tui` ran in isn't [`Draft::Here`], shown until the first message.
+    not_here: Option<String>,
+    /// The list showing, if one is.
     menu: Option<Menu>,
+    /// The runs of tool calls opened by a click, by their first entry, and whether Ctrl+O
+    /// opened them all.
+    expanded: HashSet<usize>,
+    expand_all: bool,
+    hits: RefCell<Hits>,
     input: String,
     /// The highlighted command while `/` lists them.
     slash: usize,
@@ -279,7 +335,7 @@ impl App {
     fn new(plxd: Plxd) -> Self {
         Self {
             plxd,
-            logo: logo(),
+            logo: draw::logo(),
             default_backend: None,
             providers: Vec::new(),
             shell: None,
@@ -288,8 +344,12 @@ impl App {
             threads: Vec::new(),
             runs: HashMap::new(),
             open: None,
-            draft: None,
+            draft: Draft::Chats,
+            not_here: None,
             menu: None,
+            expanded: HashSet::new(),
+            expand_all: false,
+            hits: RefCell::default(),
             input: String::new(),
             slash: 0,
             history: Vec::new(),
@@ -320,6 +380,7 @@ impl App {
     ) -> Result<(), String> {
         let mut health = tokio::time::interval(HEALTH);
         let mut frames = tokio::time::interval(FRAME);
+        let mut progressing = false;
         while !self.done {
             if self.dirty {
                 self.dirty = false;
@@ -327,12 +388,16 @@ impl App {
                     .draw(|frame| self.draw(frame))
                     .map_err(|error| format!("could not draw: {error}"))?;
             }
+            if progressing != self.working_since.is_some() {
+                progressing = !progressing;
+                progress(progressing);
+            }
             tokio::select! {
                 Some(event) = keys.recv() => {
-                    if let Event::Key(key) = event
-                        && key.kind == KeyEventKind::Press
-                    {
-                        self.key(key).await;
+                    match event {
+                        Event::Key(key) if key.kind == KeyEventKind::Press => self.key(key).await,
+                        Event::Mouse(mouse) => self.mouse(mouse).await,
+                        _ => {}
                     }
                     self.dirty = true;
                 }
@@ -416,14 +481,21 @@ impl App {
         }
     }
 
-    /// The repo plxd knows at this process's folder, so `plxd tui` in a checkout starts its
-    /// threads there, as Claude Code does in its folder.
-    fn cwd_repo(&self) -> Option<RepoId> {
-        let cwd = std::env::current_dir().ok()?.canonicalize().ok()?;
-        self.repos
-            .iter()
-            .find(|repo| !repo.scratch && !repo.space && std::path::Path::new(&repo.path) == cwd)
-            .map(|repo| repo.id)
+    /// Where `plxd tui` starts threads: in the git checkout it ran in, worked in place. plxd
+    /// runs threads only in git checkouts, so anywhere else they start in Chats, and
+    /// [`Self::not_here`] says why.
+    fn cwd_draft(&mut self) -> Draft {
+        let Ok(cwd) = std::env::current_dir() else {
+            return Draft::Chats;
+        };
+        if let Some(top) = git_top(&cwd) {
+            return Draft::Here(top);
+        }
+        self.not_here = Some(format!(
+            "{} isn't in a git repository, and plxd runs threads in one, so new threads start in Chats.",
+            tilde(&cwd)
+        ));
+        Draft::Chats
     }
 
     /// Ends the open thread's subscription, if one is open.
@@ -435,6 +507,7 @@ impl App {
         }
         self.scroll = 0;
         self.working_since = None;
+        self.expanded.clear();
     }
 
     /// Opens `run`'s transcript in place of the open one.
@@ -457,6 +530,7 @@ impl App {
             subscription: Some(subscribed.subscription),
             transcript,
         });
+        self.not_here = None;
         // As the app does on opening a thread. A coordinator isn't a thread, and fails.
         let _ = self
             .call::<ThreadUpdate>(ThreadUpdateParams {
@@ -565,6 +639,12 @@ impl App {
         }
         self.quitting = false;
         self.error = None;
+        // Opens or closes every run of tool calls, as Claude Code's Ctrl+O shows the details.
+        if control && key.code == KeyCode::Char('o') {
+            self.expand_all = !self.expand_all;
+            self.expanded.clear();
+            return;
+        }
         if self.menu.is_some() {
             return self.menu_key(key.code).await;
         }
@@ -616,6 +696,50 @@ impl App {
             KeyCode::Char(c) => {
                 self.input.push(c);
                 self.slash = 0;
+            }
+            _ => {}
+        }
+    }
+
+    /// A click opens or closes a run of tool calls, or picks a row of the sidebar, and a click
+    /// beside the sidebar closes it. The wheel scrolls the transcript.
+    async fn mouse(&mut self, mouse: MouseEvent) {
+        let at = Position::new(mouse.column, mouse.row);
+        match mouse.kind {
+            MouseEventKind::ScrollUp => self.scroll = self.scroll.saturating_add(WHEEL),
+            MouseEventKind::ScrollDown => self.scroll = self.scroll.saturating_sub(WHEEL),
+            MouseEventKind::Down(MouseButton::Left) => {
+                let sidebar = self.hits.borrow().sidebar.clone();
+                if let Some((area, rows)) = sidebar {
+                    let row = rows.iter().find(|(row, _)| *row == at.y).map(|(_, i)| *i);
+                    match (area.contains(at), row) {
+                        (true, Some(index)) => {
+                            if let Some(menu) = &mut self.menu {
+                                menu.selected = index;
+                            }
+                            self.menu_key(KeyCode::Enter).await;
+                        }
+                        (true, None) => {}
+                        (false, _) => self.menu = None,
+                    }
+                    return;
+                }
+                let hits = self.hits.borrow();
+                if !hits.transcript.contains(at) {
+                    return;
+                }
+                let row = hits.top + (at.y - hits.transcript.y);
+                let key = hits
+                    .tools
+                    .iter()
+                    .find(|(first, end, _)| (*first..*end).contains(&row))
+                    .map(|(.., key)| *key);
+                drop(hits);
+                if let Some(key) = key
+                    && !self.expanded.remove(&key)
+                {
+                    self.expanded.insert(key);
+                }
             }
             _ => {}
         }
@@ -687,12 +811,13 @@ impl App {
     async fn menu_key(&mut self, code: KeyCode) {
         let Some(menu) = &mut self.menu else { return };
         let last = menu.items.len().saturating_sub(1);
+        let page = if menu.sidebar() { 10 } else { MENU_ROWS };
         match code {
-            KeyCode::Esc | KeyCode::Left => self.menu = None,
+            KeyCode::Esc | KeyCode::Left | KeyCode::Right => self.menu = None,
             KeyCode::Up => menu.selected = menu.selected.saturating_sub(1),
             KeyCode::Down => menu.selected = (menu.selected + 1).min(last),
-            KeyCode::PageUp => menu.selected = menu.selected.saturating_sub(MENU_ROWS),
-            KeyCode::PageDown => menu.selected = (menu.selected + MENU_ROWS).min(last),
+            KeyCode::PageUp => menu.selected = menu.selected.saturating_sub(page),
+            KeyCode::PageDown => menu.selected = (menu.selected + page).min(last),
             KeyCode::Enter => {
                 let pick = menu.items.get(menu.selected).map(|item| item.pick.clone());
                 self.menu = None;
@@ -700,8 +825,8 @@ impl App {
                     self.pick(pick).await;
                 }
             }
-            // In the thread list: a new thread in the selected row's repo or Space.
-            KeyCode::Char('n') => {
+            // In the sidebar: a new thread in the selected row's repo or Space.
+            KeyCode::Char('n') if menu.sidebar() => {
                 let repo = menu
                     .items
                     .iter()
@@ -713,7 +838,8 @@ impl App {
                     })
                     .flatten();
                 self.menu = None;
-                self.new_thread(repo).await;
+                self.new_thread(repo.map_or(Draft::Chats, Draft::Repo))
+                    .await;
             }
             _ => {}
         }
@@ -725,11 +851,15 @@ impl App {
                 // What was chosen for one thread doesn't follow to another.
                 (self.provider, self.model, self.effort, self.permission) =
                     (None, None, None, None);
-                if let Err(error) = self.open(run).await {
-                    self.error = Some(error);
+                match self.open(run).await {
+                    Ok(()) => self.cd(),
+                    Err(error) => self.error = Some(error),
                 }
             }
-            Pick::Group(repo) => self.new_thread(repo).await,
+            Pick::Group(repo) => {
+                self.new_thread(repo.map_or(Draft::Chats, Draft::Repo))
+                    .await;
+            }
             Pick::Provider(id) => {
                 let before = self.provider().map(str::to_owned);
                 let thread_has_it = self.open_run().is_some_and(|run| run.backend == id);
@@ -739,6 +869,15 @@ impl App {
             Pick::Model(id) => self.model = Some(id),
             Pick::Effort(effort) => self.effort = Some(effort),
             Pick::Mode(mode) => self.permission = Some(mode),
+        }
+    }
+
+    /// Moves `plxd tui` into the open thread's repo, when it's a folder on this computer, so a
+    /// later `/new` and the header follow it. The shell that started `plxd tui` stays where it
+    /// was: no program can move its parent.
+    fn cd(&self) {
+        if let Some(folder) = self.folder() {
+            let _ = std::env::set_current_dir(folder);
         }
     }
 
@@ -798,11 +937,11 @@ impl App {
         self.open.as_ref()?.transcript.pending.first()
     }
 
-    /// Leaves the open thread for a new one in `repo`, which the next message starts.
-    async fn new_thread(&mut self, repo: Option<RepoId>) {
+    /// Leaves the open thread for a new one at `draft`, which the next message starts.
+    async fn new_thread(&mut self, draft: Draft) {
         let before = self.provider().map(str::to_owned);
         self.close().await;
-        self.draft = repo;
+        self.draft = draft;
         // A new thread runs on the host's default, unless /provider chose another.
         self.fit_provider(before.as_deref());
     }
@@ -855,7 +994,7 @@ impl App {
             .await
             .map(drop)
         } else {
-            self.start(self.draft, text.clone(), account).await
+            self.start(self.draft.clone(), text.clone(), account).await
         };
         match sent {
             Ok(()) => {
@@ -879,19 +1018,22 @@ impl App {
                         .find(|repo| repo.name.eq_ignore_ascii_case(argument))
                         .map(|repo| repo.id)
                 });
-                let repo = match named {
-                    Some(Some(repo)) => Some(repo),
+                let draft = match named {
+                    Some(Some(repo)) => Draft::Repo(repo),
                     Some(None) => {
                         self.error = Some(format!("no repo or Space is named {argument}"));
                         return;
                     }
-                    None => self
-                        .open_thread()
-                        .map_or(self.draft, |thread| Some(thread.repo)),
+                    // Where the open thread works, or where the next one was going to.
+                    None => match self.open_thread() {
+                        Some(thread) if self.repo(thread.repo).is_some_and(|r| !r.scratch) => {
+                            Draft::Repo(thread.repo)
+                        }
+                        Some(_) => Draft::Chats,
+                        None => self.draft.clone(),
+                    },
                 };
-                // The threads with no repo start with none.
-                let repo = repo.filter(|id| !self.repo(*id).is_some_and(|repo| repo.scratch));
-                self.new_thread(repo).await;
+                self.new_thread(draft).await;
             }
             "/threads" | "/resume" => self.menu = Some(self.threads_menu()),
             // An id the provider doesn't list still goes, as the app's custom models do.
@@ -927,9 +1069,11 @@ impl App {
                 self.notice = Some(
                     [
                         "/ lists commands: ↑↓ choose, Enter runs, Tab completes",
-                        "← on an empty prompt lists threads; n there starts one",
+                        "← on an empty prompt opens the sidebar; n there starts a thread",
+                        "Click a tool line to open it · Ctrl+O opens them all",
                         "Shift+Tab mode · Esc interrupts · \\ or Alt+Enter new line",
-                        "↑↓ history · PgUp/PgDn scroll · Ctrl-C twice quits",
+                        "↑↓ history · wheel or PgUp/PgDn scroll · Shift+drag selects text",
+                        "Ctrl-C twice quits",
                     ]
                     .join("\n"),
                 );
@@ -961,38 +1105,44 @@ impl App {
         }
     }
 
-    /// The thread list: each Project's coordinator, then each repo and Space with its threads,
-    /// newest first.
+    /// The sidebar, as the app lists threads: each Project's coordinator, then each repo and
+    /// Space with its threads, newest first, each with its age.
     fn threads_menu(&self) -> Menu {
         let open = self.open.as_ref().map(|open| open.run);
-        let run_item = |run: RunId, label: String| Item {
+        let now = jiff::Timestamp::now();
+        let run_item = |run: RunId, label: String, at: Option<jiff::Timestamp>| Item {
             label,
-            detail: if self.working(run) {
-                "● working".to_owned()
-            } else {
-                String::new()
-            },
+            detail: at.map_or_else(String::new, |at| age(now, at)),
             heading: false,
             current: Some(run) == open,
+            working: self.working(run),
             pick: Pick::Run(run),
         };
-        let mut items: Vec<Item> = self
+        let heading = |label: String, detail: String, repo: Option<RepoId>| Item {
+            label,
+            detail,
+            heading: true,
+            current: false,
+            working: false,
+            pick: Pick::Group(repo),
+        };
+        let mut items: Vec<Item> = Vec::new();
+        let coordinators: Vec<Item> = self
             .projects
             .iter()
             .filter_map(|project| {
                 let run = project.coordinator?;
-                Some(run_item(run, format!("◆ {}", project.name)))
+                let at = self.runs.get(&run).map(|run| run.updated_at);
+                Some(run_item(run, project.name.clone(), at))
             })
             .collect();
+        if !coordinators.is_empty() {
+            items.push(heading("Projects".to_owned(), String::new(), None));
+            items.extend(coordinators);
+        }
         // plxd makes the entry for threads with no repo on first use; until then, offer it.
         if !self.repos.iter().any(|repo| repo.scratch) {
-            items.push(Item {
-                label: "Chats".to_owned(),
-                detail: "n for a new thread here".to_owned(),
-                heading: true,
-                current: false,
-                pick: Pick::Group(None),
-            });
+            items.push(heading("Chats".to_owned(), String::new(), None));
         }
         for repo in &self.repos {
             let mut threads: Vec<&Thread> = self
@@ -1003,18 +1153,20 @@ impl App {
             threads.sort_by_key(|thread| {
                 std::cmp::Reverse(thread.last_prompt_at.unwrap_or(thread.created_at))
             });
-            items.push(Item {
-                label: group_name(repo),
-                detail: "n for a new thread here".to_owned(),
-                heading: true,
-                current: false,
-                pick: Pick::Group((!repo.scratch).then_some(repo.id)),
-            });
-            items.extend(
-                threads
-                    .into_iter()
-                    .map(|thread| run_item(thread.id, format!("  {}", self.title(thread.id)))),
-            );
+            let folder = if repo.scratch || repo.space {
+                String::new()
+            } else {
+                tilde(Path::new(&repo.path))
+            };
+            items.push(heading(
+                group_name(repo),
+                folder,
+                (!repo.scratch).then_some(repo.id),
+            ));
+            items.extend(threads.into_iter().map(|thread| {
+                let at = thread.last_prompt_at.unwrap_or(thread.created_at);
+                run_item(thread.id, self.title(thread.id), Some(at))
+            }));
         }
         Menu::new("Threads", items)
     }
@@ -1039,6 +1191,7 @@ impl App {
                     detail,
                     heading: false,
                     current: now == Some(provider.instance.id.as_str()),
+                    working: false,
                     pick: Pick::Provider(provider.instance.id.clone()),
                 };
                 (signed_in, item)
@@ -1054,8 +1207,7 @@ impl App {
         ))
     }
 
-    /// The models of the provider the next message runs on: the ones plxd found, then the
-    /// user's own.
+    /// The models of the provider the next message runs on.
     fn models_menu(&self) -> Result<Menu, String> {
         let Some(id) = self.provider() else {
             return Err("choose a provider with /provider first".to_owned());
@@ -1073,6 +1225,7 @@ impl App {
                 label: name,
                 detail: id.clone(),
                 heading: false,
+                working: false,
                 pick: Pick::Model(id),
             })
             .collect();
@@ -1100,6 +1253,7 @@ impl App {
                 detail: String::new(),
                 heading: false,
                 current: now == Some(effort),
+                working: false,
                 pick: Pick::Effort(effort),
             })
             .collect();
@@ -1116,20 +1270,26 @@ impl App {
                 detail: String::new(),
                 heading: false,
                 current: now == mode,
+                working: false,
                 pick: Pick::Mode(mode),
             })
             .collect();
         Menu::new("Mode", items)
     }
 
-    /// Starts a thread with the host's defaults and the changes made here, asking here before
-    /// tools run, as the app's threads do.
+    /// Starts a thread at `draft` with the host's defaults and the changes made here, asking
+    /// here before tools run, as the app's threads do.
     async fn start(
         &mut self,
-        repo: Option<RepoId>,
+        draft: Draft,
         prompt: String,
         account: Option<AccountChoice>,
     ) -> Result<(), String> {
+        let (repo, checkout) = match draft {
+            Draft::Chats => (None, false),
+            Draft::Repo(repo) => (Some(repo), false),
+            Draft::Here(path) => (Some(self.add_repo(&path).await?), true),
+        };
         let started = self
             .call::<ThreadStart>(ThreadStartParams {
                 run_id: RunId::generate(),
@@ -1148,7 +1308,7 @@ impl App {
                 branch_slug: None,
                 images: Vec::new(),
                 approvals: true,
-                checkout: false,
+                checkout,
                 base: None,
                 checkout_ref: None,
                 threads: Vec::new(),
@@ -1161,6 +1321,26 @@ impl App {
         });
         self.runs.insert(run, started.run);
         self.open(run).await
+    }
+
+    /// The repo entry for the checkout at `path`, adding it to plxd if plxd doesn't list it.
+    async fn add_repo(&mut self, path: &Path) -> Result<RepoId, String> {
+        let listed = self
+            .repos
+            .iter()
+            .find(|repo| !repo.scratch && !repo.space && Path::new(&repo.path) == path);
+        if let Some(repo) = listed {
+            return Ok(repo.id);
+        }
+        let added = self
+            .call::<RepoAdd>(RepoAddParams {
+                id: RepoId::generate(),
+                path: path.to_string_lossy().into_owned(),
+            })
+            .await?;
+        let id = added.repo.id;
+        upsert(&mut self.repos, added.repo, |held, new| held.id == new.id);
+        Ok(id)
     }
 
     async fn stop(&mut self) {
@@ -1258,8 +1438,31 @@ impl App {
             let repo = self.open_thread().and_then(|thread| self.repo(thread.repo));
             return repo.map_or_else(|| "Chats".to_owned(), group_name);
         }
-        let repo = self.draft.and_then(|id| self.repo(id));
-        repo.map_or_else(|| "Chats".to_owned(), group_name)
+        match &self.draft {
+            Draft::Chats => "Chats".to_owned(),
+            Draft::Repo(id) => self
+                .repo(*id)
+                .map_or_else(|| "Chats".to_owned(), group_name),
+            Draft::Here(path) => path.file_name().map_or_else(
+                || path.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            ),
+        }
+    }
+
+    /// The folder on this computer the open thread, or the next one, works in: its repo's, or
+    /// the checkout `plxd tui` ran in. None for Chats and Spaces, whose folders are plxd's.
+    fn folder(&self) -> Option<PathBuf> {
+        let repo = match &self.open {
+            Some(_) => self.open_thread().and_then(|thread| self.repo(thread.repo)),
+            None => match &self.draft {
+                Draft::Here(path) => return Some(path.clone()),
+                Draft::Repo(id) => self.repo(*id),
+                Draft::Chats => None,
+            },
+        }?;
+        let path = PathBuf::from(&repo.path);
+        (!repo.scratch && !repo.space && path.is_dir()).then_some(path)
     }
 
     /// Whether `run`'s turn is under way. A run waiting out a usage limit isn't.
@@ -1283,298 +1486,128 @@ impl App {
         matches.sort_by_key(|(name, _)| *name != self.input);
         matches
     }
+}
 
-    fn draw(&self, frame: &mut Frame) {
-        let area = frame.area().inner(Margin::new(1, 0));
-        let notice = self
-            .notice
-            .as_deref()
-            .map_or(0, |text| text.lines().count() + 1);
-        let pending = self.pending();
-        let prompt_rows = match pending {
-            Some(pending) if pending.always => 7,
-            Some(_) => 6,
-            None => self.input_lines(area.width).len(),
-        };
-        let suggestions = self.suggestions();
-        let below = match &self.menu {
-            Some(menu) => menu.items.len().min(MENU_ROWS) + 1,
-            None if !suggestions.is_empty() => suggestions.len(),
-            None => 2,
-        };
-        let rows = |n: usize| Constraint::Length(u16::try_from(n).unwrap_or(u16::MAX));
-        let [
-            body,
-            notice_area,
-            spinner,
-            meta,
-            top_rule,
-            prompt,
-            bottom_rule,
-            footer,
-        ] = Layout::vertical([
-            Constraint::Fill(1),
-            rows(notice),
-            rows(usize::from(self.working_since.is_some())),
-            rows(1),
-            rows(1),
-            rows(prompt_rows),
-            rows(1),
-            rows(below),
-        ])
-        .areas(area);
-        self.draw_transcript(frame, body);
-        if let Some(text) = &self.notice {
-            let lines: Vec<Line> = text
-                .lines()
-                .map(|line| Line::from(line).dark_gray())
-                .collect();
-            frame.render_widget(Paragraph::new(lines), notice_area);
-        }
-        if let Some(since) = self.working_since {
-            let line = Line::from(vec![
-                Span::from(format!("{} Working… ", SPINNER[self.frame % SPINNER.len()])).fg(CORAL),
-                Span::from(format!(
-                    "({}s · esc to interrupt)",
-                    since.elapsed().as_secs()
-                ))
-                .dark_gray(),
-            ]);
-            frame.render_widget(Paragraph::new(line), spinner);
-        }
-        self.draw_meta(frame, meta);
-        let rule = Paragraph::new("─".repeat(usize::from(area.width))).dark_gray();
-        frame.render_widget(rule.clone(), top_rule);
-        frame.render_widget(rule, bottom_rule);
-        match pending {
-            Some(pending) => self.draw_approval(frame, prompt, pending),
-            None => self.draw_prompt(frame, prompt),
-        }
-        if let Some(menu) = &self.menu {
-            draw_menu(frame, footer, menu);
-        } else if suggestions.is_empty() {
-            self.draw_footer(frame, footer);
-        } else {
-            let selected = self.slash.min(suggestions.len() - 1);
-            let lines: Vec<Line> = suggestions
-                .into_iter()
-                .enumerate()
-                .map(|(i, (name, what))| {
-                    let line = Line::from(vec![
-                        Span::from(format!("{name:<10} ")).fg(BLUE),
-                        Span::from(what).dark_gray(),
-                    ]);
-                    if i == selected {
-                        line.bold().reversed()
-                    } else {
-                        line
-                    }
-                })
-                .collect();
-            frame.render_widget(Paragraph::new(lines), footer);
-        }
+/// The top of the git working tree `dir` is in, by git itself, or None outside one.
+fn git_top(dir: &Path) -> Option<PathBuf> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--show-toplevel"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
     }
+    let top = String::from_utf8(output.stdout).ok()?;
+    PathBuf::from(top.trim_end()).canonicalize().ok()
+}
 
-    /// The header: the mark beside the version, the model, the provider and mode, and where
-    /// the thread works.
-    fn header(&self) -> Vec<Line<'static>> {
-        let provider = self
-            .provider()
-            .map_or_else(|| "host default".to_owned(), |id| self.provider_name(id));
-        let title = match &self.open {
-            Some(open) => self.title(open.run),
-            None => "new thread".to_owned(),
-        };
-        let effort = self.effort.or_else(|| self.open_run()?.effort);
-        let text = [
-            vec![],
-            vec![
-                Span::from("Parallax ").bold(),
-                Span::from(format!("v{}", crate::version())).dark_gray(),
+/// `path` with the home folder as `~`.
+fn tilde(path: &Path) -> String {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    match home.and_then(|home| path.strip_prefix(home).ok().map(Path::to_owned)) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
+/// How long ago `at` was, as the app's sidebar says it: now, 5m, 2h, 3d.
+fn age(now: jiff::Timestamp, at: jiff::Timestamp) -> String {
+    let secs = now.duration_since(at).as_secs().max(0);
+    match secs {
+        0..60 => "now".to_owned(),
+        60..3_600 => format!("{}m", secs / 60),
+        3_600..86_400 => format!("{}h", secs / 3_600),
+        _ => format!("{}d", secs / 86_400),
+    }
+}
+
+/// What a run of tool calls did, as Claude Code sums one up: "Ran 2 shell commands, edited 1
+/// file". Tools are grouped by name across vendors; any other counts as a tool used.
+fn summary<'a>(names: impl IntoIterator<Item = &'a str>) -> String {
+    const KINDS: [(&str, &str, &[&str]); 6] = [
+        (
+            "ran",
+            "shell command",
+            &[
+                "bash",
+                "shell",
+                "exec_command",
+                "local_shell",
+                "command",
+                "run_terminal_cmd",
             ],
-            vec![
-                Span::from(self.model_label()).bold().fg(Color::White),
-                Span::from(format!(
-                    " · {} effort",
-                    effort.map_or("default", effort_name)
-                ))
-                .dark_gray(),
+        ),
+        (
+            "read",
+            "file",
+            &["read", "view", "read_file", "notebookread"],
+        ),
+        (
+            "edited",
+            "file",
+            &[
+                "write",
+                "edit",
+                "multiedit",
+                "notebookedit",
+                "apply_patch",
+                "str_replace",
+                "create_file",
+                "edit_file",
+                "write_file",
             ],
-            vec![Span::from(format!("{provider} · {}", mode_name(self.mode()))).dark_gray()],
-            vec![Span::from(format!("{} › {title}", self.place())).dark_gray()],
-            vec![Span::from("/ for commands · ← for threads").dark_gray()],
-            vec![],
-        ];
-        self.logo
+        ),
+        (
+            "searched",
+            "time",
+            &[
+                "grep",
+                "glob",
+                "ls",
+                "search",
+                "find",
+                "codebase_search",
+                "list_dir",
+                "grep_search",
+                "file_search",
+            ],
+        ),
+        (
+            "fetched",
+            "page",
+            &["webfetch", "websearch", "web_search", "fetch"],
+        ),
+        ("updated", "to-do list", &["todowrite", "update_plan"]),
+    ];
+    let mut counts = [0usize; KINDS.len() + 1];
+    for name in names {
+        let name = name.to_ascii_lowercase();
+        let kind = KINDS
             .iter()
-            .cloned()
-            .zip(text)
-            .map(|(mut mark, text)| {
-                mark.push(Span::raw("   "));
-                mark.extend(text);
-                Line::from(mark)
-            })
-            .collect()
+            .position(|(.., names)| names.contains(&name.as_str()));
+        counts[kind.unwrap_or(KINDS.len())] += 1;
     }
-
-    fn draw_transcript(&self, frame: &mut Frame, area: Rect) {
-        let mut lines = self.header();
-        lines.push(Line::default());
-        if let Some(open) = &self.open {
-            for entry in &open.transcript.entries {
-                lines.extend(entry_lines(entry));
-                lines.push(Line::default());
-            }
-        }
-        if let Some(error) = &self.error {
-            lines.push(Line::from(format!("  ⎿  {error}")).red());
-        }
-        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
-        // The end, less what was scrolled up.
-        let total = u16::try_from(paragraph.line_count(area.width)).unwrap_or(u16::MAX);
-        let top = total.saturating_sub(area.height.saturating_add(self.scroll));
-        frame.render_widget(paragraph.scroll((top, 0)), area);
+    let mut parts = Vec::new();
+    for (i, &count) in counts.iter().enumerate().filter(|(_, count)| **count > 0) {
+        let (verb, noun) = KINDS
+            .get(i)
+            .map_or(("used", "tool"), |(verb, noun, _)| (*verb, *noun));
+        parts.push(match noun {
+            "to-do list" => format!("{verb} the to-do list"),
+            _ if count == 1 => format!("{verb} 1 {noun}"),
+            _ => format!("{verb} {count} {noun}s"),
+        });
     }
-
-    /// Above the prompt: what the next message changes on the left, the effort on the right.
-    fn draw_meta(&self, frame: &mut Frame, area: Rect) {
-        let changes: Vec<String> = [
-            self.provider.as_deref().map(|id| self.provider_name(id)),
-            self.model.as_ref().map(|_| self.model_label()),
-            self.effort
-                .map(|effort| format!("{} effort", effort_name(effort))),
-            self.permission.map(|mode| mode_name(mode).to_owned()),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-        if !changes.is_empty() {
-            let left = format!("next message: {}", changes.join(" · "));
-            frame.render_widget(Paragraph::new(left).fg(BLUE), area);
-        }
-        let effort = self
-            .effort
-            .or_else(|| self.open_run()?.effort)
-            .unwrap_or(AgentEffort::Unknown);
-        let symbol = match effort {
-            AgentEffort::Low => "○",
-            AgentEffort::High => "●",
-            AgentEffort::Xhigh | AgentEffort::Max => "◉",
-            _ => "◐",
-        };
-        let right = format!("{symbol} {} · /effort", effort_name(effort));
-        frame.render_widget(Paragraph::new(right).dark_gray().right_aligned(), area);
-    }
-
-    /// The prompt's text in lines as wide as the prompt, less its `› `.
-    fn input_lines(&self, width: u16) -> Vec<String> {
-        let width = usize::from(width.saturating_sub(2)).max(1);
-        let mut lines = Vec::new();
-        // ponytail: wraps by chars, so wide characters can overflow a line; measure display
-        // widths if that shows.
-        for line in self.input.split('\n') {
-            let chars: Vec<char> = line.chars().collect();
-            if chars.is_empty() {
-                lines.push(String::new());
-            }
-            lines.extend(
-                chars
-                    .chunks(width)
-                    .map(|chunk| chunk.iter().collect::<String>()),
-            );
-        }
-        lines
-    }
-
-    fn draw_prompt(&self, frame: &mut Frame, area: Rect) {
-        if self.input.is_empty() {
-            let placeholder = match &self.open {
-                Some(_) => "Reply, add detail, or steer what it does next".to_owned(),
-                None => format!("Start a new thread in {}", self.place()),
-            };
-            let line = Line::from(vec![
-                Span::from("› ").bold(),
-                Span::from(placeholder).dark_gray(),
-            ]);
-            frame.render_widget(Paragraph::new(line), area);
-            frame.set_cursor_position(Position::new(area.x + 2, area.y));
-            return;
-        }
-        let lines = self.input_lines(area.width);
-        let last = lines.len() - 1;
-        let cursor_x = u16::try_from(lines[last].chars().count()).unwrap_or(0);
-        let shown: Vec<Line> = lines
-            .into_iter()
-            .enumerate()
-            .map(|(i, line)| Line::from(format!("{}{line}", if i == 0 { "› " } else { "  " })))
-            .collect();
-        frame.render_widget(Paragraph::new(shown), area);
-        let y = u16::try_from(last).unwrap_or(0);
-        frame.set_cursor_position(Position::new(area.x + 2 + cursor_x, area.y + y));
-    }
-
-    /// A permission request, in place of the prompt, as Claude Code asks.
-    fn draw_approval(&self, frame: &mut Frame, area: Rect, pending: &Pending) {
-        let mut answers = vec!["Yes"];
-        if pending.always {
-            answers.push("Yes, and don't ask again this session");
-        }
-        answers.push("No");
-        let mut lines = vec![
-            Line::from(vec![
-                Span::from(pending.tool_name.clone()).bold(),
-                Span::from(format!("  {}", pending.detail)).dark_gray(),
-            ]),
-            Line::from("Do you want to proceed?"),
-        ];
-        for (i, answer) in answers.iter().enumerate() {
-            lines.push(if i == self.choice(pending) {
-                Line::from(format!("❯ {}. {answer}", i + 1)).fg(BLUE).bold()
-            } else {
-                Line::from(format!("  {}. {answer}", i + 1))
-            });
-        }
-        let block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(Style::new().fg(CORAL));
-        frame.render_widget(Paragraph::new(lines).block(block), area);
-    }
-
-    fn draw_footer(&self, frame: &mut Frame, area: Rect) {
-        let transcript = self.open.as_ref().map(|open| &open.transcript);
-        let context = transcript
-            .and_then(|transcript| transcript.context)
-            .map_or(0, |(tokens, window)| tokens * 100 / window.max(1));
-        let cost = transcript.map_or(0, |transcript| transcript.cost_micros);
-        let dot = || Span::from(" · ").dark_gray();
-        let provider = self
-            .provider()
-            .map_or_else(|| "host default".to_owned(), |id| self.provider_name(id));
-        let first = Line::from(vec![
-            Span::from(self.model_label()).bold(),
-            dot(),
-            Span::from(provider),
-            dot(),
-            Span::from(self.place()).fg(Color::Green),
-            dot(),
-            Span::from(format!("ctx {context}%")).fg(Color::Yellow),
-            dot(),
-            Span::from(format!(
-                "${}.{:02}",
-                cost / 1_000_000,
-                cost % 1_000_000 / 10_000
-            )),
-        ]);
-        let second = if self.quitting {
-            Line::from("Press Ctrl-C again to exit").dark_gray()
-        } else {
-            Line::from(vec![
-                Span::from(format!("▸▸ {} on ", mode_name(self.mode()))).fg(CORAL),
-                Span::from("(shift+tab to cycle) · / for commands · ← for threads").dark_gray(),
-            ])
-        };
-        frame.render_widget(Paragraph::new(vec![first, second]), area);
-    }
+    let text = parts.join(", ");
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }
 
 /// A provider's models as (id, name), as the app's picker lists them: the [`CATALOG`]'s for its
@@ -1590,146 +1623,11 @@ fn models(provider: &ProviderInfo) -> Vec<(String, String)> {
         .iter()
         .chain(&provider.instance.models)
         .map(|model| (model.id.clone(), model.name.clone()));
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     catalog
         .chain(found)
         .filter(|(id, _)| seen.insert(id.clone()))
         .collect()
-}
-
-/// A list below the prompt: its title and keys, then up to [`MENU_ROWS`] rows around the
-/// selected one, with `❯` at the selected and `✓` at the current.
-fn draw_menu(frame: &mut Frame, area: Rect, menu: &Menu) {
-    let mut lines = vec![Line::from(vec![
-        Span::from(format!("{}  ", menu.title)).bold(),
-        Span::from("↑↓ choose · enter pick · esc close").dark_gray(),
-    ])];
-    let first = menu
-        .selected
-        .saturating_sub(MENU_ROWS - 1)
-        .min(menu.items.len().saturating_sub(MENU_ROWS));
-    let width = menu
-        .items
-        .iter()
-        .map(|item| item.label.chars().count())
-        .max()
-        .unwrap_or(0);
-    for (i, item) in menu.items.iter().enumerate().skip(first).take(MENU_ROWS) {
-        let selected = i == menu.selected;
-        let mut label = Span::from(format!("{:<width$}", item.label));
-        if item.heading {
-            label = label.bold();
-        }
-        let mut line = Line::from(vec![
-            Span::from(if selected { "❯ " } else { "  " }).fg(BLUE),
-            label,
-            Span::from(if item.current { " ✓" } else { "  " }).fg(Color::Green),
-            Span::from(format!("  {}", item.detail)).dark_gray(),
-        ]);
-        if selected {
-            line = line.fg(BLUE).bold();
-        }
-        lines.push(line);
-    }
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
-/// The app's mark in [`LOGO_PIXELS`] square pixels, two to a terminal row with `▀` and `▄`.
-/// Its circles are `ParallaxMark`'s: radius 7 at (9.5, 9.5) and (14.5, 14.5), here cropped to
-/// their bounds. Each pixel is sampled 6 × 6 times. One at least half covered takes the mix of
-/// the colors over it, which smooths where the circles meet.
-fn logo() -> Vec<Vec<Span<'static>>> {
-    const SAMPLES: u16 = 6;
-    const LOW: f64 = 2.5;
-    const SIDE: f64 = 19.0;
-    let at = |pixel: u16, sample: u16| {
-        let offset = (f64::from(sample) + 0.5) / f64::from(SAMPLES);
-        LOW + SIDE * (f64::from(pixel) + offset) / f64::from(LOGO_PIXELS)
-    };
-    let pixel = |x: u16, y: u16| {
-        let mut sum = [0u32; 3];
-        let mut hits = 0;
-        for (a, b) in (0..SAMPLES).flat_map(|a| (0..SAMPLES).map(move |b| (a, b))) {
-            let (px, py) = (at(x, a), at(y, b));
-            let inside = |center: f64| (px - center).powi(2) + (py - center).powi(2) <= 49.0;
-            let color = match (inside(9.5), inside(14.5)) {
-                (true, true) => MARK_OVERLAP,
-                (true, false) => MARK_BLUE,
-                (false, true) => MARK_CORAL,
-                (false, false) => continue,
-            };
-            hits += 1;
-            for (total, part) in sum.iter_mut().zip(color) {
-                *total += u32::from(part);
-            }
-        }
-        let mix = |total: u32| u8::try_from(total / hits.max(1)).unwrap_or(u8::MAX);
-        (hits * 2 >= u32::from(SAMPLES * SAMPLES))
-            .then(|| Color::Rgb(mix(sum[0]), mix(sum[1]), mix(sum[2])))
-    };
-    (0..LOGO_PIXELS / 2)
-        .map(|row| {
-            (0..LOGO_PIXELS)
-                .map(|x| match (pixel(x, row * 2), pixel(x, row * 2 + 1)) {
-                    (Some(up), Some(down)) => Span::styled("▀", Style::new().fg(up).bg(down)),
-                    (Some(up), None) => Span::styled("▀", Style::new().fg(up)),
-                    (None, Some(down)) => Span::styled("▄", Style::new().fg(down)),
-                    (None, None) => Span::raw(" "),
-                })
-                .collect()
-        })
-        .collect()
-}
-
-/// The lines an entry shows, as Claude Code lays them out: `›` before a message, `●` before a
-/// reply or a tool call, and `⎿` before what the tool returned.
-fn entry_lines(entry: &Entry) -> Vec<Line<'static>> {
-    match entry {
-        Entry::User(text) => text
-            .lines()
-            .enumerate()
-            .map(|(i, line)| {
-                let prefix = if i == 0 { "› " } else { "  " };
-                Line::from(format!("{prefix}{line}")).dark_gray()
-            })
-            .collect(),
-        Entry::Assistant { text, .. } => markdown::lines(text)
-            .into_iter()
-            .enumerate()
-            .map(|(i, mut line)| {
-                let prefix = if i == 0 { "● " } else { "  " };
-                line.spans.insert(0, Span::raw(prefix));
-                line
-            })
-            .collect(),
-        Entry::Tool {
-            name,
-            detail,
-            status,
-            output,
-            ..
-        } => {
-            let color = match status {
-                Some(AgentToolStatus::Ok) => Color::Green,
-                Some(_) => Color::Red,
-                None => Color::Yellow,
-            };
-            let call = if detail.is_empty() {
-                name.clone()
-            } else {
-                format!("{name}({detail})")
-            };
-            let mut lines = vec![Line::from(vec![
-                Span::from("● ").fg(color),
-                Span::from(call).bold(),
-            ])];
-            if let Some(output) = output {
-                lines.push(Line::from(format!("  ⎿  {output}")).dark_gray());
-            }
-            lines
-        }
-        Entry::Note(text) => vec![Line::from(format!("  {text}")).dark_gray().italic()],
-    }
 }
 
 fn mode_name(mode: AgentPermission) -> &'static str {
@@ -1772,7 +1670,7 @@ mod tests {
     use parallax_protocol::{AgentEffort, AgentPermission, ClientInfo, ProviderInfo};
     use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
-    use super::App;
+    use super::{App, Draft, age, summary};
     use crate::peer::Plxd;
 
     /// An app whose plxd is never reached: these keys make no calls.
@@ -1803,11 +1701,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_new_thread_from_an_empty_thread_list() {
+    async fn a_new_thread_from_an_empty_sidebar() {
         let mut app = app();
+        app.draft = Draft::Here("/tmp".into());
         press(&mut app, &[KeyCode::Left, KeyCode::Char('n')]).await;
         assert!(app.menu.is_none());
-        assert_eq!(app.draft, None, "Chats, before plxd made its entry");
+        assert_eq!(app.draft, Draft::Chats, "Chats, before plxd made its entry");
     }
 
     #[test]
@@ -1855,5 +1754,24 @@ mod tests {
         }
         press(&mut app, &[KeyCode::Enter]).await;
         assert_eq!(app.menu.as_ref().map(|menu| menu.title), Some("Mode"));
+    }
+
+    #[test]
+    fn tool_runs_sum_up_by_kind() {
+        assert_eq!(
+            summary(["Bash", "Edit", "Write", "Bash", "Read", "mcp__x__y"]),
+            "Ran 2 shell commands, read 1 file, edited 2 files, used 1 tool"
+        );
+        assert_eq!(summary(["TodoWrite"]), "Updated the to-do list");
+    }
+
+    #[test]
+    fn ages_read_like_the_sidebar() {
+        let now: jiff::Timestamp = "2026-10-12T12:00:00Z".parse().unwrap();
+        let ago = |secs: i64| age(now, now - jiff::SignedDuration::from_secs(secs));
+        assert_eq!(
+            [ago(5), ago(300), ago(7_200), ago(259_200)],
+            ["now", "5m", "2h", "3d"]
+        );
     }
 }
