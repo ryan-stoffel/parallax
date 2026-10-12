@@ -297,6 +297,8 @@ export const collapsedThreads = stored("parallax:threadsCollapsed", false, (raw)
 export const placeRail = stored("parallax:placeRail", true, (raw, fallback) =>
   typeof raw === "boolean" ? raw : fallback,
 );
+/** The rail's width, which the sidebar adds to its list's (index.css). */
+export const railWidth = 46;
 // How long the rail's Spring motion runs each way, as index.css times it.
 const railOpenMs = 1000;
 const railCloseMs = 400;
@@ -1005,6 +1007,8 @@ function PlaceRail({
     view.state.repos.filter((r) => !r.scratch).map((repo) => ({ host, repo })),
   );
   const asks = attentions("all").filter((a) => a === "needsYou" || a === "failed").length;
+  // Inbox's label carries its count, which its badge shows only to the eye.
+  const inboxWords = asks > 0 ? `${asks} need${asks === 1 ? "s" : ""} you` : undefined;
   const tile = (
     key: RepoFilter,
     name: string,
@@ -1012,9 +1016,10 @@ function PlaceRail({
     color: string,
     glyph: ReactNode,
     badge?: ReactNode,
+    words?: string,
   ) => {
     const urgent = mostUrgent(attentions(key));
-    const label = [name, attentionWords[urgent]].filter(Boolean).join(", ");
+    const label = [name, words ?? attentionWords[urgent]].filter(Boolean).join(", ");
     return (
       <button
         key={key}
@@ -1082,12 +1087,14 @@ function PlaceRail({
             {asks}
           </span>
         ),
+        inboxWords,
       )}
       {spaces.length > 0 && rule("spaces")}
       {spaces.map(place)}
       {repos.length > 0 && rule("repos")}
       {repos.map(place)}
-      {attentions("none").length > 0 &&
+      {/* Also while it's the filter, so the rail always marks what the list shows. */}
+      {(attentions("none").length > 0 || filter === "none") &&
         tile("none", "No repo", false, "text-faint-foreground", <SquareDashed aria-hidden />)}
       <button
         type="button"

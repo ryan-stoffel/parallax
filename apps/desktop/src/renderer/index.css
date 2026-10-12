@@ -692,6 +692,7 @@ body {
 /* The sidebar widens by the rail's width, so the list keeps its own, and moves with the rail while
    it opens or closes, never while it's dragged. */
 #sidebar:has(.place-rail:not([data-motion="out"])) {
+  /* Sidebar.tsx's railWidth. */
   width: calc(var(--sidebar-w) + 46px);
 }
 #sidebar:has(.place-rail[data-motion="in"]) {
@@ -704,7 +705,9 @@ body {
   animation: rail-open 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
 .place-rail[data-motion="in"] > * {
-  animation: rail-place-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) calc(sibling-index() * 35ms) both;
+  /* Capped, so a long rail still lands before railOpenMs ends the motion. */
+  animation: rail-place-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)
+    calc(min(sibling-index(), 12) * 35ms) both;
 }
 .place-rail[data-motion="in"] [data-badge] {
   animation: rail-badge 0.45s cubic-bezier(0.3, 1.8, 0.5, 1) 0.5s both;
