@@ -411,7 +411,7 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
         | Event::TurnCursor { .. }
         | Event::RateLimit(_)
         | Event::AccountFallback { .. }
-        | Event::BackgroundTask { .. }
+        | Event::BackgroundTasks { .. }
         | Event::Finished { .. }
         | Event::Unknown => return None,
     })

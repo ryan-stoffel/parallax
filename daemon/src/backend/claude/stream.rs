@@ -3,7 +3,7 @@
 //! The shapes follow the Agent SDK's types (0004 [14]) and the headless docs (0004 [11]). Fields
 //! Parallax doesn't use are ignored, as 0004 asks, so a newer CLI that adds fields still parses.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use jiff::Timestamp;
 use serde_json::{Map, Value};
@@ -154,6 +154,8 @@ pub(super) struct Translator {
     /// The tool calls whose `task_started` named a subagent type, so their `task_notification`
     /// ends a subagent (PLX-382), not a background command.
     subagents: HashSet<String>,
+    /// The background commands and subagents still running, by `task_id` (PLX-725).
+    tasks: BTreeSet<String>,
     turn_error: Option<FailureKind>,
     limit_rejected: bool,
     /// How many `result`s arrived.
@@ -230,6 +232,7 @@ impl Translator {
             session_id: None,
             denied: HashSet::new(),
             subagents: HashSet::new(),
+            tasks: BTreeSet::new(),
             turn_error: None,
             limit_rejected: false,
             results: 0,
@@ -355,7 +358,27 @@ impl Translator {
                 {
                     self.subagents.insert(id.to_owned());
                 }
-                task(message, true).into_iter().collect()
+                let mut tasks = self.tasks.clone();
+                if counted(message)
+                    && let Some(id) = text(message, "task_id")
+                {
+                    tasks.insert(id.to_owned());
+                }
+                self.tasks_changed(tasks).into_iter().collect()
+            }
+            // Every live task, which replaces the running set, so a missed `task_notification`
+            // can't leave a task running.
+            Some("background_tasks_changed") => {
+                let Some(listed) = message.get("tasks").and_then(Value::as_array) else {
+                    return Vec::new();
+                };
+                let tasks = listed
+                    .iter()
+                    .filter_map(Value::as_object)
+                    .filter(|task| counted(task))
+                    .filter_map(|task| text(task, "task_id").map(str::to_owned))
+                    .collect();
+                self.tasks_changed(tasks).into_iter().collect()
             }
             Some("task_notification") => {
                 let mut steps = Vec::new();
@@ -376,7 +399,11 @@ impl Translator {
                             .map(str::to_owned),
                     }));
                 }
-                steps.extend(task(message, false));
+                let mut tasks = self.tasks.clone();
+                if let Some(id) = text(message, "task_id") {
+                    tasks.remove(id);
+                }
+                steps.extend(self.tasks_changed(tasks));
                 steps
             }
             Some("status") if text(message, "status") == Some("compacting") => {
@@ -402,6 +429,16 @@ impl Translator {
             }
             _ => Vec::new(),
         }
+    }
+
+    /// The [`Event::BackgroundTasks`] for `tasks`, if they differ from the ones running.
+    fn tasks_changed(&mut self, tasks: BTreeSet<String>) -> Option<Step> {
+        if tasks == self.tasks {
+            return None;
+        }
+        self.tasks = tasks;
+        let task_ids = self.tasks.iter().cloned().collect();
+        Some(Step::Emit(Event::BackgroundTasks { task_ids }))
     }
 
     /// `system/init`, which stream-json input repeats at the start of every turn.
@@ -885,11 +922,12 @@ impl Translator {
     }
 }
 
-/// The [`Event::BackgroundTask`] for a `task_started` (`running`) or a `task_notification`, when it
-/// names its task.
-fn task(message: &Map<String, Value>, running: bool) -> Option<Step> {
-    let task_id = text(message, "task_id")?.to_owned();
-    Some(Step::Emit(Event::BackgroundTask { task_id, running }))
+/// Whether a task counts as background work, as T3 Code counts it: a background command (which a
+/// Monitor runs as too) or a subagent, unless Claude Code marks it `ambient`, as its housekeeping
+/// tasks and live-update watchers are, which hosts must not treat as activity.
+fn counted(task: &Map<String, Value>) -> bool {
+    matches!(text(task, "task_type"), Some("local_bash" | "local_agent"))
+        && task.get("ambient").and_then(Value::as_bool) != Some(true)
 }
 
 /// `steps`, with each event wrapped as a subagent's when `message` came from one of the agent's

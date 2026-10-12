@@ -3529,14 +3529,33 @@ fn only_a_subagent_s_task_notification_ends_a_subagent() {
     let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
     let started = br#"{"type":"system","subtype":"task_started","task_id":"b1","tool_use_id":"toolu_bash","description":"sleep","task_type":"local_bash"}"#;
     let ended = br#"{"type":"system","subtype":"task_notification","task_id":"b1","tool_use_id":"toolu_bash","status":"completed","summary":"done"}"#;
-    let task = |running| {
-        Step::Emit(Event::BackgroundTask {
-            task_id: "b1".into(),
-            running,
-        })
-    };
-    assert_eq!(translator.line(started), [task(true)]);
-    assert_eq!(translator.line(ended), [task(false)]);
+    assert_eq!(translator.line(started), [tasks(&["b1"])]);
+    assert_eq!(translator.line(ended), [tasks(&[])]);
+}
+
+/// The [`Event::BackgroundTasks`] step for the tasks `running`.
+fn tasks(running: &[&str]) -> Step {
+    Step::Emit(Event::BackgroundTasks {
+        task_ids: running.iter().map(|&id| id.to_owned()).collect(),
+    })
+}
+
+/// PLX-725: an `ambient` task (housekeeping or a live-update watcher) and a task type T3 Code
+/// doesn't count never keep the session up, whether from `task_started` or the level
+/// `background_tasks_changed`, which replaces the running set so a missed end can't strand one.
+#[test]
+fn only_background_commands_and_subagents_count_as_background_work() {
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+    let ambient = br#"{"type":"system","subtype":"task_started","task_id":"w1","description":"watch","task_type":"local_bash","ambient":true}"#;
+    let workflow = br#"{"type":"system","subtype":"task_started","task_id":"f1","description":"spec","task_type":"local_workflow"}"#;
+    assert_eq!(translator.line(ambient), []);
+    assert_eq!(translator.line(workflow), []);
+    let level = br#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"w1","task_type":"local_bash","description":"watch","ambient":true},{"task_id":"b1","task_type":"local_bash","description":"dev server"},{"task_id":"a1","task_type":"local_agent","description":"review"}]}"#;
+    assert_eq!(translator.line(level), [tasks(&["a1", "b1"])]);
+    let one_left = br#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a1","task_type":"local_agent","description":"review"}]}"#;
+    assert_eq!(translator.line(one_left), [tasks(&["a1"])]);
+    let missed_end = br#"{"type":"system","subtype":"task_notification","task_id":"b1","status":"completed","summary":"done"}"#;
+    assert_eq!(translator.line(missed_end), [], "already gone");
 }
 
 /// A real session, recorded with `PLXD_RECORD_CLI` (PLX-493), replays to its snapshot: thinking

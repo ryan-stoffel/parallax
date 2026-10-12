@@ -3459,33 +3459,29 @@ impl Actor {
     }
 
     /// Keeps [`Self::open_work`]: a tool call until its result, and a background command or
-    /// subagent until it ends (PLX-725), long after its call's result. An idle session whose last
+    /// subagent while it runs (PLX-725), long after its call's result. An idle session whose last
     /// open work ends counts toward the host's cap from then.
     fn track_work(&mut self, event: &Event) {
-        let ended = match event {
+        let was_open = !self.open_work.is_empty();
+        match event {
             Event::ToolCall { call_id, .. } => {
                 self.open_work.insert(call_id.clone());
-                false
             }
-            Event::ToolResult { call_id, .. } => self.open_work.remove(call_id),
-            Event::BackgroundTask {
-                task_id,
-                running: true,
-            } => {
-                self.open_work.insert(format!("task:{task_id}"));
-                false
+            Event::ToolResult { call_id, .. } => {
+                self.open_work.remove(call_id);
             }
-            Event::BackgroundTask {
-                task_id,
-                running: false,
-            } => self.open_work.remove(&format!("task:{task_id}")),
-            _ => false,
-        };
+            Event::BackgroundTasks { task_ids } => {
+                self.open_work.retain(|work| !work.starts_with("task:"));
+                self.open_work
+                    .extend(task_ids.iter().map(|id| format!("task:{id}")));
+            }
+            _ => return,
+        }
         let settled = self
             .live
             .as_ref()
             .is_some_and(|live| live.settled.is_some());
-        if ended && settled && self.open_work.is_empty() {
+        if was_open && settled && self.open_work.is_empty() {
             self.count_idle();
         }
     }
@@ -4668,9 +4664,8 @@ mod tests {
         let (_sink, events) = EventSink::channel(4, Vec::new());
         actor.live = Some(Live::new(run.clone(), events, None));
         actor.in_flight = 1;
-        let task = |running| Event::BackgroundTask {
-            task_id: "task-1".to_owned(),
-            running,
+        let tasks = |running: &[&str]| Event::BackgroundTasks {
+            task_ids: running.iter().map(|&id| id.to_owned()).collect(),
         };
         let counted = |actor: &Actor| daemon.agents.idle.0.lock().unwrap().contains(&actor.id);
         let held = || run.held.load(std::sync::atomic::Ordering::SeqCst);
@@ -4681,7 +4676,7 @@ mod tests {
                 name: "Bash".to_owned(),
                 input: serde_json::json!({ "command": "npm run dev", "run_in_background": true }),
             },
-            task(true),
+            tasks(&["task-1"]),
             Event::ToolResult {
                 call_id: "call-1".to_owned(),
                 status: ToolStatus::Ok,
@@ -4702,7 +4697,7 @@ mod tests {
         actor.release_idle();
         assert!(held(), "its window passing defers the release");
 
-        actor.on_event(Some(task(false))).await;
+        actor.on_event(Some(tasks(&[]))).await;
         assert!(counted(&actor), "counted toward the cap once it ended");
         actor.release_idle();
         assert!(!held(), "released once its window passes");
