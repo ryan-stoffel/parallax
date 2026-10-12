@@ -1433,7 +1433,7 @@ export const RowView = memo(function RowView({
         row.partial && row.text.length >= SPLIT_FROM ? (
           <StreamingMarkdown text={row.text} />
         ) : (
-          <MarkdownText text={row.text} />
+          <MarkdownText text={row.text} streaming={row.partial} />
         );
       if (!reply || row.partial) return body;
       return (
@@ -2465,12 +2465,15 @@ const textOf = (node: TextNode): string => node.value ?? node.children?.map(text
 export const MarkdownText = memo(function MarkdownText({
   text,
   components,
+  streaming,
 }: {
   text: string;
   components?: Components;
+  /** Hides LaTeX that fails to typeset, since a streaming message's math may be unfinished. */
+  streaming?: boolean;
 }) {
   return (
-    <div className="markdown">
+    <div className={streaming ? "markdown streaming" : "markdown"}>
       <Markdown
         remarkPlugins={gfm}
         rehypePlugins={highlight}
@@ -2495,7 +2498,7 @@ function StreamingMarkdown({ text }: { text: string }) {
   const blocks = useRef<string[]>([]);
   blocks.current = markdownBlocks(text, blocks.current);
   return (
-    <div className="markdown">
+    <div className="markdown streaming">
       {blocks.current.map((block, i) => (
         <MarkdownBlock key={i} text={block} />
       ))}

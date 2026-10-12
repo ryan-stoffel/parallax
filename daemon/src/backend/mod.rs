@@ -58,6 +58,12 @@ pub use self::namer::NameProbe;
 use self::process::{CancelPolicy, Signals, SpawnError};
 pub use self::sandbox::WorkerSandbox;
 
+/// Appended to a full Claude thread's system prompt: the app typesets LaTeX in replies, so math
+/// written as LaTeX is drawn, and math written any other way is not (PLX-730).
+pub const MATH_FORMAT: &str = "Parallax typesets LaTeX in your replies. Write every equation, \
+formula, and math expression as LaTeX: $...$ inline and $$...$$ on their own lines for display \
+math. Don't draw math as plain text, ASCII art, or inside code blocks.";
+
 /// How many events a run buffers before its backend waits for the consumer.
 pub const EVENT_BUFFER: usize = 256;
 
