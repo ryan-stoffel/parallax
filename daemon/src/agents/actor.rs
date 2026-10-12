@@ -2726,8 +2726,15 @@ impl Actor {
             info!(run = %self.id, "resuming an agent run's session");
             // ponytail: every Codex resume reads the run's whole log for a fallback it rarely
             // uses; build it only after `thread/resume` fails if long threads make this slow.
+            // The fallback never fails a resume that would succeed without it.
             let fallback = if prepared.resolved.backend().resume_fallback() {
-                Some(self.handoff_prompt(&from, &text, &prepared.place).await?)
+                match self.handoff_prompt(&from, &text, &prepared.place).await {
+                    Ok(prompt) => Some(prompt),
+                    Err(error) => {
+                        warn!(run = %self.id, error = %error.message, "could not build a resume's fallback handoff");
+                        None
+                    }
+                }
             } else {
                 None
             };
