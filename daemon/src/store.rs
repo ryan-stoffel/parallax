@@ -25,7 +25,7 @@ use std::ops::{Deref, DerefMut};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -149,8 +149,8 @@ pub(crate) struct Tx {
     /// Set by a job that copies a fork's transcript: the runs it ends get no checkpoint (0062),
     /// since the fork's worktree never held them. Cleared when the job ends.
     pub copying: bool,
-    /// Wakes the checkpointer after each commit, on a writer that has one ([`checkpointer`]).
-    checkpoints: Option<mpsc::SyncSender<()>>,
+    /// The writer's checkpointer, if it has one.
+    checkpoints: Option<Checkpointer>,
     /// Whether this job has enqueued an effect, for the job to tell its caller, who wakes the
     /// effect worker once it commits, as `agents::store` does. Cleared as each job starts.
     pub effects: bool,
@@ -333,8 +333,8 @@ impl Tx {
             )),
             Ok(value) => match self.store.commit() {
                 Ok(()) => {
-                    if let Some(wake) = &self.checkpoints {
-                        let _ = wake.try_send(());
+                    if let Some(checkpoints) = &self.checkpoints {
+                        let _ = checkpoints.wake.try_send(());
                     }
                     self.begun = None;
                     self.command_id = None;
@@ -574,6 +574,13 @@ impl StoreHandle {
             std::thread::sleep(Duration::from_millis(
                 VACUUM_HOLD_MS.load(Ordering::Relaxed),
             ));
+            // A checkpoint in progress would make the vacuum's own fail at once, leaving the WAL.
+            let _paused = tx.checkpoints.as_ref().map(|checkpoints| {
+                checkpoints
+                    .running
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+            });
             let _ = reply.send(tx.store.vacuum().map_err(|error| failed(&error)));
         });
         self.counters.sending();
@@ -694,38 +701,44 @@ fn run(mut tx: Tx, queue: &mpsc::Receiver<Message>, counters: &QueueCounters) {
     }
 }
 
+/// What the writer keeps of its checkpointer thread.
+struct Checkpointer {
+    /// Wakes the thread after a commit.
+    wake: mpsc::SyncSender<()>,
+    /// Held while a checkpoint runs, so the vacuum can wait it out.
+    running: Arc<Mutex<()>>,
+}
+
 /// Starts the thread that checkpoints the writer's WAL on a connection of its own, and turns off
 /// the writer's own checkpoints. SQLite's automatic one runs inside the COMMIT that takes the WAL
 /// past 1000 pages and syncs the database file there, which held every queued write, and so every
-/// event's delivery, for up to 450 ms on CI's Linux runners (PLX-683). Returns what the writer
-/// wakes it with, or `None`, leaving the writer's checkpoints on, if it can't start.
-fn checkpointer(path: &Path, writer: &Store) -> Option<mpsc::SyncSender<()>> {
+/// event's delivery, for up to 450 ms on CI's Linux runners (PLX-683). Returns `None`, leaving the
+/// writer's checkpoints on, if it can't start.
+fn checkpointer(path: &Path, writer: &Store) -> Option<Checkpointer> {
     let store = Store::open_read_only(path)
         .inspect_err(|error| warn!(%error, "could not open the project store's checkpointer"))
         .ok()?;
     let (wake, woken) = mpsc::sync_channel(1);
+    let running = Arc::new(Mutex::new(()));
+    let held = Arc::clone(&running);
     thread::Builder::new()
         .name("plxd-store-checkpoint".to_owned())
-        .spawn(move || checkpoints(&store, &woken))
+        .spawn(move || checkpoints(&store, &woken, &held))
         .inspect_err(|error| warn!(%error, "could not start the project store's checkpointer"))
         .ok()?;
     writer
         .stop_auto_checkpoints()
         .inspect_err(|error| warn!(%error, "could not move the project store's checkpoints"))
         .ok()?;
-    Some(wake)
+    Some(Checkpointer { wake, running })
 }
 
 /// Checkpoints [`CHECKPOINT_INTERVAL`] after a commit wakes it, so the commits in between share
 /// one sync. Ends when the writer's thread does.
-fn checkpoints(store: &Store, woken: &mpsc::Receiver<()>) {
+fn checkpoints(store: &Store, woken: &mpsc::Receiver<()>, running: &Mutex<()>) {
     while woken.recv().is_ok() {
-        let due = Instant::now() + CHECKPOINT_INTERVAL;
-        while let Some(left) = due.checked_duration_since(Instant::now()) {
-            if let Err(RecvTimeoutError::Disconnected) = woken.recv_timeout(left) {
-                return;
-            }
-        }
+        thread::sleep(CHECKPOINT_INTERVAL);
+        let _running = running.lock().unwrap_or_else(PoisonError::into_inner);
         if let Err(error) = store.checkpoint() {
             warn!(%error, "could not checkpoint the project store's WAL");
         }

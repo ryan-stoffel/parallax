@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import { expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
 
@@ -99,5 +100,24 @@ export async function stopServe(dataDir: string) {
         }
       })
       .toBe(true);
+    // Windows reports the process gone before it has unmapped plxd.sqlite3-shm, and opening the
+    // database in that window fails with SQLITE_IOERR_TRUNCATE (PLX-683). Wait until a read works.
+    const file = path.join(dataDir, "plxd.sqlite3");
+    await expect.poll(() => !existsSync(file) || readable(file)).toBe(true);
+  }
+}
+
+/** Whether `file`'s database opens and reads, through its WAL. */
+function readable(file: string) {
+  try {
+    const db = new DatabaseSync(file);
+    try {
+      db.prepare("SELECT COUNT(*) FROM sqlite_master").get();
+    } finally {
+      db.close();
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
