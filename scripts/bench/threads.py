@@ -8,16 +8,20 @@ the same moment, and reports per-thread start latency (request to response), tim
 session start, time to first text, and time to the first turn's end, plus plxd's CPU time. Needs a
 signed-in `claude` CLI.
 
-Session start is plxd, the Claude sidecar, and the CLI starting up, with no model time in it; the
-time from there to first text is the model's. The bench first starts N bare `claude` CLIs at once
-in the same clone, as T3 Code runs them, and fails when plxd's median session start is more than
-`overhead_budget` behind theirs (PLX-711). Comparing within one run keeps the check steady on a
-busy machine.
+Session start is the Claude sidecar and the CLI starting up after `thread/start` answers, with no
+model time in it; the time from there to first text is the model's. The bench first starts N
+`claude` CLIs at once in the same clone, with only the stream-json flags and the model, and fails
+when plxd's median time from `thread/start`'s response to `sessionStarted` is more than
+`OVERHEAD_BUDGET_S` over theirs from spawn to `system/init` (PLX-711). Timing both in one run takes
+out some of a busy machine's noise, not all of it: at 20 threads the overhead varied by about 1 s
+between runs. It deletes the `~/.claude/projects` folders its CLIs create.
 """
 
 import asyncio
+import glob
 import json
 import os
+import re
 import secrets
 import shutil
 import statistics
@@ -30,10 +34,10 @@ import uuid
 PROMPT = "Reply with the numbers 1 to 40, one per line, and nothing else. Do not use any tools."
 
 
-def overhead_budget(count):
-    """The most plxd's median session start may trail a bare CLI's, in seconds. An idle M-series
-    Mac measured 0.19 s for 1 thread and 0.62 s for 20, most of it plxd's `thread/start` (PLX-711)."""
-    return 0.5 + 0.02 * count
+# The most plxd's median session start, from `thread/start`'s response, may trail a bare CLI's
+# (PLX-711). Measured at 0.02-0.07 s for 1 to 5 threads, and below zero at 20, where plxd's
+# `thread/start` responses spread its CLIs' starts out.
+OVERHEAD_BUDGET_S = 0.5
 
 
 async def bare_sessions(count, model, cwd):
@@ -197,17 +201,24 @@ async def main():
                     f"{label:>13}: p50={statistics.median(values):6.2f}s "
                     f"p90={pct(values, 90):6.2f}s max={max(values):6.2f}s n={len(values)}"
                 )
-        sessions = [r["session"] for r in runs.values() if "session" in r]
-        overhead = statistics.median(sessions) - bare if sessions else float("inf")
-        print(f"  bare claude: session start p50={bare:6.2f}s, plxd's overhead {overhead:.2f}s")
-        if overhead > overhead_budget(count):
-            print(f"FAIL: plxd's session start overhead is over its {overhead_budget(count):.2f}s budget")
+        sessions = [r["session"] - r["start"] for r in runs.values() if "session" in r and "start" in r]
+        after_start = statistics.median(sessions) if sessions else float("inf")
+        overhead = after_start - bare
+        print(f"  bare claude: session start p50={bare:6.2f}s; plxd from thread/start's response "
+              f"p50={after_start:6.2f}s; overhead {overhead:.2f}s")
+        if overhead > OVERHEAD_BUDGET_S:
+            print(f"FAIL: plxd's session start overhead is over its {OVERHEAD_BUDGET_S}s budget")
             over = True
     finally:
         daemon.terminate()
         daemon.wait()
         shutil.rmtree(data, ignore_errors=True)
         shutil.rmtree(repo, ignore_errors=True)
+        # Claude Code keeps each cwd's transcripts in a folder named for its real path.
+        config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+        prefix = re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(data))
+        for folder in glob.glob(os.path.join(config, "projects", glob.escape(prefix) + "*")):
+            shutil.rmtree(folder, ignore_errors=True)
     if over:
         sys.exit(1)
 
