@@ -369,7 +369,7 @@ impl Input {
     }
 }
 
-/// One run's query in the sidecar: what plxd sends it, and the CLI's lines, as a [`Process`]'s
+/// One session's query in the sidecar: what plxd sends it, and the CLI's lines, as a [`Process`]'s
 /// output, ending with [`Output::Exited`].
 ///
 /// [`Process`]: super::super::process::Process
