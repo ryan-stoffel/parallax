@@ -200,11 +200,7 @@ export function NewThread({
     !repoless(group) && connection?.status === "connected" && "repoRefs" in connection.capabilities;
   // The picked ref, kept with its repository and workspace, so picking another drops it: a new
   // worktree's base never becomes a checkout's switch.
-  const [pickedRef, setPickedRef] = useState<{
-    groupId: string;
-    checkout: boolean;
-    ref: string;
-  }>();
+  const [pickedRef, setPickedRef] = useState<{ groupId: string; checkout: boolean; ref: string }>();
   const gitRef =
     refsAvailable && pickedRef?.groupId === group.id && pickedRef.checkout === checkout
       ? pickedRef.ref
@@ -453,10 +449,7 @@ export function NewThread({
           imageCaps={imageCaps(connection)}
           menus={
             connection?.status === "connected" && "composerMenus" in connection.capabilities
-              ? {
-                  hostId,
-                  repo: group.id === noRepo || group.space ? undefined : group.id,
-                }
+              ? { hostId, repo: group.id === noRepo || group.space ? undefined : group.id }
               : undefined
           }
           // A new thread asks only through a plxd that sends its requests (PLX-196).

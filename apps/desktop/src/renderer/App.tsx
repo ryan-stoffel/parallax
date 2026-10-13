@@ -130,10 +130,7 @@ export function App() {
   const [split, setSplit] = useState<Split>();
   // A Project just created on another host, opened once that host is open and lists it: the
   // check below drops a Project selection the open host's list doesn't have.
-  const [opening, setOpening] = useState<{
-    hostId: string;
-    projectId: string;
-  }>();
+  const [opening, setOpening] = useState<{ hostId: string; projectId: string }>();
   const [settings, setSettings] = useState<SettingsSection | null>(null);
   // The host Set up GitHub opened Source control on (PLX-423).
   const [settingsHost, setSettingsHost] = useState<string>();
@@ -173,14 +170,9 @@ export function App() {
   const [showChanges, setShowChanges] = useState<object>();
   const [browse, setBrowse] = useState<{ url?: string; agentTab?: string }>();
   // The open thread's agent browser tabs (PLX-639), which plxd lists after each browser tool call.
-  const [agentTabs, setAgentTabs] = useState<{
-    runId: string;
-    tabs: PreviewTab[];
-  }>();
+  const [agentTabs, setAgentTabs] = useState<{ runId: string; tabs: PreviewTab[] }>();
   const showPreviews = async (runId: string, reveal: boolean) => {
-    const answer = await window.parallax.request(host.id, "preview/list", {
-      runId,
-    });
+    const answer = await window.parallax.request(host.id, "preview/list", { runId });
     if ("error" in answer) return;
     const { tabs } = answer.result;
     setAgentTabs({ runId, tabs });
@@ -370,11 +362,7 @@ export function App() {
         label: coordinator ? "Coordinator" : `Subagent: ${titleOf(run)}`,
         open: () => openAgent(coordinator ? undefined : run.id),
       };
-      return (agents.waiting[run.id] ?? []).map((approval) => ({
-        runId: run.id,
-        approval,
-        from,
-      }));
+      return (agents.waiting[run.id] ?? []).map((approval) => ({ runId: run.id, approval, from }));
     });
 
   const openThread =
@@ -500,10 +488,7 @@ export function App() {
     if (selection.kind === "thread" && subagentOpen) {
       const threadId = selection.threadId;
       if (!lineage?.active)
-        crumbs[crumbs.length - 1] = {
-          label: page,
-          onClick: () => openSubagent(threadId),
-        };
+        crumbs[crumbs.length - 1] = { label: page, onClick: () => openSubagent(threadId) };
       crumbs.push({
         label: subagents.find((s) => s.callId === subagentOpen)?.title ?? "Subagent",
         icon: <Bot />,
@@ -535,10 +520,7 @@ export function App() {
     const { groups: there } = groupThreads((views[id] ?? idleThreads).state);
     setHostId(id);
     setOpening(undefined);
-    setSelection({
-      kind: "new",
-      groupId: there.find((g) => g.name === group.name)?.id,
-    });
+    setSelection({ kind: "new", groupId: there.find((g) => g.name === group.name)?.id });
   };
 
   // Opens New Thread on another computer with one of its repositories.
@@ -586,10 +568,7 @@ export function App() {
   // Focuses a side of the split, reopening it if another view is open, and its composer.
   const focusPane = (side: 0 | 1) => {
     if (!split) return;
-    openOnHost(split.hostId, {
-      kind: "thread",
-      threadId: split.threadIds[side],
-    });
+    openOnHost(split.hostId, { kind: "thread", threadId: split.threadIds[side] });
     requestAnimationFrame(() =>
       document.querySelector<HTMLElement>(`[data-pane="${side}"] .composer-input`)?.focus(),
     );
@@ -886,6 +865,9 @@ export function App() {
                           ? lineageOf(threads.state, paneThread)?.parent?.id
                           : undefined;
                       const title = threads.state.titles[threadId];
+                      const inSpace = threads.state.repos.some(
+                        (r) => r.id === paneThread?.repo && r.space,
+                      );
                       // Keyed, so another run starts from an empty transcript.
                       return (
                         <section
@@ -919,15 +901,11 @@ export function App() {
                             prompt={threads.state.runs[threadId]?.prompt}
                             // The list's status goes stale once the run moves on, so only a start says so.
                             going={focused && selection.started}
-                            space={threads.state.repos.some(
-                              (r) => r.id === paneThread?.repo && r.space,
-                            )}
                             noRepo={repoless({
                               id: paneThread ? groupOf(threads.state, paneThread) : noRepo,
-                              space: threads.state.repos.some(
-                                (r) => r.id === paneThread?.repo && r.space,
-                              ),
+                              space: inSpace,
                             })}
+                            space={inSpace}
                             pullRequests={
                               focused &&
                               prs.urls.length > 0 && <PullRequestChip prs={prs} onOpen={openPr} />
@@ -983,12 +961,7 @@ export function App() {
                       connection?.status === "connected" && "runOptions" in connection.capabilities
                     }
                     onStarted={(threadId, background) => {
-                      if (!background)
-                        setSelection({
-                          kind: "thread",
-                          threadId,
-                          started: true,
-                        });
+                      if (!background) setSelection({ kind: "thread", threadId, started: true });
                     }}
                     disabledReason={offline}
                     threadLinks={threadLinks}
@@ -1011,10 +984,7 @@ export function App() {
                           name={project.name}
                           icon={<ProjectIcon icon={project.icon} className="size-3.5 shrink-0" />}
                           onOpenName={() =>
-                            setSelection({
-                              kind: "project",
-                              projectId: project.id,
-                            })
+                            setSelection({ kind: "project", projectId: project.id })
                           }
                           onBack={() => openAgent()}
                         />

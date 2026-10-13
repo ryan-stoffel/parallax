@@ -123,21 +123,13 @@ const extensions = [
   Bold.extend({
     addInputRules() {
       return [
-        markInputRule({
-          find: /(?:^|\s)(\*\*([^*\s](?:[^*]*[^*\s])?)\*\*)$/,
-          type: this.type,
-        }),
+        markInputRule({ find: /(?:^|\s)(\*\*([^*\s](?:[^*]*[^*\s])?)\*\*)$/, type: this.type }),
       ];
     },
   }),
   Italic.extend({
     addInputRules() {
-      return [
-        markInputRule({
-          find: /(?:^|\s)(\*([^*\s](?:[^*]*[^*\s])?)\*)$/,
-          type: this.type,
-        }),
-      ];
+      return [markInputRule({ find: /(?:^|\s)(\*([^*\s](?:[^*]*[^*\s])?)\*)$/, type: this.type })];
     },
   }),
 ];
@@ -225,12 +217,7 @@ function triggerAt(editor: Editor): Trigger | undefined {
   const match = /(?:^|\s)([/@])(\S*)$/.exec(before);
   if (!match) return undefined;
   const query = match[2]!;
-  return {
-    kind: match[1] as "/" | "@",
-    query,
-    from: $from.pos - query.length - 1,
-    to: $from.pos,
-  };
+  return { kind: match[1] as "/" | "@", query, from: $from.pos - query.length - 1, to: $from.pos };
 }
 
 /** `items` whose name starts with `query`, then those that only contain it, each in order. */
@@ -603,10 +590,7 @@ export function Composer({
   const [closedAt, setClosedAt] = useState<number>();
   const [active, setActive] = useState(0);
   // Each list with what it was fetched for, so a list for another backend or folder isn't shown.
-  const [commands, setCommands] = useState<{
-    key: string;
-    list: AgentCommand[];
-  }>();
+  const [commands, setCommands] = useState<{ key: string; list: AgentCommand[] }>();
   const [paths, setPaths] = useState<{ key: string; list: string[] }>();
   const controls = useRef<HTMLFieldSetElement>(null);
   const menuId = useId();
@@ -633,14 +617,9 @@ export function Composer({
   useEffect(() => {
     if (pathsAt === undefined || hostId === undefined || pathsKey === undefined) return;
     let live = true;
-    void window.parallax.request(hostId, "repo/files", { repo, runId }).then(
-      (r) =>
-        live &&
-        setPaths({
-          key: pathsKey,
-          list: "result" in r ? r.result.files : [],
-        }),
-    );
+    void window.parallax
+      .request(hostId, "repo/files", { repo, runId })
+      .then((r) => live && setPaths({ key: pathsKey, list: "result" in r ? r.result.files : [] }));
     return () => {
       live = false;
     };
@@ -832,10 +811,7 @@ export function Composer({
     else if (!editor.isDestroyed) {
       // Put it back ahead of anything typed or added while it was in flight.
       const typed = editor.isEmpty ? [] : (editor.getJSON().content ?? []);
-      editor.commands.setContent({
-        ...sent,
-        content: [...(sent.content ?? []), ...typed],
-      });
+      editor.commands.setContent({ ...sent, content: [...(sent.content ?? []), ...typed] });
       setImages((added) => [...sentImages, ...added].slice(0, imageCaps?.maxImages));
       putBackThreads(sentThreads);
       setError(failed);
@@ -984,10 +960,7 @@ export function Composer({
               const fence = /^```([a-z]*)$/.exec($from.parent.textContent);
               return (
                 !!fence &&
-                commands.deleteRange({
-                  from: $from.start(),
-                  to: $from.end(),
-                }) &&
+                commands.deleteRange({ from: $from.start(), to: $from.end() }) &&
                 commands.setCodeBlock(fence[1] ? { language: fence[1] } : undefined)
               );
             },
@@ -1262,10 +1235,7 @@ export function Composer({
                       onChange={(value) => setPermission(value as AgentPermission)}
                       options={permissions.map((p) =>
                         p === "manual" && manualDenied
-                          ? {
-                              ...accessOptions[p],
-                              description: manualDenials[manualDenied],
-                            }
+                          ? { ...accessOptions[p], description: manualDenials[manualDenied] }
                           : accessOptions[p],
                       )}
                       panelClassName="w-[25rem]"
