@@ -144,24 +144,22 @@ export function openXlsx(bytes: Uint8Array): Xlsx {
  * don't move.
  */
 export function shiftFormula(formula: string, rows: number, cols: number): string {
-  return formula.replace(
-    /("(?:[^"]|"")*")|('(?:[^']|'')*'!)|(\$?)([A-Z]{1,3})(\$?)(\d+)(?![\w(!])/g,
-    (
-      match,
-      text,
-      sheet,
-      colFixed: string,
-      col: string,
-      rowFixed: string,
-      row: string,
-      at: number,
-    ) => {
-      if (text || sheet || /[\w.]/.test(formula[at - 1] ?? "")) return match;
-      const c = colFixed ? col : colName(colIndex(col) + cols);
-      const r = rowFixed ? row : String(Number(row) + rows);
-      return `${colFixed}${c}${rowFixed}${r}`;
-    },
-  );
+  const col = (fixed = "", letters = "") =>
+    fixed + (fixed ? letters : colName(colIndex(letters) + cols));
+  const row = (fixed = "", digits = "") => fixed + (fixed ? digits : String(Number(digits) + rows));
+  // Quoted text and sheet names stay; then a whole-column range such as B:B, a whole-row range
+  // such as 3:3, or one cell.
+  const reference =
+    /("(?:[^"]|"")*"|'(?:[^']|'')*'!)|(?<c1f>\$?)(?<c1>[A-Z]{1,3}):(?<c2f>\$?)(?<c2>[A-Z]{1,3})(?![\w(!])|(?<r1f>\$?)(?<r1>\d+):(?<r2f>\$?)(?<r2>\d+)(?![\w(!])|(?<cf>\$?)(?<c>[A-Z]{1,3})(?<rf>\$?)(?<r>\d+)(?![\w(!])/g;
+  return formula.replace(reference, (...args: unknown[]) => {
+    const [match, quoted] = args as [string, string | undefined];
+    const at = args.at(-3) as number;
+    const g = args.at(-1) as Record<string, string | undefined>;
+    if (quoted || /[\w.$]/.test(formula[at - 1] ?? "")) return match;
+    if (g["c1"]) return `${col(g["c1f"], g["c1"])}:${col(g["c2f"], g["c2"])}`;
+    if (g["r1"]) return `${row(g["r1f"], g["r1"])}:${row(g["r2f"], g["r2"])}`;
+    return col(g["cf"], g["c"]) + row(g["rf"], g["r"]);
+  });
 }
 
 /**

@@ -34,7 +34,7 @@ export function FileCards({
   files: DocRef[];
 }) {
   const open = useContext(OpenDocumentContext);
-  useEffect(() => readPresented(hostId, item, files), [hostId, item, files]);
+  readPresented(hostId, item, files);
   return (
     <div className="flex max-w-xl flex-col gap-2">
       {files.map((doc) => (

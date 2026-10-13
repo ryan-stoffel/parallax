@@ -79,11 +79,11 @@ export function DocumentView({ hostId, doc }: { hostId: string; doc: DocRef }) {
     try {
       const { bytes, changes } = saver.current();
       const failed = await writeDocument(hostId, doc, bytes);
-      if (failed) return setSaveError(failed);
+      if (failed) return setSaveError(`Couldn't save: ${failed}`);
       const unsent = await sendSaved(hostId, doc, changes);
-      if (unsent) setSaveError(`saved, but the agent wasn't told: ${unsent}`);
+      if (unsent) setSaveError(`Saved, but the agent wasn't told: ${unsent}`);
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : String(e));
+      setSaveError(`Couldn't save: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setSaving(false);
     }
@@ -158,7 +158,7 @@ export function DocumentView({ hostId, doc }: { hostId: string; doc: DocRef }) {
       </div>
       {saveError && (
         <p role="alert" className="border-b border-border px-3 py-1.5 text-[12.5px] text-danger">
-          Couldn't save: {saveError}
+          {saveError}
         </p>
       )}
       {body}
