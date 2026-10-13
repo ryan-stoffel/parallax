@@ -150,7 +150,8 @@ export const kinds: Record<string, Kind> = {
   pi: { name: "Pi", Logo: PiLogo, program: "npx", wholeArgs: true },
   grokBuild: { name: "Grok Build", Logo: GrokLogo, program: "grok" },
   hermes: { name: "Hermes Agent", Logo: HermesLogo, program: "hermes" },
-  ollamaCloud: { name: "Ollama Cloud", Logo: OllamaLogo, program: "claude" },
+  // Hermes Agent's Ollama Cloud provider runs it, out of sight (0070).
+  ollamaCloud: { name: "Ollama Cloud", Logo: OllamaLogo },
   openRouter: { name: "OpenRouter", Logo: OpenRouterLogo, program: "claude" },
   localModel: { name: "Local model", Logo: Cpu, program: "claude" },
   acp: { name: "ACP agent", Logo: Bot, wholeArgs: true },
@@ -230,7 +231,7 @@ const anthropicApi = (url: string, token: Omit<ProviderEnvVar, "name">): Provide
 /**
  * The Add provider dialog's cards, in order: the main providers. Every other ACP agent
  * comes from the ACP Registry. The model services run Claude Code against an Anthropic-compatible
- * endpoint, set in their variables.
+ * endpoint, set in their variables, except Ollama Cloud, which runs on its API key (0070).
  */
 export const presets: Preset[] = [
   { kind: "claude", name: "Claude Code", blurb: "Anthropic's agent" },
@@ -247,8 +248,8 @@ export const presets: Preset[] = [
   {
     kind: "ollamaCloud",
     name: "Ollama Cloud",
-    blurb: "Claude Code on Ollama's models",
-    env: anthropicApi("https://ollama.com", { secret: true }),
+    blurb: "Cloud models with an API key",
+    env: [{ name: "OLLAMA_API_KEY", secret: true }],
   },
   { kind: "hermes", name: "Hermes Agent", blurb: "Nous Portal" },
   {

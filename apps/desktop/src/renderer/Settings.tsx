@@ -626,6 +626,7 @@ const installable = new Set([
   "grokBuild",
   "hermes",
   "antigravity",
+  "ollamaCloud",
 ]);
 
 /** The dot before a row's state: only when it needs the user. */
@@ -1016,6 +1017,9 @@ function InstancePane({
   const save = async (change: Partial<ProviderInstance>) =>
     setError(await saveProvider(hostId, { ...instance, ...change }));
   const program = instance.program ?? kind.program ?? "the program";
+  // Ollama Cloud's runtime stays out of sight, unless it is one from before 0070 on Claude Code.
+  const ollamaCloud =
+    instance.kind === "ollamaCloud" && !instance.env.some((v) => v.name === "ANTHROPIC_BASE_URL");
   // A Cursor instance with its own CURSOR_API_KEY runs on that key, with no browser sign-in (as T3 Code).
   const cursorAccount =
     instance.kind === "cursor" && !instance.env.some((v) => v.name === "CURSOR_API_KEY");
@@ -1213,6 +1217,11 @@ function InstancePane({
             description={
               info.note ?? "Runs through the Cursor SDK on this host. Needs Node.js 22.13 or newer."
             }
+          />
+        ) : ollamaCloud ? (
+          <Row
+            title="Ollama Cloud"
+            description="Runs Ollama Cloud's models on this host with the key in OLLAMA_API_KEY."
           />
         ) : (
           <>

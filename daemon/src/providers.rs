@@ -81,6 +81,41 @@ fn acp_agent(label: &str, program: &str, args: &[&str]) -> AcpAgent {
     AcpAgent::new("", label, program, args)
 }
 
+/// Hermes Agent, `hermes acp`, named `label`. Its modes are its edit approval policy.
+fn hermes_agent(label: &str) -> AcpAgent {
+    AcpAgent {
+        modes: vec![
+            (AgentPermission::Manual, "default".into()),
+            (AgentPermission::Edit, "accept_edits".into()),
+            (AgentPermission::Bypass, "dont_ask".into()),
+        ],
+        ..acp_agent(label, "hermes", &["acp"])
+    }
+}
+
+/// Where Ollama Cloud lists its models, which needs no key.
+const OLLAMA_CLOUD_MODELS: &str = "https://ollama.com/v1/models";
+
+/// Hermes Agent's provider for Ollama Cloud. In a home with no config of its own, Hermes runs every
+/// model on it.
+const HERMES_OLLAMA: &str = "ollama-cloud";
+
+/// The persona Ollama Cloud's Hermes Agent runs with, as its home's `SOUL.md` (0070).
+const OLLAMA_SOUL: &str = "You are Ollama Cloud's coding agent in Parallax, running an open model \
+on Ollama Cloud. Asked what you are, say that, and name your model. Be direct: match the length of \
+your reply to the weight of the ask, and report finished work as what changed, what's verified, and \
+what's left. No filler, and no restating the request. When unsure, say so plainly.\n";
+
+/// Whether `instance` is Ollama Cloud on Hermes Agent. One that sets `ANTHROPIC_BASE_URL` was added
+/// before 0070 and runs Claude Code against ollama.com.
+fn on_hermes(instance: &ProviderInstance) -> bool {
+    instance.kind == ProviderKind::OllamaCloud
+        && !instance
+            .env
+            .iter()
+            .any(|var| var.name == "ANTHROPIC_BASE_URL")
+}
+
 /// The defaults of `kind`. `None` for a kind this plxd doesn't know.
 fn preset(kind: ProviderKind) -> Option<Preset> {
     let base = |program, driver| Preset {
@@ -129,25 +164,26 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
                 })),
             )
         },
-        // Hermes Agent's modes are its edit approval policy.
         ProviderKind::Hermes => Preset {
             login: &["hermes", "setup", "--portal"],
             home_env: Some("HERMES_HOME"),
             ..base(
                 "hermes",
-                Driver::Acp(Box::new(AcpAgent {
-                    modes: vec![
-                        (AgentPermission::Manual, "default".into()),
-                        (AgentPermission::Edit, "accept_edits".into()),
-                        (AgentPermission::Bypass, "dont_ask".into()),
-                    ],
-                    ..acp_agent("Hermes Agent", "hermes", &["acp"])
-                })),
+                Driver::Acp(Box::new(hermes_agent("Hermes Agent"))),
             )
         },
+        // Hermes Agent's own Ollama Cloud provider, with the key in `OLLAMA_API_KEY`, in a home of
+        // its own (0070). Its models are listed from Ollama Cloud, not from Hermes.
         ProviderKind::OllamaCloud => Preset {
-            models_url: Some(("https://ollama.com/v1/models", "ANTHROPIC_AUTH_TOKEN")),
-            ..base("claude", Driver::Claude)
+            home_env: Some("HERMES_HOME"),
+            models_url: Some((OLLAMA_CLOUD_MODELS, "OLLAMA_API_KEY")),
+            ..base(
+                "hermes",
+                Driver::Acp(Box::new(AcpAgent {
+                    env: vec![("HERMES_INFERENCE_PROVIDER".into(), HERMES_OLLAMA.into())],
+                    ..hermes_agent("Ollama Cloud")
+                })),
+            )
         },
         ProviderKind::OpenRouter => Preset {
             models_url: Some((
@@ -179,9 +215,19 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
 }
 
 /// `instance`'s defaults: its kind's, except that `OpenCode` 2 (`opencode2`) stays on
-/// `opencode2 acp`, since its HTTP API isn't 1.x's (0055, PLX-566).
+/// `opencode2 acp`, since its HTTP API isn't 1.x's (0055, PLX-566), and an Ollama Cloud instance
+/// from before 0070 runs Claude Code.
 fn preset_for(instance: &ProviderInstance) -> Option<Preset> {
     let mut preset = preset(instance.kind)?;
+    if instance.kind == ProviderKind::OllamaCloud && !on_hermes(instance) {
+        preset = Preset {
+            program: "claude",
+            driver: Driver::Claude,
+            login: &[],
+            home_env: None,
+            models_url: Some((OLLAMA_CLOUD_MODELS, "ANTHROPIC_AUTH_TOKEN")),
+        };
+    }
     let opencode2 = instance
         .program
         .as_deref()
@@ -439,6 +485,9 @@ impl Providers {
                 "an instance's kind can't change; add a new instance instead",
             ));
         }
+        if on_hermes(&instance) && instance.home.is_none() {
+            instance.home = Some(self.ollama_cloud_home(&instance.id)?);
+        }
         let secret_id = self.save_secrets(old.as_ref(), &mut instance).await?;
         let entry = Stored {
             instance,
@@ -456,6 +505,26 @@ impl Providers {
         self.cache.lock().await.remove(&entry.instance.id);
         self.register(&entry);
         Ok(())
+    }
+
+    /// A home for Ollama Cloud's Hermes Agent, `ollama-cloud/<id>` in plxd's data folder, so it
+    /// shares none of the user's own Hermes config, sessions, or memory, with [`OLLAMA_SOUL`] as its
+    /// `SOUL.md`, which Hermes keeps since it didn't write it.
+    fn ollama_cloud_home(&self, id: &str) -> Result<String, ErrorObject> {
+        let dir = self.file.with_file_name("ollama-cloud").join(id);
+        let soul = dir.join("SOUL.md");
+        std::fs::create_dir_all(&dir)
+            .and_then(|()| {
+                if soul.exists() {
+                    Ok(())
+                } else {
+                    std::fs::write(&soul, OLLAMA_SOUL)
+                }
+            })
+            .map_err(|error| {
+                ErrorObject::internal_error(format!("couldn't make {}: {error}", dir.display()))
+            })?;
+        Ok(dir.display().to_string())
     }
 
     /// Keeps `instance`'s secret values in the keychain, takes them out of it, and returns where
@@ -638,8 +707,14 @@ impl Providers {
         } else {
             let program = program_of(instance, &preset);
             let Some(path) = detect::resolve(&self.launcher, &program) else {
+                let note = if on_hermes(instance) {
+                    "Ollama Cloud runs through Hermes Agent, which isn't installed on this host"
+                        .into()
+                } else {
+                    format!("{program} isn't installed on this host")
+                };
                 return Found {
-                    note: Some(format!("{program} isn't installed on this host")),
+                    note: Some(note),
                     ..Found::default()
                 };
             };
@@ -665,8 +740,10 @@ impl Providers {
                     .file_stem()
                     .is_some_and(|stem| stem == *launcher)
             });
+            // Ollama Cloud's Hermes Agent stays out of sight.
             let version = match instance.kind {
                 ProviderKind::Antigravity => None,
+                ProviderKind::OllamaCloud if on_hermes(instance) => None,
                 ProviderKind::Acp if launcher_program => None,
                 _ => detect::run(&self.launcher, &versioned, &["--version"], PROBE_TIMEOUT)
                     .await
@@ -686,10 +763,11 @@ impl Providers {
         }
         let env = plain_env(entry);
         match (&preset.driver, preset.models_url) {
-            (Driver::Claude, Some((url, key_name))) => {
+            // Ollama Cloud's Hermes Agent too: its models are the service's, so it isn't started.
+            (_, Some((url, key_name))) => {
                 probe_service(&self.launcher, entry, &env, url, key_name, &mut found).await;
             }
-            (Driver::Acp(agent), _) => {
+            (Driver::Acp(agent), None) => {
                 // Probed without its secrets, which only a run reads, and which never go on the
                 // sign-in command line, where `ps` would show them.
                 let agent = acp_for(
@@ -707,6 +785,11 @@ impl Providers {
                 probe_opencode(&self.launcher, entry, &preset, &mut found).await;
             }
             _ => {}
+        }
+        if instance.kind == ProviderKind::OllamaCloud {
+            for model in &mut found.models {
+                model.name = ollama_model_name(&model.id);
+            }
         }
         // Claude runs through the Agent SDK sidecar (0061), which needs Node and installs the
         // SDK on first use.
@@ -762,6 +845,44 @@ async fn probe_service(
     if found.signed_in == Some(false) {
         found.note = Some("Add the service's API key".into());
     }
+}
+
+/// What people see for an Ollama model id: `glm-5.3` is `GLM 5.3`, `kimi-k2.7-code` is
+/// `Kimi K2.7 Code`, `gpt-oss:120b` is `gpt-oss 120B`.
+fn ollama_model_name(id: &str) -> String {
+    let (base, tag) = id.split_once(':').unwrap_or((id, ""));
+    // OpenAI writes gpt-oss in lowercase.
+    let (lead, rest) = base
+        .strip_prefix("gpt-oss")
+        .map_or(("", base), |rest| ("gpt-oss", rest));
+    let mut name: Vec<String> = Vec::new();
+    if !lead.is_empty() {
+        name.push(lead.to_owned());
+    }
+    for word in rest.split('-').filter(|word| !word.is_empty()) {
+        name.push(match word {
+            "glm" => "GLM".to_owned(),
+            "deepseek" => "DeepSeek".to_owned(),
+            "minimax" => "MiniMax".to_owned(),
+            "vl" => "VL".to_owned(),
+            _ => {
+                let mut chars = word.chars();
+                chars
+                    .next()
+                    .map(|first| first.to_uppercase().chain(chars).collect())
+                    .unwrap_or_default()
+            }
+        });
+    }
+    let size = tag
+        .strip_suffix('b')
+        .is_some_and(|n| n.parse::<f64>().is_ok());
+    match tag {
+        "" => {}
+        _ if size => name.push(tag.to_uppercase()),
+        _ => name.push(tag.to_owned()),
+    }
+    name.join(" ")
 }
 
 /// Whether `instance` is an `OpenCode` whose server is at a URL, which needs no `opencode` on this
@@ -1538,6 +1659,61 @@ mod tests {
             ],
             models: Vec::new(),
             reserve: None,
+        }
+    }
+
+    /// 0070: Ollama Cloud runs Hermes Agent in a home of its own with Ollama's persona, and one
+    /// added before it, which sets `ANTHROPIC_BASE_URL`, keeps running Claude Code.
+    #[tokio::test]
+    async fn ollama_cloud_runs_hermes_in_its_own_home_unless_it_points_claude_code_at_ollama() {
+        use parallax_protocol::AgentPermission;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (providers, registry) = load(dir.path(), Arc::new(MemoryKeyStore::new()));
+        let mut cloud = ollama();
+        cloud.id = "cloud".into();
+        cloud.env = vec![ProviderEnvVar {
+            name: "OLLAMA_API_KEY".into(),
+            value: Some("ollama-key".into()),
+            secret: true,
+        }];
+        providers.save(cloud).await.unwrap();
+        providers.save(ollama()).await.unwrap();
+
+        let home = dir.path().join("ollama-cloud/cloud");
+        let soul = std::fs::read_to_string(home.join("SOUL.md")).unwrap();
+        assert!(
+            soul.starts_with("You are Ollama Cloud's coding agent") && !soul.contains("Hermes")
+        );
+        let file = std::fs::read_to_string(dir.path().join("providers.json")).unwrap();
+        let stored: Vec<Stored> = serde_json::from_str(&file).unwrap();
+        let home_of = |id: &str| {
+            let entry = stored.iter().find(|s| s.instance.id == id).unwrap();
+            entry.instance.home.clone()
+        };
+        assert_eq!(home_of("cloud"), Some(home.display().to_string()));
+        assert_eq!(home_of("ollama"), None, "Claude Code needs no home");
+
+        // Hermes Agent has no Auto; Claude Code does.
+        let auto = |id: &str| {
+            let (_, backend) = registry.by_backend_name(id).unwrap();
+            backend.permissions().contains(&AgentPermission::Auto)
+        };
+        assert!(!auto("cloud"));
+        assert!(auto("ollama"));
+    }
+
+    #[test]
+    fn ollama_models_get_the_names_people_know_them_by() {
+        for (id, name) in [
+            ("glm-5.3", "GLM 5.3"),
+            ("kimi-k2.7-code", "Kimi K2.7 Code"),
+            ("gpt-oss:120b", "gpt-oss 120B"),
+            ("deepseek-v4-pro:0813", "DeepSeek V4 Pro 0813"),
+            ("minimax-m3", "MiniMax M3"),
+            ("qwen3.5:397b", "Qwen3.5 397B"),
+        ] {
+            assert_eq!(super::ollama_model_name(id), name, "{id}");
         }
     }
 

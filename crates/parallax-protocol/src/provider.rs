@@ -35,7 +35,8 @@ pub enum ProviderKind {
     GrokBuild,
     /// Hermes Agent on Nous Portal, `hermes acp`.
     Hermes,
-    /// Ollama Cloud's models through an agent.
+    /// Ollama Cloud's models with an API key, through Hermes Agent's `ollama-cloud` provider, or
+    /// through Claude Code for an instance that sets `ANTHROPIC_BASE_URL` (0070).
     OllamaCloud,
     /// `OpenRouter`'s models through an agent.
     OpenRouter,

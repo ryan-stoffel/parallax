@@ -2228,7 +2228,6 @@ mod tests {
             &registry,
         );
         let kinds = [
-            ("ollama-cloud", ProviderKind::OllamaCloud, true),
             ("openrouter", ProviderKind::OpenRouter, true),
             ("local-model", ProviderKind::LocalModel, false),
         ];

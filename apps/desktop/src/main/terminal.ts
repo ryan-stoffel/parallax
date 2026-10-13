@@ -91,6 +91,11 @@ printf '#!/bin/sh\nexec "%s/agy_acp_server.par" "$@"\n' "$dir" > "$HOME/.local/b
 chmod +x "$HOME/.local/bin/agy_acp_server.par"
 echo "Installed Antigravity's ACP server in $dir."`;
 
+const hermes = {
+  posix: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+  windows: "iex (irm https://hermes-agent.nousresearch.com/install.ps1)",
+};
+
 /**
  * Each agent's own install, by provider kind, as its docs give it: for a POSIX shell, and for
  * PowerShell where it has one.
@@ -112,10 +117,9 @@ const installScripts: Record<string, { posix: string; windows?: string }> = {
     posix: "curl -fsSL https://x.ai/cli/install.sh | bash",
     windows: "npm install -g @xai-official/grok",
   },
-  hermes: {
-    posix: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
-    windows: "iex (irm https://hermes-agent.nousresearch.com/install.ps1)",
-  },
+  hermes,
+  // Ollama Cloud runs through Hermes Agent's own Ollama Cloud provider (0070).
+  ollamaCloud: hermes,
   // Its Windows build is an .exe that an instance's binary path names instead.
   antigravity: { posix: antigravityPosix },
 };
