@@ -569,12 +569,13 @@ function HostUsageLoader({
   const status =
     hostStatus(connection) ??
     (!current ? undefined : "days" in current ? undefined : usageError(current));
-  const coming = connection?.status !== "failed" && !connected;
+  // Still on its way: connecting, or failed but retrying by itself.
+  const coming = !connected && (connection?.status !== "failed" || connection.retrying);
   if (named && (coming || (connected && !current))) {
     return (
       <span className="mr-5 mb-6 inline-flex items-center gap-2 text-[13px] text-muted-foreground">
         {coming ? (
-          <StatusDot state={connection} />
+          <StatusDot state={undefined} />
         ) : (
           <span
             aria-hidden
