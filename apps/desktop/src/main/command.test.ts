@@ -50,22 +50,26 @@ test("only a packaged app's own plxd is offered, and not from a disk image", () 
   ).toBe("C:\\Parallax\\resources\\plxd.exe");
 });
 
-test("macOS: this app's link, another Parallax's, and anything else", async () => {
-  const dir = folder();
-  const file = path.join(dir, "parallax");
-  const plxd = "/Applications/Parallax.app/Contents/Resources/plxd";
-  expect(await commandState("darwin", file, plxd, {})).toBe("missing");
-  symlinkSync(plxd, file);
-  expect(await commandState("darwin", file, plxd, {})).toBe("installed");
-  const nightly = "/Applications/Parallax (Nightly).app/Contents/Resources/plxd";
-  expect(await commandState("darwin", file, nightly, {})).toBe("stale");
-  const other = path.join(dir, "other");
-  symlinkSync("/opt/somewhere/parallax", other);
-  expect(await commandState("darwin", other, plxd, {})).toBe("other");
-  const script = path.join(dir, "script");
-  writeFileSync(script, "#!/bin/sh\n");
-  expect(await commandState("darwin", script, plxd, {})).toBe("other");
-});
+// Windows rewrites a POSIX symlink's target with backslashes, and macOS's command is never there.
+test.skipIf(process.platform === "win32")(
+  "macOS: this app's link, another Parallax's, and anything else",
+  async () => {
+    const dir = folder();
+    const file = path.join(dir, "parallax");
+    const plxd = "/Applications/Parallax.app/Contents/Resources/plxd";
+    expect(await commandState("darwin", file, plxd, {})).toBe("missing");
+    symlinkSync(plxd, file);
+    expect(await commandState("darwin", file, plxd, {})).toBe("installed");
+    const nightly = "/Applications/Parallax (Nightly).app/Contents/Resources/plxd";
+    expect(await commandState("darwin", file, nightly, {})).toBe("stale");
+    const other = path.join(dir, "other");
+    symlinkSync("/opt/somewhere/parallax", other);
+    expect(await commandState("darwin", other, plxd, {})).toBe("other");
+    const script = path.join(dir, "script");
+    writeFileSync(script, "#!/bin/sh\n");
+    expect(await commandState("darwin", script, plxd, {})).toBe("other");
+  },
+);
 
 test("macOS installs a link where the folder is the user's, and removes it", async () => {
   const dir = folder();
