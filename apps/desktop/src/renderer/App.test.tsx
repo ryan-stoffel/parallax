@@ -11,6 +11,8 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // Only what the frame calls, so new bridge methods don't break this stub.
 const bridge: Partial<ParallaxBridge> = {
   platform: "darwin",
+  version: async () => "0.0.0",
+  request: async () => ({ error: { code: -32601, message: "Not in this test." } }),
   setThemeSource: vi.fn(),
   connectionState: async () => ({ status: "connecting" }),
   onConnectionState: () => () => {},
@@ -187,7 +189,7 @@ test("the footer's Usage opens Settings > Usage, and Update shows when it's read
   expect(button("Update Parallax")!.disabled).toBe(false);
 });
 
-test("a packaged app's release shows its notes on hover, downloads on click, then waits for a restart", () => {
+test("a packaged app's release shows its notes on hover, downloads on click, then waits for a restart", async () => {
   vi.useFakeTimers();
   const button = (name: string) =>
     document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
@@ -265,10 +267,11 @@ test("a packaged app's release shows its notes on hover, downloads on click, the
 
   act(() => button("Restart to install Parallax 2610.10205.13230-nightly")!.click());
   expect(confirm.open).toBe(true);
-  expect(confirm.textContent).toContain(
-    "Install update 2610.10205.13230-nightly and restart Parallax?",
+  expect(confirm.textContent).toContain("Update 1 server?");
+  expect(confirm.textContent).toContain("This Mac: desktop app to 2610.10205.13230-nightly");
+  await act(async () =>
+    confirm.querySelector<HTMLButtonElement>('button[value="confirm"]')!.click(),
   );
-  act(() => confirm.querySelector<HTMLButtonElement>('button[value="confirm"]')!.click());
   expect(update).toHaveBeenCalledTimes(2);
   vi.useRealTimers();
 });

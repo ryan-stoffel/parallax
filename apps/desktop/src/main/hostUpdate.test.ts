@@ -316,3 +316,33 @@ test("Retry doesn't start a second update while one is running", async () => {
   await settle();
   expect(update).toHaveBeenCalledTimes(2);
 });
+
+test("Update everything updates a host now, even one waiting for its agents", async () => {
+  vi.useFakeTimers();
+  const states = new Map<string, ConnectionState>();
+  const update = vi.fn(async (_id: string, version: string, now?: boolean) => ({
+    result: {
+      version,
+      restart: now ? ("now" as const) : ("afterRuns" as const),
+      runningAgents: 2,
+      message: "Installed.",
+    },
+  }));
+  const { events, set, updater } = rig(states, { update });
+  set("tailnet:a", updatable("0.1.0"));
+  set("local", connected(APP));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(update).toHaveBeenLastCalledWith("tailnet:a", APP);
+
+  const next = "2610.11001.10000-nightly";
+  await updater.updateNow("tailnet:a", next);
+  expect(update).toHaveBeenLastCalledWith("tailnet:a", next, true);
+  // Back on the app's version isn't the release it went to.
+  set("tailnet:a", updatable(APP));
+  expect(events).toEqual([
+    { hostId: "tailnet:a", status: "failed", error: expect.stringContaining(next) },
+  ]);
+  await updater.updateNow("tailnet:a", next);
+  set("tailnet:a", updatable(next));
+  expect(events.at(-1)).toEqual({ hostId: "tailnet:a", status: "updated", version: next });
+});

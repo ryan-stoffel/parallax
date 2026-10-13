@@ -95,6 +95,7 @@ const bridge: ParallaxBridge = {
   retry: (hostId) => ipcRenderer.invoke("parallax:retry", hostId),
   onHostUpdate: (listener) => follow("parallax:hostUpdate", listener, false),
   retryHostUpdate: (hostId) => ipcRenderer.invoke("parallax:retryHostUpdate", hostId),
+  updateHostNow: (hostId) => ipcRenderer.invoke("parallax:updateHostNow", hostId),
 
   hosts: () => ipcRenderer.invoke("parallax:hosts"),
   sshSuggestions: () => ipcRenderer.invoke("parallax:sshSuggestions"),

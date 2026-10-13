@@ -528,6 +528,7 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     // A web client has only this host, whose plxd it doesn't update.
     onHostUpdate: () => () => {},
     retryHostUpdate: async () => {},
+    updateHostNow: async () => {},
 
     hosts: async () => [],
     onHosts: none,

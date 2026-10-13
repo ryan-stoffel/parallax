@@ -58,7 +58,8 @@ use crate::{
     ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
     ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectListParams, ProjectListResult,
     ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
-    ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, PullRequest,
+    ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, ProvidersUpdatesParams,
+    ProvidersUpdatesResult, ProvidersUpgradeParams, ProvidersUpgradeResult, PullRequest,
     QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
     QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
     QueueReorderParams, QueueResult, QueueSteerParams, RelayHostsParams, RelayHostsResult,
@@ -161,8 +162,8 @@ method_table! {
         /// architecture.
         HostVersion = "host/version": HostVersionParams => HostVersionResult;
         /// `host/update`: installs plxd `version` from its GitHub release, checked against the
-        /// release's SHA-256, and restarts into it once no agent's turn is running. It never
-        /// downgrades. Gated on the `hostUpdate` capability (PLX-700, decision 0066).
+        /// release's SHA-256, and restarts into it once no agent's turn is running, or at once
+        /// with `now`. It never downgrades. Gated on the `hostUpdate` capability (PLX-700, decision 0066).
         HostUpdate = "host/update": HostUpdateParams => HostUpdateResult;
         /// `project/list`: every project, and the event log's `seq` from before the read.
         ProjectList = "project/list": ProjectListParams => ProjectListResult;
@@ -198,6 +199,13 @@ method_table! {
         /// `providers/remove`: removes an instance the user added, and its secrets, and returns
         /// every instance. Fails with `invalidParams` for a built-in one.
         ProvidersRemove = "providers/remove": ProvidersRemoveParams => ProvidersListResult;
+        /// `providers/updates`: each installed Claude Code and Codex whose npm package has a newer
+        /// release. Gated on the `providerUpdates` capability (PLX-746).
+        ProvidersUpdates = "providers/updates": ProvidersUpdatesParams => ProvidersUpdatesResult;
+        /// `providers/upgrade`: runs the CLI's own `update` command, which knows how it was
+        /// installed, and answers with the version installed after it. Gated on the
+        /// `providerUpdates` capability (PLX-746).
+        ProvidersUpgrade = "providers/upgrade": ProvidersUpgradeParams => ProvidersUpgradeResult;
         /// `usage/get`: per-account tokens and cost for today and this week (local time on this
         /// host), and the latest limit windows.
         UsageGet = "usage/get": UsageGetParams => UsageGetResult;
@@ -627,6 +635,8 @@ mod tests {
                 "providers/list",
                 "providers/save",
                 "providers/remove",
+                "providers/updates",
+                "providers/upgrade",
                 "usage/get",
                 "usage/history",
                 "usage/daily",

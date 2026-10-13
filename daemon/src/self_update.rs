@@ -13,7 +13,7 @@
 //!   in place, falling back to `~/.parallax-plxd` when its folder isn't writable. A cargo build
 //!   (`target/debug`, `target/release`) refuses.
 //! - **Handover**: plxd answers first, then restarts into the new binary once no agent's turn is
-//!   running. With its login service installed, it runs the new plxd's
+//!   running, or at once when asked `now` (PLX-746). With its login service installed, it runs the new plxd's
 //!   `service install --replace`, detached, which points the service at it and restarts it. When
 //!   that fails and the service manager runs this plxd, plxd exits with [`EXIT_RESTART`], so the
 //!   manager starts its program again, now the new binary for an in-place update; a `serve` it
@@ -129,6 +129,8 @@ struct State {
     installed: Option<(String, PathBuf)>,
     /// A handover is scheduled, so a second `host/update` doesn't schedule another.
     handing_over: bool,
+    /// A `host/update` asked for the handover `now`, so it doesn't wait for running agents.
+    now: bool,
 }
 
 impl SelfUpdate {
@@ -184,7 +186,10 @@ impl SelfUpdate {
         params: HostUpdateParams,
     ) -> Result<HostUpdateResult, ErrorObject> {
         let running = daemon.agents.running();
-        let result = self.install(&params.version, running).await?;
+        let result = self.install(&params.version, running, params.now).await?;
+        if params.now && result.restart == HostUpdateRestart::Now {
+            lock(&self.state).now = true;
+        }
         if self.handover && result.restart != HostUpdateRestart::UpToDate && self.claim_handover() {
             let daemon = Arc::clone(daemon);
             tokio::spawn(async move { handover_when_idle(daemon).await });
@@ -193,8 +198,13 @@ impl SelfUpdate {
     }
 
     /// Installs `version` unless plxd can't or needn't, and answers as `host/update` does with
-    /// `running` agents.
-    async fn install(&self, version: &str, running: u32) -> Result<HostUpdateResult, ErrorObject> {
+    /// `running` agents, restarting at once if `now`.
+    async fn install(
+        &self,
+        version: &str,
+        running: u32,
+        now: bool,
+    ) -> Result<HostUpdateResult, ErrorObject> {
         let failed = |message: String| ErrorObject::parallax(ErrorKind::HostUpdateFailed, message);
         if cfg!(windows) {
             return Err(failed(
@@ -232,7 +242,7 @@ impl SelfUpdate {
             if let Some((installed, _)) = &state.installed
                 && parse_version(installed).is_some_and(|got| compare(&got, &wanted).is_ge())
             {
-                return Ok(restart_answer(installed, running));
+                return Ok(restart_answer(installed, running, now));
             }
             if state.busy {
                 return Err(failed(
@@ -257,12 +267,17 @@ impl SelfUpdate {
         let program = installed.map_err(failed)?;
         info!(version, program = %program.display(), "installed a plxd update");
         state.installed = Some((version.to_owned(), program));
-        Ok(restart_answer(version, running))
+        Ok(restart_answer(version, running, now))
     }
 
     /// Whether this call schedules the handover: true only the first time.
     fn claim_handover(&self) -> bool {
         !std::mem::replace(&mut lock(&self.state).handing_over, true)
+    }
+
+    /// Whether a `host/update` asked to restart without waiting for running agents.
+    fn now(&self) -> bool {
+        lock(&self.state).now
     }
 
     /// The program waiting for the handover, if an update was installed.
@@ -309,7 +324,8 @@ fn answer(
     }
 }
 
-fn restart_answer(version: &str, running: u32) -> HostUpdateResult {
+fn restart_answer(version: &str, running: u32, now: bool) -> HostUpdateResult {
+    let agents = if running == 1 { "agent" } else { "agents" };
     if running == 0 {
         answer(
             version,
@@ -317,8 +333,16 @@ fn restart_answer(version: &str, running: u32) -> HostUpdateResult {
             running,
             format!("Installed plxd {version}. plxd restarts into it now."),
         )
+    } else if now {
+        answer(
+            version,
+            HostUpdateRestart::Now,
+            running,
+            format!(
+                "Installed plxd {version}. plxd restarts into it now, interrupting its {running} running {agents}."
+            ),
+        )
     } else {
-        let agents = if running == 1 { "agent" } else { "agents" };
         answer(
             version,
             HostUpdateRestart::AfterRuns,
@@ -531,10 +555,11 @@ fn make_executable(_: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Waits for the answer to go out and for every running agent's turn to end, then hands over.
+/// Waits for the answer to go out and for every running agent's turn to end, unless a
+/// `host/update` asked for `now`, then hands over.
 async fn handover_when_idle(daemon: Arc<Daemon>) {
     tokio::time::sleep(ANSWER_GRACE).await;
-    while daemon.agents.running() > 0 {
+    while daemon.agents.running() > 0 && !daemon.self_update.now() {
         tokio::time::sleep(RUNS_POLL).await;
     }
     let Some(program) = daemon.self_update.installed() else {

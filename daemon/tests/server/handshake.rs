@@ -69,6 +69,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("projectPermission".to_owned(), serde_json::Map::new()),
             ("projectPlacement".to_owned(), serde_json::Map::new()),
             ("projectTasks".to_owned(), serde_json::Map::new()),
+            ("providerUpdates".to_owned(), serde_json::Map::new()),
             ("providers".to_owned(), serde_json::Map::new()),
             (
                 "promptImages".to_owned(),
@@ -144,6 +145,7 @@ async fn host_update_refuses_what_it_cant_install_and_stays_up() {
         client
             .call::<HostUpdate>(HostUpdateParams {
                 version: version.to_owned(),
+                now: false,
             })
             .await
     };

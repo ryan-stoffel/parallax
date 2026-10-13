@@ -39,8 +39,8 @@ export type ParallaxRequests = {
 	"host/version": { params: HostVersionParams, result: HostVersionResult },
 	/**
 	 * `host/update`: installs plxd `version` from its GitHub release, checked against the
-	 * release's SHA-256, and restarts into it once no agent's turn is running. It never
-	 * downgrades. Gated on the `hostUpdate` capability (PLX-700, decision 0066).
+	 * release's SHA-256, and restarts into it once no agent's turn is running, or at once
+	 * with `now`. It never downgrades. Gated on the `hostUpdate` capability (PLX-700, decision 0066).
 	 */
 	"host/update": { params: HostUpdateParams, result: HostUpdateResult },
 	/**
@@ -101,6 +101,17 @@ export type ParallaxRequests = {
 	 * every instance. Fails with `invalidParams` for a built-in one.
 	 */
 	"providers/remove": { params: ProvidersRemoveParams, result: ProvidersListResult },
+	/**
+	 * `providers/updates`: each installed Claude Code and Codex whose npm package has a newer
+	 * release. Gated on the `providerUpdates` capability (PLX-746).
+	 */
+	"providers/updates": { params: ProvidersUpdatesParams, result: ProvidersUpdatesResult },
+	/**
+	 * `providers/upgrade`: runs the CLI's own `update` command, which knows how it was
+	 * installed, and answers with the version installed after it. Gated on the
+	 * `providerUpdates` capability (PLX-746).
+	 */
+	"providers/upgrade": { params: ProvidersUpgradeParams, result: ProvidersUpgradeResult },
 	/**
 	 * `usage/get`: per-account tokens and cost for today and this week (local time on this
 	 * host), and the latest limit windows.
@@ -717,6 +728,8 @@ export const REQUEST_METHODS = [
 	"providers/list",
 	"providers/save",
 	"providers/remove",
+	"providers/updates",
+	"providers/upgrade",
 	"usage/get",
 	"usage/history",
 	"usage/daily",
@@ -1086,6 +1099,11 @@ export type HostUpdateParams = {
 	 * The release to install, such as `2610.10912.13045-nightly`: the app's own version.
 	 */
 	version: string,
+	/**
+	 * Restart into it at once, cutting off running agents' turns, instead of once they end
+	 * (PLX-746). The host's `continueAfterRestart` then decides whether they go on.
+	 */
+	now?: boolean,
 };
 
 /**
@@ -1856,6 +1874,59 @@ export type ProvidersRemoveParams = {
 	 * The instance's id.
 	 */
 	id: string,
+};
+
+/**
+ * Params of `providers/updates`.
+ */
+export type ProvidersUpdatesParams = Record<symbol, never>;
+
+/**
+ * Result of `providers/updates` (PLX-746).
+ */
+export type ProvidersUpdatesResult = {
+	/**
+	 * Each installed agent CLI with a newer release, none when every one is current.
+	 */
+	updates: Array<ProviderUpdate>,
+};
+
+/**
+ * An agent CLI with a newer release than the one installed.
+ */
+export type ProviderUpdate = {
+	/**
+	 * The CLI.
+	 */
+	cli: CliKind,
+	/**
+	 * The version installed.
+	 */
+	version: string,
+	/**
+	 * The newest release.
+	 */
+	latest: string,
+};
+
+/**
+ * Params of `providers/upgrade`.
+ */
+export type ProvidersUpgradeParams = {
+	/**
+	 * The CLI to update.
+	 */
+	cli: CliKind,
+};
+
+/**
+ * Result of `providers/upgrade`.
+ */
+export type ProvidersUpgradeResult = {
+	/**
+	 * The version installed now, when plxd could read it.
+	 */
+	version?: string,
 };
 
 /**

@@ -14,7 +14,8 @@
 //! `crate::setup_scripts`; 0062 `checkpoints`: `orchestration/threadRuns`, `getTurnDiff`, and
 //! `getFullThreadDiff` in `crate::checkpoints`; PLX-648 `delegation`: `task/delegate`,
 //! `task/status`, and `thread/mergeBack` in `crate::delegation`; PLX-648 `secrets`:
-//! `secret/request` and `secret/answer` in `crate::secrets`), and `host.rs` advertises the
+//! `secret/request` and `secret/answer` in `crate::secrets`; PLX-746 `providerUpdates`:
+//! `provider_updates.rs`), and `host.rs` advertises the
 //! capability in `initialize`.
 
 mod accounts;
@@ -32,6 +33,7 @@ mod memory;
 mod orchestration;
 mod pr;
 pub(crate) mod project;
+mod provider_updates;
 pub(crate) mod question;
 mod queue;
 mod remote;
@@ -230,6 +232,8 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
             daemon.providers.remove(&p.id).await?;
             Ok(providers(daemon, false).await)
         },
+        ProvidersUpdates => |p| provider_updates::updates(context, p),
+        ProvidersUpgrade => |p| provider_updates::upgrade(context, p),
         UsageGet => |p| usage::get(context, p),
         UsageHistory => |p| usage::history(context, p),
         UsageDaily => |p| usage::daily(context, p),

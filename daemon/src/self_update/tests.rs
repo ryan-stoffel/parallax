@@ -331,7 +331,7 @@ async fn host_update_never_downgrades_and_answers_when_it_restarts() {
         |error: &parallax_protocol::jsonrpc::ErrorObject| error.parallax_data().unwrap().kind;
 
     let newer = update("2610.10912.13046", "file:///nonexistent");
-    let error = newer.install(NEW, 0).await.unwrap_err();
+    let error = newer.install(NEW, 0, false).await.unwrap_err();
     assert_eq!(kind(&error), ErrorKind::HostUpdateFailed);
     assert!(
         error.message.contains("never downgrades"),
@@ -340,10 +340,10 @@ async fn host_update_never_downgrades_and_answers_when_it_restarts() {
     );
 
     let same = update("2610.10912.13045", "file:///nonexistent");
-    let answer = same.install(NEW, 3).await.unwrap();
+    let answer = same.install(NEW, 3, false).await.unwrap();
     assert_eq!(answer.restart, HostUpdateRestart::UpToDate);
 
-    let error = same.install("2611.1.1;reboot", 0).await.unwrap_err();
+    let error = same.install("2611.1.1;reboot", 0, false).await.unwrap_err();
     assert!(
         error.message.contains("isn't a Parallax release"),
         "{}",
@@ -354,7 +354,7 @@ async fn host_update_never_downgrades_and_answers_when_it_restarts() {
         return;
     };
     let old = update("0.1.0", &releases);
-    let answer = old.install(NEW, 2).await.unwrap();
+    let answer = old.install(NEW, 2, false).await.unwrap();
     assert_eq!(answer.restart, HostUpdateRestart::AfterRuns);
     assert_eq!(answer.running_agents, 2);
     assert_eq!(answer.version, NEW);
@@ -366,9 +366,18 @@ async fn host_update_never_downgrades_and_answers_when_it_restarts() {
     assert_eq!(fs::read_to_string(&exe).unwrap(), FAKE_PLXD);
     assert_eq!(old.installed(), Some(exe.clone()));
 
+    // Asked `now`, it restarts at once, interrupting them.
+    let now = old.install(NEW, 2, true).await.unwrap();
+    assert_eq!(now.restart, HostUpdateRestart::Now);
+    assert!(
+        now.message.contains("interrupting its 2"),
+        "{}",
+        now.message
+    );
+
     // Installed already: the same answer, without downloading again.
     fs::remove_dir_all(fixture.path("release")).unwrap();
-    let again = old.install(NEW, 0).await.unwrap();
+    let again = old.install(NEW, 0, false).await.unwrap();
     assert_eq!(again.restart, HostUpdateRestart::Now);
 }
 
@@ -383,7 +392,7 @@ async fn a_development_build_refuses_to_update() {
         &fixture.path("home"),
         "0.1.0",
     );
-    let error = update.install(NEW, 0).await.unwrap_err();
+    let error = update.install(NEW, 0, false).await.unwrap_err();
     assert!(
         error.message.contains("development build"),
         "{}",

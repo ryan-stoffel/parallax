@@ -93,6 +93,10 @@ pub struct HostVersionResult {
 pub struct HostUpdateParams {
     /// The release to install, such as `2610.10912.13045-nightly`: the app's own version.
     pub version: String,
+    /// Restart into it at once, cutting off running agents' turns, instead of once they end
+    /// (PLX-746). The host's `continueAfterRestart` then decides whether they go on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub now: bool,
 }
 
 /// Result of `host/update`: plxd installed the release and says when it restarts into it. Every

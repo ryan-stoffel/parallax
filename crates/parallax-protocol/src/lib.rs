@@ -161,8 +161,9 @@ pub use project::{
 pub use provider::{
     CursorInstallParams, CursorInstallResult, CursorSignInCancelParams, CursorSignInCancelResult,
     CursorSignInParams, CursorSignInResult, CursorSignOutParams, CursorSignOutResult,
-    ProviderEnvVar, ProviderInfo, ProviderInstance, ProviderKind, ProviderModel,
+    ProviderEnvVar, ProviderInfo, ProviderInstance, ProviderKind, ProviderModel, ProviderUpdate,
     ProvidersListParams, ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams,
+    ProvidersUpdatesParams, ProvidersUpdatesResult, ProvidersUpgradeParams, ProvidersUpgradeResult,
 };
 pub use pull_request::{
     PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrMergeMethod,

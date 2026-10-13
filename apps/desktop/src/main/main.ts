@@ -401,7 +401,7 @@ void app.whenReady().then(async () => {
   const languages = app.getPreferredSystemLanguages().filter((tag) => validLocale(tag));
   if (languages.length > 0)
     browserSession.setUserAgent(browserSession.getUserAgent(), languages.join(","));
-  startHosts(startAccount());
+  startHosts(startAccount(), () => updateState.available?.version ?? app.getVersion());
   startStorage();
   // Under `pnpm dev`, Update follows main (scripts/channels.mjs). Nightly and stable are tags on it.
   if (!updater) process.send?.({ channel: "nightly" });

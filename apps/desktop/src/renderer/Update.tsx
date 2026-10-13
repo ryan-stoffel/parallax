@@ -4,6 +4,13 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { UpdateState } from "../preload/bridge";
 import { notify } from "./notifications";
 import { IconButton } from "./ui";
+import {
+  planLine,
+  planSummary,
+  runningThreads,
+  updateEverything,
+  useUpdatePlan,
+} from "./updateEverything";
 
 /** The updater's state from main, kept current, in an `updatable` app. */
 function useUpdateState(): UpdateState {
@@ -24,9 +31,11 @@ const downloadedVersion = ({ available, ready }: UpdateState) =>
  * release's notes, which stays open while the pointer is on the button or the card. A click
  * opens the same card and starts the download, whose progress the card shows; the dot goes away.
  * Once downloaded, the icon is a restart icon with a check, and a click asks to confirm before it
- * installs and restarts (`useUpdateAlarms` says so). Under `pnpm dev` it offers the commits main has, a
- * click takes them, and the card shows the answer. Its label carries the updater's note, such as
- * an error.
+ * installs and restarts (`useUpdateAlarms` says so). A remote host's older plxd, or a host's
+ * outdated Claude or Codex, also shows the dot, and then a click asks to confirm updating
+ * everything at once (PLX-746): those, and the app's release if there is one. Under `pnpm dev`
+ * it offers the commits main has, a click takes them, and the card shows the answer. Its label
+ * carries the updater's note, such as an error.
  */
 export function UpdateButton() {
   const id = useId();
@@ -41,6 +50,12 @@ export function UpdateButton() {
   const ready = updating ? undefined : state.ready;
   const downloaded = downloadedVersion(state);
   const downloading = progress !== undefined;
+  const { plans, refresh } = useUpdatePlan(state);
+  // Something beyond the app to update: a remote plxd or a provider.
+  const everything = plans.some((p) => p.server !== undefined || p.providers.length > 0);
+  // Running threads the confirmed update cuts off, and whether they go on after it.
+  const [running, setRunning] = useState(0);
+  const [continueThreads, setContinueThreads] = useState(true);
 
   // The pointer crosses the gap between the button and the card before the card closes.
   const closing = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -60,22 +75,29 @@ export function UpdateButton() {
   const hoverable = available !== undefined && !downloaded;
 
   const click = async (source: HTMLElement) => {
-    if (downloaded) return confirm.current?.showModal();
+    if (downloaded || everything) {
+      setRunning(0);
+      confirm.current?.showModal();
+      setRunning(await runningThreads(plans));
+      return;
+    }
     open(source);
     if (available) return void window.parallax.update();
     setAnswer("Updating…");
     setAnswer(await window.parallax.update());
   };
 
-  const label = downloaded
-    ? `Restart to install Parallax ${downloaded}`
-    : available
-      ? downloading
-        ? `Downloading Parallax ${available.version}: ${progress}%`
-        : `Update available: Parallax ${available.version}`
-      : ready
-        ? `Update ready: ${ready}`
-        : (note ?? "Update Parallax");
+  const label = everything
+    ? `Update ${planSummary(plans)}`
+    : downloaded
+      ? `Restart to install Parallax ${downloaded}`
+      : available
+        ? downloading
+          ? `Downloading Parallax ${available.version}: ${progress}%`
+          : `Update available: Parallax ${available.version}`
+        : ready
+          ? `Update ready: ${ready}`
+          : (note ?? "Update Parallax");
   return (
     <span className="ml-auto">
       <IconButton
@@ -99,7 +121,7 @@ export function UpdateButton() {
               <Check strokeWidth={4} className="size-2!" />
             </span>
           </span>
-        ) : available || ready ? (
+        ) : available || ready || everything ? (
           <span className="relative grid">
             <Download />
             {!downloading && (
@@ -176,16 +198,33 @@ export function UpdateButton() {
           method="dialog"
           onSubmit={(e) => {
             if ((e.nativeEvent as SubmitEvent).submitter?.getAttribute("value") === "confirm")
-              void window.parallax.update();
+              void updateEverything(plans, continueThreads, downloaded !== undefined, refresh);
           }}
         >
           <div className="px-5 pt-4 pb-4">
             <h2 id={`${id}-confirm`} className="text-[15px] font-semibold">
-              Install update {downloaded} and restart Parallax?
+              Update {planSummary(plans)}?
             </h2>
-            <p className="mt-1.5 text-[13px] text-muted-foreground">
-              Any running tasks will be interrupted. Make sure you're ready before continuing.
-            </p>
+            <div className="mt-1.5 text-[13px] text-muted-foreground">
+              {plans.map((plan) => (
+                <p key={plan.hostId}>{planLine(plan)}</p>
+              ))}
+            </div>
+            {running > 0 && (
+              <>
+                <p className="mt-4 text-[13px]">
+                  {running} running {running === 1 ? "thread" : "threads"} will be interrupted.
+                </p>
+                <label className="mt-2 flex items-center gap-2 text-[13px] text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={continueThreads}
+                    onChange={(e) => setContinueThreads(e.target.checked)}
+                  />
+                  Continue threads after restarts
+                </label>
+              </>
+            )}
           </div>
           <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
             <button
@@ -201,7 +240,7 @@ export function UpdateButton() {
               autoFocus
               className="rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground hover:opacity-90"
             >
-              Confirm
+              Update
             </button>
           </div>
         </form>

@@ -31,5 +31,21 @@
         "kind": "hostUpdateFailed"
       }
     }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "host/update",
+    "params": { "version": "2610.10912.13045-nightly", "now": true }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "version": "2610.10912.13045-nightly",
+      "restart": "now",
+      "runningAgents": 2,
+      "message": "Installed plxd 2610.10912.13045-nightly. plxd restarts into it now, interrupting its 2 running agents."
+    }
   }
 ]

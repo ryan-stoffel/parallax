@@ -209,6 +209,8 @@ pub(crate) fn initialize(
 /// `prWatch` (0063): `pr/watch`, `pr/unwatch`, and `pr/watches`.
 /// `setupScripts` (PLX-650): `repo/scripts`, `repo/saveScripts`, and the `thread.script` event.
 /// `hostUpdate` (PLX-700, 0066): `host/update`, which installs a newer plxd and restarts into it.
+/// `providerUpdates` (PLX-746): `providers/updates` and `providers/upgrade`, and `host/update`'s
+/// `now`.
 /// `checkpoints` (0062): `orchestration/threadRuns`, `orchestration/getTurnDiff`,
 /// `orchestration/getFullThreadDiff`, `checkpoint.rollback`, and the `thread.checkpoint` and
 /// `thread.reverted` events.
@@ -264,6 +266,7 @@ fn capabilities_advertised() -> Capabilities {
         ("projectPermission".to_owned(), serde_json::Map::new()),
         ("projectPlacement".to_owned(), serde_json::Map::new()),
         ("projectTasks".to_owned(), serde_json::Map::new()),
+        ("providerUpdates".to_owned(), serde_json::Map::new()),
         ("providers".to_owned(), serde_json::Map::new()),
         ("promptImages".to_owned(), prompt_images),
         ("prWatch".to_owned(), serde_json::Map::new()),

@@ -83,6 +83,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "projectPermission",
     "projectPlacement",
     "projectTasks",
+    "providerUpdates",
     "providers",
     "pullRequests",
     "queue",
@@ -1055,6 +1056,10 @@ const handlers: { [M in Method]?: Handler<M> } = {
     worker: { kind: "subscription", backend: "claude" },
   }),
   "providers/list": () => ({ providers: db.providers, checkedAt: now() }),
+  "providers/updates": () => ({
+    updates: [{ cli: "codex", version: "0.162.0", latest: "0.163.0" }],
+  }),
+  "providers/upgrade": () => ({ version: "0.163.0" }),
   "providers/save": (p) => {
     const i = db.providers.findIndex((x) => x.instance.id === p.instance.id);
     if (i >= 0) db.providers[i] = { ...db.providers[i]!, instance: p.instance };
@@ -1652,6 +1657,7 @@ export const mockBridge: ParallaxBridge = {
   retry: () => delay(undefined),
   onHostUpdate: () => () => {},
   retryHostUpdate: () => delay(undefined),
+  updateHostNow: () => delay(undefined),
 
   hosts: () => delay([...lan.hosts]),
   sshSuggestions: () => delay(["mac-mini", "devbox", "100.87.92.42", "github.com"]),

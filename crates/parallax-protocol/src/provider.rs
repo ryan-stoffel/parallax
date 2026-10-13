@@ -10,7 +10,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::AgentPermission;
+use crate::{AgentPermission, CliKind};
 
 /// What runs an instance, and the defaults it starts from.
 ///
@@ -250,3 +250,46 @@ pub struct CursorInstallParams {}
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CursorInstallResult {}
+
+/// Params of `providers/updates`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvidersUpdatesParams {}
+
+/// Result of `providers/updates` (PLX-746).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvidersUpdatesResult {
+    /// Each installed agent CLI with a newer release, none when every one is current.
+    pub updates: Vec<ProviderUpdate>,
+}
+
+/// An agent CLI with a newer release than the one installed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderUpdate {
+    /// The CLI.
+    pub cli: CliKind,
+    /// The version installed.
+    pub version: String,
+    /// The newest release.
+    pub latest: String,
+}
+
+/// Params of `providers/upgrade`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvidersUpgradeParams {
+    /// The CLI to update.
+    pub cli: CliKind,
+}
+
+/// Result of `providers/upgrade`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvidersUpgradeResult {
+    /// The version installed now, when plxd could read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub version: Option<String>,
+}

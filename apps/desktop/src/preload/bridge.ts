@@ -192,6 +192,12 @@ export interface ParallaxBridge {
   onHostUpdate(listener: (event: HostUpdateEvent) => void): () => void;
   /** Tries again to update a host's plxd that couldn't be updated. */
   retryHostUpdate(hostId: string): Promise<void>;
+  /**
+   * Updates a remote host's plxd to the app's next release, or its own version without one, and
+   * restarts it now, cutting off running turns (PLX-746). Resolves once plxd answers; how it went
+   * comes through `onHostUpdate`.
+   */
+  updateHostNow(hostId: string): Promise<void>;
 
   /**
    * The saved SSH hosts, oldest first, then the computers paired on the LAN. This computer is

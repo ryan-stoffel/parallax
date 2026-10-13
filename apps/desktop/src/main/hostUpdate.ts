@@ -51,8 +51,12 @@ export type HostUpdaterDeps = {
   kindOf: (hostId: string) => HostKind | undefined;
   /** Each host's connection state now, `local` included. */
   states: () => Iterable<[string, ConnectionState]>;
-  /** Sends `host/update`, waiting as long as a download takes. */
-  update: (hostId: string, version: string) => Promise<RpcResponse<HostUpdateResult>>;
+  /** Sends `host/update`, waiting as long as a download takes; restarting at once with `now`. */
+  update: (
+    hostId: string,
+    version: string,
+    now?: boolean,
+  ) => Promise<RpcResponse<HostUpdateResult>>;
   /** Agents with a turn running on the host, from `host/health`; undefined when it didn't answer. */
   runningAgents: (hostId: string) => Promise<number | undefined>;
   /** Installs the app's plxd over ssh and reconnects; resolves to an error for people. */
@@ -125,6 +129,22 @@ export class HostUpdater {
     if (state) this.consider(hostId, state);
   }
 
+  /**
+   * Updates `hostId` to `version` now, cutting off its agents' turns, as Update everything does
+   * (PLX-746): even one waiting for its agents, or one that failed. Resolves once plxd answers;
+   * the result comes as the usual event once it reconnects.
+   */
+  async updateNow(hostId: string, version: string): Promise<void> {
+    this.tried.add(`${hostId}@${this.deps.version}`);
+    this.active.add(hostId);
+    const answer = await this.deps.update(hostId, version, true).catch((error: unknown) => ({
+      error: { message: error instanceof Error ? error.message : String(error) },
+    }));
+    if ("error" in answer) return this.fail(hostId, answer.error.message);
+    if (answer.result.restart === "upToDate") return this.done(hostId);
+    this.wait(hostId, true, version);
+  }
+
   /** Updates `hostId` if it's a remote host, connected on an older plxd, not tried yet. */
   private consider(hostId: string, state: ConnectionState): void {
     const { packaged, version } = this.deps;
@@ -180,9 +200,11 @@ export class HostUpdater {
     }
   }
 
-  /** Waits for `hostId` to reconnect on the new plxd; within `RECONNECT_TIMEOUT_MS` if `restarted`. */
-  private wait(hostId: string, restarted: boolean): void {
-    const version = this.deps.version;
+  /**
+   * Waits for `hostId` to reconnect on plxd `version`, the app's unless given; within
+   * `RECONNECT_TIMEOUT_MS` if `restarted`.
+   */
+  private wait(hostId: string, restarted: boolean, version = this.deps.version): void {
     clearTimeout(this.pending.get(hostId)?.timer);
     const pending: Pending = { version, restarted };
     if (restarted) {
