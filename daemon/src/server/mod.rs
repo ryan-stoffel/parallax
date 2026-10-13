@@ -174,7 +174,7 @@ impl Config {
             remote_web_dir: std::env::var_os("PLXD_WEB_DIR")
                 .map(PathBuf::from)
                 .or_else(|| {
-                    let exe = std::env::current_exe().ok()?;
+                    let exe = crate::executable().ok()?;
                     let resources = exe.parent()?.join("app.asar.unpacked");
                     Some(resources.join("dist").join("renderer"))
                 }),

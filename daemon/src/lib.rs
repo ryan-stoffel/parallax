@@ -125,6 +125,21 @@ pub fn version() -> &'static str {
     })
 }
 
+/// The running `plxd`, through any link to the real file: where the app's bundled files sit
+/// beside it. Run through a `parallax` link (PLX-750), `current_exe` is the link on macOS. The
+/// path as given when links can't be followed, and on Windows, which canonicalizing would make
+/// `\\?\`.
+///
+/// # Errors
+///
+/// When `current_exe` can't tell.
+pub fn executable() -> std::io::Result<std::path::PathBuf> {
+    let program = std::env::current_exe()?;
+    #[cfg(unix)]
+    let program = std::fs::canonicalize(&program).unwrap_or(program);
+    Ok(program)
+}
+
 /// `bytes`' SHA-256, in lowercase hex.
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};

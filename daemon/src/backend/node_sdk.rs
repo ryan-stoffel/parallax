@@ -43,7 +43,7 @@ static INSTALLS: std::sync::LazyLock<Mutex<HashMap<PathBuf, InstallState>>> =
 impl NodeSdk {
     /// The sidecar's files: [`Self::dir`] beside `plxd` in the app, else the repo's.
     pub fn source_dir(&self) -> PathBuf {
-        if let Ok(exe) = std::env::current_exe()
+        if let Ok(exe) = crate::executable()
             && let Some(dir) = exe.parent()
         {
             let bundled = dir.join(self.dir);

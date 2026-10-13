@@ -276,7 +276,8 @@ impl Starter<'_> {
         })?;
         let log_len = log.metadata().map_or(0, |metadata| metadata.len());
         let mut command = self.data_dir.command(&self.options.program);
-        command.arg("serve");
+        // A `parallax` launcher's name for this process (PLX-750) isn't serve's, nor its agents'.
+        command.env_remove("PLXD_INVOKED_AS").arg("serve");
         let spawned = detach(&mut command, &log).map_err(|error| {
             Unavailable::Start(format!(
                 "could not run {} serve: {error}",
