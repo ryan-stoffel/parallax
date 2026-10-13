@@ -469,7 +469,11 @@ pub(crate) async fn files(
     }
     let truncated = entries.len() > MAX_ENTRIES;
     entries.truncate(MAX_ENTRIES);
-    Ok(AgentFilesResult { entries, truncated })
+    Ok(AgentFilesResult {
+        entries,
+        truncated,
+        folder: Some(root.to_string_lossy().into_owned()),
+    })
 }
 
 /// `path` under `root`, for a change: checked by [`validate_repo_path`] and reached through real

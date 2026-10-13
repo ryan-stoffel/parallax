@@ -109,6 +109,7 @@ async fn names(mcp: &mut Mcp) -> Vec<String> {
         .collect();
     let last = [
         plxd::mcp::html::TOOLS,
+        plxd::mcp::files::TOOLS,
         plxd::mcp::preview::TOOLS,
         plxd::mcp::device::TOOLS,
         plxd::mcp::triggers::TOOLS,

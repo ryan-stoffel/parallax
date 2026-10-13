@@ -4384,6 +4384,11 @@ export type AgentFilesResult = {
 	 * Whether `entries` was cut short because the folder holds more than one answer lists.
 	 */
 	truncated: boolean,
+	/**
+	 * The run's folder's absolute path on the host (PLX-755), which `present_files` resolves an
+	 * agent's absolute paths against. An older plxd leaves it out.
+	 */
+	folder?: string,
 };
 
 /**

@@ -31,6 +31,8 @@ export interface Sheet {
   merges: Map<string, { rows: number; cols: number }>;
   covered: Set<string>;
   edited: boolean;
+  /** Each shared formula's first cell and formula, by its `si`, found on first use. */
+  masters?: Map<string, { ref: string; formula: string }>;
 }
 
 interface CellStyle {
@@ -136,13 +138,63 @@ export function openXlsx(bytes: Uint8Array): Xlsx {
   return { parts, workbook, sheets, shared, styles: stylesOf(parts), edits: new Map() };
 }
 
+/**
+ * `formula` moved by `rows` and `cols`, as Excel fills it down or across: relative references
+ * shift, `$` ones stay, and text in quotes, quoted sheet names, function names, and sheet names
+ * don't move.
+ */
+export function shiftFormula(formula: string, rows: number, cols: number): string {
+  return formula.replace(
+    /("(?:[^"]|"")*")|('(?:[^']|'')*'!)|(\$?)([A-Z]{1,3})(\$?)(\d+)(?![\w(!])/g,
+    (
+      match,
+      text,
+      sheet,
+      colFixed: string,
+      col: string,
+      rowFixed: string,
+      row: string,
+      at: number,
+    ) => {
+      if (text || sheet || /[\w.]/.test(formula[at - 1] ?? "")) return match;
+      const c = colFixed ? col : colName(colIndex(col) + cols);
+      const r = rowFixed ? row : String(Number(row) + rows);
+      return `${colFixed}${c}${rowFixed}${r}`;
+    },
+  );
+}
+
+/**
+ * A cell's formula. A cell of a shared formula, one Excel filled down or across, holds only its
+ * group's `si`, and its formula is the group's first cell's, moved.
+ */
+function formulaOf(sheet: Sheet, ref: string, f: Element | undefined): string | undefined {
+  if (!f) return undefined;
+  const si = f.getAttribute("si");
+  if (f.getAttribute("t") !== "shared" || f.textContent || si === null) return f.textContent ?? "";
+  if (!sheet.masters) {
+    sheet.masters = new Map();
+    for (const [cellRef, c] of sheet.cells) {
+      const master = childOf(c, "f");
+      const id = master?.getAttribute("si");
+      if (master?.getAttribute("t") === "shared" && master.textContent && id != null)
+        sheet.masters.set(id, { ref: cellRef, formula: master.textContent });
+    }
+  }
+  const master = sheet.masters.get(si);
+  if (!master) return undefined;
+  const from = splitRef(master.ref);
+  const to = splitRef(ref);
+  return shiftFormula(master.formula, to.row - from.row, to.col - from.col);
+}
+
 /** What a cell shows, and what editing it starts from: its formula with `=`, or its value. */
 export function cellAt(x: Xlsx, sheet: Sheet, ref: string) {
   const c = sheet.cells.get(ref);
   if (!c) return { text: "", input: "", css: "", number: false };
   const type = c.getAttribute("t");
   const v = childOf(c, "v")?.textContent ?? "";
-  const formula = childOf(c, "f")?.textContent;
+  const formula = formulaOf(sheet, ref, childOf(c, "f"));
   const style = x.styles[Number(c.getAttribute("s") ?? 0)];
   let text: string;
   let number = false;
@@ -185,7 +237,19 @@ export function setCell(x: Xlsx, sheet: Sheet, ref: string, input: string) {
     r.insertBefore(c, next ?? null);
     sheet.cells.set(ref, c);
   }
+  // A shared formula's first cell holds the group's formula: each other cell takes its own
+  // before this one changes.
+  const shared = childOf(c, "f");
+  const si = shared?.getAttribute("si");
+  if (shared?.getAttribute("t") === "shared" && shared.textContent && si != null)
+    for (const [otherRef, other] of sheet.cells) {
+      const f = childOf(other, "f");
+      if (other === c || f?.getAttribute("t") !== "shared" || f.getAttribute("si") !== si) continue;
+      f.textContent = formulaOf(sheet, otherRef, f) ?? "";
+      for (const name of ["t", "si", "ref"]) f.removeAttribute(name);
+    }
   for (const name of ["f", "v", "is"]) childOf(c, name)?.remove();
+  sheet.masters = undefined;
   c.removeAttribute("t");
   if (input.startsWith("=") && input.length > 1) {
     const f = make("f");

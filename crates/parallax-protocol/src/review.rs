@@ -234,6 +234,11 @@ pub struct AgentFilesResult {
     pub entries: Vec<AgentEntry>,
     /// Whether `entries` was cut short because the folder holds more than one answer lists.
     pub truncated: bool,
+    /// The run's folder's absolute path on the host (PLX-755), which `present_files` resolves an
+    /// agent's absolute paths against. An older plxd leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub folder: Option<String>,
 }
 
 /// Params of `agent/fileCreate` (PLX-590): a new empty file or folder in a run's folder, by

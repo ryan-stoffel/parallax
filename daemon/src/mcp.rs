@@ -193,11 +193,16 @@ async fn answer(binding: &impl Tools, request: &Request) -> Result<Value, ErrorO
                 .find(|version| Some(**version) == asked.protocol_version.as_deref())
                 .or(MCP_VERSIONS.last())
                 .copied();
-            Ok(json!({
+            let mut answer = json!({
                 "protocolVersion": version,
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": SERVER, "version": crate::version()},
-            }))
+            });
+            // The CLI puts these in the model's instructions, so documents get shown unasked.
+            if binding.names().contains(&"present_files") {
+                answer["instructions"] = files::INSTRUCTIONS.into();
+            }
+            Ok(answer)
         }
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools": binding.definitions()})),

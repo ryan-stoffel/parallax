@@ -19,7 +19,7 @@ use plxd::backend::fake::Step;
 use plxd::backend::{RunRequest, ToolPolicy};
 use plxd::mcp::question::{CHILD_TOOLS, COORDINATOR_TOOLS};
 use plxd::mcp::thread::{CONTEXT_TOOLS, TOOLS};
-use plxd::mcp::{delegation, device, html, land, preview, triggers};
+use plxd::mcp::{delegation, device, files, html, land, preview, triggers};
 use plxd::paths::DataDir;
 use plxd::routing::BackendRegistry;
 use serde_json::json;
@@ -101,6 +101,7 @@ async fn tool_names(mcp: &mut Mcp) -> Vec<String> {
         .collect();
     let last = [
         html::TOOLS,
+        files::TOOLS,
         preview::TOOLS,
         device::TOOLS,
         triggers::TOOLS,
