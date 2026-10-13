@@ -189,12 +189,15 @@ mod tests {
     fn a_homebrew_install_upgrades_through_its_brew() {
         let cask = Path::new("/opt/homebrew/Caskroom/claude-code@latest/2.1.295/claude");
         let (brew, args) = brew_upgrade(cask).unwrap();
-        assert_eq!(brew, "/opt/homebrew/bin/brew");
+        assert_eq!(Path::new(&brew), Path::new("/opt/homebrew/bin/brew"));
         assert_eq!(args, ["upgrade", "--cask", "claude-code@latest"]);
 
         let formula = Path::new("/home/linuxbrew/.linuxbrew/Cellar/codex/0.162.1/bin/codex");
         let (brew, args) = brew_upgrade(formula).unwrap();
-        assert_eq!(brew, "/home/linuxbrew/.linuxbrew/bin/brew");
+        assert_eq!(
+            Path::new(&brew),
+            Path::new("/home/linuxbrew/.linuxbrew/bin/brew")
+        );
         assert_eq!(args, ["upgrade", "--formula", "codex"]);
 
         assert!(brew_upgrade(Path::new("/Users/r/.local/share/claude/versions/2.1.295")).is_none());
