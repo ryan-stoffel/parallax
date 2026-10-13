@@ -358,6 +358,8 @@ struct App {
     slash: usize,
     /// The paths `@` offers, and the folder they're in: its files, from git, and their folders.
     files: Option<(PathBuf, Vec<String>)>,
+    /// The folder whose files are being read, so another `@` there doesn't read them again.
+    reading: Option<PathBuf>,
     /// The highlighted path while `@` lists them, and whether Esc closed the list.
     mention: usize,
     mentions_closed: bool,
@@ -415,6 +417,7 @@ impl App {
             input: String::new(),
             slash: 0,
             files: None,
+            reading: None,
             mention: 0,
             mentions_closed: false,
             history: Vec::new(),
@@ -563,13 +566,24 @@ impl App {
     /// Puts what a background read found in place.
     fn take(&mut self, load: Loaded) {
         match load {
+            // Choices made before the list came are fitted to it, as choosing a provider fits them.
             Loaded::Providers { backend, providers } => {
+                let before = self.provider().map(str::to_owned);
                 if backend.is_some() {
                     self.default_backend = backend;
                 }
                 self.providers = providers;
+                self.fit_provider(before.as_deref());
             }
-            Loaded::Files(folder, paths) => self.files = Some((folder, paths)),
+            Loaded::Files(folder, paths) => {
+                if self.reading.as_ref() == Some(&folder) {
+                    self.reading = None;
+                }
+                // A read from a folder left since is dropped.
+                if self.folder().as_ref() == Some(&folder) {
+                    self.files = Some((folder, paths));
+                }
+            }
         }
     }
 
@@ -803,9 +817,11 @@ impl App {
                 (self.slash, self.mention, self.mentions_closed) = (0, 0, false);
             }
             KeyCode::Char(c) => {
+                // Only an `@` that starts a word mentions a file, not one in me@example.com.
+                let starts_word = self.input.chars().last().is_none_or(char::is_whitespace);
                 self.input.push(c);
                 (self.slash, self.mention, self.mentions_closed) = (0, 0, false);
-                if c == '@' {
+                if c == '@' && starts_word {
                     self.load_files();
                 }
             }
@@ -923,6 +939,10 @@ impl App {
         if self.files.as_ref().is_some_and(|(held, _)| *held != folder) {
             self.files = None;
         }
+        if self.reading.as_ref() == Some(&folder) {
+            return;
+        }
+        self.reading = Some(folder.clone());
         let loads = self.loads.clone();
         tokio::task::spawn_blocking(move || {
             let paths = files_in(&folder);
@@ -2014,6 +2034,25 @@ mod tests {
         assert_eq!(app.model, None);
         assert_eq!(app.permission, Some(AgentPermission::Edit));
         assert_eq!(app.effort, Some(AgentEffort::High));
+    }
+
+    #[test]
+    fn choices_made_before_providers_arrive_are_fitted_to_them() {
+        let codex: ProviderInfo = serde_json::from_value(serde_json::json!({
+            "instance": {"id": "codex", "kind": "codex", "name": "Codex", "enabled": true,
+                         "args": [], "env": [], "models": []},
+            "installed": true, "installing": false, "models": [],
+            "permissions": ["edit", "auto"], "efforts": true, "coordinator": false, "loginEnv": [],
+        }))
+        .unwrap();
+        let mut app = app();
+        // Shift+Tab to plan mode before the list came, when every mode was offered.
+        app.permission = Some(AgentPermission::Plan);
+        app.take(super::Loaded::Providers {
+            backend: Some("codex".to_owned()),
+            providers: vec![codex],
+        });
+        assert_eq!(app.permission, Some(AgentPermission::Edit));
     }
 
     #[tokio::test]
