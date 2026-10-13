@@ -166,10 +166,11 @@ const processes: ServeSystem = {
 /**
  * Whether a serve's command line is a packaged Parallax app's bundled plxd, the path `findPlxd`
  * returns there: `….app/Contents/Resources/plxd serve` on macOS, `…/resources/plxd serve` in
- * an AppImage's mount. A Cargo build or a plxd on PATH is someone else's.
+ * an AppImage's mount, or the copy the `parallax` command runs on Linux,
+ * `…/parallax/app/plxd serve` (PLX-750). A Cargo build or a plxd on PATH is someone else's.
  */
 export const isBundledServe = (args: string) =>
-  /(\.app\/Contents\/Resources|\/resources)\/plxd serve(\s|$)/.test(args);
+  /(\.app\/Contents\/Resources|\/resources|\/parallax\/app)\/plxd serve(\s|$)/.test(args);
 
 const isBundledProgram = (program: string) => isBundledServe(`${program} serve`);
 

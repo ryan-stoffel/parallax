@@ -34,8 +34,17 @@ import type { CommandStatus } from "../preload/bridge";
  * plxd follows the link to itself before it starts `serve`, so `serve` finds those files.
  */
 
-/** What plxd reads beside itself, which the Linux copy carries (scripts/ci/package-app). */
-const BESIDE_PLXD = ["plxd", "plxd.version", "claude-agent-sdk", "cursor-sdk"];
+/**
+ * What plxd reads beside itself, which the Linux copy carries: its version and the agent SDKs
+ * (scripts/ci/package-app), and the web client it serves (`remote_web_dir`).
+ */
+const BESIDE_PLXD = [
+  "plxd",
+  "plxd.version",
+  "claude-agent-sdk",
+  "cursor-sdk",
+  "app.asar.unpacked/dist/renderer",
+];
 
 /**
  * The plxd the command runs: the packaged app's own. None in a dev build or under `PLXD_PATH`,
@@ -199,7 +208,8 @@ export async function installCommand(at: Layout): Promise<void> {
 
 /**
  * Copies plxd and what it reads beside itself into the Linux copy: into a new folder first, then
- * renamed into place, so a `parallax` running from the old copy keeps its files.
+ * renamed into place over the old one, which is removed. A `serve` still running from the old
+ * copy is an older version, which the app replaces as it would its own (`isBundledServe`).
  */
 async function copyBundle(at: Layout): Promise<void> {
   const copy = at.copy!;

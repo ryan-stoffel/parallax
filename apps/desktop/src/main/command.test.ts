@@ -116,10 +116,14 @@ test.skipIf(process.platform === "win32")(
     writeFileSync(path.join(bundle, "plxd"), "plxd");
     writeFileSync(path.join(bundle, "plxd.version"), "1\n");
     writeFileSync(path.join(bundle, "claude-agent-sdk", "src", "main.mjs"), "");
+    mkdirSync(path.join(bundle, "app.asar.unpacked", "dist", "renderer"), { recursive: true });
+    writeFileSync(path.join(bundle, "app.asar.unpacked", "dist", "renderer", "index.html"), "");
     const at = layout("linux", {}, path.join(dir, "home"), path.join(bundle, "plxd"));
     await installCommand(at);
     expect(readlinkSync(at.file)).toBe(path.join(at.copy!, "plxd"));
     expect(existsSync(path.join(at.copy!, "claude-agent-sdk", "src", "main.mjs"))).toBe(true);
+    const web = path.join(at.copy!, "app.asar.unpacked", "dist", "renderer", "index.html");
+    expect(existsSync(web), "the web client").toBe(true);
     expect(await commandState(at)).toBe("installed");
     writeFileSync(path.join(bundle, "plxd.version"), "2\n");
     expect(await commandState(at), "a new app version").toBe("stale");

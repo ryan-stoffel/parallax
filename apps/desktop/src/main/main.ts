@@ -303,8 +303,9 @@ function commandLayout(): Layout | undefined {
 async function commandStatus(): Promise<CommandStatus> {
   const at = commandLayout();
   if (!at) return { state: "unavailable", path: "", onPath: true };
-  // macOS's /usr/local/bin is on PATH by /etc/paths, though not in a Finder-launched app's own.
-  const found = process.platform === "darwin" || onPath(at, process.env["PATH"]);
+  // macOS's /usr/local/bin is on PATH by /etc/paths, though not in a Finder-launched app's own,
+  // and Windows' folder goes on the registry's PATH, which this app's own doesn't follow.
+  const found = process.platform !== "linux" || onPath(at, process.env["PATH"]);
   return { state: await commandState(at), path: at.file, onPath: found };
 }
 /** Installs the command, which the user wants from now on. */

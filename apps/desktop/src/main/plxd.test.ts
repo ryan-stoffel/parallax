@@ -102,6 +102,9 @@ test("only a packaged Parallax's serve of another version is replaced", async ()
   const appImage = "/tmp/.mount_ParallaxAb1/resources/plxd serve";
   expect(await replace(macApp, "1.0.0", "1.1.0")).toEqual({ stopped: true, killed: [[42]] });
   expect(await replace(appImage, "1.1.0", "1.0.0")).toEqual({ stopped: true, killed: [[42]] });
+  // The copy the Linux `parallax` command runs (PLX-750).
+  const copy = "/home/me/.local/share/parallax/app/plxd serve";
+  expect(await replace(copy, "1.0.0", "1.1.0")).toEqual({ stopped: true, killed: [[42]] });
   // The same or an unknown version, or no serve running, stops nothing.
   expect(await replace(macApp, "1.0.0", "1.0.0")).toEqual({ stopped: false, killed: [] });
   expect(await replace(macApp, "1.0.0", undefined)).toEqual({ stopped: false, killed: [] });
