@@ -17,9 +17,10 @@ const TOKENS = new RegExp(
     String.raw`(?:https?:\/\/|www\.)[^\s<>]*|<[A-Za-z][\w+.-]*:[^\s<>]*>`,
     String.raw`(\`+)${INLINE}*?\2(?!\`)`,
     String.raw`(?:^|\n)[ \t]*\$\$[^]*?(?:\$\$|$)|\$\$${INLINE}*?\$\$`,
-    // Neither runs past another of its openers, which keeps unclosed ones from rescanning a paragraph.
-    String.raw`\\\[((?:(?!\\\[)${INLINE})+?)\\\]`,
-    String.raw`\\\(((?:(?!\\\()${INLINE})+?)\\\)`,
+    // Each reads a backslash with the character after it, so \\[2pt] is a line break, and neither
+    // runs past another of its openers, which keeps unclosed ones from rescanning a paragraph.
+    String.raw`\\\[((?:\\[^[\]\n]|(?!\n[ \t]*\n)[^\\])+?)\\\]`,
+    String.raw`\\\(((?:\\[^()\n]|(?!\n[ \t]*\n)[^\\])+?)\\\)`,
     String.raw`\\[^]`,
     String.raw`\$(?=[^\s$])(?:\\[^]|(?!\n[ \t]*\n)[^\\$])*?(?<=[^\s\\])\$(?!\d)`,
     String.raw`\$`,

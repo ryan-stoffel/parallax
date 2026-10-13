@@ -4,6 +4,10 @@ import { dollarMath } from "./math";
 
 test("rewrites \\(...\\) and \\[...\\] as dollar math", () => {
   expect(dollarMath("So \\( a^2 \\) and \\[\nx = 1\n\\]")).toBe("So $a^2$ and $$\nx = 1\n$$");
+  // \\[2pt] inside is a line break with spacing, not an opener.
+  expect(dollarMath("\\[ \\begin{aligned} a &= b \\\\[2pt] c &= d \\end{aligned} \\]")).toBe(
+    "$$ \\begin{aligned} a &= b \\\\[2pt] c &= d \\end{aligned} $$",
+  );
 });
 
 test("escapes a dollar that can't pair as Pandoc reads it", () => {
