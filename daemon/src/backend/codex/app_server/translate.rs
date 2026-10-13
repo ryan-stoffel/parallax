@@ -37,6 +37,15 @@ pub(super) enum Step {
         /// What it returned.
         result: Result<Value, String>,
     },
+    /// Codex started a turn, by its own id: one plxd asked for, or one it started itself to
+    /// pursue the thread's goal (PLX-749).
+    TurnStarted(String),
+    /// Whether the thread's goal is still pursued: `thread/goal/updated` with status `active`,
+    /// or not, after another status or `thread/goal/cleared`.
+    Goal {
+        /// Codex starts the thread's next turn itself.
+        active: bool,
+    },
     /// A turn ended: with its final text when it succeeded, or why it failed.
     TurnDone {
         /// The last agent message's text.
@@ -202,6 +211,18 @@ impl Translator {
                 }
                 steps
             }
+            "turn/started" => params
+                .get("turn")
+                .and_then(|turn| turn.get("id"))
+                .and_then(Value::as_str)
+                .map(|id| Step::TurnStarted(id.to_owned()))
+                .into_iter()
+                .collect(),
+            "thread/goal/updated" => vec![Step::Goal {
+                active: params.get("goal").and_then(|goal| goal.get("status"))
+                    == Some(&json!("active")),
+            }],
+            "thread/goal/cleared" => vec![Step::Goal { active: false }],
             "turn/completed" => {
                 let turn = params.get("turn").and_then(Value::as_object);
                 let status = turn.and_then(|turn| text(turn, "status"));

@@ -497,6 +497,57 @@ async fn compact_compacts_the_thread_instead_of_starting_a_turn() {
     );
 }
 
+/// A `/goal` (PLX-749) sets the thread's goal with `thread/goal/set` instead of starting a turn,
+/// says so as Claude Code does, and runs the turns Codex starts itself until the goal is complete.
+#[tokio::test]
+async fn goal_sets_the_threads_goal_and_runs_codexs_turns_until_it_is_complete() {
+    let (dir, backend) = fake(include_str!("../fixtures/app-server-goal.jsonl"));
+    let mut request = request(AgentPermission::Edit);
+    request.prompt = "/goal the tests pass".into();
+    request.resume = Some(Resume::new("t-0"));
+    let turn_id = request.turn_id;
+    let events = rest(&mut backend.start(request).unwrap().events).await;
+    let shown: Vec<&Event> = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::Text { .. } | Event::TurnStarted { .. } | Event::TurnFinished { .. }
+            )
+        })
+        .collect();
+    let text = |text: &str| Event::Text {
+        message_id: None,
+        text: text.into(),
+    };
+    let said = |id: &str, text: &str| Event::Text {
+        message_id: Some(id.into()),
+        text: text.into(),
+    };
+    let done = |turn_id, result: &str| Event::TurnFinished {
+        turn_id,
+        result: Some(result.into()),
+        failed: false,
+    };
+    assert_eq!(
+        shown,
+        [
+            &Event::TurnStarted { turn_id },
+            &text("Goal set: the tests pass"),
+            &said("m-1", "Fixed the first test."),
+            &done(turn_id, "Fixed the first test."),
+            &Event::TurnStarted { turn_id: None },
+            &said("m-2", "The tests pass."),
+            &done(None, "The tests pass."),
+        ]
+    );
+    let written = written(&dir);
+    assert_eq!(
+        written[3],
+        json!({"id": 3, "method": "thread/goal/set", "params": {"threadId": "t-0", "objective": "the tests pass"}})
+    );
+}
+
 /// A fork's first run forks the parent's thread rather than resuming it (0050).
 #[test]
 fn a_forks_first_run_forks_the_thread() {

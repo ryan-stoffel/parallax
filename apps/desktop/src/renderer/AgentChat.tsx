@@ -103,6 +103,7 @@ import {
 import { searchText, useFind } from "./Find";
 import { plainText, PromptRail, ScrollToEnd, type Prompt } from "./PromptRail";
 import { attachThreads, SentThread, ThreadLinksContext, type ThreadLinks } from "./threadContext";
+import { GoalStrip, pursuedGoal } from "./Goal";
 import { QueueStrip } from "./QueueStrip";
 import { ResumeCard } from "./ResumeCard";
 import { SecretCard, SecretLine } from "./Secret";
@@ -363,6 +364,7 @@ export function AgentChat({
     [items, others, answers, runId],
   );
   const plan = useMemo(() => latestPlan(items), [items]);
+  const goal = useMemo(() => pursuedGoal(items), [items]);
   // The oldest secret the agent waits on (0063).
   const secret = useMemo(() => waitingSecrets(items)[0], [items]);
   const showImage = useCallback((id: ImageId) => loadImage(hostId, runId, id), [hostId, runId]);
@@ -755,6 +757,7 @@ export function AgentChat({
         {plan && isRunning(run?.status) && !stalled && (
           <PlanStrip items={plan.items} active={plan.active} returnFocus={focusComposer} />
         )}
+        {goal && isRunning(run?.status) && !stalled && <GoalStrip objective={goal} />}
         {queueEnabled && (
           <QueueStrip
             hostId={hostId}

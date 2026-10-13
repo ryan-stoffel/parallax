@@ -408,6 +408,19 @@ pub fn is_compact(text: &str, images: &[PromptImage]) -> bool {
     images.is_empty() && text.trim().eq_ignore_ascii_case("/compact")
 }
 
+/// The objective a message sets as the thread's goal (PLX-749): `/goal <objective>`, with no
+/// images, as Claude Code's own `/goal` takes it. `/goal clear` clears a goal instead, so it is
+/// none. Claude Code runs it as its own command, and Codex as `thread/goal/set`.
+#[must_use]
+pub fn goal<'a>(text: &'a str, images: &[PromptImage]) -> Option<&'a str> {
+    let (command, objective) = text.trim().split_once(char::is_whitespace)?;
+    let objective = objective.trim();
+    (images.is_empty()
+        && command.eq_ignore_ascii_case("/goal")
+        && !objective.eq_ignore_ascii_case("clear"))
+    .then_some(objective)
+}
+
 /// Checks that `value`, such as a model or a session id, can be a CLI's argument: not empty,
 /// not starting with `-`, where the CLI would read it as an option, and with no whitespace or
 /// control characters.
@@ -1066,6 +1079,16 @@ mod tests {
             input_tokens: n,
             ..Usage::default()
         }
+    }
+
+    #[test]
+    fn a_goal_is_the_text_after_slash_goal() {
+        assert_eq!(super::goal("/goal  tests pass ", &[]), Some("tests pass"));
+        assert_eq!(super::goal("/GOAL tests pass", &[]), Some("tests pass"));
+        assert_eq!(super::goal("/goal", &[]), None);
+        assert_eq!(super::goal("/goal clear", &[]), None);
+        assert_eq!(super::goal("/goals tests pass", &[]), None);
+        assert_eq!(super::goal("make /goal x", &[]), None);
     }
 
     #[test]

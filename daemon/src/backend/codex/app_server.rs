@@ -15,7 +15,10 @@
 //! and the effort. If `thread/resume` fails, the thread sends `thread/start` once instead, with
 //! [`Resume::fallback`](super::super::Resume::fallback) as the prompt (T3 Code, PLX-728). A turn
 //! that is exactly `/compact` ([`is_compact`], PLX-638) is `thread/compact/start` instead, which
-//! Codex runs as a turn with a `contextCompaction` item.
+//! Codex runs as a turn with a `contextCompaction` item. A turn that is `/goal <objective>`
+//! ([`goal`], PLX-749) is `thread/goal/set`, after which Codex starts turns itself until the goal
+//! is complete, blocked, or paused: plxd takes each as the running turn, and keeps the thread
+//! loaded while `thread/goal/updated` says the goal is active.
 //! Each follow-up is a later turn in the same process, sent once the turn before it has
 //! completed, with any new model or mode ([`turn_settings`]) on its `turn/start`, which keeps
 //! them for the turns after it, as T3 Code does (PLX-727). A steer (PLX-370) is `turn/steer`
@@ -76,7 +79,7 @@ use crate::backend::process::{
 use crate::backend::{
     AgentPermission, Answer, ApprovalId, CancelSwitch, Credential, Decision, EVENT_BUFFER,
     EventSink, FollowUp, Held, Overrides, Rewind, RunHandle, RunRequest, StartError, Started,
-    TurnId, check_argument, is_compact,
+    TurnId, check_argument, goal, is_compact,
 };
 
 /// The permissions a thread maps, in the picker's order (0027, 0054): Codex's own presets
@@ -157,6 +160,7 @@ pub(super) fn start(
         id: request.turn_id,
         input: input(&request.prompt, &image_paths),
         compact: is_compact(&request.prompt, &request.images),
+        goal: goal(&request.prompt, &request.images).map(str::to_owned),
         settings: serde_json::Map::new(),
     };
     let fallback = request
@@ -205,6 +209,7 @@ pub(super) fn start(
         failure: None,
         last_result: None,
         turns_done: 0,
+        goal_active: false,
     };
     tokio::spawn(driver.run());
     Ok(Started {
@@ -369,12 +374,14 @@ fn input(text: &str, images: &[PathBuf]) -> Value {
 }
 
 /// A turn to start: the caller's id for it, its input, and the new model or mode it starts with
-/// ([`turn_settings`]), or a `/compact` (PLX-638), which compacts the thread instead.
+/// ([`turn_settings`]), or a `/compact` (PLX-638), which compacts the thread instead, or a
+/// `/goal`'s objective (PLX-749), which sets the thread's goal instead.
 #[derive(Debug)]
 struct Turn {
     id: Option<TurnId>,
     input: Value,
     compact: bool,
+    goal: Option<String>,
     settings: serde_json::Map<String, Value>,
 }
 
@@ -801,6 +808,10 @@ async fn call(
 
 /// One thread on its shared app-server: forwards its events, runs its turns one at a time,
 /// relays approval requests, and decides the outcome when it leaves.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about the thread, not states of one thing"
+)]
 struct Driver {
     server: Arc<Server>,
     /// The lines app-server sends this thread.
@@ -843,6 +854,8 @@ struct Driver {
     failure: Option<Failure>,
     last_result: Option<String>,
     turns_done: usize,
+    /// The thread has a goal Codex is still pursuing, so it starts the next turn itself (PLX-749).
+    goal_active: bool,
 }
 
 impl Driver {
@@ -968,6 +981,20 @@ impl Driver {
                 }
             }
             Step::Reply { id, result } => self.reply(id, result).await,
+            Step::TurnStarted(codex_id) => {
+                if let Some(running) = &mut self.running {
+                    running.codex_id.get_or_insert(codex_id);
+                } else {
+                    // A turn Codex started itself, to pursue the thread's goal.
+                    self.emit(Event::TurnStarted { turn_id: None }).await;
+                    self.running = Some(Running {
+                        turn_id: None,
+                        codex_id: Some(codex_id),
+                        steered: Vec::new(),
+                    });
+                }
+            }
+            Step::Goal { active } => self.goal_active = active,
             Step::TurnDone { result, failure } => {
                 self.turns_done += 1;
                 self.last_result.clone_from(&result);
@@ -1048,11 +1075,21 @@ impl Driver {
                 None => self.fail_to_start(message),
             },
             (Request::Turn, Ok(result)) => {
-                if let Some(running) = &mut self.running {
-                    running.codex_id = result
-                        .pointer("/turn/id")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
+                if let (Some(running), Some(codex_id)) = (
+                    &mut self.running,
+                    result.pointer("/turn/id").and_then(Value::as_str),
+                ) {
+                    running.codex_id = Some(codex_id.to_owned());
+                }
+                // `thread/goal/set`'s answer, said as Claude Code says its own `/goal`.
+                if let Some(objective) = result.pointer("/goal/objective").and_then(Value::as_str) {
+                    self.goal_active = true;
+                    let text = format!("Goal set: {objective}");
+                    self.emit(Event::Text {
+                        message_id: None,
+                        text,
+                    })
+                    .await;
                 }
             }
             // The turn never ran.
@@ -1141,9 +1178,13 @@ impl Driver {
             codex_id: None,
             steered: Vec::new(),
         });
-        // Codex runs a compaction as a turn of its own, with a `contextCompaction` item.
+        // Codex runs a compaction as a turn of its own, with a `contextCompaction` item, and
+        // starts a goal's turns itself.
         let (method, params) = if turn.compact {
             ("thread/compact/start", json!({"threadId": thread_id}))
+        } else if let Some(objective) = turn.goal {
+            let params = json!({"threadId": thread_id, "objective": objective});
+            ("thread/goal/set", params)
         } else {
             let mut params = json!({"threadId": thread_id, "input": turn.input});
             if let Some(effort) = self.effort {
@@ -1188,9 +1229,11 @@ impl Driver {
             id: Some(follow_up.turn_id),
             input: input(&follow_up.text, &paths),
             compact: is_compact(&follow_up.text, &follow_up.images),
+            goal: goal(&follow_up.text, &follow_up.images).map(str::to_owned),
             settings,
         };
-        if !follow_up.steer {
+        // A goal starts turns of its own, so it waits for the running one instead of joining it.
+        if !follow_up.steer || turn.goal.is_some() {
             self.queued.push_back(turn);
         } else if let (Some(thread_id), Some(codex_id)) = (
             &self.thread_id,
@@ -1220,8 +1263,8 @@ impl Driver {
         self.server.send(&json!({"id": ask.id, "result": result}));
     }
 
-    /// Leaves the server once no turn runs or waits, no steer or request waits on an answer, and
-    /// plxd no longer holds the thread (0060).
+    /// Leaves the server once no turn runs or waits, no steer or request waits on an answer, no
+    /// goal is pursued, and plxd no longer holds the thread (0060).
     fn close_when_idle(&mut self) {
         let started = self.thread_id.is_some();
         let steering = self
@@ -1235,6 +1278,7 @@ impl Driver {
             && !steering
             && self.control.is_empty()
             && !self.held.now()
+            && !self.goal_active
         {
             self.closing = true;
         }

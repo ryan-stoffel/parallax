@@ -1,0 +1,18 @@
+# A resumed thread whose message is /goal: plxd sends thread/goal/set, Codex runs a turn toward
+# the goal, then starts another itself, in which it marks the goal complete (shapes from
+# codex-cli 0.162.0).
+<
+{"id":1,"result":{"userAgent":"plxd/0.162.0","codexHome":"/Users/u/.codex","platformFamily":"unix","platformOs":"macos"}}
+<
+<
+{"id":2,"result":{"thread":{"id":"t-0","sessionId":"t-0","preview":"Earlier","ephemeral":false,"modelProvider":"openai","model":"gpt-6-sol","status":{"type":"idle"},"turns":[]},"model":"gpt-6-sol","modelProvider":"openai","cwd":"/repo","approvalPolicy":"never","sandbox":{"type":"workspaceWrite","writableRoots":[],"networkAccess":false,"excludeTmpdirEnvVar":false,"excludeSlashTmp":false},"reasoningEffort":"high"}}
+<
+{"id":3,"result":{"goal":{"threadId":"t-0","objective":"the tests pass","status":"active","tokenBudget":null,"tokensUsed":0,"timeUsedSeconds":0,"createdAt":1791852031,"updatedAt":1791852031}}}
+{"method":"thread/goal/updated","params":{"threadId":"t-0","turnId":null,"goal":{"threadId":"t-0","objective":"the tests pass","status":"active","tokenBudget":null,"tokensUsed":0,"timeUsedSeconds":0,"createdAt":1791852031,"updatedAt":1791852031}}}
+{"method":"turn/started","params":{"threadId":"t-0","turn":{"id":"u-4","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":1791852031,"completedAt":null,"durationMs":null}}}
+{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"m-1","text":"Fixed the first test."},"threadId":"t-0","turnId":"u-4"}}
+{"method":"turn/completed","params":{"threadId":"t-0","turn":{"id":"u-4","items":[],"itemsView":"notLoaded","status":"completed","error":null,"startedAt":1791852031,"completedAt":1791852040,"durationMs":9000}}}
+{"method":"turn/started","params":{"threadId":"t-0","turn":{"id":"u-5","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":1791852040,"completedAt":null,"durationMs":null}}}
+{"method":"thread/goal/updated","params":{"threadId":"t-0","turnId":"u-5","goal":{"threadId":"t-0","objective":"the tests pass","status":"complete","tokenBudget":null,"tokensUsed":900,"timeUsedSeconds":20,"createdAt":1791852031,"updatedAt":1791852051}}}
+{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"m-2","text":"The tests pass."},"threadId":"t-0","turnId":"u-5"}}
+{"method":"turn/completed","params":{"threadId":"t-0","turn":{"id":"u-5","items":[],"itemsView":"notLoaded","status":"completed","error":null,"startedAt":1791852040,"completedAt":1791852051,"durationMs":11000}}}

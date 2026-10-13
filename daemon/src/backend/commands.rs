@@ -11,7 +11,8 @@
 //!   Anthropic's server-launched sessions run are left out. MCP prompts, which a later `commands_changed` adds,
 //!   aren't listed.
 //! - **Codex**: `codex app-server`, `initialize`, `initialized`, and `skills/list` for the folder:
-//!   `/compact`, which plxd runs as `thread/compact/start` (PLX-638), then the enabled skills,
+//!   `/compact`, which plxd runs as `thread/compact/start` (PLX-638), `/goal`, which it runs as
+//!   `thread/goal/set` (PLX-749), then the enabled skills,
 //!   which a `$name` in a message loads. Codex's other slash commands belong to its TUI, which
 //!   app-server doesn't take.
 //! - **ACP agents** (Cursor Agent's `agent acp` and the rest of 0040): `initialize`
@@ -118,7 +119,7 @@ pub fn request(id: u64, method: &str, params: &Value) -> Value {
     serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
 }
 
-/// Codex's answer to `skills/list`: `/compact`, then the enabled skills.
+/// Codex's answer to `skills/list`: `/compact` and `/goal`, then the enabled skills.
 #[must_use]
 pub fn codex(message: &Value) -> Parsed {
     if message["id"] != LIST_ID {
@@ -135,11 +136,18 @@ pub fn codex(message: &Value) -> Parsed {
         description: "Summarize the conversation and reduce context usage".into(),
         argument_hint: None,
     };
+    let goal = AgentCommand {
+        text: "/goal".into(),
+        name: "goal".into(),
+        // Claude Code's description of its own.
+        description: "Set a goal — keep working until the condition is met".into(),
+        argument_hint: Some("<condition>".into()),
+    };
     let skills = skills
         .iter()
         .filter(|s| s["enabled"] == true)
         .filter_map(|s| command("$", s));
-    Some(Ok(std::iter::once(compact).chain(skills).collect()))
+    Some(Ok([compact, goal].into_iter().chain(skills).collect()))
 }
 
 /// An ACP agent's `available_commands_update`, or its refusal of `session/new`.
@@ -224,14 +232,19 @@ mod tests {
     }
 
     #[test]
-    fn codex_lists_compact_then_enabled_skills_as_mentions() {
+    fn codex_lists_compact_and_goal_then_enabled_skills_as_mentions() {
         let commands = first(include_str!("commands/fixtures/codex.jsonl"), codex).unwrap();
         // The fixture's `review-bugbot` is disabled.
         assert_eq!(
             texts(&commands),
-            ["/compact", "$ponytail:ponytail-help", "$create-rule"]
+            [
+                "/compact",
+                "/goal",
+                "$ponytail:ponytail-help",
+                "$create-rule"
+            ]
         );
-        assert_eq!(commands[2].name, "create-rule");
+        assert_eq!(commands[3].name, "create-rule");
     }
 
     #[test]
