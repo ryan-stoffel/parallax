@@ -62,6 +62,8 @@ mdns-sd = { version = "0.21", default-features = false }
 # `plxd tui` (PLX-740), on crossterm, which it re-exports. `line_count` scrolls a wrapped
 # transcript to its end.
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
+# Display widths, which ratatui already builds, for clipping thread titles in the sidebar.
+unicode-width = "0.2.2"
 
 [target.'cfg(unix)'.dependencies]
 # `net` for the browser proxy's view of this machine's own addresses (PLX-639).

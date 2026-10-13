@@ -10,6 +10,7 @@ use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::style::{Color, Style, Stylize as _};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Wrap};
+use unicode_width::{UnicodeWidthChar as _, UnicodeWidthStr as _};
 
 use super::transcript::{Entry, Pending};
 use super::{App, Hits, MENU_ROWS, Menu, effort_name, markdown, mode_name, summary, tilde};
@@ -21,8 +22,12 @@ const MARK_OVERLAP: [u8; 3] = [0xe4, 0xe4, 0xe7];
 pub(super) const BLUE: Color = Color::Rgb(MARK_BLUE[0], MARK_BLUE[1], MARK_BLUE[2]);
 const CORAL: Color = Color::Rgb(MARK_CORAL[0], MARK_CORAL[1], MARK_CORAL[2]);
 
-/// The logo's width and height in pixels: 14 columns, and 7 rows of two pixels each.
-const LOGO_PIXELS: u16 = 14;
+/// The logo's width and height in pixels: 18 columns, and 9 rows of two pixels each, enough for
+/// its circles to read as circles.
+const LOGO_PIXELS: u16 = 18;
+
+/// The band behind the user's messages, as Claude Code marks them.
+const USER_BG: Color = Color::Rgb(0x3a, 0x35, 0x3e);
 
 /// The spinner's frames, Claude Code's.
 const SPINNER: [&str; 6] = ["·", "✢", "✳", "✶", "✻", "✽"];
@@ -44,9 +49,11 @@ impl App {
             None => self.input_lines(area.width).len(),
         };
         let suggestions = self.suggestions();
+        let mentions = self.mentions();
         let below = match &self.menu {
             Some(menu) if !menu.sidebar() => menu.items.len().min(MENU_ROWS) + 1,
             _ if !suggestions.is_empty() => suggestions.len(),
+            _ if !mentions.is_empty() => mentions.len(),
             _ => 2,
         };
         let rows = |n: usize| Constraint::Length(u16::try_from(n).unwrap_or(u16::MAX));
@@ -97,6 +104,18 @@ impl App {
             Some(pending) => self.draw_approval(frame, prompt, pending),
             None => self.draw_prompt(frame, prompt),
         }
+        self.draw_below(frame, footer, &suggestions, &mentions);
+    }
+
+    /// Below the prompt: a list being picked from, the commands `/` lists, the paths `@` lists,
+    /// or the status line. The sidebar draws over everything else.
+    fn draw_below(
+        &self,
+        frame: &mut Frame,
+        footer: Rect,
+        suggestions: &[(&'static str, &'static str)],
+        mentions: &[String],
+    ) {
         match &self.menu {
             Some(menu) if menu.sidebar() => {
                 self.draw_footer(frame, footer);
@@ -106,9 +125,9 @@ impl App {
             None if !suggestions.is_empty() => {
                 let selected = self.slash.min(suggestions.len() - 1);
                 let lines: Vec<Line> = suggestions
-                    .into_iter()
+                    .iter()
                     .enumerate()
-                    .map(|(i, (name, what))| {
+                    .map(|(i, &(name, what))| {
                         let line = Line::from(vec![
                             Span::from(format!("{name:<10} ")).fg(BLUE),
                             Span::from(what).dark_gray(),
@@ -122,13 +141,31 @@ impl App {
                     .collect();
                 frame.render_widget(Paragraph::new(lines), footer);
             }
+            // As Claude Code lists them after `@`.
+            None if !mentions.is_empty() => {
+                let selected = self.mention.min(mentions.len() - 1);
+                let lines: Vec<Line> = mentions
+                    .iter()
+                    .enumerate()
+                    .map(|(i, path)| {
+                        let line = Line::from(format!("  + {path}"));
+                        if i == selected {
+                            line.fg(BLUE).bold()
+                        } else {
+                            line
+                        }
+                    })
+                    .collect();
+                frame.render_widget(Paragraph::new(lines), footer);
+            }
             None => self.draw_footer(frame, footer),
         }
     }
 
     /// The header: the mark beside the version, the model, the provider and mode, and where
     /// the thread works, by its folder when it has one on this computer.
-    fn header(&self) -> Vec<Line<'static>> {
+    /// Each line fits in `width`, so a long title can't wrap under the mark.
+    fn header(&self, width: u16) -> Vec<Line<'static>> {
         let provider = self
             .provider()
             .map_or_else(|| "host default".to_owned(), |id| self.provider_name(id));
@@ -141,6 +178,7 @@ impl App {
             .map_or_else(|| self.place(), |folder| tilde(&folder));
         let effort = self.effort.or_else(|| self.open_run()?.effort);
         let text = [
+            vec![],
             vec![],
             vec![
                 Span::from("Parallax ").bold(),
@@ -156,7 +194,8 @@ impl App {
             ],
             vec![Span::from(format!("{provider} · {}", mode_name(self.mode()))).dark_gray()],
             vec![Span::from(format!("{place} › {title}")).dark_gray()],
-            vec![Span::from("/ for commands · ← for threads").dark_gray()],
+            vec![Span::from("/ for commands · @ for files · ← for threads").dark_gray()],
+            vec![],
             vec![],
         ];
         self.logo
@@ -165,7 +204,12 @@ impl App {
             .zip(text)
             .map(|(mut mark, text)| {
                 mark.push(Span::raw("   "));
-                mark.extend(text);
+                let mut room = usize::from(width).saturating_sub(usize::from(LOGO_PIXELS) + 3);
+                for span in text {
+                    let clipped = clip(&span.content, room);
+                    room = room.saturating_sub(clipped.width());
+                    mark.push(Span::styled(clipped, span.style));
+                }
                 Line::from(mark)
             })
             .collect()
@@ -174,7 +218,7 @@ impl App {
     /// The header and the open thread, scrolled to the end less [`App::scroll`]. Each run of
     /// tool calls is one block, and where each lands is kept for clicks.
     fn draw_transcript(&self, frame: &mut Frame, area: Rect) {
-        let mut header = self.header();
+        let mut header = self.header(area.width);
         header.push(Line::default());
         let mut blocks: Vec<(Option<usize>, Vec<Line>)> = vec![(None, header)];
         if self.open.is_none()
@@ -194,9 +238,10 @@ impl App {
                 let (key, mut lines, next) = if tools > 0 {
                     // A click flips a run from what Ctrl+O set for all.
                     let opened = self.expand_all != self.expanded.contains(&i);
-                    (Some(i), tool_run(&entries[i..i + tools], opened), i + tools)
+                    let run = tool_run(&entries[i..i + tools], opened, area.width);
+                    (Some(i), run, i + tools)
                 } else {
-                    (None, entry_lines(&entries[i]), i + 1)
+                    (None, entry_lines(&entries[i], area.width), i + 1)
                 };
                 lines.push(Line::default());
                 blocks.push((key, lines));
@@ -257,7 +302,7 @@ impl App {
                 if !rows.is_empty() {
                     rows.push((Line::default(), None));
                 }
-                let room = width.saturating_sub(item.label.chars().count() + 3);
+                let room = width.saturating_sub(item.label.width() + 3);
                 Line::from(vec![
                     Span::from(format!(" {}", item.label)).bold(),
                     Span::from(format!("  {}", clip(&item.detail, room))).dark_gray(),
@@ -268,9 +313,11 @@ impl App {
                 } else {
                     Span::from("   ")
                 };
-                let room = width.saturating_sub(item.detail.chars().count() + 5);
-                let label = format!("{:<room$}", clip(&item.label, room));
-                let mut label = Span::from(label);
+                // The age always shows: the title gives way.
+                let room = width.saturating_sub(item.detail.width() + 5);
+                let title = clip(&item.label, room);
+                let pad = room.saturating_sub(title.width());
+                let mut label = Span::from(format!("{title}{}", " ".repeat(pad)));
                 if item.current && !selected {
                     label = label.bold().fg(Color::Cyan);
                 }
@@ -493,10 +540,10 @@ fn draw_menu(frame: &mut Frame, area: Rect, menu: &Menu) {
 
 /// The app's mark in [`LOGO_PIXELS`] square pixels, two to a terminal row with `▀` and `▄`.
 /// Its circles are `ParallaxMark`'s: radius 7 at (9.5, 9.5) and (14.5, 14.5), here cropped to
-/// their bounds. Each pixel is sampled 6 × 6 times. One at least half covered takes the mix of
+/// their bounds. Each pixel is sampled 8 × 8 times. One at least half covered takes the mix of
 /// the colors over it, which smooths where the circles meet.
 pub(super) fn logo() -> Vec<Vec<Span<'static>>> {
-    const SAMPLES: u16 = 6;
+    const SAMPLES: u16 = 8;
     const LOW: f64 = 2.5;
     const SIDE: f64 = 19.0;
     let at = |pixel: u16, sample: u16| {
@@ -538,9 +585,10 @@ pub(super) fn logo() -> Vec<Vec<Span<'static>>> {
         .collect()
 }
 
-/// A run of tool calls as Claude Code folds it: one line summing it up, `▸` until opened, then
-/// `▾` and each call with what it returned. Yellow while one runs, red when one failed.
-fn tool_run(tools: &[Entry], opened: bool) -> Vec<Line<'static>> {
+/// A run of tool calls as Claude Code folds it: one line summing it up, then once opened, each
+/// call with what it returned. Its dot is yellow while one runs, red when one failed, and green
+/// once all are done.
+fn tool_run(tools: &[Entry], opened: bool, width: u16) -> Vec<Line<'static>> {
     let names = tools.iter().filter_map(|entry| match entry {
         Entry::Tool { name, .. } => Some(name.as_str()),
         _ => None,
@@ -556,16 +604,13 @@ fn tool_run(tools: &[Entry], opened: bool) -> Vec<Line<'static>> {
     } else if failed {
         Color::Red
     } else {
-        Color::DarkGray
+        Color::Green
     };
-    let mut head = vec![
-        Span::from(if opened { "▾ " } else { "▸ " }).fg(color),
-        Span::from(summary(names)),
-    ];
+    let mut head = vec![Span::from("● ").fg(color), Span::from(summary(names))];
     if opened {
         let mut lines = vec![Line::from(head)];
         for tool in tools {
-            lines.extend(entry_lines(tool).into_iter().map(|mut line| {
+            lines.extend(entry_lines(tool, width).into_iter().map(|mut line| {
                 line.spans.insert(0, Span::raw("  "));
                 line
             }));
@@ -575,22 +620,29 @@ fn tool_run(tools: &[Entry], opened: bool) -> Vec<Line<'static>> {
     if running && let Some(Entry::Tool { name, detail, .. }) = tools.last() {
         head.push(Span::from(format!(" · {}", call(name, detail))).dark_gray());
     }
-    head.push(Span::from("  (click or ctrl+o)").dark_gray());
+    head.push(Span::from("  (click or ctrl+o to expand)").dark_gray());
     vec![Line::from(head)]
 }
 
-/// The lines an entry shows, as Claude Code lays them out: `›` before a message, `●` before a
-/// reply or a tool call, `⎿` before what the tool returned, and `✻` after a turn.
-fn entry_lines(entry: &Entry) -> Vec<Line<'static>> {
+/// The lines an entry shows, `width` columns wide, as Claude Code lays them out: a message on a
+/// band after `❯`, `●` before a reply or a tool call, `⎿` before what the tool returned, and `✻`
+/// after a turn.
+fn entry_lines(entry: &Entry, width: u16) -> Vec<Line<'static>> {
     match entry {
-        Entry::User(text) => text
-            .lines()
-            .enumerate()
-            .map(|(i, line)| {
-                let prefix = if i == 0 { "› " } else { "  " };
-                Line::from(format!("{prefix}{line}")).dark_gray()
-            })
-            .collect(),
+        // Wrapped here, so the band fills each row to the edge.
+        Entry::User(text) => {
+            let width = usize::from(width).max(3);
+            let band = Style::new().bg(USER_BG).fg(Color::White);
+            text.lines()
+                .flat_map(|line| wrap(line, width - 2))
+                .enumerate()
+                .map(|(i, row)| {
+                    let prefix = if i == 0 { "❯ " } else { "  " };
+                    let pad = (width - 2).saturating_sub(row.width());
+                    Line::from(format!("{prefix}{row}{}", " ".repeat(pad))).style(band)
+                })
+                .collect()
+        }
         Entry::Assistant { text, .. } => markdown::lines(text)
             .into_iter()
             .enumerate()
@@ -658,19 +710,61 @@ fn clock(at: Timestamp) -> String {
         .to_string()
 }
 
-/// `text` cut to `room` characters, with `…` when it was longer.
+/// `text` cut to `room` columns, with `…` when it was wider.
 fn clip(text: &str, room: usize) -> String {
-    if text.chars().count() <= room {
+    if text.width() <= room {
         return text.to_owned();
     }
-    let mut clipped: String = text.chars().take(room.saturating_sub(1)).collect();
+    if room == 0 {
+        return String::new();
+    }
+    let mut clipped = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let width = c.width().unwrap_or(0);
+        if used + width + 1 > room {
+            break;
+        }
+        used += width;
+        clipped.push(c);
+    }
     clipped.push('…');
     clipped
 }
 
+/// `line` in rows at most `width` columns wide, broken between words, and inside a word only
+/// when it's wider than a row. An empty line is one empty row.
+fn wrap(line: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut rows = vec![String::new()];
+    for word in line.split(' ') {
+        let row = rows.last_mut().expect("rows starts with one");
+        let gap = usize::from(!row.is_empty());
+        if row.width() + gap + word.width() <= width {
+            if gap == 1 {
+                row.push(' ');
+            }
+            row.push_str(word);
+            continue;
+        }
+        let mut row = String::new();
+        for c in word.chars() {
+            if row.width() + c.width().unwrap_or(0) > width {
+                rows.push(std::mem::take(&mut row));
+            }
+            row.push(c);
+        }
+        rows.push(row);
+    }
+    if rows.len() > 1 && rows[0].is_empty() {
+        rows.remove(0);
+    }
+    rows
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{clip, duration, tool_run};
+    use super::{clip, duration, tool_run, wrap};
     use crate::tui::transcript::Entry;
 
     fn tool(name: &str, status: Option<parallax_protocol::AgentToolStatus>) -> Entry {
@@ -689,15 +783,15 @@ mod tests {
             tool("Bash", Some(parallax_protocol::AgentToolStatus::Ok)),
             tool("Read", None),
         ];
-        let folded: Vec<String> = tool_run(&tools, false)
+        let folded: Vec<String> = tool_run(&tools, false, 80)
             .iter()
             .map(ToString::to_string)
             .collect();
         assert_eq!(
             folded,
-            ["▸ Ran 1 shell command, read 1 file · Read(ls)  (click or ctrl+o)"]
+            ["● Ran 1 shell command, read 1 file · Read(ls)  (click or ctrl+o to expand)"]
         );
-        let opened = tool_run(&tools, true);
+        let opened = tool_run(&tools, true, 80);
         assert_eq!(
             opened.len(),
             5,
@@ -710,5 +804,16 @@ mod tests {
     fn durations_and_clipping() {
         assert_eq!([duration(11), duration(125)], ["11s", "2m 5s"]);
         assert_eq!([clip("abc", 3), clip("abcdef", 4)], ["abc", "abc…"]);
+        assert_eq!(clip("日本語の", 5), "日本…", "by columns, not chars");
+    }
+
+    #[test]
+    fn wrapping_breaks_between_words() {
+        assert_eq!(
+            wrap("write a file and delete it", 12),
+            ["write a file", "and delete", "it"]
+        );
+        assert_eq!(wrap("abcdefgh", 3), ["abc", "def", "gh"]);
+        assert_eq!(wrap("", 5), [""]);
     }
 }

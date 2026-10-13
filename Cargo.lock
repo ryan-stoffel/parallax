@@ -1804,6 +1804,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "unicode-width",
  "uuid",
  "webpki-roots",
  "windows-sys 0.61.2",

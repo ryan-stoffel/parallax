@@ -41,9 +41,10 @@ use parallax_protocol::{
 };
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
-    MouseEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
+use ratatui::crossterm::execute;
 use ratatui::layout::{Position, Rect};
 use ratatui::text::Span;
 use tokio::sync::mpsc;
@@ -65,13 +66,14 @@ const FRAME: Duration = Duration::from_millis(120);
 /// The most rows a list below the prompt shows at once; ↑↓ scroll the rest.
 const MENU_ROWS: usize = 10;
 
+/// The most files `@` lists at once.
+const MENTIONS: usize = 8;
+
+/// The most paths `@` reads from a checkout.
+const MAX_FILES: usize = 50_000;
+
 /// Lines a wheel step scrolls.
 const WHEEL: u16 = 3;
-
-/// Clicks and the wheel, reported in SGR form (`?1000`, `?1006`), and not the motion every move
-/// would send with crossterm's own capture, which also turns on `?1003`.
-const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1006h";
-const MOUSE_OFF: &str = "\x1b[?1000l\x1b[?1006l";
 
 /// The terminal's progress bar, `OSC 9;4`: moving while a turn runs, as Ghostty, Windows
 /// Terminal, and others show it for Claude Code, and cleared after. Others ignore it.
@@ -196,7 +198,8 @@ pub async fn run(plxd: Plxd) -> Result<(), String> {
         restore(info);
     }));
     // Clicks open tool calls and threads, and the wheel scrolls. Shift+drag still selects text.
-    write(MOUSE_ON);
+    // crossterm's capture, which on Windows is a console mode rather than escape codes.
+    let _ = execute!(std::io::stdout(), EnableMouseCapture);
     let result = app.run(&mut terminal, &mut keys, &mut incoming).await;
     leave();
     ratatui::restore();
@@ -205,7 +208,7 @@ pub async fn run(plxd: Plxd) -> Result<(), String> {
 
 /// Hands the terminal back: no mouse reports, and no progress bar.
 fn leave() {
-    write(MOUSE_OFF);
+    let _ = execute!(std::io::stdout(), DisableMouseCapture);
     progress(false);
 }
 
@@ -338,6 +341,10 @@ struct App {
     input: String,
     /// The highlighted command while `/` lists them.
     slash: usize,
+    /// The paths `@` offers, and the folder they're in: its files, from git, and their folders.
+    files: Option<(PathBuf, Vec<String>)>,
+    /// The highlighted path while `@` lists them.
+    mention: usize,
     /// Messages sent from here, oldest first; the one Up recalled; and what was typed before.
     history: Vec<String>,
     recalled: Option<usize>,
@@ -388,6 +395,8 @@ impl App {
             hits: RefCell::default(),
             input: String::new(),
             slash: 0,
+            files: None,
+            mention: 0,
             history: Vec::new(),
             recalled: None,
             typed: String::new(),
@@ -429,14 +438,22 @@ impl App {
                 progress(progressing);
             }
             tokio::select! {
-                Some(event) = keys.recv() => {
-                    match event {
-                        Event::Key(key) if key.kind == KeyEventKind::Press => self.key(key).await,
-                        Event::Mouse(mouse) => self.mouse(mouse).await,
-                        _ => {}
+                Some(event) = keys.recv() => match event {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => {
+                        self.key(key).await;
+                        self.dirty = true;
                     }
-                    self.dirty = true;
-                }
+                    // Capture reports every move too; only a click or the wheel changes anything.
+                    Event::Mouse(mouse) if matches!(
+                        mouse.kind,
+                        MouseEventKind::Down(_) | MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                    ) => {
+                        self.mouse(mouse).await;
+                        self.dirty = true;
+                    }
+                    Event::Resize(..) => self.dirty = true,
+                    _ => {}
+                },
                 Some(first) = incoming.recv() => {
                     self.incoming(first).await;
                     while let Ok(more) = incoming.try_recv() {
@@ -707,6 +724,18 @@ impl App {
                 _ => {}
             }
         }
+        let mentions = self.mentions();
+        if !mentions.is_empty() {
+            let last = mentions.len() - 1;
+            match key.code {
+                KeyCode::Up => return self.mention = self.mention.saturating_sub(1),
+                KeyCode::Down => return self.mention = (self.mention + 1).min(last),
+                KeyCode::Tab | KeyCode::Enter => {
+                    return self.complete_mention(&mentions[self.mention.min(last)]);
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Esc if self.working_since.is_some() => self.stop().await,
             KeyCode::Esc => {
@@ -728,11 +757,14 @@ impl App {
             KeyCode::PageDown => self.scroll = self.scroll.saturating_sub(10),
             KeyCode::Backspace => {
                 self.input.pop();
-                self.slash = 0;
+                (self.slash, self.mention) = (0, 0);
             }
             KeyCode::Char(c) => {
                 self.input.push(c);
-                self.slash = 0;
+                (self.slash, self.mention) = (0, 0);
+                if c == '@' {
+                    self.load_files();
+                }
             }
             _ => {}
         }
@@ -785,6 +817,88 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// What's typed after the `@` the input ends in, while it ends in one.
+    fn mention_query(&self) -> Option<&str> {
+        let token = self.input.rsplit(char::is_whitespace).next()?;
+        token.strip_prefix('@')
+    }
+
+    /// The paths `@` offers for what's typed after it: those whose name starts with it first,
+    /// then those it's anywhere in, shortest first, case aside.
+    fn mentions(&self) -> Vec<String> {
+        let (Some(query), Some((_, files))) = (self.mention_query(), &self.files) else {
+            return Vec::new();
+        };
+        let query = query.to_lowercase();
+        let mut matches: Vec<(bool, &String)> = files
+            .iter()
+            .filter_map(|path| {
+                let lower = path.to_lowercase();
+                let name = lower.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+                lower
+                    .contains(&query)
+                    .then_some((!name.starts_with(&query), path))
+            })
+            .collect();
+        matches.sort_by_key(|(later, path)| (*later, path.len()));
+        matches
+            .into_iter()
+            .take(MENTIONS)
+            .map(|(_, path)| path.clone())
+            .collect()
+    }
+
+    /// Puts `path` in place of the `@` being typed. A folder stays open for more of its path.
+    fn complete_mention(&mut self, path: &str) {
+        let token = self
+            .input
+            .rsplit(char::is_whitespace)
+            .next()
+            .map_or(0, str::len);
+        self.input.truncate(self.input.len() - token);
+        self.input.push('@');
+        self.input.push_str(path);
+        if !path.ends_with('/') {
+            self.input.push(' ');
+        }
+        self.mention = 0;
+    }
+
+    /// Reads the paths `@` offers from the folder the next message works in, once per folder:
+    /// `git ls-files`, as git sees the checkout, and the folders those files are in.
+    fn load_files(&mut self) {
+        let Some(folder) = self.folder() else {
+            return;
+        };
+        if self.files.as_ref().is_some_and(|(held, _)| *held == folder) {
+            return;
+        }
+        let listed = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&folder)
+            .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+            .stderr(std::process::Stdio::null())
+            .output();
+        let Ok(listed) = listed else { return };
+        let text = String::from_utf8_lossy(&listed.stdout);
+        let mut paths = std::collections::BTreeSet::new();
+        for file in text.lines().take(MAX_FILES) {
+            let mut folder = String::new();
+            for part in file
+                .split('/')
+                .collect::<Vec<_>>()
+                .split_last()
+                .map_or(&[][..], |(_, dirs)| dirs)
+            {
+                folder.push_str(part);
+                folder.push('/');
+                paths.insert(folder.clone());
+            }
+            paths.insert(file.to_owned());
+        }
+        self.files = Some((folder, paths.into_iter().collect()));
     }
 
     /// Scrolls the transcript up by `lines`, no further than its top.
@@ -918,12 +1032,14 @@ impl App {
         }
     }
 
-    /// Moves `plxd tui` into the open thread's repo, when it's a folder on this computer, as if
-    /// it ran there: new threads in that repo then work in it, in place. The shell that started
-    /// `plxd tui` stays where it was: no program can move its parent.
+    /// Moves `plxd tui` into the folder the open thread works in, when it's on this computer.
+    /// A thread that works in its checkout, in place, makes that checkout [`App::here`], as if
+    /// `plxd tui` ran there; a thread in a worktree changes nothing about where new threads start.
+    /// The shell that started `plxd tui` stays where it was: no program can move its parent.
     fn cd(&mut self) {
-        if let Some(folder) = self.folder()
-            && std::env::set_current_dir(&folder).is_ok()
+        let Some(folder) = self.folder() else { return };
+        if std::env::set_current_dir(&folder).is_ok()
+            && self.open_run().is_some_and(|run| run.checkout)
         {
             self.here = Some(folder);
         }
@@ -1346,7 +1462,8 @@ impl App {
                 title: None,
                 prompt,
                 account,
-                model: self.model.clone(),
+                // The model the header names, as the app sends the one its composer shows.
+                model: self.model.clone().or_else(|| self.first_model()),
                 effort: self.effort,
                 permission: self.permission,
                 context_window: None,
@@ -1432,33 +1549,41 @@ impl App {
             .map_or_else(|| id.to_owned(), |provider| provider.instance.name.clone())
     }
 
-    /// The model the next message runs on: a `/model` change, or, on the thread's own provider,
-    /// the thread's model or the one its session last reported.
+    /// The model the next message runs on: a `/model` change; on the thread's own provider, the
+    /// thread's model or the one its session last reported; otherwise the provider's first, as
+    /// the app's composer picks one.
     fn model_id(&self) -> Option<String> {
-        if self.model.is_some() || self.provider.is_some() {
+        if self.model.is_some() {
             return self.model.clone();
         }
-        let open = self.open.as_ref()?;
-        self.open_run()?
-            .model
-            .clone()
-            .or_else(|| open.transcript.model.clone())
+        let thread = self.provider.is_none().then_some(()).and_then(|()| {
+            let open = self.open.as_ref()?;
+            self.open_run()?
+                .model
+                .clone()
+                .or_else(|| open.transcript.model.clone())
+        });
+        thread.or_else(|| self.first_model())
     }
 
-    /// [`Self::model_id`] by its provider's name for it, or the provider's default.
+    /// The provider's first model, which a new thread runs on unless `/model` picks another.
+    fn first_model(&self) -> Option<String> {
+        models(self.provider_info()?)
+            .into_iter()
+            .next()
+            .map(|(id, _)| id)
+    }
+
+    /// [`Self::model_id`] by its provider's name for it, such as Claude Sonnet 5.5.
     fn model_label(&self) -> String {
-        match self.model_id() {
-            Some(id) => self
-                .providers
-                .iter()
-                .flat_map(models)
-                .find(|(held, _)| *held == id)
-                .map_or(id, |(_, name)| name),
-            None => match self.provider() {
-                Some(provider) => format!("{} default model", self.provider_name(provider)),
-                None => "default model".to_owned(),
-            },
-        }
+        let Some(id) = self.model_id() else {
+            return "default model".to_owned();
+        };
+        self.providers
+            .iter()
+            .flat_map(models)
+            .find(|(held, _)| *held == id)
+            .map_or(id, |(_, name)| name)
     }
 
     /// A thread's title, or its prompt's first line.
@@ -1496,8 +1621,9 @@ impl App {
         }
     }
 
-    /// The folder on this computer the open thread, or the next one, works in: its repo's, or
-    /// the checkout `plxd tui` ran in. None for Chats and Spaces, whose folders are plxd's.
+    /// The folder on this computer the open thread, or the next one, works in: the thread's
+    /// worktree or its repo's checkout, or the checkout `plxd tui` ran in. None for Chats and
+    /// Spaces, whose folders are plxd's.
     fn folder(&self) -> Option<PathBuf> {
         let repo = match &self.open {
             Some(_) => self.open_thread().and_then(|thread| self.repo(thread.repo)),
@@ -1507,8 +1633,12 @@ impl App {
                 Draft::Chats => None,
             },
         }?;
-        let path = PathBuf::from(&repo.path);
-        (!repo.scratch && !repo.space && path.is_dir()).then_some(path)
+        if repo.scratch || repo.space {
+            return None;
+        }
+        let worktree = self.open_run().and_then(|run| run.worktree_path.as_deref());
+        let path = PathBuf::from(worktree.unwrap_or(&repo.path));
+        path.is_dir().then_some(path)
     }
 
     /// Whether `run`'s turn is under way. A run waiting out a usage limit isn't.
@@ -1828,6 +1958,34 @@ mod tests {
         assert_eq!(app.draft_for(id(other)), Draft::Repo(id(other).unwrap()));
         assert_eq!(app.draft_for(id(chats)), Draft::Chats);
         assert_eq!(app.draft_for(None), Draft::Chats);
+    }
+
+    #[tokio::test]
+    async fn at_offers_files_and_completes_them() {
+        let mut app = app();
+        app.files = Some((
+            "/dev/app".into(),
+            vec![
+                "daemon/".to_owned(),
+                "daemon/src/".to_owned(),
+                "daemon/src/tui.rs".to_owned(),
+                "daemon/src/threads.rs".to_owned(),
+                "README.md".to_owned(),
+            ],
+        ));
+        app.input = "look at @tu".to_owned();
+        assert_eq!(app.mentions(), ["daemon/src/tui.rs"]);
+        press(&mut app, &[KeyCode::Tab]).await;
+        assert_eq!(app.input, "look at @daemon/src/tui.rs ");
+
+        app.input = "@dae".to_owned();
+        assert_eq!(
+            app.mentions()[0],
+            "daemon/",
+            "a name that starts with it, shortest first"
+        );
+        press(&mut app, &[KeyCode::Enter]).await;
+        assert_eq!(app.input, "@daemon/", "a folder stays open");
     }
 
     #[test]
