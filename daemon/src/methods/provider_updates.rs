@@ -1,7 +1,9 @@
 //! `providerUpdates` (PLX-746): `providers/updates` compares each installed Claude Code and Codex
 //! with its npm package's latest release, and `providers/upgrade` runs the CLI's own `update`,
-//! which knows whether npm, Homebrew, or its native installer put it there.
+//! which knows whether npm or its native installer put it there, or `brew upgrade` for a Homebrew
+//! install, since `claude update` only prints that command (PLX-762).
 
+use std::path::Path;
 use std::time::Duration;
 
 use parallax_protocol::jsonrpc::ErrorObject;
@@ -49,7 +51,9 @@ pub(crate) async fn updates(
     })
 }
 
-/// `providers/upgrade`: runs `<cli> update`, then probes the CLI again for its version.
+/// `providers/upgrade`: runs `<cli> update`, or `brew upgrade` for a Homebrew install, then probes
+/// the CLI again for its version. A version that didn't change is an error, with the command's
+/// output saying why.
 pub(crate) async fn upgrade(
     context: &Context,
     params: ProvidersUpgradeParams,
@@ -60,30 +64,69 @@ pub(crate) async fn upgrade(
             "plxd updates only Claude Code and Codex.",
         ));
     }
-    let Some(path) = detector.get(params.cli).await.path else {
+    let found = detector.get(params.cli).await;
+    let Some(path) = found.path else {
         return Err(ErrorObject::invalid_params(
             "That CLI isn't installed on this host.",
         ));
     };
-    let mut spec = probe_spec(&path);
-    spec.args = vec!["update".into()];
+    let (program, args) = std::fs::canonicalize(&path)
+        .ok()
+        .and_then(|real| brew_upgrade(&real))
+        .unwrap_or_else(|| (path, vec!["update".to_owned()]));
+    let command = format!("{program} {}", args.join(" "));
+    let mut spec = probe_spec(&program);
+    spec.args = args.into_iter().map(Into::into).collect();
     let ran = detect::run_spec(detector.launcher(), &spec, b"", UPGRADE_TIMEOUT)
         .await
-        .map_err(|error| ErrorObject::internal_error(format!("{path} update {error}")))?;
+        .map_err(|error| ErrorObject::internal_error(format!("{command} {error}")))?;
     if ran.exit_code != Some(0) {
-        let why = ran.stderr_tail.trim();
-        let why = if why.is_empty() {
-            ran.stdout.trim()
-        } else {
-            why
-        };
         return Err(ErrorObject::internal_error(format!(
-            "{path} update failed: {why}"
+            "{command} failed: {}",
+            output(&ran)
         )));
     }
-    Ok(ProvidersUpgradeResult {
-        version: detector.refresh_one(params.cli).await.version,
-    })
+    let version = detector.refresh_one(params.cli).await.version;
+    if let Some(before) = found.version
+        && version.as_ref() == Some(&before)
+    {
+        return Err(ErrorObject::internal_error(format!(
+            "{command} left it at {before}: {}",
+            output(&ran)
+        )));
+    }
+    Ok(ProvidersUpgradeResult { version })
+}
+
+/// The `brew upgrade` command for the Homebrew package that `real`, a CLI's resolved path, belongs
+/// to: `<prefix>/Caskroom/<cask>/...` or `<prefix>/Cellar/<formula>/...`.
+fn brew_upgrade(real: &Path) -> Option<(String, Vec<String>)> {
+    let parts: Vec<_> = real.iter().collect();
+    let at = parts
+        .iter()
+        .position(|part| *part == "Caskroom" || *part == "Cellar")?;
+    let kind = if parts[at] == "Caskroom" {
+        "--cask"
+    } else {
+        "--formula"
+    };
+    let package = parts.get(at + 1)?.to_str()?;
+    let brew = parts[..at]
+        .iter()
+        .collect::<std::path::PathBuf>()
+        .join("bin/brew");
+    let args = ["upgrade", kind, package].map(str::to_owned).to_vec();
+    Some((brew.to_str()?.to_owned(), args))
+}
+
+/// What a command said: its stderr, or its stdout when stderr is empty.
+fn output(ran: &detect::Ran) -> &str {
+    let why = ran.stderr_tail.trim();
+    if why.is_empty() {
+        ran.stdout.trim()
+    } else {
+        why
+    }
 }
 
 /// The latest release of npm `package`, read with `curl` so plxd needs no HTTP client.
@@ -122,7 +165,9 @@ fn newer(version: &str, latest: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{newer, version_in};
+    use std::path::Path;
+
+    use super::{brew_upgrade, newer, version_in};
 
     #[test]
     fn a_newer_release_is_an_update() {
@@ -138,5 +183,20 @@ mod tests {
         let body = r#"{"name":"@openai/codex","version":"0.163.0","bin":{}}"#;
         assert_eq!(version_in(body).as_deref(), Some("0.163.0"));
         assert_eq!(version_in("Not Found"), None);
+    }
+
+    #[test]
+    fn a_homebrew_install_upgrades_through_its_brew() {
+        let cask = Path::new("/opt/homebrew/Caskroom/claude-code@latest/2.1.295/claude");
+        let (brew, args) = brew_upgrade(cask).unwrap();
+        assert_eq!(brew, "/opt/homebrew/bin/brew");
+        assert_eq!(args, ["upgrade", "--cask", "claude-code@latest"]);
+
+        let formula = Path::new("/home/linuxbrew/.linuxbrew/Cellar/codex/0.162.1/bin/codex");
+        let (brew, args) = brew_upgrade(formula).unwrap();
+        assert_eq!(brew, "/home/linuxbrew/.linuxbrew/bin/brew");
+        assert_eq!(args, ["upgrade", "--formula", "codex"]);
+
+        assert!(brew_upgrade(Path::new("/Users/r/.local/share/claude/versions/2.1.295")).is_none());
     }
 }
