@@ -180,6 +180,7 @@ impl Tools for Server {
             &tools[..],
             memory,
             super::html::TOOLS,
+            super::files::TOOLS,
             super::preview::TOOLS,
             device::TOOLS,
             super::triggers::TOOLS,
@@ -199,6 +200,7 @@ impl Tools for Server {
                 list.extend(memory.definitions());
             }
             list.extend(super::html::definitions());
+            list.extend(super::files::definitions());
             list.extend(super::preview::definitions());
             list.extend(device::definitions());
             list.extend(super::triggers::definitions());
@@ -210,6 +212,9 @@ impl Tools for Server {
     async fn call(&self, name: &str, arguments: Value) -> Result<Reply, String> {
         if name.starts_with("device_") {
             return self.devices.call(name, arguments).await;
+        }
+        if super::files::TOOLS.contains(&name) {
+            return super::files::call(&self.binding, name, arguments).await;
         }
         if name.starts_with("html_") {
             return super::html::call(&self.binding, name, arguments).await;
@@ -1445,6 +1450,7 @@ mod tests {
         tools.extend(land::definitions(true));
         tools.extend(device::definitions());
         tools.extend(crate::mcp::html::definitions());
+        tools.extend(crate::mcp::files::definitions());
         tools.extend(crate::mcp::preview::definitions());
         tools.extend(crate::mcp::triggers::definitions());
         tools.extend(crate::mcp::delegation::definitions());

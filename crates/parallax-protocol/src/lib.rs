@@ -186,8 +186,9 @@ pub use review::{
     AcceptId, AgentAcceptParams, AgentAcceptResult, AgentDiffFile, AgentDiffParams,
     AgentDiffResult, AgentDiffStats, AgentEntry, AgentEntryKind, AgentFileCreateParams,
     AgentFileDeleteParams, AgentFileEditResult, AgentFileParams, AgentFileRenameParams,
-    AgentFileResult, AgentFileSide, AgentFileStatus, AgentFilesParams, AgentFilesResult,
-    AgentMerge, AgentMergeKind, AgentOpenPrParams, AgentOpenPrResult, AgentRequestChangesParams,
+    AgentFileResult, AgentFileSide, AgentFileStatus, AgentFileWriteParams, AgentFilesParams,
+    AgentFilesResult, AgentMerge, AgentMergeKind, AgentOpenPrParams, AgentOpenPrResult,
+    AgentRequestChangesParams,
 };
 pub use schedule::{
     PrWatchResult, PrWatchesParams, PrWatchesResult, Schedule, ScheduleDeleteResult,

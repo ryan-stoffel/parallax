@@ -1,13 +1,14 @@
 //! `agent/files` and `agent/file`'s `working` side (PLX-296): browsing a thread's folder on disk,
 //! for a thread in a worktree and one in the user's own checkout; and `agent/fileCreate`,
-//! `agent/fileRename`, and `agent/fileDelete` (PLX-590) changing it.
+//! `agent/fileRename`, and `agent/fileDelete` (PLX-590) changing it; and `agent/fileWrite`
+//! (PLX-755) saving a file over itself.
 
 use parallax_protocol::methods::{
-    AgentFile, AgentFileCreate, AgentFileDelete, AgentFileRename, AgentFiles,
+    AgentFile, AgentFileCreate, AgentFileDelete, AgentFileRename, AgentFileWrite, AgentFiles,
 };
 use parallax_protocol::{
     AgentEntry, AgentEntryKind, AgentFileCreateParams, AgentFileDeleteParams, AgentFileParams,
-    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFilesParams,
+    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFileWriteParams, AgentFilesParams,
 };
 
 use super::*;
@@ -362,4 +363,63 @@ async fn files_and_folders_are_created_renamed_and_deleted_inside_the_threads_fo
         assert_eq!(error.code, INVALID_PARAMS, "{escape:?}: {error:?}");
     }
     assert!(worktree.join(".git").exists());
+}
+
+async fn write(
+    client: &mut Conn,
+    run_id: RunId,
+    path: &str,
+    content: &str,
+) -> Result<(), ErrorObject> {
+    let params = AgentFileWriteParams {
+        run_id,
+        path: path.to_owned(),
+        content: content.to_owned(),
+    };
+    client.call::<AgentFileWrite>(params).await.map(drop)
+}
+
+#[tokio::test]
+async fn a_file_is_saved_over_itself_and_nothing_else_is_written() {
+    let host = Host::start(fake(editing()));
+    let path = repo_with_ignores(host.work.path());
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    client.subscribe(0, Some(scope(repo.id))).await;
+    let started = client
+        .call::<ThreadStart>(start_params(Some(repo.id), "Write some notes"))
+        .await
+        .unwrap();
+    let run_id = started.run.id;
+    client.until(updated_to(AgentStatus::Completed)).await;
+    let worktree = PathBuf::from(started.run.worktree_path.unwrap());
+    add_ignored_and_links(&worktree);
+
+    // "edited\n", in base64.
+    write(&mut client, run_id, "README.md", "ZWRpdGVkCg==")
+        .await
+        .unwrap();
+    assert_eq!(text(&mut client, run_id, "README.md").await, "edited\n");
+    assert!(!worktree.join(".README.md.plx-save").exists());
+
+    // Only an existing regular file, never a symlink's target, a folder, or a new file.
+    for path in [
+        "hosts",
+        "src",
+        "new.md",
+        "../x",
+        "/tmp/x",
+        ".git/config",
+        "etc/hosts",
+    ] {
+        let error = write(&mut client, run_id, path, "eA==").await.unwrap_err();
+        assert_eq!(error.code, INVALID_PARAMS, "{path:?}: {error:?}");
+    }
+    assert!(!worktree.join("new.md").exists());
+    assert_ne!(std::fs::read("/etc/hosts").unwrap(), b"x");
+    let error = write(&mut client, run_id, "README.md", "not base64!")
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, INVALID_PARAMS);
+    assert_eq!(text(&mut client, run_id, "README.md").await, "edited\n");
 }

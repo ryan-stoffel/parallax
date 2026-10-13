@@ -1,5 +1,7 @@
 import {
   Brain,
+  FileSpreadsheet,
+  FileText,
   FolderTree,
   GitCompare,
   GitPullRequest,
@@ -9,6 +11,7 @@ import {
   Minimize2,
   PanelRight,
   Plus,
+  Presentation,
   Terminal,
   Workflow,
   X,
@@ -17,6 +20,7 @@ import {
 import { useState, type ComponentProps, type ReactNode } from "react";
 
 import { Browser } from "./Browser";
+import type { DocRef } from "./documents";
 import { PanelResize } from "./PanelResize";
 import { numberOf } from "./PullRequests";
 import { IconButton, TopBar } from "./ui";
@@ -30,7 +34,11 @@ interface Surface {
   empty?: { title: string; hint: string };
   /** A pull request's tab: the URL it shows. */
   url?: string;
+  /** A presented file's tab (PLX-755). */
+  doc?: DocRef;
 }
+
+const docIcons = { docx: FileText, pdf: FileText, xlsx: FileSpreadsheet, pptx: Presentation };
 
 // A Project's own views, pinned first in its panel.
 const overview: Surface = { name: "Project", icon: SquareKanban, key: "O" };
@@ -92,7 +100,8 @@ const knowledgeSurface = surfaces.find((s) => s.name === "Knowledge")!;
  * state. Each new `browse` opens the Browser view at its url, or at one of `agentTabs`. `pullRequests` are the open thread's
  * linked pull requests (PLX-319): its URLs, the Pull requests view, and each one's view, shown in a
  * `#n` tab only while the thread links it. Each new `pullRequest` opens that URL's tab, or without
- * one the Pull requests view.
+ * one the Pull requests view. Each new `documents.open` opens that presented file's tab (PLX-755),
+ * shown only while its thread, `documents.runId`, is open, since saving it messages that thread.
  */
 export function SidePanel({
   width = 416,
@@ -114,6 +123,7 @@ export function SidePanel({
   agentTabs,
   pullRequests,
   pullRequest,
+  documents,
   project,
 }: {
   width?: number;
@@ -137,6 +147,7 @@ export function SidePanel({
   agentTabs?: ComponentProps<typeof Browser>["agent"];
   pullRequests?: { urls: readonly string[]; list: ReactNode; view: (url: string) => ReactNode };
   pullRequest?: { url?: string };
+  documents?: { runId?: string; open?: DocRef; view: (doc: DocRef) => ReactNode };
   /** An open Project, whose home the panel rests on, with Knowledge beside it, and how many
    * things wait on the user there. */
   project?: { home: ReactNode; waiting: number };
@@ -162,7 +173,8 @@ export function SidePanel({
       (s) =>
         !pinned.includes(s) &&
         (project || (s.name !== "Knowledge" && s.name !== "Agents")) &&
-        (!s.url || pullRequests?.urls.includes(s.url)),
+        (!s.url || pullRequests?.urls.includes(s.url)) &&
+        (!s.doc || s.doc.runId === documents?.runId),
     ),
   ];
   const current =
@@ -203,6 +215,18 @@ export function SidePanel({
     if (url) openView({ name: `#${numberOf(url)}`, icon: GitPullRequest, key: url, url });
     else if (pullRequest) openView(surfaces.find((s) => s.name === "Pull requests")!);
   }
+  const [docOpened, setDocOpened] = useState(documents?.open);
+  if (documents?.open !== docOpened) {
+    setDocOpened(documents?.open);
+    const doc = documents?.open;
+    if (doc)
+      openView({
+        name: doc.name,
+        icon: docIcons[doc.kind],
+        key: `doc:${doc.runId}:${doc.path}`,
+        doc,
+      });
+  }
   const emptyOf = (s: Surface) => (
     <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
       <s.icon aria-hidden className="mb-1 size-5 text-faint-foreground" />
@@ -225,6 +249,8 @@ export function SidePanel({
       files
     ) : s.name === "Changes" && changesView ? (
       changesView
+    ) : s.doc && documents ? (
+      documents.view(s.doc)
     ) : s.url && pullRequests ? (
       pullRequests.view(s.url)
     ) : s.name === "Pull requests" && pullRequests?.urls.length ? (

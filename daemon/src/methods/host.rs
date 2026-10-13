@@ -148,6 +148,7 @@ pub(crate) fn initialize(
 /// would refuse, to browse a run's folder.
 /// `fileEdit` (PLX-590): `agent/fileCreate`, `agent/fileRename`, and `agent/fileDelete`, to change
 /// a run's folder from the Files view.
+/// `fileWrite` (PLX-755): `agent/fileWrite`, to save a document edited in the side panel.
 /// `pullRequests` (PLX-318): `pr/view` and `pr/act`, and `pullRequests` on `AgentRun` and
 /// `agent.updated`, which an older plxd never fills.
 /// `prDiff` (PLX-328): `pr/diff`, and `createdAt`, `closedAt`, `mergedAt`, `mergedBy`, `commits`,
@@ -243,6 +244,7 @@ fn capabilities_advertised() -> Capabilities {
         ("eventFilters".to_owned(), serde_json::Map::new()),
         ("eventsBefore".to_owned(), serde_json::Map::new()),
         ("fileEdit".to_owned(), serde_json::Map::new()),
+        ("fileWrite".to_owned(), serde_json::Map::new()),
         ("files".to_owned(), serde_json::Map::new()),
         ("git".to_owned(), serde_json::Map::new()),
         (

@@ -273,7 +273,21 @@ pub struct AgentFileDeleteParams {
     pub path: String,
 }
 
-/// Result of `agent/fileCreate`, `agent/fileRename`, and `agent/fileDelete`.
+/// Params of `agent/fileWrite` (PLX-755): new content for an existing regular file in a run's
+/// folder, by `agent/file`'s path rules, such as a document the user edited in the side panel.
+/// Never creates a file, and never writes through a symlink.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFileWriteParams {
+    /// The run.
+    pub run_id: RunId,
+    /// The file, relative to the run's folder.
+    pub path: String,
+    /// Its new content, base64-encoded, at most `agent/file`'s size cap.
+    pub content: String,
+}
+
+/// Result of `agent/fileCreate`, `agent/fileRename`, `agent/fileDelete`, and `agent/fileWrite`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentFileEditResult {}
