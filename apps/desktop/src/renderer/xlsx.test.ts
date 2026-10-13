@@ -7,14 +7,12 @@ import { cellAt, formatNumber, openXlsx } from "./xlsx";
 
 const NS = `xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`;
 const file = zipSync({
-  "[Content_Types].xml": strToU8(
-    `<Types><Override PartName="/xl/workbook.xml"/><Override PartName="/xl/calcChain.xml"/></Types>`,
-  ),
+  "[Content_Types].xml": strToU8(`<Types><Override PartName="/xl/workbook.xml"/></Types>`),
   "xl/workbook.xml": strToU8(
     `<workbook ${NS}><sheets><sheet name="Budget" sheetId="1" r:id="rId1"/></sheets><definedNames/></workbook>`,
   ),
   "xl/_rels/workbook.xml.rels": strToU8(
-    `<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://x/calcChain" Target="calcChain.xml"/></Relationships>`,
+    `<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`,
   ),
   "xl/sharedStrings.xml": strToU8(`<sst ${NS}><si><t>Item</t></si></sst>`),
   "xl/styles.xml": strToU8(
@@ -23,7 +21,6 @@ const file = zipSync({
   "xl/worksheets/sheet1.xml": strToU8(
     `<worksheet ${NS}><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" s="1"><v>1234.5</v></c></row><row r="3"><c r="B3"><f>B1*2</f><v>2469</v></c></row></sheetData></worksheet>`,
   ),
-  "xl/calcChain.xml": strToU8(`<calcChain/>`),
 });
 
 test("cells read with their shared strings, formats, styles, and formulas", () => {

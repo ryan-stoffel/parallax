@@ -1,16 +1,14 @@
-import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
+import { strFromU8, unzipSync } from "fflate";
 
 /**
  * The shared parts of the Office files the side panel opens (PLX-755): a .docx, .xlsx, or .pptx is
- * a zip of XML parts, linked by `_rels` files. Each format module reads the parts it shows, edits
- * the XML it changes in place, and writes every other part back as it was.
+ * a zip of XML parts, linked by `_rels` files. Each format module reads the parts it shows.
  */
 
 /** A package's parts by path, such as `word/document.xml`. */
 export type Parts = Record<string, Uint8Array>;
 
 export const unzip = (bytes: Uint8Array): Parts => unzipSync(bytes);
-export const zip = (parts: Parts): Uint8Array => zipSync(parts, { level: 6 });
 
 /** The XML part at `path`, parsed, or undefined when it's missing or isn't XML. */
 export function readXml(parts: Parts, path: string): Document | undefined {
@@ -18,16 +16,6 @@ export function readXml(parts: Parts, path: string): Document | undefined {
   if (!bytes) return undefined;
   const doc = new DOMParser().parseFromString(strFromU8(bytes), "application/xml");
   return doc.getElementsByTagName("parsererror").length ? undefined : doc;
-}
-
-/** `doc` as a part, with the declaration Office writes, which XMLSerializer leaves out. */
-export function writeXml(doc: Document): Uint8Array {
-  const xml = new XMLSerializer().serializeToString(doc);
-  return strToU8(
-    xml.startsWith("<?xml")
-      ? xml
-      : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${xml}`,
-  );
 }
 
 /** `el`'s child elements, only those named `name` (with its prefix, as `w:p`) when given. */

@@ -21,7 +21,8 @@ export type Opened =
   | { kind: "docx"; docx: Docx }
   | { kind: "xlsx"; xlsx: Xlsx }
   | { kind: "pptx"; pptx: Pptx }
-  | { kind: "pdf"; pdf: PDFDocumentProxy };
+  /** A PDF, with its first page's height over its width. */
+  | { kind: "pdf"; pdf: PDFDocumentProxy; ratio: number };
 
 export interface Loaded {
   bytes: Uint8Array;
@@ -76,7 +77,11 @@ async function load(hostId: string, doc: DocRef): Promise<Loaded> {
         ? { kind: "xlsx", xlsx: openXlsx(bytes) }
         : doc.kind === "pptx"
           ? { kind: "pptx", pptx: openPptx(bytes) }
-          : { kind: "pdf", pdf: await openPdf(bytes) };
+          : await (async () => {
+              const pdf = await openPdf(bytes);
+              const first = (await pdf.getPage(1)).getViewport({ scale: 1 });
+              return { kind: "pdf" as const, pdf, ratio: first.height / first.width };
+            })();
   return { bytes, opened };
 }
 
@@ -112,7 +117,7 @@ const subscribe = (listener: () => void) => {
   return () => listeners.delete(listener);
 };
 
-/** `doc` from `hostId`, opened, and opened again after each save. */
+/** `doc` from `hostId`, opened, and opened again when a newer presentation reloads it. */
 export function useDocument(hostId: string, doc: DocRef) {
   const loads = useSyncExternalStore(subscribe, () => version);
   const [state, setState] = useState<{ loaded?: Loaded; error?: string }>({});

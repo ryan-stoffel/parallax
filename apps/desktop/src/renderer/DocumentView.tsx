@@ -7,7 +7,7 @@ import {
   type RefObject,
 } from "react";
 
-import type { Docx } from "./docx";
+import { pagesOf, type Docx } from "./docx";
 import { download, drawPdfPage, titleOf, useDocument, type DocRef } from "./documents";
 import { drawPage, pageSize } from "./FileCards";
 import { cellAt, colName, splitRef, type Xlsx } from "./xlsx";
@@ -33,7 +33,7 @@ export function DocumentView({ hostId, doc }: { hostId: string; doc: DocRef }) {
       ) : opened.kind === "xlsx" ? (
         <SheetView xlsx={opened.xlsx} />
       ) : opened.kind === "pdf" ? (
-        <Paged count={opened.pdf.numPages} ratio={792 / 612}>
+        <Paged count={opened.pdf.numPages} ratio={opened.ratio}>
           {(page, width) => <Drawn draw={() => drawPdfPage(opened.pdf, page + 1, width)} />}
         </Paged>
       ) : (
@@ -162,84 +162,24 @@ function Drawn({ draw }: { draw: () => Promise<HTMLElement> }) {
   return <div ref={ref} />;
 }
 
-/**
- * A .docx split into pages: its paragraphs and tables, laid out once at the page's text width,
- * go onto pages in order, a new page starting when the next one won't fit or after a page break.
- * ponytail: a paragraph taller than a page is clipped rather than split across pages.
- */
+/** A .docx on its pages, each zoomed to the panel's width, so a page that grows keeps its height. */
 function DocxPages({ docx }: { docx: Docx }) {
   const [pages, setPages] = useState<HTMLElement[]>([]);
-  const { page } = docx;
-  useLayoutEffect(() => {
-    const textWidth = page.width - page.left - page.right;
-    const textHeight = page.height - page.top - page.bottom;
-    const measure = document.createElement("div");
-    measure.setAttribute(
-      "style",
-      `position:fixed;left:-100000px;top:0;width:${textWidth}px;visibility:hidden`,
-    );
-    const flow = docx.render();
-    measure.append(flow);
-    document.body.append(measure);
-    const blocks = [...flow.children] as HTMLElement[];
-    const tops = blocks.map((block) => block.getBoundingClientRect().top);
-    const end = flow.getBoundingClientRect().bottom;
-    const groups: HTMLElement[][] = [[]];
-    let start = tops[0] ?? 0;
-    blocks.forEach((block, i) => {
-      const bottom = tops[i + 1] ?? end;
-      if (groups.at(-1)!.length && bottom - start > textHeight) {
-        groups.push([]);
-        start = tops[i]!;
-      }
-      groups.at(-1)!.push(block);
-      if (block.querySelector("[data-page-break]")) {
-        groups.push([]);
-        start = bottom;
-      }
-    });
-    measure.remove();
-    setPages(
-      groups
-        .filter((group) => group.length)
-        .map((group) => {
-          const sheet = document.createElement("div");
-          sheet.setAttribute(
-            "style",
-            `width:${page.width}px;height:${page.height}px;padding:${page.top}px ${page.right}px ${page.bottom}px ${page.left}px;box-sizing:border-box;overflow:hidden;background:#fff;color:#000`,
-          );
-          const text = document.createElement("div");
-          text.className = docx.scope;
-          text.append(...group);
-          sheet.append(text);
-          return sheet;
-        }),
-    );
-  }, [docx, page]);
+  useLayoutEffect(() => setPages(pagesOf(docx)), [docx]);
   return (
-    <>
-      <style>{docx.css}</style>
-      <Paged count={pages.length} ratio={page.height / page.width}>
-        {(index, width) => <Placed node={pages[index]!} natural={page} width={width} />}
-      </Paged>
-    </>
+    <Paged count={pages.length} ratio={docx.page.height / docx.page.width}>
+      {(index, width) => <Zoomed node={pages[index]!} zoom={width / docx.page.width} />}
+    </Paged>
   );
 }
 
-/** An existing node, scaled to `width` from its natural size. */
-function Placed({
-  node,
-  natural,
-  width,
-}: {
-  node: HTMLElement;
-  natural: { width: number; height: number };
-  width: number;
-}) {
+/** An existing node, zoomed. */
+function Zoomed({ node, zoom }: { node: HTMLElement; zoom: number }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    ref.current?.replaceChildren(scaled(node, natural, width));
-  }, [node, natural, width]);
+    node.style.zoom = String(zoom);
+    ref.current?.replaceChildren(node);
+  }, [node, zoom]);
   return <div ref={ref} />;
 }
 

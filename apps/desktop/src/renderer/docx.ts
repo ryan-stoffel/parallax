@@ -33,6 +33,73 @@ const on = (el: Element | undefined) =>
 
 let scopes = 0;
 
+// Each document's pages, as its body's block indexes, measured once.
+const layouts = new WeakMap<Docx, { groups: number[][]; tall: boolean[] }>();
+
+/**
+ * The body on pages, each a sheet of the page's size, built fresh on each call: its paragraphs
+ * and tables, laid out once at the page's text width, go onto pages in order. A new page starts
+ * when the next block won't fit, after a page break, or before a paragraph that breaks before
+ * itself. A page holding one block taller than a page grows to fit it. ponytail: a paragraph
+ * or table isn't split across pages; split tables at rows if long ones need it.
+ */
+export function pagesOf(docx: Docx): HTMLElement[] {
+  const { page } = docx;
+  const flow = docx.render();
+  const blocks = [...flow.children] as HTMLElement[];
+  let layout = layouts.get(docx);
+  if (!layout) {
+    const textHeight = page.height - page.top - page.bottom;
+    const box = document.createElement("div");
+    box.setAttribute(
+      "style",
+      `position:fixed;left:-100000px;top:0;width:${page.width - page.left - page.right}px;visibility:hidden`,
+    );
+    const style = document.createElement("style");
+    style.textContent = docx.css;
+    box.append(style, flow);
+    document.body.append(box);
+    const tops = blocks.map((block) => block.getBoundingClientRect().top);
+    const end = flow.getBoundingClientRect().bottom;
+    box.remove();
+    const groups: number[][] = [[]];
+    let start = tops[0] ?? 0;
+    blocks.forEach((block, i) => {
+      const bottom = tops[i + 1] ?? end;
+      const full = bottom - start > textHeight;
+      if (groups.at(-1)!.length && (full || block.dataset["breakBefore"] !== undefined)) {
+        groups.push([]);
+        start = tops[i]!;
+      }
+      groups.at(-1)!.push(i);
+      if (block.querySelector("[data-page-break]")) {
+        groups.push([]);
+        start = bottom;
+      }
+    });
+    const kept = groups.filter((group) => group.length);
+    const tall = kept.map(
+      (group) => group.length === 1 && (tops[group[0]! + 1] ?? end) - tops[group[0]!]! > textHeight,
+    );
+    layout = { groups: kept, tall };
+    layouts.set(docx, layout);
+  }
+  return layout.groups.map((group, i) => {
+    const sheet = document.createElement("div");
+    sheet.setAttribute(
+      "style",
+      `width:${page.width}px;${layout.tall[i] ? "min-height" : "height"}:${page.height}px;padding:${page.top}px ${page.right}px ${page.bottom}px ${page.left}px;box-sizing:border-box;overflow:hidden;background:#fff;color:#000`,
+    );
+    const style = document.createElement("style");
+    style.textContent = docx.css;
+    const text = document.createElement("div");
+    text.className = docx.scope;
+    text.append(...group.map((n) => blocks[n]!));
+    sheet.append(style, text);
+    return sheet;
+  });
+}
+
 /** Opens a .docx's bytes. Throws when it has no readable `word/document.xml`. */
 export function openDocx(bytes: Uint8Array): Docx {
   const parts = unzip(bytes);
@@ -194,7 +261,10 @@ function lookOf(parts: Parts): Look {
   const defaultPPr = paragraphCss(find(find(defaults, "w:pPrDefault"), "w:pPr"));
   const numIdOf = (pPr: Element | undefined) => kid(pPr, "w:numPr");
 
-  const paragraphCache = new Map<string, { css: string; cls: string }>();
+  const paragraphCache = new Map<
+    string,
+    { css: string; cls: string; num: { numId: string; level: number } | undefined }
+  >();
   const pPrIds = new WeakMap<Element, number>();
   let nextId = 0;
   const paragraph = (style: string | null, pPr: Element | undefined) => {
@@ -213,8 +283,13 @@ function lookOf(parts: Parts): Look {
     numPr = numIdOf(pPr) ?? numPr;
     const numId = val(numPr, "w:numId");
     const level = val(numPr, "w:ilvl") ?? "0";
-    const cls = numId && numId !== "0" ? `n${numId}-${level}` : "";
-    const found = { css: cssText(css), cls };
+    const listed = !!numId && numId !== "0";
+    const cls = listed ? `n${numId}-${level}` : "";
+    const found = {
+      css: cssText(css),
+      cls,
+      num: listed ? { numId: numId!, level: Number(level) } : undefined,
+    };
     paragraphCache.set(key, found);
     return found;
   };
@@ -227,15 +302,24 @@ function lookOf(parts: Parts): Look {
     return cssText(css);
   };
 
-  /** Static HTML for XML the editor doesn't edit: its paragraphs and runs, tables, images. */
+  /** The body's XML as HTML: its paragraphs and runs, tables, images, and page breaks. */
   const render = (el: Element, into: HTMLElement) => {
     for (const c of kids(el)) {
       switch (c.nodeName) {
         case "w:p": {
           const p = document.createElement("p");
-          const { css, cls } = paragraph(val(kid(c, "w:pPr"), "w:pStyle") ?? null, kid(c, "w:pPr"));
+          const pPr = kid(c, "w:pPr");
+          const { css, cls, num } = paragraph(val(pPr, "w:pStyle") ?? null, pPr);
           p.setAttribute("style", css);
           if (cls) p.className = cls;
+          if (on(kid(pPr, "w:pageBreakBefore"))) p.dataset["breakBefore"] = "";
+          const label = num && marker(num.numId, num.level);
+          if (label !== undefined) {
+            const span = document.createElement("span");
+            span.className = "marker";
+            span.textContent = label;
+            p.append(span);
+          }
           render(c, p);
           if (!p.textContent && !p.querySelector("img")) p.append(document.createElement("br"));
           into.append(p);
@@ -320,59 +404,114 @@ function lookOf(parts: Parts): Look {
   };
 
   // Each list level's marker: its text with %n as that level's count, or the bullet.
+  // Each list's levels, by numId.
+  const abstracts = new Map(
+    [...(numbering?.getElementsByTagName("w:abstractNum") ?? [])].map((a) => [
+      a.getAttribute("w:abstractNumId"),
+      a,
+    ]),
+  );
+  const lists = new Map(
+    [...(numbering?.getElementsByTagName("w:num") ?? [])].map((num) => [
+      num.getAttribute("w:numId") ?? "",
+      kids(abstracts.get(val(num, "w:abstractNumId") ?? null), "w:lvl"),
+    ]),
+  );
+  const levelOf = (numId: string, level: number) =>
+    lists.get(numId)?.find((l) => Number(l.getAttribute("w:ilvl") ?? 0) === level);
+  const startOf = (numId: string, level: number) =>
+    Number(val(levelOf(numId, level), "w:start") ?? 1);
+  // Each list's count at each level, in document order, from the start of a render.
+  let counts = new Map<string, number[]>();
+  /** A list paragraph's marker: its bullet, or its level's text with each %n counted. */
+  const marker = (numId: string, level: number): string | undefined => {
+    const lvl = levelOf(numId, level);
+    if (!lvl) return undefined;
+    const counted = counts.get(numId) ?? [];
+    counted[level] = (counted[level] ?? startOf(numId, level) - 1) + 1;
+    counted.length = level + 1;
+    counts.set(numId, counted);
+    const text = val(lvl, "w:lvlText") ?? "";
+    if (val(lvl, "w:numFmt") === "bullet")
+      // Symbol fonts' private-use bullets show as a plain bullet.
+      return /^[\uf000-\uf8ff]?$/.test(text) ? "•" : text;
+    return text.replace(/%(\d)/g, (_, n: string) => {
+      const at = Number(n) - 1;
+      return numberAs(
+        counted[at] ?? startOf(numId, at),
+        val(levelOf(numId, at), "w:numFmt") ?? "decimal",
+      );
+    });
+  };
+  const renderBody = (body: Element, into: HTMLElement) => {
+    counts = new Map();
+    render(body, into);
+  };
+
+  // Each list level's indent, with its marker hanging in it.
   const numberingCss = (scope: string) => {
-    if (!numbering) return "";
-    const abstracts = new Map(
-      [...numbering.getElementsByTagName("w:abstractNum")].map((a) => [
-        a.getAttribute("w:abstractNumId"),
-        a,
-      ]),
-    );
-    const formats: Record<string, string> = {
-      decimal: "decimal",
-      lowerLetter: "lower-alpha",
-      upperLetter: "upper-alpha",
-      lowerRoman: "lower-roman",
-      upperRoman: "upper-roman",
-    };
     const rules: string[] = [];
-    for (const num of numbering.getElementsByTagName("w:num")) {
-      const numId = num.getAttribute("w:numId");
-      const abstract = abstracts.get(val(num, "w:abstractNumId") ?? null);
-      const levels = kids(abstract, "w:lvl");
+    for (const [numId, levels] of lists)
       for (const lvl of levels) {
-        const level = lvl.getAttribute("w:ilvl") ?? "0";
-        const cls = `.${scope} .n${numId}-${level}`;
-        const deeper = levels
-          .map((l) => l.getAttribute("w:ilvl"))
-          .filter((l) => Number(l) > Number(level))
-          .map((l) => `n${numId}-${l}`);
-        const format = val(lvl, "w:numFmt") ?? "decimal";
-        const text = val(lvl, "w:lvlText") ?? "";
-        const content =
-          format === "bullet"
-            ? JSON.stringify(/^[\uf000-\uf8ff]?$/.test(text) ? "•" : text)
-            : text
-                .split(/(%\d)/)
-                .filter(Boolean)
-                .map((piece) =>
-                  /^%\d$/.test(piece)
-                    ? `counter(n${numId}-${Number(piece[1]) - 1}, ${formats[format] ?? "decimal"})`
-                    : JSON.stringify(piece),
-                )
-                .join(" ");
         const ind = kid(kid(lvl, "w:pPr"), "w:ind");
         const left =
           Number(ind?.getAttribute("w:left") ?? ind?.getAttribute("w:start") ?? 720) / 20;
         const hanging = Number(ind?.getAttribute("w:hanging") ?? 360) / 20;
+        const cls = `.${scope} .n${numId}-${lvl.getAttribute("w:ilvl") ?? "0"}`;
         rules.push(
-          `${cls}{counter-increment:n${numId}-${level};${deeper.length ? `counter-reset:${deeper.join(" ")};` : ""}padding-left:${left}pt;text-indent:-${hanging}pt}`,
-          `${cls}::before{content:${content || '""'};display:inline-block;min-width:${hanging}pt;text-indent:0}`,
+          `${cls}{padding-left:${left}pt;text-indent:-${hanging}pt}`,
+          `${cls}>.marker{display:inline-block;min-width:${hanging}pt;text-indent:0}`,
         );
       }
-    }
     return rules.join("\n");
   };
 
-  return { base: cssText(baseCss), render, numberingCss };
+  return { base: cssText(baseCss), render: renderBody, numberingCss };
+}
+
+/** `n` in a list's number format: decimal, letters, or roman numerals. */
+export function numberAs(n: number, format: string): string {
+  const letters = (upper: boolean) => {
+    const letter = String.fromCharCode((upper ? 65 : 97) + ((n - 1) % 26));
+    return letter.repeat(Math.floor((n - 1) / 26) + 1);
+  };
+  const roman = () => {
+    const numerals: [number, string][] = [
+      [1000, "m"],
+      [900, "cm"],
+      [500, "d"],
+      [400, "cd"],
+      [100, "c"],
+      [90, "xc"],
+      [50, "l"],
+      [40, "xl"],
+      [10, "x"],
+      [9, "ix"],
+      [5, "v"],
+      [4, "iv"],
+      [1, "i"],
+    ];
+    let left = n;
+    let out = "";
+    for (const [value, numeral] of numerals)
+      while (left >= value) {
+        out += numeral;
+        left -= value;
+      }
+    return out;
+  };
+  switch (format) {
+    case "lowerLetter":
+      return letters(false);
+    case "upperLetter":
+      return letters(true);
+    case "lowerRoman":
+      return roman();
+    case "upperRoman":
+      return roman().toUpperCase();
+    case "decimalZero":
+      return String(n).padStart(2, "0");
+    default:
+      return String(n);
+  }
 }

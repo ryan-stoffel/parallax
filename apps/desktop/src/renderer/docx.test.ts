@@ -3,7 +3,7 @@
 import { strToU8, zipSync } from "fflate";
 import { expect, test } from "vite-plus/test";
 
-import { openDocx } from "./docx";
+import { numberAs, openDocx } from "./docx";
 
 const NS = `xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"`;
 const docxOf = (body: string, parts: Record<string, string> = {}) =>
@@ -56,6 +56,24 @@ test("tables draw with merged cells, list paragraphs get their markers, and page
   expect(cells.map((td) => td.textContent)).toEqual(["Wide", "A", "B"]);
   expect(cells[0]!.colSpan).toBe(2);
   expect(item!.className).toBe("n3-0");
-  expect(docx.css).toContain(`.${docx.scope} .n3-0::before{content:"•"`);
+  expect(item!.querySelector(".marker")!.textContent).toBe("•");
+  expect(docx.css).toContain(`.${docx.scope} .n3-0{padding-left:36pt;text-indent:-18pt}`);
   expect(broken!.querySelector("[data-page-break]")).not.toBeNull();
+});
+
+test("list markers count in document order across levels and formats", () => {
+  const p = (numId: string, ilvl: string, text: string) =>
+    `<w:p><w:pPr><w:numPr><w:ilvl w:val="${ilvl}"/><w:numId w:val="${numId}"/></w:numPr></w:pPr><w:r><w:t>${text}</w:t></w:r></w:p>`;
+  const docx = openDocx(
+    docxOf(
+      `${p("1", "0", "One")}${p("1", "1", "Sub")}${p("1", "1", "Sub")}${p("1", "0", "Two")}${p("1", "1", "Sub")}`,
+      {
+        "word/numbering.xml": `<w:numbering ${NS}><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="3"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl><w:lvl w:ilvl="1"><w:numFmt w:val="lowerRoman"/><w:lvlText w:val="%1.%2)"/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>`,
+      },
+    ),
+  );
+  const markers = [...docx.render().querySelectorAll(".marker")].map((m) => m.textContent);
+  expect(markers).toEqual(["3.", "3.i)", "3.ii)", "4.", "4.i)"]);
+  expect(numberAs(28, "upperLetter")).toBe("BB");
+  expect(numberAs(14, "upperRoman")).toBe("XIV");
 });

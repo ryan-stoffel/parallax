@@ -11,6 +11,7 @@ import {
   type DocRef,
   type Opened,
 } from "./documents";
+import { pagesOf } from "./docx";
 import { renderSlide } from "./pptx";
 import { cellAt, colName, type Xlsx } from "./xlsx";
 
@@ -130,21 +131,9 @@ export async function drawPage(opened: Opened, page: number): Promise<HTMLElemen
     `width:${width}px;height:${height}px;background:#fff;overflow:hidden;box-sizing:border-box;color:#000`,
   );
   switch (opened.kind) {
-    case "docx": {
-      const { docx } = opened;
-      const { top, right, bottom, left } = docx.page;
-      sheet.style.padding = `${top}px ${right}px ${bottom}px ${left}px`;
-      const style = document.createElement("style");
-      style.textContent = docx.css;
-      const clip = document.createElement("div");
-      clip.style.height = "100%";
-      clip.style.overflow = "hidden";
-      const flow = docx.render();
-      flow.style.transform = `translateY(-${page * (height - top - bottom)}px)`;
-      clip.append(flow);
-      sheet.append(style, clip);
-      return sheet;
-    }
+    case "docx":
+      // The same pages the side panel shows.
+      return pagesOf(opened.docx)[page] ?? sheet;
     case "xlsx": {
       sheet.style.padding = "24px";
       const flow = gridPreview(opened.xlsx);

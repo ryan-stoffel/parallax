@@ -101,7 +101,7 @@ const knowledgeSurface = surfaces.find((s) => s.name === "Knowledge")!;
  * linked pull requests (PLX-319): its URLs, the Pull requests view, and each one's view, shown in a
  * `#n` tab only while the thread links it. Each new `pullRequest` opens that URL's tab, or without
  * one the Pull requests view. Each new `documents.open` opens that presented file's tab (PLX-755),
- * shown only while its thread, `documents.runId`, is open, since saving it messages that thread.
+ * shown only while its thread, `documents.runId`, is open, as a pull request's is.
  */
 export function SidePanel({
   width = 416,
