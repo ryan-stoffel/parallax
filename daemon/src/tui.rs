@@ -41,10 +41,9 @@ use parallax_protocol::{
 };
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
 };
-use ratatui::crossterm::execute;
 use ratatui::layout::{Position, Rect};
 use ratatui::text::Span;
 use tokio::sync::mpsc;
@@ -68,6 +67,11 @@ const MENU_ROWS: usize = 10;
 
 /// Lines a wheel step scrolls.
 const WHEEL: u16 = 3;
+
+/// Clicks and the wheel, reported in SGR form (`?1000`, `?1006`), and not the motion every move
+/// would send with crossterm's own capture, which also turns on `?1003`.
+const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1006h";
+const MOUSE_OFF: &str = "\x1b[?1000l\x1b[?1006l";
 
 /// The terminal's progress bar, `OSC 9;4`: moving while a turn runs, as Ghostty, Windows
 /// Terminal, and others show it for Claude Code, and cleared after. Others ignore it.
@@ -163,6 +167,17 @@ pub async fn run(plxd: Plxd) -> Result<(), String> {
     // Before the terminal changes, so an unreachable plxd is a plain error.
     app.subscribe_shell().await?;
     app.draft = app.cwd_draft();
+    // Started inside a thread's own worktree, it opens that thread; plxd won't add its folder.
+    if let Draft::Here(top) = &app.draft {
+        let inside = app.runs.values().find(|run| {
+            let worktree = run.worktree_path.as_deref().map(Path::new);
+            worktree.and_then(|path| path.canonicalize().ok()).as_ref() == Some(top)
+        });
+        if let Some(run) = inside.map(|run| run.id) {
+            (app.draft, app.here) = (Draft::Chats, None);
+            app.open(run).await?;
+        }
+    }
     app.load_providers().await;
     let (sender, mut keys) = mpsc::unbounded_channel();
     // crossterm reads keys blocking; the thread ends with the process.
@@ -174,20 +189,35 @@ pub async fn run(plxd: Plxd) -> Result<(), String> {
         }
     });
     let mut terminal = ratatui::init();
+    // ratatui's hook restores the screen on a panic; the mouse and the progress bar go first.
+    let restore = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        leave();
+        restore(info);
+    }));
     // Clicks open tool calls and threads, and the wheel scrolls. Shift+drag still selects text.
-    let _ = execute!(std::io::stdout(), EnableMouseCapture);
+    write(MOUSE_ON);
     let result = app.run(&mut terminal, &mut keys, &mut incoming).await;
-    let _ = execute!(std::io::stdout(), DisableMouseCapture);
-    progress(false);
+    leave();
     ratatui::restore();
     result
 }
 
+/// Hands the terminal back: no mouse reports, and no progress bar.
+fn leave() {
+    write(MOUSE_OFF);
+    progress(false);
+}
+
+fn write(sequence: &str) {
+    let mut stdout = std::io::stdout();
+    let _ = stdout.write_all(sequence.as_bytes());
+    let _ = stdout.flush();
+}
+
 /// Starts or clears the terminal's progress bar.
 fn progress(on: bool) {
-    let mut stdout = std::io::stdout();
-    let _ = stdout.write_all(if on { PROGRESS_ON } else { PROGRESS_OFF }.as_bytes());
-    let _ = stdout.flush();
+    write(if on { PROGRESS_ON } else { PROGRESS_OFF });
 }
 
 /// Where a new thread starts.
@@ -265,6 +295,8 @@ struct Hits {
     /// The transcript's area and the content row at its top.
     transcript: Rect,
     top: u16,
+    /// The most the transcript scrolls up: its rows past one screen.
+    max_scroll: u16,
     /// Each run of tool calls: its first content row, the row after its last, and its key.
     tools: Vec<(u16, u16, usize)>,
     /// The sidebar's area, and the item each of its rows shows.
@@ -291,6 +323,9 @@ struct App {
     open: Option<Open>,
     /// With no thread open, where the next message starts one.
     draft: Draft,
+    /// The git checkout `plxd tui` is in: where it ran, or the repo of the thread it last opened.
+    /// New threads in its repo work in it, in place.
+    here: Option<PathBuf>,
     /// Why the folder `plxd tui` ran in isn't [`Draft::Here`], shown until the first message.
     not_here: Option<String>,
     /// The list showing, if one is.
@@ -345,6 +380,7 @@ impl App {
             runs: HashMap::new(),
             open: None,
             draft: Draft::Chats,
+            here: None,
             not_here: None,
             menu: None,
             expanded: HashSet::new(),
@@ -489,6 +525,7 @@ impl App {
             return Draft::Chats;
         };
         if let Some(top) = git_top(&cwd) {
+            self.here = Some(top.clone());
             return Draft::Here(top);
         }
         self.not_here = Some(format!(
@@ -687,7 +724,7 @@ impl App {
             KeyCode::Enter => self.submit().await,
             KeyCode::Up if !self.input.contains('\n') => self.recall(true),
             KeyCode::Down if !self.input.contains('\n') => self.recall(false),
-            KeyCode::PageUp => self.scroll = self.scroll.saturating_add(10),
+            KeyCode::PageUp => self.scroll_up(10),
             KeyCode::PageDown => self.scroll = self.scroll.saturating_sub(10),
             KeyCode::Backspace => {
                 self.input.pop();
@@ -706,7 +743,12 @@ impl App {
     async fn mouse(&mut self, mouse: MouseEvent) {
         let at = Position::new(mouse.column, mouse.row);
         match mouse.kind {
-            MouseEventKind::ScrollUp => self.scroll = self.scroll.saturating_add(WHEEL),
+            // Over the sidebar, the wheel moves through it.
+            MouseEventKind::ScrollUp if self.sidebar_open() => self.menu_key(KeyCode::Up).await,
+            MouseEventKind::ScrollDown if self.sidebar_open() => {
+                self.menu_key(KeyCode::Down).await;
+            }
+            MouseEventKind::ScrollUp => self.scroll_up(WHEEL),
             MouseEventKind::ScrollDown => self.scroll = self.scroll.saturating_sub(WHEEL),
             MouseEventKind::Down(MouseButton::Left) => {
                 let sidebar = self.hits.borrow().sidebar.clone();
@@ -743,6 +785,12 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Scrolls the transcript up by `lines`, no further than its top.
+    fn scroll_up(&mut self, lines: u16) {
+        let max = self.hits.borrow().max_scroll;
+        self.scroll = self.scroll.saturating_add(lines).min(max);
     }
 
     /// Steps through the messages sent from here: older with `back`, newer otherwise. Past the
@@ -838,8 +886,7 @@ impl App {
                     })
                     .flatten();
                 self.menu = None;
-                self.new_thread(repo.map_or(Draft::Chats, Draft::Repo))
-                    .await;
+                self.new_thread(self.draft_for(repo)).await;
             }
             _ => {}
         }
@@ -857,8 +904,7 @@ impl App {
                 }
             }
             Pick::Group(repo) => {
-                self.new_thread(repo.map_or(Draft::Chats, Draft::Repo))
-                    .await;
+                self.new_thread(self.draft_for(repo)).await;
             }
             Pick::Provider(id) => {
                 let before = self.provider().map(str::to_owned);
@@ -872,12 +918,28 @@ impl App {
         }
     }
 
-    /// Moves `plxd tui` into the open thread's repo, when it's a folder on this computer, so a
-    /// later `/new` and the header follow it. The shell that started `plxd tui` stays where it
-    /// was: no program can move its parent.
-    fn cd(&self) {
-        if let Some(folder) = self.folder() {
-            let _ = std::env::set_current_dir(folder);
+    /// Moves `plxd tui` into the open thread's repo, when it's a folder on this computer, as if
+    /// it ran there: new threads in that repo then work in it, in place. The shell that started
+    /// `plxd tui` stays where it was: no program can move its parent.
+    fn cd(&mut self) {
+        if let Some(folder) = self.folder()
+            && std::env::set_current_dir(&folder).is_ok()
+        {
+            self.here = Some(folder);
+        }
+    }
+
+    /// Where a new thread in `repo` starts: in place in the checkout `plxd tui` is in, as Claude
+    /// Code works; in a worktree of its own in another repo or a Space, as the app starts one;
+    /// and in Chats for none.
+    fn draft_for(&self, repo: Option<RepoId>) -> Draft {
+        let Some(repo) = repo.and_then(|id| self.repo(id)) else {
+            return Draft::Chats;
+        };
+        match &self.here {
+            _ if repo.scratch => Draft::Chats,
+            Some(here) if Path::new(&repo.path) == here => Draft::Here(here.clone()),
+            _ => Draft::Repo(repo.id),
         }
     }
 
@@ -1019,17 +1081,14 @@ impl App {
                         .map(|repo| repo.id)
                 });
                 let draft = match named {
-                    Some(Some(repo)) => Draft::Repo(repo),
+                    Some(Some(repo)) => self.draft_for(Some(repo)),
                     Some(None) => {
                         self.error = Some(format!("no repo or Space is named {argument}"));
                         return;
                     }
                     // Where the open thread works, or where the next one was going to.
                     None => match self.open_thread() {
-                        Some(thread) if self.repo(thread.repo).is_some_and(|r| !r.scratch) => {
-                            Draft::Repo(thread.repo)
-                        }
-                        Some(_) => Draft::Chats,
+                        Some(thread) => self.draft_for(Some(thread.repo)),
                         None => self.draft.clone(),
                     },
                 };
@@ -1654,7 +1713,7 @@ fn upsert<T>(items: &mut Vec<T>, new: T, same: impl Fn(&T, &T) -> bool) {
 
 #[cfg(test)]
 mod tests {
-    use parallax_protocol::{AgentEffort, AgentPermission, ClientInfo, ProviderInfo};
+    use parallax_protocol::{AgentEffort, AgentPermission, ClientInfo, ProviderInfo, Repo};
     use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
     use super::{App, Draft, age, summary};
@@ -1741,6 +1800,34 @@ mod tests {
         }
         press(&mut app, &[KeyCode::Enter]).await;
         assert_eq!(app.menu.as_ref().map(|menu| menu.title), Some("Mode"));
+    }
+
+    #[test]
+    fn new_threads_work_in_place_only_in_the_checkout_here() {
+        let repo = |id: &str, path: &str, scratch: bool| -> Repo {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "name": "r", "path": path, "scratch": scratch,
+                "createdAt": "2026-10-12T00:00:00Z",
+            }))
+            .unwrap()
+        };
+        let (here, other, chats) = (
+            "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+            "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+            "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+        );
+        let mut app = app();
+        app.repos = vec![
+            repo(here, "/dev/app", false),
+            repo(other, "/dev/lib", false),
+            repo(chats, "/data/scratch", true),
+        ];
+        app.here = Some("/dev/app".into());
+        let id = |id: &str| Some(id.parse().unwrap());
+        assert_eq!(app.draft_for(id(here)), Draft::Here("/dev/app".into()));
+        assert_eq!(app.draft_for(id(other)), Draft::Repo(id(other).unwrap()));
+        assert_eq!(app.draft_for(id(chats)), Draft::Chats);
+        assert_eq!(app.draft_for(None), Draft::Chats);
     }
 
     #[test]

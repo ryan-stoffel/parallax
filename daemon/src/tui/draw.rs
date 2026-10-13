@@ -192,7 +192,8 @@ impl App {
                     .take_while(|entry| matches!(entry, Entry::Tool { .. }))
                     .count();
                 let (key, mut lines, next) = if tools > 0 {
-                    let opened = self.expand_all || self.expanded.contains(&i);
+                    // A click flips a run from what Ctrl+O set for all.
+                    let opened = self.expand_all != self.expanded.contains(&i);
                     (Some(i), tool_run(&entries[i..i + tools], opened), i + tools)
                 } else {
                     (None, entry_lines(&entries[i]), i + 1)
@@ -225,6 +226,7 @@ impl App {
         *self.hits.borrow_mut() = Hits {
             transcript: area,
             top,
+            max_scroll: row.saturating_sub(area.height),
             tools,
             sidebar: None,
         };
@@ -337,7 +339,7 @@ impl App {
         frame.render_widget(Paragraph::new(right).dark_gray().right_aligned(), area);
     }
 
-    fn sidebar_open(&self) -> bool {
+    pub(super) fn sidebar_open(&self) -> bool {
         self.menu.as_ref().is_some_and(Menu::sidebar)
     }
 
