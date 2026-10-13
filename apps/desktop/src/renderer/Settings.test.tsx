@@ -3,7 +3,7 @@ import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 
-import type { ConnectionState, Profile, SshHost, ParallaxBridge } from "../preload/bridge";
+import type { ConnectionState, SshHost, ParallaxBridge } from "../preload/bridge";
 import type { ProviderInfo, ProviderInstance, ProviderKind } from "../protocol/generated/protocol";
 import type { SettingsSection } from "./App";
 import { models } from "./models";
@@ -765,29 +765,6 @@ test("the last provider on can't be turned off", async () => {
   expect(toggle("Claude Code").disabled).toBe(true);
   expect(toggle("Codex").disabled).toBe(false);
   localStorage.removeItem("parallax.disabledProviders");
-});
-
-test("Account's Edit opens the name on Clerk, and shows the name main publishes", async () => {
-  let publish = (_profile: Profile | null) => {};
-  const ryan = { name: "Ryan Stoffel", firstName: "Ryan", lastName: "Stoffel", email: "r@x.dev" };
-  const editProfile = vi.fn(async () => {});
-  Object.assign(window.parallax, {
-    onProfile: (listener: (profile: Profile | null) => void) => {
-      publish = listener;
-      listener(ryan);
-      return () => {};
-    },
-    editProfile,
-  });
-  await renderSettings("account");
-  expect(section("Account settings").textContent).toContain("Ryan Stoffel");
-  await click(button(section("Account settings"), "Edit"));
-  expect(editProfile).toHaveBeenCalledOnce();
-
-  // Back from the browser, main publishes the changed name.
-  act(() => publish({ ...ryan, name: "Ry Stoffel", firstName: "Ry" }));
-  expect(section("Account settings").textContent).toContain("Ry Stoffel");
-  expect(section("Profile").querySelector("h2")!.textContent).toBe("Ry Stoffel");
 });
 
 describe("on a plxd with providers", () => {

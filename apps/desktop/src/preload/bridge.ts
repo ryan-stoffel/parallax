@@ -119,8 +119,6 @@ export interface ParallaxBridge {
    * Resolves to its path, or an error for people.
    */
   cloneRepo(slug: string, dest: string): Promise<{ path: string } | { error: string }>;
-  /** Copies a picture of this window's `rect`, in CSS pixels, to the clipboard. Rejects for an empty or invalid one. */
-  copyPicture(rect: { x: number; y: number; width: number; height: number }): Promise<void>;
   /**
    * Whether `update` can run: in a packaged app, which installs releases (PLX-68), or under
    * `pnpm dev`, from a checkout (PLX-204).

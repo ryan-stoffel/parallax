@@ -839,7 +839,7 @@ function relayEnv(): Record<string, string> | undefined {
  */
 async function relayHosts(remove?: string): Promise<RelayHost[] | string> {
   const token = await account?.accessToken();
-  if (!token) return "Sign in to Parallax in Settings > Account first.";
+  if (!token) return "Sign in to Parallax from Profile in the sidebar first.";
   const local = connections.get("local");
   const answer = remove
     ? await local?.request("relay/remove", { token, hostId: remove })
@@ -854,7 +854,7 @@ async function relayHosts(remove?: string): Promise<RelayHost[] | string> {
  */
 async function registerRelay(): Promise<string | undefined> {
   const token = await account?.accessToken();
-  if (!token) return "Sign in to Parallax in Settings > Account first.";
+  if (!token) return "Sign in to Parallax from Profile in the sidebar first.";
   const answer = await connections.get("local")?.request("relay/register", { token });
   return !answer
     ? "Parallax isn't connected to this computer's plxd."

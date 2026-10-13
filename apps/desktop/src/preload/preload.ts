@@ -69,7 +69,6 @@ const bridge: ParallaxBridge = {
   listFolders: (path) => ipcRenderer.invoke("parallax:listFolders", path),
   createRepo: (name) => ipcRenderer.invoke("parallax:createRepo", name),
   cloneRepo: (slug, dest) => ipcRenderer.invoke("parallax:cloneRepo", slug, dest),
-  copyPicture: (rect) => ipcRenderer.invoke("parallax:copyPicture", rect) as Promise<void>,
   updatable: process.argv.includes("--parallax-updatable"),
   locale: validLocale(
     process.argv

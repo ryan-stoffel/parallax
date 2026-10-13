@@ -167,7 +167,7 @@ test("Reach from anywhere registers this computer with the relay before turning 
   expect(toggle.getAttribute("aria-checked")).toBe("false");
 
   // Signed out: nothing changes, and the switch says why.
-  registerRelay.mockResolvedValueOnce("Sign in to Parallax in Settings > Account first.");
+  registerRelay.mockResolvedValueOnce("Sign in to Parallax from Profile in the sidebar first.");
   await click(toggle);
   expect(request).not.toHaveBeenCalledWith("local", "host/settings/set", { relay: true });
   expect(document.querySelector('[role="alert"]')?.textContent).toContain("Sign in");

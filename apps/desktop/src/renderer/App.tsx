@@ -102,7 +102,6 @@ export interface Split {
 }
 
 export type SettingsSection =
-  | "account"
   | "usage"
   | "general"
   | "appearance"

@@ -146,12 +146,9 @@ test("the footer's Usage opens Settings > Usage, and Update shows when it's read
   act(() => button("Usage")!.click());
   const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
   expect(crumbs.map((li) => li.textContent)).toEqual(["Settings", "Usage"]);
-  // Settings' nav lists it after Account, and the side panel is a chat's.
+  // Settings' nav lists it first, before General, and the side panel is a chat's.
   const nav = [...document.querySelectorAll("#sidebar button")].map((b) => b.textContent);
-  expect(nav.slice(nav.indexOf("Account"), nav.indexOf("Account") + 2)).toEqual([
-    "Account",
-    "Usage",
-  ]);
+  expect(nav.slice(nav.indexOf("Usage"), nav.indexOf("Usage") + 2)).toEqual(["Usage", "General"]);
   expect(document.querySelector('main [aria-controls="side-panel"]')).toBeNull();
   // The range stays in the header on Limits, but can't be changed there.
   const range = document.querySelector<HTMLFieldSetElement>('main [aria-label="Usage range"]')!;

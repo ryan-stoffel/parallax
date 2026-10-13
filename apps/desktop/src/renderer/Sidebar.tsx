@@ -16,7 +16,6 @@ import {
   CircleCheck,
   CirclePause,
   CircleSlash,
-  CircleUser,
   Ellipsis,
   FileDiff,
   GitBranch,
@@ -86,7 +85,7 @@ import { resumeTime } from "./ResumeCard";
 import { ConnectionStatus } from "./ConnectionStatus";
 import { DeviceIcon } from "./DeviceIcon";
 import { hostIcon } from "./RunTargetMenu";
-import { Avatar, useProfile } from "./profile";
+import { ProfileButton } from "./ProfileMenu";
 import { type Host } from "./hosts";
 import { IconPicker } from "./IconPicker";
 import { imageUrl } from "./images";
@@ -1431,8 +1430,8 @@ function PlaceMenu({
 
 /**
  * The footer's buttons: the rail of places' toggle first, so it keeps its spot whether the rail
- * shows or not (PLX-739), then Profile, which opens Settings > Account and shows the account's
- * picture or initials (0067), Settings, Pull requests, Usage, and Update when `updatable`
+ * shows or not (PLX-739), then Profile, which shows the account's picture or initials and opens
+ * its menu (ProfileMenu.tsx), Settings, Pull requests, Usage, and Update when `updatable`
  * (Update.tsx).
  */
 function Footer({
@@ -1444,7 +1443,6 @@ function Footer({
   railShown: boolean;
   onToggleRail: () => void;
 }) {
-  const profile = useProfile();
   return (
     <div className="flex items-center gap-1">
       <IconButton
@@ -1457,12 +1455,7 @@ function Footer({
         />
       </IconButton>
       <span aria-hidden className="mx-0.5 h-4 w-px bg-border" />
-      <IconButton
-        label={profile ? profile.name || profile.email : "Profile"}
-        onClick={() => onOpenSettings("account")}
-      >
-        {profile ? <Avatar profile={profile} size={22} /> : <CircleUser />}
-      </IconButton>
+      <ProfileButton />
       <IconButton label="Settings" command="settings" onClick={() => onOpenSettings("general")}>
         <Settings />
       </IconButton>
@@ -2389,7 +2382,6 @@ export function age(time: string, now = Date.now()): string {
 
 /** Each Settings section's name and icon, in the nav's order. */
 const sections: { id: SettingsSection; name: string; Icon: LucideIcon }[] = [
-  { id: "account", name: "Account", Icon: CircleUser },
   { id: "usage", name: "Usage", Icon: ChartNoAxesColumn },
   { id: "general", name: "General", Icon: Settings },
   { id: "appearance", name: "Appearance", Icon: Palette },

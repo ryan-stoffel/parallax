@@ -48,7 +48,6 @@ import {
   withVersion,
 } from "./providers";
 import { age, backendLogos } from "./Sidebar";
-import { AccountSettings } from "./settings/AccountSettings";
 import { AppearanceSettings } from "./settings/AppearanceSettings";
 import { ConnectionSettings } from "./settings/ConnectionSettings";
 import { GeneralSettings } from "./settings/GeneralSettings";
@@ -85,7 +84,7 @@ const SignInTerminal = lazy(() =>
 
 interface SettingsProps {
   section: SettingsSection;
-  /** Every host's threads and Projects, as App loads them for the sidebar: Account's activity. */
+  /** Every host's threads and Projects, as App loads them for the sidebar: Scripts' repositories. */
   listed: { host: Host; view: ThreadsView }[];
   theme: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
@@ -107,9 +106,7 @@ export function Settings({
       <div
         className={`mx-auto px-8 pt-6 pb-16 ${section === "providers" || section === "usage" ? "max-w-5xl" : "max-w-3xl"}`}
       >
-        {section === "account" ? (
-          <AccountSettings listed={listed} />
-        ) : section === "usage" ? (
+        {section === "usage" ? (
           <UsagePage hosts={hosts} />
         ) : section === "general" ? (
           <GeneralSettings />
