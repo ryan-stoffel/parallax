@@ -17,7 +17,6 @@ import type {
   RunId,
   SecretStatus,
 } from "../protocol/generated/protocol";
-import type { DocKind, DocRef } from "./documents";
 
 /** One row of the transcript. `key` is stable across re-renders; `at` is when it began. */
 export type Item = ItemBody & { at?: string };
@@ -121,6 +120,16 @@ export interface HtmlRenderRef {
   attachmentId: string;
   title: string;
   height: number;
+}
+
+export type DocKind = "docx" | "xlsx" | "pptx" | "pdf";
+
+/** A file present_files showed (PLX-755): its run, its path in the run's folder, its name, and type. */
+export interface DocRef {
+  runId: string;
+  path: string;
+  name: string;
+  kind: DocKind;
 }
 
 /** The files a present_files output names, or undefined for anything else. */

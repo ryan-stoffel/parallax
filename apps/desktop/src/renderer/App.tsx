@@ -23,7 +23,7 @@ import { useInbox } from "./Inbox";
 import { KnowledgePanel } from "./Knowledge";
 import { NewThread } from "./NewThread";
 import { DocumentView } from "./DocumentView";
-import { savedMessage, type DocRef } from "./documents";
+import type { DocRef } from "./documents";
 import { OpenDocumentContext } from "./FileCards";
 import { panelWidths, SIDEBAR_MIN } from "./PanelResize";
 import { NewThreadPicker } from "./NewThreadPicker";
@@ -1112,16 +1112,7 @@ export function App() {
           runId: filesRunId,
           open: showDoc,
           view: (doc) => (
-            <DocumentView
-              key={`${host.id}/${doc.runId}/${doc.path}`}
-              hostId={host.id}
-              doc={doc}
-              onSaved={(saved, changes) => {
-                // The chat is under an expanded panel.
-                setPanelExpanded(false);
-                setCompose({ text: savedMessage(saved, changes), send: true });
-              }}
-            />
+            <DocumentView key={`${host.id}/${doc.runId}/${doc.path}`} hostId={host.id} doc={doc} />
           ),
         }}
         project={

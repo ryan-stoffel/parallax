@@ -5,6 +5,7 @@ import { openDocx, type Docx } from "./docx";
 import { describeError } from "./errors";
 import { fromBase64, toBase64 } from "./ooxml";
 import { openPptx, type Pptx } from "./pptx";
+import { uuidv7 } from "./uuidv7";
 import { openXlsx, type Xlsx } from "./xlsx";
 
 /**
@@ -13,15 +14,9 @@ import { openXlsx, type Xlsx } from "./xlsx";
  * until a save reloads them.
  */
 
-export type DocKind = "docx" | "xlsx" | "pptx" | "pdf";
+import type { DocKind, DocRef } from "./transcript";
 
-/** A presented file: its run, its path in the run's folder, its name, and its type. */
-export interface DocRef {
-  runId: string;
-  path: string;
-  name: string;
-  kind: DocKind;
-}
+export type { DocKind, DocRef };
 
 export type Opened =
   | { kind: "docx"; docx: Docx }
@@ -86,6 +81,26 @@ async function load(hostId: string, doc: DocRef): Promise<Loaded> {
   return { bytes, opened };
 }
 
+const reloadEverywhere = () => {
+  version++;
+  for (const listener of listeners) listener();
+};
+
+// The present_files results already seen, by transcript item.
+const presented = new Set<string>();
+
+/**
+ * Reads `docs` from disk again the first time a present_files result `item` shows, since an agent
+ * that rebuilds a file presents it again under the same path.
+ */
+export function readPresented(hostId: string, item: string, docs: DocRef[]) {
+  if (presented.has(item)) return;
+  presented.add(item);
+  let stale = false;
+  for (const doc of docs) stale = cache.delete(keyOf(hostId, doc)) || stale;
+  if (stale) reloadEverywhere();
+}
+
 const subscribe = (listener: () => void) => {
   listeners.add(listener);
   return () => listeners.delete(listener);
@@ -135,9 +150,25 @@ export async function writeDocument(
   });
   if ("error" in answer) return describeError(answer.error).replace(/^Invalid params: /, "");
   cache.delete(keyOf(hostId, doc));
-  version++;
-  for (const listener of listeners) listener();
+  reloadEverywhere();
   return undefined;
+}
+
+/**
+ * Tells `doc`'s own thread that the user saved an edit, whichever thread is open: plxd queues
+ * it behind a turn under way. Answers why it failed, or undefined.
+ */
+export async function sendSaved(
+  hostId: string,
+  doc: DocRef,
+  changes: string[],
+): Promise<string | undefined> {
+  const answer = await window.parallax.request(hostId, "agent/send", {
+    runId: doc.runId,
+    turnId: uuidv7(),
+    text: savedMessage(doc, changes),
+  });
+  return "error" in answer ? describeError(answer.error) : undefined;
 }
 
 /** Saves `bytes` as `name` through the browser's download, which asks where. */
@@ -165,7 +196,7 @@ export async function drawPdfPage(pdf: PDFDocumentProxy, n: number, width: numbe
 }
 
 /** The message that tells the thread the user saved an edit, with what changed. */
-export function savedMessage(doc: DocRef, changes: string[]): string {
+function savedMessage(doc: DocRef, changes: string[]): string {
   const what = changes.length
     ? changes.map((line) => `- ${line}`).join("\n")
     : "- Formatting only; no text changed.";

@@ -6,6 +6,7 @@ import {
   download,
   drawPdfPage,
   kinds,
+  readPresented,
   titleOf,
   useDocument,
   type DocRef,
@@ -20,10 +21,20 @@ export const OpenDocumentContext = createContext<((doc: DocRef) => void) | undef
 /**
  * The files an agent presented with `present_files` (PLX-755), as cards: a thumbnail of each
  * file's real first page, with its second fanning out behind it on hover, its title and type,
- * and Download. Clicking a card opens the file in the side panel.
+ * and Download. Clicking a card opens the file in the side panel. `item` is the transcript row,
+ * whose first showing reads its files from disk again.
  */
-export function FileCards({ hostId, files }: { hostId: string; files: DocRef[] }) {
+export function FileCards({
+  hostId,
+  item,
+  files,
+}: {
+  hostId: string;
+  item: string;
+  files: DocRef[];
+}) {
   const open = useContext(OpenDocumentContext);
+  useEffect(() => readPresented(hostId, item, files), [hostId, item, files]);
   return (
     <div className="flex max-w-xl flex-col gap-2">
       {files.map((doc) => (

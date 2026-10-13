@@ -15,7 +15,7 @@ use plxd::backend::fake::Step;
 use plxd::mcp::question::COORDINATOR_TOOLS;
 use plxd::mcp::thread::{CONTEXT_TOOLS, TOOLS};
 use plxd::mcp::{MAX_CONTEXT_BYTES, MAX_MESSAGE_BYTES, MAX_PATH_BYTES, MAX_TEXT_BYTES};
-use plxd::mcp::{delegation, device, html, land, preview, triggers};
+use plxd::mcp::{delegation, device, files, html, land, preview, triggers};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -88,6 +88,12 @@ impl Mcp {
         assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
         assert_eq!(initialized["result"]["serverInfo"]["name"], "plxd");
         assert!(initialized["result"]["capabilities"]["tools"].is_object());
+        // Every thread's agent is told to show the documents it makes (PLX-755).
+        assert!(
+            initialized["result"]["instructions"]
+                .as_str()
+                .is_some_and(|text| text.contains("present_files"))
+        );
         mcp.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
             .await;
         mcp
@@ -216,6 +222,7 @@ async fn a_coordinator_launches_steers_and_records_through_the_thread_tools() {
             land::TOOLS,
             &["memory_read", "memory_propose", "memory_write"],
             html::TOOLS,
+            files::TOOLS,
             preview::TOOLS,
             device::TOOLS,
             triggers::TOOLS,
@@ -378,6 +385,7 @@ async fn the_context_tools_reach_only_the_callers_project() {
         listed["result"]["tools"].as_array().unwrap().len(),
         TOOLS.len()
             + html::TOOLS.len()
+            + files::TOOLS.len()
             + preview::TOOLS.len()
             + device::TOOLS.len()
             + triggers::TOOLS.len()

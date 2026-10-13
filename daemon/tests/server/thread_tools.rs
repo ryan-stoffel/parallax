@@ -20,7 +20,7 @@ use parallax_protocol::{
 use plxd::backend::fake::Step;
 use plxd::mcp::MAX_CALLS;
 use plxd::mcp::thread::TOOLS;
-use plxd::mcp::{delegation, device, html, preview, triggers};
+use plxd::mcp::{delegation, device, files, html, preview, triggers};
 use plxd::paths::DataDir;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -167,6 +167,7 @@ async fn a_thread_launches_waits_on_reads_searches_and_messages_a_child() {
             TOOLS,
             memory,
             html::TOOLS,
+            files::TOOLS,
             preview::TOOLS,
             device::TOOLS,
             triggers::TOOLS,
@@ -2141,4 +2142,49 @@ async fn a_fork_never_copies_a_secret_request_card() {
     let fork = id(&mcp.ok("thread_fork", json!({"runId": me})).await);
     assert!(secret_requests(&mut client, fork).await.is_empty());
     host.server.stop().await;
+}
+
+/// `present_files` (PLX-755) resolves paths against the thread's folder as plxd knows it, not its
+/// own working folder, which Codex sets to plxd's data folder, and copies in a file from elsewhere.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn present_files_shows_documents_from_the_threads_folder_copying_others_in() {
+    let host = Host::start(temp_dir(), fake(steered()));
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let folder = worktree(&mut client, me).await;
+    std::fs::create_dir(folder.join("out")).unwrap();
+    std::fs::write(folder.join("out/Summary.docx"), b"PK").unwrap();
+    std::fs::write(folder.join("notes.txt"), b"notes").unwrap();
+    let mut mcp = tools(&host, me).await;
+
+    let absolute = folder.join("out/Summary.docx");
+    let shown = mcp
+        .ok(
+            "present_files",
+            json!({"paths": [absolute.to_str().unwrap(), "out/Summary.docx"]}),
+        )
+        .await;
+    let file = json!({"path": "out/Summary.docx", "name": "Summary.docx", "kind": "docx"});
+    assert_eq!(shown["presentedFiles"], json!([file, file]));
+    // A file built elsewhere, as agents do in /tmp, is copied in and shown from there.
+    let scratch = temp_dir();
+    let outside = scratch.path().join("Deck.pptx");
+    std::fs::write(&outside, b"PK").unwrap();
+    let shown = mcp
+        .ok(
+            "present_files",
+            json!({"paths": [outside.to_str().unwrap()]}),
+        )
+        .await;
+    assert_eq!(
+        shown["presentedFiles"],
+        json!([{"path": "Deck.pptx", "name": "Deck.pptx", "kind": "pptx"}])
+    );
+    assert_eq!(std::fs::read(folder.join("Deck.pptx")).unwrap(), b"PK");
+    for refused in ["notes.txt", "/etc/hosts", "../Summary.docx", "missing.docx"] {
+        let (text, is_error) = mcp.tool("present_files", json!({"paths": [refused]})).await;
+        assert!(is_error, "{refused}: {text}");
+    }
 }

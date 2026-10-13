@@ -3,7 +3,15 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { expect, test } from "vite-plus/test";
 
-import { cellAt, editSummary, formatNumber, openXlsx, saveXlsx, setCell } from "./xlsx";
+import {
+  cellAt,
+  editSummary,
+  formatNumber,
+  openXlsx,
+  saveXlsx,
+  setCell,
+  shiftFormula,
+} from "./xlsx";
 
 const NS = `xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`;
 const file = zipSync({
@@ -73,6 +81,41 @@ test("an edit put back drops out of the summary", () => {
   setCell(x, x.sheets[0]!, "A1", "Thing");
   setCell(x, x.sheets[0]!, "A1", "Item");
   expect(editSummary(x)).toEqual([]);
+});
+
+test("a filled-down formula reads moved, and editing its first cell keeps the rest working", () => {
+  const sheet = (data: string) =>
+    zipSync({
+      "xl/workbook.xml": strToU8(
+        `<workbook ${NS}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+      ),
+      "xl/_rels/workbook.xml.rels": strToU8(
+        `<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`,
+      ),
+      "xl/worksheets/sheet1.xml": strToU8(
+        `<worksheet ${NS}><sheetData>${data}</sheetData></worksheet>`,
+      ),
+    });
+  const x = openXlsx(
+    sheet(
+      `<row r="2"><c r="C2"><f t="shared" ref="C2:C4" si="0">A2*$B$1+SUM(A2:B2)</f><v>1</v></c></row>` +
+        `<row r="3"><c r="C3"><f t="shared" si="0"/><v>2</v></c></row>` +
+        `<row r="4"><c r="C4"><f t="shared" si="0"/><v>3</v></c></row>`,
+    ),
+  );
+  const s = x.sheets[0]!;
+  expect(cellAt(x, s, "C4").input).toBe("=A4*$B$1+SUM(A4:B4)");
+  setCell(x, s, "C2", "7");
+  const xml = strFromU8(unzipSync(saveXlsx(x))["xl/worksheets/sheet1.xml"]!);
+  expect(xml).toContain(`<c r="C3"><f>A3*$B$1+SUM(A3:B3)</f><v>2</v></c>`);
+  expect(xml).toContain(`<c r="C4"><f>A4*$B$1+SUM(A4:B4)</f><v>3</v></c>`);
+  expect(xml).not.toContain(`si="0"`);
+});
+
+test("formulas shift their relative references only", () => {
+  expect(shiftFormula(`LOG10(A1)+'Q1 2026'!B2+Q1!C3+"A1"&$D$4+E$5`, 2, 1)).toBe(
+    `LOG10(B3)+'Q1 2026'!C4+Q1!D5+"A1"&$D$4+F$5`,
+  );
 });
 
 test("numbers show in their format", () => {

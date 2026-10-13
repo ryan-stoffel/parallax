@@ -7,6 +7,7 @@ import { EditorView } from "@tiptap/pm/view";
 import { Bold, Download, Italic, Underline } from "lucide-react";
 import {
   useEffect,
+  useMemo,
   useReducer,
   useRef,
   useState,
@@ -15,37 +16,50 @@ import {
   type RefObject,
 } from "react";
 
-import { changeSummary, endsStyle, paragraphTexts, saveDocx, type Docx } from "./docx";
+import { changeSummary, endsStyle, openDocx, paragraphTexts, saveDocx, type Docx } from "./docx";
 import {
   download,
   drawPdfPage,
   kinds,
+  sendSaved,
   titleOf,
   useDocument,
   writeDocument,
   type DocRef,
 } from "./documents";
 import { drawPage, pageSize } from "./FileCards";
-import { cellAt, colName, editSummary, saveXlsx, setCell, splitRef, type Xlsx } from "./xlsx";
+import {
+  cellAt,
+  colName,
+  editSummary,
+  openXlsx,
+  saveXlsx,
+  setCell,
+  splitRef,
+  type Xlsx,
+} from "./xlsx";
 
 /** What an editor hands Save: the file's new bytes, and what changed, for the agent. */
 type Saver = () => { bytes: Uint8Array; changes: string[] };
 
 /**
  * A presented file in the side panel (PLX-755): a .docx or .xlsx to edit and save, or a .pptx or
- * .pdf to read, with Download. Save writes the file in the thread's folder, then `onSaved` tells
- * the thread what changed.
+ * .pdf to read, with Download. Save writes the file in the thread's folder, then tells the file's
+ * thread what changed.
  */
-export function DocumentView({
-  hostId,
-  doc,
-  onSaved,
-}: {
-  hostId: string;
-  doc: DocRef;
-  onSaved: (doc: DocRef, changes: string[]) => void;
-}) {
+export function DocumentView({ hostId, doc }: { hostId: string; doc: DocRef }) {
   const { loaded, error } = useDocument(hostId, doc);
+  // The editor's own copy, opened from the bytes, so edits a closed tab drops never reach the
+  // cards' copy or the next tab.
+  const own = useMemo(
+    () =>
+      loaded?.opened.kind === "docx"
+        ? { docx: openDocx(loaded.bytes) }
+        : loaded?.opened.kind === "xlsx"
+          ? { xlsx: openXlsx(loaded.bytes) }
+          : {},
+    [loaded],
+  );
   const saver = useRef<Saver>(undefined);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -65,8 +79,9 @@ export function DocumentView({
     try {
       const { bytes, changes } = saver.current();
       const failed = await writeDocument(hostId, doc, bytes);
-      if (failed) setSaveError(failed);
-      else onSaved(doc, changes);
+      if (failed) return setSaveError(failed);
+      const unsent = await sendSaved(hostId, doc, changes);
+      if (unsent) setSaveError(`saved, but the agent wasn't told: ${unsent}`);
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -82,36 +97,35 @@ export function DocumentView({
   else {
     const { opened } = loaded;
     const editor = { saver, onDirty: setDirty, onSave: () => void saveRef.current() };
-    body =
-      opened.kind === "docx" ? (
-        <DocxEditor docx={opened.docx} {...editor} />
-      ) : opened.kind === "xlsx" ? (
-        <SheetGrid xlsx={opened.xlsx} {...editor} />
-      ) : (
-        <Pages count={opened.kind === "pptx" ? opened.pptx.slides.length : opened.pdf.numPages}>
-          {(page, width) =>
-            opened.kind === "pdf" ? (
-              <Drawn draw={() => drawPdfPage(opened.pdf, page + 1, width)} />
-            ) : (
-              <Drawn
-                draw={() =>
-                  drawPage(opened, page).then((node) => {
-                    const scale = width / pageSize(opened).width;
-                    const wrap = document.createElement("div");
-                    wrap.style.width = `${width}px`;
-                    wrap.style.height = `${pageSize(opened).height * scale}px`;
-                    wrap.style.overflow = "hidden";
-                    node.style.transform = `scale(${scale})`;
-                    node.style.transformOrigin = "0 0";
-                    wrap.append(node);
-                    return wrap;
-                  })
-                }
-              />
-            )
-          }
-        </Pages>
-      );
+    body = own.docx ? (
+      <DocxEditor docx={own.docx} {...editor} />
+    ) : own.xlsx ? (
+      <SheetGrid xlsx={own.xlsx} {...editor} />
+    ) : opened.kind === "pptx" || opened.kind === "pdf" ? (
+      <Pages count={opened.kind === "pptx" ? opened.pptx.slides.length : opened.pdf.numPages}>
+        {(page, width) =>
+          opened.kind === "pdf" ? (
+            <Drawn draw={() => drawPdfPage(opened.pdf, page + 1, width)} />
+          ) : (
+            <Drawn
+              draw={() =>
+                drawPage(opened, page).then((node) => {
+                  const scale = width / pageSize(opened).width;
+                  const wrap = document.createElement("div");
+                  wrap.style.width = `${width}px`;
+                  wrap.style.height = `${pageSize(opened).height * scale}px`;
+                  wrap.style.overflow = "hidden";
+                  node.style.transform = `scale(${scale})`;
+                  node.style.transformOrigin = "0 0";
+                  wrap.append(node);
+                  return wrap;
+                })
+              }
+            />
+          )
+        }
+      </Pages>
+    ) : null;
   }
 
   return (

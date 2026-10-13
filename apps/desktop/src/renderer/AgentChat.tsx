@@ -1211,7 +1211,7 @@ function HtmlRenderRow({ page }: { page: Extract<Item, { kind: "htmlRender" }> }
 /** Files the agent presented (PLX-755), from the open host. */
 function FilesRow({ row }: { row: Extract<Item, { kind: "files" }> }) {
   const hostId = useContext(ThreadLinksContext)?.hostId;
-  return hostId ? <FileCards hostId={hostId} files={row.files} /> : null;
+  return hostId ? <FileCards hostId={hostId} item={row.key} files={row.files} /> : null;
 }
 
 /** A browser recording the agent made (PLX-639), from the open host. */
