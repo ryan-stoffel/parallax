@@ -18,7 +18,7 @@
 //! Codex runs as a turn with a `contextCompaction` item. A turn that is `/goal <objective>`
 //! ([`goal`], PLX-749) is `thread/goal/set`, after which Codex starts turns itself until the goal
 //! is complete, blocked, or paused: plxd takes each as the running turn, and keeps the thread
-//! loaded while `thread/goal/updated` says the goal is active.
+//! loaded while `thread/goal/updated` says the goal is active. A Stop clears the goal.
 //! Each follow-up is a later turn in the same process, sent once the turn before it has
 //! completed, with any new model or mode ([`turn_settings`]) on its `turn/start`, which keeps
 //! them for the turns after it, as T3 Code does (PLX-727). A steer (PLX-370) is `turn/steer`
@@ -948,8 +948,14 @@ impl Driver {
         }
     }
 
-    /// A cancel: interrupts the running turn, which the thread leaves next.
+    /// A cancel: clears a goal Codex still pursues (PLX-749), so a later run doesn't take it up
+    /// again, then interrupts the running turn, which the thread leaves next.
     fn interrupt(&mut self) {
+        if let Some(thread_id) = self.thread_id.as_ref().filter(|_| self.goal_active) {
+            let params = json!({"threadId": thread_id});
+            self.server.request(None, "thread/goal/clear", &params);
+            self.goal_active = false;
+        }
         if let (Some(thread_id), Some(turn_id)) = (
             &self.thread_id,
             self.running

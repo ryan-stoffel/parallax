@@ -817,6 +817,42 @@ async fn stop_interrupts_the_turn_and_the_thread_leaves() {
     );
 }
 
+/// A Stop during a `/goal`'s turn (PLX-749) clears the goal before interrupting the turn, so the
+/// thread's next run doesn't pursue it again unseen.
+#[tokio::test]
+async fn stop_clears_the_goal_then_interrupts_its_turn() {
+    let (dir, backend) = fake(include_str!("../fixtures/app-server-goal-interrupt.jsonl"));
+    let mut request = request(AgentPermission::Edit);
+    request.approvals = false;
+    request.prompt = "/goal the tests pass".into();
+    let started = backend.start(request).unwrap();
+    let mut events = started.events;
+    while !matches!(next(&mut events).await, Event::ToolCall { .. }) {}
+    started.run.cancel();
+    rest(&mut events).await;
+    let written = written_until(&dir, |line| line["method"] == "thread/unsubscribe").await;
+    let sent: Vec<(&Value, &Value)> = written
+        .iter()
+        .filter(|line| {
+            ["thread/goal/clear", "turn/interrupt", "thread/unsubscribe"]
+                .iter()
+                .any(|method| line["method"] == *method)
+        })
+        .map(|line| (&line["method"], &line["params"]))
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            (&json!("thread/goal/clear"), &json!({"threadId": "t-1"})),
+            (
+                &json!("turn/interrupt"),
+                &json!({"threadId": "t-1", "turnId": "u-1"})
+            ),
+            (&json!("thread/unsubscribe"), &json!({"threadId": "t-1"})),
+        ]
+    );
+}
+
 /// 0060: when the shared app-server dies, every thread on it ends, failed, mid-turn.
 #[tokio::test]
 async fn every_thread_ends_when_the_shared_app_server_dies() {

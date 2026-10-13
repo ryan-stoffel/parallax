@@ -1,0 +1,12 @@
+# A /goal's turn running a command, which a Stop interrupts: plxd clears the goal first, so Codex
+# doesn't pursue it again in a later run (shapes from codex-cli 0.162.0).
+<
+{"id":1,"result":{"userAgent":"plxd/0.162.0","codexHome":"/Users/u/.codex","platformFamily":"unix","platformOs":"macos"}}
+<
+<
+{"id":2,"result":{"thread":{"id":"t-1"},"model":"gpt-6-sol"}}
+<
+{"id":3,"result":{"goal":{"threadId":"t-1","objective":"the tests pass","status":"active","tokenBudget":null,"tokensUsed":0,"timeUsedSeconds":0,"createdAt":1791852031,"updatedAt":1791852031}}}
+{"method":"thread/goal/updated","params":{"threadId":"t-1","turnId":null,"goal":{"threadId":"t-1","objective":"the tests pass","status":"active","tokenBudget":null,"tokensUsed":0,"timeUsedSeconds":0,"createdAt":1791852031,"updatedAt":1791852031}}}
+{"method":"turn/started","params":{"threadId":"t-1","turn":{"id":"u-1","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":1791852031,"completedAt":null,"durationMs":null}}}
+{"method":"item/started","params":{"threadId":"t-1","turnId":"u-1","item":{"type":"commandExecution","id":"exec-1","command":"sleep 60","cwd":"/repo","status":"inProgress","commandActions":[],"aggregatedOutput":null,"exitCode":null,"durationMs":null}}}
