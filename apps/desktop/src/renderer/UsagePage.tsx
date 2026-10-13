@@ -21,7 +21,7 @@ import {
   type UsageLimitWindow,
   type UsageSessions,
 } from "../protocol/generated/protocol";
-import { statusLabel, useConnection } from "./ConnectionStatus";
+import { StatusDot, statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { locale } from "./locale";
@@ -564,16 +564,28 @@ function HostUsageLoader({
     [host.id, since, result, waiting, onLoad],
   );
 
-  // One host's wait is the page's skeleton; with several, each says so.
+  // One host's wait is the page's skeleton; with several, each shows as a chip, with a word only
+  // while its connection is coming up. A host that is down, or failed, says so in a line.
   const status =
     hostStatus(connection) ??
-    (!current
-      ? named
-        ? "Loading…"
-        : undefined
-      : "days" in current
-        ? undefined
-        : usageError(current));
+    (!current ? undefined : "days" in current ? undefined : usageError(current));
+  const coming = connection?.status !== "failed" && !connected;
+  if (named && (coming || (connected && !current))) {
+    return (
+      <span className="mr-5 mb-6 inline-flex items-center gap-2 text-[13px] text-muted-foreground">
+        {coming ? (
+          <StatusDot state={connection} />
+        ) : (
+          <span
+            aria-hidden
+            className="size-1.5 shrink-0 rounded-full bg-muted-foreground motion-safe:animate-pulse"
+          />
+        )}
+        <span className="text-foreground">{host.name}</span>
+        {coming && status}
+      </span>
+    );
+  }
   const notes = status ? [status] : (result?.problems.map((p) => p.message) ?? []);
   return notes.map((note) => (
     <p key={note} className="mb-6 text-[13px] text-muted-foreground">
