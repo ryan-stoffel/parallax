@@ -28,3 +28,19 @@ test("never pairs across a blank line", () => {
     "Press (`).\n\nThen $x$ and `code`",
   );
 });
+
+test("leaves dollars where Markdown doesn't read escapes: deep fences, indented code, and URLs", () => {
+  const text = [
+    "10. Run:\n\n    ```sh\n    export A=$HOME\n\n    echo $A\n    ```",
+    "Text\n\n    indented $5 and $10\n\n    more $x",
+    "See https://graph.microsoft.com/v1.0/users?$select=id and <https://e.com/?q=$filter>.",
+  ].join("\n\n");
+  expect(dollarMath(text)).toBe(text);
+});
+
+test("keeps \\(...\\) holding a dollar, and $$ must close in its paragraph mid-line", () => {
+  expect(dollarMath("\\(\\$5 \\times 3\\)")).toBe("\\(\\$5 \\times 3\\)");
+  expect(dollarMath("PID is $$. Prices $5 and $10.")).toBe("PID is \\$\\$. Prices \\$5 and \\$10.");
+  // One that opens a line runs to the end, as a streaming display equation does.
+  expect(dollarMath("Setup:\n\n$$\n\\frac{1")).toBe("Setup:\n\n$$\n\\frac{1");
+});
