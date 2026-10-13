@@ -213,6 +213,7 @@ export function AgentChat({
   prompt,
   going,
   noRepo,
+  space,
   tab,
   strip,
   startOver,
@@ -246,6 +247,8 @@ export function AgentChat({
   going?: boolean;
   /** A thread with no repo: its scratch repository has no origin, so it gets no Open PR. */
   noRepo?: boolean;
+  /** A chat in a Space: no Access picker. */
+  space?: boolean;
   /** The host the run is on, named in the composer's tab. */
   host?: Host;
   /** The composer's tab in place of the run's worktree, such as a coordinator's repository. */
@@ -523,7 +526,12 @@ export function AgentChat({
     if (failed) return setResendError(failed);
     setResendError(undefined);
     if (back.row.turnId) setCancelled((prev) => new Set(prev).add(back.row!.turnId!));
-    setEditing({ row: back.row, text: back.text, images: await images, threads: back.threads });
+    setEditing({
+      row: back.row,
+      text: back.text,
+      images: await images,
+      threads: back.threads,
+    });
   };
   // Cancel leaves the run stopped. A message plxd dropped gets its notice and Send again back.
   const cancelEdit = () => {
@@ -805,6 +813,7 @@ export function AgentChat({
           optionsDisabled={optionsDisabled}
           imageCaps={imageCaps(connection)}
           manualDenied={manualDenied}
+          noAccess={space}
           projectMode={projectMode}
           insert={compose && !compose.send ? compose.text : undefined}
           menus={
@@ -1131,7 +1140,10 @@ function promptsOf(view: readonly ViewRow[], sent: ReadonlyMap<string, SentMessa
     else if (row.kind === "user" || row.kind === "pending") {
       const said = row.text ?? (row.kind === "user" && row.turnId && sent.get(row.turnId)?.text);
       const text = said ? plainText(said) : "";
-      last = { index, text: text || (row.images?.length ? "Image" : "Follow-up message") };
+      last = {
+        index,
+        text: text || (row.images?.length ? "Image" : "Follow-up message"),
+      };
       prompts.push(last);
     } else if (row.kind === "assistant" && last) (last.replies ??= []).push(row.text);
   });
@@ -1752,7 +1764,10 @@ function Steps({
     return <RowView row={only} live={live} open={openKeys.has(only.key)} onToggle={onToggle} />;
   const doing = active ? activity(work.items.findLast((i) => i.kind !== "notice")) : undefined;
   // Its path relative to the run's worktree, as the row reads once the call is done.
-  const now = doing && { ...doing, detail: doing.detail && relative(doing.detail, root) };
+  const now = doing && {
+    ...doing,
+    detail: doing.detail && relative(doing.detail, root),
+  };
   const summary = summarize(work.items);
   return (
     <Fold
@@ -1861,7 +1876,10 @@ function Shimmer({ children }: { children: string }) {
   return (
     <span
       className="working-shimmer"
-      style={{ animationDuration: `${shimmerMs}ms`, animationDelay: `${-(now % shimmerMs)}ms` }}
+      style={{
+        animationDuration: `${shimmerMs}ms`,
+        animationDelay: `${-(now % shimmerMs)}ms`,
+      }}
     >
       {children}
     </span>
@@ -2077,7 +2095,12 @@ const statuses = {
   ok: { color: "text-muted-foreground", said: "Succeeded" },
   error: { color: "text-danger", mark: X, said: "Failed" },
   denied: { color: "text-danger", mark: Ban, said: "Denied" },
-  none: { color: "text-faint-foreground", mark: Ellipsis, faded: true, said: "No result" },
+  none: {
+    color: "text-faint-foreground",
+    mark: Ellipsis,
+    faded: true,
+    said: "No result",
+  },
 } satisfies Record<"running" | AgentToolStatus | "none", Look>;
 
 /** A collapsed-by-default step row, its chevron at its end, open state kept by the transcript. */
@@ -2215,7 +2238,11 @@ export function summarize(items: readonly Item[]): StepsSummary {
   const calls = steps.filter((i) => i.kind === "tool" || i.kind === "todo");
   if (calls.length === 0) {
     const n = steps.length;
-    return { label: n === 1 ? "Thought" : `Thought ${n} times`, Icon: icons.thinking, failed };
+    return {
+      label: n === 1 ? "Thought" : `Thought ${n} times`,
+      Icon: icons.thinking,
+      failed,
+    };
   }
   const servers: string[] = [];
   const kinds = new Set<Kind>();
@@ -2236,7 +2263,12 @@ export function summarize(items: readonly Item[]): StepsSummary {
     counts.set(group, count);
   }
   const ranked = [...counts]
-    .map(([group, count], order) => ({ group, count, order, rank: callRanks[group] ?? 1 }))
+    .map(([group, count], order) => ({
+      group,
+      count,
+      order,
+      rank: callRanks[group] ?? 1,
+    }))
     .sort((a, b) => a.rank - b.rank || a.order - b.order)
     .slice(0, 2)
     .sort((a, b) => a.order - b.order);
@@ -2259,7 +2291,12 @@ export function summarize(items: readonly Item[]): StepsSummary {
 }
 
 // Commands and edits lead a summary, and calls of tools this app doesn't know come last.
-const callRanks: Partial<Record<string, number>> = { shell: 0, editing: 0, writing: 0, working: 2 };
+const callRanks: Partial<Record<string, number>> = {
+  shell: 0,
+  editing: 0,
+  writing: 0,
+  working: 2,
+};
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const times = (n: number) => (n === 1 ? "once" : `${n} times`);
@@ -2339,7 +2376,10 @@ function plxdCall(item: Extract<Item, { kind: "tool" }>) {
     ? plxdLabels[item.name.slice(plxdTools.length)]
     : undefined;
   return label
-    ? { label, detail: item.subagent ?? toolHint(item.input, ["prompt", "path", "query", "url"]) }
+    ? {
+        label,
+        detail: item.subagent ?? toolHint(item.input, ["prompt", "path", "query", "url"]),
+      }
     : undefined;
 }
 
@@ -2444,7 +2484,10 @@ const markdownComponents: Components = {
 // Highlights a code block whose fence names its language, never a guess; a diff's lines are
 // drawn by DiffLines instead. Built once: react-markdown runs its plugins' setup on every render,
 // and rehype-highlight's registers 37 languages each time.
-const highlighter = rehypeHighlight({ detect: false, plainText: ["diff", "patch"] });
+const highlighter = rehypeHighlight({
+  detect: false,
+  plainText: ["diff", "patch"],
+});
 // Typesets $...$ and $$...$$ with KaTeX, which needs no network. Its output is plain elements, and
 // invalid LaTeX stays as its source text.
 const typeset = rehypeKatex({ strict: "ignore" });
@@ -2699,7 +2742,11 @@ function sentAt(at: string) {
   const time = clockOptions();
   return date.toDateString() === new Date().toDateString()
     ? date.toLocaleTimeString(locale(), time)
-    : date.toLocaleString(locale(), { month: "short", day: "numeric", ...time });
+    : date.toLocaleString(locale(), {
+        month: "short",
+        day: "numeric",
+        ...time,
+      });
 }
 
 /**

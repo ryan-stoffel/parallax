@@ -200,7 +200,11 @@ export function NewThread({
     !repoless(group) && connection?.status === "connected" && "repoRefs" in connection.capabilities;
   // The picked ref, kept with its repository and workspace, so picking another drops it: a new
   // worktree's base never becomes a checkout's switch.
-  const [pickedRef, setPickedRef] = useState<{ groupId: string; checkout: boolean; ref: string }>();
+  const [pickedRef, setPickedRef] = useState<{
+    groupId: string;
+    checkout: boolean;
+    ref: string;
+  }>();
   const gitRef =
     refsAvailable && pickedRef?.groupId === group.id && pickedRef.checkout === checkout
       ? pickedRef.ref
@@ -346,7 +350,7 @@ export function NewThread({
         {starting === undefined && (
           <>
             <h1
-              className={`${group.id === noRepo ? "mb-7" : "mb-2"} text-center text-[24px] font-medium tracking-tight`}
+              className={`${repoless(group) ? "mb-7" : "mb-2"} text-center text-[24px] font-medium tracking-tight`}
             >
               {group.id === noRepo
                 ? "What should we work on "
@@ -363,7 +367,7 @@ export function NewThread({
               </button>
               ?
             </h1>
-            {group.id !== noRepo && (
+            {!repoless(group) && (
               <div className="relative mb-9 text-center">
                 {/* Its shortcut, Mod+Shift+N unless rebound, shows under it on hover or focus. */}
                 <button
@@ -449,10 +453,14 @@ export function NewThread({
           imageCaps={imageCaps(connection)}
           menus={
             connection?.status === "connected" && "composerMenus" in connection.capabilities
-              ? { hostId, repo: group.id === noRepo || group.space ? undefined : group.id }
+              ? {
+                  hostId,
+                  repo: group.id === noRepo || group.space ? undefined : group.id,
+                }
               : undefined
           }
           // A new thread asks only through a plxd that sends its requests (PLX-196).
+          noAccess={group.space}
           manualDenied={
             connection?.status === "connected" && !("approvals" in connection.capabilities)
               ? "host"
@@ -464,7 +472,7 @@ export function NewThread({
                 <LoaderCircle aria-hidden className="animate-spin" />
                 Starting…
               </span>
-            ) : (
+            ) : group.space ? undefined : (
               <>
                 <RunTargetMenu
                   hosts={hosts}

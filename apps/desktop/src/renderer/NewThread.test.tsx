@@ -359,6 +359,19 @@ test("the link under the heading switches New Thread to No Repo, showing its sho
   expect(button("or start without a repo⇧⌘N")).toBeUndefined();
 });
 
+test("a Space's new thread has no start-without-a-repo link, run target bar, or details", async () => {
+  const space: Repo = { ...parallax, id: "s1", name: "Reading", path: "/spaces/s1", space: true };
+  answers["thread/list"] = () => ({ result: { repos: [parallax, space], threads: [], seq: 7 } });
+  await renderApp();
+  expect(button("or start without a repo⇧⌘N")).toBeDefined();
+  expect(button("Thread details")).toBeDefined();
+  await choose("Repository", "Reading");
+  expect(heading()).toBe("What should we talk about in Reading?");
+  expect(button("or start without a repo⇧⌘N")).toBeUndefined();
+  expect(document.body.textContent).not.toContain("New worktree");
+  expect(button("Thread details")).toBeUndefined();
+});
+
 test("No Repo starts a thread with no repo, with a thread dropped on the box attached", async () => {
   capabilities = { threadContext: { maxThreads: 8 } };
   answers["thread/start"] = (p) => ({
