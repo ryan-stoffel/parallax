@@ -21,8 +21,8 @@ export const OpenDocumentContext = createContext<((doc: DocRef) => void) | undef
 /**
  * The files an agent presented with `present_files` (PLX-755), as cards: a thumbnail of each
  * file's real first page, with its second fanning out behind it on hover, its title and type,
- * and Download. Clicking a card opens the file in the side panel. `item` is the transcript row,
- * whose first showing reads its files from disk again.
+ * and Download. Clicking a card opens the file in the side panel. `item` is the transcript row:
+ * when it's newer than any row already seen for a file, the file is read from disk again.
  */
 export function FileCards({
   hostId,
