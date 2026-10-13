@@ -1,56 +1,42 @@
 // Fixes for how remark-math reads LaTeX in agent messages (PLX-759).
 
-// A fenced code block, to its closing fence or the end, or a code span; then \[...\] or \(...\).
-const CODE_OR_TEX =
-  /(?:^|\n) {0,3}(`{3,}|~{3,})[^]*?(?:\n {0,3}\1|$)|(`+)[^]*?\2|\\\[([^]+?)\\\]|\\\(([^]+?)\\\)/g;
+// Text up to a blank line, which ends a paragraph and so any inline math or code span in it.
+const INLINE = String.raw`(?:(?!\n[ \t]*\n)[^])`;
+
+// What dollarMath reads, in order at each position: a fenced code block (to its closing fence or
+// the end), a code span, $$...$$, \[...\], \(...\), an escaped character, a $...$ pair as Pandoc
+// reads one (no space just inside either dollar, no digit right after the closing one), or a
+// lone dollar.
+const TOKENS = new RegExp(
+  [
+    String.raw`(?:^|\n) {0,3}(\`{3,}|~{3,})[^]*?(?:\n {0,3}\1|$)`,
+    String.raw`(\`+)${INLINE}*?\2(?!\`)`,
+    String.raw`\$\$[^]*?(?:\$\$|$)`,
+    String.raw`\\\[(${INLINE}+?)\\\]`,
+    String.raw`\\\((${INLINE}+?)\\\)`,
+    String.raw`\\[^]`,
+    String.raw`\$(?=[^\s$])(?:\\[^]|(?!\n[ \t]*\n)[^\\$])*?(?<=[^\s\\])\$(?!\d)`,
+    String.raw`\$`,
+  ].join("|"),
+  "g",
+);
 
 /**
- * Rewrites `\[...\]` as `$$...$$` and `\(...\)` as `$...$`, outside code, since remark-math reads
- * only dollars and Markdown's escapes would otherwise eat the backslashes. Unclosed delimiters, as
- * a streaming message has, stay as they are until they close.
+ * Prepares Markdown for remark-math, outside code: `\[...\]` becomes `$$...$$` and `\(...\)`
+ * becomes `$...$`, since remark-math reads only dollars and Markdown's escapes would eat the
+ * backslashes. A dollar that can't pair as Pandoc reads it is escaped, so "$5 and $10" and
+ * "$PATH and $HOME" stay text, with any Markdown between them intact. Delimiters still arriving,
+ * as in a streaming message, stay as they are until they close.
  */
 export const dollarMath = (text: string): string =>
-  text.includes("\\")
-    ? text.replace(CODE_OR_TEX, (match, _fence, _ticks, display?: string, inline?: string) =>
+  /[$\\]/.test(text)
+    ? text.replace(TOKENS, (match, _fence, _ticks, display?: string, inline?: string) =>
         display !== undefined
           ? `$$${display}$$`
           : inline !== undefined
             ? `$${inline.trim()}$`
-            : match,
+            : match === "$"
+              ? "\\$"
+              : match,
       )
     : text;
-
-type MathNode = {
-  type: string;
-  value?: string;
-  children?: MathNode[];
-  position?: { start: { offset?: number }; end: { offset?: number } };
-  data?: { hProperties?: { className?: string[] } };
-};
-
-/**
- * A remark plugin, after remark-math, for how models write dollars. `$$...$$` within a line is
- * display math, since they write display equations that way. A `$...$` pair is math only as
- * Pandoc reads it: no space just inside either dollar and no digit right after the closing one,
- * so "$5 and $10" and "$PATH and $HOME" stay text.
- */
-export function dollarRules() {
-  return (tree: MathNode, file: { value: unknown }) => {
-    const source = String(file.value);
-    const walk = (node: MathNode) =>
-      node.children?.forEach((child, i, siblings) => {
-        if (child.type !== "inlineMath") return walk(child);
-        const start = child.position?.start.offset;
-        const end = child.position?.end.offset;
-        if (start === undefined || end === undefined) return;
-        const raw = source.slice(start, end);
-        if (raw.startsWith("$$")) {
-          const props = child.data?.hProperties;
-          if (props) props.className = ["language-math", "math-display"];
-        } else if (/^\$\s|\s\$$/.test(raw) || /\d/.test(source[end] ?? "")) {
-          siblings[i] = { type: "text", value: raw };
-        }
-      });
-    walk(tree);
-  };
-}
