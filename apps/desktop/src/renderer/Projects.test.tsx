@@ -2452,7 +2452,7 @@ test("the rail of places lists Inbox, Spaces, repos, and No repo, filters the li
     "No repo",
     "New project or repository",
   ]);
-  expect(place("Reading")!.className).toContain("rounded-full");
+  expect(place("Reading")!.className).toContain("rounded-lg");
   expect(place("parallax")!.className).toContain("rounded-lg");
 
   const heading = () => document.querySelector('#sidebar button[aria-label^="Place: "]')!;

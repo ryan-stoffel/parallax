@@ -1019,7 +1019,7 @@ function PlaceGlyph({ repo }: { repo: Repo }) {
 
 /**
  * The rail of places (PLX-739) on the sidebar's left edge: Inbox, which is every thread, then each
- * host's Spaces as circles, its repositories as rounded squares, No repo while it has threads, and
+ * host's Spaces and repositories as rounded squares, No repo while it has threads, and
  * a button that adds one. Picking a place shows its threads, as the place menu does. A place's dot is its most urgent
  * attention, and Inbox counts what needs the user. `motion` plays the Spring opening or closing
  * (index.css).
@@ -1050,7 +1050,6 @@ function PlaceRail({
   const tile = (
     key: RepoFilter,
     name: string,
-    round: boolean,
     color: string,
     glyph: ReactNode,
     badge?: ReactNode,
@@ -1066,7 +1065,7 @@ function PlaceRail({
         title={label}
         aria-pressed={filter === key}
         onClick={() => onFilter(key)}
-        className={`relative grid size-[30px] shrink-0 place-items-center bg-current/12 ring-current ring-offset-2 ring-offset-sidebar hover:bg-current/20 aria-pressed:ring-[1.5px] aria-pressed:before:absolute aria-pressed:before:top-1.5 aria-pressed:before:-left-2 aria-pressed:before:h-[18px] aria-pressed:before:w-[3px] aria-pressed:before:rounded-r-full aria-pressed:before:bg-foreground [&_svg]:size-4 ${round ? "rounded-full" : "rounded-lg"} ${color}`}
+        className={`relative grid size-[30px] shrink-0 place-items-center bg-current/12 ring-current ring-offset-2 ring-offset-sidebar hover:bg-current/20 aria-pressed:ring-[1.5px] aria-pressed:before:absolute aria-pressed:before:top-1.5 aria-pressed:before:-left-2 aria-pressed:before:h-[18px] aria-pressed:before:w-[3px] aria-pressed:before:rounded-r-full aria-pressed:before:bg-foreground [&_svg]:size-4 rounded-lg ${color}`}
       >
         {glyph}
         {badge ??
@@ -1084,7 +1083,6 @@ function PlaceRail({
     tile(
       `${host.id}/${repo.id}`,
       many ? `${repo.name} on ${host.name}` : repo.name,
-      !!repo.space,
       placeColor(repo),
       <PlaceGlyph repo={repo} />,
     );
@@ -1103,14 +1101,13 @@ function PlaceRail({
       {tile(
         "all",
         "Inbox",
-        false,
         "text-muted-foreground",
         <Inbox aria-hidden />,
         asks > 0 && (
           <span
             aria-hidden
             data-badge
-            className="absolute -top-1 -right-1 box-content h-3.5 min-w-3.5 rounded-full border-2 border-sidebar bg-warning px-0.5 text-center text-[9px] leading-3.5 font-bold text-white"
+            className="absolute -top-1 -right-1 box-content h-3.5 min-w-3.5 rounded-full border-2 border-sidebar bg-accent px-0.5 text-center text-[9px] leading-3.5 font-bold text-accent-foreground"
           >
             {asks}
           </span>
@@ -1123,7 +1120,7 @@ function PlaceRail({
       {repos.map(place)}
       {/* Also while it's the filter, so the rail always marks what the list shows. */}
       {(attentions("none").length > 0 || filter === "none") &&
-        tile("none", "No repo", false, "text-faint-foreground", <SquareDashed aria-hidden />)}
+        tile("none", "No repo", "text-faint-foreground", <SquareDashed aria-hidden />)}
       <button
         type="button"
         aria-label="New project or repository"
