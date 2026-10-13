@@ -1,4 +1,11 @@
-import { mkdtempSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readlinkSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -6,26 +13,36 @@ import { expect, test } from "vite-plus/test";
 
 import {
   appleScriptString,
-  commandPath,
   commandSource,
   commandState,
   installCommand,
+  layout,
   offerAtLaunch,
+  onPath,
   readRecord,
   removeCommand,
   shellQuote,
   windowsLauncher,
   writeRecord,
+  type Layout,
 } from "./command";
 
 const folder = () => mkdtempSync(path.join(tmpdir(), "command-"));
 
 test("the command goes where each OS's PATH already looks", () => {
-  expect(commandPath("darwin", {}, "/Users/me")).toBe("/usr/local/bin/parallax");
-  expect(commandPath("linux", {}, "/home/me")).toBe("/home/me/.local/bin/parallax");
-  expect(
-    commandPath("win32", { LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local" }, "C:\\Users\\me"),
-  ).toBe("C:\\Users\\me\\AppData\\Local\\Parallax\\bin\\parallax.cmd");
+  const plxd = "/Applications/Parallax.app/Contents/Resources/plxd";
+  expect(layout("darwin", {}, "/Users/me", plxd).file).toBe("/usr/local/bin/parallax");
+  expect(layout("linux", {}, "/home/me", "/tmp/.mount_x/resources/plxd")).toMatchObject({
+    file: "/home/me/.local/bin/parallax",
+    copy: "/home/me/.local/share/parallax/app",
+  });
+  expect(layout("linux", { XDG_DATA_HOME: "/data" }, "/home/me", plxd).copy).toBe(
+    "/data/parallax/app",
+  );
+  const local = "C:\\Users\\me\\AppData\\Local";
+  expect(layout("win32", { LOCALAPPDATA: local }, "C:\\Users\\me", "x.exe").file).toBe(
+    `${local}\\Parallax\\bin\\parallax.cmd`,
+  );
 });
 
 test("only a packaged app's own plxd is offered, and not from a disk image", () => {
@@ -55,55 +72,95 @@ test.skipIf(process.platform === "win32")(
   "macOS: this app's link, another Parallax's, and anything else",
   async () => {
     const dir = folder();
-    const file = path.join(dir, "parallax");
     const plxd = "/Applications/Parallax.app/Contents/Resources/plxd";
-    expect(await commandState("darwin", file, plxd, {})).toBe("missing");
+    const at = (file: string, bundled = plxd): Layout => ({
+      platform: "darwin",
+      file,
+      plxd: bundled,
+    });
+    const file = path.join(dir, "parallax");
+    expect(await commandState(at(file))).toBe("missing");
     symlinkSync(plxd, file);
-    expect(await commandState("darwin", file, plxd, {})).toBe("installed");
+    expect(await commandState(at(file))).toBe("installed");
     const nightly = "/Applications/Parallax (Nightly).app/Contents/Resources/plxd";
-    expect(await commandState("darwin", file, nightly, {})).toBe("stale");
+    expect(await commandState(at(file, nightly))).toBe("stale");
     const other = path.join(dir, "other");
     symlinkSync("/opt/somewhere/parallax", other);
-    expect(await commandState("darwin", other, plxd, {})).toBe("other");
+    expect(await commandState(at(other))).toBe("other");
     const script = path.join(dir, "script");
     writeFileSync(script, "#!/bin/sh\n");
-    expect(await commandState("darwin", script, plxd, {})).toBe("other");
+    expect(await commandState(at(script))).toBe("other");
   },
 );
 
-test("macOS installs a link where the folder is the user's, and removes it", async () => {
-  const dir = folder();
-  const file = path.join(dir, "parallax");
-  const plxd = path.join(dir, "plxd");
-  writeFileSync(plxd, "");
-  await installCommand("darwin", file, plxd);
-  expect(readlinkSync(file)).toBe(plxd);
-  await removeCommand("darwin", file);
-  expect(await commandState("darwin", file, plxd, {})).toBe("missing");
-});
+test.skipIf(process.platform === "win32")(
+  "macOS installs a link where the folder is the user's, and removes it",
+  async () => {
+    const dir = folder();
+    const plxd = path.join(dir, "plxd");
+    writeFileSync(plxd, "");
+    const at: Layout = { platform: "darwin", file: path.join(dir, "parallax"), plxd };
+    await installCommand(at);
+    expect(readlinkSync(at.file)).toBe(plxd);
+    await removeCommand(at);
+    expect(await commandState(at)).toBe("missing");
+  },
+);
 
-test("Linux copies plxd, and another file of the same name isn't its own", async () => {
-  const dir = folder();
-  const plxd = path.join(dir, "plxd");
-  writeFileSync(plxd, "plxd 1");
-  const file = path.join(dir, "bin", "parallax");
-  await installCommand("linux", file, plxd);
-  expect(await commandState("linux", file, plxd, { copied: true })).toBe("installed");
-  expect(await commandState("linux", file, plxd, {})).toBe("other");
-  writeFileSync(plxd, "plxd 2, a newer one");
-  expect(await commandState("linux", file, plxd, { copied: true })).toBe("stale");
-});
+test.skipIf(process.platform === "win32")(
+  "Linux copies plxd with what it reads beside itself, and leaves another parallax alone",
+  async () => {
+    const dir = folder();
+    const bundle = path.join(dir, "mount", "resources");
+    mkdirSync(path.join(bundle, "claude-agent-sdk", "src"), { recursive: true });
+    writeFileSync(path.join(bundle, "plxd"), "plxd");
+    writeFileSync(path.join(bundle, "plxd.version"), "1\n");
+    writeFileSync(path.join(bundle, "claude-agent-sdk", "src", "main.mjs"), "");
+    const at = layout("linux", {}, path.join(dir, "home"), path.join(bundle, "plxd"));
+    await installCommand(at);
+    expect(readlinkSync(at.file)).toBe(path.join(at.copy!, "plxd"));
+    expect(existsSync(path.join(at.copy!, "claude-agent-sdk", "src", "main.mjs"))).toBe(true);
+    expect(await commandState(at)).toBe("installed");
+    writeFileSync(path.join(bundle, "plxd.version"), "2\n");
+    expect(await commandState(at), "a new app version").toBe("stale");
+    await installCommand(at);
+    expect(await commandState(at)).toBe("installed");
+    await removeCommand(at);
+    expect([await commandState(at), existsSync(at.copy!)]).toEqual(["missing", false]);
 
-test("Windows: the launcher runs plxd's TUI, and another one is someone else's", async () => {
-  const dir = folder();
-  const file = path.join(dir, "parallax.cmd");
-  const plxd = "C:\\Users\\me\\AppData\\Local\\Programs\\Parallax\\resources\\plxd.exe";
-  expect(windowsLauncher(plxd)).toBe(`@"${plxd}" tui %*\r\n`);
-  writeFileSync(file, windowsLauncher(plxd));
-  expect(await commandState("win32", file, plxd, {})).toBe("installed");
-  expect(await commandState("win32", file, "D:\\Parallax\\resources\\plxd.exe", {})).toBe("stale");
+    // A user's own parallax, a file or a link elsewhere, is never the app's.
+    writeFileSync(at.file, "#!/bin/sh\necho mine\n");
+    expect(await commandState(at)).toBe("other");
+  },
+);
+
+test("Windows: the launcher goes by %LOCALAPPDATA% and names the command", async () => {
+  const local = "C:\\Users\\José\\AppData\\Local";
+  const plxd = `${local}\\Programs\\Parallax\\resources\\plxd.exe`;
+  const at = layout("win32", { LOCALAPPDATA: local }, "C:\\Users\\José", plxd);
+  expect(windowsLauncher(at)).toBe(
+    '@setlocal\r\n@set PLXD_INVOKED_AS=parallax\r\n@"%LOCALAPPDATA%\\Programs\\Parallax\\resources\\plxd.exe" %*\r\n',
+  );
+  const elsewhere = { ...at, plxd: "C:\\Program Files\\Parallax\\resources\\plxd.exe" };
+  expect(windowsLauncher(elsewhere)).toContain(
+    '@"C:\\Program Files\\Parallax\\resources\\plxd.exe" %*',
+  );
+
+  const file = path.join(folder(), "parallax.cmd");
+  writeFileSync(file, windowsLauncher(at));
+  expect(await commandState({ ...at, file })).toBe("installed");
+  expect(await commandState({ ...elsewhere, file })).toBe("stale");
   writeFileSync(file, "@echo off\r\nsomething else\r\n");
-  expect(await commandState("win32", file, plxd, {})).toBe("other");
+  expect(await commandState({ ...at, file })).toBe("other");
+});
+
+test("Linux checks its folder is on PATH; Windows reads PATH by its own separator", () => {
+  const linux = layout("linux", {}, "/home/me", "/x/plxd");
+  expect(onPath(linux, "/usr/bin:/home/me/.local/bin")).toBe(true);
+  expect(onPath(linux, "/usr/bin:/bin")).toBe(false);
+  const local = "C:\\Users\\me\\AppData\\Local";
+  const windows = layout("win32", { LOCALAPPDATA: local }, "C:\\Users\\me", "x.exe");
+  expect(onPath(windows, `C:\\Windows;${local}\\Parallax\\bin`)).toBe(true);
 });
 
 test("macOS offers once, only when nothing is named parallax", () => {
@@ -117,8 +174,8 @@ test("macOS offers once, only when nothing is named parallax", () => {
 test("the record reads back, and a missing or bad one is empty", async () => {
   const file = path.join(folder(), "command.json");
   expect(await readRecord(file)).toEqual({});
-  await writeRecord(file, { asked: true, copied: true });
-  expect(await readRecord(file)).toEqual({ asked: true, copied: true });
+  await writeRecord(file, { asked: true, removed: true });
+  expect(await readRecord(file)).toEqual({ asked: true, removed: true });
   writeFileSync(file, "not json");
   expect(await readRecord(file)).toEqual({});
 });

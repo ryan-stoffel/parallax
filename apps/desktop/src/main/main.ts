@@ -26,14 +26,16 @@ import {
 } from "../preload/bridge";
 import { startAccount } from "./account";
 import {
-  commandPath,
   commandSource,
   commandState,
   installCommand,
+  layout,
   offerAtLaunch,
+  onPath,
   readRecord,
   removeCommand,
   writeRecord,
+  type Layout,
 } from "./command";
 import { registerAppScheme, rendererUrl, serveAppScheme } from "./appScheme";
 import {
@@ -286,31 +288,32 @@ ipcMain.handle("parallax:selectTerminalApp", async (event, selected: unknown) =>
   return chosen.name;
 });
 // The `parallax` command (PLX-750, command.ts).
-const commandFile = () => commandPath(process.platform, process.env, homedir());
 const commandRecordFile = () => path.join(app.getPath("userData"), "command.json");
-const commandPlxd = () =>
-  commandSource({
+/** Where the command goes on this computer, or none where this app can't offer it. */
+function commandLayout(): Layout | undefined {
+  const plxd = commandSource({
     packaged: app.isPackaged,
     env: process.env,
     platform: process.platform,
     resourcesPath: process.resourcesPath,
     exists: existsSync,
   });
-async function commandStatus(): Promise<CommandStatus> {
-  const plxd = commandPlxd();
-  const file = commandFile();
-  if (!plxd) return { state: "unavailable", path: file };
-  const record = await readRecord(commandRecordFile());
-  return { state: await commandState(process.platform, file, plxd, record), path: file };
+  return plxd ? layout(process.platform, process.env, homedir(), plxd) : undefined;
 }
-/** Installs the command, and on Linux records that the copy there is this app's. */
+async function commandStatus(): Promise<CommandStatus> {
+  const at = commandLayout();
+  if (!at) return { state: "unavailable", path: "", onPath: true };
+  // macOS's /usr/local/bin is on PATH by /etc/paths, though not in a Finder-launched app's own.
+  const found = process.platform === "darwin" || onPath(at, process.env["PATH"]);
+  return { state: await commandState(at), path: at.file, onPath: found };
+}
+/** Installs the command, which the user wants from now on. */
 async function putCommand(): Promise<string | null> {
-  const plxd = commandPlxd();
-  if (!plxd) return "This copy of Parallax can't install the command.";
+  const at = commandLayout();
+  if (!at) return "This copy of Parallax can't install the command.";
   try {
-    await installCommand(process.platform, commandFile(), plxd);
-    const record = await readRecord(commandRecordFile());
-    await writeRecord(commandRecordFile(), { ...record, asked: true, copied: true });
+    await installCommand(at);
+    await writeRecord(commandRecordFile(), { asked: true, removed: false });
     return null;
   } catch (error) {
     return (error as Error).message;
@@ -318,9 +321,13 @@ async function putCommand(): Promise<string | null> {
 }
 ipcMain.handle("parallax:command", commandStatus);
 ipcMain.handle("parallax:installCommand", putCommand);
+/** Removes the command, which launch then leaves removed. */
 ipcMain.handle("parallax:removeCommand", async () => {
+  const at = commandLayout();
+  if (!at) return null;
   try {
-    await removeCommand(process.platform, commandFile());
+    await removeCommand(at);
+    await writeRecord(commandRecordFile(), { asked: true, removed: true });
     return null;
   } catch (error) {
     return (error as Error).message;
@@ -329,17 +336,19 @@ ipcMain.handle("parallax:removeCommand", async () => {
 /**
  * At launch: on Linux and Windows, installs the command or brings it up to date, without asking.
  * On macOS, where it takes a password, offers it once, when there's nothing named `parallax`.
- * Something named `parallax` that this app didn't make is left alone.
+ * Something named `parallax` that this app didn't make is left alone, and so is a command the
+ * user removed in Settings.
  */
 async function setUpCommand(win: BrowserWindow): Promise<void> {
   const { state } = await commandStatus();
   if (state === "unavailable" || state === "other" || state === "installed") return;
+  const record = await readRecord(commandRecordFile());
+  if (record.removed) return;
   if (process.platform !== "darwin") {
     const error = await putCommand();
     if (error) console.warn("could not install the parallax command:", error);
     return;
   }
-  const record = await readRecord(commandRecordFile());
   if (!offerAtLaunch(process.platform, state, record.asked ?? false)) return;
   await writeRecord(commandRecordFile(), { ...record, asked: true });
   const { response } = await dialog.showMessageBox(win, {

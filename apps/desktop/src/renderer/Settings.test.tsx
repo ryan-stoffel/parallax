@@ -76,7 +76,7 @@ beforeEach(() => {
     terminalApp: async () => null,
     terminalApps: async () => [],
     openTargetIcons: async () => ({}),
-    command: async () => ({ state: "unavailable", path: "" }),
+    command: async () => ({ state: "unavailable", path: "", onPath: true }),
     connectionState: async (hostId) => states[hostId]!,
     onConnectionState: () => () => {},
     hosts: async () => [mini],
@@ -1315,7 +1315,7 @@ test("General's Legacy Plan mode switch lists Plan in the Access picker", async 
 
 test("General installs and removes the parallax command (PLX-750)", async () => {
   let state: "missing" | "installed" = "missing";
-  window.parallax.command = async () => ({ state, path: "/usr/local/bin/parallax" });
+  window.parallax.command = async () => ({ state, path: "/usr/local/bin/parallax", onPath: true });
   window.parallax.installCommand = async () => ((state = "installed"), null);
   window.parallax.removeCommand = async () => ((state = "missing"), null);
   window.parallax.openTargets = async () => [];
@@ -1331,7 +1331,7 @@ test("General installs and removes the parallax command (PLX-750)", async () => 
   expect(document.body.textContent).toContain("Installed at /usr/local/bin/parallax");
   await click(button());
   expect(button().textContent).toBe("Install");
-  window.parallax.command = async () => ({ state: "unavailable", path: "" });
+  window.parallax.command = async () => ({ state: "unavailable", path: "", onPath: true });
 });
 
 test("General selects only installed terminals and keeps the editor preference separate", async () => {

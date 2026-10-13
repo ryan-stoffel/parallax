@@ -32,6 +32,8 @@ export type OpenTarget = (typeof OPEN_TARGETS)[number];
 export type CommandStatus = {
   state: "installed" | "stale" | "missing" | "other" | "unavailable";
   path: string;
+  /** Whether its folder is on PATH. False on Linux until the session puts `~/.local/bin` there. */
+  onPath: boolean;
 };
 
 export type TerminalApp = { path: string; name: string };

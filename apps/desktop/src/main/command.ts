@@ -2,17 +2,14 @@ import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import {
   access,
-  chmod,
-  copyFile,
+  cp,
   lstat,
   mkdir,
   readFile,
   readlink,
   rename,
   rm,
-  stat,
   symlink,
-  utimes,
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
@@ -25,12 +22,20 @@ import type { CommandStatus } from "../preload/bridge";
  * (PLX-740), as `claude` and `codex` open theirs, so a new user types `parallax` and nothing else.
  * No shell's config file is read or written: some are managed, by nix and the like.
  *
- * - macOS: a link at `/usr/local/bin/parallax`, on every Mac's PATH through `/etc/paths`. Linking
- *   there takes an administrator, so the app asks once, as VS Code installs `code`.
- * - Linux: a copy of plxd at `~/.local/bin/parallax`, since an AppImage runs from a mount that
- *   goes away. Most distros put that folder on PATH. Copied again when it differs.
- * - Windows: `parallax.cmd` in `%LOCALAPPDATA%\Parallax\bin`, which goes on the user's PATH.
+ * - macOS: a link at `/usr/local/bin/parallax` to the bundled plxd, on every Mac's PATH through
+ *   `/etc/paths`. Linking there takes an administrator, so the app asks once, as VS Code installs
+ *   `code`.
+ * - Linux: an AppImage runs from a mount that goes away, so plxd and what it reads beside itself
+ *   (its version, the agent SDKs) are copied to `~/.local/share/parallax/app`, and
+ *   `~/.local/bin/parallax` links to that plxd. Copied again when the app's version differs.
+ * - Windows: `parallax.cmd` in `%LOCALAPPDATA%\Parallax\bin`, which goes on the user's PATH. It
+ *   names the command with `PLXD_INVOKED_AS`, since a batch file can't name the program.
+ *
+ * plxd follows the link to itself before it starts `serve`, so `serve` finds those files.
  */
+
+/** What plxd reads beside itself, which the Linux copy carries (scripts/ci/package-app). */
+const BESIDE_PLXD = ["plxd", "plxd.version", "claude-agent-sdk", "cursor-sdk"];
 
 /**
  * The plxd the command runs: the packaged app's own. None in a dev build or under `PLXD_PATH`,
@@ -52,52 +57,85 @@ export function commandSource(lookup: {
   return lookup.exists(plxd) && !plxd.includes("/AppTranslocation/") ? plxd : undefined;
 }
 
-/** Where the command goes on `platform`. */
-export function commandPath(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, home: string) {
-  if (platform === "darwin") return "/usr/local/bin/parallax";
+/** Where the command and what it runs go on one OS, for the bundled plxd at `plxd`. */
+export type Layout = {
+  platform: NodeJS.Platform;
+  /** The command: a link, or on Windows, a launcher. */
+  file: string;
+  /** The bundled plxd. */
+  plxd: string;
+  /** Linux: the copy of the bundled files, whose plxd the link points at. */
+  copy?: string;
+  /** Windows: `%LOCALAPPDATA%`, which the launcher names its path by. */
+  localAppData?: string;
+};
+
+export function layout(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+  home: string,
+  plxd: string,
+): Layout {
+  if (platform === "darwin") return { platform, file: "/usr/local/bin/parallax", plxd };
   if (platform === "win32") {
-    const local = env["LOCALAPPDATA"] || path.win32.join(home, "AppData", "Local");
-    return path.win32.join(local, "Parallax", "bin", "parallax.cmd");
+    const localAppData = env["LOCALAPPDATA"] || path.win32.join(home, "AppData", "Local");
+    const file = path.win32.join(localAppData, "Parallax", "bin", "parallax.cmd");
+    return { platform, file, plxd, localAppData };
   }
-  return path.posix.join(home, ".local", "bin", "parallax");
+  const data = env["XDG_DATA_HOME"] || path.posix.join(home, ".local", "share");
+  const copy = path.posix.join(data, "parallax", "app");
+  return { platform, file: path.posix.join(home, ".local", "bin", "parallax"), plxd, copy };
 }
 
-/** The Windows launcher: `plxd.exe tui` with whatever was typed after `parallax`. */
-export const windowsLauncher = (plxd: string) => `@"${plxd}" tui %*\r\n`;
+/** What the link points at: the bundled plxd, or on Linux, its copy. */
+const linkTarget = (at: Layout) => (at.copy ? path.posix.join(at.copy, "plxd") : at.plxd);
 
 /**
- * What's at `file`, the command's place, for the plxd at `plxd`:
- * - `installed`: this app's command.
- * - `stale`: one this app or another Parallax made, for a plxd that has moved or differs.
+ * The Windows launcher. The path goes by `%LOCALAPPDATA%` where it can: `cmd.exe` reads a batch
+ * file in the console's code page, which mangles a user name such as José written out.
+ */
+export function windowsLauncher(at: Layout): string {
+  const local = at.localAppData ?? "";
+  const under = local && at.plxd.toLowerCase().startsWith(`${local.toLowerCase()}\\`);
+  const plxd = under ? `%LOCALAPPDATA%${at.plxd.slice(local.length)}` : at.plxd;
+  return `@setlocal\r\n@set PLXD_INVOKED_AS=parallax\r\n@"${plxd}" %*\r\n`;
+}
+
+/**
+ * What's at the command's place:
+ * - `installed`: this app's command, up to date.
+ * - `stale`: one this app or another Parallax made, for a plxd that has moved or changed.
  * - `missing`: nothing there.
  * - `other`: something else named `parallax`, left alone.
  */
-export async function commandState(
-  platform: NodeJS.Platform,
-  file: string,
-  plxd: string,
-  record: CommandRecord,
-): Promise<CommandStatus["state"]> {
-  const found = await lstat(file).catch(() => undefined);
+export async function commandState(at: Layout): Promise<CommandStatus["state"]> {
+  const found = await lstat(at.file).catch(() => undefined);
   if (!found) return "missing";
-  if (platform === "win32") {
-    const text = await readFile(file, "utf8").catch(() => "");
-    if (text === windowsLauncher(plxd)) return "installed";
-    return /^@".*plxd\.exe" tui %\*\r?\n$/i.test(text) ? "stale" : "other";
+  if (at.platform === "win32") {
+    const text = await readFile(at.file, "utf8").catch(() => "");
+    if (text === windowsLauncher(at)) return "installed";
+    return text.includes("PLXD_INVOKED_AS=parallax") ? "stale" : "other";
   }
-  if (platform === "darwin") {
-    if (!found.isSymbolicLink()) return "other";
-    const target = await readlink(file);
-    if (target === plxd) return "installed";
+  if (!found.isSymbolicLink()) return "other";
+  const target = await readlink(at.file);
+  if (at.platform === "darwin") {
+    if (target === at.plxd) return "installed";
     return target.endsWith(".app/Contents/Resources/plxd") ? "stale" : "other";
   }
-  // Linux keeps a copy, the same size and age as the plxd it came from. A file this app didn't
-  // copy is someone else's, whatever it holds.
-  const source = await stat(plxd).catch(() => undefined);
-  if (!found.isFile() || !source || !record.copied) return "other";
-  const same = found.size === source.size && Math.abs(found.mtimeMs - source.mtimeMs) < 1;
-  return same ? "installed" : "stale";
+  if (target !== linkTarget(at)) return "other";
+  // The copy is current when it holds the bundled plxd's version.
+  const version = (file: string) => readFile(file, "utf8").catch(() => undefined);
+  const copied = await version(path.posix.join(at.copy!, "plxd.version"));
+  const bundled = await version(path.posix.join(path.posix.dirname(at.plxd), "plxd.version"));
+  return copied !== undefined && copied === bundled ? "installed" : "stale";
 }
+
+/** Whether the command's folder is on `pathVariable`. */
+export const onPath = (at: Layout, pathVariable: string | undefined) => {
+  const separator = at.platform === "win32" ? ";" : ":";
+  const folder = (at.platform === "win32" ? path.win32 : path.posix).dirname(at.file);
+  return (pathVariable ?? "").split(separator).some((entry) => entry === folder);
+};
 
 /**
  * Whether to offer the command at launch: only on macOS, where installing it asks for a password,
@@ -110,14 +148,17 @@ export const offerAtLaunch = (
   asked: boolean,
 ) => platform === "darwin" && state === "missing" && !asked;
 
-/** What the app keeps about the command: whether it has asked, and whether it copied plxd there. */
-export type CommandRecord = { asked?: boolean; copied?: boolean };
+/**
+ * What the app keeps about the command: whether it has asked, and whether the user removed it,
+ * after which launch leaves it removed.
+ */
+export type CommandRecord = { asked?: boolean; removed?: boolean };
 
 /** The record in `file`, or an empty one when it's missing or can't be read. */
 export async function readRecord(file: string): Promise<CommandRecord> {
   try {
-    const { asked, copied } = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
-    return { asked: asked === true, copied: copied === true };
+    const { asked, removed } = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+    return { asked: asked === true, removed: removed === true };
   } catch {
     return {};
   }
@@ -127,50 +168,73 @@ export const writeRecord = (file: string, record: CommandRecord) =>
   writeFile(file, `${JSON.stringify(record)}\n`);
 
 /**
- * Installs the command for the plxd at `plxd`, replacing a stale one. Throws with a message for
- * people when it can't: on macOS, also when the user cancels the password dialog.
+ * Installs the command, replacing a stale one. Throws with a message for people when it can't:
+ * on macOS, also when the user cancels the password dialog.
  */
-export async function installCommand(
-  platform: NodeJS.Platform,
-  file: string,
-  plxd: string,
-): Promise<void> {
-  const folder = path.dirname(file);
-  if (platform === "darwin") {
+export async function installCommand(at: Layout): Promise<void> {
+  const folder = path.dirname(at.file);
+  if (at.platform === "darwin") {
     // /usr/local/bin is the user's on some Macs, such as Intel ones with Homebrew.
     if (await writable(folder)) {
-      await rm(file, { force: true });
-      await symlink(plxd, file);
+      await rm(at.file, { force: true });
+      await symlink(at.plxd, at.file);
       return;
     }
     await asAdministrator(
-      `mkdir -p ${shellQuote(folder)} && ln -sfn ${shellQuote(plxd)} ${shellQuote(file)}`,
+      `mkdir -p ${shellQuote(folder)} && ln -sfn ${shellQuote(at.plxd)} ${shellQuote(at.file)}`,
     );
     return;
   }
   await mkdir(folder, { recursive: true });
-  if (platform === "win32") {
-    await writeFile(file, windowsLauncher(plxd));
-    await addToUserPath(folder);
+  if (at.platform === "win32") {
+    await writeFile(at.file, windowsLauncher(at));
+    await changeUserPath(folder, true);
     return;
   }
-  // Copied beside, then renamed over, so a `parallax` running from the old copy keeps it.
-  const next = `${file}.${process.pid}`;
-  await copyFile(plxd, next);
-  await chmod(next, 0o755);
-  // In seconds, as numbers: a Date would round to the millisecond.
-  const { atimeMs, mtimeMs } = await stat(plxd);
-  await utimes(next, atimeMs / 1000, mtimeMs / 1000);
-  await rename(next, file);
+  await copyBundle(at);
+  // A link of another program's at this name was left alone by commandState's `other`.
+  await rm(at.file, { force: true });
+  await symlink(linkTarget(at), at.file);
 }
 
-/** Removes the command. On macOS, asks for a password when the folder isn't the user's. */
-export async function removeCommand(platform: NodeJS.Platform, file: string): Promise<void> {
-  if (platform === "darwin" && !(await writable(path.dirname(file)))) {
-    await asAdministrator(`rm -f ${shellQuote(file)}`);
+/**
+ * Copies plxd and what it reads beside itself into the Linux copy: into a new folder first, then
+ * renamed into place, so a `parallax` running from the old copy keeps its files.
+ */
+async function copyBundle(at: Layout): Promise<void> {
+  const copy = at.copy!;
+  const next = `${copy}.next`;
+  const old = `${copy}.old`;
+  await rm(next, { recursive: true, force: true });
+  await mkdir(next, { recursive: true });
+  const bundle = path.posix.dirname(at.plxd);
+  for (const name of BESIDE_PLXD) {
+    await cp(path.posix.join(bundle, name), path.posix.join(next, name), {
+      recursive: true,
+    }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+  }
+  await rm(old, { recursive: true, force: true });
+  await rename(copy, old).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+  });
+  await rename(next, copy);
+  await rm(old, { recursive: true, force: true });
+}
+
+/**
+ * Removes the command: the link and, on Linux, its copy; on Windows, the launcher and its folder
+ * on PATH. On macOS, asks for a password when the folder isn't the user's.
+ */
+export async function removeCommand(at: Layout): Promise<void> {
+  if (at.platform === "darwin" && !(await writable(path.dirname(at.file)))) {
+    await asAdministrator(`rm -f ${shellQuote(at.file)}`);
     return;
   }
-  await rm(file, { force: true });
+  await rm(at.file, { force: true });
+  if (at.copy) await rm(at.copy, { recursive: true, force: true });
+  if (at.platform === "win32") await changeUserPath(path.win32.dirname(at.file), false);
 }
 
 const writable = (folder: string) =>
@@ -194,22 +258,24 @@ async function asAdministrator(command: string): Promise<void> {
   } catch (error) {
     // -128: the user cancelled the dialog.
     const cancelled = /-128/.test(String((error as { stderr?: unknown }).stderr ?? error));
-    throw new Error(cancelled ? "Cancelled." : `macOS couldn't install it: ${String(error)}`);
+    throw new Error(cancelled ? "Cancelled." : `macOS couldn't do it: ${String(error)}`);
   }
 }
 
 /**
- * Puts `folder` on the user's PATH in the registry, keeping its other entries as they are,
- * `%VARIABLES%` and all, then tells running programs the environment changed: new terminals see
- * it. Setting a variable through .NET sends that notice; the one it sets is removed in the same
- * call.
+ * Adds `folder` to the user's PATH in the registry, or with `add` false, takes it off, keeping the
+ * other entries as they are, `%VARIABLES%` and all. Then tells running programs the environment
+ * changed, so new terminals see it: setting a variable through .NET sends that notice, and the
+ * one it sets is removed in the same call.
  */
-async function addToUserPath(folder: string): Promise<void> {
+async function changeUserPath(folder: string, add: boolean): Promise<void> {
   const script = [
     "$k = Get-Item 'HKCU:\\Environment'",
     "$p = $k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')",
-    "if (($p -split ';') -notcontains $env:PARALLAX_BIN) {",
-    '  $n = if ($p) { "$p;$env:PARALLAX_BIN" } else { $env:PARALLAX_BIN }',
+    "$e = @($p -split ';' | Where-Object { $_ -and $_ -ne $env:PARALLAX_BIN })",
+    "if ($env:PARALLAX_ADD -eq '1') { $e += $env:PARALLAX_BIN }",
+    "$n = $e -join ';'",
+    "if ($n -ne $p) {",
     "  Set-ItemProperty -Path 'HKCU:\\Environment' -Name Path -Value $n -Type ExpandString",
     "  [Environment]::SetEnvironmentVariable('PARALLAX_PATH_CHANGED', $null, 'User')",
     "}",
@@ -217,6 +283,9 @@ async function addToUserPath(folder: string): Promise<void> {
   await promisify(execFile)(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-Command", script],
-    { env: { ...process.env, PARALLAX_BIN: folder }, windowsHide: true },
+    {
+      env: { ...process.env, PARALLAX_BIN: folder, PARALLAX_ADD: add ? "1" : "0" },
+      windowsHide: true,
+    },
   );
 }

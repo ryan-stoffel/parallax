@@ -54,7 +54,9 @@ function TerminalCommand() {
     setBusy(false);
   };
   const description = {
-    installed: `Type parallax in a terminal to open Parallax there. Installed at ${status.path}.`,
+    installed: status.onPath
+      ? `Type parallax in a terminal to open Parallax there. Installed at ${status.path}.`
+      : `Installed at ${status.path}, but its folder isn't on your PATH yet. Add it there, or sign out and back in, then open a new terminal.`,
     stale: `The command at ${status.path} is for another copy of Parallax.`,
     missing: "Type parallax in a terminal to open Parallax there.",
     other: `Something else named parallax is at ${status.path}, so Parallax leaves it alone.`,
