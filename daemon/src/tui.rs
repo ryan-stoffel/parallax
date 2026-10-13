@@ -180,7 +180,8 @@ pub async fn run(plxd: Plxd) -> Result<(), String> {
             app.open(run).await?;
         }
     }
-    app.load_providers().await;
+    // In the background: the screen shows before plxd has probed every provider's CLI.
+    app.refresh_providers();
     let (sender, mut keys) = mpsc::unbounded_channel();
     // crossterm reads keys blocking; the thread ends with the process.
     std::thread::spawn(move || {
@@ -306,12 +307,26 @@ struct Hits {
     sidebar: Option<(Rect, Vec<(u16, usize)>)>,
 }
 
+/// What a background read hands back to the loop.
+enum Loaded {
+    /// The host's default provider, and its providers and their models.
+    Providers {
+        backend: Option<String>,
+        providers: Vec<ProviderInfo>,
+    },
+    /// The paths `@` offers in a folder.
+    Files(PathBuf, Vec<String>),
+}
+
 #[expect(
     clippy::struct_excessive_bools,
     reason = "independent bits of screen state"
 )]
 struct App {
     plxd: Plxd,
+    /// Where background reads send what they read, and where the loop takes it.
+    loads: mpsc::UnboundedSender<Loaded>,
+    loaded: Option<mpsc::UnboundedReceiver<Loaded>>,
     /// The mark, drawn once.
     logo: Vec<Vec<Span<'static>>>,
     /// The provider new threads run on, from the host's defaults.
@@ -343,8 +358,9 @@ struct App {
     slash: usize,
     /// The paths `@` offers, and the folder they're in: its files, from git, and their folders.
     files: Option<(PathBuf, Vec<String>)>,
-    /// The highlighted path while `@` lists them.
+    /// The highlighted path while `@` lists them, and whether Esc closed the list.
     mention: usize,
+    mentions_closed: bool,
     /// Messages sent from here, oldest first; the one Up recalled; and what was typed before.
     history: Vec<String>,
     recalled: Option<usize>,
@@ -375,8 +391,11 @@ struct App {
 
 impl App {
     fn new(plxd: Plxd) -> Self {
+        let (loads, loaded) = mpsc::unbounded_channel();
         Self {
             plxd,
+            loads,
+            loaded: Some(loaded),
             logo: draw::logo(),
             default_backend: None,
             providers: Vec::new(),
@@ -397,6 +416,7 @@ impl App {
             slash: 0,
             files: None,
             mention: 0,
+            mentions_closed: false,
             history: Vec::new(),
             recalled: None,
             typed: String::new(),
@@ -426,6 +446,9 @@ impl App {
         let mut health = tokio::time::interval(HEALTH);
         let mut frames = tokio::time::interval(FRAME);
         let mut progressing = false;
+        let Some(mut loaded) = self.loaded.take() else {
+            return Err("plxd tui runs once".to_owned());
+        };
         while !self.done {
             if self.dirty {
                 self.dirty = false;
@@ -459,6 +482,10 @@ impl App {
                     while let Ok(more) = incoming.try_recv() {
                         self.incoming(more).await;
                     }
+                    self.dirty = true;
+                }
+                Some(load) = loaded.recv() => {
+                    self.take(load);
                     self.dirty = true;
                 }
                 _ = frames.tick() => self.tick(),
@@ -514,23 +541,35 @@ impl App {
         Ok(())
     }
 
-    /// Reads the host's default provider, and its providers and their models. Without them,
-    /// models show by id and the lists are empty.
+    /// Reads the host's default provider and its providers, waiting for them: for the first
+    /// list, when there's nothing to show yet.
     async fn load_providers(&mut self) {
-        let defaults = self
-            .call::<AccountsDefaultsGet>(AccountsDefaultsGetParams {})
-            .await;
-        if let Ok(defaults) = defaults
-            && let Some(AccountChoice::Subscription { backend }) = defaults.worker
-        {
-            self.default_backend = Some(backend);
-        }
-        match self
-            .call::<ProvidersList>(ProvidersListParams { refresh: false })
-            .await
-        {
-            Ok(listed) => self.providers = listed.providers,
+        match read_providers(&self.plxd).await {
+            Ok(load) => self.take(load),
             Err(error) => self.error = Some(error),
+        }
+    }
+
+    /// Reads them again in the background; [`Self::take`] puts them in place.
+    fn refresh_providers(&self) {
+        let (plxd, loads) = (self.plxd.clone(), self.loads.clone());
+        tokio::spawn(async move {
+            if let Ok(load) = read_providers(&plxd).await {
+                let _ = loads.send(load);
+            }
+        });
+    }
+
+    /// Puts what a background read found in place.
+    fn take(&mut self, load: Loaded) {
+        match load {
+            Loaded::Providers { backend, providers } => {
+                if backend.is_some() {
+                    self.default_backend = backend;
+                }
+                self.providers = providers;
+            }
+            Loaded::Files(folder, paths) => self.files = Some((folder, paths)),
         }
     }
 
@@ -730,6 +769,10 @@ impl App {
             match key.code {
                 KeyCode::Up => return self.mention = self.mention.saturating_sub(1),
                 KeyCode::Down => return self.mention = (self.mention + 1).min(last),
+                KeyCode::Esc => return self.mentions_closed = true,
+                // Enter sends a message whose `@` is already complete, such as a folder's.
+                KeyCode::Enter
+                    if self.mention_query() == Some(mentions[self.mention.min(last)].as_str()) => {}
                 KeyCode::Tab | KeyCode::Enter => {
                     return self.complete_mention(&mentions[self.mention.min(last)]);
                 }
@@ -757,11 +800,11 @@ impl App {
             KeyCode::PageDown => self.scroll = self.scroll.saturating_sub(10),
             KeyCode::Backspace => {
                 self.input.pop();
-                (self.slash, self.mention) = (0, 0);
+                (self.slash, self.mention, self.mentions_closed) = (0, 0, false);
             }
             KeyCode::Char(c) => {
                 self.input.push(c);
-                (self.slash, self.mention) = (0, 0);
+                (self.slash, self.mention, self.mentions_closed) = (0, 0, false);
                 if c == '@' {
                     self.load_files();
                 }
@@ -831,6 +874,9 @@ impl App {
         let (Some(query), Some((_, files))) = (self.mention_query(), &self.files) else {
             return Vec::new();
         };
+        if self.mentions_closed {
+            return Vec::new();
+        }
         let query = query.to_lowercase();
         let mut matches: Vec<(bool, &String)> = files
             .iter()
@@ -866,39 +912,22 @@ impl App {
         self.mention = 0;
     }
 
-    /// Reads the paths `@` offers from the folder the next message works in, once per folder:
-    /// `git ls-files`, as git sees the checkout, and the folders those files are in.
+    /// Reads the paths `@` offers from the folder the next message works in, on each `@`, in
+    /// the background: `git ls-files`, as git sees the checkout, and the folders those files are
+    /// in. Until it's read, `@` offers what was read there last; in Chats, nothing.
     fn load_files(&mut self) {
         let Some(folder) = self.folder() else {
+            self.files = None;
             return;
         };
-        if self.files.as_ref().is_some_and(|(held, _)| *held == folder) {
-            return;
+        if self.files.as_ref().is_some_and(|(held, _)| *held != folder) {
+            self.files = None;
         }
-        let listed = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&folder)
-            .args(["ls-files", "--cached", "--others", "--exclude-standard"])
-            .stderr(std::process::Stdio::null())
-            .output();
-        let Ok(listed) = listed else { return };
-        let text = String::from_utf8_lossy(&listed.stdout);
-        let mut paths = std::collections::BTreeSet::new();
-        for file in text.lines().take(MAX_FILES) {
-            let mut folder = String::new();
-            for part in file
-                .split('/')
-                .collect::<Vec<_>>()
-                .split_last()
-                .map_or(&[][..], |(_, dirs)| dirs)
-            {
-                folder.push_str(part);
-                folder.push('/');
-                paths.insert(folder.clone());
-            }
-            paths.insert(file.to_owned());
-        }
-        self.files = Some((folder, paths.into_iter().collect()));
+        let loads = self.loads.clone();
+        tokio::task::spawn_blocking(move || {
+            let paths = files_in(&folder);
+            let _ = loads.send(Loaded::Files(folder, paths));
+        });
     }
 
     /// Scrolls the transcript up by `lines`, no further than its top.
@@ -1161,7 +1190,11 @@ impl App {
                 text: text.clone(),
                 images: Vec::new(),
                 threads: Vec::new(),
-                model: self.model.clone(),
+                // On another provider, the model the header names: its first, unless picked.
+                model: self
+                    .model
+                    .clone()
+                    .or_else(|| self.provider.as_ref().and_then(|_| self.first_model())),
                 effort: self.effort,
                 permission: self.permission,
                 context_window: None,
@@ -1222,8 +1255,13 @@ impl App {
                     .map_or_else(|| argument.to_owned(), |(id, _)| id);
                 self.model = Some(id);
             }
+            // From what's already read, refreshed behind the list; read first only when empty.
             "/provider" | "/model" => {
-                self.load_providers().await;
+                if self.providers.is_empty() {
+                    self.load_providers().await;
+                } else {
+                    self.refresh_providers();
+                }
                 let menu = if name == "/provider" {
                     self.providers_menu()
                 } else {
@@ -1664,6 +1702,71 @@ impl App {
     }
 }
 
+/// The host's default provider and its providers, as plxd lists them.
+async fn read_providers(plxd: &Plxd) -> Result<Loaded, String> {
+    let defaults = tokio::time::timeout(
+        CALL_TIMEOUT,
+        plxd.call::<AccountsDefaultsGet>(AccountsDefaultsGetParams {}),
+    )
+    .await;
+    let backend = match defaults {
+        Ok(Ok(defaults)) => match defaults.worker {
+            Some(AccountChoice::Subscription { backend }) => Some(backend),
+            _ => None,
+        },
+        _ => None,
+    };
+    let listed = tokio::time::timeout(
+        CALL_TIMEOUT,
+        plxd.call::<ProvidersList>(ProvidersListParams { refresh: false }),
+    )
+    .await
+    .map_err(|_| format!("plxd didn't answer providers/list within {CALL_TIMEOUT:?}"))??;
+    Ok(Loaded::Providers {
+        backend,
+        providers: listed.providers,
+    })
+}
+
+/// The files git sees in the checkout at `folder`, tracked or not but not ignored, and the
+/// folders they're in, sorted. Paths come unquoted (`-z`), so names outside ASCII stay as they
+/// are.
+fn files_in(folder: &Path) -> Vec<String> {
+    let listed = std::process::Command::new("git")
+        .arg("-C")
+        .arg(folder)
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ])
+        .stderr(std::process::Stdio::null())
+        .output();
+    let Ok(listed) = listed else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&listed.stdout);
+    let mut paths = std::collections::BTreeSet::new();
+    for file in text
+        .split('\0')
+        .filter(|file| !file.is_empty())
+        .take(MAX_FILES)
+    {
+        let mut parent = String::new();
+        let mut parts: Vec<&str> = file.split('/').collect();
+        parts.pop();
+        for part in parts {
+            parent.push_str(part);
+            parent.push('/');
+            paths.insert(parent.clone());
+        }
+        paths.insert(file.to_owned());
+    }
+    paths.into_iter().collect()
+}
+
 /// The top of the git working tree `dir` is in, by git itself, or None outside one.
 fn git_top(dir: &Path) -> Option<PathBuf> {
     let output = std::process::Command::new("git")
@@ -1846,7 +1949,7 @@ mod tests {
     use parallax_protocol::{AgentEffort, AgentPermission, ClientInfo, ProviderInfo, Repo};
     use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
-    use super::{App, Draft, age, summary};
+    use super::{App, Draft, age, files_in, summary};
     use crate::peer::Plxd;
 
     /// An app whose plxd is never reached: these keys make no calls.
@@ -1986,6 +2089,27 @@ mod tests {
         );
         press(&mut app, &[KeyCode::Enter]).await;
         assert_eq!(app.input, "@daemon/", "a folder stays open");
+
+        press(&mut app, &[KeyCode::Esc]).await;
+        assert!(app.mentions().is_empty(), "Esc closes the list");
+        assert_eq!(app.input, "@daemon/", "and keeps the message");
+    }
+
+    #[test]
+    fn files_keep_names_outside_ascii() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        git(&["init", "-q"]);
+        std::fs::create_dir(dir.path().join("docs")).unwrap();
+        std::fs::write(dir.path().join("docs/café.md"), "").unwrap();
+        assert_eq!(files_in(dir.path()), ["docs/", "docs/café.md"]);
     }
 
     #[test]
