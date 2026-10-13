@@ -97,7 +97,10 @@ for (const method of withheldMethods) rendererMethods.delete(method);
 let hostUpdater: HostUpdater | undefined;
 /** The version Update everything puts each host's plxd on: the app's next release, else its own. */
 let targetVersion = () => app.getVersion();
-/** How long `host/update` may take: it downloads plxd, about 30 MB, before it answers. */
+/**
+ * How long `host/update` may take: it downloads plxd, about 30 MB, before it answers. A
+ * provider's `providers/upgrade` gets as long.
+ */
 const UPDATE_TIMEOUT_MS = 15 * 60_000;
 
 /**
@@ -228,7 +231,9 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
       if (!host) return invalid(ErrorCodes.InvalidParams, `unknown host: ${String(hostId)}`);
       // plxd validates the params' shape; they only have to be an object to be sent.
       if (!isObject(params)) return invalid(ErrorCodes.InvalidParams, "params must be an object");
-      return host.request(method as RendererMethod, params as never);
+      // A provider's own update downloads it, which can take minutes (PLX-746).
+      const timeout = method === "providers/upgrade" ? UPDATE_TIMEOUT_MS : undefined;
+      return host.request(method as RendererMethod, params as never, timeout);
     },
   );
 

@@ -90,6 +90,8 @@ export class HostUpdater {
   private readonly active = new Set<string>();
   /** Hosts waiting to reconnect on the new plxd. */
   private readonly pending = new Map<string, Pending>();
+  /** Each update started here until plxd answers, so `updateNow` sends after it, not over it. */
+  private readonly running = new Map<string, Promise<void>>();
   /** The local plxd ran the app's version once this launch. */
   private localCurrent = false;
 
@@ -131,10 +133,12 @@ export class HostUpdater {
 
   /**
    * Updates `hostId` to `version` now, cutting off its agents' turns, as Update everything does
-   * (PLX-746): even one waiting for its agents, or one that failed. Resolves once plxd answers;
-   * the result comes as the usual event once it reconnects.
+   * (PLX-746): even one waiting for its agents, or one that failed. One this launch is updating
+   * already is asked once plxd has answered that. Resolves once plxd answers; the result comes as
+   * the usual event once it reconnects. A plxd that doesn't know `now` waits for its agents.
    */
   async updateNow(hostId: string, version: string): Promise<void> {
+    await this.running.get(hostId);
     this.tried.add(`${hostId}@${this.deps.version}`);
     this.active.add(hostId);
     const answer = await this.deps.update(hostId, version, true).catch((error: unknown) => ({
@@ -142,7 +146,7 @@ export class HostUpdater {
     }));
     if ("error" in answer) return this.fail(hostId, answer.error.message);
     if (answer.result.restart === "upToDate") return this.done(hostId);
-    this.wait(hostId, true, version);
+    this.wait(hostId, answer.result.restart === "now", version);
   }
 
   /** Updates `hostId` if it's a remote host, connected on an older plxd, not tried yet. */
@@ -154,9 +158,12 @@ export class HostUpdater {
     if (!kind || this.tried.has(key) || this.active.has(hostId)) return;
     this.tried.add(key);
     this.active.add(hostId);
-    void this.run(hostId, kind, state).catch((error: unknown) =>
-      this.fail(hostId, error instanceof Error ? error.message : String(error)),
-    );
+    const running = this.run(hostId, kind, state)
+      .catch((error: unknown) =>
+        this.fail(hostId, error instanceof Error ? error.message : String(error)),
+      )
+      .finally(() => this.running.delete(hostId));
+    this.running.set(hostId, running);
   }
 
   private async run(

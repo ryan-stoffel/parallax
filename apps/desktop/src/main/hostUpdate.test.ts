@@ -346,3 +346,31 @@ test("Update everything updates a host now, even one waiting for its agents", as
   set("tailnet:a", updatable(next));
   expect(events.at(-1)).toEqual({ hostId: "tailnet:a", status: "updated", version: next });
 });
+
+test("Update everything waits for an update already running, and an older plxd's agents", async () => {
+  const states = new Map<string, ConnectionState>();
+  let answer!: () => void;
+  const update = vi.fn(async (_id: string, version: string, now?: boolean) => {
+    // The update this launch started is still downloading when Update everything asks.
+    if (!now) await new Promise<void>((resolve) => (answer = resolve));
+    // A plxd from before `now` waits for its agents either way.
+    return {
+      result: { version, restart: "afterRuns" as const, runningAgents: 1, message: "Installed." },
+    };
+  });
+  const { events, set, updater } = rig(states, { update });
+  set("tailnet:a", updatable("0.1.0"));
+  set("local", connected(APP));
+  await settle();
+  const asked = updater.updateNow("tailnet:a", APP);
+  await settle();
+  expect(update).toHaveBeenCalledTimes(1);
+  answer();
+  await asked;
+  expect(update).toHaveBeenLastCalledWith("tailnet:a", APP, true);
+  // Still on the old plxd while its agents run: no failure, and success once it's back.
+  set("tailnet:a", updatable("0.1.0"));
+  expect(events).toEqual([]);
+  set("tailnet:a", updatable(APP));
+  expect(events).toEqual([{ hostId: "tailnet:a", status: "updated", version: APP }]);
+});

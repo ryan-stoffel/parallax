@@ -7,7 +7,7 @@ import { IconButton } from "./ui";
 import {
   planLine,
   planSummary,
-  runningThreads,
+  restartInfo,
   updateEverything,
   useUpdatePlan,
 } from "./updateEverything";
@@ -53,9 +53,11 @@ export function UpdateButton() {
   const { plans, refresh } = useUpdatePlan(state);
   // Something beyond the app to update: a remote plxd or a provider.
   const everything = plans.some((p) => p.server !== undefined || p.providers.length > 0);
-  // Running threads the confirmed update cuts off, and whether they go on after it.
-  const [running, setRunning] = useState(0);
-  const [continueThreads, setContinueThreads] = useState(true);
+  // Running threads the confirmed update cuts off, whether they go on after it as the hosts have
+  // it, and as the user chose, which alone is saved to the hosts.
+  const [restart, setRestart] = useState({ running: 0, continueThreads: true });
+  const [continueThreads, setContinueThreads] = useState<boolean>();
+  const { running } = restart;
 
   // The pointer crosses the gap between the button and the card before the card closes.
   const closing = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -76,9 +78,10 @@ export function UpdateButton() {
 
   const click = async (source: HTMLElement) => {
     if (downloaded || everything) {
-      setRunning(0);
+      setRestart({ running: 0, continueThreads: true });
+      setContinueThreads(undefined);
       confirm.current?.showModal();
-      setRunning(await runningThreads(plans));
+      setRestart(await restartInfo(plans));
       return;
     }
     open(source);
@@ -218,7 +221,7 @@ export function UpdateButton() {
                 <label className="mt-2 flex items-center gap-2 text-[13px] text-muted-foreground">
                   <input
                     type="checkbox"
-                    checked={continueThreads}
+                    checked={continueThreads ?? restart.continueThreads}
                     onChange={(e) => setContinueThreads(e.target.checked)}
                   />
                   Continue threads after restarts

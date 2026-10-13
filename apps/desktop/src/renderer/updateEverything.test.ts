@@ -6,11 +6,11 @@ import { buildPlan, planLine, planSummary } from "./updateEverything";
 const APP = "2610.10912.13045-nightly";
 const NEXT = "2610.11001.10000-nightly";
 
-const connected = (plxd: string, hostUpdate = true): ConnectionState => ({
+const connected = (plxd: string, current = true): ConnectionState => ({
   status: "connected",
   plxd,
   protocol: 1,
-  capabilities: hostUpdate ? { hostUpdate: {} } : {},
+  capabilities: current ? { hostUpdate: {}, providerUpdates: {} } : { hostUpdate: {} },
 });
 
 const hosts = [
@@ -28,7 +28,7 @@ test("the plan lists each host's updates, as T3 Code's dialog does", () => {
       local: connected(APP),
       "tailnet:alvin": connected(APP),
       "tailnet:current": connected(NEXT),
-      // Too old for host/update: Update everything leaves it to the usual updater.
+      // Too old for host/update's `now`: Update everything leaves it to the usual updater.
       "tailnet:old": connected("0.1.0", false),
       "tailnet:offline": { status: "connecting" } as ConnectionState,
     },

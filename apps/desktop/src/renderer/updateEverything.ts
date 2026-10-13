@@ -65,7 +65,10 @@ export function buildPlan(
       id !== localId &&
       target !== undefined &&
       connected !== undefined &&
+      // A plxd with `providerUpdates` also takes `host/update`'s `now`; an older one is left to
+      // the usual update once its agents finish (`HostUpdater`).
       "hostUpdate" in connected.capabilities &&
+      "providerUpdates" in connected.capabilities &&
       isOlder(connected.plxd, target)
         ? target
         : undefined;
@@ -131,15 +134,30 @@ export function useUpdatePlan(update: UpdateState) {
   return { plans, refresh };
 }
 
-/** The running threads a restart of each restarting host cuts off, from `host/health`. */
-export async function runningThreads(plans: HostPlan[]): Promise<number> {
-  const counts = await Promise.all(
+/**
+ * The running threads a restart of each restarting host cuts off, from `host/health`, and
+ * whether every restarting host that reports `continueAfterRestart` has it on, the checkbox's
+ * starting state.
+ */
+export async function restartInfo(
+  plans: HostPlan[],
+): Promise<{ running: number; continueThreads: boolean }> {
+  const hosts = await Promise.all(
     plans.filter(restarts).map(async ({ hostId }) => {
-      const answer = await window.parallax.request(hostId, "host/health", {});
-      return "result" in answer ? answer.result.runningAgents : 0;
+      const [health, settings] = await Promise.all([
+        window.parallax.request(hostId, "host/health", {}),
+        window.parallax.request(hostId, "host/settings/get", {}),
+      ]);
+      return {
+        running: "result" in health ? health.result.runningAgents : 0,
+        on: "result" in settings ? settings.result.continueAfterRestart : undefined,
+      };
     }),
   );
-  return counts.reduce((a, b) => a + b, 0);
+  return {
+    running: hosts.reduce((n, host) => n + host.running, 0),
+    continueThreads: hosts.every((host) => host.on !== false),
+  };
 }
 
 /** Resolves once the app's update has downloaded, or to false if the download fails. */
@@ -158,19 +176,20 @@ function downloaded(): Promise<boolean> {
 
 /**
  * Updates everything in `plans`: sets each restarting host's `continueAfterRestart` to
- * `continueThreads`, updates each host's providers and then its plxd, now, and once every host
- * has answered, installs the app's update, downloading it first unless `appReady`, which
- * restarts Parallax. Failures show as notifications; a plxd's comes through `onHostUpdate`.
+ * `continueThreads` when the user chose it, updates each host's providers and then its plxd,
+ * now, and once every host has answered, installs the app's update, downloading it first unless
+ * `appReady`, which restarts Parallax. Failures show as notifications; a plxd's comes through
+ * `onHostUpdate`.
  */
 export async function updateEverything(
   plans: HostPlan[],
-  continueThreads: boolean,
+  continueThreads: boolean | undefined,
   appReady: boolean,
   refresh: (hostId: string) => Promise<void>,
 ): Promise<void> {
   await Promise.all(
     plans.map(async (plan) => {
-      if (restarts(plan))
+      if (restarts(plan) && continueThreads !== undefined)
         await window.parallax.request(plan.hostId, "host/settings/set", {
           continueAfterRestart: continueThreads,
         });
