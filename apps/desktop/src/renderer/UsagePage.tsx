@@ -25,6 +25,7 @@ import { StatusDot, statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { locale } from "./locale";
+import { hostIcon } from "./RunTargetMenu";
 import { dayKey, dayOf } from "./profile";
 import { kinds, type Kind } from "./providers";
 import { IconButton, Segmented } from "./ui";
@@ -483,7 +484,7 @@ function History({
     <>
       {/* The loaders stay first and in place, so they're never remounted (which would drop
           their answers and ask again) as the rest appears. Refresh reaches them through `now`. */}
-      <div>
+      <div className="mb-6 flex flex-wrap gap-2 empty:hidden">
         {hosts.map((h) => (
           <HostUsageLoader
             key={h.id}
@@ -573,23 +574,28 @@ function HostUsageLoader({
   const coming = !connected && (connection?.status !== "failed" || connection.retrying);
   if (named && (coming || (connected && !current))) {
     return (
-      <span className="mr-5 mb-6 inline-flex items-center gap-2 text-[13px] text-muted-foreground">
+      <span className="inline-flex items-center gap-2.5 rounded-xl border border-border bg-surface py-2 pr-3.5 pl-3 text-[13px] text-muted-foreground">
+        <span aria-hidden className="grid size-4 place-items-center [&>svg]:size-4">
+          {hostIcon(host)}
+        </span>
+        <span className="font-medium text-foreground">{host.name}</span>
         {coming ? (
-          <StatusDot state={undefined} />
+          <>
+            <StatusDot state={undefined} />
+            {status}
+          </>
         ) : (
           <span
             aria-hidden
             className="size-1.5 shrink-0 rounded-full bg-muted-foreground motion-safe:animate-pulse"
           />
         )}
-        <span className="text-foreground">{host.name}</span>
-        {coming && status}
       </span>
     );
   }
   const notes = status ? [status] : (result?.problems.map((p) => p.message) ?? []);
   return notes.map((note) => (
-    <p key={note} className="mb-6 text-[13px] text-muted-foreground">
+    <p key={note} className="basis-full text-[13px] text-muted-foreground">
       {named && `${host.name}: `}
       {note}
     </p>
