@@ -130,7 +130,8 @@ test.skipIf(process.platform === "win32")(
     await installCommand(at);
     expect(await commandState(at)).toBe("installed");
     await removeCommand(at);
-    expect([await commandState(at), existsSync(at.copy!)]).toEqual(["missing", false]);
+    // The copy stays, for a serve that may still run from it.
+    expect([await commandState(at), existsSync(at.copy!)]).toEqual(["missing", true]);
 
     // A user's own parallax, a file or a link elsewhere, is never the app's.
     writeFileSync(at.file, "#!/bin/sh\necho mine\n");

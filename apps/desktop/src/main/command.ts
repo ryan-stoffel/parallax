@@ -234,8 +234,9 @@ async function copyBundle(at: Layout): Promise<void> {
 }
 
 /**
- * Removes the command: the link and, on Linux, its copy; on Windows, the launcher and its folder
- * on PATH. On macOS, asks for a password when the folder isn't the user's.
+ * Removes the command: the link, or on Windows, the launcher and its folder on PATH. On macOS,
+ * asks for a password when the folder isn't the user's. Linux's copy stays: a `serve` that
+ * `parallax` started may still run from it, and the next install replaces it.
  */
 export async function removeCommand(at: Layout): Promise<void> {
   if (at.platform === "darwin" && !(await writable(path.dirname(at.file)))) {
@@ -243,7 +244,6 @@ export async function removeCommand(at: Layout): Promise<void> {
     return;
   }
   await rm(at.file, { force: true });
-  if (at.copy) await rm(at.copy, { recursive: true, force: true });
   if (at.platform === "win32") await changeUserPath(path.win32.dirname(at.file), false);
 }
 
