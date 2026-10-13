@@ -248,7 +248,7 @@ export function AgentChat({
   going?: boolean;
   /** A thread with no repo: its scratch repository has no origin, so it gets no Open PR. */
   noRepo?: boolean;
-  /** A chat in a Space: no Access picker. */
+  /** A chat in a Space: no Access picker, and no run tab, since it has no repository. */
   space?: boolean;
   /** The host the run is on, named in the composer's tab. */
   host?: Host;
@@ -785,7 +785,7 @@ export function AgentChat({
           disabledReason={disabledReason}
           tab={
             tab ??
-            (run && (
+            (run && !space && (
               <RunTab run={run} host={host}>
                 {pullRequests ||
                   (canOpenPr && (

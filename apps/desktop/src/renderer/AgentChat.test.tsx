@@ -937,8 +937,8 @@ const settle = async () => {
   for (let i = 0; i < 20; i++) await act(async () => {});
 };
 
-async function renderChat(noRepo?: boolean) {
-  render(<AgentChat hostId="local" runId={runId} noRepo={noRepo} />);
+async function renderChat(noRepo?: boolean, space?: boolean) {
+  render(<AgentChat hostId="local" runId={runId} noRepo={noRepo} space={space} />);
   await settle(); // the connection state and the pages
 }
 
@@ -1149,6 +1149,15 @@ test("the composer tab names the host and local checkout, which has no branch of
   } = (started as unknown as { result: AgentRunResult }).result.run;
   render(<RunTab run={{ ...run, checkout: true }} host={{ id: "local", name: "This Mac" }} />);
   expect(document.body.textContent).toBe("This Mac·Local checkout");
+});
+
+test("a chat in a Space has no worktree tab under the composer", async () => {
+  fakeBridge(4);
+  await renderChat();
+  expect(document.body.textContent).toContain("Worktree");
+  act(() => unmount());
+  await renderChat(false, true);
+  expect(document.body.textContent).not.toContain("Worktree");
 });
 
 test("Enter sends with a fresh v7 turn id, but not while an IME is composing", async () => {
