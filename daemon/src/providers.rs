@@ -596,6 +596,12 @@ impl Providers {
         self.write(&stored)?;
         self.registry.remove(id);
         drop(stored);
+        // Ollama Cloud's Hermes home goes with it, so one added again under its id starts clean.
+        // A home the user set is theirs, and stays.
+        let own = self.file.with_file_name("ollama-cloud").join(id);
+        if on_hermes(&entry.instance) && entry.instance.home.as_deref() == own.to_str() {
+            let _ = std::fs::remove_dir_all(own);
+        }
         if let Some(secrets) = entry.secrets {
             let keys = Arc::clone(&self.keys);
             // Off the runtime's threads, as the keychain may wait on the user.
@@ -1701,6 +1707,42 @@ mod tests {
         };
         assert!(!auto("cloud"));
         assert!(auto("ollama"));
+
+        // Its run is `hermes acp` on Ollama Cloud, in that home, with the key from the keychain.
+        let entry = providers
+            .stored
+            .lock()
+            .await
+            .iter()
+            .find(|s| s.instance.id == "cloud")
+            .cloned()
+            .unwrap();
+        let preset = super::preset_for(&entry.instance).unwrap();
+        let super::Driver::Acp(agent) = preset.driver.clone() else {
+            panic!("Ollama Cloud runs over ACP");
+        };
+        let env = providers.env(&entry);
+        let agent = super::acp_for(
+            &entry.instance,
+            &preset,
+            *agent,
+            super::overrides(&entry, env),
+        );
+        assert_eq!(agent.program, "hermes");
+        assert_eq!(agent.args, ["acp"]);
+        for (name, value) in [
+            ("HERMES_INFERENCE_PROVIDER", "ollama-cloud"),
+            ("OLLAMA_API_KEY", "ollama-key"),
+            ("HERMES_HOME", home.to_str().unwrap()),
+        ] {
+            assert!(
+                agent.env.iter().any(|(n, v)| n == name && v == value),
+                "{name}"
+            );
+        }
+
+        providers.remove("cloud").await.unwrap();
+        assert!(!home.exists(), "its home goes with it");
     }
 
     #[test]
