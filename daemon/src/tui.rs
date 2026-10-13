@@ -573,7 +573,10 @@ impl App {
                     self.default_backend = backend;
                 }
                 self.providers = providers;
+                // With no provider known before, a model picked then was meant for this one.
+                let model = before.is_none().then(|| self.model.take()).flatten();
                 self.fit_provider(before.as_deref());
+                self.model = model.or(self.model.take());
             }
             Loaded::Files(folder, paths) => {
                 if self.reading.as_ref() == Some(&folder) {
@@ -1076,7 +1079,14 @@ impl App {
                 self.fit_provider(before.as_deref());
             }
             Pick::Model(id) => self.model = Some(id),
+            // Checked again here: a list opened before the providers came offered every choice.
+            Pick::Effort(_) if !self.takes_effort() => {
+                self.error = Some("this provider doesn't take an effort".to_owned());
+            }
             Pick::Effort(effort) => self.effort = Some(effort),
+            Pick::Mode(mode) if !self.modes().contains(&mode) => {
+                self.error = Some(format!("this provider can't run {}", mode_name(mode)));
+            }
             Pick::Mode(mode) => self.permission = Some(mode),
         }
     }
@@ -2053,6 +2063,27 @@ mod tests {
             providers: vec![codex],
         });
         assert_eq!(app.permission, Some(AgentPermission::Edit));
+    }
+
+    #[tokio::test]
+    async fn a_model_picked_before_providers_arrive_stays() {
+        let codex: ProviderInfo = serde_json::from_value(serde_json::json!({
+            "instance": {"id": "codex", "kind": "codex", "name": "Codex", "enabled": true,
+                         "args": [], "env": [], "models": []},
+            "installed": true, "installing": false, "models": [],
+            "permissions": ["edit", "auto"], "efforts": true, "coordinator": false, "loginEnv": [],
+        }))
+        .unwrap();
+        let mut app = app();
+        app.model = Some("gpt-6.1-sol".to_owned());
+        app.take(super::Loaded::Providers {
+            backend: Some("codex".to_owned()),
+            providers: vec![codex],
+        });
+        assert_eq!(app.model.as_deref(), Some("gpt-6.1-sol"));
+        // A mode the provider can't run, picked from a list opened before, is refused.
+        app.pick(super::Pick::Mode(AgentPermission::Plan)).await;
+        assert_eq!(app.permission, None);
     }
 
     #[tokio::test]
