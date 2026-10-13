@@ -9,6 +9,8 @@ import {
   GitPullRequest,
   Link,
   Moon,
+  Network,
+  ShieldCheck,
   Sunrise,
   Sun,
   Sunset,
@@ -18,10 +20,12 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 
-import type { Profile } from "./../preload/bridge";
-import type { UsageHour } from "./../protocol/generated/protocol";
+import type { DeviceHost, Profile } from "../preload/bridge";
+import type { UsageHour } from "../protocol/generated/protocol";
 import { useConnection } from "./ConnectionStatus";
-import { useHosts, type Host } from "./hosts";
+import { osName } from "./ConnectWizard";
+import { DeviceIcon } from "./DeviceIcon";
+import { localId, useConnect, useHosts, type Host } from "./hosts";
 import { ClerkLogo, ParallaxMark } from "./logos";
 import { models } from "./models";
 import { instanceName, kinds } from "./providers";
@@ -52,6 +56,8 @@ const card = "rounded-2xl border border-border bg-surface";
 const heading = "text-[12.5px] font-medium text-muted-foreground";
 const outlineButton =
   "flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5";
+const dangerOutline =
+  "rounded-md border border-border bg-surface px-2.5 py-1 text-[12.5px] text-danger hover:bg-hover";
 
 /** "Secured by Clerk", with Clerk's mark, as Clerk's own account pages sign off. */
 export function SecuredByClerk() {
@@ -67,15 +73,38 @@ export function SecuredByClerk() {
 }
 
 const tabs = [
-  { id: "profile", name: "Profile", Icon: CircleUser },
-  { id: "activity", name: "Activity", Icon: ActivityIcon },
+  {
+    id: "profile",
+    name: "Profile",
+    Icon: CircleUser,
+    about: "Your Parallax account, and what your agents add up to.",
+  },
+  {
+    id: "activity",
+    name: "Activity",
+    Icon: ActivityIcon,
+    about: "When and how much your agents ran, across every host.",
+  },
+  {
+    id: "security",
+    name: "Security",
+    Icon: ShieldCheck,
+    about: "How you sign in, and where. Each opens Clerk's account page in your browser.",
+  },
+  {
+    id: "connect",
+    name: "Parallax Connect",
+    Icon: Network,
+    about: "The computers you added with Parallax Connect. Turn them on or off in Settings.",
+  },
 ] as const;
 
 /**
  * The Account dialog, a native modal <dialog> open while it's mounted, which the profile menu's
  * Manage account opens (0067). Profile is the account's card, with what every host's agents add
- * up to, and its settings. Activity is when and how much those agents ran. Share copies the card
- * as a picture.
+ * up to, and its settings. Activity is when and how much those agents ran. Security is how the
+ * account signs in, on Clerk's pages. Parallax Connect lists the devices added with it (0056).
+ * Share copies the card as a picture.
  */
 export function AccountDialog({
   profile,
@@ -89,6 +118,7 @@ export function AccountDialog({
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const [tab, setTab] = useState<(typeof tabs)[number]["id"]>("profile");
+  const current = tabs.find((t) => t.id === tab)!;
   useEffect(() => dialog.current?.showModal(), []);
   const hosts = useHosts();
   const [now] = useState(Date.now);
@@ -117,7 +147,7 @@ export function AccountDialog({
       ref={dialog}
       aria-labelledby={titleId}
       onClose={onClose}
-      className="m-auto h-[85vh] w-[60rem] max-w-[92vw] overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-composer backdrop:bg-black/50"
+      className="relative m-auto h-[85vh] w-[60rem] max-w-[92vw] overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-composer backdrop:bg-black/50"
     >
       {hosts.map((h) => (
         <HostUsage key={h.id} host={h} since={since} onLoad={onUsage} />
@@ -147,43 +177,53 @@ export function AccountDialog({
             <SecuredByClerk />
           </div>
         </nav>
-        <div className="@container min-w-0 flex-1 overflow-y-auto px-8 pt-5 pb-10">
-          <div className="mb-5 flex items-center justify-between">
-            <h3 className="text-[15px] font-semibold">{tabs.find((t) => t.id === tab)!.name}</h3>
-            <IconButton label="Close" onClick={() => dialog.current?.close()}>
-              <X aria-hidden />
-            </IconButton>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="border-b border-border px-8 pt-5 pb-4">
+            <h3 className="text-[15px] font-semibold">{current.name}</h3>
+            <p className="mt-0.5 text-[12.5px] text-muted-foreground">{current.about}</p>
+          </header>
+          <div className="@container min-h-0 flex-1 overflow-y-auto px-8 pt-6 pb-10">
+            {tab === "profile" ? (
+              <>
+                <ProfileCard
+                  profile={profile}
+                  activity={activity}
+                  repos={repos}
+                  hosts={hosts.length}
+                />
+                <AccountRows profile={profile} />
+              </>
+            ) : tab === "security" ? (
+              <SecurityRows />
+            ) : tab === "connect" ? (
+              <ConnectRows />
+            ) : (
+              <>
+                {activity.agents > 0 && (
+                  <div className="mb-8 grid gap-3 @2xl:grid-cols-2">
+                    <Hours hours={activity.hours} />
+                    <Models activity={activity} />
+                  </div>
+                )}
+                <Heatmap activity={activity} now={now} />
+                <Tokens hosts={hosts} usage={usage} now={now} />
+              </>
+            )}
           </div>
-          {tab === "profile" ? (
-            <>
-              <ProfileCard
-                profile={profile}
-                activity={activity}
-                repos={repos}
-                hosts={hosts.length}
-              />
-              <AccountRows profile={profile} />
-            </>
-          ) : (
-            <>
-              {activity.agents > 0 && (
-                <div className="mb-8 grid gap-3 @2xl:grid-cols-2">
-                  <Hours hours={activity.hours} />
-                  <Models activity={activity} />
-                </div>
-              )}
-              <Heatmap activity={activity} now={now} />
-              <Tokens hosts={hosts} usage={usage} now={now} />
-            </>
-          )}
         </div>
       </div>
+      <span className="absolute top-3 right-3">
+        <IconButton label="Close" onClick={() => dialog.current?.close()}>
+          <X aria-hidden />
+        </IconButton>
+      </span>
     </dialog>
   );
 }
 
 /**
- * The card at the top: a banner in the logo's colors, the account, and the stats as tiles. Share copies it as a picture, with the brand mark where its buttons are.
+ * The card at the top: a banner in the logo's colors, the account, and the stats as tiles.
+ * Share copies it as a picture, with the brand mark where the button is.
  */
 function ProfileCard({
   profile,
@@ -694,6 +734,120 @@ function AccountRows({ profile }: { profile: Profile }) {
           Sign out
         </button>
       </div>
+    </Section>
+  );
+}
+
+/** A row's title and what it says, on the left of a settings row. */
+function RowText({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <span className="block text-[13px] font-medium">{title}</span>
+      <span className="block text-[12.5px] text-muted-foreground">{children}</span>
+    </div>
+  );
+}
+
+/**
+ * The Security tab: password, passkeys, devices, and Delete account. An OAuth token can't read
+ * or change them (0067), so each opens Clerk's Security page in the browser, and the devices row
+ * names only this one.
+ */
+function SecurityRows() {
+  const local = useHosts().find((h) => h.id === localId)!;
+  const security = () => void window.parallax.editProfile("security");
+  return (
+    <>
+      <Section title="Sign-in">
+        <div className={settingRow}>
+          <RowText title="Password">Set or change the password you sign in with by email.</RowText>
+          <button type="button" onClick={security} className={outlineButton}>
+            Set password
+          </button>
+        </div>
+        <div className={settingRow}>
+          <RowText title="Passkeys">
+            Sign in with Touch ID, Windows Hello, or a security key.
+          </RowText>
+          <button type="button" onClick={security} className={outlineButton}>
+            Add a passkey
+          </button>
+        </div>
+        <div className={settingRow}>
+          <RowText title="Active devices">
+            <span className="flex items-center gap-1.5">
+              {local.name} ·{" "}
+              {osName(platformOs[window.parallax.platform] ?? window.parallax.platform)}
+              <span className="rounded-md border border-border px-1.5 text-[11.5px]">
+                This device
+              </span>
+            </span>
+          </RowText>
+          <button type="button" onClick={security} className={outlineButton}>
+            Manage
+          </button>
+        </div>
+      </Section>
+      <Section title="Danger zone">
+        <div className={settingRow}>
+          <RowText title="Delete account">
+            Deletes your Parallax account and signs out every device.
+          </RowText>
+          <button type="button" onClick={security} className={dangerOutline}>
+            Delete account
+          </button>
+        </div>
+      </Section>
+    </>
+  );
+}
+
+/** Node's platform as Tailscale names the OS, for `osName`. */
+const platformOs: Record<string, string> = { darwin: "macOS", win32: "windows", linux: "linux" };
+
+/**
+ * The Parallax Connect tab: each device added with it (0056), with its icon, address, and whether
+ * this app uses it. Remove takes it off this app's list until it's added again; nothing on the
+ * device changes.
+ */
+function ConnectRows() {
+  const connect = useConnect();
+  const [devices, setDevices] = useState<DeviceHost[]>([]);
+  useEffect(() => window.parallax.onDevices(setDevices), []);
+  if (!connect?.on)
+    return (
+      <p className="text-[13px] text-muted-foreground">
+        Parallax Connect is off. Turn it on in Settings › Connections to add your other computers.
+      </p>
+    );
+  if (!devices.length)
+    return (
+      <p className="text-[13px] text-muted-foreground">
+        No computers yet. Add one from Settings › Connections.
+      </p>
+    );
+  return (
+    <Section title="Computers">
+      {devices.map((d) => (
+        <div key={d.id} className={settingRow}>
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-border text-muted-foreground [&_svg]:size-4.5">
+              <DeviceIcon icon={d.icon} />
+            </span>
+            <RowText title={d.name}>
+              {d.hostName} · {osName(d.os)} · {d.ip}
+              {!d.enabled && " · Off here"}
+            </RowText>
+          </div>
+          <button
+            type="button"
+            onClick={() => void window.parallax.removeDevice(d.id)}
+            className={dangerOutline}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
     </Section>
   );
 }

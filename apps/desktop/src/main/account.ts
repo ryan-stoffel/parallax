@@ -284,9 +284,12 @@ export function startAccount(): Account {
     return error;
   });
 
-  // The Account dialog's name and picture are edited on Clerk's account page, since an OAuth
-  // token can't change the user. Coming back to the app shows the change.
-  ipcMain.handle("parallax:editProfile", () => shell.openExternal(`${accountPortal(api)}/user`));
+  // The Account dialog's name and picture, and its Security tab's password, passkeys, devices,
+  // and Delete account, are on Clerk's account pages, since an OAuth token can't change the user.
+  // Coming back to the app shows the change.
+  ipcMain.handle("parallax:editProfile", (_event, page: unknown) =>
+    shell.openExternal(`${accountPortal(api)}/user${page === "security" ? "/security" : ""}`),
+  );
 
   ipcMain.handle("parallax:signOut", async () => {
     page?.close();

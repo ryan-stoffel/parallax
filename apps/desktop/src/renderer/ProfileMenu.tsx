@@ -73,7 +73,7 @@ export function ProfileButton({ listed }: { listed: { host: Host; view: ThreadsV
                 )}
               </div>
             </div>
-            <div className="my-1 h-px bg-border" />
+            <div role="separator" className="my-1 h-px bg-border" />
             {profile ? (
               <>
                 {item(
@@ -93,7 +93,7 @@ export function ProfileButton({ listed }: { listed: { host: Host; view: ThreadsV
                 {item(UserPlus, "Create an account", () => void signIn(true))}
               </>
             )}
-            <div className="my-1 h-px bg-border" />
+            <div role="separator" className="my-1 h-px bg-border" />
           </>
         )}
         <div className="flex items-center justify-between px-2 py-1">

@@ -151,7 +151,7 @@ const bridge: ParallaxBridge = {
     return stop;
   },
   signIn: (create) => ipcRenderer.invoke("parallax:signIn", create),
-  editProfile: () => ipcRenderer.invoke("parallax:editProfile"),
+  editProfile: (page) => ipcRenderer.invoke("parallax:editProfile", page),
   signOut: () => ipcRenderer.invoke("parallax:signOut"),
   storage: () => ipcRenderer.invoke("parallax:storage"),
   showFolder: (id) => ipcRenderer.invoke("parallax:showFolder", id),

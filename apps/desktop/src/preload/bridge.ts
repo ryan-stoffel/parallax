@@ -347,10 +347,11 @@ export interface ParallaxBridge {
    */
   signIn(create: boolean): Promise<string | undefined>;
   /**
-   * Opens the account's page on Clerk in the system browser, where its name and picture change.
+   * Opens the account's page on Clerk in the system browser, where its name and picture change,
+   * or with `security`, its Security page: password, passkeys, devices, and deleting the account.
    * `onProfile` hears the change once the app's window is focused again.
    */
-  editProfile(): Promise<void>;
+  editProfile(page?: "security"): Promise<void>;
   /** Signs out on this computer. */
   signOut(): Promise<void>;
 

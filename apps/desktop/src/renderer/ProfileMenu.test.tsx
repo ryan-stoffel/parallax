@@ -3,11 +3,15 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import type { ParallaxBridge, Profile } from "../preload/bridge";
+import type { DeviceHost, ParallaxBridge, Profile } from "../preload/bridge";
 import { ProfileButton } from "./ProfileMenu";
 
-// The Account dialog's hosts, which need a connected plxd for usage. None here.
-vi.mock("./hosts", () => ({ useHosts: () => [] }));
+// The Account dialog's hosts: this computer alone, with Parallax Connect on.
+vi.mock("./hosts", () => ({
+  localId: "local",
+  useHosts: () => [{ id: "local", name: "MacBook" }],
+  useConnect: () => ({ on: true }),
+}));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers or modal dialogs. The menu is in the DOM either way.
@@ -29,10 +33,19 @@ function render(profile: Profile | null) {
   const calls = {
     signIn: vi.fn(async () => undefined),
     signOut: vi.fn(async () => {}),
-    editProfile: vi.fn(async () => {}),
+    editProfile: vi.fn(async (_page?: "security") => {}),
+    removeDevice: vi.fn(async (_hostId: string) => {}),
   };
   window.parallax = {
     ...calls,
+    platform: "darwin",
+    // Never connected, so the dialog asks no host for usage.
+    onConnectionState: () => () => {},
+    connectionState: () => new Promise(() => {}),
+    onDevices: (listener: (devices: DeviceHost[]) => void) => {
+      listener([mini]);
+      return () => {};
+    },
     onProfile: (listener: (p: Profile | null) => void) => {
       publish = listener;
       listener(profile);
@@ -51,6 +64,16 @@ const button = (name: string) =>
 const menu = () => document.querySelector("[popover]")!;
 const click = (b: HTMLButtonElement) => act(() => b.click());
 
+const mini: DeviceHost = {
+  id: "tailnet:mini",
+  name: "Mac Mini",
+  icon: "mini",
+  hostName: "mac-mini",
+  ip: "100.64.0.2",
+  os: "macOS",
+  detected: "mini",
+  enabled: true,
+};
 const ryan = { name: "Ryan Stoffel", firstName: "Ryan", lastName: "Stoffel", email: "r@x.dev" };
 
 test("the menu shows the account, and Manage account opens the Account dialog", async () => {
@@ -86,4 +109,19 @@ test("signed out, Sign in and Create an account open Clerk", async () => {
   expect(signIn).toHaveBeenCalledWith(true);
   click(button("Sign in"));
   expect(signIn).toHaveBeenLastCalledWith(false);
+});
+
+test("Security opens Clerk's Security page, and Parallax Connect lists and removes devices", async () => {
+  const { editProfile, removeDevice } = render(ryan);
+  click(button("Manage account"));
+  click(button("Security"));
+  expect(document.querySelector("dialog")!.textContent).toContain("MacBook · macOS");
+  click(button("Add a passkey"));
+  expect(editProfile).toHaveBeenCalledWith("security");
+
+  click(button("Parallax Connect"));
+  const computers = document.querySelector('dialog [aria-label="Computers"]')!;
+  expect(computers.textContent).toContain("mac-mini · macOS · 100.64.0.2");
+  click(button("Remove"));
+  expect(removeDevice).toHaveBeenCalledWith("tailnet:mini");
 });
