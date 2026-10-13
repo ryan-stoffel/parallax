@@ -203,7 +203,6 @@ fn copy_in(folder: &Path, source: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{copy_in, relative};
-    use std::path::Path;
 
     #[test]
     fn paths_resolve_inside_the_folder_only() {
@@ -221,11 +220,11 @@ mod tests {
         );
         assert!(relative(folder, "../a.docx").is_err());
         assert!(relative(folder, "out/../../a.docx").is_err());
-        // Outside the folder: copied in, not refused.
-        assert_eq!(
-            relative(Path::new("/nonexistent-folder"), "/etc/hosts"),
-            Ok(None)
-        );
+        // Outside the folder, by an absolute path on any OS: copied in, not refused.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let outside = elsewhere.path().join("b.docx");
+        std::fs::write(&outside, b"").unwrap();
+        assert_eq!(relative(folder, outside.to_str().unwrap()), Ok(None));
     }
 
     #[test]
