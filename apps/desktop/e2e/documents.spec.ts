@@ -80,13 +80,28 @@ test("presented files show as cards, open in the side panel, and save an edit ba
   await run.click({ position: { x: edge.width - 1, y: edge.height / 2 } });
   await page.keyboard.type(" Revised by Ryan.");
   await page.screenshot({ path: test.info().outputPath("docx-editing.png") });
+  // Formatting from the toolbar (PLX-758): the typed words larger, red, and bold, in a list.
+  for (let i = 0; i < "Revised by Ryan.".length; i++) await page.keyboard.press("Shift+ArrowLeft");
+  const toolbar = panel.getByRole("toolbar", { name: "Formatting" });
+  await toolbar.getByRole("combobox", { name: "Font size" }).selectOption("28");
+  await toolbar.getByLabel("Text color").fill("#c00000");
+  await toolbar.getByRole("button", { name: "Bold" }).click();
+  await toolbar.getByRole("button", { name: "Bulleted list" }).click();
+  await expect(toolbar.getByRole("button", { name: "Bulleted list" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await page.screenshot({ path: test.info().outputPath("docx-formatting.png") });
   await panel.getByRole("button", { name: "Save", exact: true }).click();
   await expect(transcript.getByText(/I edited `Executive_Summary.docx` in Parallax/)).toBeVisible();
   await expect(transcript.getByText(/Got it. I see your edit/)).toBeVisible();
   const saved = unzipSync(readFileSync(path.join(worktree, "Executive_Summary.docx")));
-  expect(strFromU8(saved["word/document.xml"]!)).toContain(
-    "Prepared for the Q4 planning review. Revised by Ryan. ",
+  const xml = strFromU8(saved["word/document.xml"]!);
+  expect(xml).toContain("Prepared for the Q4 planning review. ");
+  expect(xml).toMatch(
+    /<w:rPr><w:b\/><w:bCs\/><w:color w:val="C00000"\/><w:sz w:val="28"\/><w:szCs w:val="28"\/><\/w:rPr><w:t xml:space="preserve">Revised by Ryan.<\/w:t>/,
   );
+  expect(xml).toMatch(/<w:numPr><w:ilvl w:val="0"\/><w:numId w:val="\d+"\/><\/w:numPr>/);
   await page.screenshot({ path: test.info().outputPath("docx-saved.png") });
 
   // A sheet's cell, edited in place.

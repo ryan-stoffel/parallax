@@ -1,10 +1,4 @@
-import { baseKeymap, splitBlockAs, toggleMark } from "@tiptap/pm/commands";
-import { history, redo, undo } from "@tiptap/pm/history";
-import { keymap } from "@tiptap/pm/keymap";
-import type { MarkType } from "@tiptap/pm/model";
-import { EditorState, type Command } from "@tiptap/pm/state";
-import { EditorView } from "@tiptap/pm/view";
-import { Bold, Download, Italic, Underline } from "lucide-react";
+import { Download } from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -13,10 +7,10 @@ import {
   useState,
   type KeyboardEvent,
   type ReactNode,
-  type RefObject,
 } from "react";
 
-import { changeSummary, endsStyle, openDocx, paragraphTexts, saveDocx, type Docx } from "./docx";
+import { openDocx } from "./docx";
+import { DocxEditor, useWidth, type EditorProps, type Saver } from "./DocxEditor";
 import {
   download,
   drawPdfPage,
@@ -38,9 +32,6 @@ import {
   splitRef,
   type Xlsx,
 } from "./xlsx";
-
-/** What an editor hands Save: the file's new bytes, and what changed, for the agent. */
-type Saver = () => { bytes: Uint8Array; changes: string[] };
 
 /**
  * A presented file in the side panel (PLX-755): a .docx or .xlsx to edit and save, or a .pptx or
@@ -166,26 +157,6 @@ export function DocumentView({ hostId, doc }: { hostId: string; doc: DocRef }) {
   );
 }
 
-interface EditorProps {
-  saver: RefObject<Saver | undefined>;
-  onDirty: (dirty: boolean) => void;
-  onSave: () => void;
-}
-
-/** The width a scroll area's content has, as it resizes. */
-function useWidth(ref: RefObject<HTMLElement | null>) {
-  const [width, setWidth] = useState(0);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const observer = new ResizeObserver(() => setWidth(el.clientWidth));
-    observer.observe(el);
-    setWidth(el.clientWidth);
-    return () => observer.disconnect();
-  }, [ref]);
-  return width;
-}
-
 /** Each page or slide, as wide as the panel, one under another. */
 function Pages({
   count,
@@ -222,178 +193,6 @@ function Drawn({ draw }: { draw: () => Promise<HTMLElement> }) {
     };
   }, []);
   return <div ref={ref} />;
-}
-
-const toolbarButton =
-  "grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-4";
-
-/** A .docx on a page as wide as its own, zoomed to fit, with paragraph styles and B, I, U. */
-function DocxEditor({ docx, saver, onDirty, onSave }: { docx: Docx } & EditorProps) {
-  const scroll = useRef<HTMLDivElement>(null);
-  const mount = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState<EditorView>();
-  const [, refresh] = useReducer((n: number) => n + 1, 0);
-  const handlers = useRef({ onDirty, onSave });
-  handlers.current = { onDirty, onSave };
-  const width = useWidth(scroll);
-  const zoom = width ? Math.min(1, (width - 32) / docx.page.width) : 1;
-
-  useEffect(() => {
-    const { schema } = docx;
-    // Enter splits a paragraph keeping its style, except after a heading, as Word does, and
-    // the new paragraph's text keeps the formatting the cursor had.
-    const enter: Command = (state, dispatch) => {
-      const marks = state.storedMarks ?? state.selection.$from.marks();
-      return splitBlockAs((node, atEnd) =>
-        atEnd && endsStyle(node.attrs["style"])
-          ? { type: schema.nodes.paragraph }
-          : { type: node.type, attrs: node.attrs },
-      )(state, dispatch && ((tr) => dispatch(tr.ensureMarks(marks))));
-    };
-    const editor = new EditorView(mount.current!, {
-      state: EditorState.create({
-        doc: docx.doc,
-        plugins: [
-          history(),
-          keymap({
-            "Mod-z": undo,
-            "Shift-Mod-z": redo,
-            "Mod-y": redo,
-            "Mod-b": toggleMark(schema.marks.bold),
-            "Mod-i": toggleMark(schema.marks.italic),
-            "Mod-u": toggleMark(schema.marks.underline),
-            "Mod-s": () => {
-              handlers.current.onSave();
-              return true;
-            },
-            Enter: enter,
-          }),
-          keymap(baseKeymap),
-        ],
-      }),
-      attributes: {
-        class: `${docx.scope} outline-none`,
-        role: "textbox",
-        "aria-multiline": "true",
-        "aria-label": "Document",
-      },
-      dispatchTransaction(tr) {
-        const next = editor.state.apply(tr);
-        editor.updateState(next);
-        if (tr.docChanged) handlers.current.onDirty(!next.doc.eq(docx.doc));
-        refresh();
-      },
-    });
-    saver.current = () => ({
-      bytes: saveDocx(docx, editor.state.doc),
-      changes: changeSummary(docx.texts, paragraphTexts(docx, editor.state.doc)),
-    });
-    setView(editor);
-    return () => {
-      saver.current = undefined;
-      editor.destroy();
-    };
-  }, [docx, saver]);
-
-  const markOn = (type: MarkType | undefined) => {
-    if (!view || !type) return false;
-    const { from, $from, to, empty } = view.state.selection;
-    return empty
-      ? !!type.isInSet(view.state.storedMarks ?? $from.marks())
-      : view.state.doc.rangeHasMark(from, to, type);
-  };
-  const mark = (type: MarkType | undefined) => {
-    if (!view || !type) return;
-    toggleMark(type)(view.state, view.dispatch);
-    view.focus();
-  };
-  const current = view?.state.selection.$from.parent.attrs["style"] as string | null | undefined;
-  const defaultStyle = docx.styles[0]?.id ?? "";
-  const setStyle = (style: string) => {
-    if (!view) return;
-    const { from, to } = view.state.selection;
-    const tr = view.state.tr;
-    view.state.doc.nodesBetween(from, to, (node, pos) => {
-      if (node.type !== docx.schema.nodes.paragraph) return;
-      tr.setNodeMarkup(pos, undefined, { ...node.attrs, style: style || null });
-      return false;
-    });
-    view.dispatch(tr);
-    view.focus();
-  };
-  const { bold, italic, underline } = docx.schema.marks;
-
-  return (
-    <>
-      <div className="flex items-center gap-1 border-b border-border px-2 py-1">
-        {docx.styles.length > 0 && (
-          <select
-            aria-label="Paragraph style"
-            value={current ?? defaultStyle}
-            onChange={(e) => setStyle(e.target.value)}
-            className="mr-1 rounded-md bg-selected px-2 py-1 text-[12.5px]"
-          >
-            {current && !docx.styles.some((s) => s.id === current) && (
-              <option value={current}>{current}</option>
-            )}
-            {docx.styles.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name || s.id}
-              </option>
-            ))}
-          </select>
-        )}
-        <button
-          type="button"
-          aria-label="Bold"
-          title="Bold (⌘B)"
-          aria-pressed={markOn(bold)}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => mark(bold)}
-          className={toolbarButton}
-        >
-          <Bold />
-        </button>
-        <button
-          type="button"
-          aria-label="Italic"
-          title="Italic (⌘I)"
-          aria-pressed={markOn(italic)}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => mark(italic)}
-          className={toolbarButton}
-        >
-          <Italic />
-        </button>
-        <button
-          type="button"
-          aria-label="Underline"
-          title="Underline (⌘U)"
-          aria-pressed={markOn(underline)}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => mark(underline)}
-          className={toolbarButton}
-        >
-          <Underline />
-        </button>
-      </div>
-      <div ref={scroll} className="min-h-0 flex-1 overflow-auto bg-selected p-4">
-        <style>{`.${docx.scope}{${docx.base};white-space:pre-wrap;caret-color:#000}\n${docx.css}`}</style>
-        <div
-          className="mx-auto bg-white text-black shadow-sm"
-          style={{
-            zoom,
-            width: docx.page.width,
-            minHeight: docx.page.height,
-            padding: `${docx.page.top}px ${docx.page.right}px ${docx.page.bottom}px ${docx.page.left}px`,
-            boxSizing: "border-box",
-          }}
-        >
-          <div ref={mount} />
-        </div>
-      </div>
-    </>
-  );
 }
 
 /**

@@ -136,7 +136,7 @@ export async function drawPage(opened: Opened, page: number): Promise<HTMLElemen
       const { top, right, bottom, left } = docx.page;
       sheet.style.padding = `${top}px ${right}px ${bottom}px ${left}px`;
       const style = document.createElement("style");
-      style.textContent = `.${docx.scope}{${docx.base};white-space:pre-wrap}\n${docx.css}`;
+      style.textContent = `.${docx.scope}{${docx.base};white-space:pre-wrap}\n${docx.css()}`;
       const clip = document.createElement("div");
       clip.style.height = "100%";
       clip.style.overflow = "hidden";
