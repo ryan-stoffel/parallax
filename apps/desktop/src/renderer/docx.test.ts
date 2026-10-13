@@ -77,3 +77,16 @@ test("list markers count in document order across levels and formats", () => {
   expect(numberAs(28, "upperLetter")).toBe("BB");
   expect(numberAs(14, "upperRoman")).toBe("XIV");
 });
+
+test("an image takes its shape from its extent before it decodes", () => {
+  const drawing = `<w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="3810000" cy="2857500"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId5"/></a:graphicData></a:graphic></wp:inline></w:drawing>`;
+  const docx = openDocx(
+    docxOf(`<w:p><w:r>${drawing}</w:r></w:p>`, {
+      "word/_rels/document.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId5" Type="image" Target="media/image1.png"/></Relationships>`,
+      "word/media/image1.png": "png",
+    }),
+  );
+  const img = docx.render().querySelector("img")!;
+  expect(img.style.width).toBe("400px");
+  expect(img.style.aspectRatio).toBe("400 / 300");
+});

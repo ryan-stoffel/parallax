@@ -372,7 +372,10 @@ function lookOf(parts: Parts): Look {
     img.src = src;
     img.alt = find(drawing, "wp:docPr")?.getAttribute("descr") ?? "";
     const cx = Number(extent?.getAttribute("cx")) / 9525;
+    const cy = Number(extent?.getAttribute("cy")) / 9525;
     if (cx) img.style.width = `${cx}px`;
+    // Its shape before it decodes, so pages measure it at its height.
+    if (cx && cy) img.style.aspectRatio = `${cx} / ${cy}`;
     img.style.maxWidth = "100%";
     into.append(img);
   };
