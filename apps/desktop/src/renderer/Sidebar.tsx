@@ -1910,7 +1910,7 @@ function ThreadRow({
   );
   const status =
     badge ??
-    (run?.status === "waiting" && attention === "settled" ? (
+    (run?.status === "waiting" && attention === "settled" && !thread.archived ? (
       <span className="flex items-center gap-1 text-[11.5px] font-medium text-warning [&_svg]:size-3.5">
         <AlarmClock aria-hidden />
         {run.resumeAt ? `Resumes ${resumeTime(run.resumeAt)}` : "Waiting"}

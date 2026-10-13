@@ -30,6 +30,10 @@ test("a thread's attention follows its run, its requests, and when it was seen",
   // It stopped again after the user looked.
   expect(attentionOf(thread({ seenAt: "2026-10-01T10:30:00Z" }), run(), 0)).toBe("done");
   expect(attentionOf(thread(), undefined, 0)).toBe("settled");
+  // Archiving clears every badge.
+  const archived = thread({ archived: true });
+  expect(attentionOf(archived, run(), 0)).toBe("settled");
+  expect(attentionOf(archived, run({ status: "running" }), 1)).toBe("settled");
 });
 
 test("a Project needs the user when any run does, and works while any run does", () => {

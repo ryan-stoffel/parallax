@@ -2985,6 +2985,15 @@ impl Actor {
                 .map_err(|error| store_error(&error))?;
             db.record_attached_seen(run_id, &seen)
                 .map_err(|error| store_error(&error))?;
+            // A message to an archived thread brings it back; it stays out only until re-archived.
+            let archived = db
+                .get_thread(run_id)
+                .map_err(|error| store_error(&error))?
+                .is_some_and(|thread| thread.archived);
+            if archived {
+                db.set_thread_archived(run_id, false)
+                    .map_err(|error| store_error(&error))?;
+            }
             crate::threads::prompted(db, run_id)
         })
         .await;

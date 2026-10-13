@@ -1199,6 +1199,35 @@ async fn a_threads_first_message_is_the_users_own() {
     host.server.stop().await;
 }
 
+/// A message to an archived thread brings it back, so it shows its run's status again until the
+/// user archives it once more.
+#[tokio::test]
+async fn a_message_to_an_archived_thread_unarchives_it() {
+    let host = Host::start(fake(editing()));
+    let mut client = host.client().await;
+    let params = start_params(None, "Write the notes");
+    let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
+    client.subscribe(0, Some(scope(started.thread.repo))).await;
+    client.until(updated_to(AgentStatus::Completed)).await;
+
+    client
+        .call::<ThreadArchive>(ThreadArchiveParams {
+            run_id: params.run_id,
+            archived: true,
+        })
+        .await
+        .unwrap();
+    assert!(client.list().await.threads[0].archived);
+
+    client
+        .call::<AgentSend>(message(params.run_id, "And a summary"))
+        .await
+        .unwrap();
+    client.until(updated_to(AgentStatus::Completed)).await;
+    assert!(!client.list().await.threads[0].archived);
+    host.server.stop().await;
+}
+
 /// PLX-97, PLX-222: a thread's model, effort, permission, and approvals reach its backend when it
 /// starts and when it resumes, come back on its run, and count for `thread/start`'s idempotency.
 /// What the backend can't honor is refused before anything is made.

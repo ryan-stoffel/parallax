@@ -9,9 +9,11 @@ export type Attention = "working" | "needsYou" | "done" | "failed" | "settled";
 
 /**
  * A thread's attention, from its run, how many permission requests it waits on, and when the
- * user last saw it. A run stopped after `seenAt` (or never seen) is unseen.
+ * user last saw it. A run stopped after `seenAt` (or never seen) is unseen. An archived thread is
+ * always settled.
  */
 export function attentionOf(thread: Thread, run: AgentRun | undefined, asks: number): Attention {
+  if (thread.archived) return "settled";
   if (asks > 0) return "needsYou";
   if (!run) return "settled";
   if (isRunning(run.status)) return "working";
