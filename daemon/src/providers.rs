@@ -1686,7 +1686,7 @@ mod tests {
         providers.save(cloud).await.unwrap();
         providers.save(ollama()).await.unwrap();
 
-        let home = dir.path().join("ollama-cloud/cloud");
+        let home = dir.path().join("ollama-cloud").join("cloud");
         let soul = std::fs::read_to_string(home.join("SOUL.md")).unwrap();
         assert!(
             soul.starts_with("You are Ollama Cloud's coding agent") && !soul.contains("Hermes")
