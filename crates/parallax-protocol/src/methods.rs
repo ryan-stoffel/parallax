@@ -34,17 +34,17 @@ use crate::{
     AgentAutoResumeParams, AgentCancelParams, AgentCommandsParams, AgentCommandsResult,
     AgentCommitParams, AgentDiffParams, AgentDiffResult, AgentEventsParams, AgentEventsResult,
     AgentFileCreateParams, AgentFileDeleteParams, AgentFileEditResult, AgentFileParams,
-    AgentFileRenameParams, AgentFileResult, AgentFilesParams, AgentFilesResult,
-    AgentGitStatusParams, AgentImageParams, AgentListParams, AgentListResult, AgentOpenPrParams,
-    AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams, AgentResumeNowParams,
-    AgentRunResult, AgentSendParams, AgentStartParams, AgentWaitParams, AgentWaitResult,
-    ConnectDevicesParams, ConnectDevicesResult, ContextListParams, ContextListResult,
-    ContextReadParams, ContextReadResult, ContextWriteParams, ContextWriteResult,
-    CursorInstallParams, CursorInstallResult, CursorSignInCancelParams, CursorSignInCancelResult,
-    CursorSignInParams, CursorSignInResult, CursorSignOutParams, CursorSignOutResult,
-    DelegatedTask, DispatchResult, EventsEventParams, EventsResyncParams, EventsSubscribeParams,
-    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, FullThreadDiffParams,
-    GitStatus, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
+    AgentFileRenameParams, AgentFileResult, AgentFileWriteParams, AgentFilesParams,
+    AgentFilesResult, AgentGitStatusParams, AgentImageParams, AgentListParams, AgentListResult,
+    AgentOpenPrParams, AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams,
+    AgentResumeNowParams, AgentRunResult, AgentSendParams, AgentStartParams, AgentWaitParams,
+    AgentWaitResult, ConnectDevicesParams, ConnectDevicesResult, ContextListParams,
+    ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
+    ContextWriteResult, CursorInstallParams, CursorInstallResult, CursorSignInCancelParams,
+    CursorSignInCancelResult, CursorSignInParams, CursorSignInResult, CursorSignOutParams,
+    CursorSignOutResult, DelegatedTask, DispatchResult, EventsEventParams, EventsResyncParams,
+    EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult,
+    FullThreadDiffParams, GitStatus, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
     GithubSignInCancelResult, GithubSignInParams, GithubStatus, GithubStatusParams,
     HostHealthParams, HostHealthResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
     HostUpdateParams, HostUpdateResult, HostVersionParams, HostVersionResult, InboxListParams,
@@ -284,6 +284,9 @@ method_table! {
         AgentFileRename = "agent/fileRename": AgentFileRenameParams => AgentFileEditResult;
         /// `agent/fileDelete`: removes an entry of a run's folder, a folder with its contents.
         AgentFileDelete = "agent/fileDelete": AgentFileDeleteParams => AgentFileEditResult;
+        /// `agent/fileWrite`: new content for an existing file of a run's folder (PLX-755), such
+        /// as a document edited in the app. Gated on the `fileWrite` capability.
+        AgentFileWrite = "agent/fileWrite": AgentFileWriteParams => AgentFileEditResult;
         /// `agent/accept`: merges a run's commit into the project repository's current branch on
         /// the host, fast-forward when possible, then removes its worktree and branch. Never
         /// pushes. Idempotent on its client-generated id.
@@ -663,6 +666,7 @@ mod tests {
                 "agent/fileCreate",
                 "agent/fileRename",
                 "agent/fileDelete",
+                "agent/fileWrite",
                 "agent/accept",
                 "agent/requestChanges",
                 "agent/openPr",

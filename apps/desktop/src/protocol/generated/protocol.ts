@@ -243,6 +243,11 @@ export type ParallaxRequests = {
 	 */
 	"agent/fileDelete": { params: AgentFileDeleteParams, result: AgentFileEditResult },
 	/**
+	 * `agent/fileWrite`: new content for an existing file of a run's folder (PLX-755), such
+	 * as a document edited in the app. Gated on the `fileWrite` capability.
+	 */
+	"agent/fileWrite": { params: AgentFileWriteParams, result: AgentFileEditResult },
+	/**
 	 * `agent/accept`: merges a run's commit into the project repository's current branch on
 	 * the host, fast-forward when possible, then removes its worktree and branch. Never
 	 * pushes. Idempotent on its client-generated id.
@@ -756,6 +761,7 @@ export const REQUEST_METHODS = [
 	"agent/fileCreate",
 	"agent/fileRename",
 	"agent/fileDelete",
+	"agent/fileWrite",
 	"agent/accept",
 	"agent/requestChanges",
 	"agent/openPr",
@@ -4425,7 +4431,7 @@ export type AgentFileCreateParams = {
 };
 
 /**
- * Result of `agent/fileCreate`, `agent/fileRename`, and `agent/fileDelete`.
+ * Result of `agent/fileCreate`, `agent/fileRename`, `agent/fileDelete`, and `agent/fileWrite`.
  */
 export type AgentFileEditResult = Record<symbol, never>;
 
@@ -4461,6 +4467,26 @@ export type AgentFileDeleteParams = {
 	 * The entry, relative to the run's folder.
 	 */
 	path: string,
+};
+
+/**
+ * Params of `agent/fileWrite` (PLX-755): new content for an existing regular file in a run's
+ * folder, by `agent/file`'s path rules, such as a document the user edited in the side panel.
+ * Never creates a file, and never writes through a symlink.
+ */
+export type AgentFileWriteParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The file, relative to the run's folder.
+	 */
+	path: string,
+	/**
+	 * Its new content, base64-encoded, at most `agent/file`'s size cap.
+	 */
+	content: string,
 };
 
 /**

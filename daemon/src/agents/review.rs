@@ -5,7 +5,8 @@
 //!
 //! `agent/files` and `agent/file`'s `working` side (PLX-296) read the run's folder on disk
 //! instead: its worktree, or a Current checkout thread's checkout. `agent/fileCreate`,
-//! `agent/fileRename`, and `agent/fileDelete` (PLX-590) change entries there, for the Files view.
+//! `agent/fileRename`, and `agent/fileDelete` (PLX-590) change entries there, for the Files view,
+//! and `agent/fileWrite` (PLX-755) saves a file the app edited.
 //! Each checks every folder on the way with `lstat`, so a symlink the agent leaves there can't
 //! point them outside the folder.
 
@@ -17,8 +18,8 @@ use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentDiffFile, AgentDiffResult, AgentDiffStats, AgentEntry, AgentEntryKind,
     AgentFileCreateParams, AgentFileDeleteParams, AgentFileEditResult, AgentFileParams,
-    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFileStatus, AgentFilesParams,
-    AgentFilesResult, ErrorKind, ProjectId, RunId,
+    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFileStatus, AgentFileWriteParams,
+    AgentFilesParams, AgentFilesResult, ErrorKind, ProjectId, RunId,
 };
 use parallax_store::{Run as RunRow, Worktree};
 use tokio::io::AsyncReadExt as _;
@@ -586,6 +587,63 @@ pub(crate) async fn delete_entry(
         tokio::fs::remove_file(&at).await
     };
     removed.map_err(|error| edit_failed(&path, &error))?;
+    Ok(AgentFileEditResult {})
+}
+
+/// `agent/fileWrite`: replaces an existing regular file's content, never a symlink or a folder.
+/// The content goes to a new file beside it, which is then renamed over it, so a failed write
+/// leaves the old file whole.
+pub(crate) async fn write_file(
+    daemon: &Arc<Daemon>,
+    params: AgentFileWriteParams,
+) -> Result<AgentFileEditResult, ErrorObject> {
+    let AgentFileWriteParams {
+        run_id,
+        path,
+        content,
+    } = params;
+    let bytes = crate::images::decode(&content)
+        .ok_or_else(|| ErrorObject::invalid_params("content must be standard base64"))?;
+    if bytes.len() as u64 > MAX_BLOB_BYTES {
+        return Err(ErrorObject::invalid_params(format!(
+            "content is over {MAX_BLOB_BYTES} bytes"
+        )));
+    }
+    let (root, _) = run_folder(daemon, run_id).await?;
+    let at = editable(&root, &path).await?;
+    let meta = tokio::fs::symlink_metadata(&at)
+        .await
+        .map_err(|error| edit_failed(&path, &error))?;
+    if !meta.is_file() {
+        return Err(ErrorObject::invalid_params(format!(
+            "path {path:?} is not a file"
+        )));
+    }
+    let name = at
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let temp = at.with_file_name(format!(".{name}.plx-save"));
+    // A leftover from a save that stopped partway, or anything the agent put there: removing a
+    // symlink removes the link, and `create_new` then refuses anything made in between.
+    let _ = tokio::fs::remove_file(&temp).await;
+    let written = async {
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .await?;
+        tokio::io::AsyncWriteExt::write_all(&mut file, &bytes).await?;
+        file.sync_all().await?;
+        drop(file);
+        tokio::fs::set_permissions(&temp, meta.permissions()).await?;
+        tokio::fs::rename(&temp, &at).await
+    }
+    .await;
+    if let Err(error) = written {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(edit_failed(&path, &error));
+    }
     Ok(AgentFileEditResult {})
 }
 

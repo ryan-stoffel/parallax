@@ -845,6 +845,28 @@ test("an html_render result adds its page after the call, and a failed one doesn
   expect(t.items.map((i) => i.kind)).toEqual(["tool", "htmlRender", "tool"]);
 });
 
+test("a present_files result shows its files as cards, skipping unknown types", () => {
+  const out = JSON.stringify({
+    presentedFiles: [
+      { path: "out/Letter.docx", name: "Letter.docx", kind: "docx" },
+      { path: "out/notes.txt", name: "notes.txt", kind: "txt" },
+      { path: "out/Letter.pdf", name: "Letter.pdf", kind: "pdf" },
+    ],
+  });
+  const t = build(
+    output({ kind: "toolCall", callId: "f1", name: "mcp__plxd__present_files", input: {} }),
+    output({ kind: "toolResult", callId: "f1", status: "ok", output: out }),
+  );
+  expect(of(t.items, "files")).toEqual([
+    expect.objectContaining({
+      files: [
+        { runId, path: "out/Letter.docx", name: "Letter.docx", kind: "docx" },
+        { runId, path: "out/Letter.pdf", name: "Letter.pdf", kind: "pdf" },
+      ],
+    }),
+  ]);
+});
+
 test("a stopped recording shows after its call", () => {
   const stop = (out: string) => [
     output({

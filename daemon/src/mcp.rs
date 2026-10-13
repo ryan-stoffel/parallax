@@ -35,6 +35,7 @@ use crate::peer::Plxd;
 
 pub mod delegation;
 pub mod device;
+pub mod files;
 pub mod html;
 pub mod land;
 pub mod memory;

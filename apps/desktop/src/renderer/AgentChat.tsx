@@ -82,6 +82,7 @@ import { offlineReason, useConnection } from "./ConnectionStatus";
 import { describeError, githubProblem } from "./errors";
 import { ForkButton, ForkContext, type ForkTarget } from "./Fork";
 import type { Host } from "./hosts";
+import { FileCards } from "./FileCards";
 import { HtmlRender, pageUrl } from "./HtmlRender";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { Loader, type LoaderStyle } from "./Loader";
@@ -1206,6 +1207,12 @@ function HtmlRenderRow({ page }: { page: Extract<Item, { kind: "htmlRender" }> }
   return hostId ? <HtmlRender hostId={hostId} page={page} /> : null;
 }
 
+/** Files the agent presented (PLX-755), from the open host. */
+function FilesRow({ row }: { row: Extract<Item, { kind: "files" }> }) {
+  const hostId = useContext(ThreadLinksContext)?.hostId;
+  return hostId ? <FileCards hostId={hostId} files={row.files} /> : null;
+}
+
 /** A browser recording the agent made (PLX-639), from the open host. */
 function RecordingRow({ recording }: { recording: Extract<Item, { kind: "recording" }> }) {
   const hostId = useContext(ThreadLinksContext)?.hostId;
@@ -1475,6 +1482,8 @@ export const RowView = memo(function RowView({
       return <HtmlRenderRow page={row} />;
     case "recording":
       return <RecordingRow recording={row} />;
+    case "files":
+      return <FilesRow row={row} />;
     case "script":
       return <ScriptRow script={row} open={open} onToggle={onToggle} />;
     case "plan":
