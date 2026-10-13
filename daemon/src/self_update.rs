@@ -275,9 +275,11 @@ impl SelfUpdate {
         !std::mem::replace(&mut lock(&self.state).handing_over, true)
     }
 
-    /// Whether a `host/update` asked to restart without waiting for running agents.
-    fn now(&self) -> bool {
-        lock(&self.state).now
+    /// Whether the handover waits: for running agents unless a `host/update` asked `now`, and
+    /// for a download in progress, which may be a newer release to hand over to.
+    fn waits(&self, running: u32) -> bool {
+        let state = lock(&self.state);
+        state.busy || (running > 0 && !state.now)
     }
 
     /// The program waiting for the handover, if an update was installed.
@@ -555,11 +557,11 @@ fn make_executable(_: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Waits for the answer to go out and for every running agent's turn to end, unless a
-/// `host/update` asked for `now`, then hands over.
+/// Waits for the answer to go out, for every running agent's turn to end unless a `host/update`
+/// asked for `now`, and for any download in progress, then hands over to the newest install.
 async fn handover_when_idle(daemon: Arc<Daemon>) {
     tokio::time::sleep(ANSWER_GRACE).await;
-    while daemon.agents.running() > 0 && !daemon.self_update.now() {
+    while daemon.self_update.waits(daemon.agents.running()) {
         tokio::time::sleep(RUNS_POLL).await;
     }
     let Some(program) = daemon.self_update.installed() else {

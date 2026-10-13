@@ -374,3 +374,21 @@ test("Update everything waits for an update already running, and an older plxd's
   set("tailnet:a", updatable(APP));
   expect(events).toEqual([{ hostId: "tailnet:a", status: "updated", version: APP }]);
 });
+
+test("Update everything doesn't fail a host its launch update is restarting", async () => {
+  const states = new Map<string, ConnectionState>();
+  const update = vi.fn(async (_id: string, version: string, now?: boolean) =>
+    now
+      ? { error: { code: -32603, message: "The connection closed." } }
+      : { result: { version, restart: "now" as const, runningAgents: 0, message: "Installed." } },
+  );
+  const { events, set, updater } = rig(states, { update });
+  set("tailnet:a", updatable("0.1.0"));
+  set("local", connected(APP));
+  await settle();
+  // plxd restarts into the launch's update and cuts off Update everything's request.
+  await updater.updateNow("tailnet:a", "2610.11001.10000-nightly");
+  expect(events).toEqual([]);
+  set("tailnet:a", updatable(APP));
+  expect(events).toEqual([{ hostId: "tailnet:a", status: "updated", version: APP }]);
+});

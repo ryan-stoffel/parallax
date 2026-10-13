@@ -144,7 +144,12 @@ export class HostUpdater {
     const answer = await this.deps.update(hostId, version, true).catch((error: unknown) => ({
       error: { message: error instanceof Error ? error.message : String(error) },
     }));
-    if ("error" in answer) return this.fail(hostId, answer.error.message);
+    if ("error" in answer) {
+      // Already restarting into the last update, which may cut this request off: its reconnect
+      // says how that went.
+      if (this.pending.get(hostId)?.restarted) return;
+      return this.fail(hostId, answer.error.message);
+    }
     if (answer.result.restart === "upToDate") return this.done(hostId);
     this.wait(hostId, answer.result.restart === "now", version);
   }

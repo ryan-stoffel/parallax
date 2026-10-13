@@ -434,3 +434,24 @@ fn a_plxd_its_service_runs_exits_for_the_service_to_restart_it() {
         unit
     ));
 }
+
+/// PLX-746: the handover waits for running agents unless asked `now`, and always for a download,
+/// which may be a newer release than the one it would hand over to.
+#[test]
+fn the_handover_waits_for_agents_unless_now_and_for_a_download() {
+    let fixture = Fixture::new();
+    let exe = fixture.old_plxd("local/bin/plxd");
+    let update = SelfUpdate::for_tests(
+        fixture.launcher(),
+        "file:///nonexistent",
+        &exe,
+        &fixture.path("home"),
+        "0.1.0",
+    );
+    assert!(!update.waits(0));
+    assert!(update.waits(2));
+    super::lock(&update.state).now = true;
+    assert!(!update.waits(2));
+    super::lock(&update.state).busy = true;
+    assert!(update.waits(0));
+}
