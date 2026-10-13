@@ -6,6 +6,9 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 import type { ParallaxBridge, Profile } from "../preload/bridge";
 import { ProfileButton } from "./ProfileMenu";
 
+// The Account dialog's hosts, which need a connected plxd for usage. None here.
+vi.mock("./hosts", () => ({ useHosts: () => [] }));
+
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers or modal dialogs. The menu is in the DOM either way.
 HTMLElement.prototype.hidePopover = () => {};
@@ -37,7 +40,7 @@ function render(profile: Profile | null) {
     },
   } as Partial<ParallaxBridge> as ParallaxBridge;
   root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root!.render(<ProfileButton />));
+  act(() => root!.render(<ProfileButton listed={[]} />));
   return { ...calls, publish: (p: Profile | null) => act(() => publish(p)) };
 }
 
@@ -58,9 +61,11 @@ test("the menu shows the account, and Manage account opens the Account dialog", 
   click(button("Manage account"));
   const dialog = document.querySelector("dialog")!;
   expect(dialog.open).toBe(true);
-  expect(dialog.textContent).toContain("Ryan Stoffel");
-  click(button("Update profile"));
+  expect(dialog.querySelector('[aria-label="Profile"] h2')!.textContent).toBe("Ryan Stoffel");
+  click(button("Edit"));
   expect(editProfile).toHaveBeenCalledOnce();
+  click(button("Activity"));
+  expect(dialog.querySelector('[aria-label="Activity"]')).not.toBeNull();
 
   click(button("Sign out"));
   expect(signOut).toHaveBeenCalledOnce();
@@ -68,6 +73,9 @@ test("the menu shows the account, and Manage account opens the Account dialog", 
   publish(null);
   expect(document.querySelector("dialog")).toBeNull();
   expect(button("Sign in")).toBeDefined();
+  // Signing back in doesn't bring the dialog back on its own.
+  publish(ryan);
+  expect(document.querySelector("dialog")).toBeNull();
 });
 
 test("signed out, Sign in and Create an account open Clerk", async () => {

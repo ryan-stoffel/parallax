@@ -1514,6 +1514,7 @@ export const mockBridge: ParallaxBridge = {
   },
   createRepo: (name) => delay({ path: `${HOME}/.parallax/projects/${name}` }, 400),
   cloneRepo: (_slug, dest) => delay({ path: expand(dest) }, 1200),
+  copyPicture: () => delay(undefined),
   updatable: false,
   locale: undefined,
   update: () => delay("Up to date"),

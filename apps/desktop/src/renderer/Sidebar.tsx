@@ -854,6 +854,7 @@ export function ThreadList({
       <div className="border-t border-border p-2">
         <ConnectionStatus hostId={host.id} />
         <Footer
+          listed={hosts}
           onOpenSettings={onOpenSettings}
           onOpenPullRequests={onOpenPullRequests}
           railShown={railShown && railMotion !== "out"}
@@ -1435,11 +1436,13 @@ function PlaceMenu({
  * (Update.tsx).
  */
 function Footer({
+  listed,
   onOpenSettings,
   onOpenPullRequests,
   railShown,
   onToggleRail,
 }: Pick<ThreadListProps, "onOpenSettings" | "onOpenPullRequests"> & {
+  listed: HostThreads[];
   railShown: boolean;
   onToggleRail: () => void;
 }) {
@@ -1455,7 +1458,7 @@ function Footer({
         />
       </IconButton>
       <span aria-hidden className="mx-0.5 h-4 w-px bg-border" />
-      <ProfileButton />
+      <ProfileButton listed={listed} />
       <IconButton label="Settings" command="settings" onClick={() => onOpenSettings("general")}>
         <Settings />
       </IconButton>

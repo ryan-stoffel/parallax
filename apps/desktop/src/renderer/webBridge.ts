@@ -502,6 +502,7 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     listFolders: async () => ({ error: NOT_HERE }),
     createRepo: async () => ({ error: NOT_HERE }),
     cloneRepo: async () => ({ error: NOT_HERE }),
+    copyPicture: () => Promise.reject(new Error(NOT_HERE)),
     updatable: false,
     locale: navigator.language,
     update: async () => NOT_HERE,
