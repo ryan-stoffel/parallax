@@ -22,7 +22,7 @@ import type { Profile } from "./../preload/bridge";
 import type { UsageHour } from "./../protocol/generated/protocol";
 import { useConnection } from "./ConnectionStatus";
 import { useHosts, type Host } from "./hosts";
-import { ParallaxMark } from "./logos";
+import { ClerkLogo, ParallaxMark } from "./logos";
 import { models } from "./models";
 import { instanceName, kinds } from "./providers";
 import { activityOf, Avatar, dayKey, dayOf, rhythmOf, type Activity } from "./profile";
@@ -52,6 +52,19 @@ const card = "rounded-2xl border border-border bg-surface";
 const heading = "text-[12.5px] font-medium text-muted-foreground";
 const outlineButton =
   "flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5";
+
+/** "Secured by Clerk", with Clerk's mark, as Clerk's own account pages sign off. */
+export function SecuredByClerk() {
+  return (
+    <span className="flex items-center gap-1 text-[12px] text-faint-foreground">
+      Secured by
+      <span className="flex items-center gap-0.5 font-semibold text-muted-foreground">
+        <ClerkLogo className="size-3.5" />
+        Clerk
+      </span>
+    </span>
+  );
+}
 
 const tabs = [
   { id: "profile", name: "Profile", Icon: CircleUser },
@@ -126,13 +139,17 @@ export function AccountDialog({
               {t.name}
             </button>
           ))}
-          <span className="mt-auto flex items-center gap-1.5 px-2 font-brand text-[13px] font-semibold text-muted-foreground">
-            <ParallaxMark className="size-4" />
-            Parallax
-          </span>
+          <div className="mt-auto flex flex-col gap-2 px-2">
+            <span className="flex items-center gap-1.5 font-brand text-[13px] font-semibold text-muted-foreground">
+              <ParallaxMark className="size-4" />
+              Parallax
+            </span>
+            <SecuredByClerk />
+          </div>
         </nav>
-        <div className="@container relative min-w-0 flex-1 overflow-y-auto px-8 pt-6 pb-10">
-          <div className="absolute top-3 right-3">
+        <div className="@container min-w-0 flex-1 overflow-y-auto px-8 pt-5 pb-10">
+          <div className="mb-5 flex items-center justify-between">
+            <h3 className="text-[15px] font-semibold">{tabs.find((t) => t.id === tab)!.name}</h3>
             <IconButton label="Close" onClick={() => dialog.current?.close()}>
               <X aria-hidden />
             </IconButton>

@@ -445,6 +445,20 @@ export function LinearLogo(props: LogoProps) {
   );
 }
 
+/** Clerk's mark from its brand kit, in currentColor: "Secured by Clerk" under the account (0067). */
+export function ClerkLogo(props: LogoProps) {
+  return (
+    <svg viewBox="0 0 128 128" fill="currentColor" aria-hidden {...props}>
+      <circle cx="64" cy="64" r="20" />
+      <path
+        fillOpacity=".4"
+        d="M99.572 10.788c1.999 1.34 2.17 4.156.468 5.858L85.424 31.262c-1.32 1.32-3.37 1.53-5.033.678A35.846 35.846 0 0 0 64 28c-19.882 0-36 16.118-36 36a35.846 35.846 0 0 0 3.94 16.391c.851 1.663.643 3.712-.678 5.033L16.646 100.04c-1.702 1.702-4.519 1.531-5.858-.468C3.974 89.399 0 77.163 0 64 0 28.654 28.654 0 64 0c13.163 0 25.399 3.974 35.572 10.788Z"
+      />
+      <path d="M100.04 111.354c1.702 1.702 1.531 4.519-.468 5.858C89.399 124.026 77.164 128 64 128c-13.164 0-25.399-3.974-35.572-10.788-2-1.339-2.17-4.156-.468-5.858l14.615-14.616c1.322-1.32 3.37-1.53 5.033-.678A35.847 35.847 0 0 0 64 100a35.846 35.846 0 0 0 16.392-3.94c1.662-.852 3.712-.643 5.032.678l14.616 14.616Z" />
+    </svg>
+  );
+}
+
 /**
  * Parallax's mark: the blue and coral circles, their overlap filled with --mark-overlap
  * (index.css), which is indigo-black in light mode and greyish white in dark mode.

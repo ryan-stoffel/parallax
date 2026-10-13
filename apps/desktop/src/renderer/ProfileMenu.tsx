@@ -1,7 +1,7 @@
 import { CircleUser, LogIn, LogOut, Settings, UserPlus, type LucideIcon } from "lucide-react";
 import { useId, useRef, useState } from "react";
 
-import { AccountDialog } from "./Account";
+import { AccountDialog, SecuredByClerk } from "./Account";
 import type { Host } from "./hosts";
 import { ParallaxMark } from "./logos";
 import { Avatar, useProfile } from "./profile";
@@ -96,10 +96,13 @@ export function ProfileButton({ listed }: { listed: { host: Host; view: ThreadsV
             <div className="my-1 h-px bg-border" />
           </>
         )}
-        <span className="flex items-center gap-1.5 px-2 py-1 font-brand text-[12px] font-semibold text-faint-foreground">
-          <ParallaxMark className="size-3.5" />
-          Parallax
-        </span>
+        <div className="flex items-center justify-between px-2 py-1">
+          <span className="flex items-center gap-1.5 font-brand text-[12px] font-semibold text-faint-foreground">
+            <ParallaxMark className="size-3.5" />
+            Parallax
+          </span>
+          <SecuredByClerk />
+        </div>
       </Menu>
       {managing && profile && (
         <AccountDialog profile={profile} listed={listed} onClose={() => setManaging(false)} />
