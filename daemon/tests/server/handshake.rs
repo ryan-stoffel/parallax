@@ -47,7 +47,6 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("eventFilters".to_owned(), serde_json::Map::new()),
             ("eventsBefore".to_owned(), serde_json::Map::new()),
             ("fileEdit".to_owned(), serde_json::Map::new()),
-            ("fileWrite".to_owned(), serde_json::Map::new()),
             ("files".to_owned(), serde_json::Map::new()),
             ("git".to_owned(), serde_json::Map::new()),
             (

@@ -1,6 +1,6 @@
 //! `present_files` (PLX-755): shows documents the agent made, from its thread's folder, as cards in
-//! the transcript. The app reads each through `agent/file`'s working side, opens it in the side
-//! panel, and saves the user's edits with `agent/fileWrite`, then tells the thread what changed.
+//! the transcript. The app reads each through `agent/file`'s working side and shows it, view-only,
+//! in the side panel, with Download.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -18,12 +18,12 @@ pub const TOOLS: &[&str] = &["present_files"];
 /// What every thread's agent is told at startup, through MCP's `instructions` (PLX-755): without
 /// it, agents build files in /tmp, install office suites to convert them, and describe a file
 /// instead of showing it.
-pub const INSTRUCTIONS: &str = "Parallax shows documents in its chat. When the user wants a document, spreadsheet, slide deck, or PDF, build it in your working folder, not /tmp, with Python libraries, pip-installing any that are missing: python-docx for .docx, openpyxl for .xlsx, python-pptx for .pptx, and reportlab for .pdf. Don't install LibreOffice, pandoc, or another office suite. When the files are done, call present_files with their paths before your final reply. The user previews, edits, and downloads them in Parallax, so don't explain how to open them.";
+pub const INSTRUCTIONS: &str = "Parallax shows documents in its chat. When the user wants a document, spreadsheet, slide deck, or PDF, build it in your working folder, not /tmp, with Python libraries, pip-installing any that are missing: python-docx for .docx, openpyxl for .xlsx, python-pptx for .pptx, and reportlab for .pdf. Don't install LibreOffice, pandoc, or another office suite. When the files are done, call present_files with their paths before your final reply. The user previews and downloads them in Parallax, so don't explain how to open them.";
 
 /// The largest file `present_files` takes: `agent/file`'s read cap, which the app reads it through.
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 
-/// The file types the app shows. docx and xlsx are editable there; pptx and pdf are view-only.
+/// The file types the app shows.
 const KINDS: &[&str] = &["docx", "xlsx", "pptx", "pdf"];
 const MAX_FILES: usize = 10;
 
@@ -33,7 +33,7 @@ pub fn definitions() -> Vec<Value> {
     vec![json!({
         "name": "present_files",
         "title": "Present files",
-        "description": "Show finished documents to the reader as cards in this thread, with a preview of each file's first pages. The reader can open a card in Parallax's side panel to read it, edit .docx and .xlsx files there, and download any of them. Call it after you create or rebuild the files and before your final reply, which should not repeat what the cards show. Takes .docx, .xlsx, .pptx, and .pdf files of at most 4 MiB. Save them in your working folder; a file elsewhere, such as in /tmp, is copied into its top level first, replacing a file of the same name. When the reader saves an edit, you get a message naming the file and what changed.",
+        "description": "Show finished documents to the reader as cards in this thread, with a preview of each file's first pages. The reader can open a card in Parallax's side panel to read it, and download it. Call it after you create or rebuild the files and before your final reply, which should not repeat what the cards show. Takes .docx, .xlsx, .pptx, and .pdf files of at most 4 MiB. Save them in your working folder; a file elsewhere, such as in /tmp, is copied into its top level first, replacing a file of the same name.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -123,7 +123,7 @@ pub async fn call(binding: &Binding, name: &str, arguments: Value) -> Result<Rep
         "Shown to the reader as cards above your reply.".to_owned()
     } else {
         format!(
-            "Shown to the reader as cards above your reply. Copied into your working folder, where the reader's edits land: {}. Edit those copies from now on.",
+            "Shown to the reader as cards above your reply. Copied into your working folder: {}. Work on those copies from now on.",
             copied.join(", ")
         )
     };
@@ -174,8 +174,7 @@ fn relative(folder: &Path, asked: &str) -> Result<Option<String>, String> {
 }
 
 /// A file saved outside `folder`, copied into its top level under its own name, replacing an
-/// earlier copy, so the app can read it and the reader's edits land where the agent works. Its
-/// name. Never writes through a symlink or over a folder.
+/// earlier copy, so the app can read it. Its name. Never writes through a symlink or over a folder.
 fn copy_in(folder: &Path, source: &Path) -> Result<String, String> {
     let shown = source.display();
     let meta = std::fs::metadata(source).map_err(|_| format!("{shown} doesn't exist"))?;

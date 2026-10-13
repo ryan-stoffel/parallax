@@ -1,10 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { expect, test } from "@playwright/test";
-import { strFromU8, unzipSync } from "fflate";
 
 import { uuidv7 } from "../src/renderer/uuidv7";
 import { close, launch, printFailure, type Launched } from "./launch";
@@ -20,7 +19,7 @@ test.afterAll(() => close(launched));
 
 // The fake agent presents the four files in e2e/documents, which the repository holds, so the
 // thread's worktree has them (PLX-755).
-test("presented files show as cards, open in the side panel, and save an edit back to the agent", async () => {
+test("presented files show as cards and open view-only in the side panel, with download and full screen", async () => {
   const { page } = launched;
   await expect
     .poll(() => page.evaluate(`window.parallax.connectionState("local").then((s) => s.status)`))
@@ -65,44 +64,31 @@ test("presented files show as cards, open in the side panel, and save an edit ba
   await card("Executive_Summary.docx").hover();
   await page.screenshot({ path: test.info().outputPath("cards.png") });
 
-  // The document opens in the side panel; an edit there saves the file and tells the agent.
-  const runs = (await page.evaluate(`window.parallax.request("local", "agent/list", {})`)) as {
-    result: { runs: { worktreePath?: string }[] };
-  };
-  const worktree = runs.result.runs.find((r) => r.worktreePath)!.worktreePath!;
+  // Each opens view-only in the side panel, as Claude shows files: pages on a gray backdrop
+  // with the page in view counted, and Download as its type. The panel's button goes full screen.
   await card("Executive_Summary.docx").click();
   const panel = page.getByRole("complementary", { name: "Side panel" });
-  const editor = panel.getByRole("textbox", { name: "Document" });
-  const run = editor.getByText("Prepared for the Q4 planning review.");
-  await expect(run).toBeVisible();
-  // The run's right edge, before its trailing space: End doesn't move the caret on macOS.
-  const edge = (await run.boundingBox())!;
-  await run.click({ position: { x: edge.width - 1, y: edge.height / 2 } });
-  await page.keyboard.type(" Revised by Ryan.");
-  await page.screenshot({ path: test.info().outputPath("docx-editing.png") });
-  await panel.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(transcript.getByText(/I edited `Executive_Summary.docx` in Parallax/)).toBeVisible();
-  await expect(transcript.getByText(/Got it. I see your edit/)).toBeVisible();
-  const saved = unzipSync(readFileSync(path.join(worktree, "Executive_Summary.docx")));
-  expect(strFromU8(saved["word/document.xml"]!)).toContain(
-    "Prepared for the Q4 planning review. Revised by Ryan. ",
-  );
-  await page.screenshot({ path: test.info().outputPath("docx-saved.png") });
+  await expect(panel.getByText("Executive Summary", { exact: true }).first()).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Download as DOCX" })).toBeVisible();
+  await expect(panel.getByText(/^Page 1 \/ [2-9]$/)).toBeVisible();
+  await expect(panel.getByText("Prepared for the Q4 planning review.").first()).toBeVisible();
+  await expect(panel.getByRole("textbox")).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath("docx.png") });
+  await panel.getByRole("button", { name: "Full screen", exact: true }).click();
+  await expect(page.getByRole("main")).toBeHidden();
+  await page.screenshot({ path: test.info().outputPath("docx-full-screen.png") });
+  await panel.getByRole("button", { name: "Exit full screen" }).click();
+  await expect(page.getByRole("main")).toBeVisible();
 
-  // A sheet's cell, edited in place.
   await card("Budget.xlsx").click();
   const grid = panel.getByRole("grid", { name: "Budget" });
   await expect(grid.getByText("Contractors")).toBeVisible();
-  await grid.getByText("Contractors").click();
-  await page.keyboard.press("ArrowRight");
-  await page.keyboard.type("5500");
-  await page.keyboard.press("Enter");
-  await page.screenshot({ path: test.info().outputPath("xlsx-editing.png") });
-  await expect(panel.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
+  await expect(grid.getByText("$5,000")).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("xlsx.png") });
 
-  // The deck and the PDF are read-only.
   await card("Ember_Deck.pptx").click();
-  await expect(panel.getByRole("button", { name: "Save", exact: true })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "Download as PPTX" })).toBeVisible();
+  await expect(panel.getByText("Page 1 / 3")).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("pptx.png") });
   await card("Executive_Summary.pdf").click();
   await expect(panel.locator("canvas").first()).toBeVisible();

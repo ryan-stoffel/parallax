@@ -1,5 +1,3 @@
-import { Mark, Schema, type Node as PMNode } from "@tiptap/pm/model";
-
 import {
   find,
   imageUrl,
@@ -10,96 +8,24 @@ import {
   twipsToPx,
   unzip,
   val,
-  writeXml,
-  zip,
   type Parts,
 } from "./ooxml";
 
 /**
- * A .docx as the side panel edits it (PLX-755). `word/document.xml`'s body becomes a ProseMirror
- * document: each `w:p` a paragraph that keeps its `w:pPr` and paragraph style, its runs text marked
- * with their `w:rPr` plus bold, italic, and underline, and everything else (tables, drawings,
- * hyperlinks, fields) an atom holding its original XML. Saving writes a paragraph the user didn't
- * touch back as its original element, so only edited paragraphs are rebuilt, and every other part
- * of the package is written back as it was.
+ * A .docx as the side panel shows it (PLX-755), view-only: `word/document.xml`'s body drawn as
+ * HTML with its styles, theme fonts, list numbering, tables, and images, on pages its section
+ * properties size.
  */
 export interface Docx {
-  parts: Parts;
-  xml: Document;
-  body: Element;
-  /** The body's closing section properties: page size and margins, headers and footers. */
-  sectPr?: Element;
-  /** Elements the document's nodes name by index: `w:pPr`s, `w:rPr`s, and atoms' XML. */
-  els: Element[];
-  /** Each unchanged paragraph's original element, by its node's JSON. */
-  originals: Map<string, Element>;
-  schema: DocxSchema;
-  doc: PMNode;
   /** The page in CSS pixels. */
   page: { width: number; height: number; top: number; right: number; bottom: number; left: number };
-  /** The stylesheet for the document's numbered and bulleted paragraphs, scoped to `scope`. */
-  css: string;
   /** A class unique to this document, on the element its pages render in. */
   scope: string;
-  /** The page's base look: the default paragraph style's font, size, and color. */
-  base: string;
-  /** Paragraph styles to offer, by id, with their names. */
-  styles: { id: string; name: string }[];
-  /** Each paragraph's text when opened or last saved, for the change summary. */
-  texts: string[];
+  /** The stylesheet the body needs: the page's base look and list markers, scoped to `scope`. */
+  css: string;
+  /** The body as HTML, one element per paragraph or table, in an element with class `scope`. */
+  render: () => HTMLElement;
 }
-
-/** The editor's schema, with its node and mark names typed. */
-export type DocxSchema = Schema<
-  "doc" | "paragraph" | "opaqueBlock" | "text" | "hardBreak" | "opaque",
-  "run" | "bold" | "italic" | "underline"
->;
-
-const W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-const XML_NS = "http://www.w3.org/XML/1998/namespace";
-
-// CT_RPr's child order, which Word checks: a run's bold, italic, and underline go in their places.
-const RPR_ORDER = [
-  "rStyle",
-  "rFonts",
-  "b",
-  "bCs",
-  "i",
-  "iCs",
-  "caps",
-  "smallCaps",
-  "strike",
-  "dstrike",
-  "outline",
-  "shadow",
-  "emboss",
-  "imprint",
-  "noProof",
-  "snapToGrid",
-  "vanish",
-  "webHidden",
-  "color",
-  "spacing",
-  "w",
-  "kern",
-  "position",
-  "sz",
-  "szCs",
-  "highlight",
-  "u",
-  "effect",
-  "bdr",
-  "shd",
-  "fitText",
-  "vertAlign",
-  "rtl",
-  "cs",
-  "em",
-  "lang",
-  "eastAsianLayout",
-  "specVanish",
-  "oMath",
-].map((name) => `w:${name}`);
 
 /** Whether a toggle such as `<w:b/>` is on: present, without a false `w:val`. */
 const on = (el: Element | undefined) =>
@@ -113,324 +39,19 @@ export function openDocx(bytes: Uint8Array): Docx {
   const xml = readXml(parts, "word/document.xml");
   const body = xml && find(xml, "w:body");
   if (!xml || !body) throw new Error("This file has no Word document in it.");
-  const els: Element[] = [];
-  const reg = (el: Element) => els.push(el) - 1;
   const look = lookOf(parts);
-  const docx = {
-    parts,
-    xml,
-    body,
-    els,
-    originals: new Map(),
+  const scope = `docx-${++scopes}`;
+  return {
     page: pageOf(kids(body, "w:sectPr").at(-1)),
-    scope: `docx-${++scopes}`,
-    base: look.base,
-    styles: look.paragraphStyles,
-    texts: [],
-  } as unknown as Docx;
-  docx.sectPr = kids(body, "w:sectPr").at(-1);
-  docx.schema = schemaFor(docx, look);
-  docx.css = look.numberingCss(docx.scope);
-  const { schema } = docx;
-
-  const marksOf = (rPr: Element | undefined): Mark[] => {
-    const clean = rPr ? (rPr.cloneNode(true) as Element) : undefined;
-    const marks: Mark[] = [];
-    const take = (names: string[], mark: () => Mark) => {
-      const found = names.map((name) => kid(clean, name)).filter((el) => el && on(el));
-      if (!found.length || !clean) return;
-      for (const el of found) clean.removeChild(el!);
-      marks.push(mark());
-    };
-    take(["w:b", "w:bCs"], () => schema.marks.bold.create());
-    take(["w:i", "w:iCs"], () => schema.marks.italic.create());
-    const u = kid(clean, "w:u");
-    if (u && clean && u.getAttribute("w:val") !== "none") {
-      clean.removeChild(u);
-      marks.push(schema.marks.underline.create({ val: u.getAttribute("w:val") ?? "single" }));
-    }
-    return [schema.marks.run.create({ rPr: clean ? reg(clean) : null }), ...marks];
-  };
-
-  const runNodes = (r: Element, into: PMNode[]) => {
-    const rPr = kid(r, "w:rPr");
-    const marks = marksOf(rPr);
-    let text = "";
-    const flush = () => {
-      if (text) into.push(schema.text(text, marks));
-      text = "";
-    };
-    for (const c of kids(r)) {
-      const type = c.getAttribute("w:type");
-      if (c.nodeName === "w:rPr" || c.nodeName === "w:lastRenderedPageBreak") continue;
-      else if (c.nodeName === "w:t") text += c.textContent ?? "";
-      else if (c.nodeName === "w:tab") text += "\t";
-      else if (c.nodeName === "w:br" && (!type || type === "textWrapping")) {
-        flush();
-        into.push(schema.nodes.hardBreak.create(null, null, marks));
-      } else {
-        // A drawing, a field's code, a page break: a run of its own, as it was.
-        flush();
-        const piece = r.cloneNode(false) as Element;
-        if (rPr) piece.append(rPr.cloneNode(true));
-        piece.append(c.cloneNode(true));
-        into.push(schema.nodes.opaque.create({ id: reg(piece) }));
-      }
-    }
-    flush();
-  };
-
-  const blocks: PMNode[] = [];
-  for (const el of kids(body)) {
-    if (el === docx.sectPr) continue;
-    if (el.nodeName !== "w:p") {
-      blocks.push(schema.nodes.opaqueBlock.create({ id: reg(el) }));
-      continue;
-    }
-    const pPr = kid(el, "w:pPr");
-    const inline: PMNode[] = [];
-    for (const c of kids(el)) {
-      if (c.nodeName === "w:pPr" || c.nodeName === "w:proofErr") continue;
-      if (c.nodeName === "w:r") runNodes(c, inline);
-      else inline.push(schema.nodes.opaque.create({ id: reg(c) }));
-    }
-    const node = schema.nodes.paragraph.create(
-      { style: val(pPr, "w:pStyle") ?? null, pPr: pPr ? reg(pPr) : null },
-      inline,
-    );
-    docx.originals.set(JSON.stringify(node.toJSON()), el);
-    blocks.push(node);
-  }
-  if (!blocks.length) blocks.push(schema.nodes.paragraph.create());
-  docx.doc = schema.nodes.doc.create(null, blocks);
-  docx.texts = paragraphTexts(docx, docx.doc);
-  return docx;
-}
-
-/** The .docx with `doc`'s content: unchanged paragraphs as they were, edited ones rebuilt. */
-export function saveDocx(docx: Docx, doc: PMNode): Uint8Array {
-  const { xml, els, schema } = docx;
-  const el = (name: string, attrs: Record<string, string> = {}) => {
-    const made = xml.createElementNS(W, name);
-    for (const [key, value] of Object.entries(attrs)) made.setAttributeNS(W, key, value);
-    return made;
-  };
-  const insert = (rPr: Element, made: Element) => {
-    const at = RPR_ORDER.indexOf(made.nodeName);
-    const before = kids(rPr).find((c) => RPR_ORDER.indexOf(c.nodeName) > at);
-    rPr.insertBefore(made, before ?? null);
-  };
-  const rPrFor = (marks: readonly Mark[]) => {
-    const id = marks.find((m) => m.type === schema.marks.run)?.attrs["rPr"] as number | null;
-    const rPr = id == null ? el("w:rPr") : (els[id]!.cloneNode(true) as Element);
-    const set = (names: string[], wanted: boolean, attrs: Record<string, string> = {}) => {
-      for (const name of names) {
-        kid(rPr, name)?.remove();
-        if (wanted) insert(rPr, el(name, attrs));
-      }
-    };
-    if (marks.some((m) => m.type === schema.marks.bold)) set(["w:b", "w:bCs"], true);
-    if (marks.some((m) => m.type === schema.marks.italic)) set(["w:i", "w:iCs"], true);
-    const u = marks.find((m) => m.type === schema.marks.underline);
-    if (u) set(["w:u"], true, { "w:val": u.attrs["val"] as string });
-    return rPr.children.length || rPr.attributes.length ? rPr : undefined;
-  };
-  const textInto = (run: Element, text: string) =>
-    text.split("\t").forEach((piece, i) => {
-      if (i) run.append(el("w:tab"));
-      if (!piece) return;
-      const t = el("w:t");
-      t.setAttributeNS(XML_NS, "xml:space", "preserve");
-      t.textContent = piece;
-      run.append(t);
-    });
-  const build = (block: PMNode) => {
-    const p = el("w:p");
-    const pPrId = block.attrs["pPr"] as number | null;
-    let pPr = pPrId == null ? undefined : (els[pPrId]!.cloneNode(true) as Element);
-    const style = block.attrs["style"] as string | null;
-    if (style !== (val(pPr, "w:pStyle") ?? null)) {
-      pPr ??= el("w:pPr");
-      kid(pPr, "w:pStyle")?.remove();
-      if (style) pPr.prepend(el("w:pStyle", { "w:val": style }));
-    }
-    if (pPr && (pPr.children.length || pPr.attributes.length)) p.append(pPr);
-    let run: Element | undefined;
-    let runMarks: readonly Mark[] = [];
-    block.forEach((node) => {
-      if (node.isText) {
-        if (!run || !Mark.sameSet(runMarks, node.marks)) {
-          run = el("w:r");
-          const rPr = rPrFor(node.marks);
-          if (rPr) run.append(rPr);
-          p.append(run);
-          runMarks = node.marks;
-        }
-        textInto(run, node.text ?? "");
-        return;
-      }
-      run = undefined;
-      if (node.type === schema.nodes.hardBreak) {
-        const br = el("w:r");
-        const rPr = rPrFor(node.marks);
-        if (rPr) br.append(rPr);
-        br.append(el("w:br"));
-        p.append(br);
-      } else p.append(els[node.attrs["id"] as number]!.cloneNode(true));
-    });
-    return p;
-  };
-  const out: Node[] = [];
-  doc.forEach((block) => {
-    if (block.type === schema.nodes.opaqueBlock)
-      out.push(els[block.attrs["id"] as number]!.cloneNode(true));
-    else
-      out.push(docx.originals.get(JSON.stringify(block.toJSON()))?.cloneNode(true) ?? build(block));
-  });
-  if (docx.sectPr) out.push(docx.sectPr.cloneNode(true));
-  docx.body.replaceChildren(...out);
-  return zip({ ...docx.parts, "word/document.xml": writeXml(xml) });
-}
-
-/** Each paragraph's text, with atoms' text and line breaks, for the change summary. */
-export function paragraphTexts(docx: Docx, doc: PMNode): string[] {
-  const texts: string[] = [];
-  doc.forEach((block) => {
-    if (block.type === docx.schema.nodes.opaqueBlock) {
-      // A table's cells, one paragraph each.
-      for (const p of docx.els[block.attrs["id"] as number]!.getElementsByTagName("w:p"))
-        texts.push(wordText(p));
-      return;
-    }
-    let text = "";
-    block.forEach((node) => {
-      if (node.isText) text += node.text;
-      else if (node.type === docx.schema.nodes.hardBreak) text += "\n";
-      else text += wordText(docx.els[node.attrs["id"] as number]!);
-    });
-    texts.push(text);
-  });
-  return texts;
-}
-
-/** The text of an element's `w:t`s. */
-const wordText = (el: Element) =>
-  [...el.getElementsByTagName("w:t")].map((t) => t.textContent ?? "").join("");
-
-/**
- * What changed between two lists of paragraphs or lines, for the agent: an LCS alignment, with
- * removed and added lines that meet paired as changes. At most `max` lines.
- */
-export function changeSummary(before: string[], after: string[], max = 12): string[] {
-  const clip = (text: string) =>
-    JSON.stringify(text.length > 160 ? `${text.slice(0, 160)}…` : text);
-  // ponytail: O(n·m) table; documents of a few thousand paragraphs are well inside it.
-  const n = before.length;
-  const m = after.length;
-  const lcs = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
-  for (let i = n - 1; i >= 0; i--)
-    for (let j = m - 1; j >= 0; j--)
-      lcs[i]![j] =
-        before[i] === after[j]
-          ? lcs[i + 1]![j + 1]! + 1
-          : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
-  const lines: string[] = [];
-  let removed: string[] = [];
-  let added: string[] = [];
-  const flush = () => {
-    const pairs = Math.min(removed.length, added.length);
-    for (let k = 0; k < pairs; k++)
-      lines.push(`Changed ${clip(removed[k]!)} to ${clip(added[k]!)}`);
-    for (const text of removed.slice(pairs)) if (text.trim()) lines.push(`Removed ${clip(text)}`);
-    for (const text of added.slice(pairs)) if (text.trim()) lines.push(`Added ${clip(text)}`);
-    removed = [];
-    added = [];
-  };
-  let i = 0;
-  let j = 0;
-  while (i < n || j < m) {
-    if (i < n && j < m && before[i] === after[j]) {
-      flush();
-      i++;
-      j++;
-    } else if (j < m && (i === n || lcs[i]![j + 1]! >= lcs[i + 1]![j]!)) added.push(after[j++]!);
-    else removed.push(before[i++]!);
-  }
-  flush();
-  return lines.length > max ? [...lines.slice(0, max), `…and ${lines.length - max} more`] : lines;
-}
-
-const headingLike = (style: unknown) =>
-  typeof style === "string" && /^(heading|title|subtitle)/i.test(style);
-
-/** Whether Enter at the end of a paragraph in `style` starts a plain one, as Word does. */
-export const endsStyle = headingLike;
-
-function schemaFor(docx: Docx, look: Look): DocxSchema {
-  return new Schema({
-    nodes: {
-      doc: { content: "block+" },
-      paragraph: {
-        group: "block",
-        content: "inline*",
-        attrs: { style: { default: null }, pPr: { default: null } },
-        parseDOM: [{ tag: "p" }, { tag: "h1" }, { tag: "h2" }, { tag: "h3" }, { tag: "li" }],
-        toDOM: (node) => {
-          const { css, cls } = look.paragraph(
-            node.attrs["style"] as string | null,
-            node.attrs["pPr"] == null ? undefined : docx.els[node.attrs["pPr"] as number],
-          );
-          return ["p", { style: css, class: cls }, 0];
-        },
-      },
-      opaqueBlock: {
-        group: "block",
-        atom: true,
-        selectable: true,
-        attrs: { id: {} },
-        toDOM: (node) => look.block(docx.els[node.attrs["id"] as number]!),
-      },
-      text: { group: "inline" },
-      hardBreak: {
-        inline: true,
-        group: "inline",
-        selectable: false,
-        parseDOM: [{ tag: "br" }],
-        toDOM: () => ["br"],
-      },
-      opaque: {
-        inline: true,
-        group: "inline",
-        atom: true,
-        attrs: { id: {} },
-        toDOM: (node) => look.inline(docx.els[node.attrs["id"] as number]!),
-      },
+    scope,
+    css: `.${scope}{${look.base};white-space:pre-wrap}\n${look.numberingCss(scope)}`,
+    render: () => {
+      const flow = document.createElement("div");
+      flow.className = scope;
+      look.render(body, flow);
+      return flow;
     },
-    marks: {
-      run: {
-        attrs: { rPr: { default: null } },
-        toDOM: (mark) => [
-          "span",
-          {
-            style: look.run(
-              mark.attrs["rPr"] == null ? undefined : docx.els[mark.attrs["rPr"] as number],
-            ),
-          },
-          0,
-        ],
-      },
-      bold: {
-        parseDOM: [{ tag: "strong" }, { tag: "b" }],
-        toDOM: () => ["strong", { style: "font-weight:700" }, 0],
-      },
-      italic: { parseDOM: [{ tag: "em" }, { tag: "i" }], toDOM: () => ["em", 0] },
-      underline: {
-        attrs: { val: { default: "single" } },
-        parseDOM: [{ tag: "u" }],
-        toDOM: () => ["u", 0],
-      },
-    },
-  });
+  };
 }
 
 function pageOf(sectPr: Element | undefined): Docx["page"] {
@@ -451,11 +72,7 @@ function pageOf(sectPr: Element | undefined): Docx["page"] {
 
 interface Look {
   base: string;
-  paragraphStyles: { id: string; name: string }[];
-  paragraph: (style: string | null, pPr: Element | undefined) => { css: string; cls: string };
-  run: (rPr: Element | undefined) => string;
-  block: (el: Element) => HTMLElement;
-  inline: (el: Element) => HTMLElement;
+  render: (el: Element, into: HTMLElement) => void;
   numberingCss: (scope: string) => string;
 }
 
@@ -630,6 +247,9 @@ function lookOf(parts: Parts): Look {
           for (const piece of kids(c)) {
             if (piece.nodeName === "w:t") span.append(piece.textContent ?? "");
             else if (piece.nodeName === "w:tab") span.append("\t");
+            else if (piece.nodeName === "w:br" && piece.getAttribute("w:type") === "page")
+              // The pages start a new one after its paragraph.
+              span.dataset["pageBreak"] = "";
             else if (piece.nodeName === "w:br") span.append(document.createElement("br"));
             else if (piece.nodeName === "w:drawing") image(piece, span);
           }
@@ -646,6 +266,7 @@ function lookOf(parts: Parts): Look {
           into.append(a);
           break;
         }
+        case "w:sectPr":
         case "w:del":
         case "w:delText":
         case "w:pPr":
@@ -698,13 +319,6 @@ function lookOf(parts: Parts): Look {
     return out;
   };
 
-  // `render` draws an element's children, so an element draws itself inside a wrapper.
-  const wrapped = (el: Element) => {
-    const wrap = el.ownerDocument.createElementNS(W, "w:wrap");
-    wrap.append(el.cloneNode(true));
-    return wrap;
-  };
-
   // Each list level's marker: its text with %n as that level's count, or the bullet.
   const numberingCss = (scope: string) => {
     if (!numbering) return "";
@@ -737,7 +351,7 @@ function lookOf(parts: Parts): Look {
         const text = val(lvl, "w:lvlText") ?? "";
         const content =
           format === "bullet"
-            ? JSON.stringify(/^[-]?$/.test(text) ? "•" : text)
+            ? JSON.stringify(/^[\uf000-\uf8ff]?$/.test(text) ? "•" : text)
             : text
                 .split(/(%\d)/)
                 .filter(Boolean)
@@ -760,34 +374,5 @@ function lookOf(parts: Parts): Look {
     return rules.join("\n");
   };
 
-  const paragraphStyles = [...byId.values()]
-    .filter(
-      (s) =>
-        s.getAttribute("w:type") === "paragraph" && (kid(s, "w:qFormat") || s === defaultParagraph),
-    )
-    .map((s) => ({ id: s.getAttribute("w:styleId") ?? "", name: val(s, "w:name") ?? "" }))
-    .map((s) => ({
-      ...s,
-      name: s.name.replace(/^heading/i, "Heading").replace(/^title/, "Title"),
-    }));
-
-  return {
-    base: cssText(baseCss),
-    paragraphStyles,
-    paragraph,
-    run,
-    block: (el) => {
-      const div = document.createElement("div");
-      div.contentEditable = "false";
-      render(wrapped(el), div);
-      return div;
-    },
-    inline: (el) => {
-      const span = document.createElement("span");
-      if (el.nodeName !== "w:bookmarkStart" && el.nodeName !== "w:bookmarkEnd")
-        render(wrapped(el), span);
-      return span;
-    },
-    numberingCss,
-  };
+  return { base: cssText(baseCss), render, numberingCss };
 }

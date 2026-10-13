@@ -3,15 +3,14 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 
 import { openDocx, type Docx } from "./docx";
 import { describeError } from "./errors";
-import { fromBase64, toBase64 } from "./ooxml";
+import { fromBase64 } from "./ooxml";
 import { openPptx, type Pptx } from "./pptx";
-import { uuidv7 } from "./uuidv7";
 import { openXlsx, type Xlsx } from "./xlsx";
 
 /**
  * Documents an agent presented with `present_files` (PLX-755): read from its thread's folder
  * through `agent/file`, opened by type, and shared by the transcript's cards and the side panel
- * until a save reloads them.
+ * until a newer presentation reloads them.
  */
 
 import type { DocKind, DocRef } from "./transcript";
@@ -29,11 +28,11 @@ export interface Loaded {
   opened: Opened;
 }
 
-export const kinds: Record<DocKind, { label: string; editable: boolean }> = {
-  docx: { label: "Document", editable: true },
-  pdf: { label: "Document", editable: false },
-  xlsx: { label: "Spreadsheet", editable: true },
-  pptx: { label: "Presentation", editable: false },
+export const kinds: Record<DocKind, string> = {
+  docx: "Document",
+  pdf: "Document",
+  xlsx: "Spreadsheet",
+  pptx: "Presentation",
 };
 
 /** A file's name as a title: no extension, and spaces for underscores and hyphens. */
@@ -141,43 +140,6 @@ export function useDocument(hostId: string, doc: DocRef) {
   return state;
 }
 
-/**
- * Saves `bytes` over `doc` with `agent/fileWrite`, then reloads it everywhere it shows. Answers
- * why it failed, or undefined.
- */
-export async function writeDocument(
-  hostId: string,
-  doc: DocRef,
-  bytes: Uint8Array,
-): Promise<string | undefined> {
-  const answer = await window.parallax.request(hostId, "agent/fileWrite", {
-    runId: doc.runId,
-    path: doc.path,
-    content: toBase64(bytes),
-  });
-  if ("error" in answer) return describeError(answer.error).replace(/^Invalid params: /, "");
-  cache.delete(keyOf(hostId, doc));
-  reloadEverywhere();
-  return undefined;
-}
-
-/**
- * Tells `doc`'s own thread that the user saved an edit, whichever thread is open: plxd queues
- * it behind a turn under way. Answers why it failed, or undefined.
- */
-export async function sendSaved(
-  hostId: string,
-  doc: DocRef,
-  changes: string[],
-): Promise<string | undefined> {
-  const answer = await window.parallax.request(hostId, "agent/send", {
-    runId: doc.runId,
-    turnId: uuidv7(),
-    text: savedMessage(doc, changes),
-  });
-  return "error" in answer ? describeError(answer.error) : undefined;
-}
-
 /** Saves `bytes` as `name` through the browser's download, which asks where. */
 export function download(name: string, bytes: Uint8Array) {
   const url = URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>]));
@@ -200,16 +162,4 @@ export async function drawPdfPage(pdf: PDFDocumentProxy, n: number, width: numbe
   canvas.style.display = "block";
   await page.render({ canvas, viewport }).promise;
   return canvas;
-}
-
-/** The message that tells the thread the user saved an edit, with what changed. */
-function savedMessage(doc: DocRef, changes: string[]): string {
-  const what = changes.length
-    ? changes.map((line) => `- ${line}`).join("\n")
-    : "- Formatting only; no text changed.";
-  return [
-    `I edited \`${doc.path}\` in Parallax and saved it.`,
-    what,
-    "Acknowledge the edit in a sentence or two. If you made other files from this one, such as a PDF of it, rebuild them and present them again.",
-  ].join("\n\n");
 }

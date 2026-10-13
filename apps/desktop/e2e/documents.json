@@ -36,15 +36,5 @@
   },
   {
     "endTurn": {}
-  },
-  "awaitFollowUp",
-  {
-    "emit": {
-      "kind": "text",
-      "text": "Got it. I see your edit and will rebuild the PDF from the new summary."
-    }
-  },
-  {
-    "endTurn": {}
   }
 ]

@@ -288,7 +288,6 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         AgentFileCreate => |p| agents::review::create_entry(daemon, p),
         AgentFileRename => |p| agents::review::rename_entry(daemon, p),
         AgentFileDelete => |p| agents::review::delete_entry(daemon, p),
-        AgentFileWrite => |p| agents::review::write_file(daemon, p),
         AgentAccept => |p| agent::accept(context, p),
         AgentRequestChanges => |p| agent::request_changes(context, p),
         AgentOpenPr => |p| agent::open_pr(context, p),

@@ -1,4 +1,3 @@
-import { DOMSerializer } from "@tiptap/pm/model";
 import { Download } from "lucide-react";
 import { createContext, useContext, useEffect, useRef } from "react";
 
@@ -89,7 +88,7 @@ function FileCard({
       <div className="pointer-events-none min-w-0 flex-1">
         <p className="truncate text-[15px] text-foreground">{titleOf(doc.name)}</p>
         <p className="truncate text-[13px] text-muted-foreground">
-          {error ?? `${kinds[doc.kind].label} · ${doc.kind.toUpperCase()}`}
+          {error ?? `${kinds[doc.kind]} · ${doc.kind.toUpperCase()}`}
         </p>
       </div>
       <button
@@ -136,14 +135,12 @@ export async function drawPage(opened: Opened, page: number): Promise<HTMLElemen
       const { top, right, bottom, left } = docx.page;
       sheet.style.padding = `${top}px ${right}px ${bottom}px ${left}px`;
       const style = document.createElement("style");
-      style.textContent = `.${docx.scope}{${docx.base};white-space:pre-wrap}\n${docx.css}`;
+      style.textContent = docx.css;
       const clip = document.createElement("div");
       clip.style.height = "100%";
       clip.style.overflow = "hidden";
-      const flow = document.createElement("div");
-      flow.className = docx.scope;
+      const flow = docx.render();
       flow.style.transform = `translateY(-${page * (height - top - bottom)}px)`;
-      flow.append(DOMSerializer.fromSchema(docx.schema).serializeFragment(docx.doc.content));
       clip.append(flow);
       sheet.append(style, clip);
       return sheet;

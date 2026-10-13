@@ -1,72 +1,61 @@
 // @vitest-environment jsdom
-// jsdom, not happy-dom: its XML parser and serializer keep namespace prefixes, as Chromium does.
-import { EditorState } from "@tiptap/pm/state";
-import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
+// jsdom, not happy-dom: its XML parser keeps namespace prefixes, as Chromium's does.
+import { strToU8, zipSync } from "fflate";
 import { expect, test } from "vite-plus/test";
 
-import { changeSummary, openDocx, paragraphTexts, saveDocx } from "./docx";
+import { openDocx } from "./docx";
 
-const body = [
-  // An attribute a rebuilt paragraph would drop, so it shows the paragraph was kept.
-  `<w:p w:rsidR="00AB12CD"><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Title</w:t></w:r></w:p>`,
-  `<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FF0000"/></w:rPr><w:t xml:space="preserve">Hello </w:t></w:r><w:hyperlink r:id="rId9"><w:r><w:t>link</w:t></w:r></w:hyperlink><w:r><w:tab/><w:t>world</w:t></w:r></w:p>`,
-  `<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`,
-  `<w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>`,
-].join("");
-const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${body}</w:body></w:document>`;
-const file = zipSync({
-  "[Content_Types].xml": strToU8("<Types/>"),
-  "word/document.xml": strToU8(documentXml),
-  "word/media/keep.bin": new Uint8Array([1, 2, 3]),
-});
-
-const bodyOf = (bytes: Uint8Array) => {
-  const xml = strFromU8(unzipSync(bytes)["word/document.xml"]!);
-  const doc = new DOMParser().parseFromString(xml, "application/xml");
-  return [...doc.getElementsByTagName("w:body")[0]!.children];
-};
-const original = bodyOf(file);
-const xmlOf = (el: Element) => new XMLSerializer().serializeToString(el);
-
-test("an untouched document saves every element and part as it was", () => {
-  const docx = openDocx(file);
-  const saved = saveDocx(docx, docx.doc);
-  expect(bodyOf(saved).map(xmlOf)).toEqual(original.map(xmlOf));
-  expect([...unzipSync(saved)["word/media/keep.bin"]!]).toEqual([1, 2, 3]);
-});
-
-test("an edit rebuilds only its paragraph, keeping its properties, formatting, and links", () => {
-  const docx = openDocx(file);
-  let at = -1;
-  docx.doc.descendants((node, pos) => {
-    // The tab and the text after it are one text node.
-    if (node.text === "\tworld") at = pos + 1;
+const NS = `xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"`;
+const docxOf = (body: string, parts: Record<string, string> = {}) =>
+  zipSync({
+    "word/document.xml": strToU8(`<w:document ${NS}><w:body>${body}</w:body></w:document>`),
+    ...Object.fromEntries(Object.entries(parts).map(([path, xml]) => [path, strToU8(xml)])),
   });
-  const state = EditorState.create({ doc: docx.doc });
-  const edited = state.apply(state.tr.insertText("big ", at)).doc;
-  const [title, paragraph, table, sectPr] = bodyOf(saveDocx(docx, edited));
 
-  expect(xmlOf(title!)).toBe(xmlOf(original[0]!));
-  expect(xmlOf(table!)).toBe(xmlOf(original[2]!));
-  expect(xmlOf(sectPr!)).toBe(xmlOf(original[3]!));
-  const xml = xmlOf(paragraph!);
-  expect(xml).toContain(`<w:jc w:val="center"/>`);
-  // Bold goes back in CT_RPr's order, ahead of the color.
-  expect(xml).toMatch(/<w:rPr><w:b\/><w:bCs\/><w:color w:val="FF0000"\/><\/w:rPr>/);
-  // By qualified name: alone, an element serializes without its root's xmlns:r.
-  expect(paragraph!.getElementsByTagName("w:hyperlink")[0]?.getAttribute("r:id")).toBe("rId9");
-  expect(xml).toMatch(/<w:tab\/><w:t xml:space="preserve">big world<\/w:t>/);
-  expect(changeSummary(docx.texts, paragraphTexts(docx, edited))).toEqual([
-    `Changed "Hello link\\tworld" to "Hello link\\tbig world"`,
-  ]);
+test("a document draws its paragraphs with their styles and runs, on its section's page", () => {
+  const docx = openDocx(
+    docxOf(
+      `<w:p><w:pPr><w:pStyle w:val="Title"/><w:jc w:val="center"/></w:pPr><w:r><w:t>Summary</w:t></w:r></w:p>` +
+        `<w:p><w:r><w:rPr><w:b/><w:color w:val="C00000"/><w:sz w:val="28"/></w:rPr><w:t>Confidential</w:t></w:r></w:p>` +
+        `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"/></w:sectPr>`,
+      {
+        "word/styles.xml": `<w:styles ${NS}><w:style w:type="paragraph" w:styleId="Title"><w:rPr><w:sz w:val="56"/></w:rPr></w:style></w:styles>`,
+      },
+    ),
+  );
+  // A4 in CSS pixels, with half-inch margins.
+  expect(docx.page).toMatchObject({ width: 11906 / 15, height: 16838 / 15, top: 48, left: 48 });
+  const flow = docx.render();
+  expect(flow.className).toBe(docx.scope);
+  const [title, body] = [...flow.children] as HTMLElement[];
+  expect(title!.textContent).toBe("Summary");
+  expect(title!.style.textAlign).toBe("center");
+  expect(title!.style.fontSize).toBe("28pt");
+  const run = body!.querySelector("span")!;
+  expect(run.textContent).toBe("Confidential");
+  expect(run.style.fontWeight).toBe("700");
+  expect(run.style.color).toBe("rgb(192, 0, 0)");
+  expect(run.style.fontSize).toBe("14pt");
 });
 
-test("a change summary pairs replaced lines and names added and removed ones", () => {
-  expect(changeSummary(["a", "b", "c"], ["a", "B", "c", "d"])).toEqual([
-    `Changed "b" to "B"`,
-    `Added "d"`,
-  ]);
-  expect(changeSummary(["a", "b"], ["b"])).toEqual([`Removed "a"`]);
-  expect(changeSummary(["a"], ["a"])).toEqual([]);
+test("tables draw with merged cells, list paragraphs get their markers, and page breaks are marked", () => {
+  const docx = openDocx(
+    docxOf(
+      `<w:tbl><w:tblPr><w:tblBorders><w:top w:val="single"/></w:tblBorders></w:tblPr><w:tr>` +
+        `<w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr><w:p><w:r><w:t>Wide</w:t></w:r></w:p></w:tc></w:tr>` +
+        `<w:tr><w:tc><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
+        `<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="3"/></w:numPr></w:pPr><w:r><w:t>Item</w:t></w:r></w:p>` +
+        `<w:p><w:r><w:t>Before</w:t><w:br w:type="page"/></w:r></w:p>`,
+      {
+        "word/numbering.xml": `<w:numbering ${NS}><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/></w:lvl></w:abstractNum><w:num w:numId="3"><w:abstractNumId w:val="0"/></w:num></w:numbering>`,
+      },
+    ),
+  );
+  const [table, item, broken] = [...docx.render().children] as HTMLElement[];
+  const cells = [...table!.querySelectorAll("td")];
+  expect(cells.map((td) => td.textContent)).toEqual(["Wide", "A", "B"]);
+  expect(cells[0]!.colSpan).toBe(2);
+  expect(item!.className).toBe("n3-0");
+  expect(docx.css).toContain(`.${docx.scope} .n3-0::before{content:"•"`);
+  expect(broken!.querySelector("[data-page-break]")).not.toBeNull();
 });

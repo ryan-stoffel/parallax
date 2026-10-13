@@ -1,28 +1,18 @@
-import { readXml, unzip, writeXml, zip, type Parts } from "./ooxml";
+import { readXml, unzip, type Parts } from "./ooxml";
 
 /**
- * A .xlsx as the side panel edits it (PLX-755). Each sheet's XML is edited in place: a changed
- * cell keeps its style, and every other cell, sheet, chart, and part is written back as it was.
- * Formulas aren't calculated here, so saving tells Excel to recalculate on open and drops the
- * calculation chain, which a changed formula could leave stale.
+ * A .xlsx as the side panel shows it (PLX-755), view-only: each sheet's cells with their values
+ * as their number formats show them, their fonts and fills, column widths, row heights, and merges.
  */
 export interface Xlsx {
-  parts: Parts;
-  workbook: Document;
   sheets: Sheet[];
   shared: string[];
   styles: CellStyle[];
-  /** Edited cells, as `Sheet!A1`, with their input when opened and now. */
-  edits: Map<string, { before: string; after: string }>;
 }
 
 export interface Sheet {
   name: string;
-  path: string;
-  xml: Document;
-  data: Element;
   cells: Map<string, Element>;
-  rows: Map<number, Element>;
   /** Column widths in pixels, by zero-based column, where the sheet sets them. */
   widths: Map<number, number>;
   /** Row heights in pixels, by one-based row, where the sheet sets them. */
@@ -30,9 +20,6 @@ export interface Sheet {
   /** Merged ranges by their top-left cell, and the cells they cover. */
   merges: Map<string, { rows: number; cols: number }>;
   covered: Set<string>;
-  edited: boolean;
-  /** Each shared formula's first cell and formula, by its `si`, found on first use. */
-  masters?: Map<string, { ref: string; formula: string }>;
 }
 
 interface CellStyle {
@@ -122,77 +109,24 @@ export function openXlsx(bytes: Uint8Array): Xlsx {
     }
     sheets.push({
       name: entry.getAttribute("name") ?? `Sheet${sheets.length + 1}`,
-      path,
-      xml,
-      data,
       cells,
-      rows,
       widths,
       heights,
       merges,
       covered,
-      edited: false,
     });
   }
   if (!sheets.length) throw new Error("This workbook has no sheets.");
-  return { parts, workbook, sheets, shared, styles: stylesOf(parts), edits: new Map() };
+  return { sheets, shared, styles: stylesOf(parts) };
 }
 
-/**
- * `formula` moved by `rows` and `cols`, as Excel fills it down or across: relative references
- * shift, `$` ones stay, and text in quotes, quoted sheet names, function names, and sheet names
- * don't move.
- */
-export function shiftFormula(formula: string, rows: number, cols: number): string {
-  const col = (fixed = "", letters = "") =>
-    fixed + (fixed ? letters : colName(colIndex(letters) + cols));
-  const row = (fixed = "", digits = "") => fixed + (fixed ? digits : String(Number(digits) + rows));
-  // Quoted text and sheet names stay; then a whole-column range such as B:B, a whole-row range
-  // such as 3:3, or one cell.
-  const reference =
-    /("(?:[^"]|"")*"|'(?:[^']|'')*'!)|(?<c1f>\$?)(?<c1>[A-Z]{1,3}):(?<c2f>\$?)(?<c2>[A-Z]{1,3})(?![\w(!])|(?<r1f>\$?)(?<r1>\d+):(?<r2f>\$?)(?<r2>\d+)(?![\w(!])|(?<cf>\$?)(?<c>[A-Z]{1,3})(?<rf>\$?)(?<r>\d+)(?![\w(!])/g;
-  return formula.replace(reference, (...args: unknown[]) => {
-    const [match, quoted] = args as [string, string | undefined];
-    const at = args.at(-3) as number;
-    const g = args.at(-1) as Record<string, string | undefined>;
-    if (quoted || /[\w.$]/.test(formula[at - 1] ?? "")) return match;
-    if (g["c1"]) return `${col(g["c1f"], g["c1"])}:${col(g["c2f"], g["c2"])}`;
-    if (g["r1"]) return `${row(g["r1f"], g["r1"])}:${row(g["r2f"], g["r2"])}`;
-    return col(g["cf"], g["c"]) + row(g["rf"], g["r"]);
-  });
-}
-
-/**
- * A cell's formula. A cell of a shared formula, one Excel filled down or across, holds only its
- * group's `si`, and its formula is the group's first cell's, moved.
- */
-function formulaOf(sheet: Sheet, ref: string, f: Element | undefined): string | undefined {
-  if (!f) return undefined;
-  const si = f.getAttribute("si");
-  if (f.getAttribute("t") !== "shared" || f.textContent || si === null) return f.textContent ?? "";
-  if (!sheet.masters) {
-    sheet.masters = new Map();
-    for (const [cellRef, c] of sheet.cells) {
-      const master = childOf(c, "f");
-      const id = master?.getAttribute("si");
-      if (master?.getAttribute("t") === "shared" && master.textContent && id != null)
-        sheet.masters.set(id, { ref: cellRef, formula: master.textContent });
-    }
-  }
-  const master = sheet.masters.get(si);
-  if (!master) return undefined;
-  const from = splitRef(master.ref);
-  const to = splitRef(ref);
-  return shiftFormula(master.formula, to.row - from.row, to.col - from.col);
-}
-
-/** What a cell shows, and what editing it starts from: its formula with `=`, or its value. */
+/** What a cell shows, its look, and whether it's a number, which aligns right. */
 export function cellAt(x: Xlsx, sheet: Sheet, ref: string) {
   const c = sheet.cells.get(ref);
-  if (!c) return { text: "", input: "", css: "", number: false };
+  if (!c) return { text: "", css: "", number: false };
   const type = c.getAttribute("t");
   const v = childOf(c, "v")?.textContent ?? "";
-  const formula = formulaOf(sheet, ref, childOf(c, "f"));
+  const formula = childOf(c, "f")?.textContent;
   const style = x.styles[Number(c.getAttribute("s") ?? 0)];
   let text: string;
   let number = false;
@@ -203,130 +137,13 @@ export function cellAt(x: Xlsx, sheet: Sheet, ref: string) {
       .join("");
   else if (type === "b") text = v === "1" ? "TRUE" : "FALSE";
   // A formula no app has calculated yet, as libraries such as openpyxl write them, shows itself.
-  else if (v === "" && formula != null) text = `=${formula}`;
+  else if (v === "" && formula) text = `=${formula}`;
   else if (type === "str" || type === "e" || v === "") text = v;
   else {
     text = formatNumber(Number(v), style?.format ?? "General");
     number = true;
   }
-  return { text, input: formula != null ? `=${formula}` : text, css: style?.css ?? "", number };
-}
-
-/** Sets a cell from what the user typed: a formula with `=`, a number, or text. Keeps its style. */
-export function setCell(x: Xlsx, sheet: Sheet, ref: string, input: string) {
-  const before = cellAt(x, sheet, ref).input;
-  if (before === input) return;
-  const doc = sheet.xml;
-  const make = (name: string) => doc.createElementNS(NS, name);
-  let c = sheet.cells.get(ref);
-  if (!c) {
-    const { row, col } = splitRef(ref);
-    let r = sheet.rows.get(row);
-    if (!r) {
-      r = make("row");
-      r.setAttribute("r", String(row));
-      const after = [...sheet.rows.keys()].filter((n) => n > row).sort((a, b) => a - b)[0];
-      sheet.data.insertBefore(r, after === undefined ? null : sheet.rows.get(after)!);
-      sheet.rows.set(row, r);
-    }
-    c = make("c");
-    c.setAttribute("r", ref);
-    const next = [...r.children].find((other) => splitRef(other.getAttribute("r") ?? "").col > col);
-    r.insertBefore(c, next ?? null);
-    sheet.cells.set(ref, c);
-  }
-  // A shared formula's first cell holds the group's formula: each other cell takes its own
-  // before this one changes.
-  const shared = childOf(c, "f");
-  const si = shared?.getAttribute("si");
-  if (shared?.getAttribute("t") === "shared" && shared.textContent && si != null)
-    for (const [otherRef, other] of sheet.cells) {
-      const f = childOf(other, "f");
-      if (other === c || f?.getAttribute("t") !== "shared" || f.getAttribute("si") !== si) continue;
-      f.textContent = formulaOf(sheet, otherRef, f) ?? "";
-      for (const name of ["t", "si", "ref"]) f.removeAttribute(name);
-    }
-  for (const name of ["f", "v", "is"]) childOf(c, name)?.remove();
-  sheet.masters = undefined;
-  c.removeAttribute("t");
-  if (input.startsWith("=") && input.length > 1) {
-    const f = make("f");
-    f.textContent = input.slice(1);
-    c.append(f);
-  } else if (/^-?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(input.trim())) {
-    const v = make("v");
-    v.textContent = String(Number(input));
-    c.append(v);
-  } else if (input) {
-    c.setAttribute("t", "inlineStr");
-    const is = make("is");
-    const t = make("t");
-    t.setAttributeNS("http://www.w3.org/XML/1998/namespace", "xml:space", "preserve");
-    t.textContent = input;
-    is.append(t);
-    c.append(is);
-  }
-  sheet.edited = true;
-  const key = `${sheet.name}!${ref}`;
-  const opened = x.edits.get(key)?.before ?? before;
-  if (opened === input) x.edits.delete(key);
-  else x.edits.set(key, { before: opened, after: input });
-}
-
-/** Each edit, for the agent, such as `Budget!B4: "10" to "12"`. */
-export const editSummary = (x: Xlsx, max = 20) => {
-  const lines = [...x.edits].map(
-    ([key, { before, after }]) => `${key}: ${JSON.stringify(before)} to ${JSON.stringify(after)}`,
-  );
-  return lines.length > max ? [...lines.slice(0, max), `…and ${lines.length - max} more`] : lines;
-};
-
-/** The workbook with its edits, set to recalculate when Excel opens it. */
-export function saveXlsx(x: Xlsx): Uint8Array {
-  const parts: Parts = { ...x.parts };
-  for (const sheet of x.sheets) if (sheet.edited) parts[sheet.path] = writeXml(sheet.xml);
-  let calcPr = first(x.workbook, "calcPr");
-  if (!calcPr) {
-    calcPr = x.workbook.createElementNS(NS, "calcPr");
-    // CT_Workbook's order: calcPr comes after these, and before everything else.
-    const root = x.workbook.documentElement;
-    const before = [
-      "fileVersion",
-      "fileSharing",
-      "workbookPr",
-      "workbookProtection",
-      "bookViews",
-      "sheets",
-      "functionGroups",
-      "externalReferences",
-      "definedNames",
-    ];
-    const last = [...root.children].filter((c) => before.includes(c.localName)).at(-1);
-    root.insertBefore(calcPr, last?.nextSibling ?? null);
-  }
-  calcPr.setAttribute("fullCalcOnLoad", "1");
-  parts["xl/workbook.xml"] = writeXml(x.workbook);
-  if (parts["xl/calcChain.xml"]) {
-    delete parts["xl/calcChain.xml"];
-    const drop = (path: string, test: (el: Element) => boolean, tag: string) => {
-      const doc = readXml(parts, path);
-      if (!doc) return;
-      // A copy, since the live collection shrinks as elements go.
-      for (const el of Array.from(doc.getElementsByTagName(tag))) if (test(el)) el.remove();
-      parts[path] = writeXml(doc);
-    };
-    drop(
-      "xl/_rels/workbook.xml.rels",
-      (r) => (r.getAttribute("Type") ?? "").endsWith("/calcChain"),
-      "Relationship",
-    );
-    drop(
-      "[Content_Types].xml",
-      (o) => o.getAttribute("PartName") === "/xl/calcChain.xml",
-      "Override",
-    );
-  }
-  return zip(parts);
+  return { text, css: style?.css ?? "", number };
 }
 
 const builtInFormats: Record<number, string> = {
