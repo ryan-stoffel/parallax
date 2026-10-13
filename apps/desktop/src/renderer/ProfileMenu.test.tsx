@@ -39,6 +39,7 @@ function render(profile: Profile | null) {
   window.parallax = {
     ...calls,
     platform: "darwin",
+    version: async () => "2610.11213.10000",
     // Never connected, so the dialog asks no host for usage.
     onConnectionState: () => () => {},
     connectionState: () => new Promise(() => {}),
@@ -115,7 +116,9 @@ test("Security opens Clerk's Security page, and Parallax Connect lists and remov
   const { editProfile, removeDevice } = render(ryan);
   click(button("Manage account"));
   click(button("Security"));
-  expect(document.querySelector("dialog")!.textContent).toContain("MacBook · macOS");
+  await act(async () => {});
+  const devices = document.querySelector('dialog [aria-label="Sign-in"]')!.textContent;
+  expect(devices).toContain("MacintoshThis deviceMacBookParallax 2610.11213.10000");
   click(button("Add a passkey"));
   expect(editProfile).toHaveBeenCalledWith("security");
 

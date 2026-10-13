@@ -750,11 +750,15 @@ function RowText({ title, children }: { title: string; children: ReactNode }) {
 
 /**
  * The Security tab: password, passkeys, devices, and Delete account. An OAuth token can't read
- * or change them (0067), so each opens Clerk's Security page in the browser, and the devices row
- * names only this one.
+ * or change them (0067), so each opens Clerk's Security page in the browser. Active devices shows
+ * this one, as the app knows it: Clerk lists browser sessions, not the app's sign-ins.
  */
 function SecurityRows() {
   const local = useHosts().find((h) => h.id === localId)!;
+  const localIcon = useConnect()?.icon ?? "laptop";
+  const [version, setVersion] = useState<string>();
+  useEffect(() => void window.parallax.version().then(setVersion), []);
+  const electron = /Electron\/([\d.]+)/.exec(navigator.userAgent)?.[1];
   const security = () => void window.parallax.editProfile("security");
   return (
     <>
@@ -773,19 +777,34 @@ function SecurityRows() {
             Add a passkey
           </button>
         </div>
-        <div className={settingRow}>
-          <RowText title="Active devices">
-            <span className="flex items-center gap-1.5">
-              {local.name} ·{" "}
-              {osName(platformOs[window.parallax.platform] ?? window.parallax.platform)}
-              <span className="rounded-md border border-border px-1.5 text-[11.5px]">
-                This device
-              </span>
-            </span>
-          </RowText>
-          <button type="button" onClick={security} className={outlineButton}>
-            Manage
-          </button>
+        <div className="flex gap-4 border-border px-4 py-3 not-last:border-b">
+          <span className="w-40 shrink-0 text-[13px] font-medium">Active devices</span>
+          <div className="min-w-0 flex-1">
+            <div className="flex gap-3">
+              <DeviceIcon
+                icon={localIcon}
+                className="mt-0.5 size-5 shrink-0 text-muted-foreground"
+              />
+              <div className="min-w-0 text-[12.5px] leading-6 text-muted-foreground">
+                <span className="flex items-center gap-2 text-[13px] text-foreground">
+                  {deviceKinds[window.parallax.platform] ?? "Computer"}
+                  <span className="rounded-md border border-border bg-selected px-1.5 text-[11.5px] leading-5 text-muted-foreground">
+                    This device
+                  </span>
+                </span>
+                <span className="block truncate">{local.name}</span>
+                {version && <span className="block">Parallax {version}</span>}
+                {electron && <span className="block">Electron {electron}</span>}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={security}
+              className="mt-2 text-[12.5px] text-accent hover:underline"
+            >
+              Your other devices, on Clerk
+            </button>
+          </div>
         </div>
       </Section>
       <Section title="Danger zone">
@@ -802,8 +821,12 @@ function SecurityRows() {
   );
 }
 
-/** Node's platform as Tailscale names the OS, for `osName`. */
-const platformOs: Record<string, string> = { darwin: "macOS", win32: "windows", linux: "linux" };
+/** What kind of computer this is, by Node's platform, as Active devices names it. */
+const deviceKinds: Record<string, string> = {
+  darwin: "Macintosh",
+  win32: "Windows PC",
+  linux: "Linux PC",
+};
 
 /**
  * The Parallax Connect tab: each device added with it (0056), with its icon, address, and whether
