@@ -468,6 +468,17 @@ body {
   vertical-align: -0.1em;
   accent-color: var(--accent);
 }
+/* Math a little over the text's size (KaTeX's own 1.21em towers over 14px prose), and display
+   math that scrolls on its own rather than widening the message. */
+.markdown .katex {
+  font-size: 1.1em;
+}
+.markdown .katex-display {
+  /* Room for tall glyphs, which the scroll box would otherwise clip. */
+  padding-block: 0.2em;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
 /* Math still arriving is incomplete LaTeX: it appears once it typesets, or when the message ends. */
 .markdown.streaming .katex-error {
   display: none;
