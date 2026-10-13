@@ -86,19 +86,26 @@ const reloadEverywhere = () => {
   for (const listener of listeners) listener();
 };
 
-// The present_files results already seen, by transcript item.
-const presented = new Set<string>();
+// Each file's latest present_files result seen, by the event seq its transcript key starts with.
+const presented = new Map<string, number>();
 
 /**
- * Reads `docs` from disk again the first time a present_files result `item` shows, since an agent
- * that rebuilds a file presents it again under the same path.
+ * Reads `docs` from disk again when present_files result `item` is newer than any seen for them,
+ * since an agent that rebuilds a file presents it again under the same path. An older result
+ * scrolled back into view changes nothing. Called while rendering, before the cards load, so it
+ * notifies what's already showing a file afterwards.
  */
 export function readPresented(hostId: string, item: string, docs: DocRef[]) {
-  if (presented.has(item)) return;
-  presented.add(item);
+  const seq = Number.parseInt(item, 10);
   let stale = false;
-  for (const doc of docs) stale = cache.delete(keyOf(hostId, doc)) || stale;
-  if (stale) reloadEverywhere();
+  for (const doc of docs) {
+    const key = keyOf(hostId, doc);
+    const seen = presented.get(key);
+    if (seen !== undefined && seq <= seen) continue;
+    presented.set(key, seq);
+    if (seen !== undefined) stale = cache.delete(key) || stale;
+  }
+  if (stale) queueMicrotask(reloadEverywhere);
 }
 
 const subscribe = (listener: () => void) => {

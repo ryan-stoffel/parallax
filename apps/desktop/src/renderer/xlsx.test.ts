@@ -112,6 +112,12 @@ test("a filled-down formula reads moved, and editing its first cell keeps the re
   expect(xml).not.toContain(`si="0"`);
 });
 
+test("whole-column and whole-row ranges shift too", () => {
+  expect(shiftFormula("SUM(B:B)+SUM($C:$C)+SUM(3:3)+A1:B2", 1, 1)).toBe(
+    "SUM(C:C)+SUM($C:$C)+SUM(4:4)+B2:C3",
+  );
+});
+
 test("formulas shift their relative references only", () => {
   expect(shiftFormula(`LOG10(A1)+'Q1 2026'!B2+Q1!C3+"A1"&$D$4+E$5`, 2, 1)).toBe(
     `LOG10(B3)+'Q1 2026'!C4+Q1!D5+"A1"&$D$4+F$5`,

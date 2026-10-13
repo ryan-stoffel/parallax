@@ -230,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn a_file_outside_is_copied_in_but_never_through_a_symlink_or_over_a_folder() {
+    fn a_file_outside_is_copied_in_but_never_over_a_folder() {
         let dir = tempfile::tempdir().unwrap();
         let folder = dir.path().join("thread");
         std::fs::create_dir(&folder).unwrap();
@@ -240,6 +240,19 @@ mod tests {
         assert_eq!(copy_in(&folder, &source).unwrap(), "Summary.docx");
         assert_eq!(std::fs::read(folder.join("Summary.docx")).unwrap(), b"new");
 
+        assert!(copy_in(&folder, &dir.path().join("missing.docx")).is_err());
+        std::fs::create_dir(folder.join("Folder.docx")).unwrap();
+        let named = dir.path().join("Folder.docx");
+        std::fs::write(&named, b"new").unwrap();
+        assert!(copy_in(&folder, &named).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_never_writes_through_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("thread");
+        std::fs::create_dir(&folder).unwrap();
         let elsewhere = dir.path().join("elsewhere.docx");
         std::fs::write(&elsewhere, b"keep").unwrap();
         let linked = dir.path().join("Linked.docx");
@@ -247,6 +260,5 @@ mod tests {
         std::os::unix::fs::symlink(&elsewhere, folder.join("Linked.docx")).unwrap();
         assert!(copy_in(&folder, &linked).is_err());
         assert_eq!(std::fs::read(&elsewhere).unwrap(), b"keep");
-        assert!(copy_in(&folder, &dir.path().join("missing.docx")).is_err());
     }
 }
