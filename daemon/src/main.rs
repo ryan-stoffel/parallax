@@ -239,7 +239,7 @@ struct InstallOptions {
 fn main() -> ExitCode {
     // Before anything else, so the version is the one this process started as (see `version`).
     plxd::version();
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(as_parallax(std::env::args_os().collect()));
     match cli.command {
         Command::Serve(args) => serve(&args),
         Command::Attach(args) => attach(&args),
@@ -840,13 +840,52 @@ fn fail(message: &str) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// `args` with `tui` put first when plxd runs as `parallax` with no subcommand, so `parallax`
+/// opens Parallax in the terminal, as `claude` and `codex` open theirs. Linked or copied under
+/// that name, plxd is still every other command: `parallax attach` is `plxd attach`.
+fn as_parallax(mut args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    let parallax = args
+        .first()
+        .and_then(|program| std::path::Path::new(program).file_stem())
+        .is_some_and(|name| name == "parallax");
+    let subcommand = args
+        .get(1)
+        .is_some_and(|arg| !arg.to_string_lossy().starts_with('-'));
+    if parallax && !subcommand {
+        args.insert(1, "tui".into());
+    }
+    args
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
     use clap::{CommandFactory, Parser};
 
-    use super::{AttachArgs, Cli, Command, OnOff, parse_dial_address};
+    use super::{AttachArgs, Cli, Command, OnOff, as_parallax, parse_dial_address};
+
+    #[test]
+    fn parallax_alone_is_the_tui() {
+        let args = |line: &[&str]| -> Vec<String> {
+            let line = line.iter().map(Into::into).collect();
+            as_parallax(line)
+                .into_iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect()
+        };
+        assert_eq!(
+            args(&["/usr/local/bin/parallax"]),
+            ["/usr/local/bin/parallax", "tui"]
+        );
+        assert_eq!(
+            args(&["parallax", "--data-dir", "/tmp/x"]),
+            ["parallax", "tui", "--data-dir", "/tmp/x"]
+        );
+        assert_eq!(args(&["parallax.exe"]), ["parallax.exe", "tui"]);
+        assert_eq!(args(&["parallax", "serve"]), ["parallax", "serve"]);
+        assert_eq!(args(&["plxd"]), ["plxd"]);
+    }
 
     #[test]
     fn the_command_line_definition_is_valid() {
