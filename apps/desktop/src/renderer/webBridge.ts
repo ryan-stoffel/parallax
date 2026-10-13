@@ -602,6 +602,10 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     terminalApp: async () => null,
     terminalApps: async () => [],
     selectTerminalApp: async () => null,
+    // A browser has no terminal of this computer's to put a command in.
+    command: async () => ({ state: "unavailable" as const, path: "" }),
+    installCommand: async () => NOT_HERE,
+    removeCommand: async () => NOT_HERE,
 
     onProfile: (listener) => (listener(null), () => {}),
     signIn: async () => NOT_HERE,

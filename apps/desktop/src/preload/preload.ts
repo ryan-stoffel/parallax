@@ -142,6 +142,9 @@ const bridge: ParallaxBridge = {
   terminalApp: () => ipcRenderer.invoke("parallax:terminalApp"),
   terminalApps: () => ipcRenderer.invoke("parallax:terminalApps"),
   selectTerminalApp: (path) => ipcRenderer.invoke("parallax:selectTerminalApp", path),
+  command: () => ipcRenderer.invoke("parallax:command"),
+  installCommand: () => ipcRenderer.invoke("parallax:installCommand"),
+  removeCommand: () => ipcRenderer.invoke("parallax:removeCommand"),
 
   onProfile(listener) {
     const stop = follow("parallax:profile", listener, false);

@@ -25,6 +25,16 @@ import {
   validLocale,
 } from "../preload/bridge";
 import { startAccount } from "./account";
+import {
+  commandPath,
+  commandSource,
+  commandState,
+  installCommand,
+  offerAtLaunch,
+  readRecord,
+  removeCommand,
+  writeRecord,
+} from "./command";
 import { registerAppScheme, rendererUrl, serveAppScheme } from "./appScheme";
 import {
   appBundle,
@@ -35,6 +45,7 @@ import {
   launch,
   type Editor,
 } from "./editors";
+import type { CommandStatus } from "../preload/bridge";
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
 import { renderPage, savedHost, startHosts } from "./hosts";
 import { isBrowsable, isOpenableExternally, mayNavigate } from "./links";
@@ -92,6 +103,7 @@ function createWindow() {
   win.once("ready-to-show", () => win.show());
 
   void win.loadURL(devServerUrl ?? rendererUrl);
+  return win;
 }
 
 // The side panel's browser's session: persistent, and apart from the app's.
@@ -273,6 +285,82 @@ ipcMain.handle("parallax:selectTerminalApp", async (event, selected: unknown) =>
   targetIcons = undefined;
   return chosen.name;
 });
+// The `parallax` command (PLX-750, command.ts).
+const commandFile = () => commandPath(process.platform, process.env, homedir());
+const commandRecordFile = () => path.join(app.getPath("userData"), "command.json");
+const commandPlxd = () =>
+  commandSource({
+    packaged: app.isPackaged,
+    env: process.env,
+    platform: process.platform,
+    resourcesPath: process.resourcesPath,
+    exists: existsSync,
+  });
+async function commandStatus(): Promise<CommandStatus> {
+  const plxd = commandPlxd();
+  const file = commandFile();
+  if (!plxd) return { state: "unavailable", path: file };
+  const record = await readRecord(commandRecordFile());
+  return { state: await commandState(process.platform, file, plxd, record), path: file };
+}
+/** Installs the command, and on Linux records that the copy there is this app's. */
+async function putCommand(): Promise<string | null> {
+  const plxd = commandPlxd();
+  if (!plxd) return "This copy of Parallax can't install the command.";
+  try {
+    await installCommand(process.platform, commandFile(), plxd);
+    const record = await readRecord(commandRecordFile());
+    await writeRecord(commandRecordFile(), { ...record, asked: true, copied: true });
+    return null;
+  } catch (error) {
+    return (error as Error).message;
+  }
+}
+ipcMain.handle("parallax:command", commandStatus);
+ipcMain.handle("parallax:installCommand", putCommand);
+ipcMain.handle("parallax:removeCommand", async () => {
+  try {
+    await removeCommand(process.platform, commandFile());
+    return null;
+  } catch (error) {
+    return (error as Error).message;
+  }
+});
+/**
+ * At launch: on Linux and Windows, installs the command or brings it up to date, without asking.
+ * On macOS, where it takes a password, offers it once, when there's nothing named `parallax`.
+ * Something named `parallax` that this app didn't make is left alone.
+ */
+async function setUpCommand(win: BrowserWindow): Promise<void> {
+  const { state } = await commandStatus();
+  if (state === "unavailable" || state === "other" || state === "installed") return;
+  if (process.platform !== "darwin") {
+    const error = await putCommand();
+    if (error) console.warn("could not install the parallax command:", error);
+    return;
+  }
+  const record = await readRecord(commandRecordFile());
+  if (!offerAtLaunch(process.platform, state, record.asked ?? false)) return;
+  await writeRecord(commandRecordFile(), { ...record, asked: true });
+  const { response } = await dialog.showMessageBox(win, {
+    type: "question",
+    message: "Use Parallax from your terminal?",
+    detail:
+      "This installs the parallax command in /usr/local/bin, so typing parallax in any terminal opens Parallax there. macOS asks for your password. You can change this in Settings > General.",
+    buttons: ["Install", "Not Now"],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (response !== 0) return;
+  const error = await putCommand();
+  if (error && error !== "Cancelled.")
+    await dialog.showMessageBox(win, {
+      type: "warning",
+      message: "Parallax couldn't install the parallax command.",
+      detail: error,
+    });
+}
+
 // The Open targets' own app icons on macOS, as data URLs, found once. Quick Look, since
 // `app.getFileIcon` gives a `.app` bundle a placeholder icon. A target without one keeps its mark.
 let targetIcons: Promise<Partial<Record<OpenTarget, string>>> | undefined;
@@ -405,7 +493,13 @@ void app.whenReady().then(async () => {
   startStorage();
   // Under `pnpm dev`, Update follows main (scripts/channels.mjs). Nightly and stable are tags on it.
   if (!updater) process.send?.({ channel: "nightly" });
-  createWindow();
+  const win = createWindow();
+  // Once the window shows, so the offer has somewhere to appear.
+  win.once("ready-to-show", () => {
+    void setUpCommand(win).catch((error: unknown) =>
+      console.warn("could not set up the parallax command:", error),
+    );
+  });
   // The on-device thread namer's model, which earlier versions downloaded: plxd names threads
   // now (0058). Reclaims its 469 MB without holding up the window.
   void fs

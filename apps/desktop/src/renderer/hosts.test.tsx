@@ -74,6 +74,7 @@ beforeEach(() => {
     version: async () => "1.0.0",
     openTargets: async () => [],
     terminalApps: async () => [],
+    command: async () => ({ state: "unavailable", path: "" }),
     terminalApp: async () => null,
     openTargetIcons: async () => ({}),
     saveHost,

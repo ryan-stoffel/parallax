@@ -24,6 +24,16 @@ export type ThemePreference = (typeof THEME_PREFERENCES)[number];
  */
 export const OPEN_TARGETS = ["cursor", "vscode", "files", "terminal"] as const;
 export type OpenTarget = (typeof OPEN_TARGETS)[number];
+/**
+ * The `parallax` command at `path`: this app's (`installed`), one for a plxd that moved or changed
+ * (`stale`), none (`missing`), something else named `parallax` (`other`), or none to offer from
+ * this app (`unavailable`): a dev build, or one run from its disk image.
+ */
+export type CommandStatus = {
+  state: "installed" | "stale" | "missing" | "other" | "unavailable";
+  path: string;
+};
+
 export type TerminalApp = { path: string; name: string };
 
 /**
@@ -340,6 +350,12 @@ export interface ParallaxBridge {
   terminalApps(): Promise<TerminalApp[]>;
   /** Selects an installed terminal. Unknown paths are rejected. */
   selectTerminalApp(path: string): Promise<string | null>;
+  /** The `parallax` command that opens Parallax in a terminal (PLX-750), and where it goes. */
+  command(): Promise<CommandStatus>;
+  /** Installs or reinstalls the command. Null when done, or why it couldn't. */
+  installCommand(): Promise<string | null>;
+  /** Removes the command. Null when done, or why it couldn't. */
+  removeCommand(): Promise<string | null>;
 
   /**
    * Calls `listener` with the signed-in Parallax account (0067), or null, now and on every

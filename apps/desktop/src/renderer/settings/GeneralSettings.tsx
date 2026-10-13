@@ -1,7 +1,7 @@
 import { SquareTerminal } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import type { OpenTarget, TerminalApp } from "../../preload/bridge";
+import type { CommandStatus, OpenTarget, TerminalApp } from "../../preload/bridge";
 import type {
   AgentPermission,
   HostSettings,
@@ -31,6 +31,51 @@ import { HostPicker, PageTitle, quietButton, Row, Section, Switch } from "./part
 const selectClass = "rounded-md border border-border bg-background px-2 py-1 text-[13px]";
 /** The composer's own pickers are borderless; on a settings row they get the select's outline. */
 const pickerBox = "rounded-md border border-border bg-background";
+
+/**
+ * The `parallax` command that opens Parallax in a terminal (PLX-750): installs, reinstalls, or
+ * removes it. Hidden where this app can't offer it: a dev build, or one run from its disk image.
+ */
+function TerminalCommand() {
+  const [status, setStatus] = useState<CommandStatus>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    void window.parallax.command().then(setStatus);
+  }, []);
+  if (!status || status.state === "unavailable") return null;
+  const act = async (install: boolean) => {
+    setBusy(true);
+    const failed = await (install
+      ? window.parallax.installCommand()
+      : window.parallax.removeCommand());
+    setError(failed === "Cancelled." ? null : failed);
+    setStatus(await window.parallax.command());
+    setBusy(false);
+  };
+  const description = {
+    installed: `Type parallax in a terminal to open Parallax there. Installed at ${status.path}.`,
+    stale: `The command at ${status.path} is for another copy of Parallax.`,
+    missing: "Type parallax in a terminal to open Parallax there.",
+    other: `Something else named parallax is at ${status.path}, so Parallax leaves it alone.`,
+  }[status.state];
+  const action =
+    status.state === "installed" ? "Remove" : status.state === "other" ? undefined : "Install";
+  return (
+    <Row title="Terminal command" description={error ?? description}>
+      {action && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void act(action === "Install")}
+          className={quietButton}
+        >
+          {status.state === "stale" ? "Reinstall" : action}
+        </button>
+      )}
+    </Row>
+  );
+}
 
 /**
  * Settings > General: what new threads start with, the sidebar's organization, where Open sends a
@@ -151,6 +196,7 @@ export function GeneralSettings() {
             />
           </span>
         </Row>
+        <TerminalCommand />
       </Section>
       <Behavior />
       <UsageLimits />
