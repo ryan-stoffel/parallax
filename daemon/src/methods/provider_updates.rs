@@ -99,8 +99,10 @@ pub(crate) async fn upgrade(
     let mut spec = probe_spec(&program);
     spec.args = args.into_iter().map(Into::into).collect();
     if brew.is_some() {
-        // Without its auto-update, brew may not know the release `providers/updates` offered.
+        // brew rereads its API every 450 s by default, so it may not know the release
+        // `providers/updates` read from the live API yet. A full `brew update` isn't needed.
         spec.scrub.push("HOMEBREW_NO_AUTO_UPDATE".into());
+        spec.inject.set("HOMEBREW_API_AUTO_UPDATE_SECS", "0");
     }
     let ran = detect::run_spec(detector.launcher(), &spec, b"", UPGRADE_TIMEOUT)
         .await

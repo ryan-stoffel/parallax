@@ -19,8 +19,10 @@ import {
   planSummary,
   restartInfo,
   selectPlans,
+  unsettled,
   updateEverything,
   updatePrefs,
+  updateRun,
   useUpdatePlan,
   type ItemStatus,
   type UpdateItem,
@@ -169,17 +171,16 @@ export function UpdateButton() {
   const downloading = progress !== undefined;
   const { plans, items, upgraded } = useUpdatePlan(state);
   // Each item's update by key, the items the last Update took, and those unticked in the dialog.
-  const [statuses, setStatuses] = useState<Record<string, ItemStatus>>({});
-  const [taken, setTaken] = useState<UpdateItem[]>();
+  const { statuses, taken, tried } = updateRun.use();
   const [unticked, setUnticked] = useState<ReadonlySet<string>>(new Set());
-  const busy = Object.values(statuses).some((s) => s.state === "running");
-  const report = (key: string, status: ItemStatus) =>
-    setStatuses((old) => ({ ...old, [key]: status }));
+  const busy = Object.values(statuses).some(unsettled);
   // Running threads the confirmed update cuts off, whether they go on after it as the hosts have
   // it, and as the user chose, which alone is saved to the hosts.
-  const [restart, setRestart] = useState({ running: 0, continueThreads: true });
+  const [restart, setRestart] = useState<{
+    running: Record<string, number>;
+    continueThreads: boolean;
+  }>({ running: {}, continueThreads: true });
   const [continueThreads, setContinueThreads] = useState<boolean>();
-  const { running } = restart;
 
   // The pointer crosses the gap between the button and the card before the card closes.
   const closing = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -194,43 +195,42 @@ export function UpdateButton() {
   useEffect(() => () => clearTimeout(closing.current), []);
   const hoverable = items.length > 0;
 
-  // Each release downloads once on its own, so a failed download isn't retried every check.
-  const fetched = useRef<string>(undefined);
-  useEffect(() => {
-    if (!prefs.autoDownload || !available || downloaded || downloading) return;
-    if (fetched.current === available.version) return;
-    fetched.current = available.version;
-    void window.parallax.update();
-  }, [prefs.autoDownload, available, downloaded, downloading]);
-  // Each provider release is tried once on its own.
-  const tried = useRef(new Set<string>());
+  // Each release and provider version runs once on its own, so a failed one isn't retried on
+  // every check.
   const offered = items.map((item) => `${item.key}@${item.to}`).join(" ");
   useEffect(() => {
-    if (!prefs.autoProviders) return;
     const fresh = items.filter(
-      (item) => item.kind === "provider" && !tried.current.has(`${item.key}@${item.to}`),
+      (item) =>
+        !tried.has(`${item.key}@${item.to}`) &&
+        (item.kind === "app"
+          ? prefs.autoDownload && !downloaded && !downloading
+          : item.kind === "provider" && prefs.autoProviders),
     );
     if (fresh.length === 0) return;
-    for (const item of fresh) tried.current.add(`${item.key}@${item.to}`);
-    const keys = new Set(fresh.map((item) => item.key));
-    void updateEverything(selectPlans(plans, keys), undefined, true, upgraded, report);
+    updateRun.set({ tried: new Set([...tried, ...fresh.map((item) => `${item.key}@${item.to}`)]) });
+    // A release only downloads here; Update restarts into it.
+    if (fresh.some((item) => item.kind === "app")) void window.parallax.update();
+    const keys = new Set(fresh.filter((item) => item.kind === "provider").map((item) => item.key));
+    if (keys.size > 0)
+      void updateEverything(selectPlans(plans, keys), undefined, true, upgraded, updateRun.report);
     // `offered` stands for `items` and `plans`.
-  }, [prefs.autoProviders, offered]);
+  }, [prefs.autoDownload, prefs.autoProviders, offered, downloaded, downloading]);
 
   const chosen = items.filter((item) => !unticked.has(item.key));
   const rows = taken ?? items;
   const settled = taken !== undefined && !busy;
-  const restarting = chosen.some((item) => item.kind !== "provider");
+  // Running threads on the hosts a chosen update restarts.
+  const running = [
+    ...new Set(chosen.filter((item) => item.kind !== "provider").map((item) => item.hostId)),
+  ].reduce((n, hostId) => n + (restart.running[hostId] ?? 0), 0);
 
   const click = async (source: HTMLElement) => {
-    if (items.length > 0 || taken) {
+    if (items.length > 0 || busy) {
       card.current?.togglePopover(false);
       confirm.current?.showModal();
       if (busy) return;
-      setStatuses({});
-      setTaken(undefined);
       setUnticked(new Set());
-      setRestart({ running: 0, continueThreads: true });
+      setRestart({ running: {}, continueThreads: true });
       setContinueThreads(undefined);
       setRestart(await restartInfo(plans));
       return;
@@ -241,9 +241,15 @@ export function UpdateButton() {
   };
   const start = () => {
     const keys = new Set(chosen.map((item) => item.key));
-    setTaken(chosen);
+    updateRun.set({ statuses: {}, taken: chosen });
     const appReady = downloaded !== undefined;
-    void updateEverything(selectPlans(plans, keys), continueThreads, appReady, upgraded, report);
+    void updateEverything(
+      selectPlans(plans, keys),
+      continueThreads,
+      appReady,
+      upgraded,
+      updateRun.report,
+    );
   };
   const tick = (key: string, on: boolean) =>
     setUnticked((old) => {
@@ -366,6 +372,8 @@ export function UpdateButton() {
       </div>
       <dialog
         ref={confirm}
+        // A finished run is cleared, so the next click reviews what's on offer then.
+        onClose={() => !busy && updateRun.set({ statuses: {}, taken: undefined })}
         aria-labelledby={`${id}-confirm`}
         className="m-auto w-[30rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
       >
@@ -388,7 +396,9 @@ export function UpdateButton() {
                 key={item.key}
                 item={item}
                 status={statuses[item.key]}
-                line={line(item) ?? (taken && !statuses[item.key] ? "Waiting…" : undefined)}
+                line={
+                  line(item) ?? (statuses[item.key]?.state === "waiting" ? "Waiting…" : undefined)
+                }
                 showHost={showHost}
               >
                 {!taken && (
@@ -405,7 +415,7 @@ export function UpdateButton() {
           {available && rows.some((item) => item.kind === "app") && (
             <Changelog available={available} />
           )}
-          {!taken && restarting && running > 0 && (
+          {!taken && running > 0 && (
             <>
               <p className="mt-4 text-[13px]">
                 {running} running {running === 1 ? "thread" : "threads"} will be interrupted.

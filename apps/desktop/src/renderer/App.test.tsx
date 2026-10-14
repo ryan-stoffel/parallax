@@ -6,7 +6,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 import type { UpdateState, ParallaxBridge } from "../preload/bridge";
 import { App } from "./App";
 import { appShortcut, terminalAppShortcut } from "./ui";
-import { updatePrefs } from "./updateEverything";
+import { updatePrefs, updateRun } from "./updateEverything";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // Only what the frame calls, so new bridge methods don't break this stub.
@@ -48,6 +48,7 @@ afterEach(() => {
   delete bridge.updatable;
   delete bridge.update;
   delete bridge.onUpdateState;
+  updateRun.set({ statuses: {}, taken: undefined, tried: new Set() });
 });
 
 function renderApp() {

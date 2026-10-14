@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { isOlder } from "../main/hostUpdate";
 import type { ConnectionState, UpdateState } from "../preload/bridge";
@@ -231,13 +231,13 @@ export function useUpdatePlan(update: UpdateState) {
 }
 
 /**
- * The running threads a restart of each restarting host cuts off, from `host/health`, and
- * whether every restarting host that reports `continueAfterRestart` has it on, the checkbox's
- * starting state.
+ * The running threads a restart of each restarting host cuts off, by host id, from
+ * `host/health`, and whether every restarting host that reports `continueAfterRestart` has it on,
+ * the checkbox's starting state.
  */
 export async function restartInfo(
   plans: HostPlan[],
-): Promise<{ running: number; continueThreads: boolean }> {
+): Promise<{ running: Record<string, number>; continueThreads: boolean }> {
   const hosts = await Promise.all(
     plans.filter(restarts).map(async ({ hostId }) => {
       const [health, settings] = await Promise.all([
@@ -245,13 +245,14 @@ export async function restartInfo(
         window.parallax.request(hostId, "host/settings/get", {}),
       ]);
       return {
+        hostId,
         running: "result" in health ? health.result.runningAgents : 0,
         on: "result" in settings ? settings.result.continueAfterRestart : undefined,
       };
     }),
   );
   return {
-    running: hosts.reduce((n, host) => n + host.running, 0),
+    running: Object.fromEntries(hosts.map((host) => [host.hostId, host.running])),
     continueThreads: hosts.every((host) => host.on !== false),
   };
 }
@@ -270,11 +271,49 @@ function downloaded(): Promise<boolean> {
   });
 }
 
-/** How one item's update is going. */
+/** How one item's update is going: chosen and queued, running, or done either way. */
 export type ItemStatus =
+  | { state: "waiting" }
   | { state: "running" }
   | { state: "done"; version?: string }
   | { state: "failed"; error: string };
+
+/** Whether a status is still to finish. */
+export const unsettled = (status: ItemStatus) =>
+  status.state === "waiting" || status.state === "running";
+
+/**
+ * The last Update's run, kept outside the Update button, which Settings unmounts (it swaps the
+ * sidebar for its nav): each item's status by key, the items the dialog's Update took, and each
+ * release and provider version already tried on its own, so an automatic one that failed isn't
+ * run again.
+ */
+export type UpdateRun = {
+  statuses: Record<string, ItemStatus>;
+  taken?: UpdateItem[];
+  tried: ReadonlySet<string>;
+};
+
+let run: UpdateRun = { statuses: {}, tried: new Set() };
+const runListeners = new Set<() => void>();
+export const updateRun = {
+  get: () => run,
+  set(change: Partial<UpdateRun>) {
+    run = { ...run, ...change };
+    for (const listener of runListeners) listener();
+  },
+  /** Sets one item's status. */
+  report: (key: string, status: ItemStatus) =>
+    updateRun.set({ statuses: { ...run.statuses, [key]: status } }),
+  use: () =>
+    useSyncExternalStore(
+      (listener) => {
+        runListeners.add(listener);
+        return () => runListeners.delete(listener);
+      },
+      () => run,
+    ),
+};
 
 /**
  * Resolves once a remote host's plxd reconnects on `version` or its update fails, from
@@ -303,8 +342,9 @@ async function hostUpdated(hostId: string, version: string): Promise<ItemStatus>
  * Updates everything in `plans`: sets each restarting host's `continueAfterRestart` to
  * `continueThreads` when the user chose it, updates each host's providers and then its plxd,
  * now, and once every host has answered, installs the app's update, downloading it first unless
- * `appReady`, which restarts Parallax. `onStatus` hears each item's progress by its key, and
- * `upgraded` each provider that updated. A failure also shows as a notification.
+ * `appReady`, which restarts Parallax. `onStatus` hears each item's progress by its key, every
+ * one `waiting` first, and `upgraded` each provider that updated. A failure also shows as a
+ * notification.
  */
 export async function updateEverything(
   plans: HostPlan[],
@@ -313,6 +353,12 @@ export async function updateEverything(
   upgraded: (hostId: string, cli: CliKind) => void,
   onStatus: (key: string, status: ItemStatus) => void = () => {},
 ): Promise<void> {
+  for (const plan of plans) {
+    if (plan.app) onStatus("app", { state: "waiting" });
+    if (plan.server) onStatus(`server/${plan.hostId}`, { state: "waiting" });
+    for (const { cli } of plan.providers)
+      onStatus(`provider/${plan.hostId}/${cli}`, { state: "waiting" });
+  }
   await Promise.all(
     plans.map(async (plan) => {
       if (restarts(plan) && continueThreads !== undefined)

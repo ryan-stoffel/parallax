@@ -113,6 +113,8 @@ test("each provider's update reports how it went, and an updated one is dropped"
     statuses.push([key, status]),
   );
   expect(statuses).toEqual([
+    ["provider/local/claude", { state: "waiting" }],
+    ["provider/local/codex", { state: "waiting" }],
     ["provider/local/claude", { state: "running" }],
     ["provider/local/claude", { state: "done", version: "2.1.300" }],
     ["provider/local/codex", { state: "running" }],
