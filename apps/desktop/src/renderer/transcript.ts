@@ -40,13 +40,7 @@ type ItemBody =
       threads?: RunId[];
     }
   /** `partial` while it is still arriving as `textDelta`s. */
-  | {
-      kind: "assistant";
-      key: string;
-      text: string;
-      messageId?: string;
-      partial?: boolean;
-    }
+  | { kind: "assistant"; key: string; text: string; messageId?: string; partial?: boolean }
   | { kind: "reasoning"; key: string; text: string }
   /**
    * `status` is absent until its result arrives; `name` is null for a result with no call.
@@ -83,12 +77,7 @@ type ItemBody =
    * A permission request (PLX-196, 0031): what the agent asks to do, and how it ended, which is
    * absent while it waits.
    */
-  | {
-      kind: "approval";
-      key: string;
-      request: ApprovalRequest;
-      resolved?: ApprovalResolution;
-    }
+  | { kind: "approval"; key: string; request: ApprovalRequest; resolved?: ApprovalResolution }
   /**
    * The agent asking the user for a secret (`request_secret`, 0063): what it asks for, and how it
    * ended, which is absent while it waits. The value never reaches the transcript.
@@ -154,22 +143,13 @@ export interface DocRef {
 /** The files a present_files output names, or undefined for anything else. */
 export function presentedFiles(runId: string, output?: string): DocRef[] | undefined {
   try {
-    const { presentedFiles } = JSON.parse(output ?? "") as {
-      presentedFiles?: unknown;
-    };
+    const { presentedFiles } = JSON.parse(output ?? "") as { presentedFiles?: unknown };
     if (!Array.isArray(presentedFiles)) return undefined;
     const files = presentedFiles.flatMap((file: Partial<DocRef>) =>
       typeof file.path === "string" &&
       typeof file.name === "string" &&
       ([...documentKinds, ...mediaKinds] as unknown[]).includes(file.kind)
-        ? [
-            {
-              runId,
-              path: file.path,
-              name: file.name,
-              kind: file.kind as DocKind,
-            },
-          ]
+        ? [{ runId, path: file.path, name: file.name, kind: file.kind as DocKind }]
         : [],
     );
     return files.length ? files : undefined;
@@ -181,10 +161,7 @@ export function presentedFiles(runId: string, output?: string): DocRef[] | undef
 /** The recording a preview_recording_stop output names, by its attachment id. */
 function recordingId(output?: string): string | undefined {
   try {
-    const { id, mimeType } = JSON.parse(output ?? "") as {
-      id?: unknown;
-      mimeType?: unknown;
-    };
+    const { id, mimeType } = JSON.parse(output ?? "") as { id?: unknown; mimeType?: unknown };
     return typeof id === "string" && mimeType === "video/webm" ? id : undefined;
   } catch {
     return undefined;
@@ -304,13 +281,7 @@ export const nativeTitle = (s: Subagent) =>
  */
 export function subagentRows(s: Subagent): Item[] {
   const rows: Item[] = [];
-  if (s.prompt)
-    rows.push({
-      kind: "user",
-      key: `${s.callId}:prompt`,
-      text: s.prompt,
-      at: s.at,
-    });
+  if (s.prompt) rows.push({ kind: "user", key: `${s.callId}:prompt`, text: s.prompt, at: s.at });
   rows.push(...s.items);
   const said = s.items.findLast((x) => x.kind === "assistant")?.text.trim();
   const summary = s.finished?.summary?.trim();
@@ -454,10 +425,7 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
         // A request still waiting ends with the run, as when plxd stopped without resolving it.
         items.forEach((item, i) => {
           if (item.kind === "approval" && !item.resolved)
-            items[i] = {
-              ...item,
-              resolved: { decision: "withdrawn", by: "stop", at: time },
-            };
+            items[i] = { ...item, resolved: { decision: "withdrawn", by: "stop", at: time } };
           else if (item.kind === "secret" && !item.status)
             items[i] = { ...item, status: "cancelled" };
         });
@@ -630,12 +598,7 @@ function applyOutput(
           at: time,
         });
       }
-      items.push({
-        kind: "session",
-        key,
-        sessionId: item.sessionId,
-        ...(to && { model: to }),
-      });
+      items.push({ kind: "session", key, sessionId: item.sessionId, ...(to && { model: to }) });
       break;
     }
     case "turnStarted": {
@@ -678,11 +641,7 @@ function applyOutput(
     }
     case "text": {
       const found = target(item.messageId);
-      const message = {
-        kind: "assistant",
-        text: item.text,
-        messageId: item.messageId,
-      } as const;
+      const message = { kind: "assistant", text: item.text, messageId: item.messageId } as const;
       if (found) items[found.i] = { ...message, key: found.item.key, at: found.item.at };
       else items.push({ ...message, key });
       break;
@@ -706,10 +665,7 @@ function applyOutput(
     }
     case "subagentFinished": {
       const sub = subagents[item.callId] ?? { callId: item.callId, items: [] };
-      subagents[item.callId] = {
-        ...sub,
-        finished: { status: item.status, summary: item.summary },
-      };
+      subagents[item.callId] = { ...sub, finished: { status: item.status, summary: item.summary } };
       break;
     }
     case "toolCall": {
@@ -751,19 +707,8 @@ function applyOutput(
         output: item.output,
         ...(!!item.images?.length && { images: item.images }),
       };
-      if (i >= 0)
-        items[i] = {
-          ...(items[i] as Extract<Item, { kind: "tool" }>),
-          ...result,
-        };
-      else
-        items.push({
-          kind: "tool",
-          key,
-          callId: item.callId,
-          name: null,
-          ...result,
-        });
+      if (i >= 0) items[i] = { ...(items[i] as Extract<Item, { kind: "tool" }>), ...result };
+      else items.push({ kind: "tool", key, callId: item.callId, name: null, ...result });
       const page =
         i >= 0 && (items[i] as { name: string | null }).name === `${plxdTools}html_render`
           ? item.status === "ok" && htmlRenderRef(item.output)
@@ -776,12 +721,7 @@ function applyOutput(
           ? recordingId(item.output)
           : undefined;
       if (recorded)
-        items.push({
-          kind: "recording",
-          key: `${key}:video`,
-          runId,
-          attachmentId: recorded,
-        });
+        items.push({ kind: "recording", key: `${key}:video`, runId, attachmentId: recorded });
       const files =
         i >= 0 &&
         item.status === "ok" &&
@@ -957,11 +897,7 @@ function subagentTitle(items: Item[], runId: string): string | undefined {
   for (const x of items.toReversed()) {
     if (x.kind !== "tool" || !x.name?.startsWith(plxdTools) || !x.output?.includes(runId)) continue;
     try {
-      type Answer = Summary & {
-        run?: Summary;
-        runs?: Summary[];
-        thread?: Summary;
-      };
+      type Answer = Summary & { run?: Summary; runs?: Summary[]; thread?: Summary };
       const answer = JSON.parse(x.output) as Answer & { threads?: Summary[] };
       const run = [
         answer,

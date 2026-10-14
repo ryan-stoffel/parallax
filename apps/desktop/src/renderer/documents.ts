@@ -89,11 +89,7 @@ async function load(hostId: string, doc: DocRef): Promise<Loaded> {
           : await (async () => {
               const pdf = await openPdf(bytes);
               const first = (await pdf.getPage(1)).getViewport({ scale: 1 });
-              return {
-                kind: "pdf" as const,
-                pdf,
-                ratio: first.height / first.width,
-              };
+              return { kind: "pdf" as const, pdf, ratio: first.height / first.width };
             })();
   return { bytes, opened };
 }
@@ -149,10 +145,7 @@ export function useDocument(hostId: string, doc: DocRef) {
     loading.then(
       (loaded) => live && setState({ loaded }),
       (error: unknown) =>
-        live &&
-        setState({
-          error: error instanceof Error ? error.message : String(error),
-        }),
+        live && setState({ error: error instanceof Error ? error.message : String(error) }),
     );
     return () => {
       live = false;
