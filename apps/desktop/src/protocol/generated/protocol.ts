@@ -117,14 +117,15 @@ export type ParallaxRequests = {
 	 */
 	"providers/remove": { params: ProvidersRemoveParams, result: ProvidersListResult },
 	/**
-	 * `providers/updates`: each installed Claude Code and Codex whose npm package has a newer
-	 * release. Gated on the `providerUpdates` capability (PLX-746).
+	 * `providers/updates`: each installed Claude Code and Codex with a newer release where it
+	 * came from: its Homebrew cask or formula, else its npm package. Gated on the
+	 * `providerUpdates` capability (PLX-746, PLX-783).
 	 */
 	"providers/updates": { params: ProvidersUpdatesParams, result: ProvidersUpdatesResult },
 	/**
 	 * `providers/upgrade`: runs the CLI's own `update` command, which knows how it was
-	 * installed, and answers with the version installed after it. Gated on the
-	 * `providerUpdates` capability (PLX-746).
+	 * installed, or `brew upgrade`, one upgrade at a time, and answers with the version
+	 * installed after it. Gated on the `providerUpdates` capability (PLX-746).
 	 */
 	"providers/upgrade": { params: ProvidersUpgradeParams, result: ProvidersUpgradeResult },
 	/**

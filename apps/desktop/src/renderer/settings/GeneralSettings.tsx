@@ -25,6 +25,7 @@ import { workspaces } from "../RunTargetMenu";
 import { accessPrefs } from "../accessPrefs";
 import { archivePageSize, sidebarPrefs, type SidebarPrefs } from "../sidebarPrefs";
 import { Picker } from "../ui";
+import { updatePrefs, type UpdatePrefs } from "../updateEverything";
 import { notices } from "./licenses";
 import { HostPicker, PageTitle, quietButton, Row, Section, Switch } from "./parts";
 
@@ -80,9 +81,56 @@ function TerminalCommand() {
 }
 
 /**
+ * How the sidebar's Update button behaves (PLX-783): whether a Parallax release downloads as soon
+ * as it's found, and whether each host's Claude Code and Codex are checked, and updated on their
+ * own. Downloading needs an app that updates itself.
+ */
+function Updates() {
+  const prefs = updatePrefs.use();
+  const set = (change: Partial<UpdatePrefs>) => updatePrefs.set({ ...prefs, ...change });
+  return (
+    <Section title="Updates">
+      {window.parallax.updatable && (
+        <Row
+          title="Download updates automatically"
+          description="Download a new Parallax release as soon as it's out, so updating only restarts the app."
+        >
+          <Switch
+            label="Download updates automatically"
+            checked={prefs.autoDownload}
+            onChange={(autoDownload) => set({ autoDownload })}
+          />
+        </Row>
+      )}
+      <Row
+        title="Check for provider updates"
+        description="Check each computer's Claude Code and Codex for new releases every 30 minutes, and list them under Update."
+      >
+        <Switch
+          label="Check for provider updates"
+          checked={prefs.providers}
+          onChange={(providers) => set({ providers })}
+        />
+      </Row>
+      <Row
+        title="Update providers automatically"
+        description="Update Claude Code and Codex as soon as a new release is found. Running threads keep going."
+      >
+        <Switch
+          label="Update providers automatically"
+          checked={prefs.providers && prefs.autoProviders}
+          disabled={!prefs.providers}
+          onChange={(autoProviders) => set({ autoProviders })}
+        />
+      </Row>
+    </Section>
+  );
+}
+
+/**
  * Settings > General: what new threads start with, the sidebar's organization, where Open sends a
- * folder, how the app behaves, usage limits on a host, and the app's version and bundled-font
- * notices.
+ * folder, how the app behaves, usage limits on a host, how it updates, and the app's version and
+ * bundled-font notices.
  */
 export function GeneralSettings() {
   const [showNotices, setShowNotices] = useState(false);
@@ -202,6 +250,7 @@ export function GeneralSettings() {
       </Section>
       <Behavior />
       <UsageLimits />
+      <Updates />
       <Section title="About">
         <Row title="Version">
           <span className="font-mono text-[12px] text-muted-foreground">{version ?? "…"}</span>
