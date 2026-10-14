@@ -211,12 +211,13 @@ method_table! {
         /// `providers/remove`: removes an instance the user added, and its secrets, and returns
         /// every instance. Fails with `invalidParams` for a built-in one.
         ProvidersRemove = "providers/remove": ProvidersRemoveParams => ProvidersListResult;
-        /// `providers/updates`: each installed Claude Code and Codex whose npm package has a newer
-        /// release. Gated on the `providerUpdates` capability (PLX-746).
+        /// `providers/updates`: each installed Claude Code and Codex with a newer release where it
+        /// came from: its Homebrew cask or formula, else its npm package. Gated on the
+        /// `providerUpdates` capability (PLX-746, PLX-783).
         ProvidersUpdates = "providers/updates": ProvidersUpdatesParams => ProvidersUpdatesResult;
         /// `providers/upgrade`: runs the CLI's own `update` command, which knows how it was
-        /// installed, and answers with the version installed after it. Gated on the
-        /// `providerUpdates` capability (PLX-746).
+        /// installed, or `brew upgrade`, one upgrade at a time, and answers with the version
+        /// installed after it. Gated on the `providerUpdates` capability (PLX-746).
         ProvidersUpgrade = "providers/upgrade": ProvidersUpgradeParams => ProvidersUpgradeResult;
         /// `usage/get`: per-account tokens and cost for today and this week (local time on this
         /// host), and the latest limit windows.

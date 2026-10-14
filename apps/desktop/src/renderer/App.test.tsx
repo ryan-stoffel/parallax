@@ -6,6 +6,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 import type { UpdateState, ParallaxBridge } from "../preload/bridge";
 import { App } from "./App";
 import { appShortcut, terminalAppShortcut } from "./ui";
+import { updatePrefs } from "./updateEverything";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // Only what the frame calls, so new bridge methods don't break this stub.
@@ -189,7 +190,7 @@ test("the footer's Usage opens Settings > Usage, and Update shows when it's read
   expect(button("Update Parallax")!.disabled).toBe(false);
 });
 
-test("a packaged app's release shows its notes on hover, downloads on click, then waits for a restart", async () => {
+test("a packaged app's release shows on hover, is reviewed on click, then downloads and restarts", async () => {
   vi.useFakeTimers();
   const button = (name: string) =>
     document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
@@ -206,6 +207,8 @@ test("a packaged app's release shows its notes on hover, downloads on click, the
     },
   });
   renderApp();
+  // The running version, which the card shows the release's from.
+  await act(async () => {});
   const available = {
     version: "2610.10205.13230-nightly",
     notes: "• feat: a thing (PLX-1)",
@@ -223,10 +226,11 @@ test("a packaged app's release shows its notes on hover, downloads on click, the
       vi.advanceTimersByTime(200);
     });
 
-  // Hovering opens the card with the notes, and nothing downloads.
+  // Hovering opens the card with the release, from the running version, and its notes.
   pointer("pointerover", offered, document.body);
   expect(isOpen()).toBe(true);
-  expect(card.textContent).toContain("Parallax 2610.10205.13230-nightly");
+  expect(card.textContent).toContain("1 update available");
+  expect(card.textContent).toContain("Parallax0.0.02610.10205.13230-nightly");
   expect(card.textContent).toContain("• feat: a thing (PLX-1)");
   expect(card.querySelector("a")!.href).toBe(available.url);
   expect(update).not.toHaveBeenCalled();
@@ -237,43 +241,64 @@ test("a packaged app's release shows its notes on hover, downloads on click, the
   pointer("pointerout", card, document.body);
   expect(isOpen()).toBe(false);
 
-  // A click opens the card and downloads, and the dot goes away.
-  act(() => offered.click());
-  expect(isOpen()).toBe(true);
+  // A click opens the review dialog, and nothing downloads until it's confirmed.
+  const confirm = document.querySelector('button[value="confirm"]')!.closest("dialog")!;
+  const go = () => confirm.querySelector<HTMLButtonElement>('button[value="confirm"]')!;
+  await act(async () => offered.click());
+  expect(confirm.open).toBe(true);
+  expect(update).not.toHaveBeenCalled();
+  expect(confirm.textContent).toContain("What's new in Parallax");
+  const tick = confirm.querySelector<HTMLInputElement>('input[aria-label="Update Parallax"]')!;
+  expect(go().textContent).toBe("Update all");
+  act(() => tick.click());
+  expect(go().textContent).toBe("Update 0 selected");
+  expect(go().disabled).toBe(true);
+  act(() => tick.click());
+
+  // Update all downloads, the row shows its progress, and the dot goes away.
+  await act(async () => go().click());
   expect(update).toHaveBeenCalledOnce();
+  expect(confirm.querySelector('input[type="checkbox"]')).toBeNull();
   act(() => publish({ available, progress: 42 }));
+  expect(confirm.textContent).toContain("Downloading… 42%");
   expect(card.querySelector('[role="progressbar"]')!.getAttribute("aria-valuenow")).toBe("42");
   expect(offered.getAttribute("aria-label")).toBe(
     "Downloading Parallax 2610.10205.13230-nightly: 42%",
   );
   expect(dot()).toBeNull();
 
-  // Downloaded: a restart icon and a notification, but no dialog until the click.
-  const confirm = document.querySelector('button[value="confirm"]')!.closest("dialog")!;
+  // Downloaded: a notification, and Update restarts to install it.
   const toast = () => document.querySelector<HTMLElement>('[aria-label="Notifications"]');
-  expect(toast()).toBeNull();
-  const ready = { available, ready: `Parallax ${available.version} to install` };
-  act(() => publish(ready));
-  expect(isOpen()).toBe(false);
-  expect(confirm.open).toBe(false);
+  await act(async () => publish({ available, ready: `Parallax ${available.version} to install` }));
   expect(toast()!.textContent).toContain("Update downloaded");
   expect(toast()!.querySelector("a")!.href).toBe(available.url);
-  // It stays until closed, and the same download doesn't bring it back.
-  act(() => void vi.advanceTimersByTime(60_000));
-  act(() => toast()!.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click());
-  expect(toast()).toBeNull();
-  act(() => publish({ ...ready }));
-  expect(toast()).toBeNull();
-
-  act(() => button("Restart to install Parallax 2610.10205.13230-nightly")!.click());
-  expect(confirm.open).toBe(true);
-  expect(confirm.textContent).toContain("Update 1 server?");
-  expect(confirm.textContent).toContain("This Mac: desktop app to 2610.10205.13230-nightly");
-  await act(async () =>
-    confirm.querySelector<HTMLButtonElement>('button[value="confirm"]')!.click(),
-  );
   expect(update).toHaveBeenCalledTimes(2);
   vi.useRealTimers();
+});
+
+test("with automatic downloads on, a release downloads once on its own", () => {
+  const prefs = updatePrefs.get();
+  updatePrefs.set({ ...prefs, autoDownload: true });
+  const listeners: ((state: UpdateState) => void)[] = [];
+  const publish = (state: UpdateState) => listeners.forEach((listener) => listener(state));
+  const update = vi.fn(async () => "");
+  Object.assign(bridge, {
+    updatable: true,
+    update,
+    onUpdateState: (listener: (state: UpdateState) => void) => {
+      listeners.push(listener);
+      return () => {};
+    },
+  });
+  renderApp();
+  const available = { version: "2610.10205.13230-nightly", notes: "", url: "https://x" };
+  act(() => publish({ available }));
+  expect(update).toHaveBeenCalledOnce();
+  // A failed download isn't tried again on the next check.
+  act(() => publish({ available, note: "Update failed: reset" }));
+  act(() => publish({ available }));
+  expect(update).toHaveBeenCalledOnce();
+  updatePrefs.set(prefs);
 });
 
 test("in a terminal off macOS, plain Ctrl+letter shortcuts stay the shell's", () => {
