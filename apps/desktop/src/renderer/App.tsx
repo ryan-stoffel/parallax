@@ -1006,6 +1006,7 @@ export function App() {
                       others={othersAsked(agentId)}
                       projectMode={project?.permission}
                       host={host}
+                      threadLinks={threadLinks}
                       strip={
                         project && (
                           <ChildStrip
@@ -1037,6 +1038,7 @@ export function App() {
                         titles={threads.state.titles}
                         needs={needs}
                         onOpenRun={(id) => openAgent(id === project.coordinator ? undefined : id)}
+                        threadLinks={threadLinks}
                       />
                     )
                   )}
