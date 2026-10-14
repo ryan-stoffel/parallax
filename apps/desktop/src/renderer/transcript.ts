@@ -122,7 +122,15 @@ export interface HtmlRenderRef {
   height: number;
 }
 
-export type DocKind = "docx" | "xlsx" | "pptx" | "pdf";
+/** The file types present_files shows: documents as cards, and images and videos inline (PLX-785). */
+const documentKinds = ["docx", "xlsx", "pptx", "pdf"] as const;
+const mediaKinds = ["png", "jpg", "jpeg", "gif", "webp", "mp4", "webm", "mov"] as const;
+export type MediaKind = (typeof mediaKinds)[number];
+export type DocKind = (typeof documentKinds)[number] | MediaKind;
+
+export const isMedia = (kind: DocKind): kind is MediaKind =>
+  (mediaKinds as readonly DocKind[]).includes(kind);
+export const isVideo = (kind: DocKind) => kind === "mp4" || kind === "webm" || kind === "mov";
 
 /** A file present_files showed (PLX-755): its run, its path in the run's folder, its name, and type. */
 export interface DocRef {
@@ -140,7 +148,7 @@ export function presentedFiles(runId: string, output?: string): DocRef[] | undef
     const files = presentedFiles.flatMap((file: Partial<DocRef>) =>
       typeof file.path === "string" &&
       typeof file.name === "string" &&
-      (["docx", "xlsx", "pptx", "pdf"] as unknown[]).includes(file.kind)
+      ([...documentKinds, ...mediaKinds] as unknown[]).includes(file.kind)
         ? [{ runId, path: file.path, name: file.name, kind: file.kind as DocKind }]
         : [],
     );

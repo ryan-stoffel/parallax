@@ -845,12 +845,14 @@ test("an html_render result adds its page after the call, and a failed one doesn
   expect(t.items.map((i) => i.kind)).toEqual(["tool", "htmlRender", "tool"]);
 });
 
-test("a present_files result shows its files as cards, skipping unknown types", () => {
+test("a present_files result shows its documents, images, and videos, skipping unknown types", () => {
   const out = JSON.stringify({
     presentedFiles: [
       { path: "out/Letter.docx", name: "Letter.docx", kind: "docx" },
       { path: "out/notes.txt", name: "notes.txt", kind: "txt" },
       { path: "out/Letter.pdf", name: "Letter.pdf", kind: "pdf" },
+      { path: "shot.png", name: "shot.png", kind: "png" },
+      { path: "demo.mp4", name: "demo.mp4", kind: "mp4" },
     ],
   });
   const t = build(
@@ -862,6 +864,8 @@ test("a present_files result shows its files as cards, skipping unknown types", 
       files: [
         { runId, path: "out/Letter.docx", name: "Letter.docx", kind: "docx" },
         { runId, path: "out/Letter.pdf", name: "Letter.pdf", kind: "pdf" },
+        { runId, path: "shot.png", name: "shot.png", kind: "png" },
+        { runId, path: "demo.mp4", name: "demo.mp4", kind: "mp4" },
       ],
     }),
   ]);

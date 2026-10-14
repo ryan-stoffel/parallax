@@ -13,7 +13,7 @@ import { openXlsx, type Xlsx } from "./xlsx";
  * until a newer presentation reloads them.
  */
 
-import type { DocKind, DocRef } from "./transcript";
+import { isMedia, type DocKind, type DocRef, type MediaKind } from "./transcript";
 
 export type { DocKind, DocRef };
 
@@ -22,14 +22,16 @@ export type Opened =
   | { kind: "xlsx"; xlsx: Xlsx }
   | { kind: "pptx"; pptx: Pptx }
   /** A PDF, with its first page's height over its width. */
-  | { kind: "pdf"; pdf: PDFDocumentProxy; ratio: number };
+  | { kind: "pdf"; pdf: PDFDocumentProxy; ratio: number }
+  /** An image or video (PLX-785), shown from its bytes as they are. */
+  | { kind: "media" };
 
 export interface Loaded {
   bytes: Uint8Array;
   opened: Opened;
 }
 
-export const kinds: Record<DocKind, string> = {
+export const kinds: Record<Exclude<DocKind, MediaKind>, string> = {
   docx: "Document",
   pdf: "Document",
   xlsx: "Spreadsheet",
@@ -76,8 +78,9 @@ async function load(hostId: string, doc: DocRef): Promise<Loaded> {
   if (file.tooLarge || file.content == null)
     throw new Error("This file is too large to open here.");
   const bytes = fromBase64(file.content);
-  const opened: Opened =
-    doc.kind === "docx"
+  const opened: Opened = isMedia(doc.kind)
+    ? { kind: "media" }
+    : doc.kind === "docx"
       ? { kind: "docx", docx: openDocx(bytes) }
       : doc.kind === "xlsx"
         ? { kind: "xlsx", xlsx: openXlsx(bytes) }

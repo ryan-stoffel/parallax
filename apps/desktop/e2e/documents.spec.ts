@@ -17,9 +17,9 @@ test.afterEach(async () => {
 });
 test.afterAll(() => close(launched));
 
-// The fake agent presents the four files in e2e/documents, which the repository holds, so the
+// The fake agent presents the six files in e2e/documents, which the repository holds, so the
 // thread's worktree has them (PLX-755).
-test("presented files show as cards and open view-only in the side panel, with download and full screen", async () => {
+test("presented files show as cards and open view-only in the side panel, with download and full screen, and images and videos inline", async () => {
   const { page } = launched;
   await expect
     .poll(() => page.evaluate(`window.parallax.connectionState("local").then((s) => s.status)`))
@@ -63,6 +63,23 @@ test("presented files show as cards and open view-only in the side panel, with d
   await expect(transcript.getByText("Presentation · PPTX")).toBeVisible();
   await card("Executive_Summary.docx").hover();
   await page.screenshot({ path: test.info().outputPath("cards.png") });
+
+  // An image or video shows at the transcript's width, with Download in its corner (PLX-785).
+  const image = transcript.getByRole("img", { name: "Ember_Screenshot.png" });
+  await expect(image).toBeVisible();
+  await expect
+    .poll(() => image.evaluate((img) => (img as { naturalWidth: number }).naturalWidth))
+    .toBe(960);
+  const video = transcript.getByLabel("Ember_Recording.mp4", { exact: true });
+  await expect
+    .poll(() => video.evaluate((v) => (v as { readyState: number }).readyState))
+    .toBeGreaterThanOrEqual(1);
+  for (const name of ["Ember_Screenshot.png", "Ember_Recording.mp4"])
+    await expect(transcript.getByRole("button", { name: `Download ${name}` })).toBeEnabled();
+  await image.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath("image.png") });
+  await video.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath("video.png") });
 
   // Each opens view-only in the side panel, as Claude shows files: pages on a gray backdrop
   // with the page in view counted, and Download as its type. The panel's button goes full screen.
