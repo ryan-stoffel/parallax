@@ -1006,6 +1006,7 @@ export function App() {
                       others={othersAsked(agentId)}
                       projectMode={project?.permission}
                       host={host}
+                      threadLinks={threadLinks}
                       strip={
                         project && (
                           <ChildStrip
