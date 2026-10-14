@@ -17,6 +17,7 @@ import type { ProjectAgentsView } from "./ProjectAgents";
 import { RefMenu } from "./RefMenu";
 import { ProjectIcon } from "./Sidebar";
 import type { ThreadsView } from "./threads";
+import type { ThreadLinks } from "./threadContext";
 import { uuidv7 } from "./uuidv7";
 
 /**
@@ -40,6 +41,7 @@ export function ProjectChat({
   titles,
   needs,
   onOpenRun,
+  threadLinks,
 }: {
   hostId: string;
   host?: Host;
@@ -59,6 +61,8 @@ export function ProjectChat({
   needs?: ReadonlySet<string>;
   /** Opens a child's chat. */
   onOpenRun: (runId: string) => void;
+  /** The open host's threads, as a thread's chat gets them: its pages, files, and thread chips need them. */
+  threadLinks: ThreadLinks;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
@@ -181,6 +185,7 @@ export function ProjectChat({
           startOver={(text, options, images) => start(uuidv7(), text, options, images)}
           others={others}
           projectMode={project.permission}
+          threadLinks={threadLinks}
         />
       </>
     );
