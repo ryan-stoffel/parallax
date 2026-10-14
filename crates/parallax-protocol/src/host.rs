@@ -266,9 +266,9 @@ pub struct HostSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub continue_after_restart: Option<bool>,
-    /// Whether plxd removes a settled thread's worktree and local branch once its linked pull
-    /// requests have merged (PLX-555). On by default. The thread and its transcript stay. An
-    /// older plxd, without the `worktreeCleanup` capability, leaves it out.
+    /// Whether plxd removes a settled or archived thread's worktree and local branch once its
+    /// linked pull requests have merged (PLX-555). On by default. The thread and its transcript
+    /// stay. An older plxd, without the `worktreeCleanup` capability, leaves it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub clean_worktrees: Option<bool>,
