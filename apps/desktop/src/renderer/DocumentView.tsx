@@ -36,7 +36,7 @@ export function DocumentView({ hostId, doc }: { hostId: string; doc: DocRef }) {
         <Paged count={opened.pdf.numPages} ratio={opened.ratio}>
           {(page, width) => <Drawn draw={() => drawPdfPage(opened.pdf, page + 1, width)} />}
         </Paged>
-      ) : (
+      ) : opened.kind === "pptx" ? (
         <Paged count={opened.pptx.slides.length} ratio={opened.pptx.height / opened.pptx.width}>
           {(page, width) => (
             <Drawn
@@ -46,7 +46,7 @@ export function DocumentView({ hostId, doc }: { hostId: string; doc: DocRef }) {
             />
           )}
         </Paged>
-      );
+      ) : null;
   }
 
   return (

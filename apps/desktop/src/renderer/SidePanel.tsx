@@ -23,6 +23,7 @@ import { Browser } from "./Browser";
 import type { DocRef } from "./documents";
 import { PanelResize } from "./PanelResize";
 import { numberOf } from "./PullRequests";
+import { isMedia } from "./transcript";
 import { IconButton, TopBar } from "./ui";
 
 interface Surface {
@@ -223,7 +224,8 @@ export function SidePanel({
     if (doc)
       openView({
         name: doc.name,
-        icon: docIcons[doc.kind],
+        // An image or video shows in the transcript, never here (PLX-785).
+        icon: isMedia(doc.kind) ? FileText : docIcons[doc.kind],
         key: `doc:${doc.runId}:${doc.path}`,
         doc,
       });

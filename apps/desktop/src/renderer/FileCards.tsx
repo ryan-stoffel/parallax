@@ -1,5 +1,5 @@
 import { Download } from "lucide-react";
-import { createContext, useContext, useEffect, useRef } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 
 import {
   download,
@@ -12,6 +12,7 @@ import {
   type Opened,
 } from "./documents";
 import { pagesOf } from "./docx";
+import { isMedia, isVideo } from "./transcript";
 import { renderSlide } from "./pptx";
 import { cellAt, colName, type Xlsx } from "./xlsx";
 
@@ -21,7 +22,8 @@ export const OpenDocumentContext = createContext<((doc: DocRef) => void) | undef
 /**
  * The files an agent presented with `present_files` (PLX-755), as cards: a thumbnail of each
  * file's real first page, with its second fanning out behind it on hover, its title and type,
- * and Download. Clicking a card opens the file in the side panel. `item` is the transcript row:
+ * and Download. Clicking a card opens the file in the side panel. An image or video shows at
+ * full width instead, with Download in its corner (PLX-785). `item` is the transcript row:
  * when it's newer than any row already seen for a file, the file is read from disk again.
  */
 export function FileCards({
@@ -36,10 +38,14 @@ export function FileCards({
   const open = useContext(OpenDocumentContext);
   readPresented(hostId, item, files);
   return (
-    <div className="flex max-w-xl flex-col gap-2">
-      {files.map((doc) => (
-        <FileCard key={doc.path} hostId={hostId} doc={doc} onOpen={open} />
-      ))}
+    <div className="flex flex-col gap-2">
+      {files.map((doc) =>
+        isMedia(doc.kind) ? (
+          <MediaFile key={doc.path} hostId={hostId} doc={doc} />
+        ) : (
+          <FileCard key={doc.path} hostId={hostId} doc={doc} onOpen={open} />
+        ),
+      )}
     </div>
   );
 }
@@ -56,7 +62,7 @@ function FileCard({
   const { loaded, error } = useDocument(hostId, doc);
   const width = doc.kind === "pptx" ? 100 : 72;
   return (
-    <div className="group relative flex h-[88px] items-center gap-4 overflow-hidden rounded-2xl border border-border bg-surface pr-4 pl-5 hover:bg-hover">
+    <div className="group relative flex h-[88px] max-w-xl items-center gap-4 overflow-hidden rounded-2xl border border-border bg-surface pr-4 pl-5 hover:bg-hover">
       <button
         type="button"
         aria-label={`Open ${doc.name}`}
@@ -89,7 +95,7 @@ function FileCard({
       <div className="pointer-events-none min-w-0 flex-1">
         <p className="truncate text-[15px] text-foreground">{titleOf(doc.name)}</p>
         <p className="truncate text-[13px] text-muted-foreground">
-          {error ?? `${kinds[doc.kind]} · ${doc.kind.toUpperCase()}`}
+          {error ?? `${isMedia(doc.kind) ? "" : kinds[doc.kind]} · ${doc.kind.toUpperCase()}`}
         </p>
       </div>
       <button
@@ -100,6 +106,45 @@ function FileCard({
       >
         <Download aria-hidden />
         Download
+      </button>
+    </div>
+  );
+}
+
+/** An image or video at the transcript's width, played from its bytes, with Download on top. */
+function MediaFile({ hostId, doc }: { hostId: string; doc: DocRef }) {
+  const { loaded, error } = useDocument(hostId, doc);
+  const [url, setUrl] = useState<string>();
+  useEffect(() => {
+    if (!loaded) return;
+    const made = URL.createObjectURL(new Blob([loaded.bytes as Uint8Array<ArrayBuffer>]));
+    setUrl(made);
+    return () => URL.revokeObjectURL(made);
+  }, [loaded]);
+  if (error)
+    return (
+      <p className="rounded-2xl border border-border bg-surface px-5 py-4 text-[13px] text-muted-foreground">
+        {doc.name} · {error}
+      </p>
+    );
+  return (
+    <div className="relative w-full overflow-hidden rounded-2xl border border-border bg-black">
+      {!url ? (
+        <div aria-label={`Loading ${doc.name}`} className="aspect-video w-full bg-selected" />
+      ) : isVideo(doc.kind) ? (
+        <video controls src={url} aria-label={doc.name} className="block max-h-[80vh] w-full" />
+      ) : (
+        <img src={url} alt={doc.name} className="block max-h-[80vh] w-full object-contain" />
+      )}
+      <button
+        type="button"
+        aria-label={`Download ${doc.name}`}
+        title="Download"
+        disabled={!loaded}
+        onClick={() => loaded && download(doc.name, loaded.bytes)}
+        className="absolute top-2 right-2 grid size-8 place-items-center rounded-lg bg-black/60 text-white backdrop-blur hover:bg-black/80 disabled:opacity-50 [&_svg]:size-4"
+      >
+        <Download aria-hidden />
       </button>
     </div>
   );
@@ -148,6 +193,8 @@ export async function drawPage(opened: Opened, page: number): Promise<HTMLElemen
       sheet.append(await drawPdfPage(opened.pdf, page + 1, width));
       return sheet;
     }
+    case "media":
+      return sheet;
   }
 }
 

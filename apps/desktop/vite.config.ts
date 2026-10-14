@@ -13,6 +13,7 @@ import type { PackUserConfig } from "vite-plus/pack";
 // HMR websocket is same-origin, so 'self'. Images may be data: URLs, which is
 // how a message's images show (PLX-193), or GitHub's, which a pull request's
 // description and comments show (PLX-517); agent Markdown never loads images.
+// blob: is the images and videos an agent presented (PLX-785), made from bytes plxd read.
 const csp = (dev: boolean) =>
   [
     "default-src 'self'",
@@ -20,11 +21,11 @@ const csp = (dev: boolean) =>
     "style-src 'self' 'unsafe-inline'",
     // KaTeX's fonts, which Vite inlines as data: URLs when small.
     "font-src 'self' data:",
-    "img-src 'self' data: https://github.com https://*.githubusercontent.com",
+    "img-src 'self' data: blob: https://github.com https://*.githubusercontent.com",
     // html_render pages (PLX-639), which main serves with a policy of their own, and browser
     // recordings.
     "frame-src plx-render:",
-    "media-src plx-render:",
+    "media-src plx-render: blob:",
     "object-src 'none'",
     "base-uri 'none'",
   ]
