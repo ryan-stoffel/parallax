@@ -1,13 +1,14 @@
-//! Removes a settled thread's worktree once its pull request merges (PLX-555), behind the
-//! `worktreeCleanup` capability and the host's `cleanWorktrees` setting.
+//! Removes a settled or archived thread's worktree once its pull request merges (PLX-555,
+//! PLX-781), behind the `worktreeCleanup` capability and the host's `cleanWorktrees` setting.
 //!
 //! A sweep runs at start and every [`SWEEP_PERIOD`]. A thread's worktree and local branch go when
-//! the thread is settled, its run isn't running or waiting, and its linked pull requests are all
-//! merged or closed with at least one merged. The worktree must hold nothing the merge didn't
-//! keep: no uncommitted changes, and a `HEAD` that is on `origin` or is one of a merged pull
-//! request's commits. The thread, its transcript, and its worktree row stay, so a later message
-//! fails to find the folder rather than running anywhere else. A merged pull request never
-//! changes, so each is read from GitHub once per plxd run.
+//! the thread is settled or archived, its run isn't running or waiting, and its linked pull
+//! requests are all merged or closed with at least one merged. The worktree must be on its stored
+//! branch or a merged pull request's head branch, which agents often rename it to, and hold
+//! nothing the merge didn't keep: no uncommitted changes, and a `HEAD` that is on `origin` or is
+//! one of a merged pull request's commits. The thread, its transcript, and its worktree row stay,
+//! so a later message fails to find the folder rather than running anywhere else. A merged pull
+//! request never changes, so each is read from GitHub once per plxd run.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -50,7 +51,7 @@ async fn sweep(daemon: &Daemon, stop: &CancellationToken, known: &mut HashMap<St
         }
         let mut candidates = Vec::new();
         for thread in db.list_threads().map_err(|e| store_error(&e))? {
-            if !thread.settled {
+            if !thread.settled && !thread.archived {
                 continue;
             }
             let Some(run) = db.get_run(thread.id).map_err(|e| store_error(&e))? else {
@@ -84,21 +85,21 @@ async fn sweep(daemon: &Daemon, stop: &CancellationToken, known: &mut HashMap<St
             continue;
         }
         // Stopping cancels the checks, which can wait minutes on `gh`, but never a removal.
-        let removable = tokio::select! {
+        let branch = tokio::select! {
             biased;
             () = stop.cancelled() => return,
-            removable = removable(daemon, &run, &worktree, known) => removable,
+            branch = removable(daemon, &run, &worktree, known) => branch,
         };
-        if !removable {
+        let Some(branch) = branch else {
             continue;
-        }
+        };
         match daemon
             .agents
             .worktrees
             .remove(
                 Path::new(&worktree.repo_path),
                 Path::new(&worktree.path),
-                &worktree.branch,
+                &branch,
             )
             .await
         {
@@ -112,14 +113,15 @@ async fn sweep(daemon: &Daemon, stop: &CancellationToken, known: &mut HashMap<St
     }
 }
 
-/// Whether `run`'s `worktree` can go: its pull requests merged, it is on its own branch, and it
-/// holds nothing they don't. Reads only the pull requests not in `known`, and adds the merged ones.
+/// The branch to delete with `run`'s `worktree`, when the worktree can go: its pull requests
+/// merged, it is on its own branch, and it holds nothing they don't. Reads only the pull requests
+/// not in `known`, and adds the merged ones.
 async fn removable(
     daemon: &Daemon,
     run: &Run,
     worktree: &Worktree,
     known: &mut HashMap<String, Pull>,
-) -> bool {
+) -> Option<String> {
     let worktrees = &daemon.agents.worktrees;
     let mut pulls = Vec::new();
     for url in &run.state.pull_requests {
@@ -129,20 +131,24 @@ async fn removable(
         }
         match worktrees.view_pr(url).await {
             Ok(pull) => {
-                let pull = (pull.state, commits(pull.commits));
-                if pull.0 == PrState::Merged {
+                let pull = Pull {
+                    state: pull.state,
+                    commits: commits(pull.commits),
+                    head: pull.head_branch,
+                };
+                if pull.state == PrState::Merged {
                     known.insert(url.clone(), pull.clone());
                 }
                 pulls.push(pull);
             }
             Err(error) => {
                 warn!(run = %run.id, %url, %error, "could not read a pull request to clean up");
-                return false;
+                return None;
             }
         }
     }
     if !merged(&pulls) {
-        return false;
+        return None;
     }
     let folder = RunFolder::Worktree {
         path: Path::new(&worktree.path),
@@ -152,18 +158,15 @@ async fn removable(
         (Ok(status), Ok(head)) => (status, head),
         (Err(error), _) | (_, Err(error)) => {
             warn!(run = %run.id, %error, "could not read a merged worktree's git state");
-            return false;
+            return None;
         }
     };
-    // Removing deletes the stored branch, so `HEAD` must be that branch's tip: not detached, and
-    // not another branch the agent switched to.
-    if status.branch.as_deref() != Some(worktree.branch.as_str())
-        || status.changes > 0
-        || (status.ahead > 0 && !in_merged(&pulls, &head))
-    {
+    let Some(branch) = branch_to_delete(&pulls, &worktree.branch, status.branch.as_deref())
+        .filter(|_| status.changes == 0 && (status.ahead == 0 || in_merged(&pulls, &head)))
+    else {
         info!(run = %run.id, "kept a merged worktree that has work its pull request doesn't");
-        return false;
-    }
+        return None;
+    };
     // ponytail: rechecks the run is idle right before removing, which narrows but doesn't close
     // the window for a message sent mid-sweep; route through the run's actor if that ever bites.
     let id = run.id;
@@ -174,11 +177,18 @@ async fn removable(
             .is_some_and(|run| idle(&run)))
     })
     .await;
-    still_idle.unwrap_or(false)
+    still_idle.unwrap_or(false).then_some(branch)
 }
 
-/// A pull request's state and its commits' hashes.
-type Pull = (PrState, Vec<String>);
+/// A linked pull request, as the sweep reads it.
+#[derive(Clone)]
+struct Pull {
+    state: PrState,
+    /// Its commits' hashes.
+    commits: Vec<String>,
+    /// The branch it merges from.
+    head: String,
+}
 
 fn commits(commits: Vec<parallax_protocol::PrCommit>) -> Vec<String> {
     commits.into_iter().map(|commit| commit.oid).collect()
@@ -191,27 +201,49 @@ fn idle(run: &Run) -> bool {
 
 /// Whether every pull request is merged or closed, and at least one merged.
 fn merged(pulls: &[Pull]) -> bool {
-    pulls.iter().any(|(state, _)| *state == PrState::Merged)
+    pulls.iter().any(|pull| pull.state == PrState::Merged)
         && pulls
             .iter()
-            .all(|(state, _)| matches!(state, PrState::Merged | PrState::Closed))
+            .all(|pull| matches!(pull.state, PrState::Merged | PrState::Closed))
 }
 
 /// Whether `head` is one of a merged pull request's commits.
 fn in_merged(pulls: &[Pull], head: &str) -> bool {
     pulls
         .iter()
-        .any(|(state, commits)| *state == PrState::Merged && commits.iter().any(|oid| oid == head))
+        .any(|pull| pull.state == PrState::Merged && pull.commits.iter().any(|oid| oid == head))
+}
+
+/// The branch `HEAD` is on, `current`, when removing may delete it: the `stored` branch, or a
+/// merged pull request's head branch. None for a detached `HEAD` or any other branch.
+fn branch_to_delete(pulls: &[Pull], stored: &str, current: Option<&str>) -> Option<String> {
+    let current = current?;
+    (current == stored
+        || pulls
+            .iter()
+            .any(|pull| pull.state == PrState::Merged && pull.head == current))
+    .then(|| current.to_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use parallax_protocol::PrState;
 
-    use super::{Pull, in_merged, merged};
+    use super::{Pull, branch_to_delete, in_merged, merged};
 
     fn pull(state: PrState, commits: &[&str]) -> Pull {
-        (state, commits.iter().map(|oid| (*oid).to_owned()).collect())
+        Pull {
+            state,
+            commits: commits.iter().map(|oid| (*oid).to_owned()).collect(),
+            head: String::new(),
+        }
+    }
+
+    fn headed(state: PrState, head: &str) -> Pull {
+        Pull {
+            head: head.to_owned(),
+            ..pull(state, &[])
+        }
     }
 
     #[test]
@@ -238,5 +270,28 @@ mod tests {
         assert!(in_merged(&pulls, "b"));
         assert!(!in_merged(&pulls, "c"));
         assert!(!in_merged(&pulls, "d"));
+    }
+
+    #[test]
+    fn deletes_the_stored_branch_or_a_merged_pull_requests_head_branch() {
+        let pulls = [
+            headed(PrState::Merged, "feature/PLX-1-renamed"),
+            headed(PrState::Closed, "feature/PLX-1-closed"),
+        ];
+        let stored = "parallax/slug";
+        assert_eq!(
+            branch_to_delete(&pulls, stored, Some(stored)).as_deref(),
+            Some(stored)
+        );
+        assert_eq!(
+            branch_to_delete(&pulls, stored, Some("feature/PLX-1-renamed")).as_deref(),
+            Some("feature/PLX-1-renamed")
+        );
+        assert_eq!(
+            branch_to_delete(&pulls, stored, Some("feature/PLX-1-closed")),
+            None
+        );
+        assert_eq!(branch_to_delete(&pulls, stored, Some("main")), None);
+        assert_eq!(branch_to_delete(&pulls, stored, None), None);
     }
 }

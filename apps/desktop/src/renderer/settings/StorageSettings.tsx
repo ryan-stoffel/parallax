@@ -94,7 +94,7 @@ export function StorageSettings() {
 }
 
 /**
- * Whether a host removes a settled thread's worktree once its pull request merges
+ * Whether a host removes a settled or archived thread's worktree once its pull request merges
  * (`host/settings`, `cleanWorktrees`, PLX-555).
  */
 function WorktreeCleanup() {
@@ -151,7 +151,7 @@ function WorktreeCleanup() {
           ) : connection?.status === "connected" && !supported ? (
             "This host's plxd can't clean up worktrees."
           ) : (
-            "When a settled thread's pull request merges, Parallax deletes its worktree and branch. The thread stays."
+            "When a settled or archived thread's pull request merges, Parallax deletes its worktree and branch. The thread stays."
           )
         }
       >
