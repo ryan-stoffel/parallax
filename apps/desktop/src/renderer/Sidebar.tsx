@@ -367,7 +367,7 @@ export function ThreadList({
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string>();
   const [actionError, setActionError] = useState<string>();
-  // Bumped when the last open thread is archived, to drop confetti from behind the search bar.
+  // Bumped when the last open thread is archived, to drop confetti from just below the search bar.
   const [confetti, setConfetti] = useState(0);
   const [query, setQuery] = useState("");
   const [chosen, setFilterState] = useState<RepoFilter>(
@@ -711,7 +711,7 @@ export function ThreadList({
     <>
       <div className="relative flex items-center gap-1 px-2">
         {confetti > 0 && <Confetti key={confetti} onDone={() => setConfetti(0)} />}
-        <label className="relative z-[2] flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
+        <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
           <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
           <input
             type="search"
@@ -856,7 +856,7 @@ const confettiColors = [
 ];
 
 /**
- * Confetti that drifts down from behind the search bar across the sidebar, for archiving the last
+ * Confetti that drifts down from just below the search bar across the sidebar, for archiving the last
  * open thread. Each piece falls at its own pace, swaying and flipping like paper, and fades out.
  */
 function Confetti({ onDone }: { onDone: () => void }) {
