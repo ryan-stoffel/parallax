@@ -256,7 +256,9 @@
    is night, deepening into the sidebar behind the Search row. Light mode is twilight: indigo
    behind the top row's white text, brightening to a lavender that runs on past the Search row,
    light enough for its dark text, with white clouds. */
-/* Stops tuned so --faint-foreground keeps 4.5:1 wherever the Search row sits on the sky. */
+/* Dark mode's stops keep the Search field's faint text at 4.5:1 through its translucent fill.
+   Light mode's field is opaque instead (.sky-search, below), since an added light theme's text is
+   tuned to its own sidebar, not to this lavender. */
 :root.nightly .night-sky-host {
   background:
     linear-gradient(
@@ -264,8 +266,8 @@
         #15124a,
         #2e2a8c 19%,
         #6a64d6 33%,
-        #e1defd 44%,
-        #e8e6fd 70%,
+        #e6e4fe 44%,
+        #eae8fe 70%,
         var(--sidebar)
       )
       top / 100% 120px no-repeat,
@@ -273,14 +275,23 @@
 }
 :root.nightly.dark .night-sky-host {
   background:
-    linear-gradient(in oklab, #070923, #17184f 20%, #2a2470 34%, #1c1a48 52%, var(--sidebar)) top /
+    linear-gradient(in oklab, #070923, #17184f 20%, #2a2470 34%, #191741 52%, var(--sidebar)) top /
       100% 104px no-repeat,
     var(--sidebar);
 }
+/* Light mode's Search field sits on the sidebar's own color over the sky, so its text keeps the
+   contrast the theme gives it, whatever the theme. */
+:root.nightly:not(.dark) .night-sky-host .sky-search {
+  background-color: var(--sidebar);
+}
+:root.nightly:not(.dark) .night-sky-host .sky-search:is(:hover, :focus-within) {
+  background-color: color-mix(in oklab, var(--sidebar), var(--foreground) 4.5%);
+}
 /* The clouds' bodies and lit tops, far to near. */
 :root.nightly .night-sky {
-  --cloud-far: #7e78dc;
-  --cloud-far-lit: #9c97ea;
+  /* Dark enough that the top row's white text reads over the far ones. */
+  --cloud-far: #5751c4;
+  --cloud-far-lit: #6660d0;
   --cloud-mid: #bdb9f3;
   --cloud-mid-lit: #d6d4f9;
   --cloud-near: #ebeafd;
