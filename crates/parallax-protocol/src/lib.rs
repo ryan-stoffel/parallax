@@ -89,6 +89,10 @@ pub use approval::{
     AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams,
     AgentApproveResult, ApprovalId,
 };
+pub use area::{
+    Area, AreaCreateParams, AreaDeleteParams, AreaDeleteResult, AreaId, AreaResult,
+    AreaUpdateParams, MAX_AREA_NAME_CHARS,
+};
 pub use cli_account::{
     AccountsListParams, AccountsListResult, AccountsRefreshParams, AccountsRefreshResult, AuthKind,
     CliKind, DetectedCli, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
@@ -206,10 +210,6 @@ pub use terminal::{
     TerminalCommand, TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult,
     TerminalOpenParams, TerminalOutputParams, TerminalResizeParams, TerminalResult,
     TerminalWriteParams,
-};
-pub use area::{
-    Area, AreaCreateParams, AreaDeleteParams, AreaDeleteResult, AreaId, AreaResult,
-    AreaUpdateParams, MAX_AREA_NAME_CHARS,
 };
 pub use thread::{
     ForkedFrom, MAX_SPACE_NAME_BYTES, MAX_THREAD_TITLE_BYTES, Repo, RepoAddParams, RepoAddResult,

@@ -125,6 +125,7 @@ pub(crate) fn thread_entry(row: &parallax_store::Thread) -> Result<Thread, Error
         forked_from,
         title: row.fields.title.clone(),
         settled: row.settled,
+        pinned: row.pinned,
     })
 }
 
@@ -225,12 +226,13 @@ pub(crate) fn stage_started(
 
 /// `thread/list`.
 pub(crate) async fn list(daemon: &Arc<Daemon>) -> Result<ThreadListResult, ErrorObject> {
-    let ((repos, threads), seq) = daemon
+    let ((repos, threads, areas), seq) = daemon
         .reader
         .snapshot(&CancellationToken::new(), |db| {
             let repos = db.list_repos().map_err(|e| store_error(&e))?;
             let threads = db.list_threads().map_err(|e| store_error(&e))?;
-            Ok((repos, threads))
+            let areas = crate::areas::list(db)?;
+            Ok((repos, threads, areas))
         })
         .await?;
     Ok(ThreadListResult {
@@ -239,6 +241,7 @@ pub(crate) async fn list(daemon: &Arc<Daemon>) -> Result<ThreadListResult, Error
             .map(repo_entry)
             .collect::<Result<_, _>>()?,
         threads: threads.iter().map(thread_entry).collect::<Result<_, _>>()?,
+        areas,
         seq,
     })
 }
@@ -1044,7 +1047,8 @@ fn remove_scratch(daemon: &Daemon, run_id: RunId, dir: &Path) {
 }
 
 /// `thread/search` (PLX-372, PLX-487): the threads whose title or messages match the query,
-/// trimmed, title matches first, then the one with the newest message.
+/// trimmed, title matches first, then the one with the newest message, with a line of each
+/// message match (PLX-789).
 pub(crate) async fn search(
     daemon: &Arc<Daemon>,
     params: ThreadSearchParams,
@@ -1062,15 +1066,30 @@ pub(crate) async fn search(
         .limit
         .unwrap_or(DEFAULT_SEARCH_LIMIT)
         .min(MAX_SEARCH_LIMIT) as usize;
-    let rows = daemon
+    let (rows, snippets) = daemon
         .reader
         .run(&CancellationToken::new(), move |db| {
-            db.search_threads(&query, limit)
-                .map_err(|e| store_error(&e))
+            let rows = db
+                .search_threads(&query, limit)
+                .map_err(|e| store_error(&e))?;
+            let ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
+            let snippets = db
+                .search_snippets(&query, &ids)
+                .map_err(|e| store_error(&e))?;
+            Ok((rows, snippets))
         })
         .await?;
     let threads = rows.iter().map(thread_entry).collect::<Result<_, _>>()?;
-    Ok(ThreadSearchResult { threads })
+    let snippets = snippets
+        .into_iter()
+        .map(|(id, text)| {
+            Ok((
+                RunId::try_from(id).map_err(|_| corrupt("thread", id))?,
+                text,
+            ))
+        })
+        .collect::<Result<_, ErrorObject>>()?;
+    Ok(ThreadSearchResult { threads, snippets })
 }
 
 /// `thread/archive`: the orchestrator's `thread.archive` or `thread.unarchive` (0059).
@@ -1088,8 +1107,8 @@ pub(crate) async fn archive(
     Ok(ThreadArchiveResult { thread })
 }
 
-/// `thread/update`: marks a thread seen or snoozes it (0033), or sets its title or settled flag
-/// (0041), through the orchestrator's `thread.metadata.update` (0059), which appends
+/// `thread/update`: marks a thread seen or snoozes it (0033), sets its title or settled flag
+/// (0041), or pins it (PLX-789), through the orchestrator's `thread.metadata.update` (0059), which appends
 /// `thread.updated` when anything changed.
 pub(crate) async fn update(
     daemon: &Arc<Daemon>,
@@ -1102,12 +1121,14 @@ pub(crate) async fn update(
         snoozed_until,
         title,
         settled,
+        pinned,
     } = params;
     let update = ThreadUpdate {
         seen,
         snoozed_until,
         title: title.as_deref().map(check_title).transpose()?,
         settled,
+        pinned,
     };
     let thread = metadata(daemon, command_id, run_id, Action::Update(update)).await?;
     Ok(ThreadUpdateResult { thread })

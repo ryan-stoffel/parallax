@@ -1374,6 +1374,7 @@ async fn update(binding: &Binding, args: UpdateArgs) -> Result<String, String> {
                 snoozed_until: None,
                 title,
                 settled,
+                pinned: None,
             })
             .await?;
         thread = Some(updated.thread);

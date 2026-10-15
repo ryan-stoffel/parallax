@@ -25,8 +25,8 @@ use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
 use crate::{
-    AccountChoice, AgentEffort, Area, AgentPermission, AgentRun, ProjectIcon, ProjectId, PromptImage,
-    RunId, TurnId,
+    AccountChoice, AgentEffort, AgentPermission, AgentRun, Area, ProjectIcon, ProjectId,
+    PromptImage, RunId, TurnId,
 };
 
 /// The longest title `thread/start` and `thread/update` take, in bytes once trimmed (0041).
@@ -436,6 +436,11 @@ pub struct ThreadSearchParams {
 pub struct ThreadSearchResult {
     /// The matching threads: title matches first, then the one with the newest message.
     pub threads: Vec<Thread>,
+    /// For each returned thread that matched in its messages, one line of that message text around
+    /// the first match, at most about 120 characters, with `…` where it was cut (PLX-789). Absent
+    /// for a thread that matched only by title, and from a plxd without `areas`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub snippets: std::collections::BTreeMap<RunId, String>,
 }
 
 /// Params of `thread/fork`: a new thread that continues thread `runId`'s conversation from one of
@@ -602,10 +607,12 @@ mod tests {
             forked_from: None,
             title: None,
             settled: false,
+            pinned: false,
         };
         let value = serde_json::to_value(&thread).unwrap();
         assert!(value.get("archived").is_none(), "{value}");
         assert!(value.get("settled").is_none(), "{value}");
+        assert!(value.get("pinned").is_none(), "{value}");
         let archived: Thread = serde_json::from_value(json!({
             "id": thread.id,
             "repo": repo.id,

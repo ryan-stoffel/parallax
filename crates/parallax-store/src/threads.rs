@@ -51,6 +51,8 @@ pub struct Thread {
     pub settled: bool,
     /// When it was last unarchived, which the merge sweep counts as activity (PLX-795).
     pub unarchived_at: Option<Timestamp>,
+    /// Whether the user pinned it to the top of the sidebar (PLX-789).
+    pub pinned: bool,
 }
 
 /// The run and turn a thread was forked from (decision record 0041).
@@ -79,6 +81,8 @@ pub struct ThreadUpdate {
     /// Replaces its title, where `Some(None)` clears it.
     pub title: Option<Option<String>>,
     pub settled: Option<bool>,
+    /// Pins or unpins it (PLX-789).
+    pub pinned: Option<bool>,
 }
 
 const REPO_COLUMNS: &str = "id, name, path, scratch, created_at, \
@@ -86,7 +90,7 @@ const REPO_COLUMNS: &str = "id, name, path, scratch, created_at, \
 const THREAD_COLUMNS: &str = "id, repo_id, archived, created_at, seen_at, snoozed_until, \
     COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id), created_at) \
     AS last_prompt_at, (SELECT parent FROM runs WHERE runs.id = threads.id), forked_from_run, \
-    forked_from_turn, title, settled, unarchived_at";
+    forked_from_turn, title, settled, unarchived_at, pinned";
 
 /// A repo entry's columns as TEXT, before the fallible conversion to [`Repo`].
 type RawRepo = (
@@ -141,6 +145,7 @@ struct RawThread {
     title: Option<String>,
     settled: bool,
     unarchived_at: Option<String>,
+    pinned: bool,
 }
 
 fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<RawThread> {
@@ -158,6 +163,7 @@ fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<RawThread> {
         title: row.get(10)?,
         settled: row.get(11)?,
         unarchived_at: row.get(12)?,
+        pinned: row.get(13)?,
     })
 }
 
@@ -190,6 +196,7 @@ fn into_thread(raw: RawThread) -> Result<Thread, StoreError> {
             .as_deref()
             .map(timestamp::parse)
             .transpose()?,
+        pinned: raw.pinned,
     })
 }
 
@@ -222,6 +229,20 @@ fn match_query(query: &str) -> String {
     } else {
         words.join(" ")
     }
+}
+
+/// The longest snippet [`Store::search_snippets`] returns, in characters.
+const SNIPPET_CHARS: usize = 120;
+
+/// `text` on one line, its whitespace runs collapsed to single spaces, cut to [`SNIPPET_CHARS`].
+fn one_line(text: &str) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= SNIPPET_CHARS {
+        return line;
+    }
+    let mut cut: String = line.chars().take(SNIPPET_CHARS - 1).collect();
+    cut.push('…');
+    cut
 }
 
 fn fetch_repo(conn: &Connection, sql_where: &str, key: &str) -> Result<Option<Repo>, StoreError> {
@@ -428,6 +449,38 @@ impl Store {
         Ok(threads)
     }
 
+    /// For each of `threads`, one line of its message text that best matches `query`, as
+    /// [`Store::search_threads`] matches it, around the first match and at most 120 characters,
+    /// with `…` where it was cut (PLX-789). A thread none of whose
+    /// messages match has none.
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored id is corrupt.
+    pub fn search_snippets(
+        &self,
+        query: &str,
+        threads: &[Uuid],
+    ) -> Result<Vec<(Uuid, String)>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT snippet(thread_text_fts, 0, '', '', '…', 16) FROM thread_text_fts
+             JOIN thread_text ON thread_text.id = thread_text_fts.rowid
+             WHERE thread_text_fts MATCH ?1 AND thread_text.run_id = ?2
+             ORDER BY rank LIMIT 1",
+        )?;
+        let query = match_query(query);
+        let mut snippets = Vec::new();
+        for &thread in threads {
+            let found: Option<String> = stmt
+                .query_row(params![query, thread.to_string()], |row| row.get(0))
+                .optional()?;
+            if let Some(text) = found {
+                snippets.push((thread, one_line(&text)));
+            }
+        }
+        Ok(snippets)
+    }
+
     /// Indexes the agent's replies in `run_id`'s `agent.output` events logged since its newest
     /// indexed reply, for [`Store::search_threads`] (PLX-487), as one row: the events' `text`
     /// items. Its prompt and sent turns are indexed as they're stored. Called when a turn ends,
@@ -472,7 +525,7 @@ impl Store {
     }
 
     /// Applies `update` to thread `id`: marks it seen now, snoozes it (decision record 0033), or
-    /// sets its title or settled flag (decision record 0041). Returns the thread and whether
+    /// sets its title or settled flag (decision record 0041), or pins it (PLX-789). Returns the thread and whether
     /// anything changed.
     ///
     /// # Errors
@@ -488,6 +541,7 @@ impl Store {
             snoozed_until,
             title,
             settled,
+            pinned,
         } = update;
         let key = id.to_string();
         let mut changed = 0;
@@ -514,6 +568,12 @@ impl Store {
             changed += self.conn.execute(
                 "UPDATE threads SET settled = ?2 WHERE id = ?1 AND settled IS NOT ?2",
                 params![key, settled],
+            )?;
+        }
+        if let Some(pinned) = pinned {
+            changed += self.conn.execute(
+                "UPDATE threads SET pinned = ?2 WHERE id = ?1 AND pinned IS NOT ?2",
+                params![key, pinned],
             )?;
         }
         let thread = fetch_thread(&self.conn, id)?.ok_or(StoreError::NotFound { id })?;

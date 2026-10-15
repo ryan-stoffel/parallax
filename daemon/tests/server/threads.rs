@@ -32,6 +32,7 @@ use tokio::time::Instant;
 
 use crate::support::{Client, InProcess, PATIENCE, eventually, kind, temp_dir};
 
+mod areas;
 mod checkpoints;
 mod context;
 mod files;
@@ -207,6 +208,7 @@ fn attention(
         snoozed_until,
         title: None,
         settled: None,
+        pinned: None,
     }
 }
 
@@ -2029,6 +2031,7 @@ async fn a_child_thread_keeps_its_parent_and_title_until_the_parent_is_deleted()
         snoozed_until: None,
         title: Some(title.to_owned()),
         settled,
+        pinned: None,
     };
     let updated = client
         .call::<ThreadUpdate>(update("Test attach", Some(true)))

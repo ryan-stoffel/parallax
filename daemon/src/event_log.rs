@@ -179,6 +179,7 @@ pub(crate) fn run_of(event: &ParallaxEvent) -> Option<RunId> {
         | ParallaxEvent::RepoAdded { .. }
         | ParallaxEvent::RepoUpdated { .. }
         | ParallaxEvent::RepoRemoved { .. }
+        | ParallaxEvent::AreasChanged { .. }
         | ParallaxEvent::ThreadStarted { .. }
         | ParallaxEvent::ThreadUpdated { .. }
         | ParallaxEvent::ThreadDeleted { .. }

@@ -6141,6 +6141,12 @@ export type ThreadSearchResult = {
 	 * The matching threads: title matches first, then the one with the newest message.
 	 */
 	threads: Array<Thread>,
+	/**
+	 * For each returned thread that matched in its messages, one line of that message text around
+	 * the first match, at most about 120 characters, with `…` where it was cut (PLX-789). Absent
+	 * for a thread that matched only by title, and from a plxd without `areas`.
+	 */
+	snippets?: { [key in RunId]: string },
 };
 
 /**
@@ -8203,6 +8209,11 @@ export type ShellSnapshot = {
 	 * `pr.watches` events replace each part. Absent means none.
 	 */
 	waiting?: Array<RunWaiting>,
+	/**
+	 * Every area (PLX-789), oldest first. Later `areas.changed` events replace the list. Absent
+	 * from a plxd without `areas`.
+	 */
+	areas?: Array<Area>,
 };
 
 /**
