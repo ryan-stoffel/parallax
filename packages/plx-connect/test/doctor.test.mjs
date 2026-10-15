@@ -19,19 +19,21 @@ test("the data folder is ~/.parallax unless only the legacy folder exists", () =
 });
 
 test("plxd is looked for where the app and plx-connect put it", () => {
+  // path.join, so the expected paths use the separator of the OS the test runs on.
+  const app = (/** @type {string} */ dir, /** @type {string} */ name) => path.join(dir, `${name}.app`, "Contents", "Resources", "plxd");
   assert.deepEqual(plxdCandidates("darwin", "/Users/me", {}), [
-    "/Users/me/.parallax-plxd/plxd",
-    "/Applications/Parallax.app/Contents/Resources/plxd",
-    "/Applications/Parallax (Nightly).app/Contents/Resources/plxd",
-    "/Users/me/Applications/Parallax.app/Contents/Resources/plxd",
-    "/Users/me/Applications/Parallax (Nightly).app/Contents/Resources/plxd",
+    path.join("/Users/me", ".parallax-plxd", "plxd"),
+    app("/Applications", "Parallax"),
+    app("/Applications", "Parallax (Nightly)"),
+    app(path.join("/Users/me", "Applications"), "Parallax"),
+    app(path.join("/Users/me", "Applications"), "Parallax (Nightly)"),
   ]);
   assert.deepEqual(plxdCandidates("linux", "/home/me", {}), [
-    "/home/me/.parallax-plxd/plxd",
-    "/home/me/.local/bin/plxd",
-    "/home/me/.local/share/parallax/app/plxd",
+    path.join("/home/me", ".parallax-plxd", "plxd"),
+    path.join("/home/me", ".local", "bin", "plxd"),
+    path.join("/home/me", ".local", "share", "parallax", "app", "plxd"),
   ]);
-  assert.equal(plxdCandidates("linux", "/home/me", { XDG_DATA_HOME: "/data" })[2], "/data/parallax/app/plxd");
+  assert.equal(plxdCandidates("linux", "/home/me", { XDG_DATA_HOME: "/data" })[2], path.join("/data", "parallax", "app", "plxd"));
 });
 
 test("a command is found on PATH, and a folder of its name isn't", () => {
