@@ -35,19 +35,31 @@ import { linuxPackages } from "./scripts.mjs";
 const REPO = "https://github.com/ryan-stoffel/parallax";
 
 /**
- * Where plxd may be, in order: inside the app on macOS, plx-connect's `~/.local/bin` on Linux,
- * and the app's `resources` folder under `%LOCALAPPDATA%\Programs` on Windows.
+ * Where plxd may be, in the desktop app's `LOCATE_PLXD` order: `~/.parallax-plxd`, where the app
+ * installs it on an SSH host; inside the app on macOS; `~/.local/bin`, where plx-connect puts it,
+ * and the app's copy in `~/.local/share/parallax/app` on Linux (`command.ts`); and the app's
+ * `resources` folder under `%LOCALAPPDATA%\Programs` on Windows. PATH comes after these.
  * @param {NodeJS.Platform} platform
  * @param {string} home
  * @param {NodeJS.ProcessEnv} env
  */
 export function plxdCandidates(platform, home, env) {
   if (platform === "darwin") {
-    return ["/Applications", path.join(home, "Applications")].flatMap((dir) =>
-      ["Parallax", "Parallax (Nightly)"].map((name) => path.join(dir, `${name}.app`, "Contents", "Resources", "plxd")),
-    );
+    return [
+      path.join(home, ".parallax-plxd", "plxd"),
+      ...["/Applications", path.join(home, "Applications")].flatMap((dir) =>
+        ["Parallax", "Parallax (Nightly)"].map((name) => path.join(dir, `${name}.app`, "Contents", "Resources", "plxd")),
+      ),
+    ];
   }
-  if (platform !== "win32") return [path.join(home, ".local", "bin", "plxd")];
+  if (platform !== "win32") {
+    const data = env.XDG_DATA_HOME || path.join(home, ".local", "share");
+    return [
+      path.join(home, ".parallax-plxd", "plxd"),
+      path.join(home, ".local", "bin", "plxd"),
+      path.join(data, "parallax", "app", "plxd"),
+    ];
+  }
   if (!env.LOCALAPPDATA) return [];
   const programs = path.join(env.LOCALAPPDATA, "Programs");
   try {
@@ -122,10 +134,10 @@ export function parseServiceStatus(output) {
   return values;
 }
 
-/** Runs `file` and resolves to its exit code and stdout. @param {string} file @param {string[]} args */
+/** Runs `file` and resolves to its exit code, stdout, and stderr. @param {string} file @param {string[]} args */
 function capture(file, args) {
   const run = spawnSync(file, args, { encoding: "utf8", timeout: 20_000, stdio: ["ignore", "pipe", "pipe"] });
-  return { code: run.status ?? 1, stdout: run.stdout ?? "" };
+  return { code: run.status ?? 1, stdout: run.stdout ?? "", stderr: run.stderr ?? "" };
 }
 
 /** Whether Windows' plxd answers on its named pipe, `\\.\pipe\plxd-<hash>` (0023). @param {string} dataDir */
@@ -182,7 +194,12 @@ function checks(plxd, dataDir) {
           return (await probePipe(dataDir)) ? { state: "ok", detail: "answers on its pipe" } : { state: "fail", detail: "doesn't answer on its pipe", fix };
         }
         // `answers initialize` probes this data folder's socket, whatever runs plxd.
-        const status = parseServiceStatus(capture(plxd, ["service", "status"]).stdout);
+        const run = capture(plxd, ["service", "status"]);
+        const status = parseServiceStatus(run.stdout);
+        // It fails before probing where there's no systemd user manager, such as WSL or a container.
+        if (run.code !== 0 || !status["answers initialize"]) {
+          return { state: "skip", detail: `plxd service status failed: ${run.stderr.trim() || `exit ${run.code}`}` };
+        }
         if (status["answers initialize"] === "true") return { state: "ok", detail: "answers on its socket" };
         return { state: "fail", detail: "doesn't answer on its socket", fix };
       },

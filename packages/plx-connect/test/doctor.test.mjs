@@ -18,14 +18,20 @@ test("the data folder is ~/.parallax unless only the legacy folder exists", () =
   assert.equal(resolveDataDir("darwin", home, { PLXD_DATA_DIR: "/data" }), path.resolve("/data"));
 });
 
-test("plxd is looked for in both apps on macOS and in ~/.local/bin on Linux", () => {
+test("plxd is looked for where the app and plx-connect put it", () => {
   assert.deepEqual(plxdCandidates("darwin", "/Users/me", {}), [
+    "/Users/me/.parallax-plxd/plxd",
     "/Applications/Parallax.app/Contents/Resources/plxd",
     "/Applications/Parallax (Nightly).app/Contents/Resources/plxd",
     "/Users/me/Applications/Parallax.app/Contents/Resources/plxd",
     "/Users/me/Applications/Parallax (Nightly).app/Contents/Resources/plxd",
   ]);
-  assert.deepEqual(plxdCandidates("linux", "/home/me", {}), ["/home/me/.local/bin/plxd"]);
+  assert.deepEqual(plxdCandidates("linux", "/home/me", {}), [
+    "/home/me/.parallax-plxd/plxd",
+    "/home/me/.local/bin/plxd",
+    "/home/me/.local/share/parallax/app/plxd",
+  ]);
+  assert.equal(plxdCandidates("linux", "/home/me", { XDG_DATA_HOME: "/data" })[2], "/data/parallax/app/plxd");
 });
 
 test("a command is found on PATH, and a folder of its name isn't", () => {
