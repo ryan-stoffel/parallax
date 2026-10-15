@@ -1,6 +1,6 @@
 # 0029: App packaging and release builds
 
-- Status: accepted; versions, macOS signing, and the update metadata superseded by [0030](0030-release-versions.md); `release.yml`'s jobs superseded by PLX-211 (below); node-llama-cpp removed by [0058](0058-thread-naming.md)
+- Status: accepted; versions, macOS signing, and the update metadata superseded by [0030](0030-release-versions.md); `release.yml`'s jobs superseded by PLX-211 (below); node-llama-cpp removed by [0058](0058-thread-naming.md); the sidecar folders in the resources are gone since [0072](0072-connect-stays-up.md), which embeds them in plxd
 - Date: 2026-09-30
 - Issue: PLX-66
 
