@@ -151,6 +151,10 @@ fn service_install_refuses_the_default_label_for_another_data_folder() {
 // reports lingering off and refuses to turn it on, which only warns.
 #[cfg(target_os = "linux")]
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "install, status, and uninstall step by step, with their stand-ins"
+)]
 fn service_installs_reports_and_uninstalls_a_systemd_user_unit() {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
