@@ -31,16 +31,17 @@ const clouds: [number, number, number, 0 | 1 | 2][] = [
   [620, 61, 0.8, 2],
 ];
 // Each layer's lit top and its body, nearer ones lighter.
+// index.css sets them per mode: indigo at night in dark mode, white and lavender in light.
 const shades = [
-  ["#3c3a8c", "#2c2a6e"],
-  ["#5753b4", "#43409a"],
-  ["#8a86e4", "#6e6ac8"],
+  ["var(--cloud-far-lit)", "var(--cloud-far)"],
+  ["var(--cloud-mid-lit)", "var(--cloud-mid)"],
+  ["var(--cloud-near-lit)", "var(--cloud-near)"],
 ];
 
 /** A cartoon cloud: puffs on a rounded base. */
 function Cloud({ fill, dy = 0 }: { fill: string; dy?: number }) {
   return (
-    <g fill={fill} transform={`translate(0 ${dy})`}>
+    <g style={{ fill }} transform={`translate(0 ${dy})`}>
       <circle cx="-12" cy="-2" r="7" />
       <circle cx="0" cy="-7" r="10" />
       <circle cx="14" cy="-9" r="12" />

@@ -247,18 +247,19 @@
   --danger: #f0883e;
 }
 
-/* A nightly build (main.tsx sets .nightly): a night sky at the top of the sidebar, with stars and
-   cartoon clouds in its top row (NightSky.tsx), and the same sky on the send buttons. The row's
-   text turns white over it in every theme and mode.
+/* A nightly build (main.tsx sets .nightly): a sky at the top of the sidebar, with stars and
+   cartoon clouds in its top row (NightSky.tsx), and the same night sky on the send buttons. The
+   row's text turns white over it in every theme and mode.
 
    The sky is the sidebar's own background, so it sits behind all of the sidebar's content, and
-   it blends into the sidebar's color in oklab, so it merges cleanly into any theme's. Light mode
-   ends it with the top row, above the Search row's dark text; dark mode runs it on behind the
-   Search row, whose light text reads over it. */
+   it blends into the sidebar's color in oklab, so it merges cleanly into any theme's. Dark mode
+   is night, deepening into the sidebar behind the Search row. Light mode is twilight: indigo
+   behind the top row's white text, brightening to a pale lavender behind the Search row's dark
+   text, with white clouds. */
 :root.nightly .night-sky-host {
   background:
-    linear-gradient(in oklab, #070923, #17184f 34%, #2a2470 52%, var(--sidebar)) top / 100% 56px
-      no-repeat,
+    linear-gradient(in oklab, #15124a, #2e2a8c 24%, #6a64d6 42%, #dddbfa 56%, var(--sidebar)) top /
+      100% 104px no-repeat,
     var(--sidebar);
 }
 :root.nightly.dark .night-sky-host {
@@ -266,6 +267,23 @@
     linear-gradient(in oklab, #070923, #17184f 22%, #2a2470 38%, var(--sidebar)) top / 100% 104px
       no-repeat,
     var(--sidebar);
+}
+/* The clouds' bodies and lit tops, far to near. */
+:root.nightly .night-sky {
+  --cloud-far: #7e78dc;
+  --cloud-far-lit: #9c97ea;
+  --cloud-mid: #bdb9f3;
+  --cloud-mid-lit: #d6d4f9;
+  --cloud-near: #ebeafd;
+  --cloud-near-lit: #ffffff;
+}
+:root.nightly.dark .night-sky {
+  --cloud-far: #2c2a6e;
+  --cloud-far-lit: #3c3a8c;
+  --cloud-mid: #43409a;
+  --cloud-mid-lit: #5753b4;
+  --cloud-near: #6e6ac8;
+  --cloud-near-lit: #8a86e4;
 }
 .night-sky {
   display: none;
