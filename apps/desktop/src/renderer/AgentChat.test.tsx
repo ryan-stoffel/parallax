@@ -1244,6 +1244,10 @@ test("a dropped follow-up sent from here can be sent again, once", async () => {
 });
 
 test("Stop puts a first prompt's images back too, fetched from plxd by id", async () => {
+  // Sent with a PDF and the image, both saved on the host (PLX-799).
+  const prompt = sampleRun.prompt;
+  sampleRun.prompt = "Use this logo.\n\nAttached files:\n- /up/1/brief.pdf\n- /up/2/image-1.png";
+  onTestFinished(() => void (sampleRun.prompt = prompt));
   const { request, emit } = fakeBridge(2);
   await renderChat();
   // The first turn's turnStarted brings its images' ids, before the agent says anything.
@@ -1253,7 +1257,11 @@ test("Stop puts a first prompt's images back too, fetched from plxd by id", asyn
       subscription: "s",
       seq: 50,
       time: "",
-      event: { kind: "agent.output", runId, items: [{ kind: "turnStarted", images: ["i-1"] }] },
+      event: {
+        kind: "agent.output",
+        runId,
+        items: [{ kind: "turnStarted", images: ["i-1"] }],
+      },
     },
   });
   await act(async () =>
@@ -1264,6 +1272,9 @@ test("Stop puts a first prompt's images back too, fetched from plxd by id", asyn
   expect(document.querySelector<HTMLImageElement>('img[alt="Image 1"]')!.src).toBe(
     "data:image/png;base64,AAAA",
   );
+  // The image's saved path stays out of the text, since it's saved again on send (PLX-799).
+  expect(composer().textContent).toContain("/up/1/brief.pdf");
+  expect(composer().textContent).not.toContain("image-1.png");
 });
 
 test("Stop leaves a follow-up the agent hasn't started out of the box, for its held queue", async () => {

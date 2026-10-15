@@ -50,11 +50,27 @@ export async function uploadFiles(
   return paths;
 }
 
-/** `text` as the agent gets it: the paths of the files sent with it listed after it. */
+/**
+ * `text` as the agent gets it: the paths of the files sent with it listed after it. A list it
+ * already ends in, such as one Stop put back, takes them, so the message keeps one.
+ */
 export function withFiles(text: string, paths: string[]): string {
   if (paths.length === 0) return text;
-  const list = `Attached files:\n${paths.map((p) => `- ${p}`).join("\n")}`;
-  return text.trim() ? `${text}\n\n${list}` : list;
+  const listed = splitFiles(text);
+  const list = `Attached files:\n${[...listed.paths, ...paths].map((p) => `- ${p}`).join("\n")}`;
+  return listed.text.trim() ? `${listed.text}\n\n${list}` : list;
+}
+
+/**
+ * A sent message's text without its images' paths, for the box to put back: the images go back as
+ * images, and are saved again when it sends.
+ */
+export function withoutImages(text: string): string {
+  const { text: said, paths } = splitFiles(text);
+  return withFiles(
+    said,
+    paths.filter((path) => !isImagePath(path)),
+  );
 }
 
 /** A sent message's text split as `withFiles` joined it: the user's text, and the files' paths. */

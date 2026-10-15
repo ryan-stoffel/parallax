@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
-import { encodedImage, isImagePath, splitFiles, withFiles } from "./uploads";
+import { encodedImage, isImagePath, splitFiles, withFiles, withoutImages } from "./uploads";
 
 test("splitFiles takes back what withFiles added, and leaves other text alone (PLX-779)", () => {
   const paths = ["/u/1/paper v3.pdf", "/u/2/notes.md"];
@@ -22,4 +22,13 @@ test("an image is saved as image-<n> with its type's extension, and only those r
   expect(isImagePath("C:\\up\\1\\image-1.webp")).toBe(true);
   expect(isImagePath("/u/1/my-image-1.png")).toBe(false);
   expect(isImagePath("/u/1/image-1.pdf")).toBe(false);
+});
+
+test("a list put back takes new paths, and loses its images' (PLX-799)", () => {
+  const sent = withFiles("Use this.", ["/u/1/a.pdf", "/u/2/image-1.png"]);
+  expect(withoutImages(sent)).toBe(withFiles("Use this.", ["/u/1/a.pdf"]));
+  expect(withoutImages(withFiles("", ["/u/2/image-1.png"]))).toBe("");
+  expect(withFiles(withoutImages(sent), ["/u/3/image-1.png"])).toBe(
+    withFiles("Use this.", ["/u/1/a.pdf", "/u/3/image-1.png"]),
+  );
 });
