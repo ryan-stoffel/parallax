@@ -101,6 +101,7 @@ import {
 import { locale } from "./locale";
 import { GitHubLogo, LinearLogo } from "./logos";
 import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
+import { withMentions } from "./Mention";
 import { dollarMath } from "./math";
 import { useCatalog, type Provider, type RunOptions } from "./models";
 import { kinds } from "./providers";
@@ -1498,7 +1499,11 @@ export const RowView = memo(function RowView({
           {((!images?.length && !files.length) || said?.trim() !== "") && (
             <div className="max-w-[85%] rounded-2xl bg-selected px-3.5 py-2 text-[14px] leading-relaxed whitespace-pre-wrap">
               {/* A follow-up from an older log, which has no text for it. */}
-              {said ?? <span className="text-muted-foreground italic">Follow-up message</span>}
+              {said !== undefined ? (
+                withMentions(said)
+              ) : (
+                <span className="text-muted-foreground italic">Follow-up message</span>
+              )}
             </div>
           )}
           <PromptMeta

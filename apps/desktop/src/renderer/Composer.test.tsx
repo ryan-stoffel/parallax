@@ -637,7 +637,7 @@ test("/ lists the composer's commands, then the CLI's, filtered as typed, and pi
   await press("ArrowDown");
   expect(highlighted()).toBe("/code-review");
   await press("Tab");
-  expect(box.textContent).toBe("/code-review ");
+  expect(box.textContent).toBe("code-review ");
   expect(options()).toEqual([]);
   await type("the diff");
   await press("Enter");
@@ -692,7 +692,7 @@ test("@ lists the thread's files, fetched again on each new @, and inserts @path
   expect(request).toHaveBeenCalledExactlyOnceWith("local", "repo/files", { runId });
   expect(options()).toEqual(["src/main.rs"]);
   await press("Enter");
-  expect(box.textContent).toBe("see @src/main.rs ");
+  expect(box.textContent).toBe("see main.rs ");
 
   // A file the agent made since: the last list shows until the new one arrives.
   let answer: (files: string[]) => void = () => {};
@@ -952,28 +952,39 @@ test("the appearance setting picks the ring, the inline row, or neither", async 
   await act(async () => setBehaviorPrefs({ composerUsage: behaviorDefaults.composerUsage }));
 });
 
-test("a picked /skill and an @token are drawn as pills; an unknown /path is not", async () => {
-  const { box, type } = await withMenus(async () => undefined);
-  await type("/review @src/a.ts and /usr/bin and /review");
-  const pills = () => [...box.querySelectorAll(".composer-token")].map((p) => p.textContent);
-  expect(pills()).toEqual(["/review", "@src/a.ts", "/review"]);
+test("a known /skill or @file becomes one chip, sent as typed, and Backspace takes it whole", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { box, type, press } = await withMenus(onSend);
+  // The `@` lists the thread's files, which is how a typed path is known.
+  await type("fix @");
+  await type("src/lib.rs /usr/bin /review /review");
+  const chips = () =>
+    [...box.querySelectorAll("[data-node-view-wrapper]")].map((c) => c.textContent);
+  // An unknown /path stays text, and so does the /review still being typed at the cursor.
+  expect(chips()).toEqual(["lib.rs", "review"]);
+  // Just after the /review chip.
+  box.editor!.commands.setTextSelection(17);
+  await press("Backspace");
+  // The cursor left the last /review, so it's a chip now too.
+  expect(box.textContent).toBe("fix lib.rs /usr/bin  review");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(
+    "fix @src/lib.rs /usr/bin  /review",
+    expect.anything(),
+    [],
+    [],
+  );
 });
 
-test("Backspace at the end of a pill deletes the whole pill", async () => {
-  const { box, type, press } = await withMenus(async () => undefined);
-  // The `@` lists the thread's files, which is how a picked path is known.
-  await type("fix @");
-  await type("src/lib.rs /review");
-  await press("Backspace");
-  expect(box.textContent).toBe("fix @src/lib.rs ");
-  // After the space it's an ordinary Backspace, and the pill goes on the next.
-  await press("Backspace");
-  expect(box.textContent).toBe("fix @src/lib.rs ");
-  box.editor!.commands.setTextSelection(16);
-  await press("Backspace");
-  expect(box.textContent).toBe("fix  ");
-  // An @ that names no file yet is still being typed, so Backspace leaves it to the editor.
-  await type("@src/lib.r");
-  await press("Backspace");
-  expect(box.textContent).toBe("fix @src/lib.r ");
+test("a recalled prompt's chip leaves it recalled, so Up still steps back", async () => {
+  const { box, type, press } = await withMenus(async () => undefined, {
+    history: ["older", "/review the diff"],
+  });
+  // The `/` lists the commands, which is how /review is known.
+  await type("/");
+  act(() => void box.editor!.commands.clearContent(true));
+  await press("ArrowUp");
+  expect(box.querySelector("[data-node-view-wrapper]")?.textContent).toBe("review");
+  await press("ArrowUp");
+  expect(box.textContent).toBe("older");
 });

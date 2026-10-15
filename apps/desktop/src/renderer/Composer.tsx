@@ -24,8 +24,16 @@ import Text from "@tiptap/extension-text";
 import { Dropcursor, Gapcursor, UndoRedo } from "@tiptap/extensions";
 import { Fragment, Slice, type Node as ProseMirrorNode } from "@tiptap/pm/model";
 import type { EditorState } from "@tiptap/pm/state";
-import { Decoration, DecorationSet } from "@tiptap/pm/view";
-import { EditorContent, markInputRule, useEditor, type Editor } from "@tiptap/react";
+import {
+  EditorContent,
+  markInputRule,
+  Node as TiptapNode,
+  NodeViewWrapper,
+  ReactNodeViewRenderer,
+  useEditor,
+  type Editor,
+  type NodeViewProps,
+} from "@tiptap/react";
 import { defaultMarkdownSerializer, MarkdownSerializer } from "prosemirror-markdown";
 import {
   Fragment as ReactFragment,
@@ -53,6 +61,7 @@ import type { RequestUsage } from "./transcript";
 import { EffortMenu } from "./EffortMenu";
 import { accessPrefs } from "./accessPrefs";
 import { FileCard } from "./FileCard";
+import { Mention } from "./Mention";
 import { imageUrl, readImage, type ImageCaps } from "./images";
 import { base64Length, uploadFiles, withFiles } from "./uploads";
 import { ModelMenu } from "./ModelMenu";
@@ -101,6 +110,39 @@ export const accessOptions: Record<AgentPermission, PickerOption> = {
 
 const divider = <span aria-hidden className="mx-1 h-5 w-px bg-border" />;
 
+// A picked /skill or @file: one node, drawn as a chip and deleted whole, holding the token it sends.
+const MentionNode = TiptapNode.create({
+  name: "mention",
+  group: "inline",
+  inline: true,
+  atom: true,
+  selectable: false,
+  addAttributes: () => ({ token: { default: "" } }),
+  parseHTML: () => [
+    { tag: "span[data-mention]", getAttrs: (el) => ({ token: el.getAttribute("data-mention") }) },
+  ],
+  renderHTML: ({ node }) => ["span", { "data-mention": node.attrs["token"] }, node.attrs["token"]],
+  renderText: ({ node }) => node.attrs["token"] as string,
+  // Backspace just after one takes it whole, which the browser does unreliably for an uneditable span.
+  addKeyboardShortcuts: () => ({
+    Backspace: ({ editor }) => {
+      const { empty, $from, from } = editor.state.selection;
+      const before = $from.nodeBefore;
+      if (!empty || before?.type.name !== "mention") return false;
+      return editor.commands.deleteRange({ from: from - before.nodeSize, to: from });
+    },
+  }),
+  addNodeView: () =>
+    ReactNodeViewRenderer(
+      ({ node }: NodeViewProps) => (
+        <NodeViewWrapper as="span">
+          <Mention token={node.attrs["token"] as string} />
+        </NodeViewWrapper>
+      ),
+      { as: "span" },
+    ),
+});
+
 // The box's editor: typed Markdown (`- `, `1. `, ```` ``` ````, `> `, `#`, `**bold**`, `*italic*`,
 // `` `code` ``) formats as you type. Nothing else rewrites what's typed: bold and italic come from
 // `**` and `*` only, with no space just inside them (as in CommonMark), so `__init__`, `_private_`,
@@ -124,6 +166,7 @@ const extensions = [
   OrderedList,
   Paragraph,
   Text,
+  MentionNode,
   Bold.extend({
     addInputRules() {
       return [
@@ -164,6 +207,7 @@ const markdown = new MarkdownSerializer(
       state.closeBlock(node);
     },
     hardBreak: (state) => state.write("\n"),
+    mention: (state, node) => state.text(node.attrs["token"] as string, false),
     text: (state, node) => state.text(node.text!, false),
   },
   {
@@ -222,6 +266,27 @@ function triggerAt(editor: Editor): Trigger | undefined {
   if (!match) return undefined;
   const query = match[2]!;
   return { kind: match[1] as "/" | "@", query, from: $from.pos - query.length - 1, to: $from.pos };
+}
+
+/**
+ * A transaction turning each `known` `/skill` or `@path` in `state`'s text into a mention, or
+ * undefined if there's none. One that ends at the cursor is still being typed and stays text. It
+ * isn't an undo step of its own, so undo takes back what was typed, nor an edit, so a recalled
+ * prompt stays recalled for Up and Down.
+ */
+function mentionsIn(state: EditorState, known: (token: string) => boolean) {
+  const { tr, selection } = state;
+  state.doc.descendants((node, pos, parent) => {
+    if (!node.isText || parent?.type.spec.code || node.marks.some((m) => m.type.spec.code)) return;
+    for (const m of node.text!.matchAll(/(?<=^|\s)([/@]\S+)/g)) {
+      const from = pos + m.index;
+      const to = from + m[1]!.length;
+      if (!known(m[1]!) || (selection.empty && selection.from === to)) continue;
+      const mention = state.schema.nodes["mention"]!.create({ token: m[1] });
+      tr.replaceWith(tr.mapping.map(from), tr.mapping.map(to), mention);
+    }
+  });
+  return tr.docChanged ? tr.setMeta("addToHistory", false).setMeta("recall", true) : undefined;
 }
 
 /** `items` whose name starts with `query`, then those that only contain it, each in order. */
@@ -891,23 +956,11 @@ export function Composer({
     (newThread
       ? "Build a feature, fix a bug, paste an image, use /skills, @files or threads"
       : "Reply, add detail, or steer what it does next");
-  // Known /skills and @tokens drawn as pills. The text itself, and so what is sent, is unchanged.
-  const pills = (state: EditorState) => {
-    const skills = new Set((loadedCommands ?? []).map((c) => c.text));
-    const marks: Decoration[] = [];
-    state.doc.descendants((node, pos, parent) => {
-      if (!node.isText || parent?.type.name === "codeBlock") return;
-      for (const m of node.text!.matchAll(/(?<=^|\s)(\/\S+|@\S+)/g)) {
-        if (m[1]![0] === "@" || skills.has(m[1]!))
-          marks.push(
-            Decoration.inline(pos + m.index, pos + m.index + m[1]!.length, {
-              class: "composer-token",
-            }),
-          );
-      }
-    });
-    return DecorationSet.create(state.doc, marks);
-  };
+  // A known /skill, or an @ naming one of the thread's files, becomes a chip.
+  const known = (token: string) =>
+    token[0] === "/"
+      ? !!loadedCommands?.some((c) => c.text === token)
+      : !!loadedPaths?.includes(token.slice(1));
   // Its props are read again on every render, so its handlers see this render's state.
   const editor: Editor = useEditor({
     extensions,
@@ -917,6 +970,8 @@ export function Composer({
     onUpdate: ({ editor, transaction }) => {
       if (!transaction.getMeta("recall")) recalled.current = undefined;
       setText(toMarkdown(editor.state.doc));
+      const mentions = mentionsIn(editor.state, known);
+      if (mentions) editor.view.dispatch(mentions);
     },
     onSelectionUpdate: ({ editor }) => {
       const at = triggerAt(editor);
@@ -925,7 +980,6 @@ export function Composer({
       if (!at) setClosedAt(undefined);
     },
     editorProps: {
-      decorations: pills,
       // All of them, since these replace Tiptap's own (its role too) once props change.
       attributes: {
         id: "composer-input",
@@ -947,22 +1001,6 @@ export function Composer({
       },
       handleKeyDown: (view, event): boolean => {
         const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
-        // Backspace at the end of a pill, or inside one, takes the whole pill: a /skill, or an
-        // @file that names one of the thread's files, so an @ still being typed edits as text.
-        const { selection, doc } = view.state;
-        if (event.key === "Backspace" && plain && selection.empty) {
-          const at = selection.from;
-          const pill = pills(view.state)
-            .find(at, at)
-            .find((d) => {
-              const token = doc.textBetween(d.from, d.to);
-              return d.from < at && (token[0] === "/" || !!loadedPaths?.includes(token.slice(1)));
-            });
-          if (pill) {
-            view.dispatch(view.state.tr.delete(pill.from, pill.to));
-            return true;
-          }
-        }
         if (menuOpen && plain && !event.isComposing) {
           const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
           if (event.key === "Escape") setClosedAt(trigger.from);
@@ -1078,6 +1116,13 @@ export function Composer({
   useEffect(() => {
     if (contents) contents.current = { text, doc: editor.getJSON(), images, files, threads };
   }, [contents, editor, text, images, files, threads]);
+
+  // Tokens typed or recalled before their list arrived become chips once it does.
+  useEffect(() => {
+    const mentions = mentionsIn(editor.state, known);
+    if (mentions) editor.view.dispatch(mentions);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `known` reads only these lists.
+  }, [editor, loadedCommands, loadedPaths]);
 
   useEffect(() => {
     if (!insert) return;
