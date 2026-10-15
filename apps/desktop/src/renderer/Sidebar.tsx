@@ -1630,10 +1630,10 @@ function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: 
 
 /**
  * A thread's row (0033): its repo and status (what it asks of the user, or how long ago it was
- * prompted), its title, then its worktree or local checkout icon and branch, linked pull requests (the number of one, or +N for more),
- * and provider. Resting on it shows its card; hovering or focusing it swaps the status for Snooze,
- * Archive, and more actions, which also open by right-clicking the row: native popovers, so Escape
- * and clicking away close them.
+ * prompted), its title, then its worktree or local checkout icon and branch, linked pull requests
+ * (the number of one, or +N for more), and provider. Resting on it shows its card; hovering or
+ * focusing it swaps the status for Snooze, Archive, and more actions, which also open by
+ * right-clicking the row: native popovers, so Escape and clicking away close them.
  */
 function ThreadRow({
   thread,
@@ -1714,7 +1714,25 @@ function ThreadRow({
   // Read once, not polled: a row's state is as of when the sidebar loaded it.
   const prs = usePullRequests(hostId, run?.id, run?.pullRequests ?? [], false, false);
   const prLook = majorityLook(prs);
-  const hasDetails = !!(run?.branch || run?.checkout || prs.urls.length || Logo || device);
+  // A checkout thread has no branch of its own: show the one its repository has out, read again
+  // as its run's status changes. A detached HEAD, or a plxd without `git`, leaves it unnamed.
+  const [checkoutBranch, setCheckoutBranch] = useState<string | null>(null);
+  const checkoutRun = run?.checkout ? run.id : undefined;
+  const runStatus = run?.status;
+  useEffect(() => {
+    if (!checkoutRun) return;
+    let live = true;
+    void window.parallax
+      .request(hostId, "agent/gitStatus", { runId: checkoutRun })
+      .then(
+        (answer) => live && setCheckoutBranch("result" in answer ? answer.result.branch : null),
+      );
+    return () => {
+      live = false;
+    };
+  }, [hostId, checkoutRun, runStatus]);
+  const branch = run?.checkout ? (checkoutBranch ?? "Local checkout") : run?.branch;
+  const hasDetails = !!(branch || prs.urls.length || Logo || device);
   const snoozedNow = !!thread.snoozedUntil && Date.parse(thread.snoozedUntil) > Date.now();
   const mainLabel = (
     <>
@@ -1790,23 +1808,25 @@ function ThreadRow({
         {hasDetails && (
           <span className="flex w-full items-center gap-2 text-[11.5px] text-faint-foreground">
             <span className="flex min-w-0 flex-1 items-center gap-1">
-              {(run?.branch || run?.checkout) && (
+              {run?.checkout ? (
+                // Without a branch, the text beside it already says "Local checkout".
                 <span
-                  title={run.checkout ? "Local checkout" : "Worktree"}
+                  title="Local checkout"
                   role="img"
-                  aria-label={run.checkout ? "Local checkout" : "Worktree"}
+                  aria-label="Local checkout"
+                  aria-hidden={!checkoutBranch}
                   className="flex shrink-0"
                 >
-                  {run.checkout ? (
-                    <Folder className="size-3.5" />
-                  ) : (
-                    <FolderGit2 className="size-3.5" />
-                  )}
+                  <Folder className="size-3.5" />
                 </span>
+              ) : (
+                branch && (
+                  <span title="Worktree" role="img" aria-label="Worktree" className="flex shrink-0">
+                    <FolderGit2 className="size-3.5" />
+                  </span>
+                )
               )}
-              <span className="min-w-0 truncate">
-                {run?.branch ?? (run?.checkout && "Local checkout")}
-              </span>
+              <span className="min-w-0 truncate">{branch}</span>
             </span>
             {prs.urls.length > 0 && (
               <span
