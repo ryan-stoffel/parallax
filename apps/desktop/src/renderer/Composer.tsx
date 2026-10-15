@@ -1389,7 +1389,7 @@ export function Composer({
               type="submit"
               aria-label="Send"
               disabled={!canSend}
-              className="grid size-9 place-items-center rounded-full bg-send text-send-foreground disabled:opacity-25"
+              className="send-sky grid size-9 place-items-center rounded-full bg-send text-send-foreground disabled:opacity-25"
             >
               <ArrowUp className="size-4.5" />
             </button>

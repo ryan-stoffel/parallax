@@ -11,6 +11,12 @@ import "./index.css";
 document.documentElement.dataset["platform"] = window.parallax.platform;
 // The saved theme, before React renders anything.
 applyTheme();
+// A nightly build wears a night sky in the sidebar and on its send buttons (index.css).
+void window.parallax
+  .version()
+  .then((version) =>
+    document.documentElement.classList.toggle("nightly", version.includes("-nightly")),
+  );
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

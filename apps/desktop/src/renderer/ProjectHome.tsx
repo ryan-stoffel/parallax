@@ -374,7 +374,7 @@ function QuestionBox({
             type="submit"
             aria-label="Send answer"
             disabled={busy || !text.trim()}
-            className="grid size-6 shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:opacity-25"
+            className="send-sky grid size-6 shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:opacity-25"
           >
             {busy ? (
               <LoaderCircle className="size-3 animate-spin" />

@@ -118,7 +118,7 @@ export function MiniPrompt({
           type="submit"
           aria-label="Send"
           disabled={!canSend}
-          className={`grid shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:opacity-25 ${large ? "size-9" : "size-7"}`}
+          className={`send-sky grid shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:opacity-25 ${large ? "size-9" : "size-7"}`}
         >
           {busy ? (
             <LoaderCircle className="size-3.5 animate-spin" />

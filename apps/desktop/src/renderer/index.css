@@ -93,8 +93,13 @@
 }
 
 /* Parallax Light and Parallax Dark. The `dark` class on <html> switches them
-   (theme.ts). Components use only these tokens, never raw colors. Every
-   *-foreground keeps at least 4.5:1 contrast on the background and sidebar.
+   (theme.ts), and a `theme-*` class swaps in an added VS Code theme's tokens for either
+   (vscodeThemes.ts, whose CSS goes after this file).
+   Components use only these tokens, never raw colors. Every *-foreground keeps
+   at least 4.5:1 contrast on the background and sidebar, in every theme
+   (theme.test.ts, and vscodeThemes.test.ts for added themes).
+   .scheme-light and .scheme-dark paint one mode inside any other, for
+   Settings' previews.
 
    --accent: the send button, focus rings (--ring), selected states, highlights,
    links, and the working loaders (--working) all derive from it. Text and icons
@@ -104,18 +109,21 @@
    Classes on <html> from the same settings: .contrast-more strengthens text and
    borders, .reduce-motion stops animations (it's also set when the OS asks),
    and .diff-blue-orange swaps red and green for blue and orange. */
-:root {
+:root,
+.scheme-light {
   color-scheme: light;
   --background: #ffffff;
-  --sidebar: #ffffff;
+  --sidebar: #f6f6f9;
   --surface: #ffffff;
-  --foreground: #181818;
-  --muted-foreground: #4f4f4f;
-  --faint-foreground: #636363;
-  --border: rgb(0 0 0 / 9%);
-  --hover: rgb(0 0 0 / 4.5%);
-  --selected: rgb(0 0 0 / 7%);
-  --accent: #2563eb;
+  --foreground: #1e1b4b;
+  --muted-foreground: #4a4868;
+  --faint-foreground: #64627e;
+  --border: rgb(30 27 75 / 10%);
+  --hover: rgb(30 27 75 / 4.5%);
+  --selected: rgb(30 27 75 / 7%);
+  /* The logo's blue; its indigo overlap is the text, and its coral, darkened to read, is
+     --danger. */
+  --accent: #2b5cff;
   /* Black or white, whichever reads better on a fill, as a channel of
      color(from <fill> srgb-linear ...): white while the fill's WCAG luminance (from its linear
      r, g, and b, clipped as the screen clips them) is under 0.1791, where the two tie at 4.58:1. */
@@ -132,22 +140,22 @@
   --send-foreground: color(
     from var(--send) srgb-linear var(--black-or-white) var(--black-or-white) var(--black-or-white)
   );
-  --primary: #181818;
+  --primary: #1e1b4b;
   --primary-foreground: #ffffff;
   --ring: var(--accent);
-  --danger: #c42b2b;
+  --danger: #d4330f;
   /* The semantic amber, for marks and icons beside a label (--danger is the red). */
-  --warning: #d97706;
+  --warning: #b45309;
   /* A diff's added lines (Approval.tsx); its removed lines are --danger. */
   --added: #15803d;
   /* Code blocks and diffs: a step off the background, and highlight.js's token colors. */
-  --code: #f7f7f8;
-  --syntax-keyword: #cf222e;
-  --syntax-string: #0a3069;
-  --syntax-number: #0550ae;
-  --syntax-title: #8250df;
-  --syntax-type: #953800;
-  --syntax-comment: #6e7781;
+  --code: #f6f6f9;
+  --syntax-keyword: #2b5cff;
+  --syntax-string: #c2410c;
+  --syntax-number: #7c3aed;
+  --syntax-title: #4338ca;
+  --syntax-type: #be185d;
+  --syntax-comment: #6e6c88;
   --working: var(--accent);
   /* The Usage page's stacked bars (UsagePage.tsx): the accent, then a tint of it, then a neutral,
      each mixed into the surface so they stay opaque. Both modes compute from their own surface,
@@ -155,7 +163,7 @@
   --chart-1: var(--accent);
   --chart-2: color-mix(in oklab, var(--accent) 65%, var(--surface));
   --chart-3: color-mix(in oklab, var(--foreground) 20%, var(--surface));
-  --shadow-composer: 0 10px 30px -16px rgb(0 0 0 / 22%);
+  --shadow-composer: 0 10px 30px -16px rgb(30 27 75 / 22%);
   /* A Project icon's colors (projectIcons.ts), by the key plxd keeps. Each keeps at least 3:1
      on the sidebar, the dialogs, and a selected row, in both themes. */
   --project-red: #dc2626;
@@ -173,32 +181,34 @@
   --mark-overlap: #1e1b4b;
 }
 
-:root.dark {
+:root.dark,
+.scheme-dark {
   color-scheme: dark;
-  --background: #0d0d0d;
-  --sidebar: #000000;
-  --surface: #171717;
-  --foreground: #ececec;
-  --muted-foreground: #a8a8a8;
-  --faint-foreground: #868686;
-  --border: rgb(255 255 255 / 8%);
-  --hover: rgb(255 255 255 / 4.5%);
-  --selected: rgb(255 255 255 / 8%);
-  --accent: #3b82f6;
+  --background: #0b0b10;
+  --sidebar: #121218;
+  --surface: #17171f;
+  --foreground: #ededf4;
+  --muted-foreground: #a6a5b9;
+  --faint-foreground: #878699;
+  --border: rgb(237 237 244 / 8%);
+  --hover: rgb(237 237 244 / 4.5%);
+  --selected: rgb(237 237 244 / 8%);
+  /* The logo's blue, lifted to read on the dark, as --danger lifts its coral. */
+  --accent: #5b80ff;
   /* The accent, darkened: mixed toward a black with no chroma or hue, so it keeps the accent's. */
   --send: color-mix(in oklch, var(--accent) 68%, oklch(0 none none));
-  --primary: #ececec;
-  --primary-foreground: #0d0d0d;
-  --danger: #ff8f8a;
+  --primary: #ededf4;
+  --primary-foreground: #0b0b10;
+  --danger: #ff6b4a;
   --warning: #f59e0b;
   --added: #4ade80;
-  --code: #151515;
-  --syntax-keyword: #ff7b72;
-  --syntax-string: #a5d6ff;
-  --syntax-number: #79c0ff;
-  --syntax-title: #d2a8ff;
-  --syntax-type: #ffa657;
-  --syntax-comment: #8b949e;
+  --code: #121218;
+  --syntax-keyword: #7b9bff;
+  --syntax-string: #ff8a65;
+  --syntax-number: #c4b5fd;
+  --syntax-title: #a5b4fc;
+  --syntax-type: #f9a8d4;
+  --syntax-comment: #7d7c93;
   --shadow-composer: 0 14px 36px -18px rgb(0 0 0 / 80%);
   --project-red: #f87171;
   --project-orange: #fb923c;
@@ -235,6 +245,148 @@
 :root.dark.diff-blue-orange {
   --added: #58a6ff;
   --danger: #f0883e;
+}
+
+/* A nightly build (main.tsx sets .nightly): a sky at the top of the sidebar, with stars and
+   cartoon clouds in its top row (NightSky.tsx), and the same night sky on the send buttons. The
+   row's text turns white over it in every theme and mode.
+
+   The sky is the sidebar's own background, so it sits behind all of the sidebar's content, and
+   it blends into the sidebar's color in oklab, so it merges cleanly into any theme's. Dark mode
+   is night, deepening into the sidebar behind the Search row. Light mode is twilight: indigo
+   behind the top row's white text, brightening to a lavender that runs on past the Search row,
+   light enough for its dark text, with white clouds. */
+
+:root.nightly .night-sky-host {
+  background:
+    linear-gradient(
+        in oklab,
+        #15124a,
+        #2e2a8c 19%,
+        #6a64d6 33%,
+        #e6e4fe 44%,
+        #eae8fe 70%,
+        var(--sidebar)
+      )
+      top / 100% 120px no-repeat,
+    var(--sidebar);
+}
+:root.nightly.dark .night-sky-host {
+  background:
+    linear-gradient(in oklab, #070923, #17184f 20%, #2a2470 34%, #191741 52%, var(--sidebar)) top /
+      100% 104px no-repeat,
+    var(--sidebar);
+}
+/* The Search field sits on the sidebar's own color over the sky, so its text keeps the contrast
+   the theme gives it there, whatever the theme and mode. */
+:root.nightly .night-sky-host .sky-search {
+  background-color: var(--sidebar);
+}
+:root.nightly .night-sky-host .sky-search:is(:hover, :focus-within) {
+  background-color: color-mix(in oklab, var(--sidebar), var(--foreground) 4.5%);
+}
+/* The clouds' bodies and lit tops, far to near. */
+:root.nightly .night-sky {
+  /* Dark enough that the top row's white text reads over the far ones. */
+  --cloud-far: #5751c4;
+  --cloud-far-lit: #6660d0;
+  --cloud-mid: #bdb9f3;
+  --cloud-mid-lit: #d6d4f9;
+  --cloud-near: #ebeafd;
+  --cloud-near-lit: #ffffff;
+}
+:root.nightly.dark .night-sky {
+  --cloud-far: #2c2a6e;
+  --cloud-far-lit: #3c3a8c;
+  --cloud-mid: #43409a;
+  --cloud-mid-lit: #5753b4;
+  --cloud-near: #6e6ac8;
+  --cloud-near-lit: #8a86e4;
+}
+.night-sky {
+  display: none;
+}
+:root.nightly .night-sky {
+  display: block;
+  position: absolute;
+  inset: 0 0 auto;
+  height: 56px;
+  overflow: hidden;
+  pointer-events: none;
+}
+:root.nightly .night-sky svg {
+  width: 100%;
+  height: 56px;
+}
+:root.nightly .night-sky-text {
+  --foreground: #ffffff;
+  --muted-foreground: rgb(255 255 255 / 75%);
+  --hover: rgb(255 255 255 / 12%);
+  /* The logo's overlap, light as it is in dark mode, so it shows on the sky. */
+  --mark-overlap: #e4e4e7;
+}
+:root.nightly .send-sky {
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Cg fill='%236e6ac8'%3E%3Ccircle cx='8' cy='33' r='6'/%3E%3Ccircle cx='17' cy='29' r='7.5'/%3E%3Ccircle cx='28' cy='32' r='6.5'/%3E%3C/g%3E%3Cg fill='%23a5a1ef'%3E%3Ccircle cx='12' cy='37' r='5'/%3E%3Ccircle cx='22' cy='36' r='6'/%3E%3C/g%3E%3C/svg%3E")
+      bottom / 100% no-repeat,
+    radial-gradient(0.8px 0.8px at 28% 26%, #fff 50%, transparent),
+    radial-gradient(0.6px 0.6px at 66% 20%, rgb(255 255 255 / 80%) 50%, transparent),
+    radial-gradient(0.7px 0.7px at 78% 46%, rgb(255 255 255 / 70%) 50%, transparent),
+    radial-gradient(0.5px 0.5px at 40% 50%, rgb(255 255 255 / 60%) 50%, transparent),
+    radial-gradient(circle at 70% 10%, rgb(124 58 237 / 45%), transparent 60%),
+    linear-gradient(#070923, #17184f 60%, #2a2470);
+  color: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 25%),
+    inset 0 0 0 1px rgb(165 180 252 / 25%),
+    0 4px 14px -4px rgb(79 70 229 / 70%);
+  transition: filter 150ms;
+}
+:root.nightly .send-sky:enabled:hover {
+  filter: brightness(1.15);
+}
+:root.nightly:not(.reduce-motion) .night-sky .twinkle {
+  animation: twinkle 4s ease-in-out infinite;
+}
+:root.nightly:not(.reduce-motion) .night-sky .drift {
+  animation: drift 30s ease-in-out infinite alternate;
+}
+@keyframes twinkle {
+  50% {
+    opacity: 0.2;
+  }
+}
+@keyframes drift {
+  to {
+    transform: translateX(16px);
+  }
+}
+
+/* A theme's orb in Settings > Appearance: its own background and sidebar, glowing with its accent
+   and, smaller, its string color, under a sheen. A .scheme-* and .theme-* class beside it set
+   the tokens. */
+.theme-orb {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(160deg, var(--background) 30%, var(--sidebar));
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.theme-orb::before {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  background:
+    radial-gradient(circle at 68% 70%, var(--accent), transparent 40%),
+    radial-gradient(circle at 34% 64%, var(--syntax-string), transparent 24%);
+  filter: blur(6px);
+}
+.theme-orb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at 32% 22%, rgb(255 255 255 / 30%), transparent 38%);
+  box-shadow: inset 0 -8px 14px rgb(0 0 0 / 22%);
 }
 
 /* Tailwind's motion-safe and motion-reduce follow .reduce-motion, which also covers the OS's

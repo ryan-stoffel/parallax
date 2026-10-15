@@ -93,6 +93,7 @@ import { localId, type Host } from "./hosts";
 import { IconPicker } from "./IconPicker";
 import { imageUrl } from "./images";
 import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
+import { NightSky } from "./NightSky";
 import { iconColors, iconLook } from "./projectIcons";
 import { ForkMenu } from "./Fork";
 import { archivePageSize, sidebarPrefs } from "./sidebarPrefs";
@@ -147,7 +148,8 @@ interface SidebarProps {
 /**
  * The left column. Its top row holds the macOS traffic lights, then the toggle at the same
  * spot the main pane shows it while this column is hidden, then the app's mark and name, which
- * open a new thread.
+ * open a new thread. A nightly build paints a sky behind that row and the Search row under it,
+ * as the column's own background (index.css), with stars and clouds (NightSky.tsx).
  */
 export function Sidebar({
   open,
@@ -163,10 +165,12 @@ export function Sidebar({
       aria-label="Sidebar"
       hidden={!open}
       style={{ width }}
-      className="relative flex min-w-0 shrink-0 flex-col border-r border-border bg-sidebar"
+      className="night-sky-host relative flex min-w-0 shrink-0 flex-col border-r border-border bg-sidebar"
     >
+      <NightSky />
       {onResize && <PanelResize side="left" width={width} onResize={onResize} />}
-      <TopBar className="traffic-light-inset">
+      {/* Positioned, so it paints over the sky. */}
+      <TopBar className="traffic-light-inset night-sky-text relative">
         <IconButton
           label="Hide sidebar"
           command="sidebar"
@@ -720,7 +724,7 @@ export function ThreadList({
   return (
     <>
       <div className="flex items-center gap-1 px-2">
-        <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
+        <label className="sky-search flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
           <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
           <input
             type="search"

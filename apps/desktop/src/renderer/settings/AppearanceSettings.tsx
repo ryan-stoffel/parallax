@@ -1,21 +1,22 @@
-import { useId } from "react";
+import { Moon, Plus, Sun, Trash2 } from "lucide-react";
+import { useId, useState } from "react";
 
 import type { ThemePreference } from "../../preload/bridge";
 import { setAppearance, useAppearance, type Appearance } from "../appearance";
 import { behaviorPrefs, setBehaviorPrefs, usageView } from "../prefs";
-import { Segmented } from "../ui";
+import { IconButton, Segmented } from "../ui";
+import { removeExtension, useAddedThemes, type Mode } from "../vscodeThemes";
+import { AddThemeDialog } from "./AddThemeDialog";
 import { PageTitle, Row, Section, Switch } from "./parts";
 import { TypographySettings } from "./TypographySettings";
 
-// The app's two marks and its accent in each mode (index.css).
-const marks = ["#2b5cff", "#ff4a1f"];
-const accents = { light: "#2563eb", dark: "#3b82f6" };
+type ColorTheme = { id: string; name: string; mode: Mode };
 
-// A preview's colors, fixed, so each card shows its mode whatever the app is in.
-const swatches = {
-  light: { bg: "#ffffff", side: "#f5f5f5", line: "#e5e5e5", card: "#ffffff", edge: "#e5e5e5" },
-  dark: { bg: "#0d0d0d", side: "#000000", line: "#2a2a2a", card: "#171717", edge: "#2a2a2a" },
-};
+/** Parallax's own themes, in index.css. */
+const parallaxThemes: ColorTheme[] = [
+  { id: "parallax-light", name: "Parallax Light", mode: "light" },
+  { id: "parallax-dark", name: "Parallax Dark", mode: "dark" },
+];
 
 /** What each usage view shows, for its row's description. */
 const usageDescriptions = {
@@ -25,15 +26,21 @@ const usageDescriptions = {
   off: "No usage in the composer. The Usage page still has it.",
 };
 
-/** A small drawing of the app in `mode`: the sidebar, a few lines, a card, and the composer. */
-function SchemePreview({ mode }: { mode: "light" | "dark" }) {
-  const c = swatches[mode];
-  const bar = (width: string, color = c.line) => (
-    <span className="block h-1.5 rounded-full" style={{ width, background: color }} />
+/**
+ * A small drawing of the app in `theme`'s `mode`: the sidebar, a few lines, a card, and the
+ * composer. It draws with the real tokens, which .scheme-light or .scheme-dark beside the
+ * theme's class set whatever mode the app is in (index.css).
+ */
+function SchemePreview({ mode, theme }: { mode: Mode; theme: string }) {
+  const bar = (width: string) => (
+    <span
+      className="block h-1.5 rounded-full"
+      style={{ width, background: "color-mix(in oklab, var(--foreground) 16%, transparent)" }}
+    />
   );
   return (
-    <span className="flex h-full" style={{ background: c.bg }}>
-      <span className="flex w-1/5 flex-col gap-1.5 p-2" style={{ background: c.side }}>
+    <span className={`scheme-${mode} theme-${theme} flex h-full bg-background`}>
+      <span className="flex w-1/5 flex-col gap-1.5 bg-sidebar p-2">
         {bar("100%")}
         {bar("80%")}
         {bar("90%")}
@@ -44,11 +51,8 @@ function SchemePreview({ mode }: { mode: "light" | "dark" }) {
             {bar("70%")}
             {bar("50%")}
           </span>
-          <span
-            className="flex w-1/3 flex-col gap-1 rounded-md border p-1.5"
-            style={{ background: c.card, borderColor: c.edge }}
-          >
-            {marks.map((m) => (
+          <span className="flex w-1/3 flex-col gap-1 rounded-md border border-border bg-surface p-1.5">
+            {["var(--mark-blue)", "var(--mark-coral)"].map((m) => (
               <span key={m} className="flex items-center gap-1">
                 <span className="size-1 rounded-full" style={{ background: m }} />
                 {bar("70%")}
@@ -56,15 +60,81 @@ function SchemePreview({ mode }: { mode: "light" | "dark" }) {
             ))}
           </span>
         </span>
-        <span
-          className="mt-auto flex items-center justify-between rounded-full border px-2 py-1"
-          style={{ background: c.card, borderColor: c.edge }}
-        >
+        <span className="mt-auto flex items-center justify-between rounded-full border border-border bg-surface px-2 py-1">
           {bar("40%")}
-          <span className="size-2.5 rounded-full" style={{ background: accents[mode] }} />
+          <span className="size-2.5 rounded-full bg-accent" />
         </span>
       </span>
     </span>
+  );
+}
+
+/** The light and dark themes together: light on the left half, over the dark one. */
+function SplitPreview({ light, dark }: { light: string; dark: string }) {
+  return (
+    <>
+      <SchemePreview mode="dark" theme={dark} />
+      <span className="absolute inset-0 [clip-path:inset(0_50%_0_0)]">
+        <SchemePreview mode="light" theme={light} />
+      </span>
+    </>
+  );
+}
+
+/**
+ * A set of themes: an orb for each, in its colors (.theme-orb in index.css), and its name. An orb
+ * picks its theme for its mode, and the picked ones show a ring and a sun or moon.
+ */
+function ThemeCard({
+  name,
+  themes,
+  picked,
+  onPick,
+  onRemove,
+}: {
+  name: string;
+  themes: ColorTheme[];
+  picked: Record<Mode, string>;
+  onPick: (theme: ColorTheme) => void;
+  onRemove?: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-border p-4">
+      <div className="flex flex-1 flex-wrap items-center justify-center gap-3 py-2">
+        {themes.map((t) => {
+          const on = picked[t.mode] === t.id;
+          const Icon = t.mode === "light" ? Sun : Moon;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              title={t.name}
+              aria-label={`${t.name}, for ${t.mode} mode`}
+              aria-pressed={on}
+              onClick={() => onPick(t)}
+              className={`relative size-15 shrink-0 rounded-full p-1 focus-visible:outline-2 focus-visible:outline-ring ${on ? "ring-2 ring-accent" : ""}`}
+            >
+              <span
+                className={`scheme-${t.mode} theme-${t.id} theme-orb block size-full rounded-full`}
+              />
+              {on && (
+                <span className="absolute -right-0.5 -bottom-0.5 grid size-5 place-items-center rounded-full border border-border bg-surface text-foreground">
+                  <Icon aria-hidden className="size-3" />
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex min-h-7 items-center justify-between gap-2">
+        <span className="truncate text-[13px] font-medium">{name}</span>
+        {onRemove && (
+          <IconButton label={`Remove ${name}`} onClick={onRemove}>
+            <Trash2 />
+          </IconButton>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -74,11 +144,12 @@ const schemes: { value: ThemePreference; name: string }[] = [
   { value: "dark", name: "Dark" },
 ];
 
+const preview = "relative block aspect-[16/10] overflow-hidden rounded-lg border border-border";
 const card =
   "flex cursor-pointer flex-col gap-2 rounded-xl border border-border bg-surface p-2 text-center text-[12.5px] text-muted-foreground hover:bg-hover has-checked:border-accent has-checked:text-foreground has-checked:outline-1 has-checked:outline-accent has-focus-visible:outline-2 has-focus-visible:outline-ring";
 
 /**
- * Settings > Appearance: the color scheme and how the interface reads:
+ * Settings > Appearance: the color theme and scheme, and how the interface reads:
  * contrast, motion, the colors for added and removed, and typography.
  */
 export function AppearanceSettings({
@@ -92,6 +163,16 @@ export function AppearanceSettings({
   const composerUsage = usageView(behaviorPrefs.use().composerUsage);
   const set = (change: Partial<Appearance>) => setAppearance(change);
   const scheme = useId();
+  const [adding, setAdding] = useState(false);
+  const added = useAddedThemes();
+  // The picked themes, or Parallax's where a picked one is no longer added.
+  const addedIds = new Set(added.flatMap((e) => e.themes.map((t) => t.id)));
+  const picked = {
+    light: addedIds.has(appearance.lightTheme) ? appearance.lightTheme : "parallax-light",
+    dark: addedIds.has(appearance.darkTheme) ? appearance.darkTheme : "parallax-dark",
+  };
+  const pick = (t: ColorTheme) =>
+    set(t.mode === "light" ? { lightTheme: t.id } : { darkTheme: t.id });
 
   return (
     <>
@@ -108,17 +189,11 @@ export function AppearanceSettings({
                 onChange={() => onThemeChange(s.value)}
                 className="sr-only"
               />
-              <span className="relative block aspect-[16/10] overflow-hidden rounded-lg border border-border">
+              <span className={preview}>
                 {s.value === "system" ? (
-                  <>
-                    <SchemePreview mode="dark" />
-                    {/* Light on the left half, over the dark one. */}
-                    <span className="absolute inset-0 [clip-path:inset(0_50%_0_0)]">
-                      <SchemePreview mode="light" />
-                    </span>
-                  </>
+                  <SplitPreview light={picked.light} dark={picked.dark} />
                 ) : (
-                  <SchemePreview mode={s.value} />
+                  <SchemePreview mode={s.value} theme={picked[s.value]} />
                 )}
               </span>
               {s.name}
@@ -126,6 +201,35 @@ export function AppearanceSettings({
           ))}
         </fieldset>
       </Section>
+
+      <Section
+        title="Themes"
+        action={
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className="flex h-7 items-center gap-1.5 rounded-md border border-border px-2.5 text-[12.5px] font-medium hover:bg-hover"
+          >
+            <Plus aria-hidden className="size-3.5" />
+            Add theme
+          </button>
+        }
+      >
+        <div className="grid grid-cols-3 gap-3 p-3">
+          <ThemeCard name="Parallax" themes={parallaxThemes} picked={picked} onPick={pick} />
+          {added.map((e) => (
+            <ThemeCard
+              key={e.id}
+              name={e.name}
+              themes={e.themes}
+              picked={picked}
+              onPick={pick}
+              onRemove={() => removeExtension(e.id)}
+            />
+          ))}
+        </div>
+      </Section>
+      {adding && <AddThemeDialog onClose={() => setAdding(false)} />}
 
       <Section title="Interface">
         <Row title="Contrast" description="Stronger text and borders. System follows your OS.">

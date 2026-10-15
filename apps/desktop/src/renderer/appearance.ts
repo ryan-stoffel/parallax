@@ -1,8 +1,15 @@
 import { useLayoutEffect } from "react";
 
 import { merged, stored } from "./stored";
+import { themeCss, useAddedThemes } from "./vscodeThemes";
 
 export type Appearance = {
+  /**
+   * The theme for each mode, Parallax's or an added one's id (vscodeThemes.ts); Light, Dark, or
+   * System picks which shows (theme.ts). An id no longer added shows Parallax's.
+   */
+  lightTheme: string;
+  darkTheme: string;
   /** "system" follows the OS's Increase contrast. */
   contrast: "system" | "standard" | "more";
   /** A font family name, or empty for the system's. */
@@ -21,6 +28,8 @@ export type Appearance = {
 };
 
 export const defaults: Appearance = {
+  lightTheme: "parallax-light",
+  darkTheme: "parallax-dark",
   contrast: "system",
   uiFont: "",
   uiSize: 13,
@@ -106,12 +115,14 @@ const family = (name: string) => name.replace(/["';{}\\]/g, "").trim();
 
 /**
  * Paints `appearance` on <html>: the fonts as variables index.css reads, and classes for
- * contrast, motion, and diff colors.
+ * the color theme, contrast, motion, and diff colors.
  */
 export function applyAppearance(appearance: Appearance) {
   const root = document.documentElement;
   const ui = family(appearance.uiFont);
   const code = family(appearance.codeFont);
+  root.classList.remove(...[...root.classList].filter((name) => name.startsWith("theme-")));
+  root.classList.add(`theme-${appearance.lightTheme}`, `theme-${appearance.darkTheme}`);
   if (ui) root.style.setProperty("--ui-font", `"${ui}"`);
   else root.style.removeProperty("--ui-font");
   if (code) root.style.setProperty("--code-font", `"${code}"`);
@@ -131,11 +142,19 @@ export function applyAppearance(appearance: Appearance) {
 }
 
 /**
- * Keeps the saved appearance applied: the page and its zoom. Call once, at the
- * app root.
+ * Keeps the saved appearance applied: the page, its zoom, and the added themes' CSS. Call once,
+ * at the app root.
  */
 export function useAppearanceEffects() {
   const current = useAppearance();
+  const added = useAddedThemes();
+  // After index.css in <head>, so a theme's tokens win over Parallax's.
+  useLayoutEffect(() => {
+    const style = document.createElement("style");
+    style.textContent = themeCss(added);
+    document.head.append(style);
+    return () => style.remove();
+  }, [added]);
   // Layout effect, so the first paint already has the saved appearance.
   useLayoutEffect(() => {
     applyAppearance(current);

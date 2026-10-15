@@ -16,8 +16,8 @@ const token = (name: string) => `--${name.replace(/[A-Z]/g, (c) => `-${c.toLower
 
 test("the colors are the desktop's", () => {
   for (const [colors, selector] of [
-    [light, ":root"],
-    [dark, ":root.dark"],
+    [light, ":root,\n.scheme-light"],
+    [dark, ":root.dark,\n.scheme-dark"],
   ] as const) {
     for (const [name, value] of Object.entries(colors)) {
       const css = new RegExp(`${token(name)}: ([^;]+);`).exec(block(selector))?.[1];
