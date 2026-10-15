@@ -1168,6 +1168,7 @@ export function App() {
           linksPrs && threadRun
             ? {
                 urls: prs.urls,
+                get: prs.get,
                 list: <PullRequestList prs={prs} onOpen={openPr} />,
                 view: (url) => (
                   <PullRequestView

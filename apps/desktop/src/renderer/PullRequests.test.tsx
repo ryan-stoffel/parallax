@@ -487,6 +487,7 @@ test("the side panel opens a pull request's tab, or the list, and hides tabs the
           pullRequest={pullRequest}
           pullRequests={{
             urls,
+            get: () => undefined,
             list: <p>the list</p>,
             view: (u) => <p>view of {u}</p>,
           }}
