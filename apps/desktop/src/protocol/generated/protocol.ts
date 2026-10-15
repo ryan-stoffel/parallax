@@ -4183,6 +4183,10 @@ export type PreviewTab = {
 	 * Whether the agent is recording it.
 	 */
 	recording: boolean,
+	/**
+	 * Whether its viewport has a fixed size, rather than filling the app's panel.
+	 */
+	fixed?: boolean,
 };
 
 /**
@@ -4324,7 +4328,15 @@ export type PreviewInput = { "kind": "control",
 	/**
 	 * The height.
 	 */
-	height: number, } | { "kind": "navigate",
+	height: number, } | { "kind": "fixed",
+	/**
+	 * The width.
+	 */
+	width: number,
+	/**
+	 * The height.
+	 */
+	height: number, } | { "kind": "fill" } | { "kind": "navigate",
 	/**
 	 * The page, as the address bar's text.
 	 */
