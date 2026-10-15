@@ -4,8 +4,8 @@
 //!
 //! A sweep runs at start and every [`SWEEP_PERIOD`]. It looks at each thread whose run isn't
 //! running or waiting and whose linked pull requests are all merged or closed, with at least one
-//! merged. An unarchived thread is archived when the newest merge came after its last message, so
-//! a thread unarchived and messaged again stays out. A settled or archived thread's worktree and
+//! merged. An unarchived thread is archived when the newest merge came after its last message and
+//! its last unarchive, so a thread brought back stays out. A settled or archived thread's worktree and
 //! local branch go too, when the setting is on. The worktree must be on its stored branch or a
 //! merged pull request's head branch, which agents often rename it to, and hold nothing the merge
 //! didn't keep: no uncommitted changes, and a `HEAD` that is on `origin` or is one of a merged
@@ -105,8 +105,7 @@ async fn sweep(daemon: &Arc<Daemon>, stop: &CancellationToken, known: &mut HashM
         let Some(pulls) = pulls.filter(|pulls| merged(pulls)) else {
             continue;
         };
-        let archived = thread.archived
-            || (merged_since(&pulls, thread.last_prompt_at) && archive(daemon, &thread).await);
+        let archived = thread.archived || archive(daemon, thread.id, &pulls).await;
         let Some(worktree) = worktree.filter(|_| archived || thread.settled) else {
             continue;
         };
@@ -169,12 +168,23 @@ async fn read(daemon: &Daemon, run: &Run, known: &mut HashMap<String, Pull>) -> 
     Some(pulls)
 }
 
-/// Archives `thread` the way the app's Archive does, if its run is still idle. Whether it did.
-async fn archive(daemon: &Arc<Daemon>, thread: &Thread) -> bool {
-    if !still_idle(daemon, thread.id).await {
+/// Archives thread `id` the way the app's Archive does, when the newest of its merged `pulls`
+/// came after its last message or unarchive and its run is idle, read again here so a message
+/// sent mid-sweep counts. Whether it did.
+async fn archive(daemon: &Arc<Daemon>, id: Uuid, pulls: &[Pull]) -> bool {
+    let thread = store(daemon, move |db| {
+        let run = db.get_run(id).map_err(|e| store_error(&e))?;
+        let thread = db.get_thread(id).map_err(|e| store_error(&e))?;
+        Ok(thread.filter(|thread| !thread.archived && run.is_some_and(|run| idle(&run))))
+    })
+    .await;
+    let Ok(Some(thread)) = thread else {
+        return false;
+    };
+    if !merged_since(pulls, last_activity(&thread)) {
         return false;
     }
-    let Ok(run_id) = RunId::try_from(thread.id) else {
+    let Ok(run_id) = RunId::try_from(id) else {
         return false;
     };
     let params = ThreadArchiveParams {
@@ -183,14 +193,21 @@ async fn archive(daemon: &Arc<Daemon>, thread: &Thread) -> bool {
     };
     match crate::threads::archive(daemon, params, None).await {
         Ok(_) => {
-            info!(run = %thread.id, "archived a thread whose pull request merged");
+            info!(run = %id, "archived a thread whose pull request merged");
             true
         }
         Err(error) => {
-            warn!(run = %thread.id, error = %error.message, "could not archive a merged thread");
+            warn!(run = %id, error = %error.message, "could not archive a merged thread");
             false
         }
     }
+}
+
+/// When `thread` last took a message or was unarchived.
+fn last_activity(thread: &Thread) -> Timestamp {
+    thread
+        .unarchived_at
+        .map_or(thread.last_prompt_at, |at| at.max(thread.last_prompt_at))
 }
 
 /// The branch to delete with `run`'s `worktree`, when the worktree can go: it is on its own branch
@@ -265,13 +282,13 @@ fn merged(pulls: &[Pull]) -> bool {
             .all(|pull| matches!(pull.state, PrState::Merged | PrState::Closed))
 }
 
-/// Whether the newest merge came after `last_message`, so the thread wasn't messaged since.
-fn merged_since(pulls: &[Pull], last_message: Timestamp) -> bool {
+/// Whether the newest merge came after `last_activity`, so the thread wasn't used since.
+fn merged_since(pulls: &[Pull], last_activity: Timestamp) -> bool {
     pulls
         .iter()
         .filter_map(|pull| pull.merged_at)
         .max()
-        .is_some_and(|at| at > last_message)
+        .is_some_and(|at| at > last_activity)
 }
 
 /// Whether `head` is one of a merged pull request's commits.

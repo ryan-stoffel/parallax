@@ -73,6 +73,7 @@ fn thread_row(title: Option<&str>, settled: bool, archived: bool) -> Thread {
             title: title.map(str::to_owned),
         },
         settled,
+        unarchived_at: None,
     }
 }
 

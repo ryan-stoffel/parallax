@@ -723,6 +723,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 44,
         sql: "ALTER TABLE repos ADD COLUMN space INTEGER NOT NULL DEFAULT 0;",
     },
+    // When a thread was last unarchived (PLX-795), so the merge sweep doesn't archive it again.
+    Migration {
+        version: 45,
+        sql: "ALTER TABLE threads ADD COLUMN unarchived_at TEXT;",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a

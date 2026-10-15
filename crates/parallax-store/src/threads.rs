@@ -49,6 +49,8 @@ pub struct Thread {
     pub fields: ThreadFields,
     /// Whether the user or an agent marked it settled: nothing left to do.
     pub settled: bool,
+    /// When it was last unarchived, which the merge sweep counts as activity (PLX-795).
+    pub unarchived_at: Option<Timestamp>,
 }
 
 /// The run and turn a thread was forked from (decision record 0041).
@@ -84,7 +86,7 @@ const REPO_COLUMNS: &str = "id, name, path, scratch, created_at, \
 const THREAD_COLUMNS: &str = "id, repo_id, archived, created_at, seen_at, snoozed_until, \
     COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id), created_at) \
     AS last_prompt_at, (SELECT parent FROM runs WHERE runs.id = threads.id), forked_from_run, \
-    forked_from_turn, title, settled";
+    forked_from_turn, title, settled, unarchived_at";
 
 /// A repo entry's columns as TEXT, before the fallible conversion to [`Repo`].
 type RawRepo = (
@@ -138,6 +140,7 @@ struct RawThread {
     forked_from_turn: Option<String>,
     title: Option<String>,
     settled: bool,
+    unarchived_at: Option<String>,
 }
 
 fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<RawThread> {
@@ -154,6 +157,7 @@ fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<RawThread> {
         forked_from_turn: row.get(9)?,
         title: row.get(10)?,
         settled: row.get(11)?,
+        unarchived_at: row.get(12)?,
     })
 }
 
@@ -181,6 +185,11 @@ fn into_thread(raw: RawThread) -> Result<Thread, StoreError> {
             title: raw.title,
         },
         settled: raw.settled,
+        unarchived_at: raw
+            .unarchived_at
+            .as_deref()
+            .map(timestamp::parse)
+            .transpose()?,
     })
 }
 
@@ -445,15 +454,16 @@ impl Store {
         Ok(())
     }
 
-    /// Archives thread `id` or brings it back, and returns it.
+    /// Archives thread `id` or brings it back, recording when it came back, and returns it.
     ///
     /// # Errors
     ///
     /// [`StoreError::NotFound`] if no thread has `id`, or a database error.
     pub fn set_thread_archived(&self, id: Uuid, archived: bool) -> Result<Thread, StoreError> {
         let changed = self.conn.execute(
-            "UPDATE threads SET archived = ?2 WHERE id = ?1",
-            params![id.to_string(), archived],
+            "UPDATE threads SET archived = ?2, \
+             unarchived_at = CASE WHEN ?2 THEN unarchived_at ELSE ?3 END WHERE id = ?1",
+            params![id.to_string(), archived, timestamp::now()],
         )?;
         if changed == 0 {
             return Err(StoreError::NotFound { id });
