@@ -367,6 +367,8 @@ export function ThreadList({
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string>();
   const [actionError, setActionError] = useState<string>();
+  // Bumped when the last open thread is archived, to burst confetti from the search bar.
+  const [confetti, setConfetti] = useState(0);
   const [query, setQuery] = useState("");
   const [chosen, setFilterState] = useState<RepoFilter>(
     () => (readStored(filterKey) as RepoFilter | null) ?? "all",
@@ -589,7 +591,14 @@ export function ThreadList({
         snoozable={"threadAttention" in view.capabilities}
         autoResumable={"autoResume" in view.capabilities}
         onOpen={() => openItem(item)}
-        onArchive={async () => setActionError(await view.archive(t.id, !t.archived))}
+        onArchive={async () => {
+          const error = await view.archive(t.id, !t.archived);
+          setActionError(error);
+          const lastOpen = items.every(
+            (i) => i.kind !== "thread" || i.thread.archived || i.key === item.key,
+          );
+          if (!error && !t.archived && lastOpen) setConfetti((n) => n + 1);
+        }}
         onSnooze={async (until) =>
           setActionError(await view.update(t.id, { snoozedUntil: until.toISOString() }))
         }
@@ -701,7 +710,7 @@ export function ThreadList({
   return (
     <>
       <div className="flex items-center gap-1 px-2">
-        <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
+        <label className="relative flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
           <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
           <input
             type="search"
@@ -712,6 +721,7 @@ export function ThreadList({
             onKeyDown={(e) => e.key === "Escape" && setQuery("")}
             className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
           />
+          {confetti > 0 && <Confetti key={confetti} onDone={() => setConfetti(0)} />}
         </label>
         <RepoFilterMenu hosts={hosts} filter={filter} onFilter={setFilter} many={many} />
         <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
@@ -833,6 +843,41 @@ export function ThreadList({
         />
       </div>
     </>
+  );
+}
+
+const confettiColors = [
+  "var(--project-red)",
+  "var(--project-yellow)",
+  "var(--project-green)",
+  "var(--project-sky)",
+  "var(--project-violet)",
+  "var(--project-pink)",
+];
+
+/** A small burst of confetti from the search bar's middle, for archiving the last open thread. */
+function Confetti({ onDone }: { onDone: () => void }) {
+  const [pieces] = useState(() =>
+    Array.from({ length: 24 }, (_, i) => ({
+      "--x": `${Math.round((Math.random() - 0.5) * 220)}px`,
+      "--y": `${Math.round(200 + Math.random() * 160)}px`,
+      "--spin": `${Math.round((Math.random() - 0.5) * 900)}deg`,
+      animationDelay: `${Math.round(Math.random() * 120)}ms`,
+      background: confettiColors[i % confettiColors.length],
+    })),
+  );
+  // Once, on mount: the list rerenders often, and each render passes a new onDone.
+  useEffect(() => {
+    const timer = setTimeout(onDone, 2000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <span aria-hidden className="confetti">
+      {pieces.map((style, i) => (
+        <span key={i} style={style as CSSProperties} />
+      ))}
+    </span>
   );
 }
 
