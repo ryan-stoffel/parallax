@@ -35,10 +35,11 @@ import { linuxPackages } from "./scripts.mjs";
 const REPO = "https://github.com/ryan-stoffel/parallax";
 
 /**
- * Where plxd may be, in the desktop app's `LOCATE_PLXD` order: `~/.parallax-plxd`, where the app
- * installs it on an SSH host; inside the app on macOS; `~/.local/bin`, where plx-connect puts it,
- * and the app's copy in `~/.local/share/parallax/app` on Linux (`command.ts`); and the app's
- * `resources` folder under `%LOCALAPPDATA%\Programs` on Windows. PATH comes after these.
+ * Where plxd may be, in the desktop app's `LOCATE_PLXD` order: `~/.parallax-plxd`
+ * (`%USERPROFILE%\.parallax-plxd` on Windows), where plx-connect and the app's SSH install put it;
+ * inside the app on macOS; `~/.local/bin` and the app's copy in `~/.local/share/parallax/app` on
+ * Linux (`command.ts`); and the app's `resources` folder under `%LOCALAPPDATA%\Programs` on
+ * Windows. PATH comes after these.
  * @param {NodeJS.Platform} platform
  * @param {string} home
  * @param {NodeJS.ProcessEnv} env
@@ -60,12 +61,13 @@ export function plxdCandidates(platform, home, env) {
       path.join(data, "parallax", "app", "plxd"),
     ];
   }
-  if (!env.LOCALAPPDATA) return [];
+  const own = path.join(home, ".parallax-plxd", "plxd.exe");
+  if (!env.LOCALAPPDATA) return [own];
   const programs = path.join(env.LOCALAPPDATA, "Programs");
   try {
-    return readdirSync(programs).map((dir) => path.join(programs, dir, "resources", "plxd.exe"));
+    return [own, ...readdirSync(programs).map((dir) => path.join(programs, dir, "resources", "plxd.exe"))];
   } catch {
-    return [];
+    return [own];
   }
 }
 

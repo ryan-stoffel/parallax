@@ -33,6 +33,7 @@ test("plxd is looked for where the app and plx-connect put it", () => {
     path.join("/home/me", ".local", "bin", "plxd"),
     path.join("/home/me", ".local", "share", "parallax", "app", "plxd"),
   ]);
+  assert.deepEqual(plxdCandidates("win32", "/Users/me", {}), [path.join("/Users/me", ".parallax-plxd", "plxd.exe")]);
   assert.equal(plxdCandidates("linux", "/home/me", { XDG_DATA_HOME: "/data" })[2], path.join("/data", "parallax", "app", "plxd"));
 });
 
