@@ -1,7 +1,8 @@
 import { Package } from "lucide-react";
 import type { ReactNode } from "react";
 
-/** A mention in a message, as the composer draws one: an icon and a name, kept whole. */
+/** A mention in a message, as the composer draws one: an icon and a name, kept whole. Its box is
+ * inline code's (index.css), in ems, so it scales with the text around it. */
 export function Chip({
   icon,
   tone = "skill",
@@ -17,7 +18,7 @@ export function Chip({
     <span
       contentEditable={false}
       title={title}
-      className={`inline-flex items-center gap-1 rounded-md border px-1.5 align-baseline text-[0.93em] leading-normal whitespace-nowrap text-foreground [&_svg]:size-3.5 [&_svg]:shrink-0 ${
+      className={`mx-[0.1em] inline-flex items-center gap-[0.3em] rounded-[5px] border px-[0.4em] py-[0.1em] align-baseline text-[0.93em] leading-tight whitespace-nowrap text-foreground [&_img]:size-[1.05em] [&_img]:shrink-0 [&_svg]:size-[1.05em] [&_svg]:shrink-0 ${
         tone === "file"
           ? "border-accent/30 bg-accent/10"
           : "border-project-violet/30 bg-project-violet/10"
@@ -94,7 +95,7 @@ function fileIcon(path: string): ReactNode {
   const name = path.slice(path.lastIndexOf("/") + 1);
   const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
   const look = name === "Dockerfile" ? "docker" : (byExtension[ext] ?? "file");
-  return <img src={icon(look)} alt="" className="size-3.5 shrink-0" />;
+  return <img src={icon(look)} alt="" />;
 }
 
 /** A `/skill` or `@path` token as a chip: the skill's name, or the file's name with its path on
