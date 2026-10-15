@@ -38,6 +38,7 @@ export async function launch(
     PLXD_PATH: plxd,
     PLXD_DATA_DIR: dataDir,
     PLXD_FAKE_BACKEND: path.resolve(import.meta.dirname, script),
+    PLX_SKIP_ONBOARDING: "1",
   };
   if (bin) {
     // Windows spells it Path, and a second PATH key would leave which one wins to chance.

@@ -150,6 +150,11 @@ export interface ParallaxBridge {
    * `pnpm dev`, from a checkout (PLX-204).
    */
   updatable: boolean;
+  /**
+   * Whether this launch is a fresh install's, which onboards (PLX-806): main found no earlier
+   * localStorage or plxd database. Never on the web, or with PLX_SKIP_ONBOARDING set.
+   */
+  firstRun: boolean;
   /** The OS's locale, such as "de-DE", for `src/renderer/locale.ts`. Undefined when invalid. */
   locale: string | undefined;
   /**

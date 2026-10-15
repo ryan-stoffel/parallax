@@ -10,6 +10,7 @@ import {
   type HostResponse,
   type LanHost,
   type ParallaxBridge,
+  type Profile,
   type RendererMethod,
   type RpcError,
   type SubscribeParams,
@@ -1123,6 +1124,17 @@ const handlers: { [M in Method]?: Handler<M> } = {
   "providers/save": (p) => {
     const i = db.providers.findIndex((x) => x.instance.id === p.instance.id);
     if (i >= 0) db.providers[i] = { ...db.providers[i]!, instance: p.instance };
+    // A new one: OpenCode is on this Mac, the rest aren't.
+    else
+      db.providers.push({
+        instance: p.instance,
+        installed: p.instance.kind === "opencode",
+        ...(p.instance.kind === "opencode" && { version: "1.4.2" }),
+        models: [],
+        permissions: [],
+        efforts: false,
+        coordinator: false,
+      });
     return { providers: db.providers, checkedAt: now() };
   },
   "providers/remove": (p) => {
@@ -1349,6 +1361,21 @@ const tailnet: (TailnetDevice & {
   },
 ];
 const connectSetUp = location.hash.includes("connect");
+// `#onboarding` opens first-launch onboarding (PLX-806), signed out, with Cursor signed out too.
+const onboarding = location.hash.includes("onboarding");
+if (onboarding)
+  db.providers = db.providers.map((x) =>
+    x.instance.kind === "cursor"
+      ? { ...x, installed: true, version: "1.0.35", signedIn: false }
+      : x,
+  );
+const profileListeners = new Set<(profile: Profile | null) => void>();
+const profile: Profile = {
+  name: "Ryan Stoffel",
+  firstName: "Ryan",
+  lastName: "Stoffel",
+  email: "ryan@example.com",
+};
 const connect: ConnectState = connectSetUp
   ? { installed: true, on: true, icon: "laptop", channel: "nightly" }
   : { installed: false, on: false, icon: "laptop", channel: "nightly" };
@@ -1582,6 +1609,7 @@ export const mockBridge: ParallaxBridge = {
   cloneRepo: (_slug, dest) => delay({ path: expand(dest) }, 1200),
   copyPicture: () => delay(undefined),
   updatable: false,
+  firstRun: onboarding,
   locale: undefined,
   update: () => delay("Up to date"),
   onUpdateState: (listener) => {
@@ -1869,15 +1897,16 @@ export const mockBridge: ParallaxBridge = {
   removeCommand: () => delay(null),
 
   onProfile: (listener) => {
-    listener({
-      name: "Ryan Stoffel",
-      firstName: "Ryan",
-      lastName: "Stoffel",
-      email: "ryan@example.com",
-    });
-    return noop;
+    profileListeners.add(listener);
+    listener(onboarding ? null : profile);
+    return () => profileListeners.delete(listener);
   },
-  signIn: () => delay(undefined),
+  // The browser's sign-in, done a moment later.
+  signIn: async () => {
+    await delay(undefined, 1500);
+    for (const listener of profileListeners) listener(profile);
+    return undefined;
+  },
   editProfile: () => delay(undefined),
   signOut: () => delay(undefined),
 

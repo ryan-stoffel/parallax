@@ -67,6 +67,9 @@ function notifySignIns(hostId: string, before: ProvidersListResult, after: Provi
   }
 }
 
+/** `hostId`'s last list, or undefined before its first. */
+export const listedProviders = (hostId: string) => lists.get(hostId);
+
 /**
  * Lists `hostId`'s instances again, probing each with `refresh`. A load already on its way answers
  * one without `refresh`. Resolves to an error for people.
