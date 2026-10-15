@@ -44,7 +44,7 @@ vi.mock("./windows", () => ({
   broadcast: (_channel: string, profile: Profile | null) => published.push(profile),
 }));
 
-const { accountPortal, frontendApi, startAccount } = await import("./account");
+const { accountPortal, frontendApi, passwordStore, startAccount } = await import("./account");
 
 // A mocked Clerk instance at https://clerk.parallax.test: the OAuth endpoints the app calls, as
 // Clerk documents them, with a public client that must use PKCE (S256).
@@ -286,4 +286,16 @@ test("Linux's basic_text backend, a hardcoded password, keeps the session in mem
     Object.defineProperty(process, "platform", { value: platform });
     electron.backend = "gnome_libsecret";
   }
+});
+
+test("Linux asks for the Secret Service where Chromium wouldn't find a keychain itself", async () => {
+  const on = (env: NodeJS.ProcessEnv, hasSwitch = false) => passwordStore("linux", env, hasSwitch);
+  expect(on({ XDG_CURRENT_DESKTOP: "Hyprland" })).toBe("gnome-libsecret");
+  expect(on({})).toBe("gnome-libsecret");
+  expect(on({ XDG_CURRENT_DESKTOP: "GNOME" })).toBe("gnome-libsecret");
+  expect(on({ XDG_CURRENT_DESKTOP: "KDE" })).toBeUndefined();
+  expect(on({ DESKTOP_SESSION: "plasma" })).toBeUndefined();
+  expect(on({ KDE_FULL_SESSION: "true" })).toBeUndefined();
+  expect(on({ XDG_CURRENT_DESKTOP: "Hyprland" }, true)).toBeUndefined();
+  expect(passwordStore("darwin", {}, false)).toBeUndefined();
 });

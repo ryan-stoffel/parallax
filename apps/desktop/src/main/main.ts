@@ -24,7 +24,7 @@ import {
   type UpdateState,
   validLocale,
 } from "../preload/bridge";
-import { startAccount } from "./account";
+import { passwordStore, startAccount } from "./account";
 import {
   commandSource,
   commandState,
@@ -71,6 +71,13 @@ if (!app.commandLine.hasSwitch("user-data-dir")) {
   app.setPath("userData", appDataDir(homedir(), app.getPath("userData")));
 }
 app.setName(isNightly(app.getVersion()) ? "Parallax (Nightly)" : "Parallax");
+// Before `ready`, when Chromium picks the keychain safeStorage uses.
+const store = passwordStore(
+  process.platform,
+  process.env,
+  app.commandLine.hasSwitch("password-store"),
+);
+if (store) app.commandLine.appendSwitch("password-store", store);
 
 // A fresh install, which onboards (PLX-806): no localStorage in userData yet, and no local plxd
 // database. PLX_SKIP_ONBOARDING, which the end-to-end tests set, says it isn't one.
