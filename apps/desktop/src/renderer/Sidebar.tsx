@@ -367,7 +367,7 @@ export function ThreadList({
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string>();
   const [actionError, setActionError] = useState<string>();
-  // Bumped when the last open thread is archived, to drop confetti from just below the search bar.
+  // Bumped when the last open thread is archived, to pop confetti beside the empty list's note.
   const [confetti, setConfetti] = useState(0);
   const [query, setQuery] = useState("");
   const [chosen, setFilterState] = useState<RepoFilter>(
@@ -709,8 +709,7 @@ export function ThreadList({
 
   return (
     <>
-      <div className="relative flex items-center gap-1 px-2">
-        {confetti > 0 && <Confetti key={confetti} onDone={() => setConfetti(0)} />}
+      <div className="flex items-center gap-1 px-2">
         <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
           <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
           <input
@@ -790,7 +789,10 @@ export function ThreadList({
           </ul>
           {draftRows.length === 0 && topThreads.length === 0 && workingTops.length === 0 && (
             <p className={emptyNote}>
-              {q || filter !== "all" ? "Nothing matches" : "No threads yet"}
+              <span className="relative">
+                {q || filter !== "all" ? "Nothing matches" : "No threads yet"}
+                {confetti > 0 && <Confetti key={confetti} onDone={() => setConfetti(0)} />}
+              </span>
             </p>
           )}
         </div>
@@ -846,49 +848,25 @@ export function ThreadList({
   );
 }
 
-const confettiColors = [
-  "var(--project-red)",
-  "var(--project-yellow)",
-  "var(--project-green)",
-  "var(--project-sky)",
-  "var(--project-violet)",
-  "var(--project-pink)",
-];
+// Twelve rays, evenly spaced, alternating near and far, cycling the Project colors.
+const confettiRays = Array.from({ length: 12 }, (_, i) => ({
+  "--angle": `${i * 30}deg`,
+  "--distance": i % 2 ? "16px" : "24px",
+  background: ["var(--project-pink)", "var(--project-yellow)", "var(--project-sky)"][i % 3],
+})) as CSSProperties[];
 
-/**
- * Confetti that drifts down from just below the search bar across the sidebar, for archiving the last
- * open thread. Each piece falls at its own pace, swaying and flipping like paper, and fades out.
- */
+/** One pop of confetti rays just right of its parent, for archiving the last open thread. */
 function Confetti({ onDone }: { onDone: () => void }) {
-  const [pieces] = useState(() =>
-    Array.from({ length: 36 }, (_, i) => {
-      const r = Math.random;
-      return {
-        left: `${Math.round(4 + r() * 92)}%`,
-        width: `${Math.round(4 + r() * 4)}px`,
-        height: `${Math.round(3 + r() * 3)}px`,
-        animationDuration: `${Math.round(2200 + r() * 1200)}ms`,
-        animationDelay: `${Math.round(r() * 700)}ms`,
-        "--drift": `${Math.round((r() - 0.5) * 60)}px`,
-        "--sway": `${Math.round(500 + r() * 500)}ms`,
-        "--flip": `${Math.round(500 + r() * 700)}ms`,
-        "--axis": `1 ${(r() - 0.5).toFixed(2)} ${(r() - 0.5).toFixed(2)}`,
-        "--color": confettiColors[i % confettiColors.length],
-      };
-    }),
-  );
   // Once, on mount: the list rerenders often, and each render passes a new onDone.
   useEffect(() => {
-    const timer = setTimeout(onDone, 4500);
+    const timer = setTimeout(onDone, 1000);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
     <span aria-hidden className="confetti">
-      {pieces.map((style, i) => (
-        <span key={i} style={style as CSSProperties}>
-          <span />
-        </span>
+      {confettiRays.map((style, i) => (
+        <span key={i} style={style} />
       ))}
     </span>
   );
