@@ -1,6 +1,6 @@
 import { app, ipcMain, powerMonitor, type WebContents } from "electron";
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
@@ -39,7 +39,7 @@ import {
   type SavedDevice,
 } from "./connect";
 import type { Account } from "./account";
-import { Connection, LOCATE_PLXD, sshCommand } from "./connection";
+import { backoffMs, Connection, LOCATE_PLXD, sshCommand } from "./connection";
 import { HostUpdater } from "./hostUpdate";
 import { installPlxd } from "./installPlxd";
 import {
@@ -65,15 +65,7 @@ import {
   type Command,
   type SshTarget,
 } from "./terminal";
-import {
-  dataDir,
-  findPlxd,
-  movesServiceBack,
-  plistProgram,
-  plxdVersion,
-  replaceServe,
-  serviceStep,
-} from "./plxd";
+import { dataDir, findPlxd, plxdVersion, refreshCopy, replaceServe, serviceStep } from "./plxd";
 import { isNightly } from "./updater";
 import { broadcast, perWindow } from "./windows";
 
@@ -123,7 +115,6 @@ const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
 export function startHosts(signedIn: Account | undefined, target: () => string): void {
   account = signedIn;
   targetVersion = target;
-  initialServiceCheck = repointService();
   hostUpdater = new HostUpdater({
     packaged: app.isPackaged && !process.env["PLXD_PATH"],
     version: app.getVersion(),
@@ -156,6 +147,8 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
     const plxd = localPlxd();
     return plxd === undefined ? undefined : [plxd, "attach"];
   });
+  // Connect on or off, so a `plxd connect on|off` run outside the app is followed too.
+  setInterval(() => void refreshConnect(), DISCOVERY_MS);
   try {
     settings = readSettings(settingsFile());
   } catch (error) {
@@ -569,60 +562,62 @@ const localPlxd = () =>
   });
 
 /**
- * How many bundled serves this launch has replaced: at most twice, so a re-attach to a serve
- * still shutting down gets one more try. External daemons do not use up these attempts.
+ * How many times this launch has replaced the local serve, or failed to: at most twice, so a
+ * re-attach to a serve still shutting down gets one more try. After that the app keeps whatever
+ * runs, and `keepServing` tries again later. External daemons do not use up these attempts.
  */
 let serveChecks = 0;
-let initialServiceCheck: Promise<void> | undefined;
 
 /**
  * After an update, the local `plxd serve` may still be the previous app's, since attach reuses a
- * running one (0010). A packaged app replaces it when its version differs from the bundled
- * plxd's, older or newer (a move back to Standard), and reconnects, so attach starts the bundled
- * one. Only a serve a packaged Parallax started is replaced (`replaceServe`), never a dev checkout's or
- * a plxd on PATH. Not on Windows, whose installer stops every process running from the app's
- * folder, `plxd.exe` included.
+ * running one (0010). A packaged app replaces it when its version differs from the one it runs,
+ * older or newer (a move back to Standard), and reconnects (`replaceServe`). With plxd's login
+ * service installed, that's the copy's: the copy is refreshed and the service restarted on it once
+ * no agents are running. Otherwise it's the bundled plxd's, which attach then starts. Only a serve a
+ * packaged Parallax started is replaced, never a dev checkout's or a plxd on PATH. Not on Windows,
+ * whose installer stops every process running from the app's folder, `plxd.exe` included.
  */
-async function replaceOtherServe(running: string): Promise<boolean> {
-  if (!app.isPackaged || process.env["PLXD_PATH"] || process.platform === "win32") return false;
-  await initialServiceCheck;
-  const plxd = localPlxd();
-  // A PATH fallback is externally managed even in a packaged app.
-  if (plxd !== path.join(process.resourcesPath, "plxd")) return false;
-  const bundled = await plxdVersion(plxd);
-  if (bundled !== undefined && bundled !== running && serveChecks >= 2)
-    throw new Error("the local daemon still isn't running the bundled version. Restart Parallax.");
-  const service = servicePlxd();
-  const { stopped, why } = await replaceServe(
-    dataDir(process.env, process.platform, homedir()),
-    running,
-    bundled,
-    undefined,
-    service
-      ? {
-          status: async () => {
-            const { stdout } = await runPlxd(service, "service", "status");
-            const file = /^file: (.*)$/m.exec(stdout)?.[1];
-            const pid = /^pid: (\d+)$/m.exec(stdout)?.[1];
-            const program =
-              file && /^installed: true$/m.test(stdout)
-                ? plistProgram(await readFile(file, "utf8"))
-                : undefined;
-            return {
-              ...(program && { program }),
-              ...(pid && { pid: Number(pid) }),
-              ready: /^answers initialize: true$/m.test(stdout),
-            };
-          },
-          replace: async () => {
-            await runPlxd(service, "service", "install", "--replace");
-          },
-        }
-      : undefined,
-  );
-  console.log(`parallax: ${why}`);
-  if (stopped) serveChecks++;
-  return stopped;
+async function replaceOtherServe(
+  running: string,
+  runningAgents?: () => Promise<number | undefined>,
+): Promise<boolean> {
+  const plxd = process.platform === "win32" ? undefined : bundledPlxd();
+  if (!plxd) return false;
+  try {
+    const installed = /^installed: true$/m.test((await serviceStatus(plxd)) ?? "");
+    const copy = installed ? await refreshCopy(plxd, homedir()) : undefined;
+    const wanted = copy ? copy.version : await plxdVersion(plxd);
+    if (wanted !== undefined && wanted !== running && serveChecks >= 2) {
+      console.warn(`parallax: kept plxd serve ${running}, not ${wanted}, after two tries`);
+      return false;
+    }
+    const { stopped, why } = await replaceServe(
+      dataDir(process.env, process.platform, homedir()),
+      running,
+      wanted,
+      undefined,
+      copy && {
+        status: async () => {
+          const status = (await serviceStatus(plxd)) ?? "";
+          const pid = /^pid: (\d+)$/m.exec(status)?.[1];
+          return {
+            ...(pid && { pid: Number(pid) }),
+            ready: /^answers initialize: true$/m.test(status),
+          };
+        },
+        replace: async () => {
+          await runPlxd(copy.plxd, "service", "install", "--replace");
+        },
+      },
+      runningAgents,
+    );
+    console.log(`parallax: ${why}`);
+    if (stopped) serveChecks++;
+    return stopped;
+  } catch (error) {
+    serveChecks++;
+    throw error;
+  }
 }
 
 /**
@@ -671,8 +666,9 @@ function addConnection(
       hostUpdater?.onState(hostId, state);
       if (state.status !== "connected") return;
       if (hostId === "local") {
+        // A new local plxd, such as after `host/update` or a service uninstall, is checked again.
+        if (serviceState === "done") serviceState = "check";
         void refreshConnect();
-        void repointService();
       } else if (hostId.startsWith("tailnet:")) void readLook(hostId);
     },
   });
@@ -953,7 +949,6 @@ async function pairLan(target: unknown, code: unknown): Promise<string | undefin
 let connectOn: boolean | undefined;
 /** This computer's icon, from its plxd, when the user picked one. */
 let localIcon: DeviceIcon | undefined;
-let discovery: NodeJS.Timeout | undefined;
 const DISCOVERY_MS = 15_000;
 
 /** plx-connect in this build: package-app's copy in the resources, or a dev build's repo's. */
@@ -1005,136 +1000,141 @@ function keepDevices(devices: SavedDevice[]): void {
   if (saveSettings({ ...settings, devices })) settings = { ...settings, devices };
 }
 
-/** Reads the local plxd's `connect` and this computer's icon, then follows them. */
+/**
+ * Reads the local plxd's `connect` and this computer's icon, then follows them, at each local
+ * connect and every 15 s. Only an answer counts: an error or a timeout keeps the devices.
+ */
 async function refreshConnect(): Promise<void> {
   const answer = await connections.get("local")?.request("host/settings/get", {});
-  const result = answer && "result" in answer ? answer.result : undefined;
-  followConnect(result?.connect, result?.deviceIcon);
+  if (answer && "result" in answer) followConnect(answer.result.connect, answer.result.deviceIcon);
 }
 
 /** Connects to the devices and looks for more while `on`; drops their connections otherwise. */
 function followConnect(on: boolean | undefined, icon?: string): void {
+  const look = isDeviceIcon(icon) ? icon : undefined;
+  const changed = on !== connectOn || look !== localIcon;
   connectOn = on;
-  localIcon = isDeviceIcon(icon) ? icon : undefined;
+  localIcon = look;
   if (on) {
     for (const device of savedDevices()) addDeviceConnection(device);
-    if (!discovery) {
-      discovery = setInterval(() => void discover(), DISCOVERY_MS);
-      void discover();
-    }
+    void discover();
   } else {
-    clearInterval(discovery);
-    discovery = undefined;
     for (const [id, each] of connections) {
       if (!id.startsWith("tailnet:")) continue;
       each.dispose();
       connections.delete(id);
     }
   }
+  if (!changed) return;
   broadcast("parallax:connect", connectState());
   broadcast("parallax:devices", deviceHosts());
 }
 
 /**
- * Where `keepServing` is: `installed` after this launch's `install --replace`, until a discovery
- * confirms it; `busy` while a step runs; `done` once the service runs plxd; `failed` until the
- * next launch.
+ * Where `keepServing` is: `check` until the service runs the copy; `busy` while a step runs;
+ * `installed` after an `install --replace`, until a check confirms it; `done` until the local plxd
+ * connects again.
  */
-let serviceState: "unknown" | "busy" | "installed" | "done" | "failed" = "unknown";
+type ServiceState = "check" | "busy" | "installed" | "done";
+let serviceState: ServiceState = "check";
+/** `keepServing`'s failures in a row, and when it may try again. */
+let serviceFailures = 0;
+let serviceRetryAt = 0;
 
 /** Runs the local plxd with `args`, for its `service` commands. */
 const runPlxd = (plxd: string, ...args: string[]) =>
   promisify(execFile)(plxd, args, { timeout: 60_000 });
 
 /**
- * The local plxd for a packaged Mac app's login service, or undefined. A translocated app runs
- * from a random path that's gone once it quits, so a service can't point at it.
+ * The packaged app's own plxd, which its copy comes from. Undefined in a dev build, under
+ * `PLXD_PATH`, and for a plxd from PATH, which is externally managed even in a packaged app.
  */
-function servicePlxd(): string | undefined {
-  if (!app.isPackaged || process.platform !== "darwin" || process.env["PLXD_PATH"])
-    return undefined;
+function bundledPlxd(): string | undefined {
+  if (!app.isPackaged || process.env["PLXD_PATH"]) return undefined;
   const plxd = localPlxd();
-  return plxd === path.join(process.resourcesPath, "plxd") && !plxd.includes("/AppTranslocation/")
-    ? plxd
-    : undefined;
+  const name = process.platform === "win32" ? "plxd.exe" : "plxd";
+  return plxd === path.join(process.resourcesPath, name) ? plxd : undefined;
+}
+
+/** `plxd service status`'s output, or undefined where plxd has none (Windows until PLX-576). */
+async function serviceStatus(plxd: string): Promise<string | undefined> {
+  try {
+    return (await runPlxd(plxd, "service", "status")).stdout;
+  } catch (error) {
+    if (/unrecognized subcommand/.test(String((error as { stderr?: unknown }).stderr)))
+      return undefined;
+    throw error;
+  }
 }
 
 /**
- * While Connect is on, hands a packaged Mac app's local plxd over to its LaunchAgent (PLX-631).
- * Until then plxd is the app's child: macOS lists Parallax as running in the background after it
- * quits, and nothing starts plxd after a restart, so other computers can't reach it. Runs at every
- * discovery: `serviceStep` decides, installing with `--replace` only when the last `host/health`
- * said no agents were running (one could start in the moment before `serve` stops). The next
- * discovery confirms the service runs plxd; the connection reconnects through it by itself.
- * Linux's AppImage runs plxd from a temporary mount a service can't point at, so plx-connect
- * installs it there.
+ * While Connect is on, keeps this computer's plxd under its login service (0072), so other
+ * computers reach it after the app quits and after a restart. Runs at every discovery: refreshes
+ * the copy (`refreshCopy`), then `serviceStep` decides, running the copy's `install --replace`
+ * only when `host/health` just said no agents were running (one could start in the moment before
+ * `serve` stops). The next check confirms the service runs the copy; the connection reconnects
+ * through it by itself. A failed step is tried again at a later discovery, backing off to once
+ * every 5 minutes.
  */
 async function keepServing(): Promise<void> {
-  const plxd = servicePlxd();
-  if (!plxd || (serviceState !== "unknown" && serviceState !== "installed")) return;
+  const plxd = bundledPlxd();
+  if (!plxd || serviceState === "busy" || serviceState === "done") return;
+  if (Date.now() < serviceRetryAt) return;
   const installed = serviceState === "installed";
   serviceState = "busy";
+  let next: ServiceState = "check";
   try {
-    const { stdout } = await runPlxd(plxd, "service", "status");
-    const health = await connections.get("local")?.request("host/health", {});
-    const agents = health && "result" in health ? health.result.runningAgents : undefined;
-    const step = serviceStep(stdout, agents, installed);
-    if (step === "install") {
-      await runPlxd(plxd, "service", "install", "--replace");
-      serviceState = "installed";
+    const status = await serviceStatus(plxd);
+    if (status === undefined) {
+      next = "done";
       return;
     }
-    if (step === "failed") console.warn("parallax: plxd's login service isn't running it:", stdout);
-    serviceState = step === "wait" ? "unknown" : step;
+    const copy = await refreshCopy(plxd, homedir());
+    const local = connections.get("local")?.state;
+    const file = /^file: (.*)$/m.exec(status)?.[1];
+    // ponytail: the service file naming the copy's path, unescaped, is enough for a home folder
+    // without `&`, `%`, `$`, or quotes. Parse each OS's file if one has them.
+    const runsCopy =
+      local?.status === "connected" &&
+      local.plxd === copy.version &&
+      file !== undefined &&
+      (await readFile(file, "utf8").catch(() => "")).includes(copy.plxd);
+    const health = await connections.get("local")?.request("host/health", {});
+    const agents = health && "result" in health ? health.result.runningAgents : undefined;
+    const step = serviceStep(status, runsCopy, agents, installed);
+    if (step === "failed")
+      throw new Error(`it still isn't running ${copy.plxd} ${copy.version}:\n${status}`);
+    if (step === "install") {
+      await runPlxd(copy.plxd, "service", "install", "--replace");
+      next = "installed";
+    } else if (step === "done") {
+      serviceFailures = 0;
+      next = "done";
+    }
   } catch (error) {
-    console.warn("parallax: couldn't hand plxd over to its login service:", error);
-    serviceState = "failed";
+    const wait = backoffMs(serviceFailures++, 5 * 60_000);
+    serviceRetryAt = Date.now() + wait;
+    console.warn(
+      `parallax: couldn't keep plxd under its login service, trying again in ${wait / 1000} s at the earliest:`,
+      error,
+    );
+  } finally {
+    serviceState = next;
   }
 }
 
 /**
- * Points plxd's LaunchAgent at this app's plxd, at launch and on each local connect. A LaunchAgent
- * left by a Parallax that has since moved or been deleted runs a plxd that's gone: launchd keeps
- * failing to start it, and every `attach` waits out its whole deadline on `kickstart` before
- * starting a `serve` itself. One an SSH client's update (PLX-642) moved to `~/.parallax-plxd/plxd`
- * comes back once this app's plxd is newer and the local plxd says no agents are running, since
- * `--replace` restarts `serve`. Any other agent whose plxd exists is left alone, even another
- * install's, so a stable and a nightly app don't take it back and forth.
+ * A device's connection, `plxd dial` to its current address, unless it's off. One that stopped
+ * retrying, such as one refused as `incompatibleProtocol` before its plxd was updated, tries again.
  */
-async function repointService(): Promise<void> {
-  const plxd = servicePlxd();
-  if (!plxd) return;
-  try {
-    const { stdout } = await runPlxd(plxd, "service", "status");
-    const file = /^file: (.*)$/m.exec(stdout)?.[1];
-    if (!file || !/^installed: true$/m.test(stdout)) return;
-    const program = plistProgram(await readFile(file, "utf8"));
-    if (!program) return;
-    if (!existsSync(program)) {
-      await runPlxd(plxd, "service", "install");
-      console.log(`parallax: pointed plxd's login service at ${plxd}, from the missing ${program}`);
-      return;
-    }
-    // Before spawning `--version` twice; `movesServiceBack` checks it again with the rest.
-    if (program !== path.posix.join(homedir(), ".parallax-plxd", "plxd")) return;
-    const [theirs, ours] = await Promise.all([plxdVersion(program), plxdVersion(plxd)]);
-    // Last before the replace, so an agent has the least time to start in between.
-    const health = await connections.get("local")?.request("host/health", {});
-    const agents = health && "result" in health ? health.result.runningAgents : undefined;
-    if (!movesServiceBack(program, homedir(), theirs, ours, agents)) return;
-    await runPlxd(plxd, "service", "install", "--replace");
-    console.log(
-      `parallax: moved plxd's login service to ${plxd} ${ours}, from ${program} ${theirs}`,
-    );
-  } catch (error) {
-    console.warn("parallax: couldn't check plxd's login service:", error);
-  }
-}
-
-/** A device's connection, `plxd dial` to its current address, unless it has one or is off. */
 function addDeviceConnection(device: SavedDevice): void {
   const id = deviceHostId(device.id);
-  if (connections.has(id) || device.off || device.removed) return;
+  if (device.off || device.removed) return;
+  const existing = connections.get(id);
+  if (existing) {
+    if (existing.state.status === "failed" && !existing.state.retrying) existing.retry();
+    return;
+  }
   addConnection(
     id,
     () => {
@@ -1148,9 +1148,9 @@ function addDeviceConnection(device: SavedDevice): void {
 
 /** Asks the local plxd for the tailnet's devices, and connects to any new one. */
 async function discover(): Promise<void> {
+  void keepServing();
   const answer = await connections.get("local")?.request("connect/devices", {});
   if (!connectOn || !answer || "error" in answer) return;
-  void keepServing();
   const { devices, changed } = mergeFound(savedDevices(), answer.result.devices);
   if (changed) keepDevices(devices);
   for (const device of devices) addDeviceConnection(device);

@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { copyFile, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -84,48 +85,61 @@ export function appDataDir(
 
 /**
  * What `keepServing` (hosts.ts) does next, from `plxd service status`'s output: `done` once the
- * service is running plxd; else `failed` when this launch's install didn't get it running
- * (`installed`); else `install` when no agents are running (`runningAgents`, undefined when
- * unknown), since stopping `serve` ends their runs; else `wait`.
+ * service is running the copy at the copy's version (`runsCopy`); else `failed` when this
+ * launch's install didn't get it there (`installed`); else `install` when no agents are running
+ * (`runningAgents`, undefined when unknown), since `--replace` restarts `serve` and ends their
+ * runs; else `wait`.
  */
 export function serviceStep(
   status: string,
+  runsCopy: boolean,
   runningAgents: number | undefined,
   installed: boolean,
 ): "done" | "failed" | "install" | "wait" {
   const yes = (field: string) => new RegExp(`^${field}: true$`, "m").test(status);
-  if (yes("installed") && yes("loaded") && yes("running")) return "done";
+  if (yes("installed") && yes("loaded") && yes("running") && runsCopy) return "done";
   if (installed) return "failed";
   return runningAgents === 0 ? "install" : "wait";
 }
 
 /**
- * Whether `repointService` (hosts.ts) moves plxd's LaunchAgent from `program`, which runs plxd
- * `theirs`, to this app's plxd `ours`: only from the plxd an SSH client's update installed
- * (`~/.parallax-plxd/plxd` under `home`, PLX-642), only to a strictly newer version, and only with
- * no agents running (`agents`, undefined when unknown), since `--replace` restarts `serve`. macOS
- * only, so the path is POSIX.
+ * Keeps this computer's copy of the bundled plxd at `~/.parallax-plxd` under `home`, which plxd's
+ * login service runs (0072): written when it's missing or older than `bundled`, never over a
+ * newer one, such as `host/update`'s. Each file is copied into a temp folder there, then renamed
+ * into place, plxd first, then `plxd.version` (0066). Windows can't replace a running `plxd.exe`
+ * but can rename it, so it moves aside first. Answers the copy and its version.
  */
-export const movesServiceBack = (
-  program: string,
+export async function refreshCopy(
+  bundled: string,
   home: string,
-  theirs: string | undefined,
-  ours: string | undefined,
-  agents: number | undefined,
-) =>
-  program === path.posix.join(home, ".parallax-plxd", "plxd") &&
-  theirs !== undefined &&
-  ours !== undefined &&
-  olderVersion(theirs, ours) &&
-  agents === 0;
-
-/** The program a LaunchAgent plist runs: the first string of its `ProgramArguments`. */
-export function plistProgram(plist: string): string | undefined {
-  const text = /<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]*)<\/string>/.exec(
-    plist,
-  )?.[1];
-  const entities: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
-  return text?.replace(/&(amp|lt|gt|quot|apos);/g, (_, name: string) => entities[name]!);
+  platform = process.platform,
+  version = plxdVersion,
+): Promise<{ plxd: string; version: string | undefined }> {
+  const name = platform === "win32" ? "plxd.exe" : "plxd";
+  const dir = path.join(home, ".parallax-plxd");
+  const plxd = path.join(dir, name);
+  const [ours, theirs] = await Promise.all([version(bundled), version(plxd)]);
+  if (ours === undefined || (theirs !== undefined && !olderVersion(theirs, ours)))
+    return { plxd, version: theirs };
+  await mkdir(dir, { recursive: true });
+  const temp = await mkdtemp(path.join(dir, ".app-"));
+  try {
+    const versionFile = path.join(path.dirname(bundled), "plxd.version");
+    await copyFile(bundled, path.join(temp, name));
+    await copyFile(versionFile, path.join(temp, "plxd.version"));
+    if (platform === "win32") {
+      const aside = path.join(dir, "plxd.old.exe");
+      await rm(aside, { force: true }).catch(() => {}); // Still running: the rename below fails.
+      await rename(plxd, aside).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      });
+    }
+    await rename(path.join(temp, name), plxd);
+    await rename(path.join(temp, "plxd.version"), path.join(dir, "plxd.version"));
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+  return { plxd, version: ours };
 }
 
 /** What `<plxd> --version` reports ("plxd 1.2.3" → "1.2.3"), or undefined if it can't run. */
@@ -149,9 +163,11 @@ export type ServeSystem = {
   sleep: (ms: number) => Promise<void>;
 };
 
-/** A packaged Mac app's login service, checked before replacing its bundled serve. */
+/** plxd's login service, when it's installed: replaced from the copy, never the bundle (0072). */
 export type ServeService = {
-  status: () => Promise<{ program?: string; pid?: number; ready: boolean }>;
+  /** The service's pid while it runs, and whether the data folder's socket answers. */
+  status: () => Promise<{ pid?: number; ready: boolean }>;
+  /** `<copy> service install --replace`. */
   replace: () => Promise<void>;
 };
 
@@ -172,28 +188,31 @@ const processes: ServeSystem = {
 export const isBundledServe = (args: string) =>
   /(\.app\/Contents\/Resources|\/resources|\/parallax\/app)\/plxd serve(\s|$)/.test(args);
 
-const isBundledProgram = (program: string) => isBundledServe(`${program} serve`);
+/** Whether a serve's command line is the copy at `~/.parallax-plxd/plxd` (`refreshCopy`). */
+const isCopyServe = (args: string) => /\/\.parallax-plxd\/plxd serve(\s|$)/.test(args);
 
 /**
  * After an update, stops the `plxd serve` holding `dir`'s lock when its version (`running`)
- * differs from the app's bundled plxd's (`bundled`, undefined when unknown) and a packaged Parallax
+ * differs from `wanted` (undefined when unknown), the bundled plxd's, and a packaged Parallax
  * app started it (`isBundledServe`), then waits up to 10 s for it to exit. SIGTERM lets serve shut
  * down cleanly, but it ends agent runs in flight. Every other serve is left alone; a real protocol
  * mismatch with one still shows as the connection's error. macOS and Linux only (`ps`). `why` is
- * for the log. An installed bundled login service is updated and restarted through its service
- * manager instead, so its next login also runs the current app's binary. A failed service update
- * never falls back to killing its process.
+ * for the log. With plxd's login service installed, `wanted` is the copy's version, and the
+ * service is restarted on the copy instead, so its next login runs it too, unless
+ * `runningAgents` reports agents running; one that can't be asked, such as an incompatible plxd,
+ * is replaced. A failed service update never falls back to killing its process.
  */
 export async function replaceServe(
   dir: string,
   running: string,
-  bundled: string | undefined,
+  wanted: string | undefined,
   system = processes,
   service?: ServeService,
+  runningAgents?: () => Promise<number | undefined>,
 ): Promise<{ stopped: boolean; why: string }> {
   const keep = (why: string) => ({ stopped: false, why: `kept plxd serve ${running}: ${why}` });
-  if (bundled === undefined) return keep("the bundled plxd's version is unknown");
-  if (bundled === running) return keep("it is the bundled version");
+  if (wanted === undefined) return keep("the version to run is unknown");
+  if (wanted === running) return keep("it is the version to run");
   let pid: number;
   let args: string;
   try {
@@ -203,35 +222,32 @@ export async function replaceServe(
   } catch {
     return keep("it isn't running");
   }
-  if (!isBundledServe(args)) return keep(`no packaged Parallax started it (${args})`);
+  if (!isBundledServe(args) && !(service && isCopyServe(args)))
+    return keep(`no packaged Parallax started it (${args})`);
   if (service) {
-    const { program, pid: servicePid } = await service.status();
-    if (program && isBundledProgram(program)) {
-      // Never restart a service running a different data folder's daemon.
-      if (servicePid !== undefined && servicePid !== pid)
-        return keep("the login service is running another daemon");
-      await service.replace();
-      // install returns before serve necessarily listens. Otherwise attach can start a competing
-      // process, especially for an isolated data folder without the default service's kickstart.
-      const deadline = Date.now() + 10_000;
-      for (let waited = 0; waited < 10_000 && Date.now() < deadline; waited += 100) {
-        const status = await service.status();
-        let holder: number | undefined;
-        try {
-          holder = system.lockPid(dir);
-        } catch {
-          // The old lock is gone and the new service hasn't acquired it yet.
-        }
-        if (status.ready && status.pid !== undefined && status.pid !== pid && status.pid === holder)
-          return {
-            stopped: true,
-            why: `restarted plxd's login service for the bundled ${bundled}`,
-          };
-        await system.sleep(100);
+    // Never restart a service running a different data folder's daemon.
+    const { pid: servicePid } = await service.status();
+    if (servicePid !== undefined && servicePid !== pid)
+      return keep("the login service is running another daemon");
+    const agents = await runningAgents?.();
+    if (agents) return keep(`${agents} agents are running, so it's replaced once they finish`);
+    await service.replace();
+    // install returns before serve necessarily listens. Otherwise attach can start a competing
+    // process, especially for an isolated data folder without the default service's kickstart.
+    const deadline = Date.now() + 10_000;
+    for (let waited = 0; waited < 10_000 && Date.now() < deadline; waited += 100) {
+      const status = await service.status();
+      let holder: number | undefined;
+      try {
+        holder = system.lockPid(dir);
+      } catch {
+        // The old lock is gone and the new service hasn't acquired it yet.
       }
-      throw new Error("plxd's login service did not start the updated daemon within 10 seconds");
+      if (status.ready && status.pid !== undefined && status.pid !== pid && status.pid === holder)
+        return { stopped: true, why: `restarted plxd's login service on its copy, ${wanted}` };
+      await system.sleep(100);
     }
-    if (servicePid === pid) return keep("the login service is externally managed");
+    throw new Error("plxd's login service did not start the updated daemon within 10 seconds");
   }
   try {
     system.kill(pid);
@@ -243,7 +259,7 @@ export async function replaceServe(
     try {
       system.kill(pid, 0);
     } catch {
-      return { stopped: true, why: `stopped plxd serve ${running} for the bundled ${bundled}` };
+      return { stopped: true, why: `stopped plxd serve ${running} for the bundled ${wanted}` };
     }
     await system.sleep(100);
   }
