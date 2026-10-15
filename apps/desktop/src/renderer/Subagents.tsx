@@ -1,6 +1,7 @@
 // An agent's own subagents (PLX-382, 0041), such as Claude Code's Agent tool: read-only children
 // of their thread, with no run, composer, or Parallax tools. Their call's row in the transcript
 // opens one, as their chips in the top bar do.
+import { TraceDescription, TraceIcon, TraceLine, TraceTitle } from "./Trace";
 import { ArrowUpRight, Bot } from "lucide-react";
 import { createContext, useContext } from "react";
 
@@ -79,26 +80,22 @@ export function SubagentCall({ item }: { item: Extract<Item, { kind: "tool" }> }
       type="button"
       aria-label={`Open subagent: ${title}, ${subagentLabels[state]}`}
       onClick={() => context.open(item.callId)}
-      className="group/subagent flex max-w-full cursor-default items-center gap-2 rounded-md py-0.5 text-left text-[13px] hover:text-foreground"
+      className="flex w-fit max-w-full min-w-0 cursor-default rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
     >
-      <span aria-hidden className={`shrink-0 ${state === "failed" ? "text-danger" : ""}`}>
-        {state === "running" ? (
-          <Loader kind="orbit" variant="oppose" size={14} />
-        ) : (
-          <Bot className="size-3.5 text-muted-foreground" />
-        )}
-      </span>
-      <span className="shrink-0 font-medium">Subagent</span>
-      <span className="truncate text-muted-foreground">{title}</span>
-      <span
-        className={`shrink-0 text-[12px] ${state === "failed" ? "text-danger" : "text-faint-foreground"}`}
+      <TraceLine
+        status={state === "running" ? "running" : state === "failed" ? "error" : undefined}
       >
-        {subagentLabels[state]}
-      </span>
-      <ArrowUpRight
-        aria-hidden
-        className="size-3.5 shrink-0 text-faint-foreground group-hover/subagent:text-foreground"
-      />
+        <TraceIcon>
+          {state === "running" ? <Loader kind="orbit" variant="oppose" /> : <Bot />}
+        </TraceIcon>
+        <TraceTitle>Subagent: {title}</TraceTitle>
+        <TraceDescription className={state === "failed" ? "text-danger" : ""}>
+          {subagentLabels[state]}
+        </TraceDescription>
+        <TraceIcon>
+          <ArrowUpRight className="size-3.5" />
+        </TraceIcon>
+      </TraceLine>
     </button>
   );
 }

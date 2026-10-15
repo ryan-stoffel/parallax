@@ -33,7 +33,8 @@ test("an agent's own subagents show their status and open read-only, without a c
   // The chips fit only on a wide enough screen, so this opens the subagent from its row;
   // Lineage.test.tsx covers the chips.
   const transcript = page.getByRole("log", { name: "Transcript" });
-  await transcript.getByRole("button", { name: /^Running agent/ }).click();
+  // The step fold is a <summary>, which has no button role here.
+  await transcript.locator("summary", { hasText: /^Running agent/ }).click();
   const docs = transcript.getByRole("button", { name: "Open subagent: Read the build docs, Done" });
   await expect(docs).toBeVisible();
   await expect(

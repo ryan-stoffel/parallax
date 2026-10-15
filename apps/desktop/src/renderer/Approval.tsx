@@ -3,6 +3,7 @@
 // the run's own requests and, in a Project, those of its other runs. Tool input is untrusted: it
 // renders only as text, and a plan only through the transcript's safe Markdown. Pure helpers
 // first, then the components.
+import { TraceDescription, TraceIcon, TraceLine, TraceTitle } from "./Trace";
 import {
   ChevronDown,
   ChevronUp,
@@ -1122,30 +1123,37 @@ export function ApprovalSummary({ approval, tool }: { approval: Approval; tool: 
   const at = approval.resolved?.at ?? approval.at;
   const detail = tool.detail?.split("\n")[0];
   return (
-    <>
-      <Icon aria-hidden className={`size-3.5 shrink-0 ${color}`} />
-      <span className="shrink-0 font-medium">{verb}</span>
-      {!plan && (
-        <span className="min-w-0 truncate text-muted-foreground">
-          {tool.label}
-          {detail && (
-            <>
-              :{" "}
-              <span
-                className={tool.label === approval.request.toolName ? "font-mono text-[12px]" : ""}
-              >
-                {detail}
-              </span>
-            </>
-          )}
-        </span>
-      )}
+    <TraceLine>
+      <TraceIcon className={color}>
+        <Icon />
+      </TraceIcon>
+      <TraceTitle>
+        <span className="font-medium">{verb}</span>
+        {!plan && (
+          <>
+            {" "}
+            {tool.label}
+            {detail && (
+              <>
+                :{" "}
+                <span
+                  className={
+                    tool.label === approval.request.toolName ? "font-mono text-[12px]" : ""
+                  }
+                >
+                  {detail}
+                </span>
+              </>
+            )}
+          </>
+        )}
+      </TraceTitle>
       {at && (
-        <time dateTime={at} className="ml-auto shrink-0 pl-2 text-[12px] text-faint-foreground">
-          {clock(at)}
-        </time>
+        <TraceDescription>
+          <time dateTime={at}>{clock(at)}</time>
+        </TraceDescription>
       )}
-    </>
+    </TraceLine>
   );
 }
 

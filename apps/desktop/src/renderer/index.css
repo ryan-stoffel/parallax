@@ -1232,9 +1232,9 @@ body {
   }
 }
 
-/* The working line (AgentChat.tsx): its words shimmer, and a new one fades in
-   as the last fades out. AgentChat.tsx sets the shimmer's duration and delay. */
-.working-shimmer {
+/* A running Trace line's title (Trace.tsx) shimmers, and the working line's
+   words (AgentChat.tsx) fade in as the last fades out. */
+[data-slot="trace-line"][data-status="running"] [data-slot="trace-title"] {
   background: linear-gradient(
       90deg,
       var(--muted-foreground) 40%,
@@ -1244,7 +1244,7 @@ body {
     0 0 / 300% 100%;
   background-clip: text;
   color: transparent;
-  animation: working-shimmer linear infinite;
+  animation: working-shimmer 2s linear infinite;
 }
 @keyframes working-shimmer {
   from {
@@ -1279,7 +1279,7 @@ body {
     scale: 1 !important;
     translate: none !important;
   }
-  .working-shimmer {
+  [data-slot="trace-line"][data-status="running"] [data-slot="trace-title"] {
     animation: none;
     background: none;
     color: inherit;

@@ -488,7 +488,7 @@ test("an agent's own subagents are read-only lineage rows, and one opens without
   );
   // The parent's own transcript has the calls, not what the subagents did.
   const log = () => document.querySelector('[role="log"]')!;
-  await click(log().querySelector("button[aria-expanded]"));
+  await click(log().querySelector("summary"));
   expect(log().textContent).not.toContain("README.md");
   const row = log().querySelector('button[aria-label="Open subagent: Read the tests, Working"]');
   expect(row).not.toBeNull();
@@ -506,7 +506,7 @@ test("an agent's own subagents are read-only lineage rows, and one opens without
   // Its thread's crumb goes back, and the call's row opens the other one.
   await click(crumb("Ship lineage"));
   expect(document.querySelector('[role="textbox"][aria-label="Message"]')).not.toBeNull();
-  await click(log().querySelector("button[aria-expanded]"));
+  await click(log().querySelector("summary"));
   await click(log().querySelector('button[aria-label="Open subagent: Read the tests, Working"]'));
   expect(crumbs().at(-1)).toBe("Read the tests");
 });

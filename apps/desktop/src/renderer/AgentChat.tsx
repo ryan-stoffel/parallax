@@ -6,9 +6,7 @@ import {
   Bot,
   Brain,
   Check,
-  ChevronRight,
   Copy,
-  Ellipsis,
   FilePlus,
   FileText,
   FoldVertical,
@@ -88,6 +86,17 @@ import { imageCaps, imageUrl, loadImage } from "./images";
 import { FileCard } from "./FileCard";
 import { splitFiles, uploadBytes } from "./uploads";
 import { Loader, type LoaderStyle } from "./Loader";
+import {
+  Trace,
+  TraceCollapsible,
+  TraceCollapsibleContent,
+  TraceCollapsibleTrigger,
+  TraceDescription,
+  TraceIcon,
+  TraceLine,
+  TraceTitle,
+  type TraceStatus,
+} from "./Trace";
 import { locale } from "./locale";
 import { GitHubLogo, LinearLogo } from "./logos";
 import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
@@ -1273,11 +1282,11 @@ function ScriptRow({
     script.status === "running" ? (
       <Loader {...loaders.working} />
     ) : script.status === "done" ? (
-      <Check aria-hidden className="size-4 shrink-0" />
+      <Check />
     ) : failed ? (
-      <X aria-hidden className="size-4 shrink-0 text-danger" />
+      <X />
     ) : (
-      <Ban aria-hidden className="size-4 shrink-0" />
+      <Ban />
     );
   const detail =
     script.status === "running"
@@ -1294,22 +1303,22 @@ function ScriptRow({
               (script.exitCode === undefined
                 ? "Its terminal closed first."
                 : `Exited with code ${script.exitCode}.`));
-  const summary = (
-    <>
-      {icon}
-      <span className="truncate">{what}</span>
+  const line = (
+    <TraceLine status={script.status === "running" ? "running" : failed ? "error" : undefined}>
+      <TraceIcon>{icon}</TraceIcon>
+      <TraceTitle className="shrink-0">{what}</TraceTitle>
       <span className={`truncate ${failed ? "text-danger" : "text-faint-foreground"}`}>
         {detail}
       </span>
-    </>
+    </TraceLine>
   );
   // Only a running script, or a failed one's shell, still has a terminal to open; opening any
   // other would start an empty shell under its id.
   const live = script.status === "running" || (failed && script.exitCode !== undefined);
-  if (!live || !links) return <div className={`${stepRow} text-muted-foreground`}>{summary}</div>;
+  if (!live || !links) return line;
   return (
-    <Disclosure id={script.key} open={open} onToggle={onToggle} summary={summary}>
-      <div className="h-60 overflow-hidden rounded-xl border border-border bg-surface py-1.5 pl-3">
+    <Disclosure id={script.key} open={open} onToggle={onToggle} summary={line}>
+      <div className="h-60 overflow-hidden rounded-xl border border-border bg-surface py-1.5 pl-3 text-foreground">
         <Suspense>
           <TerminalView
             id={`script:${script.runId}:${script.terminalId}`}
@@ -1364,9 +1373,9 @@ export const RowView = memo(function RowView({
           openKeys={openKeys ?? new Set()}
           onToggle={onToggle}
         >
-          <span className="truncate">
-            {copied ? "Worked" : workedFor(row.startedAt, row.endedAt)}
-          </span>
+          <TraceLine>
+            <TraceTitle>{copied ? "Worked" : workedFor(row.startedAt, row.endedAt)}</TraceTitle>
+          </TraceLine>
         </Fold>
       ) : (
         <Steps
@@ -1381,11 +1390,7 @@ export const RowView = memo(function RowView({
     case "working":
       return <WorkingFor since={row.since} />;
     case "musing":
-      return (
-        <div className="flex h-6 items-center gap-2 text-sm">
-          <Musing />
-        </div>
-      );
+      return <Musing />;
     case "compaction":
       // Under way, it's the live row; done, a divider where the earlier conversation became a summary.
       return row.done ? (
@@ -1396,10 +1401,12 @@ export const RowView = memo(function RowView({
           <span className="h-px flex-1 bg-border" />
         </div>
       ) : (
-        <div className="flex h-6 items-center gap-2 text-sm">
-          <Loader {...loaders.compacting} />
-          <Shimmer>Compacting context</Shimmer>
-        </div>
+        <TraceLine status="running">
+          <TraceIcon>
+            <Loader {...loaders.compacting} />
+          </TraceIcon>
+          <TraceTitle>Compacting context</TraceTitle>
+        </TraceLine>
       );
     case "user":
     case "pending": {
@@ -1412,12 +1419,16 @@ export const RowView = memo(function RowView({
             open={open}
             onToggle={onToggle}
             summary={
-              <span className="flex items-center gap-1.5 text-muted-foreground">
-                <Workflow aria-hidden className="size-3.5" />
-                {row.wake
-                  ? "From Parallax: subagents finished"
-                  : `From another thread${sender ? `: ${sender}` : ""}`}
-              </span>
+              <TraceLine>
+                <TraceIcon>
+                  <Workflow />
+                </TraceIcon>
+                <TraceTitle>
+                  {row.wake
+                    ? "From Parallax: subagents finished"
+                    : `From another thread${sender ? `: ${sender}` : ""}`}
+                </TraceTitle>
+              </TraceLine>
             }
           >
             <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
@@ -1496,10 +1507,12 @@ export const RowView = memo(function RowView({
           open={open}
           onToggle={onToggle}
           summary={
-            <>
-              <icons.thinking aria-hidden className="size-4 shrink-0" />
-              <span className="truncate">{plainText(row.text) || "Thought"}</span>
-            </>
+            <TraceLine>
+              <TraceIcon>
+                <icons.thinking />
+              </TraceIcon>
+              <TraceTitle>{plainText(row.text) || "Thought"}</TraceTitle>
+            </TraceLine>
           }
         >
           <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
@@ -1707,31 +1720,20 @@ function Fold({
   children: ReactNode;
 }) {
   return (
-    <div>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => onToggle(id, !open)}
-        className={`${stepRow} text-muted-foreground`}
-      >
-        {children}
-        <Chevron open={open} />
-      </button>
-      {open && (
-        <div className={gap ? "mt-1 flex flex-col gap-1" : "flex flex-col"}>
-          {items.map((item) => (
-            <RowView
-              key={item.key}
-              row={item}
-              live={live}
-              open={openKeys.has(item.key)}
-              openKeys={item.kind === "work" ? openKeys : undefined}
-              onToggle={onToggle}
-            />
-          ))}
-        </div>
-      )}
-    </div>
+    <Disclosure id={id} open={open} onToggle={onToggle} summary={children}>
+      <Trace className={gap ? "gap-1" : "gap-0.5"}>
+        {items.map((item) => (
+          <RowView
+            key={item.key}
+            row={item}
+            live={live}
+            open={openKeys.has(item.key)}
+            openKeys={item.kind === "work" ? openKeys : undefined}
+            onToggle={onToggle}
+          />
+        ))}
+      </Trace>
+    </Disclosure>
   );
 }
 
@@ -1763,20 +1765,6 @@ const inFlight = (work: Work) => {
   const last = work.items.findLast((i) => i.kind !== "notice");
   return last?.kind === "tool" && last.status === undefined;
 };
-
-/** A compact step row's geometry, as T3 Code's work log draws one: an icon, a line, a chevron. */
-const stepRow =
-  "flex min-h-6 w-full max-w-full min-w-0 cursor-default items-center gap-2 rounded-md text-left text-sm hover:text-foreground";
-
-/** The chevron after a step row's label, turned down while it's open. */
-function Chevron({ open }: { open?: boolean }) {
-  return (
-    <ChevronRight
-      aria-hidden
-      className={`size-3.5 shrink-0 text-faint-foreground transition-transform group-open/disclosure:rotate-90 ${open ? "rotate-90" : ""}`}
-    />
-  );
-}
 
 /**
  * A run of steps between the agent's messages in a turn still going (PLX-584): one call or thought
@@ -1817,28 +1805,24 @@ function Steps({
       onToggle={onToggle}
     >
       {now ? (
-        <>
-          <Loader {...now.loader} />
+        <TraceLine status="running">
+          <TraceIcon>
+            <Loader {...now.loader} />
+          </TraceIcon>
           {/* Keyed, so a new label fades in. */}
-          <span key={now.label} className="working-in shrink-0 text-foreground">
-            <Shimmer>{now.label}</Shimmer>
+          <span key={now.label} className="working-in shrink-0">
+            <TraceTitle>{now.label}</TraceTitle>
           </span>
           {now.detail && <span className="truncate">{now.detail}</span>}
-        </>
+        </TraceLine>
       ) : (
-        <>
-          <span aria-hidden className={`relative shrink-0 ${summary.failed ? "text-danger" : ""}`}>
-            <summary.Icon className="size-4" />
-            {summary.failed && (
-              <X
-                strokeWidth={3}
-                className="absolute -right-1.5 -bottom-1.5 size-2.5 rounded-full bg-background"
-              />
-            )}
-          </span>
-          <span className="truncate">{summary.label}</span>
-          {summary.failed && <span className="sr-only">, one failed</span>}
-        </>
+        <TraceLine status={summary.failed ? "error" : undefined}>
+          <TraceIcon>
+            <summary.Icon />
+          </TraceIcon>
+          <TraceTitle>{summary.label}</TraceTitle>
+          {summary.failed && <TraceDescription>One failed</TraceDescription>}
+        </TraceLine>
       )}
     </Fold>
   );
@@ -1888,36 +1872,22 @@ function Musing() {
   }, [tick]);
   const word = (at: number) => musings[at % musings.length]!;
   return (
-    <>
-      <Loader {...loaders.working} />
+    <TraceLine status="running">
+      <TraceIcon>
+        <Loader {...loaders.working} />
+      </TraceIcon>
       <span className="sr-only">Working</span>
       <span aria-hidden className="grid shrink-0 justify-items-start">
         {tick > first && (
           <span key={tick - 1} className="working-out [grid-area:1/1]">
-            <Shimmer>{word(tick - 1)}</Shimmer>
+            <TraceTitle>{word(tick - 1)}</TraceTitle>
           </span>
         )}
         <span key={tick} className={`[grid-area:1/1] ${tick > first ? "working-in" : ""}`}>
-          <Shimmer>{word(tick)}</Shimmer>
+          <TraceTitle>{word(tick)}</TraceTitle>
         </span>
       </span>
-    </>
-  );
-}
-
-// How long the shimmer takes to sweep across its text.
-const shimmerMs = 2000;
-
-/** Text with a soft highlight sweeping across it, on the wall clock so a remount carries on. */
-function Shimmer({ children }: { children: string }) {
-  const [now] = useState(Date.now);
-  return (
-    <span
-      className="working-shimmer"
-      style={{ animationDuration: `${shimmerMs}ms`, animationDelay: `${-(now % shimmerMs)}ms` }}
-    >
-      {children}
-    </span>
+    </TraceLine>
   );
 }
 
@@ -2069,24 +2039,17 @@ function ToolCall({
       open={open}
       onToggle={onToggle}
       summary={
-        <>
-          {/* Its kind: the loader while it runs, then the icon, with a mark unless it succeeded. */}
-          <span aria-hidden className={`relative shrink-0 ${look.color}`}>
-            {status === "running" ? (
-              <Loader {...loaders[kind]} />
-            ) : (
-              <Icon className={`size-4 ${look.faded ? "opacity-50" : ""}`} />
-            )}
-            {look.mark && (
-              <look.mark
-                strokeWidth={3}
-                className="absolute -right-1.5 -bottom-1.5 size-2.5 rounded-full bg-background"
-              />
-            )}
-          </span>
-          <span className="truncate">{stepLabel(item, root)}</span>
-          <span className="sr-only">{look.said}</span>
-        </>
+        <TraceLine status={look.status}>
+          {/* Its kind: the loader while it runs, then the icon. */}
+          <TraceIcon>{status === "running" ? <Loader {...loaders[kind]} /> : <Icon />}</TraceIcon>
+          <TraceTitle>{stepLabel(item, root)}</TraceTitle>
+          {/* How it went: shown when it failed or never finished, otherwise only heard. */}
+          {look.shown ? (
+            <TraceDescription>{look.said}</TraceDescription>
+          ) : (
+            <span className="sr-only">{look.said}</span>
+          )}
+        </TraceLine>
       }
     >
       <div className="space-y-2 text-[12px]">
@@ -2114,26 +2077,26 @@ function ToolCall({
   );
 }
 
-/** How a tool call went: its icon's color, mark, and fading, and in words for screen readers. */
+/** How a tool call went: its line's status, and in words, shown when it failed or never finished. */
 interface Look {
-  color: string;
-  mark?: LucideIcon;
-  /** Whether the icon fades, as for a call that never finished. */
-  faded?: boolean;
+  status?: TraceStatus;
   said: string;
+  shown?: boolean;
 }
 
-// An unfinished call's icon is half its faint color, so it stands apart from a finished one's
-// muted icon, and its mark is an ellipsis, which no round icon can swallow as a ring could.
+// A call that never finished fades, as a step not done does.
 const statuses = {
-  running: { color: "", said: "Running" },
-  ok: { color: "text-muted-foreground", said: "Succeeded" },
-  error: { color: "text-danger", mark: X, said: "Failed" },
-  denied: { color: "text-danger", mark: Ban, said: "Denied" },
-  none: { color: "text-faint-foreground", mark: Ellipsis, faded: true, said: "No result" },
+  running: { status: "running", said: "Running" },
+  ok: { said: "Succeeded" },
+  error: { status: "error", said: "Failed", shown: true },
+  denied: { status: "error", said: "Denied", shown: true },
+  none: { status: "pending", said: "No result", shown: true },
 } satisfies Record<"running" | AgentToolStatus | "none", Look>;
 
-/** A collapsed-by-default step row, its chevron at its end, open state kept by the transcript. */
+/**
+ * A step's Trace line that opens, collapsed by default, its open state kept by the transcript.
+ * `summary` is the line.
+ */
 function Disclosure({
   id,
   open,
@@ -2148,20 +2111,11 @@ function Disclosure({
   children: ReactNode;
 }) {
   return (
-    <details
-      open={open}
-      onToggle={(e) => e.currentTarget.open !== open && onToggle(id, e.currentTarget.open)}
-      className="group/disclosure"
-    >
-      <summary
-        className={`${stepRow} list-none text-muted-foreground [&::-webkit-details-marker]:hidden`}
-      >
-        {summary}
-        <Chevron />
-      </summary>
+    <TraceCollapsible open={open} onOpenChange={(next) => onToggle(id, next)}>
+      <TraceCollapsibleTrigger>{summary}</TraceCollapsibleTrigger>
       {/* Rendered once open, so a closed row doesn't hold its tool's output. */}
-      {open && <div className="mt-1.5 ml-6">{children}</div>}
-    </details>
+      {open && <TraceCollapsibleContent>{children}</TraceCollapsibleContent>}
+    </TraceCollapsible>
   );
 }
 
@@ -2169,7 +2123,7 @@ function Block({ label, children }: { label: string; children: string }) {
   return (
     <div>
       <p className="mb-1 text-[11.5px] text-faint-foreground">{label}</p>
-      <pre className="max-h-80 overflow-auto rounded-xl border border-border bg-code px-3 py-2 font-mono leading-relaxed whitespace-pre-wrap">
+      <pre className="max-h-80 overflow-auto rounded-xl border border-border bg-code px-3 py-2 font-mono leading-relaxed whitespace-pre-wrap text-foreground">
         {children}
       </pre>
     </div>

@@ -87,13 +87,10 @@ const type = (text: string) => act(() => void composer().editor!.commands.setCon
 
 const row = (item: Item, open = false) =>
   render(<RowView row={item} live={false} open={open} onToggle={() => {}} />);
-// A row's summary as it shows, without what only screen readers hear.
-const shown = () => {
-  const summary = document.querySelector("summary")!.cloneNode(true) as Element;
-  summary.querySelectorAll(".sr-only").forEach((e) => e.remove());
-  return summary.textContent;
-};
-const said = () => document.querySelector("summary .sr-only")?.textContent;
+// A row's title, and how its call went: shown as its description, or only heard.
+const shown = () => document.querySelector("summary [data-slot=trace-title]")!.textContent;
+const said = () =>
+  document.querySelector("summary :is(.sr-only, [data-slot=trace-description])")?.textContent;
 
 test("a message on its way to the agent shows at full strength", () => {
   render(
@@ -152,9 +149,7 @@ test("in a fork, the history it copied is muted and offers no Fork, and the late
     "Done",
   ]);
   // Its copied work's times are all the fork's creation, so it says neither how long nor "briefly".
-  const work = document
-    .querySelectorAll("[data-copied]")[1]!
-    .querySelector("button[aria-expanded]")!;
+  const work = document.querySelectorAll("[data-copied]")[1]!.querySelector("summary")!;
   expect(work.textContent).toContain("Worked");
   expect(work.textContent).not.toContain("Worked briefly");
   expect(document.querySelector("[data-copied]")!.className).toContain("opacity-60");
@@ -732,7 +727,7 @@ test("each kind of tool has its icon once it's done, as its loader matches it wh
   expect(document.querySelector("summary svg.lucide-brain")).not.toBeNull();
 });
 
-test("a failed, denied, or unfinished tool call marks its icon, and says how it went in words", () => {
+test("a failed, denied, or unfinished tool call says how it went, as its line's status and in words", () => {
   const tool = (status?: AgentToolStatus): Item => ({
     kind: "tool",
     key: "t",
@@ -741,48 +736,30 @@ test("a failed, denied, or unfinished tool call marks its icon, and says how it 
     input: { command: "git push" },
     ...(status && { status }),
   });
-  // The kind's icon, whether it fades, and the mark at its corner.
-  const slot = () => {
-    const icon = document.querySelector("summary .lucide-square-terminal")!;
-    return {
-      color: icon.parentElement!.className.match(/text-[\w-]+/)?.[0],
-      faded: icon.classList.contains("opacity-50"),
-      mark: icon.nextElementSibling?.getAttribute("class")?.split(" ")[1],
-      said: said(),
-    };
-  };
-  const unfinished = {
-    color: "text-faint-foreground",
-    faded: true,
-    mark: "lucide-ellipsis",
-    said: "No result",
-  };
+  // The line's status, and what it says of how the call went.
+  const look = () => ({
+    status: document.querySelector("summary [data-slot=trace-line]")!.getAttribute("data-status"),
+    said: said(),
+    shown: !!document.querySelector("summary [data-slot=trace-description]"),
+  });
+  const unfinished = { status: "pending", said: "No result", shown: true };
   row(tool("error"));
-  expect(slot()).toEqual({ color: "text-danger", faded: false, mark: "lucide-x", said: "Failed" });
+  expect(look()).toEqual({ status: "error", said: "Failed", shown: true });
   act(() => unmount());
   row(tool("denied"));
-  expect(slot()).toEqual({
-    color: "text-danger",
-    faded: false,
-    mark: "lucide-ban",
-    said: "Denied",
-  });
+  expect(look()).toEqual({ status: "error", said: "Denied", shown: true });
   act(() => unmount());
   // No result, and the run has stopped: unfinished.
   row(tool());
-  expect(slot()).toEqual(unfinished);
+  expect(look()).toEqual(unfinished);
   act(() => unmount());
   // A status from a newer plxd reads as no result, rather than breaking the row.
   row(tool("cancelled" as AgentToolStatus));
-  expect(slot()).toEqual(unfinished);
+  expect(look()).toEqual(unfinished);
   act(() => unmount());
+  // A call that succeeded only says so to screen readers.
   row(tool("ok"));
-  expect(slot()).toEqual({
-    color: "text-muted-foreground",
-    faded: false,
-    mark: undefined,
-    said: "Succeeded",
-  });
+  expect(look()).toEqual({ status: null, said: "Succeeded", shown: false });
 });
 
 test("a tool named like an object's own property is any other tool, running or done", () => {
@@ -1867,7 +1844,7 @@ test("while a run goes, its work shows as steps, the call in flight live, under 
     status: "ok",
   };
   const reply: Item = { kind: "assistant", key: "a", text: "Hi", partial: true };
-  const header = () => document.querySelector("button[aria-expanded]");
+  const header = () => document.querySelector("summary");
   const rows = () => [...document.querySelectorAll("[data-index]")].map((r) => r.textContent);
 
   // A streaming reply is what the agent is doing: no steps, and no musing.
@@ -1993,9 +1970,10 @@ test("until the agent does anything, a loader muses under the message on its way
   const musing = () => {
     const row = musingRow();
     if (!row) return undefined;
-    expect(row.querySelector('[aria-hidden="true"]:not(.loader)')!.textContent).toMatch(
-      /^[A-Z][a-z]+$/,
-    );
+    expect(
+      row.querySelector('[aria-hidden="true"]:not(.loader):not([data-slot=trace-icon])')!
+        .textContent,
+    ).toMatch(/^[A-Z][a-z]+$/);
     return row.querySelector(".sr-only")?.textContent;
   };
   // What follows the message, by row, under its working line.
@@ -2044,10 +2022,11 @@ test("the musing changes its word on the wall clock, while screen readers keep h
   const header = () => musingRow()!;
   // Each word shown, and whether it fades in or out.
   const words = () =>
-    [...header().querySelectorAll('[aria-hidden="true"]:not(.loader) > span')].map((w) => [
-      w.textContent,
-      w.className.match(/working-(in|out)/)?.[0],
-    ]);
+    [
+      ...header().querySelectorAll(
+        '[aria-hidden="true"]:not(.loader):not([data-slot=trace-icon]) > span',
+      ),
+    ].map((w) => [w.textContent, w.className.match(/working-(in|out)/)?.[0]]);
   // The first word doesn't fade in, so a remount doesn't blink.
   expect(words()).toEqual([["Picturing", undefined]]);
   act(() => void vi.advanceTimersByTime(2400));
@@ -2163,13 +2142,18 @@ test("a turn's plan is one line where it began, its updates lines in the work, i
     "Done.",
   ]);
   // The work after the plan holds its updates, one line each, and no TodoWrite calls.
-  act(() => rowAt(4).querySelector("button")!.click());
-  const lines = [...rowAt(4).querySelectorAll("p")].map((p) => p.textContent);
+  act(() => rowAt(4).querySelector("summary")!.click());
+  const lines = [
+    ...rowAt(4).querySelectorAll("[data-slot=trace-collapsible-content] [data-slot=trace-line]"),
+  ].map((p) => p.textContent);
   expect(lines.filter((t) => t?.includes("the plan"))).toEqual([
     "Updated the planFinished: Read · Started: Build",
     "Updated the planFinished: Build",
   ]);
-  expect(rowAt(4).querySelectorAll("summary")).toHaveLength(1); // Bash's
+  // Bash's, in the fold.
+  expect(rowAt(4).querySelectorAll("[data-slot=trace-collapsible-content] summary")).toHaveLength(
+    1,
+  );
   expect(transcriptText()).not.toContain("TodoWrite");
 });
 
@@ -2221,8 +2205,10 @@ test("Claude Code's task tools make the same lines as TodoWrite, and their rows 
     "Updatedtheplanandran1command",
     "Done.",
   ]);
-  act(() => rowAt(3).querySelector("button")!.click());
-  const lines = [...rowAt(3).querySelectorAll("p")].map((p) => p.textContent);
+  act(() => rowAt(3).querySelector("summary")!.click());
+  const lines = [
+    ...rowAt(3).querySelectorAll("[data-slot=trace-collapsible-content] [data-slot=trace-line]"),
+  ].map((p) => p.textContent);
   expect(lines.filter((t) => t?.includes("the plan"))).toEqual([
     "Updated the planAdded: Build",
     "Updated the planStarted: Read",
@@ -2230,7 +2216,10 @@ test("Claude Code's task tools make the same lines as TodoWrite, and their rows 
     "Updated the planStarted: Build",
     "Updated the planFinished: Build",
   ]);
-  expect(rowAt(3).querySelectorAll("summary")).toHaveLength(1); // Bash's
+  // Bash's, in the fold.
+  expect(rowAt(3).querySelectorAll("[data-slot=trace-collapsible-content] summary")).toHaveLength(
+    1,
+  );
   expect(transcriptText()).not.toMatch(/Task(Create|Update|List)/);
 });
 

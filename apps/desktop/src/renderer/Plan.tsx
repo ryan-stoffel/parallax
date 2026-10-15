@@ -2,6 +2,7 @@
 // composer with its card while the run goes, and Claude Code's proposed plan. The checklist comes
 // from plxd, as for TodoWrite, or from Claude Code's task tools (PLX-248). Pure helpers first,
 // then the components.
+import { TraceIcon, TraceLine, TraceTitle } from "./Trace";
 import { Ban, ChevronDown, ChevronUp, CircleX, ClipboardList, ListChecks } from "lucide-react";
 import {
   memo,
@@ -475,18 +476,19 @@ export function PlanLine({ item }: { item: PlanRow | PlanUpdate }) {
       ? planChanges(item.previous, item.items)
       : "";
   return (
-    // A step row, so its icon lines up with a tool call's.
-    <p className="flex min-h-6 min-w-0 items-center gap-2 text-[13px]">
-      <ListChecks aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
-      <span className="shrink-0 font-medium">
+    <TraceLine>
+      <TraceIcon>
+        <ListChecks />
+      </TraceIcon>
+      <TraceTitle className="shrink-0">
         {made ? "Made a plan" : item.items.length === 0 ? "Cleared the plan" : "Updated the plan"}
-      </span>
+      </TraceTitle>
       {changes && (
-        <span className="truncate text-muted-foreground" title={changes}>
+        <span className="truncate text-faint-foreground" title={changes}>
           {changes}
         </span>
       )}
-    </p>
+    </TraceLine>
   );
 }
 

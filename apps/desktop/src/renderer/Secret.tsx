@@ -2,6 +2,7 @@
 // composer while it waits, and the line it leaves in the transcript. The value goes from the
 // password field to plxd's `secret/answer`, which keeps it in the host's keystore. It is never
 // kept in the window's state, the transcript, or the log.
+import { TraceIcon, TraceLine, TraceTitle } from "./Trace";
 import { KeyRound } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
 
@@ -126,12 +127,14 @@ const outcomes: Record<string, string> = {
 /** A secret request's line in the transcript: what was asked for, and how it ended. */
 export function SecretLine({ secret }: { secret: SecretItem }) {
   return (
-    <p className="flex min-w-0 items-center gap-2 text-[12.5px] text-muted-foreground">
-      <KeyRound aria-hidden className="size-3.5 shrink-0" />
-      <span className="shrink-0 font-medium text-foreground">
+    <TraceLine>
+      <TraceIcon>
+        <KeyRound />
+      </TraceIcon>
+      <TraceTitle className="shrink-0">
         {secret.status ? (outcomes[secret.status] ?? "Ended") : "Waiting for you"}
-      </span>
-      <span className="min-w-0 truncate">{secret.request.label}</span>
-    </p>
+      </TraceTitle>
+      <span className="truncate text-faint-foreground">{secret.request.label}</span>
+    </TraceLine>
   );
 }

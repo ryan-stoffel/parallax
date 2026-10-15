@@ -200,7 +200,7 @@ test("a waiting request is pinned over the composer, outside the transcript, wit
   expect(inCard("Deny")!.className).not.toContain("bg-send");
   expect(inCard("Always allow")!.getAttribute("aria-describedby")).toBeTruthy();
   // Its place in the transcript, until it's answered.
-  expect(lines()).toEqual([expect.stringMatching(/^Waiting for approvalBash: pnpm test/)]);
+  expect(lines()).toEqual([expect.stringMatching(/^Waiting for approval Bash: pnpm test/)]);
 });
 
 test("Approve answers with agent/approve, shows the answer on its way, then collapses to a line", async () => {
@@ -219,11 +219,11 @@ test("Approve answers with agent/approve, shows the answer on its way, then coll
   await act(async () => release({ result: { decision: "allowed", by: "user" } }));
   await settle();
   expect(pinned()).toBeNull();
-  expect(lines()).toEqual([expect.stringMatching(/^ApprovedBash: pnpm test/)]);
+  expect(lines()).toEqual([expect.stringMatching(/^Approved Bash: pnpm test/)]);
   // plxd's resolution confirms it.
   await emit(resolved("a1", { decision: "allowed", by: "user" }));
   expect(pinned()).toBeNull();
-  expect(lines()).toEqual([expect.stringMatching(/^ApprovedBash: pnpm test/)]);
+  expect(lines()).toEqual([expect.stringMatching(/^Approved Bash: pnpm test/)]);
   const time = transcript().querySelector("summary time")!;
   expect(time.getAttribute("dateTime")).toMatch(/^2026-10-01T12:00:03Z$/);
 });
@@ -238,12 +238,12 @@ test("a request that ends while its answer is on the way leaves, and the answer'
   // It timed out just before the answer reached plxd.
   await emit(resolved("a1", { decision: "expired", by: "timeout" }));
   expect(pinned()).toBeNull();
-  expect(lines()).toEqual([expect.stringMatching(/^Timed outBash/)]);
+  expect(lines()).toEqual([expect.stringMatching(/^Timed out Bash/)]);
   // plxd's reply is how it ended, as `agent/approve` is idempotent.
   await act(async () => release({ result: { decision: "expired", by: "timeout" } }));
   await settle();
   expect(pinned()).toBeNull();
-  expect(lines()).toEqual([expect.stringMatching(/^Timed outBash/)]);
+  expect(lines()).toEqual([expect.stringMatching(/^Timed out Bash/)]);
   expect(document.querySelector('[role="alert"]')).toBeNull();
 });
 
@@ -262,7 +262,7 @@ test("Always allow shows only when the request offers rules, and sends always", 
   ]);
   expect(lines()).toEqual([
     expect.stringMatching(/^Approved/),
-    expect.stringMatching(/^Always allowedBash: pnpm test/),
+    expect.stringMatching(/^Always allowed Bash: pnpm test/),
   ]);
 });
 
@@ -308,8 +308,8 @@ test("Deny asks for an optional note, which goes as the message; Escape goes bac
   ]);
   expect(pinned()).toBeNull();
   expect(lines()).toEqual([
-    expect.stringMatching(/^DeniedBash: pnpm test/),
-    expect.stringMatching(/^DeniedBash: pnpm test/),
+    expect.stringMatching(/^Denied Bash: pnpm test/),
+    expect.stringMatching(/^Denied Bash: pnpm test/),
   ]);
   // Its line opens to who decided, and the note.
   openLines();
@@ -351,7 +351,7 @@ test("approvalNotFound reads as no longer waiting, not as a failure, and Dismiss
   expect(buttons().map((b) => b.textContent)).toEqual(["Dismiss"]);
   await click(inCard("Dismiss"));
   expect(pinned()).toBeNull();
-  expect(lines()).toEqual([expect.stringMatching(/^No longer waitingBash: pnpm test/)]);
+  expect(lines()).toEqual([expect.stringMatching(/^No longer waiting Bash: pnpm test/)]);
 });
 
 test("a request that times out, is withdrawn, is stopped, or outlives its run leaves the queue, and its line says so", async () => {
@@ -366,15 +366,16 @@ test("a request that times out, is withdrawn, is stopped, or outlives its run le
   expect(pinned()).toBeNull();
   // The run is over, so its answered requests fold into its work (PLX-326).
   expect(lines()).toEqual([]);
-  await click(transcript().querySelector("button[aria-expanded]"));
+  await click(transcript().querySelector("summary"));
   expect(lines()).toEqual([
-    expect.stringMatching(/^Timed outBash/),
-    expect.stringMatching(/^WithdrawnBash/),
-    expect.stringMatching(/^DeniedBash/),
-    expect.stringMatching(/^WithdrawnBash/),
+    expect.stringMatching(/^Timed out Bash/),
+    expect.stringMatching(/^Withdrawn Bash/),
+    expect.stringMatching(/^Denied Bash/),
+    expect.stringMatching(/^Withdrawn Bash/),
   ]);
   openLines();
-  const details = [...transcript().querySelectorAll("details")].map((d) => d.textContent);
+  // The lines, inside the fold of the run's work.
+  const details = [...transcript().querySelectorAll("details details")].map((d) => d.textContent);
   expect(details[0]).toContain("Nobody answered in time, so plxd denied it");
   expect(details[2]).toContain("Denied when the run was stopped");
   expect(details[3]).toContain("The run ended before anyone answered");
@@ -491,7 +492,7 @@ test("after a reload, an answered request is a line, never a card", async () => 
   output(resolved("a1", { decision: "allowed", by: "user", always: true }));
   await renderChat();
   expect(pinned()).toBeNull();
-  expect(lines()).toEqual([expect.stringMatching(/^Always allowedBash: pnpm test/)]);
+  expect(lines()).toEqual([expect.stringMatching(/^Always allowed Bash: pnpm test/)]);
 });
 
 test("while a request waits, no loader muses under it; once answered, the work goes on", async () => {
@@ -1122,7 +1123,7 @@ test("a line in the transcript is one quiet row: how it ended, the tool, and whe
   render(<RowView row={row} live={false} open={false} onToggle={() => {}} />);
   const summary = document.querySelector("summary")!;
   expect(summary.querySelector("time")!.getAttribute("dateTime")).toBe("2026-10-01T12:00:05Z");
-  expect(summary.textContent).toBe(`ApprovedBash: pnpm test a1${clock("2026-10-01T12:00:05Z")}`);
+  expect(summary.textContent).toBe(`Approved Bash: pnpm test a1${clock("2026-10-01T12:00:05Z")}`);
   expect(document.querySelector("details")!.open).toBe(false);
   // No box around it.
   expect(summary.querySelector('[class*="border"]')).toBeNull();
