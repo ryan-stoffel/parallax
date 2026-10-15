@@ -54,6 +54,10 @@ pub struct PreviewListResult {
 /// An agent's browser tab.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about a tab, not states of one thing"
+)]
 pub struct PreviewTab {
     /// Its id within its thread, such as `tab-1`.
     pub tab_id: String,
@@ -67,6 +71,9 @@ pub struct PreviewTab {
     pub human: bool,
     /// Whether the agent is recording it.
     pub recording: bool,
+    /// Whether its viewport has a fixed size, rather than filling the app's panel.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fixed: bool,
 }
 
 /// Params of `preview/frame`: the tab's newest frame after `after`. plxd waits up to 10 s for
@@ -179,6 +186,15 @@ pub enum PreviewInput {
         /// The height.
         height: u32,
     },
+    /// The user's size bar: fixes the viewport at a size, as `preview_resize`'s freeform mode does.
+    Fixed {
+        /// The width.
+        width: u32,
+        /// The height.
+        height: u32,
+    },
+    /// The user's size bar: the viewport fills the panel again.
+    Fill,
     /// The address bar: opens a page.
     Navigate {
         /// The page, as the address bar's text.

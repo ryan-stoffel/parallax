@@ -13,7 +13,8 @@ const buttons = ["left", "middle", "right"] as const;
 /**
  * An agent's browser tab (PLX-639), which runs in the host's headless browser: its screencast,
  * long-polled from plxd, and the user's mouse, wheel, and keys sent back, which take control from
- * the agent until Hand back. The address bar opens a page too.
+ * the agent until Hand back. The address bar opens a page too, and the size bar fills the panel or
+ * fixes the page at a size, drawn centered and scaled down to fit (PLX-810).
  */
 export function AgentBrowser({
   hostId,
@@ -28,6 +29,10 @@ export function AgentBrowser({
   const [state, setState] = useState(tab);
   const [gone, setGone] = useState(false);
   const [address, setAddress] = useState<string>();
+  // The size bar's text while the user edits it.
+  const [draft, setDraft] = useState<{ width: string; height: string }>();
+  // The view's size in CSS pixels, which a fixed size scales down to fit.
+  const [panel, setPanel] = useState({ width: 0, height: 0 });
   const view = useRef<HTMLImageElement>(null);
   const lastMove = useRef(0);
   // Whether the view takes up any space: a hidden side panel or view has none. Hidden, it pulls
@@ -70,6 +75,7 @@ export function AgentBrowser({
       clearTimeout(timer);
       const [width, height] = [Math.round(el.clientWidth), Math.round(el.clientHeight)];
       setShown(width > 0 && height > 0);
+      setPanel({ width, height });
       if (width === 0 || height === 0) return;
       timer = setTimeout(() => {
         const input: PreviewInput = { kind: "viewport", width, height };
@@ -87,6 +93,13 @@ export function AgentBrowser({
     void window.parallax.request(hostId, "preview/input", { runId, tabId: tab.tabId, input });
     setState((s) => ({ ...s, human: input.kind !== "control" || input.take }));
   };
+  // The size bar's inputs, which never take control.
+  const size = (input: Extract<PreviewInput, { kind: "fixed" | "fill" }>) => {
+    void window.parallax.request(hostId, "preview/input", { runId, tabId: tab.tabId, input });
+    setState((s) => ({ ...s, fixed: input.kind === "fixed" }));
+    setDraft(undefined);
+  };
+  const scale = frame ? Math.min(1, panel.width / frame.width, panel.height / frame.height) : 1;
   // A point on the image, in the page's CSS pixels.
   const at = (e: { clientX: number; clientY: number }) => {
     const box = view.current!.getBoundingClientRect();
@@ -155,6 +168,55 @@ export function AgentBrowser({
           </span>
         )}
       </form>
+      <form
+        className="flex items-center gap-1.5 border-b border-border px-2 py-1 text-[12px]"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const [width, height] = [Number(draft?.width), Number(draft?.height)];
+          if (Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0)
+            size({ kind: "fixed", width, height });
+        }}
+      >
+        <button
+          type="button"
+          aria-pressed={!state.fixed}
+          onClick={() => size({ kind: "fill" })}
+          className={`rounded-md px-2 py-0.5 hover:bg-hover ${state.fixed ? "text-muted-foreground" : "bg-selected text-foreground"}`}
+        >
+          Fill
+        </button>
+        {(["width", "height"] as const).map((side, i) => (
+          <label key={side} className="flex items-center gap-1.5">
+            {i > 0 && <span className="text-muted-foreground">×</span>}
+            <input
+              aria-label={`Page ${side}`}
+              inputMode="numeric"
+              value={draft?.[side] ?? String(frame?.[side] ?? "")}
+              // The first keystroke starts a draft from the page's size, so the other field keeps it.
+              onChange={(e) =>
+                setDraft((d) => ({
+                  ...(d ?? {
+                    width: String(frame?.width ?? ""),
+                    height: String(frame?.height ?? ""),
+                  }),
+                  [side]: e.target.value,
+                }))
+              }
+              // A form with two fields and no submit button doesn't submit on Enter by itself.
+              onKeyDown={(e) => e.key === "Enter" && e.currentTarget.form?.requestSubmit()}
+              onBlur={(e) => {
+                if (!e.currentTarget.form?.contains(e.relatedTarget)) setDraft(undefined);
+              }}
+              className="w-14 rounded-md bg-selected px-1.5 py-0.5 tabular-nums focus-visible:outline-2 focus-visible:outline-ring"
+            />
+          </label>
+        ))}
+        {frame && scale < 1 && (
+          <span className="ml-auto text-muted-foreground tabular-nums">
+            {Math.round(scale * 100)}%
+          </span>
+        )}
+      </form>
       <div
         ref={area}
         tabIndex={0}
@@ -164,7 +226,7 @@ export function AgentBrowser({
         onWheel={(e) =>
           frame && send({ kind: "wheel", ...at(e), deltaX: e.deltaX, deltaY: e.deltaY })
         }
-        className={`relative min-h-0 flex-1 overflow-auto bg-background outline-none ${state.human ? "ring-2 ring-ring ring-inset" : ""}`}
+        className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-background outline-none ${state.human ? "ring-2 ring-ring ring-inset" : ""}`}
       >
         {frame && (
           <img
@@ -176,7 +238,8 @@ export function AgentBrowser({
             onPointerUp={pointer("up")}
             onPointerMove={pointer("move")}
             onContextMenu={(e) => e.preventDefault()}
-            className="block w-full select-none"
+            style={{ width: frame.width * scale, height: frame.height * scale }}
+            className={`block shrink-0 select-none ${state.fixed ? "shadow-md ring-1 ring-border" : ""}`}
           />
         )}
         {(gone || !frame) && (

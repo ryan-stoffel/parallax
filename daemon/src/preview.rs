@@ -214,8 +214,8 @@ impl Previews {
         })
     }
 
-    /// `preview/input`: the user's control, mouse, wheel, keys, or address bar. Anything but
-    /// handing control back takes control first.
+    /// `preview/input`: the user's control, mouse, wheel, keys, size, or address bar. Anything
+    /// but handing control back or sizing takes control first.
     pub(crate) async fn input(
         &self,
         params: PreviewInputParams,
@@ -224,11 +224,13 @@ impl Previews {
             .tab(params.run_id, Some(&params.tab_id))
             .await
             .map_err(ErrorObject::invalid_params)?;
-        let take = !matches!(
-            params.input,
-            PreviewInput::Control { take: false } | PreviewInput::Viewport { .. }
-        );
-        {
+        // Sizing leaves control where it is. Hand back releases it, and anything else takes it.
+        let take = match params.input {
+            PreviewInput::Viewport { .. } | PreviewInput::Fixed { .. } | PreviewInput::Fill => None,
+            PreviewInput::Control { take } => Some(take),
+            _ => Some(true),
+        };
+        if let Some(take) = take {
             let mut live = lock(&tab.live);
             if live.human != take {
                 live.human = take;
@@ -240,6 +242,22 @@ impl Previews {
             PreviewInput::Control { .. } => Ok(Value::Null),
             PreviewInput::Viewport { width, height } => {
                 tab.fill(width, height).await.map(|()| Value::Null)
+            }
+            PreviewInput::Fixed { width, height } => {
+                let args = ResizeArgs {
+                    mode: "freeform".to_owned(),
+                    width: Some(width),
+                    height: Some(height),
+                    ..ResizeArgs::default()
+                };
+                tab.resize(args).await
+            }
+            PreviewInput::Fill => {
+                let args = ResizeArgs {
+                    mode: "fill".to_owned(),
+                    ..ResizeArgs::default()
+                };
+                tab.resize(args).await
             }
             PreviewInput::Mouse {
                 event,
@@ -699,7 +717,30 @@ impl Tab {
             loading: live.loading,
             human: live.human,
             recording: live.recording.is_some(),
+            fixed: live.setting["mode"] != "fill",
         }
+    }
+
+    /// Sets the viewport for `preview_resize` or the user's size bar. Fill takes the app's panel
+    /// once the app has shown the tab.
+    async fn resize(&self, args: ResizeArgs) -> Result<Value, String> {
+        let (setting, (width, height)) = args.resolve()?;
+        let (width, height) = match lock(&self.live).panel {
+            Some(panel) if setting["mode"] == "fill" => panel,
+            _ => (width, height),
+        };
+        self.page
+            .call(
+                "Emulation.setDeviceMetricsOverride",
+                json!({"width": width, "height": height, "deviceScaleFactor": 1, "mobile": setting["mode"] == "preset"}),
+            )
+            .await?;
+        let mut live = lock(&self.live);
+        live.setting = setting.clone();
+        live.viewport = (width, height);
+        Ok(
+            json!({"tabId": self.id, "setting": setting, "viewport": {"width": width, "height": height}}),
+        )
     }
 
     async fn status(&self) -> Result<Value, String> {
@@ -759,27 +800,7 @@ impl Tab {
                     .await?;
                 Ok((self.status().await?, None))
             }
-            "preview_resize" => {
-                let args: ResizeArgs = parse(arguments)?;
-                let (setting, (width, height)) = args.resolve()?;
-                let (width, height) = match lock(&self.live).panel {
-                    Some(panel) if setting["mode"] == "fill" => panel,
-                    _ => (width, height),
-                };
-                self.page
-                    .call(
-                        "Emulation.setDeviceMetricsOverride",
-                        json!({"width": width, "height": height, "deviceScaleFactor": 1, "mobile": setting["mode"] == "preset"}),
-                    )
-                    .await?;
-                let mut live = lock(&self.live);
-                live.setting = setting.clone();
-                live.viewport = (width, height);
-                Ok((
-                    json!({"tabId": self.id, "setting": setting, "viewport": {"width": width, "height": height}}),
-                    None,
-                ))
-            }
+            "preview_resize" => Ok((self.resize(parse(arguments)?).await?, None)),
             "preview_set_appearance" => {
                 let args: AppearanceArgs = parse(arguments)?;
                 let scheme = match args.color_scheme.as_str() {
@@ -1622,7 +1643,7 @@ impl NavigationTarget {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ResizeArgs {
     #[serde(rename = "tabId")]
