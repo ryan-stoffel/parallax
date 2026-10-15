@@ -28,6 +28,8 @@ import { OpenDocumentContext } from "./FileCards";
 import { panelWidths, SIDEBAR_MIN } from "./PanelResize";
 import { NewThreadPicker } from "./NewThreadPicker";
 import { Notifications } from "./notifications";
+import { Onboarding } from "./Onboarding";
+import { useOnboarding } from "./firstRun";
 import { localId, useHosts } from "./hosts";
 import { iconImageBytes } from "./images";
 import { ThreadDetails, ThreadDetailsButton, useThreadDetails } from "./ThreadDetails";
@@ -120,6 +122,7 @@ export type SettingsSection =
  */
 export function App() {
   const [theme, setTheme] = useThemePreference();
+  const onboarding = useOnboarding();
   useAppearanceEffects();
   const hosts = useHosts();
   const [hostId, setHostId] = useState(localId);
@@ -710,6 +713,7 @@ export function App() {
         <HostLoader key={h.id} hostId={h.id} onView={report} onNeedsYou={needsYou} />
       ))}
       <Notifications />
+      {onboarding && <Onboarding onStart={() => picker.current?.showModal()} />}
       <NewThreadPicker
         ref={picker}
         groups={groups}

@@ -95,10 +95,12 @@ function createWindow() {
       sandbox: true,
       // The side panel's browser (Browser.tsx). `will-attach-webview` below guards it.
       webviewTag: true,
-      // The preload reads them, so `window.parallax.updatable` and `.locale` are plain values.
+      // The preload reads them, so `window.parallax.updatable`, `.onboarded`, and `.locale` are
+      // plain values.
       additionalArguments: [
         `--parallax-locale=${app.getPreferredSystemLanguages()[0] ?? app.getSystemLocale()}`,
         ...(updatable ? ["--parallax-updatable"] : []),
+        ...(process.env["PLX_SKIP_ONBOARDING"] ? ["--parallax-onboarded"] : []),
       ],
     },
   });

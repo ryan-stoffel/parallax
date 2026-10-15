@@ -12,6 +12,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // Only what the frame calls, so new bridge methods don't break this stub.
 const bridge: Partial<ParallaxBridge> = {
   platform: "darwin",
+  onboarded: true,
   version: async () => "0.0.0",
   request: async () => ({ error: { code: -32601, message: "Not in this test." } }),
   setThemeSource: vi.fn(),

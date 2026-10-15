@@ -1604,3 +1604,141 @@ body {
   background-color: var(--warning);
   color: #000;
 }
+
+/* First-launch onboarding (Onboarding.tsx). Steps and rows rise in, the logo's circles glide
+   together, and the tour's scenes play: bars fill, lines draw, chips pop, dots travel. Each
+   .onboard-layer shifts by its --depth with the pointer, from --px and --py on the dialog, each
+   -0.5 to 0.5. */
+.onboard-step,
+.onboard-rise {
+  animation: onboard-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes onboard-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+.onboard-layer {
+  translate: calc(var(--px, 0) * 2 * var(--depth, 0px)) calc(var(--py, 0) * 2 * var(--depth, 0px));
+  transition: translate 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.onboard-dots {
+  inset: -24px;
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+.onboard-mark .blue {
+  animation: onboard-meet-blue 1.1s cubic-bezier(0.34, 1.3, 0.64, 1) both;
+}
+.onboard-mark .coral {
+  animation: onboard-meet-coral 1.1s cubic-bezier(0.34, 1.3, 0.64, 1) both;
+}
+@keyframes onboard-meet-blue {
+  from {
+    opacity: 0;
+    translate: -6px -6px;
+  }
+}
+@keyframes onboard-meet-coral {
+  from {
+    opacity: 0;
+    translate: 6px 6px;
+  }
+}
+.onboard-glow {
+  animation: onboard-glow 6s ease-in-out infinite alternate;
+}
+@keyframes onboard-glow {
+  to {
+    opacity: 0.5;
+    scale: 1.25;
+  }
+}
+.onboard-bar {
+  transform-origin: left;
+  animation: onboard-bar 3s cubic-bezier(0.65, 0, 0.35, 1) infinite both;
+}
+@keyframes onboard-bar {
+  from {
+    transform: scaleX(0);
+  }
+  55%,
+  85% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+  to {
+    transform: scaleX(1);
+    opacity: 0;
+  }
+}
+.onboard-draw {
+  stroke-dasharray: 1;
+  animation: onboard-draw 0.8s cubic-bezier(0.65, 0, 0.35, 1) both;
+}
+@keyframes onboard-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.onboard-pop {
+  animation: onboard-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes onboard-pop {
+  from {
+    opacity: 0;
+    scale: 0.5;
+  }
+}
+.onboard-travel {
+  animation: onboard-travel 2.2s linear infinite both;
+}
+@keyframes onboard-travel {
+  from {
+    left: 0%;
+    opacity: 0;
+  }
+  15%,
+  85% {
+    opacity: 1;
+  }
+  to {
+    left: 100%;
+    opacity: 0;
+  }
+}
+.onboard-scan {
+  background: linear-gradient(90deg, transparent, var(--selected), transparent) 0 0 / 200% 100%;
+  animation: onboard-scan 1.4s linear infinite;
+}
+@keyframes onboard-scan {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+:root.reduce-motion {
+  .onboard-step,
+  .onboard-rise,
+  .onboard-mark *,
+  .onboard-glow,
+  .onboard-bar,
+  .onboard-draw,
+  .onboard-pop,
+  .onboard-scan {
+    animation: none;
+  }
+  .onboard-layer {
+    translate: none;
+    transition: none;
+  }
+  .onboard-travel {
+    display: none;
+  }
+}
