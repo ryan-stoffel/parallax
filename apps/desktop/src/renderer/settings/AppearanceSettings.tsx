@@ -144,13 +144,48 @@ const schemes: { value: ThemePreference; name: string }[] = [
   { value: "dark", name: "Dark" },
 ];
 
+/** A percent slider and its value, for the Window section. */
+function Percent({
+  label,
+  min,
+  value,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  min: number;
+  value: number;
+  disabled?: boolean;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <span className={`flex items-center gap-3 ${disabled ? "opacity-50" : ""}`}>
+      <input
+        type="range"
+        aria-label={label}
+        min={min}
+        max={100}
+        step={5}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-40"
+      />
+      <span className="w-9 text-right text-[12.5px] text-muted-foreground tabular-nums">
+        {value}%
+      </span>
+    </span>
+  );
+}
+
 const preview = "relative block aspect-[16/10] overflow-hidden rounded-lg border border-border";
 const card =
   "flex cursor-pointer flex-col gap-2 rounded-xl border border-border bg-surface p-2 text-center text-[12.5px] text-muted-foreground hover:bg-hover has-checked:border-accent has-checked:text-foreground has-checked:outline-1 has-checked:outline-accent has-focus-visible:outline-2 has-focus-visible:outline-ring";
 
 /**
  * Settings > Appearance: the color theme and scheme, and how the interface reads:
- * contrast, motion, the colors for added and removed, and typography.
+ * contrast, motion, the colors for added and removed, the window's blur and opacity, and
+ * typography.
  */
 export function AppearanceSettings({
   theme,
@@ -281,6 +316,41 @@ export function AppearanceSettings({
           />
         </Row>
       </Section>
+
+      {window.parallax.setWindowLook && (
+        <Section title="Window">
+          <Row
+            title="Blur behind window"
+            description="The desktop shows through the app's backgrounds, blurred."
+          >
+            <Switch
+              label="Blur behind window"
+              checked={appearance.blur}
+              onChange={(blur) => set({ blur })}
+            />
+          </Row>
+          <Row
+            title="Background opacity"
+            description="How much of the theme's background covers the blur. 0% is clear glass."
+          >
+            <Percent
+              label="Background opacity"
+              min={0}
+              value={appearance.backgroundOpacity}
+              disabled={!appearance.blur}
+              onChange={(backgroundOpacity) => set({ backgroundOpacity })}
+            />
+          </Row>
+          <Row title="Window opacity" description="The whole window, text included.">
+            <Percent
+              label="Window opacity"
+              min={30}
+              value={appearance.windowOpacity}
+              onChange={(windowOpacity) => set({ windowOpacity })}
+            />
+          </Row>
+        </Section>
+      )}
 
       <TypographySettings />
     </>

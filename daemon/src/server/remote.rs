@@ -114,9 +114,12 @@ const MAX_FILE_RESPONSES_PER_IP: usize = 6;
 const FILE_CHUNK: usize = 16 * 1024;
 
 /// The web client's Content Security Policy, as a header, which unlike vite.config.ts's `<meta>`
-/// can forbid framing. Its scripts and connections are this origin's only.
+/// can forbid framing. Its scripts are this origin's only, and it connects only here and to Open
+/// VSX, which Settings > Appearance adds color themes from.
 const WEB_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
-    img-src 'self' data: https://github.com https://*.githubusercontent.com; connect-src 'self'; \
+    img-src 'self' data: https://github.com https://*.githubusercontent.com https://open-vsx.org \
+    https://openvsx.eclipsecontent.org; \
+    connect-src 'self' https://open-vsx.org https://openvsx.eclipsecontent.org; \
     object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /// The remote listener's state, shared with `remote/*`.

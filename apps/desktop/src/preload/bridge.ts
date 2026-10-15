@@ -129,6 +129,11 @@ export interface ParallaxBridge {
   setThemeSource(preference: ThemePreference): void;
   /** Zooms this window's page, 1 being 100%: Settings > Appearance's text size. */
   setZoom(factor: number): void;
+  /**
+   * Blurs the desktop behind this window and sets its opacity, 1 being opaque: Settings >
+   * Appearance's Window. Only on macOS and Windows, and not on the web.
+   */
+  setWindowLook?(look: { blur: boolean; opacity: number }): void;
   /** Opens the OS folder picker over this window. Resolves to the folder's path, or null if cancelled. */
   pickFolder(): Promise<string | null>;
   /** The folders in a folder on this computer, whose path may start with `~`. */

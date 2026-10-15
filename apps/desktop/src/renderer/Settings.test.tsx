@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import type { ConnectionState, SshHost, ParallaxBridge } from "../preload/bridge";
 import type { ProviderInfo, ProviderInstance, ProviderKind } from "../protocol/generated/protocol";
 import type { SettingsSection } from "./App";
+import { applyAppearance, type Appearance } from "./appearance";
 import { models } from "./models";
 import { behaviorDefaults, behaviorPrefs, setBehaviorPrefs } from "./prefs";
 import { Settings } from "./Settings";
@@ -745,6 +746,29 @@ test("Typography's sizes and Word wrap are kept, and Advanced takes any font's n
     wordWrap: false,
     codeFont: "Berkeley Mono",
   });
+  localStorage.removeItem("parallax.appearance");
+});
+
+test("Window's blur and opacities are kept and tint the page, where the window can show them", async () => {
+  await renderSettings("appearance");
+  expect(document.querySelector('[aria-label="Window"]')).toBeNull();
+  act(() => unmount());
+  window.parallax.setWindowLook = () => {};
+  await renderSettings("appearance");
+  const slider = (label: string) =>
+    document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+  expect(slider("Background opacity").disabled).toBe(true);
+  await click(
+    document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Blur behind window"]')!,
+  );
+  change(slider("Background opacity"), "40");
+  change(slider("Window opacity"), "85");
+  const saved = JSON.parse(localStorage.getItem("parallax.appearance")!) as Appearance;
+  expect(saved).toMatchObject({ blur: true, backgroundOpacity: 40, windowOpacity: 85 });
+  applyAppearance(saved);
+  expect(document.documentElement.classList.contains("translucent")).toBe(true);
+  expect(document.documentElement.style.getPropertyValue("--tint")).toBe("40%");
+  applyAppearance({ ...saved, blur: false });
   localStorage.removeItem("parallax.appearance");
 });
 

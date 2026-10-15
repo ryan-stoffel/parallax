@@ -430,8 +430,9 @@
     SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   /* The app's name in the sidebar. */
   --font-brand: "Sora Variable", var(--font-sans);
-  --color-background: var(--background);
-  --color-sidebar: var(--sidebar);
+  /* --tint is 100% unless Appearance's Blur behind window is on (appearance.ts). */
+  --color-background: color-mix(in srgb, var(--background) var(--tint, 100%), transparent);
+  --color-sidebar: color-mix(in srgb, var(--sidebar) var(--tint, 100%), transparent);
   --color-surface: var(--surface);
   --color-foreground: var(--foreground);
   --color-muted-foreground: var(--muted-foreground);
@@ -495,6 +496,11 @@ body {
   -webkit-font-smoothing: antialiased;
   user-select: none;
   cursor: default;
+}
+
+/* With Blur behind window on, only the panes' translucent backgrounds cover the blur. */
+:root.translucent body {
+  background: transparent;
 }
 
 /* Keyboard focus is always visible; mouse focus never draws a ring. In the

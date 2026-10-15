@@ -14,6 +14,8 @@ import type { PackUserConfig } from "vite-plus/pack";
 // how a message's images show (PLX-193), or GitHub's, which a pull request's
 // description and comments show (PLX-517); agent Markdown never loads images.
 // blob: is the images and videos an agent presented (PLX-785), made from bytes plxd read.
+// Open VSX, and the host its downloads redirect to, is where Settings > Appearance searches for
+// and downloads color themes, with their icons.
 const csp = (dev: boolean) =>
   [
     "default-src 'self'",
@@ -21,7 +23,8 @@ const csp = (dev: boolean) =>
     "style-src 'self' 'unsafe-inline'",
     // KaTeX's fonts, which Vite inlines as data: URLs when small.
     "font-src 'self' data:",
-    "img-src 'self' data: blob: https://github.com https://*.githubusercontent.com",
+    "img-src 'self' data: blob: https://github.com https://*.githubusercontent.com https://open-vsx.org https://openvsx.eclipsecontent.org",
+    "connect-src 'self' https://open-vsx.org https://openvsx.eclipsecontent.org",
     // html_render pages (PLX-639), which main serves with a policy of their own, and browser
     // recordings.
     "frame-src plx-render:",
