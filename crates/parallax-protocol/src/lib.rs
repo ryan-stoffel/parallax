@@ -32,6 +32,7 @@
 mod account;
 mod agent;
 mod approval;
+mod area;
 mod cli_account;
 mod composer;
 mod connect;
@@ -205,6 +206,10 @@ pub use terminal::{
     TerminalCommand, TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult,
     TerminalOpenParams, TerminalOutputParams, TerminalResizeParams, TerminalResult,
     TerminalWriteParams,
+};
+pub use area::{
+    Area, AreaCreateParams, AreaDeleteParams, AreaDeleteResult, AreaId, AreaResult,
+    AreaUpdateParams, MAX_AREA_NAME_CHARS,
 };
 pub use thread::{
     ForkedFrom, MAX_SPACE_NAME_BYTES, MAX_THREAD_TITLE_BYTES, Repo, RepoAddParams, RepoAddResult,

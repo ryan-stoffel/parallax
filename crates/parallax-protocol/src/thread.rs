@@ -25,7 +25,7 @@ use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
 use crate::{
-    AccountChoice, AgentEffort, AgentPermission, AgentRun, ProjectIcon, ProjectId, PromptImage,
+    AccountChoice, AgentEffort, Area, AgentPermission, AgentRun, ProjectIcon, ProjectId, PromptImage,
     RunId, TurnId,
 };
 
@@ -110,6 +110,9 @@ pub struct Thread {
     /// Whether the user or an agent marked it settled: nothing left to do (0041).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub settled: bool,
+    /// Whether the user pinned it to the top of the sidebar (PLX-789), behind `areas`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinned: bool,
 }
 
 /// Where a thread was forked from: a run, and the turn of it the fork continues after (0041).
@@ -123,8 +126,8 @@ pub struct ForkedFrom {
 }
 
 /// Params of `thread/update`: marks a thread seen, or snoozes it (0033), behind the
-/// `threadAttention` capability, or sets its title or settled flag (0041), behind
-/// `threadLineage`.
+/// `threadAttention` capability, sets its title or settled flag (0041), behind `threadLineage`,
+/// or pins it (PLX-789), behind `areas`.
 ///
 /// `seen` sets `seenAt` to plxd's clock now. `snoozedUntil` replaces the snooze; a time in the
 /// past ends it. A change appends `thread.updated`; an update that changes nothing appends none.
@@ -150,6 +153,10 @@ pub struct ThreadUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub settled: Option<bool>,
+    /// True to pin it, false to unpin it (PLX-789), behind `areas`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pinned: Option<bool>,
 }
 
 /// Result of `thread/update`.
@@ -244,6 +251,9 @@ pub struct ThreadListResult {
     pub repos: Vec<Repo>,
     /// Every thread, oldest first.
     pub threads: Vec<Thread>,
+    /// Every area (PLX-789), oldest first. Absent from a plxd without `areas`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub areas: Vec<Area>,
     /// The event log's `seq` from before the list was read. Subscribe to host-level events with
     /// `after` set to it. The list may already reflect some events after it, and replaying them is
     /// harmless.
