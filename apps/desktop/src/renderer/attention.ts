@@ -3,7 +3,7 @@ import { isRunning } from "./transcript";
 
 /**
  * What a sidebar row asks of the user (0033): its agent is working, its turn ended but plxd
- * watches a pull request for it (monitoring) or it waits on a subagent or a Monitor (waiting,
+ * watches a pull request for it (monitoring) or it waits on background work (waiting,
  * PLX-777), it waits on the user, it stopped since the user last looked (done or failed), or
  * there is nothing new (settled).
  */

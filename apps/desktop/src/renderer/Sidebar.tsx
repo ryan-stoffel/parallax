@@ -483,7 +483,7 @@ export function ThreadList({
   }
   const tops = pool.filter((i) => !inList.has(parentKey(i) ?? ""));
   // A working top-level thread takes its children with it, so a family isn't split across sections.
-  // A thread waiting on a Monitor or a watched pull request stays with them (PLX-777).
+  // A thread waiting on background work or a watched pull request stays with them (PLX-777).
   const workingTops = workingSection
     ? tops.filter((i) => ["working", "monitoring", "waiting"].includes(i.attention))
     : [];
