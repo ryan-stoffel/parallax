@@ -2,6 +2,7 @@ import { ChevronRight, ChevronsDownUp, ChevronsUpDown, File, FileDiff, Folder } 
 import { createContext, useContext, type ReactNode } from "react";
 
 import type { CheckpointFile, ThreadRun } from "../protocol/generated/protocol";
+import { fileIcon } from "./fileIcons";
 
 /** A folder of a turn's changed files, single-child folders joined into one, or a file. */
 export type TreeNode =
@@ -93,7 +94,7 @@ export function TurnChanges({ turnId }: { turnId: string | undefined }) {
         const { file } = node;
         const label = (
           <>
-            <File aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
+            <FileIcon path={file.path} />
             <span className="min-w-0 flex-1 truncate">{node.name}</span>
             <Counts added={file.additions} removed={file.deletions} />
           </>
@@ -189,6 +190,20 @@ function totals(nodes: TreeNode[]): { added: number; removed: number } {
     removed += t.removed;
   }
   return { added, removed };
+}
+
+/** A file's icon by its type, or a plain file for a type the icons don't know. */
+function FileIcon({ path }: { path: string }) {
+  const icon = fileIcon(path);
+  if (!icon) return <File aria-hidden className="size-4 shrink-0 text-faint-foreground" />;
+  const img = "size-4 shrink-0";
+  if (!icon.light) return <img alt="" src={icon.dark} className={img} />;
+  return (
+    <>
+      <img alt="" src={icon.dark} className={`${img} hidden [:root.dark_&]:block`} />
+      <img alt="" src={icon.light} className={`${img} [:root.dark_&]:hidden`} />
+    </>
+  );
 }
 
 function Counts({ added, removed }: { added: number; removed: number }) {
