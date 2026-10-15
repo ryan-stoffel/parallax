@@ -17,6 +17,7 @@ import {
   Ellipsis,
   FileDiff,
   Folder,
+  FolderGit2,
   FolderPlus,
   GitBranch,
   GitMerge,
@@ -257,12 +258,14 @@ export function ProjectIcon({
 
 /**
  * A repo's icon: the one the user chose, in a Project's shape (0033), or else its initials on a
- * tile in a color picked from its name. No Repo is a dashed square.
+ * tile in a color picked from its name. No Repo is a dashed square. `big` draws it at 18px, as a
+ * thread row's.
  */
-export function RepoIcon({ repo }: { repo?: Repo }) {
+export function RepoIcon({ repo, big }: { repo?: Repo; big?: boolean }) {
+  const size = big ? "size-[18px]" : "size-4";
   if (!repo || repo.scratch)
-    return <SquareDashed aria-hidden className="size-4 shrink-0 text-faint-foreground" />;
-  if (repo.icon) return <ProjectIcon icon={repo.icon} className="size-4 shrink-0" />;
+    return <SquareDashed aria-hidden className={`${size} shrink-0 text-faint-foreground`} />;
+  if (repo.icon) return <ProjectIcon icon={repo.icon} className={`${size} shrink-0`} />;
   const palette = iconColors.slice(1);
   let hash = 0;
   for (let i = 0; i < repo.name.length; i++) hash = (hash * 31 + repo.name.charCodeAt(i)) | 0;
@@ -270,7 +273,7 @@ export function RepoIcon({ repo }: { repo?: Repo }) {
   return (
     <span
       aria-hidden
-      className={`grid size-4 shrink-0 place-items-center rounded-[4px] bg-current/15 text-[8.5px] leading-none font-bold ${color}`}
+      className={`grid ${size} shrink-0 place-items-center rounded-[4px] bg-current/15 ${big ? "text-[9.5px]" : "text-[8.5px]"} leading-none font-bold ${color}`}
     >
       {/* Drawn from the attribute, so the tile adds nothing to the text around it. */}
       <span data-initials={initials(repo.name)} className="before:content-[attr(data-initials)]" />
@@ -1564,8 +1567,8 @@ export const backendLogos: Partial<Record<string, ComponentType<SVGProps<SVGSVGE
  */
 function RowHead({ repo, status }: { repo?: Repo; status: ReactNode }) {
   return (
-    <span className="flex w-full items-center gap-1.5 text-[12px] text-faint-foreground group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34">
-      <RepoIcon repo={repo} />
+    <span className="flex w-full items-center gap-2 text-[12px] text-faint-foreground group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34">
+      <RepoIcon repo={repo} big />
       <span className="min-w-0 truncate">{repo && !repo.scratch ? repo.name : "No repo"}</span>
       <span
         data-status
@@ -1627,7 +1630,7 @@ function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: 
 
 /**
  * A thread's row (0033): its repo and status (what it asks of the user, or how long ago it was
- * prompted), its title, then its branch, linked pull requests (the number of one, or +N for more),
+ * prompted), its title, then its worktree or local checkout icon and branch, linked pull requests (the number of one, or +N for more),
  * and provider. Resting on it shows its card; hovering or focusing it swaps the status for Snooze,
  * Archive, and more actions, which also open by right-clicking the row: native popovers, so Escape
  * and clicking away close them.
@@ -1711,7 +1714,7 @@ function ThreadRow({
   // Read once, not polled: a row's state is as of when the sidebar loaded it.
   const prs = usePullRequests(hostId, run?.id, run?.pullRequests ?? [], false, false);
   const prLook = majorityLook(prs);
-  const hasDetails = !!(run?.branch || prs.urls.length || Logo || device);
+  const hasDetails = !!(run?.branch || run?.checkout || prs.urls.length || Logo || device);
   const snoozedNow = !!thread.snoozedUntil && Date.parse(thread.snoozedUntil) > Date.now();
   const mainLabel = (
     <>
@@ -1731,7 +1734,10 @@ function ThreadRow({
     ) : (
       <AttentionBadge attention={attention} since={lastPrompt(thread)} />
     ));
-  const titleColor = selected || attention !== "settled" ? "text-foreground" : "text-foreground/70";
+  const titleColor =
+    selected || attention !== "settled"
+      ? "text-foreground"
+      : "text-foreground/70 group-hover/row:text-foreground";
   return (
     <li
       data-kind="thread"
@@ -1753,11 +1759,14 @@ function ThreadRow({
           onLeave();
           dragThread(e.dataTransfer, hostId, thread.id);
         }}
-        className={`flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left hover:bg-hover ${selected ? current : ""}`}
+        className={`flex w-full cursor-pointer flex-col gap-1 rounded-lg px-2 py-[7px] text-left transition-colors duration-150 hover:bg-hover ${selected ? current : ""}`}
       >
         {nested ? (
           <span className="flex w-full items-center gap-2 group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34">
-            <span data-title className={`min-w-0 flex-1 truncate text-[13px] ${titleColor}`}>
+            <span
+              data-title
+              className={`min-w-0 flex-1 truncate text-[13px] font-[450] transition-colors ${titleColor}`}
+            >
               {title}
             </span>
             <span
@@ -1770,14 +1779,35 @@ function ThreadRow({
         ) : (
           <>
             <RowHead repo={repo} status={status} />
-            <span data-title className={`w-full truncate text-[13px] ${titleColor}`}>
+            <span
+              data-title
+              className={`w-full truncate text-[13px] font-[450] transition-colors ${titleColor}`}
+            >
               {title}
             </span>
           </>
         )}
         {hasDetails && (
           <span className="flex w-full items-center gap-2 text-[11.5px] text-faint-foreground">
-            <span className="min-w-0 flex-1 truncate">{run?.branch}</span>
+            <span className="flex min-w-0 flex-1 items-center gap-1">
+              {(run?.branch || run?.checkout) && (
+                <span
+                  title={run.checkout ? "Local checkout" : "Worktree"}
+                  role="img"
+                  aria-label={run.checkout ? "Local checkout" : "Worktree"}
+                  className="flex shrink-0"
+                >
+                  {run.checkout ? (
+                    <Folder className="size-3.5" />
+                  ) : (
+                    <FolderGit2 className="size-3.5" />
+                  )}
+                </span>
+              )}
+              <span className="min-w-0 truncate">
+                {run?.branch ?? (run?.checkout && "Local checkout")}
+              </span>
+            </span>
             {prs.urls.length > 0 && (
               <span
                 title={`${prs.urls.length} linked pull ${prs.urls.length === 1 ? "request" : "requests"}`}
@@ -1803,7 +1833,7 @@ function ThreadRow({
           </span>
         )}
       </button>
-      <div className="absolute top-1 right-1 flex items-center gap-0.5 opacity-0 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100">
+      <div className="absolute top-1 right-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100 [&_button]:cursor-pointer">
         {snoozable && (
           <button
             type="button"
