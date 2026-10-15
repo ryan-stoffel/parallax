@@ -1,6 +1,6 @@
 # 0066: Updating Parallax updates plxd on every connected computer
 
-- Status: accepted; extends [0030](0030-release-versions.md) (`plxd.version`), [0056](0056-parallax-connect.md), and [0065](0065-remote-reach.md)'s SSH install (PLX-642)
+- Status: accepted; extends [0030](0030-release-versions.md) (`plxd.version`), [0056](0056-parallax-connect.md), and [0065](0065-remote-reach.md)'s SSH install (PLX-642); amended by [0072](0072-connect-stays-up.md): the service runs `~/.parallax-plxd/plxd` on every OS, the app's `repointService` is gone, and `host/update` works on Windows
 - Date: 2026-10-10
 - Issue: PLX-700
 
