@@ -240,7 +240,7 @@ function StartAgent({
           aria-label="Start subagent"
           title="Start subagent"
           disabled={!canStart}
-          className="grid size-7 shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:opacity-25 [&_svg]:size-4"
+          className="send-sky grid size-7 shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:opacity-25 [&_svg]:size-4"
         >
           {starting ? <LoaderCircle className="animate-spin" /> : <ArrowUp />}
         </button>

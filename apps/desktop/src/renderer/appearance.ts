@@ -2,7 +2,18 @@ import { useLayoutEffect } from "react";
 
 import { merged, stored } from "./stored";
 
+/** The color themes, each a light and a dark pair in index.css under `theme-<value>`. */
+export const colorThemes = [
+  { value: "parallax", name: "Parallax" },
+  { value: "github", name: "GitHub" },
+  { value: "catppuccin", name: "Catppuccin" },
+  { value: "rose-pine", name: "Rosé Pine" },
+] as const;
+export type ColorTheme = (typeof colorThemes)[number]["value"];
+
 export type Appearance = {
+  /** The palette; Light, Dark, or System picks which of its pair shows (theme.ts). */
+  colorTheme: ColorTheme;
   /** "system" follows the OS's Increase contrast. */
   contrast: "system" | "standard" | "more";
   /** A font family name, or empty for the system's. */
@@ -21,6 +32,7 @@ export type Appearance = {
 };
 
 export const defaults: Appearance = {
+  colorTheme: "parallax",
   contrast: "system",
   uiFont: "",
   uiSize: 13,
@@ -106,12 +118,14 @@ const family = (name: string) => name.replace(/["';{}\\]/g, "").trim();
 
 /**
  * Paints `appearance` on <html>: the fonts as variables index.css reads, and classes for
- * contrast, motion, and diff colors.
+ * the color theme, contrast, motion, and diff colors.
  */
 export function applyAppearance(appearance: Appearance) {
   const root = document.documentElement;
   const ui = family(appearance.uiFont);
   const code = family(appearance.codeFont);
+  for (const t of colorThemes)
+    root.classList.toggle(`theme-${t.value}`, t.value === appearance.colorTheme);
   if (ui) root.style.setProperty("--ui-font", `"${ui}"`);
   else root.style.removeProperty("--ui-font");
   if (code) root.style.setProperty("--code-font", `"${code}"`);

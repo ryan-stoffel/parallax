@@ -93,8 +93,11 @@
 }
 
 /* Parallax Light and Parallax Dark. The `dark` class on <html> switches them
-   (theme.ts). Components use only these tokens, never raw colors. Every
-   *-foreground keeps at least 4.5:1 contrast on the background and sidebar.
+   (theme.ts), and a `theme-*` class swaps in another color theme's pair (below).
+   Components use only these tokens, never raw colors. Every *-foreground keeps
+   at least 4.5:1 contrast on the background and sidebar (theme.test.ts).
+   .scheme-light and .scheme-dark paint one mode inside any other, for
+   Settings' previews.
 
    --accent: the send button, focus rings (--ring), selected states, highlights,
    links, and the working loaders (--working) all derive from it. Text and icons
@@ -104,18 +107,20 @@
    Classes on <html> from the same settings: .contrast-more strengthens text and
    borders, .reduce-motion stops animations (it's also set when the OS asks),
    and .diff-blue-orange swaps red and green for blue and orange. */
-:root {
+:root,
+.scheme-light {
   color-scheme: light;
-  --background: #ffffff;
-  --sidebar: #ffffff;
+  --background: #fcfcfc;
+  --sidebar: #f5f5f6;
   --surface: #ffffff;
-  --foreground: #181818;
-  --muted-foreground: #4f4f4f;
-  --faint-foreground: #636363;
-  --border: rgb(0 0 0 / 9%);
-  --hover: rgb(0 0 0 / 4.5%);
-  --selected: rgb(0 0 0 / 7%);
-  --accent: #2563eb;
+  --foreground: #27272a;
+  --muted-foreground: #52525b;
+  --faint-foreground: #66666e;
+  --border: rgb(24 24 27 / 9%);
+  --hover: rgb(24 24 27 / 4.5%);
+  --selected: rgb(24 24 27 / 7%);
+  /* The logo's blue. */
+  --accent: #2b5cff;
   /* Black or white, whichever reads better on a fill, as a channel of
      color(from <fill> srgb-linear ...): white while the fill's WCAG luminance (from its linear
      r, g, and b, clipped as the screen clips them) is under 0.1791, where the two tie at 4.58:1. */
@@ -132,7 +137,7 @@
   --send-foreground: color(
     from var(--send) srgb-linear var(--black-or-white) var(--black-or-white) var(--black-or-white)
   );
-  --primary: #181818;
+  --primary: #27272a;
   --primary-foreground: #ffffff;
   --ring: var(--accent);
   --danger: #c42b2b;
@@ -141,7 +146,7 @@
   /* A diff's added lines (Approval.tsx); its removed lines are --danger. */
   --added: #15803d;
   /* Code blocks and diffs: a step off the background, and highlight.js's token colors. */
-  --code: #f7f7f8;
+  --code: #f4f4f5;
   --syntax-keyword: #cf222e;
   --syntax-string: #0a3069;
   --syntax-number: #0550ae;
@@ -173,26 +178,28 @@
   --mark-overlap: #1e1b4b;
 }
 
-:root.dark {
+:root.dark,
+.scheme-dark {
   color-scheme: dark;
-  --background: #0d0d0d;
-  --sidebar: #000000;
-  --surface: #171717;
-  --foreground: #ececec;
-  --muted-foreground: #a8a8a8;
-  --faint-foreground: #868686;
-  --border: rgb(255 255 255 / 8%);
-  --hover: rgb(255 255 255 / 4.5%);
-  --selected: rgb(255 255 255 / 8%);
-  --accent: #3b82f6;
+  --background: #0a0a0a;
+  --sidebar: #111111;
+  --surface: #161616;
+  --foreground: #f4f4f5;
+  --muted-foreground: #a3a3a3;
+  --faint-foreground: #858585;
+  --border: rgb(255 255 255 / 7%);
+  --hover: rgb(255 255 255 / 4%);
+  --selected: rgb(255 255 255 / 7%);
+  /* The logo's blue, lifted to read on the dark. */
+  --accent: #4b78ff;
   /* The accent, darkened: mixed toward a black with no chroma or hue, so it keeps the accent's. */
   --send: color-mix(in oklch, var(--accent) 68%, oklch(0 none none));
-  --primary: #ececec;
-  --primary-foreground: #0d0d0d;
+  --primary: #f4f4f5;
+  --primary-foreground: #0a0a0a;
   --danger: #ff8f8a;
   --warning: #f59e0b;
   --added: #4ade80;
-  --code: #151515;
+  --code: #131313;
   --syntax-keyword: #ff7b72;
   --syntax-string: #a5d6ff;
   --syntax-number: #79c0ff;
@@ -210,6 +217,148 @@
   --project-pink: #f472b6;
   --project-gray: #a1a1aa;
   --mark-overlap: #e4e4e7;
+}
+
+/* The other color themes (appearance.ts), each a light and a dark pair over Parallax's: a
+   `theme-*` class on <html>, or beside .scheme-light or .scheme-dark in a preview. :where keeps
+   the root selectors as specific as Parallax's own, so .contrast-more and .diff-blue-orange,
+   later, still win. */
+:root:where(.theme-github:not(.dark)),
+.scheme-light.theme-github {
+  --background: #ffffff;
+  --sidebar: #f6f8fa;
+  --surface: #ffffff;
+  --foreground: #1f2328;
+  --muted-foreground: #59636e;
+  --faint-foreground: #636c76;
+  --border: rgb(31 35 40 / 15%);
+  --hover: rgb(31 35 40 / 5%);
+  --selected: rgb(31 35 40 / 8%);
+  --accent: #0969da;
+  --primary: #1f2328;
+  --danger: #d1242f;
+  --warning: #9a6700;
+  --added: #1a7f37;
+  --code: #f6f8fa;
+}
+:root.dark:where(.theme-github),
+.scheme-dark.theme-github {
+  --background: #0d1117;
+  --sidebar: #010409;
+  --surface: #151b23;
+  --foreground: #f0f6fc;
+  --muted-foreground: #9198a1;
+  --faint-foreground: #848d97;
+  --border: rgb(61 68 77 / 70%);
+  --hover: rgb(101 108 118 / 10%);
+  --selected: rgb(101 108 118 / 20%);
+  --accent: #4493f8;
+  --primary: #f0f6fc;
+  --primary-foreground: #0d1117;
+  --danger: #f85149;
+  --warning: #d29922;
+  --added: #3fb950;
+  --code: #151b23;
+}
+/* Catppuccin Latte and Mocha. */
+:root:where(.theme-catppuccin:not(.dark)),
+.scheme-light.theme-catppuccin {
+  --background: #eff1f5;
+  --sidebar: #e6e9ef;
+  --surface: #f8f9fb;
+  --foreground: #4c4f69;
+  --muted-foreground: #5c5f77;
+  --faint-foreground: #5f6279;
+  --border: rgb(76 79 105 / 14%);
+  --hover: rgb(76 79 105 / 6%);
+  --selected: rgb(76 79 105 / 10%);
+  --accent: #1e66f5;
+  --primary: #4c4f69;
+  --danger: #d20f39;
+  --warning: #df8e1d;
+  --added: #40a02b;
+  --code: #e6e9ef;
+  --syntax-keyword: #8839ef;
+  --syntax-string: #40a02b;
+  --syntax-number: #fe640b;
+  --syntax-title: #1e66f5;
+  --syntax-type: #df8e1d;
+  --syntax-comment: #7c7f93;
+}
+:root.dark:where(.theme-catppuccin),
+.scheme-dark.theme-catppuccin {
+  --background: #1e1e2e;
+  --sidebar: #181825;
+  --surface: #262637;
+  --foreground: #cdd6f4;
+  --muted-foreground: #bac2de;
+  --faint-foreground: #a6adc8;
+  --border: rgb(205 214 244 / 9%);
+  --hover: rgb(205 214 244 / 5%);
+  --selected: rgb(205 214 244 / 9%);
+  --accent: #89b4fa;
+  --primary: #cdd6f4;
+  --primary-foreground: #1e1e2e;
+  --danger: #f38ba8;
+  --warning: #f9e2af;
+  --added: #a6e3a1;
+  --code: #181825;
+  --syntax-keyword: #cba6f7;
+  --syntax-string: #a6e3a1;
+  --syntax-number: #fab387;
+  --syntax-title: #89b4fa;
+  --syntax-type: #f9e2af;
+  --syntax-comment: #9399b2;
+}
+/* Rosé Pine Dawn and Rosé Pine. */
+:root:where(.theme-rose-pine:not(.dark)),
+.scheme-light.theme-rose-pine {
+  --background: #faf4ed;
+  --sidebar: #f2e9e1;
+  --surface: #fffaf3;
+  --foreground: #575279;
+  --muted-foreground: #5f5a80;
+  --faint-foreground: #67628a;
+  --border: rgb(87 82 121 / 13%);
+  --hover: rgb(87 82 121 / 6%);
+  --selected: rgb(87 82 121 / 10%);
+  --accent: #286983;
+  --primary: #575279;
+  --danger: #b4637a;
+  --warning: #ea9d34;
+  --added: #286983;
+  --code: #f2e9e1;
+  --syntax-keyword: #286983;
+  --syntax-string: #ea9d34;
+  --syntax-number: #d7827e;
+  --syntax-title: #907aa9;
+  --syntax-type: #56949f;
+  --syntax-comment: #797593;
+}
+:root.dark:where(.theme-rose-pine),
+.scheme-dark.theme-rose-pine {
+  --background: #191724;
+  --sidebar: #1f1d2e;
+  --surface: #26233a;
+  --foreground: #e0def4;
+  --muted-foreground: #b5b2cf;
+  --faint-foreground: #908caa;
+  --border: rgb(224 222 244 / 9%);
+  --hover: rgb(224 222 244 / 5%);
+  --selected: rgb(224 222 244 / 9%);
+  --accent: #c4a7e7;
+  --primary: #e0def4;
+  --primary-foreground: #191724;
+  --danger: #eb6f92;
+  --warning: #f6c177;
+  --added: #9ccfd8;
+  --code: #1f1d2e;
+  --syntax-keyword: #31748f;
+  --syntax-string: #f6c177;
+  --syntax-number: #ebbcba;
+  --syntax-title: #c4a7e7;
+  --syntax-type: #9ccfd8;
+  --syntax-comment: #6e6a86;
 }
 
 /* More contrast: muted text nearer the foreground, and borders and fills that show. */
@@ -235,6 +384,47 @@
 :root.dark.diff-blue-orange {
   --added: #58a6ff;
   --danger: #f0883e;
+}
+
+/* A nightly build (main.tsx sets .nightly): a night sky behind the sidebar's top row, fading into
+   the sidebar, and on the send buttons. The same in every theme and mode, so the row's text and
+   icons turn white over it. */
+.night-sky {
+  display: none;
+}
+:root.nightly {
+  --stars:
+    radial-gradient(1px 1px at 8% 30%, #fff 50%, transparent),
+    radial-gradient(1px 1px at 21% 72%, rgb(255 255 255 / 70%) 50%, transparent),
+    radial-gradient(1.5px 1.5px at 33% 18%, #fff 50%, transparent),
+    radial-gradient(1px 1px at 45% 86%, rgb(255 255 255 / 60%) 50%, transparent),
+    radial-gradient(1px 1px at 58% 12%, #fff 50%, transparent),
+    radial-gradient(1.5px 1.5px at 86% 84%, rgb(255 255 255 / 80%) 50%, transparent),
+    radial-gradient(1px 1px at 81% 24%, #fff 50%, transparent),
+    radial-gradient(1px 1px at 92% 62%, rgb(255 255 255 / 70%) 50%, transparent);
+  --sky: linear-gradient(170deg, #070a24, #161a52 55%, #2b2378);
+}
+:root.nightly .night-sky {
+  display: block;
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: -1;
+  height: 56px;
+  pointer-events: none;
+  background:
+    var(--stars), radial-gradient(70% 55% at 25% 100%, rgb(129 140 248 / 45%), transparent),
+    radial-gradient(60% 45% at 80% 105%, rgb(99 102 241 / 35%), transparent), var(--sky);
+  mask-image: linear-gradient(black 70%, transparent);
+}
+:root.nightly .night-sky-text {
+  --foreground: #ffffff;
+  --muted-foreground: rgb(255 255 255 / 75%);
+  --hover: rgb(255 255 255 / 12%);
+}
+:root.nightly .send-sky {
+  background:
+    var(--stars), radial-gradient(circle at 30% 25%, #5b5cf0, transparent 70%), var(--sky);
+  color: #ffffff;
 }
 
 /* Tailwind's motion-safe and motion-reduce follow .reduce-motion, which also covers the OS's

@@ -1,21 +1,17 @@
 import { useId } from "react";
 
 import type { ThemePreference } from "../../preload/bridge";
-import { setAppearance, useAppearance, type Appearance } from "../appearance";
+import {
+  colorThemes,
+  setAppearance,
+  useAppearance,
+  type Appearance,
+  type ColorTheme,
+} from "../appearance";
 import { behaviorPrefs, setBehaviorPrefs, usageView } from "../prefs";
 import { Segmented } from "../ui";
 import { PageTitle, Row, Section, Switch } from "./parts";
 import { TypographySettings } from "./TypographySettings";
-
-// The app's two marks and its accent in each mode (index.css).
-const marks = ["#2b5cff", "#ff4a1f"];
-const accents = { light: "#2563eb", dark: "#3b82f6" };
-
-// A preview's colors, fixed, so each card shows its mode whatever the app is in.
-const swatches = {
-  light: { bg: "#ffffff", side: "#f5f5f5", line: "#e5e5e5", card: "#ffffff", edge: "#e5e5e5" },
-  dark: { bg: "#0d0d0d", side: "#000000", line: "#2a2a2a", card: "#171717", edge: "#2a2a2a" },
-};
 
 /** What each usage view shows, for its row's description. */
 const usageDescriptions = {
@@ -25,15 +21,21 @@ const usageDescriptions = {
   off: "No usage in the composer. The Usage page still has it.",
 };
 
-/** A small drawing of the app in `mode`: the sidebar, a few lines, a card, and the composer. */
-function SchemePreview({ mode }: { mode: "light" | "dark" }) {
-  const c = swatches[mode];
-  const bar = (width: string, color = c.line) => (
-    <span className="block h-1.5 rounded-full" style={{ width, background: color }} />
+/**
+ * A small drawing of the app in `theme`'s `mode`: the sidebar, a few lines, a card, and the
+ * composer. It draws with the real tokens, which .scheme-light or .scheme-dark beside the
+ * theme's class set whatever mode the app is in (index.css).
+ */
+function SchemePreview({ mode, theme }: { mode: "light" | "dark"; theme: ColorTheme }) {
+  const bar = (width: string) => (
+    <span
+      className="block h-1.5 rounded-full"
+      style={{ width, background: "color-mix(in oklab, var(--foreground) 16%, transparent)" }}
+    />
   );
   return (
-    <span className="flex h-full" style={{ background: c.bg }}>
-      <span className="flex w-1/5 flex-col gap-1.5 p-2" style={{ background: c.side }}>
+    <span className={`scheme-${mode} theme-${theme} flex h-full bg-background`}>
+      <span className="flex w-1/5 flex-col gap-1.5 bg-sidebar p-2">
         {bar("100%")}
         {bar("80%")}
         {bar("90%")}
@@ -44,11 +46,8 @@ function SchemePreview({ mode }: { mode: "light" | "dark" }) {
             {bar("70%")}
             {bar("50%")}
           </span>
-          <span
-            className="flex w-1/3 flex-col gap-1 rounded-md border p-1.5"
-            style={{ background: c.card, borderColor: c.edge }}
-          >
-            {marks.map((m) => (
+          <span className="flex w-1/3 flex-col gap-1 rounded-md border border-border bg-surface p-1.5">
+            {["var(--mark-blue)", "var(--mark-coral)"].map((m) => (
               <span key={m} className="flex items-center gap-1">
                 <span className="size-1 rounded-full" style={{ background: m }} />
                 {bar("70%")}
@@ -56,15 +55,24 @@ function SchemePreview({ mode }: { mode: "light" | "dark" }) {
             ))}
           </span>
         </span>
-        <span
-          className="mt-auto flex items-center justify-between rounded-full border px-2 py-1"
-          style={{ background: c.card, borderColor: c.edge }}
-        >
+        <span className="mt-auto flex items-center justify-between rounded-full border border-border bg-surface px-2 py-1">
           {bar("40%")}
-          <span className="size-2.5 rounded-full" style={{ background: accents[mode] }} />
+          <span className="size-2.5 rounded-full bg-accent" />
         </span>
       </span>
     </span>
+  );
+}
+
+/** `theme` in both modes: light on the left half, over the dark one. */
+function SplitPreview({ theme }: { theme: ColorTheme }) {
+  return (
+    <>
+      <SchemePreview mode="dark" theme={theme} />
+      <span className="absolute inset-0 [clip-path:inset(0_50%_0_0)]">
+        <SchemePreview mode="light" theme={theme} />
+      </span>
+    </>
   );
 }
 
@@ -78,7 +86,7 @@ const card =
   "flex cursor-pointer flex-col gap-2 rounded-xl border border-border bg-surface p-2 text-center text-[12.5px] text-muted-foreground hover:bg-hover has-checked:border-accent has-checked:text-foreground has-checked:outline-1 has-checked:outline-accent has-focus-visible:outline-2 has-focus-visible:outline-ring";
 
 /**
- * Settings > Appearance: the color scheme and how the interface reads:
+ * Settings > Appearance: the color theme and scheme, and how the interface reads:
  * contrast, motion, the colors for added and removed, and typography.
  */
 export function AppearanceSettings({
@@ -92,6 +100,7 @@ export function AppearanceSettings({
   const composerUsage = usageView(behaviorPrefs.use().composerUsage);
   const set = (change: Partial<Appearance>) => setAppearance(change);
   const scheme = useId();
+  const palette = useId();
 
   return (
     <>
@@ -110,18 +119,37 @@ export function AppearanceSettings({
               />
               <span className="relative block aspect-[16/10] overflow-hidden rounded-lg border border-border">
                 {s.value === "system" ? (
-                  <>
-                    <SchemePreview mode="dark" />
-                    {/* Light on the left half, over the dark one. */}
-                    <span className="absolute inset-0 [clip-path:inset(0_50%_0_0)]">
-                      <SchemePreview mode="light" />
-                    </span>
-                  </>
+                  <SplitPreview theme={appearance.colorTheme} />
                 ) : (
-                  <SchemePreview mode={s.value} />
+                  <SchemePreview mode={s.value} theme={appearance.colorTheme} />
                 )}
               </span>
               {s.name}
+            </label>
+          ))}
+        </fieldset>
+      </Section>
+
+      <Section title="Theme">
+        <fieldset aria-label="Theme" className="grid grid-cols-4 gap-3 p-3">
+          {colorThemes.map((t) => (
+            <label key={t.value} className={card}>
+              <input
+                type="radio"
+                name={palette}
+                value={t.value}
+                checked={appearance.colorTheme === t.value}
+                onChange={() => set({ colorTheme: t.value })}
+                className="sr-only"
+              />
+              <span className="relative block aspect-[16/10] overflow-hidden rounded-lg border border-border">
+                {theme === "system" ? (
+                  <SplitPreview theme={t.value} />
+                ) : (
+                  <SchemePreview mode={theme} theme={t.value} />
+                )}
+              </span>
+              {t.name}
             </label>
           ))}
         </fieldset>

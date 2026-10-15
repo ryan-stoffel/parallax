@@ -147,7 +147,7 @@ interface SidebarProps {
 /**
  * The left column. Its top row holds the macOS traffic lights, then the toggle at the same
  * spot the main pane shows it while this column is hidden, then the app's mark and name, which
- * open a new thread.
+ * open a new thread. A nightly build paints a night sky behind that row (index.css).
  */
 export function Sidebar({
   open,
@@ -163,10 +163,11 @@ export function Sidebar({
       aria-label="Sidebar"
       hidden={!open}
       style={{ width }}
-      className="relative flex min-w-0 shrink-0 flex-col border-r border-border bg-sidebar"
+      className="relative isolate flex min-w-0 shrink-0 flex-col border-r border-border bg-sidebar"
     >
+      <div aria-hidden className="night-sky" />
       {onResize && <PanelResize side="left" width={width} onResize={onResize} />}
-      <TopBar className="traffic-light-inset">
+      <TopBar className="traffic-light-inset night-sky-text">
         <IconButton
           label="Hide sidebar"
           command="sidebar"
