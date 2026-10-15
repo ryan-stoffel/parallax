@@ -23,6 +23,8 @@ Options:
   --channel stable|nightly   Which release to install (default: stable)
   --user <user>              The SSH user for add (default: ssh's own)
   --port <port>              The SSH port for add
+  --headless                 Install plxd alone, without the app, for add and setup (Linux always
+                             gets plxd alone)
   --dry-run                  Print the steps and install script without installing anything
   --json                     Print devices as JSON
   -h, --help                 Show this help
@@ -52,7 +54,7 @@ async function main(argv) {
   if (channel !== "stable" && channel !== "nightly") return usage(`--channel is stable or nightly, not ${channel}.`);
   if (values.port !== undefined && !/^\d+$/.test(values.port)) return usage(`--port is a number, not ${values.port}.`);
   /** @type {import("../src/connect.mjs").Options} */
-  const options = { channel, user: values.user, port: values.port, dryRun: values["dry-run"] };
+  const options = { channel, user: values.user, port: values.port, headless: values.headless, dryRun: values["dry-run"] };
 
   const [command, ...rest] = positionals;
   switch (command) {
@@ -80,6 +82,7 @@ function parse(argv) {
       channel: { type: "string" },
       user: { type: "string" },
       port: { type: "string" },
+      headless: { type: "boolean" },
       "dry-run": { type: "boolean" },
       json: { type: "boolean" },
       help: { type: "boolean", short: "h" },

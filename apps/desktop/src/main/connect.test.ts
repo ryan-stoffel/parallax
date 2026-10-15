@@ -45,23 +45,45 @@ test("found devices update known ones and add new ones that answer", () => {
   expect(mergeFound(devices, [])).toEqual({ devices, changed: false });
 });
 
-test("plx-connect add runs in the login shell, or PowerShell, with checked arguments", () => {
-  const mac = { platform: "darwin" as const, env: { SHELL: "/bin/zsh" } };
-  expect(addCommand("100.74.190.83", "ryan", "nightly", mac)).toEqual({
+test("plx-connect add runs the app's own copy with its Electron as Node, with checked arguments", () => {
+  const mac = {
+    platform: "darwin" as const,
+    env: { SHELL: "/bin/zsh" },
+    execPath: "/Applications/Parallax (Nightly).app/Contents/MacOS/Parallax (Nightly)",
+    script:
+      "/Applications/Parallax (Nightly).app/Contents/Resources/plx-connect/bin/plx-connect.mjs",
+  };
+  expect(addCommand("100.74.190.83", "ryan", "nightly", false, mac)).toEqual({
     file: "/bin/zsh",
     args: [
       "-lc",
-      'PATH="$HOME/.local/bin:$PATH" exec plx-connect add 100.74.190.83 --channel nightly --user ryan',
+      "ELECTRON_RUN_AS_NODE=1 exec '/Applications/Parallax (Nightly).app/Contents/MacOS/Parallax (Nightly)' '/Applications/Parallax (Nightly).app/Contents/Resources/plx-connect/bin/plx-connect.mjs' add 100.74.190.83 --channel nightly --user ryan",
     ],
   });
-  const dev = { platform: "darwin" as const, env: { PLX_CONNECT_PATH: "/x/y z/plx-connect.mjs" } };
-  expect(addCommand("mac-mini", undefined, "stable", dev).args).toEqual([
+  const dev = {
+    ...mac,
+    env: { PLX_CONNECT_PATH: "/x/y z/plx-connect.mjs" },
+    execPath: "/repo/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
+  };
+  expect(addCommand("mac-mini", undefined, "stable", true, dev).args).toEqual([
     "-lc",
-    `PATH="$HOME/.local/bin:$PATH" exec node '/x/y z/plx-connect.mjs' add mac-mini --channel stable`,
+    "ELECTRON_RUN_AS_NODE=1 exec /repo/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron '/x/y z/plx-connect.mjs' add mac-mini --channel stable --headless",
   ]);
-  expect(addCommand("100.1.2.3", undefined, "nightly", { platform: "win32", env: {} })).toEqual({
+  const windows = {
+    platform: "win32" as const,
+    env: {},
+    execPath: "C:\\Users\\Ryan S\\AppData\\Local\\Programs\\parallax-desktop\\Parallax.exe",
+    script:
+      "C:\\Users\\Ryan S\\AppData\\Local\\Programs\\parallax-desktop\\resources\\plx-connect\\bin\\plx-connect.mjs",
+  };
+  expect(addCommand("100.1.2.3", undefined, "nightly", true, windows)).toEqual({
     file: "powershell.exe",
-    args: ["-NoLogo", "-NoProfile", "-Command", "plx-connect add 100.1.2.3 --channel nightly"],
+    args: [
+      "-NoLogo",
+      "-NoProfile",
+      "-Command",
+      `[Console]::OutputEncoding = [Text.Encoding]::UTF8; $env:ELECTRON_RUN_AS_NODE = '1'; & "${windows.execPath}" "${windows.script}" add 100.1.2.3 --channel nightly --headless | Out-Host; exit $LASTEXITCODE`,
+    ],
   });
   for (const bad of ["", "-oProxyCommand=x", "a b", "a;b", "$(x)"]) {
     expect(isDeviceAddress(bad), bad).toBe(false);

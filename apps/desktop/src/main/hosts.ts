@@ -31,12 +31,11 @@ import {
 import {
   addCommand,
   deviceHostId,
-  findConnect,
-  installConnectCommand,
   isDeviceAddress,
   isDeviceIcon,
   isSshUser,
   mergeFound,
+  type ConnectProgram,
   type SavedDevice,
 } from "./connect";
 import type { Account } from "./account";
@@ -165,18 +164,8 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   }
   for (const host of settings.hosts) addSshConnection(host, host.plxdInstalled);
   for (const computer of settings.lan ?? []) addLanConnection(computer);
-  void findConnect(connectProgram(), homedir()).then((found) => {
-    connectInstalled = found;
-    broadcast("parallax:connect", connectState());
-  });
 
   ipcMain.handle("parallax:connect", () => connectState());
-  ipcMain.handle("parallax:installConnect", async () => {
-    const failed = await runInstall(installConnectCommand(connectProgram()));
-    connectInstalled = failed ? connectInstalled : await findConnect(connectProgram(), homedir());
-    broadcast("parallax:connect", connectState());
-    return failed;
-  });
   ipcMain.handle("parallax:setConnect", (_event, on: unknown) =>
     typeof on === "boolean" ? setConnect(on) : "invalid setting",
   );
@@ -354,13 +343,14 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
       let command: Command | string | undefined;
       if (login === true) command = hostLogin(hostId, settings.hosts, settings.ssh);
       else if (isObject(connect)) {
-        const { device, user } = connect;
+        const { device, user, headless } = connect;
         if (
           hostId === "local" &&
           isDeviceAddress(device) &&
-          (user === undefined || isSshUser(user))
+          (user === undefined || isSshUser(user)) &&
+          (headless === undefined || typeof headless === "boolean")
         )
-          command = addCommand(device, user, channel(), connectProgram());
+          command = addCommand(device, user, channel(), headless === true, connectProgram());
       } else if (isInstallable(install)) command = await installOn(hostId, install);
       else if (isCliKind(cli)) command = await signInCommand(hostId, cli);
       else if (typeof provider === "string")
@@ -959,8 +949,6 @@ async function pairLan(target: unknown, code: unknown): Promise<string | undefin
 // Parallax Connect (0056): while the local plxd's `connect` is on, this app keeps a connection to
 // every device `connect/devices` finds answering on the tailnet, as host `tailnet:<node id>`.
 
-/** Whether plx-connect is installed here, undefined until looked for. */
-let connectInstalled: boolean | undefined;
 /** The local plxd's `connect`, undefined while unknown. */
 let connectOn: boolean | undefined;
 /** This computer's icon, from its plxd, when the user picked one. */
@@ -968,7 +956,15 @@ let localIcon: DeviceIcon | undefined;
 let discovery: NodeJS.Timeout | undefined;
 const DISCOVERY_MS = 15_000;
 
-const connectProgram = () => ({ platform: process.platform, env: process.env });
+/** plx-connect in this build: package-app's copy in the resources, or a dev build's repo's. */
+const connectProgram = (): ConnectProgram => ({
+  platform: process.platform,
+  env: process.env,
+  execPath: process.execPath,
+  script: app.isPackaged
+    ? path.join(process.resourcesPath, "plx-connect", "bin", "plx-connect.mjs")
+    : path.join(app.getAppPath(), "..", "..", "packages", "plx-connect", "bin", "plx-connect.mjs"),
+});
 
 /**
  * The channel `plx-connect add` installs: this app's own (0028). A development build follows
@@ -978,7 +974,6 @@ const channel = () => (isNightly(app.getVersion()) || !app.isPackaged ? "nightly
 
 function connectState(): ConnectState {
   return {
-    ...(connectInstalled !== undefined && { installed: connectInstalled }),
     ...(connectOn !== undefined && { on: connectOn }),
     icon: localIcon ?? iconFor(localName()),
     channel: channel(),

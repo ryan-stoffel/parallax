@@ -4,7 +4,6 @@ import { useEffect, useId, useRef, useState } from "react";
 import {
   DEVICE_ICONS,
   iconFor,
-  type ConnectState,
   type DeviceHost,
   type DeviceIcon as DeviceIconName,
 } from "../../preload/bridge";
@@ -16,27 +15,21 @@ import { menuItem, menuPanel } from "../ui";
 import { primaryButton, quietButton, RenameForm, Row, Section, settingRow, Switch } from "./parts";
 
 /**
- * Settings > Connections' Parallax Connect section (0056): Install puts plx-connect on this
- * computer, then a switch turns Connect on, which opens Add computer. While it's on, this
- * computer and every device found on the tailnet are listed as cards with their health. A
- * device's switch says whether this app uses it, and its menu changes its icon, renames it on
- * the device's own plxd, or removes it from this app's list.
+ * Settings > Connections' Parallax Connect section (0056): a switch turns Connect on, which opens
+ * Add computer, which runs the plx-connect inside the app. While it's on, this computer and every
+ * device found on the tailnet are listed as cards with their health. A device's switch says
+ * whether this app uses it, and its menu changes its icon, renames it on the device's own plxd,
+ * or removes it from this app's list.
  */
 export function ConnectSettings() {
   const connect = useConnect();
   const hosts = useHosts();
   const [devices, setDevices] = useState<DeviceHost[]>([]);
   const [adding, setAdding] = useState(false);
-  const [installing, setInstalling] = useState(false);
   const [error, setError] = useState<string>();
   useEffect(() => window.parallax.onDevices(setDevices), []);
   const local = hosts.find((h) => h.id === localId)!;
 
-  const install = async () => {
-    setInstalling(true);
-    setError(await window.parallax.installConnect());
-    setInstalling(false);
-  };
   const toggle = async (on: boolean) => {
     const failed = await window.parallax.setConnect(on);
     setError(failed);
@@ -50,12 +43,16 @@ export function ConnectSettings() {
           title="Connect your computers"
           description="Set up your other computers over Tailscale, and see every computer's threads live from any of them."
         >
-          <ConnectControl
-            connect={connect}
-            installing={installing}
-            onInstall={() => void install()}
-            onToggle={(on) => void toggle(on)}
-          />
+          {connect ? (
+            <Switch
+              label="Parallax Connect"
+              checked={!!connect.on}
+              disabled={connect.on === undefined}
+              onChange={(on) => void toggle(on)}
+            />
+          ) : (
+            <span className="text-[12.5px] text-muted-foreground">Checking…</span>
+          )}
         </Row>
         {error && (
           <p role="alert" className={`${settingRow} text-[12.5px] text-danger`}>
@@ -108,46 +105,6 @@ export function ConnectSettings() {
         />
       )}
     </>
-  );
-}
-
-/** Install, while plx-connect isn't here; then the switch. */
-function ConnectControl({
-  connect,
-  installing,
-  onInstall,
-  onToggle,
-}: {
-  connect?: ConnectState;
-  installing: boolean;
-  onInstall: () => void;
-  onToggle: (on: boolean) => void;
-}) {
-  if (!connect || connect.installed === undefined)
-    return <span className="text-[12.5px] text-muted-foreground">Checking…</span>;
-  if (!connect.installed)
-    return (
-      <button
-        type="button"
-        className={primaryButton}
-        disabled={installing}
-        onClick={onInstall}
-        title={
-          window.parallax.platform === "win32"
-            ? "npm install -g plx-connect"
-            : 'npm install -g --prefix "$HOME/.local" plx-connect'
-        }
-      >
-        {installing ? "Installing…" : "Install"}
-      </button>
-    );
-  return (
-    <Switch
-      label="Parallax Connect"
-      checked={!!connect.on}
-      disabled={connect.on === undefined}
-      onChange={onToggle}
-    />
   );
 }
 

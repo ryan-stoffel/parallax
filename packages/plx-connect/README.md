@@ -1,6 +1,10 @@
 # plx-connect
 
-Sets up [Parallax](https://github.com/ryan-stoffel/parallax) on your computers and connects them with Parallax Connect, over Tailscale. It installs the newest Parallax from GitHub Releases (on Linux, plxd alone), turns Connect on, and keeps plxd running, so every computer's Parallax sees every other one's threads.
+Sets up [Parallax](https://github.com/ryan-stoffel/parallax) on your computers and connects them with Parallax Connect, over Tailscale. It installs the newest Parallax from GitHub Releases, or plxd alone with `--headless` (always on Linux), turns Connect on, and keeps plxd running, so every computer's Parallax sees every other one's threads.
+
+Every download is checked against the SHA-256 its GitHub release reports, and plx-connect refuses one that doesn't match or has none. plxd goes in `~/.parallax-plxd` (`%USERPROFILE%\.parallax-plxd` on Windows), and its login service runs it from there. On Linux, `~/.local/bin/plxd` links to it.
+
+The Parallax app has plx-connect inside it, so Add computer in Settings needs no Node.
 
 ```sh
 npx plx-connect
@@ -19,11 +23,12 @@ Options:
 
 - `--channel stable|nightly`: which release to install (default `stable`).
 - `--user <user>` and `--port <port>`: the SSH user and port for `add`.
+- `--headless`: install plxd alone, without the app, for `add` and `setup`. Linux always gets plxd alone.
 - `--dry-run`: print the steps and the install script without installing anything.
 
 ## Requirements
 
-- Node 20 or newer on the computer that runs plx-connect.
+- Node 20 or newer on the computer that runs plx-connect, unless the Parallax app runs it.
 - Tailscale on both computers, logged in as the same Tailscale user. Tagged and shared devices can't join.
 - For `add`, SSH on the device: Remote Login on macOS, OpenSSH Server on Windows, or sshd on Linux. On macOS and Linux, SSH asks for the password at most once.
 - Parallax builds for macOS on Apple silicon, Windows x64 and arm64, and Linux x64 and arm64.
