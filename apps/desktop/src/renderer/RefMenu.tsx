@@ -8,6 +8,9 @@ import { MenuOption, menuButton, menuPanel, moveFocus } from "./ui";
 /** The most rows the menu draws. A search filters every ref, not just these. */
 const maxRows = 100;
 
+/** The most of a label's end that stays visible when it is cut in the middle. */
+const tailLength = 12;
+
 /** A ref's quiet note in the menu. */
 const hint = (r: RepoRef) =>
   r.current ? "current" : r.worktree ? "worktree" : r.default ? "default" : undefined;
@@ -54,6 +57,12 @@ export function RefMenu({
   const label = checkout
     ? (value ?? "Select ref")
     : `From ${value ?? list.find((r) => r.current)?.name ?? "HEAD"}`;
+  // Where the label's visible end starts: its last word, after a `-`, `/`, or space, up to
+  // `tailLength` characters of it.
+  const tail = Math.max(
+    label.length - tailLength,
+    Math.max(label.lastIndexOf("-"), label.lastIndexOf("/"), label.lastIndexOf(" ")) + 1,
+  );
 
   const choose = (r: RepoRef) => {
     menu.current?.hidePopover();
@@ -67,10 +76,17 @@ export function RefMenu({
         popoverTarget={id}
         aria-haspopup="menu"
         title={label}
-        className={`${menuButton} min-w-0`}
+        className={`${menuButton} min-w-0 max-w-72`}
       >
         <GitBranch />
-        <span className="truncate">{label}</span>
+        {/* Cut in the middle, so a long branch keeps its end: `From bug/PLX-781-sweep…worktrees`. */}
+        <span className="flex min-w-0">
+          {/* `whitespace-pre` keeps a space the cut lands after, as in `From main`. */}
+          <span className="overflow-hidden text-ellipsis whitespace-pre">
+            {label.slice(0, tail)}
+          </span>
+          <span className="shrink-0">{label.slice(tail)}</span>
+        </span>
         <ChevronDown aria-hidden className="opacity-70" />
       </button>
       <div
