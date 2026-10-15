@@ -57,7 +57,8 @@ export function RefMenu({
   const label = checkout
     ? (value ?? "Select ref")
     : `From ${value ?? list.find((r) => r.current)?.name ?? "HEAD"}`;
-  // The label's last word, after a `-`, `/`, or space, stays whole when the rest is cut.
+  // Where the label's visible end starts: its last word, after a `-`, `/`, or space, up to
+  // `tailLength` characters of it.
   const tail = Math.max(
     label.length - tailLength,
     Math.max(label.lastIndexOf("-"), label.lastIndexOf("/"), label.lastIndexOf(" ")) + 1,
@@ -80,8 +81,11 @@ export function RefMenu({
         <GitBranch />
         {/* Cut in the middle, so a long branch keeps its end: `From bug/PLX-781-sweep…worktrees`. */}
         <span className="flex min-w-0">
-          <span className="truncate">{label.slice(0, tail)}</span>
-          <span className="shrink-0 whitespace-pre">{label.slice(tail)}</span>
+          {/* `whitespace-pre` keeps a space the cut lands after, as in `From main`. */}
+          <span className="overflow-hidden text-ellipsis whitespace-pre">
+            {label.slice(0, tail)}
+          </span>
+          <span className="shrink-0">{label.slice(tail)}</span>
         </span>
         <ChevronDown aria-hidden className="opacity-70" />
       </button>
