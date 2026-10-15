@@ -1,6 +1,6 @@
 # 0023: Parallax on macOS, Windows, and Linux
 
-- Status: accepted
+- Status: accepted; its services are amended by [0072](0072-connect-stays-up.md) (always restart, lingering, the Windows logon task's triggers and action)
 - Date: 2026-09-27
 - Issue: PLX-7
 

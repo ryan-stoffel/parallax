@@ -1,6 +1,6 @@
 # 0056: Parallax Connect reaches plxd over Tailscale
 
-- Status: accepted
+- Status: accepted; amended by [0072](0072-connect-stays-up.md): the service runs `~/.parallax-plxd/plxd` on every OS, the app hands over on every OS and retries, and the app runs its own plx-connect, with `--headless` and checked downloads
 - Date: 2026-10-05
 - Issue: PLX-574
 

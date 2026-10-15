@@ -1,6 +1,6 @@
 # 0061: Claude runs through the Agent SDK in a Node sidecar
 
-- Status: accepted; supersedes in part [0014](0014-agent-runs.md) and [0031](0031-permission-requests.md) (Claude Code as `claude -p` with `--permission-prompt-tool stdio`), and [0048](0048-durable-queue-and-steer.md)'s Claude steer on stdin
+- Status: accepted; supersedes in part [0014](0014-agent-runs.md) and [0031](0031-permission-requests.md) (Claude Code as `claude -p` with `--permission-prompt-tool stdio`), and [0048](0048-durable-queue-and-steer.md)'s Claude steer on stdin; [0072](0072-connect-stays-up.md) embeds the sidecar's files in plxd instead of shipping them beside it
 - Date: 2026-10-09
 - Issue: PLX-636, for PLX-646
 

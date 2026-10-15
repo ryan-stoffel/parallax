@@ -1,6 +1,6 @@
 # 0053: Cursor runs through the official SDK
 
-- Status: accepted; supersedes the Cursor parts of [0036](0036-cursor-threads.md) and [0040](0040-provider-instances.md)
+- Status: accepted; supersedes the Cursor parts of [0036](0036-cursor-threads.md) and [0040](0040-provider-instances.md); [0072](0072-connect-stays-up.md) embeds the sidecar's files in plxd instead of shipping them beside it
 - Date: 2026-10-04
 
 ## Context
