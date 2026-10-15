@@ -6,9 +6,7 @@ import {
   Bot,
   Brain,
   Check,
-  ChevronRight,
   Copy,
-  Ellipsis,
   FilePlus,
   FileText,
   FoldVertical,
@@ -22,6 +20,7 @@ import {
   ImageOff,
   Info,
   ListChecks,
+  LoaderCircle,
   Pencil,
   Plug,
   Search,
@@ -87,7 +86,17 @@ import { HtmlRender, pageUrl } from "./HtmlRender";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { FileCard } from "./FileCard";
 import { splitFiles, uploadBytes } from "./uploads";
-import { Loader, type LoaderStyle } from "./Loader";
+import {
+  Trace,
+  TraceCollapsible,
+  TraceCollapsibleContent,
+  TraceCollapsibleTrigger,
+  TraceDescription,
+  TraceIcon,
+  TraceLine,
+  TraceTitle,
+  type TraceStatus,
+} from "./Trace";
 import { locale } from "./locale";
 import { GitHubLogo, LinearLogo } from "./logos";
 import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
@@ -96,7 +105,6 @@ import { useCatalog, type Provider, type RunOptions } from "./models";
 import { kinds } from "./providers";
 import {
   latestPlan,
-  planLoader,
   PlanStrip,
   PlanLine,
   ProposedPlan,
@@ -157,8 +165,8 @@ type Row =
     };
 /**
  * What the list shows: a turn's activity is folded into one `Work` row, its plan apart. While a
- * turn goes, a `working` row under its prompt says how long it has gone, and a `musing` row stands
- * for what the agent does next when nothing is in flight (PLX-584).
+ * turn goes, a `working` row under its prompt says how long it has gone, and a `musing` row, a
+ * running "Working" line, stands for what the agent does next when nothing is in flight (PLX-584).
  */
 type ViewRow =
   | Row
@@ -1271,13 +1279,13 @@ function ScriptRow({
   const failed = script.status === "failed";
   const icon =
     script.status === "running" ? (
-      <Loader {...loaders.working} />
+      <LoaderCircle className="animate-spin" />
     ) : script.status === "done" ? (
-      <Check aria-hidden className="size-4 shrink-0" />
+      <Check />
     ) : failed ? (
-      <X aria-hidden className="size-4 shrink-0 text-danger" />
+      <X />
     ) : (
-      <Ban aria-hidden className="size-4 shrink-0" />
+      <Ban />
     );
   const detail =
     script.status === "running"
@@ -1294,22 +1302,22 @@ function ScriptRow({
               (script.exitCode === undefined
                 ? "Its terminal closed first."
                 : `Exited with code ${script.exitCode}.`));
-  const summary = (
-    <>
-      {icon}
-      <span className="truncate">{what}</span>
+  const line = (
+    <TraceLine status={script.status === "running" ? "running" : failed ? "error" : undefined}>
+      <TraceIcon>{icon}</TraceIcon>
+      <TraceTitle className="shrink-0">{what}</TraceTitle>
       <span className={`truncate ${failed ? "text-danger" : "text-faint-foreground"}`}>
         {detail}
       </span>
-    </>
+    </TraceLine>
   );
   // Only a running script, or a failed one's shell, still has a terminal to open; opening any
   // other would start an empty shell under its id.
   const live = script.status === "running" || (failed && script.exitCode !== undefined);
-  if (!live || !links) return <div className={`${stepRow} text-muted-foreground`}>{summary}</div>;
+  if (!live || !links) return line;
   return (
-    <Disclosure id={script.key} open={open} onToggle={onToggle} summary={summary}>
-      <div className="h-60 overflow-hidden rounded-xl border border-border bg-surface py-1.5 pl-3">
+    <Disclosure id={script.key} open={open} onToggle={onToggle} summary={line}>
+      <div className="h-60 overflow-hidden rounded-xl border border-border bg-surface py-1.5 pl-3 text-foreground">
         <Suspense>
           <TerminalView
             id={`script:${script.runId}:${script.terminalId}`}
@@ -1358,15 +1366,14 @@ export const RowView = memo(function RowView({
         <Fold
           id={row.key}
           items={stepRuns(row.items)}
-          gap
           live={live}
           open={open}
           openKeys={openKeys ?? new Set()}
           onToggle={onToggle}
         >
-          <span className="truncate">
-            {copied ? "Worked" : workedFor(row.startedAt, row.endedAt)}
-          </span>
+          <TraceLine>
+            <TraceTitle>{copied ? "Worked" : workedFor(row.startedAt, row.endedAt)}</TraceTitle>
+          </TraceLine>
         </Fold>
       ) : (
         <Steps
@@ -1381,11 +1388,7 @@ export const RowView = memo(function RowView({
     case "working":
       return <WorkingFor since={row.since} />;
     case "musing":
-      return (
-        <div className="flex h-6 items-center gap-2 text-sm">
-          <Musing />
-        </div>
-      );
+      return <Musing />;
     case "compaction":
       // Under way, it's the live row; done, a divider where the earlier conversation became a summary.
       return row.done ? (
@@ -1396,10 +1399,12 @@ export const RowView = memo(function RowView({
           <span className="h-px flex-1 bg-border" />
         </div>
       ) : (
-        <div className="flex h-6 items-center gap-2 text-sm">
-          <Loader {...loaders.compacting} />
-          <Shimmer>Compacting context</Shimmer>
-        </div>
+        <TraceLine status="running">
+          <TraceIcon>
+            <LoaderCircle className="animate-spin" />
+          </TraceIcon>
+          <TraceTitle>Compacting context</TraceTitle>
+        </TraceLine>
       );
     case "user":
     case "pending": {
@@ -1412,12 +1417,16 @@ export const RowView = memo(function RowView({
             open={open}
             onToggle={onToggle}
             summary={
-              <span className="flex items-center gap-1.5 text-muted-foreground">
-                <Workflow aria-hidden className="size-3.5" />
-                {row.wake
-                  ? "From Parallax: subagents finished"
-                  : `From another thread${sender ? `: ${sender}` : ""}`}
-              </span>
+              <TraceLine>
+                <TraceIcon>
+                  <Workflow />
+                </TraceIcon>
+                <TraceTitle>
+                  {row.wake
+                    ? "From Parallax: subagents finished"
+                    : `From another thread${sender ? `: ${sender}` : ""}`}
+                </TraceTitle>
+              </TraceLine>
             }
           >
             <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
@@ -1496,10 +1505,12 @@ export const RowView = memo(function RowView({
           open={open}
           onToggle={onToggle}
           summary={
-            <>
-              <icons.thinking aria-hidden className="size-4 shrink-0" />
-              <span className="truncate">{plainText(row.text) || "Thought"}</span>
-            </>
+            <TraceLine>
+              <TraceIcon>
+                <icons.thinking />
+              </TraceIcon>
+              <TraceTitle>{plainText(row.text) || "Thought"}</TraceTitle>
+            </TraceLine>
           }
         >
           <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
@@ -1689,7 +1700,6 @@ function MessageImage({
 function Fold({
   id,
   items,
-  gap,
   live,
   open,
   openKeys,
@@ -1698,8 +1708,6 @@ function Fold({
 }: {
   id: string;
   items: readonly (Item | Work)[];
-  /** Spaces the rows apart, as a finished turn's fold does. */
-  gap?: boolean;
   live: boolean;
   open: boolean;
   openKeys: ReadonlySet<string>;
@@ -1707,31 +1715,21 @@ function Fold({
   children: ReactNode;
 }) {
   return (
-    <div>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => onToggle(id, !open)}
-        className={`${stepRow} text-muted-foreground`}
-      >
-        {children}
-        <Chevron open={open} />
-      </button>
-      {open && (
-        <div className={gap ? "mt-1 flex flex-col gap-1" : "flex flex-col"}>
-          {items.map((item) => (
-            <RowView
-              key={item.key}
-              row={item}
-              live={live}
-              open={openKeys.has(item.key)}
-              openKeys={item.kind === "work" ? openKeys : undefined}
-              onToggle={onToggle}
-            />
-          ))}
-        </div>
-      )}
-    </div>
+    <Disclosure id={id} open={open} onToggle={onToggle} summary={children}>
+      {/* Its messages in the foreground; its steps set their own color. */}
+      <Trace className="text-foreground">
+        {items.map((item) => (
+          <RowView
+            key={item.key}
+            row={item}
+            live={live}
+            open={openKeys.has(item.key)}
+            openKeys={item.kind === "work" ? openKeys : undefined}
+            onToggle={onToggle}
+          />
+        ))}
+      </Trace>
+    </Disclosure>
   );
 }
 
@@ -1764,25 +1762,11 @@ const inFlight = (work: Work) => {
   return last?.kind === "tool" && last.status === undefined;
 };
 
-/** A compact step row's geometry, as T3 Code's work log draws one: an icon, a line, a chevron. */
-const stepRow =
-  "flex min-h-6 w-full max-w-full min-w-0 cursor-default items-center gap-2 rounded-md text-left text-sm hover:text-foreground";
-
-/** The chevron after a step row's label, turned down while it's open. */
-function Chevron({ open }: { open?: boolean }) {
-  return (
-    <ChevronRight
-      aria-hidden
-      className={`size-3.5 shrink-0 text-faint-foreground transition-transform group-open/disclosure:rotate-90 ${open ? "rotate-90" : ""}`}
-    />
-  );
-}
-
 /**
  * A run of steps between the agent's messages in a turn still going (PLX-584): one call or thought
  * alone as its own row, or several as one line saying what they did, such as "Ran 3 commands and
  * read 2 files", opening to a row each. While a call in it runs, the line says what the agent is
- * doing instead, with that work's loader.
+ * doing instead, with a spinner.
  */
 function Steps({
   work,
@@ -1807,6 +1791,7 @@ function Steps({
   // Its path relative to the run's worktree, as the row reads once the call is done.
   const now = doing && { ...doing, detail: doing.detail && relative(doing.detail, root) };
   const summary = summarize(work.items);
+  const { failures } = summary;
   return (
     <Fold
       id={work.key}
@@ -1817,28 +1802,21 @@ function Steps({
       onToggle={onToggle}
     >
       {now ? (
-        <>
-          <Loader {...now.loader} />
-          {/* Keyed, so a new label fades in. */}
-          <span key={now.label} className="working-in shrink-0 text-foreground">
-            <Shimmer>{now.label}</Shimmer>
-          </span>
+        <TraceLine status="running">
+          <TraceIcon>
+            <LoaderCircle className="animate-spin" />
+          </TraceIcon>
+          <TraceTitle className="shrink-0">{now.label}</TraceTitle>
           {now.detail && <span className="truncate">{now.detail}</span>}
-        </>
+        </TraceLine>
       ) : (
-        <>
-          <span aria-hidden className={`relative shrink-0 ${summary.failed ? "text-danger" : ""}`}>
-            <summary.Icon className="size-4" />
-            {summary.failed && (
-              <X
-                strokeWidth={3}
-                className="absolute -right-1.5 -bottom-1.5 size-2.5 rounded-full bg-background"
-              />
-            )}
-          </span>
-          <span className="truncate">{summary.label}</span>
-          {summary.failed && <span className="sr-only">, one failed</span>}
-        </>
+        <TraceLine status={failures > 0 ? "error" : undefined}>
+          <TraceIcon>
+            <summary.Icon />
+          </TraceIcon>
+          <TraceTitle>{summary.label}</TraceTitle>
+          {failures > 0 && <TraceDescription>{failures} failed</TraceDescription>}
+        </TraceLine>
       )}
     </Fold>
   );
@@ -1855,69 +1833,15 @@ function WorkingFor({ since }: { since?: string }) {
   );
 }
 
-// A word for what the agent might be doing before it does anything, and how often it changes.
-const musings = [
-  "Picturing",
-  "Pondering",
-  "Sketching",
-  "Mulling",
-  "Brewing",
-  "Tinkering",
-  "Percolating",
-  "Noodling",
-];
-const musingMs = 2400;
-
-/**
- * The working line before the agent does anything: a loader and a word that changes every few
- * seconds, which screen readers hear as a steady "Working".
- */
+/** The working line before the agent does anything. */
 function Musing() {
-  // Picked by the wall clock, so a remount (New Thread handing off to the opened thread) keeps the
-  // sequence. A word fades in, and the last one out, only once it changes here. Under reduced
-  // motion it keeps one.
-  const [tick, setTick] = useState(() => Math.floor(Date.now() / musingMs));
-  const [first] = useState(tick);
-  useEffect(() => {
-    if (document.documentElement.classList.contains("reduce-motion")) return;
-    const timer = setTimeout(
-      () => setTick(Math.max(tick + 1, Math.floor(Date.now() / musingMs))),
-      musingMs - (Date.now() % musingMs),
-    );
-    return () => clearTimeout(timer);
-  }, [tick]);
-  const word = (at: number) => musings[at % musings.length]!;
   return (
-    <>
-      <Loader {...loaders.working} />
-      <span className="sr-only">Working</span>
-      <span aria-hidden className="grid shrink-0 justify-items-start">
-        {tick > first && (
-          <span key={tick - 1} className="working-out [grid-area:1/1]">
-            <Shimmer>{word(tick - 1)}</Shimmer>
-          </span>
-        )}
-        <span key={tick} className={`[grid-area:1/1] ${tick > first ? "working-in" : ""}`}>
-          <Shimmer>{word(tick)}</Shimmer>
-        </span>
-      </span>
-    </>
-  );
-}
-
-// How long the shimmer takes to sweep across its text.
-const shimmerMs = 2000;
-
-/** Text with a soft highlight sweeping across it, on the wall clock so a remount carries on. */
-function Shimmer({ children }: { children: string }) {
-  const [now] = useState(Date.now);
-  return (
-    <span
-      className="working-shimmer"
-      style={{ animationDuration: `${shimmerMs}ms`, animationDelay: `${-(now % shimmerMs)}ms` }}
-    >
-      {children}
-    </span>
+    <TraceLine status="running">
+      <TraceIcon>
+        <LoaderCircle className="animate-spin" />
+      </TraceIcon>
+      <TraceTitle>Working</TraceTitle>
+    </TraceLine>
   );
 }
 
@@ -1936,27 +1860,7 @@ const verbs: Partial<Record<string, string>> = {
   Agent: "Running agent",
 };
 
-/** The loader for each kind of work. */
-const loaders = {
-  thinking: { kind: "matrix", variant: "ripple" },
-  shell: { kind: "register", variant: "shift" },
-  reading: { kind: "bands", variant: "descend" },
-  searching: { kind: "matrix", variant: "scan" },
-  editing: { kind: "cells", variant: "merge" },
-  writing: { kind: "cells", variant: "merge" },
-  fetching: { kind: "beacon", variant: "rise" },
-  agent: { kind: "orbit", variant: "oppose" },
-  skill: { kind: "lift", variant: "rise" },
-  mcp: { kind: "beacon", variant: "balance" },
-  plxd: { kind: "cells", variant: "spread" },
-  planning: planLoader,
-  working: { kind: "orbit", variant: "chase" },
-  compacting: { kind: "bands", variant: "descend" },
-} as const satisfies Record<string, LoaderStyle>;
-
-type Kind = keyof typeof loaders;
-
-/** The icon for each kind of work, in place of its loader once it's done. */
+/** The icon for each kind of work, once it's done. */
 const icons = {
   thinking: Brain,
   shell: SquareTerminal,
@@ -1972,7 +1876,9 @@ const icons = {
   planning: ListChecks,
   working: Hammer,
   compacting: FoldVertical,
-} as const satisfies Record<Kind, LucideIcon>;
+} as const satisfies Record<string, LucideIcon>;
+
+type Kind = keyof typeof icons;
 
 // The kind of work a tool does, by the names common tools use.
 const toolKinds: Partial<Record<string, Kind>> = {
@@ -2008,37 +1914,33 @@ function toolKind(name: string | null): Kind {
   return (name !== null && Object.hasOwn(toolKinds, name) && toolKinds[name]) || "working";
 }
 
-/** What the agent is doing: a label, what it's doing it to, and the loader drawn beside them. */
+/** What the agent is doing: a label, and what it's doing it to. */
 export interface Activity {
   label: string;
   detail?: string;
-  loader: LoaderStyle;
 }
 
 /** The header of the work in progress: what its latest item is doing. */
 export function activity(item?: Item): Activity {
   switch (item?.kind) {
     case "reasoning":
-      return { label: "Thinking", loader: loaders.thinking };
+      return { label: "Thinking" };
     case "tool": {
-      const loader = loaders[toolKind(item.name)];
       const plxd = plxdCall(item);
-      if (plxd) return { ...plxd, loader };
+      if (plxd) return plxd;
       // Including a plxd tool this app doesn't know.
       const mcp = mcpTool(item.name);
-      if (mcp) return { label: `Using ${mcp.server}`, detail: mcp.tool, loader };
-      if (item.name === "Skill")
-        return { label: "Using skill", detail: skillName(item.input), loader };
+      if (mcp) return { label: `Using ${mcp.server}`, detail: mcp.tool };
+      if (item.name === "Skill") return { label: "Using skill", detail: skillName(item.input) };
       return {
         label: verbs[item.name ?? ""] ?? item.name ?? "Working",
         detail: toolHint(item.input),
-        loader,
       };
     }
     case "todo":
-      return { label: "Planning", loader: loaders.planning };
+      return { label: "Planning" };
     default:
-      return { label: "Working", loader: loaders.working };
+      return { label: "Working" };
   }
 }
 
@@ -2069,24 +1971,19 @@ function ToolCall({
       open={open}
       onToggle={onToggle}
       summary={
-        <>
-          {/* Its kind: the loader while it runs, then the icon, with a mark unless it succeeded. */}
-          <span aria-hidden className={`relative shrink-0 ${look.color}`}>
-            {status === "running" ? (
-              <Loader {...loaders[kind]} />
-            ) : (
-              <Icon className={`size-4 ${look.faded ? "opacity-50" : ""}`} />
-            )}
-            {look.mark && (
-              <look.mark
-                strokeWidth={3}
-                className="absolute -right-1.5 -bottom-1.5 size-2.5 rounded-full bg-background"
-              />
-            )}
-          </span>
-          <span className="truncate">{stepLabel(item, root)}</span>
-          <span className="sr-only">{look.said}</span>
-        </>
+        <TraceLine status={look.status}>
+          {/* A spinner while it runs, then its kind's icon. */}
+          <TraceIcon>
+            {status === "running" ? <LoaderCircle className="animate-spin" /> : <Icon />}
+          </TraceIcon>
+          <TraceTitle>{stepLabel(item, root)}</TraceTitle>
+          {/* How it went: shown when it failed or never finished, otherwise only heard. */}
+          {look.shown ? (
+            <TraceDescription>{look.said}</TraceDescription>
+          ) : (
+            <span className="sr-only">{look.said}</span>
+          )}
+        </TraceLine>
       }
     >
       <div className="space-y-2 text-[12px]">
@@ -2114,26 +2011,26 @@ function ToolCall({
   );
 }
 
-/** How a tool call went: its icon's color, mark, and fading, and in words for screen readers. */
+/** How a tool call went: its line's status, and in words, shown when it failed or never finished. */
 interface Look {
-  color: string;
-  mark?: LucideIcon;
-  /** Whether the icon fades, as for a call that never finished. */
-  faded?: boolean;
+  status?: TraceStatus;
   said: string;
+  shown?: boolean;
 }
 
-// An unfinished call's icon is half its faint color, so it stands apart from a finished one's
-// muted icon, and its mark is an ellipsis, which no round icon can swallow as a ring could.
+// A call that never finished fades, as a step not done does.
 const statuses = {
-  running: { color: "", said: "Running" },
-  ok: { color: "text-muted-foreground", said: "Succeeded" },
-  error: { color: "text-danger", mark: X, said: "Failed" },
-  denied: { color: "text-danger", mark: Ban, said: "Denied" },
-  none: { color: "text-faint-foreground", mark: Ellipsis, faded: true, said: "No result" },
+  running: { status: "running", said: "Running" },
+  ok: { said: "Succeeded" },
+  error: { status: "error", said: "Failed", shown: true },
+  denied: { status: "error", said: "Denied", shown: true },
+  none: { status: "pending", said: "No result", shown: true },
 } satisfies Record<"running" | AgentToolStatus | "none", Look>;
 
-/** A collapsed-by-default step row, its chevron at its end, open state kept by the transcript. */
+/**
+ * A step's Trace line that opens, collapsed by default, its open state kept by the transcript.
+ * `summary` is the line.
+ */
 function Disclosure({
   id,
   open,
@@ -2148,20 +2045,11 @@ function Disclosure({
   children: ReactNode;
 }) {
   return (
-    <details
-      open={open}
-      onToggle={(e) => e.currentTarget.open !== open && onToggle(id, e.currentTarget.open)}
-      className="group/disclosure"
-    >
-      <summary
-        className={`${stepRow} list-none text-muted-foreground [&::-webkit-details-marker]:hidden`}
-      >
-        {summary}
-        <Chevron />
-      </summary>
+    <TraceCollapsible open={open} onOpenChange={(next) => onToggle(id, next)}>
+      <TraceCollapsibleTrigger>{summary}</TraceCollapsibleTrigger>
       {/* Rendered once open, so a closed row doesn't hold its tool's output. */}
-      {open && <div className="mt-1.5 ml-6">{children}</div>}
-    </details>
+      {open && <TraceCollapsibleContent>{children}</TraceCollapsibleContent>}
+    </TraceCollapsible>
   );
 }
 
@@ -2169,7 +2057,7 @@ function Block({ label, children }: { label: string; children: string }) {
   return (
     <div>
       <p className="mb-1 text-[11.5px] text-faint-foreground">{label}</p>
-      <pre className="max-h-80 overflow-auto rounded-xl border border-border bg-code px-3 py-2 font-mono leading-relaxed whitespace-pre-wrap">
+      <pre className="max-h-80 overflow-auto rounded-xl border border-border bg-code px-3 py-2 font-mono leading-relaxed whitespace-pre-wrap text-foreground">
         {children}
       </pre>
     </div>
@@ -2250,8 +2138,8 @@ export function stepLabel(item: Extract<Item, { kind: "tool" }>, root?: string):
 export interface StepsSummary {
   label: string;
   Icon: LucideIcon;
-  /** Whether a call in it failed or was denied. */
-  failed: boolean;
+  /** How many of its calls failed or were denied. */
+  failures: number;
 }
 
 /**
@@ -2262,13 +2150,13 @@ export interface StepsSummary {
  */
 export function summarize(items: readonly Item[]): StepsSummary {
   const steps = items.filter((i) => i.kind !== "notice");
-  const failed = steps.some(
+  const failures = steps.filter(
     (i) => i.kind === "tool" && (i.status === "error" || i.status === "denied"),
-  );
+  ).length;
   const calls = steps.filter((i) => i.kind === "tool" || i.kind === "todo");
   if (calls.length === 0) {
     const n = steps.length;
-    return { label: n === 1 ? "Thought" : `Thought ${n} times`, Icon: icons.thinking, failed };
+    return { label: n === 1 ? "Thought" : `Thought ${n} times`, Icon: icons.thinking, failures };
   }
   const servers: string[] = [];
   const kinds = new Set<Kind>();
@@ -2307,7 +2195,7 @@ export function summarize(items: readonly Item[]): StepsSummary {
   return {
     label: label.charAt(0).toUpperCase() + label.slice(1),
     Icon: kinds.size === 1 ? icons[only!] : icons.working,
-    failed,
+    failures,
   };
 }
 

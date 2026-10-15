@@ -87,13 +87,10 @@ const type = (text: string) => act(() => void composer().editor!.commands.setCon
 
 const row = (item: Item, open = false) =>
   render(<RowView row={item} live={false} open={open} onToggle={() => {}} />);
-// A row's summary as it shows, without what only screen readers hear.
-const shown = () => {
-  const summary = document.querySelector("summary")!.cloneNode(true) as Element;
-  summary.querySelectorAll(".sr-only").forEach((e) => e.remove());
-  return summary.textContent;
-};
-const said = () => document.querySelector("summary .sr-only")?.textContent;
+// A row's title, and how its call went: shown as its description, or only heard.
+const shown = () => document.querySelector("summary [data-slot=trace-title]")!.textContent;
+const said = () =>
+  document.querySelector("summary :is(.sr-only, [data-slot=trace-description])")?.textContent;
 
 test("a message on its way to the agent shows at full strength", () => {
   render(
@@ -152,9 +149,7 @@ test("in a fork, the history it copied is muted and offers no Fork, and the late
     "Done",
   ]);
   // Its copied work's times are all the fork's creation, so it says neither how long nor "briefly".
-  const work = document
-    .querySelectorAll("[data-copied]")[1]!
-    .querySelector("button[aria-expanded]")!;
+  const work = document.querySelectorAll("[data-copied]")[1]!.querySelector("summary")!;
   expect(work.textContent).toContain("Worked");
   expect(work.textContent).not.toContain("Worked briefly");
   expect(document.querySelector("[data-copied]")!.className).toContain("opacity-60");
@@ -570,7 +565,7 @@ test("another MCP server's tool reads as the server and the tool, and a skill by
   expect(summary("Skill", { command: "simplify" })).toBe("Used skill simplify");
 });
 
-test("each kind of work has its own loader, and MCP tools and skills read by name", () => {
+test("the work in progress reads as what it does, and MCP tools and skills by name", () => {
   const tool = (name: string | null, input: Record<string, string> = {}): Item => ({
     kind: "tool",
     key: "t",
@@ -578,86 +573,71 @@ test("each kind of work has its own loader, and MCP tools and skills read by nam
     name,
     input,
   });
-  const loader = (kind: string, variant: string) => ({ kind, variant });
   expect(activity({ kind: "reasoning", key: "r", text: "Hm" })).toEqual({
     label: "Thinking",
-    loader: loader("matrix", "ripple"),
   });
   expect(activity(tool("Bash", { command: "cargo test\n--quiet" }))).toEqual({
     label: "Running",
     detail: "cargo test",
-    loader: loader("register", "shift"),
   });
   expect(activity(tool("Read", { file_path: "src/main.rs" }))).toEqual({
     label: "Reading",
     detail: "src/main.rs",
-    loader: loader("bands", "descend"),
   });
-  expect(activity(tool("Grep", { pattern: "TODO" })).loader).toEqual(loader("matrix", "scan"));
-  expect(activity(tool("WebSearch")).loader).toEqual(loader("matrix", "scan"));
-  expect(activity(tool("Edit")).loader).toEqual(loader("cells", "merge"));
-  expect(activity(tool("Write")).loader).toEqual(loader("cells", "merge"));
-  expect(activity(tool("WebFetch")).loader).toEqual(loader("beacon", "rise"));
   expect(activity(tool("Task", { description: "Find the bug" }))).toEqual({
     label: "Running agent",
     detail: "Find the bug",
-    loader: loader("orbit", "oppose"),
   });
   expect(activity(tool("Skill", { skill: "code-review" }))).toEqual({
     label: "Using skill",
     detail: "code-review",
-    loader: loader("lift", "rise"),
   });
   expect(activity(tool("mcp__linear__save_issue", { title: "Fix it" }))).toEqual({
     label: "Using Linear",
     detail: "save issue",
-    loader: loader("beacon", "balance"),
   });
   expect(activity(tool("mcp__plxd__thread_launch", { prompt: "Fix the login bug" }))).toEqual({
     label: "Started a child thread",
     detail: "Fix the login bug",
-    loader: loader("cells", "spread"),
   });
-  // A plxd tool this app doesn't know reads as any MCP server's tool does, with plxd's loader.
+  // A plxd tool this app doesn't know reads as any MCP server's tool does.
   expect(activity(tool("mcp__plxd__plan_approve"))).toEqual({
     label: "Using Parallax",
     detail: "plan approve",
-    loader: loader("cells", "spread"),
   });
   expect(activity({ kind: "todo", key: "c", items: [] })).toEqual({
     label: "Planning",
-    loader: loader("lift", "breathe"),
   });
   // Anything else.
   expect(activity(tool("Frobnicate", { path: "a.txt" }))).toEqual({
     label: "Frobnicate",
     detail: "a.txt",
-    loader: loader("orbit", "chase"),
   });
   expect(activity(tool(null))).toMatchObject({
     label: "Working",
-    loader: loader("orbit", "chase"),
   });
-  expect(activity()).toEqual({ label: "Working", loader: loader("orbit", "chase") });
+  expect(activity()).toEqual({ label: "Working" });
 });
 
-test("a running tool call draws its work's loader, and a finished one its kind's icon", () => {
+test("a running tool call spins and shimmers, and a finished one shows its kind's icon", () => {
   const tool: Item = { kind: "tool", key: "t", callId: "1", name: "Read", input: {} };
   render(<RowView row={tool} live open={false} onToggle={() => {}} />);
   const summary = () => document.querySelector("summary")!;
-  expect(summary().querySelector('[data-loader="bands"][data-variant="descend"]')).not.toBeNull();
-  // Screen readers hear the word, not the loader.
-  expect(summary().querySelector(".loader")!.closest('[aria-hidden="true"]')).not.toBeNull();
+  expect(summary().querySelector("[data-slot=trace-line]")!.getAttribute("data-status")).toBe(
+    "running",
+  );
+  // Screen readers hear the word, not the spinner.
+  expect(summary().querySelector(".animate-spin")!.closest('[aria-hidden="true"]')).not.toBeNull();
   expect(said()).toBe("Running");
   act(() => unmount());
 
   render(<RowView row={{ ...tool, status: "ok" }} live open={false} onToggle={() => {}} />);
-  expect(document.querySelector(".loader")).toBeNull();
+  expect(document.querySelector(".animate-spin")).toBeNull();
   expect(summary().querySelector("svg.lucide-file-text")).not.toBeNull();
   expect(said()).toBe("Succeeded");
 });
 
-test("each kind of tool has its icon once it's done, as its loader matches it while it runs", () => {
+test("each kind of tool has its icon once it's done", () => {
   // The icon each finished tool shows, by its lucide name.
   const icon = (name: string | null, input: Record<string, string> = {}) => {
     row({ kind: "tool", key: "t", callId: "1", name, input, status: "ok" });
@@ -732,7 +712,7 @@ test("each kind of tool has its icon once it's done, as its loader matches it wh
   expect(document.querySelector("summary svg.lucide-brain")).not.toBeNull();
 });
 
-test("a failed, denied, or unfinished tool call marks its icon, and says how it went in words", () => {
+test("a failed, denied, or unfinished tool call says how it went, as its line's status and in words", () => {
   const tool = (status?: AgentToolStatus): Item => ({
     kind: "tool",
     key: "t",
@@ -741,57 +721,36 @@ test("a failed, denied, or unfinished tool call marks its icon, and says how it 
     input: { command: "git push" },
     ...(status && { status }),
   });
-  // The kind's icon, whether it fades, and the mark at its corner.
-  const slot = () => {
-    const icon = document.querySelector("summary .lucide-square-terminal")!;
-    return {
-      color: icon.parentElement!.className.match(/text-[\w-]+/)?.[0],
-      faded: icon.classList.contains("opacity-50"),
-      mark: icon.nextElementSibling?.getAttribute("class")?.split(" ")[1],
-      said: said(),
-    };
-  };
-  const unfinished = {
-    color: "text-faint-foreground",
-    faded: true,
-    mark: "lucide-ellipsis",
-    said: "No result",
-  };
+  // The line's status, and what it says of how the call went.
+  const look = () => ({
+    status: document.querySelector("summary [data-slot=trace-line]")!.getAttribute("data-status"),
+    said: said(),
+    shown: !!document.querySelector("summary [data-slot=trace-description]"),
+  });
+  const unfinished = { status: "pending", said: "No result", shown: true };
   row(tool("error"));
-  expect(slot()).toEqual({ color: "text-danger", faded: false, mark: "lucide-x", said: "Failed" });
+  expect(look()).toEqual({ status: "error", said: "Failed", shown: true });
   act(() => unmount());
   row(tool("denied"));
-  expect(slot()).toEqual({
-    color: "text-danger",
-    faded: false,
-    mark: "lucide-ban",
-    said: "Denied",
-  });
+  expect(look()).toEqual({ status: "error", said: "Denied", shown: true });
   act(() => unmount());
   // No result, and the run has stopped: unfinished.
   row(tool());
-  expect(slot()).toEqual(unfinished);
+  expect(look()).toEqual(unfinished);
   act(() => unmount());
   // A status from a newer plxd reads as no result, rather than breaking the row.
   row(tool("cancelled" as AgentToolStatus));
-  expect(slot()).toEqual(unfinished);
+  expect(look()).toEqual(unfinished);
   act(() => unmount());
+  // A call that succeeded only says so to screen readers.
   row(tool("ok"));
-  expect(slot()).toEqual({
-    color: "text-muted-foreground",
-    faded: false,
-    mark: undefined,
-    said: "Succeeded",
-  });
+  expect(look()).toEqual({ status: null, said: "Succeeded", shown: false });
 });
 
 test("a tool named like an object's own property is any other tool, running or done", () => {
   const tool: Item = { kind: "tool", key: "t", callId: "1", name: "constructor", input: {} };
-  expect(activity(tool).loader).toEqual({ kind: "orbit", variant: "chase" });
   render(<RowView row={tool} live open={false} onToggle={() => {}} />);
-  expect(
-    document.querySelector('summary [data-loader="orbit"][data-variant="chase"]'),
-  ).not.toBeNull();
+  expect(document.querySelector("summary .animate-spin")).not.toBeNull();
   expect(said()).toBe("Running");
   act(() => unmount());
   render(<RowView row={{ ...tool, status: "ok" }} live open={false} onToggle={() => {}} />);
@@ -1337,7 +1296,7 @@ test("a message a finished run couldn't take goes back in the box, with no loade
   expect(composer().textContent).toBe("Also mention the tests.");
   expect(document.querySelector('[role="alert"]')!.textContent).toBe("the CLI didn't start");
   expect(transcriptText()).not.toContain("Also mention the tests.");
-  expect(document.querySelector(".loader")).toBeNull();
+  expect(document.querySelector("[data-status=running]")).toBeNull();
   act(() => unmount());
 
   fakeBridge(8, { sent: { status: "failed" } });
@@ -1841,11 +1800,14 @@ test("while a run goes, a message with work after it has no Copy bar, but an end
   expect(copies()).toEqual(["go", expect.stringContaining("First")]);
 });
 
-// The musing row: what stands for the agent's next step while nothing is in flight.
+// The musing row: what stands for the agent's next step while nothing is in flight, a running
+// "Working" line of its own rather than a fold's header.
 const musingRow = () =>
-  document
-    .querySelector('[role="log"] [data-loader="orbit"][data-variant="chase"]')
-    ?.closest("[data-index]") ?? undefined;
+  [...document.querySelectorAll('[role="log"] [data-index]')].find((r) =>
+    [...r.querySelectorAll("[data-slot=trace-line][data-status=running]")].some(
+      (line) => !line.closest("summary") && line.textContent === "Working",
+    ),
+  );
 
 test("while a run goes, its work shows as steps, the call in flight live, under how long it has gone", () => {
   const transcript = (rows: Item[], turnDone = false) =>
@@ -1867,7 +1829,7 @@ test("while a run goes, its work shows as steps, the call in flight live, under 
     status: "ok",
   };
   const reply: Item = { kind: "assistant", key: "a", text: "Hi", partial: true };
-  const header = () => document.querySelector("button[aria-expanded]");
+  const header = () => document.querySelector("summary");
   const rows = () => [...document.querySelectorAll("[data-index]")].map((r) => r.textContent);
 
   // A streaming reply is what the agent is doing: no steps, and no musing.
@@ -1890,7 +1852,7 @@ test("while a run goes, its work shows as steps, the call in flight live, under 
   act(() => unmount());
   transcript([user, { ...tool, at: "2026-01-01T00:00:00Z" }, read, tool]);
   expect(header()!.textContent).toBe("Runningls");
-  expect(header()!.querySelector('[data-loader="register"][data-variant="shift"]')).not.toBeNull();
+  expect(header()!.querySelector(".animate-spin")).not.toBeNull();
   expect(musingRow()).toBeUndefined();
   act(() => unmount());
 
@@ -1960,7 +1922,8 @@ test("a run of steps sums up what it did, as T3 Code does", () => {
   // Thoughts alone, and how a failure shows.
   const thought: Item = { kind: "reasoning", key: "r", text: "Hm" };
   expect(label([thought, { ...thought, key: "r2" }])).toBe("Thought 2 times");
-  expect(summarize([tool("Bash", {}, "error"), tool("Bash")]).failed).toBe(true);
+  expect(summarize([tool("Bash", {}, "error"), tool("Bash")]).failures).toBe(1);
+  expect(summarize([tool("Bash", {}, "error"), tool("Bash", {}, "denied")]).failures).toBe(2);
 });
 
 test("a context compaction shows while it runs, then as a divider", () => {
@@ -1981,7 +1944,7 @@ test("a context compaction shows while it runs, then as a divider", () => {
   expect(document.body.textContent).not.toContain("Compacting");
 });
 
-test("until the agent does anything, a loader muses under the message on its way to it", () => {
+test("until the agent does anything, a Working line stands under the message on its way to it", () => {
   const user: Item = { kind: "user", key: "u", text: "go" };
   const reply: Item = { kind: "assistant", key: "a", text: "Done." };
   const end: Item = { kind: "end", key: "e", outcome: { status: "completed" } };
@@ -1989,15 +1952,7 @@ test("until the agent does anything, a loader muses under the message on its way
   const fallback: Item = { kind: "notice", key: "n", tone: "info", text: "Switched accounts." };
   const transcript = (rows: Parameters<typeof TranscriptView>[0]["rows"], live: boolean) =>
     render(<TranscriptView rows={rows} sent={new Map()} live={live} />);
-  // The musing row: the loader and a word, which screen readers hear as Working.
-  const musing = () => {
-    const row = musingRow();
-    if (!row) return undefined;
-    expect(row.querySelector('[aria-hidden="true"]:not(.loader)')!.textContent).toMatch(
-      /^[A-Z][a-z]+$/,
-    );
-    return row.querySelector(".sr-only")?.textContent;
-  };
+  const musing = () => musingRow()?.textContent;
   // What follows the message, by row, under its working line.
   const after = (text: string) => {
     const rows = [...document.querySelectorAll("[data-index]")];
@@ -2031,65 +1986,25 @@ test("until the agent does anything, a loader muses under the message on its way
   expect(musing()).toBeUndefined();
   act(() => unmount());
 
-  // Nor in a transcript that's out of date: no loader at all.
+  // Nor in a transcript that's out of date: nothing running at all.
   render(<TranscriptView rows={[user, pending]} sent={new Map()} live stalled />);
   expect(musing()).toBeUndefined();
-  expect(document.querySelector(".loader")).toBeNull();
-});
-
-test("the musing changes its word on the wall clock, while screen readers keep hearing Working", () => {
-  // On a word's boundary: the first word is Picturing.
-  vi.useFakeTimers({ now: 2400 * 8000 });
-  render(<TranscriptView rows={[{ kind: "user", key: "u", text: "go" }]} sent={new Map()} live />);
-  const header = () => musingRow()!;
-  // Each word shown, and whether it fades in or out.
-  const words = () =>
-    [...header().querySelectorAll('[aria-hidden="true"]:not(.loader) > span')].map((w) => [
-      w.textContent,
-      w.className.match(/working-(in|out)/)?.[0],
-    ]);
-  // The first word doesn't fade in, so a remount doesn't blink.
-  expect(words()).toEqual([["Picturing", undefined]]);
-  act(() => void vi.advanceTimersByTime(2400));
-  expect(words()).toEqual([
-    ["Picturing", "working-out"],
-    ["Pondering", "working-in"],
-  ]);
-  act(() => void vi.advanceTimersByTime(2400));
-  expect(words()).toEqual([
-    ["Pondering", "working-out"],
-    ["Sketching", "working-in"],
-  ]);
-  expect(header().querySelector(".sr-only")!.textContent).toBe("Working");
-  act(() => unmount());
-  expect(vi.getTimerCount()).toBe(0);
-});
-
-test("under reduced motion, the musing keeps its word", () => {
-  vi.useFakeTimers({ now: 2400 * 8000 });
-  // appearance.ts sets it under the OS's Reduce motion or the app's own.
-  document.documentElement.classList.add("reduce-motion");
-  render(<TranscriptView rows={[{ kind: "user", key: "u", text: "go" }]} sent={new Map()} live />);
-  // The working line's clock still ticks.
-  expect(vi.getTimerCount()).toBe(1);
-  act(() => void vi.advanceTimersByTime(4800));
-  expect(musingRow()!.textContent).toBe("WorkingPicturing");
-  document.documentElement.classList.remove("reduce-motion");
+  expect(document.querySelector("[data-status=running]")).toBeNull();
 });
 
 test("a running chat that loses plxd shows no loader", async () => {
   // The run is going, and the agent hasn't done anything yet.
   const { connect } = fakeBridge(2);
   await renderChat();
-  expect(document.querySelector('[role="log"] .loader')).not.toBeNull();
+  expect(document.querySelector('[role="log"] [data-status=running]')).not.toBeNull();
   connect({ status: "connecting" });
-  expect(document.querySelector(".loader")).toBeNull();
+  expect(document.querySelector("[data-status=running]")).toBeNull();
   connect({
     status: "failed",
     retrying: true,
     error: { reason: "exited", message: "plxd exited" },
   });
-  expect(document.querySelector(".loader")).toBeNull();
+  expect(document.querySelector("[data-status=running]")).toBeNull();
   expect(transcriptText()).toContain("Add a README");
 });
 
@@ -2100,13 +2015,13 @@ test("until its transcript loads, a chat shows its first message, with the loade
   render(<AgentChat hostId="local" runId={runId} prompt="Add a README" />);
   await settle();
   expect(transcriptText()).toBe("Add a README");
-  expect(document.querySelector(".loader")).toBeNull();
+  expect(document.querySelector("[data-status=running]")).toBeNull();
   act(() => unmount());
 
   render(<AgentChat hostId="local" runId={runId} prompt="Add a README" going />);
   await settle();
   expect(document.querySelector('[role="log"] .bg-selected')!.textContent).toBe("Add a README");
-  expect(musingRow()!.querySelector(".sr-only")!.textContent).toBe("Working");
+  expect(musingRow()!.textContent).toBe("Working");
 });
 
 test("a chat that couldn't load shows its first message, with no loader", async () => {
@@ -2117,7 +2032,7 @@ test("a chat that couldn't load shows its first message, with no loader", async 
   render(<AgentChat hostId="local" runId={runId} prompt="Add a README" going />);
   await settle();
   expect(transcriptText()).toBe("Add a README");
-  expect(document.querySelector(".loader")).toBeNull();
+  expect(document.querySelector("[data-status=running]")).toBeNull();
   expect(document.querySelector('[role="alert"]')!.textContent).toBe("plxd is gone");
 });
 
@@ -2163,13 +2078,18 @@ test("a turn's plan is one line where it began, its updates lines in the work, i
     "Done.",
   ]);
   // The work after the plan holds its updates, one line each, and no TodoWrite calls.
-  act(() => rowAt(4).querySelector("button")!.click());
-  const lines = [...rowAt(4).querySelectorAll("p")].map((p) => p.textContent);
+  act(() => rowAt(4).querySelector("summary")!.click());
+  const lines = [
+    ...rowAt(4).querySelectorAll("[data-slot=trace-collapsible-content] [data-slot=trace-line]"),
+  ].map((p) => p.textContent);
   expect(lines.filter((t) => t?.includes("the plan"))).toEqual([
     "Updated the planFinished: Read · Started: Build",
     "Updated the planFinished: Build",
   ]);
-  expect(rowAt(4).querySelectorAll("summary")).toHaveLength(1); // Bash's
+  // Bash's, in the fold.
+  expect(rowAt(4).querySelectorAll("[data-slot=trace-collapsible-content] summary")).toHaveLength(
+    1,
+  );
   expect(transcriptText()).not.toContain("TodoWrite");
 });
 
@@ -2221,8 +2141,10 @@ test("Claude Code's task tools make the same lines as TodoWrite, and their rows 
     "Updatedtheplanandran1command",
     "Done.",
   ]);
-  act(() => rowAt(3).querySelector("button")!.click());
-  const lines = [...rowAt(3).querySelectorAll("p")].map((p) => p.textContent);
+  act(() => rowAt(3).querySelector("summary")!.click());
+  const lines = [
+    ...rowAt(3).querySelectorAll("[data-slot=trace-collapsible-content] [data-slot=trace-line]"),
+  ].map((p) => p.textContent);
   expect(lines.filter((t) => t?.includes("the plan"))).toEqual([
     "Updated the planAdded: Build",
     "Updated the planStarted: Read",
@@ -2230,7 +2152,10 @@ test("Claude Code's task tools make the same lines as TodoWrite, and their rows 
     "Updated the planStarted: Build",
     "Updated the planFinished: Build",
   ]);
-  expect(rowAt(3).querySelectorAll("summary")).toHaveLength(1); // Bash's
+  // Bash's, in the fold.
+  expect(rowAt(3).querySelectorAll("[data-slot=trace-collapsible-content] summary")).toHaveLength(
+    1,
+  );
   expect(transcriptText()).not.toMatch(/Task(Create|Update|List)/);
 });
 

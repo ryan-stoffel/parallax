@@ -1232,9 +1232,8 @@ body {
   }
 }
 
-/* The working line (AgentChat.tsx): its words shimmer, and a new one fades in
-   as the last fades out. AgentChat.tsx sets the shimmer's duration and delay. */
-.working-shimmer {
+/* A running Trace line's title (Trace.tsx) shimmers. */
+[data-slot="trace-line"][data-status="running"] [data-slot="trace-title"] {
   background: linear-gradient(
       90deg,
       var(--muted-foreground) 40%,
@@ -1244,7 +1243,7 @@ body {
     0 0 / 300% 100%;
   background-clip: text;
   color: transparent;
-  animation: working-shimmer linear infinite;
+  animation: working-shimmer 2s linear infinite;
 }
 @keyframes working-shimmer {
   from {
@@ -1254,24 +1253,8 @@ body {
     background-position: 0 0;
   }
 }
-.working-in {
-  animation: working-in 0.2s ease-out both;
-}
-.working-out {
-  animation: working-out 0.2s ease-in both;
-}
-@keyframes working-in {
-  from {
-    opacity: 0;
-  }
-}
-@keyframes working-out {
-  to {
-    opacity: 0;
-  }
-}
 
-/* Under reduced motion, loaders stand still and words just change. */
+/* Under reduced motion, loaders and spinners stand still, and titles don't shimmer. */
 :root.reduce-motion {
   .loader-part {
     animation: none !important;
@@ -1279,17 +1262,14 @@ body {
     scale: 1 !important;
     translate: none !important;
   }
-  .working-shimmer {
+  [data-slot="trace-line"][data-status="running"] [data-slot="trace-title"] {
     animation: none;
     background: none;
     color: inherit;
   }
-  .working-in {
+  /* Spinners, such as a running Trace line's, stand still. */
+  .animate-spin {
     animation: none;
-  }
-  .working-out {
-    animation: none;
-    visibility: hidden;
   }
 }
 
