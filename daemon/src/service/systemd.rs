@@ -1,5 +1,6 @@
 //! The systemd user unit that keeps `serve` running on Linux (PLX-18, 0023), driven with
-//! `systemctl --user`. With `loginctl enable-linger`, it runs while nobody is logged in.
+//! `systemctl --user`. [`install`] turns on lingering, so it starts at boot and runs while nobody
+//! is logged in.
 //!
 //! [`render_unit`] is pure, so it is covered by a golden-file test. [`install`] runs
 //! `daemon-reload`, `enable`, and `restart`, [`uninstall`] runs `disable --now` and
@@ -15,6 +16,9 @@ use crate::paths::{DATA_DIR_ENV, DataDir};
 
 /// Found on `PATH`: `/usr/bin/systemctl` on merged-`/usr` distros, `/bin/systemctl` on others.
 pub(crate) const SYSTEMCTL: &str = "systemctl";
+
+/// Found on `PATH`, as [`SYSTEMCTL`] is.
+const LOGINCTL: &str = "loginctl";
 
 /// The unit's name: `<label>.service`.
 #[must_use]
@@ -46,10 +50,10 @@ pub fn unit_path(label: &str) -> Result<PathBuf, ServiceError> {
 /// `logs/plxd.log` (0009), so a panic before `serve`'s own logger starts still lands there.
 /// `append:` needs systemd 240; an older one ignores it and sends both to the journal.
 ///
-/// `Restart=on-failure` is `KeepAlive.SuccessfulExit=false`: systemd restarts `serve` after a
-/// non-zero exit or a crash, but not after the 0 that a clean SIGTERM shutdown produces, so a
-/// deliberate stop stays stopped. `WantedBy=default.target` starts it with the user's manager,
-/// which with linger runs from boot.
+/// `Restart=always` is `KeepAlive` true: systemd restarts `serve` 5 s after any exit, a clean
+/// one included, and `StartLimitIntervalSec=0` keeps it from ever giving up and leaving the unit
+/// `failed`. Only `systemctl --user stop` and `disable --now` keep it stopped.
+/// `WantedBy=default.target` starts it with the user's manager, which with linger runs from boot.
 ///
 /// `Type=exec` makes `systemctl start` fail when `program` can't be run, so `attach` falls back
 /// to starting `serve` itself. `KillMode=mixed` sends the stop's SIGTERM to `serve` alone, as
@@ -66,13 +70,15 @@ pub fn render_unit(program: &Path, data_dir: &DataDir) -> Result<String, Service
     Ok(format!(
         "[Unit]\n\
          Description=plxd, the Parallax host daemon\n\
+         StartLimitIntervalSec=0\n\
          \n\
          [Service]\n\
          Type=exec\n\
          ExecStart={program} serve\n\
          Environment={data_dir_value}\n\
          KillMode=mixed\n\
-         Restart=on-failure\n\
+         Restart=always\n\
+         RestartSec=5\n\
          StandardOutput=append:{log}\n\
          StandardError=append:{log}\n\
          \n\
@@ -107,6 +113,10 @@ fn quote(text: &str) -> String {
 /// service with it. `restart` waits for the old `serve` to stop before starting the new one, so
 /// the two never race for `plxd.lock`.
 ///
+/// It turns on lingering before `restart` ([`enable_linger`]), since in a `host/update` handover
+/// this process runs in the unit's cgroup and is stopped with the old `serve`. Lingering that
+/// can't be turned on is only a warning on stderr.
+///
 /// # Errors
 ///
 /// [`ServiceError::AlreadyRunningOutsideService`] when the unit isn't running but something is
@@ -115,8 +125,7 @@ fn quote(text: &str) -> String {
 /// [`ServiceError::StillRunning`].
 ///
 /// With `replace`, that `serve` is stopped once the unit is enabled, so an `attach` in between
-/// starts the unit rather than its own `serve`. `reset-failed` then clears a start limit that
-/// such a start may have hit while the old `serve` held the lock.
+/// starts the unit rather than its own `serve`.
 pub fn install(
     label: &str,
     data_dir: &DataDir,
@@ -131,9 +140,14 @@ pub fn install(
     let name = unit_name(label);
     systemctl(&["daemon-reload"])?;
     systemctl(&["enable", &name])?;
+    if let Err(error) = enable_linger(LOGINCTL, rustix::process::getuid().as_raw()) {
+        eprintln!(
+            "plxd: warning: {error}, so the service runs only while you're logged in; \
+             `sudo loginctl enable-linger $USER` turns lingering on"
+        );
+    }
     if outside {
         stop_outside_serve(data_dir)?;
-        systemctl(&["reset-failed", &name])?;
     }
     systemctl(&["restart", &name])?;
     Ok(if state.loaded() {
@@ -208,6 +222,19 @@ fn parse_show_output(text: &str) -> ServiceState {
     }
 }
 
+/// Turns on lingering for the user `uid` with `loginctl`, the program at `loginctl`, unless
+/// `show-user` says it's on already. With it, the user's manager, and so the unit, starts at boot
+/// and keeps running after the last logout. `--no-ask-password` makes a polkit refusal fail
+/// rather than prompt.
+fn enable_linger(loginctl: &str, uid: u32) -> Result<(), ServiceError> {
+    let uid = uid.to_string();
+    let shown = run_ok(loginctl, &["show-user", &uid, "--property=Linger"]);
+    if shown.is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "Linger=yes") {
+        return Ok(());
+    }
+    run_ok(loginctl, &["--no-ask-password", "enable-linger", &uid]).map(drop)
+}
+
 fn systemctl(args: &[&str]) -> Result<std::process::Output, ServiceError> {
     run_ok(SYSTEMCTL, &[&["--user"], args].concat())
 }
@@ -216,9 +243,43 @@ fn systemctl(args: &[&str]) -> Result<std::process::Output, ServiceError> {
 mod tests {
     use std::path::Path;
 
-    use super::{parse_show_output, quote, render_unit, unit_name};
+    use super::{enable_linger, parse_show_output, quote, render_unit, unit_name};
     use crate::paths::DataDir;
+    use crate::service::tests::fake_program;
     use crate::service::{DEFAULT_LABEL, ServiceError, ServiceState};
+
+    #[test]
+    fn lingering_is_turned_on_only_when_it_is_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let calls = dir.path().join("calls");
+        let loginctl = |name: &str, linger: &str, enable: &str| {
+            fake_program(
+                dir.path(),
+                name,
+                &format!(
+                    "echo \"$*\" >> '{}'\n\
+                     if [ \"$1\" = show-user ]; then echo Linger={linger}; else {enable}; fi",
+                    calls.display()
+                ),
+            )
+        };
+
+        enable_linger(&loginctl("on", "yes", "exit 1"), 1000).unwrap();
+        enable_linger(&loginctl("off", "no", "true"), 1000).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&calls).unwrap(),
+            "show-user 1000 --property=Linger\n\
+             show-user 1000 --property=Linger\n\
+             --no-ask-password enable-linger 1000\n"
+        );
+
+        let refused = loginctl("refused", "no", "echo 'Access denied' >&2; exit 1");
+        let error = enable_linger(&refused, 1000).unwrap_err().to_string();
+        assert!(
+            error.contains("enable-linger 1000` failed: Access denied"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn unit_matches_the_golden_file() {

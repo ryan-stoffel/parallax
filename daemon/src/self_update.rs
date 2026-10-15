@@ -60,8 +60,9 @@ const RUNS_POLL: Duration = Duration::from_secs(5);
 /// `file://` URL. Only tests should set it.
 pub const RELEASES_ENV: &str = "PLXD_RELEASES_URL";
 
-/// The exit status that asks the service manager running plxd to start it again: any non-zero
-/// status does, under `Restart=on-failure` and `KeepAlive.SuccessfulExit=false`. 75 is
+/// The exit status that asks the service manager running plxd to start it again. Any exit does
+/// under `Restart=always` and `KeepAlive` true, but a service installed before PLX-821 still has
+/// `Restart=on-failure` or `KeepAlive.SuccessfulExit=false`, which need a non-zero one. 75 is
 /// `EX_TEMPFAIL`.
 pub const EXIT_RESTART: u8 = 75;
 

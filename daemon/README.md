@@ -94,13 +94,7 @@ The client runs the same `ssh ... <host> plxd attach` command, and the host need
    To check, run `ssh <host> 'command -v plxd'`.
 2. **Quiet shell startup files and a key that logs in without prompts**, as on a Mac.
 3. **The systemd user unit, which is recommended** (PLX-18). `plxd service install` writes `~/.config/systemd/user/io.github.ryan-stoffel.parallax.plxd.service`, enables it, and starts it. `uninstall` and `status` work as on a Mac, and `attach` starts plxd with `systemctl --user start` whenever the unit is installed.
-   - **Turn on linger**, once. Without it, systemd stops your user services when your last session ends and starts them again at your next login. With it, the unit starts at boot and keeps running while nobody is logged in:
-
-     ```sh
-     loginctl enable-linger
-     ```
-
-     Some distros only let root do that, with `sudo loginctl enable-linger $USER`. To check, run `loginctl show-user $USER --property=Linger`.
+   - **Linger.** Without it, systemd stops your user services when your last session ends and starts them again at your next login. With it, the unit starts at boot and keeps running while nobody is logged in. `plxd service install` turns it on with `loginctl enable-linger`. Some distros only let root do that, so where it can't, it warns on stderr; run `sudo loginctl enable-linger $USER` then. To check, run `loginctl show-user $USER --property=Linger`.
    - `systemctl --user` needs your user manager, which `pam_systemd` starts for an SSH login. Where it can't be reached, such as on a host without systemd, `attach` says so on stderr and starts `serve` itself.
    - The unit's `serve` appends its output to `logs/plxd.log` in the data folder, as on a Mac. That needs systemd 240 or later; an older one sends it to the journal, `journalctl --user --unit io.github.ryan-stoffel.parallax.plxd`.
    - The unit's `serve` gets the user manager's environment, not your shell's. If agent CLIs live on npm or nvm paths, add them to `PATH` in a `.conf` file in `~/.config/environment.d/`.

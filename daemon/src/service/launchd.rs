@@ -5,6 +5,7 @@
 //! guidance to prefer them over the deprecated `load` and `unload`.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use super::{
     InstallOutcome, ServiceError, ServiceState, Status, UninstallOutcome, check_label_serves,
@@ -13,6 +14,12 @@ use super::{
 use crate::paths::{DATA_DIR_ENV, DataDir};
 
 pub(crate) const LAUNCHCTL: &str = "/bin/launchctl";
+
+/// How long [`install`] keeps retrying a `bootstrap` that fails right after a `bootout`.
+const BOOTSTRAP_PATIENCE: Duration = Duration::from_secs(10);
+
+/// How long [`bootstrap`] waits between tries.
+const BOOTSTRAP_RETRY: Duration = Duration::from_millis(250);
 
 /// Where the `LaunchAgent`'s plist goes: `~/Library/LaunchAgents/<label>.plist`.
 ///
@@ -31,10 +38,8 @@ pub fn plist_path(label: &str) -> Result<PathBuf, ServiceError> {
 /// `logs/plxd.log` (0009), which `serve` also logs to, so a panic before its own logger starts
 /// still lands there instead of being lost.
 ///
-/// `KeepAlive.SuccessfulExit` is `false`: launchd restarts `serve` after it exits with a
-/// non-zero status (a crash, or losing the startup race for `plxd.lock`), but not after the
-/// exit status of 0 that a clean SIGTERM or SIGINT shutdown produces (`daemon/src/main.rs`), so
-/// a deliberate stop stays stopped.
+/// `KeepAlive` is `true`: launchd restarts `serve` after any exit, a clean SIGTERM shutdown's 0
+/// included, throttled to one start every 10 s. Only `launchctl bootout` keeps it stopped.
 #[must_use]
 pub fn render_plist(label: &str, program: &Path, data_dir: &DataDir) -> String {
     let label = escape_plist_text(label);
@@ -61,10 +66,7 @@ pub fn render_plist(label: &str, program: &Path, data_dir: &DataDir) -> String {
          \t<key>RunAtLoad</key>\n\
          \t<true/>\n\
          \t<key>KeepAlive</key>\n\
-         \t<dict>\n\
-         \t\t<key>SuccessfulExit</key>\n\
-         \t\t<false/>\n\
-         \t</dict>\n\
+         \t<true/>\n\
          \t<key>StandardOutPath</key>\n\
          \t<string>{log}</string>\n\
          \t<key>StandardErrorPath</key>\n\
@@ -86,7 +88,8 @@ fn escape_plist_text(text: &str) -> String {
 ///
 /// Idempotent: run again, for example after plxd moves, to update the plist and restart the
 /// service with the new one (`bootout` then `bootstrap`, since launchd does not reread a
-/// bootstrapped job's plist on its own).
+/// bootstrapped job's plist on its own). A `bootstrap` that fails right after the `bootout` is
+/// retried for up to [`BOOTSTRAP_PATIENCE`], since by then the old `serve` is gone.
 ///
 /// # Errors
 ///
@@ -123,9 +126,14 @@ pub fn install(
             &["bootout", "--wait", &format!("{uid_target}/{label}")],
         )?;
     }
-    run_ok(
+    bootstrap(
         LAUNCHCTL,
         &["bootstrap", &uid_target, &path.display().to_string()],
+        if already_loaded {
+            BOOTSTRAP_PATIENCE
+        } else {
+            Duration::ZERO
+        },
     )?;
     if outside {
         stop_outside_serve(data_dir)?;
@@ -137,6 +145,20 @@ pub fn install(
     } else {
         InstallOutcome::Installed
     })
+}
+
+/// Runs `launchctl`, the program at `launchctl`, with `args`, a `bootstrap`, trying again every
+/// [`BOOTSTRAP_RETRY`] while it fails, until `patience` is up. launchd tears a booted-out job down
+/// after `bootout` returns, so a bootstrap right after one can fail until it's done.
+fn bootstrap(launchctl: &str, args: &[&str], patience: Duration) -> Result<(), ServiceError> {
+    let deadline = Instant::now() + patience;
+    loop {
+        let result = run_ok(launchctl, args);
+        if result.is_ok() || Instant::now() >= deadline {
+            return result.map(drop);
+        }
+        std::thread::sleep(BOOTSTRAP_RETRY);
+    }
 }
 
 /// Removes the per-user `LaunchAgent` for `label`: stops it if loaded, then deletes its plist.
@@ -207,10 +229,46 @@ fn parse_print_output(text: &str) -> (bool, Option<u32>) {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::time::{Duration, Instant};
 
-    use super::{escape_plist_text, parse_print_output, plist_path, render_plist};
+    use super::{bootstrap, escape_plist_text, parse_print_output, plist_path, render_plist};
     use crate::paths::DataDir;
     use crate::service::DEFAULT_LABEL;
+    use crate::service::tests::fake_program;
+
+    #[test]
+    fn a_failing_bootstrap_is_retried_until_its_patience_is_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let tries = dir.path().join("tries");
+        // Fails twice, as launchd does while it still tears the old job down, then succeeds.
+        let launchctl = fake_program(
+            dir.path(),
+            "launchctl",
+            &format!(
+                "echo \"$*\" >> '{tries}'\n\
+                 [ $(wc -l < '{tries}') -gt 2 ] || {{ echo 'Bootstrap failed: 5: Input/output error' >&2; exit 5; }}",
+                tries = tries.display()
+            ),
+        );
+        let args = ["bootstrap", "gui/501", "/tmp/a.plist"];
+
+        bootstrap(&launchctl, &args, Duration::from_secs(10)).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&tries).unwrap(),
+            "bootstrap gui/501 /tmp/a.plist\n".repeat(3)
+        );
+
+        std::fs::remove_file(&tries).unwrap();
+        let error = bootstrap(&launchctl, &args, Duration::ZERO).unwrap_err();
+        assert!(error.to_string().contains("Input/output error"), "{error}");
+        assert_eq!(std::fs::read_to_string(&tries).unwrap().lines().count(), 1);
+
+        let started = Instant::now();
+        let failing = fake_program(dir.path(), "failing", "exit 5");
+        bootstrap(&failing, &args, Duration::from_millis(600)).unwrap_err();
+        assert!(started.elapsed() >= Duration::from_millis(600));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
 
     #[test]
     fn plist_matches_the_golden_file() {
