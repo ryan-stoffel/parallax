@@ -61,6 +61,7 @@ import type {
   ImageId,
   JsonValue,
   PromptImage,
+  ThreadRun,
 } from "../protocol/generated/protocol";
 import {
   ApprovalDetails,
@@ -147,6 +148,7 @@ import {
   type Subagent,
   type Work,
 } from "./transcript";
+import { TurnChanges, TurnChangesContext, type TurnChangesTarget } from "./TurnChanges";
 import { SetUpGithub } from "./ui";
 import { useAgentRun, type SentMessage } from "./useAgentRun";
 import { WaitingBar } from "./WaitingBar";
@@ -245,6 +247,7 @@ export function AgentChat({
   onPreview,
   forked,
   onFork,
+  onOpenChanges,
 }: {
   hostId: string;
   runId: string;
@@ -320,6 +323,8 @@ export function AgentChat({
    * messages offer Fork only with it. Resolves to plxd's error, if it refused.
    */
   onFork?: (turnId: string | undefined, choice: ForkChoice) => Promise<RpcError | undefined>;
+  /** Opens the side panel's Changes view on a turn, by its ordinal, scrolled to `path` if given. */
+  onOpenChanges?: (ordinal: number, path?: string) => void;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
@@ -335,6 +340,7 @@ export function AgentChat({
     held,
     background,
     watching,
+    runs,
     older,
     loadOlder,
   } = useAgentRun(hostId, runId, connected);
@@ -653,6 +659,25 @@ export function AgentChat({
     !isRunning(run.status) &&
     run.status !== "accepted";
 
+  // Each turn's run, for its changes card: by its prompt row's turn id, and the first prompt's,
+  // whose row has none, by `undefined`. A fork's first run is its copied prompt's, which has no
+  // checkpoint, so its copied first reply shows no changes.
+  const [folds, setFolds] = useState<ReadonlyMap<string, boolean>>(new Map());
+  const turnChanges = useMemo<TurnChangesTarget>(() => {
+    const turns = new Map<string | undefined, ThreadRun>();
+    for (const r of runs) {
+      if (r.status === "rolledBack") continue;
+      turns.set(r.id, r);
+      if (r.ordinal === 1 && !r.text) turns.set(undefined, r);
+    }
+    return {
+      turns,
+      folds,
+      setFolds: (next) => setFolds((prev) => new Map([...prev, ...Object.entries(next)])),
+      open: onOpenChanges,
+    };
+  }, [runs, folds, onOpenChanges]);
+
   const forkTarget = useMemo<ForkTarget | undefined>(
     () => (run && onFork && connected ? { hostId, run, onFork } : undefined),
     [hostId, run, onFork, connected],
@@ -697,39 +722,43 @@ export function AgentChat({
       {rows.length > 0 || editing ? (
         <ThreadLinksContext value={threadLinks}>
           <ForkContext value={forkTarget}>
-            <TranscriptView
-              rows={rows}
-              sent={unsent}
-              live={isRunning(run?.status)}
-              stalled={stalled}
-              turnDone={transcript.turnDone}
-              root={run?.worktreePath}
-              // plxd logs a fork's copied history with its agent.started, at its creation (0050).
-              copiedAt={forked ? run?.createdAt : undefined}
-              onResend={resend}
-              loadImage={showImage}
-              onNearTop={older ? loadOlder : undefined}
-              onEdit={
-                live && !editing && unanswered?.row
-                  ? { key: unanswered.row.key, edit: () => void edit() }
-                  : undefined
-              }
-              end={
-                editing ? (
-                  <EditMessage
-                    editing={editing}
-                    loadImage={showImage}
-                    disabledReason={disabledReason}
-                    onSend={(text, images) => setEditing({ ...editing, text, images, ready: true })}
-                    onCancel={cancelEdit}
-                  />
-                ) : (
-                  run?.status === "waiting" && (
-                    <ResumeCard hostId={hostId} run={run} disabledReason={disabledReason} />
+            <TurnChangesContext value={turnChanges}>
+              <TranscriptView
+                rows={rows}
+                sent={unsent}
+                live={isRunning(run?.status)}
+                stalled={stalled}
+                turnDone={transcript.turnDone}
+                root={run?.worktreePath}
+                // plxd logs a fork's copied history with its agent.started, at its creation (0050).
+                copiedAt={forked ? run?.createdAt : undefined}
+                onResend={resend}
+                loadImage={showImage}
+                onNearTop={older ? loadOlder : undefined}
+                onEdit={
+                  live && !editing && unanswered?.row
+                    ? { key: unanswered.row.key, edit: () => void edit() }
+                    : undefined
+                }
+                end={
+                  editing ? (
+                    <EditMessage
+                      editing={editing}
+                      loadImage={showImage}
+                      disabledReason={disabledReason}
+                      onSend={(text, images) =>
+                        setEditing({ ...editing, text, images, ready: true })
+                      }
+                      onCancel={cancelEdit}
+                    />
+                  ) : (
+                    run?.status === "waiting" && (
+                      <ResumeCard hostId={hostId} run={run} disabledReason={disabledReason} />
+                    )
                   )
-                )
-              }
-            />
+                }
+              />
+            </TurnChangesContext>
           </ForkContext>
         </ThreadLinksContext>
       ) : (
@@ -1493,6 +1522,7 @@ export const RowView = memo(function RowView({
       return (
         <div className="group/prompt flex flex-col gap-1.5">
           {body}
+          <TurnChanges turnId={replyTurn} />
           <PromptMeta text={row.text} fork={forkable && <ForkButton turnId={replyTurn} />} />
         </div>
       );

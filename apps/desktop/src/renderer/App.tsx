@@ -14,7 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 import type { InboxItem, PreviewTab, Repo, RepoId, Thread } from "../protocol/generated/protocol";
 import { type RepoAction } from "./Actions";
 import { AgentChat } from "./AgentChat";
-import { ChangesPanel } from "./ChangesPanel";
+import { ChangesPanel, type ChangesRequest } from "./ChangesPanel";
 import { ChildStrip } from "./ChildStrip";
 import type { Asked } from "./Approval";
 import { offlineReason, useConnection } from "./ConnectionStatus";
@@ -166,8 +166,9 @@ export function App() {
   const details = useThreadDetails();
   // The folders whose terminal drawer is open, by key (ThreadTerminal.tsx).
   const [drawers, setDrawers] = useState<ReadonlySet<string>>(new Set());
+  // A request to open the Changes view, perhaps on a thread's turn, scrolled to a file.
+  const [showChanges, setShowChanges] = useState<ChangesRequest>();
   // The page a repository action last opened in the side panel's Browser view.
-  const [showChanges, setShowChanges] = useState<object>();
   const [browse, setBrowse] = useState<{ url?: string; agentTab?: string }>();
   // The open thread's agent browser tabs (PLX-639), which plxd lists after each browser tool call.
   const [agentTabs, setAgentTabs] = useState<{ runId: string; tabs: PreviewTab[] }>();
@@ -952,6 +953,10 @@ export function App() {
                                 )
                               }
                               forked={!!paneThread?.forkedFrom}
+                              onOpenChanges={(turn, path) => {
+                                setPanelOpen(true);
+                                setShowChanges({ runId: threadId, turn, path });
+                              }}
                               onFork={
                                 "threadFork" in threads.capabilities
                                   ? (turnId, choice) => forkThread(threadId, turnId, choice)
@@ -1208,6 +1213,8 @@ export function App() {
               sessionId={threadRun.sessionId}
               running={isRunning(threadRun.status)}
               version={threads.state.checkpoints[threadRun.id]}
+              request={showChanges}
+              onRequestShown={() => setShowChanges(undefined)}
               unavailable={
                 offline ??
                 (connected && "checkpoints" in connection.capabilities

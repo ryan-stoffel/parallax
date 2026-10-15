@@ -276,3 +276,21 @@ test("thread checkpoint events reload turns even when the shell has no checkpoin
     "4",
   ]);
 });
+
+test("a changes card's request shows its turn once, then clears, and another thread's is ignored", async () => {
+  const shown = vi.fn();
+  renderPanel({ request: { runId: "other", turn: 2 }, onRequestShown: shown });
+  await settle();
+  expect(document.querySelector("select")!.value).toBe("all");
+  expect(shown).not.toHaveBeenCalled();
+
+  renderPanel({ request: { runId: "r", turn: 2, path: "b.txt" }, onRequestShown: shown });
+  await settle();
+  expect(document.querySelector("select")!.value).toBe("2");
+  expect(paths()).toEqual(["b.txt"]);
+  expect(shown).toHaveBeenCalledOnce();
+  // Cleared, it leaves the turn as the user has it.
+  renderPanel({ request: undefined, onRequestShown: shown });
+  await settle();
+  expect(document.querySelector("select")!.value).toBe("2");
+});

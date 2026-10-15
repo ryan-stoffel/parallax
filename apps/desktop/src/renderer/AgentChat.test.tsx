@@ -22,6 +22,7 @@ import type {
   AgentToolStatus,
   LoggedEvent,
   ParallaxEvent,
+  ThreadRun,
 } from "../protocol/generated/protocol";
 import {
   activity,
@@ -860,6 +861,7 @@ function fakeBridge(
   const request = vi.fn(async (_host: string, method: string, params: Params) => {
     if (method === "queue/list") return { result: { messages: [] }, logId: "log-1" };
     if (method === "agent/list") return { result: { runs: [], seq: listSeq }, logId: "log-1" };
+    if (method === "orchestration/threadRuns") return { result: { runs: [] }, logId: "log-1" };
     const command = (params as { type?: string }).type;
     if ((method === "agent/cancel" || command === "run.interrupt") && cancelError)
       return { error: { code: -32000, message: cancelError } };
@@ -941,6 +943,7 @@ function watchedBridge() {
     return stop;
   });
   const request = vi.fn(async (_host: string, method: string, params: { before?: number }) => {
+    if (method === "orchestration/threadRuns") return { result: { runs: [] }, logId: "log-1" };
     if (method !== "orchestration/threadHistory") return { result: {}, logId: "log-1" };
     const older = logged.filter((e) => e.seq < params.before!);
     return { result: { events: older.slice(-2), more: older.length > 2 }, logId: "log-1" };
@@ -963,11 +966,16 @@ function watchedBridge() {
   } as Partial<ParallaxBridge> as ParallaxBridge;
   const connect = (state: ConnectionState) =>
     act(() => connections.forEach((connection) => connection("local", state)));
-  const snapshot = (events: LoggedEvent[], more = false, seq = events.at(-1)?.seq ?? 0) =>
+  const snapshot = (
+    events: LoggedEvent[],
+    more = false,
+    seq = events.at(-1)?.seq ?? 0,
+    runs: ThreadRun[] = [],
+  ) =>
     act(async () =>
       listener({
         type: "snapshot",
-        snapshot: { seq, thread: sampleRun, runs: [], events, more, requests: [] },
+        snapshot: { seq, thread: sampleRun, runs, events, more, requests: [] },
       }),
     );
   const emit = (event: LoggedEvent) =>
@@ -975,6 +983,39 @@ function watchedBridge() {
   const emitError = (error: RpcError) => act(async () => listener({ type: "error", error }));
   return { watch, stop, request, snapshot, emit, emitError, connect };
 }
+
+test("a turn's changed files show under its reply, and Open diff opens its turn", async () => {
+  const { snapshot } = watchedBridge();
+  const onOpenChanges = vi.fn();
+  render(<AgentChat hostId="local" runId={runId} onOpenChanges={onOpenChanges} />);
+  await settle();
+  const files = [
+    { path: "README.md", additions: 12, deletions: 0 },
+    { path: "docs/build.md", additions: 3, deletions: 2 },
+  ];
+  // The first prompt's row has no turn id: its run is the one with no text.
+  const runs: ThreadRun[] = [
+    { id: "turn-1", status: "completed", ordinal: 1, checkpoint: { status: "ready", files } },
+  ];
+  await snapshot(logged, false, undefined, runs);
+  const card = () => document.querySelector('[aria-label="Turn 1\'s changed files"]');
+  const button = (name: string) =>
+    [...card()!.querySelectorAll("button")].find((b) => b.textContent!.startsWith(name));
+  expect(card()!.querySelector("header")!.textContent).toBe("2 changed files+15 −2Open diff");
+  act(() => button("Open diff")!.click());
+  expect(onOpenChanges).toHaveBeenLastCalledWith(1);
+  act(() => button("build.md")!.click());
+  expect(onOpenChanges).toHaveBeenLastCalledWith(1, "docs/build.md");
+
+  // Folding the folder hides its file and shows its lines on the folder.
+  act(() => button("docs")!.click());
+  expect(button("build.md")).toBeUndefined();
+  expect(button("docs")!.textContent).toBe("docs+3 −2");
+
+  // A revert that undid the turn leaves no card.
+  await snapshot(logged, false, undefined, [{ ...runs[0]!, status: "rolledBack" }]);
+  expect(card()).toBeNull();
+});
 
 test("opens from the thread's snapshot, appends its events, and a fresh snapshot rebuilds it", async () => {
   const { watch, stop, snapshot, emit } = watchedBridge();
@@ -1098,6 +1139,7 @@ test.each(["live", "snapshot"] as const)(
     };
     const { request, snapshot, emit } = watchedBridge();
     request.mockImplementation(async (_host, method, params) => {
+      if (method === "orchestration/threadRuns") return { result: { runs: [] }, logId: "log-1" };
       if (method !== "orchestration/threadHistory") return { result: {}, logId: "log-1" };
       const older = history.filter((e) => e.seq < params.before!);
       return { result: { events: older.slice(-500), more: older.length > 500 }, logId: "log-1" };
