@@ -86,7 +86,7 @@ import { FileCards } from "./FileCards";
 import { HtmlRender, pageUrl } from "./HtmlRender";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { FileCard } from "./FileCard";
-import { splitFiles, uploadBytes } from "./uploads";
+import { isImagePath, splitFiles, uploadBytes } from "./uploads";
 import {
   Trace,
   TraceCollapsible,
@@ -1465,9 +1465,10 @@ export const RowView = memo(function RowView({
           </Disclosure>
         );
       const text = row.text ?? sent?.text;
-      // Files sent with it are listed after the user's own text (0071), and show as cards.
-      const { text: said, paths: files } =
-        text === undefined ? { text, paths: [] } : splitFiles(text);
+      // Files sent with it are listed after the user's own text (0071), and show as cards. Its
+      // images are listed too (PLX-799), but show as their thumbnails.
+      const { text: said, paths } = text === undefined ? { text, paths: [] } : splitFiles(text);
+      const files = paths.filter((path) => !isImagePath(path));
       // Images sent from here are at hand; the log's come from plxd by id.
       const images = row.kind === "pending" ? row.images : (sent?.images ?? row.images);
       const threads = row.threads ?? sent?.threads;

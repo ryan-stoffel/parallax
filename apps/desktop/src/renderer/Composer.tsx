@@ -63,7 +63,7 @@ import { accessPrefs } from "./accessPrefs";
 import { FileCard } from "./FileCard";
 import { Mention } from "./Mention";
 import { imageUrl, readImage, type ImageCaps } from "./images";
-import { base64Length, uploadFiles, withFiles } from "./uploads";
+import { base64Length, encodedImage, uploadFiles, withFiles } from "./uploads";
 import { ModelMenu } from "./ModelMenu";
 import { behaviorPrefs, newThreadPrefs, usageView } from "./prefs";
 import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
@@ -445,9 +445,9 @@ export interface ComposerProps {
   /** The host's image caps (`promptImages`). Absent: adding an image just says it can't take them. */
   imageCaps?: ImageCaps;
   /**
-   * The host's cap on one file's base64 (`fileUploads`, 0071). With `hostId`, a file that isn't
-   * an image is saved on the host when the message sends, and the message lists its path for the
-   * agent. Absent: such a file stays a chip that isn't sent.
+   * The host's cap on one file's base64 (`fileUploads`, 0071). With `hostId`, each file and image
+   * is saved on the host when the message sends, and the message lists its path for the agent.
+   * Absent: a file that isn't an image stays a chip that isn't sent.
    */
   uploadBytes?: number;
   /**
@@ -496,8 +496,8 @@ export interface ComposerProps {
  * send and Enter a new line everywhere; Cmd/Ctrl+Shift+Enter then steers or sends in the
  * background. It grows with its text up to 40% of the window.
  * Pasted, dropped, and picked images sit above the text as thumbnails, and go beside it, never in
- * it (PLX-193). Other files sit below it as chips, and with `uploadBytes` go to the host, their
- * paths listed after the text (PLX-779).
+ * it (PLX-193). Other files sit below it as chips. With `uploadBytes`, both go to the host, their
+ * paths listed after the text (PLX-779, PLX-799).
  * In an empty box, Up and Down step through `history`, until the recalled prompt is edited.
  * With `menus`, `/` at the start of a word opens a menu of the composer's own commands and the
  * CLI's commands and skills, and `@` one of the thread's files, filtered as you type. Up and Down
@@ -890,11 +890,15 @@ export function Composer({
     const sentImages = images;
     const sentThreads = threads;
     let sentText = text;
-    if (sentFiles.length > 0) {
+    // Images too, so the agent has each as a file as well as seeing it (PLX-799).
+    const uploads = canUpload
+      ? [...sentFiles, ...sentImages.map((image, i) => encodedImage(image, i + 1))]
+      : [];
+    if (uploads.length > 0) {
       // Nothing typed meanwhile, which the box clears once they're saved.
       setUploading(true);
       editor.setEditable(false);
-      const paths = await uploadFiles(host!, sentFiles).catch(
+      const paths = await uploadFiles(host!, uploads).catch(
         (error: unknown) => `A file couldn't be read: ${String(error)}`,
       );
       if (!editor.isDestroyed) editor.setEditable(true);

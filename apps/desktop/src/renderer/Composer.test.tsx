@@ -501,6 +501,36 @@ test("with fileUploads, a file goes to the host and the message lists its path (
   );
 });
 
+test("with fileUploads, an image is also saved on the host and listed after the files (PLX-799)", async () => {
+  const upload = vi.fn(async (_host: string, _method: string, params: { name: string }) => ({
+    logId: "log-1",
+    result: { path: `/host/uploads/1/${params.name}` },
+  }));
+  window.parallax = {
+    platform: "darwin",
+    request: upload,
+    onConnectionState: () => () => {},
+    connectionState: () => new Promise(() => {}),
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  const onSend = vi.fn(async () => undefined);
+  const { paste, press } = render(onSend, caps, { hostId: "local", uploadBytes: 1024 });
+  await paste([pngFile(), new File(["%PDF-"], "paper.pdf", { type: "application/pdf" })]);
+  await read();
+  await press("Enter");
+  await vi.waitFor(() => expect(onSend).toHaveBeenCalled());
+  expect(upload).toHaveBeenLastCalledWith("local", "host/upload", {
+    name: "image-1.png",
+    data: png,
+  });
+  // The image still goes as an image too.
+  expect(onSend).toHaveBeenCalledWith(
+    "Attached files:\n- /host/uploads/1/paper.pdf\n- /host/uploads/1/image-1.png",
+    {},
+    [sentPng],
+    [],
+  );
+});
+
 test("an image pasted during an upload stays, removing waits, and a failed read says why (PLX-779)", async () => {
   let saved: (answer: unknown) => void = () => {};
   const upload = vi.fn(
