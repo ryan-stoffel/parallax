@@ -660,7 +660,8 @@ export function AgentChat({
     run.status !== "accepted";
 
   // Each turn's run, for its changes card: by its prompt row's turn id, and the first prompt's,
-  // whose row has none, by `undefined`. A fork's first run is a message, so it has text.
+  // whose row has none, by `undefined`. A fork's first run is its copied prompt's, which has no
+  // checkpoint, so its copied first reply shows no changes.
   const [folds, setFolds] = useState<ReadonlyMap<string, boolean>>(new Map());
   const turnChanges = useMemo<TurnChangesTarget>(() => {
     const turns = new Map<string | undefined, ThreadRun>();

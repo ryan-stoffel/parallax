@@ -1214,6 +1214,7 @@ export function App() {
               running={isRunning(threadRun.status)}
               version={threads.state.checkpoints[threadRun.id]}
               request={showChanges}
+              onRequestShown={() => setShowChanges(undefined)}
               unavailable={
                 offline ??
                 (connected && "checkpoints" in connection.capabilities

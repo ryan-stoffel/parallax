@@ -36,7 +36,8 @@ const cursorRefusal = (r: ThreadRun, sessionId: string | undefined) =>
  * the turns. `unavailable` says why it can't load, such as a plxd without `checkpoints`.
  * `sessionId` is the thread's provider session: Claude goes back only to a turn that recorded
  * where it ended (`cursor`) in that session, as plxd checks. A new `request` for this thread shows
- * its turn, scrolled to its file, as a turn's changes card asks.
+ * its turn, scrolled to its file, as a turn's changes card asks, and `onRequestShown` then clears
+ * it, so the panel mounting again starts from every turn.
  */
 export function ChangesPanel({
   hostId,
@@ -47,6 +48,7 @@ export function ChangesPanel({
   running,
   version,
   request,
+  onRequestShown,
   unavailable,
   onCompose,
 }: {
@@ -58,6 +60,7 @@ export function ChangesPanel({
   running: boolean;
   version?: number;
   request?: ChangesRequest;
+  onRequestShown?: () => void;
   unavailable?: string;
   onCompose: (text: string) => void;
 }) {
@@ -69,10 +72,14 @@ export function ChangesPanel({
   const mine = request?.runId === runId ? request : undefined;
   const [shownTurn, setShownTurn] = useState<number | "all">(mine?.turn ?? "all");
   const [asked, setAsked] = useState(mine);
-  if (mine !== asked) {
+  if (mine && mine !== asked) {
     setAsked(mine);
-    if (mine?.turn !== undefined) setShownTurn(mine.turn);
+    if (mine.turn !== undefined) setShownTurn(mine.turn);
   }
+  // Once shown, the request is done, so the panel opening again starts from every turn.
+  useEffect(() => {
+    if (mine) onRequestShown?.();
+  }, [mine, onRequestShown]);
   const [shown, setShown] = useState<Shown>();
   const [reverting, setReverting] = useState(false);
   const [revertError, setRevertError] = useState<string>();

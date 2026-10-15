@@ -194,7 +194,8 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
       }
       if (event.kind === "pr.watches" && event.runId === runId) setWatching(event.urls);
       if (event.kind === "agent.background" && event.runId === runId) setBackground(event.tasks);
-      // A checkpoint captured or a revert changes the runs' checkpoints, which events don't carry.
+      // A checkpoint captured or a revert changes the runs, and a run that started after the
+      // snapshot isn't in them yet, so it reads them again.
       if (
         (event.kind === "thread.checkpoint" || event.kind === "thread.reverted") &&
         event.runId === runId
