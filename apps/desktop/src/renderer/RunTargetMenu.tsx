@@ -1,10 +1,12 @@
-import { ChevronDown, Folder, FolderGit2, Laptop, Server } from "lucide-react";
+import { Check, ChevronDown, Folder, FolderGit2, Laptop, Search, Server } from "lucide-react";
 
-import { useId } from "react";
+import { useId, useState } from "react";
+
+import { useConnection } from "./ConnectionStatus";
 
 import { DeviceIcon } from "./DeviceIcon";
 import { localId, type Host } from "./hosts";
-import { Menu, menuButton, type PickerOption } from "./ui";
+import { Menu, MenuOption, menuButton, menuHeading, menuItem, type PickerOption } from "./ui";
 
 /** Where a new thread works: a worktree of its own, or the repository's own checkout. */
 export type Workspace = "worktree" | "checkout";
@@ -47,12 +49,72 @@ export const connection = (host: Host) =>
         ? "Same network"
         : "Parallax Connect";
 
+/** Past this many computers, the menu adds a search box. */
+const searchFrom = 7;
+
+/**
+ * A computer's row: its icon with a dot for whether it's connected, its name, and how it's reached,
+ * unless that's Parallax Connect, which most computers are.
+ */
+function HostOption({
+  host,
+  checked,
+  missing,
+  onClick,
+}: {
+  host: Host;
+  checked: boolean;
+  missing?: string;
+  onClick: () => void;
+}) {
+  const status = useConnection(host.id)?.status;
+  const offline = status === "failed";
+  const note = offline
+    ? "Offline"
+    : host.id === localId || host.destination || host.routes
+      ? connection(host)
+      : undefined;
+  return (
+    <button
+      type="button"
+      role="menuitemradio"
+      aria-checked={checked}
+      onClick={onClick}
+      className={`${menuItem} [&_svg]:size-4`}
+    >
+      <span
+        className={`relative grid h-5 place-items-center ${offline ? "text-faint-foreground" : ""}`}
+      >
+        {hostIcon(host)}
+        <span
+          aria-hidden
+          className={`absolute -right-0.5 -bottom-0.5 size-[7px] rounded-full ring-2 ring-surface ${status === "connected" ? "bg-added" : status === "connecting" ? "bg-warning" : "bg-faint-foreground"}`}
+        />
+      </span>
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+        {/* Both cut off with "…" when long, how it connects first. */}
+        <span className={`truncate ${offline ? "text-muted-foreground" : ""}`}>{host.name}</span>
+        <span className="shrink-[4] truncate text-[12px] text-faint-foreground">{note}</span>
+      </span>
+      {missing && (
+        <span className="shrink-0 rounded-[5px] bg-warning/12 px-1.5 text-[11.5px] leading-5 text-warning">
+          no {missing}
+        </span>
+      )}
+      <span className={`grid h-5 place-items-center ${checked ? "" : "invisible"}`}>
+        <Check aria-hidden className="size-3.5! text-accent" />
+      </span>
+    </button>
+  );
+}
+
 /**
  * Where a thread runs: which of Parallax's computers, and in a new worktree or the local checkout.
  * The menu stays open while you pick both. The computer and the workspace are the caller's, which
  * starts the thread on that computer with that workspace; `checkoutUnavailable`, when set, says why
  * Local checkout can't be picked. `missing` names the computers, by id, that lack the picked
- * repository, which say so.
+ * repository, which say so. Each computer shows whether it's connected, the list scrolls, and past
+ * a handful of computers a search box filters them.
  */
 export function RunTargetMenu({
   hosts,
@@ -72,8 +134,12 @@ export function RunTargetMenu({
   missing?: { repo: string; hostIds: ReadonlySet<string> };
 }) {
   const id = useId();
+  const [query, setQuery] = useState("");
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
   const workspace = workspaces.find((w) => w.value === workspaceChoice)!;
+  const searchable = hosts.length >= searchFrom;
+  const q = query.trim().toLowerCase();
+  const shown = q ? hosts.filter((h) => h.name.toLowerCase().includes(q)) : hosts;
   return (
     <>
       <button
@@ -95,75 +161,64 @@ export function RunTargetMenu({
         id={id}
         label="Runs on"
         className="w-80 overflow-hidden p-0"
-        focus='[aria-checked="true"]'
+        focus={searchable ? "input" : '[aria-checked="true"]'}
+        onClose={() => setQuery("")}
       >
-        <div role="group" aria-label="Computer" className="grid gap-px p-1.5">
-          {hosts.map((h) => {
-            const selected = h === host;
-            return (
-              <button
+        {searchable && (
+          <label className="flex items-center gap-2 border-b border-border px-3 py-2">
+            <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+            <input
+              type="search"
+              aria-label="Search computers"
+              placeholder="Search computers..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && shown[0]) onHostChange(shown[0].id);
+              }}
+              className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
+            />
+          </label>
+        )}
+        <div role="group" aria-label="Computer" className="p-1">
+          <p aria-hidden className={menuHeading}>
+            Computer
+          </p>
+          <div className="max-h-72 overflow-y-auto">
+            {shown.map((h) => (
+              <HostOption
                 key={h.id}
-                type="button"
-                role="menuitemradio"
-                aria-checked={selected}
+                host={h}
+                checked={h === host}
+                missing={missing?.hostIds.has(h.id) ? missing.repo : undefined}
                 onClick={() => onHostChange(h.id)}
-                className={`flex w-full items-center gap-2.5 rounded-[9px] py-1.5 pr-2 pl-1.5 text-left hover:bg-hover ${selected ? "bg-selected hover:bg-selected" : ""}`}
-              >
-                <span
-                  className={`grid size-[30px] shrink-0 place-items-center rounded-lg border [&_svg]:size-4 ${selected ? "border-accent/35 bg-accent/15 text-accent" : "border-border bg-hover text-muted-foreground"}`}
-                >
-                  {hostIcon(h)}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] leading-snug font-medium">
-                    {h.name}
-                  </span>
-                  <span className="block truncate text-[11.5px] leading-snug text-faint-foreground">
-                    {connection(h)}
-                  </span>
-                </span>
-                {missing?.hostIds.has(h.id) && (
-                  <span className="shrink-0 rounded-[5px] bg-warning/12 px-1.5 py-0.5 text-[11px] text-warning">
-                    no {missing.repo}
-                  </span>
-                )}
-              </button>
-            );
-          })}
+              />
+            ))}
+          </div>
+          {shown.length === 0 && (
+            <p className="px-2 py-1.5 text-[12.5px] text-faint-foreground">No matches</p>
+          )}
           {hosts.length === 1 && (
-            <p className="pt-1 pr-2.5 pb-1.5 pl-[50px] text-[11.5px] text-faint-foreground">
+            <p className="px-2 pt-0.5 pb-1.5 text-[12px] text-faint-foreground">
               Computers you add under Hosts show up here.
             </p>
           )}
         </div>
-        <div
-          role="group"
-          aria-label="Workspace"
-          className="border-t border-border bg-background/50 p-1.5"
-        >
-          <div className="flex gap-0.5 rounded-[10px] border border-border bg-hover p-[3px]">
-            {workspaces.map((w) => {
-              const unavailable = w.value === "checkout" ? checkoutUnavailable : undefined;
-              const selected = w === workspace;
-              return (
-                <button
-                  key={w.value}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={selected}
-                  disabled={!!unavailable}
-                  title={unavailable ?? w.description}
-                  onClick={() => onWorkspaceChange(w.value)}
-                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-[7px] px-1.5 py-1 text-[12.5px] [&_svg]:size-3.5 ${selected ? "bg-selected text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"} disabled:text-faint-foreground/60 disabled:hover:text-faint-foreground/60`}
-                >
-                  {w.icon}
-                  {w.label}
-                </button>
-              );
-            })}
-          </div>
+        <div role="group" aria-label="Workspace" className="border-t border-border p-1">
+          <p aria-hidden className={menuHeading}>
+            Workspace
+          </p>
+          {workspaces.map((w) => (
+            <MenuOption
+              key={w.value}
+              option={{ value: w.value, label: w.label, icon: w.icon }}
+              checked={w === workspace}
+              disabled={w.value === "checkout" && !!checkoutUnavailable}
+              onClick={() => onWorkspaceChange(w.value)}
+            />
+          ))}
           {checkoutUnavailable && (
-            <p className="px-1.5 pt-1.5 pb-0.5 text-[11.5px] text-faint-foreground">
+            <p className="px-2 pt-0.5 pb-1.5 text-[12px] text-faint-foreground">
               Local checkout {checkoutUnavailable}.
             </p>
           )}
