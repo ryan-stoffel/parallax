@@ -63,16 +63,9 @@ pub(crate) async fn sign_out(
 }
 
 /// Starts installing the Cursor SDK into plxd's data folder, once the user asks for it.
-pub(crate) fn install(
-    context: &Context,
-    _: CursorInstallParams,
-) -> Result<CursorInstallResult, ErrorObject> {
-    context
-        .daemon
-        .cursor
-        .install()
-        .map_err(ErrorObject::internal_error)?;
-    Ok(CursorInstallResult {})
+pub(crate) fn install(context: &Context, _: CursorInstallParams) -> CursorInstallResult {
+    context.daemon.cursor.install();
+    CursorInstallResult {}
 }
 
 fn instance_of(instance: Option<String>) -> String {

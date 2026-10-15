@@ -124,13 +124,13 @@ jobs:
 
       # plxd reads its version from a file the package step writes beside it (0030), so a commit
       # that changes no Rust reuses the last release plxd and skips the Rust build. The key covers
-      # everything that goes into the binary.
+      # everything that goes into the binary, the sidecars it embeds included (PLX-820).
       - name: Restore plxd
         id: plxd
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.PLXD_BIN }}
-          key: plxd-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', 'daemon/**', 'crates/**', 'scripts/ci/package-app') }}
+          key: plxd-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', 'daemon/**', 'crates/**', 'sidecar/**', 'scripts/ci/package-app') }}
 
       # package-app still needs rustc for the target, cached or not.
       - name: Cache Rust toolchain

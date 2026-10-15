@@ -244,7 +244,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         CursorSignIn => |p| cursor::sign_in(context, p),
         CursorSignInCancel => |p| ready(Ok(cursor::sign_in_cancel(context, p))),
         CursorSignOut => |p| cursor::sign_out(context, p),
-        CursorInstall => |p| ready(cursor::install(context, p)),
+        CursorInstall => |p| ready(Ok(cursor::install(context, p))),
         GithubStatusGet => |p| accounts::github(context, p),
         GithubInstall => |p| accounts::github_install(context, p),
         GithubSignInStart => |p| accounts::github_sign_in(context, p),

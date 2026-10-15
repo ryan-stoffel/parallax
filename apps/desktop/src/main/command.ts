@@ -26,7 +26,7 @@ import type { CommandStatus } from "../preload/bridge";
  *   `/etc/paths`. Linking there takes an administrator, so the app asks once, as VS Code installs
  *   `code`.
  * - Linux: an AppImage runs from a mount that goes away, so plxd and what it reads beside itself
- *   (its version, the agent SDKs) are copied to `~/.local/share/parallax/app`, and
+ *   (its version and the web client) are copied to `~/.local/share/parallax/app`, and
  *   `~/.local/bin/parallax` links to that plxd. Copied again when the app's version differs.
  * - Windows: `parallax.cmd` in `%LOCALAPPDATA%\Parallax\bin`, which goes on the user's PATH. It
  *   names the command with `PLXD_INVOKED_AS`, since a batch file can't name the program.
@@ -35,16 +35,10 @@ import type { CommandStatus } from "../preload/bridge";
  */
 
 /**
- * What plxd reads beside itself, which the Linux copy carries: its version and the agent SDKs
- * (scripts/ci/package-app), and the web client it serves (`remote_web_dir`).
+ * What plxd reads beside itself, which the Linux copy carries: its version
+ * (scripts/ci/package-app) and the web client it serves (`remote_web_dir`).
  */
-const BESIDE_PLXD = [
-  "plxd",
-  "plxd.version",
-  "claude-agent-sdk",
-  "cursor-sdk",
-  "app.asar.unpacked/dist/renderer",
-];
+const BESIDE_PLXD = ["plxd", "plxd.version", "app.asar.unpacked/dist/renderer"];
 
 /**
  * The plxd the command runs: the packaged app's own. None in a dev build or under `PLXD_PATH`,
