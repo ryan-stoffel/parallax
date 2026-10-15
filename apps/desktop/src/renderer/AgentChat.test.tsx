@@ -2231,6 +2231,8 @@ test("a bar beside the transcript for each prompt shows it and its reply, and sc
   expect(read!.contains("bg-foreground")).toBe(true);
   expect(other!.contains("bg-foreground")).toBe(false);
   expect(read!.contains("w-2.5") && other!.contains("w-2.5")).toBe(true);
+  // And it shows no card.
+  expect(document.querySelector('nav[aria-label="Prompts"] + [aria-hidden]')).toBeNull();
 
   act(() => bars[0]!.focus());
   const card = document.querySelector('nav[aria-label="Prompts"] + [aria-hidden]')!;

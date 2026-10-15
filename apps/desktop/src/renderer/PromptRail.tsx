@@ -28,7 +28,7 @@ const replyOf = (prompt: Prompt) =>
 
 /**
  * A bar for each of the user's prompts, down the transcript's left edge. The bar for the prompt
- * being read is brighter, so it moves as the transcript scrolls. Hovering or focusing a bar makes it
+ * being read is brighter, so the highlight moves as the transcript scrolls. Hovering or focusing a bar makes it
  * longer and brighter and shows its prompt and the start of the reply beside it, and clicking it
  * scrolls back to that prompt.
  */
