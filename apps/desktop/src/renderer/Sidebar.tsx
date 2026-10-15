@@ -1875,9 +1875,21 @@ function ThreadRow({
                 className={`flex shrink-0 items-center gap-0.5 tabular-nums ${prLook.color}`}
               >
                 <prLook.Icon aria-hidden className="size-3.5" />
-                <span>
-                  {prs.urls.length > 1 ? `+${prs.urls.length - 1}` : `#${numberOf(prs.urls[0]!)}`}
-                </span>
+                {prs.urls.length > 1 ? (
+                  <span>+{prs.urls.length - 1}</span>
+                ) : (
+                  // Inside the row's button, so a span: clicking it opens the PR on GitHub
+                  // (PLX-809), not the thread.
+                  <span
+                    className="hover:underline"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      window.open(prs.urls[0], "_blank");
+                    }}
+                  >
+                    #{numberOf(prs.urls[0]!)}
+                  </span>
+                )}
               </span>
             )}
             {device?.icon && (
