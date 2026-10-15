@@ -300,7 +300,8 @@ pub enum WorktreeError {
         /// The timeout that elapsed.
         timeout: Duration,
     },
-    /// git isn't on the host's `PATH`.
+    /// git isn't on the host's `PATH`. Where an `# Errors` section names [`WorktreeError::Spawn`],
+    /// a missing git is this instead.
     #[error(
         "git isn't installed on this host, and Parallax needs it to run a thread; install it from \
          https://git-scm.com/downloads, then try again"
