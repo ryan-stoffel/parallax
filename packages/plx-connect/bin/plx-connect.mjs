@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 // @ts-check
-// plx-connect: set up Parallax and Parallax Connect on your Tailscale devices (0056).
+// plx-connect: set up Parallax and Parallax Connect on your Tailscale devices (0056), and check
+// Parallax on this one with `doctor`.
 
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 
 import { add, setup } from "../src/connect.mjs";
+import { doctor } from "../src/doctor.mjs";
 import { listDevices, TAGGED } from "../src/tailscale.mjs";
 
 const HELP = `plx-connect: set up Parallax and Parallax Connect on your Tailscale devices.
@@ -16,6 +18,8 @@ Usage:
   plx-connect devices [--json]   List your devices on your tailnet
   plx-connect add <device>       Install Parallax on a device over SSH and connect it
   plx-connect setup              Install Parallax on this computer and connect it
+  plx-connect doctor             Check Parallax on this computer, fix what it can, and open
+                                 Claude Code to look into the rest and file an issue
 
 <device> is a host name, MagicDNS name, or Tailscale IP.
 
@@ -68,6 +72,8 @@ async function main(argv) {
       return add(rest[0], options);
     case "setup":
       return setup(options);
+    case "doctor":
+      return doctor();
     default:
       return usage(`Unknown command: ${command}`);
   }
