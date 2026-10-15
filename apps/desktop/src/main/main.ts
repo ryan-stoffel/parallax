@@ -51,7 +51,7 @@ import type { CommandStatus } from "../preload/bridge";
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
 import { renderPage, savedHost, startHosts } from "./hosts";
 import { isBrowsable, isOpenableExternally, mayNavigate } from "./links";
-import { appDataDir } from "./plxd";
+import { appDataDir, dataDir } from "./plxd";
 import { cloneRepo, createRepo, listFolders } from "./repos";
 import {
   detectTerminalApps,
@@ -71,6 +71,13 @@ if (!app.commandLine.hasSwitch("user-data-dir")) {
   app.setPath("userData", appDataDir(homedir(), app.getPath("userData")));
 }
 app.setName(isNightly(app.getVersion()) ? "Parallax (Nightly)" : "Parallax");
+
+// A fresh install, which onboards (PLX-806): no localStorage in userData yet, and no local plxd
+// database. PLX_SKIP_ONBOARDING, which the end-to-end tests set, says it isn't one.
+const firstRun =
+  !process.env["PLX_SKIP_ONBOARDING"] &&
+  !existsSync(path.join(app.getPath("userData"), "Local Storage")) &&
+  !existsSync(path.join(dataDir(process.env, process.platform, homedir()), "plxd.sqlite3"));
 
 // Set by scripts/dev.mjs. Ignored in a packaged app, which only loads its own files.
 const devServerUrl = app.isPackaged ? undefined : process.env["PLX_DEV_SERVER_URL"];
@@ -95,12 +102,12 @@ function createWindow() {
       sandbox: true,
       // The side panel's browser (Browser.tsx). `will-attach-webview` below guards it.
       webviewTag: true,
-      // The preload reads them, so `window.parallax.updatable`, `.onboarded`, and `.locale` are
+      // The preload reads them, so `window.parallax.updatable`, `.firstRun`, and `.locale` are
       // plain values.
       additionalArguments: [
         `--parallax-locale=${app.getPreferredSystemLanguages()[0] ?? app.getSystemLocale()}`,
         ...(updatable ? ["--parallax-updatable"] : []),
-        ...(process.env["PLX_SKIP_ONBOARDING"] ? ["--parallax-onboarded"] : []),
+        ...(firstRun ? ["--parallax-first-run"] : []),
       ],
     },
   });

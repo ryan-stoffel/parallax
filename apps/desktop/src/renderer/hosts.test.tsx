@@ -55,7 +55,6 @@ beforeEach(() => {
   window.parallax = {
     onProfile: () => () => {},
     platform: "darwin",
-    onboarded: true,
     setThemeSource: vi.fn(),
     connectionState: async (hostId) => states[hostId]!,
     onConnectionState: () => () => {},

@@ -1,16 +1,28 @@
 // @vitest-environment happy-dom
 import { expect, test } from "vite-plus/test";
 
-import type { ProviderInfo, ProviderKind } from "../protocol/generated/protocol";
-import { plan } from "./firstRun";
+import type { ProviderInfo, ProviderInstance } from "../protocol/generated/protocol";
+import { agents, plan } from "./firstRun";
 
+/** An agent's instance as setup adds it, with `found` and any `change` the user made. */
 const info = (
-  kind: ProviderKind,
+  id: string,
   found: Partial<ProviderInfo> & { enabled?: boolean } = {},
+  change: Partial<ProviderInstance> = {},
 ): ProviderInfo => {
   const { enabled = false, ...rest } = found;
+  const agent = agents.find((a) => a.id === id)!;
   return {
-    instance: { id: kind, kind, name: kind, enabled, args: [], env: [], models: [] },
+    instance: {
+      id,
+      kind: agent.kind,
+      name: agent.name,
+      enabled,
+      args: agent.args ?? [],
+      env: agent.env ?? [],
+      models: [],
+      ...change,
+    },
     installed: true,
     models: [],
     permissions: [],
@@ -46,11 +58,14 @@ test("with none ready, leaves the host's instances on", () => {
   expect(save).toEqual([]);
 });
 
-test("leaves instances that aren't onboarding's agents alone", () => {
-  const { remove, save } = plan([
-    info("claude", { signedIn: true }),
-    info("openRouter", { enabled: true, installed: false, signedIn: false }),
-  ]);
+test("leaves alone any instance the user made or changed", () => {
+  const work = info("claude", { installed: false }, { id: "claude-work", program: "/opt/claude" });
+  const keyed = info(
+    "codex",
+    { enabled: true, signedIn: false },
+    { env: [{ name: "OPENAI_API_KEY", secret: true }] },
+  );
+  const { remove, save } = plan([work, keyed, info("opencode")]);
   expect(remove).toEqual([]);
-  expect(save.map((i) => i.id)).toEqual(["claude"]);
+  expect(save.map((i) => [i.id, i.enabled])).toEqual([["opencode", true]]);
 });

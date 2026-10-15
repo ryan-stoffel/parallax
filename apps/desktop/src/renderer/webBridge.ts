@@ -495,7 +495,7 @@ const none = () => () => {};
 export function webBridge(host: WebHost, name: string): ParallaxBridge {
   return {
     platform: platform(),
-    onboarded: true,
+    firstRun: false,
     version: async () => (host.state.status === "connected" ? host.state.plxd : "web"),
     setThemeSource: () => {},
     setZoom: (factor) => void (document.documentElement.style.zoom = String(factor)),

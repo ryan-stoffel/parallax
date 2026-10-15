@@ -71,7 +71,7 @@ const bridge: ParallaxBridge = {
   cloneRepo: (slug, dest) => ipcRenderer.invoke("parallax:cloneRepo", slug, dest),
   copyPicture: (rect) => ipcRenderer.invoke("parallax:copyPicture", rect) as Promise<void>,
   updatable: process.argv.includes("--parallax-updatable"),
-  onboarded: process.argv.includes("--parallax-onboarded"),
+  firstRun: process.argv.includes("--parallax-first-run"),
   locale: validLocale(
     process.argv
       .find((arg) => arg.startsWith("--parallax-locale="))

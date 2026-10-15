@@ -1,4 +1,8 @@
-import type { ProviderInfo, ProviderInstance } from "../protocol/generated/protocol";
+import type {
+  ProviderEnvVar,
+  ProviderInfo,
+  ProviderInstance,
+} from "../protocol/generated/protocol";
 import {
   listedProviders,
   loadProviders,
@@ -11,16 +15,16 @@ import { stored } from "./stored";
 
 // First-launch onboarding (PLX-806): whether it's done here, and setting up the agents it finds.
 
-// Read before this run stores anything: an install that ran before onboarding shipped has keys.
-const ranBefore = localStorage.length > 0;
-const onboarded = stored("parallax.onboarded", ranBefore, (raw, fallback) =>
+const onboarded = stored("parallax.onboarded", true, (raw, fallback) =>
   typeof raw === "boolean" ? raw : fallback,
 );
-// Kept now, so a first run quit midway, after other settings were stored, still onboards next time.
-if (!ranBefore) onboarded.set(false);
+// A fresh install (main's `firstRun`) stores that it hasn't onboarded, so quitting midway still
+// onboards on the next launch, which is no longer a first run. Any other install never does.
+if (window.parallax?.firstRun && localStorage.getItem("parallax.onboarded") === null)
+  onboarded.set(false);
 
-/** Whether onboarding should show: until it's finished or skipped, on a fresh install. */
-export const useOnboarding = () => !onboarded.use() && !window.parallax.onboarded;
+/** Whether onboarding should show: on a fresh install, until it's finished or skipped. */
+export const useOnboarding = () => !onboarded.use();
 
 /** Ends onboarding on this computer for good. */
 export const finishOnboarding = () => onboarded.set(true);
@@ -47,14 +51,34 @@ export const infoOf = (providers: ProviderInfo[] | undefined, agent: Agent) =>
 /** Whether an instance can run threads now: installed, and not signed out. */
 export const ready = (info: ProviderInfo) => info.installed && info.signedIn !== false;
 
+const sameVars = (a: ProviderEnvVar[], b: ProviderEnvVar[]) =>
+  JSON.stringify(a.map((v) => [v.name, v.value, v.secret])) ===
+  JSON.stringify(b.map((v) => [v.name, v.value, v.secret]));
+
 /**
- * What setting up a host's agents changes, from its probed list: it removes each agent that isn't
- * installed (or installing), and turns on each that's ready and off each that isn't. With none
- * ready it turns nothing off, so the host keeps an instance on. Turning on comes first, so one is
- * always on.
+ * Whether `instance` is an agent as setup or plxd's first run adds it, under its id and with
+ * nothing the user set (a name aside). Setup changes only these, never one the user made.
+ */
+export function untouched(instance: ProviderInstance): boolean {
+  const agent = agents.find((a) => a.id === instance.id && a.kind === instance.kind);
+  return (
+    !!agent &&
+    instance.program === agent.program &&
+    !instance.home &&
+    instance.args.join(" ") === (agent.args ?? []).join(" ") &&
+    sameVars(instance.env, agent.env ?? []) &&
+    instance.models.length === 0
+  );
+}
+
+/**
+ * What setting up a host's agents changes, from its probed list, among the `untouched` ones: it
+ * removes each that isn't installed (or installing), and turns on each that's ready and off each
+ * that isn't. With none ready it turns nothing off, so the host keeps an instance on. Turning on
+ * comes first, so one is always on.
  */
 export function plan(providers: ProviderInfo[]): { remove: string[]; save: ProviderInstance[] } {
-  const ours = providers.filter((p) => agents.some((a) => a.kind === p.instance.kind));
+  const ours = providers.filter((p) => untouched(p.instance));
   const gone = ours.filter((p) => !p.installed && !p.installing);
   const kept = ours.filter((p) => !gone.includes(p));
   const any = kept.some(ready);
@@ -70,7 +94,16 @@ export function plan(providers: ProviderInfo[]): { remove: string[]; save: Provi
  * then applies `plan`. `refresh` probes the ones it has again, as after a sign-in or an install.
  * Resolves to an error for people.
  */
-export async function setUpAgents(hostId: string, refresh = false): Promise<string | undefined> {
+export function setUpAgents(hostId: string, refresh = false): Promise<string | undefined> {
+  const next = queue.then(() => setUp(hostId, refresh));
+  queue = next.catch(() => undefined);
+  return next;
+}
+
+// One setup at a time in this window, so a second never races the first's removes.
+let queue: Promise<unknown> = Promise.resolve();
+
+async function setUp(hostId: string, refresh: boolean): Promise<string | undefined> {
   const failed = await loadProviders(hostId, refresh);
   if (failed) return failed;
   for (const agent of agents) {
@@ -92,9 +125,7 @@ export async function setUpAgents(hostId: string, refresh = false): Promise<stri
     const saved = await saveProvider(hostId, instance);
     if (saved) return saved;
   }
-  for (const id of remove) {
-    const removed = await removeProvider(hostId, id);
-    if (removed) return removed;
-  }
+  // One left behind, as when another window removed it first, is off and harmless.
+  for (const id of remove) await removeProvider(hostId, id);
   return undefined;
 }

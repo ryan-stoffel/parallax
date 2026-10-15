@@ -330,11 +330,9 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
   const [terminal, setTerminal] = useState<{ agent: Agent; install: boolean }>();
   const [cursorWaiting, setCursorWaiting] = useState(false);
 
-  // One setup at a time, in order, so a sign-in's never races the first.
-  const queue = useRef(Promise.resolve());
+  // setUpAgents runs one at a time, so a sign-in's never races the first.
   const setUp = useCallback((refresh: boolean) => {
-    queue.current = queue.current.then(async () => {
-      const failed = await setUpAgents(localId, refresh);
+    void setUpAgents(localId, refresh).then((failed) => {
       setError(failed);
       setScanned(true);
     });

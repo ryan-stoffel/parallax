@@ -120,7 +120,6 @@ beforeEach(() => {
     onHostUpdate: () => () => {},
     onProfile: () => () => {},
     platform: "darwin",
-    onboarded: true,
     setThemeSource: vi.fn(),
     connectionState: async (hostId) =>
       states[hostId] ?? { status: "connected", plxd: "0.1.0", protocol: 1, capabilities },

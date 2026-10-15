@@ -151,10 +151,10 @@ export interface ParallaxBridge {
    */
   updatable: boolean;
   /**
-   * Whether first-launch onboarding is skipped (PLX-806): with PLX_SKIP_ONBOARDING set, as the
-   * end-to-end tests launch, and on the web, where nothing it sets up is.
+   * Whether this launch is a fresh install's, which onboards (PLX-806): main found no earlier
+   * localStorage or plxd database. Never on the web, or with PLX_SKIP_ONBOARDING set.
    */
-  onboarded: boolean;
+  firstRun: boolean;
   /** The OS's locale, such as "de-DE", for `src/renderer/locale.ts`. Undefined when invalid. */
   locale: string | undefined;
   /**
