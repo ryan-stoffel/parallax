@@ -112,16 +112,17 @@
 :root,
 .scheme-light {
   color-scheme: light;
-  --background: #fcfcfc;
-  --sidebar: #f5f5f6;
+  --background: #ffffff;
+  --sidebar: #f6f6f9;
   --surface: #ffffff;
-  --foreground: #27272a;
-  --muted-foreground: #52525b;
-  --faint-foreground: #66666e;
-  --border: rgb(24 24 27 / 9%);
-  --hover: rgb(24 24 27 / 4.5%);
-  --selected: rgb(24 24 27 / 7%);
-  /* The logo's blue. */
+  --foreground: #1e1b4b;
+  --muted-foreground: #4a4868;
+  --faint-foreground: #64627e;
+  --border: rgb(30 27 75 / 10%);
+  --hover: rgb(30 27 75 / 4.5%);
+  --selected: rgb(30 27 75 / 7%);
+  /* The logo's blue; its indigo overlap is the text, and its coral, darkened to read, is
+     --danger. */
   --accent: #2b5cff;
   /* Black or white, whichever reads better on a fill, as a channel of
      color(from <fill> srgb-linear ...): white while the fill's WCAG luminance (from its linear
@@ -139,22 +140,22 @@
   --send-foreground: color(
     from var(--send) srgb-linear var(--black-or-white) var(--black-or-white) var(--black-or-white)
   );
-  --primary: #27272a;
+  --primary: #1e1b4b;
   --primary-foreground: #ffffff;
   --ring: var(--accent);
-  --danger: #c42b2b;
+  --danger: #d4330f;
   /* The semantic amber, for marks and icons beside a label (--danger is the red). */
-  --warning: #d97706;
+  --warning: #b45309;
   /* A diff's added lines (Approval.tsx); its removed lines are --danger. */
   --added: #15803d;
   /* Code blocks and diffs: a step off the background, and highlight.js's token colors. */
-  --code: #f4f4f5;
-  --syntax-keyword: #cf222e;
-  --syntax-string: #0a3069;
-  --syntax-number: #0550ae;
-  --syntax-title: #8250df;
-  --syntax-type: #953800;
-  --syntax-comment: #6e7781;
+  --code: #f6f6f9;
+  --syntax-keyword: #2b5cff;
+  --syntax-string: #c2410c;
+  --syntax-number: #7c3aed;
+  --syntax-title: #4338ca;
+  --syntax-type: #be185d;
+  --syntax-comment: #6e6c88;
   --working: var(--accent);
   /* The Usage page's stacked bars (UsagePage.tsx): the accent, then a tint of it, then a neutral,
      each mixed into the surface so they stay opaque. Both modes compute from their own surface,
@@ -162,7 +163,7 @@
   --chart-1: var(--accent);
   --chart-2: color-mix(in oklab, var(--accent) 65%, var(--surface));
   --chart-3: color-mix(in oklab, var(--foreground) 20%, var(--surface));
-  --shadow-composer: 0 10px 30px -16px rgb(0 0 0 / 22%);
+  --shadow-composer: 0 10px 30px -16px rgb(30 27 75 / 22%);
   /* A Project icon's colors (projectIcons.ts), by the key plxd keeps. Each keeps at least 3:1
      on the sidebar, the dialogs, and a selected row, in both themes. */
   --project-red: #dc2626;
@@ -183,31 +184,31 @@
 :root.dark,
 .scheme-dark {
   color-scheme: dark;
-  --background: #0a0a0a;
-  --sidebar: #111111;
-  --surface: #161616;
-  --foreground: #f4f4f5;
-  --muted-foreground: #a3a3a3;
-  --faint-foreground: #858585;
-  --border: rgb(255 255 255 / 7%);
-  --hover: rgb(255 255 255 / 4%);
-  --selected: rgb(255 255 255 / 7%);
-  /* The logo's blue, lifted to read on the dark. */
-  --accent: #4b78ff;
+  --background: #0b0b10;
+  --sidebar: #121218;
+  --surface: #17171f;
+  --foreground: #ededf4;
+  --muted-foreground: #a6a5b9;
+  --faint-foreground: #878699;
+  --border: rgb(237 237 244 / 8%);
+  --hover: rgb(237 237 244 / 4.5%);
+  --selected: rgb(237 237 244 / 8%);
+  /* The logo's blue, lifted to read on the dark, as --danger lifts its coral. */
+  --accent: #5b80ff;
   /* The accent, darkened: mixed toward a black with no chroma or hue, so it keeps the accent's. */
   --send: color-mix(in oklch, var(--accent) 68%, oklch(0 none none));
-  --primary: #f4f4f5;
-  --primary-foreground: #0a0a0a;
-  --danger: #ff8f8a;
+  --primary: #ededf4;
+  --primary-foreground: #0b0b10;
+  --danger: #ff6b4a;
   --warning: #f59e0b;
   --added: #4ade80;
-  --code: #131313;
-  --syntax-keyword: #ff7b72;
-  --syntax-string: #a5d6ff;
-  --syntax-number: #79c0ff;
-  --syntax-title: #d2a8ff;
-  --syntax-type: #ffa657;
-  --syntax-comment: #8b949e;
+  --code: #121218;
+  --syntax-keyword: #7b9bff;
+  --syntax-string: #ff8a65;
+  --syntax-number: #c4b5fd;
+  --syntax-title: #a5b4fc;
+  --syntax-type: #f9a8d4;
+  --syntax-comment: #7d7c93;
   --shadow-composer: 0 14px 36px -18px rgb(0 0 0 / 80%);
   --project-red: #f87171;
   --project-orange: #fb923c;

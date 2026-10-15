@@ -4,13 +4,13 @@ import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
 
 test("Windows' window buttons take the theme's foreground on a clear background", () => {
   expect(titleBarOverlay("win32", true)).toEqual({
-    color: "#0a0a0a00",
-    symbolColor: "#f4f4f5",
+    color: "#0b0b1000",
+    symbolColor: "#ededf4",
     height: 52,
   });
   expect(titleBarOverlay("win32", false)).toEqual({
-    color: "#fcfcfc00",
-    symbolColor: "#27272a",
+    color: "#ffffff00",
+    symbolColor: "#1e1b4b",
     height: 52,
   });
 });
