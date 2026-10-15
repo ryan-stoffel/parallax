@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   DiffFileHeader,
@@ -11,8 +11,19 @@ import {
 
 type Row = { file: DiffFile; line?: DiffLine; header?: boolean };
 
-/** One window across all files, so both a huge file and many small files stay cheap to render. */
-export function ChangesDiff({ diff, truncated }: { diff: string; truncated?: boolean }) {
+/**
+ * One window across all files, so both a huge file and many small files stay cheap to render.
+ * A new `focus` scrolls to its file.
+ */
+export function ChangesDiff({
+  diff,
+  truncated,
+  focus,
+}: {
+  diff: string;
+  truncated?: boolean;
+  focus?: { path?: string };
+}) {
   const files = useMemo(() => parseDiff(diff), [diff]);
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const scroll = useRef<HTMLDivElement>(null);
@@ -32,6 +43,12 @@ export function ChangesDiff({ diff, truncated }: { diff: string; truncated?: boo
     estimateSize: (i) => (rows[i]!.header ? 38 : 20),
     overscan: 8,
   });
+  useEffect(() => {
+    const at = rows.findIndex((r) => r.header && r.file.path === focus?.path);
+    if (at >= 0) virtualizer.scrollToIndex(at, { align: "start" });
+    // Only a new focus scrolls, not folding a file.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus, files]);
   const added = files.reduce((n, f) => n + f.added, 0);
   const removed = files.reduce((n, f) => n + f.removed, 0);
   return (

@@ -7,6 +7,9 @@ import { ChangesDiff } from "./ChangesDiff";
 import { useProviders } from "./providers";
 import { ConfirmDialog } from "./ui";
 
+/** Open the Changes view, on `runId`'s turn `turn` if given, scrolled to the file at `path`. */
+export type ChangesRequest = { runId?: string; turn?: number; path?: string };
+
 /** A diff as plxd sent it, or why it couldn't. */
 type Shown = { diff: string; truncated?: boolean } | { error: string };
 
@@ -32,7 +35,8 @@ const cursorRefusal = (r: ThreadRun, sessionId: string | undefined) =>
  * the thread. `version` changes when a checkpoint is captured or the thread reverted, which reloads
  * the turns. `unavailable` says why it can't load, such as a plxd without `checkpoints`.
  * `sessionId` is the thread's provider session: Claude goes back only to a turn that recorded
- * where it ended (`cursor`) in that session, as plxd checks.
+ * where it ended (`cursor`) in that session, as plxd checks. A new `request` for this thread shows
+ * its turn, scrolled to its file, as a turn's changes card asks.
  */
 export function ChangesPanel({
   hostId,
@@ -42,6 +46,7 @@ export function ChangesPanel({
   sessionId,
   running,
   version,
+  request,
   unavailable,
   onCompose,
 }: {
@@ -52,6 +57,7 @@ export function ChangesPanel({
   sessionId?: string;
   running: boolean;
   version?: number;
+  request?: ChangesRequest;
   unavailable?: string;
   onCompose: (text: string) => void;
 }) {
@@ -60,7 +66,13 @@ export function ChangesPanel({
     providers?.providers.find((p) => p.instance.id === backend)?.instance.kind ?? backend;
   const [runs, setRuns] = useState<ThreadRun[] | { error: string }>();
   // The turn shown by its ordinal, or every turn.
-  const [shownTurn, setShownTurn] = useState<number | "all">("all");
+  const mine = request?.runId === runId ? request : undefined;
+  const [shownTurn, setShownTurn] = useState<number | "all">(mine?.turn ?? "all");
+  const [asked, setAsked] = useState(mine);
+  if (mine !== asked) {
+    setAsked(mine);
+    if (mine?.turn !== undefined) setShownTurn(mine.turn);
+  }
   const [shown, setShown] = useState<Shown>();
   const [reverting, setReverting] = useState(false);
   const [revertError, setRevertError] = useState<string>();
@@ -200,6 +212,7 @@ export function ChangesPanel({
           key={`${latest}/${ordinal ?? "all"}`}
           diff={shown.diff}
           truncated={shown.truncated}
+          focus={asked?.turn === ordinal ? asked : undefined}
         />
       )}
       <ConfirmDialog

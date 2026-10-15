@@ -27,6 +27,8 @@ export interface AgentRunView {
   background: AgentBackgroundTask[];
   /** The URLs of the thread's pull requests plxd watches (PLX-777). */
   watching: string[];
+  /** The thread's runs, as `orchestration/threadRuns` has them, for each turn's checkpoint (0062). */
+  runs: ThreadRun[];
   /**
    * Sends a message, its images, and the threads attached to it as the run's next turn, with a new
    * model, effort, or access for the run if given. Resolves to plxd's error, or why the run
@@ -108,6 +110,7 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
   const [held, setHeld] = useState(false);
   const [background, setBackground] = useState<AgentBackgroundTask[]>([]);
   const [watching, setWatching] = useState<string[]>([]);
+  const [runs, setRuns] = useState<ThreadRun[]>([]);
   const [watchKey, failed] = useWatchKey(`${hostId}\n${runId}`, connected, hostId);
 
   // Loads the page before `p`'s oldest event into it, one at a time: `false` while another is
@@ -179,6 +182,7 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
         setHeld(s.runs.some((r) => r.status === "queued" && r.queueHeld));
         setBackground(s.background ?? []);
         setWatching(s.watching ?? []);
+        setRuns(s.runs);
         setError(undefined);
         void fill(p, t);
         return;
@@ -190,6 +194,16 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
       }
       if (event.kind === "pr.watches" && event.runId === runId) setWatching(event.urls);
       if (event.kind === "agent.background" && event.runId === runId) setBackground(event.tasks);
+      // A checkpoint captured or a revert changes the runs' checkpoints, which events don't carry.
+      if (
+        (event.kind === "thread.checkpoint" || event.kind === "thread.reverted") &&
+        event.runId === runId
+      )
+        void window.parallax
+          .request(hostId, "orchestration/threadRuns", { threadId: runId })
+          .then((answer) => {
+            if (!stopped && !("error" in answer)) setRuns(answer.result.runs);
+          });
       pages.current?.events.push(message.event);
       setTranscript((prev) => applyEvents(prev, [message.event], runId));
       if (event.kind === "thread.reverted" && event.runId === runId) {
@@ -270,6 +284,7 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
     held,
     background,
     watching,
+    runs,
     older,
     loadOlder,
   };
