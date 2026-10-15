@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ParallaxBridge } from "../preload/bridge";
+import type { PullRequest } from "../protocol/generated/protocol";
 import { SidePanel } from "./SidePanel";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -144,4 +145,60 @@ test("Projects keep pinned Knowledge and their view list", async () => {
   expect(shown()!.textContent).toContain("Project knowledge");
   await click(openAView());
   expect(listButton("Knowledge")).toBeDefined();
+});
+
+test("each thread shows its own last tab again, and pull request tabs are colored by state", async () => {
+  const a = "https://github.com/o/r/pull/1";
+  const b = "https://github.com/o/r/pull/2";
+  const states: Record<string, "open" | "merged"> = { [a]: "open", [b]: "merged" };
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+  };
+  // A thread linking `url`, with `pullRequest` asking the panel to open it.
+  const thread = async (url: string, pullRequest?: { url?: string }) => {
+    const runId = url === a ? "thread-a" : "thread-b";
+    act(() =>
+      root.render(
+        <SidePanel
+          open
+          onClose={() => {}}
+          expanded={false}
+          onExpandedChange={() => {}}
+          pullRequests={{
+            urls: [url],
+            get: (u) => ({ pr: { state: states[u] } as PullRequest }),
+            list: null,
+            view: (u) => <p>{u}</p>,
+          }}
+          pullRequest={pullRequest}
+          documents={{ runId, view: () => null }}
+        />,
+      ),
+    );
+    await settle();
+  };
+  await thread(a);
+  await thread(a, { url: a });
+  expect(tabs()).toEqual(["#1*"]);
+  expect(panel().querySelector('[aria-label="Open views"] svg')!.classList).toContain("text-added");
+  await thread(b, { url: b });
+  expect(tabs()).toEqual(["#2*"]);
+  expect(panel().querySelector('[aria-label="Open views"] svg')!.classList).toContain(
+    "text-project-violet",
+  );
+  await thread(a);
+  expect(tabs()).toEqual(["#1*"]);
+  expect(shown()!.textContent).toBe(a);
+  await thread(b);
+  expect(tabs()).toEqual(["#2*"]);
+  // A view every thread shares, shown in one, doesn't take over another's own tab.
+  await click(openAView());
+  await click(listButton("Terminal"));
+  expect(tabs()).toEqual(["#2", "Terminal*"]);
+  await thread(a);
+  expect(tabs()).toEqual(["#1*", "Terminal"]);
+  await thread(b);
+  expect(tabs()).toEqual(["#2", "Terminal*"]);
 });

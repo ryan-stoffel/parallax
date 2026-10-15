@@ -22,7 +22,7 @@ import { useState, type ComponentProps, type ReactNode } from "react";
 import { Browser } from "./Browser";
 import type { DocRef } from "./documents";
 import { PanelResize } from "./PanelResize";
-import { numberOf } from "./PullRequests";
+import { lookOf, numberOf, type PullRequests } from "./PullRequests";
 import { isMedia } from "./transcript";
 import { IconButton, TopBar } from "./ui";
 
@@ -99,8 +99,8 @@ const knowledgeSurface = surfaces.find((s) => s.name === "Knowledge")!;
  * those views, such as a Project's, in place of their empty states. `remoteHost` is the open host's name when
  * it's an SSH host. `terminal` draws the Terminal view, told whether it's shown and given its empty
  * state. Each new `browse` opens the Browser view at its url, or at one of `agentTabs`. `pullRequests` are the open thread's
- * linked pull requests (PLX-319): its URLs, the Pull requests view, and each one's view, shown in a
- * `#n` tab only while the thread links it. Each new `pullRequest` opens that URL's tab, or without
+ * linked pull requests (PLX-319): its URLs, each one's read, the Pull requests view, and each one's
+ * view, shown in a `#n` tab, colored by its state, only while the thread links it. Each new `pullRequest` opens that URL's tab, or without
  * one the Pull requests view. Each new `documents.open` opens that presented file's tab (PLX-755),
  * shown only while its thread, `documents.runId`, is open, as a pull request's is.
  */
@@ -146,17 +146,29 @@ export function SidePanel({
   changes?: object;
   /** The open thread's agent browser tabs (PLX-639), for the Browser view. */
   agentTabs?: ComponentProps<typeof Browser>["agent"];
-  pullRequests?: { urls: readonly string[]; list: ReactNode; view: (url: string) => ReactNode };
+  pullRequests?: {
+    urls: readonly string[];
+    get: PullRequests["get"];
+    list: ReactNode;
+    view: (url: string) => ReactNode;
+  };
   pullRequest?: { url?: string };
   documents?: { runId?: string; open?: DocRef; view: (doc: DocRef) => ReactNode };
   /** An open Project, whose home the panel rests on, with Knowledge beside it, and how many
    * things wait on the user there. */
   project?: { home: ReactNode; waiting: number };
 }) {
-  // The open views in tab order, and the one shown; with none shown, the list is.
+  // The open views in tab order, and each in the order it was last shown, with the thread
+  // (`documents.runId`) it was shown in. A thread shows the last one it showed that's still open,
+  // else the last one any thread showed, else the list.
   const [tabs, setTabs] = useState<Surface[]>([]);
-  const [active, setActive] = useState<Surface>();
-  // Whether + is showing the list, in a Project, where the panel otherwise rests on its Overview.
+  const [recent, setRecent] = useState<[Surface, string | undefined][]>([]);
+  const thread = documents?.runId;
+  const setActive = (s: Surface) => {
+    setListing(false);
+    setRecent((all) => [...all.filter(([t, at]) => t !== s || at !== thread), [s, thread]]);
+  };
+  // Whether + is showing the list.
   const [listing, setListing] = useState(false);
 
   const available = project
@@ -178,11 +190,14 @@ export function SidePanel({
         (!s.doc || s.doc.runId === documents?.runId),
     ),
   ];
-  const current =
-    active && shown.includes(active) ? active : project && !listing ? overview : undefined;
+  const lastShown = (entries: typeof recent) => entries.findLast(([s]) => shown.includes(s))?.[0];
+  const current = listing
+    ? undefined
+    : (lastShown(recent.filter(([, at]) => at === thread)) ??
+      lastShown(recent) ??
+      (project ? overview : undefined));
 
   const openView = (s: Surface) => {
-    setListing(false);
     if (pinned.includes(s)) return setActive(s);
     const open = tabs.find((t) => t.key === s.key);
     if (!open) setTabs([...tabs, s]);
@@ -196,7 +211,8 @@ export function SidePanel({
     const rest = shown.toSpliced(i, 1);
     const next = s === current ? rest[Math.min(i, rest.length - 1)] : current;
     setTabs(tabs.filter((t) => t !== s));
-    setActive(next);
+    setRecent((all) => all.filter(([t]) => t !== s));
+    if (next && s === current) setActive(next);
     if (!rest.length) return onClose();
     document.getElementById(next ? `side-panel-tab-${next.key}` : "side-panel-open-view")?.focus();
   };
@@ -282,48 +298,45 @@ export function SidePanel({
       <TopBar className={`window-controls-inset px-2 ${topBarClassName}`}>
         {leading}
         <ul aria-label="Open views" className="flex min-w-0 gap-0.5 overflow-x-auto">
-          {shown.map((s) => (
-            <li
-              key={s.key}
-              className={`flex shrink-0 items-center rounded-lg ${s === current ? "bg-selected text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
-            >
-              <button
-                type="button"
-                id={`side-panel-tab-${s.key}`}
-                aria-current={s === current ? "true" : undefined}
-                onClick={() => setActive(s)}
-                className={`flex items-center gap-1.5 py-1 pl-2 text-[13px] ${pinned.includes(s) ? "pr-2" : ""}`}
+          {shown.map((s) => {
+            const look = s.url ? lookOf(pullRequests?.get(s.url)?.pr) : undefined;
+            const Icon = look?.Icon ?? s.icon;
+            return (
+              <li
+                key={s.key}
+                className={`flex shrink-0 items-center rounded-lg ${s === current ? "bg-selected text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
               >
-                <s.icon aria-hidden className="size-3.5" />
-                {nameOf(s)}
-                {s === overview && !!project?.waiting && (
-                  <span className="font-mono text-[11px] text-warning tabular-nums">
-                    {project.waiting}
-                  </span>
-                )}
-              </button>
-              {!pinned.includes(s) && (
                 <button
                   type="button"
-                  aria-label={`Close ${nameOf(s)}`}
-                  title={`Close ${nameOf(s)}`}
-                  onClick={() => closeView(s)}
-                  className="mx-0.5 grid size-5 place-items-center rounded-md hover:bg-hover [&_svg]:size-3.5"
+                  id={`side-panel-tab-${s.key}`}
+                  aria-current={s === current ? "true" : undefined}
+                  onClick={() => setActive(s)}
+                  className={`flex items-center gap-1.5 py-1 pl-2 text-[13px] ${pinned.includes(s) ? "pr-2" : ""}`}
                 >
-                  <X />
+                  <Icon aria-hidden className={`size-3.5 ${look?.color ?? ""}`} />
+                  {nameOf(s)}
+                  {s === overview && !!project?.waiting && (
+                    <span className="font-mono text-[11px] text-warning tabular-nums">
+                      {project.waiting}
+                    </span>
+                  )}
                 </button>
-              )}
-            </li>
-          ))}
+                {!pinned.includes(s) && (
+                  <button
+                    type="button"
+                    aria-label={`Close ${nameOf(s)}`}
+                    title={`Close ${nameOf(s)}`}
+                    onClick={() => closeView(s)}
+                    className="mx-0.5 grid size-5 place-items-center rounded-md hover:bg-hover [&_svg]:size-3.5"
+                  >
+                    <X />
+                  </button>
+                )}
+              </li>
+            );
+          })}
         </ul>
-        <IconButton
-          id="side-panel-open-view"
-          label="Open a view"
-          onClick={() => {
-            setActive(undefined);
-            setListing(true);
-          }}
-        >
+        <IconButton id="side-panel-open-view" label="Open a view" onClick={() => setListing(true)}>
           <Plus />
         </IconButton>
         <div className="ml-auto flex items-center gap-0.5">
