@@ -35,17 +35,20 @@ test("names what the thread waits on as T3 Code does", () => {
   expect(title([task("monitor", "")])).toBe("Waiting on a monitor");
   expect(title([], [url])).toBe("Monitoring pull request #750");
   expect(title([], [url, `${url}1`])).toBe("Monitoring 2 pull requests");
-  // A dev server alone won't wake the agent.
   expect(presentWaiting([task("command", "npm run dev")], [])).toEqual({
     title: "Running: npm run dev",
-    waiting: false,
+    items: [{ kind: "command", label: "npm run dev" }],
   });
   expect(
     presentWaiting([task("monitor", "Watching CI"), task("command", "npm run dev")], [url]),
   ).toEqual({
     title: "Waiting on 1 command, 1 monitor and 1 pull request",
     labels: "npm run dev, Watching CI, #750",
-    waiting: true,
+    items: [
+      { kind: "command", label: "npm run dev" },
+      { kind: "monitor", label: "Watching CI" },
+      { kind: "pull request", label: "#750" },
+    ],
   });
 });
 
@@ -67,10 +70,14 @@ test("Stop ends every task and watch through plxd, and shows why one couldn't", 
       />,
     ),
   );
-  expect(document.querySelector("section")?.textContent).toBe(
+  expect(document.querySelector("section > div")?.textContent).toBe(
     "Waiting on 1 monitor and 1 pull requestgh pr checks 750 --watch, #750Stop",
   );
-  await act(async () => document.querySelector("button")!.click());
+  // Details lists each item by kind.
+  expect(document.querySelector('[role="dialog"] ul')?.textContent).toBe(
+    "monitorgh pr checks 750 --watchpull request#750",
+  );
+  await act(async () => [...document.querySelectorAll("button")].at(-1)!.click());
   expect(request).toHaveBeenCalledWith("local", "agent/stopTask", { runId: "run", taskId: "t1" });
   expect(request).toHaveBeenCalledWith("local", "pr/unwatch", { runId: "run", url });
   expect(document.querySelector('[role="alert"]')?.textContent).toBe("plxd refused");

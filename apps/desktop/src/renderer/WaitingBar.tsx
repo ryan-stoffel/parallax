@@ -1,8 +1,9 @@
 import { Info } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import type { AgentBackgroundKind, AgentBackgroundTask } from "../protocol/generated/protocol";
 import { numberOf } from "./PullRequests";
+import { menuPanel } from "./ui";
 
 type Kind = AgentBackgroundKind | "pullRequest";
 
@@ -24,8 +25,8 @@ export interface WaitingPresentation {
   title: string;
   /** Every item's label, for a title that only counts them. */
   labels?: string;
-  /** False when only commands remain, such as a dev server: nothing will wake the agent. */
-  waiting: boolean;
+  /** Each item, by kind, for the details popover. */
+  items: { kind: string; label: string }[];
 }
 
 const joinWithAnd = (parts: string[]) =>
@@ -49,6 +50,7 @@ export function presentWaiting(
   ].toSorted((a, b) => kinds[a.kind].order - kinds[b.kind].order);
   if (items.length === 0) return undefined;
   const waiting = items.some((item) => item.kind !== "command");
+  const details = items.map((item) => ({ kind: kinds[item.kind].singular, label: item.label }));
   const [only] = items;
   if (items.length === 1 && only) {
     const noun = kinds[only.kind].singular;
@@ -65,7 +67,7 @@ export function presentWaiting(
             : only.kind === "monitor"
               ? only.label
               : `Waiting on ${noun} ${only.label}`;
-    return { title, waiting };
+    return { title, items: details };
   }
   const counts = new Map<Kind, number>();
   for (const item of items) counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
@@ -80,7 +82,7 @@ export function presentWaiting(
   return {
     title: `${verb} ${joinWithAnd(groups)}`,
     labels: items.map((item) => item.label).join(", "),
-    waiting,
+    items: details,
   };
 }
 
@@ -102,6 +104,7 @@ export function WaitingBar({
 }) {
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string>();
+  const id = useId();
   const shown = presentWaiting(background, watching);
   if (!shown) return null;
 
@@ -121,28 +124,24 @@ export function WaitingBar({
     if (failed && "error" in failed) setError(failed.error.message);
   }
 
-  const all = shown.labels ?? shown.title;
   return (
     <section
       aria-label="Waiting on"
       className="mx-5 -mb-4 rounded-t-3xl border border-b-0 border-border bg-surface pt-1 pb-5 text-[13px]"
     >
       <div className="flex min-w-0 items-center gap-2.5 py-1 pr-3 pl-4">
-        {/* As T3 Code's: only work that will wake the agent pulses. */}
-        <span
-          aria-hidden
-          className={`size-1.5 shrink-0 rounded-full bg-foreground ${shown.waiting ? "animate-pulse" : ""}`}
-        />
+        <span aria-hidden className="size-1.5 shrink-0 animate-pulse rounded-full bg-foreground" />
         <span className="min-w-0 truncate font-medium">{shown.title}</span>
         <span className="min-w-0 flex-1 truncate text-muted-foreground">{shown.labels}</span>
-        <span
-          role="img"
-          aria-label={all}
-          title={all}
-          className="grid size-6 shrink-0 place-items-center text-muted-foreground [&_svg]:size-3.5"
+        <button
+          type="button"
+          popoverTarget={`${id}-details`}
+          aria-label="What it waits on"
+          aria-haspopup="dialog"
+          className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
         >
           <Info aria-hidden />
-        </span>
+        </button>
         <button
           type="button"
           disabled={stopping}
@@ -151,6 +150,25 @@ export function WaitingBar({
         >
           {stopping ? "Stopping…" : "Stop"}
         </button>
+      </div>
+      <div
+        id={`${id}-details`}
+        popover="auto"
+        role="dialog"
+        aria-label="Waiting on"
+        className={`${menuPanel("end")} w-80 p-3 text-[12.5px]`}
+      >
+        <p className="mb-2 text-muted-foreground">
+          The agent picks up when one of these ends or changes.
+        </p>
+        <ul className="space-y-1.5">
+          {shown.items.map((item, i) => (
+            <li key={i} className="flex min-w-0 gap-2">
+              <span className="w-20 shrink-0 text-muted-foreground capitalize">{item.kind}</span>
+              <span className="min-w-0 break-words">{item.label}</span>
+            </li>
+          ))}
+        </ul>
       </div>
       {error && (
         <p role="alert" className="px-4 pb-1 text-[12.5px] text-danger">

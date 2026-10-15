@@ -252,9 +252,8 @@ test("a thread is in a Project when its run or an ancestor's is one of the Proje
   ]);
 });
 
-// PLX-777: a run waits while it has a subagent or a Monitor and is monitoring while plxd watches a
-// pull request for it, each part from the snapshot and then its own event. A command alone, such as
-// a dev server, isn't waiting, as in T3 Code.
+// PLX-777: a run waits while it has background work, a command included, and is monitoring while
+// plxd watches a pull request for it, each part from the snapshot and then its own event.
 test("a run is monitoring a watched pull request and waiting on work that wakes it", () => {
   let state = threadsReducer(emptyThreads, {
     type: "snapshot",
@@ -270,5 +269,7 @@ test("a run is monitoring a watched pull request and waiting on work that wakes 
   state = apply(state, { kind: "pr.watches", runId: "a", urls: [] });
   expect(waitingOf(state, "a")).toBe("waiting");
   state = apply(state, { kind: "agent.background", runId: "a", tasks: [task("command")] });
+  expect(waitingOf(state, "a")).toBe("waiting");
+  state = apply(state, { kind: "agent.background", runId: "a", tasks: [] });
   expect(waitingOf(state, "a")).toBeUndefined();
 });

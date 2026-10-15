@@ -50,8 +50,8 @@ export interface ThreadsState {
    */
   checkpoints: Readonly<Record<string, number>>;
   /**
-   * By run id: whether its agent waits on background work that will wake it, a subagent or a
-   * Monitor, or on pull requests plxd watches (PLX-777). A run waiting on neither has no entry.
+   * By run id: whether its agent waits on background work, a subagent, a Monitor, or a command,
+   * or on pull requests plxd watches (PLX-777). A run waiting on neither has no entry.
    */
   waiting: Readonly<Record<string, Waiting>>;
 }
@@ -63,10 +63,10 @@ interface Waiting {
 }
 
 /**
- * Whether `tasks` will wake the agent, as T3 Code's `backgroundWorkHoldsCompletion` decides: a
- * subagent or a Monitor does, a command such as a dev server doesn't.
+ * Whether `tasks` will wake the agent. Every kind does: Claude Code wakes it when a background
+ * command exits too, as a build it waits on does.
  */
-const wakes = (tasks: AgentBackgroundTask[] = []) => tasks.some((t) => t.kind !== "command");
+const wakes = (tasks: AgentBackgroundTask[] = []) => tasks.length > 0;
 
 export const emptyThreads: ThreadsState = {
   projects: [],
