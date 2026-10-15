@@ -81,9 +81,9 @@ use super::wake::{self, Wakes};
 use super::worker::{sandbox_path, worker_unavailable};
 use super::{Place, Prepared, RunOptions, prepare, store, store_error};
 use crate::backend::{
-    AccountRef, Answer, AnswerError, Backend, Credential, Decision, Event, EventStream, FollowUp,
-    ModelUsage, Outcome, Resume, Run, RunRequest, SendError, ThreadTools, Usage, WorkerSandbox,
-    is_compact,
+    AccountRef, Answer, AnswerError, Backend, Credential, Decision, Event, EventStream, Failure,
+    FailureKind, FollowUp, ModelUsage, Outcome, Resume, Run, RunRequest, SendError, ThreadTools,
+    Usage, WorkerSandbox, is_compact,
     run_temp::{self, RunTemp},
 };
 use crate::routing;
@@ -653,11 +653,12 @@ impl Actor {
     }
 
     /// Whether the run has a turn to start once it can: a waiting message, a wake-up, or a usage
-    /// limit's resume.
+    /// limit's or a killed CLI's resume.
     fn wants_slot(&self) -> bool {
         (!self.queued.is_empty() && !self.queue_held)
             || self.wakes.due().is_some()
             || (self.row.state.status == convert::WAITING && self.row.state.resume_at.is_some())
+            || self.resumes.kill_pending()
     }
 
     /// A slot came for the run, which waited in line: it starts what waited. The loop's top gives
@@ -863,6 +864,7 @@ impl Actor {
         let mut active = Instant::now();
         loop {
             self.deliver().await;
+            self.revive().await;
             // A shared thread holds its slot only while a turn runs, and waits in line for one
             // only while it has a turn to start (0063).
             if !self.busy() {
@@ -945,7 +947,8 @@ impl Actor {
     }
 
     /// Whether the actor holds nothing that only memory keeps (PLX-459): no CLI, push or Open
-    /// PR, unsent output, waiting message, wake-up, permission request, or resume timer. A fresh
+    /// PR, unsent output, waiting message, wake-up, permission request, resume timer, or killed
+    /// CLI's resume. A fresh
     /// actor reloads `turns`, the wake-up count, and the run from the store, and what the rest
     /// keep for a CLI's messages until their turns start has no CLI left to start them.
     fn idle(&self) -> bool {
@@ -957,6 +960,7 @@ impl Actor {
             && self.wakes.is_empty()
             && self.approvals.is_empty()
             && self.resume_due().is_none()
+            && !self.resumes.kill_pending()
             && self.slot_wait.is_none()
     }
 
@@ -3497,6 +3501,14 @@ impl Actor {
             .live
             .as_ref()
             .is_some_and(|live| live.settled.is_some());
+        // A CLI killed from outside mid-turn, or idle while its background work ran, carries on
+        // (PLX-805). One plxd released, cancelled, or stopped never does.
+        let revive = killed_from_outside(outcome)
+            && self.live.as_ref().is_some_and(|live| !live.released)
+            && !self.stopping
+            && !self.deleted
+            && self.queued.is_empty()
+            && (!settled || !self.open_work.is_empty());
         self.record_usage(finished).await;
         self.clear_live();
         // The CLI took its background tasks with it.
@@ -3517,16 +3529,24 @@ impl Actor {
                 convert::COMPLETED.clone_into(&mut self.row.state.status);
                 self.save().await;
             }
-            return;
+        } else {
+            self.index_text().await;
+            self.finish(outcome).await;
         }
-        self.index_text().await;
-        self.finish(outcome).await;
+        // The loop's top resumes it ([`Self::revive`]), as `drain` would never end with a new
+        // CLI live.
+        if revive {
+            self.resumes.saw_kill();
+        }
     }
 
     /// A turn ended. Once none is in flight, a failed one releases the session, so its process
     /// ends and its `Finished` says why, as before 0060; otherwise the next waiting message goes
     /// to the session, or with none it settles.
     async fn turn_ended(&mut self, result: Option<String>, failed: bool) {
+        if !failed {
+            self.resumes.turn_completed();
+        }
         if self.in_flight > 0 || self.live.as_ref().is_none_or(|live| live.settled.is_some()) {
             return;
         }
@@ -3941,6 +3961,19 @@ fn id_conflict(turn_id: TurnId) -> ErrorObject {
     ErrorObject::parallax(
         ErrorKind::IdConflict,
         format!("turn {turn_id} was already sent with a different text"),
+    )
+}
+
+/// Whether a CLI ended `Crashed` by a signal: plxd stops its CLIs by cancelling them, which ends
+/// them `Cancelled`, so a signal came from outside, as from a stray `pkill` (PLX-805).
+fn killed_from_outside(outcome: &Outcome) -> bool {
+    matches!(
+        outcome,
+        Outcome::Failed(Failure {
+            failure: FailureKind::Crashed,
+            exit: Some(exit),
+            ..
+        }) if exit.signal.is_some()
     )
 }
 

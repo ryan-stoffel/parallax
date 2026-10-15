@@ -11,9 +11,10 @@ use parallax_protocol::methods::{
     ThreadStart,
 };
 use parallax_protocol::{
-    AgentCancelParams, AgentListParams, AgentOutputItem, AgentPermission, AgentResumeNowParams,
-    AgentRunState, AgentStatus, ErrorKind, EventsEventParams, HostSettingsGetParams, ParallaxEvent,
-    ProjectId, Provider, RepoAddParams, RepoId, RunId, TurnId,
+    AgentBackgroundKind, AgentBackgroundTask, AgentCancelParams, AgentListParams, AgentOutputItem,
+    AgentPermission, AgentResumeNowParams, AgentRunState, AgentStatus, ErrorKind,
+    EventsEventParams, HostSettingsGetParams, ParallaxEvent, ProjectId, Provider, RepoAddParams,
+    RepoId, RunId, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
 use plxd::backend::{
@@ -29,6 +30,10 @@ use crate::support::{InProcess, kind, temp_dir};
 
 /// What plxd sends a run once its limit resets.
 const CONTINUE: &str = "Your usage limit has reset. Continue where you left off.";
+
+/// What plxd sends a run whose CLI was killed from outside (PLX-805).
+const KILLED: &str = "Your CLI was killed by a signal Parallax didn't send, and any background \
+    tasks it ran were stopped with it. Continue where you left off, restarting any you still need.";
 
 /// The fake backend playing one script per CLI it starts, the last one again once they run out,
 /// and keeping every request.
@@ -432,5 +437,119 @@ async fn resume_now_resumes_a_waiting_run_as_the_users_turn() {
             .map(|resume| resume.session_id.as_str()),
         Some("s-1")
     );
+    host.server.stop().await;
+}
+
+/// A CLI that runs `steps` in session `session`, then is killed by a signal plxd didn't send.
+fn killed(session: &str, steps: Vec<Step>) -> Vec<Step> {
+    let mut script = vec![init(session)];
+    script.extend(steps);
+    script.push(Step::Crash);
+    script
+}
+
+/// Starts a run on a fresh plxd playing `scripts`, one per CLI. Returns the host, a subscribed
+/// client, and the run.
+async fn started(
+    scripts: Vec<Vec<Step>>,
+    seen: &Arc<Mutex<Vec<RunRequest>>>,
+) -> (Host, Conn, RunId) {
+    let host = host(
+        temp_dir(),
+        sequence(scripts, seen),
+        Duration::from_secs(600),
+    );
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let run = client
+        .call::<AgentStart>(start_params(project.id, "Build it."))
+        .await
+        .unwrap()
+        .run;
+    (host, client, run.id)
+}
+
+/// The launches so far resumed session `s-1` with plxd's [`KILLED`] turn, after the first.
+fn resumed_killed(seen: &Arc<Mutex<Vec<RunRequest>>>) {
+    for launch in &seen.lock().unwrap()[1..] {
+        assert_eq!(
+            launch
+                .resume
+                .as_ref()
+                .map(|resume| resume.session_id.as_str()),
+            Some("s-1")
+        );
+        assert_eq!(launch.prompt, KILLED);
+    }
+}
+
+/// PLX-805: a CLI killed mid-turn by a signal plxd didn't send, as by a stray `pkill`, resumes its
+/// session with plxd's own turn and carries on.
+#[tokio::test]
+async fn a_cli_killed_mid_turn_resumes_its_session() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (host, mut client, run) = started(vec![killed("s-1", Vec::new()), resumed()], &seen).await;
+    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
+    assert!(
+        turns(&events).contains(&(KILLED.to_owned(), true)),
+        "{events:#?}"
+    );
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    resumed_killed(&seen);
+    assert_eq!(status(&mut client, run).await, AgentStatus::Completed);
+    host.server.stop().await;
+}
+
+/// PLX-805: an idle session killed while its background work runs resumes too, since the work it
+/// waited on died with it.
+#[tokio::test]
+async fn a_cli_killed_idle_with_background_work_resumes_its_session() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let watching = Step::Emit(Event::BackgroundTasks {
+        tasks: vec![AgentBackgroundTask {
+            task_id: "m1".to_owned(),
+            kind: AgentBackgroundKind::Monitor,
+            description: "Watching CI".to_owned(),
+        }],
+    });
+    let first = killed(
+        "s-1",
+        vec![watching, end_turn("watching"), Step::SleepMs(500)],
+    );
+    let (host, mut client, run) = started(vec![first, resumed()], &seen).await;
+    let events = until(&mut client, |event| {
+        turns(std::slice::from_ref(event)).contains(&(KILLED.to_owned(), true))
+    })
+    .await;
+    assert!(!events.is_empty());
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    resumed_killed(&seen);
+    assert_eq!(status(&mut client, run).await, AgentStatus::Completed);
+    host.server.stop().await;
+}
+
+/// PLX-805: a resumed CLI killed again before any turn completes stays stopped, so one that keeps
+/// dying isn't restarted forever.
+#[tokio::test]
+async fn a_cli_killed_again_before_a_turn_completes_stays_stopped() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let scripts = vec![
+        killed("s-1", Vec::new()),
+        killed("s-1", Vec::new()),
+        resumed(),
+    ];
+    let (host, mut client, run) = started(scripts, &seen).await;
+    until(&mut client, updated_to(AgentStatus::Failed)).await;
+    until(&mut client, updated_to(AgentStatus::Failed)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        2,
+        "the second kill started nothing"
+    );
+    resumed_killed(&seen);
+    assert_eq!(status(&mut client, run).await, AgentStatus::Failed);
     host.server.stop().await;
 }

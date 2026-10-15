@@ -1,6 +1,7 @@
 //! A run waiting for its usage limit to reset (PLX-371, decision 0049): what the actor does when
 //! its CLI ends `rateLimited`, when the stored timer fires, and when a client resumes, cancels,
-//! or turns auto-resume off for a waiting run. The policy is [`crate::agents::resume`]'s.
+//! or turns auto-resume off for a waiting run, and resuming a run whose CLI was killed from
+//! outside (PLX-805). The policy is [`crate::agents::resume`]'s.
 
 use std::time::Duration;
 
@@ -13,7 +14,7 @@ use tracing::{info, warn};
 use super::Actor;
 use crate::agents::RunOptions;
 use crate::agents::convert::{self, WAITING};
-use crate::agents::resume::{self, MESSAGE};
+use crate::agents::resume::{self, KILLED, MESSAGE};
 
 /// The longest the actor sleeps before checking the wall clock again while a run waits. Tokio's
 /// clock stops while a Mac sleeps, so one long sleep could end hours after `resumeAt`.
@@ -143,8 +144,10 @@ impl Actor {
         self.snapshot()
     }
 
-    /// `agent/cancel` on a waiting run: it stops waiting and is `cancelled`.
+    /// `agent/cancel` on a waiting run: it stops waiting and is `cancelled`. A killed CLI's
+    /// session waiting to resume stays stopped.
     pub(super) async fn cancel_waiting(&mut self) {
+        self.resumes.drop_kill();
         if self.row.state.status == WAITING {
             info!(run = %self.id, "cancelling a run that waited for its usage limit");
             self.stop_waiting(convert::CANCELLED).await;
@@ -157,6 +160,42 @@ impl Actor {
         self.row.state.resume_at = None;
         self.row.state.resume_tries = 0;
         self.save().await;
+    }
+
+    /// At the loop's top: resumes a session whose CLI a signal plxd didn't send killed, with
+    /// [`KILLED`] as plxd's turn (PLX-805), once nothing runs, in line for a shared slot as a
+    /// usage limit's resume. A message sent since carries the run on instead and a stop ends it.
+    /// Only once until a turn completes, so a CLI that keeps dying stays stopped. The auto-resume
+    /// setting is for usage limits and doesn't apply.
+    pub(super) async fn revive(&mut self) {
+        if !self.resumes.kill_pending() || self.effect.is_some() || self.pending_revert.is_some() {
+            return;
+        }
+        if self.live.is_some() || !self.queued.is_empty() || self.stopping || self.deleted {
+            self.resumes.drop_kill();
+            return;
+        }
+        if !self.slot_ready().await {
+            return;
+        }
+        let Some(turn) = self.resumes.take_kill() else {
+            info!(run = %self.id, "a resumed agent run's CLI was killed again; it stays stopped");
+            return;
+        };
+        info!(run = %self.id, "an agent run's CLI was killed from outside; resuming its session");
+        let resumed = self
+            .resume(
+                turn,
+                KILLED.to_owned(),
+                Vec::new(),
+                Vec::new(),
+                RunOptions::default(),
+                None,
+            )
+            .await;
+        if let Err(error) = resumed {
+            warn!(run = %self.id, error = %error.message, "could not resume a killed agent run");
+        }
     }
 
     /// Resumes the waiting run's session with [`MESSAGE`] as `turn`. A launch clears the timer;

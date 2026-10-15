@@ -253,6 +253,8 @@ impl Actor {
         } else {
             None
         };
+        // The rollback replaces where a killed CLI's session would have resumed from.
+        self.resumes.drop_kill();
         self.pending_revert = Some(Pending {
             command_id: command_id.hyphenated().to_string(),
             plan,
