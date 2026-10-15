@@ -1,6 +1,6 @@
 use parallax_store::{
-    AreaFields, ForkedFrom, ProjectFields, ProjectIcon, RepoFields, RunFields, RunState, Store,
-    StoreError, StoredEvent, StoredImage, ThreadFields, ThreadUpdate, WorktreeFields,
+    ForkedFrom, ProjectFields, ProjectIcon, RepoFields, RunFields, RunState, Store, StoreError,
+    StoredEvent, StoredImage, ThreadFields, ThreadUpdate, WorktreeFields,
 };
 use rusqlite::Connection;
 use uuid::Uuid;
@@ -793,28 +793,31 @@ fn an_area_keeps_top_level_members_until_they_are_deleted() {
     store.create_project(project, &project_fields).unwrap();
 
     let id = Uuid::now_v7();
-    let fields = AreaFields {
-        name: "Work".to_owned(),
-        color: "violet".to_owned(),
-        threads: vec![other, child, Uuid::now_v7(), parent, other],
-        projects: vec![Uuid::now_v7(), project, project],
-    };
-    let area = store.save_area(id, &fields).unwrap();
+    let threads = [other, child, Uuid::now_v7(), parent, other];
+    let projects = [Uuid::now_v7(), project, project];
+    let area = store
+        .save_area(id, "Work", "violet", Some(&threads), Some(&projects))
+        .unwrap();
     assert_eq!(area.fields.threads, [other, parent]);
     assert_eq!(area.fields.projects, [project]);
-    let renamed = store
-        .save_area(
-            id,
-            &AreaFields {
-                name: "Play".to_owned(),
-                ..area.fields.clone()
-            },
-        )
+    let second = store
+        .save_area(Uuid::now_v7(), "Play", "teal", Some(&threads), None)
         .unwrap();
-    assert_eq!(renamed.created_at, area.created_at);
-    let second = store.save_area(Uuid::now_v7(), &fields).unwrap();
+    assert!(second.fields.projects.is_empty());
     let ids: Vec<Uuid> = store.list_areas().unwrap().iter().map(|a| a.id).collect();
     assert_eq!(ids, [id, second.id], "oldest first");
+
+    // A member that joins a Project keeps its place through a recolor, and leaves only when
+    // the threads are sent again.
+    store.join_project(other, project, parent).unwrap();
+    let recolored = store.save_area(id, "Work", "teal", None, None).unwrap();
+    assert_eq!(recolored.fields.threads, [other, parent]);
+    assert_eq!(recolored.fields.projects, [project]);
+    assert_eq!(recolored.created_at, area.created_at);
+    let resent = store
+        .save_area(id, "Work", "teal", Some(&recolored.fields.threads), None)
+        .unwrap();
+    assert_eq!(resent.fields.threads, [parent]);
 
     assert!(store.in_area(parent).unwrap());
     assert!(!store.in_area(child).unwrap());
@@ -822,7 +825,7 @@ fn an_area_keeps_top_level_members_until_they_are_deleted() {
     store.delete_project(project).unwrap();
     assert!(!store.in_area(parent).unwrap());
     let left = store.get_area(id).unwrap().unwrap();
-    assert_eq!(left.fields.threads, [other]);
+    assert!(left.fields.threads.is_empty());
     assert!(left.fields.projects.is_empty());
 
     assert!(store.delete_area(id).unwrap());
@@ -866,4 +869,25 @@ fn a_message_match_has_a_snippet_and_a_title_match_has_none() {
         store.search_snippets("flaky", &ids).unwrap(),
         [(message, "Fix the flaky attach test.".to_owned())]
     );
+}
+
+/// A snippet longer than 120 characters is cut around its match, on character boundaries
+/// (PLX-789).
+#[test]
+fn a_long_snippet_is_cut_around_its_match() {
+    let (_dir, mut store) = open();
+    let threads = Threads::new(&mut store);
+    let prompt = format!("{} flaky {}", "é".repeat(150), "ü".repeat(150));
+    let id = threads.thread(&mut store, &prompt);
+    let snippets = store.search_snippets("flaky", &[id]).unwrap();
+    let [(found, snippet)] = snippets.as_slice() else {
+        panic!("one snippet, got {snippets:?}");
+    };
+    assert_eq!(*found, id);
+    assert_eq!(snippet.chars().count(), 120, "{snippet}");
+    assert!(
+        snippet.starts_with("…é") && snippet.ends_with("ü…"),
+        "{snippet}"
+    );
+    assert!(snippet.contains(" flaky "), "{snippet}");
 }

@@ -436,9 +436,9 @@ pub struct ThreadSearchParams {
 pub struct ThreadSearchResult {
     /// The matching threads: title matches first, then the one with the newest message.
     pub threads: Vec<Thread>,
-    /// For each returned thread that matched in its messages, one line of that message text around
-    /// the first match, at most about 120 characters, with `…` where it was cut (PLX-789). Absent
-    /// for a thread that matched only by title, and from a plxd without `areas`.
+    /// For each returned thread that matched in its messages, one line of its best-matching
+    /// message, around the matching words, at most 120 characters, with `…` where it was cut
+    /// (PLX-789). Absent for a thread that matched only by title, and from a plxd without `areas`.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub snippets: std::collections::BTreeMap<RunId, String>,
 }

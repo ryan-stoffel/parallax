@@ -234,14 +234,37 @@ fn match_query(query: &str) -> String {
 /// The longest snippet [`Store::search_snippets`] returns, in characters.
 const SNIPPET_CHARS: usize = 120;
 
-/// `text` on one line, its whitespace runs collapsed to single spaces, cut to [`SNIPPET_CHARS`].
-fn one_line(text: &str) -> String {
-    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if line.chars().count() <= SNIPPET_CHARS {
-        return line;
+/// What [`Store::search_snippets`]' `snippet()` marks a matched word's start and end with.
+const MATCH_START: char = '\u{2}';
+const MATCH_END: char = '\u{3}';
+
+/// A snippet on one line: its whitespace runs collapsed to single spaces and its match marks
+/// removed. Longer than [`SNIPPET_CHARS`], it is cut to a window that starts a third of the way
+/// before its first match, with `…` on each side that was cut.
+fn one_line(snippet: &str) -> String {
+    let line = snippet.split_whitespace().collect::<Vec<_>>().join(" ");
+    let at = line
+        .chars()
+        .position(|c| c == MATCH_START)
+        .unwrap_or_default();
+    let chars: Vec<char> = line
+        .chars()
+        .filter(|c| *c != MATCH_START && *c != MATCH_END)
+        .collect();
+    if chars.len() <= SNIPPET_CHARS {
+        return chars.into_iter().collect();
     }
-    let mut cut: String = line.chars().take(SNIPPET_CHARS - 1).collect();
-    cut.push('…');
+    let room = SNIPPET_CHARS - 2;
+    let start = at.saturating_sub(room / 3).min(chars.len() - room);
+    let end = start + room;
+    let mut cut = String::new();
+    if start > 0 {
+        cut.push('…');
+    }
+    cut.extend(&chars[start..end]);
+    if end < chars.len() {
+        cut.push('…');
+    }
     cut
 }
 
@@ -449,10 +472,10 @@ impl Store {
         Ok(threads)
     }
 
-    /// For each of `threads`, one line of its message text that best matches `query`, as
-    /// [`Store::search_threads`] matches it, around the first match and at most 120 characters,
-    /// with `…` where it was cut (PLX-789). A thread none of whose
-    /// messages match has none.
+    /// For each of `threads`, one line of its message that best matches `query`, as
+    /// [`Store::search_threads`] matches it: the window FTS5's `snippet()` picks, kept around
+    /// its first highlighted word and cut to 120 characters, with `…` where it was cut (PLX-789).
+    /// A thread none of whose messages match has none. In `threads`' order, with one query.
     ///
     /// # Errors
     ///
@@ -462,23 +485,31 @@ impl Store {
         query: &str,
         threads: &[Uuid],
     ) -> Result<Vec<(Uuid, String)>, StoreError> {
+        let ids = threads
+            .iter()
+            .map(|id| format!("\"{id}\""))
+            .collect::<Vec<_>>()
+            .join(",");
         let mut stmt = self.conn.prepare(
-            "SELECT snippet(thread_text_fts, 0, '', '', '…', 16) FROM thread_text_fts
-             JOIN thread_text ON thread_text.id = thread_text_fts.rowid
-             WHERE thread_text_fts MATCH ?1 AND thread_text.run_id = ?2
-             ORDER BY rank LIMIT 1",
+            "SELECT thread_text.run_id, snippet(thread_text_fts, 0, char(2), char(3), '…', 16)
+             FROM thread_text_fts JOIN thread_text ON thread_text.id = thread_text_fts.rowid
+             WHERE thread_text_fts MATCH ?1
+                AND thread_text.run_id IN (SELECT value FROM json_each(?2))
+             ORDER BY rank",
         )?;
-        let query = match_query(query);
-        let mut snippets = Vec::new();
-        for &thread in threads {
-            let found: Option<String> = stmt
-                .query_row(params![query, thread.to_string()], |row| row.get(0))
-                .optional()?;
-            if let Some(text) = found {
-                snippets.push((thread, one_line(&text)));
-            }
+        let rows = stmt.query_map(params![match_query(query), format!("[{ids}]")], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        // Rows come best first, so a thread's first row is its best.
+        let mut best = std::collections::HashMap::new();
+        for row in rows {
+            let (run, text) = row?;
+            best.entry(Uuid::parse_str(&run)?).or_insert(text);
         }
-        Ok(snippets)
+        Ok(threads
+            .iter()
+            .filter_map(|id| best.remove(id).map(|text| (*id, one_line(&text))))
+            .collect())
     }
 
     /// Indexes the agent's replies in `run_id`'s `agent.output` events logged since its newest

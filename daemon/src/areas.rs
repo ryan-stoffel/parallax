@@ -14,7 +14,7 @@ use parallax_protocol::{
     Area, AreaCreateParams, AreaDeleteParams, AreaDeleteResult, AreaId, AreaResult,
     AreaUpdateParams, ErrorKind, MAX_AREA_NAME_CHARS, ParallaxEvent, ProjectId, RunId,
 };
-use parallax_store::{AreaFields, Store};
+use parallax_store::Store;
 use uuid::Uuid;
 
 use crate::methods::project::{MAX_ICON_COLOR_CHARS, check_key};
@@ -112,16 +112,12 @@ pub(crate) async fn create(
     } = params;
     let name = check_name(&name)?;
     check_key("color", &color, MAX_ICON_COLOR_CHARS)?;
-    let fields = AreaFields {
-        name,
-        color,
-        threads: uuids(threads),
-        projects: uuids(projects),
-    };
+    let threads = uuids(threads);
+    let projects = uuids(projects);
     store(daemon, move |db| {
         let key: Uuid = id.into();
         if let Some(existing) = db.get_area(key).map_err(|e| store_error(&e))? {
-            if existing.fields.name == fields.name {
+            if existing.fields.name == name {
                 return Ok(AreaResult {
                     area: entry(existing)?,
                 });
@@ -131,8 +127,10 @@ pub(crate) async fn create(
                 format!("{id} is already in use"),
             ));
         }
-        check_unique(db, key, &fields.name)?;
-        let row = db.save_area(key, &fields).map_err(|e| store_error(&e))?;
+        check_unique(db, key, &name)?;
+        let row = db
+            .save_area(key, &name, &color, Some(&threads), Some(&projects))
+            .map_err(|e| store_error(&e))?;
         stage_changed(db)?;
         Ok(AreaResult { area: entry(row)? })
     })
@@ -166,13 +164,13 @@ pub(crate) async fn update(
         if let Some(name) = &name {
             check_unique(db, key, name)?;
         }
-        let fields = AreaFields {
-            name: name.unwrap_or_else(|| before.fields.name.clone()),
-            color: color.unwrap_or_else(|| before.fields.color.clone()),
-            threads: threads.map_or_else(|| before.fields.threads.clone(), uuids),
-            projects: projects.map_or_else(|| before.fields.projects.clone(), uuids),
-        };
-        let row = db.save_area(key, &fields).map_err(|e| store_error(&e))?;
+        let name = name.as_deref().unwrap_or(&before.fields.name);
+        let color = color.as_deref().unwrap_or(&before.fields.color);
+        let threads = threads.map(uuids);
+        let projects = projects.map(uuids);
+        let row = db
+            .save_area(key, name, color, threads.as_deref(), projects.as_deref())
+            .map_err(|e| store_error(&e))?;
         if row != before {
             stage_changed(db)?;
         }

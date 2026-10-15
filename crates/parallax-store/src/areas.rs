@@ -8,14 +8,14 @@ use uuid::Uuid;
 use crate::error::StoreError;
 use crate::{Store, timestamp};
 
-/// What [`Store::save_area`] writes.
+/// An area's name, color, and members, as stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AreaFields {
     pub name: String,
     pub color: String,
-    /// Its threads. Ids that name no top-level thread are dropped, and repeats after the first.
+    /// Its threads, in the order they were added.
     pub threads: Vec<Uuid>,
-    /// Its Projects. Ids that name no Project are dropped, and repeats after the first.
+    /// Its Projects, in the order they were added.
     pub projects: Vec<Uuid>,
 }
 
@@ -93,37 +93,49 @@ impl Store {
             .transpose()
     }
 
-    /// Creates area `id`, or replaces its name, color, and members, keeping its creation time.
-    /// Drops member ids that name no top-level thread or Project, and repeats. Returns the area
-    /// as stored.
+    /// Creates area `id`, or sets its name and color, keeping its creation time. Replaces its
+    /// threads or Projects only when given, dropping ids that name no top-level thread or
+    /// Project, and repeats; a list not given keeps its stored members, even a thread that has
+    /// since gained a parent. Returns the area as stored.
     ///
     /// # Errors
     ///
     /// A database error.
-    pub fn save_area(&mut self, id: Uuid, fields: &AreaFields) -> Result<Area, StoreError> {
+    pub fn save_area(
+        &mut self,
+        id: Uuid,
+        name: &str,
+        color: &str,
+        threads: Option<&[Uuid]>,
+        projects: Option<&[Uuid]>,
+    ) -> Result<Area, StoreError> {
         let tx = self.conn.savepoint()?;
         let key = id.to_string();
         tx.execute(
             "INSERT INTO areas (id, name, color, created_at) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT (id) DO UPDATE SET name = excluded.name, color = excluded.color",
-            params![key, fields.name, fields.color, timestamp::now()],
+            params![key, name, color, timestamp::now()],
         )?;
-        tx.execute("DELETE FROM area_threads WHERE area_id = ?1", params![key])?;
-        tx.execute("DELETE FROM area_projects WHERE area_id = ?1", params![key])?;
-        for (position, thread) in fields.threads.iter().enumerate() {
-            tx.execute(
-                "INSERT OR IGNORE INTO area_threads (area_id, thread_id, position)
-                 SELECT ?1, id, ?3 FROM threads WHERE id = ?2
-                    AND (SELECT parent FROM runs WHERE runs.id = threads.id) IS NULL",
-                params![key, thread.to_string(), position],
-            )?;
+        if let Some(threads) = threads {
+            tx.execute("DELETE FROM area_threads WHERE area_id = ?1", params![key])?;
+            for (position, thread) in threads.iter().enumerate() {
+                tx.execute(
+                    "INSERT OR IGNORE INTO area_threads (area_id, thread_id, position)
+                     SELECT ?1, id, ?3 FROM threads WHERE id = ?2
+                        AND (SELECT parent FROM runs WHERE runs.id = threads.id) IS NULL",
+                    params![key, thread.to_string(), position],
+                )?;
+            }
         }
-        for (position, project) in fields.projects.iter().enumerate() {
-            tx.execute(
-                "INSERT OR IGNORE INTO area_projects (area_id, project_id, position)
-                 SELECT ?1, id, ?3 FROM projects WHERE id = ?2",
-                params![key, project.to_string(), position],
-            )?;
+        if let Some(projects) = projects {
+            tx.execute("DELETE FROM area_projects WHERE area_id = ?1", params![key])?;
+            for (position, project) in projects.iter().enumerate() {
+                tx.execute(
+                    "INSERT OR IGNORE INTO area_projects (area_id, project_id, position)
+                     SELECT ?1, id, ?3 FROM projects WHERE id = ?2",
+                    params![key, project.to_string(), position],
+                )?;
+            }
         }
         tx.commit()?;
         self.get_area(id)?.ok_or(StoreError::NotFound { id })

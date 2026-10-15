@@ -201,7 +201,7 @@ pub(crate) enum Action {
     Create(Box<NewRows>),
     /// `thread.archive`, or `thread.unarchive` with `false`.
     Archive(bool),
-    /// `thread.metadata.update`: its title, settled flag, seen time, or snooze.
+    /// `thread.metadata.update`: its title, settled flag, seen time, snooze, or pin.
     Update(ThreadUpdate),
     /// `thread.delete`, once its CLI has exited, with the worktree its actor had.
     Delete { worktree: Option<Worktree> },
