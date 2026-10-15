@@ -88,12 +88,13 @@ import { draggedThread, threadDragType } from "./threadDrag";
  * The main pane: a Project's coordinator chat, or with `agentId` one of its subagents' chats, a
  * thread (its id is its run's; `started` when New Thread just started it, until anything else is
  * selected; `subagent` when one of its agent's own subagents is open, by its call's id), a new
- * thread in a sidebar group (`threads.ts`; with no group, it's the first repository's).
+ * thread in a sidebar group (`threads.ts`; with no group, it's the first repository's; `draft` when
+ * it reopens one, by id, PLX-788).
  */
 export type Selection =
   | { kind: "project"; projectId: string; agentId?: string }
   | { kind: "thread"; threadId: string; started?: boolean; subagent?: string }
-  | { kind: "new"; groupId?: string };
+  | { kind: "new"; groupId?: string; draft?: string };
 
 /** Two threads on one host open side by side (PLX-587), left then right. */
 export interface Split {
@@ -517,6 +518,8 @@ export function App() {
     setOpening({ hostId, projectId });
   };
 
+  // New Thread's draft, which picking where it runs keeps (PLX-788).
+  const draft = selection.kind === "new" ? selection.draft : undefined;
   // Runs New Thread on another computer: opens that host, keeping the repository if it lists one
   // of the same name (each host's entries have their own ids), else New Thread's first repository,
   // which is also what a host whose list hasn't loaded yet gets.
@@ -525,7 +528,7 @@ export function App() {
     const { groups: there } = groupThreads((views[id] ?? idleThreads).state);
     setHostId(id);
     setOpening(undefined);
-    setSelection({ kind: "new", groupId: there.find((g) => g.name === group.name)?.id });
+    setSelection({ kind: "new", groupId: there.find((g) => g.name === group.name)?.id, draft });
   };
 
   // Opens New Thread on another computer with one of its repositories.
@@ -961,14 +964,19 @@ export function App() {
                     </div>
                   ) : selection.kind === "new" ? (
                     <NewThread
+                      // Opening a draft opens a new screen, which leaves the one open as a draft.
+                      key={draft}
+                      draftId={draft}
                       hostId={host.id}
                       hosts={hosts}
                       onHostChange={pickHost}
                       groups={groups}
                       groupId={group.id}
-                      onGroupChange={(groupId) => setSelection({ kind: "new", groupId })}
+                      onGroupChange={(groupId) => setSelection({ kind: "new", groupId, draft })}
                       elsewhere={elsewhere}
-                      onPickElsewhere={pickRepoOn}
+                      onPickElsewhere={(hostId, groupId) =>
+                        openOnHost(hostId, { kind: "new", groupId, draft })
+                      }
                       missing={
                         new Set(
                           hosts.filter((h) => lacksRepo(views[h.id], group.name)).map((h) => h.id),
