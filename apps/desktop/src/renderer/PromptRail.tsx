@@ -27,9 +27,10 @@ const replyOf = (prompt: Prompt) =>
     .findLast(Boolean);
 
 /**
- * A bar for each of the user's prompts, down the transcript's left edge. Hovering or focusing a bar
- * makes it longer and brighter and shows its prompt and the start of the reply beside it, and
- * clicking it scrolls back to that prompt.
+ * A bar for each of the user's prompts, down the transcript's left edge. The bar for the prompt
+ * being read is brighter, so it moves as the transcript scrolls. Hovering or focusing a bar makes it
+ * longer and brighter and shows its prompt and the start of the reply beside it, and clicking it
+ * scrolls back to that prompt.
  */
 export function PromptRail({
   prompts,
@@ -74,7 +75,11 @@ export function PromptRail({
             onClick={() => onJump(p)}
             className="group flex h-2.5 w-5 shrink-0 cursor-default items-center px-0.5 focus-visible:outline-none"
           >
-            <span className="h-0.5 w-2.5 rounded-full bg-faint-foreground/60 transition-[width,background-color] group-hover:w-4 group-hover:bg-foreground group-focus-visible:w-4 group-focus-visible:bg-foreground" />
+            <span
+              className={`h-0.5 w-2.5 rounded-full transition-[width,background-color] group-hover:w-4 group-hover:bg-foreground group-focus-visible:w-4 group-focus-visible:bg-foreground ${
+                at === current ? "bg-foreground" : "bg-faint-foreground/60"
+              }`}
+            />
           </button>
         ))}
       </nav>
