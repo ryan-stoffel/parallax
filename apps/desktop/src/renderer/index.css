@@ -807,39 +807,62 @@ body {
     translate: 16px 0;
   }
 }
-/* Archiving the last open thread bursts confetti from the sidebar's search bar (Sidebar.tsx):
-   each piece arcs up and out to its own --x, then falls to --y, spinning, and fades. */
+/* Archiving the last open thread drops confetti from behind the sidebar's search bar
+   (Sidebar.tsx), clipped to the sidebar. Each piece falls (the outer span) while its paper sways
+   and flips (the inner span), and fades in past the search bar and out near the bottom. */
 .confetti {
   position: absolute;
+  inset-inline: 0;
   top: 50%;
-  left: 50%;
-  z-index: 20;
+  z-index: 1;
+  height: 100vh;
+  overflow: hidden;
   pointer-events: none;
 }
 .confetti > span {
   position: absolute;
-  width: 6px;
-  height: 3px;
-  border-radius: 1px;
-  animation: confetti 1.7s both;
+  top: 0;
+  animation-name: confetti-fall;
+  animation-timing-function: cubic-bezier(0.3, 0, 0.7, 1);
+  animation-fill-mode: both;
 }
-@keyframes confetti {
+.confetti > span > span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 1px;
+  background: var(--color);
+  animation:
+    confetti-sway var(--sway) ease-in-out infinite alternate,
+    confetti-flip var(--flip) linear infinite;
+}
+@keyframes confetti-fall {
   0% {
     translate: 0 0;
-    rotate: 0deg;
-    animation-timing-function: cubic-bezier(0.2, 0.8, 0.4, 1);
+    opacity: 0;
   }
-  25% {
-    translate: calc(var(--x) * 0.5) calc(var(--y) * -0.12);
-    animation-timing-function: cubic-bezier(0.5, 0, 0.8, 0.6);
+  10% {
+    opacity: 1;
   }
   75% {
     opacity: 1;
   }
   100% {
-    translate: var(--x) var(--y);
-    rotate: var(--spin);
+    translate: var(--drift) 70vh;
     opacity: 0;
+  }
+}
+@keyframes confetti-sway {
+  from {
+    translate: -8px 0;
+  }
+  to {
+    translate: 8px 0;
+  }
+}
+@keyframes confetti-flip {
+  to {
+    rotate: var(--axis) 360deg;
   }
 }
 :root.reduce-motion .confetti {
