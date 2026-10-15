@@ -31,7 +31,7 @@ Ryan wants Parallax Connect to be set and forget: a computer added once stays re
 - systemd: `Restart=always`, `RestartSec=5`, and `StartLimitIntervalSec=0`, so the unit never enters `failed` from start limits. `systemctl --user stop` and `service uninstall` still stop it. `plxd service install` turns on lingering for the user when it's off, so plxd starts at boot and outlives logout. If it can't, it warns and still installs.
 - launchd: `KeepAlive` true, under launchd's throttle. A `bootstrap` that fails right after `bootout` is retried for up to 10 seconds.
 - Windows (PLX-576): a per-user scheduled task, registered from XML with `schtasks /create /xml`, which needs no admin rights. It has a logon trigger for the user that repeats every 5 minutes with no end, and `MultipleInstancesPolicy` `IgnoreNew`, so a running plxd ignores the repeats and one that exited is started again within 5 minutes. It runs as `InteractiveToken` with `LeastPrivilege`, has no execution time limit (the default of 72 hours would end plxd), runs on battery, has `RestartOnFailure`, and runs at normal priority. Its action is `conhost.exe --headless "<plxd.exe>" serve`, so no console window opens. ConPTY has run that itself since Windows 10 1809. `plxd attach` starts the task with `schtasks /run`, and starts `serve` itself when that fails. `service status` prints the same `key: value` lines as on the other OSes.
-- Every path where plxd exits 0 on purpose either goes through the service manager (`service install --replace`, `service uninstall`), or happens without a service installed.
+- Every path where plxd exits 0 on purpose either goes through the service manager (`service install --replace`, `service uninstall`), or happens in a plxd the service manager doesn't run, such as `host/update` starting the new `serve` itself after a failed `--replace`.
 
 ### The app keeps the copy current and its devices connected
 
@@ -48,6 +48,7 @@ Ryan wants Parallax Connect to be set and forget: a computer added once stays re
 
 ### `host/update` on Windows (PLX-825)
 
+- `host/update` on every OS skips the download when the destination copy's `plxd.version` isn't older than the version it was asked for, and hands over to that copy. The app can refresh the copy while the service still runs an older plxd, and an older app on another computer must not write over it.
 - `host/update` on Windows downloads `parallax-plxd-<v>-win-<arch>.exe`, checks it, installs it as above, and hands over through the logon task, or starts `serve` detached when there's none. It no longer refuses.
 
 ## Consequences
