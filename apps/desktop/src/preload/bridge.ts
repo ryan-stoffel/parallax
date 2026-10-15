@@ -88,6 +88,18 @@ export const NPM_INSTALLS: Partial<Record<ProviderKind, string>> = {
 export const npmInstallLine = (pkg: string, windows: boolean) =>
   windows ? `npm install -g ${pkg}` : `npm install -g --prefix "$HOME/.local" ${pkg}`;
 
+const NO_NPM =
+  "npm is not installed. Install Node.js from https://nodejs.org, which includes npm, then try again.";
+
+/**
+ * `line`, an npm install, run only when npm is found. Without it the shell exits 127 with
+ * `NO_NPM` on stderr instead of its own "not found" output.
+ */
+export const needNpm = (line: string, windows: boolean) =>
+  windows
+    ? `if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { [Console]::Error.WriteLine('${NO_NPM}'); exit 127 }; ${line}`
+    : `command -v npm >/dev/null || { echo '${NO_NPM}' >&2; exit 127; }; ${line}`;
+
 /** Whether version `a` is older than `b` (0030): by number, then a nightly before its release. */
 export function olderVersion(a: string, b: string): boolean {
   const [x, y] = [a, b].map((v) => /^(\d+)\.(\d+)\.(\d+)(-.+)?$/.exec(v));

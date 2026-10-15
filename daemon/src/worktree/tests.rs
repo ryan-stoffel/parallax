@@ -781,6 +781,23 @@ async fn create_refuses_a_directory_that_is_not_a_repo() {
 }
 
 #[tokio::test]
+async fn create_says_git_is_not_installed_when_it_is_not_on_path() {
+    let repo_dir = tempfile::tempdir().unwrap();
+    let data_dir = tempfile::tempdir().unwrap();
+    let mut env = Environment::empty();
+    env.set("PATH", data_dir.path());
+    let launcher = Launcher::new(DataDir::new(data_dir.path()).unwrap(), env);
+    let mgr = WorktreeManager::new(launcher, data_dir.path());
+
+    let error = mgr
+        .create_named(repo_dir.path(), RunId::generate(), None, None)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, WorktreeError::GitNotInstalled), "{error:?}");
+}
+
+#[tokio::test]
 async fn create_works_from_a_detached_head() {
     let repo_dir = tempfile::tempdir().unwrap();
     let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
