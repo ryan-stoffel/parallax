@@ -67,7 +67,7 @@ export function NightSky() {
             x1="0"
             y1="36"
             x2="0"
-            y2="54"
+            y2="52"
             gradientUnits="userSpaceOnUse"
           >
             <stop offset="0" stopColor="#fff" />

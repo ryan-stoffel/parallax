@@ -254,18 +254,27 @@
    The sky is the sidebar's own background, so it sits behind all of the sidebar's content, and
    it blends into the sidebar's color in oklab, so it merges cleanly into any theme's. Dark mode
    is night, deepening into the sidebar behind the Search row. Light mode is twilight: indigo
-   behind the top row's white text, brightening to a pale lavender behind the Search row's dark
-   text, with white clouds. */
+   behind the top row's white text, brightening to a lavender that runs on past the Search row,
+   light enough for its dark text, with white clouds. */
+/* Stops tuned so --faint-foreground keeps 4.5:1 wherever the Search row sits on the sky. */
 :root.nightly .night-sky-host {
   background:
-    linear-gradient(in oklab, #15124a, #2e2a8c 24%, #6a64d6 42%, #dddbfa 56%, var(--sidebar)) top /
-      100% 104px no-repeat,
+    linear-gradient(
+        in oklab,
+        #15124a,
+        #2e2a8c 19%,
+        #6a64d6 33%,
+        #e1defd 44%,
+        #e8e6fd 70%,
+        var(--sidebar)
+      )
+      top / 100% 120px no-repeat,
     var(--sidebar);
 }
 :root.nightly.dark .night-sky-host {
   background:
-    linear-gradient(in oklab, #070923, #17184f 22%, #2a2470 38%, var(--sidebar)) top / 100% 104px
-      no-repeat,
+    linear-gradient(in oklab, #070923, #17184f 20%, #2a2470 34%, #1c1a48 52%, var(--sidebar)) top /
+      100% 104px no-repeat,
     var(--sidebar);
 }
 /* The clouds' bodies and lit tops, far to near. */

@@ -148,7 +148,8 @@ interface SidebarProps {
 /**
  * The left column. Its top row holds the macOS traffic lights, then the toggle at the same
  * spot the main pane shows it while this column is hidden, then the app's mark and name, which
- * open a new thread. A nightly build paints a night sky behind that row (index.css).
+ * open a new thread. A nightly build paints a sky behind that row and, in dark mode, the Search
+ * row under it, as the column's own background (index.css), with stars and clouds (NightSky.tsx).
  */
 export function Sidebar({
   open,
