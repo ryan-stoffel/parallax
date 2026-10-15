@@ -722,6 +722,36 @@ test("New Thread lists another computer's repositories, and picking one opens it
   expect(options("Repository")).toEqual(["parallax", "dotfiles", "No Repo"]);
 });
 
+test("Runs on marks an offline computer, and past six computers searches them (PLX-816)", async () => {
+  const names = ["alpha", "bravo", "charlie", "delta", "echo", "nas"];
+  window.parallax.hosts = async () =>
+    names.map((name) => ({ id: `ssh-${name}`, name, destination: name }));
+  window.parallax.connectionState = async (host) =>
+    host === "ssh-nas"
+      ? { status: "failed", retrying: true, error: { reason: "unresponsive", message: "gone" } }
+      : { status: "connected", plxd: "0.1.0", protocol: 1, capabilities };
+  const options = () =>
+    [...document.querySelectorAll('main [aria-label="Computer"] [role="menuitemradio"]')].map(
+      (b) => b.textContent,
+    );
+  await renderApp();
+  expect(options()).toHaveLength(7);
+  expect(options()).toContain("nasOffline");
+  const search = document.querySelector<HTMLInputElement>(
+    'main input[aria-label="Search computers"]',
+  )!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, "ECH");
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(options()).toEqual(["echoSSH · echo"]);
+  await act(async () => {
+    search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  await settle();
+  expect(control("Runs on: echo, New worktree")).not.toBeNull();
+});
+
 test("Local checkout starts a thread in the repository itself, with no branch of its own", async () => {
   capabilities = { checkout: {} };
   answers["thread/start"] = (p) => ({
