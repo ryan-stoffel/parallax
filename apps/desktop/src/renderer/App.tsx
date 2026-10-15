@@ -759,7 +759,7 @@ export function App() {
 
       {/* An expanded side panel takes the main pane's place. */}
       <OpenDocumentContext value={openDoc}>
-        <main hidden={expanded} className="flex min-w-0 flex-1 flex-col bg-background">
+        <main hidden={expanded} className="flex min-w-0 flex-1 flex-col bg-pane">
           {settings ? (
             <>
               <TopBar className={topBarInset}>

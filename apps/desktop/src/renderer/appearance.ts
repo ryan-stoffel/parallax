@@ -25,6 +25,12 @@ export type Appearance = {
   motion: "system" | "reduce";
   /** The pair that marks added and removed, done and failed. */
   diffColors: "redGreen" | "blueOrange";
+  /** Whether the desktop shows, blurred, behind the window (macOS and Windows 11). */
+  blur: boolean;
+  /** How much of the theme's background covers the blur, in percent. */
+  backgroundOpacity: number;
+  /** The whole window's opacity, text included, in percent (macOS and Windows). */
+  windowOpacity: number;
 };
 
 export const defaults: Appearance = {
@@ -38,6 +44,9 @@ export const defaults: Appearance = {
   wordWrap: true,
   motion: "system",
   diffColors: "redGreen",
+  blur: false,
+  backgroundOpacity: 70,
+  windowOpacity: 100,
 };
 
 export const uiSizes = [11, 12, 13, 14, 15, 16, 18, 20];
@@ -139,6 +148,10 @@ export function applyAppearance(appearance: Appearance) {
     appearance.motion === "reduce" || matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
   root.classList.toggle("diff-blue-orange", appearance.diffColors === "blueOrange");
+  // index.css mixes the panes' colors with transparent by --tint, over the blur.
+  const blur = appearance.blur && window.parallax?.canBlur === true;
+  root.classList.toggle("translucent", blur);
+  root.style.setProperty("--tint", `${blur ? appearance.backgroundOpacity : 100}%`);
 }
 
 /**
@@ -167,4 +180,12 @@ export function useAppearanceEffects() {
     };
   }, [current]);
   useLayoutEffect(() => window.parallax.setZoom(current.uiSize / 13), [current.uiSize]);
+  useLayoutEffect(
+    () =>
+      window.parallax.setWindowLook?.({
+        blur: current.blur,
+        opacity: current.windowOpacity / 100,
+      }),
+    [current.blur, current.windowOpacity],
+  );
 }

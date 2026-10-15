@@ -10,7 +10,7 @@ import type {
   WatchMessage,
   WatchParams,
 } from "./bridge";
-import { validLocale } from "./bridge";
+import { blurSupported, validLocale } from "./bridge";
 
 // Subscription and watch listeners by the key this preload gave them.
 type Message = SubscriptionMessage | WatchMessage;
@@ -65,6 +65,11 @@ const bridge: ParallaxBridge = {
   version: () => ipcRenderer.invoke("parallax:version") as Promise<string>,
   setThemeSource: (preference) => ipcRenderer.send("parallax:theme", preference),
   setZoom: (factor) => webFrame.setZoomFactor(factor),
+  ...(process.platform !== "linux" && {
+    setWindowLook: (look: { blur: boolean; opacity: number }) =>
+      ipcRenderer.send("parallax:windowLook", look),
+    canBlur: blurSupported(process.platform, process.getSystemVersion()),
+  }),
   pickFolder: () => ipcRenderer.invoke("parallax:pickFolder") as Promise<string | null>,
   listFolders: (path) => ipcRenderer.invoke("parallax:listFolders", path),
   createRepo: (name) => ipcRenderer.invoke("parallax:createRepo", name),

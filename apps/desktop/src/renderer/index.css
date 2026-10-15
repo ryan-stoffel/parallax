@@ -269,13 +269,13 @@
         var(--sidebar)
       )
       top / 100% 120px no-repeat,
-    var(--sidebar);
+    var(--pane-sidebar);
 }
 :root.nightly.dark .night-sky-host {
   background:
     linear-gradient(in oklab, #070923, #17184f 20%, #2a2470 34%, #191741 52%, var(--sidebar)) top /
       100% 104px no-repeat,
-    var(--sidebar);
+    var(--pane-sidebar);
 }
 /* The Search field sits on the sidebar's own color over the sky, so its text keeps the contrast
    the theme gives it there, whatever the theme and mode. */
@@ -432,6 +432,8 @@
   --font-brand: "Sora Variable", var(--font-sans);
   --color-background: var(--background);
   --color-sidebar: var(--sidebar);
+  --color-pane: var(--pane);
+  --color-pane-sidebar: var(--pane-sidebar);
   --color-surface: var(--surface);
   --color-foreground: var(--foreground);
   --color-muted-foreground: var(--muted-foreground);
@@ -495,6 +497,17 @@ body {
   -webkit-font-smoothing: antialiased;
   user-select: none;
   cursor: default;
+}
+
+/* The window's panes, the main pane, side panel, and sidebar, paint these. With Blur behind
+   window on, they let the blur through by --tint (appearance.ts), and they're all that covers
+   it. Everything else keeps --background and --sidebar opaque. */
+:root {
+  --pane: color-mix(in srgb, var(--background) var(--tint, 100%), transparent);
+  --pane-sidebar: color-mix(in srgb, var(--sidebar) var(--tint, 100%), transparent);
+}
+:root.translucent body {
+  background: transparent;
 }
 
 /* Keyboard focus is always visible; mouse focus never draws a ring. In the
