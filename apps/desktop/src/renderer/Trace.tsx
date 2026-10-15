@@ -70,7 +70,10 @@ export function TraceDescription({ className, ...props }: ComponentProps<"span">
   return (
     <span
       data-slot="trace-description"
-      className={cx("shrink-0 text-faint-foreground tabular-nums", className)}
+      className={cx(
+        "shrink-0 text-faint-foreground tabular-nums in-data-[status=error]:text-danger",
+        className,
+      )}
       {...props}
     />
   );

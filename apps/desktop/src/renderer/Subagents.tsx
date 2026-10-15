@@ -2,10 +2,9 @@
 // of their thread, with no run, composer, or Parallax tools. Their call's row in the transcript
 // opens one, as their chips in the top bar do.
 import { TraceDescription, TraceIcon, TraceLine, TraceTitle } from "./Trace";
-import { ArrowUpRight, Bot } from "lucide-react";
+import { ArrowUpRight, Bot, LoaderCircle } from "lucide-react";
 import { createContext, useContext } from "react";
 
-import { Loader } from "./Loader";
 import { models } from "./models";
 import {
   subagentLabels,
@@ -86,12 +85,10 @@ export function SubagentCall({ item }: { item: Extract<Item, { kind: "tool" }> }
         status={state === "running" ? "running" : state === "failed" ? "error" : undefined}
       >
         <TraceIcon>
-          {state === "running" ? <Loader kind="orbit" variant="oppose" /> : <Bot />}
+          {state === "running" ? <LoaderCircle className="animate-spin" /> : <Bot />}
         </TraceIcon>
         <TraceTitle>Subagent: {title}</TraceTitle>
-        <TraceDescription className={state === "failed" ? "text-danger" : ""}>
-          {subagentLabels[state]}
-        </TraceDescription>
+        <TraceDescription>{subagentLabels[state]}</TraceDescription>
         <TraceIcon>
           <ArrowUpRight className="size-3.5" />
         </TraceIcon>

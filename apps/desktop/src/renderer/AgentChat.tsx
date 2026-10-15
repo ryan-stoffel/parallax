@@ -20,6 +20,7 @@ import {
   ImageOff,
   Info,
   ListChecks,
+  LoaderCircle,
   Pencil,
   Plug,
   Search,
@@ -85,7 +86,6 @@ import { HtmlRender, pageUrl } from "./HtmlRender";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { FileCard } from "./FileCard";
 import { splitFiles, uploadBytes } from "./uploads";
-import { Loader, type LoaderStyle } from "./Loader";
 import {
   Trace,
   TraceCollapsible,
@@ -105,7 +105,6 @@ import { useCatalog, type Provider, type RunOptions } from "./models";
 import { kinds } from "./providers";
 import {
   latestPlan,
-  planLoader,
   PlanStrip,
   PlanLine,
   ProposedPlan,
@@ -166,8 +165,8 @@ type Row =
     };
 /**
  * What the list shows: a turn's activity is folded into one `Work` row, its plan apart. While a
- * turn goes, a `working` row under its prompt says how long it has gone, and a `musing` row stands
- * for what the agent does next when nothing is in flight (PLX-584).
+ * turn goes, a `working` row under its prompt says how long it has gone, and a `musing` row, a
+ * running "Working" line, stands for what the agent does next when nothing is in flight (PLX-584).
  */
 type ViewRow =
   | Row
@@ -1280,7 +1279,7 @@ function ScriptRow({
   const failed = script.status === "failed";
   const icon =
     script.status === "running" ? (
-      <Loader {...loaders.working} />
+      <LoaderCircle className="animate-spin" />
     ) : script.status === "done" ? (
       <Check />
     ) : failed ? (
@@ -1367,7 +1366,6 @@ export const RowView = memo(function RowView({
         <Fold
           id={row.key}
           items={stepRuns(row.items)}
-          gap
           live={live}
           open={open}
           openKeys={openKeys ?? new Set()}
@@ -1403,7 +1401,7 @@ export const RowView = memo(function RowView({
       ) : (
         <TraceLine status="running">
           <TraceIcon>
-            <Loader {...loaders.compacting} />
+            <LoaderCircle className="animate-spin" />
           </TraceIcon>
           <TraceTitle>Compacting context</TraceTitle>
         </TraceLine>
@@ -1702,7 +1700,6 @@ function MessageImage({
 function Fold({
   id,
   items,
-  gap,
   live,
   open,
   openKeys,
@@ -1711,8 +1708,6 @@ function Fold({
 }: {
   id: string;
   items: readonly (Item | Work)[];
-  /** Spaces the rows apart, as a finished turn's fold does. */
-  gap?: boolean;
   live: boolean;
   open: boolean;
   openKeys: ReadonlySet<string>;
@@ -1721,7 +1716,8 @@ function Fold({
 }) {
   return (
     <Disclosure id={id} open={open} onToggle={onToggle} summary={children}>
-      <Trace className={gap ? "gap-1" : "gap-0.5"}>
+      {/* Its messages in the foreground; its steps set their own color. */}
+      <Trace className="text-foreground">
         {items.map((item) => (
           <RowView
             key={item.key}
@@ -1770,7 +1766,7 @@ const inFlight = (work: Work) => {
  * A run of steps between the agent's messages in a turn still going (PLX-584): one call or thought
  * alone as its own row, or several as one line saying what they did, such as "Ran 3 commands and
  * read 2 files", opening to a row each. While a call in it runs, the line says what the agent is
- * doing instead, with that work's loader.
+ * doing instead, with a spinner.
  */
 function Steps({
   work,
@@ -1795,6 +1791,9 @@ function Steps({
   // Its path relative to the run's worktree, as the row reads once the call is done.
   const now = doing && { ...doing, detail: doing.detail && relative(doing.detail, root) };
   const summary = summarize(work.items);
+  const failures = work.items.filter(
+    (i) => i.kind === "tool" && (i.status === "error" || i.status === "denied"),
+  ).length;
   return (
     <Fold
       id={work.key}
@@ -1807,21 +1806,18 @@ function Steps({
       {now ? (
         <TraceLine status="running">
           <TraceIcon>
-            <Loader {...now.loader} />
+            <LoaderCircle className="animate-spin" />
           </TraceIcon>
-          {/* Keyed, so a new label fades in. */}
-          <span key={now.label} className="working-in shrink-0">
-            <TraceTitle>{now.label}</TraceTitle>
-          </span>
+          <TraceTitle className="shrink-0">{now.label}</TraceTitle>
           {now.detail && <span className="truncate">{now.detail}</span>}
         </TraceLine>
       ) : (
-        <TraceLine status={summary.failed ? "error" : undefined}>
+        <TraceLine status={failures > 0 ? "error" : undefined}>
           <TraceIcon>
             <summary.Icon />
           </TraceIcon>
           <TraceTitle>{summary.label}</TraceTitle>
-          {summary.failed && <TraceDescription>One failed</TraceDescription>}
+          {failures > 0 && <TraceDescription>{failures} failed</TraceDescription>}
         </TraceLine>
       )}
     </Fold>
@@ -1839,54 +1835,14 @@ function WorkingFor({ since }: { since?: string }) {
   );
 }
 
-// A word for what the agent might be doing before it does anything, and how often it changes.
-const musings = [
-  "Picturing",
-  "Pondering",
-  "Sketching",
-  "Mulling",
-  "Brewing",
-  "Tinkering",
-  "Percolating",
-  "Noodling",
-];
-const musingMs = 2400;
-
-/**
- * The working line before the agent does anything: a loader and a word that changes every few
- * seconds, which screen readers hear as a steady "Working".
- */
+/** The working line before the agent does anything. */
 function Musing() {
-  // Picked by the wall clock, so a remount (New Thread handing off to the opened thread) keeps the
-  // sequence. A word fades in, and the last one out, only once it changes here. Under reduced
-  // motion it keeps one.
-  const [tick, setTick] = useState(() => Math.floor(Date.now() / musingMs));
-  const [first] = useState(tick);
-  useEffect(() => {
-    if (document.documentElement.classList.contains("reduce-motion")) return;
-    const timer = setTimeout(
-      () => setTick(Math.max(tick + 1, Math.floor(Date.now() / musingMs))),
-      musingMs - (Date.now() % musingMs),
-    );
-    return () => clearTimeout(timer);
-  }, [tick]);
-  const word = (at: number) => musings[at % musings.length]!;
   return (
     <TraceLine status="running">
       <TraceIcon>
-        <Loader {...loaders.working} />
+        <LoaderCircle className="animate-spin" />
       </TraceIcon>
-      <span className="sr-only">Working</span>
-      <span aria-hidden className="grid shrink-0 justify-items-start">
-        {tick > first && (
-          <span key={tick - 1} className="working-out [grid-area:1/1]">
-            <TraceTitle>{word(tick - 1)}</TraceTitle>
-          </span>
-        )}
-        <span key={tick} className={`[grid-area:1/1] ${tick > first ? "working-in" : ""}`}>
-          <TraceTitle>{word(tick)}</TraceTitle>
-        </span>
-      </span>
+      <TraceTitle>Working</TraceTitle>
     </TraceLine>
   );
 }
@@ -1906,27 +1862,7 @@ const verbs: Partial<Record<string, string>> = {
   Agent: "Running agent",
 };
 
-/** The loader for each kind of work. */
-const loaders = {
-  thinking: { kind: "matrix", variant: "ripple" },
-  shell: { kind: "register", variant: "shift" },
-  reading: { kind: "bands", variant: "descend" },
-  searching: { kind: "matrix", variant: "scan" },
-  editing: { kind: "cells", variant: "merge" },
-  writing: { kind: "cells", variant: "merge" },
-  fetching: { kind: "beacon", variant: "rise" },
-  agent: { kind: "orbit", variant: "oppose" },
-  skill: { kind: "lift", variant: "rise" },
-  mcp: { kind: "beacon", variant: "balance" },
-  plxd: { kind: "cells", variant: "spread" },
-  planning: planLoader,
-  working: { kind: "orbit", variant: "chase" },
-  compacting: { kind: "bands", variant: "descend" },
-} as const satisfies Record<string, LoaderStyle>;
-
-type Kind = keyof typeof loaders;
-
-/** The icon for each kind of work, in place of its loader once it's done. */
+/** The icon for each kind of work, once it's done. */
 const icons = {
   thinking: Brain,
   shell: SquareTerminal,
@@ -1942,7 +1878,9 @@ const icons = {
   planning: ListChecks,
   working: Hammer,
   compacting: FoldVertical,
-} as const satisfies Record<Kind, LucideIcon>;
+} as const satisfies Record<string, LucideIcon>;
+
+type Kind = keyof typeof icons;
 
 // The kind of work a tool does, by the names common tools use.
 const toolKinds: Partial<Record<string, Kind>> = {
@@ -1978,37 +1916,33 @@ function toolKind(name: string | null): Kind {
   return (name !== null && Object.hasOwn(toolKinds, name) && toolKinds[name]) || "working";
 }
 
-/** What the agent is doing: a label, what it's doing it to, and the loader drawn beside them. */
+/** What the agent is doing: a label, and what it's doing it to. */
 export interface Activity {
   label: string;
   detail?: string;
-  loader: LoaderStyle;
 }
 
 /** The header of the work in progress: what its latest item is doing. */
 export function activity(item?: Item): Activity {
   switch (item?.kind) {
     case "reasoning":
-      return { label: "Thinking", loader: loaders.thinking };
+      return { label: "Thinking" };
     case "tool": {
-      const loader = loaders[toolKind(item.name)];
       const plxd = plxdCall(item);
-      if (plxd) return { ...plxd, loader };
+      if (plxd) return plxd;
       // Including a plxd tool this app doesn't know.
       const mcp = mcpTool(item.name);
-      if (mcp) return { label: `Using ${mcp.server}`, detail: mcp.tool, loader };
-      if (item.name === "Skill")
-        return { label: "Using skill", detail: skillName(item.input), loader };
+      if (mcp) return { label: `Using ${mcp.server}`, detail: mcp.tool };
+      if (item.name === "Skill") return { label: "Using skill", detail: skillName(item.input) };
       return {
         label: verbs[item.name ?? ""] ?? item.name ?? "Working",
         detail: toolHint(item.input),
-        loader,
       };
     }
     case "todo":
-      return { label: "Planning", loader: loaders.planning };
+      return { label: "Planning" };
     default:
-      return { label: "Working", loader: loaders.working };
+      return { label: "Working" };
   }
 }
 
@@ -2040,8 +1974,10 @@ function ToolCall({
       onToggle={onToggle}
       summary={
         <TraceLine status={look.status}>
-          {/* Its kind: the loader while it runs, then the icon. */}
-          <TraceIcon>{status === "running" ? <Loader {...loaders[kind]} /> : <Icon />}</TraceIcon>
+          {/* A spinner while it runs, then its kind's icon. */}
+          <TraceIcon>
+            {status === "running" ? <LoaderCircle className="animate-spin" /> : <Icon />}
+          </TraceIcon>
           <TraceTitle>{stepLabel(item, root)}</TraceTitle>
           {/* How it went: shown when it failed or never finished, otherwise only heard. */}
           {look.shown ? (

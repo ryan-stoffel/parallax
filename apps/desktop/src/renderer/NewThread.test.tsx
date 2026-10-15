@@ -220,10 +220,9 @@ test("New Thread adds a picked folder, starts there, and reuses its run id on a 
 // The transcript's message bubble, and the musing under it until the agent does anything.
 const bubble = () => document.querySelector('[role="log"] .bg-selected')?.textContent;
 const musing = () =>
-  document
-    .querySelector('[role="log"] [data-loader="orbit"][data-variant="chase"]')
-    ?.closest("[data-index]")
-    ?.querySelector(".sr-only")?.textContent;
+  [...document.querySelectorAll('[role="log"] [data-slot=trace-line][data-status=running]')].find(
+    (line) => !line.closest("summary"),
+  )?.textContent;
 
 test("Send shows the prompt at once while plxd starts the thread, and a failure puts it back", async () => {
   let answer: (response: RpcResponse<unknown>) => void = () => {};
@@ -242,7 +241,7 @@ test("Send shows the prompt at once while plxd starts the thread, and a failure 
   expect(heading()).toBe("What should we build in parallax?");
   expect(composer().textContent).toBe("Tidy the README");
   expect(document.querySelector('[role="alert"]')?.textContent).toBe("plxd is busy");
-  expect(document.querySelector(".loader")).toBeNull();
+  expect(document.querySelector("[data-status=running]")).toBeNull();
 });
 
 test("the loader under the prompt carries on as the thread opens and loads", async () => {
@@ -259,9 +258,6 @@ test("the loader under the prompt carries on as the thread opens and loads", asy
     }) as unknown as RpcResponse<unknown>;
   // The opened thread's transcript is still on its way.
   answers["agent/events"] = () => new Promise(() => {}) as unknown as RpcResponse<unknown>;
-  // The musing's word changes on a 2.4 s wall-clock timer, which would fade a word in whenever
-  // the test straddles a change (PLX-277). Held, only the remount can.
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   await renderApp();
   await send("Tidy the README");
   expect(musing()).toBe("Working");
@@ -271,8 +267,6 @@ test("the loader under the prompt carries on as the thread opens and loads", asy
   expect(crumbs()).toEqual(["This Mac", "parallax", "Tidy the README"]);
   expect(bubble()).toBe("Tidy the README");
   expect(musing()).toBe("Working");
-  // Its word carries on rather than fading in again.
-  expect(document.querySelector('[role="log"] .working-in')).toBeNull();
 });
 
 test("a thread started here that finished reopens with no loader while its transcript loads", async () => {
@@ -308,7 +302,7 @@ test("a thread started here that finished reopens with no loader while its trans
   await send("Tidy the README");
   expect(crumbs()).toEqual(["This Mac", "parallax", "Tidy the README"]);
   expect(bubble()).toBe("Tidy the README");
-  expect(document.querySelector(".loader")).toBeNull();
+  expect(document.querySelector("[data-status=running]")).toBeNull();
 
   // The host's list still says it's starting, but it isn't the thread just started anymore.
   await act(async () => (threadRow("Fix the flaky test") as HTMLElement).click());
@@ -318,7 +312,7 @@ test("a thread started here that finished reopens with no loader while its trans
   await settle();
   expect(crumbs()).toEqual(["This Mac", "parallax", "Tidy the README"]);
   expect(bubble()).toBe("Tidy the README");
-  expect(document.querySelector(".loader")).toBeNull();
+  expect(document.querySelector("[data-status=running]")).toBeNull();
   expect(musing()).toBeUndefined();
   expect(document.querySelector("main")!.textContent).not.toContain("Working");
 });
@@ -333,7 +327,7 @@ test("a finished thread opens on its prompt with no loader while its transcript 
   await settle();
   expect(crumbs()).toEqual(["This Mac", "parallax", "Fix the flaky test"]);
   expect(bubble()).toBe("Fix the flaky test");
-  expect(document.querySelector(".loader")).toBeNull();
+  expect(document.querySelector("[data-status=running]")).toBeNull();
   expect(musing()).toBeUndefined();
 });
 

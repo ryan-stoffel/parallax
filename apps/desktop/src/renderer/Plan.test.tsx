@@ -681,11 +681,9 @@ test("the plan card: its progress, then each step in its state, as text for scre
     "To do: Step 4",
     "To do: New",
   ]);
-  // The step under way draws the planning loader, and only it does.
-  expect(card.querySelectorAll(".loader")).toHaveLength(1);
-  expect(
-    card.querySelector('li:nth-child(3) [data-loader="lift"][data-variant="breathe"]'),
-  ).not.toBeNull();
+  // The step under way spins, and only it does.
+  expect(card.querySelectorAll(".animate-spin")).toHaveLength(1);
+  expect(card.querySelector("li:nth-child(3) .animate-spin")).not.toBeNull();
 });
 
 test("a step that finishes while the card shows draws its check; one done before, as on scrolling back, doesn't", () => {
@@ -729,7 +727,7 @@ test("the strip is a labeled region: the step under way, progress, and a toggle 
   const region = document.querySelector('section[aria-label="Plan"]')!;
   const toggle = region.querySelector("button")!;
   expect(toggle.textContent).toBe("In progress: Doing step 32 of 5 done");
-  expect(toggle.querySelector('[data-loader="lift"]')).not.toBeNull();
+  expect(toggle.querySelector(".animate-spin")).not.toBeNull();
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
   const popover = document.getElementById(toggle.getAttribute("popovertarget")!)!;
   expect(popover.getAttribute("popover")).toBe("auto");
@@ -758,7 +756,7 @@ test("the strip is a labeled region: the step under way, progress, and a toggle 
   expect(document.querySelector("button")!.textContent).toBe("Next: Step 21 of 2 done");
   render(<PlanStrip items={steps("completed")} />);
   expect(document.querySelector("button")!.textContent).toBe("All steps done1 of 1 done");
-  expect(document.querySelector(".loader")).toBeNull();
+  expect(document.querySelector(".animate-spin")).toBeNull();
 });
 
 // happy-dom lays nothing out: the proposed plan's height, as measured.

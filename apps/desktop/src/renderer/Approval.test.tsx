@@ -498,9 +498,9 @@ test("after a reload, an answered request is a line, never a card", async () => 
 test("while a request waits, no loader muses under it; once answered, the work goes on", async () => {
   output(asked("a1"));
   await renderChat();
-  expect(transcript().querySelector(".loader")).toBeNull();
+  expect(transcript().querySelector("[data-status=running]")).toBeNull();
   await click(inCard("Approve"));
-  expect(transcript().querySelector(".loader")).not.toBeNull();
+  expect(transcript().querySelector("[data-status=running]")).not.toBeNull();
 });
 
 test("an open chat's Supervised says its requests are denied when its run started without approvals", async () => {

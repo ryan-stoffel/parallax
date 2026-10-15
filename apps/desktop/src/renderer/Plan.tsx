@@ -3,7 +3,15 @@
 // from plxd, as for TodoWrite, or from Claude Code's task tools (PLX-248). Pure helpers first,
 // then the components.
 import { TraceIcon, TraceLine, TraceTitle } from "./Trace";
-import { Ban, ChevronDown, ChevronUp, CircleX, ClipboardList, ListChecks } from "lucide-react";
+import {
+  Ban,
+  ChevronDown,
+  ChevronUp,
+  CircleX,
+  ClipboardList,
+  ListChecks,
+  LoaderCircle,
+} from "lucide-react";
 import {
   memo,
   useId,
@@ -20,7 +28,6 @@ import type {
   AgentToolStatus,
   JsonValue,
 } from "../protocol/generated/protocol";
-import { Loader, type LoaderStyle } from "./Loader";
 import { field, isObject, type Item } from "./transcript";
 
 type Todo = Extract<Item, { kind: "todo" }>;
@@ -426,17 +433,14 @@ function Step({ step, draw }: { step: AgentTodoItem; draw: boolean }) {
   );
 }
 
-/** What a plan's step under way shows, in the strip and the card. */
-export const planLoader = { kind: "lift", variant: "breathe" } as const satisfies LoaderStyle;
-
-/** A step's mark: a check when done, the loader in a soft accent disc while under way, or a hollow dot. */
+/** A step's mark: a check when done, a spinner in a soft accent disc while under way, or a hollow dot. */
 function Marker({ state, draw = false }: { state: "done" | "now" | "todo"; draw?: boolean }) {
   if (state === "done") return <Check draw={draw} />;
   if (state === "todo")
     return <span className="size-[9px] rounded-full border-[1.5px] border-faint-foreground/70" />;
   return (
     <span className="grid size-4 place-items-center rounded-full bg-accent/15">
-      <Loader {...planLoader} size={14} />
+      <LoaderCircle aria-hidden className="size-3.5 animate-spin text-working" />
     </span>
   );
 }

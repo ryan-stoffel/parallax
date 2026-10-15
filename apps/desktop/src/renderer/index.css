@@ -1232,8 +1232,7 @@ body {
   }
 }
 
-/* A running Trace line's title (Trace.tsx) shimmers, and the working line's
-   words (AgentChat.tsx) fade in as the last fades out. */
+/* A running Trace line's title (Trace.tsx) shimmers. */
 [data-slot="trace-line"][data-status="running"] [data-slot="trace-title"] {
   background: linear-gradient(
       90deg,
@@ -1254,24 +1253,8 @@ body {
     background-position: 0 0;
   }
 }
-.working-in {
-  animation: working-in 0.2s ease-out both;
-}
-.working-out {
-  animation: working-out 0.2s ease-in both;
-}
-@keyframes working-in {
-  from {
-    opacity: 0;
-  }
-}
-@keyframes working-out {
-  to {
-    opacity: 0;
-  }
-}
 
-/* Under reduced motion, loaders stand still and words just change. */
+/* Under reduced motion, loaders and spinners stand still, and titles don't shimmer. */
 :root.reduce-motion {
   .loader-part {
     animation: none !important;
@@ -1284,12 +1267,9 @@ body {
     background: none;
     color: inherit;
   }
-  .working-in {
+  /* Spinners, such as a running Trace line's, stand still. */
+  .animate-spin {
     animation: none;
-  }
-  .working-out {
-    animation: none;
-    visibility: hidden;
   }
 }
 
