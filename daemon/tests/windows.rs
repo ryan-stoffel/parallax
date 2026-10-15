@@ -268,5 +268,16 @@ fn attach_starts_serve_when_the_task_does_not_run() {
     let connected = attach::connect(&DataDir::new(data.path()).unwrap(), &options);
     drop(connected.expect("attach started serve itself"));
     drop(entered);
-    runtime.block_on(kill(data.path()));
+    // `serve` can accept the connection before it logs the pid that `kill` reads.
+    let log = data.path().join("logs").join("plxd.log");
+    runtime.block_on(async {
+        timeout(PATIENCE, async {
+            while !std::fs::read_to_string(&log).is_ok_and(|log| log.contains("listening")) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("serve logged its pid");
+        kill(data.path()).await;
+    });
 }

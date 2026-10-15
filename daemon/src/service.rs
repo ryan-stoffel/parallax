@@ -374,9 +374,10 @@ fn probe_initialize(data_dir: &DataDir) -> bool {
         return false;
     };
     let plxd = crate::peer::Plxd::local(socket.path);
-    // Any call connects first; this one asks nothing more than `initialize`.
+    // Any call connects first; this one asks nothing more than `initialize`. The timeout is made
+    // inside the runtime, which its timer needs.
     runtime
-        .block_on(tokio::time::timeout(PROBE_TIMEOUT, plxd.agent_wait()))
+        .block_on(async { tokio::time::timeout(PROBE_TIMEOUT, plxd.agent_wait()).await })
         .is_ok_and(|answer| answer.is_ok())
 }
 

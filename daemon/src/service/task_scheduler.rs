@@ -335,10 +335,11 @@ fn serve_pid(data_dir: &DataDir) -> Option<u32> {
         .enable_all()
         .build()
         .ok()?;
-    let stream = runtime
-        .block_on(crate::transport::connect(&socket.path))
-        .ok()?;
-    crate::windows::pipe_server_pid(&stream).ok()
+    // The pipe is opened and closed inside the runtime, which its client needs.
+    runtime.block_on(async {
+        let stream = crate::transport::connect(&socket.path).await.ok()?;
+        crate::windows::pipe_server_pid(&stream).ok()
+    })
 }
 
 /// Whether a process holds `data_dir`'s `plxd.lock`.
