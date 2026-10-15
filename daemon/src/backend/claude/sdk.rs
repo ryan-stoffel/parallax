@@ -42,7 +42,22 @@ pub const NODE_REQUIRED: &str = "Node.js 22.16 or newer is required";
 pub(crate) static SDK: NodeSdk = NodeSdk {
     name: "Claude Agent SDK",
     dir: "claude-agent-sdk",
-    repo: "claude",
+    manifest: include_bytes!("../../../../sidecar/claude/package.json"),
+    lockfile: include_bytes!("../../../../sidecar/claude/package-lock.json"),
+    src: &[
+        (
+            "main.mjs",
+            include_bytes!("../../../../sidecar/claude/src/main.mjs"),
+        ),
+        (
+            "process.mjs",
+            include_bytes!("../../../../sidecar/claude/src/process.mjs"),
+        ),
+        (
+            "protocol.mjs",
+            include_bytes!("../../../../sidecar/claude/src/protocol.mjs"),
+        ),
+    ],
     pin: "/dependencies/@anthropic-ai~1claude-agent-sdk",
     npm: &[
         "ci",
@@ -68,16 +83,13 @@ fn unready(launcher: &Launcher) -> Option<String> {
     if launcher.base().get(OVERRIDE_ENV).is_some() {
         return None;
     }
-    if !SDK.script_present() {
-        return Some(SDK.no_sidecar());
-    }
     if detect::resolve(launcher, "node").is_none() {
         return Some(NODE_REQUIRED.into());
     }
     if SDK.installed(launcher).is_some() {
         return None;
     }
-    let _ = SDK.start_install(launcher, false);
+    SDK.start_install(launcher, false);
     let (installing, failure) = SDK.install_state(launcher);
     Some(if installing {
         SDK.installing_note()
@@ -145,17 +157,13 @@ impl Host {
     /// installs waits for it, rather than failing, and fails with the install if that does.
     fn start(launcher: &Launcher) -> Result<Self, StartError> {
         if launcher.base().get(OVERRIDE_ENV).is_none() {
-            if !SDK.script_present() {
-                return Err(StartError::Unsupported(SDK.no_sidecar()));
-            }
             if detect::resolve(launcher, "node").is_none() {
                 return Err(StartError::Unsupported(format!(
                     "{NODE_REQUIRED} to run Claude"
                 )));
             }
             if SDK.installed(launcher).is_none() {
-                SDK.start_install(launcher, true)
-                    .map_err(StartError::Unsupported)?;
+                SDK.start_install(launcher, true);
             }
         }
         let (input, lines) = mpsc::unbounded_channel();
@@ -196,7 +204,7 @@ async fn sidecar_spec(launcher: &Launcher) -> Result<ProcessSpec, String> {
             match SDK.install_state(launcher) {
                 (true, _) => {}
                 (false, Some(failure)) => return Err(failure),
-                (false, None) => SDK.start_install(launcher, true)?,
+                (false, None) => SDK.start_install(launcher, true),
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         };

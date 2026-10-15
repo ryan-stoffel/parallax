@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import readline from "node:readline";
@@ -58,21 +58,19 @@ function scratchSidecar(t, entry = path.join(here, "main.mjs")) {
   return { dir, lines, cleanup, send, until, open, prompt, exit, sidecar };
 }
 
-test("packaged resources start a query through the real SDK and Rust supervisor",
+test("the files plxd embeds start a query through the real SDK and Rust supervisor",
   { skip: !installed, timeout: 10000 }, async (t) => {
-    const resources = mkdtempSync(path.join(tmpdir(), "claude-package-"));
-    t.after(() => rmSync(resources, { recursive: true, force: true }));
-    const root = path.join(here, "../../..");
-    // Execute the release script's actual copy list, so a missing import fails this test.
-    const staging = readFileSync(path.join(root, "scripts/ci/package-app"), "utf8")
-      .split("\n").filter((line) => /^(mkdir|cp|rm) .*claude-agent-sdk\//.test(line))
-      .join("\n").replaceAll("target/package-resources", '"$PLX_TEST_RESOURCES"');
-    assert.ok(staging.includes("claude-agent-sdk/src/"), "release staging commands found");
-    execFileSync("sh", ["-eu", "-c", staging], {
-      cwd: root, env: { ...process.env, PLX_TEST_RESOURCES: resources },
-    });
-    const staged = path.join(resources, "claude-agent-sdk");
-    // The SDK is installed separately on first use, outside the shipped resources.
+    const staged = mkdtempSync(path.join(tmpdir(), "claude-embedded-"));
+    t.after(() => rmSync(staged, { recursive: true, force: true }));
+    // What plxd embeds and installs (daemon/src/backend/claude/sdk.rs): every src/*.mjs but the
+    // tests, so an import from anywhere else fails this test.
+    mkdirSync(path.join(staged, "src"));
+    copyFileSync(path.join(here, "../package.json"), path.join(staged, "package.json"));
+    const embedded = (name) => name.endsWith(".mjs") && !name.endsWith(".test.mjs");
+    for (const name of readdirSync(here).filter(embedded)) {
+      copyFileSync(path.join(here, name), path.join(staged, "src", name));
+    }
+    // The SDK is installed separately on first use.
     symlinkSync(path.join(here, "../node_modules"), path.join(staged, "node_modules"), "dir");
     const { lines, open, prompt, until, send, exit } = scratchSidecar(t, path.join(staged, "src/main.mjs"));
     open("packaged", []);

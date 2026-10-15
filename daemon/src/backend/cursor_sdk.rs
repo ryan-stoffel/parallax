@@ -1,7 +1,7 @@
 //! Cursor threads through the official Cursor SDK (0053).
 //!
 //! `@cursor/sdk` is a Node library, so plxd runs `sidecar/cursor` and speaks JSON lines with it.
-//! The app ships only the sidecar's own files. [`install`] puts the pinned SDK in plxd's data
+//! plxd embeds only the sidecar's own files. [`install`] puts the pinned SDK in plxd's data
 //! folder the first time the user installs Cursor, and the sidecar runs from there. Sign-in is
 //! the SDK's browser login, which mints a key into plxd's data folder. Ambient `CURSOR_*` is
 //! dropped. A `CURSOR_API_KEY` set on the provider instance wins over the login, as
@@ -185,17 +185,22 @@ impl Backend for CursorSdkBackend {
 pub(crate) static SDK: NodeSdk = NodeSdk {
     name: "Cursor SDK",
     dir: "cursor-sdk",
-    repo: "cursor",
+    manifest: include_bytes!("../../../sidecar/cursor/package.json"),
+    lockfile: include_bytes!("../../../sidecar/cursor/package-lock.json"),
+    src: &[
+        (
+            "main.mjs",
+            include_bytes!("../../../sidecar/cursor/src/main.mjs"),
+        ),
+        (
+            "protocol.mjs",
+            include_bytes!("../../../sidecar/cursor/src/protocol.mjs"),
+        ),
+    ],
     pin: "/dependencies/@cursor~1sdk",
     npm: &["ci", "--omit=dev", "--no-audit", "--no-fund"],
     node_required: NODE_REQUIRED,
 };
-
-/// Whether the sidecar's files are in the repo or beside `plxd`, installed or not.
-#[must_use]
-pub(crate) fn script_present() -> bool {
-    SDK.script_present()
-}
 
 const NODE_REQUIRED: &str = "Node.js 22.13 or newer is required";
 
@@ -312,22 +317,16 @@ pub(crate) async fn inspect(
     report
 }
 
-/// Why the sidecar can't run yet, if it can't: no sidecar, no SDK, or no Node. The SDK isn't
-/// installed until the user installs Cursor, so detection never runs npm for someone who doesn't
-/// use it. For someone who chose Cursor before (or `chose` now, with an API key), this starts the
-/// install in the background and reports it installing: after an update that changes the pin, or
-/// from the SDK the app used to ship.
+/// Why the sidecar can't run yet, if it can't: no SDK, or no Node. The SDK isn't installed until
+/// the user installs Cursor, so detection never runs npm for someone who doesn't use it. For
+/// someone who chose Cursor before (or `chose` now, with an API key), this starts the install in
+/// the background and reports it installing: after an update that changes the pin, or from the
+/// SDK the app used to ship.
 pub(crate) fn unready(launcher: &Launcher, chose: bool) -> Option<Report> {
-    if !script_present() {
-        return Some(Report {
-            note: Some(SDK.no_sidecar()),
-            ..Report::default()
-        });
-    }
     let has_node = detect::resolve(launcher, "node").is_some();
     if SDK.installed(launcher).is_none() {
         if chose || chose_cursor(launcher) {
-            let _ = SDK.start_install(launcher, false);
+            SDK.start_install(launcher, false);
         }
         let (installing, failure) = SDK.install_state(launcher);
         let note = if installing {
@@ -476,12 +475,8 @@ impl CursorAuth {
 
     /// Starts installing the SDK in the background; `providers/list` reports it installing, then
     /// installed or why it failed.
-    ///
-    /// # Errors
-    ///
-    /// When this plxd has no sidecar to install.
-    pub fn install(&self) -> Result<(), String> {
-        SDK.start_install(&self.launcher, true)
+    pub fn install(&self) {
+        SDK.start_install(&self.launcher, true);
     }
 
     /// Forgets the stored login for `instance`.
@@ -1256,7 +1251,7 @@ wait
         assert!(!report.installed && !report.installing);
         assert_eq!(npm_runs(&root), 0, "a probe ran npm");
 
-        super::SDK.start_install(&launcher, true).unwrap();
+        super::SDK.start_install(&launcher, true);
         settled(&launcher).await;
         let installed = super::SDK.installed(&launcher).unwrap();
         assert!(installed.join("node_modules").is_dir());
@@ -1320,7 +1315,7 @@ wait
         let _ = super::inspect(&launcher, "cursor", &[], Duration::from_secs(5)).await;
         assert_eq!(npm_runs(&root), 1, "a probe retried npm");
 
-        super::SDK.start_install(&launcher, true).unwrap();
+        super::SDK.start_install(&launcher, true);
         settled(&launcher).await;
         assert_eq!(npm_runs(&root), 2, "Install retries");
     }

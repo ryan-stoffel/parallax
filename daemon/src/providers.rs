@@ -251,11 +251,11 @@ const BUILT_IN: &[(&str, ProviderKind, &str)] = &[
     ("cursor", ProviderKind::Cursor, "Cursor"),
 ];
 
-/// Whether a first run should list this built-in. Cursor is present when its sidecar script is,
-/// which the app ships beside `plxd`; the others when their CLI is on `PATH`.
+/// Whether a first run should list this built-in. Cursor always is, since plxd embeds its
+/// sidecar; the others when their CLI is on `PATH`.
 fn built_in_present(launcher: &Launcher, kind: ProviderKind) -> bool {
     if kind == ProviderKind::Cursor {
-        return crate::backend::cursor_sdk::script_present();
+        return true;
     }
     preset(kind).is_some_and(|preset| detect::resolve(launcher, preset.program).is_some())
 }
@@ -1896,18 +1896,11 @@ mod tests {
             .map(|s| s.instance.id.clone())
             .collect();
         ids.sort();
-        let mut expected = vec!["codex".to_owned()];
-        if crate::backend::cursor_sdk::script_present() {
-            expected.push("cursor".to_owned());
-        }
-        expected.sort();
-        assert_eq!(ids, expected, "only the installed built-ins");
+        assert_eq!(ids, ["codex", "cursor"], "only the installed built-ins");
         assert!(registry.by_backend_name("codex").is_some());
 
         providers.remove("codex").await.unwrap();
-        if expected.iter().any(|id| id == "cursor") {
-            providers.remove("cursor").await.unwrap();
-        }
+        providers.remove("cursor").await.unwrap();
         assert!(registry.by_backend_name("codex").is_none());
         assert!(
             registry
