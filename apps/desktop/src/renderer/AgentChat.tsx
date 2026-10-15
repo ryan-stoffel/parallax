@@ -86,7 +86,15 @@ import { FileCards } from "./FileCards";
 import { HtmlRender, pageUrl } from "./HtmlRender";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { FileCard } from "./FileCard";
-import { splitFiles, uploadBytes } from "./uploads";
+import {
+  encodedImage,
+  isImagePath,
+  splitFiles,
+  uploadBytes,
+  uploadFiles,
+  withFiles,
+  withoutImages,
+} from "./uploads";
 import {
   Trace,
   TraceCollapsible,
@@ -498,7 +506,7 @@ export function AgentChat({
     const queued = queue.findLast((m) => sent.has(m.id));
     if (queued) {
       const { text, images, threads } = sent.get(queued.id)!;
-      return { text, images: async () => images, threads, turnId: queued.id };
+      return { text: withoutImages(text), images: async () => images, threads, turnId: queued.id };
     }
     const at = rows.findLastIndex((r) => r.kind === "user" || r.kind === "pending");
     const row = rows[at];
@@ -512,8 +520,9 @@ export function AgentChat({
     )
       return undefined;
     const mine = row.kind === "user" && row.turnId ? sent.get(row.turnId) : undefined;
-    const text = row.text ?? mine?.text;
-    if (text == null) return undefined;
+    const said = row.text ?? mine?.text;
+    if (said == null) return undefined;
+    const text = withoutImages(said);
     const atHand = (row.kind === "pending" ? row.images : mine?.images) ?? [];
     const ids = row.kind === "user" && !mine ? (row.images ?? []) : [];
     const images = async () => {
@@ -573,9 +582,19 @@ export function AgentChat({
     if (!editing?.ready || !stopped) return;
     const was = editing;
     setEditing(undefined);
-    void sendText(was.text, {}, was.images, [...(was.threads ?? [])]).then((failed) => {
+    void (async () => {
+      // Its images are saved again, as the composer saves them (PLX-799).
+      const images = uploadBytes(connection)
+        ? await uploadFiles(
+            hostId,
+            was.images.map((image, i) => encodedImage(image, i + 1)),
+          )
+        : [];
+      if (typeof images === "string") return setEditing({ ...was, ready: false, error: images });
+      const text = withFiles(was.text, images);
+      const failed = await sendText(text, {}, was.images, [...(was.threads ?? [])]);
       if (failed !== undefined) setEditing({ ...was, ready: false, error: failed || undefined });
-    });
+    })();
   }, [editing, stopped]);
 
   // One that couldn't load, stopped updating, or lost plxd shows nothing in progress.
@@ -1465,9 +1484,10 @@ export const RowView = memo(function RowView({
           </Disclosure>
         );
       const text = row.text ?? sent?.text;
-      // Files sent with it are listed after the user's own text (0071), and show as cards.
-      const { text: said, paths: files } =
-        text === undefined ? { text, paths: [] } : splitFiles(text);
+      // Files sent with it are listed after the user's own text (0071), and show as cards. Its
+      // images are listed too (PLX-799), but show as their thumbnails.
+      const { text: said, paths } = text === undefined ? { text, paths: [] } : splitFiles(text);
+      const files = paths.filter((path) => !isImagePath(path));
       // Images sent from here are at hand; the log's come from plxd by id.
       const images = row.kind === "pending" ? row.images : (sent?.images ?? row.images);
       const threads = row.threads ?? sent?.threads;
