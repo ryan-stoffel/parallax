@@ -5,7 +5,7 @@
 import net from "node:net";
 
 import { parseDetails, parseUname, POSIX_DETAILS, UNAME_COMMAND, WINDOWS_DETAILS } from "./detect.mjs";
-import { appName, fetchReleases, pickAsset, pickRelease } from "./releases.mjs";
+import { appName, fetchReleases, pickAsset, pickRelease, withSha256 } from "./releases.mjs";
 import { localRunner, sshArgs, sshRunner } from "./run.mjs";
 import { installScript } from "./scripts.mjs";
 import { findDevice, parseStatus, PLXD_PORT, probe, readStatus, TAGGED } from "./tailscale.mjs";
@@ -20,6 +20,7 @@ import { findDevice, parseStatus, PLXD_PORT, probe, readStatus, TAGGED } from ".
  * @property {Channel} channel
  * @property {string} [user] The SSH user, else ssh's own default.
  * @property {string} [port] The SSH port.
+ * @property {boolean} [headless] Install plxd alone, without the app. Linux always does.
  * @property {boolean} [dryRun] Print the steps and the install script without running ssh or
  *   installing anything. Only the release list is fetched.
  */
@@ -54,14 +55,22 @@ async function readDetails(runner, os) {
   return parseDetails(os, stdout);
 }
 
-/** What plx-connect installs: the app, or on Linux plxd alone. @param {Channel} channel @param {Os} os */
-const product = (channel, os) => (os === "linux" ? "plxd" : appName(channel));
+/** Whether `os` gets plxd alone: with `--headless`, and always on Linux. @param {Os} os @param {Options} options */
+const plxdOnly = (os, options) => os === "linux" || !!options.headless;
 
-/** The newest release of `channel` for `target`. @param {Channel} channel @param {Target} target */
-function findInstaller(channel, target) {
-  return step(`Finding the newest ${channel} release`, async () => {
-    const installer = pickAsset(pickRelease(await fetchReleases(), channel), target.os, target.arch);
-    return [`${product(channel, target.os)} ${installer.version}: ${installer.name}`, installer];
+/** What plx-connect installs: the app, or plxd alone. @param {Os} os @param {Options} options */
+const product = (os, options) => (plxdOnly(os, options) ? "plxd" : appName(options.channel));
+
+/**
+ * The newest release's asset for `target`, with the SHA-256 the script checks it against.
+ * @param {Target} target
+ * @param {Options} options
+ */
+function findInstaller(target, options) {
+  return step(`Finding the newest ${options.channel} release`, async () => {
+    const found = pickAsset(pickRelease(await fetchReleases(), options.channel), target.os, target.arch, plxdOnly(target.os, options));
+    const installer = await withSha256(found);
+    return [`${product(target.os, options)} ${installer.version}: ${installer.name}`, installer];
   });
 }
 
@@ -75,18 +84,19 @@ function findInstaller(channel, target) {
  * @param {Options} options
  */
 async function install(runner, target, name, ip, options) {
-  const installer = await findInstaller(options.channel, target);
-  const script = installScript(target.os, installer, options.channel);
+  const installer = await findInstaller(target, options);
+  const script = installScript(target.os, installer, options.channel, plxdOnly(target.os, options));
+  const what = plxdOnly(target.os, options) ? "plxd alone, without the app," : `${appName(options.channel)} and plxd`;
   if (options.dryRun) {
-    console.log(`→ Installing ${product(options.channel, target.os)} on ${name} with this ${target.os === "windows" ? "PowerShell" : "sh"} script (dry run, not run):`);
+    console.log(`→ Installing ${what} on ${name} with this ${target.os === "windows" ? "PowerShell" : "sh"} script (dry run, not run):`);
     for (const line of script.trimEnd().split("\n")) console.log(`  ${line}`);
     console.log(`→ Would wait up to 60 s for ${ip ?? name}:${PLXD_PORT} to answer.`);
     return;
   }
-  await step(`Installing ${product(options.channel, target.os)} on ${name}`, async () => {
+  await step(`Installing ${what} on ${name}`, async () => {
     const { code } = await runner.script(target.os === "windows" ? "powershell" : "sh", script, false);
     if (code !== 0) throw new Error(`The install failed on ${name} (exit ${code}).`);
-    return [`Installed ${product(options.channel, target.os)} ${installer.version} and turned on Parallax Connect`, undefined];
+    return [`Installed ${product(target.os, options)} ${installer.version} and turned on Parallax Connect`, undefined];
   });
   await step(`Waiting for ${name} to answer on port ${PLXD_PORT}`, async () => {
     if (!ip) throw new Error("Tailscale gave this computer no IPv4 address to check.");

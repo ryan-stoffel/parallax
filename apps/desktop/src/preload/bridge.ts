@@ -305,8 +305,6 @@ export interface ParallaxBridge {
 
   /** Parallax Connect here (0056). Calls `listener` now and on every change. Returns the unsubscribe function. */
   onConnect(listener: (state: ConnectState) => void): () => void;
-  /** Installs `plx-connect` on this computer with npm. Resolves to an error for people, or undefined. */
-  installConnect(): Promise<string | undefined>;
   /**
    * Turns Parallax Connect on or off: the local plxd's `connect`, which makes it listen on its
    * Tailscale address, and this app's connections to the other devices. Resolves to an error for
@@ -468,8 +466,11 @@ export type TerminalTarget =
   | { hostId: string; path: string; threadId?: string; terminalId?: string }
   | { hostId: string; connect: ConnectAdd };
 
-/** What Add computer sets up with `plx-connect add` (0056): a Tailscale IP, and an ssh user. */
-export type ConnectAdd = { device: string; user?: string };
+/**
+ * What Add computer sets up with `plx-connect add` (0056): a Tailscale IP, an ssh user, and with
+ * `headless`, plxd alone, without the app.
+ */
+export type ConnectAdd = { device: string; user?: string; headless?: boolean };
 
 /** How an ACP Registry agent is run with `npx` or `uvx`: a package, pinned to its version. */
 export type RegistryPackage = { package: string; args?: string[]; env?: Record<string, string> };
@@ -559,8 +560,6 @@ export type DeviceHost = {
 
 /** Parallax Connect on this computer (0056). */
 export type ConnectState = {
-  /** Whether `plx-connect` is installed here; undefined until main has looked. */
-  installed?: boolean;
   /** The local plxd's `connect`; undefined while it isn't connected, or doesn't have Connect. */
   on?: boolean;
   /** This computer's icon. */

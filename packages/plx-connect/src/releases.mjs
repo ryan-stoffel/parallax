@@ -10,14 +10,30 @@
  * @property {string} tag_name
  * @property {boolean} prerelease
  * @property {boolean} [draft]
- * @property {{ name: string, browser_download_url: string }[]} assets
+ * @property {Asset[]} assets
  */
 
 /**
- * @typedef {object} Installer
+ * @typedef {object} Asset
+ * @property {string} name
+ * @property {string} browser_download_url
+ * @property {string | null} [digest] GitHub's `sha256:<hex>` of the file, on assets uploaded since
+ *   mid-2025.
+ */
+
+/**
+ * @typedef {object} Installer What an install script downloads.
  * @property {string} version The release's version: its tag without the `v`.
  * @property {string} name The asset's file name.
  * @property {string} url Where to download it.
+ * @property {string} sha256 Its SHA-256 as the release reports it, in hex. The script refuses a
+ *   file that doesn't match.
+ */
+
+/**
+ * @typedef {Omit<Installer, "sha256"> & { sha256?: string, sha256Url?: string }} Found
+ *   An asset {@link pickAsset} chose: with its SHA-256 from GitHub's digest, or where its
+ *   `.sha256` asset is, or neither. {@link withSha256} makes it an {@link Installer}.
  */
 
 export const RELEASES_URL = "https://api.github.com/repos/ryan-stoffel/parallax/releases?per_page=30";
@@ -54,32 +70,64 @@ export function pickRelease(releases, channel) {
 }
 
 /**
- * The installer in `release` for `os` and `arch`: the dmg on macOS (arm64 only), the NSIS exe on
- * Windows, and on Linux the static plxd by itself (PLX-642's asset), which runs where the
- * AppImage's runtime can't, such as NixOS. Throws a message for people when
- * the release has none.
+ * The asset in `release` for `os` and `arch`: the dmg on macOS (arm64 only) and the NSIS exe on
+ * Windows, or with `headless`, plxd by itself (`parallax-plxd-<v>-mac-arm64`,
+ * `parallax-plxd-<v>-win-<arch>.exe`). Linux always gets plxd by itself (PLX-642's asset), which
+ * runs where the AppImage's runtime can't, such as NixOS. Throws a message for people when the
+ * release has none.
  * @param {Release} release
  * @param {Os} os
  * @param {Arch} arch
- * @returns {Installer}
+ * @param {boolean} [headless]
+ * @returns {Found}
  */
-export function pickAsset(release, os, arch) {
+export function pickAsset(release, os, arch, headless = false) {
   const version = release.tag_name.replace(/^v/, "");
-  const prefix = `parallax-${version}`;
-  /** @type {string[]} */
-  let names;
-  if (os === "macos") {
-    if (arch !== "arm64") throw new Error("Parallax has no build for Intel Macs, only Apple silicon.");
-    names = [`${prefix}-mac-arm64.dmg`];
-  } else if (os === "windows") {
-    names = [`${prefix}-win-${arch}.exe`];
-  } else {
-    names = [`parallax-plxd-${version}-linux-${arch}`];
-  }
-  const asset = release.assets.find((a) => names.includes(a.name));
+  if (os === "macos" && arch !== "arm64") throw new Error("Parallax has no build for Intel Macs, only Apple silicon.");
+  const plxdOnly = os === "linux" || headless;
+  const tag = { macos: "mac", windows: "win", linux: "linux" }[os];
+  const name = plxdOnly
+    ? `parallax-plxd-${version}-${tag}-${arch}${os === "windows" ? ".exe" : ""}`
+    : `parallax-${version}-${tag}-${arch}.${os === "macos" ? "dmg" : "exe"}`;
+  const asset = release.assets.find((a) => a.name === name);
   if (!asset) {
     const kind = release.prerelease ? "nightly" : "release";
-    throw new Error(`The newest ${kind}, ${release.tag_name}, has no ${OS_NAMES[os]} ${arch} build.`);
+    const what = plxdOnly && os !== "linux" ? "plxd" : "build";
+    throw new Error(`The newest ${kind}, ${release.tag_name}, has no ${OS_NAMES[os]} ${arch} ${what}.`);
   }
-  return { version, name: asset.name, url: asset.browser_download_url };
+  const digest = /^sha256:([0-9a-f]{64})$/i.exec(asset.digest ?? "")?.[1]?.toLowerCase();
+  const sums = release.assets.find((a) => a.name === `${name}.sha256`);
+  return {
+    version,
+    name,
+    url: asset.browser_download_url,
+    ...(digest ? { sha256: digest } : sums && { sha256Url: sums.browser_download_url }),
+  };
+}
+
+/**
+ * `found` with its SHA-256: GitHub's digest, else the hash its `.sha256` asset lists for it
+ * (`<hex>  <name>`, as `shasum -a 256` writes). Throws a message for people when there's neither,
+ * so nothing is installed unchecked.
+ * @param {Found} found
+ * @param {(url: string) => Promise<string>} [fetchText]
+ * @returns {Promise<Installer>}
+ */
+export async function withSha256({ sha256Url, ...found }, fetchText = fetchUrl) {
+  if (found.sha256) return { ...found, sha256: found.sha256 };
+  const listed = sha256Url
+    ? (await fetchText(sha256Url))
+        .split(/\r?\n/)
+        .map((line) => /^([0-9a-f]{64}) [ *]?(.+)$/i.exec(line.trim()))
+        .find((m) => m?.[2] === found.name)?.[1]
+    : undefined;
+  if (!listed) throw new Error(`The release has no SHA-256 for ${found.name}, so plx-connect won't install it.`);
+  return { ...found, sha256: listed.toLowerCase() };
+}
+
+/** The text at `url`. @param {string} url */
+async function fetchUrl(url) {
+  const response = await fetch(url, { headers: { "user-agent": "plx-connect" }, signal: AbortSignal.timeout(20_000) });
+  if (!response.ok) throw new Error(`GitHub answered ${response.status} ${response.statusText} for ${url}.`);
+  return response.text();
 }

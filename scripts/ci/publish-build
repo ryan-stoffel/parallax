@@ -15,14 +15,16 @@ write() {
   if [ "${DRY_RUN:-}" = 1 ]; then echo "dry run: gh $*"; else gh "$@"; fi
 }
 
-# The installers, the macOS zip, the blockmaps, and plxd for SSH hosts; then the channel's update metadata.
+# The installers, the macOS zip, the blockmaps, and plxd by itself with its .sha256; then the
+# channel's update metadata.
 files=()
 for f in parallax-*; do [ -f "$f" ] && files+=("$f"); done
 if [ ${#files[@]} = 0 ]; then echo "publish-build: no installer in $PWD" >&2; exit 1; fi
 # Both Windows builds write <channel>.yml. Each attaches its own as <channel>-win-<arch>.yml, which
 # no updater reads, and release.yml's finish job joins the two from the release into <channel>.yml.
 if [ -f "$CHANNEL.yml" ]; then
-  exe=(parallax-*-win-*.exe)
+  # The installer's name starts with its version; plxd's own exe, parallax-plxd-*, doesn't.
+  exe=(parallax-[0-9]*-win-*.exe)
   [ -f "${exe[0]}" ] || { echo "publish-build: $CHANNEL.yml without a Windows installer" >&2; exit 1; }
   arch=${exe[0]##*-win-}
   mv "$CHANNEL.yml" "$CHANNEL-win-${arch%.exe}.yml"

@@ -118,7 +118,6 @@ const bridge: ParallaxBridge = {
   removeRelayHost: (hostId) => ipcRenderer.invoke("parallax:removeRelayHost", hostId),
 
   onConnect: (listener) => follow("parallax:connect", listener),
-  installConnect: () => ipcRenderer.invoke("parallax:installConnect"),
   setConnect: (on) => ipcRenderer.invoke("parallax:setConnect", on),
   onDevices: (listener) => follow("parallax:devices", listener),
   saveDevice: (hostId, look) => ipcRenderer.invoke("parallax:saveDevice", hostId, look),

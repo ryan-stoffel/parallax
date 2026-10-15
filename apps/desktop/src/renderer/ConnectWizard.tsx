@@ -24,7 +24,7 @@ import { iconFor, type DeviceHost } from "../preload/bridge";
 import type { ConnectDevicesResult, TailnetDevice } from "../protocol/generated/protocol";
 import { DeviceIcon } from "./DeviceIcon";
 import { localId } from "./hosts";
-import { primaryButton, quietButton, rowField } from "./settings/parts";
+import { primaryButton, quietButton, rowField, Switch } from "./settings/parts";
 import { IconButton } from "./ui";
 
 const TerminalView = lazy(() => import("./Terminal").then((m) => ({ default: m.TerminalView })));
@@ -37,19 +37,23 @@ export const osName = (os: string) =>
   ({ macOS: "macOS", windows: "Windows", linux: "Linux", iOS: "iOS", android: "Android" })[os] ??
   os;
 
+/** An install's device and ssh user, and with `headless`, plxd alone, without the app. */
+type Install = { device: TailnetDevice; user?: string; headless: boolean; run: number };
+
 type Step =
   | { kind: "list" }
   | { kind: "confirm"; device: TailnetDevice }
-  | { kind: "install"; device: TailnetDevice; user?: string; run: number }
-  | { kind: "done"; device: TailnetDevice }
-  | { kind: "failed"; device: TailnetDevice; user?: string; run: number; why?: string };
+  | ({ kind: "install" } & Install)
+  | { kind: "done"; device: TailnetDevice; headless: boolean }
+  | ({ kind: "failed"; why?: string } & Install);
 
 /**
  * Add computer (0056), a modal dialog open while it's mounted: the user's devices on the tailnet,
- * from the local plxd's `connect/devices`; then, for one, what `plx-connect add` will do there;
- * then that command in a terminal, where ssh can ask for a password; then whether it worked, with
- * Add another computer and Done. A device that already runs Connect but this app doesn't use,
- * because it was turned off or removed here, gets Add instead of Set up.
+ * from the local plxd's `connect/devices`; then, for one, what `plx-connect add` will do there,
+ * with a Headless switch for plxd alone, which Linux always gets; then that command in a terminal,
+ * where ssh can ask for a password; then whether it worked, with Add another computer and Done. A
+ * device that already runs Connect but this app doesn't use, because it was turned off or removed
+ * here, gets Add instead of Set up.
  */
 export function ConnectWizard({
   channel,
@@ -67,6 +71,7 @@ export function ConnectWizard({
   const [step, setStep] = useState<Step>({ kind: "list" });
   const [found, setFound] = useState<ConnectDevicesResult | string>();
   const [user, setUser] = useState("");
+  const [headless, setHeadless] = useState(false);
 
   const look = useCallback(async () => {
     setFound(undefined);
@@ -78,8 +83,15 @@ export function ConnectWizard({
 
   const close = () => dialog.current?.close();
   const app = channel === "nightly" ? "Parallax (Nightly)" : "Parallax";
+  const alone = (device: TailnetDevice) => device.os === "linux" || headless;
   const start = (device: TailnetDevice, run = 0) =>
-    setStep({ kind: "install", device, ...(user.trim() && { user: user.trim() }), run });
+    setStep({
+      kind: "install",
+      device,
+      ...(user.trim() && { user: user.trim() }),
+      headless: alone(device),
+      run,
+    });
   const back = () => setStep({ kind: "list" });
   const device = step.kind === "list" ? undefined : step.device;
 
@@ -146,13 +158,33 @@ export function ConnectWizard({
                   To {step.device.ip}. If it asks for a password, type it in the terminal. It goes
                   only to {step.device.hostName}.
                 </Plan>
-                <Plan icon={<Download aria-hidden />} title={`Installs ${app} and plxd`}>
-                  The newest {channel} build for its OS, and plx-connect when npm is there.
+                <Plan
+                  icon={<Download aria-hidden />}
+                  title={alone(step.device) ? "Installs plxd" : `Installs ${app} and plxd`}
+                >
+                  The newest {channel} build for its OS, {alone(step.device) && "without the app, "}
+                  and plx-connect when npm is there.
                 </Plan>
                 <Plan icon={<Network aria-hidden />} title="Turns on Parallax Connect">
                   So every computer sees its threads, and it sees theirs.
                 </Plan>
               </ul>
+              <div className="flex items-center justify-between gap-4 text-[13px]">
+                <span>
+                  <span className="block font-medium">Headless</span>
+                  <span className="block text-[12.5px] text-muted-foreground">
+                    {step.device.os === "linux"
+                      ? "Linux always gets plxd only, since the app's AppImage doesn't run everywhere."
+                      : "Install plxd only, without the app."}
+                  </span>
+                </span>
+                <Switch
+                  label="Headless"
+                  checked={alone(step.device)}
+                  disabled={step.device.os === "linux"}
+                  onChange={setHeadless}
+                />
+              </div>
               <label className="flex items-center justify-between gap-4 text-[13px]">
                 <span>
                   <span className="block font-medium">SSH user</span>
@@ -203,13 +235,21 @@ export function ConnectWizard({
                     id="connect-add"
                     target={{
                       hostId: localId,
-                      connect: { device: step.device.ip, ...(step.user && { user: step.user }) },
+                      connect: {
+                        device: step.device.ip,
+                        ...(step.user && { user: step.user }),
+                        ...(step.headless && { headless: true }),
+                      },
                     }}
                     label={`Setting up ${step.device.hostName}`}
                     onEnd={(why, exitCode) => {
                       if (step.kind !== "install") return;
                       if (!why && exitCode === 0)
-                        return setStep({ kind: "done", device: step.device });
+                        return setStep({
+                          kind: "done",
+                          device: step.device,
+                          headless: step.headless,
+                        });
                       setStep({ ...step, kind: "failed", ...(why && { why }) });
                     }}
                   />
@@ -243,7 +283,7 @@ export function ConnectWizard({
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[13.5px] font-medium">{step.device.hostName}</p>
                   <p className="truncate text-[12.5px] text-muted-foreground">
-                    {app} · plxd · Parallax Connect on
+                    {step.headless ? "plxd" : `${app} · plxd`} · Parallax Connect on
                   </p>
                 </div>
                 <span className="flex items-center gap-1 text-[12.5px] text-added [&_svg]:size-3.5">

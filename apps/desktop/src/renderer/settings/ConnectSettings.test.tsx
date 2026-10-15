@@ -60,6 +60,7 @@ const tailnet: ConnectDevicesResult = {
     device("mac-mini", "macOS", "100.74.190.83"),
     device("old-air", "macOS", "100.70.8.14", { online: false }),
     device("thinkpad-server", "linux", "100.88.40.21", { parallax: true }),
+    device("nix-box", "linux", "100.88.40.30"),
   ],
 };
 
@@ -71,10 +72,6 @@ const announce = (state: ConnectState) => {
 };
 let devices: DeviceHost[];
 const bridge = {
-  installConnect: vi.fn(async () => {
-    announce({ ...connect, installed: true });
-    return undefined;
-  }),
   setConnect: vi.fn(async (on: boolean) => {
     announce({ ...connect, on });
     return undefined;
@@ -93,7 +90,7 @@ const connected: ConnectionState = {
 
 beforeEach(() => {
   exitCode = 0;
-  connect = { installed: false, on: false, icon: "laptop", channel: "nightly" };
+  connect = { on: false, icon: "laptop", channel: "nightly" };
   connectListeners.clear();
   devices = [];
   for (const fn of Object.values(bridge)) fn.mockClear();
@@ -158,10 +155,9 @@ const click = async (element: Element) => {
   await settle();
 };
 
-test("Install, then the switch turns Connect on and opens Add computer", async () => {
+test("The switch turns Connect on and opens Add computer, with nothing to install first", async () => {
   await render();
-  await click(button("Install"));
-  expect(bridge.installConnect).toHaveBeenCalled();
+  expect(button("Install")).toBeUndefined();
   const toggle = document.querySelector('[role="switch"]')!;
   expect(toggle.getAttribute("aria-checked")).toBe("false");
   await click(toggle);
@@ -170,7 +166,7 @@ test("Install, then the switch turns Connect on and opens Add computer", async (
 });
 
 test("Add computer lists the tailnet, sets one up in a terminal, and confirms", async () => {
-  connect = { ...connect, installed: true, on: true };
+  connect = { ...connect, on: true };
   await render();
   await click(button("Add computer"));
   const rows = [...document.querySelectorAll('[aria-label="Your computers"] li')];
@@ -178,14 +174,15 @@ test("Add computer lists the tailnet, sets one up in a terminal, and confirms", 
   expect(rows.map((r) => r.querySelector("p")?.textContent)).toEqual([
     "mac-mini",
     "thinkpad-server",
+    "nix-box",
     "ryans-iphone",
     "old-air",
   ]);
   // It runs Connect but this app doesn't list it, so it's added rather than set up.
   await click(rows[1]!.querySelector("button")!);
   expect(bridge.setDeviceEnabled).toHaveBeenCalledWith("tailnet:n-thinkpad-server", true);
-  expect(rows[2]!.textContent).toContain("Can't run Parallax");
-  expect(rows[3]!.querySelector("button")?.disabled).toBe(true);
+  expect(rows[3]!.textContent).toContain("Can't run Parallax");
+  expect(rows[4]!.querySelector("button")?.disabled).toBe(true);
 
   await click(rows[0]!.querySelector("button")!);
   expect(document.querySelector("dialog")!.textContent).toContain("Signs in over SSH");
@@ -208,11 +205,61 @@ test("Add computer lists the tailnet, sets one up in a terminal, and confirms", 
   await click(button("Try again"));
   await click(button("Finish"));
   expect(document.querySelector("dialog h2")!.textContent).toBe("mac-mini is set up");
+  expect(document.querySelector("dialog")!.textContent).toContain(
+    "Parallax (Nightly) · plxd · Parallax Connect on",
+  );
   expect(button("Add another computer")).toBeTruthy();
 });
 
+test("Headless installs plxd alone, which Linux always gets", async () => {
+  connect = { ...connect, on: true };
+  await render();
+  await click(button("Add computer"));
+  const headless = () => document.querySelector<HTMLButtonElement>('[aria-label="Headless"]')!;
+  const plan = () => document.querySelector("dialog ul")!.textContent;
+  const setUp = async (name: string) => {
+    const row = [...document.querySelectorAll('[aria-label="Your computers"] li')].find(
+      (r) => r.querySelector("p")?.textContent === name,
+    )!;
+    await click(row.querySelector("button")!);
+  };
+
+  // Linux: on, and it can't be turned off.
+  await setUp("nix-box");
+  expect(headless().getAttribute("aria-checked")).toBe("true");
+  expect(headless().disabled).toBe(true);
+  expect(document.querySelector("dialog")!.textContent).toContain(
+    "Linux always gets plxd only, since the app's AppImage doesn't run everywhere.",
+  );
+  expect(plan()).toContain("Installs plxd");
+  expect(plan()).not.toContain("Installs Parallax");
+  await click(button("Back"));
+
+  // macOS: off by default, so the app comes too; on, plxd alone.
+  await setUp("mac-mini");
+  expect(headless().getAttribute("aria-checked")).toBe("false");
+  expect(headless().disabled).toBe(false);
+  expect(document.querySelector("dialog")!.textContent).toContain(
+    "Install plxd only, without the app.",
+  );
+  expect(plan()).toContain("Installs Parallax (Nightly) and plxd");
+  await click(headless());
+  expect(headless().getAttribute("aria-checked")).toBe("true");
+  expect(plan()).toContain("Installs plxd");
+  expect(plan()).toContain("without the app");
+  await click(button("Install"));
+  expect(JSON.parse(button("Finish").dataset["target"]!)).toEqual({
+    hostId: "local",
+    connect: { device: "100.74.190.83", headless: true },
+  });
+  await click(button("Finish"));
+  const done = document.querySelector("dialog")!.textContent;
+  expect(done).toContain("plxd · Parallax Connect on");
+  expect(done).not.toContain("Parallax (Nightly) · plxd");
+});
+
 test("Devices show their health; the menu renames, changes the icon, and removes", async () => {
-  connect = { installed: true, on: true, icon: "laptop", channel: "nightly" };
+  connect = { on: true, icon: "laptop", channel: "nightly" };
   devices = [
     {
       id: "tailnet:n-mini",
@@ -261,7 +308,7 @@ test("Devices show their health; the menu renames, changes the icon, and removes
 });
 
 test("A device turned off can't be renamed or re-iconed, and reads Off", async () => {
-  connect = { installed: true, on: true, icon: "laptop", channel: "nightly" };
+  connect = { on: true, icon: "laptop", channel: "nightly" };
   devices = [
     {
       id: "tailnet:n-pc",

@@ -1286,7 +1286,7 @@ function retarget(event: ParallaxEvent, run: AgentRun): ParallaxEvent {
 
 // Ryan's computers on the tailnet. Three of the fixtures' plain threads run on them, so the
 // sidebar shows threads from every computer. `#connect` in the URL starts with Connect set up;
-// otherwise plx-connect isn't installed yet, and Add computer's fake install sets each one up.
+// otherwise it's off, and Add computer's fake install sets each one up.
 const tailnet: (TailnetDevice & {
   name?: string;
   icon?: DeviceIcon;
@@ -1377,8 +1377,8 @@ const profile: Profile = {
   email: "ryan@example.com",
 };
 const connect: ConnectState = connectSetUp
-  ? { installed: true, on: true, icon: "laptop", channel: "nightly" }
-  : { installed: false, on: false, icon: "laptop", channel: "nightly" };
+  ? { on: true, icon: "laptop", channel: "nightly" }
+  : { on: false, icon: "laptop", channel: "nightly" };
 // Set up, they carry the names given on them; new, they're known by their host names.
 if (connectSetUp) for (const d of tailnet.slice(0, 3)) d.parallax = true;
 else for (const d of tailnet) delete d.name;
@@ -1799,12 +1799,6 @@ export const mockBridge: ParallaxBridge = {
     listener({ ...connect });
     connectListeners.add(listener);
     return () => connectListeners.delete(listener);
-  },
-  installConnect: async () => {
-    await delay(undefined, 1800);
-    connect.installed = true;
-    connectChanged();
-    return undefined;
   },
   setConnect: async (on) => {
     await delay(undefined, 300);

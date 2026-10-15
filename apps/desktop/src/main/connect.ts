@@ -1,13 +1,9 @@
-import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import path from "node:path";
-
-import { DEVICE_ICONS, needNpm, npmInstallLine, type DeviceIcon } from "../preload/bridge";
+import { DEVICE_ICONS, type DeviceIcon } from "../preload/bridge";
 import type { TailnetDevice } from "../protocol/generated/protocol";
 import { quote, type Command } from "./terminal";
 
 // Parallax Connect's pieces in main (0056) that need no Electron: what hosts.ts keeps of each
-// device, and the commands that install and run plx-connect.
+// device, and the command that runs plx-connect.
 
 /** A Connect device as `settings.json` keeps it, so it's listed and retried while offline. */
 export type SavedDevice = {
@@ -64,59 +60,50 @@ export const isSshUser = (value: unknown): value is string =>
   typeof value === "string" && /^[\w][\w.-]{0,63}$/.test(value);
 
 /**
- * How main runs plx-connect: `PLX_CONNECT_PATH`, a checkout's `bin/plx-connect.mjs` run with
- * node, else `plx-connect` as npm installed it, found by the login shell (or PowerShell), so it
- * finds `node` where the user would. On POSIX npm installs it in `~/.local/bin`
- * (`npmInstallLine`), which a stock macOS login shell doesn't have on PATH, so it goes first.
+ * How main runs plx-connect: the copy in this build, `script`, or `PLX_CONNECT_PATH`, run by the
+ * app's own Electron as Node (`ELECTRON_RUN_AS_NODE`; the app sets no fuses), so this computer
+ * needs no Node or npm, and plx-connect always matches the app.
  */
-export type ConnectProgram = { platform: NodeJS.Platform; env: NodeJS.ProcessEnv };
-
-const program = ({ env }: ConnectProgram) => {
-  const override = env["PLX_CONNECT_PATH"];
-  return override ? `node ${quote(override)}` : "plx-connect";
+export type ConnectProgram = {
+  platform: NodeJS.Platform;
+  env: NodeJS.ProcessEnv;
+  /** The app's Electron, `process.execPath`. */
+  execPath: string;
+  /** `bin/plx-connect.mjs` in the app's resources, which package-app copies, or the repo's in a dev build. */
+  script: string;
 };
 
-/** `line` in the user's login shell, or in PowerShell on Windows. */
-function shell(line: string, { platform, env }: ConnectProgram): Command {
-  if (platform === "win32")
-    return { file: "powershell.exe", args: ["-NoLogo", "-NoProfile", "-Command", line] };
-  return { file: env["SHELL"] || "/bin/sh", args: ["-lc", line] };
-}
-
-/** What installs plx-connect on this computer with npm, as an agent's npm install does (PLX-558). */
-export const installConnectCommand = (where: ConnectProgram): Command =>
-  shell(
-    needNpm(npmInstallLine("plx-connect", where.platform === "win32"), where.platform === "win32"),
-    where,
-  );
-
-/** What sets up `device` for Connect: `plx-connect add` in a terminal, where ssh can ask for a password. */
+/**
+ * What sets up `device` for Connect: `plx-connect add` in a terminal, where ssh can ask for a
+ * password, through the login shell, so ssh is found where the user would find it, or PowerShell
+ * on Windows. Electron is a GUI program there, which PowerShell doesn't wait for unless its output
+ * is piped, so it's piped to the host, read as UTF-8 for plx-connect's ✓ and ✗. Its paths are
+ * PowerShell string literals, in which `$` and backticks are plain characters.
+ */
 export function addCommand(
   device: string,
   user: string | undefined,
   channel: "stable" | "nightly",
-  where: ConnectProgram,
+  headless: boolean,
+  { platform, env, execPath, script }: ConnectProgram,
 ): Command {
-  const userArg = user ? ` --user ${user}` : "";
-  const line = `${program(where)} add ${device} --channel ${channel}${userArg}`;
-  return shell(
-    where.platform === "win32" ? line : `PATH="$HOME/.local/bin:$PATH" exec ${line}`,
-    where,
-  );
+  const args = `add ${device} --channel ${channel}${user ? ` --user ${user}` : ""}${headless ? " --headless" : ""}`;
+  const plxConnect = env["PLX_CONNECT_PATH"] || script;
+  if (platform === "win32")
+    return {
+      file: "powershell.exe",
+      args: [
+        "-NoLogo",
+        "-NoProfile",
+        "-Command",
+        `[Console]::OutputEncoding = [Text.Encoding]::UTF8; $env:ELECTRON_RUN_AS_NODE = '1'; & ${psQuote(execPath)} ${psQuote(plxConnect)} ${args} | Out-Host; exit $LASTEXITCODE`,
+      ],
+    };
+  return {
+    file: env["SHELL"] || "/bin/sh",
+    args: ["-lc", `ELECTRON_RUN_AS_NODE=1 exec ${quote(execPath)} ${quote(plxConnect)} ${args}`],
+  };
 }
 
-/** Whether plx-connect is installed here: `PLX_CONNECT_PATH`, npm's `~/.local/bin`, or on the shell's PATH. */
-export function findConnect(where: ConnectProgram, home: string): Promise<boolean> {
-  const override = where.env["PLX_CONNECT_PATH"];
-  if (override) return Promise.resolve(existsSync(override));
-  if (where.platform !== "win32" && existsSync(path.join(home, ".local/bin/plx-connect")))
-    return Promise.resolve(true);
-  const look =
-    where.platform === "win32"
-      ? shell("Get-Command plx-connect -ErrorAction Stop | Out-Null", where)
-      : shell("command -v plx-connect", where);
-  const args = Array.isArray(look.args) ? look.args : [look.args];
-  return new Promise((resolve) =>
-    execFile(look.file, args, { timeout: 10_000 }, (error) => resolve(!error)),
-  );
-}
+/** `value` as a PowerShell string literal. */
+const psQuote = (value: string) => `'${value.replaceAll("'", "''")}'`;
