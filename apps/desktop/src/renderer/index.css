@@ -257,14 +257,34 @@
   display: block;
   position: absolute;
   inset: 0 0 auto;
-  height: 60px;
+  height: 64px;
   overflow: hidden;
   pointer-events: none;
-  mask-image: linear-gradient(black 70%, transparent);
+  /* Eased, so the sky thins into the sidebar instead of stopping. Light mode ends it above the
+     Search row, whose dark text it would cover. */
+  mask-image: linear-gradient(
+    black 55%,
+    rgb(0 0 0 / 62%) 70%,
+    rgb(0 0 0 / 28%) 84%,
+    rgb(0 0 0 / 8%) 94%,
+    transparent
+  );
+}
+/* Dark mode lets it run on past the Search row, whose light text reads over it. */
+:root.nightly.dark .night-sky {
+  height: 104px;
+  mask-image: linear-gradient(
+    black 38%,
+    rgb(0 0 0 / 72%) 52%,
+    rgb(0 0 0 / 42%) 66%,
+    rgb(0 0 0 / 18%) 80%,
+    rgb(0 0 0 / 5%) 92%,
+    transparent
+  );
 }
 :root.nightly .night-sky svg {
   width: 100%;
-  height: 100%;
+  height: 104px;
 }
 :root.nightly .night-sky-text {
   --foreground: #ffffff;
@@ -310,20 +330,31 @@
   }
 }
 
-/* A theme's orb in Settings > Appearance: its background, lit by its foreground and accent. A
-   .scheme-* and .theme-* class beside it set the tokens. */
+/* A theme's orb in Settings > Appearance: its own background and sidebar, glowing with its accent
+   and, smaller, its string color, under a sheen. A .scheme-* and .theme-* class beside it set
+   the tokens. */
 .theme-orb {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(160deg, var(--background) 30%, var(--sidebar));
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.theme-orb::before {
+  content: "";
+  position: absolute;
+  inset: -20%;
   background:
-    radial-gradient(
-      circle at 32% 26%,
-      color-mix(in oklab, var(--foreground) 45%, transparent),
-      transparent 45%
-    ),
-    radial-gradient(circle at 72% 78%, var(--accent), transparent 62%),
-    radial-gradient(circle at 22% 80%, var(--sidebar), transparent 55%), var(--background);
-  box-shadow:
-    inset 0 0 0 1px var(--border),
-    inset 0 -6px 12px rgb(0 0 0 / 18%);
+    radial-gradient(circle at 68% 70%, var(--accent), transparent 40%),
+    radial-gradient(circle at 34% 64%, var(--syntax-string), transparent 24%);
+  filter: blur(6px);
+}
+.theme-orb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at 32% 22%, rgb(255 255 255 / 30%), transparent 38%);
+  box-shadow: inset 0 -8px 14px rgb(0 0 0 / 22%);
 }
 
 /* Tailwind's motion-safe and motion-reduce follow .reduce-motion, which also covers the OS's
