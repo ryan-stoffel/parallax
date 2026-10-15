@@ -653,11 +653,12 @@ impl Actor {
     }
 
     /// Whether the run has a turn to start once it can: a waiting message, a wake-up, or a usage
-    /// limit's resume.
+    /// limit's or a killed CLI's resume.
     fn wants_slot(&self) -> bool {
         (!self.queued.is_empty() && !self.queue_held)
             || self.wakes.due().is_some()
             || (self.row.state.status == convert::WAITING && self.row.state.resume_at.is_some())
+            || self.resumes.kill_pending()
     }
 
     /// A slot came for the run, which waited in line: it starts what waited. The loop's top gives
@@ -863,6 +864,7 @@ impl Actor {
         let mut active = Instant::now();
         loop {
             self.deliver().await;
+            self.revive().await;
             // A shared thread holds its slot only while a turn runs, and waits in line for one
             // only while it has a turn to start (0063).
             if !self.busy() {
@@ -945,7 +947,8 @@ impl Actor {
     }
 
     /// Whether the actor holds nothing that only memory keeps (PLX-459): no CLI, push or Open
-    /// PR, unsent output, waiting message, wake-up, permission request, or resume timer. A fresh
+    /// PR, unsent output, waiting message, wake-up, permission request, resume timer, or killed
+    /// CLI's resume. A fresh
     /// actor reloads `turns`, the wake-up count, and the run from the store, and what the rest
     /// keep for a CLI's messages until their turns start has no CLI left to start them.
     fn idle(&self) -> bool {
@@ -957,6 +960,7 @@ impl Actor {
             && self.wakes.is_empty()
             && self.approvals.is_empty()
             && self.resume_due().is_none()
+            && !self.resumes.kill_pending()
             && self.slot_wait.is_none()
     }
 
@@ -3529,8 +3533,10 @@ impl Actor {
             self.index_text().await;
             self.finish(outcome).await;
         }
+        // The loop's top resumes it ([`Self::revive`]), as `drain` would never end with a new
+        // CLI live.
         if revive {
-            self.revive().await;
+            self.resumes.saw_kill();
         }
     }
 

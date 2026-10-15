@@ -160,24 +160,37 @@ impl Actor {
         self.save().await;
     }
 
-    /// Resumes a session whose CLI a signal plxd didn't send killed, with [`KILLED`] as plxd's
-    /// turn (PLX-805). Only once until a turn completes, so a CLI that keeps dying stays stopped.
+    /// At the loop's top: resumes a session whose CLI a signal plxd didn't send killed, with
+    /// [`KILLED`] as plxd's turn (PLX-805), once nothing runs, in line for a shared slot as a
+    /// usage limit's resume. A message sent since carries the run on instead and a stop ends it.
+    /// Only once until a turn completes, so a CLI that keeps dying stays stopped. The auto-resume
+    /// setting is for usage limits and doesn't apply.
     pub(super) async fn revive(&mut self) {
-        let Some(turn) = self.resumes.revive() else {
+        if !self.resumes.kill_pending() || self.effect.is_some() || self.pending_revert.is_some() {
+            return;
+        }
+        if self.live.is_some() || !self.queued.is_empty() || self.stopping || self.deleted {
+            self.resumes.drop_kill();
+            return;
+        }
+        if !self.slot_ready().await {
+            return;
+        }
+        let Some(turn) = self.resumes.take_kill() else {
             info!(run = %self.id, "a resumed agent run's CLI was killed again; it stays stopped");
             return;
         };
         info!(run = %self.id, "an agent run's CLI was killed from outside; resuming its session");
-        // Boxed: resuming starts a process, whose start can drain this one's events.
-        let resumed = Box::pin(self.resume(
-            turn,
-            KILLED.to_owned(),
-            Vec::new(),
-            Vec::new(),
-            RunOptions::default(),
-            None,
-        ))
-        .await;
+        let resumed = self
+            .resume(
+                turn,
+                KILLED.to_owned(),
+                Vec::new(),
+                Vec::new(),
+                RunOptions::default(),
+                None,
+            )
+            .await;
         if let Err(error) = resumed {
             warn!(run = %self.id, error = %error.message, "could not resume a killed agent run");
         }

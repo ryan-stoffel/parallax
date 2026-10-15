@@ -60,8 +60,10 @@ pub(super) struct Resumes {
     reset: Option<Timestamp>,
     /// The resume turn last sent, until its `turnStarted` is logged.
     sent: Option<TurnId>,
+    /// A CLI was killed from outside, and its session waits to resume (PLX-805).
+    killed: bool,
     /// A killed CLI's session was resumed and no turn has completed since, so another kill leaves
-    /// it stopped rather than resuming a CLI that keeps dying (PLX-805).
+    /// it stopped rather than resuming a CLI that keeps dying.
     revived: bool,
 }
 
@@ -87,9 +89,25 @@ impl Resumes {
         turn
     }
 
-    /// A resume turn for a killed CLI's session, or `None` if one was sent and no turn has
+    /// Notes that the CLI was killed from outside, so its session waits to resume.
+    pub fn saw_kill(&mut self) {
+        self.killed = true;
+    }
+
+    /// Whether a killed CLI's session waits to resume.
+    pub fn kill_pending(&self) -> bool {
+        self.killed
+    }
+
+    /// Forgets a waiting kill that a message or a stop overtook.
+    pub fn drop_kill(&mut self) {
+        self.killed = false;
+    }
+
+    /// Forgets a waiting kill: a resume turn for it, or `None` if one was sent and no turn has
     /// completed since.
-    pub fn revive(&mut self) -> Option<TurnId> {
+    pub fn take_kill(&mut self) -> Option<TurnId> {
+        self.killed = false;
         (!std::mem::replace(&mut self.revived, true)).then(|| self.next())
     }
 
