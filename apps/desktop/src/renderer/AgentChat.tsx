@@ -1791,9 +1791,7 @@ function Steps({
   // Its path relative to the run's worktree, as the row reads once the call is done.
   const now = doing && { ...doing, detail: doing.detail && relative(doing.detail, root) };
   const summary = summarize(work.items);
-  const failures = work.items.filter(
-    (i) => i.kind === "tool" && (i.status === "error" || i.status === "denied"),
-  ).length;
+  const { failures } = summary;
   return (
     <Fold
       id={work.key}
@@ -2140,8 +2138,8 @@ export function stepLabel(item: Extract<Item, { kind: "tool" }>, root?: string):
 export interface StepsSummary {
   label: string;
   Icon: LucideIcon;
-  /** Whether a call in it failed or was denied. */
-  failed: boolean;
+  /** How many of its calls failed or were denied. */
+  failures: number;
 }
 
 /**
@@ -2152,13 +2150,13 @@ export interface StepsSummary {
  */
 export function summarize(items: readonly Item[]): StepsSummary {
   const steps = items.filter((i) => i.kind !== "notice");
-  const failed = steps.some(
+  const failures = steps.filter(
     (i) => i.kind === "tool" && (i.status === "error" || i.status === "denied"),
-  );
+  ).length;
   const calls = steps.filter((i) => i.kind === "tool" || i.kind === "todo");
   if (calls.length === 0) {
     const n = steps.length;
-    return { label: n === 1 ? "Thought" : `Thought ${n} times`, Icon: icons.thinking, failed };
+    return { label: n === 1 ? "Thought" : `Thought ${n} times`, Icon: icons.thinking, failures };
   }
   const servers: string[] = [];
   const kinds = new Set<Kind>();
@@ -2197,7 +2195,7 @@ export function summarize(items: readonly Item[]): StepsSummary {
   return {
     label: label.charAt(0).toUpperCase() + label.slice(1),
     Icon: kinds.size === 1 ? icons[only!] : icons.working,
-    failed,
+    failures,
   };
 }
 

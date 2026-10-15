@@ -1922,7 +1922,8 @@ test("a run of steps sums up what it did, as T3 Code does", () => {
   // Thoughts alone, and how a failure shows.
   const thought: Item = { kind: "reasoning", key: "r", text: "Hm" };
   expect(label([thought, { ...thought, key: "r2" }])).toBe("Thought 2 times");
-  expect(summarize([tool("Bash", {}, "error"), tool("Bash")]).failed).toBe(true);
+  expect(summarize([tool("Bash", {}, "error"), tool("Bash")]).failures).toBe(1);
+  expect(summarize([tool("Bash", {}, "error"), tool("Bash", {}, "denied")]).failures).toBe(2);
 });
 
 test("a context compaction shows while it runs, then as a divider", () => {
