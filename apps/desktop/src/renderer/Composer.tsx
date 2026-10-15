@@ -35,6 +35,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type RefObject,
 } from "react";
 
 import type {
@@ -46,6 +47,7 @@ import type {
   PromptImage,
 } from "../protocol/generated/protocol";
 import { lastPrompt } from "./attention";
+import type { ComposerContents } from "./drafts";
 import { UsageInline, UsageRing, useComposerUsage } from "./ComposerUsage";
 import type { RequestUsage } from "./transcript";
 import { EffortMenu } from "./EffortMenu";
@@ -414,6 +416,10 @@ export interface ComposerProps {
    * a sidebar row dropped on the box attaches one, as a chip beside the images. Absent: neither.
    */
   attach?: AttachThreads;
+  /** What the box starts with, such as a reopened draft (PLX-788). Read once, as it mounts. */
+  initial?: ComposerContents;
+  /** Kept up to date with what the box holds, for New Thread to save as a draft as it closes. */
+  contents?: RefObject<ComposerContents | undefined>;
 }
 
 /**
@@ -463,19 +469,21 @@ export function Composer({
   history = [],
   menus,
   attach,
+  initial,
+  contents,
 }: ComposerProps) {
   // The box as Markdown, kept on every edit.
-  const [text, setText] = useState("");
+  const [text, setText] = useState(initial?.text ?? "");
   const [error, setError] = useState<string>();
   const [stopping, setStopping] = useState(false);
   // Files that aren't images, shown as chips, and uploaded on send where the host takes them.
-  const [files, setFiles] = useState<File[]>([]);
+  const [files, setFiles] = useState<File[]>(initial?.files ?? []);
   const canUpload = !!host && !!uploadBytes;
   // While the files upload, before the message goes.
   const [uploading, setUploading] = useState(false);
-  const [images, setImages] = useState<PromptImage[]>([]);
+  const [images, setImages] = useState<PromptImage[]>(initial?.images ?? []);
   // Attached threads' run ids, shown as chips beside the images.
-  const [threads, setThreads] = useState<string[]>([]);
+  const [threads, setThreads] = useState<string[]>(initial?.threads ?? []);
   // Run ids are the host's own, so they don't follow a New Thread draft to another computer.
   // Reset while rendering, not in an effect, so a Composer that never changes host does no extra work.
   const [threadsHost, setThreadsHost] = useState(host);
@@ -903,6 +911,7 @@ export function Composer({
   // Its props are read again on every render, so its handlers see this render's state.
   const editor: Editor = useEditor({
     extensions,
+    content: initial?.doc,
     // Pasted text arrives as typed, never reformatted.
     enablePasteRules: false,
     onUpdate: ({ editor, transaction }) => {
@@ -1065,6 +1074,10 @@ export function Composer({
       },
     },
   });
+
+  useEffect(() => {
+    if (contents) contents.current = { text, doc: editor.getJSON(), images, files, threads };
+  }, [contents, editor, text, images, files, threads]);
 
   useEffect(() => {
     if (!insert) return;

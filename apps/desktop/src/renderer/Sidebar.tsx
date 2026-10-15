@@ -28,6 +28,7 @@ import {
   Palette,
   PanelLeftClose,
   Pencil,
+  PencilLine,
   Plus,
   Search,
   Server,
@@ -67,6 +68,7 @@ import type {
 import type { RpcError } from "../preload/bridge";
 import type { Selection, SettingsSection, Split } from "./App";
 import { clock } from "./Approval";
+import { drafts, type Draft } from "./drafts";
 import { AddDialog, type AddDialogHandle } from "./AddDialog";
 import {
   attentionOf,
@@ -440,11 +442,10 @@ export function ThreadList({
     item.kind === "project"
       ? item.project.name
       : (item.view.state.titles[item.thread.id] ?? "Thread");
-  const inFilter = (item: Item) =>
+  const inRepoFilter = (hostId: string, repo?: Repo) =>
     filter === "all" ||
-    (filter === "none"
-      ? !item.repo || item.repo.scratch
-      : filter === `${item.host.id}/${item.repo?.id}`);
+    (filter === "none" ? !repo || repo.scratch : filter === `${hostId}/${repo?.id}`);
+  const inFilter = (item: Item) => inRepoFilter(item.host.id, item.repo);
   const shown = items
     .filter((i) => inFilter(i) && (!q || titleOf(i).toLowerCase().includes(q)))
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
@@ -457,6 +458,15 @@ export function ThreadList({
   // The Projects section shows once any host has a Project, even while search or the filter hides
   // them all.
   const hasProjects = items.some((i) => i.kind === "project");
+  // Unsent New Thread prompts (PLX-788), above the threads, on hosts still listed.
+  const draftRows = drafts.use().flatMap((d) => {
+    const view = hosts.find((h) => h.host.id === d.hostId)?.view;
+    if (!view) return [];
+    const repo = view.state.repos.find((r) => r.id === d.groupId);
+    return inRepoFilter(d.hostId, repo) && (!q || d.text.toLowerCase().includes(q))
+      ? [{ draft: d, repo }]
+      : [];
+  });
 
   // A thread whose parent is in the list nests under it (0041), oldest first, collapsed until
   // opened or until one of them is the open thread.
@@ -756,9 +766,19 @@ export function ThreadList({
         </div>
         <div id={threadsId} hidden={threadsCollapsed}>
           <ul aria-label="Threads" className="flex flex-col gap-0.5">
+            {draftRows.map(({ draft, repo }) => (
+              <DraftRow
+                key={draft.id}
+                draft={draft}
+                repo={repo}
+                onOpen={() =>
+                  onSelect(draft.hostId, { kind: "new", groupId: draft.groupId, draft: draft.id })
+                }
+              />
+            ))}
             {topThreads.map((i) => tree(i, false))}
           </ul>
-          {topThreads.length === 0 && workingTops.length === 0 && (
+          {draftRows.length === 0 && topThreads.length === 0 && workingTops.length === 0 && (
             <p className={emptyNote}>
               {q || filter !== "all" ? "Nothing matches" : "No threads yet"}
             </p>
@@ -1570,6 +1590,39 @@ function majorityLook(prs: PullRequests) {
     if (n >= top) [best, top] = [pr, n];
   }
   return lookOf(best);
+}
+
+/**
+ * An unsent New Thread prompt's row (PLX-788): its repo and a Draft status, then its first line,
+ * outlined in the warning color. Opening it reopens New Thread with it, which takes it off the list.
+ */
+function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: () => void }) {
+  const attached = draft.images.length + draft.files.length + draft.threads.length;
+  const title =
+    draft.text.trim().split("\n")[0] ||
+    `${attached} ${attached === 1 ? "attachment" : "attachments"}`;
+  return (
+    <li data-kind="draft">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex w-full flex-col gap-0.5 rounded-lg border border-warning px-2 py-1.5 text-left hover:bg-hover"
+      >
+        <RowHead
+          repo={repo}
+          status={
+            <span className="flex items-center gap-1 text-[11.5px] font-medium text-warning [&_svg]:size-3.5">
+              <PencilLine aria-hidden />
+              Draft
+            </span>
+          }
+        />
+        <span data-title className="w-full truncate text-[13px] text-foreground">
+          {title}
+        </span>
+      </button>
+    </li>
+  );
 }
 
 /**

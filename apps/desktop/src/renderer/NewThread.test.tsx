@@ -8,6 +8,7 @@ import type { RpcResponse, SubscriptionMessage, ParallaxBridge } from "../preloa
 import type { Capabilities, ErrorKind, Repo, Thread } from "../protocol/generated/protocol";
 import { accessDefaults, accessPrefs } from "./accessPrefs";
 import { App } from "./App";
+import { drafts } from "./drafts";
 import { dragThread } from "./threadDrag";
 import { fakeWatch } from "./fakeWatch";
 
@@ -59,6 +60,8 @@ beforeEach(() => {
   capabilities = {};
   localStorage.clear();
   accessPrefs.set(accessDefaults);
+  // A test that ends with text in New Thread leaves it as a draft.
+  for (const d of drafts.get()) drafts.remove(d.id);
   answers = {
     "thread/list": () => ({ result: { repos: [parallax], threads: [thread], seq: 7 } }),
     "agent/list": () => ({
@@ -397,6 +400,47 @@ test("No Repo starts a thread with no repo, with a thread dropped on the box att
     { runId: expect.any(String), prompt: "Hi", threads: [thread.id], branchSlug: "hi" },
   ]);
   expect(crumbs()).toEqual(["This Mac", "No Repo", "Hi"]);
+});
+
+test("leaving New Thread keeps its prompt as a draft atop Threads, which reopens it (PLX-788)", async () => {
+  capabilities = { threadContext: { maxThreads: 8 } };
+  answers["thread/start"] = (p) => ({
+    result: {
+      thread: { id: p["runId"], repo: parallax.id, createdAt: "2026-09-26T12:05:00Z" },
+      run: run(p["runId"] as string, "Tidy the README"),
+    },
+  });
+  await renderApp();
+  const data = new DataTransfer();
+  dragThread(data, "local", thread.id);
+  act(() => {
+    document.querySelector("main form")!.dispatchEvent(
+      Object.defineProperty(new Event("drop", { bubbles: true }), "dataTransfer", {
+        value: data,
+      }),
+    );
+    void composer().editor!.commands.setContent("Tidy the README");
+  });
+  await act(async () => (threadRow("Fix the flaky test") as HTMLElement).click());
+  await settle();
+
+  const draft = () => document.querySelector<HTMLElement>('#sidebar li[data-kind="draft"] button');
+  const rows = document.querySelectorAll('#sidebar ul[aria-label="Threads"] > li');
+  expect(rows[0]!.getAttribute("data-kind")).toBe("draft");
+  expect(draft()!.textContent).toBe("parallaxDraftTidy the README");
+
+  await act(async () => draft()!.click());
+  await settle();
+  expect(draft()).toBeNull();
+  expect(heading()).toBe("What should we build in parallax?");
+  expect(composer().textContent).toBe("Tidy the README");
+
+  // Starting it leaves no draft behind.
+  await send("Tidy the README");
+  expect(calls("thread/start")).toEqual([
+    expect.objectContaining({ prompt: "Tidy the README", threads: [thread.id] }),
+  ]);
+  expect(draft()).toBeNull();
 });
 
 test("a new thread asks plxd to forward its permission requests only when plxd advertises approvals (PLX-196)", async () => {

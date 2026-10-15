@@ -5,6 +5,7 @@ import type { AccountChoice, PromptImage, Repo, Role } from "../protocol/generat
 import { TranscriptView } from "./AgentChat";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
+import { drafts, isEmpty, type ComposerContents } from "./drafts";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { imageCaps } from "./images";
@@ -60,6 +61,8 @@ interface NewThreadProps {
   disabledReason?: string;
   /** The host's threads, which the composer attaches where plxd takes them (PLX-378). */
   threadLinks?: ThreadLinks;
+  /** The draft it reopens (PLX-788), by id. Read once, as it mounts. */
+  draftId?: string;
 }
 
 /** One start of a thread. Retrying it reuses its run id, so plxd never makes a second thread (0007). */
@@ -148,6 +151,7 @@ export function NewThread({
   onStarted,
   disabledReason,
   threadLinks,
+  draftId: reopened,
 }: NewThreadProps) {
   // The no-repo start's shortcut, as Settings > Keybinds has it.
   const noRepoKeys = useShortcutLabel("noRepoThread");
@@ -189,6 +193,26 @@ export function NewThread({
     setRepoError(undefined);
   }, [hostId]);
   const group = groups.find((g) => g.id === groupId) ?? groups.at(-1)!;
+  // The draft this screen edits (PLX-788): out of the sidebar's list while it's open, and back in
+  // as it closes, unless the box is empty or a thread it starts opens. The pair nets out under
+  // StrictMode's extra mount.
+  const [draftId] = useState(() => reopened ?? uuidv7());
+  const [draft] = useState(() => drafts.get().find((d) => d.id === draftId));
+  const contents = useRef<ComposerContents>(undefined);
+  // Set as a start that opens its thread begins, since the box may not render empty before it opens.
+  const opening = useRef(false);
+  const where = useRef({ hostId, groupId: group.id });
+  useEffect(() => {
+    where.current = { hostId, groupId: group.id };
+  });
+  useEffect(() => {
+    drafts.remove(draftId);
+    return () => {
+      const box = contents.current;
+      if (box && !isEmpty(box) && !opening.current)
+        drafts.put({ ...box, ...where.current, id: draftId });
+    };
+  }, [draftId]);
   // Starts as Settings > General says; picking one here is for this thread only.
   const [workspace, setWorkspace] = useState<Workspace>(() => newThreadPrefs.get().workspace);
   // Only a repository has a checkout, and only a plxd that takes `checkout` would use it: an
@@ -279,6 +303,7 @@ export function NewThread({
         : undefined;
     // A background start leaves the box empty for the next thread.
     if (!background) setStarting({ prompt, images, threads });
+    opening.current = !background;
     const error = await attemptStart({
       runId: same?.runId ?? uuidv7(),
       groupId: group.id,
@@ -291,17 +316,24 @@ export function NewThread({
       background,
     });
     // On success the app opens the thread instead.
-    if (error !== undefined) setStarting(undefined);
+    if (error !== undefined) {
+      setStarting(undefined);
+      opening.current = false;
+    }
     return error;
   };
 
   const continueWith = async (option: AccountOption) => {
     setChoosing(true);
     setChooseError(undefined);
+    opening.current = true;
     // Continue is a click on New Thread, so the thread opens, even after a Cmd/Ctrl+Enter.
     const error = await runOn({ ...failed.current!, background: false }, option);
     setChoosing(false);
-    if (error) setChooseError(error);
+    if (error) {
+      setChooseError(error);
+      opening.current = false;
+    }
   };
 
   const pickRepository = async () => {
@@ -435,6 +467,8 @@ export function NewThread({
         )}
         <Composer
           newThread
+          initial={draft}
+          contents={contents}
           onSend={(prompt, options, images, threads) =>
             send(prompt, options, images, threads, false)
           }
