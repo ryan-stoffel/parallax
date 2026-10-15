@@ -144,8 +144,10 @@ impl Actor {
         self.snapshot()
     }
 
-    /// `agent/cancel` on a waiting run: it stops waiting and is `cancelled`.
+    /// `agent/cancel` on a waiting run: it stops waiting and is `cancelled`. A killed CLI's
+    /// session waiting to resume stays stopped.
     pub(super) async fn cancel_waiting(&mut self) {
+        self.resumes.drop_kill();
         if self.row.state.status == WAITING {
             info!(run = %self.id, "cancelling a run that waited for its usage limit");
             self.stop_waiting(convert::CANCELLED).await;
