@@ -84,10 +84,9 @@ function HostOption({
         />
       </span>
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-        <span className={`shrink-0 truncate ${offline ? "text-muted-foreground" : ""}`}>
-          {host.name}
-        </span>
-        <span className="truncate text-[12px] text-faint-foreground">
+        {/* Both cut off with "…" when long, how it connects first. */}
+        <span className={`truncate ${offline ? "text-muted-foreground" : ""}`}>{host.name}</span>
+        <span className="shrink-[4] truncate text-[12px] text-faint-foreground">
           {offline ? "Offline" : connection(host)}
         </span>
       </span>
