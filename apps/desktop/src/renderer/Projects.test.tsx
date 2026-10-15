@@ -2471,6 +2471,13 @@ test("a thread's sidebar row shows its linked pull requests, colored by their ma
   expect(chip("t-merged")?.className).toContain("text-project-violet");
   expect(chip("t-merged")?.textContent).toBe("+2");
   expect(chip("t-closed")?.className).toContain("text-danger");
+
+  // Clicking a lone PR's number opens it on GitHub, not the thread (PLX-809).
+  const open = vi.fn();
+  window.open = open;
+  await click(chip("t-open")?.querySelector("span.hover\\:underline"));
+  expect(open).toHaveBeenCalledWith(url(1), "_blank");
+  expect(chip("t-open")?.closest("button")?.getAttribute("aria-current")).toBeNull();
 });
 
 test("with no Projects, Threads is the only section, and the toolbar's one button opens the add palette", async () => {
