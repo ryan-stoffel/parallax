@@ -214,8 +214,8 @@ impl Previews {
         })
     }
 
-    /// `preview/input`: the user's control, mouse, wheel, keys, or address bar. Anything but
-    /// handing control back takes control first.
+    /// `preview/input`: the user's control, mouse, wheel, keys, size, or address bar. Anything
+    /// but handing control back or sizing takes control first.
     pub(crate) async fn input(
         &self,
         params: PreviewInputParams,
@@ -224,14 +224,13 @@ impl Previews {
             .tab(params.run_id, Some(&params.tab_id))
             .await
             .map_err(ErrorObject::invalid_params)?;
-        let take = !matches!(
-            params.input,
-            PreviewInput::Control { take: false }
-                | PreviewInput::Viewport { .. }
-                | PreviewInput::Fixed { .. }
-                | PreviewInput::Fill
-        );
-        {
+        // Sizing leaves control where it is. Hand back releases it, and anything else takes it.
+        let take = match params.input {
+            PreviewInput::Viewport { .. } | PreviewInput::Fixed { .. } | PreviewInput::Fill => None,
+            PreviewInput::Control { take } => Some(take),
+            _ => Some(true),
+        };
+        if let Some(take) = take {
             let mut live = lock(&tab.live);
             if live.human != take {
                 live.human = take;

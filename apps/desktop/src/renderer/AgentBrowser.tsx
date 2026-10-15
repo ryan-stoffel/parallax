@@ -196,6 +196,8 @@ export function AgentBrowser({
                 setDraft({ width: String(frame?.width ?? ""), height: String(frame?.height ?? "") })
               }
               onChange={(e) => setDraft((d) => d && { ...d, [side]: e.target.value })}
+              // A form with two fields and no submit button doesn't submit on Enter by itself.
+              onKeyDown={(e) => e.key === "Enter" && e.currentTarget.form?.requestSubmit()}
               onBlur={(e) => {
                 if (!e.currentTarget.form?.contains(e.relatedTarget)) setDraft(undefined);
               }}
