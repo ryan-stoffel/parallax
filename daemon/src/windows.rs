@@ -4,6 +4,7 @@
 //! - [`create_pipe`]: a named pipe instance whose DACL grants only this user.
 //! - [`pipe_client_pid`], [`pipe_server_pid`], and [`runs_as_this_user`]: the SID checks on both
 //!   ends of the pipe.
+//! - [`this_user_sid`]: the user plxd's logon task runs as.
 //! - [`stop_inheriting_handles`]: so a process plxd starts gets only the handles it is given.
 //! - [`Job`]: the job object an agent CLI runs in.
 
@@ -51,8 +52,17 @@ fn check(succeeded: i32) -> io::Result<()> {
 ///
 /// If this process's user can't be read.
 pub fn this_user_only_sddl() -> io::Result<String> {
-    let sid = user_of(current_process())?;
-    Ok(format!("D:P(A;;GA;;;{})", sid_string(&sid)?))
+    Ok(format!("D:P(A;;GA;;;{})", this_user_sid()?))
+}
+
+/// This process's user's SID in its string form, such as `S-1-5-21-...`, which names the user in
+/// plxd's logon task (0023).
+///
+/// # Errors
+///
+/// If this process's user can't be read.
+pub fn this_user_sid() -> io::Result<String> {
+    sid_string(&user_of(current_process())?)
 }
 
 /// Creates an instance of the pipe `name` with `options` and the security descriptor `sddl`.

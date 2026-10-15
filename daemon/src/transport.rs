@@ -38,6 +38,14 @@ pub const MAX_MESSAGE_BYTES: usize = 4 * 1024;
 #[derive(Debug)]
 pub struct Stream(NamedPipeClient);
 
+/// The pipe's handle, for [`crate::windows::pipe_server_pid`].
+#[cfg(windows)]
+impl std::os::windows::io::AsRawHandle for Stream {
+    fn as_raw_handle(&self) -> std::os::windows::io::RawHandle {
+        self.0.as_raw_handle()
+    }
+}
+
 #[cfg(windows)]
 impl AsyncRead for Stream {
     fn poll_read(
