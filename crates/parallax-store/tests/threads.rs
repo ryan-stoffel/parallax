@@ -189,8 +189,12 @@ fn a_thread_is_recorded_with_its_run_and_worktree_and_archives() {
 
     let archived = store.set_thread_archived(id, true).unwrap();
     assert!(archived.archived);
-    assert_eq!(store.get_thread(id).unwrap(), Some(archived));
-    assert!(!store.set_thread_archived(id, false).unwrap().archived);
+    assert_eq!(store.get_thread(id).unwrap(), Some(archived.clone()));
+    assert_eq!(archived.unarchived_at, None);
+    let back = store.set_thread_archived(id, false).unwrap();
+    assert!(!back.archived);
+    // Bringing it back records when, which the merge sweep counts as activity (PLX-795).
+    assert!(back.unarchived_at.is_some());
     let missing = Uuid::now_v7();
     assert!(matches!(
         store.set_thread_archived(missing, true).unwrap_err(),

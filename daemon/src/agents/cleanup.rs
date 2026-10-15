@@ -1,31 +1,36 @@
-//! Removes a settled or archived thread's worktree once its pull request merges (PLX-555,
-//! PLX-781), behind the `worktreeCleanup` capability and the host's `cleanWorktrees` setting.
+//! Archives a thread once its linked pull requests merge (PLX-795), and removes a settled or
+//! archived thread's worktree once they do (PLX-555, PLX-781), behind the `worktreeCleanup`
+//! capability and the host's `cleanWorktrees` setting.
 //!
-//! A sweep runs at start and every [`SWEEP_PERIOD`]. A thread's worktree and local branch go when
-//! the thread is settled or archived, its run isn't running or waiting, and its linked pull
-//! requests are all merged or closed with at least one merged. The worktree must be on its stored
-//! branch or a merged pull request's head branch, which agents often rename it to, and hold
-//! nothing the merge didn't keep: no uncommitted changes, and a `HEAD` that is on `origin` or is
-//! one of a merged pull request's commits. The thread, its transcript, and its worktree row stay,
-//! so a later message fails to find the folder rather than running anywhere else. A merged pull
-//! request never changes, so each is read from GitHub once per plxd run.
+//! A sweep runs at start and every [`SWEEP_PERIOD`]. It looks at each thread whose run isn't
+//! running or waiting and whose linked pull requests are all merged or closed, with at least one
+//! merged. An unarchived thread is archived when the newest merge came after its last message and
+//! its last unarchive, so a thread brought back stays out. A settled or archived thread's worktree and
+//! local branch go too, when the setting is on. The worktree must be on its stored branch or a
+//! merged pull request's head branch, which agents often rename it to, and hold nothing the merge
+//! didn't keep: no uncommitted changes, and a `HEAD` that is on `origin` or is one of a merged
+//! pull request's commits. The thread, its transcript, and its worktree row stay, so a later
+//! message fails to find the folder rather than running anywhere else. A merged pull request
+//! never changes, so each is read from GitHub once per plxd run.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use parallax_protocol::PrState;
-use parallax_store::{Run, Worktree};
+use jiff::Timestamp;
+use parallax_protocol::{PrState, RunId, ThreadArchiveParams};
+use parallax_store::{Run, Thread, Worktree};
 use tokio::time::{self, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use super::{convert, store, store_error};
 use crate::server::Daemon;
 use crate::worktree::RunFolder;
 
-/// How often a sweep looks for merged worktrees.
+/// How often a sweep looks for merged pull requests.
 const SWEEP_PERIOD: Duration = Duration::from_mins(15);
 
 /// Sweeps once, then every [`SWEEP_PERIOD`] until `stop`.
@@ -42,53 +47,72 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
     }
 }
 
-/// Removes every merged worktree, when the host's setting is on, stopping early for `stop`.
-/// `known` holds the merged pull requests read so far, by URL.
-async fn sweep(daemon: &Daemon, stop: &CancellationToken, known: &mut HashMap<String, Pull>) {
+/// Archives every thread whose pull requests merged since its last message, and removes every
+/// merged worktree when the host's setting is on, stopping early for `stop`. `known` holds the
+/// merged pull requests read so far, by URL.
+async fn sweep(daemon: &Arc<Daemon>, stop: &CancellationToken, known: &mut HashMap<String, Pull>) {
     let candidates = store(daemon, |db| {
-        if !db.clean_worktrees().map_err(|e| store_error(&e))? {
-            return Ok(Vec::new());
-        }
+        let clean = db.clean_worktrees().map_err(|e| store_error(&e))?;
         let mut candidates = Vec::new();
         for thread in db.list_threads().map_err(|e| store_error(&e))? {
-            if !thread.settled && !thread.archived {
+            if thread.archived && !clean {
                 continue;
             }
             let Some(run) = db.get_run(thread.id).map_err(|e| store_error(&e))? else {
                 continue;
             };
-            // A worktree other threads work in stays (0063).
-            if let Some(worktree) = db.get_worktree(thread.id).map_err(|e| store_error(&e))?
-                && idle(&run)
-                && db
-                    .shared_users(thread.id)
-                    .map_err(|e| store_error(&e))?
-                    .is_empty()
-                && !run.state.pull_requests.is_empty()
-            {
-                candidates.push((run, worktree));
+            if !idle(&run) || run.state.pull_requests.is_empty() {
+                continue;
             }
+            // A worktree other threads work in stays (0063).
+            let worktree = match db.get_worktree(thread.id).map_err(|e| store_error(&e))? {
+                Some(worktree)
+                    if clean
+                        && db
+                            .shared_users(thread.id)
+                            .map_err(|e| store_error(&e))?
+                            .is_empty() =>
+                {
+                    Some(worktree)
+                }
+                _ => None,
+            };
+            candidates.push((thread, run, worktree));
         }
         Ok(candidates)
     })
     .await;
     let candidates = candidates.unwrap_or_else(|error| {
-        warn!(error = %error.message, "could not list worktrees to clean up");
+        warn!(error = %error.message, "could not list threads with merged pull requests");
         Vec::new()
     });
-    for (run, worktree) in candidates {
+    for (thread, run, worktree) in candidates {
         if stop.is_cancelled() {
             return;
         }
         // A worktree already removed, or never pinned (#166), has nothing to clean.
-        if worktree.git_dir.is_empty() || !Path::new(&worktree.path).is_dir() {
+        let worktree = worktree
+            .filter(|worktree| !worktree.git_dir.is_empty() && Path::new(&worktree.path).is_dir());
+        if thread.archived && worktree.is_none() {
             continue;
         }
-        // Stopping cancels the checks, which can wait minutes on `gh`, but never a removal.
+        // Stopping cancels the reads, which can wait minutes on `gh`, but never a removal.
+        let pulls = tokio::select! {
+            biased;
+            () = stop.cancelled() => return,
+            pulls = read(daemon, &run, known) => pulls,
+        };
+        let Some(pulls) = pulls.filter(|pulls| merged(pulls)) else {
+            continue;
+        };
+        let archived = thread.archived || archive(daemon, thread.id, &pulls).await;
+        let Some(worktree) = worktree.filter(|_| archived || thread.settled) else {
+            continue;
+        };
         let branch = tokio::select! {
             biased;
             () = stop.cancelled() => return,
-            branch = removable(daemon, &run, &worktree, known) => branch,
+            branch = removable(daemon, &run, &worktree, &pulls) => branch,
         };
         let Some(branch) = branch else {
             continue;
@@ -113,26 +137,20 @@ async fn sweep(daemon: &Daemon, stop: &CancellationToken, known: &mut HashMap<St
     }
 }
 
-/// The branch to delete with `run`'s `worktree`, when the worktree can go: its pull requests
-/// merged, it is on its own branch, and it holds nothing they don't. Reads only the pull requests
-/// not in `known`, and adds the merged ones.
-async fn removable(
-    daemon: &Daemon,
-    run: &Run,
-    worktree: &Worktree,
-    known: &mut HashMap<String, Pull>,
-) -> Option<String> {
-    let worktrees = &daemon.agents.worktrees;
+/// `run`'s linked pull requests, reading only those not in `known` and adding the merged ones.
+/// None when one can't be read.
+async fn read(daemon: &Daemon, run: &Run, known: &mut HashMap<String, Pull>) -> Option<Vec<Pull>> {
     let mut pulls = Vec::new();
     for url in &run.state.pull_requests {
         if let Some(pull) = known.get(url) {
             pulls.push(pull.clone());
             continue;
         }
-        match worktrees.view_pr(url).await {
+        match daemon.agents.worktrees.view_pr(url).await {
             Ok(pull) => {
                 let pull = Pull {
                     state: pull.state,
+                    merged_at: pull.merged_at,
                     commits: commits(pull.commits),
                     head: pull.head_branch,
                 };
@@ -142,14 +160,65 @@ async fn removable(
                 pulls.push(pull);
             }
             Err(error) => {
-                warn!(run = %run.id, %url, %error, "could not read a pull request to clean up");
+                warn!(run = %run.id, %url, %error, "could not read a linked pull request");
                 return None;
             }
         }
     }
-    if !merged(&pulls) {
-        return None;
+    Some(pulls)
+}
+
+/// Archives thread `id` the way the app's Archive does, when the newest of its merged `pulls`
+/// came after its last message or unarchive and its run is idle, read again here so a message
+/// sent mid-sweep counts. Whether it did.
+async fn archive(daemon: &Arc<Daemon>, id: Uuid, pulls: &[Pull]) -> bool {
+    let thread = store(daemon, move |db| {
+        let run = db.get_run(id).map_err(|e| store_error(&e))?;
+        let thread = db.get_thread(id).map_err(|e| store_error(&e))?;
+        Ok(thread.filter(|thread| !thread.archived && run.is_some_and(|run| idle(&run))))
+    })
+    .await;
+    let Ok(Some(thread)) = thread else {
+        return false;
+    };
+    if !merged_since(pulls, last_activity(&thread)) {
+        return false;
     }
+    let Ok(run_id) = RunId::try_from(id) else {
+        return false;
+    };
+    let params = ThreadArchiveParams {
+        run_id,
+        archived: true,
+    };
+    match crate::threads::archive(daemon, params, None).await {
+        Ok(_) => {
+            info!(run = %id, "archived a thread whose pull request merged");
+            true
+        }
+        Err(error) => {
+            warn!(run = %id, error = %error.message, "could not archive a merged thread");
+            false
+        }
+    }
+}
+
+/// When `thread` last took a message or was unarchived.
+fn last_activity(thread: &Thread) -> Timestamp {
+    thread
+        .unarchived_at
+        .map_or(thread.last_prompt_at, |at| at.max(thread.last_prompt_at))
+}
+
+/// The branch to delete with `run`'s `worktree`, when the worktree can go: it is on its own branch
+/// and holds nothing the merged `pulls` don't.
+async fn removable(
+    daemon: &Daemon,
+    run: &Run,
+    worktree: &Worktree,
+    pulls: &[Pull],
+) -> Option<String> {
+    let worktrees = &daemon.agents.worktrees;
     let folder = RunFolder::Worktree {
         path: Path::new(&worktree.path),
         git_dir: Path::new(&worktree.git_dir),
@@ -161,29 +230,35 @@ async fn removable(
             return None;
         }
     };
-    let Some(branch) = branch_to_delete(&pulls, &worktree.branch, status.branch.as_deref())
-        .filter(|_| status.changes == 0 && (status.ahead == 0 || in_merged(&pulls, &head)))
+    let Some(branch) = branch_to_delete(pulls, &worktree.branch, status.branch.as_deref())
+        .filter(|_| status.changes == 0 && (status.ahead == 0 || in_merged(pulls, &head)))
     else {
         info!(run = %run.id, "kept a merged worktree that has work its pull request doesn't");
         return None;
     };
     // ponytail: rechecks the run is idle right before removing, which narrows but doesn't close
     // the window for a message sent mid-sweep; route through the run's actor if that ever bites.
-    let id = run.id;
-    let still_idle = store(daemon, move |db| {
+    still_idle(daemon, run.id).await.then_some(branch)
+}
+
+/// Whether run `id` is idle now, read again from the store.
+async fn still_idle(daemon: &Daemon, id: Uuid) -> bool {
+    store(daemon, move |db| {
         Ok(db
             .get_run(id)
             .map_err(|e| store_error(&e))?
             .is_some_and(|run| idle(&run)))
     })
-    .await;
-    still_idle.unwrap_or(false).then_some(branch)
+    .await
+    .unwrap_or(false)
 }
 
 /// A linked pull request, as the sweep reads it.
 #[derive(Clone)]
 struct Pull {
     state: PrState,
+    /// When it merged.
+    merged_at: Option<Timestamp>,
     /// Its commits' hashes.
     commits: Vec<String>,
     /// The branch it merges from.
@@ -207,6 +282,15 @@ fn merged(pulls: &[Pull]) -> bool {
             .all(|pull| matches!(pull.state, PrState::Merged | PrState::Closed))
 }
 
+/// Whether the newest merge came after `last_activity`, so the thread wasn't used since.
+fn merged_since(pulls: &[Pull], last_activity: Timestamp) -> bool {
+    pulls
+        .iter()
+        .filter_map(|pull| pull.merged_at)
+        .max()
+        .is_some_and(|at| at > last_activity)
+}
+
 /// Whether `head` is one of a merged pull request's commits.
 fn in_merged(pulls: &[Pull], head: &str) -> bool {
     pulls
@@ -227,13 +311,15 @@ fn branch_to_delete(pulls: &[Pull], stored: &str, current: Option<&str>) -> Opti
 
 #[cfg(test)]
 mod tests {
+    use jiff::Timestamp;
     use parallax_protocol::PrState;
 
-    use super::{Pull, branch_to_delete, in_merged, merged};
+    use super::{Pull, branch_to_delete, in_merged, merged, merged_since};
 
     fn pull(state: PrState, commits: &[&str]) -> Pull {
         Pull {
             state,
+            merged_at: None,
             commits: commits.iter().map(|oid| (*oid).to_owned()).collect(),
             head: String::new(),
         }
@@ -259,6 +345,25 @@ mod tests {
             pull(PrState::Open, &[])
         ]));
         assert!(!merged(&[]));
+    }
+
+    #[test]
+    fn archives_only_when_the_newest_merge_follows_the_last_message() {
+        let at = |time: &str| time.parse::<Timestamp>().unwrap();
+        let merged_at = |time: &str| Pull {
+            merged_at: Some(at(time)),
+            ..pull(PrState::Merged, &[])
+        };
+        let pulls = [
+            merged_at("2026-10-01T10:00:00Z"),
+            merged_at("2026-10-03T10:00:00Z"),
+        ];
+        assert!(merged_since(&pulls, at("2026-10-02T10:00:00Z")));
+        assert!(!merged_since(&pulls, at("2026-10-04T10:00:00Z")));
+        assert!(!merged_since(
+            &[pull(PrState::Closed, &[])],
+            at("2026-10-02T10:00:00Z")
+        ));
     }
 
     #[test]
