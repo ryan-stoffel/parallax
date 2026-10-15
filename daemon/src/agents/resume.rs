@@ -25,6 +25,11 @@ use crate::server::Daemon;
 /// The turn plxd sends a run once its usage limit has reset.
 pub(super) const MESSAGE: &str = "Your usage limit has reset. Continue where you left off.";
 
+/// The turn plxd sends a run whose CLI a signal it didn't send killed (PLX-805).
+pub(super) const KILLED: &str = "Your CLI was killed by a signal Parallax didn't send, and any \
+    background tasks it ran were stopped with it. Continue where you left off, restarting any \
+    you still need.";
+
 /// The backoff never grows past this many times its first interval: 4 hours from 15 minutes.
 const BACKOFF_CAP: u32 = 16;
 
@@ -55,6 +60,9 @@ pub(super) struct Resumes {
     reset: Option<Timestamp>,
     /// The resume turn last sent, until its `turnStarted` is logged.
     sent: Option<TurnId>,
+    /// A killed CLI's session was resumed and no turn has completed since, so another kill leaves
+    /// it stopped rather than resuming a CLI that keeps dying (PLX-805).
+    revived: bool,
 }
 
 impl Resumes {
@@ -77,6 +85,17 @@ impl Resumes {
         let turn = TurnId::generate();
         self.sent = Some(turn);
         turn
+    }
+
+    /// A resume turn for a killed CLI's session, or `None` if one was sent and no turn has
+    /// completed since.
+    pub fn revive(&mut self) -> Option<TurnId> {
+        (!std::mem::replace(&mut self.revived, true)).then(|| self.next())
+    }
+
+    /// A turn completed, so a later kill resumes the session again.
+    pub fn turn_completed(&mut self) {
+        self.revived = false;
     }
 
     /// Whether `turn` was sent as a resume, forgetting it.

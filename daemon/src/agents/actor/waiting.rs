@@ -1,6 +1,7 @@
 //! A run waiting for its usage limit to reset (PLX-371, decision 0049): what the actor does when
 //! its CLI ends `rateLimited`, when the stored timer fires, and when a client resumes, cancels,
-//! or turns auto-resume off for a waiting run. The policy is [`crate::agents::resume`]'s.
+//! or turns auto-resume off for a waiting run, and resuming a run whose CLI was killed from
+//! outside (PLX-805). The policy is [`crate::agents::resume`]'s.
 
 use std::time::Duration;
 
@@ -13,7 +14,7 @@ use tracing::{info, warn};
 use super::Actor;
 use crate::agents::RunOptions;
 use crate::agents::convert::{self, WAITING};
-use crate::agents::resume::{self, MESSAGE};
+use crate::agents::resume::{self, KILLED, MESSAGE};
 
 /// The longest the actor sleeps before checking the wall clock again while a run waits. Tokio's
 /// clock stops while a Mac sleeps, so one long sleep could end hours after `resumeAt`.
@@ -157,6 +158,29 @@ impl Actor {
         self.row.state.resume_at = None;
         self.row.state.resume_tries = 0;
         self.save().await;
+    }
+
+    /// Resumes a session whose CLI a signal plxd didn't send killed, with [`KILLED`] as plxd's
+    /// turn (PLX-805). Only once until a turn completes, so a CLI that keeps dying stays stopped.
+    pub(super) async fn revive(&mut self) {
+        let Some(turn) = self.resumes.revive() else {
+            info!(run = %self.id, "a resumed agent run's CLI was killed again; it stays stopped");
+            return;
+        };
+        info!(run = %self.id, "an agent run's CLI was killed from outside; resuming its session");
+        // Boxed: resuming starts a process, whose start can drain this one's events.
+        let resumed = Box::pin(self.resume(
+            turn,
+            KILLED.to_owned(),
+            Vec::new(),
+            Vec::new(),
+            RunOptions::default(),
+            None,
+        ))
+        .await;
+        if let Err(error) = resumed {
+            warn!(run = %self.id, error = %error.message, "could not resume a killed agent run");
+        }
     }
 
     /// Resumes the waiting run's session with [`MESSAGE`] as `turn`. A launch clears the timer;

@@ -154,6 +154,19 @@ test("file MCP configs and startup failures leave a second live SDK query health
     assert.equal((await exit("healthy")).code, 0);
   });
 
+// PLX-805: a stray `pkill` killed idle CLIs' helpers, and their queries never reported an exit.
+test("a helper killed by a signal ends its query with that signal",
+  { skip: !installed || process.platform === "win32", timeout: 10000 }, async (t) => {
+    const { dir, lines, open, prompt, until, exit } = scratchSidecar(t);
+    open("q", []);
+    prompt("q");
+    await until((lines) => lines.some((line) => line.includes('"type":"result"')));
+    const helper = execFileSync("pgrep", ["-f", `sdk-process -- ${dir}/claude`], { encoding: "utf8" });
+    process.kill(Number(helper.trim()), "SIGTERM");
+    assert.equal((await exit("q")).signal, 15);
+    assert.equal(lines.filter((line) => line.startsWith("q exit ")).length, 1);
+  });
+
 for (const escaped of [false, true]) {
   test(`CLI exit drains output once while a ${escaped ? "detached" : "same-group"} child holds stdout`,
     { skip: !installed, timeout: 10000 }, async (t) => {

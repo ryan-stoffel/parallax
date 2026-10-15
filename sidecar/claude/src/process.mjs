@@ -65,7 +65,12 @@ export function spawnClaude(supervisor, { command, args, cwd, env, signal }, onF
       if (frame.stdout !== undefined) child.stdout.write(Buffer.concat([Buffer.from(frame.stdout, "base64"), Buffer.from("\n")]));
     }
   });
-  helper.once("close", () => finish({ code: null, signal: null, stderr: stderr || "Claude process supervisor exited without a status" }));
+  // A helper killed before its exit frame (PLX-805) ends the query as the helper ended: an exit
+  // with neither code nor signal reads as clean to the SDK, which then waits forever.
+  helper.once("close", (code, signal) => finish({
+    code, signal: signal ? constants.signals[signal] ?? null : null,
+    stderr: stderr || "Claude process supervisor exited without a status",
+  }));
   const abort = () => child.kill();
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
