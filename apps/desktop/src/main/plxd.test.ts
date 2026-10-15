@@ -239,13 +239,15 @@ test("keepServing's next step: done once the service runs the copy, installing o
   expect(serviceStep(status(true, true, true), false, 0, true)).toBe("failed");
 });
 
-test("the copy is written when missing or older, never over a newer one", async () => {
+test("the copy and its web client are written when missing or older, never over a newer one", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "plx823-"));
   try {
     const bundle = path.join(root, "Resources");
-    mkdirSync(bundle);
+    const web = path.join("app.asar.unpacked", "dist", "renderer");
+    mkdirSync(path.join(bundle, web), { recursive: true });
     writeFileSync(path.join(bundle, "plxd"), "bundled", { mode: 0o755 });
     writeFileSync(path.join(bundle, "plxd.version"), "1.1.0\n");
+    writeFileSync(path.join(bundle, web, "index.html"), "bundled web");
     // As plxd reports itself: the version file beside it.
     const version = async (plxd: string) =>
       existsSync(plxd)
@@ -255,13 +257,15 @@ test("the copy is written when missing or older, never over a newer one", async 
     const copy = (platform: NodeJS.Platform) =>
       refreshCopy(path.join(bundle, "plxd"), root, platform, version);
     const plxd = path.join(dir, "plxd");
-    const files = () => [plxd, path.join(dir, "plxd.version")].map((f) => readFileSync(f, "utf8"));
+    const index = path.join(dir, web, "index.html");
+    const files = () =>
+      [plxd, path.join(dir, "plxd.version"), index].map((f) => readFileSync(f, "utf8"));
 
     expect(await copy("linux")).toEqual({ plxd, version: "1.1.0" });
-    expect(files()).toEqual(["bundled", "1.1.0\n"]);
+    expect(files()).toEqual(["bundled", "1.1.0\n", "bundled web"]);
     if (process.platform !== "win32") expect(statSync(plxd).mode & 0o111).toBeTruthy();
     // Nothing is left behind in the folder.
-    expect(readdirSync(dir).sort()).toEqual(["plxd", "plxd.version"]);
+    expect(readdirSync(dir).sort()).toEqual(["app.asar.unpacked", "plxd", "plxd.version"]);
 
     for (const [theirs, kept] of [
       ["1.0.0", false],
@@ -272,9 +276,22 @@ test("the copy is written when missing or older, never over a newer one", async 
     ] as const) {
       writeFileSync(plxd, "theirs");
       writeFileSync(path.join(dir, "plxd.version"), `${theirs}\n`);
+      writeFileSync(index, "theirs web");
+      writeFileSync(`${path.join(dir, web)}.version`, `${theirs}\n`);
+      writeFileSync(path.join(dir, web, "old.js"), "");
       expect(await copy("linux"), theirs).toEqual({ plxd, version: kept ? theirs : "1.1.0" });
-      expect(readFileSync(plxd, "utf8"), theirs).toBe(kept ? "theirs" : "bundled");
+      expect(files(), theirs).toEqual(
+        kept ? ["theirs", `${theirs}\n`, "theirs web"] : ["bundled", "1.1.0\n", "bundled web"],
+      );
+      // A refresh replaces the whole web client, so no older file stays in it.
+      expect(existsSync(path.join(dir, web, "old.js")), theirs).toBe(kept);
     }
+
+    // A newer plxd from `host/update`, with no web client beside it, gets this app's.
+    rmSync(path.join(dir, "app.asar.unpacked"), { recursive: true });
+    expect(await copy("linux")).toEqual({ plxd, version: "1.2.0" });
+    expect(files()).toEqual(["theirs", "1.2.0\n", "bundled web"]);
+    expect(readFileSync(`${path.join(dir, web)}.version`, "utf8")).toBe("1.1.0\n");
 
     // Windows renames the old plxd.exe aside, since it can't replace one that's running.
     writeFileSync(path.join(bundle, "plxd.exe"), "bundled");

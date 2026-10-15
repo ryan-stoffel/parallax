@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { copyFile, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
+import { copyFile, cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -102,12 +102,18 @@ export function serviceStep(
   return runningAgents === 0 ? "install" : "wait";
 }
 
+/** The web client a packaged plxd serves, beside itself (`remote_web_dir`, PLX-651). */
+const WEB_CLIENT = path.join("app.asar.unpacked", "dist", "renderer");
+
 /**
  * Keeps this computer's copy of the bundled plxd at `~/.parallax-plxd` under `home`, which plxd's
  * login service runs (0072): written when it's missing or older than `bundled`, never over a
- * newer one, such as `host/update`'s. Each file is copied into a temp folder there, then renamed
- * into place, plxd first, then `plxd.version` (0066). Windows can't replace a running `plxd.exe`
- * but can rename it, so it moves aside first. Answers the copy and its version.
+ * newer one, such as `host/update`'s. The web client plxd serves from beside itself (`WEB_CLIENT`)
+ * is kept the same way on its own, by the version in `renderer.version` beside it, since
+ * `host/update` and plx-connect install plxd without it. Each is copied into a temp folder there,
+ * then renamed into place: the web client and its version, then plxd, then `plxd.version` (0066).
+ * Windows can't replace a running `plxd.exe` but can rename it, so it moves aside first. Answers
+ * the copy and its version.
  */
 export async function refreshCopy(
   bundled: string,
@@ -118,15 +124,42 @@ export async function refreshCopy(
   const name = platform === "win32" ? "plxd.exe" : "plxd";
   const dir = path.join(home, ".parallax-plxd");
   const plxd = path.join(dir, name);
-  const [ours, theirs] = await Promise.all([version(bundled), version(plxd)]);
-  if (ours === undefined || (theirs !== undefined && !olderVersion(theirs, ours)))
-    return { plxd, version: theirs };
+  // Electron's asar patch leaves `app.asar.unpacked` alone, as command.ts's Linux copy relies on.
+  const source = path.join(path.dirname(bundled), WEB_CLIENT);
+  const web = path.join(dir, WEB_CLIENT);
+  const [ours, theirs, theirWeb] = await Promise.all([
+    version(bundled),
+    version(plxd),
+    readFile(`${web}.version`, "utf8").then(
+      (text) => text.trim(),
+      () => undefined,
+    ),
+  ]);
+  const stale = (copied: string | undefined) =>
+    ours !== undefined && (copied === undefined || olderVersion(copied, ours));
+  const newPlxd = stale(theirs);
+  const newWeb = stale(theirWeb) && existsSync(source);
+  if (!newPlxd && !newWeb) return { plxd, version: theirs };
   await mkdir(dir, { recursive: true });
   const temp = await mkdtemp(path.join(dir, ".app-"));
   try {
-    const versionFile = path.join(path.dirname(bundled), "plxd.version");
+    if (newWeb) {
+      await cp(source, path.join(temp, "web"), { recursive: true });
+      await writeFile(path.join(temp, "web.version"), `${ours}\n`);
+      // A folder can't be renamed over one with files in it, so the old one moves into `temp`.
+      await mkdir(path.dirname(web), { recursive: true });
+      await rename(web, path.join(temp, "old-web")).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      });
+      await rename(path.join(temp, "web"), web);
+      await rename(path.join(temp, "web.version"), `${web}.version`);
+    }
+    if (!newPlxd) return { plxd, version: theirs };
     await copyFile(bundled, path.join(temp, name));
-    await copyFile(versionFile, path.join(temp, "plxd.version"));
+    await copyFile(
+      path.join(path.dirname(bundled), "plxd.version"),
+      path.join(temp, "plxd.version"),
+    );
     if (platform === "win32") {
       const aside = path.join(dir, "plxd.old.exe");
       await rm(aside, { force: true }).catch(() => {}); // Still running: the rename below fails.

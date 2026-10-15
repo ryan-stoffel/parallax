@@ -147,8 +147,9 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
     const plxd = localPlxd();
     return plxd === undefined ? undefined : [plxd, "attach"];
   });
-  // Connect on or off, so a `plxd connect on|off` run outside the app is followed too.
-  setInterval(() => void refreshConnect(), DISCOVERY_MS);
+  // Connect on or off, so a `plxd connect on|off` run outside the app is followed too, and an
+  // installed service is kept current either way.
+  setInterval(() => void refreshConnect().then(keepServing), DISCOVERY_MS);
   try {
     settings = readSettings(settingsFile());
   } catch (error) {
@@ -615,8 +616,10 @@ async function replaceOtherServe(
     if (stopped) serveChecks++;
     return stopped;
   } catch (error) {
-    serveChecks++;
-    throw error;
+    // A failure that repeats, such as a full disk for the copy, mustn't keep plxd from connecting.
+    if (++serveChecks < 2) throw error;
+    console.warn(`parallax: kept plxd serve ${running} after failing to replace it twice:`, error);
+    return false;
   }
 }
 
@@ -668,7 +671,7 @@ function addConnection(
       if (hostId === "local") {
         // A new local plxd, such as after `host/update` or a service uninstall, is checked again.
         if (serviceState === "done") serviceState = "check";
-        void refreshConnect();
+        void refreshConnect().then(keepServing);
       } else if (hostId.startsWith("tailnet:")) void readLook(hostId);
     },
   });
@@ -1026,6 +1029,9 @@ function followConnect(on: boolean | undefined, icon?: string): void {
     }
   }
   if (!changed) return;
+  // Connect decides whether `keepServing` installs a service, so it checks again now.
+  if (serviceState === "done") serviceState = "check";
+  void keepServing();
   broadcast("parallax:connect", connectState());
   broadcast("parallax:devices", deviceHosts());
 }
@@ -1069,12 +1075,13 @@ async function serviceStatus(plxd: string): Promise<string | undefined> {
 
 /**
  * While Connect is on, keeps this computer's plxd under its login service (0072), so other
- * computers reach it after the app quits and after a restart. Runs at every discovery: refreshes
- * the copy (`refreshCopy`), then `serviceStep` decides, running the copy's `install --replace`
- * only when `host/health` just said no agents were running (one could start in the moment before
- * `serve` stops). The next check confirms the service runs the copy; the connection reconnects
- * through it by itself. A failed step is tried again at a later discovery, backing off to once
- * every 5 minutes.
+ * computers reach it after the app quits and after a restart. With Connect off, only a service
+ * that's already installed is kept: on the current copy, and repaired when it runs anything else,
+ * such as a plxd that's gone. Runs at each local connect and every 15 s: refreshes the copy
+ * (`refreshCopy`), then `serviceStep` decides, running the copy's `install --replace` only when
+ * `host/health` just said no agents were running (one could start in the moment before `serve`
+ * stops). The next check confirms the service runs the copy; the connection reconnects through it
+ * by itself. A failed step is tried again later, backing off to once every 5 minutes.
  */
 async function keepServing(): Promise<void> {
   const plxd = bundledPlxd();
@@ -1085,7 +1092,8 @@ async function keepServing(): Promise<void> {
   let next: ServiceState = "check";
   try {
     const status = await serviceStatus(plxd);
-    if (status === undefined) {
+    // No service here yet (Windows until PLX-576), or none to keep while Connect is off.
+    if (status === undefined || (!connectOn && !/^installed: true$/m.test(status))) {
       next = "done";
       return;
     }
@@ -1148,7 +1156,6 @@ function addDeviceConnection(device: SavedDevice): void {
 
 /** Asks the local plxd for the tailnet's devices, and connects to any new one. */
 async function discover(): Promise<void> {
-  void keepServing();
   const answer = await connections.get("local")?.request("connect/devices", {});
   if (!connectOn || !answer || "error" in answer) return;
   const { devices, changed } = mergeFound(savedDevices(), answer.result.devices);
