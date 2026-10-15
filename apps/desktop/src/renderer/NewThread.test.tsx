@@ -8,6 +8,7 @@ import type { RpcResponse, SubscriptionMessage, ParallaxBridge } from "../preloa
 import type { Capabilities, ErrorKind, Repo, Thread } from "../protocol/generated/protocol";
 import { accessDefaults, accessPrefs } from "./accessPrefs";
 import { App } from "./App";
+import { flushToasts } from "./undo";
 import { drafts } from "./drafts";
 import { dragThread } from "./threadDrag";
 import { fakeWatch } from "./fakeWatch";
@@ -962,8 +963,22 @@ test("Delete asks first, and only deletes once confirmed", async () => {
   await act(async () => button("Delete…")!.click());
   await act(async () => button("Delete")!.click());
   await settle();
-  expect(calls("thread/delete")).toEqual([{ runId: thread.id }]);
+  // Held back, out of the list, while its toast's Undo can bring it back.
   expect(dialog.open).toBe(false);
+  expect(threadRow("Fix the flaky test")).toBeUndefined();
+  expect(calls("thread/delete")).toEqual([]);
+  await act(async () => button("Undo")!.click());
+  expect(threadRow("Fix the flaky test")).toBeDefined();
+  expect(calls("thread/delete")).toEqual([]);
+
+  // Once Undo can't take it back, it goes.
+  await act(async () => button("Thread actions")!.click());
+  openRowMenus();
+  await act(async () => button("Delete…")!.click());
+  await act(async () => button("Delete")!.click());
+  await act(async () => flushToasts());
+  await settle();
+  expect(calls("thread/delete")).toEqual([{ runId: thread.id }]);
   expect(threadRow("Fix the flaky test")).toBeUndefined();
 });
 

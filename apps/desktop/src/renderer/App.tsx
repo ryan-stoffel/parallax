@@ -1,7 +1,10 @@
 import {
   ArrowLeft,
   Bot,
+  ChevronLeft,
+  ChevronRight,
   Columns2,
+  Plus,
   GitFork,
   X,
   PanelBottom,
@@ -9,9 +12,16 @@ import {
   PanelRight,
   Workflow,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type DragEvent } from "react";
 
-import type { InboxItem, PreviewTab, Repo, RepoId, Thread } from "../protocol/generated/protocol";
+import type {
+  Area,
+  InboxItem,
+  PreviewTab,
+  Repo,
+  RepoId,
+  Thread,
+} from "../protocol/generated/protocol";
 import { type RepoAction } from "./Actions";
 import { AgentChat } from "./AgentChat";
 import { ChangesPanel, type ChangesRequest } from "./ChangesPanel";
@@ -48,6 +58,8 @@ import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
 import type { NativeSubagent } from "./Subagents";
 import { attentionOf } from "./attention";
+import { AreaSwatch } from "./AreaEditor";
+import { parseScope, scopeStore, withMember } from "./areas";
 import {
   useAccountAlarms,
   useConnectionAlarms,
@@ -81,7 +93,7 @@ import {
   type ThreadsView,
 } from "./threads";
 import { isRunning } from "./transcript";
-import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
+import { appShortcut, Breadcrumb, IconButton, Menu, menuItem, TopBar, type Crumb } from "./ui";
 import { useUpdateAlarms } from "./Update";
 import { useShortcutLabel } from "./keybindings";
 import { draggedThread, threadDragType } from "./threadDrag";
@@ -129,6 +141,13 @@ export function App() {
   // The open host, or this computer once the open one is removed.
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
   const [selection, setSelection] = useState<Selection>({ kind: "new" });
+  // The threads opened in this window, oldest first, and where Back and Forward stand (PLX-789).
+  const [history, setHistory] = useState<{
+    list: { hostId: string; threadId: string }[];
+    at: number;
+  }>({ list: [], at: -1 });
+  // Set while Back or Forward opens a thread, so it doesn't count as a new step.
+  const stepping = useRef(false);
   // Shown while the selection is one of its threads, which is the focused one.
   const [split, setSplit] = useState<Split>();
   // A Project just created on another host, opened once that host is open and lists it: the
@@ -403,6 +422,60 @@ export function App() {
   };
   const openHostThread = (hostId: string, threadId: string) =>
     openOnHost(hostId, { kind: "thread", threadId });
+
+  // Each thread opened is a step in this window's history, unless Back or Forward opened it.
+  const openedThread = selection.kind === "thread" ? selection.threadId : undefined;
+  useEffect(() => {
+    if (!openedThread) return;
+    if (stepping.current) {
+      stepping.current = false;
+      return;
+    }
+    setHistory(({ list, at }) => {
+      const here = list[at];
+      if (here?.hostId === host.id && here.threadId === openedThread) return { list, at };
+      const next = [...list.slice(0, at + 1), { hostId: host.id, threadId: openedThread }];
+      return { list: next, at: next.length - 1 };
+    });
+  }, [host.id, openedThread]);
+  // Where Back (-1) or Forward (1) goes, skipping deleted threads.
+  const stepTo = (step: -1 | 1) => {
+    for (let at = history.at + step; at >= 0 && at < history.list.length; at += step) {
+      const { hostId, threadId } = history.list[at]!;
+      const view = views[hostId];
+      if (
+        view?.state.threads.some((t) => t.id === threadId) ||
+        (!view && hosts.some((h) => h.id === hostId))
+      )
+        return at;
+    }
+    return undefined;
+  };
+  const step = (direction: -1 | 1) => {
+    const at = stepTo(direction);
+    if (at === undefined) return;
+    const { hostId, threadId } = history.list[at]!;
+    stepping.current = true;
+    setHistory({ list: history.list, at });
+    openHostThread(hostId, threadId);
+  };
+
+  // New Thread joins the open area (PLX-789), unless the user takes the chip off or picks another.
+  const scope = parseScope(scopeStore.use());
+  const areasHere = "areas" in threads.capabilities ? threads.state.areas : [];
+  const [joinChoice, setJoinChoice] = useState<{ hostId: string; area: string | null }>();
+  const inNew = selection.kind === "new";
+  if (!inNew && joinChoice) setJoinChoice(undefined);
+  const joining = areasHere.find((a) =>
+    joinChoice?.hostId === host.id
+      ? a.id === joinChoice.area
+      : scope.kind === "area" && scope.hostId === host.id && a.id === scope.id,
+  );
+  const joinArea = async (threadId: string) => {
+    if (!joining) return;
+    const area = (views[host.id] ?? idleThreads).state.areas.find((a) => a.id === joining.id);
+    if (area) await threads.updateArea(area.id, withMember(area, "thread", threadId, true));
+  };
   useSnoozeAlarms(listed, openHostThread);
   useThreadAlarms(listed, openHostThread, settings ? [] : panes.map((id) => `${host.id}/${id}`));
   useConnectionAlarms(hosts);
@@ -633,6 +706,9 @@ export function App() {
       } else if (command === "leftThread" || command === "rightThread") {
         if (dialog || !split) return;
         focusPane(command === "leftThread" ? 0 : 1);
+      } else if (command === "back" || command === "forward") {
+        if (dialog || settings) return;
+        step(command === "back" ? -1 : 1);
       } else if (command === "settings") openSettings("general");
       else if (command === "usage") openSettings("usage");
       else if (command === "openPr") {
@@ -792,6 +868,26 @@ export function App() {
             <>
               <TopBar className={`@container ${topBarInset}`}>
                 {showSidebar}
+                <div className="-ml-1 flex shrink-0 items-center">
+                  <IconButton
+                    label="Back"
+                    command="back"
+                    disabled={stepTo(-1) === undefined}
+                    onClick={() => step(-1)}
+                    className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-35 [&_svg]:size-4"
+                  >
+                    <ChevronLeft />
+                  </IconButton>
+                  <IconButton
+                    label="Forward"
+                    command="forward"
+                    disabled={stepTo(1) === undefined}
+                    onClick={() => step(1)}
+                    className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-35 [&_svg]:size-4"
+                  >
+                    <ChevronRight />
+                  </IconButton>
+                </div>
                 {agentId && (
                   <IconButton
                     label="Back to the coordinator"
@@ -1006,8 +1102,18 @@ export function App() {
                         "runOptions" in connection.capabilities
                       }
                       onStarted={(threadId, background) => {
+                        void joinArea(threadId);
                         if (!background) setSelection({ kind: "thread", threadId, started: true });
                       }}
+                      chips={
+                        areasHere.length > 0 && (
+                          <JoinChip
+                            areas={areasHere}
+                            joining={joining}
+                            onJoin={(area) => setJoinChoice({ hostId: host.id, area })}
+                          />
+                        )
+                      }
                       disabledReason={offline}
                       threadLinks={threadLinks}
                     />
@@ -1283,6 +1389,69 @@ export function App() {
         )}
       />
     </div>
+  );
+}
+
+/**
+ * New Thread's area chip (PLX-789): "Joins <area>" while the thread will join one, which × takes
+ * off, or else Add to an area, a menu of the host's areas.
+ */
+function JoinChip({
+  areas,
+  joining,
+  onJoin,
+}: {
+  areas: Area[];
+  joining?: Area;
+  onJoin: (area: string | null) => void;
+}) {
+  const menuId = useId();
+  const chip =
+    "flex h-7 max-w-64 items-center gap-1.5 rounded-lg border border-border text-[12.5px] [&_svg]:size-3.5";
+  if (joining)
+    return (
+      <span title="It joins this area too" className={`${chip} pr-1 pl-2.5 text-foreground`}>
+        <AreaSwatch color={joining.color} />
+        <span className="min-w-0 truncate">Joins {joining.name}</span>
+        <button
+          type="button"
+          aria-label={`Don't add to ${joining.name}`}
+          onClick={() => onJoin(null)}
+          className="grid size-5 shrink-0 place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground"
+        >
+          <X />
+        </button>
+      </span>
+    );
+  return (
+    <>
+      <button
+        type="button"
+        popoverTarget={menuId}
+        aria-haspopup="menu"
+        className={`${chip} border-dashed px-2.5 text-muted-foreground hover:bg-hover hover:text-foreground`}
+      >
+        <Plus aria-hidden />
+        Add to an area
+      </button>
+      <Menu id={menuId} label="Area" className="min-w-48 p-1">
+        {areas.map((a) => (
+          <button
+            key={a.id}
+            type="button"
+            role="menuitem"
+            className={menuItem}
+            onClick={(e) => {
+              e.currentTarget.closest<HTMLElement>("[popover]")?.hidePopover();
+              onJoin(a.id);
+            }}
+          >
+            <AreaSwatch color={a.color} />
+            <span className="min-w-0 truncate">{a.name}</span>
+          </button>
+        ))}
+      </Menu>
+    </>
   );
 }
 

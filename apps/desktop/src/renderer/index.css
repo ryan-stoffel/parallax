@@ -1003,6 +1003,33 @@ body {
 :root.reduce-motion .confetti {
   display: none;
 }
+/* The sidebar's areas (PLX-789): a thread that just finished flashes green once, and the undo
+   toasts, the bulk bar, and the area editor rise or pop in. */
+.row-flash {
+  animation: row-flash 1.8s ease-out;
+}
+@keyframes row-flash {
+  0%,
+  35% {
+    background: color-mix(in srgb, var(--added) 20%, transparent);
+  }
+}
+@keyframes sidebar-rise {
+  from {
+    opacity: 0;
+    translate: 0 6px;
+  }
+}
+@keyframes sidebar-pop {
+  from {
+    opacity: 0;
+    translate: 0 -4px;
+    scale: 0.985;
+  }
+}
+:root.reduce-motion .row-flash {
+  animation: none;
+}
 :root.reduce-motion {
   .plan-bar {
     transition: none;

@@ -17,7 +17,9 @@ export type Command =
   | "nextThread"
   | "previousThread"
   | "leftThread"
-  | "rightThread";
+  | "rightThread"
+  | "back"
+  | "forward";
 
 /**
  * Every rebindable command, in Settings > Keybinds' order, with its default bindings. "Mod" is
@@ -52,6 +54,9 @@ export const commands: { id: Command; name: string; defaults: string[]; elsewher
     defaults: ["Ctrl+Digit2"],
     elsewhere: ["Ctrl+Shift+Digit2"],
   },
+  // The threads opened in this window, as a browser's history (PLX-789).
+  { id: "back", name: "Back", defaults: ["Mod+BracketLeft"] },
+  { id: "forward", name: "Forward", defaults: ["Mod+BracketRight"] },
 ];
 
 const order = ["Ctrl", "Alt", "Shift", "Meta"];
@@ -87,6 +92,8 @@ const keyNames: Record<string, string> = {
   ArrowDown: "↓",
   ArrowLeft: "←",
   ArrowRight: "→",
+  BracketLeft: "[",
+  BracketRight: "]",
 };
 
 /** A keybinding as the OS writes it: "⌃⇧T" on macOS, "Ctrl+Shift+T" elsewhere. */

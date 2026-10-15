@@ -20,6 +20,7 @@ import type {
   ProviderInfo,
   Question,
   Repo,
+  Area,
   Thread,
   UsageDay,
   UsageSessions,
@@ -48,6 +49,8 @@ export interface ContextDoc {
 
 export interface Fixtures {
   repos: Repo[];
+  /** Hand-picked lists of threads and Projects (PLX-789). */
+  areas: Area[];
   projects: Project[];
   threads: Thread[];
   runs: AgentRun[];
@@ -99,6 +102,14 @@ export const ids = {
   questionInbox: uuid(60),
   questionPalette: uuid(61),
   approvalScheduler: uuid(70),
+  repoAcmeWeb: uuid(80),
+  repoAcmeApi: uuid(81),
+  checkout: uuid(82),
+  webhooks: uuid(83),
+  cart: uuid(84),
+  approvalWebhooks: uuid(85),
+  areaLaunch: uuid(90),
+  areaAcme: uuid(91),
 } as const;
 
 const OPUS = "claude-opus-5-5";
@@ -124,6 +135,18 @@ export function createFixtures(now = Date.now()): Fixtures {
       name: "docs-site",
       path: DOCS_PATH,
       createdAt: ago(60 * 24 * 12),
+    },
+    {
+      id: ids.repoAcmeWeb,
+      name: "acme-web",
+      path: `${HOME}/Developer/clients/acme-web`,
+      createdAt: ago(60 * 24 * 9),
+    },
+    {
+      id: ids.repoAcmeApi,
+      name: "acme-api",
+      path: `${HOME}/Developer/clients/acme-api`,
+      createdAt: ago(60 * 24 * 9),
     },
     {
       id: ids.repoScratch,
@@ -1112,6 +1135,90 @@ export function createFixtures(now = Date.now()): Fixtures {
     .update(ago(29), { status: "failed", error: linksError })
     .finish(ago(29), { status: "failed", failure: "setupFailed", message: linksError });
 
+  // ---- A client's two repositories, grouped in an area (PLX-789) ---------------------------
+
+  const checkout = thread({
+    id: ids.checkout,
+    repo: ids.repoAcmeWeb,
+    title: "Checkout page redesign",
+    slug: "checkout-redesign",
+    prompt: "Redesign the checkout page from the Figma frames: one column, totals pinned.",
+    status: "running",
+    started: 4,
+    updated: 0,
+  });
+  log(checkout).out(ago(4), session(), { kind: "turnStarted" });
+  const webhooks = thread({
+    id: ids.webhooks,
+    repo: ids.repoAcmeApi,
+    title: "Stripe webhook retries",
+    slug: "webhook-retries",
+    prompt: "Retry failed Stripe webhooks with exponential backoff, capped at five tries.",
+    status: "running",
+    started: 14,
+    updated: 2,
+  });
+  log(webhooks)
+    .out(
+      ago(14),
+      session(),
+      { kind: "turnStarted" },
+      { kind: "text", text: "Retry with exponential backoff, capped at five tries." },
+    )
+    .out(ago(2), {
+      kind: "approvalRequested",
+      approvalId: ids.approvalWebhooks,
+      toolName: "Bash",
+      input: { command: "stripe trigger payment_intent.payment_failed" },
+      callId: callId(),
+      reason: "Sends a test event to the Stripe account.",
+      expiresAt: ahead(28),
+    });
+  const cart = thread({
+    id: ids.cart,
+    repo: ids.repoAcmeWeb,
+    title: "Cart totals rounding",
+    slug: "cart-rounding",
+    prompt:
+      "Cart totals are off by a cent with three or more discounted items. Round once, at the end.",
+    status: "completed",
+    started: 60 * 30,
+    updated: 60 * 29,
+    seen: 60 * 28,
+    pullRequests: ["https://github.com/acme/acme-web/pull/41"],
+  });
+  log(cart)
+    .out(
+      ago(60 * 30),
+      session(),
+      { kind: "turnStarted" },
+      {
+        kind: "text",
+        text: "Rounding per line drifted. Totals now round once, in cents, at the end.",
+      },
+      { kind: "turnFinished" },
+    )
+    .update(ago(60 * 29), { status: "completed" })
+    .finish(ago(60 * 29), { status: "completed" });
+  threads.find((t) => t.id === ids.updater)!.pinned = true;
+
+  const areas: Area[] = [
+    {
+      id: ids.areaLaunch,
+      name: "Parallax launch",
+      color: "violet",
+      threads: [ids.tahoe, ids.updater, ids.docsSearch],
+      projects: [ids.projectParallax],
+    },
+    {
+      id: ids.areaAcme,
+      name: "Acme client",
+      color: "orange",
+      threads: [ids.checkout, ids.webhooks, ids.cart],
+      projects: [],
+    },
+  ];
+
   // ---- Questions and the inbox --------------------------------------------------------------
 
   const inboxQuestion = "Should scrolling past an inbox item mark it seen, or only opening it?";
@@ -1659,6 +1766,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
 
   return {
     repos,
+    areas,
     projects,
     threads,
     runs,

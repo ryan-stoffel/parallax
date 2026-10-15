@@ -1,5 +1,5 @@
 import { Folder, House, LoaderCircle, MessagesSquare, Plus } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { AccountChoice, PromptImage, Repo, Role } from "../protocol/generated/protocol";
 import { TranscriptView } from "./AgentChat";
@@ -63,6 +63,8 @@ interface NewThreadProps {
   threadLinks?: ThreadLinks;
   /** The draft it reopens (PLX-788), by id. Read once, as it mounts. */
   draftId?: string;
+  /** Chips under the heading, such as the area the thread joins (PLX-789). */
+  chips?: ReactNode;
 }
 
 /** One start of a thread. Retrying it reuses its run id, so plxd never makes a second thread (0007). */
@@ -152,6 +154,7 @@ export function NewThread({
   disabledReason,
   threadLinks,
   draftId: reopened,
+  chips,
 }: NewThreadProps) {
   // The no-repo start's shortcut, as Settings > Keybinds has it.
   const noRepoKeys = useShortcutLabel("noRepoThread");
@@ -400,7 +403,7 @@ export function NewThread({
               {shared && !repoless(group) && ` on ${hosts.find((h) => h.id === hostId)?.name}`}?
             </h1>
             {!repoless(group) && (
-              <div className="relative mb-9 text-center">
+              <div className={`relative text-center ${chips ? "mb-4" : "mb-9"}`}>
                 {/* Its shortcut, Mod+Shift+N unless rebound, shows under it on hover or focus. */}
                 <button
                   type="button"
@@ -422,6 +425,11 @@ export function NewThread({
                     </kbd>
                   )}
                 </button>
+              </div>
+            )}
+            {chips && (
+              <div className={`mb-6 flex justify-center gap-1.5 ${repoless(group) ? "-mt-3" : ""}`}>
+                {chips}
               </div>
             )}
             {/* Menu only: the repository name in the heading opens it. */}

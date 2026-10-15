@@ -4,6 +4,7 @@ import type { RpcError } from "../preload/bridge";
 import { ErrorCodes } from "../protocol/generated/protocol";
 import type {
   AgentBackgroundTask,
+  Area,
   AccountChoice,
   Capabilities,
   AgentRun,
@@ -35,6 +36,8 @@ export interface ThreadsState {
   projects: Project[];
   repos: Repo[];
   threads: Thread[];
+  /** The host's areas (PLX-789), oldest first: hand-picked lists of threads and Projects. */
+  areas: Area[];
   /**
    * By run id: a thread's own title from plxd (0041), or else its run's (`titleOf`). Runs with no
    * thread, such as a Project's, have their run's.
@@ -72,6 +75,7 @@ export const emptyThreads: ThreadsState = {
   projects: [],
   repos: [],
   threads: [],
+  areas: [],
   titles: {},
   runs: {},
   approvals: {},
@@ -107,6 +111,7 @@ export type ThreadsAction =
       projects: Project[];
       repos: Repo[];
       threads: Thread[];
+      areas?: Area[];
       runs: AgentRun[];
       waiting?: RunWaiting[];
     }
@@ -117,7 +122,10 @@ export type ThreadsAction =
   /** A repo's or a Project's own events: its runs and their permission requests. */
   | { type: "scope"; events: LoggedEvent[] }
   /** The permission requests runs wait on, from the shell's snapshot. */
-  | { type: "approvals"; events: LoggedEvent[] };
+  | { type: "approvals"; events: LoggedEvent[] }
+  /** One area as plxd answered for it, or with only `id`, deleted (PLX-789). */
+  | { type: "area"; area: Area }
+  | { type: "area"; id: string };
 
 /** Applies a snapshot, runs' titles, or a host-level event. Events are upserts, so a repeat is harmless. */
 export function threadsReducer(state: ThreadsState, action: ThreadsAction): ThreadsState {
@@ -127,6 +135,7 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
         projects: action.projects,
         repos: action.repos,
         threads: action.threads,
+        areas: action.areas ?? [],
         titles: withThreadTitles(titlesOf(action.runs), action.threads),
         runs: byId(action.runs),
         approvals: {},
@@ -178,6 +187,14 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
     }
     case "approvals":
       return { ...state, approvals: trackApprovals(state.approvals, action.events) };
+    case "area":
+      return {
+        ...state,
+        areas:
+          "area" in action
+            ? upsert(state.areas, action.area)
+            : state.areas.filter((a) => a.id !== action.id),
+      };
     case "event": {
       const e = action.event;
       switch (e.kind) {
@@ -214,6 +231,8 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
         }
         case "thread.deleted":
           return { ...state, threads: state.threads.filter((t) => t.id !== e.runId) };
+        case "areas.changed":
+          return { ...state, areas: e.areas };
         case "agent.background":
           return {
             ...state,
@@ -549,13 +568,31 @@ export interface ThreadsView {
   renameSpace: (space: string, name: string) => Promise<string | undefined>;
   /** Deletes a Space and its chats. Resolves to an error message, or undefined. */
   deleteSpace: (space: string) => Promise<string | undefined>;
+  /**
+   * Makes an area (PLX-789) with `id`, on a plxd with `areas`, which keeps only the members that
+   * are top-level threads or Projects. Reuse `id` to retry, or to bring a deleted one back.
+   * Resolves to an error message, or undefined.
+   */
+  createArea: (area: Area) => Promise<string | undefined>;
+  /** Renames, recolors, or replaces an area's members. Resolves to an error message, or undefined. */
+  updateArea: (id: string, change: AreaChange) => Promise<string | undefined>;
+  /** Deletes an area; its threads stay. Resolves to an error message, or undefined. */
+  deleteArea: (id: string) => Promise<string | undefined>;
 }
 
 /** What a fork runs on: absent keeps the thread's model and account. */
 export type ForkChoice = { model?: string; account?: AccountChoice };
 
-/** What `thread/update` changes. */
-export type ThreadChange = { seen?: boolean; snoozedUntil?: string };
+/** What `thread/update` changes. An empty `title` clears it. */
+export type ThreadChange = {
+  seen?: boolean;
+  snoozedUntil?: string;
+  pinned?: boolean;
+  title?: string;
+};
+
+/** What `area/update` changes. */
+export type AreaChange = Partial<Omit<Area, "id">>;
 
 /** What `project/update` changes: a project's name, icon, permission mode, or autonomy. */
 export type ProjectChange = Omit<ProjectUpdateParams, "project">;
@@ -638,8 +675,8 @@ export function useThreads(
         return setError(old ? undefined : message.error.message);
       }
       if (message.type === "snapshot") {
-        const { projects, repos, threads, runs, requests, waiting } = message.snapshot;
-        dispatch({ type: "snapshot", projects, repos, threads, runs, waiting });
+        const { projects, repos, threads, areas, runs, requests, waiting } = message.snapshot;
+        dispatch({ type: "snapshot", projects, repos, threads, areas, runs, waiting });
         dispatch({ type: "approvals", events: requests });
         setError(undefined);
         setOutdated(false);
@@ -856,6 +893,31 @@ export function useThreads(
         dispatch({ type: "event", event: { kind: "repo.removed", repo: space } });
         return undefined;
       },
+
+      // The answer is the one area; `areas.changed` brings the whole list right after.
+      async createArea(area: Area) {
+        const answer = await window.parallax.request(hostId, "area/create", area);
+        if ("error" in answer) return describeError(answer.error);
+        dispatch({ type: "area", area: answer.result.area });
+        return undefined;
+      },
+
+      async updateArea(id: string, change: AreaChange) {
+        const answer = await window.parallax.request(hostId, "area/update", {
+          area: id,
+          ...change,
+        });
+        if ("error" in answer) return describeError(answer.error);
+        dispatch({ type: "area", area: answer.result.area });
+        return undefined;
+      },
+
+      async deleteArea(id: string) {
+        const answer = await window.parallax.request(hostId, "area/delete", { area: id });
+        if ("error" in answer) return describeError(answer.error);
+        dispatch({ type: "area", id });
+        return undefined;
+      },
     }),
     [hostId, approvals, naming],
   );
@@ -897,4 +959,7 @@ export const idleThreads: ThreadsView = {
   createSpace: async () => notConnected,
   renameSpace: async () => notConnected,
   deleteSpace: async () => notConnected,
+  createArea: async () => notConnected,
+  updateArea: async () => notConnected,
+  deleteArea: async () => notConnected,
 };
