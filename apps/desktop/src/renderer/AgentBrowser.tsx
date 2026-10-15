@@ -193,7 +193,10 @@ export function AgentBrowser({
               inputMode="numeric"
               value={draft?.[side] ?? String(frame?.[side] ?? "")}
               onFocus={() =>
-                setDraft({ width: String(frame?.width ?? ""), height: String(frame?.height ?? "") })
+                setDraft(
+                  (d) =>
+                    d ?? { width: String(frame?.width ?? ""), height: String(frame?.height ?? "") },
+                )
               }
               onChange={(e) => setDraft((d) => d && { ...d, [side]: e.target.value })}
               // A form with two fields and no submit button doesn't submit on Enter by itself.
