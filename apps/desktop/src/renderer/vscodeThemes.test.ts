@@ -10,7 +10,7 @@ import {
   type Tokens,
 } from "./vscodeThemes";
 
-// Parallax's tokens a theme falls back on, as far as these tests need them.
+// Fallback tokens for a theme that lacks a color, shaped like Parallax's (its real ones are in index.css).
 const defaults: Record<"light" | "dark", Tokens> = {
   light: {
     "--background": "#fcfcfc",
