@@ -2,6 +2,7 @@ import { Atom, Package } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 
 import { codeSizes, installedFonts, setAppearance, uiSizes, useAppearance } from "../appearance";
+import { Chip } from "../Mention";
 import { Row, Section, Switch } from "./parts";
 
 const control =
@@ -132,31 +133,6 @@ export function TypographySettings() {
         />
       </Row>
     </Section>
-  );
-}
-
-/** A mention in a message, as the composer draws one: an icon and a name, kept whole. */
-function Chip({
-  icon,
-  tone = "skill",
-  children,
-}: {
-  icon: ReactNode;
-  tone?: "skill" | "file";
-  children: ReactNode;
-}) {
-  return (
-    <span
-      contentEditable={false}
-      className={`inline-flex items-center gap-1 rounded-md border px-1.5 align-baseline text-[0.93em] [&_svg]:size-3.5 ${
-        tone === "file"
-          ? "border-accent/30 bg-accent/10 text-foreground"
-          : "border-project-violet/30 bg-project-violet/10 text-foreground"
-      }`}
-    >
-      {icon}
-      {children}
-    </span>
   );
 }
 
