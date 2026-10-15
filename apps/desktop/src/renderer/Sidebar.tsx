@@ -370,6 +370,15 @@ export function ThreadList({
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string>();
   const [actionError, setActionError] = useState<string>();
+  // Bumped when the last open thread is archived, to pop confetti beside the empty list's note.
+  const [confetti, setConfetti] = useState(0);
+  // It ends here rather than in Confetti, so a pop that never showed, say behind a draft row,
+  // can't play later.
+  useEffect(() => {
+    if (!confetti) return;
+    const timer = setTimeout(() => setConfetti(0), 1000);
+    return () => clearTimeout(timer);
+  }, [confetti]);
   const [query, setQuery] = useState("");
   const [chosen, setFilterState] = useState<RepoFilter>(
     () => (readStored(filterKey) as RepoFilter | null) ?? "all",
@@ -592,7 +601,14 @@ export function ThreadList({
         snoozable={"threadAttention" in view.capabilities}
         autoResumable={"autoResume" in view.capabilities}
         onOpen={() => openItem(item)}
-        onArchive={async () => setActionError(await view.archive(t.id, !t.archived))}
+        onArchive={async () => {
+          const error = await view.archive(t.id, !t.archived);
+          setActionError(error);
+          const lastOpen = items.every(
+            (i) => i.kind !== "thread" || i.thread.archived || i.key === item.key,
+          );
+          if (!error && !t.archived && lastOpen) setConfetti((n) => n + 1);
+        }}
         onSnooze={async (until) =>
           setActionError(await view.update(t.id, { snoozedUntil: until.toISOString() }))
         }
@@ -783,7 +799,10 @@ export function ThreadList({
           </ul>
           {draftRows.length === 0 && topThreads.length === 0 && workingTops.length === 0 && (
             <p className={emptyNote}>
-              {q || filter !== "all" ? "Nothing matches" : "No threads yet"}
+              <span className="relative">
+                {q || filter !== "all" ? "Nothing matches" : "No threads yet"}
+                {confetti > 0 && <Confetti key={confetti} />}
+              </span>
             </p>
           )}
         </div>
@@ -836,6 +855,24 @@ export function ThreadList({
         />
       </div>
     </>
+  );
+}
+
+// Twelve rays, evenly spaced, alternating near and far, cycling the Project colors.
+const confettiRays = Array.from({ length: 12 }, (_, i) => ({
+  "--angle": `${i * 30}deg`,
+  "--distance": i % 2 ? "16px" : "24px",
+  background: ["var(--project-pink)", "var(--project-yellow)", "var(--project-sky)"][i % 3],
+})) as CSSProperties[];
+
+/** One pop of confetti rays just right of its parent, for archiving the last open thread. */
+function Confetti() {
+  return (
+    <span aria-hidden className="confetti">
+      {confettiRays.map((style, i) => (
+        <span key={i} style={style} />
+      ))}
+    </span>
   );
 }
 

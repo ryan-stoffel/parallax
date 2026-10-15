@@ -807,6 +807,37 @@ body {
     translate: 16px 0;
   }
 }
+/* Archiving the last open thread pops confetti just right of the empty list's note (Sidebar.tsx),
+   clear of its text: each ray turns to its --angle, then shoots out to its --distance and fades. */
+.confetti {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 30px);
+  pointer-events: none;
+}
+.confetti > span {
+  position: absolute;
+  width: 6px;
+  height: 2px;
+  margin: -1px 0 0 -3px;
+  border-radius: 1px;
+  animation: confetti 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes confetti {
+  from {
+    transform: rotate(var(--angle)) translateX(4px) scaleX(0.4);
+  }
+  50% {
+    opacity: 1;
+  }
+  to {
+    transform: rotate(var(--angle)) translateX(var(--distance)) scaleX(1);
+    opacity: 0;
+  }
+}
+:root.reduce-motion .confetti {
+  display: none;
+}
 :root.reduce-motion {
   .plan-bar {
     transition: none;
