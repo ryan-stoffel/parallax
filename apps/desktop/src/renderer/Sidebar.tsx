@@ -164,7 +164,7 @@ export function Sidebar({
       aria-label="Sidebar"
       hidden={!open}
       style={{ width }}
-      className="relative flex min-w-0 shrink-0 flex-col border-r border-border bg-sidebar"
+      className="night-sky-host relative flex min-w-0 shrink-0 flex-col border-r border-border bg-sidebar"
     >
       <NightSky />
       {onResize && <PanelResize side="left" width={width} onResize={onResize} />}

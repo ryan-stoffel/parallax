@@ -247,9 +247,26 @@
   --danger: #f0883e;
 }
 
-/* A nightly build (main.tsx sets .nightly): a night sky with cartoon clouds behind the sidebar's
-   top row (NightSky.tsx), fading into the sidebar, and the same sky on the send buttons. The
-   clouds sit below the row's text, which turns white over the sky in every theme and mode. */
+/* A nightly build (main.tsx sets .nightly): a night sky at the top of the sidebar, with stars and
+   cartoon clouds in its top row (NightSky.tsx), and the same sky on the send buttons. The row's
+   text turns white over it in every theme and mode.
+
+   The sky is the sidebar's own background, so it sits behind all of the sidebar's content, and
+   it blends into the sidebar's color in oklab, so it merges cleanly into any theme's. Light mode
+   ends it with the top row, above the Search row's dark text; dark mode runs it on behind the
+   Search row, whose light text reads over it. */
+:root.nightly .night-sky-host {
+  background:
+    linear-gradient(in oklab, #070923, #17184f 34%, #2a2470 52%, var(--sidebar)) top / 100% 56px
+      no-repeat,
+    var(--sidebar);
+}
+:root.nightly.dark .night-sky-host {
+  background:
+    linear-gradient(in oklab, #070923, #17184f 22%, #2a2470 38%, var(--sidebar)) top / 100% 104px
+      no-repeat,
+    var(--sidebar);
+}
 .night-sky {
   display: none;
 }
@@ -257,34 +274,13 @@
   display: block;
   position: absolute;
   inset: 0 0 auto;
-  height: 64px;
+  height: 56px;
   overflow: hidden;
   pointer-events: none;
-  /* Eased, so the sky thins into the sidebar instead of stopping. Light mode ends it above the
-     Search row, whose dark text it would cover. */
-  mask-image: linear-gradient(
-    black 55%,
-    rgb(0 0 0 / 62%) 70%,
-    rgb(0 0 0 / 28%) 84%,
-    rgb(0 0 0 / 8%) 94%,
-    transparent
-  );
-}
-/* Dark mode lets it run on past the Search row, whose light text reads over it. */
-:root.nightly.dark .night-sky {
-  height: 104px;
-  mask-image: linear-gradient(
-    black 38%,
-    rgb(0 0 0 / 72%) 52%,
-    rgb(0 0 0 / 42%) 66%,
-    rgb(0 0 0 / 18%) 80%,
-    rgb(0 0 0 / 5%) 92%,
-    transparent
-  );
 }
 :root.nightly .night-sky svg {
   width: 100%;
-  height: 104px;
+  height: 56px;
 }
 :root.nightly .night-sky-text {
   --foreground: #ffffff;

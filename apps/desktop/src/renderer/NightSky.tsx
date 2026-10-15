@@ -1,7 +1,8 @@
 import { useId } from "react";
 
-// A nightly build's sky behind the sidebar's top row (index.css shows it only under .nightly,
-// which main.tsx sets). Drawn 640 by 104 and cropped to the sidebar, so it never scales.
+// A nightly build's stars, glow, and clouds in the sidebar's top row (index.css shows them only
+// under .nightly, which main.tsx sets). Drawn 640 by 56 and cropped to the sidebar, so they never
+// scale. The sky behind them is the sidebar's own background (.night-sky-host in index.css).
 
 // Stars: x, y, radius, opacity, from a fixed seed so every window draws the same sky.
 const stars = (() => {
@@ -53,36 +54,29 @@ export function NightSky() {
   const id = useId();
   return (
     <div aria-hidden className="night-sky">
-      <svg viewBox="0 0 640 104" preserveAspectRatio="xMinYMin slice">
+      <svg viewBox="0 0 640 56" preserveAspectRatio="xMinYMin slice">
         <defs>
-          <linearGradient id={`${id}-sky`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="#070923" />
-            <stop offset="0.36" stopColor="#17184f" />
-            <stop offset="0.56" stopColor="#2a2470" />
-            <stop offset="1" stopColor="#14133a" />
-          </linearGradient>
           <radialGradient id={`${id}-glow`} cx="0.75" cy="0" r="0.5">
             <stop offset="0" stopColor="#7c3aed" stopOpacity="0.4" />
             <stop offset="1" stopColor="#7c3aed" stopOpacity="0" />
           </radialGradient>
-          {/* The clouds thin out above the Search row, into the sky. */}
+          {/* The clouds thin out into the sky by the top row's bottom. */}
           <linearGradient
             id={`${id}-thin`}
             x1="0"
-            y1="40"
+            y1="36"
             x2="0"
-            y2="62"
+            y2="54"
             gradientUnits="userSpaceOnUse"
           >
             <stop offset="0" stopColor="#fff" />
             <stop offset="1" stopColor="#fff" stopOpacity="0" />
           </linearGradient>
-          <mask id={`${id}-clouds`} maskUnits="userSpaceOnUse" x="0" y="0" width="640" height="104">
-            <rect width="640" height="104" fill={`url(#${id}-thin)`} />
+          <mask id={`${id}-clouds`} maskUnits="userSpaceOnUse" x="0" y="0" width="640" height="56">
+            <rect width="640" height="56" fill={`url(#${id}-thin)`} />
           </mask>
         </defs>
-        <rect width="640" height="104" fill={`url(#${id}-sky)`} />
-        <rect width="640" height="104" fill={`url(#${id}-glow)`} />
+        <rect width="640" height="56" fill={`url(#${id}-glow)`} />
         {stars.map(([x, y, r, opacity], i) => (
           <circle
             key={i}
