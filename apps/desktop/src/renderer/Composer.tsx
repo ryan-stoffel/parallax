@@ -122,6 +122,7 @@ const MentionNode = TiptapNode.create({
     { tag: "span[data-mention]", getAttrs: (el) => ({ token: el.getAttribute("data-mention") }) },
   ],
   renderHTML: ({ node }) => ["span", { "data-mention": node.attrs["token"] }, node.attrs["token"]],
+  renderText: ({ node }) => node.attrs["token"] as string,
   // Backspace just after one takes it whole, which the browser does unreliably for an uneditable span.
   addKeyboardShortcuts: () => ({
     Backspace: ({ editor }) => {
@@ -270,7 +271,8 @@ function triggerAt(editor: Editor): Trigger | undefined {
 /**
  * A transaction turning each `known` `/skill` or `@path` in `state`'s text into a mention, or
  * undefined if there's none. One that ends at the cursor is still being typed and stays text. It
- * isn't an undo step of its own, so undo takes back what was typed.
+ * isn't an undo step of its own, so undo takes back what was typed, nor an edit, so a recalled
+ * prompt stays recalled for Up and Down.
  */
 function mentionsIn(state: EditorState, known: (token: string) => boolean) {
   const { tr, selection } = state;
@@ -284,7 +286,7 @@ function mentionsIn(state: EditorState, known: (token: string) => boolean) {
       tr.replaceWith(tr.mapping.map(from), tr.mapping.map(to), mention);
     }
   });
-  return tr.docChanged ? tr.setMeta("addToHistory", false) : undefined;
+  return tr.docChanged ? tr.setMeta("addToHistory", false).setMeta("recall", true) : undefined;
 }
 
 /** `items` whose name starts with `query`, then those that only contain it, each in order. */

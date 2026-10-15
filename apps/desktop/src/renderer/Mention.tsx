@@ -1,4 +1,4 @@
-import { Atom, File, Package } from "lucide-react";
+import { Package } from "lucide-react";
 import type { ReactNode } from "react";
 
 /** A mention in a message, as the composer draws one: an icon and a name, kept whole. */
@@ -29,22 +29,72 @@ export function Chip({
   );
 }
 
-// Drawn as an SVG like the other icons, so every chip sits on the text's baseline alike.
-const badge = (text: string) => (
-  <svg viewBox="0 0 16 16" aria-hidden>
-    <text x="8" y="11.5" textAnchor="middle" fontSize="9.5" fontWeight="700" fill="currentColor">
-      {text}
-    </text>
-  </svg>
+// VS Code's Material file icons (material-icon-theme, MIT), by name: only these are bundled.
+const icons = import.meta.glob<string>(
+  "../../node_modules/material-icon-theme/icons/{c,console,cpp,csharp,css,database,docker,file,go,html,image,java,javascript,json,kotlin,lock,markdown,pdf,php,python,react,react_ts,ruby,rust,sass,svelte,svg,swift,toml,typescript,vue,xml,yaml}.svg",
+  { eager: true, import: "default" },
 );
+const icon = (name: string) => icons[`../../node_modules/material-icon-theme/icons/${name}.svg`]!;
 
-/** The icon for a file, by its extension. */
+// Each extension's icon, as VS Code's Material theme draws it.
+const byExtension: Record<string, string> = {
+  rs: "rust",
+  ts: "typescript",
+  mts: "typescript",
+  cts: "typescript",
+  tsx: "react_ts",
+  js: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  jsx: "react",
+  html: "html",
+  htm: "html",
+  css: "css",
+  scss: "sass",
+  sass: "sass",
+  json: "json",
+  jsonc: "json",
+  md: "markdown",
+  mdx: "markdown",
+  py: "python",
+  go: "go",
+  java: "java",
+  c: "c",
+  h: "c",
+  cpp: "cpp",
+  cc: "cpp",
+  hpp: "cpp",
+  cs: "csharp",
+  swift: "swift",
+  kt: "kotlin",
+  rb: "ruby",
+  php: "php",
+  sh: "console",
+  bash: "console",
+  zsh: "console",
+  yml: "yaml",
+  yaml: "yaml",
+  toml: "toml",
+  lock: "lock",
+  svg: "svg",
+  png: "image",
+  jpg: "image",
+  jpeg: "image",
+  gif: "image",
+  webp: "image",
+  pdf: "pdf",
+  vue: "vue",
+  svelte: "svelte",
+  xml: "xml",
+  sql: "database",
+};
+
+/** The icon for a file, by its extension, or Dockerfile by name. */
 function fileIcon(path: string): ReactNode {
-  const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
-  if (ext === "tsx" || ext === "jsx") return <Atom />;
-  if (ext === "ts" || ext === "mts" || ext === "cts") return badge("TS");
-  if (ext === "js" || ext === "mjs" || ext === "cjs") return badge("JS");
-  return <File />;
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
+  const look = name === "Dockerfile" ? "docker" : (byExtension[ext] ?? "file");
+  return <img src={icon(look)} alt="" className="size-3.5 shrink-0" />;
 }
 
 /** A `/skill` or `@path` token as a chip: the skill's name, or the file's name with its path on
@@ -60,8 +110,9 @@ export function Mention({ token }: { token: string }) {
 }
 
 /** `/name` and `@path` tokens in sent text: a slash command or skill (no further `/`), or a path
- * with a `.` or `/` in it, so `/usr/bin` and `@someone` stay text. */
-const tokens = /(?<=^|\s)(\/[\w:.-]+|@[\w.-]*[./][\w./-]*)(?=\s|$)/g;
+ * ending in an extension, so `/usr/bin`, `@someone`, and `@types/node` stay text. Either may end a
+ * sentence or clause. */
+const tokens = /(?<=^|\s)(\/[\w:-]+|@[\w./-]*\.\w+)(?=$|\s|[,;:!?)]|\.(?:\s|$))/g;
 
 /** A sent prompt's text with its `/skill` and `@path` tokens drawn as chips. */
 export function withMentions(text: string): ReactNode[] {

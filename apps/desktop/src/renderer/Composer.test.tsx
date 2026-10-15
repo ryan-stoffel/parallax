@@ -975,3 +975,16 @@ test("a known /skill or @file becomes one chip, sent as typed, and Backspace tak
     [],
   );
 });
+
+test("a recalled prompt's chip leaves it recalled, so Up still steps back", async () => {
+  const { box, type, press } = await withMenus(async () => undefined, {
+    history: ["older", "/review the diff"],
+  });
+  // The `/` lists the commands, which is how /review is known.
+  await type("/");
+  act(() => void box.editor!.commands.clearContent(true));
+  await press("ArrowUp");
+  expect(box.querySelector("[data-node-view-wrapper]")?.textContent).toBe("review");
+  await press("ArrowUp");
+  expect(box.textContent).toBe("older");
+});
