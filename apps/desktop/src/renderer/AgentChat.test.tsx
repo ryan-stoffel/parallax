@@ -2226,8 +2226,13 @@ test("a bar beside the transcript for each prompt shows it and its reply, and sc
   ]);
   // Scrolled to the end, the latest prompt is the one being read.
   expect(bars.map((b) => b.getAttribute("aria-current"))).toEqual([null, "true"]);
-  // Only a hovered or focused bar stands out, not the one being read.
-  expect(bars[1]!.firstElementChild!.className).toBe(bars[0]!.firstElementChild!.className);
+  // The bar being read is brighter, but only a hovered or focused one is longer.
+  const [other, read] = bars.map((b) => b.firstElementChild!.classList);
+  expect(read!.contains("bg-foreground")).toBe(true);
+  expect(other!.contains("bg-foreground")).toBe(false);
+  expect(read!.contains("w-2.5") && other!.contains("w-2.5")).toBe(true);
+  // And it shows no card.
+  expect(document.querySelector('nav[aria-label="Prompts"] + [aria-hidden]')).toBeNull();
 
   act(() => bars[0]!.focus());
   const card = document.querySelector('nav[aria-label="Prompts"] + [aria-hidden]')!;
