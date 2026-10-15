@@ -900,7 +900,7 @@ test("the row menu archives into Archived, and unarchives back", async () => {
   openRowMenus();
   await act(async () => button("Archive")!.click());
   expect(calls("thread/archive")).toEqual([{ runId: thread.id, archived: true }]);
-  // It was the only open thread, so confetti bursts from the search bar.
+  // It was the only open thread, so confetti pops beside the empty list's note.
   expect(document.querySelector("#sidebar .confetti")).not.toBeNull();
   await act(async () => drawer("Archived")!.querySelector("summary")!.click());
   expect(drawer("Archived")?.textContent).toContain("Fix the flaky test");

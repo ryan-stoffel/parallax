@@ -369,6 +369,13 @@ export function ThreadList({
   const [actionError, setActionError] = useState<string>();
   // Bumped when the last open thread is archived, to pop confetti beside the empty list's note.
   const [confetti, setConfetti] = useState(0);
+  // It ends here rather than in Confetti, so a pop that never showed, say behind a draft row,
+  // can't play later.
+  useEffect(() => {
+    if (!confetti) return;
+    const timer = setTimeout(() => setConfetti(0), 1000);
+    return () => clearTimeout(timer);
+  }, [confetti]);
   const [query, setQuery] = useState("");
   const [chosen, setFilterState] = useState<RepoFilter>(
     () => (readStored(filterKey) as RepoFilter | null) ?? "all",
@@ -791,7 +798,7 @@ export function ThreadList({
             <p className={emptyNote}>
               <span className="relative">
                 {q || filter !== "all" ? "Nothing matches" : "No threads yet"}
-                {confetti > 0 && <Confetti key={confetti} onDone={() => setConfetti(0)} />}
+                {confetti > 0 && <Confetti key={confetti} />}
               </span>
             </p>
           )}
@@ -856,13 +863,7 @@ const confettiRays = Array.from({ length: 12 }, (_, i) => ({
 })) as CSSProperties[];
 
 /** One pop of confetti rays just right of its parent, for archiving the last open thread. */
-function Confetti({ onDone }: { onDone: () => void }) {
-  // Once, on mount: the list rerenders often, and each render passes a new onDone.
-  useEffect(() => {
-    const timer = setTimeout(onDone, 1000);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+function Confetti() {
   return (
     <span aria-hidden className="confetti">
       {confettiRays.map((style, i) => (
