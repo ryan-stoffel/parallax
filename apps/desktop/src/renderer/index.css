@@ -93,11 +93,11 @@
 }
 
 /* Parallax Light and Parallax Dark. The `dark` class on <html> switches them
-   (theme.ts), and a `theme-*` class swaps in a VS Code theme's tokens for either
-   (themes.css, which main.tsx loads after this file).
+   (theme.ts), and a `theme-*` class swaps in an added VS Code theme's tokens for either
+   (vscodeThemes.ts, whose CSS goes after this file).
    Components use only these tokens, never raw colors. Every *-foreground keeps
    at least 4.5:1 contrast on the background and sidebar, in every theme
-   (theme.test.ts).
+   (theme.test.ts, and vscodeThemes.test.ts for added themes).
    .scheme-light and .scheme-dark paint one mode inside any other, for
    Settings' previews.
 
@@ -246,32 +246,24 @@
   --danger: #f0883e;
 }
 
-/* A nightly build (main.tsx sets .nightly): a night sky with clouds behind the sidebar's top row,
-   a cloud on its logo (NightSky.tsx), and the same sky on the send buttons. The sky is the same in
-   every theme and mode, so the row's text and icons turn white over it. */
-.night-sky,
-.night-cloud {
+/* A nightly build (main.tsx sets .nightly): a night sky with cartoon clouds behind the sidebar's
+   top row (NightSky.tsx), fading into the sidebar, and the same sky on the send buttons. The
+   clouds sit below the row's text, which turns white over the sky in every theme and mode. */
+.night-sky {
   display: none;
 }
 :root.nightly .night-sky {
   display: block;
   position: absolute;
   inset: 0 0 auto;
-  height: 52px;
+  height: 60px;
   overflow: hidden;
   pointer-events: none;
+  mask-image: linear-gradient(black 70%, transparent);
 }
 :root.nightly .night-sky svg {
   width: 100%;
   height: 100%;
-}
-:root.nightly .night-cloud {
-  display: block;
-  position: absolute;
-  right: -5px;
-  bottom: -3px;
-  width: 12px;
-  filter: drop-shadow(0 1px 1px rgb(4 6 26 / 50%));
 }
 :root.nightly .night-sky-text {
   --foreground: #ffffff;
@@ -282,14 +274,14 @@
 }
 :root.nightly .send-sky {
   background:
-    radial-gradient(0.8px 0.8px at 28% 30%, #fff 50%, transparent),
-    radial-gradient(0.6px 0.6px at 66% 22%, rgb(255 255 255 / 80%) 50%, transparent),
-    radial-gradient(0.7px 0.7px at 78% 52%, rgb(255 255 255 / 70%) 50%, transparent),
-    radial-gradient(0.5px 0.5px at 40% 58%, rgb(255 255 255 / 60%) 50%, transparent),
-    radial-gradient(45% 24% at 32% 96%, rgb(224 231 255 / 60%), transparent 70%),
-    radial-gradient(40% 22% at 70% 100%, rgb(224 231 255 / 50%), transparent 70%),
-    radial-gradient(circle at 35% 25%, rgb(129 140 248 / 70%), transparent 60%),
-    linear-gradient(160deg, #070a24, #161a52 55%, #2f2a8f);
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Cg fill='%236e6ac8'%3E%3Ccircle cx='8' cy='33' r='6'/%3E%3Ccircle cx='17' cy='29' r='7.5'/%3E%3Ccircle cx='28' cy='32' r='6.5'/%3E%3C/g%3E%3Cg fill='%23a5a1ef'%3E%3Ccircle cx='12' cy='37' r='5'/%3E%3Ccircle cx='22' cy='36' r='6'/%3E%3C/g%3E%3C/svg%3E")
+      bottom / 100% no-repeat,
+    radial-gradient(0.8px 0.8px at 28% 26%, #fff 50%, transparent),
+    radial-gradient(0.6px 0.6px at 66% 20%, rgb(255 255 255 / 80%) 50%, transparent),
+    radial-gradient(0.7px 0.7px at 78% 46%, rgb(255 255 255 / 70%) 50%, transparent),
+    radial-gradient(0.5px 0.5px at 40% 50%, rgb(255 255 255 / 60%) 50%, transparent),
+    radial-gradient(circle at 70% 10%, rgb(124 58 237 / 45%), transparent 60%),
+    linear-gradient(#070923, #17184f 60%, #2a2470);
   color: #ffffff;
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 25%),
@@ -304,7 +296,7 @@
   animation: twinkle 4s ease-in-out infinite;
 }
 :root.nightly:not(.reduce-motion) .night-sky .drift {
-  animation: drift 24s ease-in-out infinite alternate;
+  animation: drift 30s ease-in-out infinite alternate;
 }
 @keyframes twinkle {
   50% {
@@ -313,8 +305,24 @@
 }
 @keyframes drift {
   to {
-    transform: translateX(10px);
+    transform: translateX(16px);
   }
+}
+
+/* A theme's orb in Settings > Appearance: its background, lit by its foreground and accent. A
+   .scheme-* and .theme-* class beside it set the tokens. */
+.theme-orb {
+  background:
+    radial-gradient(
+      circle at 32% 26%,
+      color-mix(in oklab, var(--foreground) 45%, transparent),
+      transparent 45%
+    ),
+    radial-gradient(circle at 72% 78%, var(--accent), transparent 62%),
+    radial-gradient(circle at 22% 80%, var(--sidebar), transparent 55%), var(--background);
+  box-shadow:
+    inset 0 0 0 1px var(--border),
+    inset 0 -6px 12px rgb(0 0 0 / 18%);
 }
 
 /* Tailwind's motion-safe and motion-reduce follow .reduce-motion, which also covers the OS's

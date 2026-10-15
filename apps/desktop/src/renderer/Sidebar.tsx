@@ -93,7 +93,7 @@ import { localId, type Host } from "./hosts";
 import { IconPicker } from "./IconPicker";
 import { imageUrl } from "./images";
 import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
-import { NightCloud, NightSky } from "./NightSky";
+import { NightSky } from "./NightSky";
 import { iconColors, iconLook } from "./projectIcons";
 import { ForkMenu } from "./Fork";
 import { archivePageSize, sidebarPrefs } from "./sidebarPrefs";
@@ -184,10 +184,7 @@ export function Sidebar({
           onClick={onNewThread}
           className="mr-auto flex items-center gap-1.5 rounded-md px-1 py-0.5 font-brand text-[14px] font-semibold tracking-tight text-foreground hover:bg-hover"
         >
-          <span className="relative">
-            <ParallaxMark className="size-5" />
-            <NightCloud />
-          </span>
+          <ParallaxMark className="size-5" />
           Parallax
         </button>
       </TopBar>

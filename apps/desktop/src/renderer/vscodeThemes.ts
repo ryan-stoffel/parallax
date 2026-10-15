@@ -1,0 +1,365 @@
+import { strFromU8, unzipSync } from "fflate";
+
+import { stored } from "./stored";
+
+// VS Code color themes, added from Open VSX in Settings > Appearance. Each theme's VS Code colors
+// and syntax colors become Parallax's tokens (`tokensOf`) when it's added, and its CSS
+// (`themeCss`) paints them under a `theme-<id>` class on <html> (appearance.ts).
+
+export type Mode = "light" | "dark";
+export type Tokens = Record<string, string>;
+
+/** One color theme, converted. */
+export interface AddedTheme {
+  id: string;
+  name: string;
+  mode: Mode;
+  tokens: Tokens;
+  /** --added and --danger under Blue & orange change colors. */
+  blueOrange: Tokens;
+}
+
+/** An Open VSX extension's color themes, as added. */
+export interface AddedExtension {
+  /** `namespace.name` on Open VSX. */
+  id: string;
+  name: string;
+  themes: AddedTheme[];
+}
+
+/** JSON with comments and trailing commas, as VS Code reads theme files. */
+export function parseJsonc(text: string): unknown {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      const start = i;
+      for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === "\\") i++;
+      out += text.slice(start, i + 1);
+    } else if (c === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      out += "\n";
+    } else if (c === "/" && text[i + 1] === "*") {
+      i = text.indexOf("*/", i + 2) + 1;
+      if (i === 0) break;
+    } else out += c;
+  }
+  return JSON.parse(out.replace(/,(\s*[}\]])/g, "$1"));
+}
+
+// Colors: #rgb, #rgba, #rrggbb, or #rrggbbaa, as [r, g, b] in 0..255 and an alpha in 0..1.
+function parse(color: string): [number, number, number, number] {
+  let h = color.replace("#", "").toLowerCase();
+  if (h.length <= 4) h = h.replace(/./g, "$&$&");
+  const n = (i: number) => parseInt(h.slice(i, i + 2), 16);
+  return [n(0), n(2), n(4), h.length === 8 ? n(6) / 255 : 1];
+}
+const isColor = (value: unknown): value is string =>
+  typeof value === "string" && /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value);
+const hex = (rgb: number[]) =>
+  "#" + rgb.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
+/** `top` painted over the opaque `under`. */
+function over(top: string, under: string) {
+  const [r, g, b, a] = parse(top);
+  const u = parse(under);
+  return hex([r * a + u[0] * (1 - a), g * a + u[1] * (1 - a), b * a + u[2] * (1 - a)]);
+}
+/** `a` mixed into `b`, `t` of the way. */
+const mix = (a: string, b: string, t: number) => {
+  const [x, y] = [parse(a), parse(b)];
+  return hex([0, 1, 2].map((i) => x[i]! * t + y[i]! * (1 - t)));
+};
+function luminance(color: string) {
+  const [r, g, b] = parse(color).map((v) => {
+    const c = v / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+}
+/** WCAG 2's contrast ratio of two opaque colors. */
+export function contrast(a: string, b: string) {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi! + 0.05) / (lo! + 0.05);
+}
+/** `color`, moved toward white on dark fills or black on light ones until it keeps `ratio` on each. */
+function readable(color: string, fills: string[], ratio: number, dark: boolean) {
+  let c = color;
+  for (let t = 0.04; fills.some((f) => contrast(c, f) < ratio) && t <= 1; t += 0.04)
+    c = mix(dark ? "#ffffff" : "#000000", color, t);
+  return c;
+}
+
+type TokenColor = { scope?: string | string[]; settings?: { foreground?: string } };
+type VscodeTheme = { colors?: Record<string, unknown>; tokenColors?: TokenColor[] };
+
+/** The foreground VS Code would give `scope`: the rule whose selector matches the most of it. */
+function scopeColor(tokenColors: TokenColor[], scope: string) {
+  let best: { length: number; color: string } | undefined;
+  for (const rule of tokenColors) {
+    const color = rule.settings?.foreground;
+    if (!isColor(color)) continue;
+    const selectors = typeof rule.scope === "string" ? rule.scope.split(",") : (rule.scope ?? []);
+    for (const s of selectors.map((s) => s.trim()))
+      if ((scope === s || scope.startsWith(`${s}.`)) && s.length >= (best?.length ?? 0))
+        best = { length: s.length, color };
+  }
+  return best?.color;
+}
+
+// Blue for added, orange for removed, under Blue & orange change colors: index.css's.
+const blueOrange = {
+  light: { "--added": "#0969da", "--danger": "#bc4c00" },
+  dark: { "--added": "#58a6ff", "--danger": "#f0883e" },
+};
+
+/**
+ * Parallax's tokens from a VS Code theme, over `defaults`, Parallax's own for `mode`. Text keeps
+ * 4.5:1 on the background and sidebar and Project colors 3:1 on the sidebar, moved toward white
+ * or black where the theme's fall short.
+ */
+export function tokensOf(
+  { colors = {}, tokenColors = [] }: VscodeTheme,
+  mode: Mode,
+  defaults: Tokens,
+): { tokens: Tokens; blueOrange: Tokens } {
+  const dark = mode === "dark";
+  const first = (...keys: string[]) => keys.map((k) => colors[k]).find(isColor);
+  const background = over(
+    first("editor.background") ?? defaults["--background"]!,
+    dark ? "#000000" : "#ffffff",
+  );
+  const opaque = (color: string | undefined, fallback: string) =>
+    color ? over(color, background) : fallback;
+  const sidebar = opaque(first("sideBar.background"), background);
+  const fills = [background, sidebar];
+  const text = (color: string | undefined, fallback: string) =>
+    readable(opaque(color, fallback), fills, 4.5, dark);
+  const foreground = text(first("editor.foreground", "foreground"), defaults["--foreground"]!);
+  const description = first("descriptionForeground");
+  const [r, g, b] = parse(foreground);
+  const alpha = (percent: number) => `rgb(${r} ${g} ${b} / ${percent}%)`;
+  const syntax = (scope: string, token: string) =>
+    opaque(scopeColor(tokenColors, scope), defaults[token]!);
+  const tokens: Tokens = {
+    "--background": background,
+    "--sidebar": sidebar,
+    "--surface": opaque(first("editorWidget.background", "input.background"), background),
+    "--foreground": foreground,
+    "--muted-foreground": text(
+      description && opaque(description, foreground) !== foreground ? description : undefined,
+      mix(foreground, background, 0.75),
+    ),
+    "--faint-foreground": text(undefined, mix(foreground, background, 0.6)),
+    "--border": alpha(dark ? 9 : 12),
+    "--hover": alpha(5),
+    "--selected": alpha(9),
+    "--accent": text(
+      first("textLink.foreground", "progressBar.background", "focusBorder"),
+      defaults["--accent"]!,
+    ),
+    "--primary": foreground,
+    "--primary-foreground": background,
+    "--danger": text(first("errorForeground", "editorError.foreground"), defaults["--danger"]!),
+    "--warning": readable(
+      opaque(first("editorWarning.foreground", "terminal.ansiYellow"), defaults["--warning"]!),
+      fills,
+      3,
+      dark,
+    ),
+    "--added": text(
+      first("gitDecoration.addedResourceForeground", "terminal.ansiGreen"),
+      defaults["--added"]!,
+    ),
+    "--code": opaque(first("textCodeBlock.background"), sidebar),
+    "--syntax-keyword": syntax("keyword.control", "--syntax-keyword"),
+    "--syntax-string": syntax("string.quoted.double", "--syntax-string"),
+    "--syntax-number": syntax("constant.numeric", "--syntax-number"),
+    "--syntax-title": syntax("entity.name.function", "--syntax-title"),
+    "--syntax-type": syntax("entity.name.type", "--syntax-type"),
+    "--syntax-comment": syntax("comment.line.double-slash", "--syntax-comment"),
+  };
+  for (const [name, value] of Object.entries(defaults))
+    if (name.startsWith("--project-")) tokens[name] = readable(value, [sidebar], 3, dark);
+  return {
+    tokens,
+    blueOrange: Object.fromEntries(
+      Object.entries(blueOrange[mode]).map(([k, v]) => [k, readable(v, fills, 4.5, dark)]),
+    ),
+  };
+}
+
+/** `path`, relative to the file `from`, as a name inside the .vsix. */
+const resolve = (path: string, from: string) =>
+  decodeURIComponent(new URL(path, `file:///${from}`).pathname.slice(1));
+
+const slug = (text: string) =>
+  text
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+
+/**
+ * The color themes in an extension's .vsix, converted over `defaults` (Parallax's tokens by
+ * mode). Throws when it has none.
+ */
+export function themesFromVsix(
+  vsix: Uint8Array,
+  id: string,
+  defaults: Record<Mode, Tokens>,
+): AddedTheme[] {
+  const files = unzipSync(vsix, {
+    filter: (f) => f.name === "extension/package.json" || f.name.endsWith(".json"),
+  });
+  const read = (name: string) => {
+    const file = files[name];
+    if (!file) throw new Error(`The extension has no ${name.replace(/^extension\//, "")}.`);
+    return parseJsonc(strFromU8(file)) as VscodeTheme & { include?: string };
+  };
+  // A theme file, with any `include` merged under it.
+  const theme = (name: string): VscodeTheme => {
+    const { include, ...own } = read(name);
+    if (!include) return own;
+    const base = theme(resolve(include, name));
+    return {
+      colors: { ...base.colors, ...own.colors },
+      tokenColors: [...(base.tokenColors ?? []), ...(own.tokenColors ?? [])],
+    };
+  };
+  const manifest = read("extension/package.json") as {
+    contributes?: { themes?: { label?: string; uiTheme?: string; path?: string }[] };
+  };
+  const themes = (manifest.contributes?.themes ?? []).flatMap((t) => {
+    if (!t.path) return [];
+    const mode: Mode = t.uiTheme === "vs" || t.uiTheme === "hc-light" ? "light" : "dark";
+    const name = t.label ?? t.path;
+    const file = resolve(t.path, "extension/package.json");
+    return [
+      { id: slug(`${id}-${name}`), name, mode, ...tokensOf(theme(file), mode, defaults[mode]) },
+    ];
+  });
+  if (!themes.length) throw new Error("This extension has no color themes.");
+  return themes;
+}
+
+/** An extension Open VSX's search found. */
+export interface FoundExtension {
+  namespace: string;
+  name: string;
+  displayName?: string;
+  description?: string;
+  downloadCount?: number;
+  files: { icon?: string };
+}
+
+const openVsx = "https://open-vsx.org/api";
+
+/** Open VSX's Themes most downloaded for `query`, leaving out icon themes. */
+export async function searchThemes(query: string, signal?: AbortSignal): Promise<FoundExtension[]> {
+  const params = new URLSearchParams({
+    query,
+    category: "Themes",
+    sortBy: "downloadCount",
+    sortOrder: "desc",
+    size: "24",
+  });
+  const response = await fetch(`${openVsx}/-/search?${params}`, { signal });
+  if (!response.ok) throw new Error(`Open VSX answered ${response.status}.`);
+  const { extensions = [] } = (await response.json()) as { extensions?: FoundExtension[] };
+  return extensions.filter((e) => !/\bicons?\b/i.test(`${e.displayName ?? e.name}`));
+}
+
+/** Downloads an extension's latest version from Open VSX and converts its color themes. */
+export async function fetchExtension(
+  namespace: string,
+  name: string,
+  defaults: Record<Mode, Tokens>,
+): Promise<AddedExtension> {
+  const meta = await fetch(`${openVsx}/${namespace}/${name}`);
+  if (!meta.ok) throw new Error(`Open VSX answered ${meta.status}.`);
+  const { displayName, files } = (await meta.json()) as {
+    displayName?: string;
+    files: { download: string };
+  };
+  const vsix = await fetch(files.download);
+  if (!vsix.ok) throw new Error(`Open VSX answered ${vsix.status}.`);
+  const id = `${namespace}.${name}`;
+  return {
+    id,
+    name: displayName ?? name,
+    themes: themesFromVsix(new Uint8Array(await vsix.arrayBuffer()), id, defaults),
+  };
+}
+
+/**
+ * The CSS for added themes: each one mode's tokens over Parallax's, under `theme-<id>` on <html>
+ * or beside .scheme-light or .scheme-dark in a preview. It goes after index.css, and :where keeps
+ * the root selectors no more specific than Parallax's own, so .contrast-more, more specific,
+ * still wins, and each theme's Blue & orange colors win over index.css's by coming later.
+ */
+export function themeCss(extensions: AddedExtension[]) {
+  const block = (selector: string, tokens: Tokens) =>
+    `${selector} {\n${Object.entries(tokens)
+      .map(([k, v]) => `  ${k}: ${v};`)
+      .join("\n")}\n}`;
+  return extensions
+    .flatMap((e) => e.themes)
+    .flatMap(({ id, mode, tokens, blueOrange }) =>
+      mode === "light"
+        ? [
+            block(`:root:where(.theme-${id}:not(.dark)),\n.scheme-light.theme-${id}`, tokens),
+            block(`:root.diff-blue-orange:where(.theme-${id}:not(.dark))`, blueOrange),
+          ]
+        : [
+            block(`:root.dark:where(.theme-${id}),\n.scheme-dark.theme-${id}`, tokens),
+            block(`:root.dark.diff-blue-orange:where(.theme-${id})`, blueOrange),
+          ],
+    )
+    .join("\n");
+}
+
+const added = stored<AddedExtension[]>("parallax.themes", [], (raw, fallback) =>
+  Array.isArray(raw) ? (raw as AddedExtension[]) : fallback,
+);
+
+/** The added extensions, kept current. */
+export const useAddedThemes = added.use;
+
+/** Adds `extension`, in place of an earlier copy of it. */
+export const addExtension = (extension: AddedExtension) =>
+  added.set([...added.get().filter((e) => e.id !== extension.id), extension]);
+
+export const removeExtension = (id: string) => added.set(added.get().filter((e) => e.id !== id));
+
+/** Parallax's own tokens for each mode, as index.css's .scheme-light and .scheme-dark set them. */
+export function parallaxTokens(): Record<Mode, Tokens> {
+  const read = (mode: Mode) => {
+    const probe = document.createElement("span");
+    probe.className = `scheme-${mode}`;
+    document.body.append(probe);
+    const style = getComputedStyle(probe);
+    const tokens: Tokens = {};
+    for (const name of [
+      "--background",
+      "--foreground",
+      "--accent",
+      "--danger",
+      "--warning",
+      "--added",
+      "--syntax-keyword",
+      "--syntax-string",
+      "--syntax-number",
+      "--syntax-title",
+      "--syntax-type",
+      "--syntax-comment",
+      ...["red", "orange", "yellow", "green", "teal", "sky", "violet", "pink", "gray"].map(
+        (c) => `--project-${c}`,
+      ),
+    ])
+      tokens[name] = style.getPropertyValue(name).trim();
+    probe.remove();
+    return tokens;
+  };
+  return { light: read("light"), dark: read("dark") };
+}

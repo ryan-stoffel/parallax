@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { expect, test } from "vite-plus/test";
 
-import { colorThemes } from "./appearance";
+import { contrast } from "./vscodeThemes";
 import { resolveTheme } from "./theme";
 
 test("system follows the OS, and an explicit choice ignores it", () => {
@@ -12,11 +12,11 @@ test("system follows the OS, and an explicit choice ignores it", () => {
   expect(resolveTheme("light", true)).toBe("light");
 });
 
-// index.css's and themes.css's hex tokens, by each rule's selector, comments dropped.
-const css = ["./index.css", "./themes.css"]
-  .map((file) => readFileSync(new URL(file, import.meta.url), "utf8"))
-  .join("\n")
-  .replace(/\/\*[\s\S]*?\*\//g, "");
+// index.css's hex tokens, by each rule's selector, comments dropped.
+const css = readFileSync(new URL("./index.css", import.meta.url), "utf8").replace(
+  /\/\*[\s\S]*?\*\//g,
+  "",
+);
 function tokens(selector: string): Record<string, string> {
   const rule = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].find((m) =>
     m[1]!.split(",").some((s) => s.trim() === selector),
@@ -27,42 +27,27 @@ function tokens(selector: string): Record<string, string> {
   );
 }
 
-// WCAG 2's contrast ratio of two #rrggbb colors.
-function contrast(a: string, b: string) {
-  const luminance = (hex: string) => {
-    const [r, g, b] = [1, 3, 5].map((i) => {
-      const c = parseInt(hex.slice(i, i + 2), 16) / 255;
-      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-    });
-    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
-  };
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return (hi! + 0.05) / (lo! + 0.05);
-}
-
-test("every theme's text keeps 4.5:1, and its Project colors 3:1, on its background and sidebar", () => {
+test("Parallax's text keeps 4.5:1, and its Project colors 3:1, in each mode and setting", () => {
   const light = tokens(".scheme-light");
-  const base = { light, dark: { ...light, ...tokens(".scheme-dark") } };
-  for (const { id, mode } of colorThemes) {
-    const t = id.startsWith("parallax-")
-      ? base[mode]
-      : { ...base[mode], ...tokens(`.scheme-${mode}.theme-${id}`) };
-    const texts = [
-      "foreground",
-      "muted-foreground",
-      "faint-foreground",
-      "accent",
-      "danger",
-      "added",
-    ];
+  const dark = { ...light, ...tokens(".scheme-dark") };
+  const variants = {
+    light,
+    "light, more contrast": { ...light, ...tokens(":root.contrast-more") },
+    "light, blue & orange": { ...light, ...tokens(":root.diff-blue-orange") },
+    dark,
+    "dark, more contrast": { ...dark, ...tokens(":root.dark.contrast-more") },
+    "dark, blue & orange": { ...dark, ...tokens(":root.dark.diff-blue-orange") },
+  };
+  const texts = ["foreground", "muted-foreground", "faint-foreground", "accent", "danger", "added"];
+  for (const [variant, t] of Object.entries(variants)) {
     for (const text of texts)
       for (const fill of ["background", "sidebar"])
         expect
-          .soft(contrast(t[`--${text}`]!, t[`--${fill}`]!), `${id} --${text} on --${fill}`)
+          .soft(contrast(t[`--${text}`]!, t[`--${fill}`]!), `${variant} --${text} on --${fill}`)
           .toBeGreaterThanOrEqual(4.5);
     for (const project of Object.keys(t).filter((k) => k.startsWith("--project-")))
       expect
-        .soft(contrast(t[project]!, t["--sidebar"]!), `${id} ${project} on --sidebar`)
+        .soft(contrast(t[project]!, t["--sidebar"]!), `${variant} ${project} on --sidebar`)
         .toBeGreaterThanOrEqual(3);
   }
 });

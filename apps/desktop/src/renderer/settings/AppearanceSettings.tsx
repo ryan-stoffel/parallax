@@ -1,17 +1,22 @@
-import { useId } from "react";
+import { Moon, Plus, Sun, Trash2 } from "lucide-react";
+import { useId, useState } from "react";
 
 import type { ThemePreference } from "../../preload/bridge";
-import {
-  colorThemes,
-  setAppearance,
-  useAppearance,
-  type Appearance,
-  type ColorTheme,
-} from "../appearance";
+import { setAppearance, useAppearance, type Appearance } from "../appearance";
 import { behaviorPrefs, setBehaviorPrefs, usageView } from "../prefs";
-import { Segmented } from "../ui";
+import { IconButton, Segmented } from "../ui";
+import { removeExtension, useAddedThemes, type Mode } from "../vscodeThemes";
+import { AddThemeDialog } from "./AddThemeDialog";
 import { PageTitle, Row, Section, Switch } from "./parts";
 import { TypographySettings } from "./TypographySettings";
+
+type ColorTheme = { id: string; name: string; mode: Mode };
+
+/** Parallax's own themes, in index.css. */
+const parallaxThemes: ColorTheme[] = [
+  { id: "parallax-light", name: "Parallax Light", mode: "light" },
+  { id: "parallax-dark", name: "Parallax Dark", mode: "dark" },
+];
 
 /** What each usage view shows, for its row's description. */
 const usageDescriptions = {
@@ -26,7 +31,7 @@ const usageDescriptions = {
  * composer. It draws with the real tokens, which .scheme-light or .scheme-dark beside the
  * theme's class set whatever mode the app is in (index.css).
  */
-function SchemePreview({ mode, theme }: { mode: "light" | "dark"; theme: ColorTheme }) {
+function SchemePreview({ mode, theme }: { mode: Mode; theme: string }) {
   const bar = (width: string) => (
     <span
       className="block h-1.5 rounded-full"
@@ -65,7 +70,7 @@ function SchemePreview({ mode, theme }: { mode: "light" | "dark"; theme: ColorTh
 }
 
 /** The light and dark themes together: light on the left half, over the dark one. */
-function SplitPreview({ light, dark }: { light: ColorTheme; dark: ColorTheme }) {
+function SplitPreview({ light, dark }: { light: string; dark: string }) {
   return (
     <>
       <SchemePreview mode="dark" theme={dark} />
@@ -73,6 +78,63 @@ function SplitPreview({ light, dark }: { light: ColorTheme; dark: ColorTheme }) 
         <SchemePreview mode="light" theme={light} />
       </span>
     </>
+  );
+}
+
+/**
+ * A set of themes: an orb for each, in its colors (.theme-orb in index.css), and its name. An orb
+ * picks its theme for its mode, and the picked ones show a ring and a sun or moon.
+ */
+function ThemeCard({
+  name,
+  themes,
+  picked,
+  onPick,
+  onRemove,
+}: {
+  name: string;
+  themes: ColorTheme[];
+  picked: Record<Mode, string>;
+  onPick: (theme: ColorTheme) => void;
+  onRemove?: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-border p-4">
+      <div className="flex flex-1 flex-wrap items-center justify-center gap-3 py-2">
+        {themes.map((t) => {
+          const on = picked[t.mode] === t.id;
+          const Icon = t.mode === "light" ? Sun : Moon;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              title={t.name}
+              aria-label={`${t.name}, for ${t.mode} mode`}
+              aria-pressed={on}
+              onClick={() => onPick(t)}
+              className={`relative size-15 shrink-0 rounded-full p-1 focus-visible:outline-2 focus-visible:outline-ring ${on ? "ring-2 ring-accent" : ""}`}
+            >
+              <span
+                className={`scheme-${t.mode} theme-${t.id} theme-orb block size-full rounded-full`}
+              />
+              {on && (
+                <span className="absolute -right-0.5 -bottom-0.5 grid size-5 place-items-center rounded-full border border-border bg-surface text-foreground">
+                  <Icon aria-hidden className="size-3" />
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex min-h-7 items-center justify-between gap-2">
+        <span className="truncate text-[13px] font-medium">{name}</span>
+        {onRemove && (
+          <IconButton label={`Remove ${name}`} onClick={onRemove}>
+            <Trash2 />
+          </IconButton>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -101,7 +163,16 @@ export function AppearanceSettings({
   const composerUsage = usageView(behaviorPrefs.use().composerUsage);
   const set = (change: Partial<Appearance>) => setAppearance(change);
   const scheme = useId();
-  const themeGroup = useId();
+  const [adding, setAdding] = useState(false);
+  const added = useAddedThemes();
+  // The picked themes, or Parallax's where a picked one is no longer added.
+  const addedIds = new Set(added.flatMap((e) => e.themes.map((t) => t.id)));
+  const picked = {
+    light: addedIds.has(appearance.lightTheme) ? appearance.lightTheme : "parallax-light",
+    dark: addedIds.has(appearance.darkTheme) ? appearance.darkTheme : "parallax-dark",
+  };
+  const pick = (t: ColorTheme) =>
+    set(t.mode === "light" ? { lightTheme: t.id } : { darkTheme: t.id });
 
   return (
     <>
@@ -120,12 +191,9 @@ export function AppearanceSettings({
               />
               <span className={preview}>
                 {s.value === "system" ? (
-                  <SplitPreview light={appearance.lightTheme} dark={appearance.darkTheme} />
+                  <SplitPreview light={picked.light} dark={picked.dark} />
                 ) : (
-                  <SchemePreview
-                    mode={s.value}
-                    theme={s.value === "light" ? appearance.lightTheme : appearance.darkTheme}
-                  />
+                  <SchemePreview mode={s.value} theme={picked[s.value]} />
                 )}
               </span>
               {s.name}
@@ -134,34 +202,34 @@ export function AppearanceSettings({
         </fieldset>
       </Section>
 
-      {(["light", "dark"] as const).map((mode) => {
-        const field = mode === "light" ? "lightTheme" : "darkTheme";
-        const title = mode === "light" ? "Light theme" : "Dark theme";
-        return (
-          <Section key={mode} title={title}>
-            <fieldset aria-label={title} className="grid grid-cols-4 gap-3 p-3">
-              {colorThemes
-                .filter((t) => t.mode === mode)
-                .map((t) => (
-                  <label key={t.id} className={card}>
-                    <input
-                      type="radio"
-                      name={`${themeGroup}-${mode}`}
-                      value={t.id}
-                      checked={appearance[field] === t.id}
-                      onChange={() => set({ [field]: t.id })}
-                      className="sr-only"
-                    />
-                    <span className={preview}>
-                      <SchemePreview mode={mode} theme={t.id} />
-                    </span>
-                    {t.name}
-                  </label>
-                ))}
-            </fieldset>
-          </Section>
-        );
-      })}
+      <Section
+        title="Themes"
+        action={
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className="flex h-7 items-center gap-1.5 rounded-md border border-border px-2.5 text-[12.5px] font-medium hover:bg-hover"
+          >
+            <Plus aria-hidden className="size-3.5" />
+            Add theme
+          </button>
+        }
+      >
+        <div className="grid grid-cols-3 gap-3 p-3">
+          <ThemeCard name="Parallax" themes={parallaxThemes} picked={picked} onPick={pick} />
+          {added.map((e) => (
+            <ThemeCard
+              key={e.id}
+              name={e.name}
+              themes={e.themes}
+              picked={picked}
+              onPick={pick}
+              onRemove={() => removeExtension(e.id)}
+            />
+          ))}
+        </div>
+      </Section>
+      {adding && <AddThemeDialog onClose={() => setAdding(false)} />}
 
       <Section title="Interface">
         <Row title="Contrast" description="Stronger text and borders. System follows your OS.">

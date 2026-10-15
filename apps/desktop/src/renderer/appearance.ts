@@ -1,20 +1,15 @@
 import { useLayoutEffect } from "react";
 
 import { merged, stored } from "./stored";
-import { vscodeThemes } from "./themes";
-
-/** The color themes, each for one mode: Parallax's pair (index.css), then VS Code's (themes.css). */
-export const colorThemes = [
-  { id: "parallax-light", name: "Parallax Light", mode: "light" },
-  { id: "parallax-dark", name: "Parallax Dark", mode: "dark" },
-  ...vscodeThemes,
-] as const;
-export type ColorTheme = (typeof colorThemes)[number]["id"];
+import { themeCss, useAddedThemes } from "./vscodeThemes";
 
 export type Appearance = {
-  /** The themes for each mode; Light, Dark, or System picks which shows (theme.ts). */
-  lightTheme: ColorTheme;
-  darkTheme: ColorTheme;
+  /**
+   * The theme for each mode, Parallax's or an added one's id (vscodeThemes.ts); Light, Dark, or
+   * System picks which shows (theme.ts). An id no longer added shows Parallax's.
+   */
+  lightTheme: string;
+  darkTheme: string;
   /** "system" follows the OS's Increase contrast. */
   contrast: "system" | "standard" | "more";
   /** A font family name, or empty for the system's. */
@@ -126,11 +121,8 @@ export function applyAppearance(appearance: Appearance) {
   const root = document.documentElement;
   const ui = family(appearance.uiFont);
   const code = family(appearance.codeFont);
-  for (const { id } of colorThemes)
-    root.classList.toggle(
-      `theme-${id}`,
-      id === appearance.lightTheme || id === appearance.darkTheme,
-    );
+  root.classList.remove(...[...root.classList].filter((name) => name.startsWith("theme-")));
+  root.classList.add(`theme-${appearance.lightTheme}`, `theme-${appearance.darkTheme}`);
   if (ui) root.style.setProperty("--ui-font", `"${ui}"`);
   else root.style.removeProperty("--ui-font");
   if (code) root.style.setProperty("--code-font", `"${code}"`);
@@ -150,11 +142,19 @@ export function applyAppearance(appearance: Appearance) {
 }
 
 /**
- * Keeps the saved appearance applied: the page and its zoom. Call once, at the
- * app root.
+ * Keeps the saved appearance applied: the page, its zoom, and the added themes' CSS. Call once,
+ * at the app root.
  */
 export function useAppearanceEffects() {
   const current = useAppearance();
+  const added = useAddedThemes();
+  // After index.css in <head>, so a theme's tokens win over Parallax's.
+  useLayoutEffect(() => {
+    const style = document.createElement("style");
+    style.textContent = themeCss(added);
+    document.head.append(style);
+    return () => style.remove();
+  }, [added]);
   // Layout effect, so the first paint already has the saved appearance.
   useLayoutEffect(() => {
     applyAppearance(current);
