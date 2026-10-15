@@ -1,19 +1,20 @@
 import { useLayoutEffect } from "react";
 
 import { merged, stored } from "./stored";
+import { vscodeThemes } from "./themes";
 
-/** The color themes, each a light and a dark pair in index.css under `theme-<value>`. */
+/** The color themes, each for one mode: Parallax's pair (index.css), then VS Code's (themes.css). */
 export const colorThemes = [
-  { value: "parallax", name: "Parallax" },
-  { value: "github", name: "GitHub" },
-  { value: "catppuccin", name: "Catppuccin" },
-  { value: "rose-pine", name: "Rosé Pine" },
+  { id: "parallax-light", name: "Parallax Light", mode: "light" },
+  { id: "parallax-dark", name: "Parallax Dark", mode: "dark" },
+  ...vscodeThemes,
 ] as const;
-export type ColorTheme = (typeof colorThemes)[number]["value"];
+export type ColorTheme = (typeof colorThemes)[number]["id"];
 
 export type Appearance = {
-  /** The palette; Light, Dark, or System picks which of its pair shows (theme.ts). */
-  colorTheme: ColorTheme;
+  /** The themes for each mode; Light, Dark, or System picks which shows (theme.ts). */
+  lightTheme: ColorTheme;
+  darkTheme: ColorTheme;
   /** "system" follows the OS's Increase contrast. */
   contrast: "system" | "standard" | "more";
   /** A font family name, or empty for the system's. */
@@ -32,7 +33,8 @@ export type Appearance = {
 };
 
 export const defaults: Appearance = {
-  colorTheme: "parallax",
+  lightTheme: "parallax-light",
+  darkTheme: "parallax-dark",
   contrast: "system",
   uiFont: "",
   uiSize: 13,
@@ -124,8 +126,11 @@ export function applyAppearance(appearance: Appearance) {
   const root = document.documentElement;
   const ui = family(appearance.uiFont);
   const code = family(appearance.codeFont);
-  for (const t of colorThemes)
-    root.classList.toggle(`theme-${t.value}`, t.value === appearance.colorTheme);
+  for (const { id } of colorThemes)
+    root.classList.toggle(
+      `theme-${id}`,
+      id === appearance.lightTheme || id === appearance.darkTheme,
+    );
   if (ui) root.style.setProperty("--ui-font", `"${ui}"`);
   else root.style.removeProperty("--ui-font");
   if (code) root.style.setProperty("--code-font", `"${code}"`);

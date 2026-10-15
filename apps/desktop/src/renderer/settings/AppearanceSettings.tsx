@@ -64,13 +64,13 @@ function SchemePreview({ mode, theme }: { mode: "light" | "dark"; theme: ColorTh
   );
 }
 
-/** `theme` in both modes: light on the left half, over the dark one. */
-function SplitPreview({ theme }: { theme: ColorTheme }) {
+/** The light and dark themes together: light on the left half, over the dark one. */
+function SplitPreview({ light, dark }: { light: ColorTheme; dark: ColorTheme }) {
   return (
     <>
-      <SchemePreview mode="dark" theme={theme} />
+      <SchemePreview mode="dark" theme={dark} />
       <span className="absolute inset-0 [clip-path:inset(0_50%_0_0)]">
-        <SchemePreview mode="light" theme={theme} />
+        <SchemePreview mode="light" theme={light} />
       </span>
     </>
   );
@@ -82,6 +82,7 @@ const schemes: { value: ThemePreference; name: string }[] = [
   { value: "dark", name: "Dark" },
 ];
 
+const preview = "relative block aspect-[16/10] overflow-hidden rounded-lg border border-border";
 const card =
   "flex cursor-pointer flex-col gap-2 rounded-xl border border-border bg-surface p-2 text-center text-[12.5px] text-muted-foreground hover:bg-hover has-checked:border-accent has-checked:text-foreground has-checked:outline-1 has-checked:outline-accent has-focus-visible:outline-2 has-focus-visible:outline-ring";
 
@@ -100,7 +101,7 @@ export function AppearanceSettings({
   const composerUsage = usageView(behaviorPrefs.use().composerUsage);
   const set = (change: Partial<Appearance>) => setAppearance(change);
   const scheme = useId();
-  const palette = useId();
+  const themeGroup = useId();
 
   return (
     <>
@@ -117,11 +118,14 @@ export function AppearanceSettings({
                 onChange={() => onThemeChange(s.value)}
                 className="sr-only"
               />
-              <span className="relative block aspect-[16/10] overflow-hidden rounded-lg border border-border">
+              <span className={preview}>
                 {s.value === "system" ? (
-                  <SplitPreview theme={appearance.colorTheme} />
+                  <SplitPreview light={appearance.lightTheme} dark={appearance.darkTheme} />
                 ) : (
-                  <SchemePreview mode={s.value} theme={appearance.colorTheme} />
+                  <SchemePreview
+                    mode={s.value}
+                    theme={s.value === "light" ? appearance.lightTheme : appearance.darkTheme}
+                  />
                 )}
               </span>
               {s.name}
@@ -130,30 +134,34 @@ export function AppearanceSettings({
         </fieldset>
       </Section>
 
-      <Section title="Theme">
-        <fieldset aria-label="Theme" className="grid grid-cols-4 gap-3 p-3">
-          {colorThemes.map((t) => (
-            <label key={t.value} className={card}>
-              <input
-                type="radio"
-                name={palette}
-                value={t.value}
-                checked={appearance.colorTheme === t.value}
-                onChange={() => set({ colorTheme: t.value })}
-                className="sr-only"
-              />
-              <span className="relative block aspect-[16/10] overflow-hidden rounded-lg border border-border">
-                {theme === "system" ? (
-                  <SplitPreview theme={t.value} />
-                ) : (
-                  <SchemePreview mode={theme} theme={t.value} />
-                )}
-              </span>
-              {t.name}
-            </label>
-          ))}
-        </fieldset>
-      </Section>
+      {(["light", "dark"] as const).map((mode) => {
+        const field = mode === "light" ? "lightTheme" : "darkTheme";
+        const title = mode === "light" ? "Light theme" : "Dark theme";
+        return (
+          <Section key={mode} title={title}>
+            <fieldset aria-label={title} className="grid grid-cols-4 gap-3 p-3">
+              {colorThemes
+                .filter((t) => t.mode === mode)
+                .map((t) => (
+                  <label key={t.id} className={card}>
+                    <input
+                      type="radio"
+                      name={`${themeGroup}-${mode}`}
+                      value={t.id}
+                      checked={appearance[field] === t.id}
+                      onChange={() => set({ [field]: t.id })}
+                      className="sr-only"
+                    />
+                    <span className={preview}>
+                      <SchemePreview mode={mode} theme={t.id} />
+                    </span>
+                    {t.name}
+                  </label>
+                ))}
+            </fieldset>
+          </Section>
+        );
+      })}
 
       <Section title="Interface">
         <Row title="Contrast" description="Stronger text and borders. System follows your OS.">

@@ -12,18 +12,18 @@ test("system follows the OS, and an explicit choice ignores it", () => {
   expect(resolveTheme("light", true)).toBe("light");
 });
 
-// index.css's hex tokens, by each rule's selector, comments dropped.
-const css = readFileSync(new URL("./index.css", import.meta.url), "utf8").replace(
-  /\/\*[\s\S]*?\*\//g,
-  "",
-);
+// index.css's and themes.css's hex tokens, by each rule's selector, comments dropped.
+const css = ["./index.css", "./themes.css"]
+  .map((file) => readFileSync(new URL(file, import.meta.url), "utf8"))
+  .join("\n")
+  .replace(/\/\*[\s\S]*?\*\//g, "");
 function tokens(selector: string): Record<string, string> {
   const rule = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].find((m) =>
     m[1]!.split(",").some((s) => s.trim() === selector),
   );
   if (!rule) throw new Error(`no rule for ${selector}`);
   return Object.fromEntries(
-    [...rule[2]!.matchAll(/(--[\w-]+):\s*(#[0-9a-f]{6})/g)].map((m) => [m[1], m[2]]),
+    [...rule[2]!.matchAll(/(--[\w-]+):\s*(#[0-9a-f]{6});/g)].map((m) => [m[1], m[2]]),
   );
 }
 
@@ -40,21 +40,29 @@ function contrast(a: string, b: string) {
   return (hi! + 0.05) / (lo! + 0.05);
 }
 
-test("every theme's text keeps 4.5:1 on its background and sidebar in both modes", () => {
+test("every theme's text keeps 4.5:1, and its Project colors 3:1, on its background and sidebar", () => {
   const light = tokens(".scheme-light");
-  const dark = { ...light, ...tokens(".scheme-dark") };
-  for (const { value } of colorThemes) {
-    for (const [mode, base] of [
-      ["light", light],
-      ["dark", dark],
-    ] as const) {
-      const t =
-        value === "parallax" ? base : { ...base, ...tokens(`.scheme-${mode}.theme-${value}`) };
-      for (const text of ["--foreground", "--muted-foreground", "--faint-foreground"])
-        for (const fill of ["--background", "--sidebar"])
-          expect
-            .soft(contrast(t[text]!, t[fill]!), `${value} ${mode} ${text} on ${fill}`)
-            .toBeGreaterThanOrEqual(4.5);
-    }
+  const base = { light, dark: { ...light, ...tokens(".scheme-dark") } };
+  for (const { id, mode } of colorThemes) {
+    const t = id.startsWith("parallax-")
+      ? base[mode]
+      : { ...base[mode], ...tokens(`.scheme-${mode}.theme-${id}`) };
+    const texts = [
+      "foreground",
+      "muted-foreground",
+      "faint-foreground",
+      "accent",
+      "danger",
+      "added",
+    ];
+    for (const text of texts)
+      for (const fill of ["background", "sidebar"])
+        expect
+          .soft(contrast(t[`--${text}`]!, t[`--${fill}`]!), `${id} --${text} on --${fill}`)
+          .toBeGreaterThanOrEqual(4.5);
+    for (const project of Object.keys(t).filter((k) => k.startsWith("--project-")))
+      expect
+        .soft(contrast(t[project]!, t["--sidebar"]!), `${id} ${project} on --sidebar`)
+        .toBeGreaterThanOrEqual(3);
   }
 });

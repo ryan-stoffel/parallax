@@ -93,6 +93,7 @@ import { localId, type Host } from "./hosts";
 import { IconPicker } from "./IconPicker";
 import { imageUrl } from "./images";
 import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
+import { NightCloud, NightSky } from "./NightSky";
 import { iconColors, iconLook } from "./projectIcons";
 import { ForkMenu } from "./Fork";
 import { archivePageSize, sidebarPrefs } from "./sidebarPrefs";
@@ -163,11 +164,12 @@ export function Sidebar({
       aria-label="Sidebar"
       hidden={!open}
       style={{ width }}
-      className="relative isolate flex min-w-0 shrink-0 flex-col border-r border-border bg-sidebar"
+      className="relative flex min-w-0 shrink-0 flex-col border-r border-border bg-sidebar"
     >
-      <div aria-hidden className="night-sky" />
+      <NightSky />
       {onResize && <PanelResize side="left" width={width} onResize={onResize} />}
-      <TopBar className="traffic-light-inset night-sky-text">
+      {/* Positioned, so it paints over the sky. */}
+      <TopBar className="traffic-light-inset night-sky-text relative">
         <IconButton
           label="Hide sidebar"
           command="sidebar"
@@ -182,7 +184,10 @@ export function Sidebar({
           onClick={onNewThread}
           className="mr-auto flex items-center gap-1.5 rounded-md px-1 py-0.5 font-brand text-[14px] font-semibold tracking-tight text-foreground hover:bg-hover"
         >
-          <ParallaxMark className="size-5" />
+          <span className="relative">
+            <ParallaxMark className="size-5" />
+            <NightCloud />
+          </span>
           Parallax
         </button>
       </TopBar>

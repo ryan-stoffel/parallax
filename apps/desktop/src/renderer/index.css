@@ -93,9 +93,11 @@
 }
 
 /* Parallax Light and Parallax Dark. The `dark` class on <html> switches them
-   (theme.ts), and a `theme-*` class swaps in another color theme's pair (below).
+   (theme.ts), and a `theme-*` class swaps in a VS Code theme's tokens for either
+   (themes.css, which main.tsx loads after this file).
    Components use only these tokens, never raw colors. Every *-foreground keeps
-   at least 4.5:1 contrast on the background and sidebar (theme.test.ts).
+   at least 4.5:1 contrast on the background and sidebar, in every theme
+   (theme.test.ts).
    .scheme-light and .scheme-dark paint one mode inside any other, for
    Settings' previews.
 
@@ -219,148 +221,6 @@
   --mark-overlap: #e4e4e7;
 }
 
-/* The other color themes (appearance.ts), each a light and a dark pair over Parallax's: a
-   `theme-*` class on <html>, or beside .scheme-light or .scheme-dark in a preview. :where keeps
-   the root selectors as specific as Parallax's own, so .contrast-more and .diff-blue-orange,
-   later, still win. */
-:root:where(.theme-github:not(.dark)),
-.scheme-light.theme-github {
-  --background: #ffffff;
-  --sidebar: #f6f8fa;
-  --surface: #ffffff;
-  --foreground: #1f2328;
-  --muted-foreground: #59636e;
-  --faint-foreground: #636c76;
-  --border: rgb(31 35 40 / 15%);
-  --hover: rgb(31 35 40 / 5%);
-  --selected: rgb(31 35 40 / 8%);
-  --accent: #0969da;
-  --primary: #1f2328;
-  --danger: #d1242f;
-  --warning: #9a6700;
-  --added: #1a7f37;
-  --code: #f6f8fa;
-}
-:root.dark:where(.theme-github),
-.scheme-dark.theme-github {
-  --background: #0d1117;
-  --sidebar: #010409;
-  --surface: #151b23;
-  --foreground: #f0f6fc;
-  --muted-foreground: #9198a1;
-  --faint-foreground: #848d97;
-  --border: rgb(61 68 77 / 70%);
-  --hover: rgb(101 108 118 / 10%);
-  --selected: rgb(101 108 118 / 20%);
-  --accent: #4493f8;
-  --primary: #f0f6fc;
-  --primary-foreground: #0d1117;
-  --danger: #f85149;
-  --warning: #d29922;
-  --added: #3fb950;
-  --code: #151b23;
-}
-/* Catppuccin Latte and Mocha. */
-:root:where(.theme-catppuccin:not(.dark)),
-.scheme-light.theme-catppuccin {
-  --background: #eff1f5;
-  --sidebar: #e6e9ef;
-  --surface: #f8f9fb;
-  --foreground: #4c4f69;
-  --muted-foreground: #5c5f77;
-  --faint-foreground: #5f6279;
-  --border: rgb(76 79 105 / 14%);
-  --hover: rgb(76 79 105 / 6%);
-  --selected: rgb(76 79 105 / 10%);
-  --accent: #1e66f5;
-  --primary: #4c4f69;
-  --danger: #d20f39;
-  --warning: #df8e1d;
-  --added: #40a02b;
-  --code: #e6e9ef;
-  --syntax-keyword: #8839ef;
-  --syntax-string: #40a02b;
-  --syntax-number: #fe640b;
-  --syntax-title: #1e66f5;
-  --syntax-type: #df8e1d;
-  --syntax-comment: #7c7f93;
-}
-:root.dark:where(.theme-catppuccin),
-.scheme-dark.theme-catppuccin {
-  --background: #1e1e2e;
-  --sidebar: #181825;
-  --surface: #262637;
-  --foreground: #cdd6f4;
-  --muted-foreground: #bac2de;
-  --faint-foreground: #a6adc8;
-  --border: rgb(205 214 244 / 9%);
-  --hover: rgb(205 214 244 / 5%);
-  --selected: rgb(205 214 244 / 9%);
-  --accent: #89b4fa;
-  --primary: #cdd6f4;
-  --primary-foreground: #1e1e2e;
-  --danger: #f38ba8;
-  --warning: #f9e2af;
-  --added: #a6e3a1;
-  --code: #181825;
-  --syntax-keyword: #cba6f7;
-  --syntax-string: #a6e3a1;
-  --syntax-number: #fab387;
-  --syntax-title: #89b4fa;
-  --syntax-type: #f9e2af;
-  --syntax-comment: #9399b2;
-}
-/* Rosé Pine Dawn and Rosé Pine. */
-:root:where(.theme-rose-pine:not(.dark)),
-.scheme-light.theme-rose-pine {
-  --background: #faf4ed;
-  --sidebar: #f2e9e1;
-  --surface: #fffaf3;
-  --foreground: #575279;
-  --muted-foreground: #5f5a80;
-  --faint-foreground: #67628a;
-  --border: rgb(87 82 121 / 13%);
-  --hover: rgb(87 82 121 / 6%);
-  --selected: rgb(87 82 121 / 10%);
-  --accent: #286983;
-  --primary: #575279;
-  --danger: #b4637a;
-  --warning: #ea9d34;
-  --added: #286983;
-  --code: #f2e9e1;
-  --syntax-keyword: #286983;
-  --syntax-string: #ea9d34;
-  --syntax-number: #d7827e;
-  --syntax-title: #907aa9;
-  --syntax-type: #56949f;
-  --syntax-comment: #797593;
-}
-:root.dark:where(.theme-rose-pine),
-.scheme-dark.theme-rose-pine {
-  --background: #191724;
-  --sidebar: #1f1d2e;
-  --surface: #26233a;
-  --foreground: #e0def4;
-  --muted-foreground: #b5b2cf;
-  --faint-foreground: #908caa;
-  --border: rgb(224 222 244 / 9%);
-  --hover: rgb(224 222 244 / 5%);
-  --selected: rgb(224 222 244 / 9%);
-  --accent: #c4a7e7;
-  --primary: #e0def4;
-  --primary-foreground: #191724;
-  --danger: #eb6f92;
-  --warning: #f6c177;
-  --added: #9ccfd8;
-  --code: #1f1d2e;
-  --syntax-keyword: #31748f;
-  --syntax-string: #f6c177;
-  --syntax-number: #ebbcba;
-  --syntax-title: #c4a7e7;
-  --syntax-type: #9ccfd8;
-  --syntax-comment: #6e6a86;
-}
-
 /* More contrast: muted text nearer the foreground, and borders and fills that show. */
 :root.contrast-more {
   --muted-foreground: #333333;
@@ -386,45 +246,75 @@
   --danger: #f0883e;
 }
 
-/* A nightly build (main.tsx sets .nightly): a night sky behind the sidebar's top row, fading into
-   the sidebar, and on the send buttons. The same in every theme and mode, so the row's text and
-   icons turn white over it. */
-.night-sky {
+/* A nightly build (main.tsx sets .nightly): a night sky with clouds behind the sidebar's top row,
+   a cloud on its logo (NightSky.tsx), and the same sky on the send buttons. The sky is the same in
+   every theme and mode, so the row's text and icons turn white over it. */
+.night-sky,
+.night-cloud {
   display: none;
-}
-:root.nightly {
-  --stars:
-    radial-gradient(1px 1px at 8% 30%, #fff 50%, transparent),
-    radial-gradient(1px 1px at 21% 72%, rgb(255 255 255 / 70%) 50%, transparent),
-    radial-gradient(1.5px 1.5px at 33% 18%, #fff 50%, transparent),
-    radial-gradient(1px 1px at 45% 86%, rgb(255 255 255 / 60%) 50%, transparent),
-    radial-gradient(1px 1px at 58% 12%, #fff 50%, transparent),
-    radial-gradient(1.5px 1.5px at 86% 84%, rgb(255 255 255 / 80%) 50%, transparent),
-    radial-gradient(1px 1px at 81% 24%, #fff 50%, transparent),
-    radial-gradient(1px 1px at 92% 62%, rgb(255 255 255 / 70%) 50%, transparent);
-  --sky: linear-gradient(170deg, #070a24, #161a52 55%, #2b2378);
 }
 :root.nightly .night-sky {
   display: block;
   position: absolute;
   inset: 0 0 auto;
-  z-index: -1;
-  height: 56px;
+  height: 52px;
+  overflow: hidden;
   pointer-events: none;
-  background:
-    var(--stars), radial-gradient(70% 55% at 25% 100%, rgb(129 140 248 / 45%), transparent),
-    radial-gradient(60% 45% at 80% 105%, rgb(99 102 241 / 35%), transparent), var(--sky);
-  mask-image: linear-gradient(black 70%, transparent);
+}
+:root.nightly .night-sky svg {
+  width: 100%;
+  height: 100%;
+}
+:root.nightly .night-cloud {
+  display: block;
+  position: absolute;
+  right: -5px;
+  bottom: -3px;
+  width: 12px;
+  filter: drop-shadow(0 1px 1px rgb(4 6 26 / 50%));
 }
 :root.nightly .night-sky-text {
   --foreground: #ffffff;
   --muted-foreground: rgb(255 255 255 / 75%);
   --hover: rgb(255 255 255 / 12%);
+  /* The logo's overlap, light as it is in dark mode, so it shows on the sky. */
+  --mark-overlap: #e4e4e7;
 }
 :root.nightly .send-sky {
   background:
-    var(--stars), radial-gradient(circle at 30% 25%, #5b5cf0, transparent 70%), var(--sky);
+    radial-gradient(0.8px 0.8px at 28% 30%, #fff 50%, transparent),
+    radial-gradient(0.6px 0.6px at 66% 22%, rgb(255 255 255 / 80%) 50%, transparent),
+    radial-gradient(0.7px 0.7px at 78% 52%, rgb(255 255 255 / 70%) 50%, transparent),
+    radial-gradient(0.5px 0.5px at 40% 58%, rgb(255 255 255 / 60%) 50%, transparent),
+    radial-gradient(45% 24% at 32% 96%, rgb(224 231 255 / 60%), transparent 70%),
+    radial-gradient(40% 22% at 70% 100%, rgb(224 231 255 / 50%), transparent 70%),
+    radial-gradient(circle at 35% 25%, rgb(129 140 248 / 70%), transparent 60%),
+    linear-gradient(160deg, #070a24, #161a52 55%, #2f2a8f);
   color: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 25%),
+    inset 0 0 0 1px rgb(165 180 252 / 25%),
+    0 4px 14px -4px rgb(79 70 229 / 70%);
+  transition: filter 150ms;
+}
+:root.nightly .send-sky:enabled:hover {
+  filter: brightness(1.15);
+}
+:root.nightly:not(.reduce-motion) .night-sky .twinkle {
+  animation: twinkle 4s ease-in-out infinite;
+}
+:root.nightly:not(.reduce-motion) .night-sky .drift {
+  animation: drift 24s ease-in-out infinite alternate;
+}
+@keyframes twinkle {
+  50% {
+    opacity: 0.2;
+  }
+}
+@keyframes drift {
+  to {
+    transform: translateX(10px);
+  }
 }
 
 /* Tailwind's motion-safe and motion-reduce follow .reduce-motion, which also covers the OS's
