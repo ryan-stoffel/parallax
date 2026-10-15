@@ -46,7 +46,7 @@ Ryan wants Parallax Connect to be set and forget: a computer added once stays re
 - Every download is checked against the SHA-256 that GitHub's release API reports for the asset (`digest`), else against its `.sha256` asset. A mismatch, or a missing checksum, refuses the install.
 - On Windows, the script installs the logon task, and falls back to `attach` with a warning for a plxd that has no task.
 
-### `host/update` on Windows (PLX-825)
+### `host/update` (PLX-825)
 
 - `host/update` on every OS skips the download when the destination copy's `plxd.version` isn't older than the version it was asked for, and hands over to that copy. The app can refresh the copy while the service still runs an older plxd, and an older app on another computer must not write over it.
 - `host/update` on Windows downloads `parallax-plxd-<v>-win-<arch>.exe`, checks it, installs it as above, and hands over through the logon task, or starts `serve` detached when there's none. It no longer refuses.
