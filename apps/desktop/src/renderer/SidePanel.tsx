@@ -158,14 +158,15 @@ export function SidePanel({
    * things wait on the user there. */
   project?: { home: ReactNode; waiting: number };
 }) {
-  // The open views in tab order, and in the order they were last shown, so each thread shows the
-  // last of its own (its pull requests' and files' tabs hide in another thread's); with none, the
-  // list is.
+  // The open views in tab order, and each in the order it was last shown, with the thread
+  // (`documents.runId`) it was shown in. A thread shows the last one it showed that's still open,
+  // else the last one any thread showed, else the list.
   const [tabs, setTabs] = useState<Surface[]>([]);
-  const [recent, setRecent] = useState<Surface[]>([]);
+  const [recent, setRecent] = useState<[Surface, string | undefined][]>([]);
+  const thread = documents?.runId;
   const setActive = (s: Surface) => {
     setListing(false);
-    setRecent((all) => [...all.filter((t) => t !== s), s]);
+    setRecent((all) => [...all.filter(([t, at]) => t !== s || at !== thread), [s, thread]]);
   };
   // Whether + is showing the list.
   const [listing, setListing] = useState(false);
@@ -189,9 +190,12 @@ export function SidePanel({
         (!s.doc || s.doc.runId === documents?.runId),
     ),
   ];
+  const lastShown = (entries: typeof recent) => entries.findLast(([s]) => shown.includes(s))?.[0];
   const current = listing
     ? undefined
-    : (recent.findLast((s) => shown.includes(s)) ?? (project ? overview : undefined));
+    : (lastShown(recent.filter(([, at]) => at === thread)) ??
+      lastShown(recent) ??
+      (project ? overview : undefined));
 
   const openView = (s: Surface) => {
     if (pinned.includes(s)) return setActive(s);
@@ -207,7 +211,7 @@ export function SidePanel({
     const rest = shown.toSpliced(i, 1);
     const next = s === current ? rest[Math.min(i, rest.length - 1)] : current;
     setTabs(tabs.filter((t) => t !== s));
-    setRecent((all) => all.filter((t) => t !== s));
+    setRecent((all) => all.filter(([t]) => t !== s));
     if (next && s === current) setActive(next);
     if (!rest.length) return onClose();
     document.getElementById(next ? `side-panel-tab-${next.key}` : "side-panel-open-view")?.focus();

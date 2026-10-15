@@ -147,7 +147,7 @@ test("Projects keep pinned Knowledge and their view list", async () => {
   expect(listButton("Knowledge")).toBeDefined();
 });
 
-test("each thread shows its own pull request's tab again, colored by its state", async () => {
+test("each thread shows its own last tab again, and pull request tabs are colored by state", async () => {
   const a = "https://github.com/o/r/pull/1";
   const b = "https://github.com/o/r/pull/2";
   const states: Record<string, "open" | "merged"> = { [a]: "open", [b]: "merged" };
@@ -158,6 +158,7 @@ test("each thread shows its own pull request's tab again, colored by its state",
   };
   // A thread linking `url`, with `pullRequest` asking the panel to open it.
   const thread = async (url: string, pullRequest?: { url?: string }) => {
+    const runId = url === a ? "thread-a" : "thread-b";
     act(() =>
       root.render(
         <SidePanel
@@ -172,6 +173,7 @@ test("each thread shows its own pull request's tab again, colored by its state",
             view: (u) => <p>{u}</p>,
           }}
           pullRequest={pullRequest}
+          documents={{ runId, view: () => null }}
         />,
       ),
     );
@@ -191,4 +193,12 @@ test("each thread shows its own pull request's tab again, colored by its state",
   expect(shown()!.textContent).toBe(a);
   await thread(b);
   expect(tabs()).toEqual(["#2*"]);
+  // A view every thread shares, shown in one, doesn't take over another's own tab.
+  await click(openAView());
+  await click(listButton("Terminal"));
+  expect(tabs()).toEqual(["#2", "Terminal*"]);
+  await thread(a);
+  expect(tabs()).toEqual(["#1*", "Terminal"]);
+  await thread(b);
+  expect(tabs()).toEqual(["#2", "Terminal*"]);
 });
