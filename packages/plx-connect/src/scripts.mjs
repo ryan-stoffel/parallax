@@ -200,16 +200,18 @@ fi`;
 /**
  * What every POSIX script ends with, once `$plxd` is in place: Parallax Connect on, then plxd's
  * login service installed from `$plxd` and started, replacing any service or `serve` running
- * another plxd. On a Mac nobody is logged in to, launchd can't start the LaunchAgent yet, but its
- * file is written, so it starts at the next login. Without the service running, plxd starts now
- * with `attach`. Then plx-connect from npm when npm is there.
+ * another plxd. On a Mac nobody is logged in to, there's no GUI session for launchd to start the
+ * LaunchAgent in, but its file is written, so it starts at the next login. Any other failure is
+ * printed with a warning. Without the service running, plxd starts now with `attach`, and the
+ * install fails when that does too. Then plx-connect from npm when npm is there.
  */
 const posixTail = `echo "Turning on Parallax Connect"
 "$plxd" connect on
 echo "Installing plxd's login service"
 if ! out=$("$plxd" service install --replace </dev/null 2>&1); then
-  if [ "$(uname -s)" = Darwin ] && "$plxd" service status </dev/null 2>/dev/null | grep -qx 'installed: true'; then
-    echo "plxd's login service starts the next time you log in to this Mac. Starting plxd now."
+  if [ "$(uname -s)" = Darwin ] && ! launchctl print "gui/$(id -u)" >/dev/null 2>&1 &&
+    "$plxd" service status </dev/null 2>/dev/null | grep -qx 'installed: true'; then
+    echo "Nobody is logged in to this Mac, so plxd's login service starts at the next login. Starting plxd now."
   else
     printf '%s\\n' "$out"
     echo "warning: plxd's login service didn't install, so plxd won't start at login. Starting it now."

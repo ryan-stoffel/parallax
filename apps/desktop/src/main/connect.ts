@@ -77,7 +77,8 @@ export type ConnectProgram = {
  * What sets up `device` for Connect: `plx-connect add` in a terminal, where ssh can ask for a
  * password, through the login shell, so ssh is found where the user would find it, or PowerShell
  * on Windows. Electron is a GUI program there, which PowerShell doesn't wait for unless its output
- * is piped, so it's piped to the host, read as UTF-8 for plx-connect's ✓ and ✗.
+ * is piped, so it's piped to the host, read as UTF-8 for plx-connect's ✓ and ✗. Its paths are
+ * PowerShell string literals, in which `$` and backticks are plain characters.
  */
 export function addCommand(
   device: string,
@@ -87,7 +88,7 @@ export function addCommand(
   { platform, env, execPath, script }: ConnectProgram,
 ): Command {
   const args = `add ${device} --channel ${channel}${user ? ` --user ${user}` : ""}${headless ? " --headless" : ""}`;
-  const run = `${quote(execPath)} ${quote(env["PLX_CONNECT_PATH"] || script)} ${args}`;
+  const plxConnect = env["PLX_CONNECT_PATH"] || script;
   if (platform === "win32")
     return {
       file: "powershell.exe",
@@ -95,8 +96,14 @@ export function addCommand(
         "-NoLogo",
         "-NoProfile",
         "-Command",
-        `[Console]::OutputEncoding = [Text.Encoding]::UTF8; $env:ELECTRON_RUN_AS_NODE = '1'; & ${run} | Out-Host; exit $LASTEXITCODE`,
+        `[Console]::OutputEncoding = [Text.Encoding]::UTF8; $env:ELECTRON_RUN_AS_NODE = '1'; & ${psQuote(execPath)} ${psQuote(plxConnect)} ${args} | Out-Host; exit $LASTEXITCODE`,
       ],
     };
-  return { file: env["SHELL"] || "/bin/sh", args: ["-lc", `ELECTRON_RUN_AS_NODE=1 exec ${run}`] };
+  return {
+    file: env["SHELL"] || "/bin/sh",
+    args: ["-lc", `ELECTRON_RUN_AS_NODE=1 exec ${quote(execPath)} ${quote(plxConnect)} ${args}`],
+  };
 }
+
+/** `value` as a PowerShell string literal. */
+const psQuote = (value: string) => `'${value.replaceAll("'", "''")}'`;

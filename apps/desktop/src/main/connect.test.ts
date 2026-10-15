@@ -69,12 +69,13 @@ test("plx-connect add runs the app's own copy with its Electron as Node, with ch
     "-lc",
     "ELECTRON_RUN_AS_NODE=1 exec /repo/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron '/x/y z/plx-connect.mjs' add mac-mini --channel stable --headless",
   ]);
+  // A profile folder may hold `$`, a backtick, or `'`: literals keep them as they are.
   const windows = {
     platform: "win32" as const,
     env: {},
-    execPath: "C:\\Users\\Ryan S\\AppData\\Local\\Programs\\parallax-desktop\\Parallax.exe",
+    execPath: "C:\\Users\\R$yan O'B`x\\AppData\\Local\\Programs\\parallax-desktop\\Parallax.exe",
     script:
-      "C:\\Users\\Ryan S\\AppData\\Local\\Programs\\parallax-desktop\\resources\\plx-connect\\bin\\plx-connect.mjs",
+      "C:\\Users\\R$yan O'B`x\\AppData\\Local\\Programs\\parallax-desktop\\resources\\plx-connect\\bin\\plx-connect.mjs",
   };
   expect(addCommand("100.1.2.3", undefined, "nightly", true, windows)).toEqual({
     file: "powershell.exe",
@@ -82,7 +83,7 @@ test("plx-connect add runs the app's own copy with its Electron as Node, with ch
       "-NoLogo",
       "-NoProfile",
       "-Command",
-      `[Console]::OutputEncoding = [Text.Encoding]::UTF8; $env:ELECTRON_RUN_AS_NODE = '1'; & "${windows.execPath}" "${windows.script}" add 100.1.2.3 --channel nightly --headless | Out-Host; exit $LASTEXITCODE`,
+      "[Console]::OutputEncoding = [Text.Encoding]::UTF8; $env:ELECTRON_RUN_AS_NODE = '1'; & 'C:\\Users\\R$yan O''B`x\\AppData\\Local\\Programs\\parallax-desktop\\Parallax.exe' 'C:\\Users\\R$yan O''B`x\\AppData\\Local\\Programs\\parallax-desktop\\resources\\plx-connect\\bin\\plx-connect.mjs' add 100.1.2.3 --channel nightly --headless | Out-Host; exit $LASTEXITCODE",
     ],
   });
   for (const bad of ["", "-oProxyCommand=x", "a b", "a;b", "$(x)"]) {

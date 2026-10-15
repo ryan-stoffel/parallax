@@ -70,19 +70,21 @@ test("every POSIX install puts plxd and its version in ~/.parallax-plxd", () => 
 /**
  * Runs `script` with `sh -s` in a temporary home, whose `bin` comes first on PATH: a `curl` that
  * saves `served` wherever it's told, and the tools in `fakes`, each a sh body that may log to
- * `$HOME/log`. Returns the run, what's in `~/.parallax-plxd`, and the log, then removes the home.
+ * `$HOME/log`, with `env` besides PATH and HOME. Returns the run, what's in `~/.parallax-plxd`,
+ * and the log, then removes the home.
  * @param {string} script
  * @param {string} served
  * @param {Record<string, string>} [fakes]
+ * @param {Record<string, string>} [env]
  */
-function runInstall(script, served, fakes = {}) {
+function runInstall(script, served, fakes = {}, env = {}) {
   const home = mkdtempSync(path.join(tmpdir(), "plx-install-"));
   const bin = path.join(home, "bin");
   mkdirSync(bin);
   writeFileSync(path.join(home, "served"), served);
   const tools = { curl: `while [ "$1" != -o ]; do shift; done; cp "$HOME/served" "$2"`, ...fakes };
   for (const [name, body] of Object.entries(tools)) writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
-  const run = spawnSync("/bin/sh", ["-s"], { input: script, encoding: "utf8", env: { PATH: `${bin}:/usr/bin:/bin`, HOME: home } });
+  const run = spawnSync("/bin/sh", ["-s"], { input: script, encoding: "utf8", env: { ...env, PATH: `${bin}:/usr/bin:/bin`, HOME: home } });
   const dir = path.join(home, ".parallax-plxd");
   const files = Object.fromEntries(readdirSync(dir).map((f) => [f, readFileSync(path.join(dir, f), "utf8")]));
   const log = existsSync(path.join(home, "log")) ? readFileSync(path.join(home, "log"), "utf8") : "";
@@ -117,15 +119,30 @@ test("a checked plxd goes in ~/.parallax-plxd, and the service is installed from
     "~/.parallax-plxd/plxd connect on\n~/.parallax-plxd/plxd service install --replace\nnpm install -g --prefix ~/.local plx-connect\n",
   );
 
-  // On a Mac nobody is logged in to, launchd won't start the LaunchAgent, but its file is written.
-  const noGui = release(
-    `case "$*" in "service install --replace") echo "Bootstrap failed: 125" >&2; exit 1 ;; "service status") echo "installed: true" ;; esac`,
+  // On a Mac whose service didn't start, the LaunchAgent's file is written either way, and
+  // `launchctl print gui/<uid>` fails only when nobody is logged in to its desktop.
+  const failed = release(
+    `case "$*" in "service install --replace") echo "plxd: the old plxd (pid 42) didn't stop" >&2; exit 1 ;; "service status") echo "installed: true" ;; attach) exit "\${ATTACH_EXIT:-0}" ;; esac`,
   );
-  const noLogin = runInstall(noGui.script, noGui.plxd, { npm, uname: "echo Darwin" });
+  const mac = (/** @type {string} */ launchctl) => ({ npm, uname: "echo Darwin", launchctl });
+  const noLogin = runInstall(failed.script, failed.plxd, mac("exit 113"));
   assert.equal(noLogin.run.status, 0, noLogin.run.stderr);
-  assert.match(noLogin.run.stdout, /^plxd's login service starts the next time you log in to this Mac\. Starting plxd now\.$/m);
-  assert.doesNotMatch(noLogin.run.stdout, /Bootstrap failed|warning/);
+  assert.match(noLogin.run.stdout, /^Nobody is logged in to this Mac, so plxd's login service starts at the next login\. Starting plxd now\.$/m);
+  assert.doesNotMatch(noLogin.run.stdout, /didn't stop|warning/);
   assert.match(noLogin.log, /plxd attach\n/);
+
+  // Logged in, the failure is something else: it's shown, with the warning, and attach still runs.
+  const loggedIn = runInstall(failed.script, failed.plxd, mac("exit 0"));
+  assert.equal(loggedIn.run.status, 0, loggedIn.run.stderr);
+  assert.match(loggedIn.run.stdout, /^plxd: the old plxd \(pid 42\) didn't stop$/m);
+  assert.match(loggedIn.run.stdout, /^warning: plxd's login service didn't install, so plxd won't start at login\. Starting it now\.$/m);
+  assert.doesNotMatch(loggedIn.run.stdout, /next login/);
+  assert.match(loggedIn.log, /plxd attach\n/);
+
+  // And when attach fails too, so does the install.
+  const noPlxd = runInstall(failed.script, failed.plxd, mac("exit 0"), { ATTACH_EXIT: "4" });
+  assert.equal(noPlxd.run.status, 4);
+  assert.doesNotMatch(noPlxd.log, /npm install/);
 });
 
 /**
