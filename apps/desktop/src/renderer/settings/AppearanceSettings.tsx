@@ -319,28 +319,32 @@ export function AppearanceSettings({
 
       {window.parallax.setWindowLook && (
         <Section title="Window">
-          <Row
-            title="Blur behind window"
-            description="The desktop shows through the app's backgrounds, blurred."
-          >
-            <Switch
-              label="Blur behind window"
-              checked={appearance.blur}
-              onChange={(blur) => set({ blur })}
-            />
-          </Row>
-          <Row
-            title="Background opacity"
-            description="How much of the theme's background covers the blur. 0% is clear glass."
-          >
-            <Percent
-              label="Background opacity"
-              min={0}
-              value={appearance.backgroundOpacity}
-              disabled={!appearance.blur}
-              onChange={(backgroundOpacity) => set({ backgroundOpacity })}
-            />
-          </Row>
+          {window.parallax.canBlur && (
+            <>
+              <Row
+                title="Blur behind window"
+                description="The desktop shows through the app's backgrounds, blurred."
+              >
+                <Switch
+                  label="Blur behind window"
+                  checked={appearance.blur}
+                  onChange={(blur) => set({ blur })}
+                />
+              </Row>
+              <Row
+                title="Background opacity"
+                description="How much of the theme's background covers the blur. 0% is clear glass."
+              >
+                <Percent
+                  label="Background opacity"
+                  min={0}
+                  value={appearance.backgroundOpacity}
+                  disabled={!appearance.blur}
+                  onChange={(backgroundOpacity) => set({ backgroundOpacity })}
+                />
+              </Row>
+            </>
+          )}
           <Row title="Window opacity" description="The whole window, text included.">
             <Percent
               label="Window opacity"

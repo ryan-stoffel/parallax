@@ -292,7 +292,7 @@ export function SidePanel({
         openView(next);
       }}
       style={expanded ? undefined : { width }}
-      className={`relative flex min-w-0 flex-col bg-background ${expanded ? "flex-1" : "shrink-0 border-l border-border"}`}
+      className={`relative flex min-w-0 flex-col bg-pane ${expanded ? "flex-1" : "shrink-0 border-l border-border"}`}
     >
       {!expanded && onResize && <PanelResize side="right" width={width} onResize={onResize} />}
       <TopBar className={`window-controls-inset px-2 ${topBarClassName}`}>

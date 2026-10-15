@@ -19,6 +19,7 @@ import path from "node:path";
 
 import {
   THEME_PREFERENCES,
+  blurSupported,
   type OpenTarget,
   type RegistryAgent,
   type UpdateState,
@@ -494,19 +495,25 @@ ipcMain.on("parallax:theme", (_event, preference: unknown) => {
   if (source) nativeTheme.themeSource = source;
 });
 // Settings > Appearance's Window, which the preload offers only on macOS and Windows: the desktop
-// blurred behind the asking window, which shows through its translucent backgrounds, and its
-// opacity, 30% at the least.
+// blurred behind the asking window where it can be, which shows through its translucent panes,
+// and its opacity, 30% at the least.
 const blurred = new WeakSet<BrowserWindow>();
 ipcMain.on("parallax:windowLook", (event, look: unknown) => {
   const win = BrowserWindow.fromWebContents(event.sender);
-  const { blur, opacity } = (look ?? {}) as { blur?: unknown; opacity?: unknown };
-  if (!win || typeof blur !== "boolean" || typeof opacity !== "number" || !Number.isFinite(opacity))
+  const { blur: asked, opacity } = (look ?? {}) as { blur?: unknown; opacity?: unknown };
+  if (
+    !win ||
+    typeof asked !== "boolean" ||
+    typeof opacity !== "number" ||
+    !Number.isFinite(opacity)
+  )
     return;
+  const blur = asked && blurSupported(process.platform, process.getSystemVersion());
   win.setOpacity(Math.min(1, Math.max(0.3, opacity)));
   if (blur) blurred.add(win);
   else blurred.delete(win);
   if (process.platform === "darwin") win.setVibrancy(blur ? "under-window" : null);
-  else win.setBackgroundMaterial(blur ? "acrylic" : "none");
+  else if (process.platform === "win32") win.setBackgroundMaterial(blur ? "acrylic" : "none");
   win.setBackgroundColor(blur ? "#00000000" : windowBackground(nativeTheme.shouldUseDarkColors));
 });
 // Fires for the setting above, and for an OS theme change while it's "system".

@@ -25,7 +25,7 @@ export type Appearance = {
   motion: "system" | "reduce";
   /** The pair that marks added and removed, done and failed. */
   diffColors: "redGreen" | "blueOrange";
-  /** Whether the desktop shows, blurred, behind the window (macOS and Windows). */
+  /** Whether the desktop shows, blurred, behind the window (macOS and Windows 11). */
   blur: boolean;
   /** How much of the theme's background covers the blur, in percent. */
   backgroundOpacity: number;
@@ -148,9 +148,10 @@ export function applyAppearance(appearance: Appearance) {
     appearance.motion === "reduce" || matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
   root.classList.toggle("diff-blue-orange", appearance.diffColors === "blueOrange");
-  // index.css mixes --background and --sidebar with transparent by --tint, over the blur.
-  root.classList.toggle("translucent", appearance.blur);
-  root.style.setProperty("--tint", `${appearance.blur ? appearance.backgroundOpacity : 100}%`);
+  // index.css mixes the panes' colors with transparent by --tint, over the blur.
+  const blur = appearance.blur && window.parallax?.canBlur === true;
+  root.classList.toggle("translucent", blur);
+  root.style.setProperty("--tint", `${blur ? appearance.backgroundOpacity : 100}%`);
 }
 
 /**

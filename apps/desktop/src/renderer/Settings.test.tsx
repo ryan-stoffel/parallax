@@ -754,6 +754,7 @@ test("Window's blur and opacities are kept and tint the page, where the window c
   expect(document.querySelector('[aria-label="Window"]')).toBeNull();
   act(() => unmount());
   window.parallax.setWindowLook = () => {};
+  window.parallax.canBlur = true;
   await renderSettings("appearance");
   const slider = (label: string) =>
     document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
