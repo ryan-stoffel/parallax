@@ -65,6 +65,10 @@ dmg:
   writeUpdateInfo: false
 win:
   target: nsis
+# The static type2 runtime: the legacy one (toolset 0.0.0) dlopens libfuse.so.2, which Arch,
+# Omarchy, and newer Fedora and Ubuntu don't install, so the AppImage didn't start there (PLX-808).
+toolsets:
+  appimage: "1.0.3"
 linux:
   target: AppImage
   category: Development

@@ -73,6 +73,23 @@ function bringForward() {
   app.focus({ steal: true });
 }
 
+/**
+ * The `--password-store` to start Chromium with on Linux, or undefined to let it choose. Chromium
+ * picks the keychain from the desktop's name and knows only GNOME-family desktops and KDE, so
+ * Hyprland, Sway, i3, and other window managers get `basic_text` even with gnome-keyring running,
+ * and sign-in stays in memory (PLX-808). Those ask for the Secret Service: without one, Chromium
+ * has no key and encryption stays unavailable, as before. KDE keeps KWallet. Call before `ready`.
+ */
+export function passwordStore(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+  hasSwitch: boolean,
+): string | undefined {
+  if (platform !== "linux" || hasSwitch || env["KDE_FULL_SESSION"]) return undefined;
+  const desktop = `${env["XDG_CURRENT_DESKTOP"] ?? ""}:${env["DESKTOP_SESSION"] ?? ""}`;
+  return /kde|plasma/i.test(desktop) ? undefined : "gnome-libsecret";
+}
+
 /** The account's access token, for Parallax Relay (PLX-652). Main only: it never reaches a renderer. */
 export type Account = {
   accessToken(): Promise<string | undefined>;
