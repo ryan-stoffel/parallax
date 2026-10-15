@@ -52,7 +52,10 @@ export const connection = (host: Host) =>
 /** Past this many computers, the menu adds a search box. */
 const searchFrom = 7;
 
-/** A computer's row: its icon with a dot for whether it's connected, its name, and how it's reached. */
+/**
+ * A computer's row: its icon with a dot for whether it's connected, its name, and how it's reached,
+ * unless that's Parallax Connect, which most computers are.
+ */
 function HostOption({
   host,
   checked,
@@ -66,6 +69,11 @@ function HostOption({
 }) {
   const status = useConnection(host.id)?.status;
   const offline = status === "failed";
+  const note = offline
+    ? "Offline"
+    : host.id === localId || host.destination || host.routes
+      ? connection(host)
+      : undefined;
   return (
     <button
       type="button"
@@ -86,9 +94,7 @@ function HostOption({
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
         {/* Both cut off with "…" when long, how it connects first. */}
         <span className={`truncate ${offline ? "text-muted-foreground" : ""}`}>{host.name}</span>
-        <span className="shrink-[4] truncate text-[12px] text-faint-foreground">
-          {offline ? "Offline" : connection(host)}
-        </span>
+        <span className="shrink-[4] truncate text-[12px] text-faint-foreground">{note}</span>
       </span>
       {missing && (
         <span className="shrink-0 rounded-[5px] bg-warning/12 px-1.5 text-[11.5px] leading-5 text-warning">
