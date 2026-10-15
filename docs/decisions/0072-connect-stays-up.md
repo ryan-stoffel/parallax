@@ -18,7 +18,7 @@ Ryan wants Parallax Connect to be set and forget: a computer added once stays re
 
 ### One plxd per user, at `~/.parallax-plxd`
 
-- On every OS, plxd's login service runs `~/.parallax-plxd/plxd` (`%USERPROFILE%\.parallax-plxd\plxd.exe` on Windows), with `plxd.version` beside it. That's already the layout of the SSH install (PLX-642), `host/update` (0066), and `LOCATE_PLXD`. It no longer runs from an app bundle or an AppImage mount. A service that still runs plx-connect's old `~/.local/bin/plxd` keeps working, and `host/update` still updates that file in place, until plx-connect runs there again.
+- On every OS, plxd's login service runs `~/.parallax-plxd/plxd` (`%USERPROFILE%\.parallax-plxd\plxd.exe` on Windows), with `plxd.version` beside it. That's already the layout of the SSH install (PLX-642), `host/update` (0066), and `LOCATE_PLXD`. It no longer runs from an app bundle or an AppImage mount. A service that still runs plx-connect's old `~/.local/bin/plxd` keeps working, and `host/update` still updates that file in place, until the app, the SSH install, or plx-connect moves the service to the copy.
 - Whoever installs or updates plxd writes that copy: the app, plx-connect, the SSH install, and `host/update`. The app and `host/update` write a temp file in the same folder and rename it into place, plxd first and then `plxd.version`, as 0066 does, and never replace a newer copy with an older one. plx-connect installs the release it picked, as it always has. On Windows, a running `plxd.exe` is renamed aside before the new one moves in, and the leftover is deleted at the next start.
 - On Linux, plx-connect also links `~/.local/bin/plxd` to the copy, so `plxd` stays on `PATH` and existing services move to it.
 
