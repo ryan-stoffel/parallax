@@ -192,13 +192,16 @@ export function AgentBrowser({
               aria-label={`Page ${side}`}
               inputMode="numeric"
               value={draft?.[side] ?? String(frame?.[side] ?? "")}
-              onFocus={() =>
-                setDraft(
-                  (d) =>
-                    d ?? { width: String(frame?.width ?? ""), height: String(frame?.height ?? "") },
-                )
+              // The first keystroke starts a draft from the page's size, so the other field keeps it.
+              onChange={(e) =>
+                setDraft((d) => ({
+                  ...(d ?? {
+                    width: String(frame?.width ?? ""),
+                    height: String(frame?.height ?? ""),
+                  }),
+                  [side]: e.target.value,
+                }))
               }
-              onChange={(e) => setDraft((d) => d && { ...d, [side]: e.target.value })}
               // A form with two fields and no submit button doesn't submit on Enter by itself.
               onKeyDown={(e) => e.key === "Enter" && e.currentTarget.form?.requestSubmit()}
               onBlur={(e) => {
