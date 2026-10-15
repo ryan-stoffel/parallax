@@ -1,11 +1,13 @@
 import { expect, test } from "vite-plus/test";
 
+import { needNpm } from "../preload/bridge";
 import type { CliKind } from "../protocol/generated/protocol";
 import {
   installCommand,
   loginCommand,
   hostLogin,
   masterCommand,
+  quote,
   runInstall,
   terminalEnv,
   type Command,
@@ -86,10 +88,10 @@ test("installs a CLI with its own script in the login shell, here or over ssh", 
   // Pi installs with npm into ~/.local, which a Nix store's read-only prefix can't stop.
   expect((installCommand("pi", undefined, "linux", {}) as Command).args).toEqual([
     "-lc",
-    'npm install -g --prefix "$HOME/.local" @earendil-works/pi-coding-agent',
+    needNpm('npm install -g --prefix "$HOME/.local" @earendil-works/pi-coding-agent', false),
   ]);
   expect((installCommand("opencode", undefined, "win32") as Command).args.at(-1)).toBe(
-    "npm install -g opencode-ai",
+    needNpm("npm install -g opencode-ai", true),
   );
   // A Windows SSH host gets PowerShell's, by the OS its plxd reports.
   expect((installCommand("claude", mini, "darwin", {}, "windows") as Command).args.at(-1)).toBe(
@@ -100,7 +102,7 @@ test("installs a CLI with its own script in the login shell, here or over ssh", 
   expect(installCommand("antigravity", undefined, "win32")).toMatch(/can't install/);
   expect(installCommand("codex", mini, "darwin")).toMatchObject({ file: "ssh" });
   expect((installCommand("codex", mini, "darwin") as Command).args.at(-1)).toBe(
-    `exec "$SHELL" -lc 'npm install -g @openai/codex'`,
+    `exec "$SHELL" -lc ${quote(needNpm("npm install -g @openai/codex", false))}`,
   );
 });
 
@@ -129,6 +131,16 @@ test.skipIf(process.platform === "win32")(
       }),
     ).toBe(`The install failed: ${npm.slice(0, 3).join("\n")}`);
     expect(await runInstall("Parallax can't install this agent on Windows.")).toMatch(/can't/);
+    // No npm: the install says so instead of the shell's "not found".
+    expect(
+      await runInstall({
+        file: "/bin/sh",
+        args: ["-c", needNpm("npm install -g x", false)],
+        env: { PATH: "/nonexistent" },
+      }),
+    ).toBe(
+      "The install failed: npm is not installed. Install Node.js from https://nodejs.org, which includes npm, then try again.",
+    );
   },
 );
 

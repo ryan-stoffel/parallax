@@ -300,9 +300,15 @@ pub enum WorktreeError {
         /// The timeout that elapsed.
         timeout: Duration,
     },
-    /// git could not be started.
+    /// git isn't on the host's `PATH`.
+    #[error(
+        "git isn't installed on this host, and Parallax needs it to run a thread; install it from \
+         https://git-scm.com/downloads, then try again"
+    )]
+    GitNotInstalled,
+    /// git, or another program a worktree runs, could not be started.
     #[error(transparent)]
-    Spawn(#[from] SpawnError),
+    Spawn(SpawnError),
     /// A filesystem operation other than running git failed.
     #[error("could not use {}: {source}", .path.display())]
     Io {
@@ -312,6 +318,17 @@ pub enum WorktreeError {
         #[source]
         source: io::Error,
     },
+}
+
+/// Every program a worktree runs is started through this, so a missing git always reads as
+/// [`WorktreeError::GitNotInstalled`].
+impl From<SpawnError> for WorktreeError {
+    fn from(error: SpawnError) -> Self {
+        match error {
+            SpawnError::NotFound { program, .. } if program == "git" => Self::GitNotInstalled,
+            error => Self::Spawn(error),
+        }
+    }
 }
 
 /// A newly created worktree.

@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-import { DEVICE_ICONS, npmInstallLine, type DeviceIcon } from "../preload/bridge";
+import { DEVICE_ICONS, needNpm, npmInstallLine, type DeviceIcon } from "../preload/bridge";
 import type { TailnetDevice } from "../protocol/generated/protocol";
 import { quote, type Command } from "./terminal";
 
@@ -85,7 +85,10 @@ function shell(line: string, { platform, env }: ConnectProgram): Command {
 
 /** What installs plx-connect on this computer with npm, as an agent's npm install does (PLX-558). */
 export const installConnectCommand = (where: ConnectProgram): Command =>
-  shell(npmInstallLine("plx-connect", where.platform === "win32"), where);
+  shell(
+    needNpm(npmInstallLine("plx-connect", where.platform === "win32"), where.platform === "win32"),
+    where,
+  );
 
 /** What sets up `device` for Connect: `plx-connect add` in a terminal, where ssh can ask for a password. */
 export function addCommand(

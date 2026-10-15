@@ -133,12 +133,34 @@ pub async fn check_host(launcher: &Launcher, claude: &Path) -> Result<(), String
              would open the D-Bus session bus and docker.sock to workers; update Claude Code to \
              {WORKER_MIN_VERSION} or later"
         )),
-        _ => Err(format!(
-            "Claude Code's seccomp filter (its apply-seccomp helper) could not run: {}; Claude \
-             Code {WORKER_MIN_VERSION} or later has it built in on x86_64 and arm64",
-            first_line(&filtered)
-        )),
+        _ => Err(helper_problem(&first_line(&filtered))),
     }
+}
+
+/// Why Claude Code's seccomp helper couldn't run, from the first line it printed. A failed write
+/// to `/proc/self/uid_map`, `gid_map`, or `setgroups` means the helper is there, and bubblewrap
+/// works (the probe before it passed), but the kernel won't let the helper map IDs in the user
+/// namespace it nests inside bubblewrap's. Claude Code's own sandbox fails the same way on that
+/// host, so a newer Claude Code doesn't help.
+fn helper_problem(line: &str) -> String {
+    let nested = [
+        "/proc/self/uid_map",
+        "/proc/self/gid_map",
+        "/proc/self/setgroups",
+    ];
+    if nested.iter().any(|file| line.contains(file)) {
+        return format!(
+            "Claude Code's seccomp filter (its apply-seccomp helper) could not run: {line}. \
+             bubblewrap works on this host, but the kernel won't let the helper set up the user \
+             namespace it nests inside bubblewrap's. This comes from the host's configuration \
+             (its kernel, or a container plxd runs in), not Claude Code's version, and Claude \
+             Code's own sandbox fails the same way here"
+        );
+    }
+    format!(
+        "Claude Code's seccomp filter (its apply-seccomp helper) could not run: {line}; Claude \
+         Code {WORKER_MIN_VERSION} or later has it built in on x86_64 and arm64"
+    )
 }
 
 /// Refuses a `claude` that runs with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` on. On Linux the flag
@@ -309,7 +331,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
 
-    use super::{check_host, missing_packages, read_status, status_spec};
+    use super::{check_host, helper_problem, missing_packages, read_status, status_spec};
     use crate::backend::claude::ClaudeBackend;
     use crate::backend::process::{Environment, Launcher};
     use crate::backend::{
@@ -352,6 +374,16 @@ mod tests {
         script(&bin, "bwrap", "exit 0");
         let error = check_host(&only, &claude).await.unwrap_err();
         assert!(error.starts_with("socat isn't installed"), "{error}");
+    }
+
+    #[test]
+    fn a_helper_refused_a_nested_namespace_blames_the_host_not_the_version() {
+        // What a current Claude Code printed on a Rocky Linux host (PLX-802).
+        let error =
+            helper_problem("apply-seccomp: write /proc/self/uid_map: Operation not permitted");
+        assert!(error.contains("not Claude Code's version"), "{error}");
+        assert!(!error.contains("or later"), "{error}");
+        assert!(helper_problem("no helper here").contains("or later has it built in"));
     }
 
     #[test]

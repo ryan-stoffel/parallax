@@ -2,7 +2,7 @@ import type { WebContents } from "electron";
 import { execFile } from "node:child_process";
 import os from "node:os";
 
-import { NPM_INSTALLS, npmInstallLine } from "../preload/bridge";
+import { NPM_INSTALLS, needNpm, npmInstallLine } from "../preload/bridge";
 import type { CliKind, TerminalKey, TerminalOpenParams } from "../protocol/generated/protocol";
 import { SSH_CONTROL_PATH, type Connection } from "./connection";
 import { perWindow } from "./windows";
@@ -105,17 +105,23 @@ const installScripts: Record<string, { posix: string; windows?: string }> = {
     posix: "curl -fsSL https://claude.ai/install.sh | bash",
     windows: "irm https://claude.ai/install.ps1 | iex",
   },
-  codex: { posix: "npm install -g @openai/codex", windows: "npm install -g @openai/codex" },
+  codex: {
+    posix: needNpm("npm install -g @openai/codex", false),
+    windows: needNpm("npm install -g @openai/codex", true),
+  },
   // Pi and OpenCode install with npm, in the background (`runInstall`).
   ...Object.fromEntries(
     Object.entries(NPM_INSTALLS).map(([kind, pkg]) => [
       kind,
-      { posix: npmInstallLine(pkg!, false), windows: npmInstallLine(pkg!, true) },
+      {
+        posix: needNpm(npmInstallLine(pkg!, false), false),
+        windows: needNpm(npmInstallLine(pkg!, true), true),
+      },
     ]),
   ),
   grokBuild: {
     posix: "curl -fsSL https://x.ai/cli/install.sh | bash",
-    windows: "npm install -g @xai-official/grok",
+    windows: needNpm("npm install -g @xai-official/grok", true),
   },
   hermes,
   // Ollama Cloud runs through Hermes Agent's own Ollama Cloud provider (0070).
