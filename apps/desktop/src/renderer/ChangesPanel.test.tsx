@@ -7,6 +7,9 @@ import type { ParallaxBridge, WatchMessage } from "../preload/bridge";
 import type { ThreadRun } from "../protocol/generated/protocol";
 import { ChangesPanel } from "./ChangesPanel";
 
+// happy-dom has no popovers. The Turn menu's items are in the DOM either way.
+HTMLElement.prototype.hidePopover = () => {};
+
 vi.mock("./providers", () => ({
   useProviders: () => ({
     providers: [
@@ -118,20 +121,32 @@ const settle = async () => {
 const paths = () => [...document.querySelectorAll("span[title]")].map((s) => s.textContent);
 const button = (name: string) =>
   [...document.querySelectorAll("button")].find((b) => b.textContent === name)!;
+// The Turn menu (ui.tsx's Picker): its options' text, the ordinal of each ("all" for All turns),
+// and the one shown on its trigger.
+const turnItems = () => [
+  ...document.querySelectorAll<HTMLElement>(
+    '[role="menu"][aria-label="Turn"] [role="menuitemradio"]',
+  ),
+];
+const turnTexts = () => turnItems().map((o) => o.textContent);
+const turnValues = () => turnTexts().map((t) => /^Turn (\d+):/.exec(t ?? "")?.[1] ?? "all");
+const shownTurn = () =>
+  /^Turn: Turn (\d+):/.exec(
+    document.querySelector('button[aria-label^="Turn: "]')!.getAttribute("aria-label")!,
+  )?.[1] ?? "all";
+const selectTurn = async (ordinal: number) => {
+  await act(async () =>
+    turnItems()
+      .find((o) => o.textContent?.startsWith(`Turn ${ordinal}:`))!
+      .click(),
+  );
+  await settle();
+};
 
 test("every turn's diff shows first, then one turn's, with undone turns left out", async () => {
   expect(paths()).toEqual(["a.txt", "b.txt"]);
-  const select = document.querySelector("select")!;
-  expect([...select.options].map((o) => o.text)).toEqual([
-    "All turns",
-    "Turn 1: Add a",
-    "Turn 2: Now b",
-  ]);
-  await act(async () => {
-    select.value = "2";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-  await settle();
+  expect(turnTexts()).toEqual(["All turns", "Turn 1: Add a", "Turn 2: Now b"]);
+  await selectTurn(2);
   expect(request).toHaveBeenCalledWith("h", "orchestration/getTurnDiff", {
     threadId: "r",
     from: 1,
@@ -145,12 +160,7 @@ test.each(["codex-work", "claude-work"])(
   async (backend) => {
     listedRuns = cursored;
     renderPanel({ backend, sessionId: "s1", version: 1 });
-    const select = document.querySelector("select")!;
-    await act(async () => {
-      select.value = "2";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-    await settle();
+    await selectTurn(2);
     await act(async () => button("Edit from here").click());
     expect(document.querySelector("dialog")!.open).toBe(true);
     await act(async () => button("Revert and keep changes").click());
@@ -164,15 +174,6 @@ test.each(["codex-work", "claude-work"])(
     expect(document.querySelector("dialog")!.open).toBe(false);
   },
 );
-
-const selectTurn = async (ordinal: number) => {
-  await act(async () => {
-    const select = document.querySelector("select")!;
-    select.value = String(ordinal);
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-  await settle();
-};
 
 test.each([
   [{ running: true }, "Interrupt the current turn before reverting checkpoints."],
@@ -223,11 +224,7 @@ test("ordinal labels survive checkpoint gaps, and rollback never targets an unre
   ];
   renderPanel({ version: 1 });
   await settle();
-  expect([...document.querySelector("select")!.options].map((o) => o.text)).toEqual([
-    "All turns",
-    "Turn 1: Add a",
-    "Turn 4: Now b",
-  ]);
+  expect(turnTexts()).toEqual(["All turns", "Turn 1: Add a", "Turn 4: Now b"]);
   await selectTurn(4);
   expect(button("Edit from here").disabled).toBe(true);
   expect(button("Edit from here").title).toBe(
@@ -269,28 +266,23 @@ test("thread checkpoint events reload turns even when the shell has no checkpoin
     }),
   );
   await settle();
-  expect([...document.querySelector("select")!.options].map((o) => o.value)).toEqual([
-    "all",
-    "1",
-    "2",
-    "4",
-  ]);
+  expect(turnValues()).toEqual(["all", "1", "2", "4"]);
 });
 
 test("a changes card's request shows its turn once, then clears, and another thread's is ignored", async () => {
   const shown = vi.fn();
   renderPanel({ request: { runId: "other", turn: 2 }, onRequestShown: shown });
   await settle();
-  expect(document.querySelector("select")!.value).toBe("all");
+  expect(shownTurn()).toBe("all");
   expect(shown).not.toHaveBeenCalled();
 
   renderPanel({ request: { runId: "r", turn: 2, path: "b.txt" }, onRequestShown: shown });
   await settle();
-  expect(document.querySelector("select")!.value).toBe("2");
+  expect(shownTurn()).toBe("2");
   expect(paths()).toEqual(["b.txt"]);
   expect(shown).toHaveBeenCalledOnce();
   // Cleared, it leaves the turn as the user has it.
   renderPanel({ request: undefined, onRequestShown: shown });
   await settle();
-  expect(document.querySelector("select")!.value).toBe("2");
+  expect(shownTurn()).toBe("2");
 });

@@ -65,11 +65,10 @@ const bridge: ParallaxBridge = {
   version: () => ipcRenderer.invoke("parallax:version") as Promise<string>,
   setThemeSource: (preference) => ipcRenderer.send("parallax:theme", preference),
   setZoom: (factor) => webFrame.setZoomFactor(factor),
-  ...(process.platform !== "linux" && {
-    setWindowLook: (look: { blur: boolean; opacity: number }) =>
-      ipcRenderer.send("parallax:windowLook", look),
-    canBlur: blurSupported(process.platform, process.getSystemVersion()),
-  }),
+  setWindowLook: (look) => ipcRenderer.send("parallax:windowLook", look),
+  canBlur: blurSupported(process.platform, process.getSystemVersion()),
+  transparent: process.argv.includes("--parallax-transparent"),
+  relaunch: () => ipcRenderer.send("parallax:relaunch"),
   pickFolder: () => ipcRenderer.invoke("parallax:pickFolder") as Promise<string | null>,
   listFolders: (path) => ipcRenderer.invoke("parallax:listFolders", path),
   createRepo: (name) => ipcRenderer.invoke("parallax:createRepo", name),

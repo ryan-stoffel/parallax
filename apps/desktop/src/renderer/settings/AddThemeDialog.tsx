@@ -7,6 +7,7 @@ import {
   parallaxTokens,
   searchThemes,
   useAddedThemes,
+  type AddedExtension,
   type FoundExtension,
 } from "../vscodeThemes";
 
@@ -15,10 +16,16 @@ const downloads = new Intl.NumberFormat(undefined, { notation: "compact" });
 
 /**
  * Settings > Appearance's Add theme: a modal that searches Open VSX's color themes, most
- * downloaded first, and adds one's themes (vscodeThemes.ts). Opens when mounted; `onClose` runs
- * when it closes.
+ * downloaded first, and adds one's themes (vscodeThemes.ts). Opens when mounted; adding closes it
+ * and runs `onAdded`, and `onClose` runs when it closes.
  */
-export function AddThemeDialog({ onClose }: { onClose: () => void }) {
+export function AddThemeDialog({
+  onAdded,
+  onClose,
+}: {
+  onAdded: (extension: AddedExtension) => void;
+  onClose: () => void;
+}) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const [query, setQuery] = useState("");
@@ -44,12 +51,10 @@ export function AddThemeDialog({ onClose }: { onClose: () => void }) {
     const id = `${namespace}.${name}`;
     setStatus((s) => ({ ...s, [id]: "busy" }));
     try {
-      addExtension(await fetchExtension(namespace, name, parallaxTokens()));
-      setStatus((s) => {
-        const next = { ...s };
-        delete next[id];
-        return next;
-      });
+      const extension = await fetchExtension(namespace, name, parallaxTokens());
+      addExtension(extension);
+      onAdded(extension);
+      dialog.current?.close();
     } catch (e) {
       setStatus((s) => ({ ...s, [id]: e instanceof Error ? e.message : String(e) }));
     }
@@ -68,7 +73,8 @@ export function AddThemeDialog({ onClose }: { onClose: () => void }) {
             Add a theme
           </h2>
           <p className="mt-1 text-[13px] text-muted-foreground">
-            Search color themes from Open VSX. Each adds its light and dark themes.
+            Search color themes from Open VSX. Adding one switches to it, and its other variants
+            join the theme menus.
           </p>
         </div>
         <button

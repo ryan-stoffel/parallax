@@ -1,5 +1,6 @@
 import { useLayoutEffect } from "react";
 
+import type { WindowMaterial } from "../preload/bridge";
 import { merged, stored } from "./stored";
 import {
   customColorsCss,
@@ -34,12 +35,13 @@ export type Appearance = {
   motion: "system" | "reduce";
   /** The pair that marks added and removed, done and failed. */
   diffColors: "redGreen" | "blueOrange";
-  /** Whether the desktop shows, blurred, behind the window (macOS and Windows 11). */
-  blur: boolean;
-  /** How much of the theme's background covers the blur, in percent. */
+  /**
+   * The window's background: opaque, clear (the desktop shows through), or blurred (macOS and
+   * Windows 11 blur what shows through).
+   */
+  windowMaterial: WindowMaterial;
+  /** How much of the theme's background covers what shows through, in percent. */
   backgroundOpacity: number;
-  /** The whole window's opacity, text included, in percent (macOS and Windows). */
-  windowOpacity: number;
 };
 
 export const defaults: Appearance = {
@@ -54,34 +56,31 @@ export const defaults: Appearance = {
   wordWrap: true,
   motion: "system",
   diffColors: "redGreen",
-  blur: false,
-  backgroundOpacity: 70,
-  windowOpacity: 100,
+  windowMaterial: "opaque",
+  backgroundOpacity: 75,
 };
 
-export const uiSizes = [11, 12, 13, 14, 15, 16, 18, 20];
-export const codeSizes = [10, 11, 12, 13, 14, 15, 16, 18];
+export const uiSizes = [11, 12, 13, 14, 15, 16, 17, 18, 20];
+export const codeSizes = [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24];
+
+/** Fonts that ship with Parallax (index.css), so every computer has them. */
+export const bundledFonts = {
+  ui: ["Inter Variable", "Geist Variable"],
+  code: ["Geist Mono Variable", "Fira Code Variable", "Source Code Pro Variable"],
+};
 
 /**
- * The fonts Appearance offers, those installed here among these, after the system's. Typing a
- * name under Advanced takes any other.
+ * Common fonts, for where the system's list can't be read: those installed are offered instead.
  */
-const uiCandidates = [
-  "Inter",
+const commonFonts = [
   "Helvetica Neue",
   "Arial",
   "Avenir Next",
   "Segoe UI",
   "Roboto",
-  "Atkinson Hyperlegible",
-  "Lexend",
-  "IBM Plex Sans",
-  "Open Sans",
-  "Verdana",
   "Ubuntu",
   "Noto Sans",
-];
-const codeCandidates = [
+  "Verdana",
   "SF Mono",
   "Menlo",
   "Monaco",
@@ -90,19 +89,21 @@ const codeCandidates = [
   "Cascadia Code",
   "Consolas",
   "Source Code Pro",
-  "IBM Plex Mono",
-  "Hack",
   "Ubuntu Mono",
   "DejaVu Sans Mono",
   "Courier New",
 ];
+
+function canvas() {
+  return document.createElement("canvas").getContext("2d");
+}
 
 /**
  * Whether `name` is installed: text in it measures unlike each generic fallback's. False where
  * there's no canvas to measure with.
  */
 function isInstalled(name: string): boolean {
-  const ctx = document.createElement("canvas").getContext("2d");
+  const ctx = canvas();
   if (!ctx) return false;
   const sample = "mmmmmmmmmmlli10OQ@#";
   return ["monospace", "serif", "sans-serif"].some((generic) => {
@@ -113,11 +114,41 @@ function isInstalled(name: string): boolean {
   });
 }
 
-let installed: { ui: string[]; code: string[] } | undefined;
-/** The candidate fonts installed on this computer, measured once. */
-export function installedFonts() {
-  installed ??= { ui: uiCandidates.filter(isInstalled), code: codeCandidates.filter(isInstalled) };
-  return installed;
+/** Whether `name`'s narrow and wide letters measure the same. */
+function isMonospace(ctx: CanvasRenderingContext2D, name: string) {
+  ctx.font = `24px "${name}", sans-serif`;
+  return ctx.measureText("iiiiil").width === ctx.measureText("MMMMMW").width;
+}
+
+/** This computer's fonts by family, monospace ones apart. `complete` is false for the fallback. */
+export type SystemFonts = { mono: string[]; other: string[]; complete: boolean };
+
+let systemFonts: Promise<SystemFonts> | undefined;
+/**
+ * Every font family installed here, read once with the Local Font Access API. Where that's refused,
+ * as before a click gives the page a user gesture, it's the installed `commonFonts`, and the next
+ * call tries again.
+ */
+export function loadSystemFonts(): Promise<SystemFonts> {
+  systemFonts ??= (async () => {
+    const query = (window as { queryLocalFonts?: () => Promise<{ family: string }[]> })
+      .queryLocalFonts;
+    let families: string[] = [];
+    try {
+      families = ((await query?.()) ?? []).map((f) => f.family);
+    } catch {
+      // Refused: the common fonts below.
+    }
+    const complete = families.length > 0;
+    if (!complete) families = commonFonts.filter(isInstalled);
+    families = [...new Set(families)].sort((a, b) => a.localeCompare(b));
+    const ctx = canvas();
+    const mono = ctx ? families.filter((f) => isMonospace(ctx, f)) : [];
+    const result = { mono, other: families.filter((f) => !mono.includes(f)), complete };
+    if (!complete) systemFonts = undefined;
+    return result;
+  })();
+  return systemFonts;
 }
 
 const appearance = stored("parallax.appearance", defaults, merged);
@@ -136,6 +167,15 @@ export function shownThemes(appearance: Appearance, added: AddedExtension[]): Re
     light: ids.has(appearance.lightTheme) ? appearance.lightTheme : "parallax-light",
     dark: ids.has(appearance.darkTheme) ? appearance.darkTheme : "parallax-dark",
   };
+}
+
+/**
+ * Whether this window shows what's behind it with `material`: blurred where the OS can blur, and
+ * clear where the window was created see-through.
+ */
+export function seesThrough(material: WindowMaterial) {
+  if (material === "blur") return window.parallax?.canBlur === true;
+  return material === "clear" && window.parallax?.transparent === true;
 }
 
 // A font name the user typed, kept to what a CSS family name can hold.
@@ -167,10 +207,10 @@ export function applyAppearance(appearance: Appearance) {
     appearance.motion === "reduce" || matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
   root.classList.toggle("diff-blue-orange", appearance.diffColors === "blueOrange");
-  // index.css mixes the panes' colors with transparent by --tint, over the blur.
-  const blur = appearance.blur && window.parallax?.canBlur === true;
-  root.classList.toggle("translucent", blur);
-  root.style.setProperty("--tint", `${blur ? appearance.backgroundOpacity : 100}%`);
+  // index.css mixes the panes' colors with transparent by --tint, over what shows through.
+  const through = seesThrough(appearance.windowMaterial);
+  root.classList.toggle("translucent", through);
+  root.style.setProperty("--tint", `${through ? appearance.backgroundOpacity : 100}%`);
 }
 
 /**
@@ -207,11 +247,7 @@ export function useAppearanceEffects() {
   }, [current, added]);
   useLayoutEffect(() => window.parallax.setZoom(current.uiSize / 13), [current.uiSize]);
   useLayoutEffect(
-    () =>
-      window.parallax.setWindowLook?.({
-        blur: current.blur,
-        opacity: current.windowOpacity / 100,
-      }),
-    [current.blur, current.windowOpacity],
+    () => window.parallax.setWindowLook?.({ material: current.windowMaterial }),
+    [current.windowMaterial],
   );
 }

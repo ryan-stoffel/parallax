@@ -13,7 +13,7 @@ import {
   session,
   shell,
 } from "electron";
-import { existsSync, promises as fs } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -91,6 +91,17 @@ const firstRun =
 const devServerUrl = app.isPackaged ? undefined : process.env["PLX_DEV_SERVER_URL"];
 registerAppScheme();
 
+// Whether windows open see-through (Settings > Appearance's Clear background), read at launch. The
+// OS fixes a window's transparency when it's created, so a change applies on the next launch.
+const clearFile = path.join(app.getPath("userData"), "clear-window.json");
+const clearAtLaunch = (() => {
+  try {
+    return JSON.parse(readFileSync(clearFile, "utf8")) === true;
+  } catch {
+    return false;
+  }
+})();
+
 function createWindow() {
   const dark = nativeTheme.shouldUseDarkColors;
   const win = new BrowserWindow({
@@ -101,7 +112,10 @@ function createWindow() {
     // Hidden until the renderer's first paint, which already has the saved
     // theme, so a theme that differs from the OS's never flashes.
     show: false,
-    backgroundColor: windowBackground(dark),
+    transparent: clearAtLaunch,
+    backgroundColor: clearAtLaunch ? "#00000000" : windowBackground(dark),
+    // macOS keeps a blurred window's blur when it isn't focused, rather than going flat gray.
+    visualEffectState: "active",
     ...frameOptions(process.platform, dark),
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.cjs"),
@@ -116,6 +130,7 @@ function createWindow() {
         `--parallax-locale=${app.getPreferredSystemLanguages()[0] ?? app.getSystemLocale()}`,
         ...(updatable ? ["--parallax-updatable"] : []),
         ...(firstRun ? ["--parallax-first-run"] : []),
+        ...(clearAtLaunch ? ["--parallax-transparent"] : []),
       ],
     },
   });
@@ -494,34 +509,39 @@ ipcMain.on("parallax:theme", (_event, preference: unknown) => {
   const source = THEME_PREFERENCES.find((p) => p === preference);
   if (source) nativeTheme.themeSource = source;
 });
-// Settings > Appearance's Window, which the preload offers only on macOS and Windows: the desktop
-// blurred behind the asking window where it can be, which shows through its translucent panes,
-// and its opacity, 30% at the least.
-const blurred = new WeakSet<BrowserWindow>();
+// Settings > Appearance's window background for the asking window: opaque; clear, which shows the
+// desktop where the window was created transparent (the next launch's windows are); or blurred,
+// with macOS's vibrancy or Windows 11's acrylic where the OS can. Its panes let either through.
+const seeThrough = new WeakSet<BrowserWindow>();
 ipcMain.on("parallax:windowLook", (event, look: unknown) => {
   const win = BrowserWindow.fromWebContents(event.sender);
-  const { blur: asked, opacity } = (look ?? {}) as { blur?: unknown; opacity?: unknown };
-  if (
-    !win ||
-    typeof asked !== "boolean" ||
-    typeof opacity !== "number" ||
-    !Number.isFinite(opacity)
-  )
-    return;
-  const blur = asked && blurSupported(process.platform, process.getSystemVersion());
-  win.setOpacity(Math.min(1, Math.max(0.3, opacity)));
-  if (blur) blurred.add(win);
-  else blurred.delete(win);
+  const { material } = (look ?? {}) as { material?: unknown };
+  if (!win || (material !== "opaque" && material !== "clear" && material !== "blur")) return;
+  const clear = material === "clear";
+  try {
+    writeFileSync(clearFile, JSON.stringify(clear));
+  } catch {
+    // Unwritable: the next launch opens as this one did.
+  }
+  const blur = material === "blur" && blurSupported(process.platform, process.getSystemVersion());
+  const through = blur || (clear && clearAtLaunch);
+  if (through) seeThrough.add(win);
+  else seeThrough.delete(win);
   if (process.platform === "darwin") win.setVibrancy(blur ? "under-window" : null);
   else if (process.platform === "win32") win.setBackgroundMaterial(blur ? "acrylic" : "none");
-  win.setBackgroundColor(blur ? "#00000000" : windowBackground(nativeTheme.shouldUseDarkColors));
+  win.setBackgroundColor(through ? "#00000000" : windowBackground(nativeTheme.shouldUseDarkColors));
+});
+// Restarts Parallax, for a window background that applies at launch.
+ipcMain.on("parallax:relaunch", () => {
+  app.relaunch();
+  app.quit();
 });
 // Fires for the setting above, and for an OS theme change while it's "system".
 nativeTheme.on("updated", () => {
   const dark = nativeTheme.shouldUseDarkColors;
   const overlay = titleBarOverlay(process.platform, dark);
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!blurred.has(win)) win.setBackgroundColor(windowBackground(dark));
+    if (!seeThrough.has(win)) win.setBackgroundColor(windowBackground(dark));
     if (overlay) win.setTitleBarOverlay(overlay);
   }
 });

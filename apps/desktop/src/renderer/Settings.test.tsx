@@ -142,6 +142,21 @@ const click = async (element: HTMLElement) => {
   await act(async () => element.click());
   await settle();
 };
+// A dropdown's option (ui.tsx's Picker), by its menu's label and the option's text.
+const pick = (menu: string, option: string) =>
+  click(
+    [
+      ...document.querySelectorAll<HTMLElement>(
+        `[role="menu"][aria-label="${menu}"] [role="menuitemradio"]`,
+      ),
+    ].find((b) => b.textContent === option)!,
+  );
+// A dropdown's trigger reads "<label>: <choice>".
+const picked = (label: string) =>
+  document
+    .querySelector(`button[aria-haspopup][aria-label^="${label}: "]`)!
+    .getAttribute("aria-label")!
+    .slice(label.length + 2);
 const change = (element: HTMLSelectElement | HTMLInputElement, value: string) =>
   act(() => {
     Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value")!.set!.call(
@@ -230,12 +245,7 @@ test("keys still show when the CLIs can't be checked", async () => {
 
 test("the host picker shows another host's state", async () => {
   await renderSettings();
-  const picker = section("Host") as HTMLSelectElement;
-  await act(async () => {
-    picker.value = mini.id;
-    picker.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-  await settle();
+  await pick("Host", mini.name);
   expect(tabs()).toEqual([]);
   expect(document.body.textContent).toContain("Disconnected");
 });
@@ -765,50 +775,70 @@ test("Colors changes the shown theme's colors, by picker or as JSON, and resets 
   localStorage.removeItem("parallax.appearance");
 });
 
-test("Typography's sizes and Word wrap are kept, and Advanced takes any font's name", async () => {
+test("Text's sizes and Word wrap are kept, and a font's search takes any font's name", async () => {
   await renderSettings("appearance");
-  const select = (label: string) =>
-    document.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
-  change(select("Interface font size"), "16");
-  change(select("Monospace font size"), "14");
+  await pick("Interface font size", "16 px");
+  await pick("Monospace font size", "14 px");
+  await pick("Interface font", "Inter");
   await click(
     document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Word wrap"]')!,
   );
-  await click(document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Advanced"]')!);
-  change(
-    document.querySelector<HTMLInputElement>('input[aria-label="Monospace font"]')!,
-    "Berkeley Mono",
-  );
+  const search =
+    section("Monospace font")!.querySelector<HTMLInputElement>('input[type="search"]')!;
+  change(search, "Berkeley Mono");
+  act(() => {
+    search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
   expect(JSON.parse(localStorage.getItem("parallax.appearance")!)).toMatchObject({
     uiSize: 16,
     codeSize: 14,
+    uiFont: "Inter Variable",
     wordWrap: false,
     codeFont: "Berkeley Mono",
   });
+  expect(picked("Monospace font")).toBe("Berkeley Mono");
   localStorage.removeItem("parallax.appearance");
 });
 
-test("Window's blur and opacities are kept and tint the page, where the window can show them", async () => {
+test("Window's background and opacity are kept and tint the page, where the window can show them", async () => {
   await renderSettings("appearance");
   expect(document.querySelector('[aria-label="Window"]')).toBeNull();
   act(() => unmount());
-  window.parallax.setWindowLook = () => {};
-  window.parallax.canBlur = true;
+  const relaunch = vi.fn();
+  Object.assign(window.parallax, {
+    setWindowLook: () => {},
+    canBlur: true,
+    transparent: false,
+    relaunch,
+  });
   await renderSettings("appearance");
-  const slider = (label: string) =>
-    document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
-  expect(slider("Background opacity").disabled).toBe(true);
-  await click(
-    document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Blur behind window"]')!,
-  );
-  change(slider("Background opacity"), "40");
-  change(slider("Window opacity"), "85");
+  const slider = document.querySelector<HTMLInputElement>(
+    'input[aria-label="Background opacity"]',
+  )!;
+  const material = (value: string) =>
+    click(
+      document.querySelector<HTMLInputElement>(
+        `fieldset[aria-label="Window background"] input[value="${value}"]`,
+      )!,
+    );
+  expect(slider.disabled).toBe(true);
+  await material("blur");
+  change(slider, "40");
   const saved = JSON.parse(localStorage.getItem("parallax.appearance")!) as Appearance;
-  expect(saved).toMatchObject({ blur: true, backgroundOpacity: 40, windowOpacity: 85 });
+  expect(saved).toMatchObject({ windowMaterial: "blur", backgroundOpacity: 40 });
   applyAppearance(saved);
   expect(document.documentElement.classList.contains("translucent")).toBe(true);
   expect(document.documentElement.style.getPropertyValue("--tint")).toBe("40%");
-  applyAppearance({ ...saved, blur: false });
+
+  // Clear needs a window opened see-through: until a restart, the page stays opaque.
+  await material("clear");
+  applyAppearance({ ...saved, windowMaterial: "clear" });
+  expect(document.documentElement.classList.contains("translucent")).toBe(false);
+  await click(
+    [...document.querySelectorAll("button")].find((b) => b.textContent === "Restart Parallax")!,
+  );
+  expect(relaunch).toHaveBeenCalled();
+  applyAppearance({ ...saved, windowMaterial: "opaque" });
   localStorage.removeItem("parallax.appearance");
 });
 
@@ -1356,9 +1386,7 @@ test("General's New threads and Behavior settings are kept (PLX-538)", async () 
     document.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${label}"]`)!;
   await click(sw("System notifications"));
   expect(behaviorPrefs.get().systemNotifications).toBe(false);
-  const select = (label: string) =>
-    document.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
-  expect(select("Time format").value).toBe("system");
+  expect(picked("Time format")).toBe("System default");
   expect(section("New threads").textContent).toContain("Permissions");
   setBehaviorPrefs(behaviorDefaults);
 });

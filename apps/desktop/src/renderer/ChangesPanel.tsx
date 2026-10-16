@@ -5,7 +5,7 @@ import type { ThreadRun } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { ChangesDiff } from "./ChangesDiff";
 import { useProviders } from "./providers";
-import { ConfirmDialog } from "./ui";
+import { ConfirmDialog, Picker } from "./ui";
 
 /** Open the Changes view, on `runId`'s turn `turn` if given, scrolled to the file at `path`. */
 export type ChangesRequest = { runId?: string; turn?: number; path?: string };
@@ -180,19 +180,21 @@ export function ChangesPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-        <select
-          aria-label="Turn"
-          value={ordinal ?? "all"}
-          onChange={(e) => setShownTurn(e.target.value === "all" ? "all" : Number(e.target.value))}
-          className="min-w-0 flex-1 truncate rounded-md bg-transparent py-1 text-[13px] hover:bg-hover"
-        >
-          <option value="all">All turns</option>
-          {turns.filter(ready).map((t) => (
-            <option key={t.id} value={t.ordinal}>
-              Turn {t.ordinal}: {firstLine(t.text ?? (t === turns[0] ? prompt : "")) || "(no text)"}
-            </option>
-          ))}
-        </select>
+        <span className="flex min-w-0 flex-1">
+          <Picker
+            label="Turn"
+            value={String(ordinal ?? "all")}
+            onChange={(v) => setShownTurn(v === "all" ? "all" : Number(v))}
+            options={[
+              { value: "all", label: "All turns" },
+              ...turns.filter(ready).map((t) => ({
+                value: String(t.ordinal),
+                label: `Turn ${t.ordinal}: ${firstLine(t.text ?? (t === turns[0] ? prompt : "")) || "(no text)"}`,
+              })),
+            ]}
+            panelClassName="max-w-96 min-w-60"
+          />
+        </span>
         {turn && (
           <button
             type="button"

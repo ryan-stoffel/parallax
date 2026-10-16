@@ -1,9 +1,9 @@
-import { RotateCcw } from "lucide-react";
+import { Braces, RotateCcw } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { IconButton, Segmented } from "../ui";
 import { colorTokens, customColors, parseJsonc, type Mode, type Tokens } from "../vscodeThemes";
-import { field, primaryButton, quietButton, Section } from "./parts";
+import { field, primaryButton, quietButton, Row, Section } from "./parts";
 
 type Theme = { id: string; name: string; mode: Mode; tokens?: Tokens };
 
@@ -80,75 +80,63 @@ export function ColorSettings({
     }
   };
 
+  const count = Object.keys(changed).length;
   return (
-    <Section
-      title="Colors"
-      action={
-        <span className="flex items-center gap-2">
-          {Object.keys(changed).length > 0 && (
-            <button type="button" className={quietButton} onClick={() => save({})}>
-              Reset all
-            </button>
-          )}
-          <button
-            type="button"
-            className={quietButton}
-            onClick={() =>
-              json === undefined
-                ? setJson(
-                    JSON.stringify(
-                      Object.fromEntries(
-                        Object.entries(changed).map(([k, v]) => [k.replace(/^--/, ""), v]),
-                      ),
-                      null,
-                      2,
-                    ),
-                  )
-                : closeJson()
-            }
-          >
-            {json === undefined ? "Edit as JSON" : "Close JSON"}
-          </button>
-          <Segmented
-            label="Theme to change"
-            options={[
-              { value: "light", name: "Light" },
-              { value: "dark", name: "Dark" },
-            ]}
-            value={mode}
-            onChange={(m) => {
-              setMode(m);
-              closeJson();
-            }}
-          />
-        </span>
-      }
-    >
-      <p className="px-4 pt-3 text-[12.5px] text-muted-foreground">
-        Changes to {theme.name}, the {mode} theme. Each theme keeps its own.
-      </p>
+    <Section title="Colors">
+      <Row
+        title="Customize"
+        description={`${theme.name}, the ${mode} theme. ${count ? `${count} changed. ` : ""}Each theme keeps its own changes.`}
+      >
+        <Segmented
+          label="Theme to change"
+          options={[
+            { value: "light", name: "Light" },
+            { value: "dark", name: "Dark" },
+          ]}
+          value={mode}
+          onChange={(m) => {
+            setMode(m);
+            closeJson();
+          }}
+        />
+      </Row>
       {json === undefined ? (
-        <div className="grid grid-cols-2 gap-x-6 px-4 py-2">
-          {Object.entries(colorTokens).map(([token, name]) => (
-            <div key={token} className="flex h-9 items-center gap-2.5">
-              <input
-                type="color"
-                aria-label={name}
-                value={toHex(changed[token] ?? base[token])}
-                onChange={(e) => setColor(token, e.target.value)}
-                className="size-6 shrink-0 cursor-pointer rounded-md border border-border bg-transparent p-0 [&::-webkit-color-swatch]:rounded-[5px] [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch-wrapper]:p-0"
-              />
-              <span className="min-w-0 flex-1 truncate text-[13px]">{name}</span>
-              {changed[token] && (
-                <IconButton label={`Reset ${name}`} onClick={() => setColor(token)}>
-                  <RotateCcw />
-                </IconButton>
-              )}
-            </div>
-          ))}
+        <div className="grid grid-cols-2 border-b border-border">
+          {Object.entries(colorTokens).map(([token, name], i) => {
+            const value = changed[token] ?? base[token];
+            return (
+              <label
+                key={token}
+                className={`flex h-11 cursor-pointer items-center gap-3 border-border px-4 hover:bg-hover ${i % 2 ? "" : "border-r"} ${i < Object.keys(colorTokens).length - 2 ? "border-b" : ""}`}
+              >
+                <span className="min-w-0 flex-1 truncate text-[13px]">{name}</span>
+                {changed[token] && (
+                  <IconButton
+                    label={`Reset ${name}`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setColor(token);
+                    }}
+                  >
+                    <RotateCcw />
+                  </IconButton>
+                )}
+                <span className="font-mono text-[11.5px] text-muted-foreground uppercase">
+                  {value?.startsWith("#") ? value : toHex(value)}
+                </span>
+                <input
+                  type="color"
+                  aria-label={name}
+                  value={toHex(value)}
+                  onChange={(e) => setColor(token, e.target.value)}
+                  className="size-5 shrink-0 cursor-pointer appearance-none rounded-full border border-border bg-transparent p-0 [&::-webkit-color-swatch]:rounded-full [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch-wrapper]:p-0"
+                />
+              </label>
+            );
+          })}
         </div>
       ) : (
-        <div className="flex flex-col gap-2 px-4 pt-1 pb-3">
+        <div className="flex flex-col gap-2 border-b border-border px-4 py-3">
           <p className="text-[12.5px] text-muted-foreground">
             Token names like <code>accent</code> or <code>sidebar</code>, or VS Code&apos;s color
             keys like <code>editor.background</code>, <code>sideBar.background</code>, and{" "}
@@ -180,6 +168,36 @@ export function ColorSettings({
           </span>
         </div>
       )}
+      <div className="flex items-center justify-between px-4 py-2">
+        <button
+          type="button"
+          className={`${quietButton} flex items-center gap-1.5`}
+          onClick={() =>
+            json === undefined
+              ? setJson(
+                  JSON.stringify(
+                    Object.fromEntries(
+                      Object.entries(changed).map(([k, v]) => [k.replace(/^--/, ""), v]),
+                    ),
+                    null,
+                    2,
+                  ),
+                )
+              : closeJson()
+          }
+        >
+          <Braces aria-hidden className="size-3.5" />
+          {json === undefined ? "Edit as JSON" : "Close JSON"}
+        </button>
+        <button
+          type="button"
+          disabled={count === 0}
+          className={`${quietButton} disabled:opacity-40`}
+          onClick={() => save({})}
+        >
+          Reset all
+        </button>
+      </div>
     </Section>
   );
 }

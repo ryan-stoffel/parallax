@@ -129,6 +129,9 @@ export function blurSupported(platform: string, version: string): boolean {
   return platform === "win32" && Number(version.split(".")[2]) >= 22621;
 }
 
+/** A window's background: Settings > Appearance's Window. */
+export type WindowMaterial = "opaque" | "clear" | "blur";
+
 export interface ParallaxBridge {
   /** Node's `process.platform`, e.g. "darwin", "win32", "linux". */
   platform: string;
@@ -139,12 +142,16 @@ export interface ParallaxBridge {
   /** Zooms this window's page, 1 being 100%: Settings > Appearance's text size. */
   setZoom(factor: number): void;
   /**
-   * Blurs the desktop behind this window and sets its opacity, 1 being opaque: Settings >
-   * Appearance's Window. Only on macOS and Windows, and not on the web.
+   * This window's background, Settings > Appearance's Window: opaque, clear (see-through where
+   * `transparent`, and from the next launch), or blurred where `canBlur`. Not on the web.
    */
-  setWindowLook?(look: { blur: boolean; opacity: number }): void;
+  setWindowLook?(look: { material: WindowMaterial }): void;
   /** Whether `setWindowLook` can blur: `blurSupported` here. */
   canBlur?: boolean;
+  /** Whether this window was created see-through, so a clear background shows the desktop. */
+  transparent?: boolean;
+  /** Restarts Parallax. Not on the web. */
+  relaunch?(): void;
   /** Opens the OS folder picker over this window. Resolves to the folder's path, or null if cancelled. */
   pickFolder(): Promise<string | null>;
   /** The folders in a folder on this computer, whose path may start with `~`. */

@@ -7,6 +7,7 @@ import {
   useState,
   type ButtonHTMLAttributes,
   type ComponentProps,
+  type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -362,6 +363,10 @@ export interface PickerOption {
   hint?: string;
   /** Draws a line above this option, to set it apart. */
   divider?: boolean;
+  /** A heading over this option and those after it, until another option names another. */
+  group?: string;
+  /** Styles the label, here and on the trigger, such as a font's own family. */
+  style?: CSSProperties;
 }
 
 /**
@@ -391,7 +396,9 @@ export function MenuOption({
       {/* One line tall, so a two-line row's icon sits beside its label. */}
       {o.icon && <span className="grid h-5 place-items-center">{o.icon}</span>}
       <span className="min-w-0 flex-1">
-        <span className="block truncate leading-5">{o.label}</span>
+        <span className="block truncate leading-5" style={o.style}>
+          {o.label}
+        </span>
         {o.description && (
           <span className="mt-0.5 block text-[12px] leading-snug text-faint-foreground">
             {o.description}
@@ -416,11 +423,20 @@ export const menuHeading = "px-2 pt-1.5 pb-1 text-[11.5px] font-medium text-fain
 export const unavailableBadge =
   "shrink-0 rounded-md border border-amber-500/30 px-2 py-0.5 text-[12px] text-amber-500";
 
+/** A form control's look, for a `field` Picker's trigger and the fields beside it. */
+export const fieldControl =
+  "flex h-8 items-center gap-2 rounded-lg border border-border bg-background px-2.5 text-[13px] text-foreground enabled:hover:border-faint-foreground/60 disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0";
+
 /**
  * A dropdown showing the chosen option, with a check beside it in the menu. The chosen option's
  * icon leads. Pass `value` to control it, or leave it to keep its own choice. Other buttons can
  * open the same menu with `popoverTarget={id}`; it anchors to whichever opened it, and
  * `button={false}` leaves them as its only way in.
+ *
+ * `field` draws the trigger as a form control, `className` wide (Parallax's select, used in place
+ * of the native one). `search` adds a filter box with that placeholder, and `custom` offers a
+ * choice for what's typed there when no option is named so, such as any font's name. `footer`
+ * goes under the options, given a function that closes the menu.
  */
 export function Picker({
   id,
@@ -431,6 +447,11 @@ export function Picker({
   align,
   panelClassName = "min-w-44",
   button = true,
+  field,
+  className = "",
+  search,
+  custom,
+  footer,
 }: {
   id?: string;
   button?: boolean;
@@ -440,18 +461,33 @@ export function Picker({
   onChange?: (value: string) => void;
   align?: "start" | "end";
   panelClassName?: string;
+  field?: boolean;
+  className?: string;
+  search?: string;
+  custom?: (query: string) => PickerOption;
+  footer?: (close: () => void) => ReactNode;
 }) {
   const ownId = useId();
   const menuId = id ?? ownId;
   const menu = useRef<HTMLDivElement>(null);
   const [own, setOwn] = useState<string>();
+  const [query, setQuery] = useState("");
   // Uncontrolled, it shows the first option until one is picked, even if options arrive later.
   const current =
     options.find((o) => o.value === (value ?? own)) ??
-    (value === undefined ? options[0] : undefined);
+    (value === undefined ? options[0] : custom && value ? custom(value) : undefined);
+  const q = query.trim().toLowerCase();
+  const shown = q
+    ? options.filter((o) => `${o.label} ${o.group ?? ""}`.toLowerCase().includes(q))
+    : options;
+  const typed =
+    custom && q && !options.some((o) => o.label.toLowerCase() === q)
+      ? custom(query.trim())
+      : undefined;
+  const close = () => menu.current?.hidePopover();
 
   const choose = (o: PickerOption) => {
-    menu.current?.hidePopover();
+    close();
     setOwn(o.value);
     onChange?.(o.value);
   };
@@ -466,11 +502,13 @@ export function Picker({
           aria-label={`${label}: ${current?.label ?? "none"}`}
           title={current?.label}
           // It can shrink, cutting a long choice (a branch name) short rather than widening its row.
-          className={`${menuButton} min-w-0`}
+          className={field ? `${fieldControl} ${className}` : `${menuButton} min-w-0 ${className}`}
         >
           {current?.icon}
-          <span className="truncate">{current?.label}</span>
-          <ChevronDown aria-hidden className="opacity-70" />
+          <span className={`truncate ${field ? "flex-1 text-left" : ""}`} style={current?.style}>
+            {current?.label}
+          </span>
+          <ChevronDown aria-hidden className={field ? "text-faint-foreground" : "opacity-70"} />
         </button>
       )}
       <div
@@ -480,23 +518,58 @@ export function Picker({
         role="menu"
         aria-label={label}
         onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-          if (e.newState === "open")
-            menu.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
+          if (e.newState !== "open") return setQuery("");
+          const box = menu.current?.querySelector<HTMLElement>('input[type="search"]');
+          (box ?? menu.current?.querySelector<HTMLElement>('[aria-checked="true"]'))?.focus();
+          menu.current
+            ?.querySelector('[aria-checked="true"]')
+            ?.scrollIntoView({ block: "nearest" });
         }}
         onKeyDown={moveFocus}
-        className={`${menuPanel(align)} overflow-hidden p-0 ${panelClassName}`}
+        // At least as wide as its trigger.
+        className={`${menuPanel(align)} overflow-hidden p-0 ${field ? "[min-width:anchor-size(width)]" : ""} ${panelClassName}`}
       >
+        {search && (
+          <div className="border-b border-border p-1">
+            <input
+              type="search"
+              aria-label={search}
+              placeholder={search}
+              value={query}
+              spellCheck={false}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                const first = shown[0] ?? typed;
+                if (e.key === "Enter" && first) choose(first);
+              }}
+              className="h-7 w-full rounded-md bg-transparent px-2 text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
+            />
+          </div>
+        )}
         <div className="max-h-80 overflow-y-auto p-1">
-          {options.map((o) => (
+          {shown.map((o, i) => (
             <Fragment key={o.value}>
-              {o.divider && <div role="separator" className="-mx-1 my-1 h-px bg-border" />}
-              <MenuOption option={o} checked={o === current} onClick={() => choose(o)} />
+              {o.divider && !q && <div role="separator" className="-mx-1 my-1 h-px bg-border" />}
+              {o.group && o.group !== shown[i - 1]?.group && (
+                <div className={menuHeading}>{o.group}</div>
+              )}
+              {/* Off-screen rows skip layout and their fonts until scrolled to, so long lists stay quick. */}
+              <div className="[contain-intrinsic-size:auto_32px] [content-visibility:auto]">
+                <MenuOption option={o} checked={o === current} onClick={() => choose(o)} />
+              </div>
             </Fragment>
           ))}
-          {options.length === 0 && (
+          {typed && (
+            <>
+              {shown.length > 0 && <div role="separator" className="-mx-1 my-1 h-px bg-border" />}
+              <MenuOption option={typed} checked={false} onClick={() => choose(typed)} />
+            </>
+          )}
+          {shown.length === 0 && !typed && (
             <p className="px-2 py-1.5 text-[12.5px] text-faint-foreground">No matches</p>
           )}
         </div>
+        {footer && <div className="border-t border-border p-1">{footer(close)}</div>}
       </div>
     </>
   );

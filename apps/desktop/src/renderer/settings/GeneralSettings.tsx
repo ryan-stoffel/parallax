@@ -29,9 +29,8 @@ import { updatePrefs, type UpdatePrefs } from "../updateEverything";
 import { notices } from "./licenses";
 import { HostPicker, PageTitle, quietButton, Row, Section, Switch } from "./parts";
 
-const selectClass = "rounded-md border border-border bg-background px-2 py-1 text-[13px]";
 /** The composer's own pickers are borderless; on a settings row they get the select's outline. */
-const pickerBox = "rounded-md border border-border bg-background";
+const pickerBox = "rounded-lg border border-border bg-background";
 
 /**
  * The `parallax` command that opens Parallax in a terminal (PLX-750): installs, reinstalls, or
@@ -444,16 +443,19 @@ function Behavior() {
         />
       </Row>
       <Row title="Time format" description="System default follows your OS clock preference.">
-        <select
-          aria-label="Time format"
+        <Picker
+          field
+          label="Time format"
           value={prefs.timeFormat}
-          onChange={(e) => set({ timeFormat: e.target.value as BehaviorPrefs["timeFormat"] })}
-          className={selectClass}
-        >
-          <option value="system">System default</option>
-          <option value="12">12-hour</option>
-          <option value="24">24-hour</option>
-        </select>
+          onChange={(v) => set({ timeFormat: v as BehaviorPrefs["timeFormat"] })}
+          options={[
+            { value: "system", label: "System default" },
+            { value: "12", label: "12-hour" },
+            { value: "24", label: "24-hour" },
+          ]}
+          className="w-48"
+          panelClassName="min-w-48"
+        />
       </Row>
       <Row
         title="Send shortcut"
@@ -463,29 +465,35 @@ function Behavior() {
             : `${mac ? "⌘ Enter" : "Ctrl+Enter"} sends. Enter starts a new line.`
         }
       >
-        <select
-          aria-label="Send shortcut"
+        <Picker
+          field
+          label="Send shortcut"
           value={prefs.sendKey}
-          onChange={(e) => set({ sendKey: e.target.value as BehaviorPrefs["sendKey"] })}
-          className={selectClass}
-        >
-          <option value="enter">Enter</option>
-          <option value="modEnter">{mac ? "⌘ Enter" : "Ctrl+Enter"}</option>
-        </select>
+          onChange={(v) => set({ sendKey: v as BehaviorPrefs["sendKey"] })}
+          options={[
+            { value: "enter", label: "Enter" },
+            { value: "modEnter", label: mac ? "⌘ Enter" : "Ctrl+Enter" },
+          ]}
+          className="w-48"
+          panelClassName="min-w-48"
+        />
       </Row>
       <Row
         title="Open pull requests in"
         description="Where Open on GitHub goes: your system browser, or the Browser in the side panel."
       >
-        <select
-          aria-label="Open pull requests in"
+        <Picker
+          field
+          label="Open pull requests in"
           value={prefs.openPrsIn}
-          onChange={(e) => set({ openPrsIn: e.target.value as BehaviorPrefs["openPrsIn"] })}
-          className={selectClass}
-        >
-          <option value="external">System browser</option>
-          <option value="browser">Side panel browser</option>
-        </select>
+          onChange={(v) => set({ openPrsIn: v as BehaviorPrefs["openPrsIn"] })}
+          options={[
+            { value: "external", label: "System browser" },
+            { value: "browser", label: "Side panel browser" },
+          ]}
+          className="w-48"
+          panelClassName="min-w-48"
+        />
       </Row>
     </Section>
   );

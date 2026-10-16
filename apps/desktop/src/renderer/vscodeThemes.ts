@@ -24,6 +24,8 @@ export interface AddedExtension {
   /** `namespace.name` on Open VSX. */
   id: string;
   name: string;
+  /** Its Open VSX icon, as a data: URL, so it shows offline. */
+  icon?: string;
   themes: AddedTheme[];
 }
 
@@ -270,26 +272,64 @@ export async function searchThemes(query: string, signal?: AbortSignal): Promise
   return extensions.filter((e) => !/\bicons?\b/i.test(`${e.displayName ?? e.name}`));
 }
 
+/** The image at `url` as a data: URL, or undefined where it can't be read. */
+async function dataUrl(url: string | undefined): Promise<string | undefined> {
+  if (!url) return undefined;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return undefined;
+    const blob = await response.blob();
+    return await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => resolve(undefined);
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+type ExtensionMeta = { displayName?: string; files: { download: string; icon?: string } };
+
+async function extensionMeta(namespace: string, name: string): Promise<ExtensionMeta> {
+  const meta = await fetch(`${openVsx}/${namespace}/${name}`);
+  if (!meta.ok) throw new Error(`Open VSX answered ${meta.status}.`);
+  return (await meta.json()) as ExtensionMeta;
+}
+
 /** Downloads an extension's latest version from Open VSX and converts its color themes. */
 export async function fetchExtension(
   namespace: string,
   name: string,
   defaults: Record<Mode, Tokens>,
 ): Promise<AddedExtension> {
-  const meta = await fetch(`${openVsx}/${namespace}/${name}`);
-  if (!meta.ok) throw new Error(`Open VSX answered ${meta.status}.`);
-  const { displayName, files } = (await meta.json()) as {
-    displayName?: string;
-    files: { download: string };
-  };
+  const { displayName, files } = await extensionMeta(namespace, name);
   const vsix = await fetch(files.download);
   if (!vsix.ok) throw new Error(`Open VSX answered ${vsix.status}.`);
   const id = `${namespace}.${name}`;
   return {
     id,
     name: displayName ?? name,
+    icon: await dataUrl(files.icon),
     themes: themesFromVsix(new Uint8Array(await vsix.arrayBuffer()), id, defaults),
   };
+}
+
+/** Fetches the icons of extensions added before they were kept. Each is tried once a session. */
+const iconTried = new Set<string>();
+export async function fillIcons() {
+  for (const e of added.get().filter((e) => !e.icon && !iconTried.has(e.id))) {
+    iconTried.add(e.id);
+    const dot = e.id.indexOf(".");
+    const [namespace, name] = [e.id.slice(0, dot), e.id.slice(dot + 1)];
+    if (dot < 1 || !name) continue;
+    const icon = await extensionMeta(namespace, name).then(
+      (m) => dataUrl(m.files.icon),
+      () => undefined,
+    );
+    if (icon) added.set(added.get().map((a) => (a.id === e.id ? { ...a, icon } : a)));
+  }
 }
 
 const block = (selector: string, tokens: Tokens) =>

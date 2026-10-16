@@ -1,5 +1,12 @@
 @import "tailwindcss";
 @import "@fontsource-variable/sora";
+/* Fonts Settings > Appearance offers on every computer (appearance.ts's bundledFonts). Each loads
+   only when something uses it. */
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "@fontsource-variable/fira-code";
+@import "@fontsource-variable/source-code-pro";
 
 /*! JetBrains Mono Nerd Font is JetBrains Mono (SIL Open Font License 1.1) with Nerd Fonts' icons
    (v3.5.1, https://www.nerdfonts.com). Its icon sets keep their own licenses, listed at
@@ -362,9 +369,9 @@
   }
 }
 
-/* A theme's orb in Settings > Appearance: its own background and sidebar, glowing with its accent
-   and, smaller, its string color, under a sheen. A .scheme-* and .theme-* class beside it set
-   the tokens. */
+/* A theme's orb, its icon in Settings > Appearance where its extension has none: its own
+   background and sidebar, glowing with its accent and, smaller, its string color, under a sheen.
+   A .scheme-* and .theme-* class beside it set the tokens. */
 .theme-orb {
   position: relative;
   overflow: hidden;
@@ -499,12 +506,19 @@ body {
   cursor: default;
 }
 
-/* The window's panes, the main pane, side panel, and sidebar, paint these. With Blur behind
-   window on, they let the blur through by --tint (appearance.ts), and they're all that covers
-   it. Everything else keeps --background and --sidebar opaque. */
+/* The window's panes, the main pane, side panel, and sidebar, paint these. With a clear or
+   blurred window background (.translucent), they let the desktop through by --tint
+   (appearance.ts), the sidebar a little more, as macOS's own sidebars do. They're all that covers
+   it, with Settings' cards (--pane-card) a step more opaque than the pane under them; everything
+   else keeps --background and --sidebar opaque, so text stays solid. */
 :root {
+  --pane-card: var(--surface);
   --pane: color-mix(in srgb, var(--background) var(--tint, 100%), transparent);
   --pane-sidebar: color-mix(in srgb, var(--sidebar) var(--tint, 100%), transparent);
+}
+:root.translucent {
+  --pane-sidebar: color-mix(in srgb, var(--sidebar) calc(var(--tint) * 0.8), transparent);
+  --pane-card: color-mix(in srgb, var(--surface) min(100%, calc(var(--tint) + 15%)), transparent);
 }
 :root.translucent body {
   background: transparent;
