@@ -74,6 +74,7 @@ fn thread_row(title: Option<&str>, settled: bool, archived: bool) -> Thread {
         },
         settled,
         unarchived_at: None,
+        pinned: false,
     }
 }
 
@@ -98,6 +99,7 @@ fn decide_changes_only_what_differs() {
         snoozed_until: None,
         title: Some(Some("Title".to_owned())),
         settled: Some(false),
+        pinned: Some(false),
     };
     assert_eq!(
         decide(id, Action::Update(update), rows(Some(row.clone()))),

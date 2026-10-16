@@ -728,6 +728,33 @@ const MIGRATIONS: &[Migration] = &[
         version: 45,
         sql: "ALTER TABLE threads ADD COLUMN unarchived_at TEXT;",
     },
+    // Areas (PLX-789): named, colored lists of top-level threads and Projects, in creation order,
+    // each member in the order it was added. A member's row goes with its area, thread, or Project.
+    // `pinned` keeps a thread at the top of the sidebar.
+    Migration {
+        version: 46,
+        sql: "ALTER TABLE threads ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+        CREATE TABLE areas (
+            id TEXT NOT NULL PRIMARY KEY,
+            name TEXT NOT NULL,
+            color TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE area_threads (
+            area_id TEXT NOT NULL REFERENCES areas (id) ON DELETE CASCADE,
+            thread_id TEXT NOT NULL REFERENCES threads (id) ON DELETE CASCADE,
+            position INTEGER NOT NULL,
+            PRIMARY KEY (area_id, thread_id)
+        );
+        CREATE INDEX area_threads_thread ON area_threads (thread_id);
+        CREATE TABLE area_projects (
+            area_id TEXT NOT NULL REFERENCES areas (id) ON DELETE CASCADE,
+            project_id TEXT NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+            position INTEGER NOT NULL,
+            PRIMARY KEY (area_id, project_id)
+        );
+        CREATE INDEX area_projects_project ON area_projects (project_id);",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a

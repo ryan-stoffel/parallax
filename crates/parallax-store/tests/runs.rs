@@ -558,7 +558,8 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP TABLE runs; DROP TABLE log_meta; DROP TABLE events; DROP TABLE turns;
+            "DROP TABLE area_threads; DROP TABLE area_projects; DROP TABLE areas;
+             DROP TABLE runs; DROP TABLE log_meta; DROP TABLE events; DROP TABLE turns;
              DROP TABLE threads; DROP TABLE repos; DROP TABLE wakes; DROP TABLE images;
              DROP TABLE host_settings; DROP TABLE inbox; DROP TABLE queued; DROP TABLE questions;
              DROP TABLE landings;

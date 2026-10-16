@@ -1,0 +1,207 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "area/create",
+    "params": {
+      "id": "01a0f8a0-0000-7000-8000-000000000001",
+      "name": "Launch",
+      "color": "violet",
+      "threads": [
+        "01a0f8a0-0000-7000-8000-000000000011",
+        "01a0f8a0-0000-7000-8000-000000000019"
+      ],
+      "projects": ["01a0f8a0-0000-7000-8000-000000000021"]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "area": {
+        "id": "01a0f8a0-0000-7000-8000-000000000001",
+        "name": "Launch",
+        "color": "violet",
+        "threads": ["01a0f8a0-0000-7000-8000-000000000011"],
+        "projects": ["01a0f8a0-0000-7000-8000-000000000021"]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0f8a0-0000-7000-8000-000000000031",
+      "seq": 40,
+      "time": "2026-10-15T12:00:00Z",
+      "event": {
+        "kind": "areas.changed",
+        "areas": [
+          {
+            "id": "01a0f8a0-0000-7000-8000-000000000001",
+            "name": "Launch",
+            "color": "violet",
+            "threads": ["01a0f8a0-0000-7000-8000-000000000011"],
+            "projects": ["01a0f8a0-0000-7000-8000-000000000021"]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "area/update",
+    "params": {
+      "area": "01a0f8a0-0000-7000-8000-000000000001",
+      "color": "teal",
+      "projects": []
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "area": {
+        "id": "01a0f8a0-0000-7000-8000-000000000001",
+        "name": "Launch",
+        "color": "teal",
+        "threads": ["01a0f8a0-0000-7000-8000-000000000011"],
+        "projects": []
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "area/update",
+    "params": {
+      "area": "01a0f8a0-0000-7000-8000-000000000009",
+      "name": "Gone"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "error": {
+      "code": -32000,
+      "message": "no area has id 01a0f8a0-0000-7000-8000-000000000009",
+      "data": { "kind": "areaNotFound" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "thread/update",
+    "params": {
+      "runId": "01a0f8a0-0000-7000-8000-000000000011",
+      "pinned": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "thread": {
+        "id": "01a0f8a0-0000-7000-8000-000000000011",
+        "repo": "01a0f8a0-0000-7000-8000-000000000041",
+        "createdAt": "2026-10-15T11:00:00Z",
+        "lastPromptAt": "2026-10-15T11:30:00Z",
+        "pinned": true
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "thread/search",
+    "params": { "query": "dark mode" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": {
+      "threads": [
+        {
+          "id": "01a0f8a0-0000-7000-8000-000000000011",
+          "repo": "01a0f8a0-0000-7000-8000-000000000041",
+          "createdAt": "2026-10-15T11:00:00Z",
+          "lastPromptAt": "2026-10-15T11:30:00Z",
+          "pinned": true
+        }
+      ],
+      "snippets": {
+        "01a0f8a0-0000-7000-8000-000000000011": "…the settings page gets a dark mode toggle next to the font size…"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "orchestration/subscribeShell",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "result": {
+      "subscription": "01a0f8a0-0000-7000-8000-000000000032",
+      "snapshot": {
+        "seq": 41,
+        "projects": [],
+        "repos": [
+          {
+            "id": "01a0f8a0-0000-7000-8000-000000000041",
+            "name": "parallax",
+            "path": "/Users/me/src/parallax",
+            "createdAt": "2026-10-15T10:00:00Z"
+          }
+        ],
+        "threads": [
+          {
+            "id": "01a0f8a0-0000-7000-8000-000000000011",
+            "repo": "01a0f8a0-0000-7000-8000-000000000041",
+            "createdAt": "2026-10-15T11:00:00Z",
+            "lastPromptAt": "2026-10-15T11:30:00Z",
+            "pinned": true
+          }
+        ],
+        "runs": [],
+        "requests": [],
+        "areas": [
+          {
+            "id": "01a0f8a0-0000-7000-8000-000000000001",
+            "name": "Launch",
+            "color": "teal",
+            "threads": ["01a0f8a0-0000-7000-8000-000000000011"],
+            "projects": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "area/delete",
+    "params": { "area": "01a0f8a0-0000-7000-8000-000000000001" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "result": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0f8a0-0000-7000-8000-000000000031",
+      "seq": 42,
+      "time": "2026-10-15T12:05:00Z",
+      "event": {
+        "kind": "areas.changed",
+        "areas": []
+      }
+    }
+  }
+]

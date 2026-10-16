@@ -649,6 +649,7 @@ impl App {
                 snoozed_until: None,
                 title: None,
                 settled: None,
+                pinned: None,
             })
             .await;
         Ok(())

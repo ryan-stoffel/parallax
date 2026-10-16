@@ -56,40 +56,42 @@ pub(super) async fn subscribe_shell(
         };
         return Ok((result, cursor));
     }
-    let ((projects, repos, threads, runs, requests, watches), seq) = at_seq(context, |db, _| {
-        let error = |error| store_error(&error);
-        let projects = db
-            .list_projects()
-            .map_err(error)?
-            .into_iter()
-            .map(|row| {
-                let coordinator = coordinator::coordinator_of(db, row.id)?;
-                store::project(row, coordinator)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let repos = db
-            .list_repos()
-            .map_err(error)?
-            .into_iter()
-            .map(threads::repo_entry)
-            .collect::<Result<Vec<_>, _>>()?;
-        let threads = db
-            .list_threads()
-            .map_err(error)?
-            .iter()
-            .map(threads::thread_entry)
-            .collect::<Result<Vec<_>, _>>()?;
-        let runs = db
-            .list_runs_with_worktrees(None)
-            .map_err(error)?
-            .iter()
-            .map(|(row, worktree)| agents::snapshot(row, worktree.as_ref()))
-            .collect::<Result<Vec<_>, _>>()?;
-        let requests = graph::requests(db, None)?;
-        let watches = db.pr_watches().map_err(error)?;
-        Ok((projects, repos, threads, runs, requests, watches))
-    })
-    .await?;
+    let ((projects, repos, threads, runs, requests, watches, areas), seq) =
+        at_seq(context, |db, _| {
+            let error = |error| store_error(&error);
+            let projects = db
+                .list_projects()
+                .map_err(error)?
+                .into_iter()
+                .map(|row| {
+                    let coordinator = coordinator::coordinator_of(db, row.id)?;
+                    store::project(row, coordinator)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let repos = db
+                .list_repos()
+                .map_err(error)?
+                .into_iter()
+                .map(threads::repo_entry)
+                .collect::<Result<Vec<_>, _>>()?;
+            let threads = db
+                .list_threads()
+                .map_err(error)?
+                .iter()
+                .map(threads::thread_entry)
+                .collect::<Result<Vec<_>, _>>()?;
+            let runs = db
+                .list_runs_with_worktrees(None)
+                .map_err(error)?
+                .iter()
+                .map(|(row, worktree)| agents::snapshot(row, worktree.as_ref()))
+                .collect::<Result<Vec<_>, _>>()?;
+            let requests = graph::requests(db, None)?;
+            let watches = db.pr_watches().map_err(error)?;
+            let areas = crate::areas::list(db)?;
+            Ok((projects, repos, threads, runs, requests, watches, areas))
+        })
+        .await?;
     cursor.after = seq;
     let mut waiting: BTreeMap<RunId, RunWaiting> = agents::backgrounds(&context.daemon)
         .into_iter()
@@ -126,6 +128,7 @@ pub(super) async fn subscribe_shell(
             runs,
             requests,
             waiting: waiting.into_values().collect(),
+            areas,
         }),
     };
     Ok((result, cursor))

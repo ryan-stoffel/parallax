@@ -494,7 +494,7 @@ const MAX_REPO_PATH_BYTES: usize = 1024;
 const MAX_ICON_NAME_CHARS: usize = 64;
 
 /// The longest icon color plxd accepts, in characters (0032).
-const MAX_ICON_COLOR_CHARS: usize = 32;
+pub(crate) const MAX_ICON_COLOR_CHARS: usize = 32;
 
 // The limits also bound every `project.created` and `project.updated` event, and with it the
 // event log's memory, far below the frame limit.
@@ -608,7 +608,7 @@ pub(crate) fn check_icon(icon: &ProjectIcon) -> Result<(), ErrorObject> {
     Ok(())
 }
 
-fn check_key(field: &str, key: &str, max: usize) -> Result<(), ErrorObject> {
+pub(crate) fn check_key(field: &str, key: &str, max: usize) -> Result<(), ErrorObject> {
     let allowed = |byte: u8| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-';
     if (1..=max).contains(&key.len()) && key.bytes().all(allowed) {
         Ok(())

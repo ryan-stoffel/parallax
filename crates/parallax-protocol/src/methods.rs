@@ -38,8 +38,9 @@ use crate::{
     AgentGitStatusParams, AgentImageParams, AgentListParams, AgentListResult, AgentOpenPrParams,
     AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams, AgentResumeNowParams,
     AgentRunResult, AgentSendParams, AgentStartParams, AgentStopTaskParams, AgentStopTaskResult,
-    AgentWaitParams, AgentWaitResult, ConnectDevicesParams, ConnectDevicesResult,
-    ContextListParams, ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
+    AgentWaitParams, AgentWaitResult, AreaCreateParams, AreaDeleteParams, AreaDeleteResult,
+    AreaResult, AreaUpdateParams, ConnectDevicesParams, ConnectDevicesResult, ContextListParams,
+    ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
     ContextWriteResult, CursorInstallParams, CursorInstallResult, CursorSignInCancelParams,
     CursorSignInCancelResult, CursorSignInParams, CursorSignInResult, CursorSignOutParams,
     CursorSignOutResult, DelegatedTask, DispatchResult, EventsEventParams, EventsResyncParams,
@@ -351,6 +352,15 @@ method_table! {
         /// `space/delete`: deletes a Space and the chats in it (0069). Gated on the `spaces`
         /// capability.
         SpaceDelete = "space/delete": SpaceDeleteParams => SpaceDeleteResult;
+        /// `area/create`: makes an area, a hand-picked list of threads and Projects (PLX-789).
+        /// Idempotent on its client-generated id. Gated on the `areas` capability.
+        AreaCreate = "area/create": AreaCreateParams => AreaResult;
+        /// `area/update`: renames an area, recolors it, or replaces its members (PLX-789). Gated
+        /// on the `areas` capability.
+        AreaUpdate = "area/update": AreaUpdateParams => AreaResult;
+        /// `area/delete`: deletes an area, leaving its threads and Projects where they are
+        /// (PLX-789). Gated on the `areas` capability.
+        AreaDelete = "area/delete": AreaDeleteParams => AreaDeleteResult;
         /// `thread/delete`: deletes a normal thread with its run, worktree, and stored events,
         /// stopping its CLI first if it runs.
         ThreadDelete = "thread/delete": ThreadDeleteParams => ThreadDeleteResult;
@@ -702,6 +712,9 @@ mod tests {
                 "repo/update",
                 "space/create",
                 "space/delete",
+                "area/create",
+                "area/update",
+                "area/delete",
                 "thread/delete",
                 "project/start",
                 "project/update",

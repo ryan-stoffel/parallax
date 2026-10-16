@@ -11,6 +11,7 @@
 //! in this database (#117).
 
 mod accounts;
+mod areas;
 mod attached;
 mod defaults;
 mod error;
@@ -45,6 +46,7 @@ use std::time::{Duration, Instant};
 use rusqlite::{Connection, Error as SqliteError, ErrorCode};
 
 pub use accounts::{Account, AccountFields};
+pub use areas::{Area, AreaFields};
 pub use defaults::RoleDefault;
 pub use error::StoreError;
 pub use events::{CompactableTurn, StoredEvent};
