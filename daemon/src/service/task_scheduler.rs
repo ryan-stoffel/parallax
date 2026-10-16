@@ -10,7 +10,7 @@
 //! `taskkill /f`, since Windows has no SIGTERM to send it.
 
 use std::path::Path;
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 use std::path::PathBuf;
 #[cfg(windows)]
 use std::time::{Duration, Instant};
@@ -160,6 +160,38 @@ fn utf16_with_bom(text: &str) -> Vec<u8> {
         .collect()
 }
 
+/// What a task file from [`render_task`] runs: its `plxd` and its `--data-dir`, read back from the
+/// action's arguments. `None` when it isn't such a file.
+#[cfg(any(windows, test))]
+fn task_action(file: &[u8]) -> Option<(PathBuf, PathBuf)> {
+    let units: Vec<u16> = file
+        .strip_prefix(&[0xFF, 0xFE][..])?
+        .as_chunks()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
+        .collect();
+    let xml = String::from_utf16(&units).ok()?;
+    let (_, rest) = xml.split_once("<Arguments>")?;
+    let (arguments, _) = rest.split_once("</Arguments>")?;
+    let arguments = arguments
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&");
+    // Neither path can hold `"`, so the quotes `quote_arg` added mark where each one ends.
+    let rest = arguments.strip_prefix("--headless \"")?;
+    let (program, rest) = rest.split_once("\" serve --data-dir \"")?;
+    let data_dir = rest.strip_suffix('"')?;
+    Some((unquote_arg(program).into(), unquote_arg(data_dir).into()))
+}
+
+/// Undoes [`quote_arg`]'s doubled trailing backslashes, once its quotes are gone.
+#[cfg(any(windows, test))]
+fn unquote_arg(text: &str) -> &str {
+    let trailing = text.len() - text.trim_end_matches('\\').len();
+    &text[..text.len() - trailing / 2]
+}
+
 /// Reads `schtasks /query /v /fo csv /nh` for a task it found. It prints a quoted CSV row per
 /// trigger, in a column order that doesn't change with the language: the seventh is Last Result,
 /// [`LAST_RESULT_RUNNING`] while the task runs. The Status column would say so too, but in the
@@ -202,6 +234,9 @@ pub fn install(
         .map_err(|error| ServiceError::io("reading this user's SID", error))?;
     let task = render_task(&program, data_dir.root(), &user)?;
     let file = task_file(label)?;
+    // A running task's `serve` is the one for the folder it was installed with, which may not be
+    // `data_dir`. Read before the file is replaced.
+    let installed = installed_data_dir(&file);
     write_file(&file, utf16_with_bom(&task))?;
 
     if state.running() {
@@ -219,7 +254,10 @@ pub fn install(
             "/f",
         ],
     )?;
-    if state.running() || outside {
+    if state.running() {
+        stop_serve(installed.as_ref().unwrap_or(data_dir))?;
+    }
+    if outside {
         stop_serve(data_dir)?;
     }
     run_ok(SCHTASKS, &["/run", "/tn", label])?;
@@ -230,8 +268,9 @@ pub fn install(
     })
 }
 
-/// Removes the task for `label`: ends it and stops the `serve` it ran for `data_dir` if it's
-/// running, deletes it, and deletes its XML.
+/// Removes the task for `label`: ends it if it's running, and stops its `serve`, for the data
+/// folder its XML names; then deletes the task and the XML. A running task whose XML is gone
+/// leaves its `serve` running, since nothing says which folder that is.
 ///
 /// Idempotent: uninstalling a label that was never installed succeeds and reports
 /// [`UninstallOutcome::NotInstalled`].
@@ -241,8 +280,10 @@ pub fn install(
 /// A [`ServiceError`] if `schtasks /delete` fails, the `serve` doesn't stop, or the XML exists
 /// but can't be removed.
 #[cfg(windows)]
-pub fn uninstall(label: &str, data_dir: &DataDir) -> Result<UninstallOutcome, ServiceError> {
+pub fn uninstall(label: &str) -> Result<UninstallOutcome, ServiceError> {
     let state = load_state(label)?;
+    let file = task_file(label)?;
+    let data_dir = installed_data_dir(&file);
     if state.running() {
         let _ = run(SCHTASKS, &["/end", "/tn", label]);
     }
@@ -250,10 +291,12 @@ pub fn uninstall(label: &str, data_dir: &DataDir) -> Result<UninstallOutcome, Se
         run_ok(SCHTASKS, &["/delete", "/tn", label, "/f"])?;
     }
     // After the delete, so the task's next repeat can't start it again.
-    if state.running() {
+    if state.running()
+        && let Some(data_dir) = &data_dir
+    {
         stop_serve(data_dir)?;
     }
-    let removed_file = remove_file(&task_file(label)?)?;
+    let removed_file = remove_file(&file)?;
     Ok(if state.loaded() || removed_file {
         UninstallOutcome::Removed
     } else {
@@ -271,7 +314,21 @@ pub fn uninstall(label: &str, data_dir: &DataDir) -> Result<UninstallOutcome, Se
 #[cfg(windows)]
 pub fn status(label: &str, data_dir: &DataDir) -> Result<Status, ServiceError> {
     let state = load_state(label)?;
-    Status::check(label, task_file(label)?, state, data_dir)
+    let path = task_file(label)?;
+    let program = installed_action(&path).map(|(program, _)| program);
+    Status::check(label, path, program, state, data_dir)
+}
+
+/// What the task file at `file` runs, if it's there: see [`task_action`].
+#[cfg(windows)]
+fn installed_action(file: &Path) -> Option<(PathBuf, PathBuf)> {
+    task_action(&std::fs::read(file).ok()?)
+}
+
+/// The data folder the task file at `file` serves, if it's there.
+#[cfg(windows)]
+fn installed_data_dir(file: &Path) -> Option<DataDir> {
+    DataDir::new(installed_action(file)?.1).ok()
 }
 
 /// Whether Task Scheduler reports `label` running within [`START_WAIT`], or by `deadline` if
@@ -307,18 +364,27 @@ fn load_state(label: &str) -> Result<ServiceState, ServiceError> {
 }
 
 /// Stops the `serve` holding `data_dir`'s lock: `taskkill /f` on its pipe's server, then waits up
-/// to [`STOP_TIMEOUT`] for the lock to be free. Windows has no SIGTERM to send it. Nothing
-/// answering the pipe is not an error.
+/// to [`STOP_TIMEOUT`] for the lock to be free. Windows has no SIGTERM to send it. A `serve` that
+/// holds the lock but doesn't answer yet, as while it's starting, is looked for again until then.
+/// Nothing holding the lock is not an error.
 #[cfg(windows)]
 fn stop_serve(data_dir: &DataDir) -> Result<(), ServiceError> {
-    let Some(pid) = serve_pid(data_dir) else {
-        return Ok(());
-    };
-    run_ok("taskkill", &["/f", "/pid", &pid.to_string()])?;
     let deadline = Instant::now() + STOP_TIMEOUT;
+    let mut killed = None;
     while lock_held(data_dir) {
+        if killed.is_none()
+            && let Some(pid) = serve_pid(data_dir)
+        {
+            run_ok("taskkill", &["/f", "/pid", &pid.to_string()])?;
+            killed = Some(pid);
+        }
         if Instant::now() >= deadline {
-            return Err(ServiceError::StillRunning { pid });
+            return Err(match killed {
+                Some(pid) => ServiceError::StillRunning { pid },
+                None => ServiceError::LockHeldWithoutAnswering {
+                    data_dir: data_dir.root().to_owned(),
+                },
+            });
         }
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -353,7 +419,10 @@ fn lock_held(data_dir: &DataDir) -> bool {
 mod tests {
     use std::path::Path;
 
-    use super::{LAST_RESULT_RUNNING, parse_query_output, quote_arg, render_task, utf16_with_bom};
+    use super::{
+        LAST_RESULT_RUNNING, parse_query_output, quote_arg, render_task, task_action,
+        utf16_with_bom,
+    };
     use crate::service::ServiceState;
 
     #[test]
@@ -379,6 +448,17 @@ mod tests {
         );
         assert_eq!(quote_arg(r"C:\x"), r#""C:\x""#);
         assert_eq!(quote_arg(r"C:\x\\"), r#""C:\x\\\\""#);
+    }
+
+    #[test]
+    fn the_program_and_data_folder_are_read_back_from_the_file() {
+        let program = Path::new(r"C:\A&B\<plxd>.exe");
+        let file = utf16_with_bom(&render_task(program, Path::new(r"D:\"), "S-1").unwrap());
+        assert_eq!(
+            task_action(&file),
+            Some((program.to_owned(), r"D:\".into()))
+        );
+        assert_eq!(task_action(b"<Task/>"), None);
     }
 
     #[test]

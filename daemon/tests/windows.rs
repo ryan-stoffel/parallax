@@ -199,8 +199,9 @@ impl Drop for Uninstall<'_> {
 }
 
 /// `plxd service` against the real Task Scheduler, under a test label: install registers the
-/// task and its `serve` answers, status reports it running, and uninstall stops that `serve` and
-/// removes the task.
+/// task and its `serve` answers, status reports it running and its program, and uninstall stops
+/// that `serve`, for the folder the task serves rather than the one it's given, and removes the
+/// task.
 #[tokio::test]
 async fn service_installs_reports_and_uninstalls_a_logon_task() {
     let temp = tempfile::tempdir().unwrap();
@@ -225,12 +226,14 @@ async fn service_installs_reports_and_uninstalls_a_logon_task() {
     })
     .await;
     assert!(answered.is_ok(), "{status}{}", schtasks_query());
-    for line in ["installed: true", "loaded: true", "running: true"] {
+    let program = format!("program: {}\n", env!("CARGO_BIN_EXE_plxd"));
+    for line in ["installed: true", "loaded: true", "running: true", &program] {
         assert!(status.contains(line), "{status}{}", schtasks_query());
     }
 
+    let elsewhere = temp.path().join("elsewhere");
     assert_eq!(
-        service(&data, &local, "uninstall").await,
+        service(&elsewhere, &local, "uninstall").await,
         format!("uninstalled {TEST_LABEL}\n")
     );
     let status = service(&data, &local, "status").await;

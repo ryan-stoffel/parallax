@@ -96,6 +96,17 @@ pub enum ServiceError {
         /// Its pid.
         pid: u32,
     },
+    /// On Windows, something held the data folder's lock for [`STOP_TIMEOUT`] without answering
+    /// on its pipe, which is how plxd finds the `serve` to stop.
+    #[error(
+        "something held {}'s plxd.lock for 30 s without answering on its pipe, so it couldn't be \
+         stopped",
+        .data_dir.display()
+    )]
+    LockHeldWithoutAnswering {
+        /// The data folder.
+        data_dir: PathBuf,
+    },
     /// The home folder is unknown, so the service's file can't be placed.
     #[error("the home folder is unknown")]
     NoHomeDir,
@@ -174,8 +185,8 @@ pub enum ServiceState {
 }
 
 impl ServiceState {
-    /// The manager has the label loaded: launchd in the per-user GUI domain, or the systemd user
-    /// manager.
+    /// The manager has the label loaded: launchd in the per-user GUI domain, the systemd user
+    /// manager, or Task Scheduler.
     #[must_use]
     pub fn loaded(self) -> bool {
         !matches!(self, Self::NotLoaded)
@@ -206,6 +217,9 @@ pub struct Status {
     pub path: PathBuf,
     /// That file exists.
     pub installed: bool,
+    /// The `plxd` that file runs, read back from it. `None` when there's no file, or it isn't
+    /// one plxd wrote.
+    pub program: Option<PathBuf>,
     /// What the service manager reports for `label`.
     pub state: ServiceState,
     /// The data folder's socket answered an `initialize` request just now.
@@ -216,6 +230,7 @@ impl Status {
     fn check(
         label: &str,
         path: PathBuf,
+        program: Option<PathBuf>,
         state: ServiceState,
         data_dir: &DataDir,
     ) -> Result<Self, ServiceError> {
@@ -226,6 +241,7 @@ impl Status {
             label: label.to_owned(),
             path,
             installed,
+            program,
             state,
             answers_initialize: probe_initialize(data_dir),
         })
@@ -258,8 +274,8 @@ fn check_label_serves(
 /// What every install does before writing its file: checks whether something other than the
 /// service already answers `data_dir` (`ours` says whether the service is what could be
 /// answering), and refuses then unless `replace`. Then prepares the data folder and its `logs/`.
-/// Returns the running `plxd`'s path, and whether a `serve` outside the service must be stopped
-/// with [`stop_outside_serve`].
+/// Returns the running `plxd`'s path, and whether a `serve` outside the service must be stopped:
+/// with `stop_outside_serve` on Unix, and `task_scheduler`'s own stop on Windows.
 fn prepare_install(
     data_dir: &DataDir,
     ours: bool,

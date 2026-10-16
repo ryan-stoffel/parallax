@@ -115,6 +115,7 @@ fn service_status_reports_a_fresh_label_as_absent() {
     assert!(stdout.contains("loaded: false"), "{stdout}");
     assert!(stdout.contains("running: false"), "{stdout}");
     assert!(stdout.contains("answers initialize: false"), "{stdout}");
+    assert!(stdout.contains("program: -\n"), "{stdout}");
 }
 
 // The refusal comes before anything touches launchd or `~/Library/LaunchAgents`, so this never

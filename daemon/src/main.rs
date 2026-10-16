@@ -744,15 +744,7 @@ fn service_install(options: &InstallOptions) -> ExitCode {
 
 #[cfg(any(target_os = "macos", target_os = "linux", windows))]
 fn service_uninstall(options: &ServiceOptions) -> ExitCode {
-    // Windows stops the task's `serve` itself, by the data folder's pipe.
-    #[cfg(windows)]
-    let uninstalled = match resolve_data_dir(options) {
-        Ok(data_dir) => service::uninstall(&options.label, &data_dir),
-        Err(code) => return code,
-    };
-    #[cfg(unix)]
-    let uninstalled = service::uninstall(&options.label);
-    match uninstalled {
+    match service::uninstall(&options.label) {
         Ok(service::UninstallOutcome::Removed) => {
             println!("uninstalled {}", options.label);
             ExitCode::SUCCESS
@@ -775,6 +767,13 @@ fn service_status(options: &ServiceOptions) -> ExitCode {
         Ok(status) => {
             println!("label: {}", status.label);
             println!("file: {}", status.path.display());
+            println!(
+                "program: {}",
+                status
+                    .program
+                    .as_ref()
+                    .map_or_else(|| "-".to_owned(), |program| program.display().to_string())
+            );
             println!("installed: {}", status.installed);
             println!("loaded: {}", status.state.loaded());
             println!("running: {}", status.state.running());

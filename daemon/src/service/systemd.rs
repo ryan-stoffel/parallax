@@ -197,7 +197,33 @@ pub fn uninstall(label: &str) -> Result<UninstallOutcome, ServiceError> {
 /// `initialize` is reported in the result, not treated as an error.
 pub fn status(label: &str, data_dir: &DataDir) -> Result<Status, ServiceError> {
     let state = load_state(label)?;
-    Status::check(label, unit_path(label)?, state, data_dir)
+    let path = unit_path(label)?;
+    let program = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|unit| unit_program(&unit));
+    Status::check(label, path, program, state, data_dir)
+}
+
+/// The program a unit from [`render_unit`] runs: `ExecStart`'s quoted first word, with [`quote`]'s
+/// escapes and the doubled `$` undone.
+fn unit_program(unit: &str) -> Option<PathBuf> {
+    let quoted = unit
+        .lines()
+        .find_map(|line| line.strip_prefix("ExecStart=\""))?;
+    let mut program = String::new();
+    let mut chars = quoted.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(PathBuf::from(program)),
+            '\\' => program.push(chars.next()?),
+            '%' | '$' => {
+                chars.next().filter(|next| *next == c)?;
+                program.push(c);
+            }
+            c => program.push(c),
+        }
+    }
+    None
 }
 
 /// Asks the user manager about `label` with `systemctl --user show`, which succeeds for a unit
@@ -288,6 +314,10 @@ mod tests {
         let golden = include_str!("../../tests/golden/systemd.service");
         assert_eq!(unit, golden);
         assert_eq!(
+            super::unit_program(&unit).as_deref(),
+            Some(Path::new("/usr/local/bin/plxd"))
+        );
+        assert_eq!(
             unit_name(DEFAULT_LABEL),
             "io.github.ryan-stoffel.parallax.plxd.service"
         );
@@ -297,6 +327,10 @@ mod tests {
     fn special_characters_in_paths_are_quoted_and_escaped() {
         let data_dir = DataDir::new("/home/a b/100%/\"q\"").unwrap();
         let unit = render_unit(Path::new("/opt/$x\\y/plxd"), &data_dir).unwrap();
+        assert_eq!(
+            super::unit_program(&unit).as_deref(),
+            Some(Path::new("/opt/$x\\y/plxd"))
+        );
         assert!(
             unit.contains("ExecStart=\"/opt/$$x\\\\y/plxd\" serve\n"),
             "{unit}"
