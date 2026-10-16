@@ -121,13 +121,21 @@ export function validLocale(tag: string | undefined): string | undefined {
 }
 
 /**
- * Whether a window can blur the desktop behind it: macOS's vibrancy, or Windows 11 22H2's
- * (build 22621) acrylic. `version` is `process.getSystemVersion()`.
+ * Whether a window can blur the desktop behind it: macOS's vibrancy, Windows 11 22H2's (build
+ * 22621) acrylic, or on Linux, the compositor's blur of a see-through window, as Hyprland's and
+ * KDE's are. `version` is `process.getSystemVersion()`.
  */
 export function blurSupported(platform: string, version: string): boolean {
-  if (platform === "darwin") return true;
+  if (platform === "darwin" || platform === "linux") return true;
   return platform === "win32" && Number(version.split(".")[2]) >= 22621;
 }
+
+/**
+ * Whether `material` needs the window created see-through: clear everywhere, and blurred on
+ * Linux, where the compositor blurs what a see-through window shows.
+ */
+export const needsTransparentWindow = (material: WindowMaterial, platform: string) =>
+  material === "clear" || (material === "blur" && platform === "linux");
 
 /** A window's background: Settings > Appearance's Window. */
 export type WindowMaterial = "opaque" | "clear" | "blur";

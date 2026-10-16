@@ -506,22 +506,71 @@ body {
   cursor: default;
 }
 
-/* The window's panes, the main pane, side panel, and sidebar, paint these. With a clear or
-   blurred window background (.translucent), they let the desktop through by --tint
-   (appearance.ts), the sidebar a little more, as macOS's own sidebars do. They're all that covers
-   it, with Settings' cards (--pane-card) a step more opaque than the pane under them; everything
-   else keeps --background and --sidebar opaque, so text stays solid. */
+/* The window's panes, the main pane, side panel, and sidebar, paint these, and Settings' cards
+   --pane-card. Opaque, they're the theme's colors. */
 :root {
+  --pane: var(--background);
+  --pane-sidebar: var(--sidebar);
   --pane-card: var(--surface);
-  --pane: color-mix(in srgb, var(--background) var(--tint, 100%), transparent);
-  --pane-sidebar: color-mix(in srgb, var(--sidebar) var(--tint, 100%), transparent);
 }
+
+/* A clear or blurred window background (.translucent) is one sheet of glass, as Ghostty's
+   background-opacity is: the theme's background is painted once, on <body>, letting the desktop
+   through by --tint (appearance.ts), and what sits on it is a light layer of its own color rather
+   than an opaque block, so nothing reads as a patch. Text keeps its color, solid. Menus and
+   dialogs float over the page as frosted glass, and the sidebar's sticky headings frost what
+   scrolls under them. Unlayered, so these win over Tailwind's utilities. */
 :root.translucent {
-  --pane-sidebar: color-mix(in srgb, var(--sidebar) calc(var(--tint) * 0.8), transparent);
-  --pane-card: color-mix(in srgb, var(--surface) min(100%, calc(var(--tint) + 15%)), transparent);
+  --pane: transparent;
+  /* A faint lift, so the sidebar reads apart from the main pane without thickening the glass. */
+  --pane-sidebar: color-mix(in srgb, var(--foreground) 2.5%, transparent);
+  --pane-card: color-mix(in srgb, var(--surface) 45%, transparent);
+  --glass: blur(28px) saturate(1.6);
 }
 :root.translucent body {
-  background: transparent;
+  background: color-mix(in srgb, var(--background) var(--tint), transparent);
+}
+:root.translucent .bg-background {
+  background-color: color-mix(in srgb, var(--background) 45%, transparent);
+}
+:root.translucent .bg-surface {
+  background-color: color-mix(in srgb, var(--surface) 55%, transparent);
+}
+:root.translucent .bg-code {
+  background-color: color-mix(in srgb, var(--code) 55%, transparent);
+}
+:root.translucent .bg-sidebar {
+  background-color: color-mix(in srgb, var(--sidebar) 55%, transparent);
+  backdrop-filter: var(--glass);
+}
+:root.translucent :is([popover], dialog):is(.bg-background, .bg-surface) {
+  background-color: color-mix(in srgb, var(--surface) 82%, transparent);
+  backdrop-filter: var(--glass);
+}
+/* A nightly's sky fades into the glass rather than into the sidebar's solid color. */
+:root.nightly.translucent .night-sky-host {
+  background:
+    linear-gradient(in oklab, #15124a, #2e2a8c 19%, #6a64d6 33%, transparent) top / 100% 120px
+      no-repeat,
+    var(--pane-sidebar);
+}
+:root.nightly.dark.translucent .night-sky-host {
+  background:
+    linear-gradient(in oklab, #070923, #17184f 20%, #2a2470 34%, transparent) top / 100% 104px
+      no-repeat,
+    var(--pane-sidebar);
+}
+:root.nightly.translucent .night-sky-host .sky-search {
+  background-color: color-mix(in srgb, var(--sidebar) 55%, transparent);
+}
+/* Settings' theme previews show their theme as it is. */
+:root.translucent
+  :is(.scheme-light, .scheme-dark):is(.bg-background, .bg-surface, .bg-sidebar, .bg-code),
+:root.translucent
+  :is(.scheme-light, .scheme-dark)
+  :is(.bg-background, .bg-surface, .bg-sidebar, .bg-code) {
+  background-color: revert-layer;
+  backdrop-filter: none;
 }
 
 /* Keyboard focus is always visible; mouse focus never draws a ring. In the

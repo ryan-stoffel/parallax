@@ -1,6 +1,6 @@
 import { useLayoutEffect } from "react";
 
-import type { WindowMaterial } from "../preload/bridge";
+import { needsTransparentWindow, type WindowMaterial } from "../preload/bridge";
 import { merged, stored } from "./stored";
 import {
   customColorsCss,
@@ -189,8 +189,10 @@ export function shownThemes(appearance: Appearance, added: AddedExtension[]): Re
  * clear where the window was created see-through.
  */
 export function seesThrough(material: WindowMaterial) {
-  if (material === "blur") return window.parallax?.canBlur === true;
-  return material === "clear" && window.parallax?.transparent === true;
+  const bridge = window.parallax;
+  if (!bridge || material === "opaque") return false;
+  if (needsTransparentWindow(material, bridge.platform)) return bridge.transparent === true;
+  return bridge.canBlur === true;
 }
 
 // A font name the user typed, kept to what a CSS family name can hold.

@@ -1,7 +1,11 @@
 import { Plus, RotateCw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import type { ThemePreference, WindowMaterial } from "../../preload/bridge";
+import {
+  needsTransparentWindow,
+  type ThemePreference,
+  type WindowMaterial,
+} from "../../preload/bridge";
 import {
   seesThrough,
   setAppearance,
@@ -292,9 +296,11 @@ export function AppearanceSettings({
           <Row
             title="Background"
             description={
-              window.parallax.canBlur
-                ? "Clear lets the desktop show through the window. Blurred frosts it."
-                : "Clear lets the desktop show through the window."
+              !window.parallax.canBlur
+                ? "Clear lets the desktop show through the window."
+                : window.parallax.platform === "linux"
+                  ? "Clear lets the desktop show through the window. Blurred asks your compositor, such as Hyprland or KDE, to frost it."
+                  : "Clear lets the desktop show through the window. Blurred frosts it."
             }
           >
             <Segmented
@@ -308,21 +314,22 @@ export function AppearanceSettings({
               onChange={(windowMaterial) => set({ windowMaterial })}
             />
           </Row>
-          {appearance.windowMaterial === "clear" && !window.parallax.transparent && (
-            <Row
-              title="Restart to finish"
-              description="Your OS makes a window clear only when it opens."
-            >
-              <button
-                type="button"
-                className={`${quietButton} flex items-center gap-1.5 border border-border text-foreground`}
-                onClick={() => window.parallax.relaunch?.()}
+          {needsTransparentWindow(appearance.windowMaterial, window.parallax.platform) &&
+            !window.parallax.transparent && (
+              <Row
+                title="Restart to finish"
+                description="Your OS makes a window see-through only when it opens."
               >
-                <RotateCw aria-hidden className="size-3.5" />
-                Restart Parallax
-              </button>
-            </Row>
-          )}
+                <button
+                  type="button"
+                  className={`${quietButton} flex items-center gap-1.5 border border-border text-foreground`}
+                  onClick={() => window.parallax.relaunch?.()}
+                >
+                  <RotateCw aria-hidden className="size-3.5" />
+                  Restart Parallax
+                </button>
+              </Row>
+            )}
           <Row
             title="Background opacity"
             description="How much of the theme covers what shows through. Text stays solid."

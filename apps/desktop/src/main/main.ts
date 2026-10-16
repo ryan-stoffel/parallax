@@ -20,6 +20,7 @@ import path from "node:path";
 import {
   THEME_PREFERENCES,
   blurSupported,
+  needsTransparentWindow,
   type OpenTarget,
   type RegistryAgent,
   type UpdateState,
@@ -517,13 +518,17 @@ ipcMain.on("parallax:windowLook", (event, look: unknown) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   const { material } = (look ?? {}) as { material?: unknown };
   if (!win || (material !== "opaque" && material !== "clear" && material !== "blur")) return;
-  const clear = material === "clear";
+  const clear = needsTransparentWindow(material, process.platform);
   try {
     writeFileSync(clearFile, JSON.stringify(clear));
   } catch {
     // Unwritable: the next launch opens as this one did.
   }
-  const blur = material === "blur" && blurSupported(process.platform, process.getSystemVersion());
+  // Linux's blur is its compositor's, of a see-through window.
+  const blur =
+    material === "blur" &&
+    process.platform !== "linux" &&
+    blurSupported(process.platform, process.getSystemVersion());
   const through = blur || (clear && clearAtLaunch);
   if (through) seeThrough.add(win);
   else seeThrough.delete(win);
