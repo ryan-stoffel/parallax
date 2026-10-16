@@ -15,7 +15,7 @@ import { expect, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, WatchMessage } from "../preload/bridge";
 import { Connection } from "./connection";
-import { plistProgram, plxdVersion, replaceServe, type ServeService } from "./plxd";
+import { plxdVersion, replaceServe, type ServeService } from "./plxd";
 
 // Opt in with a locally built plxd. Every process and service belongs to a temporary data folder.
 const binary = process.env["PLX_TEST_PLXD"];
@@ -49,11 +49,8 @@ for (const kind of ["bundled", "service", "external"]) {
       const service: ServeService = {
         status: async () => {
           const { stdout } = await run(current, "service", "status", "--label", label);
-          const file = /^file: (.*)$/m.exec(stdout)?.[1];
           const pid = /^pid: (\d+)$/m.exec(stdout)?.[1];
-          const program = file ? plistProgram(readFileSync(file, "utf8")) : undefined;
           return {
-            ...(program && { program }),
             ...(pid && { pid: Number(pid) }),
             ready: /^answers initialize: true$/m.test(stdout),
           };
@@ -127,8 +124,11 @@ for (const kind of ["bundled", "service", "external"]) {
         expect(messages.some((message) => message.type === "error")).toBe(false);
         if (external) expect(lockPid()).toBe(oldPid);
         else expect(lockPid()).not.toBe(oldPid);
-        if (loginService)
-          expect(await service.status()).toEqual({ program: current, pid: lockPid(), ready: true });
+        if (loginService) {
+          expect(await service.status()).toEqual({ pid: lockPid(), ready: true });
+          const { stdout } = await run(current, "service", "status", "--label", label);
+          expect(readFileSync(/^file: (.*)$/m.exec(stdout)![1]!, "utf8")).toContain(current);
+        }
       } finally {
         probe?.dispose();
         upgraded?.dispose();

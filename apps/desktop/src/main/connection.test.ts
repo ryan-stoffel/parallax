@@ -11,7 +11,14 @@ import type {
   TerminalMessage,
   WatchMessage,
 } from "../preload/bridge";
-import { backoffMs, Connection, exitError, LOCATE_PLXD, sshCommand } from "./connection";
+import {
+  backoffMs,
+  Connection,
+  exitError,
+  LOCATE_PLXD,
+  sshCommand,
+  type ConnectionOptions,
+} from "./connection";
 
 type Message = Record<string, unknown> & {
   id?: number;
@@ -62,7 +69,7 @@ let located: string | undefined;
 const child = () => children.at(-1)!;
 const state = () => states.at(-1);
 
-function connect(destination?: string, replaceDaemon?: (version: string) => Promise<boolean>) {
+function connect(destination?: string, replaceDaemon?: ConnectionOptions["replaceDaemon"]) {
   const connection = new Connection({
     command: () =>
       destination
@@ -128,20 +135,50 @@ test.each([false, true])(
   },
 );
 
-test("a failed local upgrade exposes its error without connecting or retrying automatically", async () => {
+test("a failed local upgrade exposes its error and keeps retrying", async () => {
+  let fails = true;
   const connection = connect(undefined, async () => {
-    throw new Error("service restart failed");
+    if (fails) throw new Error("service restart failed");
+    return false;
   });
   child().handshake();
   await Promise.resolve();
   expect(state()).toMatchObject({
     status: "failed",
-    retrying: false,
+    retrying: true,
     error: { message: "Couldn't update the bundled local plxd: service restart failed" },
   });
-  await vi.advanceTimersByTimeAsync(20_000);
-  expect(children).toHaveLength(1);
+  fails = false;
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(children).toHaveLength(2);
+  child().handshake();
+  await Promise.resolve();
+  expect(state()?.status).toBe("connected");
   connection.dispose();
+});
+
+test("the local upgrade asks a compatible plxd for its running agents", async () => {
+  let agents: (() => Promise<number | undefined>) | undefined;
+  const connection = connect(undefined, async (_version, runningAgents) => {
+    agents = runningAgents;
+    return false;
+  });
+  child().handshake();
+  const asked = agents!();
+  child().reply({
+    id: child().request("host/health").id,
+    result: { uptimeSeconds: 1, store: "ok", runningAgents: 2 },
+  });
+  expect(await asked).toBe(2);
+  connection.dispose();
+  // An incompatible one can't be asked.
+  const old = connect(undefined, async (_version, runningAgents) => {
+    agents = runningAgents;
+    return false;
+  });
+  child().reply({ id: child().request("initialize").id, error: incompatible });
+  expect(agents).toBeUndefined();
+  old.dispose();
 });
 
 test("an external incompatible daemon stays failed when replacement declines", async () => {
@@ -220,7 +257,13 @@ test("not found fails without spawning anything", () => {
 });
 
 test("reports attach's exit code and stderr, and backs off from 1 s to 10 s", () => {
-  expect([0, 1, 2, 3, 4, 5].map(backoffMs)).toEqual([1000, 2000, 4000, 8000, 10_000, 10_000]);
+  expect([0, 1, 2, 3, 4, 5].map((n) => backoffMs(n))).toEqual([
+    1000, 2000, 4000, 8000, 10_000, 10_000,
+  ]);
+  // keepServing's (hosts.ts): at most once every 5 minutes.
+  expect([4, 8, 9, 20].map((n) => backoffMs(n, 300_000))).toEqual([
+    16_000, 256_000, 300_000, 300_000,
+  ]);
   connect();
   child().stderr.emit("data", Buffer.from("plxd attach: timed out\n"));
   child().emit("close", 4, null);

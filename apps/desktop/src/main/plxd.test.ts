@@ -1,3 +1,14 @@
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { expect, test, vi } from "vite-plus/test";
@@ -6,9 +17,8 @@ import {
   appDataDir,
   dataDir,
   findPlxd,
-  movesServiceBack,
+  refreshCopy,
   replaceServe,
-  plistProgram,
   serviceStep,
   type ServeSystem,
   type PlxdLookup,
@@ -126,25 +136,36 @@ test("a replaced serve is waited for until it exits", async () => {
   expect(vi.mocked(system.kill).mock.calls).toEqual([[42], [42, 0], [42, 0], [42, 0], [42, 0]]);
 });
 
-test("a bundled login service is repointed and restarted instead of sending SIGTERM", async () => {
-  const system = fakeServe("/Applications/Parallax.app/Contents/Resources/plxd serve");
-  let restarted = false;
-  system.lockPid = () => (restarted ? 43 : 42);
-  const replace = vi.fn(async () => {
-    restarted = true;
+test("an installed login service is restarted on the copy instead of sending SIGTERM", async () => {
+  // The app's bundled serve, or the copy the service already runs.
+  for (const args of [
+    "/Applications/Parallax.app/Contents/Resources/plxd serve",
+    "/Users/r/.parallax-plxd/plxd serve",
+  ]) {
+    const system = fakeServe(args);
+    let restarted = false;
+    system.lockPid = () => (restarted ? 43 : 42);
+    const replace = vi.fn(async () => {
+      restarted = true;
+    });
+    const service = { status: async () => ({ pid: restarted ? 43 : 42, ready: true }), replace };
+    expect(await replaceServe("/d", "1.0.0", "1.1.0", system, service)).toMatchObject({
+      stopped: true,
+    });
+    expect(replace).toHaveBeenCalledOnce();
+    expect(system.kill).not.toHaveBeenCalled();
+  }
+});
+
+test("a login service with agents running is restarted only once they finish", async () => {
+  const system = fakeServe("/Users/r/.parallax-plxd/plxd serve");
+  const replace = vi.fn(async () => {});
+  const service = { status: async () => ({ pid: 42, ready: true }), replace };
+  expect(await replaceServe("/d", "1.0.0", "1.1.0", system, service, async () => 2)).toEqual({
+    stopped: false,
+    why: "kept plxd serve 1.0.0: 2 agents are running, so it's replaced once they finish",
   });
-  const service = {
-    status: async () => ({
-      program: "/Applications/Older.app/Contents/Resources/plxd",
-      pid: restarted ? 43 : 42,
-      ready: true,
-    }),
-    replace,
-  };
-  expect(await replaceServe("/d", "1.0.0", "1.1.0", system, service)).toMatchObject({
-    stopped: true,
-  });
-  expect(replace).toHaveBeenCalledOnce();
+  expect(replace).not.toHaveBeenCalled();
   expect(system.kill).not.toHaveBeenCalled();
 });
 
@@ -152,11 +173,7 @@ test("a failed service upgrade never falls back to SIGTERM", async () => {
   const system = fakeServe("/Applications/Parallax.app/Contents/Resources/plxd serve");
   await expect(
     replaceServe("/d", "1.0.0", "1.1.0", system, {
-      status: async () => ({
-        program: "/Applications/Parallax.app/Contents/Resources/plxd",
-        pid: 42,
-        ready: true,
-      }),
+      status: async () => ({ pid: 42, ready: true }),
       replace: async () => {
         throw new Error("bootout failed");
       },
@@ -165,22 +182,19 @@ test("a failed service upgrade never falls back to SIGTERM", async () => {
   expect(system.kill).not.toHaveBeenCalled();
 });
 
-test("a service for another daemon and an externally managed service are left alone", async () => {
-  for (const status of [
-    { program: "/Applications/Parallax.app/Contents/Resources/plxd", pid: 99 },
-    { program: "/usr/local/bin/plxd", pid: 42 },
-  ]) {
-    const system = fakeServe("/Applications/Parallax.app/Contents/Resources/plxd serve");
-    const replace = vi.fn(async () => {});
+test("another data folder's service, or the copy's serve without a service, is left alone", async () => {
+  const service = { status: async () => ({ pid: 99, ready: true }), replace: vi.fn() };
+  for (const [args, withService] of [
+    ["/Applications/Parallax.app/Contents/Resources/plxd serve", true],
+    ["/Users/r/.parallax-plxd/plxd serve", false],
+  ] as const) {
+    const system = fakeServe(args);
     expect(
-      await replaceServe("/d", "1.0.0", "1.1.0", system, {
-        status: async () => ({ ...status, ready: true }),
-        replace,
-      }),
+      await replaceServe("/d", "1.0.0", "1.1.0", system, withService ? service : undefined),
     ).toMatchObject({ stopped: false });
-    expect(replace).not.toHaveBeenCalled();
     expect(system.kill).not.toHaveBeenCalled();
   }
+  expect(service.replace).not.toHaveBeenCalled();
 });
 
 test("replacement fails when the bundled serve does not exit", async () => {
@@ -192,11 +206,7 @@ test("a service restart that never owns the data folder fails without SIGTERM", 
   const system = fakeServe("/Applications/Parallax.app/Contents/Resources/plxd serve");
   await expect(
     replaceServe("/d", "1.0.0", "1.1.0", system, {
-      status: async () => ({
-        program: "/Applications/Parallax.app/Contents/Resources/plxd",
-        pid: 42,
-        ready: true,
-      }),
+      status: async () => ({ pid: 42, ready: true }),
       replace: async () => {},
     }),
   ).rejects.toThrow("did not start the updated daemon");
@@ -213,55 +223,85 @@ test("a denied SIGTERM reports a failed upgrade", async () => {
   );
 });
 
-test("keepServing's next step: done once the service runs plxd, installing only with no agents running", () => {
+test("keepServing's next step: done once the service runs the copy, installing only with no agents running", () => {
   const status = (installed: boolean, loaded: boolean, running: boolean) =>
     `label: io.github.ryan-stoffel.parallax.plxd\nfile: /Users/r/Library/LaunchAgents/x.plist\ninstalled: ${installed}\nloaded: ${loaded}\nrunning: ${running}\npid: -\nanswers initialize: true\n`;
-  expect(serviceStep(status(true, true, true), 3, false)).toBe("done");
+  expect(serviceStep(status(true, true, true), true, 3, false)).toBe("done");
+  // Running something else, such as the app bundle's plxd or an older copy.
+  expect(serviceStep(status(true, true, true), false, 0, false)).toBe("install");
+  expect(serviceStep(status(true, true, true), false, 1, false)).toBe("wait");
   // Loaded but not running: the app's own serve may still hold the data folder.
-  expect(serviceStep(status(true, true, false), 0, false)).toBe("install");
-  expect(serviceStep(status(false, false, false), 0, false)).toBe("install");
-  expect(serviceStep(status(false, false, false), 2, false)).toBe("wait");
-  expect(serviceStep(status(false, false, false), undefined, false)).toBe("wait");
-  // This launch installed it, and it still isn't running: no second try until the next launch.
-  expect(serviceStep(status(true, true, false), 0, true)).toBe("failed");
+  expect(serviceStep(status(true, true, false), true, 0, false)).toBe("install");
+  expect(serviceStep(status(false, false, false), false, 0, false)).toBe("install");
+  expect(serviceStep(status(false, false, false), false, undefined, false)).toBe("wait");
+  // The last check installed it, and it still isn't there: a failure, tried again after a backoff.
+  expect(serviceStep(status(true, true, false), true, 0, true)).toBe("failed");
+  expect(serviceStep(status(true, true, true), false, 0, true)).toBe("failed");
 });
 
-test("a LaunchAgent moves back from an SSH-installed plxd only to a newer one, with no agents running", () => {
-  const ssh = "/Users/r/.parallax-plxd/plxd";
-  const cases: [string, string | undefined, string | undefined, number | undefined, boolean][] = [
-    [ssh, "1.2.0", "1.3.0", 0, true],
-    [ssh, "1.3.0-nightly", "1.3.0", 0, true],
-    [ssh, "1.3.0", "1.3.0", 0, false],
-    [ssh, "1.4.0", "1.3.0", 0, false],
-    [ssh, "1.2.0", "1.3.0", 1, false],
-    [ssh, "1.2.0", "1.3.0", undefined, false],
-    [ssh, undefined, "1.3.0", 0, false],
-    [ssh, "1.2.0", undefined, 0, false],
-    // Another install's plxd stays.
-    ["/Applications/Parallax.app/Contents/Resources/plxd", "1.2.0", "1.3.0", 0, false],
-  ];
-  for (const [program, theirs, ours, agents, moves] of cases)
-    expect(
-      movesServiceBack(program, "/Users/r", theirs, ours, agents),
-      `${program} ${theirs} ${ours} ${agents}`,
-    ).toBe(moves);
-});
+test("the copy and its web client are written when missing or older, never over a newer one", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "plx823-"));
+  try {
+    const bundle = path.join(root, "Resources");
+    const web = path.join("app.asar.unpacked", "dist", "renderer");
+    mkdirSync(path.join(bundle, web), { recursive: true });
+    writeFileSync(path.join(bundle, "plxd"), "bundled", { mode: 0o755 });
+    writeFileSync(path.join(bundle, "plxd.version"), "1.1.0\n");
+    writeFileSync(path.join(bundle, web, "index.html"), "bundled web");
+    // As plxd reports itself: the version file beside it.
+    const version = async (plxd: string) =>
+      existsSync(plxd)
+        ? readFileSync(path.join(path.dirname(plxd), "plxd.version"), "utf8").trim()
+        : undefined;
+    const dir = path.join(root, ".parallax-plxd");
+    const copy = (platform: NodeJS.Platform) =>
+      refreshCopy(path.join(bundle, "plxd"), root, platform, version);
+    const plxd = path.join(dir, "plxd");
+    const index = path.join(dir, web, "index.html");
+    const files = () =>
+      [plxd, path.join(dir, "plxd.version"), index].map((f) => readFileSync(f, "utf8"));
 
-test("a LaunchAgent's program is the first ProgramArguments string, unescaped", () => {
-  const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0">
-<dict>
-\t<key>Label</key>
-\t<string>io.github.ryan-stoffel.parallax.plxd</string>
-\t<key>ProgramArguments</key>
-\t<array>
-\t\t<string>/Applications/R&amp;D/Parallax (Nightly).app/Contents/Resources/plxd</string>
-\t\t<string>serve</string>
-\t</array>
-</dict>
-</plist>`;
-  expect(plistProgram(plist)).toBe(
-    "/Applications/R&D/Parallax (Nightly).app/Contents/Resources/plxd",
-  );
-  expect(plistProgram("<plist></plist>")).toBeUndefined();
+    expect(await copy("linux")).toEqual({ plxd, version: "1.1.0" });
+    expect(files()).toEqual(["bundled", "1.1.0\n", "bundled web"]);
+    if (process.platform !== "win32") expect(statSync(plxd).mode & 0o111).toBeTruthy();
+    // Nothing is left behind in the folder.
+    expect(readdirSync(dir).sort()).toEqual(["app.asar.unpacked", "plxd", "plxd.version"]);
+
+    for (const [theirs, kept] of [
+      ["1.0.0", false],
+      // A nightly comes before its release (0030).
+      ["1.1.0-nightly", false],
+      ["1.1.0", true],
+      ["1.2.0", true],
+    ] as const) {
+      writeFileSync(plxd, "theirs");
+      writeFileSync(path.join(dir, "plxd.version"), `${theirs}\n`);
+      writeFileSync(index, "theirs web");
+      writeFileSync(`${path.join(dir, web)}.version`, `${theirs}\n`);
+      writeFileSync(path.join(dir, web, "old.js"), "");
+      expect(await copy("linux"), theirs).toEqual({ plxd, version: kept ? theirs : "1.1.0" });
+      expect(files(), theirs).toEqual(
+        kept ? ["theirs", `${theirs}\n`, "theirs web"] : ["bundled", "1.1.0\n", "bundled web"],
+      );
+      // A refresh replaces the whole web client, so no older file stays in it.
+      expect(existsSync(path.join(dir, web, "old.js")), theirs).toBe(kept);
+    }
+
+    // A newer plxd from `host/update`, with no web client beside it, gets this app's.
+    rmSync(path.join(dir, "app.asar.unpacked"), { recursive: true });
+    expect(await copy("linux")).toEqual({ plxd, version: "1.2.0" });
+    expect(files()).toEqual(["theirs", "1.2.0\n", "bundled web"]);
+    expect(readFileSync(`${path.join(dir, web)}.version`, "utf8")).toBe("1.1.0\n");
+
+    // Windows renames the old plxd.exe aside, since it can't replace one that's running.
+    writeFileSync(path.join(bundle, "plxd.exe"), "bundled");
+    writeFileSync(path.join(dir, "plxd.exe"), "running");
+    writeFileSync(path.join(dir, "plxd.version"), "1.0.0\n");
+    const exe = (await refreshCopy(path.join(bundle, "plxd.exe"), root, "win32", version)).plxd;
+    expect(exe).toBe(path.join(dir, "plxd.exe"));
+    expect(readFileSync(exe, "utf8")).toBe("bundled");
+    expect(readFileSync(path.join(dir, "plxd.old.exe"), "utf8")).toBe("running");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

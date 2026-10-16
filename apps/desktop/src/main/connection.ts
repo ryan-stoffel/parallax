@@ -104,8 +104,8 @@ const MUTATING_METHODS = new Set([
   "pr/act",
 ]);
 
-/** The wait before reconnect attempt `failures + 1`: 1 s, doubling, capped at 10 s. */
-export const backoffMs = (failures: number) => Math.min(1000 * 2 ** failures, 10_000);
+/** The wait before attempt `failures + 1`: 1 s, doubling, capped at `cap`, 10 s for a reconnect. */
+export const backoffMs = (failures: number, cap = 10_000) => Math.min(1000 * 2 ** failures, cap);
 
 /**
  * Runs `plxd attach` on a macOS or Linux host from `~/.parallax-plxd`, where the app installs plxd
@@ -169,8 +169,14 @@ export type ConnectionOptions = {
   /** The app's version, sent in `initialize`. */
   clientVersion: string;
   onState: (state: ConnectionState) => void;
-  /** Checks the local running version before exposing it. True reconnects after replacement. */
-  replaceDaemon?: (version: string) => Promise<boolean>;
+  /**
+   * Checks the local running version before exposing it. True reconnects after replacement.
+   * `runningAgents` asks that plxd's `host/health`; it's undefined when the handshake failed.
+   */
+  replaceDaemon?: (
+    version: string,
+    runningAgents?: () => Promise<number | undefined>,
+  ) => Promise<boolean>;
   /** More environment for plxd, asked on every attempt: a relay route's sign-in (PLX-652). */
   env?: () => Record<string, string> | undefined;
   /** Starts `plxd attach`. Tests pass a fake. */
@@ -503,7 +509,11 @@ export class Connection {
         };
         if (!this.options.replaceDaemon || version === undefined) return finish();
         this.preparing = true;
-        void this.options.replaceDaemon(version).then(
+        const runningAgents = async () => {
+          const health = await client.request("host/health", {}, LIVENESS_MS);
+          return "result" in health ? health.result.runningAgents : undefined;
+        };
+        void this.options.replaceDaemon(version, error ? undefined : runningAgents).then(
           (replaced) => {
             if (child !== this.child) return;
             this.preparing = false;
@@ -514,13 +524,11 @@ export class Connection {
           (failure: unknown) => {
             if (child !== this.child) return;
             this.teardown();
-            this.fail(
-              {
-                reason: "exited",
-                message: `Couldn't update the bundled local plxd: ${failure instanceof Error ? failure.message : String(failure)}`,
-              },
-              false,
-            );
+            // Retried with backoff: the service may yet start, and `replaceDaemon` stops trying.
+            this.fail({
+              reason: "exited",
+              message: `Couldn't update the bundled local plxd: ${failure instanceof Error ? failure.message : String(failure)}`,
+            });
           },
         );
       },
@@ -669,11 +677,10 @@ export class Connection {
     this.fail(error);
   }
 
-  private fail(error: ConnectionError, retryAllowed = true): void {
+  private fail(error: ConnectionError): void {
     // These can't fix themselves: the binary is missing or incompatible, rejects `attach`'s
     // arguments (exit 2, a usage error), or the host needs setting up.
     const retrying =
-      retryAllowed &&
       error.reason !== "notFound" &&
       error.reason !== "incompatibleProtocol" &&
       error.reason !== "sshSetup" &&

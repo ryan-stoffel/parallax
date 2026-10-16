@@ -13,10 +13,10 @@ const RELEASES = "https://github.com/ryan-stoffel/parallax/releases/download";
  * against the release's `<asset>.sha256`, and proves it runs before replacing anything. Then the
  * old plxd stops, which ends its agents' runs: a host with plxd's login service (a Mac with
  * Connect on, a Linux host plx-connect set up) gets `service install --replace`, which points the
- * service at this plxd and restarts it, so a Mac's LaunchAgent moves off its own app's plxd
- * until that one is newer (`repointService`); any other host's `plxd serve`, or one whose service
- * can't be moved, gets SIGTERM, so the next attach starts this one. Exits 3 with one line for
- * people when it can't. `sh -s` reads it from ssh's stdin.
+ * service at this plxd, the copy the app keeps there too (`refreshCopy`), and restarts it; any
+ * other host's `plxd serve`, or one whose service can't be moved, gets SIGTERM, so the next attach
+ * starts this one. Exits 3 with one line for people when it can't. `sh -s` reads it from ssh's
+ * stdin.
  */
 export const INSTALL_SCRIPT = `set -eu
 version=$1
