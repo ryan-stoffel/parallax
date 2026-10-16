@@ -13,8 +13,8 @@ import { IconButton } from "./ui";
 export const THREAD_DETAILS_KEY = "parallax.threadDetails";
 export const THREAD_DETAILS_ID = "thread-details";
 
-/** The docked card's width, `w-72`, with its right gap. */
-const DOCKED_WIDTH = 300;
+/** The docked card's width, `w-64`, with its right gap. */
+const DOCKED_WIDTH = 268;
 /** The least of its row the thread keeps beside the docked card; below it the card floats. */
 export const THREAD_MIN_SHARE = 0.6;
 
