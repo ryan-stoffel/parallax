@@ -65,7 +65,15 @@ import {
   type Command,
   type SshTarget,
 } from "./terminal";
-import { dataDir, findPlxd, plxdVersion, refreshCopy, replaceServe, serviceStep } from "./plxd";
+import {
+  dataDir,
+  findPlxd,
+  plxdVersion,
+  refreshCopy,
+  replaceServe,
+  serviceRuns,
+  serviceStep,
+} from "./plxd";
 import { isNightly } from "./updater";
 import { broadcast, perWindow } from "./windows";
 
@@ -1062,7 +1070,7 @@ function bundledPlxd(): string | undefined {
   return plxd === path.join(process.resourcesPath, name) ? plxd : undefined;
 }
 
-/** `plxd service status`'s output, or undefined where plxd has none (Windows until PLX-576). */
+/** `plxd service status`'s output, or undefined where plxd has none (Windows before PLX-576). */
 async function serviceStatus(plxd: string): Promise<string | undefined> {
   try {
     return (await runPlxd(plxd, "service", "status")).stdout;
@@ -1092,21 +1100,17 @@ async function keepServing(): Promise<void> {
   let next: ServiceState = "check";
   try {
     const status = await serviceStatus(plxd);
-    // No service here yet (Windows until PLX-576), or none to keep while Connect is off.
+    // No service here (Windows before PLX-576), or none to keep while Connect is off.
     if (status === undefined || (!connectOn && !/^installed: true$/m.test(status))) {
       next = "done";
       return;
     }
     const copy = await refreshCopy(plxd, homedir());
     const local = connections.get("local")?.state;
-    const file = /^file: (.*)$/m.exec(status)?.[1];
-    // ponytail: the service file naming the copy's path, unescaped, is enough for a home folder
-    // without `&`, `%`, `$`, or quotes. Parse each OS's file if one has them.
     const runsCopy =
       local?.status === "connected" &&
       local.plxd === copy.version &&
-      file !== undefined &&
-      (await readFile(file, "utf8").catch(() => "")).includes(copy.plxd);
+      (await serviceRuns(status, copy.plxd, (file) => readFile(file, "utf8")));
     const health = await connections.get("local")?.request("host/health", {});
     const agents = health && "result" in health ? health.result.runningAgents : undefined;
     const step = serviceStep(status, runsCopy, agents, installed);
