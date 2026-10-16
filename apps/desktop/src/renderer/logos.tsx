@@ -476,3 +476,28 @@ export function ParallaxMark(props: LogoProps) {
     </svg>
   );
 }
+
+/**
+ * Parallax's mark in one color, sized and colored like a lucide icon: its two circles as rings,
+ * their overlap filled. The icon of its own tools' calls, as T3 Code marks its own (PLX-843).
+ */
+export function ParallaxGlyph(props: LogoProps) {
+  const clip = useId();
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      aria-hidden
+      {...props}
+    >
+      <clipPath id={clip}>
+        <circle cx="9.5" cy="9.5" r="6.5" />
+      </clipPath>
+      <circle cx="9.5" cy="9.5" r="6.5" />
+      <circle cx="14.5" cy="14.5" r="6.5" />
+      <circle cx="14.5" cy="14.5" r="6.5" clipPath={`url(#${clip})`} fill="currentColor" />
+    </svg>
+  );
+}

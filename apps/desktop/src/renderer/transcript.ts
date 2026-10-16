@@ -934,6 +934,8 @@ export interface Work {
   items: Item[];
   /** Whether an `end` closed its turn, so it folds under "Worked for …" (PLX-326). */
   done?: boolean;
+  /** Whether its items are calls that started subagents, shown as one card (PLX-843). */
+  subagents?: boolean;
   /** When the work began, and when what followed it (the answer, or the end) did. */
   startedAt?: string;
   endedAt?: string;
@@ -1016,6 +1018,23 @@ export function groupWork<R extends { kind: string; at?: string }>(
     run = [];
   };
   for (const [i, row] of rows.entries()) {
+    // A going turn's subagent calls leave its steps, as one card (PLX-843). An ended turn's stay
+    // in its fold, where `subagentRuns` splits them out.
+    const call = row.kind === "tool" ? (row as Extract<Item, { kind: "tool" }>) : undefined;
+    if (call && isSubagentTool(call.name) && !ended.has(i)) {
+      flush(call);
+      const prev = out.at(-1);
+      if (prev?.kind === "work" && (prev as Work).subagents) (prev as Work).items.push(call);
+      else
+        out.push({
+          kind: "work",
+          key: `subagents:${call.key}`,
+          items: [call],
+          subagents: true,
+          startedAt: call.at,
+        });
+      continue;
+    }
     if (
       folds.has(i) ||
       ["reasoning", "tool", "todo"].includes(row.kind) ||
@@ -1027,6 +1046,37 @@ export function groupWork<R extends { kind: string; at?: string }>(
       flush(row);
       out.push(row);
     }
+  }
+  flush();
+  return out;
+}
+
+/**
+ * A run of steps with each run of subagent calls in it as one `Work` of `subagents` (PLX-843), and
+ * the steps between as their own `Work`s, or alone when they're only notices.
+ */
+export function subagentRuns(items: readonly Item[]): (Item | Work)[] {
+  const out: (Item | Work)[] = [];
+  let run: Item[] = [];
+  let calls: Item[] = [];
+  const flush = () => {
+    if (calls.length > 0)
+      out.push({
+        kind: "work",
+        key: `subagents:${calls[0]!.key}`,
+        items: calls,
+        subagents: true,
+      });
+    else if (run.some((i) => i.kind !== "notice"))
+      out.push({ kind: "work", key: `steps:${run[0]!.key}`, items: run });
+    else out.push(...run);
+    run = [];
+    calls = [];
+  };
+  for (const item of items) {
+    const call = item.kind === "tool" && isSubagentTool(item.name);
+    if (call ? run.length > 0 : calls.length > 0) flush();
+    (call ? calls : run).push(item);
   }
   flush();
   return out;

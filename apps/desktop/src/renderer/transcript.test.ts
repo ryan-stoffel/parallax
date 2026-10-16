@@ -7,6 +7,7 @@ import {
   applyEvents,
   emptyTranscript,
   groupWork,
+  subagentRuns,
   rebuild,
   subagentRows,
   subagentState,
@@ -376,6 +377,23 @@ test("a turn's activity folds into one work row, leaving the closing answer out"
   expect(workedFor("2026-01-01T00:00:00Z", "2026-01-01T00:01:29Z")).toBe("Worked for 1m 29s");
   expect(workedFor("2026-01-01T00:00:00Z", "2026-01-01T00:00:12Z")).toBe("Worked for 12s");
   expect(workedFor("", "")).toBe("Worked briefly");
+});
+
+test("a turn's subagent calls leave its steps as one card, in its fold once it ends", () => {
+  const rows = [
+    { kind: "tool", key: "t1", callId: "1", name: "Bash" },
+    { kind: "tool", key: "a1", callId: "a1", name: "Agent" },
+    { kind: "tool", key: "a2", callId: "a2", name: "Task" },
+    { kind: "reasoning", key: "r", text: "Wait" },
+  ] as Item[];
+  expect(groupWork(rows).map((r) => r.key)).toEqual(["work:t1", "subagents:a1", "work:r"]);
+  // An ended turn folds them all, and its fold splits them out the same way.
+  const ended = groupWork([
+    ...rows,
+    { kind: "end", key: "e", outcome: { status: "completed" } } as Item,
+  ]);
+  expect(ended.map((r) => r.key)).toEqual(["work:t1", "e"]);
+  expect(subagentRuns(rows).map((r) => r.key)).toEqual(["steps:t1", "subagents:a1", "steps:r"]);
 });
 
 test("messages split work rows and stay in order; a mid-run notice folds, and a follow-up's time isn't work", () => {

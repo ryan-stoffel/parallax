@@ -22,8 +22,10 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ComponentType,
   type ReactNode,
   type RefObject,
+  type SVGProps,
 } from "react";
 
 import type { JsonValue } from "../protocol/generated/protocol";
@@ -41,7 +43,7 @@ import { clockOptions } from "./prefs";
 
 /** How the transcript names a tool (AgentChat's `describeTool`): its kind's icon, label, and target. */
 export interface ToolLook {
-  Icon: LucideIcon;
+  Icon: ComponentType<SVGProps<SVGSVGElement>>;
   label: string;
   detail?: string;
 }

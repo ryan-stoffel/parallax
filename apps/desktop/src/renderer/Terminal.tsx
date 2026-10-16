@@ -93,7 +93,10 @@ export function TerminalView({
       if (message.type === "replay") term.reset();
       term.write(message.data);
     });
-    term.onData((data) => window.parallax.terminalInput(id, data));
+    // What's typed before the shell starts waits for it: main drops input to a terminal it
+    // hasn't opened yet, and the shell opens only once the fonts load.
+    let typed: string[] | undefined = [];
+    term.onData((data) => (typed ? typed.push(data) : window.parallax.terminalInput(id, data)));
     term.onResize(({ cols, rows }) => window.parallax.resizeTerminal(id, cols, rows));
     const observer = new ResizeObserver(fitShown);
     observer.observe(element);
@@ -117,7 +120,13 @@ export function TerminalView({
       .then(() =>
         live ? window.parallax.openTerminal(id, opened.current, term.cols, term.rows) : undefined,
       )
-      .then((error) => live && (error ? ended(error) : began()));
+      .then((error) => {
+        if (!live) return;
+        if (error) return ended(error);
+        for (const data of typed ?? []) window.parallax.terminalInput(id, data);
+        typed = undefined;
+        began();
+      });
     term.focus();
 
     return () => {
