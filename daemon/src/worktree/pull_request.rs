@@ -117,6 +117,22 @@ impl WorktreeManager {
         parse_view(&viewed)
     }
 
+    /// Pull request `url`'s state alone, a lighter read than [`Self::view_pr`] for the merge
+    /// sweep (PLX-839).
+    ///
+    /// # Errors
+    ///
+    /// [`PrError`]: `gh` is missing, not signed in, or failed.
+    pub async fn pr_state(&self, url: &str) -> Result<PrState, PrError> {
+        let viewed = self
+            .gh(
+                &std::env::temp_dir(),
+                &["pr", "view", url, "--json=state", "--jq=.state"],
+            )
+            .await?;
+        Ok(pr_state(viewed.trim()))
+    }
+
     /// Pull request `url`'s unified diff, cut at a line's end at [`MAX_DIFF_BYTES`].
     ///
     /// # Errors
@@ -394,6 +410,16 @@ fn discussion(comments: Vec<Comment>, reviews: Vec<Review>) -> (Vec<PrComment>, 
 }
 
 /// `gh pr view --json`'s answer as a [`PullRequest`].
+/// `gh`'s name for a pull request's state as a [`PrState`].
+fn pr_state(state: &str) -> PrState {
+    match state {
+        "OPEN" => PrState::Open,
+        "CLOSED" => PrState::Closed,
+        "MERGED" => PrState::Merged,
+        _ => PrState::Unknown,
+    }
+}
+
 fn parse_view(json: &str) -> Result<PullRequest, PrError> {
     let viewed: Viewed = serde_json::from_str(json)
         .map_err(|error| PrError::Gh(format!("could not read gh pr view's answer: {error}")))?;
@@ -426,12 +452,7 @@ fn parse_view(json: &str) -> Result<PullRequest, PrError> {
             .collect::<Vec<_>>()
             .join("/"),
         url: viewed.url,
-        state: match viewed.state.as_str() {
-            "OPEN" => PrState::Open,
-            "CLOSED" => PrState::Closed,
-            "MERGED" => PrState::Merged,
-            _ => PrState::Unknown,
-        },
+        state: pr_state(&viewed.state),
         draft: viewed.is_draft,
         author: login(viewed.author),
         updated_at: viewed.updated_at,

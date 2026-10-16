@@ -1,21 +1,27 @@
 //! Linked pull requests end to end (PLX-318): an agent's `gh pr create` links what it prints,
-//! the link survives a restart, and `pr/view`, `pr/diff` (PLX-328), and `pr/act` reach only a
-//! linked one, through `open_pr`'s fake `gh`.
+//! the link survives a restart, `pr/view`, `pr/diff` (PLX-328), and `pr/act` reach only a
+//! linked one, and a merge through `pr/act` archives its thread (PLX-839), through `open_pr`'s
+//! fake `gh`.
+
+use std::time::{Duration, Instant};
 
 use parallax_protocol::jsonrpc::INVALID_PARAMS;
-use parallax_protocol::methods::{AgentList, AgentStart, PrAct, PrDiff, PrView};
+use parallax_protocol::methods::{
+    AgentList, AgentStart, PrAct, PrDiff, PrView, RepoAdd, ThreadList, ThreadStart,
+};
 use parallax_protocol::{
     AgentListParams, AgentStatus, ErrorKind, ParallaxEvent, PrActParams, PrAction, PrState,
-    PrViewParams, RunId,
+    PrViewParams, ProjectId, RepoAddParams, RepoId, RunId, ThreadListParams,
 };
 use plxd::backend::fake::Step;
 use plxd::backend::{Event, ToolStatus};
 use serde_json::json;
 
 use crate::agents::{
-    Conn, create, end_turn, fake, init, project_params, start_params, subscribe, until, updated_to,
+    Conn, create, end_turn, fake, init, project_params, real_repo, start_params, subscribe, until,
+    updated_to,
 };
-use crate::open_pr::{Tools, start};
+use crate::open_pr::{Tools, start, thread};
 use crate::support::{kind, temp_dir};
 
 const FIRST: &str = "https://github.com/me/app/pull/1";
@@ -230,5 +236,69 @@ async fn an_agent_s_gh_pr_create_links_its_pull_request_and_only_that_one_is_vie
     let host = host.restart(fake(Vec::new())).await;
     let mut client = host.client().await;
     assert_eq!(linked(&mut client).await, [FIRST, SECOND, SUBAGENT_S]);
+    host.server.stop().await;
+}
+
+#[tokio::test]
+async fn merging_with_pr_act_archives_the_thread_before_the_next_sweep() {
+    let tools = Tools::new();
+    let work = temp_dir();
+    let repo = real_repo(work.path());
+    let host = start(temp_dir(), opening(), &tools);
+    let mut client = host.client().await;
+    let entry = client
+        .call::<RepoAdd>(RepoAddParams {
+            id: RepoId::generate(),
+            path: repo.to_str().unwrap().to_owned(),
+        })
+        .await
+        .unwrap()
+        .repo;
+    subscribe(
+        &mut client,
+        ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap(),
+        0,
+    )
+    .await;
+    let start = thread(Some(entry.id));
+    let run_id = start.run_id;
+    client.call::<ThreadStart>(start).await.unwrap();
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    // Every linked pull request now reads as merged, after the thread's last message.
+    tools.state("MERGED");
+    tools.view(
+        &json!({
+            "number": 1, "title": "Add a README", "url": FIRST, "state": "MERGED",
+            "isDraft": false, "author": {"login": "me"}, "updatedAt": "2026-10-02T12:00:00Z",
+            "baseRefName": "main", "headRefName": "parallax/x", "changedFiles": 1,
+            "additions": 3, "deletions": 0, "body": "", "mergeStateStatus": "CLEAN",
+            "autoMergeRequest": null, "mergedAt": jiff::Timestamp::now().to_string()
+        })
+        .to_string(),
+    );
+    client
+        .call::<PrAct>(PrActParams {
+            run_id,
+            url: FIRST.to_owned(),
+            action: PrAction::Squash,
+        })
+        .await
+        .unwrap();
+    // The next timed sweep is a minute away.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !client
+        .call::<ThreadList>(ThreadListParams {})
+        .await
+        .unwrap()
+        .threads[0]
+        .archived
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the merge didn't archive the thread"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     host.server.stop().await;
 }

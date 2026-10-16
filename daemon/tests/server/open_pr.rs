@@ -27,10 +27,10 @@ const URL: &str = "https://github.com/example/app/pull/7";
 
 /// A folder that is plxd's whole `PATH`: the real git, and a fake `gh` that logs its arguments to
 /// `gh.log`, answers `pr list` with a fork's pull request from a branch of the same name, then the
-/// one `pr create` made, answers `pr view` with what [`Tools::view`] wrote, `pr diff` with a
-/// one-line diff, succeeds at `pr merge`,
-/// `pr ready`, and `pr close`, and fails as `gh-mode` says: `signed-out` (exit 4, as gh does) or
-/// `fail`.
+/// one `pr create` made, answers `pr view` with what [`Tools::view`] wrote, or for `--jq=.state`
+/// with what [`Tools::state`] wrote, else `OPEN`, `pr diff` with a one-line diff, succeeds at
+/// `pr merge`, `pr ready`, and `pr close`, and fails as `gh-mode` says: `signed-out` (exit 4, as gh
+/// does) or `fail`.
 pub(crate) struct Tools(TempDir);
 
 impl Tools {
@@ -59,7 +59,12 @@ case "$1 $2" in
     fi
     echo "[$list]" ;;
   'pr create') echo '{URL}' > "$dir/pr"; echo 'Creating pull request' >&2; echo '{URL}' ;;
-  'pr view') while IFS= read -r line; do printf '%s\n' "$line"; done < "$dir/view.json" ;;
+  'pr view')
+    case "$*" in
+      *--jq=.state*)
+        state=OPEN; [ -f "$dir/state" ] && read -r state < "$dir/state"; echo "$state" ;;
+      *) while IFS= read -r line; do printf '%s\n' "$line"; done < "$dir/view.json" ;;
+    esac ;;
   'pr diff') echo 'diff --git a/README.md b/README.md' ;;
   'pr merge' | 'pr ready' | 'pr close') ;;
   *) exit 1 ;;
@@ -91,6 +96,11 @@ esac
     /// What `gh pr view` prints.
     pub(crate) fn view(&self, json: &str) {
         fs::write(self.0.path().join("view.json"), format!("{json}\n")).unwrap();
+    }
+
+    /// What `gh pr view --jq=.state` prints.
+    pub(crate) fn state(&self, state: &str) {
+        fs::write(self.0.path().join("state"), format!("{state}\n")).unwrap();
     }
 
     pub(crate) fn mode(&self, mode: &str) {

@@ -30,10 +30,10 @@ use uuid::Uuid;
 
 use super::{convert, store, store_error};
 use crate::server::Daemon;
-use crate::worktree::RunFolder;
+use crate::worktree::{PrError, RunFolder};
 
-/// How often a sweep looks for merged pull requests. Each reads only the linked pull requests
-/// not yet known merged, of idle threads.
+/// How often a sweep looks for merged pull requests. Each reads only the state of the linked
+/// pull requests not yet known merged, of idle threads.
 const SWEEP_PERIOD: Duration = Duration::from_mins(1);
 
 /// Sweeps per check of a worktree kept from an earlier sweep's merge, so its `git status` runs
@@ -52,7 +52,7 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
             biased;
             () = stop.cancelled() => break,
             _ = interval.tick() => {}
-            () = daemon.merged.notified() => {}
+            () = daemon.merged.notified() => interval.reset(),
         }
         let recheck = count.is_multiple_of(RECHECK_EVERY);
         if recheck {
@@ -118,11 +118,7 @@ async fn sweep(
         if thread.archived && worktree.is_none() {
             continue;
         }
-        let fresh = run
-            .state
-            .pull_requests
-            .iter()
-            .any(|url| !known.contains_key(url));
+        let before = known.len();
         // Stopping cancels the reads, which can wait minutes on `gh`, but never a removal.
         let pulls = tokio::select! {
             biased;
@@ -132,6 +128,8 @@ async fn sweep(
         let Some(pulls) = pulls.filter(|pulls| merged(pulls)) else {
             continue;
         };
+        // This sweep read a merge for the first time.
+        let fresh = known.len() > before;
         let archived_now = !thread.archived && archive(daemon, thread.id, &pulls).await;
         let Some(worktree) = worktree
             .filter(|_| thread.archived || archived_now || thread.settled)
@@ -176,14 +174,8 @@ async fn read(daemon: &Daemon, run: &Run, known: &mut HashMap<String, Pull>) -> 
             pulls.push(pull.clone());
             continue;
         }
-        match daemon.agents.worktrees.view_pr(url).await {
+        match read_one(daemon, url).await {
             Ok(pull) => {
-                let pull = Pull {
-                    state: pull.state,
-                    merged_at: pull.merged_at,
-                    commits: commits(pull.commits),
-                    head: pull.head_branch,
-                };
                 if pull.state == PrState::Merged {
                     known.insert(url.clone(), pull.clone());
                 }
@@ -196,6 +188,27 @@ async fn read(daemon: &Daemon, run: &Run, known: &mut HashMap<String, Pull>) -> 
         }
     }
     Some(pulls)
+}
+
+/// Pull request `url`: its state alone, as every sweep reads it, and the rest only once merged.
+async fn read_one(daemon: &Daemon, url: &str) -> Result<Pull, PrError> {
+    let worktrees = &daemon.agents.worktrees;
+    let state = worktrees.pr_state(url).await?;
+    if state != PrState::Merged {
+        return Ok(Pull {
+            state,
+            merged_at: None,
+            commits: Vec::new(),
+            head: String::new(),
+        });
+    }
+    let pull = worktrees.view_pr(url).await?;
+    Ok(Pull {
+        state: pull.state,
+        merged_at: pull.merged_at,
+        commits: commits(pull.commits),
+        head: pull.head_branch,
+    })
 }
 
 /// Archives thread `id` the way the app's Archive does, when the newest of its merged `pulls`
