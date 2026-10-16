@@ -10,6 +10,7 @@
 //! `pr/watch` has plxd check one of a run's linked pull requests every two minutes and wake the
 //! run with a message when a check fails, the required checks pass, someone else comments, or the
 //! branch starts to conflict. `pr/unwatch` stops it, and `pr/watches` lists a run's watches.
+//! `pr/status` reads one pull request and says whether it is ready to merge.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -301,4 +302,84 @@ pub struct PrWatchesParams {
 pub struct PrWatchesResult {
     /// The URLs.
     pub urls: Vec<String>,
+}
+
+/// Result of `pr/status` (PLX-837): one read of a pull request, and whether it is ready to merge.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrStatusResult {
+    /// The pull request's URL.
+    pub url: String,
+    /// `OPEN`, `CLOSED`, or `MERGED`.
+    pub state: String,
+    /// Whether it is a draft.
+    pub draft: bool,
+    /// The head commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub head_sha: Option<String>,
+    /// The branch it merges into.
+    pub base_branch: String,
+    /// Commits on the base branch the head doesn't have. 0 once it isn't open.
+    pub behind_by: u64,
+    /// `MERGEABLE`, `CONFLICTING`, or `UNKNOWN` while GitHub works it out.
+    pub mergeable: String,
+    /// GitHub's `mergeStateStatus`, such as `CLEAN`, `BLOCKED`, or `BEHIND`.
+    pub merge_state: String,
+    /// `APPROVED`, `CHANGES_REQUESTED`, or `REVIEW_REQUIRED`, when the repository asks for
+    /// reviews.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub review_decision: Option<String>,
+    /// The head commit's failed checks.
+    pub failing: Vec<PrStatusCheck>,
+    /// The names of its checks still running or queued.
+    pub pending: Vec<String>,
+    /// The names of its checks that passed.
+    pub passed: Vec<String>,
+    /// Review threads nobody has resolved.
+    pub unresolved_threads: Vec<PrStatusThread>,
+    /// Whether plxd watches it for the run.
+    pub watching: bool,
+    /// Open, not a draft, no conflict, not behind, every check passed, no unresolved thread, and
+    /// no change request.
+    pub ready: bool,
+    /// Why it isn't ready, one line each. Empty when it is.
+    pub reasons: Vec<String>,
+}
+
+/// A failed check in a [`PrStatusResult`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrStatusCheck {
+    /// The check's name.
+    pub name: String,
+    /// How it failed, in lowercase: `failure`, `cancelled`, `timed out`, and so on.
+    pub how: String,
+    /// Whether branch protection requires it.
+    pub required: bool,
+    /// Its log or details page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url: Option<String>,
+}
+
+/// An unresolved review thread in a [`PrStatusResult`], by its first comment.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrStatusThread {
+    /// The file it is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub path: Option<String>,
+    /// Who wrote the comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub author: Option<String>,
+    /// The comment, on one line, at most 200 characters.
+    pub body: String,
+    /// The comment on GitHub.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url: Option<String>,
 }

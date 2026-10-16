@@ -166,5 +166,33 @@
     "jsonrpc": "2.0",
     "id": 8,
     "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/670", "watching": false, "wasWatching": true }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "method": "pr/status",
+    "params": { "runId": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e8f", "url": "https://github.com/ryan-stoffel/parallax/pull/670" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "result": {
+      "url": "https://github.com/ryan-stoffel/parallax/pull/670",
+      "state": "OPEN",
+      "draft": false,
+      "headSha": "17e2526c30dea6dd42eca5c642dc1789f99504c2",
+      "baseBranch": "develop",
+      "behindBy": 2,
+      "mergeable": "MERGEABLE",
+      "mergeState": "BEHIND",
+      "reviewDecision": "CHANGES_REQUESTED",
+      "failing": [{ "name": "check-rust", "how": "failure", "required": true, "url": "https://github.com/ryan-stoffel/parallax/actions/runs/1/job/2" }],
+      "pending": ["e2e-app"],
+      "passed": ["check-app", "lint"],
+      "unresolvedThreads": [{ "path": "daemon/src/pr_watch.rs", "author": "reviewer", "body": "This read needs a timeout.", "url": "https://github.com/ryan-stoffel/parallax/pull/670#discussion_r1" }],
+      "watching": true,
+      "ready": false,
+      "reasons": ["2 commits behind develop", "failing: check-rust", "pending: e2e-app", "1 unresolved review thread", "changes requested"]
+    }
   }
 ]

@@ -1,8 +1,10 @@
 use jiff::{SignedDuration, Timestamp};
 
 use super::{
-    Change, Check, CheckState, Detail, Remark, WAKE_LIMIT, Watch, evaluate, message, parse, snippet,
+    Change, Check, CheckState, Detail, Remark, WAKE_LIMIT, Watch, evaluate, message, parse,
+    snippet, verdict,
 };
+use parallax_protocol::{PrStatusCheck, PrStatusThread};
 
 fn start() -> Timestamp {
     "2026-10-09T10:00:00Z".parse().unwrap()
@@ -39,6 +41,7 @@ fn open(checks: Vec<Check>, remarks: Vec<Remark>, mergeable: &str) -> Detail {
         viewer: Some("agent-bot".to_owned()),
         author: Some("ryan".to_owned()),
         remarks,
+        ..Detail::default()
     }
 }
 
@@ -206,7 +209,8 @@ fn githubs_answer_reads_into_a_detail() {
       "viewer": {"login": "agent-bot"},
       "repository": {"pullRequest": {
         "state": "OPEN", "author": {"login": "ryan"}, "baseRefName": "develop",
-        "headRefOid": "abc1234def", "mergeable": "CONFLICTING",
+        "headRefOid": "abc1234def", "mergeable": "CONFLICTING", "isDraft": false,
+        "mergeStateStatus": "DIRTY", "reviewDecision": "CHANGES_REQUESTED",
         "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"nodes": [
           {"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "FAILURE",
            "detailsUrl": "https://ci/1", "isRequired": true},
@@ -224,10 +228,16 @@ fn githubs_answer_reads_into_a_detail() {
           {"id": "r2", "author": {"login": "reviewer"}, "body": "", "state": "CHANGES_REQUESTED",
            "submittedAt": "2026-10-09T10:07:00Z", "lastEditedAt": null, "url": null}
         ]},
-        "reviewThreads": {"nodes": [{"path": "src/main.rs", "comments": {"nodes": [
-          {"id": "t1", "author": null, "body": "nit", "createdAt": "2026-10-09T10:04:00Z",
-           "lastEditedAt": "2026-10-09T10:08:00Z", "url": null}
-        ]}}]}
+        "reviewThreads": {"nodes": [
+          {"path": "src/main.rs", "isResolved": false, "comments": {"nodes": [
+            {"id": "t1", "author": null, "body": "nit", "createdAt": "2026-10-09T10:04:00Z",
+             "lastEditedAt": "2026-10-09T10:08:00Z", "url": null}
+          ]}},
+          {"path": "src/lib.rs", "isResolved": true, "comments": {"nodes": [
+            {"id": "t2", "author": {"login": "reviewer"}, "body": "done", "createdAt":
+             "2026-10-09T10:03:00Z", "lastEditedAt": null, "url": null}
+          ]}}
+        ]}
       }}
     }}"#;
     let detail = parse(answer).unwrap();
@@ -254,10 +264,22 @@ fn githubs_answer_reads_into_a_detail() {
         .collect();
     assert_eq!(
         ids,
-        ["c1", "r2", "t1"],
+        ["t2", "c1", "r2", "t1"],
         "oldest first; an empty COMMENTED review is skipped"
     );
-    assert_eq!(detail.remarks[2].path.as_deref(), Some("src/main.rs"));
+    assert_eq!(detail.remarks[3].path.as_deref(), Some("src/main.rs"));
+    assert_eq!(detail.merge_state, "DIRTY");
+    assert_eq!(detail.review_decision.as_deref(), Some("CHANGES_REQUESTED"));
+    assert_eq!(
+        detail.unresolved,
+        [PrStatusThread {
+            path: Some("src/main.rs".to_owned()),
+            author: None,
+            body: "nit".to_owned(),
+            url: None,
+        }],
+        "a resolved thread is left out"
+    );
 
     let report = evaluate(&Watch::new(start()), &detail);
     let text = message("https://github.com/me/app/pull/1", &detail, &report);
@@ -278,6 +300,83 @@ fn githubs_answer_reads_into_a_detail() {
     let error =
         parse(r#"{"data": null, "errors": [{"message": "API rate limit exceeded"}]}"#).unwrap_err();
     assert!(error.to_string().contains("rate limit"));
+}
+
+#[test]
+fn a_pull_request_is_ready_only_when_nothing_holds_it_back() {
+    let url = "https://github.com/me/app/pull/1".to_owned();
+    let green = vec![check("lint", CheckState::Passed, true)];
+    let ready = verdict(
+        url.clone(),
+        open(green.clone(), Vec::new(), "MERGEABLE"),
+        0,
+        true,
+    );
+    assert!(ready.ready, "{:?}", ready.reasons);
+    assert!(ready.watching);
+    assert_eq!(ready.passed, ["lint"]);
+
+    let mut held = open(
+        vec![
+            check("test", CheckState::Pending, false),
+            Check {
+                url: Some("https://ci/1".to_owned()),
+                ..check("lint", CheckState::Failed("timed out"), true)
+            },
+        ],
+        Vec::new(),
+        "CONFLICTING",
+    );
+    held.draft = true;
+    held.review_decision = Some("CHANGES_REQUESTED".to_owned());
+    held.unresolved = vec![PrStatusThread {
+        path: None,
+        author: None,
+        body: "nit".to_owned(),
+        url: None,
+    }];
+    let held = verdict(url.clone(), held, 1, false);
+    assert!(!held.ready);
+    assert_eq!(
+        held.reasons,
+        [
+            "it is a draft",
+            "it conflicts with develop",
+            "1 commit behind develop",
+            "failing: lint",
+            "pending: test",
+            "1 unresolved review thread",
+            "changes requested",
+        ]
+    );
+    assert_eq!(
+        held.failing,
+        [PrStatusCheck {
+            name: "lint".to_owned(),
+            how: "timed out".to_owned(),
+            required: true,
+            url: Some("https://ci/1".to_owned()),
+        }]
+    );
+
+    // Right after a push the head has no checks yet: that is not green.
+    let fresh = verdict(
+        url.clone(),
+        open(Vec::new(), Vec::new(), "UNKNOWN"),
+        0,
+        false,
+    );
+    assert_eq!(
+        fresh.reasons,
+        [
+            "GitHub is still working out whether it conflicts",
+            "no checks have reported on its head yet",
+        ]
+    );
+
+    let mut merged = open(green, Vec::new(), "UNKNOWN");
+    merged.state = "MERGED".to_owned();
+    assert_eq!(verdict(url, merged, 0, false).reasons, ["it is merged"]);
 }
 
 #[test]

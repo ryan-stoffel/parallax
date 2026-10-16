@@ -198,9 +198,10 @@ pub use review::{
     AgentMerge, AgentMergeKind, AgentOpenPrParams, AgentOpenPrResult, AgentRequestChangesParams,
 };
 pub use schedule::{
-    PrWatchResult, PrWatchesParams, PrWatchesResult, Schedule, ScheduleDeleteResult,
-    ScheduleIdParams, ScheduleListParams, ScheduleListResult, ScheduleRunStatus,
-    ScheduleSaveParams, ScheduleWebhook, ScheduledTask, SignatureEncoding, WebhookSignature,
+    PrStatusCheck, PrStatusResult, PrStatusThread, PrWatchResult, PrWatchesParams, PrWatchesResult,
+    Schedule, ScheduleDeleteResult, ScheduleIdParams, ScheduleListParams, ScheduleListResult,
+    ScheduleRunStatus, ScheduleSaveParams, ScheduleWebhook, ScheduledTask, SignatureEncoding,
+    WebhookSignature,
 };
 pub use scripts::{
     RepoSaveScriptsParams, RepoScript, RepoScriptsParams, RepoScriptsResult, ScriptStatus,

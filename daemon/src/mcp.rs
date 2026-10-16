@@ -198,9 +198,19 @@ async fn answer(binding: &impl Tools, request: &Request) -> Result<Value, ErrorO
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": SERVER, "version": crate::version()},
             });
-            // The CLI puts these in the model's instructions, so documents get shown unasked.
-            if binding.names().contains(&"present_files") {
-                answer["instructions"] = files::INSTRUCTIONS.into();
+            // The CLI puts these in the model's instructions, so documents get shown unasked and
+            // pull requests are read and waited on through plxd.
+            let names = binding.names();
+            let instructions: Vec<&str> = [
+                ("present_files", files::INSTRUCTIONS),
+                ("pull_request_status", triggers::INSTRUCTIONS),
+            ]
+            .into_iter()
+            .filter(|(tool, _)| names.contains(tool))
+            .map(|(_, text)| text)
+            .collect();
+            if !instructions.is_empty() {
+                answer["instructions"] = instructions.join("\n\n").into();
             }
             Ok(answer)
         }

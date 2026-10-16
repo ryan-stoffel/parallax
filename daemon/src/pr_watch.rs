@@ -11,6 +11,10 @@
 //! an unwatch during the read wins. The wake is a `thread.wake` effect, sent with `agent/send`
 //! queued behind the run's turn ([`crate::schedules::deliver`]).
 //!
+//! [`status`], `pr/status` (PLX-837), reads a pull request the same way, plus how far its head is
+//! behind its base, and says whether it is ready to merge, so agents never read it with `gh`
+//! themselves.
+//!
 //! A watch ends when its pull request merges or closes, when its thread settles or is archived,
 //! after [`WAKE_LIMIT`] comment-only wakes in a row, or after [`READ_FAILURE_LIMIT`] failed reads
 //! in a row; a rate limit only delays it. A watch goes with its run.
@@ -22,8 +26,8 @@ use std::time::Duration;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    ParallaxEvent, PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult, ProjectId, RunId,
-    TurnId,
+    ParallaxEvent, PrStatusCheck, PrStatusResult, PrStatusThread, PrViewParams, PrWatchResult,
+    PrWatchesParams, PrWatchesResult, ProjectId, RunId, TurnId,
 };
 use parallax_store::Store;
 use serde::{Deserialize, Serialize};
@@ -52,9 +56,9 @@ const WAKE_LIMIT: u32 = 10;
 const LISTED: usize = 10;
 const SNIPPET: usize = 200;
 
-/// One `gh api graphql` read: the viewer, and the pull request's state, head, checks with
-/// whether each is required, mergeability, and its newest comments, reviews, and review-thread
-/// comments.
+/// One `gh api graphql` read: the viewer, and the pull request's state, draft, head, checks with
+/// whether each is required, mergeability, merge state, review decision, and its newest comments,
+/// reviews, and review threads with whether each is resolved.
 // ponytail: reads the newest 50 comments, reviews, and threads (20 comments each) per pass;
 // page them if a pull request ever gets more than that between two passes.
 const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
@@ -62,6 +66,9 @@ const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       state
+      isDraft
+      mergeStateStatus
+      reviewDecision
       author { login }
       baseRefName
       headRefOid
@@ -73,11 +80,18 @@ const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
       } } } } } }
       comments(last: 50) { nodes { id author { login } body createdAt lastEditedAt url } }
       reviews(last: 50) { nodes { id author { login } body state submittedAt lastEditedAt url } }
-      reviewThreads(last: 50) { nodes { path comments(last: 20) { nodes {
+      reviewThreads(last: 50) { nodes { path isResolved comments(last: 20) { nodes {
         id author { login } body createdAt lastEditedAt url
       } } } }
     }
   }
+}";
+
+/// How far `$head` is behind `$base`, for [`status`].
+const BEHIND: &str = "query($owner: String!, $name: String!, $base: String!, $head: String!) {
+  repository(owner: $owner, name: $name) { ref(qualifiedName: $base) { compare(headRef: $head) {
+    behindBy
+  } } }
 }";
 
 /// The sweep's wake-up when the first watch starts, and each pull request's failed reads in a
@@ -124,11 +138,16 @@ impl Watch {
 #[derive(Debug, Default)]
 struct Detail {
     state: String,
+    draft: bool,
     head_sha: Option<String>,
     base_branch: String,
     checks: Vec<Check>,
     /// `MERGEABLE`, `CONFLICTING`, or `UNKNOWN` while GitHub works it out.
     mergeable: String,
+    merge_state: String,
+    review_decision: Option<String>,
+    /// Review threads nobody has resolved, by their first comment.
+    unresolved: Vec<PrStatusThread>,
     /// The account plxd reads as, whose own remarks never wake.
     viewer: Option<String>,
     author: Option<String>,
@@ -242,6 +261,121 @@ pub(crate) async fn watch(
         watching: true,
         was_watching,
     })
+}
+
+/// `pr/status`: reads `url` as a pass does, plus how far its head is behind its base, and judges
+/// it with [`verdict`]. The pull request needn't be linked.
+pub(crate) async fn status(
+    daemon: &Daemon,
+    params: PrViewParams,
+) -> Result<PrStatusResult, ErrorObject> {
+    let PrViewParams { run_id, url } = params;
+    let unreadable = |error: PrError| {
+        ErrorObject::invalid_params(format!("could not read the pull request: {error}"))
+    };
+    let detail = read(daemon, &url).await.map_err(unreadable)?;
+    let behind_by = match (detail.state.as_str(), &detail.head_sha) {
+        ("OPEN", Some(head)) => behind(daemon, &url, &detail.base_branch, head)
+            .await
+            .map_err(unreadable)?,
+        _ => 0,
+    };
+    let id = Uuid::from(run_id);
+    let watched = daemon
+        .reader
+        .run(&CancellationToken::new(), move |db| urls(db, id))
+        .await?;
+    let watching = watched.contains(&url);
+    Ok(verdict(url, detail, behind_by, watching))
+}
+
+/// Judges a pull request as `pr_status.py` does: ready when it is open, not a draft, doesn't
+/// conflict, isn't behind its base, every check on its head passed, no review thread is
+/// unresolved, and no change is requested. Each miss is a reason.
+fn verdict(url: String, detail: Detail, behind_by: u64, watching: bool) -> PrStatusResult {
+    let mut failing = Vec::new();
+    let mut pending = Vec::new();
+    let mut passed = Vec::new();
+    for check in detail.checks {
+        match check.state {
+            CheckState::Passed => passed.push(check.name),
+            CheckState::Pending => pending.push(check.name),
+            CheckState::Failed(how) => failing.push(PrStatusCheck {
+                name: check.name,
+                how: how.to_owned(),
+                required: check.required,
+                url: check.url,
+            }),
+        }
+    }
+    failing.sort_by(|a, b| a.name.cmp(&b.name));
+    pending.sort();
+    passed.sort();
+    let open = detail.state == "OPEN";
+    let base = &detail.base_branch;
+    let plural = |count: usize, one: &str, many: &str| {
+        format!("{count} {}", if count == 1 { one } else { many })
+    };
+    let mut reasons = Vec::new();
+    if !open {
+        reasons.push(format!("it is {}", detail.state.to_lowercase()));
+    }
+    if detail.draft {
+        reasons.push("it is a draft".to_owned());
+    }
+    match detail.mergeable.as_str() {
+        "CONFLICTING" if open => reasons.push(format!("it conflicts with {base}")),
+        "UNKNOWN" if open => {
+            reasons.push("GitHub is still working out whether it conflicts".to_owned());
+        }
+        _ => {}
+    }
+    if behind_by > 0 {
+        let count = usize::try_from(behind_by).unwrap_or(usize::MAX);
+        reasons.push(format!(
+            "{} behind {base}",
+            plural(count, "commit", "commits")
+        ));
+    }
+    if failing.is_empty() && pending.is_empty() && passed.is_empty() {
+        reasons.push("no checks have reported on its head yet".to_owned());
+    }
+    if !failing.is_empty() {
+        let names: Vec<&str> = failing.iter().map(|check| check.name.as_str()).collect();
+        reasons.push(format!("failing: {}", names.join(", ")));
+    }
+    if !pending.is_empty() {
+        reasons.push(format!("pending: {}", pending.join(", ")));
+    }
+    if !detail.unresolved.is_empty() {
+        let threads = plural(
+            detail.unresolved.len(),
+            "unresolved review thread",
+            "unresolved review threads",
+        );
+        reasons.push(threads);
+    }
+    if detail.review_decision.as_deref() == Some("CHANGES_REQUESTED") {
+        reasons.push("changes requested".to_owned());
+    }
+    PrStatusResult {
+        url,
+        state: detail.state,
+        draft: detail.draft,
+        head_sha: detail.head_sha,
+        base_branch: detail.base_branch,
+        behind_by,
+        mergeable: detail.mergeable,
+        merge_state: detail.merge_state,
+        review_decision: detail.review_decision,
+        failing,
+        pending,
+        passed,
+        unresolved_threads: detail.unresolved,
+        watching,
+        ready: reasons.is_empty(),
+        reasons,
+    }
 }
 
 /// `pr/unwatch`: stops watching; the pull request stays linked.
@@ -797,25 +931,62 @@ fn snippet(body: &str) -> String {
 async fn read(daemon: &Daemon, url: &str) -> Result<Detail, PrError> {
     let (owner, name, number) = parts(url)
         .ok_or_else(|| PrError::Gh(format!("{url:?} is not a GitHub pull request URL")))?;
-    let args = [
-        "api".to_owned(),
-        "graphql".to_owned(),
-        "-f".to_owned(),
-        format!("query={QUERY}"),
-        "-f".to_owned(),
-        format!("owner={owner}"),
-        "-f".to_owned(),
-        format!("name={name}"),
-        "-F".to_owned(),
-        format!("number={number}"),
-    ];
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let answer = daemon
+    let answer = graphql(
+        daemon,
+        QUERY,
+        &[
+            ("-f", format!("owner={owner}")),
+            ("-f", format!("name={name}")),
+            ("-F", format!("number={number}")),
+        ],
+    )
+    .await?;
+    parse(&answer)
+}
+
+/// How many commits `base` has that `head` doesn't, in `url`'s repository.
+async fn behind(daemon: &Daemon, url: &str, base: &str, head: &str) -> Result<u64, PrError> {
+    let (owner, name, _) = parts(url)
+        .ok_or_else(|| PrError::Gh(format!("{url:?} is not a GitHub pull request URL")))?;
+    let answer = graphql(
+        daemon,
+        BEHIND,
+        &[
+            ("-f", format!("owner={owner}")),
+            ("-f", format!("name={name}")),
+            ("-f", format!("base=refs/heads/{base}")),
+            ("-f", format!("head={head}")),
+        ],
+    )
+    .await?;
+    let answer: serde_json::Value = serde_json::from_str(&answer)
+        .map_err(|error| PrError::Gh(format!("could not read GitHub's answer: {error}")))?;
+    if let Some(message) = answer["errors"][0]["message"].as_str() {
+        return Err(PrError::Gh(message.to_owned()));
+    }
+    // A base branch that is gone answers `ref: null`, which must not read as up to date.
+    answer["data"]["repository"]["ref"]["compare"]["behindBy"]
+        .as_u64()
+        .ok_or_else(|| PrError::Gh(format!("GitHub can't compare {head} with {base}")))
+}
+
+/// Runs `gh api graphql` with `query` and `fields`, each a flag (`-f` for text, `-F` for a
+/// number) and its `key=value`, in plxd's temp folder.
+async fn graphql(
+    daemon: &Daemon,
+    query: &str,
+    fields: &[(&str, String)],
+) -> Result<String, PrError> {
+    let query = format!("query={query}");
+    let mut args = vec!["api", "graphql", "-f", query.as_str()];
+    for (flag, field) in fields {
+        args.extend([*flag, field.as_str()]);
+    }
+    daemon
         .agents
         .worktrees()
         .gh(&std::env::temp_dir(), &args)
-        .await?;
-    parse(&answer)
+        .await
 }
 
 /// `https://github.com/<owner>/<name>/pull/<number>`'s parts.
@@ -869,8 +1040,19 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
         }
         remark(review, None, Some(state))
     }));
+    let mut unresolved = Vec::new();
     for thread in pr.review_threads.nodes.into_iter().flatten() {
         let path = thread.path;
+        if !thread.is_resolved
+            && let Some(first) = thread.comments.nodes.iter().flatten().next()
+        {
+            unresolved.push(PrStatusThread {
+                path: path.clone(),
+                author: first.author.as_ref().map(|author| author.login.clone()),
+                body: snippet(&first.body),
+                url: first.url.clone(),
+            });
+        }
         remarks.extend(
             thread
                 .comments
@@ -883,10 +1065,14 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
     remarks.sort_by_key(|remark| remark.at);
     Ok(Detail {
         state: pr.state,
+        draft: pr.is_draft,
         head_sha: pr.head_ref_oid,
         base_branch: pr.base_ref_name,
         checks,
         mergeable: pr.mergeable,
+        merge_state: pr.merge_state_status,
+        review_decision: pr.review_decision,
+        unresolved,
         viewer: data.viewer.map(|viewer| viewer.login),
         author: pr.author.map(|author| author.login),
         remarks,
@@ -963,6 +1149,11 @@ struct Repository {
 #[serde(rename_all = "camelCase")]
 struct PullRequest {
     state: String,
+    #[serde(default)]
+    is_draft: bool,
+    #[serde(default)]
+    merge_state_status: String,
+    review_decision: Option<String>,
     author: Option<Login>,
     base_ref_name: String,
     head_ref_oid: Option<String>,
@@ -1031,8 +1222,11 @@ struct Comment {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Thread {
     path: Option<String>,
+    #[serde(default)]
+    is_resolved: bool,
     comments: Nodes<Comment>,
 }
 
