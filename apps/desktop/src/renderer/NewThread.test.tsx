@@ -355,6 +355,8 @@ test("the link under the heading switches New Thread to No Repo, showing its sho
   act(() => link.click());
   expect(heading()).toBe("What should we work on without a repo?");
   expect(button("or start without a repo⇧⌘N")).toBeUndefined();
+  // No repo means no worktree or checkout to pick, so no run target bar.
+  expect(document.body.textContent).not.toContain("New worktree");
 });
 
 test("a Space's new thread has no start-without-a-repo link, run target bar, or details", async () => {
@@ -846,7 +848,7 @@ describe("the ref picker", () => {
   });
 });
 
-test("Local checkout can't be picked without a repo, or from a plxd that would make a worktree anyway", async () => {
+test("Local checkout can't be picked from a plxd that would make a worktree anyway, and No Repo hides it", async () => {
   const checkoutOption = () =>
     [
       ...document.querySelectorAll<HTMLButtonElement>(
@@ -863,9 +865,8 @@ test("Local checkout can't be picked without a repo, or from a plxd that would m
   expect(checkoutOption().disabled).toBe(false);
   await act(async () => checkoutOption().click());
   await choose("Repository", "No Repo");
-  expect(checkoutOption().disabled).toBe(true);
-  expect(document.body.textContent).toContain("Local checkout needs a repo.");
-  expect(control("Runs on: This Mac, New worktree")).not.toBeNull();
+  expect(control("Runs on: This Mac, Local checkout")).toBeNull();
+  expect(document.body.textContent).not.toContain("Local checkout");
 });
 
 test("a thread can start with an image alone, titled Image, and nothing to name it by", async () => {
