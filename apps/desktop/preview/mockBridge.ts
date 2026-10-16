@@ -58,6 +58,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "agentWait",
     "agents",
     "approvals",
+    "areas",
     "autoResume",
     "checkpoints",
     "checks",
@@ -808,15 +809,56 @@ const handlers: { [M in Method]?: Handler<M> } = {
     const thread = db.threads.find((t) => t.id === p.runId);
     db.threads = db.threads.filter((t) => t.id !== p.runId);
     if (thread) emit({ kind: "thread.deleted", runId: p.runId, repo: thread.repo });
+    if (db.areas.some((a) => a.threads.includes(p.runId))) {
+      for (const a of db.areas) a.threads = a.threads.filter((id) => id !== p.runId);
+      emit({ kind: "areas.changed", areas: db.areas });
+    }
     return {};
   },
   "thread/search": (p) => {
     const q = p.query.toLowerCase();
-    return {
-      threads: db.threads.filter(
-        (t) => t.title?.toLowerCase().includes(q) || runOf(t.id)?.prompt.toLowerCase().includes(q),
-      ),
+    const snippets: Record<string, string> = {};
+    const threads = db.threads.filter((t) => {
+      const prompt = runOf(t.id)?.prompt ?? "";
+      const at = prompt.toLowerCase().indexOf(q);
+      if (at >= 0)
+        snippets[t.id] = (at > 20 ? "…" : "") + prompt.slice(Math.max(0, at - 20), at + 100);
+      return t.title?.toLowerCase().includes(q) || at >= 0;
+    });
+    return { threads, snippets };
+  },
+
+  // Areas (PLX-789): every change sends the whole list again, as plxd does.
+  "area/create": (p) => {
+    const found = db.areas.find((a) => a.id === p.id);
+    if (found) return { area: found };
+    const listed = (id: string) => db.threads.some((t) => t.id === id && !t.parent);
+    const area = {
+      id: p.id,
+      name: p.name.trim(),
+      color: p.color,
+      threads: p.threads.filter(listed),
+      projects: p.projects.filter((id) => db.projects.some((x) => x.id === id)),
     };
+    db.areas.push(area);
+    emit({ kind: "areas.changed", areas: db.areas });
+    return { area };
+  },
+  "area/update": (p) => {
+    const area = db.areas.find((a) => a.id === p.area);
+    if (!area) return fail("no such area", "areaNotFound");
+    if (p.name !== undefined) area.name = p.name.trim();
+    if (p.color !== undefined) area.color = p.color;
+    if (p.threads) area.threads = [...new Set(p.threads)];
+    if (p.projects) area.projects = [...new Set(p.projects)];
+    emit({ kind: "areas.changed", areas: db.areas });
+    return { area };
+  },
+  "area/delete": (p) => {
+    if (!db.areas.some((a) => a.id === p.area)) return {};
+    db.areas = db.areas.filter((a) => a.id !== p.area);
+    emit({ kind: "areas.changed", areas: db.areas });
+    return {};
   },
 
   // Every computer has the same folders in the preview.
@@ -1699,6 +1741,7 @@ export const mockBridge: ParallaxBridge = {
         projects: hostId === LOCAL ? db.projects : [],
         repos: known ? db.repos : [],
         threads: known ? db.threads.filter((t) => own(t.id)) : [],
+        areas: hostId === LOCAL ? db.areas : [],
         runs,
         requests: waiting(runs.map((r) => r.id)),
         waiting: runs.flatMap((r) =>

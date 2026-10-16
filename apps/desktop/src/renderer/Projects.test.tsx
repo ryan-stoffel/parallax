@@ -24,7 +24,8 @@ import type {
   Thread,
 } from "../protocol/generated/protocol";
 import { App } from "./App";
-import { collapsedProjects, collapsedThreads } from "./Sidebar";
+import { scopeStore } from "./areas";
+import { sectionsStore } from "./Sidebar";
 import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
 import { fakeWatch } from "./fakeWatch";
 
@@ -95,8 +96,8 @@ beforeEach(() => {
   request.mockClear();
   localStorage.clear();
   sidebarPrefs.set(sidebarDefaults);
-  collapsedProjects.set(false);
-  collapsedThreads.set(false);
+  sectionsStore.set({});
+  scopeStore.set("all");
   popoverSources = [];
   listeners = new Set();
   capabilities = {};
@@ -2313,7 +2314,7 @@ test("Archived lists 25 threads, Show more reveals the next page, and the summar
   sidebarPrefs.set({ ...sidebarDefaults, pageArchived: false });
   act(() => unmount());
   await renderApp();
-  await click(drawer("Archived")!.querySelector("summary"));
+  // The drawer stays open, as this scope left it (PLX-789).
   expect(drawerTitles("Archived")).toHaveLength(60);
   expect(
     [...drawer("Archived")!.querySelectorAll("button")].some((b) =>
@@ -2537,7 +2538,7 @@ test("search, the repo filter, and Mod+number cover both sections, and a collaps
   expect(sidebarTitles()).toEqual(["photon", "ember"]);
   await click(repoChoice("parallax"));
   expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
-  await click(repoChoice("All repos"));
+  await click(repoChoice("All threads"));
 
   await keyDown({ key: "Meta", metaKey: true });
   expect(["photon", "ember", "Fix the flaky test"].map(statusOf)).toEqual(["⌘1", "⌘2", "⌘3"]);
@@ -2988,15 +2989,58 @@ test("with spaces, a Space's row in the Repos filter renames and deletes it, and
   expect(filter().textContent).toContain("Notes");
 
   // Filtered to the Space, deleting it shows every repo again.
-  const trigger = () => document.querySelector('#sidebar [aria-label^="Repos:"]')!;
+  const trigger = () => document.querySelector('#sidebar [aria-label^="Showing "]')!;
   await click(
     [...filter().querySelectorAll('[role="menuitemradio"]')].find((b) => b.textContent === "Notes"),
   );
-  expect(trigger().getAttribute("aria-label")).toBe("Repos: Notes");
+  expect(trigger().getAttribute("aria-label")).toBe("Showing Notes");
   await click(press("Delete Notes"));
   await submit(spaceDialog("Delete Notes"));
   expect(calls("space/delete")).toEqual([{ space: "s1" }]);
   expect(filter().textContent).not.toContain("Notes");
-  expect(trigger().getAttribute("aria-label")).toBe("Repos: All repos");
+  expect(trigger().getAttribute("aria-label")).toBe("Showing All threads");
   expect(trigger().getAttribute("aria-pressed")).toBe("false");
+});
+
+test("⌥ and a digit opens an area, but not while typing, where it types a character (PLX-789)", async () => {
+  capabilities = { areas: {} };
+  withThread();
+  const launch = {
+    id: "a-launch",
+    name: "Launch",
+    color: "violet",
+    threads: [flaky.id],
+    projects: [],
+  };
+  answers["thread/list"] = () => ({
+    result: { repos: [parallax], threads: [flaky], areas: [launch], seq: 7 },
+  });
+  await renderApp();
+  const shown = () =>
+    document.querySelector('#sidebar [aria-label^="Showing "]')!.getAttribute("aria-label");
+  const search = document.querySelector<HTMLInputElement>('#sidebar input[type="search"]')!;
+  await act(
+    async () =>
+      void search.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "¡", code: "Digit1", altKey: true, bubbles: true }),
+      ),
+  );
+  expect(shown()).toBe("Showing All threads");
+  await keyDown({ key: "¡", code: "Digit1", altKey: true });
+  expect(shown()).toBe("Showing Launch");
+  expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
+  await keyDown({ key: "º", code: "Digit0", altKey: true });
+  expect(shown()).toBe("Showing All threads");
+});
+
+test("on a host without pins or titles, P and R on a row do nothing (PLX-789)", async () => {
+  withThread();
+  await renderApp();
+  const row = document.querySelector<HTMLElement>(`#sidebar [data-row$="/${flaky.id}"]`)!;
+  act(() => row.focus());
+  press("p");
+  press("r");
+  await settle();
+  expect(calls("thread/update")).toEqual([]);
+  expect(document.querySelector('input[aria-label="Thread name"]')).toBeNull();
 });
