@@ -1,6 +1,6 @@
 //! What `host/update` decides on every OS (PLX-700, PLX-825): version order, asset names, where an
-//! update goes, a copy that isn't older, and Windows' rename-aside. Nothing here downloads or
-//! restarts anything. `install_tests` installs from fake releases on Unix.
+//! update goes, a copy that isn't older, Windows' rename-aside, and the handover's route. Nothing
+//! here downloads or restarts anything. `install_tests` installs from fake releases on Unix.
 
 use std::cmp::Ordering;
 use std::fs;
@@ -9,11 +9,12 @@ use std::path::{Path, PathBuf};
 use parallax_protocol::HostUpdateRestart;
 
 use super::{
-    ASIDE, PLXD, Placement, SelfUpdate, asset_name, compare, move_in, not_older, parse_version,
-    placement, remove_aside, set_aside,
+    ASIDE, PLXD, Placement, Route, SelfUpdate, asset_name, compare, move_in, not_older,
+    parse_version, placement, remove_aside, route, set_aside,
 };
 use crate::backend::process::{Environment, Launcher};
 use crate::paths::DataDir;
+use crate::service::ServiceState;
 
 const NEW: &str = "2610.10912.13045-nightly";
 
@@ -215,5 +216,43 @@ fn a_failed_move_in_puts_the_old_plxd_back() {
     assert_eq!(
         fs::read_to_string(dir.path().join(ASIDE)).unwrap(),
         "running"
+    );
+}
+
+/// On Windows, only a running logon task takes over: Task Scheduler starts nothing while nobody
+/// is logged on, so plxd starts the new `serve` itself (PLX-825). macOS and Linux take over
+/// through any installed service, and exit for a service manager that runs them.
+#[test]
+fn a_handover_goes_through_the_service_only_when_it_can_take_over() {
+    let installed = |state| Ok((true, state));
+    let running = ServiceState::Running(None);
+    let unreadable = || Err("couldn't ask".to_owned());
+
+    assert_eq!(route(true, installed(running), false), Route::Replace);
+    assert_eq!(
+        route(true, installed(ServiceState::Loaded), false),
+        Route::NoService
+    );
+    assert_eq!(route(true, unreadable(), false), Route::NoService);
+    assert_eq!(
+        route(true, Ok((false, ServiceState::NotLoaded)), false),
+        Route::NoService
+    );
+
+    for state in [running, ServiceState::Loaded, ServiceState::NotLoaded] {
+        assert_eq!(route(false, installed(state), false), Route::Replace);
+    }
+    assert_eq!(
+        route(false, Ok((false, ServiceState::NotLoaded)), false),
+        Route::NoService
+    );
+    assert_eq!(route(false, unreadable(), false), Route::NoService);
+    assert!(matches!(
+        route(false, Ok((false, running)), true),
+        Route::Failed(_)
+    ));
+    assert_eq!(
+        route(false, unreadable(), true),
+        Route::Failed("couldn't ask".to_owned())
     );
 }

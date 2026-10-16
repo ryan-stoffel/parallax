@@ -692,21 +692,42 @@ async fn service_handover(daemon: &Arc<Daemon>, program: &Path) -> ServiceHandov
         std::process::id(),
         service_hint(&label),
     );
+    let status = status.map(|status| (status.installed, status.state));
+    match route(cfg!(windows), status, managed) {
+        Route::Replace => match replace_service(&data_dir, program).await {
+            Ok(()) => ServiceHandover::Replaced,
+            Err(error) => ServiceHandover::Failed { error, managed },
+        },
+        Route::NoService => ServiceHandover::NoService,
+        Route::Failed(error) => ServiceHandover::Failed { error, managed },
+    }
+}
+
+/// Which way [`service_handover`] goes, before it runs anything.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Route {
+    /// Run the new plxd's `service install --replace`.
+    Replace,
+    /// No service takes over, so plxd starts the new `serve` itself.
+    NoService,
+    /// Neither works, for this reason.
+    Failed(String),
+}
+
+/// The [`Route`] for the service's status, whether it's installed and its state or why it
+/// couldn't be read, on Windows or not, and `managed` when the service manager runs this plxd.
+pub(crate) fn route(
+    windows: bool,
+    status: Result<(bool, crate::service::ServiceState), String>,
+    managed: bool,
+) -> Route {
     match status {
         // On Windows, `--replace` stops this `serve` and asks Task Scheduler to start the task,
         // which it doesn't while nobody is logged on. So only a running task takes over.
-        Ok(status) if status.installed && (cfg!(not(windows)) || status.state.running()) => {
-            match replace_service(&data_dir, program).await {
-                Ok(()) => ServiceHandover::Replaced,
-                Err(error) => ServiceHandover::Failed { error, managed },
-            }
-        }
-        _ if !managed => ServiceHandover::NoService,
-        Ok(_) => ServiceHandover::Failed {
-            error: "the service that runs plxd has no file to replace".to_owned(),
-            managed,
-        },
-        Err(error) => ServiceHandover::Failed { error, managed },
+        Ok((true, state)) if !windows || state.running() => Route::Replace,
+        _ if !managed => Route::NoService,
+        Ok(_) => Route::Failed("the service that runs plxd has no file to replace".to_owned()),
+        Err(error) => Route::Failed(error),
     }
 }
 
