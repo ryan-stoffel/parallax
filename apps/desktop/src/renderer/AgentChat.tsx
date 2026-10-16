@@ -1,6 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowLeftRight,
+  ArrowUpLeft,
   ArrowRight,
   Ban,
   Bot,
@@ -128,8 +129,8 @@ import { attachThreads, SentThread, ThreadLinksContext, type ThreadLinks } from 
 import { GoalStrip, pursuedGoal } from "./Goal";
 import { QueueStrip } from "./QueueStrip";
 import { AgentsBar, isGoing, type AgentRow } from "./AgentsBar";
-import { ChildStrip } from "./ChildStrip";
 import { ComposerTabs, type ComposerTab } from "./ComposerTabs";
+import { useShortcutLabel } from "./keybindings";
 import { ResumeCard } from "./ResumeCard";
 import { SecretCard, SecretLine } from "./Secret";
 import { hostIcon } from "./RunTargetMenu";
@@ -738,7 +739,6 @@ export function AgentChat({
             sub={shown}
             live={live}
             stalled={stalled}
-            parent={title ?? (run ? titleOf(run) : "Thread")}
             onBack={() => onOpenSubagent?.(runId)}
           />
         ) : (
@@ -968,53 +968,48 @@ function SubagentView({
   sub,
   live,
   stalled,
-  parent,
   onBack,
 }: {
   sub: Subagent;
   live: boolean;
   stalled: boolean;
-  /** Its thread's title, which `onBack` opens. */
-  parent: string;
+  /** Opens its thread. */
   onBack: () => void;
 }) {
   const rows = useMemo(() => subagentRows(sub), [sub]);
   const state = subagentState(sub, live);
+  const keys = useShortcutLabel("parentThread");
   return (
     <>
       <TranscriptView rows={rows} sent={noneSent} live={state === "running"} stalled={stalled} />
-      <div className="mx-auto flex w-full max-w-3xl flex-col px-6 pt-1">
-        <ComposerTabs
-          tabs={[
-            {
-              key: "parent",
-              label: "Parent thread",
-              node: (
-                <ChildStrip
-                  name={parent}
-                  relation="A subagent of"
-                  onOpenName={onBack}
-                  onBack={onBack}
-                />
-              ),
-            },
-          ]}
-        />
-        <p
+      <div className="mx-auto w-full max-w-3xl px-6 pt-1">
+        <div
           role="status"
           aria-label="Subagent"
-          className="relative z-10 flex items-center gap-2 rounded-3xl border border-border bg-surface px-4 py-3 text-[12.5px] text-muted-foreground"
+          className="flex min-w-0 items-center gap-2.5 rounded-3xl border border-border bg-surface py-2.5 pr-2.5 pl-4 text-[13px] text-muted-foreground"
         >
-          <ClaudeLogo aria-hidden className="size-3.5 shrink-0" />
-          <span className="truncate">
-            {[sub.agentType, modelName(sub.model), subagentLabels[state]]
-              .filter(Boolean)
-              .join(" · ")}
+          <ClaudeLogo aria-hidden className="size-4 shrink-0" />
+          <span className="min-w-0 truncate">
+            <span className="font-medium text-foreground">
+              {modelName(sub.model) ?? "Claude Code"}
+            </span>
+            {[sub.agentType, subagentLabels[state]].filter(Boolean).map((part) => (
+              <span key={part} className="ml-2.5">
+                {part}
+              </span>
+            ))}
           </span>
-          <span className="ml-auto shrink-0 text-faint-foreground">
-            Read-only: Claude Code's own subagent
-          </span>
-        </p>
+          <span className="ml-auto shrink-0 text-faint-foreground">Read-only</span>
+          <button
+            type="button"
+            onClick={onBack}
+            title={keys ? `Open parent (${keys})` : "Open parent"}
+            className="flex h-8 shrink-0 items-center gap-1.5 rounded-full px-2.5 font-medium text-foreground hover:bg-hover"
+          >
+            <ArrowUpLeft aria-hidden className="size-4 text-muted-foreground" />
+            Open parent
+          </button>
+        </div>
       </div>
     </>
   );

@@ -502,12 +502,9 @@ test("an agent's own subagents are read-only lineage rows, and one opens without
   expect(chips()).toContain("Read the docs*");
   expect(log().textContent).toContain("Read the docs.");
   expect(log().textContent).toContain("The docs say pnpm.");
-  expect(document.querySelector('[role="status"][aria-label="Subagent"]')!.textContent).toBe(
-    "Explore · Claude Haiku 4.5 · DoneRead-only: Claude Code's own subagent",
-  );
+  const bar = () => document.querySelector('[role="status"][aria-label="Subagent"]');
+  expect(bar()!.textContent).toBe("Claude Haiku 4.5ExploreDoneRead-onlyOpen parent");
   expect(document.querySelector('[role="textbox"][aria-label="Message"]')).toBeNull();
-  const strip = () => document.querySelector('main section[aria-label="Child thread"]');
-  expect(strip()!.textContent).toBe("A subagent of Ship lineageOpen parent⌥⌘↑");
 
   // Its thread's crumb goes back, and the call's row opens the other one.
   await click(crumb("Ship lineage"));
@@ -516,9 +513,20 @@ test("an agent's own subagents are read-only lineage rows, and one opens without
   await click(log().querySelector('button[aria-label="Open subagent: Read the tests, Working"]'));
   expect(crumbs().at(-1)).toBe("Read the tests");
   // As does Open parent.
-  await click(
-    [...strip()!.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Open parent")),
-  );
+  await click(bar()!.querySelector("button"));
   expect(crumbs().at(-1)).toBe("Ship lineage");
   expect(document.querySelector('[role="textbox"][aria-label="Message"]')).not.toBeNull();
+  // As does Go to parent.
+  await click(docs);
+  await act(async () => {
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowUp",
+        code: "ArrowUp",
+        metaKey: true,
+        altKey: true,
+      }),
+    );
+  });
+  expect(crumbs().at(-1)).toBe("Ship lineage");
 });

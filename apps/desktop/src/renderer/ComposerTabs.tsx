@@ -23,6 +23,8 @@ const inset = (depth: number) => ({ marginInline: 20 + depth * 10 });
 export function ComposerTabs({ tabs }: { tabs: readonly ComposerTab[] }) {
   const [expanded, setExpanded] = useState(false);
   const folding = tabs.length > shown;
+  // Opened tabs fold again once there are too few to fold, so the next ones to come start folded.
+  if (expanded && !folding) setExpanded(false);
   const folded = folding && !expanded ? tabs.length - shown : 0;
   if (tabs.length === 0) return null;
   return (

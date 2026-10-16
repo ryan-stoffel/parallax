@@ -6,19 +6,16 @@ import { useShortcutLabel } from "./keybindings";
 
 /**
  * Tucked over a child thread's composer: whose child it is, `name` opening it (a Project's home, or
- * the parent thread), and Open parent, with its shortcut. A Project child passes its Project's icon,
- * and an agent's own subagent says it's a subagent.
+ * the parent thread), and Open parent, with its shortcut. A Project child passes its Project's icon.
  */
 export function ChildStrip({
   name,
   icon,
-  relation = "A child thread of",
   onOpenName,
   onBack,
 }: {
   name: string;
   icon?: ReactNode;
-  relation?: string;
   onOpenName: () => void;
   onBack: () => void;
 }) {
@@ -30,7 +27,7 @@ export function ChildStrip({
     >
       {icon}
       <span className="min-w-0 flex-1 truncate text-muted-foreground">
-        {relation}{" "}
+        A child thread of{" "}
         <button
           type="button"
           onClick={onOpenName}
