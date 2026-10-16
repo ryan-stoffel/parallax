@@ -88,11 +88,14 @@ impl Mcp {
         assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
         assert_eq!(initialized["result"]["serverInfo"]["name"], "plxd");
         assert!(initialized["result"]["capabilities"]["tools"].is_object());
-        // Every thread's agent is told to show the documents it makes (PLX-755).
+        // Every thread's agent is told to show the documents it makes (PLX-755), and to read and
+        // wait on pull requests through plxd (PLX-837).
+        let instructions = initialized["result"]["instructions"].as_str().unwrap();
+        assert!(instructions.contains("present_files"), "{instructions}");
         assert!(
-            initialized["result"]["instructions"]
-                .as_str()
-                .is_some_and(|text| text.contains("present_files"))
+            instructions.contains("pull_request_status")
+                && instructions.contains("watch_pull_request"),
+            "{instructions}"
         );
         mcp.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
             .await;

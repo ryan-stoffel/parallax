@@ -55,12 +55,12 @@ use crate::{
     LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult, MemoryListParams, MemoryListResult,
     MemoryProposeParams, MemoryProposeResult, MemoryReadParams, MemoryReadResult,
     MemoryWriteParams, MemoryWriteResult, OrchestrationCommand, PrActParams, PrDiffResult,
-    PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult, PreviewCallParams,
-    PreviewCallResult, PreviewFrameParams, PreviewFrameResult, PreviewInputParams,
-    PreviewInputResult, PreviewListParams, PreviewListResult, ProjectCreateParams,
-    ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult, ProjectFromThreadsParams,
-    ProjectFromThreadsResult, ProjectListParams, ProjectListResult, ProjectStartParams,
-    ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
+    PrStatusResult, PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult,
+    PreviewCallParams, PreviewCallResult, PreviewFrameParams, PreviewFrameResult,
+    PreviewInputParams, PreviewInputResult, PreviewListParams, PreviewListResult,
+    ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
+    ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectListParams, ProjectListResult,
+    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
     ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, ProvidersUpdatesParams,
     ProvidersUpdatesResult, ProvidersUpgradeParams, ProvidersUpgradeResult, PullRequest,
     QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
@@ -542,12 +542,15 @@ method_table! {
         ScheduleRun = "schedule/run": ScheduleIdParams => ScheduledTask;
         /// `pr/watch`: links a GitHub pull request URL to a run if it isn't, and watches it for
         /// the run (0063). Fails with `invalidParams` for a pull request that isn't open. Gated
-        /// on the `prWatch` capability, like `pr/unwatch` and `pr/watches`.
+        /// on the `prWatch` capability, like `pr/unwatch`, `pr/watches`, and `pr/status`.
         PrWatch = "pr/watch": PrViewParams => PrWatchResult;
         /// `pr/unwatch`: stops watching a pull request for a run. It stays linked.
         PrUnwatch = "pr/unwatch": PrViewParams => PrWatchResult;
         /// `pr/watches`: the run's watched pull requests.
         PrWatches = "pr/watches": PrWatchesParams => PrWatchesResult;
+        /// `pr/status` (PLX-837): reads a GitHub pull request once and says whether it is ready
+        /// to merge, and whether the run watches it. It needn't be linked.
+        PrStatus = "pr/status": PrViewParams => PrStatusResult;
         /// `repo/scripts`: a repo entry's setup and settle scripts, and those its `parallax.json`
         /// declares (PLX-650). Fails with `repoNotFound` for an unknown entry. Gated on the
         /// `setupScripts` capability, like `repo/saveScripts`.
@@ -779,6 +782,7 @@ mod tests {
                 "pr/watch",
                 "pr/unwatch",
                 "pr/watches",
+                "pr/status",
                 "repo/scripts",
                 "repo/saveScripts",
                 "task/delegate",

@@ -2,11 +2,13 @@
 //! `schedule_task`, `list_scheduled_tasks`, `update_scheduled_task`, `delete_scheduled_task`, and
 //! `run_scheduled_task_now` through `schedule/*`, and `link_pull_request`,
 //! `unlink_pull_request`, `watch_pull_request`, `unwatch_pull_request`, and
-//! `list_thread_pull_requests` through `pr/*`. Every caller gets them.
+//! `list_thread_pull_requests` through `pr/*`, and Parallax's own `pull_request_status`
+//! (PLX-837). Every caller gets them, and [`INSTRUCTIONS`], which tell the agent to use them
+//! instead of `gh`.
 
 use parallax_protocol::methods::{
-    PrLink, PrUnlink, PrUnwatch, PrWatch, PrWatches, ScheduleDelete, ScheduleList, ScheduleRun,
-    ScheduleSave, ThreadList,
+    PrLink, PrStatus, PrUnlink, PrUnwatch, PrWatch, PrWatches, ScheduleDelete, ScheduleList,
+    ScheduleRun, ScheduleSave, ThreadList,
 };
 use parallax_protocol::{
     AccountChoice, AgentRun, PrViewParams, PrWatchesParams, RunId, Schedule, ScheduleIdParams,
@@ -31,7 +33,13 @@ pub const TOOLS: &[&str] = &[
     "watch_pull_request",
     "unwatch_pull_request",
     "list_thread_pull_requests",
+    "pull_request_status",
 ];
+
+/// What every thread's agent is told at startup, through MCP's `instructions`, as T3 Code's
+/// runtime instructions tell it (PLX-837): without it, each agent reads and waits on its pull
+/// requests its own way, with `gh` loops, sleeps, and watchers that spend the shared GitHub quota.
+pub const INSTRUCTIONS: &str = "Parallax is your GitHub integration for pull requests. Register every pull request you open or work on with link_pull_request, each layer of a stack included. Read a pull request's checks, reviews, unresolved review threads, conflicts, and whether it is ready to merge with pull_request_status, not gh. To wait on CI or reviews, or when asked to monitor, watch, or babysit a pull request, call watch_pull_request and end your turn: Parallax wakes you when a check fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict. Never poll, sleep, or run your own watcher, such as gh pr checks --watch, gh run watch, or a loop. Use gh only for what these tools don't do, such as reading a failed job's log, replying to or resolving a review thread, and merging.";
 
 /// What `link_pull_request` and `list_thread_pull_requests` remind the agent of, as T3's do.
 const REGISTER: &str = "Register every pull request you open for this thread, including each layer of a stack, right after creating it.";
@@ -163,7 +171,7 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "watch_pull_request",
-            "Have Parallax watch an open pull request for this thread, linking it first if needed. Parallax checks it every two minutes and wakes you with a message when a check fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict with its base. Use this to monitor a pull request instead of polling, sleeping, or running a watcher. Only comments posted after this call wake you, so handle the existing ones first, then end your turn. A wake is news, not a merge decision. When you hand the work back to the user, call unwatch_pull_request first. Watching ends when the pull request merges or closes, when its thread settles or is archived, when Parallax fails to read it 8 times in a row (a rate limit only delays it), after 10 comment-only wakes in a row, or when you call unwatch_pull_request. Unsettle the thread before starting a new watch.",
+            "Have Parallax watch an open pull request for this thread, linking it first if needed. Parallax checks it every two minutes and wakes you with a message when a check fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict with its base. Use this to monitor a pull request instead of polling, sleeping, or running a watcher. Only comments posted after this call wake you, so handle the existing ones first, then end your turn. A wake is news, not a merge decision: call pull_request_status for that. When you hand the work back to the user, call unwatch_pull_request first. Watching ends when the pull request merges or closes, when its thread settles or is archived, when Parallax fails to read it 8 times in a row (a rate limit only delays it), after 10 comment-only wakes in a row, or when you call unwatch_pull_request. Unsettle the thread before starting a new watch.",
             target(),
             false,
         ),
@@ -182,6 +190,12 @@ pub fn definitions() -> Vec<Value> {
                 json!({"threadId": {"type": "string", "description": "The thread's run id. Omit for this thread."}}),
                 &[],
             ),
+            true,
+        ),
+        tool(
+            "pull_request_status",
+            "Read a pull request from GitHub now and say whether it is ready to merge. Returns its state, draft, head commit, base branch, commits behind the base, mergeability, merge state, review decision, failing checks with their links, pending and passed checks, unresolved review threads with their links, whether Parallax watches it for this thread, and ready with the reasons it isn't. Ready means open, not a draft, no conflict, not behind its base, every check on the head passed, no unresolved review thread, and no change requested. Use this instead of gh pr view, gh pr checks, or gh api to check a pull request, and after each watch_pull_request wake. It needn't be linked. Right after a push the head has no checks yet, which is not ready: watch it and end your turn.",
+            target(),
             true,
         ),
     ]
@@ -392,6 +406,7 @@ pub(super) async fn call(
                         answer["wasLinked"] = json!(before);
                     }
                 }
+                "pull_request_status" => return Ok(pretty(&plxd.call::<PrStatus>(params).await?)),
                 "watch_pull_request" | "unwatch_pull_request" => {
                     let result = if name == "watch_pull_request" {
                         plxd.call::<PrWatch>(params).await?

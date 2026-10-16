@@ -665,7 +665,7 @@ export type ParallaxRequests = {
 	/**
 	 * `pr/watch`: links a GitHub pull request URL to a run if it isn't, and watches it for
 	 * the run (0063). Fails with `invalidParams` for a pull request that isn't open. Gated
-	 * on the `prWatch` capability, like `pr/unwatch` and `pr/watches`.
+	 * on the `prWatch` capability, like `pr/unwatch`, `pr/watches`, and `pr/status`.
 	 */
 	"pr/watch": { params: PrViewParams, result: PrWatchResult },
 	/**
@@ -676,6 +676,11 @@ export type ParallaxRequests = {
 	 * `pr/watches`: the run's watched pull requests.
 	 */
 	"pr/watches": { params: PrWatchesParams, result: PrWatchesResult },
+	/**
+	 * `pr/status` (PLX-837): reads a GitHub pull request once and says whether it is ready
+	 * to merge, and whether the run watches it. It needn't be linked.
+	 */
+	"pr/status": { params: PrViewParams, result: PrStatusResult },
 	/**
 	 * `repo/scripts`: a repo entry's setup and settle scripts, and those its `parallax.json`
 	 * declares (PLX-650). Fails with `repoNotFound` for an unknown entry. Gated on the
@@ -884,6 +889,7 @@ export const REQUEST_METHODS = [
 	"pr/watch",
 	"pr/unwatch",
 	"pr/watches",
+	"pr/status",
 	"repo/scripts",
 	"repo/saveScripts",
 	"task/delegate",
@@ -7714,6 +7720,122 @@ export type PrWatchesResult = {
 	 * The URLs.
 	 */
 	urls: Array<string>,
+};
+
+/**
+ * Result of `pr/status` (PLX-837): one read of a pull request, and whether it is ready to merge.
+ */
+export type PrStatusResult = {
+	/**
+	 * The pull request's URL.
+	 */
+	url: string,
+	/**
+	 * `OPEN`, `CLOSED`, or `MERGED`.
+	 */
+	state: string,
+	/**
+	 * Whether it is a draft.
+	 */
+	draft: boolean,
+	/**
+	 * The head commit.
+	 */
+	headSha?: string,
+	/**
+	 * The branch it merges into.
+	 */
+	baseBranch: string,
+	/**
+	 * Commits on the base branch the head doesn't have. 0 once it isn't open.
+	 */
+	behindBy: number,
+	/**
+	 * `MERGEABLE`, `CONFLICTING`, or `UNKNOWN` while GitHub works it out.
+	 */
+	mergeable: string,
+	/**
+	 * GitHub's `mergeStateStatus`, such as `CLEAN`, `BLOCKED`, or `BEHIND`.
+	 */
+	mergeState: string,
+	/**
+	 * `APPROVED`, `CHANGES_REQUESTED`, or `REVIEW_REQUIRED`, when the repository asks for
+	 * reviews.
+	 */
+	reviewDecision?: string,
+	/**
+	 * The head commit's failed checks.
+	 */
+	failing: Array<PrStatusCheck>,
+	/**
+	 * The names of its checks still running or queued.
+	 */
+	pending: Array<string>,
+	/**
+	 * The names of its checks that passed.
+	 */
+	passed: Array<string>,
+	/**
+	 * Review threads nobody has resolved.
+	 */
+	unresolvedThreads: Array<PrStatusThread>,
+	/**
+	 * Whether plxd watches it for the run.
+	 */
+	watching: boolean,
+	/**
+	 * Open, not a draft, no conflict, not behind, every check passed, no unresolved thread, and
+	 * no change request.
+	 */
+	ready: boolean,
+	/**
+	 * Why it isn't ready, one line each. Empty when it is.
+	 */
+	reasons: Array<string>,
+};
+
+/**
+ * A failed check in a [`PrStatusResult`].
+ */
+export type PrStatusCheck = {
+	/**
+	 * The check's name.
+	 */
+	name: string,
+	/**
+	 * How it failed, in lowercase: `failure`, `cancelled`, `timed out`, and so on.
+	 */
+	how: string,
+	/**
+	 * Whether branch protection requires it.
+	 */
+	required: boolean,
+	/**
+	 * Its log or details page.
+	 */
+	url?: string,
+};
+
+/**
+ * An unresolved review thread in a [`PrStatusResult`], by its first comment.
+ */
+export type PrStatusThread = {
+	/**
+	 * The file it is on.
+	 */
+	path?: string,
+	/**
+	 * Who wrote the comment.
+	 */
+	author?: string,
+	/**
+	 * The comment, on one line, at most 200 characters.
+	 */
+	body: string,
+	/**
+	 * The comment on GitHub.
+	 */
+	url?: string,
 };
 
 /**
