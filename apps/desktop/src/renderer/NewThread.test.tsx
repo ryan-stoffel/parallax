@@ -736,7 +736,7 @@ test("A computer without the repository at that path keeps New Thread here, sayi
   expect(heading()).toBe("What should we build in parallax?");
 });
 
-test("An add that finishes after the thread started here leaves that thread open (PLX-849)", async () => {
+test("While the picked computer adds the repository, Send is off, and picking this computer again drops the add (PLX-849)", async () => {
   window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
   let finish: (answer: RpcResponse<unknown>) => void = () => {};
   request.mockImplementation(async (host, method, params) => {
@@ -747,19 +747,16 @@ test("An add that finishes after the thread started here leaves that thread open
     const answer = answers[method];
     return answer ? answer(params) : { error: { code: -32601, message: `${method} isn't faked` } };
   });
-  answers["thread/start"] = (p) => ({
-    result: {
-      thread: { id: p["runId"], repo: parallax.id, createdAt: "2026-09-26T12:05:00Z" },
-      run: run(p["runId"] as string, "Fix it"),
-    },
-  });
   await renderApp();
   await choose("Runs on", "mac miniSSH · minino parallax");
+  // A thread sent now would start on the computer being left.
   await send("Fix it");
-  expect(crumbs()).toEqual(["This Mac", "parallax", "Fix it"]);
+  expect(calls("thread/start")).toEqual([]);
+  expect(composer().textContent).toBe("Fix it");
+  await choose("Runs on", "This MacThis computer");
   await act(async () => finish({ result: { repo: { ...parallax, id: "r-mini-parallax" } } }));
   await settle();
-  expect(crumbs()).toEqual(["This Mac", "parallax", "Fix it"]);
+  expect(control("Runs on: This Mac, New worktree")).not.toBeNull();
 });
 
 test("No Repo picks only the computer, and starts the thread there (PLX-849)", async () => {

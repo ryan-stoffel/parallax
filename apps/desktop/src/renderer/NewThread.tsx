@@ -341,9 +341,14 @@ export function NewThread({
     }
   };
 
+  // The computer picked while it adds the repository, during which Send is off, so a thread
+  // can't start on the computer being left.
+  const [moving, setMoving] = useState<string>();
   const pickHost = async (id: string) => {
     setRepoError(undefined);
+    setMoving(id);
     const error = await onHostChange(id);
+    setMoving((m) => (m === id ? undefined : m));
     if (error) setRepoError(error);
   };
 
@@ -499,7 +504,13 @@ export function NewThread({
           contextAndFast={
             connection?.status === "connected" && "contextAndFast" in connection.capabilities
           }
-          disabledReason={starting === undefined ? disabledReason : "Starting thread…"}
+          disabledReason={
+            starting !== undefined
+              ? "Starting thread…"
+              : moving
+                ? `Adding ${group.name} on ${hosts.find((h) => h.id === moving)?.name}…`
+                : disabledReason
+          }
           imageCaps={imageCaps(connection)}
           uploadBytes={uploadBytes(connection)}
           menus={

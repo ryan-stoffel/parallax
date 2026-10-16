@@ -616,8 +616,9 @@ export function App() {
     shown.current = { hostId: host.id, selection };
   });
   const pickHost = async (id: string): Promise<string | undefined> => {
-    if (id === host.id) return undefined;
+    // Picking this computer again is a pick too, so it drops an add still under way.
     const pick = ++picks.current;
+    if (id === host.id) return undefined;
     const before = shown.current;
     const view = views[id] ?? idleThreads;
     let groupId = groupThreads(view.state).groups.find((g) => g.name === group.name)?.id;
