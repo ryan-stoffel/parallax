@@ -166,6 +166,22 @@ const background = new Map<string, AgentBackgroundTask[]>([
   ],
 ]);
 const watching = new Map([[ids.updater, ["https://github.com/ryan-stoffel/parallax/pull/588"]]]);
+// "Tahoe icon variants" has a message queued behind its turn, which its composer's tab lists.
+const queued = new Map<string, ThreadRun[]>([
+  [
+    ids.tahoe,
+    [
+      {
+        id: "queued-1",
+        status: "queued",
+        position: 0,
+        text: "Then export a 16 px favicon from the same glyph.",
+        images: 0,
+        threads: [],
+      },
+    ],
+  ],
+]);
 
 /** Logs and delivers an event, as plxd does: a run's to its scope, a host-level one to the host. */
 function emit(event: ParallaxEvent, project?: string) {
@@ -1761,7 +1777,7 @@ export const mockBridge: ParallaxBridge = {
       snapshot = {
         seq,
         thread: run,
-        runs: [],
+        runs: queued.get(thread) ?? [],
         events: logs.get(thread) ?? [],
         more: false,
         requests: [],

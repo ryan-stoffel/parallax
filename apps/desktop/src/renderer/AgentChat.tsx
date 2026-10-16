@@ -1,6 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowLeftRight,
+  ArrowUpLeft,
   ArrowRight,
   Ban,
   Bot,
@@ -111,7 +112,7 @@ import {
   type TraceStatus,
 } from "./Trace";
 import { locale } from "./locale";
-import { GitHubLogo, LinearLogo } from "./logos";
+import { ClaudeLogo, GitHubLogo, LinearLogo } from "./logos";
 import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
 import { withMentions } from "./Mention";
 import { dollarMath } from "./math";
@@ -131,6 +132,9 @@ import { plainText, PromptRail, ScrollToEnd, type Prompt } from "./PromptRail";
 import { attachThreads, SentThread, ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { GoalStrip, pursuedGoal } from "./Goal";
 import { QueueStrip } from "./QueueStrip";
+import { AgentsBar, isGoing, type AgentRow } from "./AgentsBar";
+import { ComposerTabs, type ComposerTab } from "./ComposerTabs";
+import { useShortcutLabel } from "./keybindings";
 import { ResumeCard } from "./ResumeCard";
 import { SecretCard, SecretLine } from "./Secret";
 import { hostIcon } from "./RunTargetMenu";
@@ -159,12 +163,13 @@ import {
   type Approval,
   type Item,
   type Subagent,
+  type SubagentState,
   type Work,
 } from "./transcript";
 import { TurnChanges, TurnChangesContext, type TurnChangesTarget } from "./TurnChanges";
 import { SetUpGithub } from "./ui";
 import { useAgentRun, type SentMessage } from "./useAgentRun";
-import { WaitingBar } from "./WaitingBar";
+import { presentWaiting, WaitingBar } from "./WaitingBar";
 import { clockOptions } from "./prefs";
 
 /** A row: a transcript item, or a message this window sent that hasn't reached the agent yet. */
@@ -283,8 +288,8 @@ export function AgentChat({
   host?: Host;
   /** The composer's tab in place of the run's worktree, such as a coordinator's repository. */
   tab?: ReactNode;
-  /** A strip tucked over the composer, above the plan's, such as a Project's agents. */
-  strip?: ReactNode;
+  /** The back tab over the composer, behind the plan's, such as a Project's agents. */
+  strip?: ComposerTab;
   /**
    * Starts a new run with `text` and `images` in place of this one once this one can't take
    * messages, as a Project's coordinator can (0024). Resolves to an error message, or undefined.
@@ -320,8 +325,11 @@ export function AgentChat({
   threadLinks?: ThreadLinks;
   /** The agent's own subagent shown in place of the chat, by its call's id (PLX-382). */
   subagent?: string;
-  /** Opens one of the agent's own subagents in run `runId`, as its call's row does. */
-  onOpenSubagent?: (runId: string, callId: string) => void;
+  /**
+   * Opens one of the agent's own subagents in run `runId`, as its call's row does, or with no
+   * `callId`, the run's own chat.
+   */
+  onOpenSubagent?: (runId: string, callId?: string) => void;
   /** Told run `runId`'s own subagents whenever they change, for the top bar's chips. */
   onSubagents?: (runId: string, subagents: NativeSubagent[]) => void;
   /**
@@ -731,7 +739,12 @@ export function AgentChat({
     return (
       <SubagentsContext value={subagents}>
         {shown ? (
-          <SubagentView sub={shown} live={live} stalled={stalled} />
+          <SubagentView
+            sub={shown}
+            live={live}
+            stalled={stalled}
+            onBack={() => onOpenSubagent?.(runId)}
+          />
         ) : (
           <div className="flex flex-1 items-center justify-center text-[13px] text-faint-foreground">
             {error ?? (run ? "This subagent isn't in the transcript" : "Loading…")}
@@ -740,6 +753,52 @@ export function AgentChat({
         <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 pb-5">{pinned}</div>
       </SubagentsContext>
     );
+
+  // The tabs over the composer, back to front, so the queue sits nearest the box.
+  const running = isRunning(run?.status);
+  const tabs: ComposerTab[] = [];
+  if (strip) tabs.push(strip);
+  const subagentTabRows = nativeRows(transcript.subagents, live);
+  if (subagents && subagentTabRows.some(isGoing))
+    tabs.push({
+      key: "subagents",
+      label: "Subagents",
+      node: <AgentsBar rows={subagentTabRows} label="Subagents" onOpen={subagents.open} />,
+    });
+  // Once its turn settles, as T3 Code's strip: a turn's own work shows in the transcript.
+  if (!running && presentWaiting(background, watching))
+    tabs.push({
+      key: "waiting",
+      label: "Waiting",
+      node: (
+        <WaitingBar hostId={hostId} runId={runId} background={background} watching={watching} />
+      ),
+    });
+  if (goal && running && !stalled)
+    tabs.push({ key: "goal", label: "Goal", node: <GoalStrip objective={goal} /> });
+  // The latest turn's plan, while the run works on it.
+  if (plan && running && !stalled)
+    tabs.push({
+      key: "plan",
+      label: "Plan",
+      node: <PlanStrip items={plan.items} active={plan.active} returnFocus={focusComposer} />,
+    });
+  if (queueEnabled && queue.length > 0)
+    tabs.push({
+      key: "queue",
+      label: "Queued",
+      node: (
+        <QueueStrip
+          hostId={hostId}
+          runId={runId}
+          messages={queue}
+          held={held}
+          running={running}
+          disabledReason={disabledReason}
+          onCancelled={(id) => setCancelled((prev) => new Set(prev).add(id))}
+        />
+      ),
+    });
 
   return (
     <SubagentsContext value={subagents}>
@@ -827,27 +886,7 @@ export function AgentChat({
             </button>
           </p>
         )}
-        {strip}
-        {/* The latest turn's plan, while the run works on it. */}
-        {plan && isRunning(run?.status) && !stalled && (
-          <PlanStrip items={plan.items} active={plan.active} returnFocus={focusComposer} />
-        )}
-        {goal && isRunning(run?.status) && !stalled && <GoalStrip objective={goal} />}
-        {/* Once its turn settles, as T3 Code's strip: a turn's own work shows in the transcript. */}
-        {!isRunning(run?.status) && (
-          <WaitingBar hostId={hostId} runId={runId} background={background} watching={watching} />
-        )}
-        {queueEnabled && (
-          <QueueStrip
-            hostId={hostId}
-            runId={runId}
-            messages={queue}
-            held={held}
-            running={isRunning(run?.status)}
-            disabledReason={disabledReason}
-            onCancelled={(id) => setCancelled((prev) => new Set(prev).add(id))}
-          />
-        )}
+        <ComposerTabs tabs={tabs} />
         <Composer
           onSend={(text, options, images, threads) =>
             sendText(text, options, images, threads, queueEnabled ? "queue" : undefined)
@@ -906,32 +945,77 @@ export function AgentChat({
 
 const noneSent: ReadonlyMap<string, SentMessage> = new Map();
 
+const subagentAttention: Record<SubagentState, AgentRow["attention"]> = {
+  running: "working",
+  completed: "done",
+  failed: "failed",
+  stopped: "done",
+};
+
+/** A thread's own subagents as the Subagents tab lists them, oldest first, nested ones left out. */
+function nativeRows(subagents: Readonly<Record<string, Subagent>> | undefined, live: boolean) {
+  return nativeSubagents(subagents, live)
+    .filter((sub) => !sub.parent)
+    .map((sub): AgentRow => ({
+      id: sub.callId,
+      title: sub.title,
+      attention: subagentAttention[sub.state],
+      Logo: ClaudeLogo,
+      ...(sub.model && { detail: modelName(sub.model) }),
+    }));
+}
+
 /**
  * One of the agent's own subagents, read-only (PLX-382): its prompt, what it did, and its final
  * report, then its type, model, and where it stands, in place of a composer.
  */
-function SubagentView({ sub, live, stalled }: { sub: Subagent; live: boolean; stalled: boolean }) {
+function SubagentView({
+  sub,
+  live,
+  stalled,
+  onBack,
+}: {
+  sub: Subagent;
+  live: boolean;
+  stalled: boolean;
+  /** Opens its thread. */
+  onBack: () => void;
+}) {
   const rows = useMemo(() => subagentRows(sub), [sub]);
   const state = subagentState(sub, live);
+  const keys = useShortcutLabel("parentThread");
   return (
     <>
       <TranscriptView rows={rows} sent={noneSent} live={state === "running"} stalled={stalled} />
       <div className="mx-auto w-full max-w-3xl px-6 pt-1">
-        <p
+        <div
           role="status"
           aria-label="Subagent"
-          className="flex items-center gap-2 rounded-xl border border-border px-3.5 py-2.5 text-[12.5px] text-muted-foreground"
+          className="flex min-w-0 items-center gap-2.5 rounded-3xl border border-border bg-surface py-2.5 pr-2.5 pl-4 text-[13px] text-muted-foreground"
         >
-          <Bot aria-hidden className="size-3.5 shrink-0" />
-          <span className="truncate">
-            {[sub.agentType, modelName(sub.model), subagentLabels[state]]
-              .filter(Boolean)
-              .join(" · ")}
+          <ClaudeLogo aria-hidden className="size-4 shrink-0" />
+          <span className="min-w-0 truncate">
+            <span className="font-medium text-foreground">
+              {modelName(sub.model) ?? "Claude Code"}
+            </span>
+            {[sub.agentType, subagentLabels[state]].filter(Boolean).map((part) => (
+              <span key={part} className="ml-2.5">
+                {part}
+              </span>
+            ))}
           </span>
-          <span className="ml-auto shrink-0 text-faint-foreground">
-            Read-only: Claude Code's own subagent
-          </span>
-        </p>
+          <span className="ml-auto shrink-0 text-faint-foreground">Read-only</span>
+          <button
+            type="button"
+            onClick={onBack}
+            title={keys ? `Open parent (${keys})` : "Open parent"}
+            className="flex h-8 shrink-0 items-center gap-1.5 rounded-full px-2.5 font-medium text-foreground hover:bg-hover"
+          >
+            <ArrowUpLeft aria-hidden className="size-4 text-muted-foreground" />
+            Open parent
+            {keys && <kbd className="font-sans text-[11px] text-faint-foreground">{keys}</kbd>}
+          </button>
+        </div>
       </div>
     </>
   );

@@ -16,7 +16,7 @@ const action =
   "grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 [&_svg]:size-3.5";
 
 /**
- * The host's next messages, editable until plxd delivers them, through `orchestration/dispatch`'s
+ * The host's next messages as a tab over the composer, editable until plxd delivers them, through `orchestration/dispatch`'s
  * queued-run commands (0059). A queue a Stop or a restart held waits for Resume (`queue.resume`,
  * 0060). Changes arrive through queue.updated.
  */
@@ -69,9 +69,9 @@ export function QueueStrip({
   return (
     <section
       aria-label="Queued messages"
-      className="mb-2 overflow-hidden rounded-xl border border-border bg-surface text-[12.5px]"
+      className="overflow-hidden rounded-t-3xl border border-b-0 border-border bg-surface pb-4 text-[12.5px]"
     >
-      <div className="flex items-center justify-between px-3 py-2 text-faint-foreground">
+      <div className="flex items-center justify-between py-2 pr-3.5 pl-4 text-faint-foreground">
         <span>
           Queued{" "}
           <span className="ml-1 rounded bg-hover px-1.5 text-foreground">{messages.length}</span>
@@ -94,7 +94,7 @@ export function QueueStrip({
         {messages.map((m, index) => (
           <li
             key={m.id}
-            className="border-t border-border px-2 py-1.5"
+            className="border-t border-border px-2.5 py-1.5"
             onDragOver={(e) => {
               if (e.dataTransfer.types.includes("application/x-parallax-queue")) e.preventDefault();
             }}

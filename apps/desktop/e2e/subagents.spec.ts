@@ -44,8 +44,9 @@ test("an agent's own subagents show their status and open read-only, without a c
   await page.screenshot({ path: test.info().outputPath("subagents-thread.png") });
 
   await docs.click();
+  // Open parent ends on its shortcut, whose keys differ by OS.
   await expect(page.getByRole("status", { name: "Subagent" })).toHaveText(
-    "Explore · Claude Haiku 4.5 · DoneRead-only: Claude Code's own subagent",
+    /^Claude Haiku 4\.5ExploreDoneRead-onlyOpen parent/,
   );
   await expect(transcript.getByText("The README says to build with")).toBeVisible();
   await expect(box).toHaveCount(0);

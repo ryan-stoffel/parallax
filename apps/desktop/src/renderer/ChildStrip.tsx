@@ -23,7 +23,7 @@ export function ChildStrip({
   return (
     <section
       aria-label="Child thread"
-      className="mx-5 -mb-4 flex items-center gap-2.5 rounded-t-3xl border border-b-0 border-border bg-surface py-1.5 pr-1.5 pb-5.5 pl-4 text-[13px]"
+      className="flex items-center gap-2.5 rounded-t-3xl border border-b-0 border-border bg-surface py-1.5 pr-1.5 pb-5.5 pl-4 text-[13px]"
     >
       {icon}
       <span className="min-w-0 flex-1 truncate text-muted-foreground">

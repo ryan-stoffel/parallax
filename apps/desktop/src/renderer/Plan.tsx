@@ -529,7 +529,7 @@ export function PlanStrip({
     <section
       ref={section}
       aria-label="Plan"
-      className="plan-strip mx-5 -mb-4 rounded-t-3xl border border-b-0 border-border bg-surface pb-4"
+      className="plan-strip rounded-t-3xl border border-b-0 border-border bg-surface pb-4"
     >
       <button
         type="button"

@@ -1,6 +1,5 @@
 import {
   ArrowLeft,
-  Bot,
   ChevronLeft,
   ChevronRight,
   Columns2,
@@ -26,6 +25,7 @@ import { type RepoAction } from "./Actions";
 import { AgentChat } from "./AgentChat";
 import { ChangesPanel, type ChangesRequest } from "./ChangesPanel";
 import { ChildStrip } from "./ChildStrip";
+import { ClaudeLogo } from "./logos";
 import type { Asked } from "./Approval";
 import { offlineReason, useConnection } from "./ConnectionStatus";
 import { FilesPanel } from "./FilesPanel";
@@ -581,7 +581,7 @@ export function App() {
         crumbs[crumbs.length - 1] = { label: page, onClick: () => openSubagent(threadId) };
       crumbs.push({
         label: subagents.find((s) => s.callId === subagentOpen)?.title ?? "Subagent",
-        icon: <Bot />,
+        icon: <ClaudeLogo />,
       });
     }
   }
@@ -727,8 +727,16 @@ export function App() {
         !dialog &&
         (command === "parentThread" || command === "nextThread" || command === "previousThread")
       ) {
-        // In a Project, Go to parent goes from a child back to the coordinator.
+        // In a Project, Go to parent goes from a child back to the coordinator, and from an
+        // agent's own subagent, back to its thread.
         if (command === "parentThread" && agentId && !settings) openAgent();
+        else if (
+          command === "parentThread" &&
+          selection.kind === "thread" &&
+          selection.subagent &&
+          !settings
+        )
+          openSubagent(selection.threadId);
         else {
           const next = lineageStep(command);
           if (!next) return;
@@ -1051,13 +1059,19 @@ export function App() {
                               onSubagents={reportNative}
                               onPreview={(runId, reveal) => void showPreviews(runId, reveal)}
                               strip={
-                                paneParent && (
-                                  <ChildStrip
-                                    name={threads.state.titles[paneParent] ?? "Thread"}
-                                    onOpenName={() => openThreadId(paneParent)}
-                                    onBack={() => openThreadId(paneParent)}
-                                  />
-                                )
+                                paneParent
+                                  ? {
+                                      key: "parent",
+                                      label: "Parent thread",
+                                      node: (
+                                        <ChildStrip
+                                          name={threads.state.titles[paneParent] ?? "Thread"}
+                                          onOpenName={() => openThreadId(paneParent)}
+                                          onBack={() => openThreadId(paneParent)}
+                                        />
+                                      ),
+                                    }
+                                  : undefined
                               }
                               forked={!!paneThread?.forkedFrom}
                               onOpenChanges={(turn, path) => {
@@ -1138,16 +1152,22 @@ export function App() {
                       host={host}
                       threadLinks={threadLinks}
                       strip={
-                        project && (
-                          <ChildStrip
-                            name={project.name}
-                            icon={<ProjectIcon icon={project.icon} className="size-3.5 shrink-0" />}
-                            onOpenName={() =>
-                              setSelection({ kind: "project", projectId: project.id })
-                            }
-                            onBack={() => openAgent()}
-                          />
-                        )
+                        project && {
+                          key: "parent",
+                          label: "Project",
+                          node: (
+                            <ChildStrip
+                              name={project.name}
+                              icon={
+                                <ProjectIcon icon={project.icon} className="size-3.5 shrink-0" />
+                              }
+                              onOpenName={() =>
+                                setSelection({ kind: "project", projectId: project.id })
+                              }
+                              onBack={() => openAgent()}
+                            />
+                          ),
+                        }
                       }
                     />
                   ) : (

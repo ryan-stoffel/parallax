@@ -4,6 +4,7 @@ import { useEffect, useId, useState } from "react";
 import type { AgentRun, Thread } from "../protocol/generated/protocol";
 import { attentionOf, type Attention } from "./attention";
 import { duration, WorkingMark } from "./AttentionMark";
+import { ClaudeLogo } from "./logos";
 import { models } from "./models";
 import { age, backendLogos } from "./Sidebar";
 import { modelName, type NativeSubagent } from "./Subagents";
@@ -150,7 +151,7 @@ export function LineageSection({
             className="flex w-full flex-col gap-0.5 rounded-md py-2 pr-2 text-left hover:bg-hover aria-[current=page]:bg-selected"
           >
             <span className="flex w-full min-w-0 items-center gap-2 text-[13px]">
-              <Bot aria-hidden className="size-3.5 shrink-0" />
+              <ClaudeLogo aria-hidden className="size-3.5 shrink-0" />
               <span data-lineage-title className="min-w-0 flex-1 truncate">
                 {sub.title}
               </span>
@@ -158,9 +159,7 @@ export function LineageSection({
               <StatusMark attention={row.attention} />
             </span>
             <span className="w-full truncate pl-5.5 text-[11.5px] text-faint-foreground">
-              {[modelName(sub.model), subagentLabels[sub.state], "Read-only subagent"]
-                .filter(Boolean)
-                .join(" · ")}
+              {[modelName(sub.model), subagentLabels[sub.state]].filter(Boolean).join(" · ")}
             </span>
           </button>
         </li>

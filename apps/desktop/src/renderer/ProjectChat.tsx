@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { Project, PromptImage } from "../protocol/generated/protocol";
 import { AgentChat, CheckoutLabel, PinnedApprovals, TranscriptView } from "./AgentChat";
-import { AgentsBar } from "./AgentsBar";
+import { AgentsBar, isGoing, projectAgentRows } from "./AgentsBar";
+import { ComposerTabs } from "./ComposerTabs";
 import { queueOf, useAnswers, type Asked } from "./Approval";
 import { Composer, tabItem } from "./Composer";
 import { offlineReason, useConnection } from "./ConnectionStatus";
@@ -159,15 +160,10 @@ export function ProjectChat({
     return error && describeError(error);
   };
 
-  const bar = (
-    <AgentsBar
-      agents={agents}
-      titles={titles}
-      coordinator={project.coordinator}
-      needs={needs}
-      onOpen={onOpenRun}
-    />
-  );
+  const rows = projectAgentRows(agents, titles ?? {}, project.coordinator, needs);
+  const bar = rows.some(isGoing)
+    ? { key: "agents", label: "Agents", node: <AgentsBar rows={rows} onOpen={onOpenRun} /> }
+    : undefined;
 
   if (project.coordinator)
     return (
@@ -258,7 +254,7 @@ export function ProjectChat({
           onDismiss={dismiss}
           disabledReason={connected ? undefined : "Connecting to plxd…"}
         />
-        {bar}
+        <ComposerTabs tabs={bar ? [bar] : []} />
         {/* In the same place while it starts, so a failed start puts the message back. */}
         <Composer
           newThread={!starting}
