@@ -6,11 +6,13 @@ import {
   drawPdfPage,
   kinds,
   readPresented,
+  readWorking,
   sizeOf,
   titleOf,
   typeOf,
   useDocument,
   useObjectUrl,
+  workingSize,
   type DocRef,
   type Opened,
 } from "./documents";
@@ -65,14 +67,47 @@ function FileCard({
   doc: DocRef;
   onOpen?: (doc: DocRef) => void;
 }) {
-  const { loaded, error } = useDocument(hostId, doc);
-  const width = doc.kind === "pptx" ? 100 : 72;
   const plain = doc.kind === "file";
+  // A plain file shows only its size, and is read when Download is clicked (PLX-835).
+  const { loaded, error: loadError, progress } = useDocument(hostId, doc, !plain);
+  const [file, setFile] = useState<{ size?: number; share?: number; error?: string }>({});
+  useEffect(() => {
+    if (!plain) return;
+    let live = true;
+    void workingSize(hostId, doc.runId, doc.path).then(
+      (size) => live && setFile({ size }),
+      (error: unknown) =>
+        live && setFile({ error: error instanceof Error ? error.message : String(error) }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [hostId, plain, doc.runId, doc.path]);
+  const save = () => {
+    if (!plain) return loaded && download(doc.name, loaded.bytes);
+    setFile((f) => ({ size: f.size, share: 0 }));
+    readWorking(hostId, doc.runId, doc.path, (share) => setFile((f) => ({ ...f, share }))).then(
+      (bytes) => {
+        download(doc.name, bytes);
+        setFile((f) => ({ size: f.size }));
+      },
+      (error: unknown) =>
+        setFile((f) => ({
+          size: f.size,
+          error: error instanceof Error ? error.message : String(error),
+        })),
+    );
+  };
+  const error = plain ? file.error : loadError;
+  const reading = plain ? file.share : progress;
+  const width = doc.kind === "pptx" ? 100 : 72;
   const what = isMedia(doc.kind)
     ? ""
-    : plain && loaded
-      ? sizeOf(loaded.bytes.length)
-      : kinds[doc.kind];
+    : reading !== undefined
+      ? `Reading ${Math.round(reading * 100)}%`
+      : plain && file.size !== undefined
+        ? sizeOf(file.size)
+        : kinds[doc.kind];
   return (
     <div className="group relative flex h-[88px] max-w-xl items-center gap-4 overflow-hidden rounded-2xl border border-border bg-surface pr-4 pl-5 hover:bg-hover">
       <button
@@ -120,8 +155,8 @@ function FileCard({
       </div>
       <button
         type="button"
-        disabled={!loaded}
-        onClick={() => loaded && download(doc.name, loaded.bytes)}
+        disabled={plain ? file.share !== undefined : !loaded}
+        onClick={save}
         className="relative flex shrink-0 items-center gap-1.5 rounded-lg bg-selected px-3 py-1.5 text-[13px] text-foreground hover:bg-hover disabled:opacity-50 [&_svg]:size-3.5"
       >
         <Download aria-hidden />

@@ -1,22 +1,32 @@
 // Files attached to a message (PLX-779, decision 0071): plxd saves each on the host with
 // `host/upload`, and the message lists their paths for the agent to read. Images are saved too
-// (PLX-799), so the agent has a file to work with as well as the image it sees.
-import type { ConnectionState } from "../preload/bridge";
-import type { PromptImage } from "../protocol/generated/protocol";
+// (PLX-799), so the agent has a file to work with as well as the image it sees. On a plxd with
+// `fileChunks` (PLX-835, decision 0074), a file goes in pieces and reads back in slices.
+import type { ConnectionState, HostResponse } from "../preload/bridge";
+import type { HostUploadResult, PromptImage } from "../protocol/generated/protocol";
+import { fileChunks, readSlices, retried, type Slice } from "./documents";
 import { describeError } from "./errors";
-import { fromBase64 } from "./ooxml";
 
-/** The `fileUploads` cap on one file's base64. Undefined while the host isn't connected, or when its plxd takes no files. */
-export function uploadBytes(connection?: ConnectionState): number | undefined {
-  const max =
+/** What a host's `host/upload` takes: the most bytes one file can be, and on `fileChunks`, the most one piece carries. */
+export interface UploadCaps {
+  maxBytes: number;
+  chunkBytes?: number;
+}
+
+/**
+ * `connection`'s upload caps: `fileChunks`' when its plxd has them, or else the file `fileUploads`'
+ * cap on one message's base64 holds. Undefined while the host isn't connected, or when its plxd
+ * takes no files.
+ */
+export function uploadBytes(connection?: ConnectionState): UploadCaps | undefined {
+  const base64 =
     connection?.status === "connected"
       ? connection.capabilities["fileUploads"]?.["maxBytes"]
       : undefined;
-  return typeof max === "number" ? max : undefined;
+  if (typeof base64 !== "number") return undefined;
+  // Every 3 bytes are 4 characters of base64.
+  return fileChunks(connection) ?? { maxBytes: Math.floor(base64 / 4) * 3 };
 }
-
-/** How long `file`'s base64 is, which the cap is measured on. */
-export const base64Length = (file: Blob) => Math.ceil(file.size / 3) * 4;
 
 /** A file already in base64, such as a message's image, to save with `uploadFiles`. */
 export interface Encoded {
@@ -33,21 +43,63 @@ export const encodedImage = (image: PromptImage, n: number): Encoded => ({
 /** Whether `path` is one `encodedImage` named, which the transcript shows as the image itself. */
 export const isImagePath = (path: string) => /[/\\]image-\d+\.(?:png|jpg|gif|webp)$/.test(path);
 
-/** Saves each of `files` on the host, in order, and resolves to their paths there, or to why not. */
+/**
+ * Saves each of `files` on the host, in order, and resolves to their paths there, or to why not.
+ * With `chunkBytes`, each `File` goes in pieces that size, and `onProgress` gets the share of it
+ * sent before the first and after each. An encoded image is always one message.
+ */
 export async function uploadFiles(
   hostId: string,
   files: (File | Encoded)[],
+  chunkBytes?: number,
+  onProgress?: (file: File, share: number) => void,
 ): Promise<string[] | string> {
   const paths: string[] = [];
   for (const file of files) {
-    const answer = await window.parallax.request(hostId, "host/upload", {
-      name: file.name,
-      data: file instanceof Blob ? await base64Of(file) : file.data,
-    });
+    const answer =
+      file instanceof File && chunkBytes
+        ? await sendPieces(hostId, file, chunkBytes, (share) => onProgress?.(file, share))
+        : await window.parallax.request(hostId, "host/upload", {
+            name: file.name,
+            data: file instanceof Blob ? await base64Of(file) : file.data,
+          });
     if ("error" in answer) return `${file.name} couldn't be sent: ${describeError(answer.error)}`;
     paths.push(answer.result.path);
   }
   return paths;
+}
+
+/**
+ * `file` sent to `hostId` as `Blob.slice()` pieces of `chunkBytes`, in order (0074), each tried up
+ * to three times, which plxd answers as it did when a try already landed. Answers the last piece's
+ * answer, or the first that failed.
+ */
+async function sendPieces(
+  hostId: string,
+  file: File,
+  chunkBytes: number,
+  onProgress: (share: number) => void,
+): Promise<HostResponse<HostUploadResult>> {
+  let uploadId: string | undefined;
+  onProgress(0);
+  for (let offset = 0; ; offset += chunkBytes) {
+    const end = Math.min(offset + chunkBytes, file.size);
+    const last = end === file.size;
+    const data = await base64Of(file.slice(offset, end));
+    const answer = await retried(hostId, () =>
+      window.parallax.request(hostId, "host/upload", {
+        name: file.name,
+        data,
+        uploadId,
+        offset,
+        last,
+      }),
+    );
+    if ("error" in answer) return answer;
+    onProgress(file.size ? end / file.size : 1);
+    if (last) return answer;
+    uploadId = answer.result.uploadId;
+  }
 }
 
 /**
@@ -85,11 +137,16 @@ export function splitFiles(text: string): { text: string; paths: string[] } {
   return { text: text.slice(0, list.index), paths };
 }
 
-/** A file `uploadFiles` saved on `hostId`, read back for the transcript. */
-export async function readUpload(hostId: string, path: string): Promise<Uint8Array> {
-  const answer = await window.parallax.request(hostId, "host/readUpload", { path });
-  if ("error" in answer) throw new Error(describeError(answer.error));
-  return fromBase64(answer.result.data);
+/** A file `uploadFiles` saved on `hostId`, read back for the transcript with `readSlices`. */
+export function readUpload(hostId: string, path: string): Promise<Uint8Array> {
+  const slice: Slice = async (at) => {
+    const answer = await retried(hostId, () =>
+      window.parallax.request(hostId, "host/readUpload", { path, ...at }),
+    );
+    if ("error" in answer) throw new Error(describeError(answer.error));
+    return answer.result;
+  };
+  return readSlices(hostId, slice);
 }
 
 function base64Of(file: Blob): Promise<string> {

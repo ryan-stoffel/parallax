@@ -25,8 +25,10 @@ const folders: Record<string, AgentEntry[]> = {
 const files: Record<string, Partial<AgentFileResult>> = {
   "src/main.rs": { exists: true, content: btoa("fn main() {}\n"), tooLarge: false },
   "logo.png": { exists: true, content: btoa("\x89PNG\x00"), tooLarge: false },
-  "big.bin": { exists: true, tooLarge: true },
+  "big.bin": { exists: true, size: 5_000_000, tooLarge: true },
 };
+// big.bin's bytes, which only slices read (PLX-835).
+const big = new Uint8Array(5_000_000).fill(7);
 // plxd's answer to a change: the error message to fail with, or nothing.
 let editError: string | undefined;
 const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
@@ -37,13 +39,27 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
       : { logId: "log-1", result: {} };
   if (method === "agent/files")
     return { logId: "log-1", result: { entries: folders[path], truncated: false } };
+  const offset = params["offset"] as number | undefined;
+  if (path === "big.bin" && offset !== undefined) {
+    const slice = big.subarray(offset, offset + (params["length"] as number));
+    const content = Buffer.from(slice).toString("base64");
+    const result = { path, side: "working", exists: true, size: big.length, tooLarge: false };
+    return { logId: "log-1", result: { ...result, content } };
+  }
   return { logId: "log-1", result: { path, side: "working", ...files[path] } };
 });
+// What the host advertises: none of `fileChunks` unless a test sets it.
+let capabilities: Record<string, Record<string, number>> = {};
 
 beforeEach(() => {
   request.mockClear();
   editError = undefined;
-  window.parallax = { platform: "darwin", request } as Partial<ParallaxBridge> as ParallaxBridge;
+  capabilities = {};
+  window.parallax = {
+    platform: "darwin",
+    request,
+    connectionState: async () => ({ status: "connected", plxd: "", protocol: 1, capabilities }),
+  } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
 let unmount = () => {};
@@ -129,6 +145,35 @@ test("binary and oversized files show a note instead of their content, and a bin
   await click(row("big.bin"));
   expect(shown()).toContain("This file is too large to show.");
   expect(shown()).not.toContain("Download");
+});
+
+test("on a plxd with fileChunks, a file too large to show downloads, read in slices (PLX-835)", async () => {
+  capabilities = { fileChunks: { chunkBytes: 2 * 2 ** 20, maxBytes: 2 ** 30 } };
+  let saved: [string, number] | undefined;
+  URL.createObjectURL = (blob: Blob) => ((saved = ["", blob.size]), "blob:big");
+  URL.revokeObjectURL = () => {};
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementationOnce(function (
+    this: HTMLAnchorElement,
+  ) {
+    saved![0] = this.download;
+  });
+  await render(<FilesPanel hostId="local" runId="run-1" />);
+  await click(row("big.bin"));
+  expect(shown()).toContain("This file is too large to show.");
+  // Only its size is asked until Download.
+  expect(request).toHaveBeenLastCalledWith("local", "agent/file", {
+    runId: "run-1",
+    path: "big.bin",
+    side: "working",
+    sizeOnly: true,
+  });
+  await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Download"));
+  await vi.waitFor(() => expect(saved).toEqual(["big.bin", 5_000_000]));
+  const slices = request.mock.calls.filter(([, , p]) => p["offset"] !== undefined);
+  // 256 KiB slices (`pieceBytes`), under plxd's 2 MiB chunkBytes.
+  expect(slices.map(([, , p]) => p["offset"])).toEqual(
+    Array.from({ length: 20 }, (_, i) => i * 2 ** 18),
+  );
 });
 
 test("with no thread open, or a plxd without files, the view says so and asks nothing", async () => {
