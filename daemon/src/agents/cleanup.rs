@@ -32,12 +32,13 @@ use super::{convert, store, store_error};
 use crate::server::Daemon;
 use crate::worktree::{PrError, RunFolder};
 
-/// How often a sweep looks for merged pull requests. Each reads only the state of the linked
-/// pull requests not yet known merged, of idle threads.
+/// How often a sweep looks for merged pull requests. Each reads only the state of idle threads'
+/// linked pull requests not yet known merged or closed.
 const SWEEP_PERIOD: Duration = Duration::from_mins(1);
 
-/// Sweeps per check of a worktree kept from an earlier sweep's merge, so its `git status` runs
-/// every 15 minutes rather than every sweep.
+/// Sweeps per recheck, which runs `git status` again on a worktree kept from an earlier sweep's
+/// merge and reads closed pull requests again, since one can reopen: every 15 minutes rather than
+/// every sweep.
 const RECHECK_EVERY: u32 = 15;
 
 /// Sweeps once, then every [`SWEEP_PERIOD`] and on `daemon.merged` until `stop`. Every
@@ -45,18 +46,25 @@ const RECHECK_EVERY: u32 = 15;
 pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
     let mut interval = time::interval(SWEEP_PERIOD);
     interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    let mut known = HashMap::new();
+    let mut known: HashMap<String, Pull> = HashMap::new();
     let mut count: u32 = 0;
     loop {
-        tokio::select! {
+        let woken = tokio::select! {
             biased;
             () = stop.cancelled() => break,
-            _ = interval.tick() => {}
-            () = daemon.merged.notified() => interval.reset(),
-        }
+            _ = interval.tick() => false,
+            () = daemon.merged.notified() => {
+                interval.reset();
+                true
+            }
+        };
         let recheck = count.is_multiple_of(RECHECK_EVERY);
         if recheck {
             crate::methods::host::sweep_uploads(&daemon).await;
+        }
+        // The merge that woke this sweep may be of a pull request known closed, since reopened.
+        if recheck || woken {
+            known.retain(|_, pull| pull.state == PrState::Merged);
         }
         sweep(&daemon, &stop, &mut known, recheck).await;
         count = count.wrapping_add(1);
@@ -65,18 +73,14 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
 
 /// Archives every thread whose pull requests merged since its last message, and removes every
 /// merged worktree when the host's setting is on, stopping early for `stop`. `known` holds the
-/// merged and closed pull requests read so far, by URL. `recheck` reads the closed ones again,
-/// since one can reopen. Without it, a worktree whose pull requests were all known merged before
-/// this sweep stays unless its thread archives now.
+/// merged and closed pull requests read so far, by URL. Without `recheck`, a worktree whose pull
+/// requests were all known merged before this sweep stays unless its thread archives now.
 async fn sweep(
     daemon: &Arc<Daemon>,
     stop: &CancellationToken,
     known: &mut HashMap<String, Pull>,
     recheck: bool,
 ) {
-    if recheck {
-        known.retain(|_, pull| pull.state == PrState::Merged);
-    }
     let candidates = store(daemon, |db| {
         let clean = db.clean_worktrees().map_err(|e| store_error(&e))?;
         let mut candidates = Vec::new();
@@ -167,34 +171,60 @@ async fn sweep(
 }
 
 /// `run`'s linked pull requests, reading only those not in `known` and adding the merged and
-/// closed ones, and whether this read a merge for the first time. None when one can't be read.
+/// closed ones, and whether this read a merge for the first time. A closed one in `known` is read
+/// again before the others' merge counts, since it may have reopened. None when one can't be read.
 async fn read(
     daemon: &Daemon,
     run: &Run,
     known: &mut HashMap<String, Pull>,
 ) -> Option<(Vec<Pull>, bool)> {
+    let urls = &run.state.pull_requests;
     let mut pulls = Vec::new();
     let mut fresh = false;
-    for url in &run.state.pull_requests {
-        if let Some(pull) = known.get(url) {
-            pulls.push(pull.clone());
-            continue;
-        }
-        match read_one(daemon, url).await {
-            Ok(pull) => {
-                if matches!(pull.state, PrState::Merged | PrState::Closed) {
-                    fresh |= pull.state == PrState::Merged;
-                    known.insert(url.clone(), pull.clone());
+    let mut stale = Vec::new();
+    for (index, url) in urls.iter().enumerate() {
+        let pull = match known.get(url) {
+            Some(pull) => {
+                if pull.state == PrState::Closed {
+                    stale.push(index);
                 }
-                pulls.push(pull);
+                pull.clone()
             }
-            Err(error) => {
-                warn!(run = %run.id, %url, %error, "could not read a linked pull request");
-                return None;
-            }
+            None => live(daemon, run, url, known, &mut fresh).await?,
+        };
+        pulls.push(pull);
+    }
+    if merged(&pulls) {
+        for index in stale {
+            known.remove(&urls[index]);
+            pulls[index] = live(daemon, run, &urls[index], known, &mut fresh).await?;
         }
     }
     Some((pulls, fresh))
+}
+
+/// Pull request `url` read from GitHub, added to `known` when merged or closed, with `fresh` set
+/// when merged. None when it can't be read.
+async fn live(
+    daemon: &Daemon,
+    run: &Run,
+    url: &str,
+    known: &mut HashMap<String, Pull>,
+    fresh: &mut bool,
+) -> Option<Pull> {
+    match read_one(daemon, url).await {
+        Ok(pull) => {
+            if matches!(pull.state, PrState::Merged | PrState::Closed) {
+                *fresh |= pull.state == PrState::Merged;
+                known.insert(url.to_owned(), pull.clone());
+            }
+            Some(pull)
+        }
+        Err(error) => {
+            warn!(run = %run.id, %url, %error, "could not read a linked pull request");
+            None
+        }
+    }
 }
 
 /// Pull request `url`: its state alone, as every sweep reads it, and the rest only once merged.
