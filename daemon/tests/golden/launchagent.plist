@@ -17,10 +17,7 @@
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
-	<dict>
-		<key>SuccessfulExit</key>
-		<false/>
-	</dict>
+	<true/>
 	<key>StandardOutPath</key>
 	<string>/Users/ryan/Library/Application Support/parallax/logs/plxd.log</string>
 	<key>StandardErrorPath</key>
