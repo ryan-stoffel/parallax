@@ -143,7 +143,10 @@ const shownKind = (kind: unknown): DocKind =>
 export const kindOf = (name: string): DocKind =>
   shownKind(/\.([^./]+)$/.exec(name)?.[1]?.toLowerCase());
 
-/** A file present_files showed (PLX-755): its run, its path in the run's folder, its name, and type. */
+/**
+ * A file present_files showed (PLX-755) or a transcript linked (PLX-834): its run, its path in the
+ * run's folder, its name, and type.
+ */
 export interface DocRef {
   runId: string;
   path: string;
