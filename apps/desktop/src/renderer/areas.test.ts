@@ -7,6 +7,7 @@ import {
   jumpTarget,
   nextColor,
   parseScope,
+  revertEdit,
   rootIds,
   searchMatch,
   withMember,
@@ -121,4 +122,16 @@ test("a toast pushed out of the stack commits its held-back change", () => {
   const { list: next, settled } = pushToast(list, { id: 4, text: "note" });
   expect(next.map((t) => t.id)).toEqual([2, 3, 4]);
   expect(settled.map((t) => t.id)).toEqual([1]);
+});
+
+test("undoing an area edit puts back only what the edit changed", () => {
+  const before = area({ name: "Acme", threads: ["a", "b"] });
+  const after = { ...before, name: "Acme client", threads: ["b", "c"] };
+  // Since the edit, "d" joined from New Thread and the color changed elsewhere.
+  const now = { ...after, id: before.id, color: "teal", threads: ["b", "c", "d"] };
+  expect(revertEdit(before, after, now)).toEqual({
+    name: "Acme",
+    threads: ["b", "d", "a"],
+    projects: [],
+  });
 });

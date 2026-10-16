@@ -37,7 +37,7 @@ import type { DocRef } from "./documents";
 import { OpenDocumentContext } from "./FileCards";
 import { panelWidths, SIDEBAR_MIN } from "./PanelResize";
 import { NewThreadPicker } from "./NewThreadPicker";
-import { Notifications } from "./notifications";
+import { Notifications, notify } from "./notifications";
 import { Onboarding } from "./Onboarding";
 import { useOnboarding } from "./firstRun";
 import { localId, useHosts } from "./hosts";
@@ -146,8 +146,6 @@ export function App() {
     list: { hostId: string; threadId: string }[];
     at: number;
   }>({ list: [], at: -1 });
-  // Set while Back or Forward opens a thread, so it doesn't count as a new step.
-  const stepping = useRef(false);
   // Shown while the selection is one of its threads, which is the focused one.
   const [split, setSplit] = useState<Split>();
   // A Project just created on another host, opened once that host is open and lists it: the
@@ -423,14 +421,11 @@ export function App() {
   const openHostThread = (hostId: string, threadId: string) =>
     openOnHost(hostId, { kind: "thread", threadId });
 
-  // Each thread opened is a step in this window's history, unless Back or Forward opened it.
+  // Each thread opened is a step in this window's history. Back and Forward move `at` to the
+  // thread they open first, so it isn't a new step.
   const openedThread = selection.kind === "thread" ? selection.threadId : undefined;
   useEffect(() => {
     if (!openedThread) return;
-    if (stepping.current) {
-      stepping.current = false;
-      return;
-    }
     setHistory(({ list, at }) => {
       const here = list[at];
       if (here?.hostId === host.id && here.threadId === openedThread) return { list, at };
@@ -438,9 +433,13 @@ export function App() {
       return { list: next, at: next.length - 1 };
     });
   }, [host.id, openedThread]);
-  // Where Back (-1) or Forward (1) goes, skipping deleted threads.
+  // Where Back (-1) or Forward (1) goes, skipping deleted threads. Away from the thread at `at`,
+  // as on New Thread or a Project, Back goes to that thread itself.
+  const here = history.list[history.at];
+  const onStep = here?.hostId === host.id && here.threadId === openedThread;
   const stepTo = (step: -1 | 1) => {
-    for (let at = history.at + step; at >= 0 && at < history.list.length; at += step) {
+    const from = onStep ? history.at + step : step === -1 ? history.at : history.at + 1;
+    for (let at = from; at >= 0 && at < history.list.length; at += step) {
       const { hostId, threadId } = history.list[at]!;
       const view = views[hostId];
       if (
@@ -455,7 +454,6 @@ export function App() {
     const at = stepTo(direction);
     if (at === undefined) return;
     const { hostId, threadId } = history.list[at]!;
-    stepping.current = true;
     setHistory({ list: history.list, at });
     openHostThread(hostId, threadId);
   };
@@ -471,10 +469,19 @@ export function App() {
       ? a.id === joinChoice.area
       : scope.kind === "area" && scope.hostId === host.id && a.id === scope.id,
   );
-  const joinArea = async (threadId: string) => {
+  // Read when a start answers, from the lists as they are then, so two quick starts both join.
+  const viewsNow = useRef(views);
+  useEffect(() => {
+    viewsNow.current = views;
+  });
+  const joinArea = async (hostId: string, threadId: string) => {
     if (!joining) return;
-    const area = (views[host.id] ?? idleThreads).state.areas.find((a) => a.id === joining.id);
-    if (area) await threads.updateArea(area.id, withMember(area, "thread", threadId, true));
+    const view = viewsNow.current[hostId] ?? idleThreads;
+    const area = view.state.areas.find((a) => a.id === joining.id);
+    const error =
+      area && (await view.updateArea(area.id, withMember(area, "thread", threadId, true)));
+    if (error)
+      notify({ tone: "error", title: `Couldn't add the thread to ${joining.name}`, body: error });
   };
   useSnoozeAlarms(listed, openHostThread);
   useThreadAlarms(listed, openHostThread, settings ? [] : panes.map((id) => `${host.id}/${id}`));
@@ -1102,7 +1109,7 @@ export function App() {
                         "runOptions" in connection.capabilities
                       }
                       onStarted={(threadId, background) => {
-                        void joinArea(threadId);
+                        void joinArea(host.id, threadId);
                         if (!background) setSelection({ kind: "thread", threadId, started: true });
                       }}
                       chips={

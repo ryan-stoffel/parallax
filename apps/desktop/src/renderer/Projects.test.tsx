@@ -3001,3 +3001,46 @@ test("with spaces, a Space's row in the Repos filter renames and deletes it, and
   expect(trigger().getAttribute("aria-label")).toBe("Showing All threads");
   expect(trigger().getAttribute("aria-pressed")).toBe("false");
 });
+
+test("⌥ and a digit opens an area, but not while typing, where it types a character (PLX-789)", async () => {
+  capabilities = { areas: {} };
+  withThread();
+  const launch = {
+    id: "a-launch",
+    name: "Launch",
+    color: "violet",
+    threads: [flaky.id],
+    projects: [],
+  };
+  answers["thread/list"] = () => ({
+    result: { repos: [parallax], threads: [flaky], areas: [launch], seq: 7 },
+  });
+  await renderApp();
+  const shown = () =>
+    document.querySelector('#sidebar [aria-label^="Showing "]')!.getAttribute("aria-label");
+  const search = document.querySelector<HTMLInputElement>('#sidebar input[type="search"]')!;
+  await act(
+    async () =>
+      void search.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "¡", code: "Digit1", altKey: true, bubbles: true }),
+      ),
+  );
+  expect(shown()).toBe("Showing All threads");
+  await keyDown({ key: "¡", code: "Digit1", altKey: true });
+  expect(shown()).toBe("Showing Launch");
+  expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
+  await keyDown({ key: "º", code: "Digit0", altKey: true });
+  expect(shown()).toBe("Showing All threads");
+});
+
+test("on a host without pins or titles, P and R on a row do nothing (PLX-789)", async () => {
+  withThread();
+  await renderApp();
+  const row = document.querySelector<HTMLElement>(`#sidebar [data-row$="/${flaky.id}"]`)!;
+  act(() => row.focus());
+  press("p");
+  press("r");
+  await settle();
+  expect(calls("thread/update")).toEqual([]);
+  expect(document.querySelector('input[aria-label="Thread name"]')).toBeNull();
+});

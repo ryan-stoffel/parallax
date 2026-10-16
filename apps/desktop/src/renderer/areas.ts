@@ -153,3 +153,21 @@ export function highlight(
     .filter(Boolean)
     .map((part) => ({ text: part, mark: words.includes(part.toLowerCase()) }));
 }
+
+/**
+ * What puts back an area edit from `before` to `after`, applied to the area as it is `now`: the
+ * name and color if the edit changed them, and only the members it added or took out, so changes
+ * made since, such as a thread that joined from New Thread, stay.
+ */
+export function revertEdit(before: Area, after: Omit<Area, "id">, now: Area) {
+  const undo = (was: string[], edited: string[], current: string[]) => [
+    ...current.filter((id) => !(edited.includes(id) && !was.includes(id))),
+    ...was.filter((id) => !edited.includes(id) && !current.includes(id)),
+  ];
+  return {
+    ...(after.name !== before.name && { name: before.name }),
+    ...(after.color !== before.color && { color: before.color }),
+    threads: undo(before.threads, after.threads, now.threads),
+    projects: undo(before.projects, after.projects, now.projects),
+  };
+}

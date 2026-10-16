@@ -87,6 +87,7 @@ import {
   inArea,
   jumpTarget,
   parseScope,
+  revertEdit,
   rootIds,
   scopeStore,
   searchMatch,
@@ -477,7 +478,7 @@ export function ThreadList({
   const [flashing, setFlashing] = useState<ReadonlySet<string>>(new Set());
   // The row to focus after the next render: by key, or by place, as the one that takes an
   // archived row's place.
-  const focusNext = useRef<{ key?: string; index?: number }>(undefined);
+  const focusNext = useRef<{ key?: string; index?: number; leaving?: string }>(undefined);
   const card = useRef<CardHandle>(null);
   // Snoozes end on time even with nothing else changing.
   const now = useMinute();
@@ -653,6 +654,8 @@ export function ThreadList({
     const m = searchMatch(words, i.text, (w) => !!hits?.hits.get(w)?.has(i.key));
     if (m) matched.set(i.key, m);
   }
+  // While plxd's matches in messages are on their way, an empty list isn't "No matches" yet.
+  const searching = !hits && hosts.some(({ view }) => "threadContext" in view.capabilities);
   const snippetOf = (i: Item) =>
     matched.get(i.key)?.length ? hits?.snippets.get(i.key) : undefined;
 
@@ -782,8 +785,10 @@ export function ThreadList({
   useLayoutEffect(() => {
     const next = focusNext.current;
     if (!next) return;
-    focusNext.current = undefined;
     const rows = [...document.querySelectorAll<HTMLElement>("#sidebar [data-row]")];
+    // A row on its way out keeps focus until plxd's answer takes it out of the list.
+    if (next.leaving && rows.some((r) => r.dataset["row"] === next.leaving)) return;
+    focusNext.current = undefined;
     const row =
       next.key !== undefined
         ? rows.find((r) => r.dataset["row"] === next.key)
@@ -805,7 +810,8 @@ export function ThreadList({
     setTimeout(() => setFlashing((f) => new Set([...f].filter((k) => !keys.includes(k)))), 1800);
   });
 
-  // Held-back deletes go through when the window closes.
+  // Held-back deletes go through once the list closes, as when Settings opens, or the window does,
+  // so nothing is left half done; their Undo ends then.
   useEffect(() => {
     window.addEventListener("beforeunload", flushToasts);
     return () => {
@@ -831,8 +837,10 @@ export function ThreadList({
         e.preventDefault();
         return jump(e.key === "ArrowDown" ? 1 : -1);
       }
-      // ⌥1 to ⌥9 open areas in order and ⌥0 shows every thread. By key position, since ⌥ and a
-      // digit type a symbol on macOS.
+      const typing = prose || target.tagName === "INPUT" || target.tagName === "SELECT";
+      if (typing) return;
+      // ⌥1 to ⌥9 open areas in order and ⌥0 shows every thread, by key position. Not while
+      // typing: ⌥ and a digit types a character there, such as { on a German layout.
       const digit = /^Digit([0-9])$/.exec(e.code)?.[1];
       if (digit !== undefined && plainAlt && listedAreas.length) {
         const d = Number(digit);
@@ -841,8 +849,6 @@ export function ThreadList({
         e.preventDefault();
         return setScope(area ? areaScope(area) : "all");
       }
-      const typing = prose || target.tagName === "INPUT" || target.tagName === "SELECT";
-      if (typing) return;
       if (modOnly(e) && e.code === "KeyZ") {
         if (undo()) e.preventDefault();
       } else if (e.key === "Escape" && picked.size) {
@@ -872,7 +878,7 @@ export function ThreadList({
     const was = !!t.archived;
     const error = await item.view.archive(t.id, !was);
     setActionError(error);
-    if (error) return;
+    if (error) return void (focusNext.current = undefined);
     const lastOpen = items.every(
       (i) => i.kind !== "thread" || i.thread.archived || i.key === item.key,
     );
@@ -887,7 +893,7 @@ export function ThreadList({
     const was = t.snoozedUntil;
     const error = await item.view.update(t.id, { snoozedUntil: until.toISOString() });
     setActionError(error);
-    if (error) return;
+    if (error) return void (focusNext.current = undefined);
     const ending = until.getTime() <= Date.now();
     toast(ending ? "Unsnoozed" : `Snoozed until ${when(until)}`, () => {
       // A snooze that ended meanwhile ends now.
@@ -970,21 +976,26 @@ export function ThreadList({
           if (!t.archived) void viewOf(item.host.id)?.archive(t.id, false);
       });
     } else if (action === "snooze") {
+      // Only where plxd keeps snoozes (`threadAttention`).
+      const able = list.filter(({ item }) => "threadAttention" in item.view.capabilities);
+      if (!able.length) return;
       const until = new Date(Date.now() + 3_600_000).toISOString();
       errors.push(
         ...(await Promise.all(
-          list.map(({ item, t }) => item.view.update(t.id, { snoozedUntil: until })),
+          able.map(({ item, t }) => item.view.update(t.id, { snoozedUntil: until })),
         )),
       );
       setPicked(new Set());
-      toast(`Snoozed ${n} for an hour`, () => {
-        for (const { item, t } of list)
+      toast(`Snoozed ${plural(able.length, "thread")} for an hour`, () => {
+        for (const { item, t } of able)
           void viewOf(item.host.id)?.update(t.id, {
             snoozedUntil: t.snoozedUntil ?? new Date().toISOString(),
           });
       });
     } else {
-      const tops = list.filter(({ t }) => !t.parent);
+      // Only top-level threads, where plxd keeps pins (`areas`).
+      const tops = list.filter(({ item, t }) => !t.parent && "areas" in item.view.capabilities);
+      if (!tops.length) return;
       const on = !tops.every(({ t }) => t.pinned);
       errors.push(
         ...(await Promise.all(tops.map(({ item, t }) => item.view.update(t.id, { pinned: on })))),
@@ -1038,7 +1049,8 @@ export function ThreadList({
     const at = rows.indexOf(e.currentTarget);
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     const thread = item.kind === "thread";
-    const act = (run: () => void, after?: { index?: number; key?: string }) => {
+    const can = (capability: string) => thread && capability in item.view.capabilities;
+    const act = (run: () => void, after?: { index?: number; key?: string; leaving?: string }) => {
       e.preventDefault();
       focusNext.current = after;
       run();
@@ -1048,12 +1060,16 @@ export function ThreadList({
       const next = rows[at + (key === "ArrowDown" ? 1 : -1)];
       next?.focus();
       next?.scrollIntoView({ block: "nearest" });
-    } else if (key === "e" && thread) act(() => void archive(item), { index: at });
-    else if (key === "s" && thread && !e.shiftKey)
-      act(() => void snoozeUntil(item, new Date(Date.now() + 3_600_000)), { index: at });
-    else if (key === "p" && thread && !item.thread.parent)
+    } else if (key === "e" && thread)
+      act(() => void archive(item), { index: at, leaving: item.key });
+    else if (key === "s" && can("threadAttention") && !e.shiftKey)
+      act(() => void snoozeUntil(item, new Date(Date.now() + 3_600_000)), {
+        index: at,
+        leaving: item.key,
+      });
+    else if (key === "p" && can("areas") && item.kind === "thread" && !item.thread.parent)
       act(() => void pin(item), { key: item.key });
-    else if (key === "r" && thread) act(() => setRenaming(item.key));
+    else if (key === "r" && can("threadLineage")) act(() => setRenaming(item.key));
     else if (key === "a")
       act(() =>
         e.currentTarget
@@ -1316,8 +1332,11 @@ export function ThreadList({
       const error = await view.updateArea(area.id, fields);
       if (error) return error;
       setEditor(undefined);
-      const { id: _, ...was } = area;
-      toast(`Saved ${fields.name}`, () => void viewOf(hostId)?.updateArea(area.id, was));
+      toast(`Saved ${fields.name}`, () => {
+        const view = viewOf(hostId);
+        const now = view?.state.areas.find((a) => a.id === area.id);
+        if (view && now) void view.updateArea(area.id, revertEdit(area, fields, now));
+      });
       return undefined;
     }
     const created = { id: uuidv7(), ...fields };
@@ -1326,7 +1345,9 @@ export function ThreadList({
     setEditor(undefined);
     setQuery("");
     setScope(`area:${hostId}/${created.id}`, false);
-    const index = listedAreas.length;
+    // It goes last among its host's areas, which list in the hosts' order.
+    const hostAt = (id: string) => hosts.findIndex((h) => h.host.id === id);
+    const index = listedAreas.filter((a) => hostAt(a.host.id) <= hostAt(hostId)).length;
     toast(
       `Created ${fields.name}${index < 9 ? ` · ${areaKey(index + 1)}` : ""}`,
       () => void viewOf(hostId)?.deleteArea(created.id),
@@ -1457,7 +1478,7 @@ export function ThreadList({
             onClose={onClosePane}
           />
         )}
-        {words.length > 0 && nothingShown ? (
+        {words.length > 0 && nothingShown && !searching ? (
           <EmptyCard title={`No matches${scopeLabel ? ` in ${scopeLabel.name}` : ""}`}>
             Nothing matches “{query.trim()}”.
             {scope !== "all" && (

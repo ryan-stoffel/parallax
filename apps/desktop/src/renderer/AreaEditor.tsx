@@ -170,18 +170,18 @@ export function AreaEditor({
     }
     setSaving(true);
     const known = new Map(candidates.map((c) => [c.id, c.kind]));
-    // Members the picker doesn't list now, such as an archived thread, stay as they were.
-    const keep = (kind: "thread" | "project", list: string[] = []) =>
-      list.filter((id) => !known.has(id));
+    // Members the picker doesn't list, such as an archived thread or the archived row New area
+    // was opened from, stay as they were.
+    const keep = (list: string[] = []) => list.filter((id) => !known.has(id));
     const failed = await onSave({
       name: name.trim(),
       color,
       threads: [
-        ...keep("thread", area?.threads),
+        ...keep(area?.threads ?? initial?.threads),
         ...[...picked].filter((id) => known.get(id) === "thread"),
       ],
       projects: [
-        ...keep("project", area?.projects),
+        ...keep(area?.projects ?? initial?.projects),
         ...[...picked].filter((id) => known.get(id) === "project"),
       ],
     });
