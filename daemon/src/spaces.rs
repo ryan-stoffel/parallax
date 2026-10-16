@@ -148,12 +148,16 @@ pub(crate) async fn delete(
         threads::delete(daemon, run, None).await?;
     }
     store(daemon, move |db| {
+        let in_area = db.in_area(id.into()).map_err(|e| store_error(&e))?;
         db.delete_repo(id.into()).map_err(|e| store_error(&e))?;
         db.stage(
             jiff::Timestamp::now(),
             None,
             ParallaxEvent::RepoRemoved { repo: id },
         );
+        if in_area {
+            crate::areas::stage_changed(db)?;
+        }
         Ok(())
     })
     .await?;

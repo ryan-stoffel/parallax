@@ -3919,6 +3919,11 @@ export type Area = {
 	 * Its Projects, in the order they were added.
 	 */
 	projects: Array<ProjectId>,
+	/**
+	 * Its repo entries and Spaces, never the scratch entry, in the order they were added, behind
+	 * `areaRepos`. Absent from an older plxd.
+	 */
+	repos?: Array<RepoId>,
 };
 
 /**
@@ -3926,6 +3931,12 @@ export type Area = {
  * retry of `area/create`.
  */
 export type AreaId = string;
+
+/**
+ * A repo entry's id: a version 7 UUID that the client generates once and sends again on
+ * every retry of `repo/add`. plxd generates the scratch entry's.
+ */
+export type RepoId = string;
 
 /**
  * A finished turn rewritten in place as one `agent.output` row (0052).
@@ -4039,12 +4050,6 @@ export type Repo = {
 	 */
 	createdAt: string,
 };
-
-/**
- * A repo entry's id: a version 7 UUID that the client generates once and sends again on
- * every retry of `repo/add`. plxd generates the scratch entry's.
- */
-export type RepoId = string;
 
 /**
  * Where a script is.
@@ -5422,8 +5427,8 @@ export type SpaceDeleteResult = Record<symbol, never>;
 /**
  * Params of `area/create`: makes an area. Idempotent on `id`: a retry with the same name returns
  * the area, another name fails with `idConflict`. A name another area has, ignoring case, fails
- * with `invalidParams`. Ids that name no top-level thread or Project are dropped, so the result
- * says what was kept. Appends `areas.changed`.
+ * with `invalidParams`. Ids that name no top-level thread, Project, or non-scratch repo entry are
+ * dropped, so the result says what was kept. Appends `areas.changed`.
  */
 export type AreaCreateParams = {
 	/**
@@ -5446,6 +5451,10 @@ export type AreaCreateParams = {
 	 * Its Projects.
 	 */
 	projects: Array<ProjectId>,
+	/**
+	 * Its repo entries and Spaces, behind `areaRepos`.
+	 */
+	repos?: Array<RepoId>,
 };
 
 /**
@@ -5484,10 +5493,15 @@ export type AreaUpdateParams = {
 	 * Its Projects, replacing the old list.
 	 */
 	projects?: Array<ProjectId>,
+	/**
+	 * Its repo entries and Spaces, replacing the old list, behind `areaRepos`.
+	 */
+	repos?: Array<RepoId>,
 };
 
 /**
- * Params of `area/delete`: deletes an area. Its threads and Projects stay where they are.
+ * Params of `area/delete`: deletes an area. Its threads, Projects, and repo entries stay where
+ * they are.
  * Deleting an unknown area succeeds and appends nothing; otherwise it appends `areas.changed`.
  */
 export type AreaDeleteParams = {

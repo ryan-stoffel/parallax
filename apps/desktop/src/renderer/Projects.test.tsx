@@ -3033,6 +3033,66 @@ test("⌥ and a digit opens an area, but not while typing, where it types a char
   expect(shown()).toBe("Showing All threads");
 });
 
+test("an area lists its Spaces and repos as folders, an empty one too, that open and close (PLX-852)", async () => {
+  capabilities = { areas: {}, areaRepos: {}, spaces: {} };
+  withThread();
+  const math: Repo = { ...repo("Calculus", "/data/spaces/s1"), id: "s1", space: true };
+  const school = {
+    id: "a-school",
+    name: "School",
+    color: "sky",
+    threads: [],
+    projects: [],
+    repos: [math.id, parallax.id],
+  };
+  answers["thread/list"] = () => ({
+    result: { repos: [parallax, math], threads: [flaky], areas: [school], seq: 7 },
+  });
+  await renderApp();
+  await keyDown({ key: "¡", code: "Digit1", altKey: true });
+  const folders = () => [...document.querySelectorAll<HTMLElement>("#sidebar li[data-folder]")];
+  expect(folders().map((f) => f.querySelector("button")!.textContent)).toEqual([
+    "Calculus",
+    "parallax1",
+  ]);
+  expect(folders()[0]!.textContent).toContain("No threads yet");
+  expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
+  expect(document.querySelector('#sidebar [aria-label="Threads"]')).toBeNull();
+
+  const toggle = folders()[1]!.querySelector("button")!;
+  await click(toggle);
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(sidebarTitles()).toEqual([]);
+});
+
+test("an empty area's editor adds a whole Space (PLX-852)", async () => {
+  capabilities = { areas: {}, areaRepos: {}, spaces: {} };
+  withThread();
+  const math: Repo = { ...repo("Calculus", "/data/spaces/s1"), id: "s1", space: true };
+  const school = { id: "a-school", name: "School", color: "sky", threads: [], projects: [] };
+  answers["thread/list"] = () => ({
+    result: { repos: [parallax, math], threads: [flaky], areas: [school], seq: 7 },
+  });
+  answers["area/update"] = () => ({ result: { area: { ...school, repos: [math.id] } } });
+  await renderApp();
+  await keyDown({ key: "¡", code: "Digit1", altKey: true });
+  await click(
+    [...document.querySelectorAll("#sidebar button")].find((b) => b.textContent === "Pick threads"),
+  );
+  const editor = document.querySelector<HTMLDialogElement>("dialog[open]")!;
+  const calculus = [...editor.querySelectorAll('[role="checkbox"]')].find((b) =>
+    b.textContent?.startsWith("Calculus"),
+  )!;
+  expect(calculus.textContent).toBe("CalculusSpace");
+  await click(calculus);
+  await click(
+    [...editor.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Save")),
+  );
+  expect(calls("area/update")).toEqual([
+    expect.objectContaining({ area: school.id, repos: [math.id] }),
+  ]);
+});
+
 test("on a host without pins or titles, P and R on a row do nothing (PLX-789)", async () => {
   withThread();
   await renderApp();

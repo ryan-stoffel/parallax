@@ -21,6 +21,14 @@ export interface Candidate {
   at: string;
 }
 
+/** A repo entry or Space the editor can add whole (PLX-852). */
+export interface Folder {
+  id: string;
+  name: string;
+  icon: ReactNode;
+  space: boolean;
+}
+
 /** What Save sends: the area's fields, its members split by kind. */
 export type AreaFields = Omit<Area, "id">;
 
@@ -87,12 +95,14 @@ function Box({ state }: { state: boolean | "mixed" }) {
  * New area or Edit area (PLX-789), a modal: a name, one of eight colors (a new area's starts at
  * the first no area uses), and a searchable picker of the host's top-level threads and Projects,
  * grouped by repo, each group with a checkbox for all of it. Each candidate shows its status and
- * the other areas it's in. ⌘↵ saves, as Enter in the name does; Delete area asks inline first.
+ * the other areas it's in. Where the host's plxd has `areaRepos`, a list above it adds whole Spaces
+ * and repos (PLX-852). ⌘↵ saves, as Enter in the name does; Delete area asks inline first.
  */
 export function AreaEditor({
   area,
   areas,
   candidates,
+  folders,
   initial,
   onSave,
   onDelete,
@@ -103,6 +113,8 @@ export function AreaEditor({
   /** The host's areas, for unique names, the next color, and each candidate's other areas. */
   areas: readonly Area[];
   candidates: readonly Candidate[];
+  /** The host's Spaces and repos, where its plxd keeps them as members; absent hides the list. */
+  folders?: readonly Folder[];
   /** New area's name and picks to start with, as from the filter's text or a row's menu. */
   initial?: { name?: string; threads?: string[]; projects?: string[] };
   /** Saves; resolves to plxd's error, for people, or undefined once saved. */
@@ -122,6 +134,11 @@ export function AreaEditor({
         ...(area?.projects ?? initial?.projects ?? []),
       ]),
   );
+  const [pickedFolders, setPickedFolders] = useState(() => new Set(area?.repos ?? []));
+  // The area's Spaces and repos as it opened come first, then Spaces before repos.
+  const [firstFolders] = useState(pickedFolders);
+  const rank = (f: Folder) => (firstFolders.has(f.id) ? 0 : 2) + (f.space ? 0 : 1);
+  const sortedFolders = folders && [...folders].sort((a, b) => rank(a) - rank(b));
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
@@ -184,6 +201,7 @@ export function AreaEditor({
         ...keep(area?.projects ?? initial?.projects),
         ...[...picked].filter((id) => known.get(id) === "project"),
       ],
+      ...(folders && { repos: [...pickedFolders] }),
     });
     setSaving(false);
     if (failed) setError(failed);
@@ -282,6 +300,41 @@ export function AreaEditor({
           />
         ))}
       </div>
+      {folders && folders.length > 0 && (
+        <>
+          <p className={sectionLabel}>
+            Spaces and repos
+            <span className="font-normal">· every thread in them</span>
+          </p>
+          <div className="mb-0.5 max-h-32 shrink-0 overflow-y-auto rounded-xl border border-border p-1">
+            {sortedFolders!.map((f) => {
+              const on = pickedFolders.has(f.id);
+              return (
+                <button
+                  key={f.id}
+                  type="button"
+                  role="checkbox"
+                  aria-checked={on}
+                  onClick={() => {
+                    const next = new Set(pickedFolders);
+                    if (on) next.delete(f.id);
+                    else next.add(f.id);
+                    setPickedFolders(next);
+                  }}
+                  className={pickRow}
+                >
+                  <Box state={on} />
+                  {f.icon}
+                  <span className="min-w-0 flex-1 truncate">{f.name}</span>
+                  <span className="shrink-0 text-[11.5px] text-faint-foreground">
+                    {f.space ? "Space" : "Repo"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
       <p className={sectionLabel}>
         Threads and Projects
         <span className="font-normal">· {count} picked</span>

@@ -351,6 +351,10 @@ export const sectionsStore = stored<Record<string, Partial<Sections>>>(
 );
 /** Each scope's last open row, by key, so switching back reopens it. */
 const lastOpenStore = stored<Record<string, string>>("parallax:lastOpen", {}, record);
+/** The area folders (PLX-852) the user closed, as `host/repo`, kept on this computer. */
+const closedFoldersStore = stored<string[]>("parallax:closedFolders", [], (raw, fallback) =>
+  Array.isArray(raw) ? raw.filter((k): k is string => typeof k === "string") : fallback,
+);
 
 /** One row of the list: a thread, or a Project, with its host and what it asks of the user. */
 type Item = (
@@ -597,7 +601,11 @@ export function ThreadList({
     if (p.kind === "all") return true;
     if (p.kind === "none") return !item.repo || item.repo.scratch;
     if (item.host.id !== p.hostId) return false;
-    return p.kind === "repo" ? item.repo?.id === p.id : item.areas.some((a) => a.id === p.id);
+    if (p.kind === "repo") return item.repo?.id === p.id;
+    if (item.areas.some((a) => a.id === p.id)) return true;
+    // A thread or Project in a repo entry or Space the area holds (PLX-852).
+    const area = item.view.state.areas.find((a) => a.id === p.id);
+    return !!item.repo && !!area?.repos?.includes(item.repo.id);
   };
   const isArchived = (i: Item) => i.kind === "thread" && !!i.thread.archived;
   const isSnoozed = (i: Item) => i.kind === "thread" && snoozed(i.thread, i.attention, now);
@@ -699,10 +707,21 @@ export function ThreadList({
     if (key && inList.has(key)) children.set(key, [...(children.get(key) ?? []), i]);
   }
   const tops = pool.filter((i) => !inList.has(parentKey(i) ?? ""));
+  // An area's repo entries and Spaces (PLX-852): folders that list every thread in them, shown
+  // even when they hold none.
+  const folders = (scopeArea?.area.repos ?? []).flatMap((id) => {
+    const repo = scopeArea!.view.state.repos.find((r) => r.id === id);
+    return repo ? [repo] : [];
+  });
+  const closedFolders = closedFoldersStore.use();
+  const folderKey = (repo: Repo) => `${scopeArea!.host.id}/${repo.id}`;
   // Pinned threads stay put; the rest of a working family sits in Working (PLX-777: a thread
-  // waiting on background work or a watched pull request stays with them).
+  // waiting on background work or a watched pull request stays with them). A thread in a
+  // folder sits in it.
   const pinned = tops.filter((i) => i.kind === "thread" && i.thread.pinned);
-  const unpinned = tops.filter((i) => !pinned.includes(i));
+  const inFolder = (i: Item, repo?: Repo) =>
+    !pinned.includes(i) && !!i.repo && (repo ? i.repo === repo : folders.includes(i.repo));
+  const unpinned = tops.filter((i) => !pinned.includes(i) && !inFolder(i));
   const workingTops = workingSection ? unpinned.filter((i) => working(i.attention)) : [];
   const topThreads = unpinned.filter((i) => !workingTops.includes(i));
   const selectedKey =
@@ -724,21 +743,42 @@ export function ThreadList({
     }
     if (opened.size !== expanded.size) setExpanded(opened);
   }
+  // A closed folder holding the open thread's family opens as the thread does, so its row shows.
+  let top = selectedKey === undefined ? undefined : pool.find((i) => i.key === selectedKey);
+  for (const seen = new Set<string>(); top && !seen.has(top.key);) {
+    seen.add(top.key);
+    const up = parentKey(top);
+    const parent = up === undefined ? undefined : pool.find((i) => i.key === up);
+    if (!parent) break;
+    top = parent;
+  }
+  const hiddenIn = top && folders.find((r) => inFolder(top!, r));
+  const hiddenKey = hiddenIn && folderKey(hiddenIn);
+  useEffect(() => {
+    if (hiddenKey && closedFoldersStore.get().includes(hiddenKey))
+      closedFoldersStore.set(closedFoldersStore.get().filter((k) => k !== hiddenKey));
+  }, [selectedKey]);
   // The rows shown, in order, a group's children after their parent while it's open.
   const flat = (i: Item): Item[] => [
     i,
     ...(expanded.has(i.key) ? (children.get(i.key) ?? []).flatMap(flat) : []),
   ];
   const pinnedRows = sections.pinned ? pinned.flatMap(flat) : [];
+  const folderRows = folders.flatMap((repo) =>
+    closedFolders.includes(folderKey(repo))
+      ? []
+      : tops.filter((i) => inFolder(i, repo)).flatMap(flat),
+  );
   const threadRows = sections.threads ? topThreads.flatMap(flat) : [];
   const workingRows = sections.working ? workingTops.flatMap(flat) : [];
 
   // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held:
-  // Pinned's, then the Projects section's, then the threads', then Working's, each only while
-  // it's open.
+  // Pinned's, then the Projects section's, then the open folders', then the threads', then
+  // Working's, each only while it's open.
   const listed = [
     ...pinnedRows,
     ...(sections.projects ? projects : []),
+    ...folderRows,
     ...threadRows,
     ...workingRows,
   ];
@@ -1118,7 +1158,8 @@ export function ThreadList({
   };
 
   const row = (item: Item, inFamily = false) => itemRow(item, false, inFamily);
-  const itemRow = (item: Item, nested: boolean, inFamily = false) => {
+  // `withAsk` shows a top-level thread's waiting approval inline, as in a folder.
+  const itemRow = (item: Item, nested: boolean, inFamily = false, withAsk = !nested) => {
     const n = modHeld ? listed.indexOf(item) : -1;
     const badge = n >= 0 && n < 9 ? <RowBadge index={n} /> : undefined;
     const selected = item.key === selectedKey;
@@ -1152,7 +1193,7 @@ export function ThreadList({
       );
     const { thread: t, view } = item;
     const pinnable = "areas" in view.capabilities && !t.parent;
-    const ask = nested ? undefined : askOf(item);
+    const ask = withAsk ? askOf(item) : undefined;
     return (
       <ThreadRow
         key={item.key}
@@ -1247,9 +1288,9 @@ export function ThreadList({
   // A thread's row, then with children, a strip under it with their count and, while they're
   // hidden, the most urgent one's status; the two read as one block, with one hover and tint.
   // Open, the children list under it on a guide line.
-  const tree = (item: Item, nested: boolean): ReactNode => {
+  const tree = (item: Item, nested: boolean, withAsk = !nested): ReactNode => {
     const kids = children.get(item.key);
-    if (!kids) return itemRow(item, nested);
+    if (!kids) return itemRow(item, nested, false, withAsk);
     const isOpen = expanded.has(item.key);
     const toggle = () => {
       quiet();
@@ -1265,7 +1306,7 @@ export function ThreadList({
         data-family
         className={`group/fam rounded-lg transition-colors duration-100 hover:bg-hover has-[[aria-current=page]]:hover:bg-hover ${isOpen ? "bg-hover/60" : ""}`}
       >
-        <ul>{itemRow(item, nested, true)}</ul>
+        <ul>{itemRow(item, nested, true, withAsk)}</ul>
         <button
           type="button"
           aria-expanded={isOpen}
@@ -1298,6 +1339,64 @@ export function ThreadList({
       </li>
     );
     return block;
+  };
+
+  // An area's folder: a row with its icon, name, and thread count that opens and closes it, and,
+  // while closed, its most urgent thread's status. Open, its threads list under it on a guide
+  // line, or a note that it has none yet.
+  const folder = (repo: Repo): ReactNode => {
+    const key = folderKey(repo);
+    const isOpen = !closedFolders.includes(key);
+    const kids = tops.filter((i) => inFolder(i, repo));
+    const urgent = mostUrgent(
+      kids.flatMap((k) => [k, ...descendants(k.key)]).map((k) => k.attention),
+    );
+    return (
+      <li key={key} data-folder={key}>
+        <button
+          type="button"
+          aria-expanded={isOpen}
+          onClick={() => {
+            quiet();
+            closedFoldersStore.set(
+              isOpen ? [...closedFolders, key] : closedFolders.filter((k) => k !== key),
+            );
+          }}
+          className="flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] hover:bg-hover"
+        >
+          <span className="grid shrink-0 place-items-center">
+            <RepoIcon repo={repo} />
+          </span>
+          <span className="min-w-0 flex-1 truncate text-foreground/80">
+            <Marked text={repo.name} words={words} />
+          </span>
+          {urgent !== "settled" && !isOpen ? (
+            <AttentionBadge attention={urgent} />
+          ) : (
+            <span className="shrink-0 text-[11.5px] text-faint-foreground tabular-nums">
+              {kids.length || ""}
+            </span>
+          )}
+          <ChevronRight
+            aria-hidden
+            className={`size-3 shrink-0 text-faint-foreground transition-transform ${isOpen ? "rotate-90" : ""}`}
+          />
+        </button>
+        {isOpen && (
+          <ul
+            aria-label={`Threads in ${repo.name}`}
+            className="mb-1.25 ml-4.25 flex flex-col gap-px border-l border-foreground/14 pr-1 pl-1.75"
+          >
+            {kids.map((k) => tree(k, true, true))}
+            {kids.length === 0 && (
+              <li className="px-2 py-1 text-[12px] text-faint-foreground">
+                {words.length ? "Nothing matches" : "No threads yet"}
+              </li>
+            )}
+          </ul>
+        )}
+      </li>
+    );
   };
 
   const confirmDelete = async () => {
@@ -1413,7 +1512,9 @@ export function ThreadList({
     !draftRows.length;
   // An area with nothing in it that's still around asks for some.
   const emptyArea =
-    scopeArea && !items.some((i) => inScope(i, scope) && !isArchived(i) && !doomed.has(i.key));
+    scopeArea &&
+    !folders.length &&
+    !items.some((i) => inScope(i, scope) && !isArchived(i) && !doomed.has(i.key));
 
   return (
     <>
@@ -1486,7 +1587,7 @@ export function ThreadList({
             onClose={onClosePane}
           />
         )}
-        {words.length > 0 && nothingShown && !searching ? (
+        {words.length > 0 && nothingShown && !folders.length && !searching ? (
           <EmptyCard title={`No matches${scopeLabel ? ` in ${scopeLabel.name}` : ""}`}>
             Nothing matches “{query.trim()}”.
             {scope !== "all" && (
@@ -1500,7 +1601,11 @@ export function ThreadList({
             title={`Nothing in ${scopeArea.area.name} yet`}
             mark={<AreaSwatch color={scopeArea.area.color} className="size-3 rounded-[4px]" />}
           >
-            Add a thread from its ⋯ menu, or pick a few now.
+            Add a thread from its ⋯ menu, or pick
+            {"areaRepos" in scopeArea.view.capabilities
+              ? " threads, Spaces, and repos"
+              : " a few"}{" "}
+            now.
             <button
               type="button"
               onClick={() => setEditor({ hostId: scopeArea.host.id, area: scopeArea.area })}
@@ -1547,47 +1652,57 @@ export function ThreadList({
                 </div>
               </>
             )}
-            <div className={sectionHeading}>
-              <SectionToggle
-                label="Threads"
-                collapsed={!sections.threads}
-                controls={threadsId}
-                onToggle={() => toggleSection("threads")}
-              />
-            </div>
-            <div id={threadsId} hidden={!sections.threads}>
-              <ul aria-label="Threads" className="flex flex-col gap-px">
-                {draftRows.map(({ draft, repo }) => (
-                  <DraftRow
-                    key={draft.id}
-                    draft={draft}
-                    repo={repo}
-                    onOpen={() =>
-                      onSelect(draft.hostId, {
-                        kind: "new",
-                        groupId: draft.groupId,
-                        draft: draft.id,
-                      })
-                    }
-                  />
-                ))}
-                {topThreads.map((i) => tree(i, false))}
+            {folders.length > 0 && (
+              <ul aria-label="Spaces and repos" className="mb-2 flex flex-col gap-px">
+                {folders.map(folder)}
               </ul>
-              {draftRows.length === 0 && topThreads.length === 0 && (
-                <p className={emptyNote}>
-                  <span className="relative">
-                    {workingTops.length
-                      ? "Everything else here is working."
-                      : pinned.length
-                        ? "Nothing else here."
-                        : words.length || scope !== "all"
-                          ? "Nothing matches"
-                          : "No threads yet"}
-                    {confetti > 0 && <Confetti key={confetti} />}
-                  </span>
-                </p>
-              )}
-            </div>
+            )}
+            {/* Beside folders, the Threads section shows only with threads outside them. */}
+            {(!folders.length || topThreads.length > 0) && (
+              <>
+                <div className={sectionHeading}>
+                  <SectionToggle
+                    label="Threads"
+                    collapsed={!sections.threads}
+                    controls={threadsId}
+                    onToggle={() => toggleSection("threads")}
+                  />
+                </div>
+                <div id={threadsId} hidden={!sections.threads}>
+                  <ul aria-label="Threads" className="flex flex-col gap-px">
+                    {draftRows.map(({ draft, repo }) => (
+                      <DraftRow
+                        key={draft.id}
+                        draft={draft}
+                        repo={repo}
+                        onOpen={() =>
+                          onSelect(draft.hostId, {
+                            kind: "new",
+                            groupId: draft.groupId,
+                            draft: draft.id,
+                          })
+                        }
+                      />
+                    ))}
+                    {topThreads.map((i) => tree(i, false))}
+                  </ul>
+                  {draftRows.length === 0 && topThreads.length === 0 && (
+                    <p className={emptyNote}>
+                      <span className="relative">
+                        {workingTops.length
+                          ? "Everything else here is working."
+                          : pinned.length
+                            ? "Nothing else here."
+                            : words.length || scope !== "all"
+                              ? "Nothing matches"
+                              : "No threads yet"}
+                        {confetti > 0 && <Confetti key={confetti} />}
+                      </span>
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
           </>
         )}
       </div>
@@ -1650,6 +1765,18 @@ export function ThreadList({
           area={editor.area}
           areas={editorView.state.areas}
           candidates={candidates}
+          folders={
+            "areaRepos" in editorView.capabilities
+              ? editorView.state.repos
+                  .filter((r) => !r.scratch)
+                  .map((r) => ({
+                    id: r.id,
+                    name: r.name,
+                    icon: <RepoIcon repo={r} />,
+                    space: !!r.space,
+                  }))
+              : undefined
+          }
           initial={editor.initial}
           onSave={(fields) => saveArea(editor.hostId, fields, editor.area)}
           onDelete={editor.area ? () => void deleteArea(editor.hostId, editor.area!) : undefined}

@@ -1,4 +1,5 @@
-//! Areas and pins (PLX-789): `area/*`, `areas.changed`, and `pinned` on `thread/update`.
+//! Areas and pins (PLX-789): `area/*`, `areas.changed`, and `pinned` on `thread/update`, and
+//! repo entries and Spaces as members (PLX-852).
 
 use parallax_protocol::methods::{AreaCreate, AreaDelete, AreaUpdate, OrchestrationSubscribeShell};
 use parallax_protocol::{
@@ -14,6 +15,7 @@ fn create(id: AreaId, name: &str, color: &str, threads: Vec<RunId>) -> AreaCreat
         color: color.to_owned(),
         threads,
         projects: Vec::new(),
+        repos: Vec::new(),
     }
 }
 
@@ -77,6 +79,7 @@ async fn an_area_lists_top_level_threads_and_follows_their_deletion() {
         color: Some("teal".to_owned()),
         threads: Some(vec![parent.run_id, other.run_id]),
         projects: None,
+        repos: None,
     };
     let updated = client
         .call::<AreaUpdate>(update.clone())
@@ -111,6 +114,7 @@ async fn an_area_lists_top_level_threads_and_follows_their_deletion() {
             color: None,
             threads: None,
             projects: None,
+            repos: None,
         })
         .await
         .unwrap_err();
@@ -211,4 +215,58 @@ async fn areas_are_checked_listed_and_deleted_beside_pins() {
         .await
         .unwrap();
     assert_eq!(client.list().await.areas, [work]);
+}
+
+/// An area keeps Spaces and repo entries but not the scratch entry, and loses a Space when
+/// `space/delete` deletes it, appending `areas.changed`.
+#[tokio::test]
+async fn an_area_holds_spaces_until_they_are_deleted() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    client.subscribe(0, None).await;
+    let repo = client.add(&path).await;
+    let space = client
+        .call::<SpaceCreate>(SpaceCreateParams {
+            id: RepoId::generate(),
+            name: "Calculus".to_owned(),
+            icon: None,
+        })
+        .await
+        .unwrap()
+        .repo;
+    // A thread with no repo makes the scratch entry.
+    client
+        .call::<ThreadStart>(start_params(None, "Loose"))
+        .await
+        .unwrap();
+    let scratch = client
+        .list()
+        .await
+        .repos
+        .into_iter()
+        .find(|r| r.scratch)
+        .unwrap();
+
+    let area = client
+        .call::<AreaCreate>(AreaCreateParams {
+            repos: vec![space.id, scratch.id, RepoId::generate(), repo.id, space.id],
+            ..create(AreaId::generate(), "School", "sky", Vec::new())
+        })
+        .await
+        .unwrap()
+        .area;
+    assert_eq!(area.repos, [space.id, repo.id]);
+    client.until(changed_to(std::slice::from_ref(&area))).await;
+
+    client
+        .call::<SpaceDelete>(SpaceDeleteParams { space: space.id })
+        .await
+        .unwrap();
+    let left = Area {
+        repos: vec![repo.id],
+        ..area
+    };
+    client.until(changed_to(std::slice::from_ref(&left))).await;
+    assert_eq!(client.list().await.areas, [left]);
 }
