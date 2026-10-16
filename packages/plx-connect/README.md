@@ -18,6 +18,7 @@ npx plx-connect
 | `plx-connect devices [--json]` | Lists your devices on your tailnet, and whether each answers on Parallax Connect's port, 7340. |
 | `plx-connect add <device>` | Installs Parallax on a device over SSH and connects it. `<device>` is a host name, MagicDNS name, or Tailscale IP. |
 | `plx-connect setup` | Installs Parallax on this computer and connects it, for a device that can't take SSH. |
+| `plx-connect doctor` | Checks Parallax on this computer: plxd is installed, up to date, and running, Claude Code's sandbox packages on Linux, and an agent CLI on PATH. It offers a fix for each failed check it can fix, then offers to open Claude Code with the results to look into the problem and help you file an issue. Without Claude Code, it prints the prompt to paste into any agent. |
 
 Options:
 

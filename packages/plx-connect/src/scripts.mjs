@@ -147,9 +147,10 @@ ${posixTail}`;
 
 /**
  * The part of the Linux script that sees to Claude Code's sandbox packages and, on NixOS, nix-ld.
- * `has` also looks in Nix profiles, which a non-login shell may not have on its PATH.
+ * `has` also looks in Nix profiles, which a non-login shell may not have on its PATH. `doctor`
+ * runs it alone as its fix for missing sandbox packages.
  */
-const linuxPackages = `has() {
+export const linuxPackages = `has() {
   command -v "$1" >/dev/null 2>&1 || [ -x "$HOME/.nix-profile/bin/$1" ] || [ -x "$HOME/.local/state/nix/profile/bin/$1" ]
 }
 missing() {
