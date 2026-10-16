@@ -726,6 +726,45 @@ test("Connections installs plxd on an SSH host without it, in one click", async 
   }
 });
 
+test("Colors changes the shown theme's colors, by picker or as JSON, and resets them", async () => {
+  await renderSettings("appearance");
+  const colors = () => JSON.parse(localStorage.getItem("parallax.appearance")!).colors;
+  const button = (name: string) =>
+    [...document.querySelectorAll("button")].find((b) => b.textContent === name)!;
+  await click(
+    document.querySelector<HTMLInputElement>(
+      'fieldset[aria-label="Theme to change"] input[value="light"]',
+    )!,
+  );
+  change(
+    document.querySelector<HTMLInputElement>('input[type="color"][aria-label="Accent"]')!,
+    "#ff00aa",
+  );
+  expect(colors()).toEqual({ "parallax-light": { "--accent": "#ff00aa" } });
+
+  await click(button("Edit as JSON"));
+  const json = document.querySelector<HTMLTextAreaElement>(
+    'textarea[aria-label="Colors as JSON"]',
+  )!;
+  expect(JSON.parse(json.value)).toEqual({ accent: "#ff00aa" });
+  change(
+    json as unknown as HTMLInputElement,
+    '{ "sideBar.background": "#101010", "nope": "#000" }',
+  );
+  await click(button("Apply"));
+  expect(document.querySelector('[role="alert"]')!.textContent).toBe(
+    "nope isn't a color Parallax has.",
+  );
+  expect(colors()).toEqual({ "parallax-light": { "--accent": "#ff00aa" } });
+  change(json as unknown as HTMLInputElement, '{ "sideBar.background": "#101010" }');
+  await click(button("Apply"));
+  expect(colors()).toEqual({ "parallax-light": { "--sidebar": "#101010" } });
+
+  await click(button("Reset all"));
+  expect(colors()).toEqual({});
+  localStorage.removeItem("parallax.appearance");
+});
+
 test("Typography's sizes and Word wrap are kept, and Advanced takes any font's name", async () => {
   await renderSettings("appearance");
   const select = (label: string) =>

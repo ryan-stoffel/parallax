@@ -1,7 +1,14 @@
 import { useLayoutEffect } from "react";
 
 import { merged, stored } from "./stored";
-import { themeCss, useAddedThemes } from "./vscodeThemes";
+import {
+  customColorsCss,
+  themeCss,
+  useAddedThemes,
+  type AddedExtension,
+  type Mode,
+  type Tokens,
+} from "./vscodeThemes";
 
 export type Appearance = {
   /**
@@ -10,6 +17,8 @@ export type Appearance = {
    */
   lightTheme: string;
   darkTheme: string;
+  /** Colors changed over each theme, by its id, as VS Code's `workbench.colorCustomizations`. */
+  colors: Record<string, Tokens>;
   /** "system" follows the OS's Increase contrast. */
   contrast: "system" | "standard" | "more";
   /** A font family name, or empty for the system's. */
@@ -36,6 +45,7 @@ export type Appearance = {
 export const defaults: Appearance = {
   lightTheme: "parallax-light",
   darkTheme: "parallax-dark",
+  colors: {},
   contrast: "system",
   uiFont: "",
   uiSize: 13,
@@ -119,6 +129,15 @@ export const setAppearance = (change: Partial<Appearance>) =>
 /** The appearance, kept current. */
 export const useAppearance = appearance.use;
 
+/** The theme each mode shows: the picked one, or Parallax's where it's no longer added. */
+export function shownThemes(appearance: Appearance, added: AddedExtension[]): Record<Mode, string> {
+  const ids = new Set(added.flatMap((e) => e.themes.map((t) => t.id)));
+  return {
+    light: ids.has(appearance.lightTheme) ? appearance.lightTheme : "parallax-light",
+    dark: ids.has(appearance.darkTheme) ? appearance.darkTheme : "parallax-dark",
+  };
+}
+
 // A font name the user typed, kept to what a CSS family name can hold.
 const family = (name: string) => name.replace(/["';{}\\]/g, "").trim();
 
@@ -155,30 +174,37 @@ export function applyAppearance(appearance: Appearance) {
 }
 
 /**
- * Keeps the saved appearance applied: the page, its zoom, and the added themes' CSS. Call once,
+ * Keeps the saved appearance applied: the page, its zoom, and the added themes' CSS with the
+ * colors changed over them. Call once,
  * at the app root.
  */
 export function useAppearanceEffects() {
   const current = useAppearance();
   const added = useAddedThemes();
-  // After index.css in <head>, so a theme's tokens win over Parallax's.
+  // After index.css in <head>, so a theme's tokens win over Parallax's, and changed colors after
+  // the themes', so they win over both.
   useLayoutEffect(() => {
+    const modes: Record<string, Mode> = { "parallax-light": "light", "parallax-dark": "dark" };
+    for (const t of added.flatMap((e) => e.themes)) modes[t.id] = t.mode;
     const style = document.createElement("style");
-    style.textContent = themeCss(added);
+    style.textContent = `${themeCss(added)}\n${customColorsCss(current.colors, modes)}`;
     document.head.append(style);
     return () => style.remove();
-  }, [added]);
+  }, [added, current.colors]);
   // Layout effect, so the first paint already has the saved appearance.
   useLayoutEffect(() => {
-    applyAppearance(current);
+    // The shown themes' classes, so Parallax's changed colors apply where a picked theme is gone.
+    const { light, dark } = shownThemes(current, added);
+    const shown = { ...current, lightTheme: light, darkTheme: dark };
+    applyAppearance(shown);
     // The OS's Increase contrast and Reduce motion, which "system" follows.
     const media = ["(prefers-contrast: more)", "(prefers-reduced-motion: reduce)"].map(matchMedia);
-    const apply = () => applyAppearance(current);
+    const apply = () => applyAppearance(shown);
     for (const m of media) m.addEventListener("change", apply);
     return () => {
       for (const m of media) m.removeEventListener("change", apply);
     };
-  }, [current]);
+  }, [current, added]);
   useLayoutEffect(() => window.parallax.setZoom(current.uiSize / 13), [current.uiSize]);
   useLayoutEffect(
     () =>

@@ -292,6 +292,17 @@ export async function fetchExtension(
   };
 }
 
+const block = (selector: string, tokens: Tokens) =>
+  `${selector} {\n${Object.entries(tokens)
+    .map(([k, v]) => `  ${k}: ${v};`)
+    .join("\n")}\n}`;
+
+/** `tokens` for theme `id` in its `mode`, on <html> or in a preview. */
+const themeBlock = (id: string, mode: Mode, tokens: Tokens) =>
+  mode === "light"
+    ? block(`:root:where(.theme-${id}:not(.dark)),\n.scheme-light.theme-${id}`, tokens)
+    : block(`:root.dark:where(.theme-${id}),\n.scheme-dark.theme-${id}`, tokens);
+
 /**
  * The CSS for added themes: each one mode's tokens over Parallax's, under `theme-<id>` on <html>
  * or beside .scheme-light or .scheme-dark in a preview. It goes after index.css, and :where keeps
@@ -299,22 +310,109 @@ export async function fetchExtension(
  * still wins, and each theme's Blue & orange colors win over index.css's by coming later.
  */
 export function themeCss(extensions: AddedExtension[]) {
-  const block = (selector: string, tokens: Tokens) =>
-    `${selector} {\n${Object.entries(tokens)
-      .map(([k, v]) => `  ${k}: ${v};`)
-      .join("\n")}\n}`;
   return extensions
     .flatMap((e) => e.themes)
-    .flatMap(({ id, mode, tokens, blueOrange }) =>
+    .flatMap(({ id, mode, tokens, blueOrange }) => [
+      themeBlock(id, mode, tokens),
       mode === "light"
-        ? [
-            block(`:root:where(.theme-${id}:not(.dark)),\n.scheme-light.theme-${id}`, tokens),
-            block(`:root.diff-blue-orange:where(.theme-${id}:not(.dark))`, blueOrange),
-          ]
-        : [
-            block(`:root.dark:where(.theme-${id}),\n.scheme-dark.theme-${id}`, tokens),
-            block(`:root.dark.diff-blue-orange:where(.theme-${id})`, blueOrange),
-          ],
+        ? block(`:root.diff-blue-orange:where(.theme-${id}:not(.dark))`, blueOrange)
+        : block(`:root.dark.diff-blue-orange:where(.theme-${id})`, blueOrange),
+    ])
+    .join("\n");
+}
+
+/** The tokens Settings > Appearance > Colors changes, by their names there. */
+export const colorTokens: Record<string, string> = {
+  "--accent": "Accent",
+  "--background": "Background",
+  "--sidebar": "Sidebar",
+  "--surface": "Cards and menus",
+  "--code": "Code blocks",
+  "--foreground": "Text",
+  "--muted-foreground": "Secondary text",
+  "--faint-foreground": "Faint text",
+  "--added": "Added",
+  "--danger": "Removed and errors",
+  "--warning": "Warnings",
+  "--syntax-keyword": "Keywords",
+  "--syntax-string": "Strings",
+  "--syntax-number": "Numbers",
+  "--syntax-title": "Functions",
+  "--syntax-type": "Types",
+  "--syntax-comment": "Comments",
+};
+/** Tokens only Edit as JSON changes: they're usually see-through, which a color picker can't set. */
+const jsonOnlyTokens = ["--border", "--hover", "--selected"];
+
+/** The VS Code color keys Edit as JSON takes, and the token each sets: `tokensOf`'s sources. */
+const vscodeKeys: Record<string, string> = {
+  "editor.background": "--background",
+  "sideBar.background": "--sidebar",
+  "editorWidget.background": "--surface",
+  "input.background": "--surface",
+  foreground: "--foreground",
+  "editor.foreground": "--foreground",
+  descriptionForeground: "--muted-foreground",
+  focusBorder: "--accent",
+  "textLink.foreground": "--accent",
+  "progressBar.background": "--accent",
+  "button.background": "--accent",
+  errorForeground: "--danger",
+  "editorError.foreground": "--danger",
+  "editorWarning.foreground": "--warning",
+  "gitDecoration.addedResourceForeground": "--added",
+  "textCodeBlock.background": "--code",
+  "panel.border": "--border",
+  "list.hoverBackground": "--hover",
+  "list.activeSelectionBackground": "--selected",
+};
+
+/**
+ * Whether `value` is a color CSS reads, kept to one plain value (a hex, a name, or one function
+ * like rgb() or oklch()), so it can't end its declaration in the CSS it goes into.
+ */
+export const isCssColor = (value: unknown): value is string =>
+  typeof value === "string" &&
+  /^(#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})|[a-z-]+(\([^;{}()]*\))?)$/i.test(value.trim()) &&
+  (globalThis.CSS?.supports("color", value) ?? true);
+
+/**
+ * Edit as JSON's object, as tokens: its keys are Parallax's token names, with or without `--`, or
+ * VS Code's color keys, as in VS Code's `workbench.colorCustomizations`. `errors` names each key
+ * or color it can't take.
+ */
+export function customColors(json: unknown): { tokens: Tokens; errors: string[] } {
+  const tokens: Tokens = {};
+  const errors: string[] = [];
+  if (!json || typeof json !== "object" || Array.isArray(json))
+    return { tokens, errors: ['Colors must be an object, like { "accent": "#ff4a1f" }.'] };
+  for (const [key, value] of Object.entries(json)) {
+    const name = key.startsWith("--") ? key : `--${key}`;
+    const token =
+      vscodeKeys[key] ?? (name in colorTokens || jsonOnlyTokens.includes(name) ? name : undefined);
+    if (!token) errors.push(`${key} isn't a color Parallax has.`);
+    else if (!isCssColor(value)) errors.push(`${key}: ${JSON.stringify(value)} isn't a color.`);
+    else tokens[token] = value.trim();
+  }
+  return { tokens, errors };
+}
+
+/**
+ * The CSS for changed colors (Appearance's `colors`), each theme's over its tokens: after
+ * `themeCss`, with the same selectors, so they win and show in previews too. `modes` has each
+ * theme's mode; colors for a theme it lacks, or that aren't colors, are left out.
+ */
+export function customColorsCss(colors: Record<string, Tokens>, modes: Record<string, Mode>) {
+  return Object.entries(colors)
+    .filter(([id]) => /^[\w-]+$/.test(id) && modes[id])
+    .map(([id, tokens]) =>
+      themeBlock(
+        id,
+        modes[id]!,
+        Object.fromEntries(
+          Object.entries(tokens).filter(([k, v]) => /^--[\w-]+$/.test(k) && isCssColor(v)),
+        ),
+      ),
     )
     .join("\n");
 }

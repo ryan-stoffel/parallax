@@ -2,11 +2,12 @@ import { Moon, Plus, Sun, Trash2 } from "lucide-react";
 import { useId, useState } from "react";
 
 import type { ThemePreference } from "../../preload/bridge";
-import { setAppearance, useAppearance, type Appearance } from "../appearance";
+import { setAppearance, shownThemes, useAppearance, type Appearance } from "../appearance";
 import { behaviorPrefs, setBehaviorPrefs, usageView } from "../prefs";
 import { IconButton, Segmented } from "../ui";
 import { removeExtension, useAddedThemes, type Mode } from "../vscodeThemes";
 import { AddThemeDialog } from "./AddThemeDialog";
+import { ColorSettings } from "./ColorSettings";
 import { PageTitle, Row, Section, Switch } from "./parts";
 import { TypographySettings } from "./TypographySettings";
 
@@ -183,9 +184,9 @@ const card =
   "flex cursor-pointer flex-col gap-2 rounded-xl border border-border bg-surface p-2 text-center text-[12.5px] text-muted-foreground hover:bg-hover has-checked:border-accent has-checked:text-foreground has-checked:outline-1 has-checked:outline-accent has-focus-visible:outline-2 has-focus-visible:outline-ring";
 
 /**
- * Settings > Appearance: the color theme and scheme, and how the interface reads:
- * contrast, motion, the colors for added and removed, the window's blur and opacity, and
- * typography.
+ * Settings > Appearance: the color theme and scheme, the colors changed over it, and how the
+ * interface reads: contrast, motion, the colors for added and removed, the window's blur and
+ * opacity, and typography.
  */
 export function AppearanceSettings({
   theme,
@@ -200,12 +201,7 @@ export function AppearanceSettings({
   const scheme = useId();
   const [adding, setAdding] = useState(false);
   const added = useAddedThemes();
-  // The picked themes, or Parallax's where a picked one is no longer added.
-  const addedIds = new Set(added.flatMap((e) => e.themes.map((t) => t.id)));
-  const picked = {
-    light: addedIds.has(appearance.lightTheme) ? appearance.lightTheme : "parallax-light",
-    dark: addedIds.has(appearance.darkTheme) ? appearance.darkTheme : "parallax-dark",
-  };
+  const picked = shownThemes(appearance, added);
   const pick = (t: ColorTheme) =>
     set(t.mode === "light" ? { lightTheme: t.id } : { darkTheme: t.id });
 
@@ -265,6 +261,13 @@ export function AppearanceSettings({
         </div>
       </Section>
       {adding && <AddThemeDialog onClose={() => setAdding(false)} />}
+
+      <ColorSettings
+        themes={[...parallaxThemes, ...added.flatMap((e) => e.themes)]}
+        shown={picked}
+        colors={appearance.colors}
+        onChange={(colors) => set({ colors })}
+      />
 
       <Section title="Interface">
         <Row title="Contrast" description="Stronger text and borders. System follows your OS.">
