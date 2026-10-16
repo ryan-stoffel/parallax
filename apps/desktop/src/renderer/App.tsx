@@ -608,14 +608,28 @@ export function App() {
   // of the same name (each host's entries have their own ids). A host whose list is in but lacks
   // it adds the repository at the same path first. When that fails, New Thread stays on this host
   // and it resolves to plxd's error, for people. A host whose list hasn't loaded yet gets New
-  // Thread's first repository.
+  // Thread's first repository. An add that finishes after another pick, or once anything else is
+  // open, changes nothing.
+  const picks = useRef(0);
+  const shown = useRef({ hostId: host.id, selection });
+  useEffect(() => {
+    shown.current = { hostId: host.id, selection };
+  });
   const pickHost = async (id: string): Promise<string | undefined> => {
     if (id === host.id) return undefined;
+    const pick = ++picks.current;
+    const before = shown.current;
     const view = views[id] ?? idleThreads;
     let groupId = groupThreads(view.state).groups.find((g) => g.name === group.name)?.id;
     const path = threads.state.repos.find((r) => r.id === group.id)?.path;
     if (!repoless(group) && path && lacksRepo(view, group.name)) {
       const added = await view.addRepo(path);
+      if (
+        pick !== picks.current ||
+        shown.current.hostId !== before.hostId ||
+        shown.current.selection !== before.selection
+      )
+        return undefined;
       if (typeof added === "string")
         return `${hosts.find((h) => h.id === id)?.name ?? "That computer"}: ${added}`;
       groupId = added.id;
