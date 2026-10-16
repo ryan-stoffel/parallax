@@ -130,7 +130,7 @@ async fn sweep(
         let pulls = tokio::select! {
             biased;
             () = stop.cancelled() => return,
-            pulls = read(daemon, &run, known) => pulls,
+            pulls = read(daemon, &thread, &run, known) => pulls,
         };
         let Some((pulls, fresh)) = pulls.filter(|(pulls, _)| merged(pulls)) else {
             continue;
@@ -172,9 +172,11 @@ async fn sweep(
 
 /// `run`'s linked pull requests, reading only those not in `known` and adding the merged and
 /// closed ones, and whether this read a merge for the first time. A closed one in `known` is read
-/// again before the others' merge counts, since it may have reopened. None when one can't be read.
+/// again when the others' merge would archive `thread` or remove its worktree now, since it may
+/// have reopened. None when one can't be read.
 async fn read(
     daemon: &Daemon,
+    thread: &Thread,
     run: &Run,
     known: &mut HashMap<String, Pull>,
 ) -> Option<(Vec<Pull>, bool)> {
@@ -194,7 +196,8 @@ async fn read(
         };
         pulls.push(pull);
     }
-    if merged(&pulls) {
+    let acts = fresh || (!thread.archived && merged_since(&pulls, last_activity(thread)));
+    if merged(&pulls) && acts {
         for index in stale {
             known.remove(&urls[index]);
             pulls[index] = live(daemon, run, &urls[index], known, &mut fresh).await?;
