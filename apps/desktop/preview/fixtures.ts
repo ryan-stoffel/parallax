@@ -1017,6 +1017,22 @@ export function createFixtures(now = Date.now()): Fixtures {
         2,
       ),
     ),
+    // Two of Claude Code's own subagents at work (PLX-382), which ride over the composer.
+    ...(["Find the Dock's icon sizes", "Read Apple's icon guidelines"] as const).map(
+      (description, i) => ({
+        kind: "toolCall" as const,
+        callId: `toolu_tahoe_${i}`,
+        name: "Agent",
+        input: { description, prompt: `${description}.`, subagent_type: "Explore" },
+      }),
+    ),
+    {
+      kind: "subagent",
+      callId: "toolu_tahoe_0",
+      agentType: "Explore",
+      model: "claude-haiku-4-5-20251001",
+      item: { kind: "toolCall", callId: callId(), name: "Grep", input: { pattern: "32x32" } },
+    },
     {
       kind: "toolCall",
       callId: callId(),

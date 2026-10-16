@@ -21,7 +21,7 @@ export function GoalStrip({ objective }: { objective: string }) {
     <section
       aria-label="Goal"
       title={objective}
-      className="plan-strip mx-5 -mb-4 flex min-w-0 items-center gap-2.5 rounded-t-3xl border border-b-0 border-border bg-surface py-2 pr-3.5 pb-6 pl-4 text-[13px]"
+      className="plan-strip flex min-w-0 items-center gap-2.5 rounded-t-3xl border border-b-0 border-border bg-surface py-2 pr-3.5 pb-6 pl-4 text-[13px]"
     >
       <Target aria-hidden className="size-4 shrink-0 text-muted-foreground" />
       <span className="shrink-0 font-medium">Pursuing goal</span>

@@ -477,6 +477,10 @@ test("an agent's own subagents are read-only lineage rows, and one opens without
   });
   await renderApp();
   await click(sidebarRow("Ship lineage"));
+  // The working subagent rides over the composer, as a Project's children do.
+  expect(document.querySelector('main section[aria-label="Subagents"] button')!.textContent).toBe(
+    "1 agent going: Read the tests1 working",
+  );
   // The running subagent and child are current; the finished ones are previous.
   expect(chips()).toEqual(["Read the tests", "Style the chips"]);
   await openPrevious();
@@ -502,6 +506,8 @@ test("an agent's own subagents are read-only lineage rows, and one opens without
     "Explore · Claude Haiku 4.5 · DoneRead-only: Claude Code's own subagent",
   );
   expect(document.querySelector('[role="textbox"][aria-label="Message"]')).toBeNull();
+  const strip = () => document.querySelector('main section[aria-label="Child thread"]');
+  expect(strip()!.textContent).toBe("A subagent of Ship lineageOpen parent⌥⌘↑");
 
   // Its thread's crumb goes back, and the call's row opens the other one.
   await click(crumb("Ship lineage"));
@@ -509,4 +515,10 @@ test("an agent's own subagents are read-only lineage rows, and one opens without
   await click(log().querySelector("summary"));
   await click(log().querySelector('button[aria-label="Open subagent: Read the tests, Working"]'));
   expect(crumbs().at(-1)).toBe("Read the tests");
+  // As does Open parent.
+  await click(
+    [...strip()!.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Open parent")),
+  );
+  expect(crumbs().at(-1)).toBe("Ship lineage");
+  expect(document.querySelector('[role="textbox"][aria-label="Message"]')).not.toBeNull();
 });

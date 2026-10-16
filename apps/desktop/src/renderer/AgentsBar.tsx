@@ -1,7 +1,6 @@
 import { ChevronUp, CircleAlert, GitBranch, ShieldQuestion } from "lucide-react";
 import { useId, useState, type ComponentType, type SVGProps } from "react";
 
-import type { AgentRun } from "../protocol/generated/protocol";
 import { DoneMark } from "./AttentionMark";
 import { childOrder, runAttention, type Attention } from "./attention";
 import { Loader } from "./Loader";
@@ -14,68 +13,91 @@ import { accountLabel } from "./transcript";
 
 type Logo = ComponentType<SVGProps<SVGSVGElement>>;
 
-interface Child {
-  run: AgentRun;
+/** One agent the bar lists: a Project's child, or a thread's own subagent. */
+export interface AgentRow {
+  id: string;
   title: string;
   attention: Attention;
   Logo?: Logo;
+  branch?: string;
+  diff?: { insertions: number; deletions: number };
+  updatedAt?: string;
+  /** Under its time, such as its account or model. */
+  detail?: string;
 }
 
-// How many finished children the card lists under those still going.
+// How many finished agents the card lists under those still going.
 const finishedShown = 5;
 
+/** Whether an agent works or waits on the user, which shows the bar. */
+export const isGoing = (row: AgentRow) =>
+  row.attention === "needsYou" || row.attention === "working";
+
 /**
- * A Project's children, tucked over its composer as the plan is: while any of them works or waits
- * on the user, the providers of the first three as stacked logos, a count of the rest, and the
- * child that matters most. It opens a card over the chat listing them, those that need the user
- * first, then those working, then the latest finished; each opens its chat. Hidden while none is
- * going. `needs` are the children whose questions wait in the inbox.
+ * A Project's children as the bar lists them, oldest first. `needs` are the children whose
+ * questions wait in the inbox.
  */
-export function AgentsBar({
-  agents,
-  titles = {},
-  coordinator,
-  needs,
-  onOpen,
-}: {
-  agents: ProjectAgentsView;
-  titles?: Readonly<Record<string, string>>;
-  coordinator?: string;
-  needs?: ReadonlySet<string>;
-  onOpen: (runId: string) => void;
-}) {
-  const id = useId();
-  const [open, setOpen] = useState(false);
-  const children: Child[] = agents.runs
+export function projectAgentRows(
+  agents: ProjectAgentsView,
+  titles: Readonly<Record<string, string>>,
+  coordinator?: string,
+  needs?: ReadonlySet<string>,
+): AgentRow[] {
+  return agents.runs
     .filter((r) => r.id !== coordinator && r.policy !== "noWrite")
     .map((run) => {
       const asks = (agents.waiting[run.id]?.length ?? 0) + (needs?.has(run.id) ? 1 : 0);
       return {
-        run,
+        id: run.id,
         title: titles[run.id] ?? titleOf(run),
         attention: runAttention(run, asks),
         Logo: backendLogos[run.backend] ?? instanceLogo(run.backend),
+        ...(run.branch && { branch: run.branch }),
+        ...(run.diff && { diff: run.diff }),
+        updatedAt: run.updatedAt,
+        detail: instanceName(run.accountId) ?? accountLabel(run.accountId),
       };
-    })
+    });
+}
+
+/**
+ * Agents at work, tucked over the composer as the plan is: a Project's children, or a thread's own
+ * subagents. While any of them works or waits on the user, the providers of the first three as
+ * stacked logos, a count of the rest, and the agent that matters most. It opens a card over the
+ * chat listing them, those that need the user first, then those working, then the latest
+ * finished; each opens its chat. Hidden while none is going. `rows` go oldest first.
+ */
+export function AgentsBar({
+  rows,
+  label = "Agents",
+  onOpen,
+}: {
+  rows: readonly AgentRow[];
+  label?: string;
+  onOpen: (id: string) => void;
+}) {
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const children = rows
     .toReversed()
     .toSorted((a, b) => childOrder.indexOf(a.attention) - childOrder.indexOf(b.attention));
-  const going = children.filter((c) => c.attention === "needsYou" || c.attention === "working");
+  const going = children.filter(isGoing);
   if (going.length === 0) return null;
-  const finished = children.filter((c) => !going.includes(c)).slice(0, finishedShown);
+  const finished = children.filter((c) => !isGoing(c)).slice(0, finishedShown);
   const lead = going[0]!;
   const waiting = going.filter((c) => c.attention === "needsYou").length;
   const extra = going.length - 3;
 
   return (
     <section
-      aria-label="Agents"
-      className="mx-5 -mb-4 rounded-t-3xl border border-b-0 border-border bg-surface pb-4"
+      aria-label={label}
+      className="rounded-t-3xl border border-b-0 border-border bg-surface pb-4"
     >
       <button
         type="button"
         popoverTarget={id}
         aria-expanded={open}
-        title={open ? "Hide the agents" : "Show the agents"}
+        title={open ? `Hide the ${label.toLowerCase()}` : `Show the ${label.toLowerCase()}`}
         className="flex w-full min-w-0 items-center gap-2.5 rounded-t-3xl py-1.5 pr-3.5 pl-2 text-left text-[13px] hover:bg-hover"
       >
         {/* The providers at work, as one quiet group. */}
@@ -84,9 +106,9 @@ export function AgentsBar({
             .slice(0, 3)
             .map((c) =>
               c.Logo ? (
-                <c.Logo key={c.run.id} aria-hidden />
+                <c.Logo key={c.id} aria-hidden />
               ) : (
-                <span key={c.run.id} className="size-1.5 rounded-full bg-muted-foreground" />
+                <span key={c.id} className="size-1.5 rounded-full bg-muted-foreground" />
               ),
             )}
           {extra > 0 && (
@@ -159,7 +181,7 @@ function CardGroup({
   onOpen,
 }: {
   label: string;
-  items: Child[];
+  items: AgentRow[];
   onOpen: (runId: string) => void;
 }) {
   return (
@@ -169,10 +191,10 @@ function CardGroup({
       </h3>
       <ul>
         {items.map((c) => (
-          <li key={c.run.id}>
+          <li key={c.id}>
             <button
               type="button"
-              onClick={() => onOpen(c.run.id)}
+              onClick={() => onOpen(c.id)}
               className="group flex w-full min-w-0 items-center gap-3 rounded-xl px-2.5 py-2 text-left hover:bg-hover"
             >
               <span className="grid size-5 shrink-0 place-items-center [&_svg]:size-4">
@@ -182,23 +204,23 @@ function CardGroup({
                 <span className="truncate text-[13px]">{c.title}</span>
                 <span className="flex min-w-0 items-center gap-2 font-mono text-[11px] text-faint-foreground [&_svg]:size-3 [&_svg]:shrink-0">
                   <State attention={c.attention} />
-                  {c.run.branch && (
+                  {c.branch && (
                     <span className="flex min-w-0 items-center gap-1">
                       <GitBranch aria-hidden />
-                      <span className="truncate">{c.run.branch}</span>
+                      <span className="truncate">{c.branch}</span>
                     </span>
                   )}
-                  {c.run.diff && (
+                  {c.diff && (
                     <span className="shrink-0 tabular-nums">
-                      <span className="text-added">+{c.run.diff.insertions}</span>{" "}
-                      <span className="text-danger">−{c.run.diff.deletions}</span>
+                      <span className="text-added">+{c.diff.insertions}</span>{" "}
+                      <span className="text-danger">−{c.diff.deletions}</span>
                     </span>
                   )}
                 </span>
               </span>
               <span className="flex shrink-0 flex-col items-end gap-0.5 font-mono text-[11px] text-faint-foreground">
-                <span className="tabular-nums">{age(c.run.updatedAt)}</span>
-                <span>{instanceName(c.run.accountId) ?? accountLabel(c.run.accountId)}</span>
+                {c.updatedAt && <span className="tabular-nums">{age(c.updatedAt)}</span>}
+                {c.detail && <span>{c.detail}</span>}
               </span>
               <OpenHint />
             </button>

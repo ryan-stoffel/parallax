@@ -127,7 +127,7 @@ export function WaitingBar({
   return (
     <section
       aria-label="Waiting on"
-      className="mx-5 -mb-4 rounded-t-3xl border border-b-0 border-border bg-surface pt-1 pb-5 text-[13px]"
+      className="rounded-t-3xl border border-b-0 border-border bg-surface pt-1 pb-5 text-[13px]"
     >
       <div className="flex min-w-0 items-center gap-2.5 py-1 pr-3 pl-4">
         <span aria-hidden className="size-1.5 shrink-0 animate-pulse rounded-full bg-foreground" />
