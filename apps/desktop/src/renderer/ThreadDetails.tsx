@@ -112,7 +112,7 @@ export function ThreadDetails({
       data-mode={mode}
       // Docked, it takes room in the thread's row; floating, it hovers over the thread's right.
       // Either way it's an opaque card sized to its rows, scrolling at the row's height.
-      className={`flex w-72 flex-col py-2 pr-3 ${
+      className={`flex w-64 flex-col py-2 pr-3 ${
         mode === "floating"
           ? "pointer-events-none absolute inset-y-0 right-0 z-30 max-w-[calc(100%-1rem)]"
           : "shrink-0"

@@ -1259,7 +1259,7 @@ export function TranscriptView({
                 >
                   <div
                     data-copied={muted || undefined}
-                    className={`mx-auto max-w-3xl px-6 ${listKinds.has(row.kind) ? "py-1" : "py-2"} ${muted ? "opacity-60" : ""}`}
+                    className={`mx-auto max-w-3xl px-10 ${listKinds.has(row.kind) ? "py-1" : "py-2"} ${muted ? "opacity-60" : ""}`}
                   >
                     <RowView
                       row={row}
@@ -1283,7 +1283,7 @@ export function TranscriptView({
               );
             })}
           </div>
-          {end && <div className="mx-auto max-w-3xl px-6 pb-6">{end}</div>}
+          {end && <div className="mx-auto max-w-3xl px-10 pb-6">{end}</div>}
         </div>
         {/* One prompt is no choice of where to go, so there's no rail for it. */}
         {prompts.length > 1 && <PromptRail prompts={prompts} current={reading} onJump={jump} />}
