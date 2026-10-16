@@ -173,10 +173,11 @@ method_table! {
         /// (PLX-769). Gated on the `hostFolders` capability.
         HostFolders = "host/folders": HostFoldersParams => HostFoldersResult;
         /// `host/upload`: saves a file attached to a message on the host and answers its path
-        /// (PLX-779, decision 0071). Gated on the `fileUploads` capability.
+        /// (PLX-779, decision 0071). Gated on the `fileUploads` capability, and a file sent in
+        /// pieces on `fileChunks` (decision 0074).
         HostUpload = "host/upload": HostUploadParams => HostUploadResult;
         /// `host/readUpload`: a file `host/upload` saved, for the transcript (PLX-779). Gated on
-        /// the `fileUploads` capability.
+        /// the `fileUploads` capability, and a slice of it on `fileChunks` (decision 0074).
         HostReadUpload = "host/readUpload": HostReadUploadParams => HostReadUploadResult;
         /// `project/list`: every project, and the event log's `seq` from before the read.
         ProjectList = "project/list": ProjectListParams => ProjectListResult;
@@ -285,7 +286,7 @@ method_table! {
         AgentDiff = "agent/diff": AgentDiffParams => AgentDiffResult;
         /// `agent/file`: one file of a run's diff, on its base or head side, base64-encoded and
         /// size-capped, for a diff editor. Its `working` side, behind the `files` capability,
-        /// reads the file on disk now.
+        /// reads the file on disk now, and behind `fileChunks` (decision 0074), one slice of it.
         AgentFile = "agent/file": AgentFileParams => AgentFileResult;
         /// `agent/files`: one folder of a run's worktree, or a Current checkout thread's
         /// checkout, without `.git` or what git ignores, for browsing (PLX-296). Gated on the

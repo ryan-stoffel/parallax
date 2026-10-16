@@ -2183,7 +2183,15 @@ async fn present_files_shows_documents_from_the_threads_folder_copying_others_in
         json!([{"path": "Deck.pptx", "name": "Deck.pptx", "kind": "pptx"}])
     );
     assert_eq!(std::fs::read(folder.join("Deck.pptx")).unwrap(), b"PK");
-    for refused in ["notes.txt", "/etc/hosts", "../Summary.docx", "missing.docx"] {
+    // Any other kind shows as a file to download, but only from the thread's folder (0074).
+    let shown = mcp
+        .ok("present_files", json!({"paths": ["notes.txt"]}))
+        .await;
+    assert_eq!(
+        shown["presentedFiles"],
+        json!([{"path": "notes.txt", "name": "notes.txt", "kind": "file"}])
+    );
+    for refused in ["/etc/hosts", "../Summary.docx", "missing.docx"] {
         let (text, is_error) = mcp.tool("present_files", json!({"paths": [refused]})).await;
         assert!(is_error, "{refused}: {text}");
     }

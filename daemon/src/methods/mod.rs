@@ -26,7 +26,7 @@ pub(crate) mod context;
 mod cursor;
 mod defaults;
 mod events;
-mod host;
+pub(crate) mod host;
 pub(crate) mod inbox;
 pub(crate) mod land;
 mod memory;

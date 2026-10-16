@@ -4,7 +4,10 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, SystemTime};
 
 use parallax_protocol::framing::MAX_FRAME_BYTES;
 use parallax_protocol::jsonrpc::{ErrorObject, Request};
@@ -14,8 +17,9 @@ use parallax_protocol::{
     HostSettings, HostSettingsGetParams, HostSettingsSetParams, HostUploadParams, HostUploadResult,
     HostVersionParams, HostVersionResult, IncompatibleProtocolDetail, InitializeParams,
     InitializeProtocol, InitializeResult, MAX_DEVICE_NAME_CHARS, ProtocolRange, StoreState,
+    UploadId,
 };
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::Context;
@@ -218,6 +222,11 @@ pub(crate) fn initialize(
 /// `fileUploads` (PLX-779, 0071): `host/upload`, which saves a file attached to a message on the
 /// host for the agent to read, and `host/readUpload`, which reads it back for the transcript.
 /// Its option `maxBytes` is the cap on the file's base64 `data`.
+/// `fileChunks` (PLX-833, 0074): `host/upload` takes a file in pieces, with `uploadId`, `offset`,
+/// and `last`, and `host/readUpload` and `agent/file`'s `working` side read a slice, with `offset`
+/// and `length`, which an older plxd would ignore, sending the whole file or refusing it. Its
+/// options are `chunkBytes`, the most file bytes a piece or slice carries, and `maxBytes`, the
+/// largest file pieces make.
 /// `hostUpdate` (PLX-700, 0066): `host/update`, which installs a newer plxd and restarts into it.
 /// `providerUpdates` (PLX-746): `providers/updates` and `providers/upgrade`, and `host/update`'s
 /// `now`.
@@ -253,6 +262,13 @@ fn capabilities_advertised() -> Capabilities {
         ("delegation".to_owned(), serde_json::Map::new()),
         ("eventFilters".to_owned(), serde_json::Map::new()),
         ("eventsBefore".to_owned(), serde_json::Map::new()),
+        (
+            "fileChunks".to_owned(),
+            serde_json::Map::from_iter([
+                ("chunkBytes".to_owned(), CHUNK_BYTES.into()),
+                ("maxBytes".to_owned(), MAX_FILE_BYTES.into()),
+            ]),
+        ),
         ("fileEdit".to_owned(), serde_json::Map::new()),
         (
             "fileUploads".to_owned(),
@@ -371,23 +387,60 @@ fn list_folders(input: &str, home: Option<&Path>) -> Result<HostFoldersResult, E
 /// fits in one of 0007's 8 MiB frames with the envelope.
 pub(crate) const MAX_UPLOAD_BYTES: usize = 6 * 1024 * 1024;
 
+/// The most file bytes one piece of `host/upload`, or one slice of `host/readUpload` or
+/// `agent/file`, carries (`fileChunks`, 0074): about 1.4 MiB of base64, which a slow link sends
+/// well inside the app's request timeout.
+pub(crate) const CHUNK_BYTES: u64 = 1024 * 1024;
+
+/// The largest file `host/upload` assembles from pieces (`fileChunks`, 0074).
+pub(crate) const MAX_FILE_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// How long an unfinished upload waits for its next piece before [`sweep_uploads`] removes it.
+const ABANDONED_AFTER: Duration = Duration::from_hours(1);
+
+/// What an unfinished upload's folder adds to its id, until its last piece renames it.
+const PARTIAL: &str = ".partial";
+
+/// Held while a piece is checked and written, and while the sweep runs, so each piece sees the
+/// length the one before it left.
+// ponytail: one lock for every upload; one per upload if many large uploads run at once.
+static PIECES: Mutex<()> = Mutex::new(());
+
+/// The `(offset, length)` a slice's `offset` and `length` ask for, or `None` without either.
+pub(crate) fn slice(
+    offset: Option<u64>,
+    length: Option<u64>,
+) -> Result<Option<(u64, u64)>, ErrorObject> {
+    if offset.is_none() && length.is_none() {
+        return Ok(None);
+    }
+    let length = length.unwrap_or(CHUNK_BYTES);
+    if length > CHUNK_BYTES {
+        return Err(ErrorObject::invalid_params(format!(
+            "length is {length}; a slice is at most {CHUNK_BYTES} bytes"
+        )));
+    }
+    Ok(Some((offset.unwrap_or(0), length)))
+}
+
 /// `host/upload`: saves the file in a new folder of the data folder's `uploads/` and answers its
-/// path, which the app puts in the message for the agent to read (0071).
-// ponytail: uploads are never removed; prune them with their thread if the folder grows.
+/// path, which the app puts in the message for the agent to read (0071). A piece of a larger file
+/// goes to [`save_piece`] instead (0074).
+// ponytail: finished uploads are never removed; prune them with their thread if the folder grows.
 pub(crate) async fn upload(
     context: &Context,
     params: HostUploadParams,
 ) -> Result<HostUploadResult, ErrorObject> {
-    let dir = context
-        .daemon
-        .data_dir
-        .uploads_dir()
-        .join(Uuid::now_v7().to_string());
+    let uploads = context.daemon.data_dir.uploads_dir();
+    if params.upload_id.is_some() || params.offset.is_some() || params.last.is_some() {
+        return super::context::run_blocking(move || save_piece(&uploads, &params)).await;
+    }
+    let dir = uploads.join(Uuid::now_v7().to_string());
     super::context::run_blocking(move || save_upload(&dir, &params)).await
 }
 
-/// Writes `params`' file as `<dir>/<name>`, after checking its name and size.
-fn save_upload(dir: &Path, params: &HostUploadParams) -> Result<HostUploadResult, ErrorObject> {
+/// `params`' bytes, after checking its name and the length of its base64.
+fn upload_bytes(params: &HostUploadParams) -> Result<Vec<u8>, ErrorObject> {
     let name = params.name.as_str();
     // `:` too: on Windows `C:x` is a path on drive C, which `join` would put outside `dir`.
     if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', ':', '\0']) {
@@ -402,43 +455,233 @@ fn save_upload(dir: &Path, params: &HostUploadParams) -> Result<HostUploadResult
             params.data.len()
         )));
     }
-    let bytes = images::decode(&params.data)
-        .ok_or_else(|| ErrorObject::invalid_params("data is not standard base64 with padding"))?;
-    let path = dir.join(name);
+    images::decode(&params.data)
+        .ok_or_else(|| ErrorObject::invalid_params("data is not standard base64 with padding"))
+}
+
+fn save_failed(error: &std::io::Error) -> ErrorObject {
+    ErrorObject::internal_error(format!("could not save the file: {error}"))
+}
+
+/// Writes `params`' file as `<dir>/<name>`, after checking its name and size.
+fn save_upload(dir: &Path, params: &HostUploadParams) -> Result<HostUploadResult, ErrorObject> {
+    let bytes = upload_bytes(params)?;
+    let path = dir.join(&params.name);
     fs::create_dir_all(dir)
         .and_then(|()| fs::write(&path, bytes))
-        .map_err(|error| {
-            ErrorObject::internal_error(format!("could not save the file: {error}"))
-        })?;
+        .map_err(|error| save_failed(&error))?;
     Ok(HostUploadResult {
         path: path.to_string_lossy().into_owned(),
+        upload_id: None,
     })
 }
 
-/// `host/readUpload`: a file [`upload`] saved, as base64.
+/// Appends a piece of a file to its upload in `uploads`, `<id>.partial/<name>`, which a first
+/// piece starts, and on the last piece renames the folder to `<id>`, so the final path only ever
+/// holds a whole file. The piece that landed last, sent again as a retry sends it, answers as it
+/// did without being written twice, even once its `last` finished the file.
+fn save_piece(uploads: &Path, params: &HostUploadParams) -> Result<HostUploadResult, ErrorObject> {
+    let bytes = upload_bytes(params)?;
+    let offset = params.offset.unwrap_or(0);
+    let size = bytes.len() as u64;
+    if size > CHUNK_BYTES {
+        return Err(ErrorObject::invalid_params(format!(
+            "the piece is {size} bytes; it must be at most {CHUNK_BYTES}"
+        )));
+    }
+    if offset.saturating_add(size) > MAX_FILE_BYTES {
+        return Err(ErrorObject::invalid_params(format!(
+            "the file would be over {MAX_FILE_BYTES} bytes"
+        )));
+    }
+    if params.upload_id.is_none() && offset != 0 {
+        return Err(ErrorObject::invalid_params(
+            "a piece after the first must name its uploadId",
+        ));
+    }
+    let id = params.upload_id.unwrap_or_else(UploadId::generate);
+    let last = params.last == Some(true);
+    let partial = uploads.join(format!("{id}{PARTIAL}"));
+    let path = partial.join(&params.name);
+    let done = uploads.join(id.to_string());
+    let answer = HostUploadResult {
+        path: done.join(&params.name).to_string_lossy().into_owned(),
+        upload_id: Some(id),
+    };
+    let _held = PIECES.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut file = if params.upload_id.is_none() {
+        fs::create_dir_all(&partial)
+            .and_then(|()| fs::File::create_new(&path))
+            .map_err(|error| save_failed(&error))?
+    } else {
+        // Only a file a first piece made, and never through a symlink.
+        let plain = |path: &Path, options: &mut fs::OpenOptions| {
+            open_plain(path, options)
+                .ok()
+                .filter(|file| file.metadata().is_ok_and(|meta| meta.is_file()))
+        };
+        match plain(&path, fs::OpenOptions::new().read(true).append(true)) {
+            Some(file) => file,
+            None if last
+                && plain(&done.join(&params.name), fs::OpenOptions::new().read(true))
+                    .is_some_and(|file| ends_with(&file, offset, &bytes)) =>
+            {
+                return Ok(answer);
+            }
+            None => {
+                return Err(ErrorObject::invalid_params(format!(
+                    "upload {id} has no unfinished file named {:?}",
+                    untrusted(&params.name)
+                )));
+            }
+        }
+    };
+    let received = file.metadata().map_err(|error| save_failed(&error))?.len();
+    if received == offset {
+        if let Err(error) = file.write_all(&bytes) {
+            // So the piece can be sent again.
+            let _ = file.set_len(offset);
+            return Err(save_failed(&error));
+        }
+    } else if !ends_with(&file, offset, &bytes) {
+        return Err(ErrorObject::invalid_params(format!(
+            "upload {id} has {received} bytes, so its next piece starts there, not at {offset}"
+        )));
+    }
+    drop(file);
+    if last {
+        fs::rename(&partial, &done).map_err(|error| save_failed(&error))?;
+    }
+    Ok(answer)
+}
+
+/// Whether `file` is `offset` bytes followed by exactly `bytes`: the piece that landed last.
+fn ends_with(mut file: &fs::File, offset: u64, bytes: &[u8]) -> bool {
+    let mut tail = Vec::with_capacity(bytes.len());
+    file.metadata()
+        .is_ok_and(|meta| meta.len() == offset + bytes.len() as u64)
+        && file.seek(SeekFrom::Start(offset)).is_ok()
+        && file.read_to_end(&mut tail).is_ok()
+        && tail == bytes
+}
+
+/// Opens `path` with `options` without following a symlink at its end, or waiting on a FIFO.
+fn open_plain(path: &Path, options: &mut fs::OpenOptions) -> std::io::Result<fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(
+            (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK)
+                .bits()
+                .cast_signed(),
+        );
+    }
+    options.open(path)
+}
+
+/// Removes the uploads no piece has reached for [`ABANDONED_AFTER`]. `agents::cleanup` runs it
+/// at start and every sweep.
+pub(crate) async fn sweep_uploads(daemon: &Daemon) {
+    let uploads = daemon.data_dir.uploads_dir();
+    let cutoff = SystemTime::now() - ABANDONED_AFTER;
+    let _ = tokio::task::spawn_blocking(move || sweep_uploads_at(&uploads, cutoff)).await;
+}
+
+/// Removes every unfinished upload in `uploads` written last before `cutoff`.
+fn sweep_uploads_at(uploads: &Path, cutoff: SystemTime) {
+    let Ok(entries) = fs::read_dir(uploads) else {
+        return;
+    };
+    let _held = PIECES.lock().unwrap_or_else(PoisonError::into_inner);
+    for entry in entries.flatten() {
+        if !entry.file_name().to_string_lossy().ends_with(PARTIAL) {
+            continue;
+        }
+        let path = entry.path();
+        // A piece changes its file's time, and the first one made the folder.
+        let newest = fs::read_dir(&path)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .chain([entry])
+            .filter_map(|entry| entry.metadata().ok()?.modified().ok())
+            .max();
+        if newest.is_some_and(|newest| newest >= cutoff) {
+            continue;
+        }
+        match fs::remove_dir_all(&path) {
+            Ok(()) => info!(path = %path.display(), "removed an unfinished upload"),
+            Err(error) => {
+                warn!(%error, path = %path.display(), "could not remove an unfinished upload");
+            }
+        }
+    }
+}
+
+/// `host/readUpload`: a file [`upload`] saved, or a slice of it, as base64.
 pub(crate) async fn read_upload(
     context: &Context,
     params: HostReadUploadParams,
 ) -> Result<HostReadUploadResult, ErrorObject> {
     let root = context.daemon.data_dir.uploads_dir();
-    super::context::run_blocking(move || read_upload_at(&root, &params.path)).await
+    let slice = slice(params.offset, params.length)?;
+    super::context::run_blocking(move || read_upload_at(&root, &params.path, slice)).await
 }
 
-/// The file at `path`, as base64, if it's inside `root` once links are followed.
-fn read_upload_at(root: &Path, path: &str) -> Result<HostReadUploadResult, ErrorObject> {
+/// The file at `path`, as base64, if it's inside `root` once links are followed. A slice, `(offset,
+/// length)`, is also refused through a link inside `root`.
+fn read_upload_at(
+    root: &Path,
+    path: &str,
+    slice: Option<(u64, u64)>,
+) -> Result<HostReadUploadResult, ErrorObject> {
     let refuse =
         || ErrorObject::invalid_params(format!("{:?} is not an uploaded file", untrusted(path)));
-    let root = fs::canonicalize(root).map_err(|_| refuse())?;
+    let given = root;
+    let root = fs::canonicalize(given).map_err(|_| refuse())?;
     let file = fs::canonicalize(path).map_err(|_| refuse())?;
-    // Only what `host/upload` could have saved, which fits in a frame.
-    let fits = fs::metadata(&file)
-        .is_ok_and(|meta| meta.is_file() && meta.len() <= (MAX_UPLOAD_BYTES / 4 * 3) as u64);
-    if !file.starts_with(&root) || !fits {
+    let Some((offset, length)) = slice else {
+        // Only what `host/upload` could have saved in one piece, which fits in a frame.
+        let fits = fs::metadata(&file)
+            .is_ok_and(|meta| meta.is_file() && meta.len() <= (MAX_UPLOAD_BYTES / 4 * 3) as u64);
+        if !file.starts_with(&root) || !fits {
+            return Err(refuse());
+        }
+        let bytes = fs::read(&file).map_err(|_| refuse())?;
+        return Ok(HostReadUploadResult {
+            data: images::encode(&bytes),
+            size: None,
+        });
+    };
+    // Below `root`, the path must already be the file's real one, so no link is followed. The
+    // file is opened once, without following one, and checked on that handle, so a file swapped
+    // in since is refused.
+    let asked = Path::new(path);
+    let below = asked
+        .strip_prefix(given)
+        .or_else(|_| asked.strip_prefix(&root))
+        .map_err(|_| refuse())?;
+    if !file.starts_with(&root) || root.join(below) != file {
         return Err(refuse());
     }
-    let bytes = fs::read(&file).map_err(|_| refuse())?;
+    let mut opened = open_plain(&file, fs::OpenOptions::new().read(true)).map_err(|_| refuse())?;
+    let size = opened
+        .metadata()
+        .ok()
+        .filter(fs::Metadata::is_file)
+        .ok_or_else(refuse)?
+        .len();
+    let mut bytes = Vec::new();
+    // Past the end is empty, however far: a seek to 2^63 or more fails.
+    if offset < size {
+        opened
+            .seek(SeekFrom::Start(offset))
+            .and_then(|_| (&opened).take(length).read_to_end(&mut bytes))
+            .map_err(|_| refuse())?;
+    }
     Ok(HostReadUploadResult {
         data: images::encode(&bytes),
+        size: Some(size),
     })
 }
 
@@ -624,12 +867,16 @@ fn plist_string<'a>(plist: &'a str, key: &str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
-    use parallax_protocol::HostUploadParams;
+    use std::time::{Duration, SystemTime};
+
+    use parallax_protocol::{HostUploadParams, UploadId};
 
     use super::{
-        check_device_icon, clean_device_name, list_folders, plist_string, read_upload_at,
-        save_upload,
+        CHUNK_BYTES, MAX_FILE_BYTES, MAX_UPLOAD_BYTES, check_device_icon, clean_device_name,
+        list_folders, plist_string, read_upload_at, save_piece, save_upload, slice,
+        sweep_uploads_at,
     };
+    use crate::images;
 
     #[test]
     fn device_names_are_cleaned_and_icons_checked() {
@@ -690,6 +937,7 @@ mod tests {
                 &HostUploadParams {
                     name: name.to_owned(),
                     data: data.to_owned(),
+                    ..HostUploadParams::default()
                 },
             )
         };
@@ -704,19 +952,124 @@ mod tests {
         }
         assert_eq!(upload("x", "not base64").unwrap_err().code, -32602);
 
-        // Read back by its path, and nothing outside the uploads folder.
-        let read = |path: &std::path::Path| read_upload_at(dir.path(), &path.to_string_lossy());
-        assert_eq!(
-            read(std::path::Path::new(&saved.path)).unwrap().data,
-            "JVBERi0="
-        );
+        // Read back by its path, and nothing outside the uploads folder, whole or sliced.
+        let read = |path: &std::path::Path, slice| {
+            read_upload_at(dir.path(), &path.to_string_lossy(), slice)
+        };
+        let saved = std::path::Path::new(&saved.path);
+        assert_eq!(read(saved, None).unwrap().data, "JVBERi0=");
         let outside = tempfile::NamedTempFile::new().unwrap();
-        assert_eq!(read(outside.path()).unwrap_err().code, -32602);
+        for slice in [None, Some((0, CHUNK_BYTES))] {
+            assert_eq!(read(outside.path(), slice).unwrap_err().code, -32602);
+            assert_eq!(
+                read(&dir.path().join("id/../id/missing"), slice)
+                    .unwrap_err()
+                    .code,
+                -32602
+            );
+            assert_eq!(
+                read(&dir.path().join("id"), slice).unwrap_err().code,
+                -32602
+            );
+        }
+
+        // A slice, of any size of file, and the file's size.
+        let sliced = read(saved, Some((1, 3))).unwrap();
         assert_eq!(
-            read(&dir.path().join("id/../id/missing")).unwrap_err().code,
-            -32602
+            (sliced.data, sliced.size),
+            (images::encode(b"PDF"), Some(5))
         );
-        assert_eq!(read(&dir.path().join("id")).unwrap_err().code, -32602);
+        for offset in [9, 1 << 63, u64::MAX] {
+            let past = read(saved, Some((offset, 3))).unwrap();
+            assert_eq!((past.data, past.size), (String::new(), Some(5)), "{offset}");
+        }
+        let big = dir.path().join("id/big.bin");
+        let size = MAX_UPLOAD_BYTES / 4 * 3 + 1;
+        std::fs::write(&big, vec![7; size]).unwrap();
+        assert_eq!(read(&big, None).unwrap_err().code, -32602);
+        let tail = read(&big, Some((size as u64 - 1, CHUNK_BYTES))).unwrap();
+        assert_eq!(
+            (tail.data, tail.size),
+            (images::encode(&[7]), Some(size as u64))
+        );
+
+        // A whole read follows a link inside the uploads folder, as it always has; a slice never
+        // does.
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("id/link.pdf");
+            std::os::unix::fs::symlink(saved, &link).unwrap();
+            assert_eq!(read(&link, None).unwrap().data, "JVBERi0=");
+            assert_eq!(read(&link, Some((0, 3))).unwrap_err().code, -32602);
+        }
+    }
+
+    #[test]
+    fn a_slice_is_at_most_chunk_bytes() {
+        assert_eq!(slice(None, None).unwrap(), None);
+        assert_eq!(slice(Some(5), None).unwrap(), Some((5, CHUNK_BYTES)));
+        assert_eq!(slice(None, Some(3)).unwrap(), Some((0, 3)));
+        assert_eq!(slice(None, Some(CHUNK_BYTES + 1)).unwrap_err().code, -32602);
+    }
+
+    #[test]
+    fn assembles_an_upload_from_ordered_pieces_and_removes_abandoned_ones() {
+        let uploads = tempfile::tempdir().unwrap();
+        let piece = |upload_id, offset, bytes: &[u8], last: bool| {
+            save_piece(
+                uploads.path(),
+                &HostUploadParams {
+                    name: "data.bin".to_owned(),
+                    data: images::encode(bytes),
+                    upload_id,
+                    offset: Some(offset),
+                    last: last.then_some(true),
+                },
+            )
+        };
+        let refused = |result: Result<_, parallax_protocol::jsonrpc::ErrorObject>| {
+            result.unwrap_err().code == -32602
+        };
+
+        let first = piece(None, 0, &[0, 1, 2], false).unwrap();
+        let id = first.upload_id.unwrap();
+        let done = uploads.path().join(id.to_string()).join("data.bin");
+        assert_eq!(first.path, done.to_string_lossy());
+        assert!(!done.exists(), "only a whole file is at its path");
+
+        // A gap, a different piece where one landed, a later piece without its upload, and an
+        // upload plxd never started.
+        assert!(refused(piece(Some(id), 4, &[4], false)));
+        assert!(refused(piece(Some(id), 0, &[0], false)));
+        assert!(refused(piece(None, 3, &[3], false)));
+        assert!(refused(piece(Some(UploadId::generate()), 3, &[3], false)));
+        // Pieces over the chunk size, or past the cap.
+        assert!(refused(piece(None, 0, &vec![0; 1024 * 1024 + 1], false)));
+        assert!(refused(piece(Some(id), MAX_FILE_BYTES, &[0], false)));
+
+        // The piece that landed last, sent again, answers as it did and isn't written twice.
+        let next = piece(Some(id), 3, &[3], false).unwrap();
+        assert_eq!(piece(Some(id), 3, &[3], false).unwrap(), next);
+        assert!(refused(piece(Some(id), 3, &[9], false)));
+        let last = piece(Some(id), 4, &[4], true).unwrap();
+        assert_eq!((&last.path, last.upload_id), (&first.path, Some(id)));
+        assert_eq!(std::fs::read(&done).unwrap(), [0, 1, 2, 3, 4]);
+        // So does the last piece, after it finished the file.
+        assert_eq!(piece(Some(id), 4, &[4], true).unwrap(), last);
+        assert_eq!(std::fs::read(&done).unwrap(), [0, 1, 2, 3, 4]);
+        assert!(refused(piece(Some(id), 4, &[8], true)));
+        assert!(refused(piece(Some(id), 5, &[5], false)), "it's finished");
+
+        // An upload no piece reached for an hour is removed; a finished one stays.
+        let abandoned = piece(None, 0, &[0], false).unwrap();
+        let partial = uploads
+            .path()
+            .join(format!("{}.partial", abandoned.upload_id.unwrap()));
+        sweep_uploads_at(uploads.path(), SystemTime::now() - Duration::from_hours(1));
+        assert!(partial.exists());
+        sweep_uploads_at(uploads.path(), SystemTime::now() + Duration::from_mins(1));
+        assert!(!partial.exists());
+        assert!(done.exists());
     }
 
     #[test]

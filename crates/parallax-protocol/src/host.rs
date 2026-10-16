@@ -2,6 +2,13 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::ProtocolRange;
+use crate::id::uuid_v7_id;
+
+uuid_v7_id! {
+    /// A chunked upload's id (`fileChunks`, decision 0074): a version 7 UUID plxd generates for
+    /// a file's first piece, which every later piece names.
+    UploadId
+}
 
 /// Params of `host/health`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -167,40 +174,81 @@ pub struct HostFolder {
 
 /// Params of `host/upload`, behind the `fileUploads` capability (PLX-779, decision 0071): a file
 /// the user attached to a message, which plxd saves on the host so the agent can read it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HostUploadParams {
     /// Its file name, kept as is. A name with `/`, `\`, or `:`, or that is `.` or `..`, fails
     /// with `invalidParams`.
     pub name: String,
-    /// Its bytes, in standard base64 with padding, at most the capability's `maxBytes` long.
+    /// Its bytes, in standard base64 with padding, at most the capability's `maxBytes` long. A
+    /// piece's are at most `fileChunks`' `chunkBytes` once decoded.
     pub data: String,
+    /// The upload this piece belongs to (`fileChunks`, decision 0074), as the first piece's
+    /// answer named it. Absent on the first piece, which starts a new upload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub upload_id: Option<UploadId>,
+    /// Where this piece starts in the file, which must be the length received so far: 0 for the
+    /// first piece. A gap, a different piece where one already landed, or a file that would grow
+    /// past `fileChunks`' `maxBytes` fails with `invalidParams`. The piece that landed last, sent
+    /// again with the same bytes, as a retry sends it, answers as it did without being written
+    /// twice, even once its `last` finished the file. Any of `uploadId`, `offset`, and `last`
+    /// makes the call a piece; absent means 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub offset: Option<u64>,
+    /// Whether this is the file's last piece, after which the file is at `path`. Absent means
+    /// false. An upload that gets no piece for an hour is removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last: Option<bool>,
 }
 
 /// Result of `host/upload`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HostUploadResult {
-    /// The saved file's absolute path on the host: `<data folder>/uploads/<id>/<name>`.
+    /// The saved file's absolute path on the host: `<data folder>/uploads/<id>/<name>`. For a
+    /// piece, where the file will be once its last piece arrives.
     pub path: String,
+    /// The upload a piece belongs to, for the next piece to name. Absent for a whole file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub upload_id: Option<UploadId>,
 }
 
 /// Params of `host/readUpload`, behind `fileUploads` (PLX-779): a file `host/upload` saved, for
 /// the transcript to show again.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HostReadUploadParams {
     /// The path `host/upload` answered. Any path outside the uploads folder fails with
     /// `invalidParams`, as does one that's gone.
     pub path: String,
+    /// Where to start reading, in bytes, for one slice of the file (`fileChunks`, decision
+    /// 0074). A slice is read from a file of any size, and never through a symlink. Either of
+    /// `offset` and `length` makes the call a slice; absent `offset` means 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub offset: Option<u64>,
+    /// How many bytes a slice reads, at most `fileChunks`' `chunkBytes`, which is also the
+    /// default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub length: Option<u64>,
 }
 
 /// Result of `host/readUpload`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HostReadUploadResult {
-    /// The file's bytes, in standard base64 with padding.
+    /// The file's bytes, or a slice's, in standard base64 with padding. A slice past the end is
+    /// empty.
     pub data: String,
+    /// The whole file's size in bytes, for a slice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub size: Option<u64>,
 }
 
 /// Params of `host/settings/get`.

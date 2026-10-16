@@ -1,0 +1,45 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "agent/file",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "path": "out/report.zip",
+      "side": "working",
+      "offset": 1048576,
+      "length": 1048576
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "path": "out/report.zip",
+      "side": "working",
+      "exists": true,
+      "size": 1048579,
+      "content": "UEsF",
+      "tooLarge": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "agent/file",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "path": "out/report.zip",
+      "side": "head",
+      "offset": 0
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "error": {
+      "code": -32602,
+      "message": "Invalid params: only the working side reads a slice"
+    }
+  }
+]

@@ -47,6 +47,13 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("delegation".to_owned(), serde_json::Map::new()),
             ("eventFilters".to_owned(), serde_json::Map::new()),
             ("eventsBefore".to_owned(), serde_json::Map::new()),
+            (
+                "fileChunks".to_owned(),
+                serde_json::from_value(
+                    json!({"chunkBytes": 1024 * 1024, "maxBytes": 1024 * 1024 * 1024})
+                )
+                .unwrap()
+            ),
             ("fileEdit".to_owned(), serde_json::Map::new()),
             (
                 "fileUploads".to_owned(),

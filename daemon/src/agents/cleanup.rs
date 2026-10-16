@@ -33,7 +33,8 @@ use crate::worktree::RunFolder;
 /// How often a sweep looks for merged pull requests.
 const SWEEP_PERIOD: Duration = Duration::from_mins(15);
 
-/// Sweeps once, then every [`SWEEP_PERIOD`] until `stop`.
+/// Sweeps once, then every [`SWEEP_PERIOD`] until `stop`. Each sweep also removes abandoned
+/// chunked uploads (0074).
 pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
     let mut interval = time::interval(SWEEP_PERIOD);
     interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -42,7 +43,10 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
         tokio::select! {
             biased;
             () = stop.cancelled() => break,
-            _ = interval.tick() => sweep(&daemon, &stop, &mut known).await,
+            _ = interval.tick() => {
+                crate::methods::host::sweep_uploads(&daemon).await;
+                sweep(&daemon, &stop, &mut known).await;
+            }
         }
     }
 }

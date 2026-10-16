@@ -1692,6 +1692,8 @@ async fn read_file(
             path: path.to_owned(),
             side,
             size_only: None,
+            offset: None,
+            length: None,
         })
         .await
 }
@@ -1752,6 +1754,8 @@ async fn assert_reviewable(
             path: "README.md".to_owned(),
             side: AgentFileSide::Head,
             size_only: Some(true),
+            offset: None,
+            length: None,
         })
         .await
         .unwrap();
@@ -1789,6 +1793,8 @@ async fn assert_paths_are_checked(client: &mut Conn, run_id: RunId) {
             path: "README.md".to_owned(),
             side: AgentFileSide::Head,
             size_only: None,
+            offset: None,
+            length: None,
         })
         .await
         .unwrap_err();
