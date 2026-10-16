@@ -182,7 +182,7 @@ export function FileImage({ path, alt }: { path: string; alt: string }) {
 
 function LinkedImage({ hostId, doc, alt }: { hostId: string; doc: DocRef; alt: string }) {
   const open = useContext(OpenDocumentContext);
-  const { loaded, error } = useDocument(hostId, doc);
+  const { loaded, error, progress } = useDocument(hostId, doc);
   const url = useObjectUrl(loaded?.bytes);
   if (error)
     return (
@@ -204,8 +204,10 @@ function LinkedImage({ hostId, doc, alt }: { hostId: string; doc: DocRef; alt: s
       ) : (
         <span
           aria-label={`Loading ${doc.name}`}
-          className="block h-32 w-48 rounded-md bg-selected"
-        />
+          className="grid h-32 w-48 place-items-center rounded-md bg-selected text-[12.5px] text-muted-foreground tabular-nums"
+        >
+          {progress !== undefined && `${Math.round(progress * 100)}%`}
+        </span>
       )}
     </button>
   );

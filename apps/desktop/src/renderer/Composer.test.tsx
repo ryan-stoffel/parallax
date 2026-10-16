@@ -478,8 +478,10 @@ test("with fileUploads, a file goes to the host and the message lists its path (
     connectionState: () => new Promise(() => {}),
   } as Partial<ParallaxBridge> as ParallaxBridge;
   const onSend = vi.fn(async () => undefined);
-  // A cap of 8 bytes of base64 takes files of up to 6 bytes.
-  const { paste, press } = render(onSend, caps, { hostId: "local", uploadBytes: 8 });
+  const { paste, press } = render(onSend, caps, {
+    hostId: "local",
+    uploadBytes: { maxBytes: 6 },
+  });
   await paste([
     new File(["%PDF-"], "paper.pdf", { type: "application/pdf" }),
     new File(["1234567"], "big.bin"),
@@ -513,7 +515,10 @@ test("with fileUploads, an image is also saved on the host and listed after the 
     connectionState: () => new Promise(() => {}),
   } as Partial<ParallaxBridge> as ParallaxBridge;
   const onSend = vi.fn(async () => undefined);
-  const { paste, press } = render(onSend, caps, { hostId: "local", uploadBytes: 1024 });
+  const { paste, press } = render(onSend, caps, {
+    hostId: "local",
+    uploadBytes: { maxBytes: 1024 },
+  });
   await paste([pngFile(), new File(["%PDF-"], "paper.pdf", { type: "application/pdf" })]);
   await read();
   await press("Enter");
@@ -546,7 +551,10 @@ test("an image pasted during an upload stays, removing waits, and a failed read 
     connectionState: () => new Promise(() => {}),
   } as Partial<ParallaxBridge> as ParallaxBridge;
   const onSend = vi.fn(async () => undefined);
-  const { paste, press } = render(onSend, caps, { hostId: "local", uploadBytes: 1024 });
+  const { paste, press } = render(onSend, caps, {
+    hostId: "local",
+    uploadBytes: { maxBytes: 1024 },
+  });
   await paste([new File(["%PDF-"], "paper.pdf", { type: "application/pdf" })]);
   await press("Enter");
   await vi.waitFor(() => expect(upload).toHaveBeenCalled());
@@ -564,6 +572,48 @@ test("an image pasted during an upload stays, removing waits, and a failed read 
   await press("Enter");
   await vi.waitFor(() => expect(alert()).toMatch(/^A file couldn't be read/));
   expect(document.querySelector('[role="textbox"]')!.getAttribute("contenteditable")).toBe("true");
+});
+
+test("with fileChunks, a file goes in pieces and its chip shows how much is sent (PLX-835)", async () => {
+  // Each piece waits to be answered, so the chip shows mid-upload.
+  const answers: (() => void)[] = [];
+  const upload = vi.fn(
+    (_host: string, _method: string, params: { name: string; offset?: number; last?: boolean }) =>
+      new Promise((resolve) =>
+        answers.push(() =>
+          resolve({ logId: "l", result: { path: `/up/u1/${params.name}`, uploadId: "u1" } }),
+        ),
+      ),
+  );
+  window.parallax = {
+    platform: "darwin",
+    request: upload,
+    onConnectionState: () => () => {},
+    connectionState: () => new Promise(() => {}),
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  const onSend = vi.fn(async () => undefined);
+  const { paste, press } = render(onSend, caps, {
+    hostId: "local",
+    uploadBytes: { maxBytes: 1024, chunkBytes: 2 },
+  });
+  await paste([new File(["%PDF-"], "paper.pdf", { type: "application/pdf" })]);
+  await press("Enter");
+  const sent = () =>
+    document
+      .querySelector('[role="progressbar"][aria-label="Sending paper.pdf"]')
+      ?.getAttribute("aria-valuenow");
+  for (const [i, shown] of [undefined, "40", "80"].entries()) {
+    await vi.waitFor(() => expect(answers).toHaveLength(i + 1));
+    expect(sent()).toBe(shown);
+    await act(async () => answers[i]!());
+  }
+  await vi.waitFor(() => expect(onSend).toHaveBeenCalled());
+  expect(onSend).toHaveBeenCalledWith("Attached files:\n- /up/u1/paper.pdf", {}, [], []);
+  expect(upload.mock.calls.map(([, , p]) => [p.offset, p.last])).toEqual([
+    [0, false],
+    [2, false],
+    [4, true],
+  ]);
 });
 
 test("Up and Down recall the thread's earlier prompts until one is edited (PLX-325)", async () => {

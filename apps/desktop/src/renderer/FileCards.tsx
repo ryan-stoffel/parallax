@@ -65,14 +65,16 @@ function FileCard({
   doc: DocRef;
   onOpen?: (doc: DocRef) => void;
 }) {
-  const { loaded, error } = useDocument(hostId, doc);
+  const { loaded, error, progress } = useDocument(hostId, doc);
   const width = doc.kind === "pptx" ? 100 : 72;
   const plain = doc.kind === "file";
   const what = isMedia(doc.kind)
     ? ""
-    : plain && loaded
-      ? sizeOf(loaded.bytes.length)
-      : kinds[doc.kind];
+    : progress !== undefined
+      ? `Reading ${Math.round(progress * 100)}%`
+      : plain && loaded
+        ? sizeOf(loaded.bytes.length)
+        : kinds[doc.kind];
   return (
     <div className="group relative flex h-[88px] max-w-xl items-center gap-4 overflow-hidden rounded-2xl border border-border bg-surface pr-4 pl-5 hover:bg-hover">
       <button

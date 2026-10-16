@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
-import type { RpcError } from "../preload/bridge";
+import type { ConnectionState, HostResponse, RpcError } from "../preload/bridge";
 import { openDocx, type Docx } from "./docx";
 import { describeError } from "./errors";
 import { fromBase64 } from "./ooxml";
@@ -10,7 +10,8 @@ import { openXlsx, type Xlsx } from "./xlsx";
 
 /**
  * Documents an agent presented with `present_files` (PLX-755) or linked in a message (PLX-834):
- * read from its thread's folder through `agent/file`, opened by type, and shared by the
+ * read from its thread's folder through `agent/file`, in slices on a plxd with `fileChunks`
+ * (PLX-835, decision 0074), opened by type, and shared by the
  * transcript's cards and the side panel until a newer presentation reloads them.
  */
 
@@ -48,11 +49,12 @@ export const typeOf = (doc: DocRef) =>
     ? (/\.([a-z0-9]{1,10})$/i.exec(doc.name)?.[1]?.toUpperCase() ?? "FILE")
     : doc.kind.toUpperCase();
 
-/** `bytes` as a size people read: 512 bytes, 12 KB, 3.4 MB. */
+/** `bytes` as a size people read: 512 bytes, 12 KB, 3.4 MB, 1.0 GB. */
 export function sizeOf(bytes: number): string {
   if (bytes < 1024) return `${bytes} bytes`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
 /** A file's name as a title: no extension, and spaces for underscores and hyphens. */
@@ -103,18 +105,102 @@ export async function readAttachment(
   return fromBase64(answer.result.data);
 }
 
-export async function load(hostId: string, doc: DocRef): Promise<Loaded> {
-  const answer = await window.parallax.request(hostId, "agent/file", {
-    runId: doc.runId,
-    path: doc.path,
-    side: "working",
-  });
-  if ("error" in answer) throw new Error(await failure(hostId, answer.error));
-  const file = answer.result;
-  if (!file.exists) throw new Error("This file isn't in the thread's folder anymore.");
-  if (file.tooLarge || file.content == null)
-    throw new Error("This file is too large to open here.");
-  const bytes = fromBase64(file.content);
+/** A host's `fileChunks` capability (0074): the most bytes one slice or piece carries, and the largest file pieces make. */
+export interface FileChunks {
+  chunkBytes: number;
+  maxBytes: number;
+}
+
+/** `connection`'s `fileChunks`. Undefined while it isn't connected, or when its plxd moves each file in one message. */
+export function fileChunks(connection?: ConnectionState): FileChunks | undefined {
+  const cap =
+    connection?.status === "connected" ? connection.capabilities["fileChunks"] : undefined;
+  const chunkBytes = cap?.["chunkBytes"];
+  const maxBytes = cap?.["maxBytes"];
+  return typeof chunkBytes === "number" && typeof maxBytes === "number"
+    ? { chunkBytes, maxBytes }
+    : undefined;
+}
+
+/** `hostId`'s `fileChunks`, as it's connected now. */
+export const chunksOf = async (hostId: string) =>
+  fileChunks(await window.parallax.connectionState(hostId).catch(() => undefined));
+
+/**
+ * `send`'s answer, sent up to twice more while it answers an error, as a timeout on a slow link
+ * does. Only for a call that answers a repeat as it did the first: a slice, or a piece (0074).
+ */
+export async function retried<R>(send: () => Promise<HostResponse<R>>): Promise<HostResponse<R>> {
+  let answer = await send();
+  for (let tries = 1; tries < 3 && "error" in answer; tries++) answer = await send();
+  return answer;
+}
+
+/** Reads over this many bytes report their progress; smaller ones finish before it would show. */
+export const progressFrom = 4 * 2 ** 20;
+
+/** One slice of a file, or with no `at`, all of it in one message: its base64, and the whole file's size. */
+export type Slice = (at?: {
+  offset: number;
+  length: number;
+}) => Promise<{ data: string; size?: number }>;
+
+/**
+ * A whole file on `hostId`, read with `slice`: on a plxd with `fileChunks` (0074), in slices of
+ * its `chunkBytes` into one buffer, so a file of any size reads over a slow link, with
+ * `onProgress` given the share read after each slice of a file over `progressFrom`. Without
+ * `fileChunks`, in one message, under that plxd's cap.
+ */
+export async function readSlices(
+  hostId: string,
+  slice: Slice,
+  onProgress?: (share: number) => void,
+): Promise<Uint8Array> {
+  const chunks = await chunksOf(hostId);
+  if (!chunks) return fromBase64((await slice()).data);
+  let bytes: Uint8Array | undefined;
+  let at = 0;
+  do {
+    const { data, size = 0 } = await slice({ offset: at, length: chunks.chunkBytes });
+    bytes ??= new Uint8Array(size);
+    const piece = fromBase64(data);
+    // Rewritten, grown, or cut short since the first slice.
+    if (size !== bytes.length || at + piece.length > size || (piece.length === 0 && at < size))
+      throw new Error("This file changed while it was read. Try again.");
+    bytes.set(piece, at);
+    at += piece.length;
+    if (size > progressFrom) onProgress?.(at / size);
+  } while (at < bytes.length);
+  return bytes;
+}
+
+/** File `path` in run `runId`'s folder on `hostId`, from `agent/file`, read with `readSlices`. */
+export function readWorking(
+  hostId: string,
+  runId: string,
+  path: string,
+  onProgress?: (share: number) => void,
+): Promise<Uint8Array> {
+  const slice: Slice = async (at) => {
+    const answer = await retried(() =>
+      window.parallax.request(hostId, "agent/file", { runId, path, side: "working", ...at }),
+    );
+    if ("error" in answer) throw new Error(await failure(hostId, answer.error));
+    const file = answer.result;
+    if (!file.exists) throw new Error("This file isn't in the thread's folder anymore.");
+    if (file.tooLarge || file.content == null)
+      throw new Error("This file is too large to open here.");
+    return { data: file.content, size: file.size };
+  };
+  return readSlices(hostId, slice, onProgress);
+}
+
+export async function load(
+  hostId: string,
+  doc: DocRef,
+  onProgress?: (share: number) => void,
+): Promise<Loaded> {
+  const bytes = await readWorking(hostId, doc.runId, doc.path, onProgress);
   if (doc.kind === "file") return { bytes, opened: { kind: "file" } };
   const opened: Opened = isMedia(doc.kind)
     ? { kind: "media" }
@@ -164,9 +250,16 @@ const subscribe = (listener: () => void) => {
   return () => listeners.delete(listener);
 };
 
-/** `doc` from `hostId`, opened, and opened again when a newer presentation reloads it. */
+// Each file over `progressFrom`'s share read so far, by key, while it loads.
+const shares = new Map<string, number>();
+
+/**
+ * `doc` from `hostId`, opened, and opened again when a newer presentation reloads it. While a
+ * file over `progressFrom` loads, `progress` is the share of it read so far.
+ */
 export function useDocument(hostId: string, doc: DocRef) {
   const loads = useSyncExternalStore(subscribe, () => version);
+  const share = useSyncExternalStore(subscribe, () => shares.get(keyOf(hostId, doc)));
   const [state, setState] = useState<{ loaded?: Loaded; error?: string }>({});
   const { runId, path, name, kind } = doc;
   useEffect(() => {
@@ -175,10 +268,19 @@ export function useDocument(hostId: string, doc: DocRef) {
     const key = keyOf(hostId, ref);
     let loading = cache.get(key);
     if (!loading) {
-      loading = load(hostId, ref);
+      loading = load(hostId, ref, (read) => {
+        shares.set(key, read);
+        for (const listener of listeners) listener();
+      });
       cache.set(key, loading);
-      // A failed read is tried again the next time.
-      loading.catch(() => cache.delete(key));
+      loading.then(
+        () => shares.delete(key),
+        () => {
+          shares.delete(key);
+          // A failed read is tried again the next time.
+          cache.delete(key);
+        },
+      );
     }
     loading.then(
       (loaded) => live && setState({ loaded }),
@@ -189,7 +291,7 @@ export function useDocument(hostId: string, doc: DocRef) {
       live = false;
     };
   }, [hostId, runId, path, name, kind, loads]);
-  return state;
+  return { ...state, progress: state.loaded || state.error ? undefined : share };
 }
 
 /** Saves `bytes` as `name` through the browser's download, which asks where. */

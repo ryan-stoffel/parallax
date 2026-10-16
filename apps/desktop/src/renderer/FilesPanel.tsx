@@ -12,11 +12,10 @@ import {
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
-import type { AgentEntry, AgentFileResult } from "../protocol/generated/protocol";
-import { failure } from "./documents";
+import type { AgentEntry } from "../protocol/generated/protocol";
+import { chunksOf, failure, progressFrom, readWorking } from "./documents";
 import { describeError } from "./errors";
 import { DownloadButton } from "./FileCards";
-import { fromBase64 } from "./ooxml";
 import { ConfirmDialog, IconButton, Menu, menuItem, openOnContextMenu } from "./ui";
 
 /** A folder's entries once listed, or why they couldn't be. */
@@ -432,11 +431,8 @@ function Empty({ title, hint }: { title: string; hint: string }) {
   );
 }
 
-/** A file's text, or a note when it's binary, too large, or gone. */
-export function fileText(file: AgentFileResult): { text: string } | { note: string } {
-  if (!file.exists) return { note: "This file isn't there anymore." };
-  if (file.tooLarge) return { note: "This file is too large to show." };
-  const bytes = Uint8Array.from(atob(file.content ?? ""), (c) => c.charCodeAt(0));
+/** A file's text, or a note when it's binary. */
+export function fileText(bytes: Uint8Array): { text: string } | { note: string } {
   if (bytes.includes(0)) return { note: "This is a binary file." };
   try {
     return { text: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
@@ -446,48 +442,86 @@ export function fileText(file: AgentFileResult): { text: string } | { note: stri
 }
 
 /**
+ * What the view shows of a file: its text, or a note on why not, with its bytes for Download, or
+ * `large` for one only Download reads, or why it couldn't be read.
+ */
+type Shown =
+  | { text: string }
+  | { note: string; bytes?: Uint8Array; large?: boolean }
+  | { error: string };
+
+/**
+ * File `path` as the view shows it. Its size comes first, so a file over `progressFrom` is read
+ * only when it's downloaded, which takes a plxd that reads slices (PLX-835).
+ */
+async function readShown(hostId: string, runId: string, path: string): Promise<Shown> {
+  const stat = await window.parallax.request(hostId, "agent/file", {
+    runId,
+    path,
+    side: "working",
+    sizeOnly: true,
+  });
+  if ("error" in stat) return { error: await failure(hostId, stat.error) };
+  if (!stat.result.exists) return { note: "This file isn't there anymore." };
+  if ((stat.result.size ?? 0) > progressFrom)
+    return { note: "This file is too large to show.", large: !!(await chunksOf(hostId)) };
+  try {
+    const bytes = await readWorking(hostId, runId, path);
+    const shown = fileText(bytes);
+    return "text" in shown ? shown : { ...shown, bytes };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
  * One file as it is on disk now, as plain monospace text. A binary file offers Download instead
- * (PLX-834).
+ * (PLX-834), and so does one too large to show, read in slices with its progress (PLX-835).
  */
 function FileView({ hostId, runId, path }: { hostId: string; runId: string; path: string }) {
-  const [read, setRead] = useState<AgentFileResult | { error: string }>();
+  const [read, setRead] = useState<Shown>();
+  // The share of a large file read so far, while Download reads it.
+  const [share, setShare] = useState<number>();
   useEffect(() => {
     let stopped = false;
-    void window.parallax
-      .request(hostId, "agent/file", { runId, path, side: "working" })
-      .then(async (answer) => {
-        const next =
-          "error" in answer ? { error: await failure(hostId, answer.error) } : answer.result;
-        if (!stopped) setRead(next);
-      });
+    void readShown(hostId, runId, path).then((next) => !stopped && setRead(next));
     return () => {
       stopped = true;
     };
   }, [hostId, runId, path]);
 
   if (!read) return null;
-  const shown = "error" in read ? read : fileText(read);
-  if ("text" in shown)
+  if ("text" in read)
     return (
       <pre
         aria-label={path}
         className="code-lines min-h-0 flex-1 overflow-auto px-4 pt-2 pb-4 font-mono text-[12px] leading-[1.6] text-foreground"
       >
-        {shown.text}
+        {read.text}
       </pre>
     );
-  const content = "content" in read ? read.content : undefined;
+  const bytes = "bytes" in read ? read.bytes : undefined;
+  const save = bytes
+    ? async () => bytes
+    : "large" in read && read.large
+      ? () => readWorking(hostId, runId, path, setShare).finally(() => setShare(undefined))
+      : undefined;
   return (
     <div className="px-4 pt-2">
       <p
-        role={"error" in shown ? "alert" : undefined}
-        className={`text-[12.5px] ${"error" in shown ? "text-danger" : "text-muted-foreground"}`}
+        role={"error" in read ? "alert" : undefined}
+        className={`text-[12.5px] ${"error" in read ? "text-danger" : "text-muted-foreground"}`}
       >
-        {"error" in shown ? shown.error : shown.note}
+        {"error" in read ? read.error : read.note}
       </p>
-      {content && (
-        <div className="-ml-2 pt-1">
-          <DownloadButton name={nameOf(path)} read={async () => fromBase64(content)} />
+      {save && (
+        <div className="-ml-2 flex items-center gap-2 pt-1">
+          <DownloadButton name={nameOf(path)} read={save} />
+          {share !== undefined && (
+            <span className="text-[12.5px] text-muted-foreground tabular-nums">
+              {Math.round(share * 100)}%
+            </span>
+          )}
         </div>
       )}
     </div>

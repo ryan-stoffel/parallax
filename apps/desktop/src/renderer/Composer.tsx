@@ -55,6 +55,7 @@ import type {
   PromptImage,
 } from "../protocol/generated/protocol";
 import { lastPrompt } from "./attention";
+import { sizeOf } from "./documents";
 import type { ComposerContents } from "./drafts";
 import { UsageInline, UsageRing, useComposerUsage } from "./ComposerUsage";
 import type { RequestUsage } from "./transcript";
@@ -63,7 +64,7 @@ import { accessPrefs } from "./accessPrefs";
 import { FileCard } from "./FileCard";
 import { Mention } from "./Mention";
 import { imageUrl, readImage, type ImageCaps } from "./images";
-import { base64Length, encodedImage, uploadFiles, withFiles } from "./uploads";
+import { encodedImage, uploadFiles, withFiles, type UploadCaps } from "./uploads";
 import { ModelMenu } from "./ModelMenu";
 import { behaviorPrefs, newThreadPrefs, usageView } from "./prefs";
 import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
@@ -445,11 +446,13 @@ export interface ComposerProps {
   /** The host's image caps (`promptImages`). Absent: adding an image just says it can't take them. */
   imageCaps?: ImageCaps;
   /**
-   * The host's cap on one file's base64 (`fileUploads`, 0071). With `hostId`, each file and image
-   * is saved on the host when the message sends, and the message lists its path for the agent.
-   * Absent: a file that isn't an image stays a chip that isn't sent.
+   * What the host's `host/upload` takes (`fileUploads`, 0071, and `fileChunks`, 0074): the most
+   * bytes a file can be, and the size of the pieces a file goes in, whose progress its chip shows.
+   * With `hostId`, each file and image is saved on the host when the message sends, and the
+   * message lists its path for the agent. Absent: a file that isn't an image stays a chip that
+   * isn't sent.
    */
-  uploadBytes?: number;
+  uploadBytes?: UploadCaps;
   /**
    * Why Supervised's requests are denied instead of coming to the chat (0031): the host's plxd lacks
    * `approvals`, or the open run started without them. Absent: they come as approval cards.
@@ -546,6 +549,8 @@ export function Composer({
   const canUpload = !!host && !!uploadBytes;
   // While the files upload, before the message goes.
   const [uploading, setUploading] = useState(false);
+  // The file going in pieces now, and the share of it sent.
+  const [sending, setSending] = useState<{ file: File; share: number }>();
   const [images, setImages] = useState<PromptImage[]>(initial?.images ?? []);
   // Attached threads' run ids, shown as chips beside the images.
   const [threads, setThreads] = useState<string[]>(initial?.threads ?? []);
@@ -862,13 +867,13 @@ export function Composer({
   const addFiles = async (added: File[]) => {
     const isImage = (f: File) => f.type.startsWith("image/");
     const others = added.filter((f) => !isImage(f));
-    const fits = (f: File) => !canUpload || base64Length(f) <= uploadBytes;
+    const fits = (f: File) => !host || !uploadBytes || f.size <= uploadBytes.maxBytes;
     setFiles((all) => [...all, ...others.filter(fits)]);
     const tooLarge = others.find((f) => !fits(f));
     const picked = added.filter(isImage);
     setAttachError(
       tooLarge &&
-        `${tooLarge.name} is larger than ${Math.floor((uploadBytes! * 3) / 4 / 2 ** 20)} MB, the most a file can be.`,
+        `${tooLarge.name} is larger than ${sizeOf(uploadBytes!.maxBytes)}, the most a file can be.`,
     );
     if (picked.length === 0) return;
     if (!imageCaps) return setAttachError("This host's plxd can't take images.");
@@ -898,11 +903,12 @@ export function Composer({
       // Nothing typed meanwhile, which the box clears once they're saved.
       setUploading(true);
       editor.setEditable(false);
-      const paths = await uploadFiles(host!, uploads).catch(
-        (error: unknown) => `A file couldn't be read: ${String(error)}`,
-      );
+      const paths = await uploadFiles(host!, uploads, uploadBytes?.chunkBytes, (file, share) =>
+        setSending({ file, share }),
+      ).catch((error: unknown) => `A file couldn't be read: ${String(error)}`);
       if (!editor.isDestroyed) editor.setEditable(true);
       setUploading(false);
+      setSending(undefined);
       if (typeof paths === "string") return setError(paths);
       sentText = withFiles(text, paths);
     }
@@ -1269,6 +1275,7 @@ export function Composer({
               <FileCard
                 key={`${f.name}-${f.lastModified}-${i}`}
                 file={f}
+                progress={sending?.file === f ? sending.share : undefined}
                 onRemove={() => setFiles((all) => all.filter((_, j) => j !== i))}
               />
             ))}
