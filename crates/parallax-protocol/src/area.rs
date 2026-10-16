@@ -3,7 +3,9 @@
 //! An area is a named, colored list of threads and Projects the user picks by hand, from any repo
 //! entry, Project, or Space. A thread still belongs to its repo entry; an area only lists it too,
 //! and one thread can be in several areas. Only top-level threads and Projects are members: a
-//! child thread shows wherever its root parent does, which the client works out.
+//! child thread shows wherever its root parent does, which the client works out. Behind the
+//! `areaRepos` capability (PLX-852), whole repo entries and Spaces are members too, as folders
+//! that list every thread in them.
 //!
 //! `thread/list` returns every area, and `areas.changed` carries every area again whenever one is
 //! created, updated, or deleted.
@@ -12,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
-use crate::{ProjectId, RunId};
+use crate::{ProjectId, RepoId, RunId};
 
 /// The longest area name, in characters once trimmed.
 pub const MAX_AREA_NAME_CHARS: usize = 40;
@@ -38,12 +40,16 @@ pub struct Area {
     pub threads: Vec<RunId>,
     /// Its Projects, in the order they were added.
     pub projects: Vec<ProjectId>,
+    /// Its repo entries and Spaces, never the scratch entry, in the order they were added, behind
+    /// `areaRepos`. Absent from an older plxd.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<RepoId>,
 }
 
 /// Params of `area/create`: makes an area. Idempotent on `id`: a retry with the same name returns
 /// the area, another name fails with `idConflict`. A name another area has, ignoring case, fails
-/// with `invalidParams`. Ids that name no top-level thread or Project are dropped, so the result
-/// says what was kept. Appends `areas.changed`.
+/// with `invalidParams`. Ids that name no top-level thread, Project, or non-scratch repo entry are
+/// dropped, so the result says what was kept. Appends `areas.changed`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AreaCreateParams {
@@ -59,6 +65,9 @@ pub struct AreaCreateParams {
     /// Its Projects.
     #[serde(default)]
     pub projects: Vec<ProjectId>,
+    /// Its repo entries and Spaces, behind `areaRepos`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<RepoId>,
 }
 
 /// Params of `area/update`: renames an area, recolors it, or replaces its members, checked as
@@ -85,6 +94,10 @@ pub struct AreaUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub projects: Option<Vec<ProjectId>>,
+    /// Its repo entries and Spaces, replacing the old list, behind `areaRepos`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub repos: Option<Vec<RepoId>>,
 }
 
 /// Result of `area/create` and `area/update`.
@@ -95,7 +108,8 @@ pub struct AreaResult {
     pub area: Area,
 }
 
-/// Params of `area/delete`: deletes an area. Its threads and Projects stay where they are.
+/// Params of `area/delete`: deletes an area. Its threads, Projects, and repo entries stay where
+/// they are.
 /// Deleting an unknown area succeeds and appends nothing; otherwise it appends `areas.changed`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

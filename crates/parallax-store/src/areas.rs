@@ -1,5 +1,5 @@
-//! Areas (PLX-789): named, colored lists of top-level threads and Projects. A member's row goes
-//! with its area, thread, or Project, by foreign key.
+//! Areas (PLX-789): named, colored lists of top-level threads, Projects, and repo entries
+//! (PLX-852). A member's row goes with its area, thread, Project, or repo entry, by foreign key.
 
 use jiff::Timestamp;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -17,6 +17,8 @@ pub struct AreaFields {
     pub threads: Vec<Uuid>,
     /// Its Projects, in the order they were added.
     pub projects: Vec<Uuid>,
+    /// Its repo entries and Spaces, in the order they were added.
+    pub repos: Vec<Uuid>,
 }
 
 /// An area row with its members, each list in the order it was given.
@@ -52,6 +54,7 @@ fn area(conn: &Connection, row: (String, String, String, String)) -> Result<Area
             color,
             threads: members(conn, "area_threads", "thread_id", &id)?,
             projects: members(conn, "area_projects", "project_id", &id)?,
+            repos: members(conn, "area_repos", "repo_id", &id)?,
         },
         id: Uuid::parse_str(&id)?,
         created_at: timestamp::parse(&created_at)?,
@@ -94,9 +97,9 @@ impl Store {
     }
 
     /// Creates area `id`, or sets its name and color, keeping its creation time. Replaces its
-    /// threads or Projects only when given, dropping ids that name no top-level thread or
-    /// Project, and repeats; a list not given keeps its stored members, even a thread that has
-    /// since gained a parent. Returns the area as stored.
+    /// threads, Projects, or repo entries only when given, dropping ids that name no top-level
+    /// thread, Project, or non-scratch repo entry, and repeats; a list not given keeps its stored
+    /// members, even a thread that has since gained a parent. Returns the area as stored.
     ///
     /// # Errors
     ///
@@ -108,6 +111,7 @@ impl Store {
         color: &str,
         threads: Option<&[Uuid]>,
         projects: Option<&[Uuid]>,
+        repos: Option<&[Uuid]>,
     ) -> Result<Area, StoreError> {
         let tx = self.conn.savepoint()?;
         let key = id.to_string();
@@ -137,11 +141,21 @@ impl Store {
                 )?;
             }
         }
+        if let Some(repos) = repos {
+            tx.execute("DELETE FROM area_repos WHERE area_id = ?1", params![key])?;
+            for (position, repo) in repos.iter().enumerate() {
+                tx.execute(
+                    "INSERT OR IGNORE INTO area_repos (area_id, repo_id, position)
+                     SELECT ?1, id, ?3 FROM repos WHERE id = ?2 AND scratch = 0",
+                    params![key, repo.to_string(), position],
+                )?;
+            }
+        }
         tx.commit()?;
         self.get_area(id)?.ok_or(StoreError::NotFound { id })
     }
 
-    /// Deletes area `id`, leaving its threads and Projects. Returns whether it existed.
+    /// Deletes area `id`, leaving its threads, Projects, and repo entries. Returns whether it existed.
     ///
     /// # Errors
     ///
@@ -153,7 +167,7 @@ impl Store {
             > 0)
     }
 
-    /// Whether thread or Project `id` is in any area, so deleting it changes one.
+    /// Whether thread, Project, or repo entry `id` is in any area, so deleting it changes one.
     ///
     /// # Errors
     ///
@@ -161,7 +175,8 @@ impl Store {
     pub fn in_area(&self, id: Uuid) -> Result<bool, StoreError> {
         Ok(self.conn.query_row(
             "SELECT EXISTS (SELECT 1 FROM area_threads WHERE thread_id = ?1)
-                OR EXISTS (SELECT 1 FROM area_projects WHERE project_id = ?1)",
+                OR EXISTS (SELECT 1 FROM area_projects WHERE project_id = ?1)
+                OR EXISTS (SELECT 1 FROM area_repos WHERE repo_id = ?1)",
             params![id.to_string()],
             |row| row.get(0),
         )?)

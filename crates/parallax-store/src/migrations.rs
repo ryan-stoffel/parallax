@@ -755,6 +755,18 @@ const MIGRATIONS: &[Migration] = &[
         );
         CREATE INDEX area_projects_project ON area_projects (project_id);",
     },
+    // Repo entries and Spaces as area members (PLX-852), each listing every thread in it. A row
+    // goes with its area or repo entry.
+    Migration {
+        version: 47,
+        sql: "CREATE TABLE area_repos (
+            area_id TEXT NOT NULL REFERENCES areas (id) ON DELETE CASCADE,
+            repo_id TEXT NOT NULL REFERENCES repos (id) ON DELETE CASCADE,
+            position INTEGER NOT NULL,
+            PRIMARY KEY (area_id, repo_id)
+        );
+        CREATE INDEX area_repos_repo ON area_repos (repo_id);",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a

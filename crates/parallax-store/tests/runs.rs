@@ -553,12 +553,12 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     // landings table and auto-land column (PLX-410's migration 33), the placement columns and
     // table (PLX-413's migration 34), the checks columns (PLX-411's migration 35), the search
     // index (PLX-487's migration 36), the attached-thread cursors (PLX-486's migration 37), the
-    // orchestrator's tables (PLX-643's migration 39), or delegation's (PLX-648's migrations 42
-    // and 43).
+    // orchestrator's tables (PLX-643's migration 39), delegation's (PLX-648's migrations 42
+    // and 43), or the areas tables (PLX-789's migration 46 and PLX-852's 47).
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP TABLE area_threads; DROP TABLE area_projects; DROP TABLE areas;
+            "DROP TABLE area_repos; DROP TABLE area_threads; DROP TABLE area_projects; DROP TABLE areas;
              DROP TABLE runs; DROP TABLE log_meta; DROP TABLE events; DROP TABLE turns;
              DROP TABLE threads; DROP TABLE repos; DROP TABLE wakes; DROP TABLE images;
              DROP TABLE host_settings; DROP TABLE inbox; DROP TABLE queued; DROP TABLE questions;

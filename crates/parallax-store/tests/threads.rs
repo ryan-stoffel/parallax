@@ -796,12 +796,12 @@ fn an_area_keeps_top_level_members_until_they_are_deleted() {
     let threads = [other, child, Uuid::now_v7(), parent, other];
     let projects = [Uuid::now_v7(), project, project];
     let area = store
-        .save_area(id, "Work", "violet", Some(&threads), Some(&projects))
+        .save_area(id, "Work", "violet", Some(&threads), Some(&projects), None)
         .unwrap();
     assert_eq!(area.fields.threads, [other, parent]);
     assert_eq!(area.fields.projects, [project]);
     let second = store
-        .save_area(Uuid::now_v7(), "Play", "teal", Some(&threads), None)
+        .save_area(Uuid::now_v7(), "Play", "teal", Some(&threads), None, None)
         .unwrap();
     assert!(second.fields.projects.is_empty());
     let ids: Vec<Uuid> = store.list_areas().unwrap().iter().map(|a| a.id).collect();
@@ -810,12 +810,21 @@ fn an_area_keeps_top_level_members_until_they_are_deleted() {
     // A member that joins a Project keeps its place through a recolor, and leaves only when
     // the threads are sent again.
     store.join_project(other, project, parent).unwrap();
-    let recolored = store.save_area(id, "Work", "teal", None, None).unwrap();
+    let recolored = store
+        .save_area(id, "Work", "teal", None, None, None)
+        .unwrap();
     assert_eq!(recolored.fields.threads, [other, parent]);
     assert_eq!(recolored.fields.projects, [project]);
     assert_eq!(recolored.created_at, area.created_at);
     let resent = store
-        .save_area(id, "Work", "teal", Some(&recolored.fields.threads), None)
+        .save_area(
+            id,
+            "Work",
+            "teal",
+            Some(&recolored.fields.threads),
+            None,
+            None,
+        )
         .unwrap();
     assert_eq!(resent.fields.threads, [parent]);
 
@@ -832,6 +841,54 @@ fn an_area_keeps_top_level_members_until_they_are_deleted() {
     assert!(!store.delete_area(id).unwrap());
     assert_eq!(store.get_area(id).unwrap(), None);
     assert!(store.get_thread(other).unwrap().is_some(), "members stay");
+}
+
+/// An area keeps repo entries and Spaces once each in the order given, never the scratch entry,
+/// and loses one when it is deleted (PLX-852).
+#[test]
+fn an_area_keeps_repo_entries_until_they_are_deleted() {
+    let (_dir, mut store) = open();
+    let repo = store
+        .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/parallax"))
+        .unwrap();
+    let space = store
+        .add_repo(
+            Uuid::now_v7(),
+            &RepoFields {
+                space: true,
+                ..repo_fields("/data/spaces/math")
+            },
+        )
+        .unwrap();
+    let scratch = store
+        .add_repo(
+            Uuid::now_v7(),
+            &RepoFields {
+                scratch: true,
+                ..repo_fields("/data/scratch")
+            },
+        )
+        .unwrap();
+
+    let id = Uuid::now_v7();
+    let repos = [space.id, scratch.id, Uuid::now_v7(), repo.id, space.id];
+    let area = store
+        .save_area(id, "School", "sky", None, None, Some(&repos))
+        .unwrap();
+    assert_eq!(area.fields.repos, [space.id, repo.id]);
+    let renamed = store
+        .save_area(id, "Classes", "sky", None, None, None)
+        .unwrap();
+    assert_eq!(
+        renamed.fields.repos,
+        [space.id, repo.id],
+        "kept when not sent"
+    );
+
+    assert!(store.in_area(space.id).unwrap());
+    assert!(store.delete_repo(space.id).unwrap());
+    assert!(!store.in_area(space.id).unwrap());
+    assert_eq!(store.get_area(id).unwrap().unwrap().fields.repos, [repo.id]);
 }
 
 /// A pin round-trips, and pinning a pinned thread changes nothing (PLX-789).

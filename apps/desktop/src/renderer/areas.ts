@@ -169,5 +169,8 @@ export function revertEdit(before: Area, after: Omit<Area, "id">, now: Area) {
     ...(after.color !== before.color && { color: before.color }),
     threads: undo(before.threads, after.threads, now.threads),
     projects: undo(before.projects, after.projects, now.projects),
+    ...((before.repos || after.repos) && {
+      repos: undo(before.repos ?? [], after.repos ?? [], now.repos ?? []),
+    }),
   };
 }

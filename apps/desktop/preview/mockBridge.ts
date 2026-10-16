@@ -58,6 +58,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "agentWait",
     "agents",
     "approvals",
+    "areaRepos",
     "areas",
     "autoResume",
     "checkpoints",
@@ -855,6 +856,9 @@ const handlers: { [M in Method]?: Handler<M> } = {
       color: p.color,
       threads: p.threads.filter(listed),
       projects: p.projects.filter((id) => db.projects.some((x) => x.id === id)),
+      repos: [...new Set(p.repos ?? [])].filter((id) =>
+        db.repos.some((r) => r.id === id && !r.scratch),
+      ),
     };
     db.areas.push(area);
     emit({ kind: "areas.changed", areas: db.areas });
@@ -867,6 +871,7 @@ const handlers: { [M in Method]?: Handler<M> } = {
     if (p.color !== undefined) area.color = p.color;
     if (p.threads) area.threads = [...new Set(p.threads)];
     if (p.projects) area.projects = [...new Set(p.projects)];
+    if (p.repos) area.repos = [...new Set(p.repos)];
     emit({ kind: "areas.changed", areas: db.areas });
     return { area };
   },
@@ -933,6 +938,10 @@ const handlers: { [M in Method]?: Handler<M> } = {
     db.threads = db.threads.filter((t) => t.repo !== p.space);
     db.repos = db.repos.filter((r) => r.id !== p.space);
     emit({ kind: "repo.removed", repo: p.space });
+    if (db.areas.some((a) => a.repos?.includes(p.space))) {
+      for (const a of db.areas) a.repos = a.repos?.filter((id) => id !== p.space);
+      emit({ kind: "areas.changed", areas: db.areas });
+    }
     return {};
   },
   "repo/refs": () => ({

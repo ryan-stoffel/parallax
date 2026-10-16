@@ -2,7 +2,8 @@
 //! capability.
 //!
 //! An area is a named, colored list of top-level threads and Projects from any repo entry,
-//! Project, or Space. plxd drops member ids that name no top-level thread or Project, so an undo
+//! Project, or Space, and of whole repo entries and Spaces behind `areaRepos` (PLX-852). plxd
+//! drops member ids that name no top-level thread, Project, or non-scratch repo entry, so an undo
 //! that re-creates an area keeps only what still exists. Every change, and deleting a member,
 //! appends `areas.changed` with every area.
 
@@ -12,7 +13,7 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     Area, AreaCreateParams, AreaDeleteParams, AreaDeleteResult, AreaId, AreaResult,
-    AreaUpdateParams, ErrorKind, MAX_AREA_NAME_CHARS, ParallaxEvent, ProjectId, RunId,
+    AreaUpdateParams, ErrorKind, MAX_AREA_NAME_CHARS, ParallaxEvent, ProjectId, RepoId, RunId,
 };
 use parallax_store::Store;
 use uuid::Uuid;
@@ -71,6 +72,12 @@ fn entry(row: parallax_store::Area) -> Result<Area, ErrorObject> {
             .into_iter()
             .map(|project| ProjectId::try_from(project).map_err(|_| corrupt(id)))
             .collect::<Result<_, _>>()?,
+        repos: row
+            .fields
+            .repos
+            .into_iter()
+            .map(|repo| RepoId::try_from(repo).map_err(|_| corrupt(id)))
+            .collect::<Result<_, _>>()?,
     })
 }
 
@@ -109,11 +116,13 @@ pub(crate) async fn create(
         color,
         threads,
         projects,
+        repos,
     } = params;
     let name = check_name(&name)?;
     check_key("color", &color, MAX_ICON_COLOR_CHARS)?;
     let threads = uuids(threads);
     let projects = uuids(projects);
+    let repos = uuids(repos);
     store(daemon, move |db| {
         let key: Uuid = id.into();
         if let Some(existing) = db.get_area(key).map_err(|e| store_error(&e))? {
@@ -129,7 +138,14 @@ pub(crate) async fn create(
         }
         check_unique(db, key, &name)?;
         let row = db
-            .save_area(key, &name, &color, Some(&threads), Some(&projects))
+            .save_area(
+                key,
+                &name,
+                &color,
+                Some(&threads),
+                Some(&projects),
+                Some(&repos),
+            )
             .map_err(|e| store_error(&e))?;
         stage_changed(db)?;
         Ok(AreaResult { area: entry(row)? })
@@ -148,6 +164,7 @@ pub(crate) async fn update(
         color,
         threads,
         projects,
+        repos,
     } = params;
     let name = name.as_deref().map(check_name).transpose()?;
     if let Some(color) = &color {
@@ -168,8 +185,16 @@ pub(crate) async fn update(
         let color = color.as_deref().unwrap_or(&before.fields.color);
         let threads = threads.map(uuids);
         let projects = projects.map(uuids);
+        let repos = repos.map(uuids);
         let row = db
-            .save_area(key, name, color, threads.as_deref(), projects.as_deref())
+            .save_area(
+                key,
+                name,
+                color,
+                threads.as_deref(),
+                projects.as_deref(),
+                repos.as_deref(),
+            )
             .map_err(|e| store_error(&e))?;
         if row != before {
             stage_changed(db)?;
