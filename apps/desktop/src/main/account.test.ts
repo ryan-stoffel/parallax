@@ -61,6 +61,7 @@ const clerk = {
     picture: "https://img.clerk.test/ryan.png",
   },
   issued: 0,
+  pictureDown: false,
 };
 function issue(refreshToken = `rt${++clerk.issued}`) {
   const accessToken = `at${clerk.issued}`;
@@ -76,6 +77,7 @@ const oauthError = (error: string) => Response.json({ error }, { status: 400 });
 const realFetch = globalThis.fetch;
 vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
   const url = new URL(input);
+  if (url.host === "img.clerk.test" && clerk.pictureDown) throw new TypeError("fetch failed");
   if (url.host === "img.clerk.test")
     return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } });
   if (url.host !== "clerk.parallax.test") return realFetch(input, init);
@@ -242,6 +244,26 @@ test("a restart shows the saved profile at once, then refreshes it; sign-out rev
   expect(clerk.revoked).toEqual([after.refreshToken]);
   expect(fs.existsSync(savedFile())).toBe(false);
   await settle();
+});
+
+test("a picture that failed to load loads on the next refresh", async () => {
+  clerk.user = { ...clerk.user, picture: "https://img.clerk.test/ryan.png" };
+  clerk.pictureDown = true;
+  startAccount();
+  const answer = call("parallax:signIn", false);
+  await vi.waitFor(() => expect(electron.opened).toHaveLength(1));
+  await signInInBrowser(electron.opened[0]!);
+  await answer;
+  await settle();
+  expect(published.at(-1)).toMatchObject({ email: "ryan@example.com", picture: undefined });
+
+  // Back online, focusing the window a minute later shows it.
+  clerk.pictureDown = false;
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 61_000);
+  electron.focus.at(-1)!();
+  await vi.waitFor(() => expect(published.at(-1)?.picture).toBe("data:image/png;base64,AQID"));
+  vi.restoreAllMocks();
+  await call("parallax:signOut");
 });
 
 test("a refresh token revoked elsewhere signs this computer out", async () => {

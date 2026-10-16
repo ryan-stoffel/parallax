@@ -2429,8 +2429,8 @@ function ScopeMenu({
 
 /**
  * The footer's buttons: Profile, which shows the account's picture or initials and opens its menu
- * (ProfileMenu.tsx), Settings, Pull requests, Usage, and Update when `updatable` (Update.tsx), then
- * how many threads need the user, which goes to the next (⌥↓), and the keyboard shortcuts.
+ * (ProfileMenu.tsx), Settings, Pull requests, and Usage, then how many threads need the user, which
+ * goes to the next (⌥↓), and Update when `updatable` (Update.tsx).
  */
 function Footer({
   listed,
@@ -2455,7 +2455,6 @@ function Footer({
       <IconButton label="Usage" onClick={() => onOpenSettings("usage")}>
         <ChartNoAxesColumn />
       </IconButton>
-      {window.parallax.updatable && <UpdateButton />}
       <span className="flex-1" />
       {needs > 0 && (
         <button
@@ -2470,71 +2469,13 @@ function Footer({
           <kbd className="font-sans font-semibold opacity-75">{altArrow("↓")}</kbd>
         </button>
       )}
-      <ShortcutsButton />
+      {window.parallax.updatable && <UpdateButton />}
     </div>
   );
 }
 
 /** ⌥ and an arrow, as this OS writes it. */
 const altArrow = (arrow: string) => (mac() ? `⌥${arrow}` : `Alt+${arrow}`);
-
-/** The keyboard button and its list of the sidebar's shortcuts (PLX-789). */
-function ShortcutsButton() {
-  const id = useId();
-  const back = useShortcutLabel("back");
-  const forward = useShortcutLabel("forward");
-  const mod = mac() ? "⌘" : "Ctrl+";
-  // Each: what it does, its keys, and how else.
-  const keys: [string, string[], string?][] = [
-    ["Next or previous that needs you", [altArrow("↓"), altArrow("↑")]],
-    ["Move between threads", ["↑", "↓"]],
-    ["Open", ["↵"]],
-    ["Archive, snooze, pin", ["E", "S", "P"]],
-    ["Add to an area", ["A"]],
-    ["Rename", ["R"], "or double-click"],
-    ["Select", ["X"], `⇧-click, ${mod}click`],
-    ["Delete", ["⌫"]],
-    ...(back && forward ? [["Back, forward", [back, forward]] as [string, string[]]] : []),
-    ["Areas, all threads", [`${areaKey(1)}–9`, areaKey(0)]],
-    ["Search", ["/"]],
-    ["Undo", [shortcut("Z")]],
-  ];
-  return (
-    <>
-      <IconButton label="Keyboard shortcuts" popoverTarget={id}>
-        <Keyboard />
-      </IconButton>
-      <div
-        id={id}
-        popover="auto"
-        role="dialog"
-        aria-label="Keyboard shortcuts"
-        className={`${menuPanel("end")} w-76 p-3`}
-      >
-        <table className="w-full border-collapse text-[12.5px]">
-          <tbody>
-            {keys.map(([what, how, also]) => (
-              <tr key={what} className="[&+&>td]:border-t [&+&>td]:border-border">
-                <td className="py-1 pr-2">{what}</td>
-                <td className="py-1 text-right whitespace-nowrap text-muted-foreground">
-                  {how.map((k) => (
-                    <kbd
-                      key={k}
-                      className="ml-1 rounded bg-hover px-1 py-px font-sans text-[10.5px]"
-                    >
-                      {k}
-                    </kbd>
-                  ))}
-                  {also && <span className="ml-1 text-[11.5px]">{also}</span>}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </>
-  );
-}
 
 /** A row's Areas menu section (PLX-789). */
 interface AreaMenu {
