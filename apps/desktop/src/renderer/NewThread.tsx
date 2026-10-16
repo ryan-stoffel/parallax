@@ -220,12 +220,11 @@ export function NewThread({
   const [workspace, setWorkspace] = useState<Workspace>(() => newThreadPrefs.get().workspace);
   // Only a repository has a checkout, and only a plxd that takes `checkout` would use it: an
   // older one would make a worktree anyway.
-  const checkoutUnavailable = repoless(group)
-    ? "needs a repo"
-    : connection?.status === "connected" && !("checkout" in connection.capabilities)
+  const checkoutUnavailable =
+    connection?.status === "connected" && !("checkout" in connection.capabilities)
       ? "needs a newer plxd"
       : undefined;
-  const checkout = workspace === "checkout" && !checkoutUnavailable;
+  const checkout = workspace === "checkout" && !checkoutUnavailable && !repoless(group);
   // Only a plxd with `repoRefs` lists refs or starts from one, and only a repository has them.
   const refsAvailable =
     !repoless(group) && connection?.status === "connected" && "repoRefs" in connection.capabilities;
@@ -506,13 +505,14 @@ export function NewThread({
               ? "host"
               : undefined
           }
+          // A repoless thread has no tab, here or once it opens: nothing to pick a worktree of.
           tab={
-            starting !== undefined ? (
+            repoless(group) ? undefined : starting !== undefined ? (
               <span className={tabItem}>
                 <LoaderCircle aria-hidden className="animate-spin" />
                 Starting…
               </span>
-            ) : group.space ? undefined : (
+            ) : (
               <>
                 <RunTargetMenu
                   hosts={hosts}
@@ -521,9 +521,7 @@ export function NewThread({
                   workspace={checkout ? "checkout" : "worktree"}
                   onWorkspaceChange={setWorkspace}
                   checkoutUnavailable={checkoutUnavailable}
-                  missing={
-                    missing && !repoless(group) ? { repo: group.name, hostIds: missing } : undefined
-                  }
+                  missing={missing && { repo: group.name, hostIds: missing }}
                 />
                 {refsAvailable && (
                   <RefMenu

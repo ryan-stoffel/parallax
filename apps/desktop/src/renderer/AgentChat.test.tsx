@@ -1181,12 +1181,15 @@ test("the composer tab shows icons for the host and local checkout, which has no
   expect(document.body.textContent).toBe("");
 });
 
-test("a chat in a Space has no worktree tab under the composer", async () => {
+test("a chat in a Space or with no repo has no worktree tab under the composer", async () => {
   fakeBridge(4);
   await renderChat();
   expect(document.querySelector('[aria-label="Worktree"]')).not.toBeNull();
   act(() => unmount());
   await renderChat(false, true);
+  expect(document.querySelector('[aria-label="Worktree"]')).toBeNull();
+  act(() => unmount());
+  await renderChat(true);
   expect(document.querySelector('[aria-label="Worktree"]')).toBeNull();
 });
 

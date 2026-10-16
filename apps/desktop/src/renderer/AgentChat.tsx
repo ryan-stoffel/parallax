@@ -271,7 +271,7 @@ export function AgentChat({
    * the transcript loads, `prompt` then shows as on its way to it, with the loader under it.
    */
   going?: boolean;
-  /** A thread with no repo: its scratch repository has no origin, so it gets no Open PR. */
+  /** A thread with no repo: its scratch repository has no origin, so it gets no run tab or Open PR. */
   noRepo?: boolean;
   /** A chat in a Space: no Access picker, and no run tab, since it has no repository. */
   space?: boolean;
@@ -859,7 +859,7 @@ export function AgentChat({
           disabledReason={disabledReason}
           tab={
             tab ??
-            (run && !space && (
+            (run && !space && !noRepo && (
               <RunTab run={run} host={host}>
                 {pullRequests ||
                   (canOpenPr && (
