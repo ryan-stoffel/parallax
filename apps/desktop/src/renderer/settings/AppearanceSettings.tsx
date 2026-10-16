@@ -1,21 +1,39 @@
-import { Moon, Plus, Sun, Trash2 } from "lucide-react";
-import { useId, useState } from "react";
+import { Plus, RotateCw, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
 
-import type { ThemePreference } from "../../preload/bridge";
-import { setAppearance, useAppearance, type Appearance } from "../appearance";
+import {
+  needsTransparentWindow,
+  type ThemePreference,
+  type WindowMaterial,
+} from "../../preload/bridge";
+import {
+  seesThrough,
+  setAppearance,
+  shownThemes,
+  useAppearance,
+  type Appearance,
+} from "../appearance";
+import { ParallaxMark } from "../logos";
 import { behaviorPrefs, setBehaviorPrefs, usageView } from "../prefs";
-import { IconButton, Segmented } from "../ui";
-import { removeExtension, useAddedThemes, type Mode } from "../vscodeThemes";
+import { IconButton, Picker, Segmented, menuItem, type PickerOption } from "../ui";
+import {
+  fillIcons,
+  removeExtension,
+  useAddedThemes,
+  type AddedExtension,
+  type Mode,
+} from "../vscodeThemes";
 import { AddThemeDialog } from "./AddThemeDialog";
-import { PageTitle, Row, Section, Switch } from "./parts";
+import { ColorSettings } from "./ColorSettings";
+import { PageTitle, Row, Section, Switch, quietButton } from "./parts";
 import { TypographySettings } from "./TypographySettings";
 
 type ColorTheme = { id: string; name: string; mode: Mode };
 
-/** Parallax's own themes, in index.css. */
+/** Parallax's own themes, in index.css. Their menus call each just Parallax. */
 const parallaxThemes: ColorTheme[] = [
-  { id: "parallax-light", name: "Parallax Light", mode: "light" },
-  { id: "parallax-dark", name: "Parallax Dark", mode: "dark" },
+  { id: "parallax-light", name: "Parallax", mode: "light" },
+  { id: "parallax-dark", name: "Parallax", mode: "dark" },
 ];
 
 /** What each usage view shows, for its row's description. */
@@ -69,123 +87,26 @@ function SchemePreview({ mode, theme }: { mode: Mode; theme: string }) {
   );
 }
 
-/** The light and dark themes together: light on the left half, over the dark one. */
-function SplitPreview({ light, dark }: { light: string; dark: string }) {
+/** A theme's icon in menus: Parallax's mark, its extension's Open VSX icon, or an orb in its colors. */
+function ThemeIcon({ theme, extension }: { theme: ColorTheme; extension?: AddedExtension }) {
+  if (!extension) return <ParallaxMark className="size-4" />;
+  if (extension.icon) return <img src={extension.icon} alt="" className="size-4 rounded-[3px]" />;
   return (
-    <>
-      <SchemePreview mode="dark" theme={dark} />
-      <span className="absolute inset-0 [clip-path:inset(0_50%_0_0)]">
-        <SchemePreview mode="light" theme={light} />
-      </span>
-    </>
+    <span
+      className={`scheme-${theme.mode} theme-${theme.id} theme-orb block size-4 rounded-full`}
+    />
   );
 }
 
-/**
- * A set of themes: an orb for each, in its colors (.theme-orb in index.css), and its name. An orb
- * picks its theme for its mode, and the picked ones show a ring and a sun or moon.
- */
-function ThemeCard({
-  name,
-  themes,
-  picked,
-  onPick,
-  onRemove,
-}: {
-  name: string;
-  themes: ColorTheme[];
-  picked: Record<Mode, string>;
-  onPick: (theme: ColorTheme) => void;
-  onRemove?: () => void;
-}) {
-  return (
-    <div className="flex flex-col gap-3 rounded-xl border border-border p-4">
-      <div className="flex flex-1 flex-wrap items-center justify-center gap-3 py-2">
-        {themes.map((t) => {
-          const on = picked[t.mode] === t.id;
-          const Icon = t.mode === "light" ? Sun : Moon;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              title={t.name}
-              aria-label={`${t.name}, for ${t.mode} mode`}
-              aria-pressed={on}
-              onClick={() => onPick(t)}
-              className={`relative size-15 shrink-0 rounded-full p-1 focus-visible:outline-2 focus-visible:outline-ring ${on ? "ring-2 ring-accent" : ""}`}
-            >
-              <span
-                className={`scheme-${t.mode} theme-${t.id} theme-orb block size-full rounded-full`}
-              />
-              {on && (
-                <span className="absolute -right-0.5 -bottom-0.5 grid size-5 place-items-center rounded-full border border-border bg-surface text-foreground">
-                  <Icon aria-hidden className="size-3" />
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-      <div className="flex min-h-7 items-center justify-between gap-2">
-        <span className="truncate text-[13px] font-medium">{name}</span>
-        {onRemove && (
-          <IconButton label={`Remove ${name}`} onClick={onRemove}>
-            <Trash2 />
-          </IconButton>
-        )}
-      </div>
-    </div>
-  );
-}
-
-const schemes: { value: ThemePreference; name: string }[] = [
-  { value: "system", name: "System" },
-  { value: "light", name: "Light" },
-  { value: "dark", name: "Dark" },
+const materials: { value: WindowMaterial; name: string }[] = [
+  { value: "opaque", name: "Opaque" },
+  { value: "clear", name: "Clear" },
+  { value: "blur", name: "Blurred" },
 ];
 
-/** A percent slider and its value, for the Window section. */
-function Percent({
-  label,
-  min,
-  value,
-  disabled,
-  onChange,
-}: {
-  label: string;
-  min: number;
-  value: number;
-  disabled?: boolean;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <span className={`flex items-center gap-3 ${disabled ? "opacity-50" : ""}`}>
-      <input
-        type="range"
-        aria-label={label}
-        min={min}
-        max={100}
-        step={5}
-        value={value}
-        disabled={disabled}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-40"
-      />
-      <span className="w-9 text-right text-[12.5px] text-muted-foreground tabular-nums">
-        {value}%
-      </span>
-    </span>
-  );
-}
-
-const preview = "relative block aspect-[16/10] overflow-hidden rounded-lg border border-border";
-const card =
-  "flex cursor-pointer flex-col gap-2 rounded-xl border border-border bg-surface p-2 text-center text-[12.5px] text-muted-foreground hover:bg-hover has-checked:border-accent has-checked:text-foreground has-checked:outline-1 has-checked:outline-accent has-focus-visible:outline-2 has-focus-visible:outline-ring";
-
 /**
- * Settings > Appearance: the color theme and scheme, and how the interface reads:
- * contrast, motion, the colors for added and removed, the window's blur and opacity, and
- * typography.
+ * Settings > Appearance: the theme for each mode and the colors changed over it, the window's
+ * background, text, and how the interface reads.
  */
 export function AppearanceSettings({
   theme,
@@ -197,74 +118,243 @@ export function AppearanceSettings({
   const appearance = useAppearance();
   const composerUsage = usageView(behaviorPrefs.use().composerUsage);
   const set = (change: Partial<Appearance>) => setAppearance(change);
-  const scheme = useId();
-  const [adding, setAdding] = useState(false);
+  // The mode whose menu opened Add theme, which gets the added theme.
+  const [adding, setAdding] = useState<Mode>();
   const added = useAddedThemes();
-  // The picked themes, or Parallax's where a picked one is no longer added.
-  const addedIds = new Set(added.flatMap((e) => e.themes.map((t) => t.id)));
-  const picked = {
-    light: addedIds.has(appearance.lightTheme) ? appearance.lightTheme : "parallax-light",
-    dark: addedIds.has(appearance.darkTheme) ? appearance.darkTheme : "parallax-dark",
+  useEffect(() => void fillIcons(), []);
+  const picked = shownThemes(appearance, added);
+  const slot = (mode: Mode, id: string) =>
+    set(mode === "light" ? { lightTheme: id } : { darkTheme: id });
+  // The mode showing now, ringed in the previews.
+  const showing = (mode: Mode) =>
+    theme === mode ||
+    (theme === "system" &&
+      matchMedia("(prefers-color-scheme: dark)").matches === (mode === "dark"));
+
+  const themes = (mode: Mode) => [
+    ...parallaxThemes
+      .filter((t) => t.mode === mode)
+      .map((t) => ({ theme: t, extension: undefined as AddedExtension | undefined })),
+    ...added.flatMap((e) =>
+      e.themes.filter((t) => t.mode === mode).map((t) => ({ theme: t, extension: e })),
+    ),
+  ];
+  const nameOf = (mode: Mode) => themes(mode).find((t) => t.theme.id === picked[mode])?.theme.name;
+  const themeOptions = (mode: Mode): PickerOption[] =>
+    themes(mode).map(({ theme: t, extension: e }) => ({
+      value: t.id,
+      label: t.name,
+      group: e?.name,
+      icon: <ThemeIcon theme={t} extension={e} />,
+    }));
+
+  const themePicker = (mode: Mode) => {
+    const options = themeOptions(mode);
+    return (
+      <Picker
+        field
+        label={mode === "light" ? "Light theme" : "Dark theme"}
+        value={picked[mode]}
+        onChange={(id) => slot(mode, id)}
+        options={options}
+        search={options.length > 8 ? "Search themes" : undefined}
+        align="end"
+        className="w-64"
+        panelClassName="w-72"
+        footer={(close) => (
+          <button
+            type="button"
+            className={menuItem}
+            onClick={() => {
+              close();
+              setAdding(mode);
+            }}
+          >
+            <Plus aria-hidden />
+            Add a theme from Open VSX…
+          </button>
+        )}
+      />
+    );
   };
-  const pick = (t: ColorTheme) =>
-    set(t.mode === "light" ? { lightTheme: t.id } : { darkTheme: t.id });
+
+  const through = seesThrough(appearance.windowMaterial);
+  const canSet = window.parallax.setWindowLook !== undefined;
 
   return (
     <>
-      <PageTitle title="Appearance" />
-      <Section title="Color scheme">
-        <fieldset aria-label="Color scheme" className="grid grid-cols-3 gap-3 p-3">
-          {schemes.map((s) => (
-            <label key={s.value} className={card}>
-              <input
-                type="radio"
-                name={scheme}
-                value={s.value}
-                checked={theme === s.value}
-                onChange={() => onThemeChange(s.value)}
-                className="sr-only"
-              />
-              <span className={preview}>
-                {s.value === "system" ? (
-                  <SplitPreview light={picked.light} dark={picked.dark} />
-                ) : (
-                  <SchemePreview mode={s.value} theme={picked[s.value]} />
-                )}
-              </span>
-              {s.name}
-            </label>
-          ))}
-        </fieldset>
-      </Section>
+      <PageTitle title="Appearance">
+        Make Parallax yours: its themes and colors, the window, and its text.
+      </PageTitle>
 
-      <Section
-        title="Themes"
-        action={
-          <button
-            type="button"
-            onClick={() => setAdding(true)}
-            className="flex h-7 items-center gap-1.5 rounded-md border border-border px-2.5 text-[12.5px] font-medium hover:bg-hover"
-          >
-            <Plus aria-hidden className="size-3.5" />
-            Add theme
-          </button>
-        }
-      >
-        <div className="grid grid-cols-3 gap-3 p-3">
-          <ThemeCard name="Parallax" themes={parallaxThemes} picked={picked} onPick={pick} />
-          {added.map((e) => (
-            <ThemeCard
-              key={e.id}
-              name={e.name}
-              themes={e.themes}
-              picked={picked}
-              onPick={pick}
-              onRemove={() => removeExtension(e.id)}
-            />
+      <Section title="Theme">
+        <div className="grid grid-cols-2 gap-3 border-b border-border p-4">
+          {(["light", "dark"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              aria-label={`Use the ${mode} theme`}
+              aria-pressed={theme === mode}
+              onClick={() => onThemeChange(mode)}
+              className="group flex flex-col gap-2 text-left"
+            >
+              <span
+                className={`relative block aspect-[16/7] overflow-hidden rounded-lg border transition-shadow ${showing(mode) ? "border-accent ring-2 ring-accent/40" : "border-border group-hover:border-faint-foreground/60"}`}
+              >
+                <SchemePreview mode={mode} theme={picked[mode]} />
+              </span>
+              <span className="flex items-baseline gap-1.5 text-[12.5px]">
+                <span className="font-medium capitalize">{mode}</span>
+                <span className="truncate text-muted-foreground">{nameOf(mode)}</span>
+              </span>
+            </button>
           ))}
         </div>
+        <Row title="Color scheme" description="Which theme shows. System follows your OS.">
+          <Segmented
+            label="Color scheme"
+            options={[
+              { value: "system", name: "System" },
+              { value: "light", name: "Light" },
+              { value: "dark", name: "Dark" },
+            ]}
+            value={theme}
+            onChange={onThemeChange}
+          />
+        </Row>
+        <Row title="Light theme" description="Shown in light mode.">
+          {themePicker("light")}
+        </Row>
+        <Row title="Dark theme" description="Shown in dark mode.">
+          {themePicker("dark")}
+        </Row>
+        <div className="px-4 py-3">
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <span className="block text-[13px] font-medium">Installed themes</span>
+              <span className="block text-[12.5px] text-muted-foreground">
+                VS Code themes from Open VSX. Each one&apos;s variants join the menus above.
+              </span>
+            </div>
+            <button
+              type="button"
+              className={`${quietButton} flex shrink-0 items-center gap-1.5 border border-border text-foreground`}
+              onClick={() => setAdding(showing("light") ? "light" : "dark")}
+            >
+              <Plus aria-hidden className="size-3.5" />
+              Add theme
+            </button>
+          </div>
+          {added.length > 0 && (
+            <ul aria-label="Installed themes" className="mt-3 flex flex-col gap-1">
+              {added.map((e) => (
+                <li
+                  key={e.id}
+                  className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-2"
+                >
+                  {e.icon ? (
+                    <img src={e.icon} alt="" className="size-6 rounded-md" />
+                  ) : (
+                    <span
+                      className={`scheme-${e.themes[0]!.mode} theme-${e.themes[0]!.id} theme-orb block size-6 rounded-full`}
+                    />
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px]">{e.name}</span>
+                    <span className="block truncate text-[12px] text-muted-foreground">
+                      {e.themes.map((t) => t.name).join(", ")}
+                    </span>
+                  </span>
+                  <IconButton label={`Remove ${e.name}`} onClick={() => removeExtension(e.id)}>
+                    <Trash2 />
+                  </IconButton>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </Section>
-      {adding && <AddThemeDialog onClose={() => setAdding(false)} />}
+      {adding && (
+        <AddThemeDialog
+          onAdded={(e) => {
+            const first = e.themes.find((t) => t.mode === adding) ?? e.themes[0]!;
+            slot(first.mode, first.id);
+          }}
+          onClose={() => setAdding(undefined)}
+        />
+      )}
+
+      <ColorSettings
+        themes={[...parallaxThemes, ...added.flatMap((e) => e.themes)]}
+        shown={picked}
+        colors={appearance.colors}
+        onChange={(colors) => set({ colors })}
+      />
+
+      {canSet && (
+        <Section title="Window">
+          <Row
+            title="Background"
+            description={
+              !window.parallax.canBlur
+                ? "Clear lets the desktop show through the window."
+                : window.parallax.platform === "linux"
+                  ? "Clear lets the desktop show through the window. Blurred asks your compositor, such as Hyprland or KDE, to frost it."
+                  : "Clear lets the desktop show through the window. Blurred frosts it."
+            }
+          >
+            <Segmented
+              label="Window background"
+              options={materials.filter((m) => m.value !== "blur" || window.parallax.canBlur)}
+              value={
+                appearance.windowMaterial === "blur" && !window.parallax.canBlur
+                  ? "opaque"
+                  : appearance.windowMaterial
+              }
+              onChange={(windowMaterial) => set({ windowMaterial })}
+            />
+          </Row>
+          {needsTransparentWindow(appearance.windowMaterial, window.parallax.platform) &&
+            !window.parallax.transparent && (
+              <Row
+                title="Restart to finish"
+                description="Your OS makes a window see-through only when it opens."
+              >
+                <button
+                  type="button"
+                  className={`${quietButton} flex items-center gap-1.5 border border-border text-foreground`}
+                  onClick={() => window.parallax.relaunch?.()}
+                >
+                  <RotateCw aria-hidden className="size-3.5" />
+                  Restart Parallax
+                </button>
+              </Row>
+            )}
+          <Row
+            title="Background opacity"
+            description="How much of the theme covers what shows through. Text stays solid."
+          >
+            <span className={`flex items-center gap-3 ${through ? "" : "opacity-50"}`}>
+              <input
+                type="range"
+                aria-label="Background opacity"
+                min={0}
+                max={100}
+                step={5}
+                value={appearance.backgroundOpacity}
+                disabled={!through}
+                onChange={(e) => set({ backgroundOpacity: Number(e.target.value) })}
+                className="w-40 accent-accent"
+              />
+              <span className="w-9 text-right text-[12.5px] text-muted-foreground tabular-nums">
+                {appearance.backgroundOpacity}%
+              </span>
+            </span>
+          </Row>
+        </Section>
+      )}
+
+      <TypographySettings />
 
       <Section title="Interface">
         <Row title="Contrast" description="Stronger text and borders. System follows your OS.">
@@ -316,47 +406,6 @@ export function AppearanceSettings({
           />
         </Row>
       </Section>
-
-      {window.parallax.setWindowLook && (
-        <Section title="Window">
-          {window.parallax.canBlur && (
-            <>
-              <Row
-                title="Blur behind window"
-                description="The desktop shows through the app's backgrounds, blurred."
-              >
-                <Switch
-                  label="Blur behind window"
-                  checked={appearance.blur}
-                  onChange={(blur) => set({ blur })}
-                />
-              </Row>
-              <Row
-                title="Background opacity"
-                description="How much of the theme's background covers the blur. 0% is clear glass."
-              >
-                <Percent
-                  label="Background opacity"
-                  min={0}
-                  value={appearance.backgroundOpacity}
-                  disabled={!appearance.blur}
-                  onChange={(backgroundOpacity) => set({ backgroundOpacity })}
-                />
-              </Row>
-            </>
-          )}
-          <Row title="Window opacity" description="The whole window, text included.">
-            <Percent
-              label="Window opacity"
-              min={30}
-              value={appearance.windowOpacity}
-              onChange={(windowOpacity) => set({ windowOpacity })}
-            />
-          </Row>
-        </Section>
-      )}
-
-      <TypographySettings />
     </>
   );
 }

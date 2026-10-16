@@ -24,6 +24,8 @@ export interface AddedExtension {
   /** `namespace.name` on Open VSX. */
   id: string;
   name: string;
+  /** Its Open VSX icon, as a data: URL, so it shows offline. */
+  icon?: string;
   themes: AddedTheme[];
 }
 
@@ -270,27 +272,78 @@ export async function searchThemes(query: string, signal?: AbortSignal): Promise
   return extensions.filter((e) => !/\bicons?\b/i.test(`${e.displayName ?? e.name}`));
 }
 
+/** The image at `url` as a data: URL, or undefined where it can't be read. */
+async function dataUrl(url: string | undefined): Promise<string | undefined> {
+  if (!url) return undefined;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return undefined;
+    const blob = await response.blob();
+    // Kept in localStorage with the themes: an outsized icon is left out rather than fill it.
+    if (blob.size > 100_000) return undefined;
+    return await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => resolve(undefined);
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+type ExtensionMeta = { displayName?: string; files: { download: string; icon?: string } };
+
+async function extensionMeta(namespace: string, name: string): Promise<ExtensionMeta> {
+  const meta = await fetch(`${openVsx}/${namespace}/${name}`);
+  if (!meta.ok) throw new Error(`Open VSX answered ${meta.status}.`);
+  return (await meta.json()) as ExtensionMeta;
+}
+
 /** Downloads an extension's latest version from Open VSX and converts its color themes. */
 export async function fetchExtension(
   namespace: string,
   name: string,
   defaults: Record<Mode, Tokens>,
 ): Promise<AddedExtension> {
-  const meta = await fetch(`${openVsx}/${namespace}/${name}`);
-  if (!meta.ok) throw new Error(`Open VSX answered ${meta.status}.`);
-  const { displayName, files } = (await meta.json()) as {
-    displayName?: string;
-    files: { download: string };
-  };
+  const { displayName, files } = await extensionMeta(namespace, name);
   const vsix = await fetch(files.download);
   if (!vsix.ok) throw new Error(`Open VSX answered ${vsix.status}.`);
   const id = `${namespace}.${name}`;
   return {
     id,
     name: displayName ?? name,
+    icon: await dataUrl(files.icon),
     themes: themesFromVsix(new Uint8Array(await vsix.arrayBuffer()), id, defaults),
   };
 }
+
+/** Fetches the icons of extensions added before they were kept. Each is tried once a session. */
+const iconTried = new Set<string>();
+export async function fillIcons() {
+  for (const e of added.get().filter((e) => !e.icon && !iconTried.has(e.id))) {
+    iconTried.add(e.id);
+    const dot = e.id.indexOf(".");
+    const [namespace, name] = [e.id.slice(0, dot), e.id.slice(dot + 1)];
+    if (dot < 1 || !name) continue;
+    const icon = await extensionMeta(namespace, name).then(
+      (m) => dataUrl(m.files.icon),
+      () => undefined,
+    );
+    if (icon) added.set(added.get().map((a) => (a.id === e.id ? { ...a, icon } : a)));
+  }
+}
+
+const block = (selector: string, tokens: Tokens) =>
+  `${selector} {\n${Object.entries(tokens)
+    .map(([k, v]) => `  ${k}: ${v};`)
+    .join("\n")}\n}`;
+
+/** `tokens` for theme `id` in its `mode`, on <html> or in a preview. */
+const themeBlock = (id: string, mode: Mode, tokens: Tokens) =>
+  mode === "light"
+    ? block(`:root:where(.theme-${id}:not(.dark)),\n.scheme-light.theme-${id}`, tokens)
+    : block(`:root.dark:where(.theme-${id}),\n.scheme-dark.theme-${id}`, tokens);
 
 /**
  * The CSS for added themes: each one mode's tokens over Parallax's, under `theme-<id>` on <html>
@@ -299,22 +352,112 @@ export async function fetchExtension(
  * still wins, and each theme's Blue & orange colors win over index.css's by coming later.
  */
 export function themeCss(extensions: AddedExtension[]) {
-  const block = (selector: string, tokens: Tokens) =>
-    `${selector} {\n${Object.entries(tokens)
-      .map(([k, v]) => `  ${k}: ${v};`)
-      .join("\n")}\n}`;
   return extensions
     .flatMap((e) => e.themes)
-    .flatMap(({ id, mode, tokens, blueOrange }) =>
+    .flatMap(({ id, mode, tokens, blueOrange }) => [
+      themeBlock(id, mode, tokens),
       mode === "light"
-        ? [
-            block(`:root:where(.theme-${id}:not(.dark)),\n.scheme-light.theme-${id}`, tokens),
-            block(`:root.diff-blue-orange:where(.theme-${id}:not(.dark))`, blueOrange),
-          ]
-        : [
-            block(`:root.dark:where(.theme-${id}),\n.scheme-dark.theme-${id}`, tokens),
-            block(`:root.dark.diff-blue-orange:where(.theme-${id})`, blueOrange),
-          ],
+        ? block(`:root.diff-blue-orange:where(.theme-${id}:not(.dark))`, blueOrange)
+        : block(`:root.dark.diff-blue-orange:where(.theme-${id})`, blueOrange),
+    ])
+    .join("\n");
+}
+
+/** The tokens Settings > Appearance > Colors changes, by their names there. */
+export const colorTokens: Record<string, string> = {
+  "--accent": "Accent",
+  "--background": "Background",
+  "--sidebar": "Sidebar",
+  "--surface": "Cards and menus",
+  "--code": "Code blocks",
+  "--foreground": "Text",
+  "--muted-foreground": "Secondary text",
+  "--faint-foreground": "Faint text",
+  "--added": "Added",
+  "--danger": "Removed and errors",
+  "--warning": "Warnings",
+  "--syntax-keyword": "Keywords",
+  "--syntax-string": "Strings",
+  "--syntax-number": "Numbers",
+  "--syntax-title": "Functions",
+  "--syntax-type": "Types",
+  "--syntax-comment": "Comments",
+};
+/** Tokens only Edit as JSON changes: they're usually see-through, which a color picker can't set. */
+const jsonOnlyTokens = ["--border", "--hover", "--selected"];
+
+/** The VS Code color keys Edit as JSON takes, and the token each sets: `tokensOf`'s sources. */
+const vscodeKeys: Record<string, string> = {
+  "editor.background": "--background",
+  "sideBar.background": "--sidebar",
+  "editorWidget.background": "--surface",
+  "input.background": "--surface",
+  foreground: "--foreground",
+  "editor.foreground": "--foreground",
+  descriptionForeground: "--muted-foreground",
+  focusBorder: "--accent",
+  "textLink.foreground": "--accent",
+  "progressBar.background": "--accent",
+  "button.background": "--accent",
+  errorForeground: "--danger",
+  "editorError.foreground": "--danger",
+  "editorWarning.foreground": "--warning",
+  "gitDecoration.addedResourceForeground": "--added",
+  "textCodeBlock.background": "--code",
+  "panel.border": "--border",
+  "list.hoverBackground": "--hover",
+  "list.activeSelectionBackground": "--selected",
+};
+
+/**
+ * Whether `value` is a color CSS reads, kept to one plain value (a hex, a name, or one function
+ * like rgb() or oklch()), so it can't end its declaration in the CSS it goes into.
+ */
+export const isCssColor = (value: unknown): value is string =>
+  typeof value === "string" &&
+  /^(#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})|[a-z-]+(\([^;{}()]*\))?)$/i.test(value.trim()) &&
+  (globalThis.CSS?.supports("color", value) ?? true);
+
+/**
+ * Edit as JSON's object, as tokens: its keys are Parallax's token names, with or without `--`, or
+ * VS Code's color keys, as in VS Code's `workbench.colorCustomizations`. `errors` names each key
+ * or color it can't take.
+ */
+export function customColors(json: unknown): { tokens: Tokens; errors: string[] } {
+  const tokens: Tokens = {};
+  const errors: string[] = [];
+  if (!json || typeof json !== "object" || Array.isArray(json))
+    return { tokens, errors: ['Colors must be an object, like { "accent": "#ff4a1f" }.'] };
+  for (const [key, value] of Object.entries(json)) {
+    const name = key.startsWith("--") ? key : `--${key}`;
+    const token =
+      vscodeKeys[key] ?? (name in colorTokens || jsonOnlyTokens.includes(name) ? name : undefined);
+    if (!token) errors.push(`${key} isn't a color Parallax has.`);
+    else if (!isCssColor(value)) errors.push(`${key}: ${JSON.stringify(value)} isn't a color.`);
+    else tokens[token] = value.trim();
+  }
+  return { tokens, errors };
+}
+
+/**
+ * The CSS for changed colors (Appearance's `colors`), each theme's over its tokens, with
+ * `themeCss`'s selectors so they show in previews too. They're !important, so they also win over
+ * .contrast-more's and Blue & orange's more specific rules. `modes` has each theme's mode; colors
+ * for a theme it lacks, or that aren't colors, are left out.
+ */
+export function customColorsCss(colors: Record<string, Tokens>, modes: Record<string, Mode>) {
+  return Object.entries(colors)
+    .filter(([id]) => /^[\w-]+$/.test(id) && modes[id])
+    .map(([id, tokens]) =>
+      themeBlock(
+        id,
+        modes[id]!,
+        Object.fromEntries(
+          Object.entries(tokens)
+            .filter(([k, v]) => /^--[\w-]+$/.test(k) && isCssColor(v))
+            .map(([k, v]) => [k, `${v} !important`]),
+        ),
+      ),
     )
     .join("\n");
 }

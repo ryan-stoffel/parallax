@@ -121,13 +121,24 @@ export function validLocale(tag: string | undefined): string | undefined {
 }
 
 /**
- * Whether a window can blur the desktop behind it: macOS's vibrancy, or Windows 11 22H2's
- * (build 22621) acrylic. `version` is `process.getSystemVersion()`.
+ * Whether a window can blur the desktop behind it: macOS's vibrancy, Windows 11 22H2's (build
+ * 22621) acrylic, or on Linux, the compositor's blur of a see-through window, as Hyprland's and
+ * KDE's are. `version` is `process.getSystemVersion()`.
  */
 export function blurSupported(platform: string, version: string): boolean {
-  if (platform === "darwin") return true;
+  if (platform === "darwin" || platform === "linux") return true;
   return platform === "win32" && Number(version.split(".")[2]) >= 22621;
 }
+
+/**
+ * Whether `material` needs the window created see-through: clear everywhere, and blurred on
+ * Linux, where the compositor blurs what a see-through window shows.
+ */
+export const needsTransparentWindow = (material: WindowMaterial, platform: string) =>
+  material === "clear" || (material === "blur" && platform === "linux");
+
+/** A window's background: Settings > Appearance's Window. */
+export type WindowMaterial = "opaque" | "clear" | "blur";
 
 export interface ParallaxBridge {
   /** Node's `process.platform`, e.g. "darwin", "win32", "linux". */
@@ -139,12 +150,16 @@ export interface ParallaxBridge {
   /** Zooms this window's page, 1 being 100%: Settings > Appearance's text size. */
   setZoom(factor: number): void;
   /**
-   * Blurs the desktop behind this window and sets its opacity, 1 being opaque: Settings >
-   * Appearance's Window. Only on macOS and Windows, and not on the web.
+   * This window's background, Settings > Appearance's Window: opaque, clear (see-through where
+   * `transparent`, and from the next launch), or blurred where `canBlur`. Not on the web.
    */
-  setWindowLook?(look: { blur: boolean; opacity: number }): void;
+  setWindowLook?(look: { material: WindowMaterial }): void;
   /** Whether `setWindowLook` can blur: `blurSupported` here. */
   canBlur?: boolean;
+  /** Whether this window was created see-through, so a clear background shows the desktop. */
+  transparent?: boolean;
+  /** Restarts Parallax. Not on the web. */
+  relaunch?(): void;
   /** Opens the OS folder picker over this window. Resolves to the folder's path, or null if cancelled. */
   pickFolder(): Promise<string | null>;
   /** The folders in a folder on this computer, whose path may start with `~`. */

@@ -5,6 +5,7 @@ import { useConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { localId, useHosts, type Host } from "../hosts";
 import { isRepository, type ThreadsView } from "../threads";
+import { Picker } from "../ui";
 import { field, HostPicker, PageTitle, primaryButton, quietButton, Section, Switch } from "./parts";
 
 /** A script's roles in a few words, as T3 Code's `projectScriptMenuLabel` names them. */
@@ -92,21 +93,16 @@ export function ScriptSettings({ listed }: { listed: { host: Host; view: Threads
       <div className="mb-6 flex flex-wrap items-center gap-4">
         <HostPicker hosts={hosts} value={hostId} onChange={setHostId} />
         {repos.length > 0 && (
-          <label className="flex items-center gap-1.5 text-[15px] text-muted-foreground">
+          <span className="flex items-center gap-1.5 text-[15px] text-muted-foreground">
             Repository
-            <select
-              aria-label="Repository"
+            <Picker
+              label="Repository"
               value={repo?.id}
-              onChange={(e) => setRepoId(e.target.value)}
-              className="rounded-md bg-transparent py-0.5 pr-1 font-medium text-foreground hover:bg-hover"
-            >
-              {repos.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name}
-                </option>
-              ))}
-            </select>
-          </label>
+              onChange={setRepoId}
+              options={repos.map((r) => ({ value: r.id, label: r.name }))}
+              className="font-medium text-foreground"
+            />
+          </span>
         )}
       </div>
       <Section

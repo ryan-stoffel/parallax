@@ -64,4 +64,29 @@ export const notices: Notice[] = [
     license: "SIL OFL 1.1",
     text: "Copyright 2019 The Sora Project Authors (https://github.com/sora-xor/sora-font). Licensed under the SIL Open Font License, Version 1.1 (https://openfontlicense.org).",
   },
+  {
+    name: "Inter",
+    license: "SIL OFL 1.1",
+    text: "Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter). Licensed under the SIL Open Font License, Version 1.1 (https://openfontlicense.org).",
+  },
+  {
+    name: "Geist",
+    license: "SIL OFL 1.1",
+    text: "Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font). Licensed under the SIL Open Font License, Version 1.1 (https://openfontlicense.org).",
+  },
+  {
+    name: "Geist Mono",
+    license: "SIL OFL 1.1",
+    text: "Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font). Licensed under the SIL Open Font License, Version 1.1 (https://openfontlicense.org).",
+  },
+  {
+    name: "Fira Code",
+    license: "SIL OFL 1.1",
+    text: "Copyright 2014-2020 The Fira Code Project Authors (https://github.com/tonsky/FiraCode). Licensed under the SIL Open Font License, Version 1.1 (https://openfontlicense.org).",
+  },
+  {
+    name: "Source Code Pro",
+    license: "SIL OFL 1.1",
+    text: "Copyright 2010-2020 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'. Licensed under the SIL Open Font License, Version 1.1 (https://openfontlicense.org).",
+  },
 ];

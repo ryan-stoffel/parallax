@@ -1,40 +1,42 @@
 import { Atom, Package } from "lucide-react";
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
-import { codeSizes, installedFonts, setAppearance, uiSizes, useAppearance } from "../appearance";
+import {
+  bundledFonts,
+  codeSizes,
+  loadSystemFonts,
+  setAppearance,
+  uiSizes,
+  useAppearance,
+  type SystemFonts,
+} from "../appearance";
 import { Chip } from "../Mention";
+import { Picker, type PickerOption } from "../ui";
 import { Row, Section, Switch } from "./parts";
 
-const control =
-  "h-8 rounded-lg border border-border bg-background px-2.5 text-[13px] text-foreground";
-const preview = "mx-4 mb-3.5 rounded-xl border border-border bg-background outline-none";
+const preview = "mx-4 mb-3.5 rounded-lg border border-border bg-background outline-none";
 
 /**
- * Appearance's Typography: the interface and monospace fonts and sizes, each with a preview to
- * type in, and Word wrap. Advanced takes any installed font's name instead of the list.
+ * Appearance's Text: the interface and code fonts and sizes, a preview of each, and Word wrap.
+ * Either font can be any installed one, one Parallax ships, or any name typed in its search.
  */
 export function TypographySettings() {
   const appearance = useAppearance();
-  const [advanced, setAdvanced] = useState(false);
-  const fonts = installedFonts();
+  const [fonts, setFonts] = useState<SystemFonts>({ mono: [], other: [], complete: false });
+  useEffect(() => void loadSystemFonts().then(setFonts), []);
+  // The system's list may need a user gesture: a press on a font menu tries again.
+  const retry = () => fonts.complete || void loadSystemFonts().then(setFonts);
   return (
-    <Section
-      title="Typography"
-      action={
-        <label className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
-          Advanced
-          <Switch label="Advanced" checked={advanced} onChange={setAdvanced} />
-        </label>
-      }
-    >
-      <div className="border-b border-border">
-        <Row title="Interface font" description="Everything outside code blocks and the terminal.">
+    <Section title="Text">
+      <Row title="Interface font" description="Menus, chat, and everything outside code.">
+        <span onPointerDown={retry} className="flex gap-2">
           <FontPicker
             label="Interface font"
             value={appearance.uiFont}
-            fonts={fonts.ui}
-            system="System"
-            advanced={advanced}
+            defaultName="System"
+            defaultFamily="var(--font-sans)"
+            bundled={bundledFonts.ui}
+            groups={[["Installed", [...fonts.other, ...fonts.mono]]]}
             onChange={(uiFont) => setAppearance({ uiFont })}
           />
           <SizePicker
@@ -43,7 +45,31 @@ export function TypographySettings() {
             sizes={uiSizes}
             onChange={(uiSize) => setAppearance({ uiSize })}
           />
-        </Row>
+        </span>
+      </Row>
+      <Row title="Code font" description="Code blocks, diffs, file previews, and the terminal.">
+        <span onPointerDown={retry} className="flex gap-2">
+          <FontPicker
+            label="Monospace font"
+            value={appearance.codeFont}
+            defaultName="JetBrains Mono"
+            defaultFamily='"JetBrains Mono Nerd Font"'
+            bundled={bundledFonts.code}
+            groups={[
+              ["Installed monospace", fonts.mono],
+              ["Other installed fonts", fonts.other],
+            ]}
+            onChange={(codeFont) => setAppearance({ codeFont })}
+          />
+          <SizePicker
+            label="Monospace font size"
+            value={appearance.codeSize}
+            sizes={codeSizes}
+            onChange={(codeSize) => setAppearance({ codeSize })}
+          />
+        </span>
+      </Row>
+      <div className="border-b border-border pt-3.5">
         {/* Typing here only tries the font; nothing is kept. */}
         <div
           role="textbox"
@@ -64,64 +90,8 @@ export function TypographySettings() {
           </Chip>{" "}
           before shipping.
         </div>
-      </div>
-
-      <div className="border-b border-border">
-        <Row
-          title="Monospace font"
-          description="Code blocks, diffs, file previews, and the terminal."
-        >
-          <FontPicker
-            label="Monospace font"
-            value={appearance.codeFont}
-            fonts={fonts.code}
-            system="Default (JetBrains Mono Nerd Font)"
-            advanced={advanced}
-            onChange={(codeFont) => setAppearance({ codeFont })}
-          />
-          <SizePicker
-            label="Monospace font size"
-            value={appearance.codeSize}
-            sizes={codeSizes}
-            onChange={(codeSize) => setAppearance({ codeSize })}
-          />
-        </Row>
         <DiffPreview />
-        <pre
-          role="textbox"
-          aria-label="Monospace font preview"
-          aria-multiline
-          contentEditable
-          suppressContentEditableWarning
-          spellCheck={false}
-          className={`${preview} code-lines bg-code px-4 py-3 font-mono text-[12px] leading-relaxed`}
-        >
-          <span className="text-project-yellow">VITE v7.1.1</span> ready in{" "}
-          <b className="text-foreground">1.24s</b>
-          {"\n\n"}
-          <span className="text-project-green">→</span> Local:{"   "}
-          <span className="text-project-teal underline">http://127.0.0.1:5173/</span>
-          {"\n"}
-          <span className="text-project-green">→</span> Network: {""}
-          <span className="text-project-teal underline">http://192.168.1.24:5173/</span>
-          {"\n\n"}
-          <span className="text-added">✓ 85 passed</span>
-          {"   "}
-          <span className="text-warning">△ 2 warnings</span>
-          {"   "}
-          <span className="text-danger">✗ 0 failed</span>
-          {"\n\n"}
-          <span className="bg-project-yellow px-1 text-black">READY</span> watching for changes —
-          press <b className="text-foreground">q</b> to quit
-          {"\n"}
-          <span className="text-project-green">→</span>{" "}
-          <span className="text-project-teal">parallax</span>{" "}
-          <span className="text-project-sky">git:(</span>
-          <span className="text-project-red">main</span>
-          <span className="text-project-sky">)</span> ✗{" "}
-        </pre>
       </div>
-
       <Row
         title="Word wrap"
         description="Wrap long lines in code blocks, diffs, and file previews by default."
@@ -205,61 +175,56 @@ function DiffPreview() {
   );
 }
 
+// A font's name in menus: fontsource's variable fonts end in " Variable".
+const fontName = (family: string) => family.replace(/ Variable$/, "");
+const fontOption = (family: string, group?: string): PickerOption => ({
+  value: family,
+  label: fontName(family),
+  group,
+  style: { fontFamily: `"${family}"` },
+});
+
 /**
- * A font: a list of the installed ones after the system's, or under Advanced, any name typed,
- * with the installed ones suggested.
+ * A font menu, each name in its own face: the default, the fonts Parallax ships, then `groups` of
+ * installed ones. Its search also takes any font's name, installed or not.
  */
 function FontPicker({
   label,
   value,
-  fonts,
-  system,
-  advanced,
+  defaultName,
+  defaultFamily,
+  bundled,
+  groups,
   onChange,
 }: {
   label: string;
   value: string;
-  fonts: string[];
-  system: string;
-  advanced: boolean;
+  defaultName: string;
+  defaultFamily: string;
+  bundled: string[];
+  groups: [string, string[]][];
   onChange: (font: string) => void;
 }) {
-  const list = useId();
-  if (advanced)
-    return (
-      <>
-        <input
-          aria-label={label}
-          list={list}
-          value={value}
-          placeholder={system}
-          spellCheck={false}
-          onChange={(e) => onChange(e.target.value)}
-          className={`${control} w-48 placeholder:text-faint-foreground`}
-        />
-        <datalist id={list}>
-          {fonts.map((f) => (
-            <option key={f} value={f} />
-          ))}
-        </datalist>
-      </>
-    );
-  // A typed font that isn't in the list stays choosable.
-  const options = value && !fonts.includes(value) ? [value, ...fonts] : fonts;
+  const options: PickerOption[] = [
+    { value: "", label: defaultName, hint: "Default", style: { fontFamily: defaultFamily } },
+    ...bundled.map((f) => fontOption(f, "Included with Parallax")),
+    ...groups.flatMap(([group, fonts]) =>
+      fonts.filter((f) => !bundled.includes(f)).map((f) => fontOption(f, group)),
+    ),
+  ];
   return (
-    <select
-      aria-label={label}
+    <Picker
+      field
+      label={label}
       value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className={`${control} w-48`}
-    >
-      <option value="">{system}</option>
-      {options.map((f) => (
-        <option key={f} value={f}>
-          {f}
-        </option>
-      ))}
-    </select>
+      onChange={onChange}
+      options={options}
+      search="Search or type a font name"
+      custom={(name) => ({ ...fontOption(name), hint: "Use this name" })}
+      align="end"
+      className="w-56"
+      panelClassName="w-72"
+    />
   );
 }
 
@@ -275,17 +240,15 @@ function SizePicker({
   onChange: (size: number) => void;
 }) {
   return (
-    <select
-      aria-label={label}
-      value={value}
-      onChange={(e) => onChange(Number(e.target.value))}
-      className={`${control} w-24`}
-    >
-      {sizes.map((s) => (
-        <option key={s} value={s}>
-          {s} px
-        </option>
-      ))}
-    </select>
+    <Picker
+      field
+      label={label}
+      value={String(value)}
+      onChange={(v) => onChange(Number(v))}
+      options={sizes.map((s) => ({ value: String(s), label: `${s} px` }))}
+      align="end"
+      className="w-24"
+      panelClassName="min-w-24"
+    />
   );
 }

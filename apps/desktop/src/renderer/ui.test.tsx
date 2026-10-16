@@ -122,3 +122,60 @@ test("a right-click that arrives with a button down opens its menu on the releas
   }
   expect(opened).toHaveBeenCalledTimes(3);
 });
+
+test("a field Picker's search filters its groups, and Enter takes the first match or the typed name", () => {
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  const onChange = vi.fn();
+  const close = vi.fn();
+  render(
+    <Picker
+      field
+      label="Font"
+      value=""
+      onChange={onChange}
+      options={[
+        { value: "", label: "System" },
+        { value: "Inter Variable", label: "Inter", group: "Included with Parallax" },
+        { value: "Menlo", label: "Menlo", group: "Installed" },
+      ]}
+      search="Search fonts"
+      custom={(name) => ({ value: name, label: name })}
+      footer={(c) => (
+        <button type="button" onClick={() => (close(), c())}>
+          Add
+        </button>
+      )}
+    />,
+  );
+  const search = document.querySelector<HTMLInputElement>('input[type="search"]')!;
+  const type = (text: string) =>
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, text);
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  const enter = () =>
+    act(() => {
+      search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+  const headings = () =>
+    [...document.querySelectorAll('[role="menu"] .text-faint-foreground')].map(
+      (h) => h.textContent,
+    );
+
+  expect(headings()).toEqual(["Included with Parallax", "Installed"]);
+  // Enter with nothing typed keeps the choice.
+  enter();
+  expect(onChange).not.toHaveBeenCalled();
+  type("men");
+  // The typed name comes after the matches, and Enter takes the first match.
+  expect(items().map((i) => i.textContent)).toEqual(["Menlo", "men"]);
+  expect(headings()).toEqual(["Installed"]);
+  enter();
+  expect(onChange).toHaveBeenLastCalledWith("Menlo");
+  type("Berkeley Mono");
+  expect(items()[0]!.textContent).toBe("Berkeley Mono");
+  enter();
+  expect(onChange).toHaveBeenLastCalledWith("Berkeley Mono");
+  act(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Add")!.click());
+  expect(close).toHaveBeenCalled();
+});

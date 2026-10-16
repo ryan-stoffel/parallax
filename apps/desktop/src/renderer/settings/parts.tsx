@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import type { Host } from "../hosts";
+import { Picker } from "../ui";
 
 // What every Settings page is built from.
 
@@ -44,7 +45,7 @@ export function Section({
         <h2 className="text-[12.5px] font-medium text-muted-foreground">{title}</h2>
         {action}
       </div>
-      <div className="rounded-xl border border-border bg-surface">{children}</div>
+      <div className="rounded-xl border border-border bg-(--pane-card)">{children}</div>
     </section>
   );
 }
@@ -139,21 +140,16 @@ export function HostPicker({
       </p>
     ) : null;
   return (
-    <label className="flex items-center gap-1.5 text-[15px] text-muted-foreground">
+    <span className="flex items-center gap-1.5 text-[15px] text-muted-foreground">
       Applying settings on
-      <select
-        aria-label="Host"
+      <Picker
+        label="Host"
         value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="rounded-md bg-transparent py-0.5 pr-1 font-medium text-foreground hover:bg-hover"
-      >
-        {hosts.map((h) => (
-          <option key={h.id} value={h.id}>
-            {h.name}
-          </option>
-        ))}
-      </select>
-    </label>
+        onChange={onChange}
+        options={hosts.map((h) => ({ value: h.id, label: h.name }))}
+        className="font-medium text-foreground"
+      />
+    </span>
   );
 }
 
