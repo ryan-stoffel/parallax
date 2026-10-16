@@ -72,8 +72,8 @@ use parallax_protocol::{
     AgentFailureKind, AgentImageParams, AgentOpenPrResult, AgentOutcome, AgentOutputItem,
     AgentPermission, AgentRun, AgentSendParams, AgentStartParams, ApprovalId, CoordinatorThreadId,
     ErrorKind, GitStatus, ImageId, ImageMediaType, ParallaxEvent, PrActParams, PrDiffResult,
-    PrViewParams, ProjectId, ProjectPermission, PromptImage, PullRequest, QueueResult, Role, RunId,
-    TurnId,
+    PrState, PrViewParams, ProjectId, ProjectPermission, PromptImage, PullRequest, QueueResult,
+    Role, RunId, TurnId,
 };
 use parallax_store::{RunFields, RunState, StoreError, ThreadFields, WorktreeFields};
 use tokio::sync::{mpsc, oneshot};
@@ -2039,6 +2039,9 @@ pub(crate) async fn act_pr(
         .await
         .map_err(|error| pr_error(&error))?;
     info!(run = %run_id, %url, ?action, "acted on a pull request");
+    if acted.state == PrState::Merged {
+        daemon.merged.notify_one();
+    }
     Ok(acted)
 }
 

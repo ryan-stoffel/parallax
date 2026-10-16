@@ -310,6 +310,8 @@ pub(crate) struct Daemon {
     pub schedules: crate::schedules::Schedules,
     /// The pull request watches' sweep (0063).
     pub pr_watches: crate::pr_watch::Watches,
+    /// Wakes the merge sweep when plxd merges a pull request itself (PLX-839).
+    pub(crate) merged: tokio::sync::Notify,
     /// `host/update`'s install and handover (PLX-700).
     pub self_update: crate::self_update::SelfUpdate,
     /// `request_secret`'s requests and its refs' expiry timer (0063).
@@ -472,6 +474,7 @@ impl Server {
             relay: crate::relay::Relay::new(config.relay_url.clone()),
             schedules: crate::schedules::Schedules::default(),
             pr_watches: crate::pr_watch::Watches::default(),
+            merged: tokio::sync::Notify::new(),
             self_update: crate::self_update::SelfUpdate::new(launcher.clone()),
             secrets: crate::secrets::Secrets::default(),
         });
@@ -871,6 +874,7 @@ impl Daemon {
             relay: crate::relay::Relay::new(crate::relay::DEFAULT_URL.to_owned()),
             schedules: crate::schedules::Schedules::default(),
             pr_watches: crate::pr_watch::Watches::default(),
+            merged: tokio::sync::Notify::new(),
             self_update: crate::self_update::SelfUpdate::new(launcher),
             secrets: crate::secrets::Secrets::default(),
         })

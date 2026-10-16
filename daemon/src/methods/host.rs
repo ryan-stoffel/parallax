@@ -580,7 +580,7 @@ fn open_plain(path: &Path, options: &mut fs::OpenOptions) -> std::io::Result<fs:
 }
 
 /// Removes the uploads no piece has reached for [`ABANDONED_AFTER`]. `agents::cleanup` runs it
-/// at start and every sweep.
+/// at start and on every recheck sweep, about every 15 minutes.
 pub(crate) async fn sweep_uploads(daemon: &Daemon) {
     let uploads = daemon.data_dir.uploads_dir();
     let cutoff = SystemTime::now() - ABANDONED_AFTER;
