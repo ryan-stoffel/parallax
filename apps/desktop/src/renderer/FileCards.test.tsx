@@ -10,6 +10,7 @@ import { DownloadButton, FileCards } from "./FileCards";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 let connection: ConnectionState["status"] = "connected";
+let capabilities: Record<string, unknown> = {};
 const request = vi.fn(async (_host: string, method: string) =>
   method === "agent/file"
     ? {
@@ -29,10 +30,13 @@ let saved: { name: string; blob: Blob }[] = [];
 let unmount = () => {};
 beforeEach(() => {
   connection = "connected";
+  capabilities = {};
   saved = [];
+  request.mockClear();
   window.parallax = {
     request,
-    connectionState: async () => ({ status: connection }) as ConnectionState,
+    connectionState: async () => ({ status: connection, capabilities }) as ConnectionState,
+    onConnectionState: () => () => {},
   } as Partial<ParallaxBridge> as ParallaxBridge;
   const blobs = new Map<string, Blob>();
   URL.createObjectURL = (blob: Blob) => {
@@ -98,4 +102,36 @@ test("a Download that can't read its bytes says the host is offline, beside it",
   expect(request).toHaveBeenCalledWith("box", "agent/image", { runId: "run-1", imageId: "rec-1" });
   expect(document.querySelector('[role="alert"]')!.textContent).toBe("The host is offline.");
   expect(saved).toEqual([]);
+});
+
+test("a presented video plays from main's stream on a host that reads slices, and Download reads it whole", async () => {
+  capabilities = { fileChunks: { chunkBytes: 1048576, maxBytes: 1073741824 } };
+  const doc = {
+    runId: "run-1",
+    path: "out/demo clip.mp4",
+    name: "demo clip.mp4",
+    kind: "mp4" as const,
+  };
+  await render(<FileCards hostId="box" item="7" files={[doc]} />);
+  expect(document.querySelector("video")!.getAttribute("src")).toBe(
+    "plx-file://file/box/run-1/out%2Fdemo%20clip.mp4",
+  );
+  expect(request).not.toHaveBeenCalled();
+
+  const save = document.querySelector<HTMLButtonElement>('[aria-label="Download demo clip.mp4"]')!;
+  await act(async () => save.click());
+  await settle();
+  expect(request).toHaveBeenCalledWith("box", "agent/file", {
+    runId: "run-1",
+    path: "out/demo clip.mp4",
+    side: "working",
+  });
+  expect(saved.map((s) => [s.name, s.blob.size])).toEqual([["demo clip.mp4", 1536]]);
+});
+
+test("an older host's video is read whole, as before", async () => {
+  const doc = { runId: "run-1", path: "demo.mp4", name: "demo.mp4", kind: "mp4" as const };
+  await render(<FileCards hostId="box" item="7" files={[doc]} />);
+  expect(document.querySelector("video")!.getAttribute("src")).toMatch(/^blob:/);
+  expect(request).toHaveBeenCalledTimes(1);
 });

@@ -12,13 +12,17 @@ export const rendererUrl = "app://renderer/index.html";
 const rendererDir = path.join(__dirname, "../renderer");
 
 /**
- * Registers the app scheme, and `plx-render`, which serves html_render pages (hosts.ts). Must run
- * before the app is ready.
+ * Registers the app scheme, `plx-render`, which serves html_render pages, and `plx-file`, which
+ * streams a run's videos (hosts.ts). Must run before the app is ready.
  */
 export function registerAppScheme(): void {
   protocol.registerSchemesAsPrivileged([
     { scheme: "app", privileges: { standard: true, secure: true, codeCache: true } },
     { scheme: "plx-render", privileges: { standard: true, secure: true, stream: true } },
+    {
+      scheme: "plx-file",
+      privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true },
+    },
   ]);
 }
 

@@ -556,6 +556,125 @@ export async function renderPage(url: string): Promise<Response> {
   });
 }
 
+/**
+ * A Range header's one byte range (PLX-836): `bytes=a-b` and `bytes=a-` as its first byte and, when
+ * given, its last, and `bytes=-n` as the last `suffix` bytes. Undefined without a header, and
+ * "invalid" for anything else, more than one range included.
+ */
+export function byteRange(
+  header: string | null,
+): { start: number; end?: number } | { suffix: number } | "invalid" | undefined {
+  if (header === null) return undefined;
+  const [, from, to] = /^bytes=(\d*)-(\d*)$/.exec(header.trim()) ?? [];
+  if (from === undefined || to === undefined) return "invalid";
+  if (from === "") return Number(to) > 0 ? { suffix: Number(to) } : "invalid";
+  const start = Number(from);
+  if (to === "") return { start };
+  return Number(to) >= start ? { start, end: Number(to) } : "invalid";
+}
+
+// A streamed file's Content-Type, by its extension. Anything else is bytes.
+const streamTypes: Record<string, string> = {
+  mp4: "video/mp4",
+  m4v: "video/mp4",
+  webm: "video/webm",
+  mov: "video/quicktime",
+};
+
+/**
+ * A file in a run's folder at `plx-file://file/<host>/<run>/<path>`, each part encoded, for a
+ * `<video>` that plays while it loads and seeks (PLX-836). It's read from that host's plxd in
+ * `agent/file` slices (0074), the path passed as given, so plxd's rules decide what it serves and
+ * only that host's runs answer. Only a host of this app's with `fileChunks` serves one. A Range
+ * request gets 206 and the bytes it asks for, and one without gets 200 and the whole file, read a
+ * slice each time the player wants more, so a player that pauses or seeks away reads no further.
+ * Each answer runs to the range's end: Chromium takes a non-http response's length as the file's,
+ * so a shorter one would end the video there.
+ */
+export async function streamFile(url: string, range: string | null): Promise<Response> {
+  const refuse = (status: number, why: string) => new Response(why, { status });
+  const parts = (URL.parse(url)?.pathname ?? "").split("/").map((part) => {
+    try {
+      return decodeURIComponent(part);
+    } catch {
+      return "";
+    }
+  });
+  const [, hostId, runId, filePath] = parts;
+  if (parts.length !== 4 || !hostId || !runId || !filePath)
+    return refuse(400, "That isn't a file's address.");
+  const host = connections.get(hostId);
+  const chunkBytes =
+    host?.state.status === "connected"
+      ? host.state.capabilities["fileChunks"]?.["chunkBytes"]
+      : undefined;
+  if (!host || typeof chunkBytes !== "number" || chunkBytes < 1)
+    return refuse(404, "That host can't stream files.");
+  const asked = byteRange(range);
+  if (asked === "invalid") return refuse(416, "Parallax reads one byte range at a time.");
+
+  // One read of the file: its size and the bytes asked for, or the refusal to answer with. plxd
+  // refuses a path its rules don't serve as invalid params, and a run it doesn't have as its own.
+  const read = async (more: { offset: number; length: number } | { sizeOnly: true }) => {
+    const answer = await host
+      .request("agent/file", { runId, path: filePath, side: "working", ...more })
+      .catch(() => undefined);
+    if (!answer) return refuse(502, "The host didn't answer.");
+    if ("error" in answer) {
+      const { code, message } = answer.error;
+      const status =
+        code === ErrorCodes.InvalidParams ? 403 : code === ErrorCodes.ParallaxError ? 404 : 502;
+      return refuse(status, message);
+    }
+    const { exists, size, content } = answer.result;
+    if (!exists || size === undefined) return refuse(404, "That file isn't on this host.");
+    return { size, bytes: Buffer.from(content ?? "", "base64") };
+  };
+
+  let start = 0;
+  let last = Infinity;
+  if (asked && "suffix" in asked) {
+    const stat = await read({ sizeOnly: true });
+    if (stat instanceof Response) return stat;
+    start = Math.max(0, stat.size - asked.suffix);
+  } else if (asked) {
+    start = asked.start;
+    last = asked.end ?? Infinity;
+  }
+  const first = await read({ offset: start, length: Math.min(chunkBytes, last - start + 1) });
+  if (first instanceof Response) return first;
+  const { size } = first;
+  if (asked && start >= size)
+    return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${size}` } });
+  const end = Math.min(last + 1, size);
+
+  let offset = start;
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const slice =
+        offset === start
+          ? first
+          : await read({ offset, length: Math.min(chunkBytes, end - offset) });
+      const bytes = slice instanceof Response ? undefined : slice.bytes.subarray(0, end - offset);
+      // A file that shrank, or a host that stopped answering, ends the read short.
+      if (!bytes?.length) return controller.error(new Error("The file stopped short."));
+      controller.enqueue(bytes);
+      offset += bytes.length;
+      if (offset >= end) controller.close();
+    },
+  });
+  const extension = /\.([a-z0-9]+)$/i.exec(filePath)?.[1]?.toLowerCase() ?? "";
+  return new Response(end > start ? body : null, {
+    status: asked ? 206 : 200,
+    headers: {
+      "Accept-Ranges": "bytes",
+      "Content-Type": streamTypes[extension] ?? "application/octet-stream",
+      "Content-Length": String(end - start),
+      ...(asked && { "Content-Range": `bytes ${start}-${end - 1}/${size}` }),
+    },
+  });
+}
+
 /** A saved SSH host by id. Undefined for this computer, `local`, and for an unknown id. */
 export const savedHost = (id: string): SshHost | undefined =>
   settings.hosts.find((h) => h.id === id);

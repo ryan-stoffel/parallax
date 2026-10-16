@@ -103,7 +103,7 @@ export async function readAttachment(
   return fromBase64(answer.result.data);
 }
 
-async function load(hostId: string, doc: DocRef): Promise<Loaded> {
+export async function load(hostId: string, doc: DocRef): Promise<Loaded> {
   const answer = await window.parallax.request(hostId, "agent/file", {
     runId: doc.runId,
     path: doc.path,

@@ -19,6 +19,7 @@ import {
   type DocRef,
 } from "./documents";
 import { drawPage, pageSize } from "./FileCards";
+import { useSaveWhole, useStreamUrl } from "./mediaUrl";
 import { isVideo } from "./transcript";
 import { cellAt, colName, splitRef, type Xlsx } from "./xlsx";
 
@@ -27,11 +28,20 @@ import { cellAt, colName, splitRef, type Xlsx } from "./xlsx";
  * type and Download over its pages, which sit on a gray backdrop with the page in view counted at
  * the bottom right. The panel's own button takes it full screen. A spreadsheet shows as its
  * sheets' grids instead, an image or video as itself, and any other file as its size, to download
- * (PLX-834).
+ * (PLX-834). A video its host streams (PLX-836) isn't read whole first.
  */
 export function DocumentView({ hostId, doc }: { hostId: string; doc: DocRef }) {
+  const src = useStreamUrl(hostId, doc);
+  return src === null ? (
+    <ReadView hostId={hostId} doc={doc} />
+  ) : (
+    <StreamedView hostId={hostId} doc={doc} src={src} />
+  );
+}
+
+/** A file read whole, then opened by kind. */
+function ReadView({ hostId, doc }: { hostId: string; doc: DocRef }) {
   const { loaded, error } = useDocument(hostId, doc);
-  const type = typeOf(doc);
 
   let body: ReactNode;
   if (error) body = <p className="p-6 text-[13px] text-muted-foreground">{error}</p>;
@@ -68,29 +78,70 @@ export function DocumentView({ hostId, doc }: { hostId: string; doc: DocRef }) {
   }
 
   return (
+    <Framed
+      doc={doc}
+      disabled={!loaded}
+      onDownload={() => loaded && download(doc.name, loaded.bytes)}
+    >
+      {body}
+    </Framed>
+  );
+}
+
+/** A video its host streams (PLX-836), whose Download reads it whole only when clicked. */
+function StreamedView({ hostId, doc, src }: { hostId: string; doc: DocRef; src?: string }) {
+  const { busy, error, save } = useSaveWhole(hostId, doc);
+  return (
+    <Framed doc={doc} disabled={!src || busy} onDownload={save} problem={error}>
+      <Media doc={doc} src={src} />
+    </Framed>
+  );
+}
+
+/** A file's title and type over `children`, with Download, and why it failed when it did. */
+function Framed({
+  doc,
+  disabled,
+  onDownload,
+  problem,
+  children,
+}: {
+  doc: DocRef;
+  disabled: boolean;
+  onDownload: () => void;
+  problem?: string;
+  children: ReactNode;
+}) {
+  const type = typeOf(doc);
+  return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-1 border-b border-border px-3 py-1.5">
         <p className="min-w-0 flex-1 truncate text-[13.5px] text-foreground">
           {titleOf(doc.name)}
           <span className="text-muted-foreground"> · {type}</span>
         </p>
+        {problem && (
+          <span role="alert" className="truncate text-[12.5px] text-danger">
+            {problem}
+          </span>
+        )}
         <button
           type="button"
-          disabled={!loaded}
-          onClick={() => loaded && download(doc.name, loaded.bytes)}
+          disabled={disabled}
+          onClick={onDownload}
           className="rounded-lg bg-selected px-3 py-1 text-[13px] text-foreground hover:bg-hover disabled:opacity-40"
         >
           Download as {type}
         </button>
       </div>
-      {body}
+      {children}
     </div>
   );
 }
 
-/** An image or video (PLX-834), fit to the panel on a dark backdrop. */
-function Media({ doc, bytes }: { doc: DocRef; bytes: Uint8Array }) {
-  const url = useObjectUrl(bytes);
+/** An image or video (PLX-834), fit to the panel on a dark backdrop: from its bytes, or `src`. */
+function Media({ doc, bytes, src }: { doc: DocRef; bytes?: Uint8Array; src?: string }) {
+  const url = useObjectUrl(bytes) ?? src;
   return (
     <div className="grid min-h-0 flex-1 place-items-center overflow-auto bg-black p-4">
       {url &&

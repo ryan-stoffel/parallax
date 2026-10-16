@@ -15,6 +15,7 @@ import {
   type Opened,
 } from "./documents";
 import { pagesOf } from "./docx";
+import { useSaveWhole, useStreamUrl } from "./mediaUrl";
 import { isMedia, isVideo } from "./transcript";
 import { renderSlide } from "./pptx";
 import { cellAt, colName, type Xlsx } from "./xlsx";
@@ -26,9 +27,10 @@ export const OpenDocumentContext = createContext<((doc: DocRef) => void) | undef
  * The files an agent presented with `present_files` (PLX-755), as cards: a thumbnail of each
  * file's real first page, with its second fanning out behind it on hover, its title and type,
  * and Download. Clicking a card opens the file in the side panel. An image or video shows at
- * full width instead, with Download in its corner (PLX-785). A file of any other kind is a plain
- * card with its name, size, and Download (PLX-834). `item` is the transcript row: when it's newer
- * than any row already seen for a file, the file is read from disk again.
+ * full width instead, with Download in its corner (PLX-785), and a video its host streams plays
+ * while it loads (PLX-836). A file of any other kind is a plain card with its name, size, and
+ * Download (PLX-834). `item` is the transcript row: when it's newer than any row already seen
+ * for a file, the file is read from disk again.
  */
 export function FileCards({
   hostId,
@@ -129,8 +131,21 @@ function FileCard({
   );
 }
 
-/** An image or video at the transcript's width, played from its bytes, with Download on top. */
+/**
+ * An image or video at the transcript's width, with Download on top: a video its host streams
+ * (PLX-836) from main's scheme, anything else from its bytes.
+ */
 function MediaFile({ hostId, doc }: { hostId: string; doc: DocRef }) {
+  const src = useStreamUrl(hostId, doc);
+  return src === null ? (
+    <ReadMedia hostId={hostId} doc={doc} />
+  ) : (
+    <StreamedMedia hostId={hostId} doc={doc} src={src} />
+  );
+}
+
+/** An image or video read whole, as a blob: URL. */
+function ReadMedia({ hostId, doc }: { hostId: string; doc: DocRef }) {
   const { loaded, error } = useDocument(hostId, doc);
   const url = useObjectUrl(loaded?.bytes);
   if (error)
@@ -140,6 +155,38 @@ function MediaFile({ hostId, doc }: { hostId: string; doc: DocRef }) {
       </p>
     );
   return (
+    <MediaFrame
+      doc={doc}
+      url={url}
+      disabled={!loaded}
+      onDownload={() => loaded && download(doc.name, loaded.bytes)}
+    />
+  );
+}
+
+/** A streamed video, whose Download reads it whole only when clicked. */
+function StreamedMedia({ hostId, doc, src }: { hostId: string; doc: DocRef; src?: string }) {
+  const { busy, error, save } = useSaveWhole(hostId, doc);
+  return (
+    <MediaFrame doc={doc} url={src} disabled={!src || busy} onDownload={save} problem={error} />
+  );
+}
+
+/** `url`'s image or video, or a placeholder until it has one, with Download in its corner. */
+function MediaFrame({
+  doc,
+  url,
+  disabled,
+  onDownload,
+  problem,
+}: {
+  doc: DocRef;
+  url?: string;
+  disabled: boolean;
+  onDownload: () => void;
+  problem?: string;
+}) {
+  return (
     <div className="relative w-full overflow-hidden rounded-2xl border border-border bg-black">
       {!url ? (
         <div aria-label={`Loading ${doc.name}`} className="aspect-video w-full bg-selected" />
@@ -148,12 +195,17 @@ function MediaFile({ hostId, doc }: { hostId: string; doc: DocRef }) {
       ) : (
         <img src={url} alt={doc.name} className="block max-h-[80vh] w-full object-contain" />
       )}
+      {problem && (
+        <p role="alert" className="px-4 py-2 text-[12.5px] text-danger">
+          {problem}
+        </p>
+      )}
       <button
         type="button"
         aria-label={`Download ${doc.name}`}
         title="Download"
-        disabled={!loaded}
-        onClick={() => loaded && download(doc.name, loaded.bytes)}
+        disabled={disabled}
+        onClick={onDownload}
         className="absolute top-2 right-2 grid size-8 place-items-center rounded-lg bg-black/60 text-white backdrop-blur hover:bg-black/80 disabled:opacity-50 [&_svg]:size-4"
       >
         <Download aria-hidden />
