@@ -189,9 +189,11 @@ pub struct HostUploadParams {
     #[ts(optional)]
     pub upload_id: Option<UploadId>,
     /// Where this piece starts in the file, which must be the length received so far: 0 for the
-    /// first piece. A gap, a repeated piece, or a file that would grow past `fileChunks`'
-    /// `maxBytes` fails with `invalidParams`. Any of `uploadId`, `offset`, and `last` makes the
-    /// call a piece; absent means 0.
+    /// first piece. A gap, a different piece where one already landed, or a file that would grow
+    /// past `fileChunks`' `maxBytes` fails with `invalidParams`. The piece that landed last, sent
+    /// again with the same bytes, as a retry sends it, answers as it did without being written
+    /// twice, even once its `last` finished the file. Any of `uploadId`, `offset`, and `last`
+    /// makes the call a piece; absent means 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub offset: Option<u64>,

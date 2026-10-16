@@ -48,6 +48,26 @@
   {
     "jsonrpc": "2.0",
     "id": 3,
+    "result": {
+      "path": "/Users/me/.parallax/uploads/0199e1c2-7a3b-7c4d-8e5f-6a7b8c9d0e2a/notes.txt",
+      "uploadId": "0199e1c2-7a3b-7c4d-8e5f-6a7b8c9d0e2a"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "host/upload",
+    "params": {
+      "name": "notes.txt",
+      "data": "bm8K",
+      "uploadId": "0199e1c2-7a3b-7c4d-8e5f-6a7b8c9d0e2a",
+      "offset": 3,
+      "last": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
     "error": {
       "code": -32602,
       "message": "Invalid params: upload 0199e1c2-7a3b-7c4d-8e5f-6a7b8c9d0e2a has no unfinished file named \"notes.txt\""
@@ -55,7 +75,7 @@
   },
   {
     "jsonrpc": "2.0",
-    "id": 4,
+    "id": 5,
     "method": "host/readUpload",
     "params": {
       "path": "/Users/me/.parallax/uploads/0199e1c2-7a3b-7c4d-8e5f-6a7b8c9d0e2a/notes.txt",
@@ -63,5 +83,5 @@
       "length": 1048576
     }
   },
-  { "jsonrpc": "2.0", "id": 4, "result": { "data": "bGxvCg==", "size": 6 } }
+  { "jsonrpc": "2.0", "id": 5, "result": { "data": "bGxvCg==", "size": 6 } }
 ]

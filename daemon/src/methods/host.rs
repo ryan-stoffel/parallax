@@ -478,7 +478,8 @@ fn save_upload(dir: &Path, params: &HostUploadParams) -> Result<HostUploadResult
 
 /// Appends a piece of a file to its upload in `uploads`, `<id>.partial/<name>`, which a first
 /// piece starts, and on the last piece renames the folder to `<id>`, so the final path only ever
-/// holds a whole file.
+/// holds a whole file. The piece that landed last, sent again as a retry sends it, answers as it
+/// did without being written twice, even once its `last` finished the file.
 fn save_piece(uploads: &Path, params: &HostUploadParams) -> Result<HostUploadResult, ErrorObject> {
     let bytes = upload_bytes(params)?;
     let offset = params.offset.unwrap_or(0);
@@ -499,8 +500,14 @@ fn save_piece(uploads: &Path, params: &HostUploadParams) -> Result<HostUploadRes
         ));
     }
     let id = params.upload_id.unwrap_or_else(UploadId::generate);
+    let last = params.last == Some(true);
     let partial = uploads.join(format!("{id}{PARTIAL}"));
     let path = partial.join(&params.name);
+    let done = uploads.join(id.to_string());
+    let answer = HostUploadResult {
+        path: done.join(&params.name).to_string_lossy().into_owned(),
+        upload_id: Some(id),
+    };
     let _held = PIECES.lock().unwrap_or_else(PoisonError::into_inner);
     let mut file = if params.upload_id.is_none() {
         fs::create_dir_all(&partial)
@@ -508,36 +515,54 @@ fn save_piece(uploads: &Path, params: &HostUploadParams) -> Result<HostUploadRes
             .map_err(|error| save_failed(&error))?
     } else {
         // Only a file a first piece made, and never through a symlink.
-        open_plain(&path, fs::OpenOptions::new().append(true))
-            .ok()
-            .filter(|file| file.metadata().is_ok_and(|meta| meta.is_file()))
-            .ok_or_else(|| {
-                ErrorObject::invalid_params(format!(
+        let plain = |path: &Path, options: &mut fs::OpenOptions| {
+            open_plain(path, options)
+                .ok()
+                .filter(|file| file.metadata().is_ok_and(|meta| meta.is_file()))
+        };
+        match plain(&path, fs::OpenOptions::new().read(true).append(true)) {
+            Some(file) => file,
+            None if last
+                && plain(&done.join(&params.name), fs::OpenOptions::new().read(true))
+                    .is_some_and(|file| ends_with(&file, offset, &bytes)) =>
+            {
+                return Ok(answer);
+            }
+            None => {
+                return Err(ErrorObject::invalid_params(format!(
                     "upload {id} has no unfinished file named {:?}",
                     untrusted(&params.name)
-                ))
-            })?
+                )));
+            }
+        }
     };
     let received = file.metadata().map_err(|error| save_failed(&error))?.len();
-    if received != offset {
+    if received == offset {
+        if let Err(error) = file.write_all(&bytes) {
+            // So the piece can be sent again.
+            let _ = file.set_len(offset);
+            return Err(save_failed(&error));
+        }
+    } else if !ends_with(&file, offset, &bytes) {
         return Err(ErrorObject::invalid_params(format!(
             "upload {id} has {received} bytes, so its next piece starts there, not at {offset}"
         )));
     }
-    if let Err(error) = file.write_all(&bytes) {
-        // So the piece can be sent again.
-        let _ = file.set_len(offset);
-        return Err(save_failed(&error));
-    }
     drop(file);
-    let done = uploads.join(id.to_string());
-    if params.last == Some(true) {
+    if last {
         fs::rename(&partial, &done).map_err(|error| save_failed(&error))?;
     }
-    Ok(HostUploadResult {
-        path: done.join(&params.name).to_string_lossy().into_owned(),
-        upload_id: Some(id),
-    })
+    Ok(answer)
+}
+
+/// Whether `file` is `offset` bytes followed by exactly `bytes`: the piece that landed last.
+fn ends_with(mut file: &fs::File, offset: u64, bytes: &[u8]) -> bool {
+    let mut tail = Vec::with_capacity(bytes.len());
+    file.metadata()
+        .is_ok_and(|meta| meta.len() == offset + bytes.len() as u64)
+        && file.seek(SeekFrom::Start(offset)).is_ok()
+        && file.read_to_end(&mut tail).is_ok()
+        && tail == bytes
 }
 
 /// Opens `path` with `options` without following a symlink at its end, or waiting on a FIFO.
@@ -647,10 +672,13 @@ fn read_upload_at(
         .ok_or_else(refuse)?
         .len();
     let mut bytes = Vec::new();
-    opened
-        .seek(SeekFrom::Start(offset))
-        .and_then(|_| (&opened).take(length).read_to_end(&mut bytes))
-        .map_err(|_| refuse())?;
+    // Past the end is empty, however far: a seek to 2^63 or more fails.
+    if offset < size {
+        opened
+            .seek(SeekFrom::Start(offset))
+            .and_then(|_| (&opened).take(length).read_to_end(&mut bytes))
+            .map_err(|_| refuse())?;
+    }
     Ok(HostReadUploadResult {
         data: images::encode(&bytes),
         size: Some(size),
@@ -951,8 +979,10 @@ mod tests {
             (sliced.data, sliced.size),
             (images::encode(b"PDF"), Some(5))
         );
-        let past = read(saved, Some((9, 3))).unwrap();
-        assert_eq!((past.data, past.size), (String::new(), Some(5)));
+        for offset in [9, 1 << 63, u64::MAX] {
+            let past = read(saved, Some((offset, 3))).unwrap();
+            assert_eq!((past.data, past.size), (String::new(), Some(5)), "{offset}");
+        }
         let big = dir.path().join("id/big.bin");
         let size = MAX_UPLOAD_BYTES / 4 * 3 + 1;
         std::fs::write(&big, vec![7; size]).unwrap();
@@ -1007,7 +1037,8 @@ mod tests {
         assert_eq!(first.path, done.to_string_lossy());
         assert!(!done.exists(), "only a whole file is at its path");
 
-        // A gap, a repeat, a later piece without its upload, and an upload plxd never started.
+        // A gap, a different piece where one landed, a later piece without its upload, and an
+        // upload plxd never started.
         assert!(refused(piece(Some(id), 4, &[4], false)));
         assert!(refused(piece(Some(id), 0, &[0], false)));
         assert!(refused(piece(None, 3, &[3], false)));
@@ -1016,10 +1047,18 @@ mod tests {
         assert!(refused(piece(None, 0, &vec![0; 1024 * 1024 + 1], false)));
         assert!(refused(piece(Some(id), MAX_FILE_BYTES, &[0], false)));
 
-        let last = piece(Some(id), 3, &[3], true).unwrap();
-        assert_eq!((last.path, last.upload_id), (first.path, Some(id)));
-        assert_eq!(std::fs::read(&done).unwrap(), [0, 1, 2, 3]);
-        assert!(refused(piece(Some(id), 4, &[4], false)), "it's finished");
+        // The piece that landed last, sent again, answers as it did and isn't written twice.
+        let next = piece(Some(id), 3, &[3], false).unwrap();
+        assert_eq!(piece(Some(id), 3, &[3], false).unwrap(), next);
+        assert!(refused(piece(Some(id), 3, &[9], false)));
+        let last = piece(Some(id), 4, &[4], true).unwrap();
+        assert_eq!((&last.path, last.upload_id), (&first.path, Some(id)));
+        assert_eq!(std::fs::read(&done).unwrap(), [0, 1, 2, 3, 4]);
+        // So does the last piece, after it finished the file.
+        assert_eq!(piece(Some(id), 4, &[4], true).unwrap(), last);
+        assert_eq!(std::fs::read(&done).unwrap(), [0, 1, 2, 3, 4]);
+        assert!(refused(piece(Some(id), 4, &[8], true)));
+        assert!(refused(piece(Some(id), 5, &[5], false)), "it's finished");
 
         // An upload no piece reached for an hour is removed; a finished one stays.
         let abandoned = piece(None, 0, &[0], false).unwrap();

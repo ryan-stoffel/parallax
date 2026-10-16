@@ -107,7 +107,13 @@ pub async fn call(binding: &Binding, name: &str, arguments: Value) -> Result<Rep
                     "{asked} is outside your working folder; copy it in first, since only a document, image, or video is copied in for you"
                 ));
             }
-            let path = copy_in(&folder, Path::new(asked))?;
+            // Up to 256 MiB, so off this server's one thread, where other calls run.
+            let (into, source) = (folder.clone(), PathBuf::from(asked));
+            let path = tokio::task::spawn_blocking(move || copy_in(&into, &source))
+                .await
+                .map_err(|error| {
+                    format!("couldn't copy {asked} into your working folder: {error}")
+                })??;
             copied.push(format!("{asked} to {path}"));
             path
         };

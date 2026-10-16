@@ -1,6 +1,6 @@
 # 0071: A file attached to a message is saved on the host, and the message names its path
 
-- Status: accepted
+- Status: accepted; superseded in part by [0074](0074-files-move-in-chunks.md) (a file may also arrive in 1 MiB pieces, up to 1 GiB, and be read back in slices)
 - Date: 2026-10-14
 - Issue: PLX-779
 

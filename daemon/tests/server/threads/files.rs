@@ -233,12 +233,15 @@ async fn a_worktree_threads_files_read_in_slices_by_the_same_rules() {
             .unwrap(),
         (Some(14), false, b"pub fn".to_vec())
     );
-    assert_eq!(
-        sliced("src/lib.rs", working, (Some(100), None))
-            .await
-            .unwrap(),
-        (Some(14), false, Vec::new())
-    );
+    for offset in [100, 1 << 63, u64::MAX] {
+        assert_eq!(
+            sliced("src/lib.rs", working, (Some(offset), None))
+                .await
+                .unwrap(),
+            (Some(14), false, Vec::new()),
+            "{offset}"
+        );
+    }
     assert_eq!(
         sliced("hosts", working, (Some(5), Some(100)))
             .await

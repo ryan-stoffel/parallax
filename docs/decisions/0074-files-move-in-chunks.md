@@ -17,7 +17,8 @@ Ryan works with agents on other computers, over SSH, Connect, LAN, and the relay
   - A call with neither field is unchanged: whole files, capped as before.
 - **Pieces.** `host/upload` takes optional `uploadId`, `offset`, and `last`. Any of them makes the call a piece.
   - The first piece has `offset` 0 and no `uploadId`. plxd makes `uploads/<id>.partial/<name>` under a new UUIDv7 and answers it as `uploadId`, with the `path` the file will have.
-  - Each later piece names that `uploadId`, which only parses as a lowercase, hyphenated UUIDv7, so it always names a plain folder, and only one plxd made. Its `offset` must be the length received so far, so a gap or a repeat fails with `invalidParams`, as does a file that would pass `maxBytes`. A piece is at most `chunkBytes`. The name is checked as in 0071.
+  - Each later piece names that `uploadId`, which only parses as a lowercase, hyphenated UUIDv7, so it always names a plain folder, and only one plxd made. Its `offset` must be the length received so far, so a gap, or a different piece where one already landed, fails with `invalidParams`, as does a file that would pass `maxBytes`. A piece is at most `chunkBytes`. The name is checked as in 0071.
+  - The piece that landed last, sent again with the same bytes, as a retry after a timeout sends it, answers as it did. plxd compares it with the file's end on disk and doesn't write it twice. A repeated `last` piece answers the final path, after the rename too, and finishes the rename if it failed. No error kind is added.
   - `last` renames the folder to `uploads/<id>/`, so the answered path only ever holds a whole file.
   - A failed write truncates the file back to `offset`, so the piece can be sent again.
   - One lock serializes pieces and the sweep.
@@ -41,5 +42,5 @@ Ryan works with agents on other computers, over SSH, Connect, LAN, and the relay
 ## Consequences
 
 - An attached file can be up to 1 GiB, and a downloaded one any size, at 1 MiB per round trip.
-- A retried piece that already landed fails as a repeat. The app restarts the upload.
-- The app side, which sends and reads in pieces and shows `kind: "file"`, is a separate issue. Until then, the app works as before and drops `file` cards.
+- A timeout costs one piece, not the upload: the app retries the piece, and plxd answers it whether or not the first try landed.
+- The app side, which sends and reads in pieces and shows `kind: "file"`, is a separate issue (PLX-835). Until then, today's app drops `file` cards, and a known kind over 4 MiB, which `present_files` used to refuse with a message to the agent, now shows as a card whose viewer says "This file is too large to open here."

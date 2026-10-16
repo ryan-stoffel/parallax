@@ -383,6 +383,8 @@ async fn read_working(
                 .take(usize::try_from(length).unwrap_or(usize::MAX))
                 .collect(),
         ),
+        // Past the end is empty, however far: a seek to 2^63 or more fails.
+        (Ok(_), Some((offset, _))) if offset >= size => Some(Vec::new()),
         // On the handle checked above, never the path again.
         (Ok(mut file), Some((offset, length))) => {
             let mut bytes = Vec::new();
