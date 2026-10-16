@@ -86,8 +86,8 @@ const resize = (to: number) =>
 
 test("the thread keeps at least 60% of its row beside a docked card", () => {
   expect(tooNarrowToDock(1200)).toBe(false);
-  expect(tooNarrowToDock(750)).toBe(false);
-  expect(tooNarrowToDock(740)).toBe(true);
+  expect(tooNarrowToDock(670)).toBe(false);
+  expect(tooNarrowToDock(660)).toBe(true);
   expect(tooNarrowToDock(0)).toBe(false);
 });
 
@@ -118,7 +118,7 @@ test("with room, the button docks the panel until pressed again, and a restart k
 
 test("without room it starts collapsed, and the button floats it over the thread", async () => {
   localStorage.setItem(THREAD_DETAILS_KEY, "open");
-  width = 700;
+  width = 600;
   await render();
   expect(panel().hidden).toBe(true);
 
@@ -133,13 +133,13 @@ test("without room it starts collapsed, and the button floats it over the thread
   // Room again docks it as kept; narrowing collapses it, and a floating card closes on widening.
   await resize(1200);
   expect(panel().dataset["mode"]).toBe("docked");
-  await resize(700);
+  await resize(600);
   expect(panel().hidden).toBe(true);
   await act(async () => button().click());
   expect(panel().dataset["mode"]).toBe("floating");
   await resize(1200);
   expect(panel().dataset["mode"]).toBe("docked");
-  await resize(700);
+  await resize(600);
   expect(panel().hidden).toBe(true);
 });
 
@@ -149,7 +149,7 @@ test("a row that unmounts and returns narrower is measured again", async () => {
   expect(panel().dataset["mode"]).toBe("docked");
   // The Pull requests page replaces the thread; the window narrows meanwhile.
   await rerender(false);
-  width = 700;
+  width = 600;
   await rerender(true);
   expect(panel().hidden).toBe(true);
 });

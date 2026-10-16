@@ -13,8 +13,8 @@ import { IconButton } from "./ui";
 export const THREAD_DETAILS_KEY = "parallax.threadDetails";
 export const THREAD_DETAILS_ID = "thread-details";
 
-/** The docked card's width, `w-72`, with its right gap. */
-const DOCKED_WIDTH = 300;
+/** The docked card's width, `w-64`, with its right gap. */
+const DOCKED_WIDTH = 268;
 /** The least of its row the thread keeps beside the docked card; below it the card floats. */
 export const THREAD_MIN_SHARE = 0.6;
 
@@ -112,7 +112,7 @@ export function ThreadDetails({
       data-mode={mode}
       // Docked, it takes room in the thread's row; floating, it hovers over the thread's right.
       // Either way it's an opaque card sized to its rows, scrolling at the row's height.
-      className={`flex w-72 flex-col py-2 pr-3 ${
+      className={`flex w-64 flex-col py-2 pr-3 ${
         mode === "floating"
           ? "pointer-events-none absolute inset-y-0 right-0 z-30 max-w-[calc(100%-1rem)]"
           : "shrink-0"
