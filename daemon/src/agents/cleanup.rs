@@ -13,7 +13,7 @@
 //! from an earlier sweep's merge is checked again only every [`RECHECK_EVERY`] sweeps. The thread,
 //! its transcript, and its worktree row stay, so a later message fails to find the folder rather
 //! than running anywhere else. A merged pull request never changes, so each is read from GitHub
-//! once per plxd run.
+//! once per plxd run, and a closed one is read again only every [`RECHECK_EVERY`] sweeps.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -65,14 +65,18 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
 
 /// Archives every thread whose pull requests merged since its last message, and removes every
 /// merged worktree when the host's setting is on, stopping early for `stop`. `known` holds the
-/// merged pull requests read so far, by URL. Without `recheck`, a worktree whose pull requests
-/// were all known merged before this sweep stays unless its thread archives now.
+/// merged and closed pull requests read so far, by URL. `recheck` reads the closed ones again,
+/// since one can reopen. Without it, a worktree whose pull requests were all known merged before
+/// this sweep stays unless its thread archives now.
 async fn sweep(
     daemon: &Arc<Daemon>,
     stop: &CancellationToken,
     known: &mut HashMap<String, Pull>,
     recheck: bool,
 ) {
+    if recheck {
+        known.retain(|_, pull| pull.state == PrState::Merged);
+    }
     let candidates = store(daemon, |db| {
         let clean = db.clean_worktrees().map_err(|e| store_error(&e))?;
         let mut candidates = Vec::new();
@@ -118,18 +122,15 @@ async fn sweep(
         if thread.archived && worktree.is_none() {
             continue;
         }
-        let before = known.len();
         // Stopping cancels the reads, which can wait minutes on `gh`, but never a removal.
         let pulls = tokio::select! {
             biased;
             () = stop.cancelled() => return,
             pulls = read(daemon, &run, known) => pulls,
         };
-        let Some(pulls) = pulls.filter(|pulls| merged(pulls)) else {
+        let Some((pulls, fresh)) = pulls.filter(|(pulls, _)| merged(pulls)) else {
             continue;
         };
-        // This sweep read a merge for the first time.
-        let fresh = known.len() > before;
         let archived_now = !thread.archived && archive(daemon, thread.id, &pulls).await;
         let Some(worktree) = worktree
             .filter(|_| thread.archived || archived_now || thread.settled)
@@ -165,10 +166,15 @@ async fn sweep(
     }
 }
 
-/// `run`'s linked pull requests, reading only those not in `known` and adding the merged ones.
-/// None when one can't be read.
-async fn read(daemon: &Daemon, run: &Run, known: &mut HashMap<String, Pull>) -> Option<Vec<Pull>> {
+/// `run`'s linked pull requests, reading only those not in `known` and adding the merged and
+/// closed ones, and whether this read a merge for the first time. None when one can't be read.
+async fn read(
+    daemon: &Daemon,
+    run: &Run,
+    known: &mut HashMap<String, Pull>,
+) -> Option<(Vec<Pull>, bool)> {
     let mut pulls = Vec::new();
+    let mut fresh = false;
     for url in &run.state.pull_requests {
         if let Some(pull) = known.get(url) {
             pulls.push(pull.clone());
@@ -176,7 +182,8 @@ async fn read(daemon: &Daemon, run: &Run, known: &mut HashMap<String, Pull>) -> 
         }
         match read_one(daemon, url).await {
             Ok(pull) => {
-                if pull.state == PrState::Merged {
+                if matches!(pull.state, PrState::Merged | PrState::Closed) {
+                    fresh |= pull.state == PrState::Merged;
                     known.insert(url.clone(), pull.clone());
                 }
                 pulls.push(pull);
@@ -187,7 +194,7 @@ async fn read(daemon: &Daemon, run: &Run, known: &mut HashMap<String, Pull>) -> 
             }
         }
     }
-    Some(pulls)
+    Some((pulls, fresh))
 }
 
 /// Pull request `url`: its state alone, as every sweep reads it, and the rest only once merged.

@@ -409,7 +409,6 @@ fn discussion(comments: Vec<Comment>, reviews: Vec<Review>) -> (Vec<PrComment>, 
     (said, verdicts)
 }
 
-/// `gh pr view --json`'s answer as a [`PullRequest`].
 /// `gh`'s name for a pull request's state as a [`PrState`].
 fn pr_state(state: &str) -> PrState {
     match state {
@@ -420,6 +419,7 @@ fn pr_state(state: &str) -> PrState {
     }
 }
 
+/// `gh pr view --json`'s answer as a [`PullRequest`].
 fn parse_view(json: &str) -> Result<PullRequest, PrError> {
     let viewed: Viewed = serde_json::from_str(json)
         .map_err(|error| PrError::Gh(format!("could not read gh pr view's answer: {error}")))?;
