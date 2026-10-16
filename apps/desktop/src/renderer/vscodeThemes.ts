@@ -398,9 +398,10 @@ export function customColors(json: unknown): { tokens: Tokens; errors: string[] 
 }
 
 /**
- * The CSS for changed colors (Appearance's `colors`), each theme's over its tokens: after
- * `themeCss`, with the same selectors, so they win and show in previews too. `modes` has each
- * theme's mode; colors for a theme it lacks, or that aren't colors, are left out.
+ * The CSS for changed colors (Appearance's `colors`), each theme's over its tokens, with
+ * `themeCss`'s selectors so they show in previews too. They're !important, so they also win over
+ * .contrast-more's and Blue & orange's more specific rules. `modes` has each theme's mode; colors
+ * for a theme it lacks, or that aren't colors, are left out.
  */
 export function customColorsCss(colors: Record<string, Tokens>, modes: Record<string, Mode>) {
   return Object.entries(colors)
@@ -410,7 +411,9 @@ export function customColorsCss(colors: Record<string, Tokens>, modes: Record<st
         id,
         modes[id]!,
         Object.fromEntries(
-          Object.entries(tokens).filter(([k, v]) => /^--[\w-]+$/.test(k) && isCssColor(v)),
+          Object.entries(tokens)
+            .filter(([k, v]) => /^--[\w-]+$/.test(k) && isCssColor(v))
+            .map(([k, v]) => [k, `${v} !important`]),
         ),
       ),
     )

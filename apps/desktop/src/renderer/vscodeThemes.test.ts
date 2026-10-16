@@ -191,6 +191,6 @@ test("changed colors go under their theme's mode, leaving out unknown themes and
     { "parallax-dark": "dark" },
   );
   expect(css).toBe(
-    ":root.dark:where(.theme-parallax-dark),\n.scheme-dark.theme-parallax-dark {\n  --accent: #ff4a1f;\n}",
+    ":root.dark:where(.theme-parallax-dark),\n.scheme-dark.theme-parallax-dark {\n  --accent: #ff4a1f !important;\n}",
   );
 });

@@ -181,8 +181,8 @@ export function applyAppearance(appearance: Appearance) {
 export function useAppearanceEffects() {
   const current = useAppearance();
   const added = useAddedThemes();
-  // After index.css in <head>, so a theme's tokens win over Parallax's, and changed colors after
-  // the themes', so they win over both.
+  // After index.css in <head>, so a theme's tokens win over Parallax's. Changed colors win over
+  // both (customColorsCss).
   useLayoutEffect(() => {
     const modes: Record<string, Mode> = { "parallax-light": "light", "parallax-dark": "dark" };
     for (const t of added.flatMap((e) => e.themes)) modes[t.id] = t.mode;
