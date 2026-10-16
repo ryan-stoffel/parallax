@@ -2,16 +2,18 @@
 //! archived thread's worktree once they do (PLX-555, PLX-781), behind the `worktreeCleanup`
 //! capability and the host's `cleanWorktrees` setting.
 //!
-//! A sweep runs at start and every [`SWEEP_PERIOD`]. It looks at each thread whose run isn't
-//! running or waiting and whose linked pull requests are all merged or closed, with at least one
-//! merged. An unarchived thread is archived when the newest merge came after its last message and
-//! its last unarchive, so a thread brought back stays out. A settled or archived thread's worktree and
-//! local branch go too, when the setting is on. The worktree must be on its stored branch or a
-//! merged pull request's head branch, which agents often rename it to, and hold nothing the merge
-//! didn't keep: no uncommitted changes, and a `HEAD` that is on `origin` or is one of a merged
-//! pull request's commits. The thread, its transcript, and its worktree row stay, so a later
-//! message fails to find the folder rather than running anywhere else. A merged pull request
-//! never changes, so each is read from GitHub once per plxd run.
+//! A sweep runs at start, every [`SWEEP_PERIOD`], and right after `pr/act` merges a pull request
+//! (PLX-839). It looks at each thread whose run isn't running or waiting and whose linked pull
+//! requests are all merged or closed, with at least one merged. An unarchived thread is archived
+//! when the newest merge came after its last message and its last unarchive, so a thread brought
+//! back stays out. A settled or archived thread's worktree and local branch go too, when the
+//! setting is on. The worktree must be on its stored branch or a merged pull request's head branch,
+//! which agents often rename it to, and hold nothing the merge didn't keep: no uncommitted changes,
+//! and a `HEAD` that is on `origin` or is one of a merged pull request's commits. A worktree kept
+//! from an earlier sweep's merge is checked again only every [`RECHECK_EVERY`] sweeps. The thread,
+//! its transcript, and its worktree row stay, so a later message fails to find the folder rather
+//! than running anywhere else. A merged pull request never changes, so each is read from GitHub
+//! once per plxd run.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -30,31 +32,47 @@ use super::{convert, store, store_error};
 use crate::server::Daemon;
 use crate::worktree::RunFolder;
 
-/// How often a sweep looks for merged pull requests.
-const SWEEP_PERIOD: Duration = Duration::from_mins(15);
+/// How often a sweep looks for merged pull requests. Each reads only the linked pull requests
+/// not yet known merged, of idle threads.
+const SWEEP_PERIOD: Duration = Duration::from_mins(1);
 
-/// Sweeps once, then every [`SWEEP_PERIOD`] until `stop`. Each sweep also removes abandoned
-/// chunked uploads (0074).
+/// Sweeps per check of a worktree kept from an earlier sweep's merge, so its `git status` runs
+/// every 15 minutes rather than every sweep.
+const RECHECK_EVERY: u32 = 15;
+
+/// Sweeps once, then every [`SWEEP_PERIOD`] and on `daemon.merged` until `stop`. Every
+/// [`RECHECK_EVERY`] sweeps also removes abandoned chunked uploads (0074).
 pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
     let mut interval = time::interval(SWEEP_PERIOD);
     interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut known = HashMap::new();
+    let mut count: u32 = 0;
     loop {
         tokio::select! {
             biased;
             () = stop.cancelled() => break,
-            _ = interval.tick() => {
-                crate::methods::host::sweep_uploads(&daemon).await;
-                sweep(&daemon, &stop, &mut known).await;
-            }
+            _ = interval.tick() => {}
+            () = daemon.merged.notified() => {}
         }
+        let recheck = count.is_multiple_of(RECHECK_EVERY);
+        if recheck {
+            crate::methods::host::sweep_uploads(&daemon).await;
+        }
+        sweep(&daemon, &stop, &mut known, recheck).await;
+        count = count.wrapping_add(1);
     }
 }
 
 /// Archives every thread whose pull requests merged since its last message, and removes every
 /// merged worktree when the host's setting is on, stopping early for `stop`. `known` holds the
-/// merged pull requests read so far, by URL.
-async fn sweep(daemon: &Arc<Daemon>, stop: &CancellationToken, known: &mut HashMap<String, Pull>) {
+/// merged pull requests read so far, by URL. Without `recheck`, a worktree whose pull requests
+/// were all known merged before this sweep stays unless its thread archives now.
+async fn sweep(
+    daemon: &Arc<Daemon>,
+    stop: &CancellationToken,
+    known: &mut HashMap<String, Pull>,
+    recheck: bool,
+) {
     let candidates = store(daemon, |db| {
         let clean = db.clean_worktrees().map_err(|e| store_error(&e))?;
         let mut candidates = Vec::new();
@@ -100,6 +118,11 @@ async fn sweep(daemon: &Arc<Daemon>, stop: &CancellationToken, known: &mut HashM
         if thread.archived && worktree.is_none() {
             continue;
         }
+        let fresh = run
+            .state
+            .pull_requests
+            .iter()
+            .any(|url| !known.contains_key(url));
         // Stopping cancels the reads, which can wait minutes on `gh`, but never a removal.
         let pulls = tokio::select! {
             biased;
@@ -109,8 +132,11 @@ async fn sweep(daemon: &Arc<Daemon>, stop: &CancellationToken, known: &mut HashM
         let Some(pulls) = pulls.filter(|pulls| merged(pulls)) else {
             continue;
         };
-        let archived = thread.archived || archive(daemon, thread.id, &pulls).await;
-        let Some(worktree) = worktree.filter(|_| archived || thread.settled) else {
+        let archived_now = !thread.archived && archive(daemon, thread.id, &pulls).await;
+        let Some(worktree) = worktree
+            .filter(|_| thread.archived || archived_now || thread.settled)
+            .filter(|_| recheck || fresh || archived_now)
+        else {
             continue;
         };
         let branch = tokio::select! {
