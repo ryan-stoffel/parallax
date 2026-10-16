@@ -478,7 +478,9 @@ export function ThreadList({
   const [flashing, setFlashing] = useState<ReadonlySet<string>>(new Set());
   // The row to focus after the next render: by key, or by place, as the one that takes an
   // archived row's place.
-  const focusNext = useRef<{ key?: string; index?: number; leaving?: string }>(undefined);
+  const focusNext = useRef<{ key?: string; index?: number }>(undefined);
+  // Bumped to render once more after setting `focusNext` outside a render, as when plxd answers.
+  const [, refocus] = useState(0);
   const card = useRef<CardHandle>(null);
   // Snoozes end on time even with nothing else changing.
   const now = useMinute();
@@ -786,8 +788,6 @@ export function ThreadList({
     const next = focusNext.current;
     if (!next) return;
     const rows = [...document.querySelectorAll<HTMLElement>("#sidebar [data-row]")];
-    // A row on its way out keeps focus until plxd's answer takes it out of the list.
-    if (next.leaving && rows.some((r) => r.dataset["row"] === next.leaving)) return;
     focusNext.current = undefined;
     const row =
       next.key !== undefined
@@ -872,13 +872,24 @@ export function ThreadList({
   };
 
   // What the user changes shows a toast with Undo, which puts back only what they changed.
-  const archive = async (item: Item) => {
+  // After E or S, once plxd answers: focus the row now at `focusAt`, the one that took its place,
+  // unless focus has moved on since, as into the search box.
+  const focusAfter = (focusAt?: number) => {
+    const here = document.activeElement;
+    if (focusAt === undefined || (here && here !== document.body && !here.closest("[data-row]")))
+      return;
+    focusNext.current = { index: focusAt };
+    refocus((n) => n + 1);
+  };
+  // `focusAt` comes from E, for `focusAfter`.
+  const archive = async (item: Item, focusAt?: number) => {
     if (item.kind !== "thread") return;
     const { thread: t, host: h } = item;
     const was = !!t.archived;
     const error = await item.view.archive(t.id, !was);
     setActionError(error);
-    if (error) return void (focusNext.current = undefined);
+    if (error) return;
+    focusAfter(focusAt);
     const lastOpen = items.every(
       (i) => i.kind !== "thread" || i.thread.archived || i.key === item.key,
     );
@@ -887,13 +898,14 @@ export function ThreadList({
       void viewOf(h.id)?.archive(t.id, was);
     });
   };
-  const snoozeUntil = async (item: Item, until: Date) => {
+  const snoozeUntil = async (item: Item, until: Date, focusAt?: number) => {
     if (item.kind !== "thread") return;
     const { thread: t, host: h } = item;
     const was = t.snoozedUntil;
     const error = await item.view.update(t.id, { snoozedUntil: until.toISOString() });
     setActionError(error);
-    if (error) return void (focusNext.current = undefined);
+    if (error) return;
+    focusAfter(focusAt);
     const ending = until.getTime() <= Date.now();
     toast(ending ? "Unsnoozed" : `Snoozed until ${when(until)}`, () => {
       // A snooze that ended meanwhile ends now.
@@ -1050,7 +1062,7 @@ export function ThreadList({
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     const thread = item.kind === "thread";
     const can = (capability: string) => thread && capability in item.view.capabilities;
-    const act = (run: () => void, after?: { index?: number; key?: string; leaving?: string }) => {
+    const act = (run: () => void, after?: { key?: string }) => {
       e.preventDefault();
       focusNext.current = after;
       run();
@@ -1060,13 +1072,9 @@ export function ThreadList({
       const next = rows[at + (key === "ArrowDown" ? 1 : -1)];
       next?.focus();
       next?.scrollIntoView({ block: "nearest" });
-    } else if (key === "e" && thread)
-      act(() => void archive(item), { index: at, leaving: item.key });
+    } else if (key === "e" && thread) act(() => void archive(item, at));
     else if (key === "s" && can("threadAttention") && !e.shiftKey)
-      act(() => void snoozeUntil(item, new Date(Date.now() + 3_600_000)), {
-        index: at,
-        leaving: item.key,
-      });
+      act(() => void snoozeUntil(item, new Date(Date.now() + 3_600_000), at));
     else if (key === "p" && can("areas") && item.kind === "thread" && !item.thread.parent)
       act(() => void pin(item), { key: item.key });
     else if (key === "r" && can("threadLineage")) act(() => setRenaming(item.key));
@@ -1614,6 +1622,12 @@ export function ThreadList({
             state: b.state,
             onToggle: () => void bulkArea(b),
           }))}
+          can={{
+            snooze: pickedItems.some((i) => "threadAttention" in i.view.capabilities),
+            pin: pickedItems.some(
+              (i) => i.kind === "thread" && !i.thread.parent && "areas" in i.view.capabilities,
+            ),
+          }}
           onAction={(a) => void bulk(a)}
           onClear={() => setPicked(new Set())}
         />
@@ -1699,10 +1713,13 @@ function EmptyCard({
 function BulkBar({
   count,
   areas,
+  can,
   onAction,
   onClear,
 }: {
   count: number;
+  /** Whether any picked thread's host keeps snoozes, and pins. */
+  can: { snooze: boolean; pin: boolean };
   areas: { key: string; area: Area; state: boolean | "mixed"; onToggle: () => void }[];
   onAction: (action: "archive" | "snooze" | "pin") => void;
   onClear: () => void;
@@ -1730,8 +1747,9 @@ function BulkBar({
         type="button"
         aria-label="Snooze"
         title="Snooze for an hour (S)"
+        disabled={!can.snooze}
         onClick={() => onAction("snooze")}
-        className={button}
+        className={`${button} disabled:pointer-events-none disabled:opacity-40`}
       >
         <AlarmClock />
       </button>
@@ -1739,8 +1757,9 @@ function BulkBar({
         type="button"
         aria-label="Pin"
         title="Pin (P)"
+        disabled={!can.pin}
         onClick={() => onAction("pin")}
-        className={button}
+        className={`${button} disabled:pointer-events-none disabled:opacity-40`}
       >
         <Pin />
       </button>
