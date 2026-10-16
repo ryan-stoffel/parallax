@@ -603,9 +603,9 @@ export function ThreadList({
     if (item.host.id !== p.hostId) return false;
     if (p.kind === "repo") return item.repo?.id === p.id;
     if (item.areas.some((a) => a.id === p.id)) return true;
-    // A thread in a repo entry or Space the area holds (PLX-852).
+    // A thread or Project in a repo entry or Space the area holds (PLX-852).
     const area = item.view.state.areas.find((a) => a.id === p.id);
-    return item.kind === "thread" && !!item.repo && !!area?.repos?.includes(item.repo.id);
+    return !!item.repo && !!area?.repos?.includes(item.repo.id);
   };
   const isArchived = (i: Item) => i.kind === "thread" && !!i.thread.archived;
   const isSnoozed = (i: Item) => i.kind === "thread" && snoozed(i.thread, i.attention, now);
@@ -743,6 +743,21 @@ export function ThreadList({
     }
     if (opened.size !== expanded.size) setExpanded(opened);
   }
+  // A closed folder holding the open thread's family opens as the thread does, so its row shows.
+  let top = selectedKey === undefined ? undefined : pool.find((i) => i.key === selectedKey);
+  for (const seen = new Set<string>(); top && !seen.has(top.key);) {
+    seen.add(top.key);
+    const up = parentKey(top);
+    const parent = up === undefined ? undefined : pool.find((i) => i.key === up);
+    if (!parent) break;
+    top = parent;
+  }
+  const hiddenIn = top && folders.find((r) => inFolder(top!, r));
+  const hiddenKey = hiddenIn && folderKey(hiddenIn);
+  useEffect(() => {
+    if (hiddenKey && closedFoldersStore.get().includes(hiddenKey))
+      closedFoldersStore.set(closedFoldersStore.get().filter((k) => k !== hiddenKey));
+  }, [selectedKey]);
   // The rows shown, in order, a group's children after their parent while it's open.
   const flat = (i: Item): Item[] => [
     i,
@@ -1143,7 +1158,8 @@ export function ThreadList({
   };
 
   const row = (item: Item, inFamily = false) => itemRow(item, false, inFamily);
-  const itemRow = (item: Item, nested: boolean, inFamily = false) => {
+  // `withAsk` shows a top-level thread's waiting approval inline, as in a folder.
+  const itemRow = (item: Item, nested: boolean, inFamily = false, withAsk = !nested) => {
     const n = modHeld ? listed.indexOf(item) : -1;
     const badge = n >= 0 && n < 9 ? <RowBadge index={n} /> : undefined;
     const selected = item.key === selectedKey;
@@ -1177,7 +1193,7 @@ export function ThreadList({
       );
     const { thread: t, view } = item;
     const pinnable = "areas" in view.capabilities && !t.parent;
-    const ask = nested ? undefined : askOf(item);
+    const ask = withAsk ? askOf(item) : undefined;
     return (
       <ThreadRow
         key={item.key}
@@ -1272,9 +1288,9 @@ export function ThreadList({
   // A thread's row, then with children, a strip under it with their count and, while they're
   // hidden, the most urgent one's status; the two read as one block, with one hover and tint.
   // Open, the children list under it on a guide line.
-  const tree = (item: Item, nested: boolean): ReactNode => {
+  const tree = (item: Item, nested: boolean, withAsk = !nested): ReactNode => {
     const kids = children.get(item.key);
-    if (!kids) return itemRow(item, nested);
+    if (!kids) return itemRow(item, nested, false, withAsk);
     const isOpen = expanded.has(item.key);
     const toggle = () => {
       quiet();
@@ -1290,7 +1306,7 @@ export function ThreadList({
         data-family
         className={`group/fam rounded-lg transition-colors duration-100 hover:bg-hover has-[[aria-current=page]]:hover:bg-hover ${isOpen ? "bg-hover/60" : ""}`}
       >
-        <ul>{itemRow(item, nested, true)}</ul>
+        <ul>{itemRow(item, nested, true, withAsk)}</ul>
         <button
           type="button"
           aria-expanded={isOpen}
@@ -1371,7 +1387,7 @@ export function ThreadList({
             aria-label={`Threads in ${repo.name}`}
             className="mb-1.25 ml-4.25 flex flex-col gap-px border-l border-foreground/14 pr-1 pl-1.75"
           >
-            {kids.map((k) => tree(k, true))}
+            {kids.map((k) => tree(k, true, true))}
             {kids.length === 0 && (
               <li className="px-2 py-1 text-[12px] text-faint-foreground">
                 {words.length ? "Nothing matches" : "No threads yet"}
