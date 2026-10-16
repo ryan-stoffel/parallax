@@ -159,9 +159,7 @@ export function LineageSection({
               <StatusMark attention={row.attention} />
             </span>
             <span className="w-full truncate pl-5.5 text-[11.5px] text-faint-foreground">
-              {[modelName(sub.model), subagentLabels[sub.state], "Read-only subagent"]
-                .filter(Boolean)
-                .join(" · ")}
+              {[modelName(sub.model), subagentLabels[sub.state]].filter(Boolean).join(" · ")}
             </span>
           </button>
         </li>
