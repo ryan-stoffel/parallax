@@ -471,18 +471,18 @@ async fn host_update_replaces_a_running_plxd_and_starts_the_new_serve() {
     kill(&update.path("data")).await;
 }
 
-/// With the logon task installed, `host/update` hands over through the new plxd.exe's
-/// `service install --replace`, and the task runs the new `serve` (PLX-825).
+/// With the logon task installed but not running, as while nobody is logged on, `host/update`
+/// starts the new `serve` itself rather than through `--replace`, which would stop this `serve`
+/// and leave Task Scheduler to start nothing (PLX-825).
 #[tokio::test]
-async fn host_update_hands_over_through_the_logon_task() {
+async fn host_update_starts_serve_itself_when_the_logon_task_isnt_running() {
     let update = Update::new();
     let label = format!("{TEST_LABEL}.update");
     let (data, local) = (update.path("data"), update.path("local"));
     let _uninstall = Uninstall(&data, &local, &label);
     let installed = update.service(&["install", "--label", &label]).await;
     assert!(installed.status.success(), "{installed:?}");
-    // The task's `serve` has the user's own environment, without the fake release, so one with
-    // this test's takes its place until the update hands back to the task.
+    // Stop the task's `serve`, which ends the task, and serve with this test's fake release.
     update.listened(1).await;
     kill(&data).await;
     let _old = update.serve(&label).spawn().unwrap();
@@ -490,8 +490,7 @@ async fn host_update_hands_over_through_the_logon_task() {
     update.update().await;
     let status = update.service(&["status", "--label", &label]).await;
     let status = String::from_utf8(status.stdout).unwrap();
-    let program = format!("program: {}\n", update.program.display());
-    for line in ["running: true", &program] {
-        assert!(status.contains(line), "{status}");
-    }
+    assert!(status.contains("running: false"), "{status}");
+    update.listened(3).await;
+    kill(&data).await;
 }

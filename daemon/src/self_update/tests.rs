@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use parallax_protocol::HostUpdateRestart;
 
 use super::{
-    ASIDE, PLXD, Placement, SelfUpdate, asset_name, compare, not_older, parse_version, placement,
-    remove_aside, set_aside,
+    ASIDE, PLXD, Placement, SelfUpdate, asset_name, compare, move_in, not_older, parse_version,
+    placement, remove_aside, set_aside,
 };
 use crate::backend::process::{Environment, Launcher};
 use crate::paths::DataDir;
@@ -183,15 +183,37 @@ async fn a_replaced_plxd_moves_aside_and_the_next_start_deletes_it() {
     fs::write(&aside, "earlier").unwrap();
     fs::write(&program, "running").unwrap();
 
-    set_aside(&program);
+    assert!(set_aside(&program));
     assert!(!program.exists());
     assert_eq!(fs::read_to_string(&aside).unwrap(), "running");
     // Nothing to move: the earlier one stays.
-    set_aside(&program);
+    assert!(!set_aside(&program));
     assert_eq!(fs::read_to_string(&aside).unwrap(), "running");
 
     remove_aside(program.clone()).await;
     assert!(!aside.exists());
     // Nothing to delete: it returns at once.
     remove_aside(program).await;
+}
+
+/// A new plxd that can't move in puts the one it set aside back, so none goes missing.
+#[test]
+fn a_failed_move_in_puts_the_old_plxd_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = dir.path().join(PLXD);
+    fs::write(&program, "running").unwrap();
+
+    let error = move_in(&dir.path().join("missing"), &program, true).unwrap_err();
+    assert!(error.contains("Couldn't move plxd into"), "{error}");
+    assert_eq!(fs::read_to_string(&program).unwrap(), "running");
+    assert!(!dir.path().join(ASIDE).exists());
+
+    let new = dir.path().join("new");
+    fs::write(&new, "new").unwrap();
+    move_in(&new, &program, true).unwrap();
+    assert_eq!(fs::read_to_string(&program).unwrap(), "new");
+    assert_eq!(
+        fs::read_to_string(dir.path().join(ASIDE)).unwrap(),
+        "running"
+    );
 }

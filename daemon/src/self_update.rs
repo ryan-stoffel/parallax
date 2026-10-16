@@ -23,8 +23,9 @@
 //!   that fails and the service manager runs this plxd, plxd exits with [`EXIT_RESTART`], so the
 //!   manager starts its program again, now the new binary for an in-place update; a `serve` it
 //!   started itself would die with the service's cgroup on Linux. Without a service, plxd shuts
-//!   down and its last act starts the new `serve`. On Windows, the logon task never counts as
-//!   running plxd, so a failed `--replace` starts the new `serve` too.
+//!   down and its last act starts the new `serve`. On Windows, the logon task hands over only
+//!   while it runs, since Task Scheduler starts nothing while nobody is logged on, and it never
+//!   counts as running plxd, so a failed `--replace` starts the new `serve` too.
 //! - It never downgrades.
 
 use std::cmp::Ordering;
@@ -537,22 +538,29 @@ pub(crate) async fn install_release(
             crate::github::last_line(&ran.stderr_tail)
         ));
     }
-    let move_to = |from: &Path, to: &Path| {
-        std::fs::rename(from, to)
-            .map_err(|error| format!("Couldn't move plxd into {}: {error}.", to.display()))
-    };
     // The app may have refreshed it during the download.
     if let Some(there) = not_older(&program, version) {
         return Ok((there, program));
     }
-    if cfg!(windows) {
-        set_aside(&program);
-    }
     // plxd first, then its version: if the second move fails, the new plxd reports the old
     // version, which only makes the app try again, never the old plxd claiming the new one.
-    move_to(&new, &program)?;
-    move_to(&version_file, &program.with_file_name(crate::VERSION_FILE))?;
+    move_in(&new, &program, cfg!(windows))?;
+    let version_to = program.with_file_name(crate::VERSION_FILE);
+    std::fs::rename(&version_file, &version_to)
+        .map_err(|error| format!("Couldn't move plxd into {}: {error}.", version_to.display()))?;
     Ok((version.to_owned(), program))
+}
+
+/// Moves `new` over the plxd at `program`, setting the old one aside first when `aside`, as on
+/// Windows. When `new` can't move in, the old one goes back, so `program` is never left missing.
+fn move_in(new: &Path, program: &Path, aside: bool) -> Result<(), String> {
+    let set = aside && set_aside(program);
+    std::fs::rename(new, program).map_err(|error| {
+        if set {
+            let _ = std::fs::rename(program.with_file_name(ASIDE), program);
+        }
+        format!("Couldn't move plxd into {}: {error}.", program.display())
+    })
 }
 
 /// The version of the plxd at `program`, by the `plxd.version` beside it, when it's there and
@@ -566,10 +574,10 @@ fn not_older(program: &Path, version: &str) -> Option<String> {
 }
 
 /// Renames the plxd at `program` to [`ASIDE`] beside it, over an earlier one, so that the new one
-/// can move in while it runs: Windows renames a running exe, but won't replace one. When this
-/// fails, as while the earlier one still runs, the move in reports it.
-fn set_aside(program: &Path) {
-    let _ = std::fs::rename(program, program.with_file_name(ASIDE));
+/// can move in while it runs: Windows renames a running exe, but won't replace one. Returns
+/// whether it did. When it didn't, as while the earlier one still runs, the move in reports it.
+fn set_aside(program: &Path) -> bool {
+    std::fs::rename(program, program.with_file_name(ASIDE)).is_ok()
 }
 
 /// Deletes [`ASIDE`] beside `exe`, which the plxd an update replaced on Windows ran from. That
@@ -666,7 +674,8 @@ enum ServiceHandover {
     Failed { error: String, managed: bool },
 }
 
-/// Hands plxd over to its login service, when one is installed or runs this plxd.
+/// Hands plxd over to its login service, when one is installed (and running, on Windows) or runs
+/// this plxd.
 #[cfg(any(target_os = "macos", target_os = "linux", windows))]
 async fn service_handover(daemon: &Arc<Daemon>, program: &Path) -> ServiceHandover {
     let data_dir = daemon.data_dir.clone();
@@ -684,10 +693,14 @@ async fn service_handover(daemon: &Arc<Daemon>, program: &Path) -> ServiceHandov
         service_hint(&label),
     );
     match status {
-        Ok(status) if status.installed => match replace_service(&data_dir, program).await {
-            Ok(()) => ServiceHandover::Replaced,
-            Err(error) => ServiceHandover::Failed { error, managed },
-        },
+        // On Windows, `--replace` stops this `serve` and asks Task Scheduler to start the task,
+        // which it doesn't while nobody is logged on. So only a running task takes over.
+        Ok(status) if status.installed && (cfg!(not(windows)) || status.state.running()) => {
+            match replace_service(&data_dir, program).await {
+                Ok(()) => ServiceHandover::Replaced,
+                Err(error) => ServiceHandover::Failed { error, managed },
+            }
+        }
         _ if !managed => ServiceHandover::NoService,
         Ok(_) => ServiceHandover::Failed {
             error: "the service that runs plxd has no file to replace".to_owned(),
