@@ -597,8 +597,9 @@ test("the work in progress reads as what it does, and MCP tools and skills by na
     label: "Using Linear",
     detail: "save issue",
   });
+  // A plxd tool says what it's doing while it runs (PLX-843).
   expect(activity(tool("mcp__plxd__thread_launch", { prompt: "Fix the login bug" }))).toEqual({
-    label: "Started a child thread",
+    label: "Starting a child thread",
     detail: "Fix the login bug",
   });
   // A plxd tool this app doesn't know reads as any MCP server's tool does.
@@ -639,12 +640,12 @@ test("a running tool call spins and shimmers, and a finished one shows its kind'
 });
 
 test("each kind of tool has its icon once it's done", () => {
-  // The icon each finished tool shows, by its lucide name.
+  // The icon each finished tool shows, by its lucide name, or Parallax's mark.
   const icon = (name: string | null, input: Record<string, string> = {}) => {
     row({ kind: "tool", key: "t", callId: "1", name, input, status: "ok" });
     const svg = document.querySelector("summary svg:not(.lucide-chevron-right)")!;
     act(() => unmount());
-    return svg.getAttribute("class")!.split(" ")[1];
+    return svg.querySelector("clipPath") ? "parallax" : svg.getAttribute("class")!.split(" ")[1];
   };
   expect(
     Object.fromEntries(
@@ -694,10 +695,10 @@ test("each kind of tool has its icon once it's done", () => {
     WebFetch: "lucide-globe",
     mcp__linear__save_issue: "lucide-plug",
     Skill: "lucide-sparkles",
-    // Parallax's own tools wear a wrench (PLX-598).
-    mcp__plxd__thread_launch: "lucide-wrench",
+    // Parallax's own tools wear its mark (PLX-843).
+    mcp__plxd__thread_launch: "parallax",
     // A plxd tool this app doesn't know is still plxd's.
-    mcp__plxd__plan_approve: "lucide-wrench",
+    mcp__plxd__plan_approve: "parallax",
     TodoWrite: "lucide-list-checks",
     // Claude Code's task tools plan as TodoWrite did (PLX-248).
     TaskCreate: "lucide-list-checks",
@@ -1975,6 +1976,17 @@ test("a run of steps sums up what it did, as T3 Code does", () => {
     "Used Linear and ran 1 command",
   );
   expect(label([tool("WebSearch"), tool("WebSearch")])).toBe("Searched the web 2 times");
+  // Parallax's calls say what they did, and more than two kinds read as using it (PLX-843).
+  expect(label([tool("mcp__plxd__orchestrator_capabilities"), tool("Bash")])).toBe(
+    "Checked orchestration capabilities and ran 1 command",
+  );
+  expect(
+    label([
+      tool("mcp__plxd__device_list"),
+      tool("mcp__plxd__thread_list"),
+      tool("mcp__plxd__memory_read"),
+    ]),
+  ).toBe("Used Parallax");
   // Thoughts alone, and how a failure shows.
   const thought: Item = { kind: "reasoning", key: "r", text: "Hm" };
   expect(label([thought, { ...thought, key: "r2" }])).toBe("Thought 2 times");

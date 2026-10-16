@@ -29,9 +29,7 @@ import {
   SquareTerminal,
   TriangleAlert,
   Workflow,
-  Wrench,
   X,
-  type LucideIcon,
 } from "lucide-react";
 import {
   createContext,
@@ -46,7 +44,9 @@ import {
   useRef,
   useState,
   type ComponentProps,
+  type ComponentType,
   type ReactNode,
+  type SVGProps,
 } from "react";
 import Markdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
@@ -112,7 +112,7 @@ import {
   type TraceStatus,
 } from "./Trace";
 import { locale } from "./locale";
-import { ClaudeLogo, GitHubLogo, LinearLogo } from "./logos";
+import { ClaudeLogo, GitHubLogo, LinearLogo, ParallaxGlyph } from "./logos";
 import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
 import { withMentions } from "./Mention";
 import { dollarMath } from "./math";
@@ -142,7 +142,7 @@ import {
   knownModel,
   modelName,
   nativeSubagents,
-  SubagentCall,
+  SubagentCard,
   SubagentsContext,
   type NativeSubagent,
 } from "./Subagents";
@@ -152,9 +152,9 @@ import {
   groupWork,
   isObject,
   isRunning,
-  isSubagentTool,
   subagentLabels,
   subagentRows,
+  subagentRuns,
   subagentState,
   waitingApprovals,
   waitingSecrets,
@@ -1519,6 +1519,16 @@ export const RowView = memo(function RowView({
 }: RowProps) {
   switch (row.kind) {
     case "work":
+      if (row.subagents)
+        return (
+          <SubagentCalls
+            work={row}
+            live={live}
+            open={open}
+            openKeys={openKeys ?? new Set()}
+            onToggle={onToggle}
+          />
+        );
       // A finished turn's work under one dropdown (PLX-326): how long it worked, opening to its
       // steps and the messages it folded, as T3 Code's turn fold does. A fork's `copied` work says
       // only "Worked", since its logged times are all the fork's creation (0050).
@@ -1928,17 +1938,58 @@ function Fold({
   );
 }
 
+/**
+ * Calls that started the agent's own subagents (PLX-382), as one card (PLX-843), each opening its
+ * subagent. A call the transcript knows no subagent for, as one that failed, is a plain call.
+ */
+function SubagentCalls({
+  work,
+  live,
+  open,
+  openKeys,
+  onToggle,
+}: {
+  work: Work;
+  live: boolean;
+  open: boolean;
+  openKeys: ReadonlySet<string>;
+  onToggle: (key: string, open: boolean) => void;
+}) {
+  const known = useContext(SubagentsContext)?.subagents ?? {};
+  const calls = work.items.filter((i) => i.kind === "tool");
+  const subs = calls.flatMap((c) => known[c.callId] ?? []);
+  return (
+    <>
+      {subs.length > 0 && (
+        <SubagentCard id={work.key} subs={subs} open={open} onToggle={onToggle} />
+      )}
+      {calls
+        .filter((c) => !known[c.callId])
+        .map((c) => (
+          <ToolCall
+            key={c.key}
+            item={c}
+            live={live}
+            open={openKeys.has(c.key)}
+            onToggle={onToggle}
+          />
+        ))}
+    </>
+  );
+}
+
 /** The kinds of rows that are steps of the agent's work, as opposed to its messages. */
 const stepKinds = new Set(["reasoning", "tool", "todo", "notice"]);
 
-/** A finished turn's items, with each run of steps between its messages as one open `Work`. */
+/**
+ * A finished turn's items, with each run of steps between its messages as one open `Work`, and its
+ * subagent calls as their card's (PLX-843).
+ */
 function stepRuns(items: readonly Item[]): (Item | Work)[] {
   const out: (Item | Work)[] = [];
   let run: Item[] = [];
   const flush = () => {
-    if (run.some((i) => i.kind !== "notice"))
-      out.push({ kind: "work", key: `steps:${run[0]!.key}`, items: run });
-    else out.push(...run);
+    out.push(...subagentRuns(run));
     run = [];
   };
   for (const item of items)
@@ -2067,11 +2118,11 @@ const icons = {
   agent: Bot,
   skill: Sparkles,
   mcp: Plug,
-  plxd: Wrench,
+  plxd: ParallaxGlyph,
   planning: ListChecks,
   working: Hammer,
   compacting: FoldVertical,
-} as const satisfies Record<string, LucideIcon>;
+} as const satisfies Record<string, ComponentType<SVGProps<SVGSVGElement>>>;
 
 type Kind = keyof typeof icons;
 
@@ -2121,7 +2172,7 @@ export function activity(item?: Item): Activity {
     case "reasoning":
       return { label: "Thinking" };
     case "tool": {
-      const plxd = plxdCall(item);
+      const plxd = plxdCall(item, true);
       if (plxd) return plxd;
       // Including a plxd tool this app doesn't know.
       const mcp = mcpTool(item.name);
@@ -2150,11 +2201,7 @@ function ToolCall({
   open: boolean;
   onToggle: (key: string, open: boolean) => void;
 }) {
-  // A call that started one of the agent's own subagents opens it (PLX-382).
-  const subagents = useContext(SubagentsContext);
   const { root, loadImage } = useContext(RowContext);
-  if (isSubagentTool(item.name) && subagents?.subagents[item.callId])
-    return <SubagentCall item={item} />;
   const kind = toolKind(item.name);
   const status = item.status ?? (live ? "running" : "none");
   // A status newer than this app reads as no result.
@@ -2171,7 +2218,7 @@ function ToolCall({
           <TraceIcon>
             {status === "running" ? <LoaderCircle className="animate-spin" /> : <Icon />}
           </TraceIcon>
-          <TraceTitle>{stepLabel(item, root)}</TraceTitle>
+          <TraceTitle>{stepLabel(item, root, status === "running")}</TraceTitle>
           {/* How it went: shown when it failed or never finished, otherwise only heard. */}
           {look.shown ? (
             <TraceDescription>{look.said}</TraceDescription>
@@ -2283,10 +2330,15 @@ const filePath = (input?: JsonValue, root?: string) =>
 
 /**
  * A tool call's step row as a line, as T3 Code words one (PLX-584): the command it ran, or what it
- * did and to what. A plxd or other MCP server's tool reads by its server and tool.
+ * did and to what. A plxd or other MCP server's tool reads by its server and tool, and a plxd tool
+ * says what it's `doing` while it runs (PLX-843).
  */
-export function stepLabel(item: Extract<Item, { kind: "tool" }>, root?: string): string {
-  const plxd = plxdCall(item);
+export function stepLabel(
+  item: Extract<Item, { kind: "tool" }>,
+  root?: string,
+  doing = false,
+): string {
+  const plxd = plxdCall(item, doing);
   if (plxd) return plxd.detail ? `${plxd.label}: ${plxd.detail}` : plxd.label;
   const mcp = mcpTool(item.name);
   if (mcp) return `${mcp.server}: ${mcp.tool}`;
@@ -2332,16 +2384,16 @@ export function stepLabel(item: Extract<Item, { kind: "tool" }>, root?: string):
 /** What a run of steps did, in a line, and the icon for it. */
 export interface StepsSummary {
   label: string;
-  Icon: LucideIcon;
+  Icon: ComponentType<SVGProps<SVGSVGElement>>;
   /** How many of its calls failed or were denied. */
   failures: number;
 }
 
 /**
- * What a run of steps did, as T3 Code sums one up (PLX-584): the MCP servers it used, then its two
- * main kinds of call with counts, commands and edits first, then how many others, as in "Used
- * Linear, ran 3 commands, and changed 2 files". Thoughts and notices aren't counted, unless
- * they're all there is.
+ * What a run of steps did, as T3 Code sums one up (PLX-584): the MCP servers it used, up to two of
+ * Parallax's calls in words (PLX-843), then its two main kinds of call with counts, commands and
+ * edits first, then how many others, as in "Used Linear, ran 3 commands, and changed 2 files".
+ * Thoughts and notices aren't counted, unless they're all there is.
  */
 export function summarize(items: readonly Item[]): StepsSummary {
   const steps = items.filter((i) => i.kind !== "notice");
@@ -2354,12 +2406,19 @@ export function summarize(items: readonly Item[]): StepsSummary {
     return { label: n === 1 ? "Thought" : `Thought ${n} times`, Icon: icons.thinking, failures };
   }
   const servers: string[] = [];
+  // Parallax's calls by what they did, and how many times (PLX-843).
+  const plxd = new Map<string, number>();
   const kinds = new Set<Kind>();
   // By kind of call, in the order each first came: its calls, and the files of edits.
   const counts = new Map<string, { calls: number; files: Set<string> }>();
   for (const call of calls) {
     const kind = call.kind === "todo" ? "planning" : toolKind(call.name);
     kinds.add(kind);
+    const done = call.kind === "tool" ? plxdLabel(call.name)?.[1] : undefined;
+    if (done) {
+      plxd.set(done, (plxd.get(done) ?? 0) + 1);
+      continue;
+    }
     if (call.kind === "tool" && (kind === "mcp" || kind === "plxd")) {
       const server = kind === "plxd" ? "Parallax" : mcpTool(call.name)!.server;
       if (!servers.includes(server)) servers.push(server);
@@ -2377,7 +2436,13 @@ export function summarize(items: readonly Item[]): StepsSummary {
     .slice(0, 2)
     .sort((a, b) => a.order - b.order);
   const parts = ranked.map(({ group, count }) => callLabel(group, count.calls, count.files.size));
-  if (servers.length > 0) parts.unshift(`Used ${list.format(servers)}`);
+  // Up to two of Parallax's in words, as "Checked orchestration capabilities", more as using it.
+  const said = [...plxd].map(([label, n]) => (n > 1 ? `${label} ${times(n)}` : label));
+  if (said.length > 2 && !servers.includes("Parallax")) servers.push("Parallax");
+  parts.unshift(
+    ...(servers.length > 0 ? [`Used ${list.format(servers)}`] : []),
+    ...(said.length > 2 ? [] : said),
+  );
   const others =
     calls.length -
     calls.filter((c) => c.kind === "tool" && ["mcp", "plxd"].includes(toolKind(c.name))).length -
@@ -2430,52 +2495,104 @@ function callLabel(group: string, calls: number, files: number): string {
 /** Joins English parts: "a", "a and b", or "a, b, and c". */
 const list = new Intl.ListFormat("en", { type: "conjunction" });
 
-// A thread's plxd tools (0041), by what they did, then the 0019 coordinator tools older
-// transcripts hold.
-const plxdLabels: Partial<Record<string, string>> = {
-  thread_launch: "Started a child thread",
-  thread_fork: "Forked a thread",
-  thread_list: "Listed threads",
-  thread_read: "Read a thread",
-  thread_search: "Searched threads",
-  thread_send: "Messaged a thread",
-  thread_wait: "Waited on a thread",
-  thread_interrupt: "Interrupted a thread",
-  thread_update: "Updated a thread",
-  pr_link: "Linked a pull request",
-  pr_unlink: "Unlinked a pull request",
-  ask: "Asked the coordinator",
-  answer: "Answered a question",
-  escalate: "Passed a question to you",
-  memory_read: "Read memory",
-  memory_propose: "Proposed a memory",
-  memory_write: "Wrote memory",
-  land: "Queued a thread to land",
-  checks_propose: "Proposed checks",
-  read_context: "Read shared context",
-  write_context: "Wrote shared context",
-  spawn_agent: "Started a subagent",
-  list_agents: "Listed subagents",
-  agent_status: "Checked on a subagent",
-  message_agent: "Messaged a subagent",
-  cancel_agent: "Stopped a subagent",
-  agent_diff: "Read a subagent's diff",
-  device_list: "Listed devices",
-  device_open: "Opened a device",
-  device_screenshot: "Took a device screenshot",
-  device_close: "Closed a device",
+// A thread's plxd tools (0041), by what they're doing and what they did (PLX-843), then the 0019
+// coordinator tools older transcripts hold.
+const plxdLabels: Partial<Record<string, readonly [doing: string, done: string]>> = {
+  thread_launch: ["Starting a child thread", "Started a child thread"],
+  thread_fork: ["Forking a thread", "Forked a thread"],
+  thread_list: ["Listing threads", "Listed threads"],
+  thread_read: ["Reading a thread", "Read a thread"],
+  thread_search: ["Searching threads", "Searched threads"],
+  thread_send: ["Messaging a thread", "Messaged a thread"],
+  thread_wait: ["Waiting on a thread", "Waited on a thread"],
+  thread_interrupt: ["Interrupting a thread", "Interrupted a thread"],
+  thread_update: ["Updating a thread", "Updated a thread"],
+  thread_merge_back: ["Merging a thread back", "Merged a thread back"],
+  create_threads: ["Creating threads", "Created threads"],
+  orchestrator_capabilities: [
+    "Checking orchestration capabilities",
+    "Checked orchestration capabilities",
+  ],
+  delegate_task: ["Delegating a task", "Delegated a task"],
+  task_status: ["Checking on a task", "Checked on a task"],
+  task_cancel: ["Cancelling a task", "Cancelled a task"],
+  schedule_task: ["Scheduling a task", "Scheduled a task"],
+  list_scheduled_tasks: ["Listing scheduled tasks", "Listed scheduled tasks"],
+  update_scheduled_task: ["Updating a scheduled task", "Updated a scheduled task"],
+  delete_scheduled_task: ["Deleting a scheduled task", "Deleted a scheduled task"],
+  run_scheduled_task_now: ["Running a scheduled task", "Ran a scheduled task"],
+  request_secret: ["Asking you for a secret", "Asked you for a secret"],
+  present_files: ["Presenting files", "Presented files"],
+  html_render: ["Rendering a page", "Rendered a page"],
+  html_preview: ["Previewing a page", "Previewed a page"],
+  pr_link: ["Linking a pull request", "Linked a pull request"],
+  pr_unlink: ["Unlinking a pull request", "Unlinked a pull request"],
+  link_pull_request: ["Linking a pull request", "Linked a pull request"],
+  unlink_pull_request: ["Unlinking a pull request", "Unlinked a pull request"],
+  list_thread_pull_requests: ["Listing pull requests", "Listed pull requests"],
+  watch_pull_request: ["Watching a pull request", "Watched a pull request"],
+  unwatch_pull_request: ["Unwatching a pull request", "Unwatched a pull request"],
+  memory_read: ["Reading memory", "Read memory"],
+  memory_propose: ["Proposing a memory", "Proposed a memory"],
+  memory_write: ["Writing memory", "Wrote memory"],
+  device_list: ["Listing devices", "Listed devices"],
+  device_open: ["Opening a device", "Opened a device"],
+  device_screenshot: ["Taking a device screenshot", "Took a device screenshot"],
+  device_close: ["Closing a device", "Closed a device"],
+  preview_open: ["Opening a preview", "Opened a preview"],
+  preview_list: ["Listing previews", "Listed previews"],
+  preview_status: ["Checking the preview", "Checked the preview"],
+  preview_close: ["Closing the preview", "Closed the preview"],
+  preview_navigate: ["Navigating the preview", "Navigated the preview"],
+  preview_snapshot: ["Reading the page", "Read the page"],
+  preview_click: ["Clicking in the preview", "Clicked in the preview"],
+  preview_hover: ["Hovering in the preview", "Hovered in the preview"],
+  preview_drag: ["Dragging in the preview", "Dragged in the preview"],
+  preview_type: ["Typing in the preview", "Typed in the preview"],
+  preview_press: ["Pressing a key", "Pressed a key"],
+  preview_select: ["Choosing an option", "Chose an option"],
+  preview_scroll: ["Scrolling the preview", "Scrolled the preview"],
+  preview_resize: ["Resizing the preview", "Resized the preview"],
+  preview_upload: ["Uploading a file", "Uploaded a file"],
+  preview_dialog: ["Answering a dialog", "Answered a dialog"],
+  preview_evaluate: ["Running a script in the preview", "Ran a script in the preview"],
+  preview_wait_for: ["Waiting on the page", "Waited on the page"],
+  preview_set_appearance: ["Setting the preview's appearance", "Set the preview's appearance"],
+  preview_recording_start: ["Recording the preview", "Started a recording"],
+  preview_recording_stop: ["Stopping the recording", "Stopped the recording"],
+  ask: ["Asking the coordinator", "Asked the coordinator"],
+  answer: ["Answering a question", "Answered a question"],
+  escalate: ["Passing a question to you", "Passed a question to you"],
+  land: ["Queuing a thread to land", "Queued a thread to land"],
+  checks_propose: ["Proposing checks", "Proposed checks"],
+  read_context: ["Reading shared context", "Read shared context"],
+  write_context: ["Writing shared context", "Wrote shared context"],
+  spawn_agent: ["Starting a subagent", "Started a subagent"],
+  list_agents: ["Listing subagents", "Listed subagents"],
+  agent_status: ["Checking on a subagent", "Checked on a subagent"],
+  message_agent: ["Messaging a subagent", "Messaged a subagent"],
+  cancel_agent: ["Stopping a subagent", "Stopped a subagent"],
+  agent_diff: ["Reading a subagent's diff", "Read a subagent's diff"],
 };
 
+/** A plxd tool's words for what it's doing and what it did, when this app knows the tool. */
+const plxdLabel = (name: string | null) =>
+  name?.startsWith(plxdTools) ? plxdLabels[name.slice(plxdTools.length)] : undefined;
+
 /**
- * A plxd tool call as a short line: what it did, and what it did it to (the new thread's task,
- * the thread it named, the search, the file, or the pull request). Undefined for any other tool.
+ * A plxd tool call as a short line: what it did, or is `doing`, and what to (the new thread's or
+ * task's title or prompt, the secret, the file, the search, or the page). Undefined for any other
+ * tool.
  */
-function plxdCall(item: Extract<Item, { kind: "tool" }>) {
-  const label = item.name?.startsWith(plxdTools)
-    ? plxdLabels[item.name.slice(plxdTools.length)]
-    : undefined;
-  return label
-    ? { label, detail: item.subagent ?? toolHint(item.input, ["prompt", "path", "query", "url"]) }
+function plxdCall(item: Extract<Item, { kind: "tool" }>, doing = false) {
+  const labels = plxdLabel(item.name);
+  return labels
+    ? {
+        label: labels[doing ? 0 : 1],
+        detail:
+          item.subagent ??
+          toolHint(item.input, ["title", "prompt", "task", "label", "path", "query", "url"]),
+      }
     : undefined;
 }
 

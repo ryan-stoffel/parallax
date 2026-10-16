@@ -959,6 +959,56 @@ export function createFixtures(now = Date.now()): Fixtures {
         { text: "Check at 32 and 128 px", status: "pending" },
       ],
     },
+    // Three of Claude Code's own subagents started together (PLX-843): two done, one working.
+    ...(() => {
+      const agent = (description: string, prompt: string, done?: string): AgentOutputItem[] => {
+        const id = callId();
+        return [
+          {
+            kind: "toolCall",
+            callId: id,
+            name: "Agent",
+            input: { description, prompt, subagent_type: "Explore", run_in_background: true },
+          },
+          { kind: "toolResult", callId: id, status: "ok", output: "Started in the background." },
+          {
+            kind: "subagent",
+            callId: id,
+            agentType: "Explore",
+            model: "claude-haiku-5-5",
+            item: { kind: "text", text: `Looking into ${description.toLowerCase()}.` },
+          },
+          ...(done
+            ? [
+                {
+                  kind: "subagentFinished",
+                  callId: id,
+                  status: "completed",
+                  summary: done,
+                } as const,
+              ]
+            : []),
+        ];
+      };
+      return [
+        ...agent(
+          "Find the icon sources",
+          "List every SVG and icns under design/icon.",
+          "Found glyph.svg, background.svg, and parallax.icns.",
+        ),
+        ...agent(
+          "Check electron-builder icon config",
+          "Read electron-builder.yml and report how the macOS icon is set.",
+          "mac.icon points at design/icon/parallax.icns.",
+        ),
+        ...agent("Survey Tahoe icon guidance", "Summarize Apple's Tahoe app icon guidance."),
+      ];
+    })(),
+    ...tool(
+      "mcp__plxd__orchestrator_capabilities",
+      {},
+      JSON.stringify({ providers: ["claude", "codex"] }),
+    ),
     {
       kind: "reasoning",
       text: "Icon Composer wants each layer as its own SVG, so first check whether design/icon already splits the glyph from the background.",
