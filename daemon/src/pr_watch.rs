@@ -964,9 +964,10 @@ async fn behind(daemon: &Daemon, url: &str, base: &str, head: &str) -> Result<u6
     if let Some(message) = answer["errors"][0]["message"].as_str() {
         return Err(PrError::Gh(message.to_owned()));
     }
-    Ok(answer["data"]["repository"]["ref"]["compare"]["behindBy"]
+    // A base branch that is gone answers `ref: null`, which must not read as up to date.
+    answer["data"]["repository"]["ref"]["compare"]["behindBy"]
         .as_u64()
-        .unwrap_or(0))
+        .ok_or_else(|| PrError::Gh(format!("GitHub can't compare {head} with {base}")))
 }
 
 /// Runs `gh api graphql` with `query` and `fields`, each a flag (`-f` for text, `-F` for a
