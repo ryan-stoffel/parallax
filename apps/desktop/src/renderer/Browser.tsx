@@ -197,7 +197,7 @@ export function Browser({
           />
         )}
         {(error || !src) && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-background px-8 pb-16 text-center">
+          <div className="solid absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-background px-8 pb-16 text-center">
             {error ? (
               <>
                 <TriangleAlert aria-hidden className="mb-1 size-5 text-faint-foreground" />

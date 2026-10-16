@@ -1410,7 +1410,7 @@ export function Composer({
       </form>
       {tab && (
         // Tucked under the box, so what it shows reads as part of it.
-        <div className="mx-5 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-3xl border border-t-0 border-border bg-surface px-3 pt-5 pb-1.5">
+        <div className="tucked mx-5 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-3xl border border-t-0 border-border bg-surface px-3 pt-5 pb-1.5">
           {tab}
         </div>
       )}

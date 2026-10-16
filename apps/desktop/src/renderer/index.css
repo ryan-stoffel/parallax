@@ -530,22 +530,33 @@ body {
 :root.translucent body {
   background: color-mix(in srgb, var(--background) var(--tint), transparent);
 }
-:root.translucent .bg-background {
+/* An element with a hover color of its own (hover:bg-*) keeps it while hovered. */
+:root.translucent .bg-background:not(:where([class*="hover:bg-"]:hover)) {
   background-color: color-mix(in srgb, var(--background) 45%, transparent);
 }
-:root.translucent .bg-surface {
+:root.translucent .bg-surface:not(:where([class*="hover:bg-"]:hover)) {
   background-color: color-mix(in srgb, var(--surface) 55%, transparent);
 }
-:root.translucent .bg-code {
+:root.translucent .bg-code:not(:where([class*="hover:bg-"]:hover)) {
   background-color: color-mix(in srgb, var(--code) 55%, transparent);
 }
-:root.translucent .bg-sidebar {
+:root.translucent .bg-sidebar:not(:where([class*="hover:bg-"]:hover)) {
   background-color: color-mix(in srgb, var(--sidebar) 55%, transparent);
   backdrop-filter: var(--glass);
 }
-:root.translucent :is([popover], dialog):is(.bg-background, .bg-surface) {
+/* What floats over the page: menus, dialogs, and the cards and bars that cast the composer's
+   shadow (tooltips, the find bar, suggestions, hover cards). */
+:root.translucent
+  :is([popover], dialog, .shadow-composer):is(.bg-background, .bg-surface):not(
+    :where([class*="hover:bg-"]:hover)
+  ) {
   background-color: color-mix(in srgb, var(--surface) 82%, transparent);
   backdrop-filter: var(--glass);
+}
+/* A tray tucked 1rem under a prompt box (.tucked, -mt-4) would show its top through the box's
+   glass: its side borders and a second layer of fill. Through glass it starts where the box ends. */
+:root.translucent .tucked {
+  mask-image: linear-gradient(transparent 1rem, #000 1rem);
 }
 /* A nightly's sky fades into the glass rather than into the sidebar's solid color. */
 :root.nightly.translucent .night-sky-host {
@@ -563,7 +574,9 @@ body {
 :root.nightly.translucent .night-sky-host .sky-search {
   background-color: color-mix(in srgb, var(--sidebar) 55%, transparent);
 }
-/* Settings' theme previews show their theme as it is. */
+/* Settings' theme previews show their theme as it is, and .solid keeps an element opaque, as
+   over the side panel's browser. */
+:root.translucent .solid,
 :root.translucent
   :is(.scheme-light, .scheme-dark):is(.bg-background, .bg-surface, .bg-sidebar, .bg-code),
 :root.translucent
