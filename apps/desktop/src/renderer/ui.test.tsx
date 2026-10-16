@@ -163,6 +163,9 @@ test("a field Picker's search filters its groups, and Enter takes the first matc
     );
 
   expect(headings()).toEqual(["Included with Parallax", "Installed"]);
+  // Enter with nothing typed keeps the choice.
+  enter();
+  expect(onChange).not.toHaveBeenCalled();
   type("men");
   // The typed name comes after the matches, and Enter takes the first match.
   expect(items().map((i) => i.textContent)).toEqual(["Menlo", "men"]);

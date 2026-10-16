@@ -279,6 +279,8 @@ async function dataUrl(url: string | undefined): Promise<string | undefined> {
     const response = await fetch(url);
     if (!response.ok) return undefined;
     const blob = await response.blob();
+    // Kept in localStorage with the themes: an outsized icon is left out rather than fill it.
+    if (blob.size > 100_000) return undefined;
     return await new Promise((resolve) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result as string);

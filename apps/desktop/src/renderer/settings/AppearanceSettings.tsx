@@ -235,7 +235,7 @@ export function AppearanceSettings({
             <button
               type="button"
               className={`${quietButton} flex shrink-0 items-center gap-1.5 border border-border text-foreground`}
-              onClick={() => setAdding(theme === "light" ? "light" : "dark")}
+              onClick={() => setAdding(showing("light") ? "light" : "dark")}
             >
               <Plus aria-hidden className="size-3.5" />
               Add theme

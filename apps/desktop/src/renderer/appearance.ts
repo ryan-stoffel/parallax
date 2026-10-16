@@ -151,7 +151,22 @@ export function loadSystemFonts(): Promise<SystemFonts> {
   return systemFonts;
 }
 
-const appearance = stored("parallax.appearance", defaults, merged);
+// Before the window background had three choices, `blur` turned it on, beside a `windowOpacity`
+// that faded the whole window. A saved blur carries over; both fields are dropped.
+const appearance = stored("parallax.appearance", defaults, (raw, fallback) => {
+  const {
+    blur,
+    windowOpacity: _,
+    ...rest
+  } = merged(raw, {
+    ...fallback,
+    blur: false,
+    windowOpacity: 100,
+  });
+  return blur === true && !(raw as Partial<Appearance>).windowMaterial
+    ? { ...rest, windowMaterial: "blur" as const }
+    : rest;
+});
 
 /** Changes and saves part of the appearance, for every window of this computer. */
 export const setAppearance = (change: Partial<Appearance>) =>

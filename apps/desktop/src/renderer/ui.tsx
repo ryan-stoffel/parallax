@@ -539,7 +539,8 @@ export function Picker({
               spellCheck={false}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
-                const first = shown[0] ?? typed;
+                // With nothing typed, Enter keeps the choice.
+                const first = q ? (shown[0] ?? typed) : undefined;
                 if (e.key === "Enter" && first) choose(first);
               }}
               className="h-7 w-full rounded-md bg-transparent px-2 text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
