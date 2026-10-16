@@ -23,18 +23,21 @@ async function firstPage(bytes: Promise<ArrayBuffer | Uint8Array>): Promise<stri
  * A file that isn't an image, as a card (PLX-779): a PDF's first page, or else its name, with its
  * type in a badge. `file` is one attached in the composer, or the path on `hostId` of one sent,
  * which `host/readUpload` reads. With `onRemove`, hovering shows a remove button. With
- * `progress`, the share of it sent so far shows as a bar along its bottom (PLX-835).
+ * `progress`, the share of it sent so far shows as a bar along its bottom (PLX-835), red once
+ * `failed`.
  */
 export function FileCard({
   file,
   hostId,
   onRemove,
   progress,
+  failed,
 }: {
   file: File | string;
   hostId?: string;
   onRemove?: () => void;
   progress?: number;
+  failed?: boolean;
 }) {
   const name = typeof file === "string" ? (file.split(/[\\/]/).pop() ?? file) : file.name;
   const type = /\.([a-z0-9]{1,5})$/i.exec(name)?.[1]?.toUpperCase() ?? "FILE";
@@ -70,12 +73,12 @@ export function FileCard({
       {progress !== undefined && (
         <span
           role="progressbar"
-          aria-label={`Sending ${name}`}
+          aria-label={failed ? `${name} couldn't be sent` : `Sending ${name}`}
           aria-valuenow={Math.round(progress * 100)}
           className="absolute inset-x-0 bottom-0 h-1 bg-selected"
         >
           <span
-            className="block h-full bg-accent transition-[width]"
+            className={`block h-full transition-[width] ${failed ? "bg-danger" : "bg-accent"}`}
             style={{ width: `${progress * 100}%` }}
           />
         </span>

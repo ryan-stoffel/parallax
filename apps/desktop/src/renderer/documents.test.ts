@@ -3,10 +3,10 @@ import { beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, ParallaxBridge } from "../preload/bridge";
 import type { AgentFileParams } from "../protocol/generated/protocol";
-import { progressFrom, readWorking } from "./documents";
+import { pieceBytes, progressFrom, readWorking } from "./documents";
 
 const MiB = 2 ** 20;
-// Just over `progressFrom`, so it reads in three 2 MiB slices and reports its progress.
+// Just over `progressFrom`, so it reads in 17 slices of `pieceBytes` and reports its progress.
 let file = Uint8Array.from({ length: progressFrom + 1 }, (_, i) => i % 251);
 let state: ConnectionState;
 // Answers that fail before the next real one, as timeouts on a slow link do.
@@ -39,24 +39,26 @@ beforeEach(() => {
   window.parallax = {
     request,
     connectionState: async () => state,
+    onConnectionState: () => () => {},
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
 const offsets = () => request.mock.calls.map(([, , p]) => p.offset);
 
-test("a file reads in chunkBytes slices, in order, into one buffer, with its progress (PLX-835)", async () => {
+test("a file reads in slices of pieceBytes, under plxd's chunkBytes, in order, into one buffer, with its progress (PLX-835)", async () => {
   const progress: number[] = [];
   const bytes = await readWorking("box", "run-1", "out/big.bin", (share) => progress.push(share));
   expect(Buffer.from(bytes).equals(Buffer.from(file))).toBe(true);
-  expect(offsets()).toEqual([0, 2 * MiB, 4 * MiB]);
+  const at = Array.from({ length: 17 }, (_, i) => i * pieceBytes);
+  expect(offsets()).toEqual(at);
   expect(request.mock.calls[0]![2]).toEqual({
     runId: "run-1",
     path: "out/big.bin",
     side: "working",
     offset: 0,
-    length: 2 * MiB,
+    length: pieceBytes,
   });
-  expect(progress).toEqual([(2 * MiB) / file.length, (4 * MiB) / file.length, 1]);
+  expect(progress).toEqual([...at.slice(1).map((n) => n / file.length), 1]);
 });
 
 test("a small file reads in one slice and reports no progress (PLX-835)", async () => {
@@ -72,7 +74,7 @@ test("a small file reads in one slice and reports no progress (PLX-835)", async 
 test("a failed slice is asked again twice, then the read fails with plxd's reason (PLX-835)", async () => {
   failing = 2;
   await readWorking("box", "run-1", "out/big.bin");
-  expect(offsets()).toEqual([0, 0, 0, 2 * MiB, 4 * MiB]);
+  expect(offsets().slice(0, 4)).toEqual([0, 0, 0, pieceBytes]);
 
   request.mockClear();
   failing = 3;

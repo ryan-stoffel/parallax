@@ -549,8 +549,8 @@ export function Composer({
   const canUpload = !!host && !!uploadBytes;
   // While the files upload, before the message goes.
   const [uploading, setUploading] = useState(false);
-  // The file going in pieces now, and the share of it sent.
-  const [sending, setSending] = useState<{ file: File; share: number }>();
+  // The file going in pieces now, the share of it sent, and whether a piece failed.
+  const [sending, setSending] = useState<{ file: File; share: number; failed?: boolean }>();
   const [images, setImages] = useState<PromptImage[]>(initial?.images ?? []);
   // Attached threads' run ids, shown as chips beside the images.
   const [threads, setThreads] = useState<string[]>(initial?.threads ?? []);
@@ -908,7 +908,10 @@ export function Composer({
       ).catch((error: unknown) => `A file couldn't be read: ${String(error)}`);
       if (!editor.isDestroyed) editor.setEditable(true);
       setUploading(false);
-      setSending(undefined);
+      // A file that stopped partway keeps its bar, marked failed (PLX-835).
+      setSending((s) =>
+        typeof paths === "string" && s && s.share < 1 ? { ...s, failed: true } : undefined,
+      );
       if (typeof paths === "string") return setError(paths);
       sentText = withFiles(text, paths);
     }
@@ -1276,6 +1279,7 @@ export function Composer({
                 key={`${f.name}-${f.lastModified}-${i}`}
                 file={f}
                 progress={sending?.file === f ? sending.share : undefined}
+                failed={sending?.file === f && sending.failed}
                 onRemove={() => setFiles((all) => all.filter((_, j) => j !== i))}
               />
             ))}

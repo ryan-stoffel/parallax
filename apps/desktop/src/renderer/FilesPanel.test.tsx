@@ -170,7 +170,10 @@ test("on a plxd with fileChunks, a file too large to show downloads, read in sli
   await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Download"));
   await vi.waitFor(() => expect(saved).toEqual(["big.bin", 5_000_000]));
   const slices = request.mock.calls.filter(([, , p]) => p["offset"] !== undefined);
-  expect(slices.map(([, , p]) => p["offset"])).toEqual([0, 2 * 2 ** 20, 4 * 2 ** 20]);
+  // 256 KiB slices (`pieceBytes`), under plxd's 2 MiB chunkBytes.
+  expect(slices.map(([, , p]) => p["offset"])).toEqual(
+    Array.from({ length: 20 }, (_, i) => i * 2 ** 18),
+  );
 });
 
 test("with no thread open, or a plxd without files, the view says so and asks nothing", async () => {

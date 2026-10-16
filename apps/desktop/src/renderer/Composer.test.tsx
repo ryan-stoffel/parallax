@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import type { ParallaxBridge } from "../preload/bridge";
+import type { ConnectionState, ParallaxBridge } from "../preload/bridge";
 import type { AgentRun, PromptImage } from "../protocol/generated/protocol";
 import { Composer, type ComposerProps } from "./Composer";
 import type { ImageCaps } from "./images";
@@ -602,7 +602,7 @@ test("with fileChunks, a file goes in pieces and its chip shows how much is sent
     document
       .querySelector('[role="progressbar"][aria-label="Sending paper.pdf"]')
       ?.getAttribute("aria-valuenow");
-  for (const [i, shown] of [undefined, "40", "80"].entries()) {
+  for (const [i, shown] of ["0", "40", "80"].entries()) {
     await vi.waitFor(() => expect(answers).toHaveLength(i + 1));
     expect(sent()).toBe(shown);
     await act(async () => answers[i]!());
@@ -614,6 +614,36 @@ test("with fileChunks, a file goes in pieces and its chip shows how much is sent
     [2, false],
     [4, true],
   ]);
+});
+
+test("a piece that fails three times marks its file's chip and keeps the message (PLX-835)", async () => {
+  const upload = vi.fn(async (_host: string, _method: string, params: { offset?: number }) =>
+    params.offset === 0
+      ? { logId: "l", result: { path: "/up/u1/paper.pdf", uploadId: "u1" } }
+      : { error: { code: -32603, message: "timed out" } },
+  );
+  window.parallax = {
+    platform: "darwin",
+    request: upload,
+    onConnectionState: () => () => {},
+    // A host that can't reconnect, so the retries go at once.
+    connectionState: async () => ({ status: "failed", retrying: false }) as ConnectionState,
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  const onSend = vi.fn(async () => undefined);
+  const { paste, press } = render(onSend, caps, {
+    hostId: "local",
+    uploadBytes: { maxBytes: 1024, chunkBytes: 2 },
+  });
+  await paste([new File(["%PDF-"], "paper.pdf", { type: "application/pdf" })]);
+  await press("Enter");
+  await vi.waitFor(() =>
+    expect(document.querySelector('[role="progressbar"]')?.getAttribute("aria-label")).toBe(
+      "paper.pdf couldn't be sent",
+    ),
+  );
+  expect(upload).toHaveBeenCalledTimes(4);
+  expect(onSend).not.toHaveBeenCalled();
+  expect(document.body.textContent).toContain("paper.pdf couldn't be sent: timed out");
 });
 
 test("Up and Down recall the thread's earlier prompts until one is edited (PLX-325)", async () => {

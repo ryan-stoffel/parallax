@@ -46,7 +46,7 @@ export const isImagePath = (path: string) => /[/\\]image-\d+\.(?:png|jpg|gif|web
 /**
  * Saves each of `files` on the host, in order, and resolves to their paths there, or to why not.
  * With `chunkBytes`, each `File` goes in pieces that size, and `onProgress` gets the share of it
- * sent after each. An encoded image is always one message.
+ * sent before the first and after each. An encoded image is always one message.
  */
 export async function uploadFiles(
   hostId: string,
@@ -81,11 +81,12 @@ async function sendPieces(
   onProgress: (share: number) => void,
 ): Promise<HostResponse<HostUploadResult>> {
   let uploadId: string | undefined;
+  onProgress(0);
   for (let offset = 0; ; offset += chunkBytes) {
     const end = Math.min(offset + chunkBytes, file.size);
     const last = end === file.size;
     const data = await base64Of(file.slice(offset, end));
-    const answer = await retried(() =>
+    const answer = await retried(hostId, () =>
       window.parallax.request(hostId, "host/upload", {
         name: file.name,
         data,
@@ -139,7 +140,7 @@ export function splitFiles(text: string): { text: string; paths: string[] } {
 /** A file `uploadFiles` saved on `hostId`, read back for the transcript with `readSlices`. */
 export function readUpload(hostId: string, path: string): Promise<Uint8Array> {
   const slice: Slice = async (at) => {
-    const answer = await retried(() =>
+    const answer = await retried(hostId, () =>
       window.parallax.request(hostId, "host/readUpload", { path, ...at }),
     );
     if ("error" in answer) throw new Error(describeError(answer.error));

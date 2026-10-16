@@ -105,20 +105,30 @@ export async function readAttachment(
   return fromBase64(answer.result.data);
 }
 
-/** A host's `fileChunks` capability (0074): the most bytes one slice or piece carries, and the largest file pieces make. */
+/** A host's `fileChunks` capability (0074): the bytes one slice or piece carries, and the largest file pieces make. */
 export interface FileChunks {
   chunkBytes: number;
   maxBytes: number;
 }
 
-/** `connection`'s `fileChunks`. Undefined while it isn't connected, or when its plxd moves each file in one message. */
+/**
+ * The most file bytes the app puts in one slice or piece, below plxd's `chunkBytes` (a maximum).
+ * About 350 KB of base64, which sends inside the heartbeat's 10 s liveness (`LIVENESS_MS`) on a
+ * link down to about 0.3 Mbit/s, so a piece in flight never ends the connection.
+ */
+export const pieceBytes = 256 * 2 ** 10;
+
+/**
+ * `connection`'s `fileChunks`, with `chunkBytes` at most `pieceBytes`. Undefined while it isn't
+ * connected, or when its plxd moves each file in one message.
+ */
 export function fileChunks(connection?: ConnectionState): FileChunks | undefined {
   const cap =
     connection?.status === "connected" ? connection.capabilities["fileChunks"] : undefined;
   const chunkBytes = cap?.["chunkBytes"];
   const maxBytes = cap?.["maxBytes"];
   return typeof chunkBytes === "number" && typeof maxBytes === "number"
-    ? { chunkBytes, maxBytes }
+    ? { chunkBytes: Math.min(chunkBytes, pieceBytes), maxBytes }
     : undefined;
 }
 
@@ -126,13 +136,45 @@ export function fileChunks(connection?: ConnectionState): FileChunks | undefined
 export const chunksOf = async (hostId: string) =>
   fileChunks(await window.parallax.connectionState(hostId).catch(() => undefined));
 
+/** How long a retry waits for its host to reconnect before it's sent anyway. */
+export const reconnectWaitMs = 60_000;
+
+/**
+ * Resolves once `hostId` is connected, or can't reconnect by itself, or after `reconnectWaitMs`,
+ * whichever comes first.
+ */
+function reconnected(hostId: string): Promise<void> {
+  const settled = (state: ConnectionState) =>
+    state.status === "connected" || (state.status === "failed" && !state.retrying);
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      stop();
+      resolve();
+    };
+    const timer = setTimeout(done, reconnectWaitMs);
+    const stop = window.parallax.onConnectionState((id, state) => {
+      if (id === hostId && settled(state)) done();
+    });
+    void window.parallax.connectionState(hostId).then((state) => settled(state) && done(), done);
+  });
+}
+
 /**
  * `send`'s answer, sent up to twice more while it answers an error, as a timeout on a slow link
- * does. Only for a call that answers a repeat as it did the first: a slice, or a piece (0074).
+ * does. A retry first waits for `hostId` to reconnect, so a dropped connection resumes the
+ * transfer from the same slice or piece. Only for a call that answers a repeat as it did the
+ * first: a slice, or a piece (0074).
  */
-export async function retried<R>(send: () => Promise<HostResponse<R>>): Promise<HostResponse<R>> {
+export async function retried<R>(
+  hostId: string,
+  send: () => Promise<HostResponse<R>>,
+): Promise<HostResponse<R>> {
   let answer = await send();
-  for (let tries = 1; tries < 3 && "error" in answer; tries++) answer = await send();
+  for (let tries = 1; tries < 3 && "error" in answer; tries++) {
+    await reconnected(hostId);
+    answer = await send();
+  }
   return answer;
 }
 
@@ -182,7 +224,7 @@ export function readWorking(
   onProgress?: (share: number) => void,
 ): Promise<Uint8Array> {
   const slice: Slice = async (at) => {
-    const answer = await retried(() =>
+    const answer = await retried(hostId, () =>
       window.parallax.request(hostId, "agent/file", { runId, path, side: "working", ...at }),
     );
     if ("error" in answer) throw new Error(await failure(hostId, answer.error));
@@ -193,6 +235,19 @@ export function readWorking(
     return { data: file.content, size: file.size };
   };
   return readSlices(hostId, slice, onProgress);
+}
+
+/** The size of file `path` in run `runId`'s folder on `hostId`, asked without its content. */
+export async function workingSize(hostId: string, runId: string, path: string): Promise<number> {
+  const answer = await window.parallax.request(hostId, "agent/file", {
+    runId,
+    path,
+    side: "working",
+    sizeOnly: true,
+  });
+  if ("error" in answer) throw new Error(await failure(hostId, answer.error));
+  if (!answer.result.exists) throw new Error("This file isn't in the thread's folder anymore.");
+  return answer.result.size ?? 0;
 }
 
 export async function load(
@@ -255,14 +310,16 @@ const shares = new Map<string, number>();
 
 /**
  * `doc` from `hostId`, opened, and opened again when a newer presentation reloads it. While a
- * file over `progressFrom` loads, `progress` is the share of it read so far.
+ * file over `progressFrom` loads, `progress` is the share of it read so far. With `read` false,
+ * nothing is read, for a card that reads its file only when asked.
  */
-export function useDocument(hostId: string, doc: DocRef) {
+export function useDocument(hostId: string, doc: DocRef, read = true) {
   const loads = useSyncExternalStore(subscribe, () => version);
   const share = useSyncExternalStore(subscribe, () => shares.get(keyOf(hostId, doc)));
   const [state, setState] = useState<{ loaded?: Loaded; error?: string }>({});
   const { runId, path, name, kind } = doc;
   useEffect(() => {
+    if (!read) return;
     let live = true;
     const ref = { runId, path, name, kind };
     const key = keyOf(hostId, ref);
@@ -290,7 +347,7 @@ export function useDocument(hostId: string, doc: DocRef) {
     return () => {
       live = false;
     };
-  }, [hostId, runId, path, name, kind, loads]);
+  }, [hostId, runId, path, name, kind, loads, read]);
   return { ...state, progress: state.loaded || state.error ? undefined : share };
 }
 
