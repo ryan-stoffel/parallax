@@ -1,37 +1,54 @@
 //! `plxd service`: installs, removes, and reports on the per-user service that keeps
-//! `plxd serve` running: a `LaunchAgent` on macOS ([`launchd`], #61) and a systemd user unit on
-//! Linux ([`systemd`], PLX-18), both named after [`DEFAULT_LABEL`] (0010, 0023).
+//! `plxd serve` running: a `LaunchAgent` on macOS ([`launchd`], #61), a systemd user unit on
+//! Linux ([`systemd`], PLX-18), and a scheduled task with a logon trigger on Windows
+//! ([`task_scheduler`], PLX-576), all named after [`DEFAULT_LABEL`] (0010, 0023).
 //!
 //! Each OS module renders its file with a pure function, covered by a golden-file test, and drives
-//! its service manager. Both compile on every Unix, so their tests run everywhere; the running
-//! OS's `install`, `uninstall`, and `status` are re-exported here. What they share lives here: the
-//! label rule, the `initialize` probe, and preparing the data folder.
+//! its service manager. `launchd` and `systemd` compile on every Unix, and `task_scheduler`'s
+//! rendering on every OS, so their tests run everywhere; the running OS's `install`,
+//! `uninstall`, and `status` are re-exported here. What they share lives here: the label rule, the
+//! `initialize` probe, and preparing the data folder.
 
+#[cfg(unix)]
 pub mod launchd;
+#[cfg(unix)]
 pub mod systemd;
+pub mod task_scheduler;
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io;
+#[cfg(unix)]
+use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
+#[cfg(unix)]
 use parallax_protocol::jsonrpc::{Message, Request};
+#[cfg(unix)]
 use parallax_protocol::methods::Initialize;
+#[cfg(unix)]
 use parallax_protocol::{Capabilities, ClientInfo, InitializeParams, ProtocolRange};
+#[cfg(unix)]
 use rustix::process::{Pid, Signal, kill_process};
 
 #[cfg(target_os = "macos")]
 pub use launchd::{install, status, uninstall};
 #[cfg(target_os = "linux")]
 pub use systemd::{install, status, uninstall};
+#[cfg(windows)]
+pub use task_scheduler::{install, status, uninstall};
 
 use crate::paths::DataDir;
 
 /// plxd's service label: Parallax's bundle id (`io.github.ryan-stoffel.parallax`, 0006) plus `.plxd`.
-/// It is the `LaunchAgent`'s label on macOS, and the systemd unit's name, before `.service`, on
-/// Linux.
+/// It is the `LaunchAgent`'s label on macOS, the systemd unit's name, before `.service`, on Linux,
+/// and the scheduled task's name on Windows.
 pub const DEFAULT_LABEL: &str = "io.github.ryan-stoffel.parallax.plxd";
 
 /// The environment variable that overrides the label when `--label` is not given. Only tests
@@ -79,6 +96,17 @@ pub enum ServiceError {
         /// Its pid.
         pid: u32,
     },
+    /// On Windows, something held the data folder's lock for [`STOP_TIMEOUT`] without answering
+    /// on its pipe, which is how plxd finds the `serve` to stop.
+    #[error(
+        "something held {}'s plxd.lock for 30 s without answering on its pipe, so it couldn't be \
+         stopped",
+        .data_dir.display()
+    )]
+    LockHeldWithoutAnswering {
+        /// The data folder.
+        data_dir: PathBuf,
+    },
     /// The home folder is unknown, so the service's file can't be placed.
     #[error("the home folder is unknown")]
     NoHomeDir,
@@ -88,14 +116,15 @@ pub enum ServiceError {
     /// The data folder could not be prepared. See [`crate::server::prepare_data_dir`].
     #[error(transparent)]
     DataDir(#[from] crate::server::StartError),
-    /// A path can't be written into a systemd unit, because it isn't UTF-8 or has a control
-    /// character such as a line break.
-    #[error("{} can't be written into a systemd unit", .path.display())]
+    /// A path can't be written into the service's file: a systemd unit, because it isn't UTF-8 or
+    /// has a control character such as a line break, or a scheduled task, because it isn't
+    /// Unicode.
+    #[error("{} can't be written into the service's file", .path.display())]
     UnitPath {
         /// The path.
         path: PathBuf,
     },
-    /// `launchctl` or `systemctl` exited with an error.
+    /// `launchctl`, `systemctl`, `schtasks`, or `taskkill` exited with an error.
     #[error("`{command}` failed: {stderr}")]
     Failed {
         /// The command line that failed.
@@ -156,8 +185,8 @@ pub enum ServiceState {
 }
 
 impl ServiceState {
-    /// The manager has the label loaded: launchd in the per-user GUI domain, or the systemd user
-    /// manager.
+    /// The manager has the label loaded: launchd in the per-user GUI domain, the systemd user
+    /// manager, or Task Scheduler.
     #[must_use]
     pub fn loaded(self) -> bool {
         !matches!(self, Self::NotLoaded)
@@ -184,10 +213,13 @@ impl ServiceState {
 pub struct Status {
     /// The label checked.
     pub label: String,
-    /// Where its plist or unit file would be.
+    /// Where its plist, unit file, or task XML would be.
     pub path: PathBuf,
     /// That file exists.
     pub installed: bool,
+    /// The `plxd` that file runs, read back from it. `None` when there's no file, or it isn't
+    /// one plxd wrote.
+    pub program: Option<PathBuf>,
     /// What the service manager reports for `label`.
     pub state: ServiceState,
     /// The data folder's socket answered an `initialize` request just now.
@@ -198,6 +230,7 @@ impl Status {
     fn check(
         label: &str,
         path: PathBuf,
+        program: Option<PathBuf>,
         state: ServiceState,
         data_dir: &DataDir,
     ) -> Result<Self, ServiceError> {
@@ -208,6 +241,7 @@ impl Status {
             label: label.to_owned(),
             path,
             installed,
+            program,
             state,
             answers_initialize: probe_initialize(data_dir),
         })
@@ -240,8 +274,8 @@ fn check_label_serves(
 /// What every install does before writing its file: checks whether something other than the
 /// service already answers `data_dir` (`ours` says whether the service is what could be
 /// answering), and refuses then unless `replace`. Then prepares the data folder and its `logs/`.
-/// Returns the running `plxd`'s path, and whether a `serve` outside the service must be stopped
-/// with [`stop_outside_serve`].
+/// Returns the running `plxd`'s path, and whether a `serve` outside the service must be stopped:
+/// with `stop_outside_serve` on Unix, and `task_scheduler`'s own stop on Windows.
 fn prepare_install(
     data_dir: &DataDir,
     ours: bool,
@@ -267,6 +301,7 @@ fn prepare_install(
 ///
 /// [`ServiceError::StillRunning`] when it hasn't exited in time, and [`ServiceError::Io`] when
 /// the signal can't be sent.
+#[cfg(unix)]
 pub fn stop_outside_serve(data_dir: &DataDir) -> Result<(), ServiceError> {
     let lock = data_dir.lock_file();
     // Checking for the file first keeps the lookup from creating one once `serve` removed it.
@@ -297,6 +332,7 @@ pub fn stop_outside_serve(data_dir: &DataDir) -> Result<(), ServiceError> {
 /// Connects to `data_dir`'s socket and sends `initialize`, to see whether something answers it
 /// right now. `false` covers every way that can fail to happen: no socket, nothing listening, a
 /// connection that doesn't answer in time, or an answer that isn't a well-formed response.
+#[cfg(unix)]
 fn probe_initialize(data_dir: &DataDir) -> bool {
     let Ok(socket) = data_dir.socket_path() else {
         return false;
@@ -340,6 +376,27 @@ fn probe_initialize(data_dir: &DataDir) -> bool {
     )
 }
 
+/// The same probe over the data folder's pipe, through [`crate::peer::Plxd`], which sends
+/// `initialize` when it connects and checks that the pipe's server runs as this user. Its pipe
+/// client needs a tokio runtime.
+#[cfg(windows)]
+fn probe_initialize(data_dir: &DataDir) -> bool {
+    let (Ok(socket), Ok(runtime)) = (
+        data_dir.socket_path(),
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build(),
+    ) else {
+        return false;
+    };
+    let plxd = crate::peer::Plxd::local(socket.path);
+    // Any call connects first; this one asks nothing more than `initialize`. The timeout is made
+    // inside the runtime, which its timer needs.
+    runtime
+        .block_on(async { tokio::time::timeout(PROBE_TIMEOUT, plxd.agent_wait()).await })
+        .is_ok_and(|answer| answer.is_ok())
+}
+
 /// Creates `logs/` under the data folder, if it is not there yet, so the service manager has
 /// somewhere to send `serve`'s stdout and stderr before `serve` itself creates the folder.
 fn prepare_log_dir(data_dir: &DataDir) -> Result<(), ServiceError> {
@@ -347,9 +404,11 @@ fn prepare_log_dir(data_dir: &DataDir) -> Result<(), ServiceError> {
     let Some(dir) = log_file.parent() else {
         return Ok(());
     };
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder
         .create(dir)
         .map_err(|error| ServiceError::io(format!("creating {}", dir.display()), error))
 }
@@ -364,7 +423,7 @@ fn current_exe() -> Result<PathBuf, ServiceError> {
 }
 
 /// Writes the service's file, creating its folder first.
-fn write_file(path: &Path, contents: &str) -> Result<(), ServiceError> {
+fn write_file(path: &Path, contents: impl AsRef<[u8]>) -> Result<(), ServiceError> {
     if let Some(dir) = path.parent() {
         std::fs::DirBuilder::new()
             .recursive(true)
@@ -409,14 +468,14 @@ fn run_ok(program: &str, args: &[&str]) -> Result<Output, ServiceError> {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt as _;
-    use std::path::Path;
-
     use super::{DEFAULT_LABEL, ServiceError, check_label_serves};
     use crate::paths::DataDir;
 
     /// A stand-in for `launchctl` or `loginctl`: a `sh` script named `name` in `dir`.
-    pub(super) fn fake_program(dir: &Path, name: &str, script: &str) -> String {
+    #[cfg(unix)]
+    pub(super) fn fake_program(dir: &std::path::Path, name: &str, script: &str) -> String {
+        use std::os::unix::fs::PermissionsExt as _;
+
         let path = dir.join(name);
         std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();

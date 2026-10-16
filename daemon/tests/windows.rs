@@ -1,6 +1,6 @@
 //! `plxd attach` and `plxd serve` on Windows (0023): attach starts a detached `serve`, which
 //! answers over the named pipe, outlives attach, holds the lock, and gets none of attach's
-//! handles.
+//! handles. And `plxd service`'s logon task (PLX-576), which attach starts.
 #![cfg(windows)]
 
 use std::path::Path;
@@ -12,6 +12,8 @@ use parallax_protocol::framing::FrameCodec;
 use parallax_protocol::jsonrpc::{Message, Request};
 use parallax_protocol::methods::Initialize;
 use parallax_protocol::{Capabilities, ClientInfo, InitializeParams, ProtocolRange};
+use plxd::attach::{self, Options};
+use plxd::launch_agent::LaunchAgent;
 use plxd::paths::DataDir;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -155,4 +157,130 @@ async fn attach_starts_a_serve_that_answers_outlives_it_and_holds_the_lock() {
     let stdout = attach_once(data.path()).await;
     assert!(stdout.contains("\"protocol\":1"), "{stdout}");
     kill(data.path()).await;
+}
+
+const TEST_LABEL: &str = "io.github.ryan-stoffel.parallax.plxd.windows-test";
+
+/// Runs `plxd service <command>` under [`TEST_LABEL`] for `data`, with the task's XML in `local`.
+async fn service(data: &Path, local: &Path, command: &str) -> String {
+    let output = timeout(
+        PATIENCE,
+        plxd(data, &["service", command, "--label", TEST_LABEL])
+            .env("LOCALAPPDATA", local)
+            .output(),
+    )
+    .await
+    .expect("plxd service finished")
+    .unwrap();
+    assert!(output.status.success(), "{command}: {output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// What Task Scheduler says about [`TEST_LABEL`], for a failure message.
+fn schtasks_query() -> String {
+    let output = std::process::Command::new("schtasks")
+        .args(["/query", "/tn", TEST_LABEL, "/v", "/fo", "csv", "/nh"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// Uninstalls [`TEST_LABEL`] if a test stops partway, so no logon task is left behind.
+struct Uninstall<'a>(&'a Path, &'a Path);
+
+impl Drop for Uninstall<'_> {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new(env!("CARGO_BIN_EXE_plxd"))
+            .args(["service", "uninstall", "--label", TEST_LABEL, "--data-dir"])
+            .arg(self.0)
+            .env("LOCALAPPDATA", self.1)
+            .output();
+    }
+}
+
+/// `plxd service` against the real Task Scheduler, under a test label: install registers the
+/// task and its `serve` answers, status reports it running and its program, and uninstall stops
+/// that `serve`, for the folder the task serves rather than the one it's given, and removes the
+/// task.
+#[tokio::test]
+async fn service_installs_reports_and_uninstalls_a_logon_task() {
+    let temp = tempfile::tempdir().unwrap();
+    let data = temp.path().join("data");
+    let local = temp.path().join("local");
+    std::fs::create_dir(&local).unwrap();
+    let _uninstall = Uninstall(&data, &local);
+
+    assert_eq!(
+        service(&data, &local, "install").await,
+        format!("installed and started {TEST_LABEL}\n")
+    );
+    let xml = std::fs::read(local.join(format!("{TEST_LABEL}.xml"))).unwrap();
+    assert_eq!(xml[..2], [0xFF, 0xFE], "UTF-16 LE with a byte order mark");
+
+    let mut status = String::new();
+    let answered = timeout(PATIENCE, async {
+        while !status.contains("answers initialize: true") {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            status = service(&data, &local, "status").await;
+        }
+    })
+    .await;
+    assert!(answered.is_ok(), "{status}{}", schtasks_query());
+    let program = format!("program: {}\n", env!("CARGO_BIN_EXE_plxd"));
+    for line in ["installed: true", "loaded: true", "running: true", &program] {
+        assert!(status.contains(line), "{status}{}", schtasks_query());
+    }
+
+    let elsewhere = temp.path().join("elsewhere");
+    assert_eq!(
+        service(&elsewhere, &local, "uninstall").await,
+        format!("uninstalled {TEST_LABEL}\n")
+    );
+    let status = service(&data, &local, "status").await;
+    for line in [
+        "installed: false",
+        "loaded: false",
+        "answers initialize: false",
+    ] {
+        assert!(status.contains(line), "{status}");
+    }
+    assert_eq!(
+        service(&data, &local, "uninstall").await,
+        format!("{TEST_LABEL} was not installed\n")
+    );
+}
+
+/// attach starts `serve` itself when `schtasks /run` succeeds but the task doesn't run, as while
+/// the user isn't logged on (0023).
+#[test]
+fn attach_starts_serve_when_the_task_does_not_run() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let options = Options {
+        program: env!("CARGO_BIN_EXE_plxd").into(),
+        connect_timeout: PATIENCE,
+        launch_agent: Some(LaunchAgent {
+            // Succeeds, as `schtasks /run` does, and starts nothing.
+            program: "whoami".into(),
+            args: Vec::new(),
+            task: format!("{TEST_LABEL}.missing"),
+        }),
+    };
+
+    let entered = runtime.enter();
+    let connected = attach::connect(&DataDir::new(data.path()).unwrap(), &options);
+    drop(connected.expect("attach started serve itself"));
+    drop(entered);
+    // `serve` can accept the connection before it logs the pid that `kill` reads.
+    let log = data.path().join("logs").join("plxd.log");
+    runtime.block_on(async {
+        timeout(PATIENCE, async {
+            while !std::fs::read_to_string(&log).is_ok_and(|log| log.contains("listening")) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("serve logged its pid");
+        kill(data.path()).await;
+    });
 }

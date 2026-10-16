@@ -23,10 +23,10 @@
 //! - [`mcp`]: `plxd mcp`, the coordinator's Parallax tools as an MCP server on stdio, bound to one
 //!   project and one coordinator thread (#195, 0019).
 //! - [`peer`]: the client of a plxd, over the local socket or a tailnet device's TCP port (0057).
-//! - [`launch_agent`]: the service that `attach` starts plxd through, when it is installed. On
-//!   Windows there is none yet, so `attach` starts `serve` itself (0023).
+//! - [`launch_agent`]: the service that `attach` starts plxd through, when it is installed.
 //! - [`service`]: installs, removes, and reports on the per-user service that keeps `serve`
-//!   running: a `LaunchAgent` on macOS (#61), a systemd user unit on Linux (PLX-18). Unix only.
+//!   running: a `LaunchAgent` on macOS (#61), a systemd user unit on Linux (PLX-18), and a logon
+//!   task on Windows (PLX-576).
 //! - [`keystore`]: where API keys live: the macOS login Keychain (#117), the Secret Service on
 //!   Linux (PLX-19), and no store yet on Windows.
 //! - [`usage`]: turns backend usage events into `parallax-store` rows (#120).
@@ -86,7 +86,6 @@ mod schedules;
 mod secrets;
 pub mod self_update;
 pub mod server;
-#[cfg(unix)]
 pub mod service;
 mod setup_scripts;
 mod spaces;

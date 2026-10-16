@@ -19,6 +19,7 @@ import {
   findPlxd,
   refreshCopy,
   replaceServe,
+  serviceRuns,
   serviceStep,
   type ServeSystem,
   type PlxdLookup,
@@ -237,6 +238,22 @@ test("keepServing's next step: done once the service runs the copy, installing o
   // The last check installed it, and it still isn't there: a failure, tried again after a backoff.
   expect(serviceStep(status(true, true, false), true, 0, true)).toBe("failed");
   expect(serviceStep(status(true, true, true), false, 0, true)).toBe("failed");
+});
+
+test("the service runs the copy when status's program line names it, or an older plxd's file does", async () => {
+  const copy = String.raw`C:\Users\r\.parallax-plxd\plxd.exe`;
+  const status = (program?: string) =>
+    `file: C:\\x.xml\n${program === undefined ? "" : `program: ${program}\n`}installed: true\n`;
+  // A UTF-16 task file can't be searched as UTF-8 text, so the program line decides.
+  const unreadable = () => Promise.resolve("\uFFFD");
+  expect(await serviceRuns(status(copy), copy, unreadable)).toBe(true);
+  const bundled = String.raw`C:\Program Files\Parallax\resources\plxd.exe`;
+  expect(await serviceRuns(status(bundled), copy, unreadable)).toBe(false);
+  expect(await serviceRuns(status("-"), copy, unreadable)).toBe(false);
+  // A plxd from before PLX-576 prints no program line, so the file it names decides.
+  const plist = () => Promise.resolve(`<string>${copy}</string>`);
+  expect(await serviceRuns(status(), copy, plist)).toBe(true);
+  expect(await serviceRuns(status(), copy, () => Promise.reject(new Error("ENOENT")))).toBe(false);
 });
 
 test("the copy and its web client are written when missing or older, never over a newer one", async () => {

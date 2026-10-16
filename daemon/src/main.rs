@@ -14,7 +14,7 @@ use plxd::logging::{self, DEFAULT_LOG_LEVEL, LOG_LEVEL_ENV, LogFilter};
 use plxd::paths::{DATA_DIR_ENV, DataDir};
 use plxd::remote;
 use plxd::server::{self, Config, EXIT_ALREADY_RUNNING, Server, Shutdown, StartError};
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 use plxd::service::{self, DEFAULT_LABEL, SERVICE_LABEL_ENV};
 use tracing::{error, info, warn};
 
@@ -43,8 +43,8 @@ enum Command {
     /// Starts plxd if it isn't running.
     Tui(TuiArgs),
     /// Manage the per-user service that keeps plxd running: a `LaunchAgent` on macOS, a systemd
-    /// user unit on Linux.
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    /// user unit on Linux, a scheduled task that starts at logon on Windows.
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     Service(ServiceArgs),
     /// Serve a thread's Parallax tools over MCP on stdin and stdout. plxd
     /// starts it.
@@ -194,14 +194,14 @@ fn parse_seconds(text: &str) -> Result<Duration, String> {
         })
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 #[derive(Debug, Args)]
 struct ServiceArgs {
     #[command(subcommand)]
     command: ServiceCommand,
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 #[derive(Debug, Subcommand)]
 enum ServiceCommand {
     /// Install or update the service, then start or restart it.
@@ -212,7 +212,7 @@ enum ServiceCommand {
     Status(ServiceOptions),
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 #[derive(Debug, Args)]
 struct ServiceOptions {
     /// The data folder [default: ~/.parallax]
@@ -224,7 +224,7 @@ struct ServiceOptions {
     label: String,
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 #[derive(Debug, Args)]
 struct InstallOptions {
     #[command(flatten)]
@@ -247,7 +247,7 @@ fn main() -> ExitCode {
         Command::Dial(args) => dial(&args),
         Command::Connect(args) => connect(&args),
         Command::Tui(args) => tui(&args),
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         Command::Service(args) => service_command(args.command),
         Command::Mcp(args) => mcp(&args),
         Command::SdkProcess(args) => sdk_process(&args),
@@ -710,7 +710,7 @@ fn serve(args: &ServeArgs) -> ExitCode {
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 fn service_command(command: ServiceCommand) -> ExitCode {
     match command {
         ServiceCommand::Install(options) => service_install(&options),
@@ -719,7 +719,7 @@ fn service_command(command: ServiceCommand) -> ExitCode {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 fn service_install(options: &InstallOptions) -> ExitCode {
     let InstallOptions {
         service: options,
@@ -742,7 +742,7 @@ fn service_install(options: &InstallOptions) -> ExitCode {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 fn service_uninstall(options: &ServiceOptions) -> ExitCode {
     match service::uninstall(&options.label) {
         Ok(service::UninstallOutcome::Removed) => {
@@ -757,7 +757,7 @@ fn service_uninstall(options: &ServiceOptions) -> ExitCode {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 fn service_status(options: &ServiceOptions) -> ExitCode {
     let data_dir = match resolve_data_dir(options) {
         Ok(data_dir) => data_dir,
@@ -767,6 +767,13 @@ fn service_status(options: &ServiceOptions) -> ExitCode {
         Ok(status) => {
             println!("label: {}", status.label);
             println!("file: {}", status.path.display());
+            println!(
+                "program: {}",
+                status
+                    .program
+                    .as_ref()
+                    .map_or_else(|| "-".to_owned(), |program| program.display().to_string())
+            );
             println!("installed: {}", status.installed);
             println!("loaded: {}", status.state.loaded());
             println!("running: {}", status.state.running());
@@ -784,7 +791,7 @@ fn service_status(options: &ServiceOptions) -> ExitCode {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 fn resolve_data_dir(options: &ServiceOptions) -> Result<DataDir, ExitCode> {
     DataDir::resolve(options.data_dir.as_deref())
         .map_err(|error| fail(&format!("could not find the data folder: {error}")))
@@ -1025,7 +1032,7 @@ mod tests {
         assert!(Cli::try_parse_from(["plxd", "connect"]).is_err());
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     #[test]
     fn service_install_takes_a_data_folder_a_label_and_replace() {
         let cli = Cli::try_parse_from([
@@ -1053,7 +1060,7 @@ mod tests {
         assert!(options.replace);
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     #[test]
     fn service_status_defaults_to_the_parallax_label_with_no_data_dir_override() {
         let cli = Cli::try_parse_from(["plxd", "service", "status"]).unwrap();
@@ -1091,7 +1098,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     #[test]
     fn service_uninstall_parses_with_no_options() {
         let cli = Cli::try_parse_from(["plxd", "service", "uninstall"]).unwrap();
@@ -1104,7 +1111,7 @@ mod tests {
         ));
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     #[test]
     fn service_without_a_subcommand_is_a_usage_error() {
         assert!(Cli::try_parse_from(["plxd", "service"]).is_err());

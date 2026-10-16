@@ -102,6 +102,24 @@ export function serviceStep(
   return runningAgents === 0 ? "install" : "wait";
 }
 
+/**
+ * Whether the service in `plxd service status`'s output (`status`) runs `plxd`: its `program:`
+ * line, or for a plxd from before PLX-576, which prints none, the service file it names (read with
+ * `read`) holding that path.
+ */
+export async function serviceRuns(
+  status: string,
+  plxd: string,
+  read: (file: string) => Promise<string>,
+): Promise<boolean> {
+  const program = /^program: (.*)$/m.exec(status)?.[1];
+  if (program !== undefined) return program === plxd;
+  const file = /^file: (.*)$/m.exec(status)?.[1];
+  // ponytail: the service file naming the copy's path, unescaped, is enough for a home folder
+  // without `&`, `%`, `$`, or quotes. Only an older plxd gets here.
+  return file !== undefined && (await read(file).catch(() => "")).includes(plxd);
+}
+
 /** The web client a packaged plxd serves, beside itself (`remote_web_dir`, PLX-651). */
 const WEB_CLIENT = path.join("app.asar.unpacked", "dist", "renderer");
 

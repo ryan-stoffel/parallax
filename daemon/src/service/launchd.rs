@@ -196,7 +196,25 @@ pub fn uninstall(label: &str) -> Result<UninstallOutcome, ServiceError> {
 pub fn status(label: &str, data_dir: &DataDir) -> Result<Status, ServiceError> {
     let uid = rustix::process::getuid().as_raw();
     let state = load_state(uid, label)?;
-    Status::check(label, plist_path(label)?, state, data_dir)
+    let path = plist_path(label)?;
+    let program = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|plist| plist_program(&plist));
+    Status::check(label, path, program, state, data_dir)
+}
+
+/// The program a plist from [`render_plist`] runs: the first `<string>` after
+/// `<key>ProgramArguments</key>`, unescaped.
+fn plist_program(plist: &str) -> Option<PathBuf> {
+    let (_, rest) = plist.split_once("<key>ProgramArguments</key>")?;
+    let (_, rest) = rest.split_once("<string>")?;
+    let (program, _) = rest.split_once("</string>")?;
+    Some(PathBuf::from(
+        program
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&"),
+    ))
 }
 
 /// Asks launchd about `label` with `launchctl print`. A label nothing has bootstrapped yet is
@@ -276,6 +294,15 @@ mod tests {
         let plist = render_plist(DEFAULT_LABEL, Path::new("/usr/local/bin/plxd"), &data_dir);
         let golden = include_str!("../../tests/golden/launchagent.plist");
         assert_eq!(plist, golden);
+    }
+
+    #[test]
+    fn status_reads_the_program_back_from_the_plist() {
+        let data_dir = DataDir::new("/Users/a&b/parallax").unwrap();
+        let program = Path::new("/Applications/A&B <1>.app/plxd");
+        let plist = render_plist(DEFAULT_LABEL, program, &data_dir);
+        assert_eq!(super::plist_program(&plist).as_deref(), Some(program));
+        assert_eq!(super::plist_program("<plist/>"), None);
     }
 
     #[test]
