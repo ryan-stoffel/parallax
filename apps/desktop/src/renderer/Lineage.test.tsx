@@ -503,7 +503,7 @@ test("an agent's own subagents are read-only lineage rows, and one opens without
   expect(log().textContent).toContain("Read the docs.");
   expect(log().textContent).toContain("The docs say pnpm.");
   const bar = () => document.querySelector('[role="status"][aria-label="Subagent"]');
-  expect(bar()!.textContent).toBe("Claude Haiku 4.5ExploreDoneRead-onlyOpen parent");
+  expect(bar()!.textContent).toBe("Claude Haiku 4.5ExploreDoneRead-onlyOpen parent⌥⌘↑");
   expect(document.querySelector('[role="textbox"][aria-label="Message"]')).toBeNull();
 
   // Its thread's crumb goes back, and the call's row opens the other one.
@@ -517,7 +517,8 @@ test("an agent's own subagents are read-only lineage rows, and one opens without
   expect(crumbs().at(-1)).toBe("Ship lineage");
   expect(document.querySelector('[role="textbox"][aria-label="Message"]')).not.toBeNull();
   // As does Go to parent.
-  await click(docs);
+  await click(chip("Read the docs"));
+  expect(crumbs().at(-1)).toBe("Read the docs");
   await act(async () => {
     window.dispatchEvent(
       new KeyboardEvent("keydown", {

@@ -1008,6 +1008,7 @@ function SubagentView({
           >
             <ArrowUpLeft aria-hidden className="size-4 text-muted-foreground" />
             Open parent
+            {keys && <kbd className="font-sans text-[11px] text-faint-foreground">{keys}</kbd>}
           </button>
         </div>
       </div>
