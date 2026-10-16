@@ -27,9 +27,9 @@ const csp = (dev: boolean) =>
     "img-src 'self' data: blob: https://github.com https://*.githubusercontent.com https://open-vsx.org https://openvsx.eclipsecontent.org",
     "connect-src 'self' https://open-vsx.org https://openvsx.eclipsecontent.org",
     // html_render pages (PLX-639), which main serves with a policy of their own, and browser
-    // recordings.
+    // recordings. plx-file: is presented videos, which main streams from their host (PLX-836).
     "frame-src plx-render:",
-    "media-src plx-render: blob:",
+    "media-src plx-render: plx-file: blob:",
     "object-src 'none'",
     "base-uri 'none'",
   ]

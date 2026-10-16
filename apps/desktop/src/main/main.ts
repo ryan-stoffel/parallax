@@ -50,7 +50,7 @@ import {
 } from "./editors";
 import type { CommandStatus } from "../preload/bridge";
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
-import { renderPage, savedHost, startHosts } from "./hosts";
+import { renderPage, savedHost, startHosts, streamFile } from "./hosts";
 import { isBrowsable, isOpenableExternally, mayNavigate } from "./links";
 import { appDataDir, dataDir } from "./plxd";
 import { cloneRepo, createRepo, listFolders } from "./repos";
@@ -529,6 +529,7 @@ nativeTheme.on("updated", () => {
 void app.whenReady().then(async () => {
   if (!devServerUrl) await serveAppScheme();
   protocol.handle("plx-render", (request) => renderPage(request.url));
+  protocol.handle("plx-file", (request) => streamFile(request.url, request.headers.get("range")));
   // Pages in the side panel's browser get no camera, microphone, notifications, and the like.
   const browserSession = session.fromPartition(browserPartition);
   browserSession.setPermissionRequestHandler((_c, _p, grant) => grant(false));
