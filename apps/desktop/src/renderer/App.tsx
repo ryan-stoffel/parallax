@@ -605,14 +605,25 @@ export function App() {
   // New Thread's draft, which picking where it runs keeps (PLX-788).
   const draft = selection.kind === "new" ? selection.draft : undefined;
   // Runs New Thread on another computer: opens that host, keeping the repository if it lists one
-  // of the same name (each host's entries have their own ids), else New Thread's first repository,
-  // which is also what a host whose list hasn't loaded yet gets.
-  const pickHost = (id: string) => {
-    if (id === host.id) return;
-    const { groups: there } = groupThreads((views[id] ?? idleThreads).state);
+  // of the same name (each host's entries have their own ids). A host whose list is in but lacks
+  // it adds the repository at the same path first. When that fails, New Thread stays on this host
+  // and it resolves to plxd's error, for people. A host whose list hasn't loaded yet gets New
+  // Thread's first repository.
+  const pickHost = async (id: string): Promise<string | undefined> => {
+    if (id === host.id) return undefined;
+    const view = views[id] ?? idleThreads;
+    let groupId = groupThreads(view.state).groups.find((g) => g.name === group.name)?.id;
+    const path = threads.state.repos.find((r) => r.id === group.id)?.path;
+    if (!repoless(group) && path && lacksRepo(view, group.name)) {
+      const added = await view.addRepo(path);
+      if (typeof added === "string")
+        return `${hosts.find((h) => h.id === id)?.name ?? "That computer"}: ${added}`;
+      groupId = added.id;
+    }
     setHostId(id);
     setOpening(undefined);
-    setSelection({ kind: "new", groupId: there.find((g) => g.name === group.name)?.id, draft });
+    setSelection({ kind: "new", groupId, draft });
+    return undefined;
   };
 
   // Opens New Thread on another computer with one of its repositories.

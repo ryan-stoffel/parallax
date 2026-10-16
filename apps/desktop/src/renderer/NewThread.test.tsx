@@ -355,7 +355,8 @@ test("the link under the heading switches New Thread to No Repo, showing its sho
   act(() => link.click());
   expect(heading()).toBe("What should we work on without a repo?");
   expect(button("or start without a repo⇧⌘N")).toBeUndefined();
-  // No repo means no worktree or checkout to pick, so no run target bar.
+  // No repo means no worktree or checkout to pick, only a computer.
+  expect(control("Runs on: This Mac")).not.toBeNull();
   expect(document.body.textContent).not.toContain("New worktree");
 });
 
@@ -675,6 +676,90 @@ test("Picking another computer in Runs on keeps the draft and starts the thread 
   expect(request.mock.calls.some(([host, m]) => host === "local" && m === "thread/start")).toBe(
     false,
   );
+});
+
+test("Picking a computer that doesn't list the repository adds it there at the same path, and starts in it (PLX-849)", async () => {
+  window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
+  const added: Repo = { ...parallax, id: "r-mini-parallax" };
+  request.mockImplementation(async (host, method, params) => {
+    if (host === "ssh-mini" && method === "thread/list")
+      return { result: { repos: [], threads: [], seq: 1 } };
+    if (host === "ssh-mini" && method === "repo/add") return { result: { repo: added } };
+    const answer = answers[method];
+    return answer ? answer(params) : { error: { code: -32601, message: `${method} isn't faked` } };
+  });
+  answers["thread/start"] = (p) => ({
+    result: {
+      thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
+      run: run(p["runId"] as string, "Fix it"),
+    },
+  });
+  await renderApp();
+  await choose("Runs on", "mac miniSSH · minino parallax");
+  expect(request).toHaveBeenCalledWith(
+    "ssh-mini",
+    "repo/add",
+    expect.objectContaining({ path: parallax.path }),
+  );
+  expect(control("Runs on: mac mini, New worktree")).not.toBeNull();
+  expect(heading()).toBe("What should we build in parallax on mac mini?");
+  await send("Fix it");
+  expect(request).toHaveBeenCalledWith(
+    "ssh-mini",
+    "thread/start",
+    expect.objectContaining({ prompt: "Fix it", repo: added.id }),
+  );
+});
+
+test("A computer without the repository at that path keeps New Thread here, saying so (PLX-849)", async () => {
+  window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
+  request.mockImplementation(async (host, method, params) => {
+    if (host === "ssh-mini" && method === "thread/list")
+      return { result: { repos: [], threads: [], seq: 1 } };
+    if (host === "ssh-mini" && method === "repo/add")
+      return {
+        error: {
+          code: -32000,
+          message: "/src/parallax is not the top folder of a git repository: it doesn't exist.",
+          data: { kind: "notARepository" },
+        },
+      };
+    const answer = answers[method];
+    return answer ? answer(params) : { error: { code: -32601, message: `${method} isn't faked` } };
+  });
+  await renderApp();
+  await choose("Runs on", "mac miniSSH · minino parallax");
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+    "mac mini: /src/parallax is not the top folder of a git repository: it doesn't exist.",
+  );
+  expect(control("Runs on: This Mac, New worktree")).not.toBeNull();
+  expect(heading()).toBe("What should we build in parallax?");
+});
+
+test("No Repo picks only the computer, and starts the thread there (PLX-849)", async () => {
+  window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
+  answers["thread/start"] = (p) => ({
+    result: {
+      thread: { id: p["runId"], repo: "scratch", createdAt: "2026-09-26T12:05:00Z" },
+      run: run(p["runId"] as string, "Hi"),
+    },
+  });
+  await renderApp();
+  await choose("Repository", "No Repo");
+  expect(
+    document.querySelector('main [role="menu"][aria-label="Runs on"] [aria-label="Workspace"]'),
+  ).toBeNull();
+  // Every computer has No Repo, so none is marked as lacking it.
+  await choose("Runs on", "mac miniSSH · mini");
+  expect(control("Runs on: mac mini")).not.toBeNull();
+  expect(heading()).toBe("What should we work on without a repo?");
+  await send("Hi");
+  expect(request).toHaveBeenCalledWith(
+    "ssh-mini",
+    "thread/start",
+    expect.not.objectContaining({ repo: expect.anything() }),
+  );
+  expect(calls("repo/add")).toEqual([]);
 });
 
 test("New Thread lists another computer's repositories, and picking one opens it there (PLX-606)", async () => {
