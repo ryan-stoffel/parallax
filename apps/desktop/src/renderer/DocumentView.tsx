@@ -8,19 +8,30 @@ import {
 } from "react";
 
 import { pagesOf, type Docx } from "./docx";
-import { download, drawPdfPage, titleOf, useDocument, type DocRef } from "./documents";
+import {
+  download,
+  drawPdfPage,
+  sizeOf,
+  titleOf,
+  typeOf,
+  useDocument,
+  useObjectUrl,
+  type DocRef,
+} from "./documents";
 import { drawPage, pageSize } from "./FileCards";
+import { isVideo } from "./transcript";
 import { cellAt, colName, splitRef, type Xlsx } from "./xlsx";
 
 /**
  * A presented file in the side panel (PLX-755), view-only, as Claude shows one: its title and
  * type and Download over its pages, which sit on a gray backdrop with the page in view counted at
  * the bottom right. The panel's own button takes it full screen. A spreadsheet shows as its
- * sheets' grids instead.
+ * sheets' grids instead, an image or video as itself, and any other file as its size, to download
+ * (PLX-834).
  */
 export function DocumentView({ hostId, doc }: { hostId: string; doc: DocRef }) {
   const { loaded, error } = useDocument(hostId, doc);
-  const type = doc.kind.toUpperCase();
+  const type = typeOf(doc);
 
   let body: ReactNode;
   if (error) body = <p className="p-6 text-[13px] text-muted-foreground">{error}</p>;
@@ -46,7 +57,14 @@ export function DocumentView({ hostId, doc }: { hostId: string; doc: DocRef }) {
             />
           )}
         </Paged>
-      ) : null;
+      ) : opened.kind === "media" ? (
+        <Media doc={doc} bytes={loaded.bytes} />
+      ) : (
+        <p className="p-6 text-[13px] text-muted-foreground">
+          {sizeOf(loaded.bytes.length)}. Parallax can't show this kind of file, but you can download
+          it.
+        </p>
+      );
   }
 
   return (
@@ -66,6 +84,21 @@ export function DocumentView({ hostId, doc }: { hostId: string; doc: DocRef }) {
         </button>
       </div>
       {body}
+    </div>
+  );
+}
+
+/** An image or video (PLX-834), fit to the panel on a dark backdrop. */
+function Media({ doc, bytes }: { doc: DocRef; bytes: Uint8Array }) {
+  const url = useObjectUrl(bytes);
+  return (
+    <div className="grid min-h-0 flex-1 place-items-center overflow-auto bg-black p-4">
+      {url &&
+        (isVideo(doc.kind) ? (
+          <video controls src={url} aria-label={doc.name} className="max-h-full max-w-full" />
+        ) : (
+          <img src={url} alt={doc.name} className="max-h-full max-w-full object-contain" />
+        ))}
     </div>
   );
 }

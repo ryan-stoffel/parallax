@@ -13,7 +13,10 @@ import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type { AgentEntry, AgentFileResult } from "../protocol/generated/protocol";
+import { failure } from "./documents";
 import { describeError } from "./errors";
+import { DownloadButton } from "./FileCards";
+import { fromBase64 } from "./ooxml";
 import { ConfirmDialog, IconButton, Menu, menuItem, openOnContextMenu } from "./ui";
 
 /** A folder's entries once listed, or why they couldn't be. */
@@ -442,23 +445,28 @@ export function fileText(file: AgentFileResult): { text: string } | { note: stri
   }
 }
 
-/** One file as it is on disk now, as plain monospace text. */
+/**
+ * One file as it is on disk now, as plain monospace text. A binary file offers Download instead
+ * (PLX-834).
+ */
 function FileView({ hostId, runId, path }: { hostId: string; runId: string; path: string }) {
-  const [shown, setShown] = useState<{ text: string } | { note: string } | { error: string }>();
+  const [read, setRead] = useState<AgentFileResult | { error: string }>();
   useEffect(() => {
     let stopped = false;
     void window.parallax
       .request(hostId, "agent/file", { runId, path, side: "working" })
-      .then((read) => {
-        if (stopped) return;
-        setShown("error" in read ? { error: describeError(read.error) } : fileText(read.result));
+      .then(async (answer) => {
+        const next =
+          "error" in answer ? { error: await failure(hostId, answer.error) } : answer.result;
+        if (!stopped) setRead(next);
       });
     return () => {
       stopped = true;
     };
   }, [hostId, runId, path]);
 
-  if (!shown) return null;
+  if (!read) return null;
+  const shown = "error" in read ? read : fileText(read);
   if ("text" in shown)
     return (
       <pre
@@ -468,12 +476,20 @@ function FileView({ hostId, runId, path }: { hostId: string; runId: string; path
         {shown.text}
       </pre>
     );
+  const content = "content" in read ? read.content : undefined;
   return (
-    <p
-      role={"error" in shown ? "alert" : undefined}
-      className={`px-4 pt-2 text-[12.5px] ${"error" in shown ? "text-danger" : "text-muted-foreground"}`}
-    >
-      {"error" in shown ? shown.error : shown.note}
-    </p>
+    <div className="px-4 pt-2">
+      <p
+        role={"error" in shown ? "alert" : undefined}
+        className={`text-[12.5px] ${"error" in shown ? "text-danger" : "text-muted-foreground"}`}
+      >
+        {"error" in shown ? shown.error : shown.note}
+      </p>
+      {content && (
+        <div className="-ml-2 pt-1">
+          <DownloadButton name={nameOf(path)} read={async () => fromBase64(content)} />
+        </div>
+      )}
+    </div>
   );
 }

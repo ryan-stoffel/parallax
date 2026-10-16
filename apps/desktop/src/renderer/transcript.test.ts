@@ -845,7 +845,7 @@ test("an html_render result adds its page after the call, and a failed one doesn
   expect(t.items.map((i) => i.kind)).toEqual(["tool", "htmlRender", "tool"]);
 });
 
-test("a present_files result shows its documents, images, and videos, skipping unknown types", () => {
+test("a present_files result shows its documents, images, and videos, and any other kind as a file", () => {
   const out = JSON.stringify({
     presentedFiles: [
       { path: "out/Letter.docx", name: "Letter.docx", kind: "docx" },
@@ -863,6 +863,7 @@ test("a present_files result shows its documents, images, and videos, skipping u
     expect.objectContaining({
       files: [
         { runId, path: "out/Letter.docx", name: "Letter.docx", kind: "docx" },
+        { runId, path: "out/notes.txt", name: "notes.txt", kind: "file" },
         { runId, path: "out/Letter.pdf", name: "Letter.pdf", kind: "pdf" },
         { runId, path: "shot.png", name: "shot.png", kind: "png" },
         { runId, path: "demo.mp4", name: "demo.mp4", kind: "mp4" },

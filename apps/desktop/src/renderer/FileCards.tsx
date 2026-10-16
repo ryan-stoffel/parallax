@@ -1,4 +1,4 @@
-import { Download } from "lucide-react";
+import { Download, File } from "lucide-react";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 
 import {
@@ -6,8 +6,11 @@ import {
   drawPdfPage,
   kinds,
   readPresented,
+  sizeOf,
   titleOf,
+  typeOf,
   useDocument,
+  useObjectUrl,
   type DocRef,
   type Opened,
 } from "./documents";
@@ -23,8 +26,9 @@ export const OpenDocumentContext = createContext<((doc: DocRef) => void) | undef
  * The files an agent presented with `present_files` (PLX-755), as cards: a thumbnail of each
  * file's real first page, with its second fanning out behind it on hover, its title and type,
  * and Download. Clicking a card opens the file in the side panel. An image or video shows at
- * full width instead, with Download in its corner (PLX-785). `item` is the transcript row:
- * when it's newer than any row already seen for a file, the file is read from disk again.
+ * full width instead, with Download in its corner (PLX-785). A file of any other kind is a plain
+ * card with its name, size, and Download (PLX-834). `item` is the transcript row: when it's newer
+ * than any row already seen for a file, the file is read from disk again.
  */
 export function FileCards({
   hostId,
@@ -61,6 +65,12 @@ function FileCard({
 }) {
   const { loaded, error } = useDocument(hostId, doc);
   const width = doc.kind === "pptx" ? 100 : 72;
+  const plain = doc.kind === "file";
+  const what = isMedia(doc.kind)
+    ? ""
+    : plain && loaded
+      ? sizeOf(loaded.bytes.length)
+      : kinds[doc.kind];
   return (
     <div className="group relative flex h-[88px] max-w-xl items-center gap-4 overflow-hidden rounded-2xl border border-border bg-surface pr-4 pl-5 hover:bg-hover">
       <button
@@ -72,7 +82,15 @@ function FileCard({
         className="absolute inset-0 rounded-2xl focus-visible:outline-2 focus-visible:outline-ring"
       />
       <div aria-hidden className="pointer-events-none relative h-full shrink-0" style={{ width }}>
-        {loaded && (
+        {plain && (
+          <div
+            className="absolute top-4 left-0 grid h-24 place-items-start justify-center rounded-[3px] bg-selected pt-6 text-muted-foreground"
+            style={{ width }}
+          >
+            <File className="size-6" />
+          </div>
+        )}
+        {loaded && !plain && (
           <>
             <Thumb
               opened={loaded.opened}
@@ -88,14 +106,14 @@ function FileCard({
             />
           </>
         )}
-        {!loaded && (
+        {!loaded && !plain && (
           <div className="absolute top-4 left-0 h-24 rounded-[3px] bg-selected" style={{ width }} />
         )}
       </div>
       <div className="pointer-events-none min-w-0 flex-1">
         <p className="truncate text-[15px] text-foreground">{titleOf(doc.name)}</p>
         <p className="truncate text-[13px] text-muted-foreground">
-          {error ?? `${isMedia(doc.kind) ? "" : kinds[doc.kind]} · ${doc.kind.toUpperCase()}`}
+          {error ?? `${what} · ${typeOf(doc)}`}
         </p>
       </div>
       <button
@@ -114,13 +132,7 @@ function FileCard({
 /** An image or video at the transcript's width, played from its bytes, with Download on top. */
 function MediaFile({ hostId, doc }: { hostId: string; doc: DocRef }) {
   const { loaded, error } = useDocument(hostId, doc);
-  const [url, setUrl] = useState<string>();
-  useEffect(() => {
-    if (!loaded) return;
-    const made = URL.createObjectURL(new Blob([loaded.bytes as Uint8Array<ArrayBuffer>]));
-    setUrl(made);
-    return () => URL.revokeObjectURL(made);
-  }, [loaded]);
+  const url = useObjectUrl(loaded?.bytes);
   if (error)
     return (
       <p className="rounded-2xl border border-border bg-surface px-5 py-4 text-[13px] text-muted-foreground">
@@ -147,6 +159,43 @@ function MediaFile({ hostId, doc }: { hostId: string; doc: DocRef }) {
         <Download aria-hidden />
       </button>
     </div>
+  );
+}
+
+/**
+ * Download for bytes read only when it's clicked, such as a recording's (PLX-834): saves what
+ * `read` gives as `name`, or says why it couldn't beside it.
+ */
+export function DownloadButton({ name, read }: { name: string; read: () => Promise<Uint8Array> }) {
+  const [state, setState] = useState<{ busy?: boolean; error?: string }>({});
+  const save = () => {
+    setState({ busy: true });
+    read().then(
+      (bytes) => {
+        download(name, bytes);
+        setState({});
+      },
+      (error: unknown) =>
+        setState({ error: error instanceof Error ? error.message : String(error) }),
+    );
+  };
+  return (
+    <span className="flex items-center gap-2">
+      <button
+        type="button"
+        disabled={state.busy}
+        onClick={save}
+        className="flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground disabled:opacity-50 [&_svg]:size-3.5"
+      >
+        <Download aria-hidden />
+        Download
+      </button>
+      {state.error && (
+        <span role="alert" className="text-[12.5px] text-danger">
+          {state.error}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -194,6 +243,7 @@ export async function drawPage(opened: Opened, page: number): Promise<HTMLElemen
       return sheet;
     }
     case "media":
+    case "file":
       return sheet;
   }
 }
