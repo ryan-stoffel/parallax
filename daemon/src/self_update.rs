@@ -1,25 +1,31 @@
-//! `host/update` (PLX-700, decision record 0066): plxd updates itself to the app's version, so a
-//! computer the app reaches only through plxd's own protocol (a LAN-paired computer, a Parallax
-//! Connect device) never stays on an old plxd.
+//! `host/update` (PLX-700, decision records 0066 and 0072): plxd updates itself to the app's
+//! version, so a computer the app reaches only through plxd's own protocol (a LAN-paired computer,
+//! a Parallax Connect device) never stays on an old plxd.
 //!
-//! - **Download**: the release's `parallax-plxd-<version>-<os>-<arch>` and its `.sha256` from
-//!   GitHub Releases, with the system `curl` as `github/install` does, into a temp folder beside
-//!   where it goes. It checks the SHA-256, writes `plxd.version` beside it (0030), and proves it
-//!   runs (`--version` names the version) before replacing anything.
-//! - **Where**: a plxd inside an app bundle (`Resources/` on macOS, `resources/` on Linux), or one
-//!   already in `~/.parallax-plxd`, installs to `~/.parallax-plxd/plxd`, where the app's SSH
-//!   install (`INSTALL_SCRIPT` in the app's installPlxd.ts) puts it and `LOCATE_PLXD` looks first.
+//! - **Download**: the release's `parallax-plxd-<version>-<os>-<arch>` (`.exe` on Windows) and its
+//!   `.sha256` from GitHub Releases, with the system `curl` as `github/install` does, into a temp
+//!   folder beside where it goes. It checks the SHA-256, writes `plxd.version` beside it (0030),
+//!   and proves it runs (`--version` names the version) before replacing anything.
+//! - **Where**: a plxd inside an app bundle (`Resources/` on macOS, `resources/` on Linux and in
+//!   an NSIS install on Windows), or one already in `~/.parallax-plxd`, installs to
+//!   `~/.parallax-plxd/plxd` (`plxd.exe` on Windows), where the app's SSH install
+//!   (`INSTALL_SCRIPT` in the app's installPlxd.ts) puts it and `LOCATE_PLXD` looks first.
 //!   A standalone plxd, such as the `~/.local/bin/plxd` plx-connect installs on Linux, is replaced
 //!   in place, falling back to `~/.parallax-plxd` when its folder isn't writable. A cargo build
-//!   (`target/debug`, `target/release`) refuses.
+//!   (`target/debug`, `target/release`) refuses. Windows won't replace a running exe but renames
+//!   one, so the old one moves aside to [`ASIDE`] first, and the next `serve` deletes it.
+//! - **Never older**: when the plxd already there reports a version that isn't older than the
+//!   one asked for, as when the app refreshed `~/.parallax-plxd` while this plxd waited for its
+//!   agents (PLX-825), nothing is downloaded, and plxd hands over to that one.
 //! - **Handover**: plxd answers first, then restarts into the new binary once no agent's turn is
 //!   running, or at once when asked `now` (PLX-746). With its login service installed, it runs the new plxd's
 //!   `service install --replace`, detached, which points the service at it and restarts it. When
 //!   that fails and the service manager runs this plxd, plxd exits with [`EXIT_RESTART`], so the
 //!   manager starts its program again, now the new binary for an in-place update; a `serve` it
 //!   started itself would die with the service's cgroup on Linux. Without a service, plxd shuts
-//!   down and its last act starts the new `serve`.
-//! - It never downgrades, and on Windows it refuses: Parallax's installer owns plxd there.
+//!   down and its last act starts the new `serve`. On Windows, the logon task never counts as
+//!   running plxd, so a failed `--replace` starts the new `serve` too.
+//! - It never downgrades.
 
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
@@ -34,12 +40,21 @@ use tracing::info;
 use crate::backend::process::Launcher;
 use crate::server::Daemon;
 
-/// Where each release `v<version>` keeps plxd for each macOS and Linux target, with its `.sha256`
-/// (`package-app`).
+/// Where each release `v<version>` keeps plxd for each target, with its `.sha256` (`package-app`).
 pub(crate) const RELEASES: &str = "https://github.com/ryan-stoffel/parallax/releases/download";
 
 /// The folder in the home folder that an installed plxd goes in, as the app's SSH install does.
 pub(crate) const SHARED_DIR: &str = ".parallax-plxd";
+
+/// plxd's file name.
+const PLXD: &str = if cfg!(windows) { "plxd.exe" } else { "plxd" };
+
+/// What a replaced plxd is renamed to beside the new one on Windows, as the app's `refreshCopy`
+/// does, since Windows won't replace a running exe. [`remove_aside`] deletes it.
+pub const ASIDE: &str = "plxd.old.exe";
+
+/// How long [`remove_aside`] keeps trying while the plxd that ran from it exits.
+const ASIDE_PATIENCE: Duration = Duration::from_secs(10);
 
 /// How long the checksum may take to download.
 const SMALL_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30);
@@ -137,9 +152,7 @@ struct State {
 impl SelfUpdate {
     /// The running plxd's self-update, installing from [`RELEASES`].
     pub(crate) fn new(launcher: Launcher) -> Self {
-        let exe = std::env::current_exe()
-            .ok()
-            .map(|exe| std::fs::canonicalize(&exe).unwrap_or(exe));
+        let exe = crate::executable().ok();
         let (releases, protocols) = match std::env::var(RELEASES_ENV) {
             Ok(releases) if !releases.is_empty() => (releases, "=https,file"),
             _ => (RELEASES.to_owned(), crate::github::DOWNLOAD_PROTOCOLS),
@@ -159,7 +172,7 @@ impl SelfUpdate {
 
     /// A self-update that installs from `releases` for the plxd at `exe` running `current`, in
     /// `home`, and never restarts.
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     pub(crate) fn for_tests(
         launcher: Launcher,
         releases: &str,
@@ -207,11 +220,6 @@ impl SelfUpdate {
         now: bool,
     ) -> Result<HostUpdateResult, ErrorObject> {
         let failed = |message: String| ErrorObject::parallax(ErrorKind::HostUpdateFailed, message);
-        if cfg!(windows) {
-            return Err(failed(
-                "plxd can't update itself on Windows. Update Parallax on that computer.".to_owned(),
-            ));
-        }
         let wanted = parse_version(version)
             .ok_or_else(|| failed(format!("{version:?} isn't a Parallax release version.")))?;
         match parse_version(&self.current).map(|current| compare(&wanted, &current)) {
@@ -265,10 +273,11 @@ impl SelfUpdate {
         .await;
         // `busy` clears with `installed` set, under one lock, so no second call sees neither.
         let mut state = busy.finish();
-        let program = installed.map_err(failed)?;
-        info!(version, program = %program.display(), "installed a plxd update");
-        state.installed = Some((version.to_owned(), program));
-        Ok(restart_answer(version, running, now))
+        let (got, program) = installed.map_err(failed)?;
+        info!(version = got, program = %program.display(), "installed a plxd update");
+        let answer = restart_answer(&got, running, now);
+        state.installed = Some((got, program));
+        Ok(answer)
     }
 
     /// Whether this call schedules the handover: true only the first time.
@@ -389,27 +398,28 @@ pub(crate) fn compare(a: &[u64], b: &[u64]) -> Ordering {
 }
 
 /// plxd's file in release `version` for `os` and `arch` as Rust names them, such as
-/// `parallax-plxd-2610.10912.13045-linux-x64`. Parallax builds plxd for Apple silicon Macs and
-/// for Linux on x64 and arm64.
+/// `parallax-plxd-2610.10912.13045-linux-x64` or `parallax-plxd-2610.10912.13045-win-x64.exe`.
+/// Parallax builds plxd for Apple silicon Macs, and for Linux and Windows on x64 and arm64.
 pub(crate) fn asset_name(version: &str, os: &str, arch: &str) -> Result<String, String> {
-    let os = match os {
-        "macos" => "mac",
-        "linux" => "linux",
+    let (os, suffix) = match os {
+        "macos" => ("mac", ""),
+        "linux" => ("linux", ""),
+        "windows" => ("win", ".exe"),
         other => return Err(format!("Parallax has no plxd release for {other}.")),
     };
     let arch = match arch {
         "aarch64" => "arm64",
-        "x86_64" if os == "linux" => "x64",
+        "x86_64" if os != "mac" => "x64",
         "x86_64" => return Err("Parallax has no plxd for Intel Macs.".to_owned()),
         other => return Err(format!("Parallax has no plxd release for {other}.")),
     };
-    Ok(format!("parallax-plxd-{version}-{os}-{arch}"))
+    Ok(format!("parallax-plxd-{version}-{os}-{arch}{suffix}"))
 }
 
 /// Where an update goes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Placement {
-    /// `plxd` and `plxd.version` in this folder, `~/.parallax-plxd`.
+    /// `plxd` (`plxd.exe` on Windows) and `plxd.version` in this folder, `~/.parallax-plxd`.
     Shared(PathBuf),
     /// Over this plxd, with `plxd.version` beside it.
     InPlace(PathBuf),
@@ -447,9 +457,10 @@ pub(crate) fn placement(exe: &Path, home: &Path) -> Result<Placement, String> {
 }
 
 /// Downloads, checks, and installs plxd `version` from `releases`, over the URL schemes in
-/// `protocols`, where `placement` says, and returns where it went. An in-place install whose
-/// folder plxd can't write goes to `~/.parallax-plxd` instead. Returns what went wrong, for
-/// people.
+/// `protocols`, where `placement` says, and returns the version installed and where. An in-place
+/// install whose folder plxd can't write goes to `~/.parallax-plxd` instead. A plxd already there
+/// whose version isn't older is kept and returned, checked before the download and again before
+/// the move. Returns what went wrong, for people.
 pub(crate) async fn install_release(
     launcher: &Launcher,
     releases: &str,
@@ -457,7 +468,7 @@ pub(crate) async fn install_release(
     version: &str,
     placement: &Placement,
     home: &Path,
-) -> Result<PathBuf, String> {
+) -> Result<(String, PathBuf), String> {
     let name = asset_name(version, std::env::consts::OS, std::env::consts::ARCH)?;
     let shared = home.join(SHARED_DIR);
     let temp_in = |dir: &Path| {
@@ -468,13 +479,16 @@ pub(crate) async fn install_release(
     let (temp, program) = match placement {
         Placement::InPlace(exe) => match exe.parent().map(&temp_in) {
             Some(Ok(temp)) => (temp, exe.clone()),
-            _ => (shared_temp(&shared, temp_in)?, shared.join("plxd")),
+            _ => (shared_temp(&shared, temp_in)?, shared.join(PLXD)),
         },
-        Placement::Shared(dir) => (shared_temp(dir, temp_in)?, dir.join("plxd")),
+        Placement::Shared(dir) => (shared_temp(dir, temp_in)?, dir.join(PLXD)),
     };
+    if let Some(there) = not_older(&program, version) {
+        return Ok((there, program));
+    }
     let dir = temp.path();
     let url = |file: &str| format!("{releases}/v{version}/{file}");
-    let new = dir.join("plxd");
+    let new = dir.join(PLXD);
     crate::github::download_with(
         launcher,
         &format!("{name}.sha256"),
@@ -527,11 +541,52 @@ pub(crate) async fn install_release(
         std::fs::rename(from, to)
             .map_err(|error| format!("Couldn't move plxd into {}: {error}.", to.display()))
     };
+    // The app may have refreshed it during the download.
+    if let Some(there) = not_older(&program, version) {
+        return Ok((there, program));
+    }
+    if cfg!(windows) {
+        set_aside(&program);
+    }
     // plxd first, then its version: if the second move fails, the new plxd reports the old
     // version, which only makes the app try again, never the old plxd claiming the new one.
     move_to(&new, &program)?;
     move_to(&version_file, &program.with_file_name(crate::VERSION_FILE))?;
-    Ok(program)
+    Ok((version.to_owned(), program))
+}
+
+/// The version of the plxd at `program`, by the `plxd.version` beside it, when it's there and
+/// isn't older than `version`: one the app or another update put there, which an update to
+/// `version` must not write over (0072).
+fn not_older(program: &Path, version: &str) -> Option<String> {
+    let wanted = parse_version(version)?;
+    let there = crate::stamped_version(program)?;
+    (program.is_file() && parse_version(&there).is_some_and(|got| compare(&got, &wanted).is_ge()))
+        .then_some(there)
+}
+
+/// Renames the plxd at `program` to [`ASIDE`] beside it, over an earlier one, so that the new one
+/// can move in while it runs: Windows renames a running exe, but won't replace one. When this
+/// fails, as while the earlier one still runs, the move in reports it.
+fn set_aside(program: &Path) {
+    let _ = std::fs::rename(program, program.with_file_name(ASIDE));
+}
+
+/// Deletes [`ASIDE`] beside `exe`, which the plxd an update replaced on Windows ran from. That
+/// plxd may still be exiting as this one starts, so it keeps trying for [`ASIDE_PATIENCE`].
+pub async fn remove_aside(exe: PathBuf) {
+    let aside = exe.with_file_name(ASIDE);
+    let deadline = tokio::time::Instant::now() + ASIDE_PATIENCE;
+    while let Err(error) = std::fs::remove_file(&aside) {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            tracing::warn!(%error, aside = %aside.display(), "couldn't delete the plxd an update replaced");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
 }
 
 /// A temp folder in `dir`, which is made first.
@@ -575,14 +630,14 @@ async fn handover_when_idle(daemon: Arc<Daemon>) {
 /// else by shutting down, after which `main` either exits for the service manager to restart it
 /// or starts `program serve` itself ([`take_handover`], [`fallback`]).
 #[cfg_attr(
-    not(any(target_os = "macos", target_os = "linux")),
+    not(any(target_os = "macos", target_os = "linux", windows)),
     expect(
         clippy::unused_async,
-        reason = "awaits the service handover on macOS and Linux"
+        reason = "awaits the service handover on macOS, Linux, and Windows"
     )
 )]
 async fn hand_over(daemon: &Arc<Daemon>, program: PathBuf) {
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     let handover = match service_handover(daemon, &program).await {
         // The service manager stops this plxd now.
         ServiceHandover::Replaced => return,
@@ -592,7 +647,7 @@ async fn hand_over(daemon: &Arc<Daemon>, program: PathBuf) {
             fallback(program, managed)
         }
     };
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     let handover = Handover::Spawn(program);
     info!(?handover, "shutting down to restart into the plxd update");
     *lock(&HANDOVER) = Some(handover);
@@ -600,7 +655,7 @@ async fn hand_over(daemon: &Arc<Daemon>, program: PathBuf) {
 }
 
 /// How handing plxd over to its login service went.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 #[derive(Debug)]
 enum ServiceHandover {
     /// `service install --replace` moved the service to the new plxd, and restarts it.
@@ -612,7 +667,7 @@ enum ServiceHandover {
 }
 
 /// Hands plxd over to its login service, when one is installed or runs this plxd.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 async fn service_handover(daemon: &Arc<Daemon>, program: &Path) -> ServiceHandover {
     let data_dir = daemon.data_dir.clone();
     let label = std::env::var(crate::service::SERVICE_LABEL_ENV)
@@ -662,6 +717,13 @@ fn service_hint(label: &str) -> bool {
     std::env::var("XPC_SERVICE_NAME").is_ok_and(|name| name == label)
 }
 
+/// Never on Windows: Task Scheduler doesn't say which process its task runs, and a `serve` plxd
+/// starts itself outlives the task, so a failed `--replace` falls back to that.
+#[cfg(windows)]
+fn service_hint(_: &str) -> bool {
+    false
+}
+
 /// Whether `/proc/self/cgroup`'s text puts the process in systemd unit `unit`: a line whose path
 /// ends in it, such as `0::/user.slice/user-1000.slice/user@1000.service/app.slice/<unit>`.
 #[must_use]
@@ -673,27 +735,18 @@ pub fn in_unit_cgroup(cgroup: &str, unit: &str) -> bool {
 }
 
 /// Runs `program service install --replace`, detached, so it outlives this plxd, which the
-/// service manager stops. Waits for it on a thread of its own, which never holds up the
-/// process's exit, since only a failure comes back.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+/// service manager stops (on Windows, `--replace` itself). Waits for it on a thread of its own,
+/// which never holds up the process's exit, since only a failure comes back.
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 async fn replace_service(data_dir: &crate::paths::DataDir, program: &Path) -> Result<(), String> {
-    use std::os::fd::AsFd as _;
-
     let log = crate::logging::open_log_file(&data_dir.log_file()).map_err(|e| e.to_string())?;
-    let null = std::fs::File::open("/dev/null").map_err(|e| e.to_string())?;
     let mut command = data_dir.command(program);
     command.args(["service", "install", "--replace"]);
-    let stdio = crate::spawn::Stdio {
-        stdin: null.as_fd(),
-        stdout: log.as_fd(),
-        stderr: log.as_fd(),
-    };
     info!(program = %program.display(), "handing plxd over to its login service");
-    let pid = crate::spawn::spawn_detached(&command, stdio).map_err(|e| e.to_string())?;
+    let spawned = crate::attach::detach(&mut command, &log).map_err(|e| e.to_string())?;
     let (done, exited) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
-        let waited = rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::empty());
-        let _ = done.send(waited.map(|w| w.and_then(|(_, status)| status.exit_status())));
+        let _ = done.send(exit_code(spawned));
     });
     match exited.await {
         Ok(Ok(Some(0))) => Ok(()),
@@ -705,27 +758,34 @@ async fn replace_service(data_dir: &crate::paths::DataDir, program: &Path) -> Re
     }
 }
 
+/// The exit code of a process [`crate::attach::detach`] started, once it exits.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn exit_code(pid: rustix::process::Pid) -> std::io::Result<Option<i32>> {
+    let waited = rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::empty())?;
+    Ok(waited.and_then(|(_, status)| status.exit_status()))
+}
+
+/// The exit code of a process [`crate::attach::detach`] started, once it exits.
+#[cfg(windows)]
+fn exit_code(mut child: std::process::Child) -> std::io::Result<Option<i32>> {
+    child.wait().map(|status| status.code())
+}
+
 /// Starts `program serve` detached on `data_dir`, as `attach` starts one, after a handover shut
 /// this one down.
 ///
 /// # Errors
 ///
 /// When the log can't be opened or the process can't start.
-#[cfg(unix)]
 pub fn start_serve(program: &Path, data_dir: &crate::paths::DataDir) -> std::io::Result<()> {
-    use std::os::fd::AsFd as _;
-
     let log = crate::logging::open_log_file(&data_dir.log_file())?;
-    let null = std::fs::File::open("/dev/null")?;
     let mut command = data_dir.command(program);
     command.arg("serve");
-    let stdio = crate::spawn::Stdio {
-        stdin: null.as_fd(),
-        stdout: log.as_fd(),
-        stderr: log.as_fd(),
-    };
-    crate::spawn::spawn_detached(&command, stdio).map(drop)
+    crate::attach::detach(&mut command, &log).map(drop)
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests;
+
+#[cfg(all(test, unix))]
+mod install_tests;

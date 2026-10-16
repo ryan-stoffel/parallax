@@ -680,10 +680,14 @@ fn serve(args: &ServeArgs) -> ExitCode {
                 return fail(&error.to_string());
             }
         };
+        // The plxd a Windows update replaced, renamed aside while it ran (PLX-825).
+        #[cfg(windows)]
+        if let Ok(exe) = plxd::executable() {
+            tokio::spawn(plxd::self_update::remove_aside(exe));
+        }
         match server.run(shutdown).await {
             Ok(()) => {
                 // `host/update` shut it down to hand over to the plxd it installed (PLX-700).
-                #[cfg(unix)]
                 match plxd::self_update::take_handover() {
                     Some(plxd::self_update::Handover::Spawn(program)) => {
                         match plxd::self_update::start_serve(&program, &data_dir) {

@@ -153,7 +153,7 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// The version in [`VERSION_FILE`] beside `exe`, if the file is there and not blank.
-fn stamped_version(exe: &std::path::Path) -> Option<String> {
+pub(crate) fn stamped_version(exe: &std::path::Path) -> Option<String> {
     let text = std::fs::read_to_string(exe.with_file_name(VERSION_FILE)).ok()?;
     let version = text.lines().next()?.trim();
     (!version.is_empty()).then(|| version.to_owned())
