@@ -1,5 +1,7 @@
 import {
   Brain,
+  File,
+  FileImage,
   FileSpreadsheet,
   FileText,
   FolderTree,
@@ -39,7 +41,13 @@ interface Surface {
   doc?: DocRef;
 }
 
-const docIcons = { docx: FileText, pdf: FileText, xlsx: FileSpreadsheet, pptx: Presentation };
+const docIcons = {
+  docx: FileText,
+  pdf: FileText,
+  xlsx: FileSpreadsheet,
+  pptx: Presentation,
+  file: File,
+};
 
 // A Project's own views, pinned first in its panel.
 const overview: Surface = { name: "Project", icon: SquareKanban, key: "O" };
@@ -240,8 +248,8 @@ export function SidePanel({
     if (doc)
       openView({
         name: doc.name,
-        // An image or video shows in the transcript, never here (PLX-785).
-        icon: isMedia(doc.kind) ? FileText : docIcons[doc.kind],
+        // An image or video opens here from a link in the transcript (PLX-834).
+        icon: isMedia(doc.kind) ? FileImage : docIcons[doc.kind],
         key: `doc:${doc.runId}:${doc.path}`,
         doc,
       });

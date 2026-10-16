@@ -12,8 +12,9 @@ import type { PackUserConfig } from "vite-plus/pack";
 // 'self', except for React Refresh's inline preamble in dev. The dev server's
 // HMR websocket is same-origin, so 'self'. Images may be data: URLs, which is
 // how a message's images show (PLX-193), or GitHub's, which a pull request's
-// description and comments show (PLX-517); agent Markdown never loads images.
-// blob: is the images and videos an agent presented (PLX-785), made from bytes plxd read.
+// description and comments show (PLX-517); agent Markdown loads only images in its thread's
+// folder (PLX-834). blob: is those, and the images and videos an agent presented (PLX-785), made
+// from bytes plxd read.
 // Open VSX, and the host its downloads redirect to, is where Settings > Appearance searches for
 // and downloads color themes, with their icons.
 const csp = (dev: boolean) =>

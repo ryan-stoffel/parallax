@@ -82,10 +82,14 @@ import { offlineReason, useConnection } from "./ConnectionStatus";
 import { describeError, githubProblem } from "./errors";
 import { ForkButton, ForkContext, type ForkTarget } from "./Fork";
 import type { Host } from "./hosts";
-import { FileCards } from "./FileCards";
+import { download, readAttachment } from "./documents";
+import { DownloadButton, FileCards } from "./FileCards";
+import { FileImage, FileLink, FileRunContext, keepFiles, linkedPath } from "./FileLink";
 import { HtmlRender, pageUrl } from "./HtmlRender";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { FileCard } from "./FileCard";
+import { Lightbox } from "./Lightbox";
+import { fromBase64 } from "./ooxml";
 import {
   encodedImage,
   isImagePath,
@@ -750,6 +754,7 @@ export function AgentChat({
                 stalled={stalled}
                 turnDone={transcript.turnDone}
                 root={run?.worktreePath}
+                runId={runId}
                 // plxd logs a fork's copied history with its agent.started, at its creation (0050).
                 copiedAt={forked ? run?.createdAt : undefined}
                 onResend={resend}
@@ -948,6 +953,7 @@ export function TranscriptView({
   copiedAt,
   turnDone = false,
   root,
+  runId,
   onEdit,
 }: {
   rows: Row[];
@@ -959,6 +965,8 @@ export function TranscriptView({
   turnDone?: boolean;
   /** The run's worktree, which tool rows' paths read relative to. */
   root?: string;
+  /** The run whose folder the agent's file links and images read from (PLX-834). */
+  runId?: string;
   onResend?: (turnId: string, message: SentMessage) => void;
   /** Fetches a message's image by id, as a data URL. */
   loadImage?: (imageId: ImageId) => Promise<string | undefined>;
@@ -973,8 +981,11 @@ export function TranscriptView({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowContext = useMemo(() => ({ root, loadImage }), [root, loadImage]);
+  const links = useContext(ThreadLinksContext);
   // Threads' titles, to name the thread that sent a message or stopped this one (0041).
-  const titles = useContext(ThreadLinksContext)?.state.titles;
+  const titles = links?.state.titles;
+  const hostId = links?.hostId;
+  const fileRun = useMemo(() => (hostId && runId ? { hostId, runId } : undefined), [hostId, runId]);
   const atBottom = useRef(true);
   // Whether Scroll to end's smooth scroll is on its way down.
   const ending = useRef(false);
@@ -1127,7 +1138,7 @@ export function TranscriptView({
     },
   });
 
-  return (
+  const transcript = (
     // Bounds the rail and Scroll to end, which stay put while the list scrolls under them.
     <RowContext value={rowContext}>
       <div className="relative flex min-h-0 flex-1 flex-col">
@@ -1197,6 +1208,7 @@ export function TranscriptView({
       </div>
     </RowContext>
   );
+  return <FileRunContext value={fileRun}>{transcript}</FileRunContext>;
 }
 
 // Rows of the agent's work, which sit closer to one another and to the messages around them, as
@@ -1279,10 +1291,19 @@ interface RowProps {
   onEdit?: () => void;
 }
 
-/** An html_render page (PLX-639), from the open host. */
+/** An html_render page (PLX-639), from the open host, with Download under it (PLX-834). */
 function HtmlRenderRow({ page }: { page: Extract<Item, { kind: "htmlRender" }> }) {
   const hostId = useContext(ThreadLinksContext)?.hostId;
-  return hostId ? <HtmlRender hostId={hostId} page={page} /> : null;
+  if (!hostId) return null;
+  return (
+    <div>
+      <HtmlRender hostId={hostId} page={page} />
+      <DownloadButton
+        name={`${page.title || "Page"}.html`}
+        read={() => readAttachment(hostId, page.runId, page.attachmentId)}
+      />
+    </div>
+  );
 }
 
 /** Files the agent presented (PLX-755), from the open host. */
@@ -1291,18 +1312,24 @@ function FilesRow({ row }: { row: Extract<Item, { kind: "files" }> }) {
   return hostId ? <FileCards hostId={hostId} item={row.key} files={row.files} /> : null;
 }
 
-/** A browser recording the agent made (PLX-639), from the open host. */
+/** A browser recording the agent made (PLX-639), from the open host, with Download (PLX-834). */
 function RecordingRow({ recording }: { recording: Extract<Item, { kind: "recording" }> }) {
   const hostId = useContext(ThreadLinksContext)?.hostId;
   if (!hostId) return null;
   const src = pageUrl(hostId, recording.runId, recording.attachmentId);
   return (
-    <video
-      controls
-      src={src}
-      aria-label="The agent's browser recording"
-      className="max-h-96 max-w-full rounded-md border border-border bg-black"
-    />
+    <div className="flex flex-col items-start gap-1">
+      <video
+        controls
+        src={src}
+        aria-label="The agent's browser recording"
+        className="max-h-96 max-w-full rounded-md border border-border bg-black"
+      />
+      <DownloadButton
+        name="Recording.webm"
+        read={() => readAttachment(hostId, recording.runId, recording.attachmentId)}
+      />
+    </div>
   );
 }
 
@@ -1711,15 +1738,19 @@ function SentFile({ path }: { path: string }) {
 
 /**
  * One of a user message's images, as a thumbnail: at hand, or fetched by id. The same height
- * either way, so the row doesn't jump when it loads.
+ * either way, so the row doesn't jump when it loads. A tool call's is `zoomable`: clicking it opens
+ * it large, with Download (PLX-834).
  */
 function MessageImage({
   image,
   loadImage,
+  zoomable,
 }: {
   image: PromptImage | ImageId;
   loadImage?: (imageId: ImageId) => Promise<string | undefined>;
+  zoomable?: boolean;
 }) {
+  const [large, setLarge] = useState(false);
   // By id: its data URL once fetched, or null when plxd couldn't serve it.
   const [fetched, setFetched] = useState<{ id: ImageId; url: string | null }>();
   useEffect(() => {
@@ -1732,14 +1763,39 @@ function MessageImage({
   }, [image, loadImage]);
   const url =
     typeof image === "string" ? (fetched?.id === image ? fetched.url : undefined) : imageUrl(image);
-  if (url)
-    return (
+  if (url) {
+    const thumb = (
       <img
         src={url}
         alt="Image"
         className="h-32 max-w-60 rounded-xl border border-border object-cover"
       />
     );
+    if (!zoomable) return thumb;
+    // A data: URL, `data:image/png;base64,...`.
+    const name = `Image.${url.slice("data:image/".length, url.indexOf(";"))}`;
+    return (
+      <>
+        <button
+          type="button"
+          aria-label="Open image"
+          onClick={() => setLarge(true)}
+          className="cursor-zoom-in rounded-xl"
+        >
+          {thumb}
+        </button>
+        {large && (
+          <Lightbox
+            images={[{ src: url, name }]}
+            index={0}
+            onIndex={() => {}}
+            onClose={() => setLarge(false)}
+            onDownload={() => download(name, fromBase64(url.slice(url.indexOf(",") + 1)))}
+          />
+        )}
+      </>
+    );
+  }
   return (
     <span
       role="img"
@@ -2055,7 +2111,7 @@ function ToolCall({
             <p className="mb-1 text-[11.5px] text-faint-foreground">Images</p>
             <div className="flex flex-wrap gap-2">
               {item.images.map((id) => (
-                <MessageImage key={id} image={id} loadImage={loadImage} />
+                <MessageImage key={id} image={id} loadImage={loadImage} zoomable />
               ))}
             </div>
           </div>
@@ -2400,9 +2456,13 @@ export function linkIcon(href?: string) {
 
 // Agent output is untrusted: no raw HTML (no rehype-raw), and react-markdown's
 // default urlTransform drops javascript: and other unsafe links. Links open in
-// a new window, which main hands to the system browser, https only.
+// a new window, which main hands to the system browser, https only. In a
+// transcript, a link or image naming a file is read from the thread's folder
+// through agent/file instead (FileLink.tsx, PLX-834).
 const markdownComponents: Components = {
   a: ({ href, children }) => {
+    const path = linkedPath(href);
+    if (path !== undefined) return <FileLink path={path}>{children}</FileLink>;
     const Icon = linkIcon(href);
     return (
       <a href={href} target="_blank" rel="noreferrer">
@@ -2428,13 +2488,17 @@ const markdownComponents: Components = {
       </CodeBlock>
     );
   },
-  // Never load images: a link with the alt text, which opens externally like any link.
-  img: ({ src, alt }) => (
+  // Never load a remote image: a link with the alt text, which opens externally like any link.
+  img: ({ src, alt }) => {
+    const path = linkedPath(typeof src === "string" ? src : undefined);
+    if (path !== undefined) return <FileImage path={path} alt={alt || "Image"} />;
     // An unsafe source arrives as "" from urlTransform: no href at all, then.
-    <a href={typeof src === "string" && src ? src : undefined} target="_blank" rel="noreferrer">
-      {alt || "Image"}
-    </a>
-  ),
+    return (
+      <a href={typeof src === "string" && src ? src : undefined} target="_blank" rel="noreferrer">
+        {alt || "Image"}
+      </a>
+    );
+  },
 };
 
 // Highlights a code block whose fence names its language, never a guess; a diff's lines are
@@ -2468,12 +2532,14 @@ export const MarkdownText = memo(function MarkdownText({
   /** Hides LaTeX that fails to typeset, since a streaming message's math may be unfinished. */
   streaming?: boolean;
 }) {
+  const inThread = useContext(FileRunContext) !== undefined;
   return (
     <div className={streaming ? "markdown streaming" : "markdown"}>
       <Markdown
         remarkPlugins={gfm}
         rehypePlugins={highlight}
         components={{ ...markdownComponents, ...components }}
+        urlTransform={inThread ? keepFiles : undefined}
       >
         {dollarMath(text)}
       </Markdown>
@@ -2532,8 +2598,14 @@ function StreamingMarkdown({ text }: { text: string }) {
 }
 
 const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }) {
+  const inThread = useContext(FileRunContext) !== undefined;
   return (
-    <Markdown remarkPlugins={gfm} rehypePlugins={highlight} components={markdownComponents}>
+    <Markdown
+      remarkPlugins={gfm}
+      rehypePlugins={highlight}
+      components={markdownComponents}
+      urlTransform={inThread ? keepFiles : undefined}
+    >
       {text}
     </Markdown>
   );

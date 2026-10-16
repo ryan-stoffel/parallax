@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
+import type { RpcError } from "../preload/bridge";
 import { openDocx, type Docx } from "./docx";
 import { describeError } from "./errors";
 import { fromBase64 } from "./ooxml";
@@ -8,9 +9,9 @@ import { openPptx, type Pptx } from "./pptx";
 import { openXlsx, type Xlsx } from "./xlsx";
 
 /**
- * Documents an agent presented with `present_files` (PLX-755): read from its thread's folder
- * through `agent/file`, opened by type, and shared by the transcript's cards and the side panel
- * until a newer presentation reloads them.
+ * Documents an agent presented with `present_files` (PLX-755) or linked in a message (PLX-834):
+ * read from its thread's folder through `agent/file`, opened by type, and shared by the
+ * transcript's cards and the side panel until a newer presentation reloads them.
  */
 
 import { isMedia, type DocKind, type DocRef, type MediaKind } from "./transcript";
@@ -24,7 +25,9 @@ export type Opened =
   /** A PDF, with its first page's height over its width. */
   | { kind: "pdf"; pdf: PDFDocumentProxy; ratio: number }
   /** An image or video (PLX-785), shown from its bytes as they are. */
-  | { kind: "media" };
+  | { kind: "media" }
+  /** Any other file (PLX-834): only its bytes, to download. */
+  | { kind: "file" };
 
 export interface Loaded {
   bytes: Uint8Array;
@@ -36,7 +39,21 @@ export const kinds: Record<Exclude<DocKind, MediaKind>, string> = {
   pdf: "Document",
   xlsx: "Spreadsheet",
   pptx: "Presentation",
+  file: "File",
 };
+
+/** A file's type in a badge: its kind, or for a plain file its extension. */
+export const typeOf = (doc: DocRef) =>
+  doc.kind === "file"
+    ? (/\.([a-z0-9]{1,10})$/i.exec(doc.name)?.[1]?.toUpperCase() ?? "FILE")
+    : doc.kind.toUpperCase();
+
+/** `bytes` as a size people read: 512 bytes, 12 KB, 3.4 MB. */
+export function sizeOf(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 /** A file's name as a title: no extension, and spaces for underscores and hyphens. */
 export const titleOf = (name: string) =>
@@ -66,18 +83,39 @@ export async function openPdf(bytes: Uint8Array): Promise<PDFDocumentProxy> {
   });
 }
 
+/** Why a request to `hostId` failed, for people: the host being offline, or plxd's reason. */
+export async function failure(hostId: string, error: RpcError): Promise<string> {
+  const state = await window.parallax.connectionState(hostId).catch(() => undefined);
+  return state?.status === "connected" ? describeError(error) : "The host is offline.";
+}
+
+/** Run `runId`'s html_render page or recording `attachmentId` (PLX-639), from `agent/image`. */
+export async function readAttachment(
+  hostId: string,
+  runId: string,
+  attachmentId: string,
+): Promise<Uint8Array> {
+  const answer = await window.parallax.request(hostId, "agent/image", {
+    runId,
+    imageId: attachmentId,
+  });
+  if ("error" in answer) throw new Error(await failure(hostId, answer.error));
+  return fromBase64(answer.result.data);
+}
+
 async function load(hostId: string, doc: DocRef): Promise<Loaded> {
   const answer = await window.parallax.request(hostId, "agent/file", {
     runId: doc.runId,
     path: doc.path,
     side: "working",
   });
-  if ("error" in answer) throw new Error(describeError(answer.error));
+  if ("error" in answer) throw new Error(await failure(hostId, answer.error));
   const file = answer.result;
   if (!file.exists) throw new Error("This file isn't in the thread's folder anymore.");
   if (file.tooLarge || file.content == null)
     throw new Error("This file is too large to open here.");
   const bytes = fromBase64(file.content);
+  if (doc.kind === "file") return { bytes, opened: { kind: "file" } };
   const opened: Opened = isMedia(doc.kind)
     ? { kind: "media" }
     : doc.kind === "docx"
@@ -162,6 +200,21 @@ export function download(name: string, bytes: Uint8Array) {
   a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** `bytes` as a blob: URL for an `<img>` or `<video>`, revoked when they change or unmount. */
+export function useObjectUrl(bytes?: Uint8Array): string | undefined {
+  const [url, setUrl] = useState<string>();
+  useEffect(() => {
+    if (!bytes) return;
+    const made = URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>]));
+    setUrl(made);
+    return () => {
+      URL.revokeObjectURL(made);
+      setUrl(undefined);
+    };
+  }, [bytes]);
+  return url;
 }
 
 /** Page `n`, counted from 1, drawn `width` CSS pixels wide at the screen's density. */

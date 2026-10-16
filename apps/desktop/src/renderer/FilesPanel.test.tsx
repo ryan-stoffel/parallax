@@ -110,14 +110,25 @@ test("the tree lists folders first, opens a folder lazily on click, and opens fi
   expect(request.mock.calls.length).toBe(calls + 1);
 });
 
-test("binary and oversized files show a note instead of their content", async () => {
+test("binary and oversized files show a note instead of their content, and a binary Download", async () => {
+  let saved: [string, number] | undefined;
+  URL.createObjectURL = (blob: Blob) => ((saved = ["", blob.size]), "blob:logo");
+  URL.revokeObjectURL = () => {};
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementationOnce(function (
+    this: HTMLAnchorElement,
+  ) {
+    saved![0] = this.download;
+  });
   await render(<FilesPanel hostId="local" runId="run-1" />);
   await click(row("logo.png"));
   expect(shown()).toContain("This is a binary file.");
   expect(document.querySelector("pre")).toBeNull();
+  await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Download"));
+  expect(saved).toEqual(["logo.png", 5]);
   await click(back());
   await click(row("big.bin"));
   expect(shown()).toContain("This file is too large to show.");
+  expect(shown()).not.toContain("Download");
 });
 
 test("with no thread open, or a plxd without files, the view says so and asks nothing", async () => {
