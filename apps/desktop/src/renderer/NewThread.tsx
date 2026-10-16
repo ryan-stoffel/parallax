@@ -36,8 +36,11 @@ interface NewThreadProps {
   hostId: string;
   /** The computers a thread can run on. */
   hosts: Host[];
-  /** Called when the user picks another computer to run the thread on. */
-  onHostChange: (hostId: string) => void;
+  /**
+   * Called when the user picks another computer to run the thread on. Resolves to why New Thread
+   * couldn't move there, for people, such as the repository not being a repository there.
+   */
+  onHostChange: (hostId: string) => Promise<string | undefined>;
   /** Repositories and No Repo, as the sidebar groups them. */
   groups: ThreadGroup[];
   groupId: string;
@@ -338,6 +341,19 @@ export function NewThread({
     }
   };
 
+  // The computer picked while it adds the repository, during which Send is off, so a thread
+  // can't start on the computer being left.
+  const [moving, setMoving] = useState<string>();
+  const pickHost = async (id: string) => {
+    setRepoError(undefined);
+    // Its accounts are this computer's, and its Continue would start the thread here.
+    setChoices(undefined);
+    setMoving(id);
+    const error = await onHostChange(id);
+    setMoving((m) => (m === id ? undefined : m));
+    if (error) setRepoError(error);
+  };
+
   const pickRepository = async () => {
     setRepoError(undefined);
     const path = await window.parallax.pickFolder();
@@ -490,7 +506,13 @@ export function NewThread({
           contextAndFast={
             connection?.status === "connected" && "contextAndFast" in connection.capabilities
           }
-          disabledReason={starting === undefined ? disabledReason : "Starting thread…"}
+          disabledReason={
+            starting !== undefined
+              ? "Starting thread…"
+              : moving
+                ? `Adding ${group.name} on ${hosts.find((h) => h.id === moving)?.name}…`
+                : disabledReason
+          }
           imageCaps={imageCaps(connection)}
           uploadBytes={uploadBytes(connection)}
           menus={
@@ -505,19 +527,24 @@ export function NewThread({
               ? "host"
               : undefined
           }
-          // A repoless thread has no tab, here or once it opens: nothing to pick a worktree of.
+          // A repoless thread has no tab once it opens: nothing to pick a worktree of. No Repo picks
+          // only its computer here, and a Space nothing, since its entry is on this computer alone.
           tab={
-            repoless(group) ? undefined : starting !== undefined ? (
-              <span className={tabItem}>
-                <LoaderCircle aria-hidden className="animate-spin" />
-                Starting…
-              </span>
+            group.space ? undefined : starting !== undefined ? (
+              repoless(group) ? undefined : (
+                <span className={tabItem}>
+                  <LoaderCircle aria-hidden className="animate-spin" />
+                  Starting…
+                </span>
+              )
+            ) : repoless(group) ? (
+              <RunTargetMenu hosts={hosts} hostId={hostId} onHostChange={pickHost} />
             ) : (
               <>
                 <RunTargetMenu
                   hosts={hosts}
                   hostId={hostId}
-                  onHostChange={onHostChange}
+                  onHostChange={pickHost}
                   workspace={checkout ? "checkout" : "worktree"}
                   onWorkspaceChange={setWorkspace}
                   checkoutUnavailable={checkoutUnavailable}

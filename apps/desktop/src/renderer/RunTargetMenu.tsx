@@ -111,8 +111,9 @@ function HostOption({
 /**
  * Where a thread runs: which of Parallax's computers, and in a new worktree or the local checkout.
  * The menu stays open while you pick both. The computer and the workspace are the caller's, which
- * starts the thread on that computer with that workspace; `checkoutUnavailable`, when set, says why
- * Local checkout can't be picked. `missing` names the computers, by id, that lack the picked
+ * starts the thread on that computer with that workspace; with no `workspace`, as for a thread with
+ * no repo, it picks only the computer. `checkoutUnavailable`, when set, says why Local checkout
+ * can't be picked. `missing` names the computers, by id, that lack the picked
  * repository, which say so. Each computer shows whether it's connected, the list scrolls, and past
  * a handful of computers a search box filters them.
  */
@@ -128,15 +129,15 @@ export function RunTargetMenu({
   hosts: Host[];
   hostId: string;
   onHostChange: (hostId: string) => void;
-  workspace: Workspace;
-  onWorkspaceChange: (workspace: Workspace) => void;
+  workspace?: Workspace;
+  onWorkspaceChange?: (workspace: Workspace) => void;
   checkoutUnavailable?: string;
   missing?: { repo: string; hostIds: ReadonlySet<string> };
 }) {
   const id = useId();
   const [query, setQuery] = useState("");
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
-  const workspace = workspaces.find((w) => w.value === workspaceChoice)!;
+  const workspace = workspaces.find((w) => w.value === workspaceChoice);
   const searchable = hosts.length >= searchFrom;
   const q = query.trim().toLowerCase();
   const shown = q ? hosts.filter((h) => h.name.toLowerCase().includes(q)) : hosts;
@@ -146,15 +147,19 @@ export function RunTargetMenu({
         type="button"
         popoverTarget={id}
         aria-haspopup="menu"
-        aria-label={`Runs on: ${host.name}, ${workspace.label}`}
+        aria-label={`Runs on: ${host.name}${workspace ? `, ${workspace.label}` : ""}`}
         className={menuButton}
       >
         {hostIcon(host)}
         {host.name}
-        <span aria-hidden className="text-faint-foreground">
-          ·
-        </span>
-        {workspace.label}
+        {workspace && (
+          <>
+            <span aria-hidden className="text-faint-foreground">
+              ·
+            </span>
+            {workspace.label}
+          </>
+        )}
         <ChevronDown aria-hidden className="opacity-70" />
       </button>
       <Menu
@@ -204,25 +209,27 @@ export function RunTargetMenu({
             </p>
           )}
         </div>
-        <div role="group" aria-label="Workspace" className="border-t border-border p-1">
-          <p aria-hidden className={menuHeading}>
-            Workspace
-          </p>
-          {workspaces.map((w) => (
-            <MenuOption
-              key={w.value}
-              option={{ value: w.value, label: w.label, icon: w.icon }}
-              checked={w === workspace}
-              disabled={w.value === "checkout" && !!checkoutUnavailable}
-              onClick={() => onWorkspaceChange(w.value)}
-            />
-          ))}
-          {checkoutUnavailable && (
-            <p className="px-2 pt-0.5 pb-1.5 text-[12px] text-faint-foreground">
-              Local checkout {checkoutUnavailable}.
+        {workspace && (
+          <div role="group" aria-label="Workspace" className="border-t border-border p-1">
+            <p aria-hidden className={menuHeading}>
+              Workspace
             </p>
-          )}
-        </div>
+            {workspaces.map((w) => (
+              <MenuOption
+                key={w.value}
+                option={{ value: w.value, label: w.label, icon: w.icon }}
+                checked={w === workspace}
+                disabled={w.value === "checkout" && !!checkoutUnavailable}
+                onClick={() => onWorkspaceChange?.(w.value)}
+              />
+            ))}
+            {checkoutUnavailable && (
+              <p className="px-2 pt-0.5 pb-1.5 text-[12px] text-faint-foreground">
+                Local checkout {checkoutUnavailable}.
+              </p>
+            )}
+          </div>
+        )}
       </Menu>
     </>
   );

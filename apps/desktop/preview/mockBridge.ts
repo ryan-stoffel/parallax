@@ -1755,7 +1755,7 @@ export const mockBridge: ParallaxBridge = {
       snapshot = {
         seq,
         projects: hostId === LOCAL ? db.projects : [],
-        repos: known ? db.repos : [],
+        repos: known ? (deviceOf(hostId)?.repos?.(db.repos) ?? db.repos) : [],
         threads: known ? db.threads.filter((t) => own(t.id)) : [],
         areas: hostId === LOCAL ? db.areas : [],
         runs,
