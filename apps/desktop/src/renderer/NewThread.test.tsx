@@ -1150,6 +1150,26 @@ describe("a host with no usable default account for threads", () => {
     expect(crumbs()).toEqual(["This Mac", "parallax", "Tidy the README"]);
   });
 
+  test("picking another computer closes the chooser, so Continue can't start the thread here (PLX-849)", async () => {
+    accounts([cli("claude", true)], [key("Work", "anthropic")]);
+    window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
+    request.mockImplementation(async (host, method, params) => {
+      if (host === "ssh-mini" && method === "thread/list")
+        return { result: { repos: [], threads: [], seq: 1 } };
+      // Still adding the repository when Continue would be clicked.
+      if (host === "ssh-mini" && method === "repo/add") return new Promise(() => {});
+      const answer = answers[method];
+      return answer
+        ? answer(params)
+        : { error: { code: -32601, message: `${method} isn't faked` } };
+    });
+    await renderApp();
+    await send("Tidy the README");
+    expect(button("Continue")).toBeDefined();
+    await choose("Runs on", "mac miniSSH · minino parallax");
+    expect(button("Continue")).toBeUndefined();
+  });
+
   test("Continue after Cmd+Enter opens the thread, so the prompt can't start it twice", async () => {
     accounts([cli("claude", true)], [key("Work", "anthropic")]);
     await renderApp();

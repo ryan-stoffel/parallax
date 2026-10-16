@@ -346,6 +346,8 @@ export function NewThread({
   const [moving, setMoving] = useState<string>();
   const pickHost = async (id: string) => {
     setRepoError(undefined);
+    // Its accounts are this computer's, and its Continue would start the thread here.
+    setChoices(undefined);
     setMoving(id);
     const error = await onHostChange(id);
     setMoving((m) => (m === id ? undefined : m));
