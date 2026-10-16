@@ -164,13 +164,9 @@ async fn host_update_refuses_what_it_cant_install_and_stays_up() {
             .await
     };
 
-    // Windows' installer owns plxd; elsewhere this test's plxd is a cargo build.
+    // This test's plxd is a cargo build.
     let newer = update("9912.13123.15959").await.unwrap_err();
     assert_eq!(kind(&newer), ErrorKind::HostUpdateFailed);
-    if cfg!(windows) {
-        assert!(newer.message.contains("Windows"), "{}", newer.message);
-        return;
-    }
     assert!(
         newer.message.contains("development build"),
         "{}",

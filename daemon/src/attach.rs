@@ -344,7 +344,10 @@ impl Starter<'_> {
 /// Starts `command` detached (0010): in a new session with stdin on `/dev/null`, stdout and
 /// stderr on `log`, and no other descriptors.
 #[cfg(unix)]
-fn detach(command: &mut std::process::Command, log: &File) -> io::Result<rustix::process::Pid> {
+pub(crate) fn detach(
+    command: &mut std::process::Command,
+    log: &File,
+) -> io::Result<rustix::process::Pid> {
     use std::os::fd::AsFd as _;
 
     let null = File::open("/dev/null").map_err(|error| {
@@ -364,7 +367,10 @@ fn detach(command: &mut std::process::Command, log: &File) -> io::Result<rustix:
 /// startup, so those are the only handles `serve` gets. If the job forbids breaking away, it
 /// starts `serve` inside the job and warns that it ends with the session.
 #[cfg(windows)]
-fn detach(command: &mut std::process::Command, log: &File) -> io::Result<std::process::Child> {
+pub(crate) fn detach(
+    command: &mut std::process::Command,
+    log: &File,
+) -> io::Result<std::process::Child> {
     use std::os::windows::process::CommandExt as _;
     use std::process::Stdio;
 
