@@ -201,8 +201,9 @@ export function startAccount(): Account {
     profile = next;
     broadcast("parallax:profile", profile);
   };
-  // The last picture fetched, so a profile refresh doesn't fetch it again.
-  let picture: { url: string; data: string | undefined } | undefined;
+  // The last picture fetched, so a profile refresh doesn't fetch it again. A failed fetch isn't
+  // kept, so the next refresh tries again.
+  let picture: { url: string; data: string } | undefined;
   // Each change gets a number, so a slow picture fetch never overwrites a newer profile.
   let changes = 0;
   function show(user: User) {
@@ -216,7 +217,7 @@ export function startAccount(): Account {
     // The name now, the picture once it's here.
     publish(shown);
     void fetchPicture(url).then((data) => {
-      picture = { url, data };
+      if (data) picture = { url, data };
       if (change === changes) publish({ ...shown, picture: data });
     });
   }
