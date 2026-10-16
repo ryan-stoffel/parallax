@@ -65,6 +65,28 @@ async fn read(
             path: path.to_owned(),
             side: AgentFileSide::Working,
             size_only: size_only.then_some(true),
+            offset: None,
+            length: None,
+        })
+        .await
+}
+
+/// The slice of `path` at `offset` and `length` (0074), on `side`.
+async fn slice(
+    client: &mut Conn,
+    run_id: RunId,
+    path: &str,
+    side: AgentFileSide,
+    (offset, length): (Option<u64>, Option<u64>),
+) -> Result<AgentFileResult, ErrorObject> {
+    client
+        .call::<AgentFile>(AgentFileParams {
+            run_id,
+            path: path.to_owned(),
+            side,
+            size_only: None,
+            offset,
+            length,
         })
         .await
 }
@@ -166,6 +188,74 @@ async fn a_worktree_threads_files_list_by_folder_without_git_or_ignored_entries(
         .await
         .unwrap_err();
     assert_eq!(kind(&unknown), ErrorKind::RunNotFound);
+}
+
+/// A slice (0074) reads a file of any size, a symlink's target included, on the working side
+/// only, by the same path rules as a whole read.
+#[tokio::test]
+async fn a_worktree_threads_files_read_in_slices_by_the_same_rules() {
+    let host = Host::start(fake(editing()));
+    let path = repo_with_ignores(host.work.path());
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    client.subscribe(0, Some(scope(repo.id))).await;
+    let started = client
+        .call::<ThreadStart>(start_params(Some(repo.id), "Write some notes"))
+        .await
+        .unwrap();
+    let run_id = started.run.id;
+    client.until(updated_to(AgentStatus::Completed)).await;
+    let worktree = PathBuf::from(started.run.worktree_path.unwrap());
+    add_ignored_and_links(&worktree);
+    std::fs::write(worktree.join("big.bin"), vec![0; 4 * 1024 * 1024 + 1]).unwrap();
+
+    let working = AgentFileSide::Working;
+    let mut sliced = async |path: &str, side, range| {
+        slice(&mut client, run_id, path, side, range)
+            .await
+            .map(|file| {
+                (
+                    file.size,
+                    file.too_large,
+                    decode_base64(&file.content.unwrap()),
+                )
+            })
+    };
+    assert_eq!(
+        sliced("big.bin", working, (Some(4 * 1024 * 1024), None))
+            .await
+            .unwrap(),
+        (Some(4 * 1024 * 1024 + 1), false, vec![0])
+    );
+    assert_eq!(
+        sliced("src/lib.rs", working, (None, Some(6)))
+            .await
+            .unwrap(),
+        (Some(14), false, b"pub fn".to_vec())
+    );
+    assert_eq!(
+        sliced("src/lib.rs", working, (Some(100), None))
+            .await
+            .unwrap(),
+        (Some(14), false, Vec::new())
+    );
+    assert_eq!(
+        sliced("hosts", working, (Some(5), Some(100)))
+            .await
+            .unwrap(),
+        (Some(10), false, b"hosts".to_vec())
+    );
+    for (side, range) in [
+        (working, (None, Some(1024 * 1024 + 1))),
+        (AgentFileSide::Head, (Some(0), None)),
+    ] {
+        let error = sliced("src/lib.rs", side, range).await.unwrap_err();
+        assert_eq!(error.code, INVALID_PARAMS, "{side:?} {range:?}: {error:?}");
+    }
+    for escape in ["../README.md", ".git/config", "etc/hosts", "src", ""] {
+        let error = sliced(escape, working, (Some(0), None)).await.unwrap_err();
+        assert_eq!(error.code, INVALID_PARAMS, "{escape:?}: {error:?}");
+    }
 }
 
 #[tokio::test]

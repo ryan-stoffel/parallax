@@ -192,8 +192,9 @@ impl DataDir {
         self.root.join("tools")
     }
 
-    /// `uploads/`: files attached to messages (PLX-779, 0071), each in a folder of its own. A
-    /// worker's sandbox may read it, though the rest of the data folder stays unreadable.
+    /// `uploads/`: files attached to messages (PLX-779, 0071), each in a folder of its own, which
+    /// is `<id>.partial` while its pieces arrive (0074). A worker's sandbox may read it, though
+    /// the rest of the data folder stays unreadable.
     #[must_use]
     pub fn uploads_dir(&self) -> PathBuf {
         self.root.join(UPLOADS_DIR)

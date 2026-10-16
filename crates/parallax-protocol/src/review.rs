@@ -149,6 +149,19 @@ pub struct AgentFileParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub size_only: Option<bool>,
+    /// Where to start reading, in bytes, for one slice of a file of any size (`fileChunks`,
+    /// decision 0074): `content` is the slice, empty past the end, `size` is the whole file's,
+    /// and `tooLarge` is false. Only the `working` side reads slices; another side fails with
+    /// `invalidParams`. Either of `offset` and `length` makes the call a slice; absent `offset`
+    /// means 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub offset: Option<u64>,
+    /// How many bytes a slice reads, at most `fileChunks`' `chunkBytes`, which is also the
+    /// default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub length: Option<u64>,
 }
 
 /// Result of `agent/file`.

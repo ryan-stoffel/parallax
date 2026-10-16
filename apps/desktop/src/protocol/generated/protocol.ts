@@ -50,12 +50,13 @@ export type ParallaxRequests = {
 	"host/folders": { params: HostFoldersParams, result: HostFoldersResult },
 	/**
 	 * `host/upload`: saves a file attached to a message on the host and answers its path
-	 * (PLX-779, decision 0071). Gated on the `fileUploads` capability.
+	 * (PLX-779, decision 0071). Gated on the `fileUploads` capability, and a file sent in
+	 * pieces on `fileChunks` (decision 0074).
 	 */
 	"host/upload": { params: HostUploadParams, result: HostUploadResult },
 	/**
 	 * `host/readUpload`: a file `host/upload` saved, for the transcript (PLX-779). Gated on
-	 * the `fileUploads` capability.
+	 * the `fileUploads` capability, and a slice of it on `fileChunks` (decision 0074).
 	 */
 	"host/readUpload": { params: HostReadUploadParams, result: HostReadUploadResult },
 	/**
@@ -236,7 +237,7 @@ export type ParallaxRequests = {
 	/**
 	 * `agent/file`: one file of a run's diff, on its base or head side, base64-encoded and
 	 * size-capped, for a diff editor. Its `working` side, behind the `files` capability,
-	 * reads the file on disk now.
+	 * reads the file on disk now, and behind `fileChunks` (decision 0074), one slice of it.
 	 */
 	"agent/file": { params: AgentFileParams, result: AgentFileResult },
 	/**
@@ -1239,19 +1240,48 @@ export type HostUploadParams = {
 	 */
 	name: string,
 	/**
-	 * Its bytes, in standard base64 with padding, at most the capability's `maxBytes` long.
+	 * Its bytes, in standard base64 with padding, at most the capability's `maxBytes` long. A
+	 * piece's are at most `fileChunks`' `chunkBytes` once decoded.
 	 */
 	data: string,
+	/**
+	 * The upload this piece belongs to (`fileChunks`, decision 0074), as the first piece's
+	 * answer named it. Absent on the first piece, which starts a new upload.
+	 */
+	uploadId?: UploadId,
+	/**
+	 * Where this piece starts in the file, which must be the length received so far: 0 for the
+	 * first piece. A gap, a repeated piece, or a file that would grow past `fileChunks`'
+	 * `maxBytes` fails with `invalidParams`. Any of `uploadId`, `offset`, and `last` makes the
+	 * call a piece; absent means 0.
+	 */
+	offset?: number,
+	/**
+	 * Whether this is the file's last piece, after which the file is at `path`. Absent means
+	 * false. An upload that gets no piece for an hour is removed.
+	 */
+	last?: boolean,
 };
+
+/**
+ * A chunked upload's id (`fileChunks`, decision 0074): a version 7 UUID plxd generates for
+ * a file's first piece, which every later piece names.
+ */
+export type UploadId = string;
 
 /**
  * Result of `host/upload`.
  */
 export type HostUploadResult = {
 	/**
-	 * The saved file's absolute path on the host: `<data folder>/uploads/<id>/<name>`.
+	 * The saved file's absolute path on the host: `<data folder>/uploads/<id>/<name>`. For a
+	 * piece, where the file will be once its last piece arrives.
 	 */
 	path: string,
+	/**
+	 * The upload a piece belongs to, for the next piece to name. Absent for a whole file.
+	 */
+	uploadId?: UploadId,
 };
 
 /**
@@ -1264,6 +1294,17 @@ export type HostReadUploadParams = {
 	 * `invalidParams`, as does one that's gone.
 	 */
 	path: string,
+	/**
+	 * Where to start reading, in bytes, for one slice of the file (`fileChunks`, decision
+	 * 0074). A slice is read from a file of any size, and never through a symlink. Either of
+	 * `offset` and `length` makes the call a slice; absent `offset` means 0.
+	 */
+	offset?: number,
+	/**
+	 * How many bytes a slice reads, at most `fileChunks`' `chunkBytes`, which is also the
+	 * default.
+	 */
+	length?: number,
 };
 
 /**
@@ -1271,9 +1312,14 @@ export type HostReadUploadParams = {
  */
 export type HostReadUploadResult = {
 	/**
-	 * The file's bytes, in standard base64 with padding.
+	 * The file's bytes, or a slice's, in standard base64 with padding. A slice past the end is
+	 * empty.
 	 */
 	data: string,
+	/**
+	 * The whole file's size in bytes, for a slice.
+	 */
+	size?: number,
 };
 
 /**
@@ -4537,6 +4583,19 @@ export type AgentFileParams = {
 	 * `stat` needs. Absent means false.
 	 */
 	sizeOnly?: boolean,
+	/**
+	 * Where to start reading, in bytes, for one slice of a file of any size (`fileChunks`,
+	 * decision 0074): `content` is the slice, empty past the end, `size` is the whole file's,
+	 * and `tooLarge` is false. Only the `working` side reads slices; another side fails with
+	 * `invalidParams`. Either of `offset` and `length` makes the call a slice; absent `offset`
+	 * means 0.
+	 */
+	offset?: number,
+	/**
+	 * How many bytes a slice reads, at most `fileChunks`' `chunkBytes`, which is also the
+	 * default.
+	 */
+	length?: number,
 };
 
 /**

@@ -1,6 +1,7 @@
 //! `present_files` (PLX-755): shows documents the agent made, from its thread's folder, as cards in
-//! the transcript, and images and videos large in it (PLX-785). The app reads each through
-//! `agent/file`'s working side and shows it, view-only, with Download.
+//! the transcript, images and videos large in it (PLX-785), and any other file as one to download
+//! (0074). The app reads each through `agent/file`'s working side, in slices, and shows it,
+//! view-only, with Download.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -20,10 +21,11 @@ pub const TOOLS: &[&str] = &["present_files"];
 /// instead of showing it.
 pub const INSTRUCTIONS: &str = "Parallax shows documents in its chat. When the user wants a document, spreadsheet, slide deck, or PDF, build it in your working folder, not /tmp, with Python libraries, pip-installing any that are missing: python-docx for .docx, openpyxl for .xlsx, python-pptx for .pptx, and reportlab for .pdf. Don't install LibreOffice, pandoc, or another office suite. When the files are done, call present_files with their paths before your final reply. Present images and videos you make for the user, such as screenshots and recordings, the same way. The user previews and downloads them in Parallax, so don't explain how to open them.";
 
-/// The largest file `present_files` takes: `agent/file`'s read cap, which the app reads it through.
-const MAX_BYTES: u64 = 4 * 1024 * 1024;
+/// The largest file `present_files` takes, which the app reads in `agent/file` slices (0074).
+const MAX_BYTES: u64 = 256 * 1024 * 1024;
 
-/// The file types the app shows: documents as cards, images and videos inline.
+/// The file types the app shows: documents as cards, images and videos inline. Any other file's
+/// kind is `file`.
 const KINDS: &[&str] = &[
     "docx", "xlsx", "pptx", "pdf", "png", "jpg", "jpeg", "gif", "webp", "mp4", "webm", "mov",
 ];
@@ -35,7 +37,7 @@ pub fn definitions() -> Vec<Value> {
     vec![json!({
         "name": "present_files",
         "title": "Present files",
-        "description": "Show finished documents, images, and videos to the reader in this thread. A document shows as a card with a preview of its first pages, which the reader can open in Parallax's side panel; an image or video shows full width, playable. The reader can download each. Call it after you create or rebuild the files and before your final reply, which should not repeat what they show. Takes .docx, .xlsx, .pptx, .pdf, .png, .jpg, .jpeg, .gif, .webp, .mp4, .webm, and .mov files of at most 4 MiB. Save them in your working folder; a file elsewhere, such as in /tmp, is copied into its top level first, replacing a file of the same name.",
+        "description": "Show finished files to the reader in this thread. A document (.docx, .xlsx, .pptx, .pdf) shows as a card with a preview of its first pages, which the reader can open in Parallax's side panel; an image or video (.png, .jpg, .jpeg, .gif, .webp, .mp4, .webm, .mov) shows full width, playable; any other file, such as a .zip or .csv, shows as a file to download. The reader can download each. Call it after you create or rebuild the files and before your final reply, which should not repeat what they show. Takes files of at most 256 MiB. Save them in your working folder; a document, image, or video elsewhere, such as in /tmp, is copied into its top level first, replacing a file of the same name.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -91,14 +93,20 @@ pub async fn call(binding: &Binding, name: &str, arguments: Value) -> Result<Rep
     let mut files = Vec::new();
     let mut copied = Vec::new();
     for asked in &args.paths {
-        let kind = Path::new(asked)
+        let known = Path::new(asked)
             .extension()
             .map(|ext| ext.to_string_lossy().to_lowercase())
-            .filter(|ext| KINDS.contains(&ext.as_str()))
-            .ok_or_else(|| format!("{asked} is not a document, image, or video Parallax shows"))?;
+            .filter(|ext| KINDS.contains(&ext.as_str()));
         let path = if let Some(path) = relative(&folder, asked)? {
             path
         } else {
+            // Only the kinds it always copied in, so a call can't pull a key or a credentials
+            // file into the folder, where the next commit would take it.
+            if known.is_none() {
+                return Err(format!(
+                    "{asked} is outside your working folder; copy it in first, since only a document, image, or video is copied in for you"
+                ));
+            }
             let path = copy_in(&folder, Path::new(asked))?;
             copied.push(format!("{asked} to {path}"));
             path
@@ -110,15 +118,18 @@ pub async fn call(binding: &Binding, name: &str, arguments: Value) -> Result<Rep
                 path: path.clone(),
                 side: AgentFileSide::Working,
                 size_only: Some(true),
+                offset: None,
+                length: None,
             })
             .await?;
         if !file.exists {
             return Err(format!("{asked} isn't in your working folder"));
         }
-        if file.too_large {
-            return Err(format!("{asked} is over 4 MiB, too large to show"));
+        if file.size.unwrap_or(0) > MAX_BYTES {
+            return Err(format!("{asked} is over 256 MiB, too large to show"));
         }
         let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
+        let kind = known.unwrap_or_else(|| "file".to_owned());
         files.push(json!({"path": path, "name": name, "kind": kind}));
     }
     let message = if copied.is_empty() {
@@ -184,7 +195,7 @@ fn copy_in(folder: &Path, source: &Path) -> Result<String, String> {
         return Err(format!("{shown} is not a file"));
     }
     if meta.len() > MAX_BYTES {
-        return Err(format!("{shown} is over 4 MiB, too large to show"));
+        return Err(format!("{shown} is over 256 MiB, too large to show"));
     }
     let name = source
         .file_name()

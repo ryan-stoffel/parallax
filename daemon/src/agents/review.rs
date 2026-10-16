@@ -9,7 +9,7 @@
 //! Each checks every folder on the way with `lstat`, so a symlink the agent leaves there can't
 //! point them outside the folder.
 
-use std::io::ErrorKind as IoErrorKind;
+use std::io::{ErrorKind as IoErrorKind, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -21,7 +21,7 @@ use parallax_protocol::{
     AgentFilesResult, ErrorKind, ProjectId, RunId,
 };
 use parallax_store::{Run as RunRow, Worktree};
-use tokio::io::AsyncReadExt as _;
+use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
 
 use super::{convert, run_accepted, run_not_found, store, store_error};
 use crate::server::Daemon;
@@ -134,6 +134,8 @@ pub(crate) async fn file(
         path,
         side,
         size_only,
+        offset,
+        length,
     } = params;
     let size_only = size_only.unwrap_or(false);
     validate_repo_path(&path).map_err(ErrorObject::invalid_params)?;
@@ -142,9 +144,15 @@ pub(crate) async fn file(
             "side must be base, head, or working",
         ));
     }
+    let slice = crate::methods::host::slice(offset, length)?;
     if side == AgentFileSide::Working {
         let (root, _) = run_folder(daemon, run_id).await?;
-        return read_working(&root, path, size_only).await;
+        return read_working(&root, path, size_only, slice).await;
+    }
+    if slice.is_some() {
+        return Err(ErrorObject::invalid_params(
+            "only the working side reads a slice",
+        ));
     }
     let (row, worktree) = reviewable(daemon, run_id).await?;
     let commit = match side {
@@ -304,12 +312,14 @@ fn io_failed(path: &Path, error: &std::io::Error) -> ErrorObject {
     ErrorObject::internal_error(format!("could not read {}: {error}", path.display()))
 }
 
-/// `agent/file`'s `working` side: the file at `path` under `root` as it is now. A symlink's
-/// content is its target, as git stores it, and is never followed.
+/// `agent/file`'s `working` side: the file at `path` under `root` as it is now, or the slice of
+/// it at `(offset, length)`. A symlink's content is its target, as git stores it, and is never
+/// followed.
 async fn read_working(
     root: &Path,
     path: String,
     size_only: bool,
+    slice: Option<(u64, u64)>,
 ) -> Result<AgentFileResult, ErrorObject> {
     let missing = |path| AgentFileResult {
         path,
@@ -361,11 +371,31 @@ async fn read_working(
     } else {
         return Err(not_a_file());
     };
-    let too_large = size > MAX_BLOB_BYTES;
-    let content = match file {
+    // A slice is read from a file of any size.
+    let too_large = slice.is_none() && size > MAX_BLOB_BYTES;
+    let content = match (file, slice) {
         _ if size_only || too_large => None,
-        Err(target) => Some(target),
-        Ok(file) => {
+        (Err(target), None) => Some(target),
+        (Err(target), Some((offset, length))) => Some(
+            target
+                .into_iter()
+                .skip(usize::try_from(offset).unwrap_or(usize::MAX))
+                .take(usize::try_from(length).unwrap_or(usize::MAX))
+                .collect(),
+        ),
+        // On the handle checked above, never the path again.
+        (Ok(mut file), Some((offset, length))) => {
+            let mut bytes = Vec::new();
+            file.seek(SeekFrom::Start(offset))
+                .await
+                .map_err(|error| io_failed(&at, &error))?;
+            file.take(length)
+                .read_to_end(&mut bytes)
+                .await
+                .map_err(|error| io_failed(&at, &error))?;
+            Some(bytes)
+        }
+        (Ok(file), None) => {
             let mut bytes = Vec::new();
             // The agent can grow the file meanwhile; never read past the cap.
             file.take(MAX_BLOB_BYTES + 1)
