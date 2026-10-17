@@ -4,12 +4,14 @@ import { expect, test } from "vite-plus/test";
 
 import { withMentions } from "./Mention";
 
-test("a sent prompt's /skills and @paths are chips; other slashes and @s stay text", () => {
+test("a sent prompt's known /skills and @paths are chips; other slashes and @s stay text", () => {
+  const known = new Set(["/implement", "@src/main.rs", "/review"]);
   const div = document.createElement("div");
   div.innerHTML = renderToStaticMarkup(
     <>
       {withMentions(
-        "/implement on @src/main.rs, then /review.\nnot /usr/bin, @ryan, @types/node or a@b.com",
+        "/implement on @src/main.rs, then /review.\nnot /skill, @src/gone.rs, /usr/bin, @ryan, @types/node or a@b.com",
+        (token) => known.has(token),
       )}
     </>,
   );
@@ -20,6 +22,6 @@ test("a sent prompt's /skills and @paths are chips; other slashes and @s stay te
     ["review", null],
   ]);
   expect(div.textContent).toBe(
-    "implement on main.rs, then review.\nnot /usr/bin, @ryan, @types/node or a@b.com",
+    "implement on main.rs, then review.\nnot /skill, @src/gone.rs, /usr/bin, @ryan, @types/node or a@b.com",
   );
 });

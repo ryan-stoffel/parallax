@@ -2481,3 +2481,27 @@ test("a queued message cancelled from here leaves no notice or Send again (PLX-3
   event(52, { kind: "queue.updated", runId, messages: [] });
   expect(transcriptText()).toBe(before);
 });
+
+test("a sent prompt's /skill and @file are chips only when they name the thread's commands or files", async () => {
+  window.parallax = {
+    request: vi.fn(async (_host: string, method: string) =>
+      method === "agent/commands"
+        ? { result: { commands: [{ text: "/review" }] } }
+        : { result: { files: ["src/a.ts"] } },
+    ),
+  } as unknown as ParallaxBridge;
+  render(
+    <ThreadLinksContext value={threadLinks()}>
+      <TranscriptView
+        rows={[{ kind: "user", key: "u", text: "/review @src/a.ts, not /skill or @src/b.ts" }]}
+        sent={new Map()}
+        live={false}
+        runId="run-mentions"
+        backend="claude"
+      />
+    </ThreadLinksContext>,
+  );
+  await settle();
+  const chips = [...document.querySelectorAll('[role="log"] span[contenteditable]')];
+  expect(chips.map((c) => c.textContent)).toEqual(["review", "a.ts"]);
+});

@@ -336,7 +336,7 @@ const ownCommands = new Set(["model", "effort", "fast", "permissions"]);
 const commandLists = new Map<string, Promise<AgentCommand[]>>();
 
 /** The commands `agent/commands` lists for a thread on `backend`, once per host and folder. */
-function listCommands(
+export function listCommands(
   hostId: string,
   backend: string,
   repo: string | undefined,
