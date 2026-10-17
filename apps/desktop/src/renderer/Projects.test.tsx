@@ -24,7 +24,7 @@ import type {
   Thread,
 } from "../protocol/generated/protocol";
 import { App } from "./App";
-import { scopeStore } from "./areas";
+import { scopeStore } from "./scope";
 import { sectionsStore } from "./Sidebar";
 import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
 import { fakeWatch } from "./fakeWatch";
@@ -177,11 +177,10 @@ const click = async (element: Element | null | undefined) => {
   await act(async () => (element as HTMLElement).click());
   await settle();
 };
-// Each Project row's name and status (its age while it asks nothing), in the sidebar's order.
+// Each Project's favorite, by name, in the sidebar's order (0075).
 const projectRows = () =>
-  [...document.querySelectorAll('#sidebar li[data-kind="project"]')].map(
-    (li) =>
-      `${li.querySelector("[data-title]")?.textContent}${li.querySelector("[data-status]")?.textContent}`,
+  [...document.querySelectorAll('#sidebar [aria-label="Favorites"] button[data-row]')].map((b) =>
+    b.getAttribute("aria-label"),
   );
 const crumbs = () =>
   [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
@@ -281,9 +280,9 @@ const connected: ConnectionState = {
   capabilities: {},
 };
 
-test("lists plxd's projects, most recently active first, and adds one from project.created", async () => {
+test("lists plxd's Projects as favorites by name, keeping the order they're moved into, and adds one from project.created", async () => {
   await renderApp();
-  expect(projectRows()).toEqual(["photon3h", "ember3d"]);
+  expect(projectRows()).toEqual(["ember", "photon"]);
 
   await act(async () =>
     deliver({
@@ -296,7 +295,16 @@ test("lists plxd's projects, most recently active first, and adds one from proje
       },
     }),
   );
-  expect(projectRows()).toEqual(["parallaxnow", "photon3h", "ember3d"]);
+  expect(projectRows()).toEqual(["ember", "parallax", "photon"]);
+  // Moved, it stays put, however busy the others get.
+  act(
+    () =>
+      void rowButton("photon").dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true, bubbles: true }),
+      ),
+  );
+  await settle();
+  expect(projectRows()).toEqual(["ember", "photon", "parallax"]);
 });
 
 test("a Project is one row that opens its chat: its repository and branch, with the composer off on an older plxd", async () => {
@@ -362,7 +370,7 @@ test("Create Project names it after its repository, shows plxd's error, retries 
   expect(hostsOf("project/create")).toEqual(["local", "local"]);
   expect(dialog().open).toBe(false);
   expect(crumbs()).toEqual(["This Mac", "parallax"]);
-  expect(projectRows()[0]).toBe("parallaxnow");
+  expect(projectRows()).toContain("parallax");
 });
 
 /** A folder listing for `listFolders`, under /Users/me. */
@@ -400,6 +408,7 @@ test("Local folder browses from ~/, filters as you type, opens with Enter, goes 
     "Local folderAdd a repository that's already on this computer",
     "Clone from GitHubClone a repository by its owner/name",
     "New ProjectA focused chat where agents coordinate work",
+    "New folderKeep chats and threads together in the sidebar",
   ]);
   await click(paletteOption("Local folder"));
   expect(field().value).toBe("~/");
@@ -639,7 +648,7 @@ test("a repository on another host creates the Project there, then opens that ho
   expect(dialog().open).toBe(false);
   // Mac mini became the open host, then the Project opened once Mac mini listed it.
   expect(crumbs()).toEqual(["Mac mini", "api"]);
-  expect(projectRows()).toContain("apinow");
+  expect(projectRows()).toContain("api");
 });
 
 test("a host that is connecting or can't be reached says so in its group, and lists once it connects", async () => {
@@ -713,21 +722,33 @@ test("the Workspace menu searches every host's repositories, Enter picks the fir
   expect(document.activeElement?.textContent).toBe("parallax");
 });
 
-const projectsList = () =>
-  document.querySelector<HTMLElement>('#sidebar ul[aria-label="Projects"]')!;
-/** A Project's row in the sidebar, by its name. */
-const projectRow = (name: string) =>
-  [...projectsList().querySelectorAll<HTMLLIElement>('li[data-kind="project"]')].find((li) =>
-    li.querySelector("[data-title]")?.textContent?.startsWith(name),
-  )!;
+const favorites = () => document.querySelector<HTMLElement>('#sidebar [aria-label="Favorites"]')!;
+/** A Project's favorite square in the sidebar, by its name (0075). */
 const rowButton = (name: string) =>
-  projectRow(name).querySelector<HTMLButtonElement>(":scope > button:first-child")!;
+  favorites().querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`)!;
+const projectRow = (name: string) => rowButton(name).closest("li")!;
+// The favorites' menu, as a right-click on `name`'s square fills it in.
+const menuItems = (name: string) => {
+  act(() => void rowButton(name).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
+  return [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      '[role="menu"][aria-label="Favorite"] [role="menuitem"]',
+    ),
+  ];
+};
 const menuItem = (name: string, item: string) =>
-  [...projectRow(name).querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
-    (b) => b.textContent === item,
-  );
-const nameEditor = () =>
-  projectsList().querySelector<HTMLInputElement>('input[aria-label="Project name"]');
+  menuItems(name).find((b) => b.textContent === item);
+const renameDialog = () =>
+  document.querySelector<HTMLDialogElement>('dialog[aria-label="Rename Project"]');
+const nameEditor = () => renameDialog()?.querySelector<HTMLInputElement>("input") ?? null;
+const submitIn = (dialog: Element | null) => click(dialog?.querySelector('button[type="submit"]'));
+const cancelIn = (dialog: Element | null) =>
+  click([...(dialog?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Cancel"));
+// The open icon picker: it draws its grid only while open.
+const openPicker = () =>
+  [...document.querySelectorAll<HTMLElement>('[role="dialog"][aria-label="Project icon"]')].find(
+    (p) => p.childElementCount > 0,
+  )!;
 /** The Lucide glyph and color an icon draws, from its classes. */
 const looks = (svg: Element | null | undefined) => {
   const classes = [...(svg?.classList ?? [])];
@@ -736,9 +757,11 @@ const looks = (svg: Element | null | undefined) => {
     classes.find((c) => c.startsWith("text-")),
   ];
 };
-const rowIcon = (name: string) => looks(rowButton(name).querySelector("[data-project-icon] svg"));
+const rowIcon = (name: string) => looks(rowButton(name).querySelector("svg"));
 const iconPicker = (within: Element) =>
-  within.querySelector<HTMLElement>('[role="dialog"][aria-label="Project icon"]');
+  within.matches('[role="dialog"][aria-label="Project icon"]')
+    ? (within as HTMLElement)
+    : within.querySelector<HTMLElement>('[role="dialog"][aria-label="Project icon"]');
 const pickIcon = (within: Element, label: string) =>
   click(iconPicker(within)!.querySelector(`[role="option"][aria-label="${label}"]`));
 const pickColor = (within: Element, label: string) =>
@@ -760,130 +783,82 @@ const updates: Answer = (p) => {
   return { result: { project: { ...before, ...(name && { name }), ...(icon && { icon }) } } };
 };
 
-test("Rename edits a Project's name in its row: Enter or leaving the field saves, and Escape, an empty name, or the same name save nothing", async () => {
+test("a Project's favorite opens its menu on a right-click, and Rename… saves a new name, while Cancel, an empty name, or the same name save nothing", async () => {
   capabilities = { projectEdit: {} };
   answers["project/update"] = updates;
   await renderApp();
-  const actions = projectRow("ember").querySelector<HTMLButtonElement>(
-    'button[aria-label="Project actions"]',
-  )!;
-  expect(actions.getAttribute("popovertarget")).toBe(
-    projectRow("ember").querySelector('[role="menu"]')!.id,
-  );
-  expect(
-    [...projectRow("ember").querySelectorAll('[role="menuitem"]')].map((b) => b.textContent),
-  ).toEqual(["Rename", "Change icon"]);
-  // Right-clicking the row opens the same menu: on the button's release where it comes while the
+  expect(menuItems("ember").map((b) => b.textContent)).toEqual([
+    "Open",
+    "Move left",
+    "Move right",
+    "Rename…",
+    "Change icon…",
+  ]);
+  // Right-clicking the square opens the menu: on the button's release where it comes while the
   // button is down (macOS, Linux), since the release would close a menu shown before it.
+  const trigger = projectRow("ember").querySelector<HTMLButtonElement>("button[popovertarget]")!;
   const opened = vi.fn();
-  actions.addEventListener("click", opened);
+  trigger.addEventListener("click", opened);
   const pressed = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, buttons: 2 });
   act(() => void rowButton("ember").dispatchEvent(pressed));
   expect(pressed.defaultPrevented).toBe(true);
   expect(opened).not.toHaveBeenCalled();
   act(() => void window.dispatchEvent(new Event("pointerup")));
   expect(opened).toHaveBeenCalledTimes(1);
-  const released = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
-  act(() => void rowButton("ember").dispatchEvent(released));
-  expect(released.defaultPrevented).toBe(true);
-  expect(opened).toHaveBeenCalledTimes(2);
 
-  await click(menuItem("ember", "Rename"));
+  await click(menuItem("ember", "Rename…"));
+  expect(renameDialog()!.open).toBe(true);
   expect(nameEditor()!.value).toBe("ember");
-  expect(document.activeElement).toBe(nameEditor());
   typeInto(nameEditor()!, "  ember app ");
-  press("Enter");
-  await settle();
+  await submitIn(renameDialog());
   expect(calls("project/update")).toEqual([{ project: "p-ember", name: "ember app" }]);
-  expect(nameEditor()).toBeNull();
-  expect(projectRows()).toEqual(["photon3h", "ember app3d"]);
-  expect(document.activeElement).toBe(rowButton("ember app"));
+  expect(renameDialog()).toBeNull();
+  expect(projectRows()).toEqual(["ember app", "photon"]);
 
-  // Escape, an empty name, and the same name each close the field and save nothing.
-  await click(menuItem("photon", "Rename"));
+  // Cancel, an empty name, and the same name each close the dialog and save nothing.
+  await click(menuItem("photon", "Rename…"));
   typeInto(nameEditor()!, "photon two");
-  press("Escape");
-  await click(menuItem("photon", "Rename"));
+  await cancelIn(renameDialog());
+  await click(menuItem("photon", "Rename…"));
   typeInto(nameEditor()!, "   ");
-  press("Enter");
-  await click(menuItem("photon", "Rename"));
-  press("Enter");
-  await settle();
-  expect(nameEditor()).toBeNull();
+  await submitIn(renameDialog());
+  await click(menuItem("photon", "Rename…"));
+  await submitIn(renameDialog());
+  expect(renameDialog()).toBeNull();
   expect(calls("project/update")).toHaveLength(1);
-  expect(projectRows()).toEqual(["photon3h", "ember app3d"]);
-
-  await click(menuItem("photon", "Rename"));
-  typeInto(nameEditor()!, "photon two");
-  await act(async () => nameEditor()!.blur());
-  await settle();
-  expect(calls("project/update")).toEqual([
-    { project: "p-ember", name: "ember app" },
-    { project: "p-photon", name: "photon two" },
-  ]);
-  // A rename isn't activity (0032): the order stays.
-  expect(projectRows()).toEqual(["photon two3h", "ember app3d"]);
-});
-
-test("Enter and Escape while an input method is composing leave the rename field open", async () => {
-  capabilities = { projectEdit: {} };
-  answers["project/update"] = updates;
-  await renderApp();
-  await click(menuItem("ember", "Rename"));
-  typeInto(nameEditor()!, "ember app");
-  for (const key of ["Enter", "Escape"])
-    act(() => {
-      nameEditor()!.dispatchEvent(
-        new KeyboardEvent("keydown", { key, isComposing: true, bubbles: true }),
-      );
-    });
-  await settle();
-  expect(nameEditor()?.value).toBe("ember app");
-  expect(calls("project/update")).toEqual([]);
-
-  press("Enter");
-  await settle();
-  expect(calls("project/update")).toEqual([{ project: "p-ember", name: "ember app" }]);
 });
 
 test("a rename left as it opened sends nothing, even after another client renamed the project", async () => {
   capabilities = { projectEdit: {} };
   answers["project/update"] = updates;
   await renderApp();
-  await click(menuItem("ember", "Rename"));
+  await click(menuItem("ember", "Rename…"));
   await projectEvent(8, "project.updated", {
     ...project("ember", "2026-09-26T12:00:00Z"),
     name: "ember (renamed elsewhere)",
   });
   expect(nameEditor()!.value).toBe("ember");
-  press("Enter");
-  await settle();
+  await submitIn(renameDialog());
   expect(calls("project/update")).toEqual([]);
-  expect(projectRows()).toEqual(["photon3h", "ember (renamed elsewhere)3d"]);
+  expect(projectRows()).toEqual(["ember (renamed elsewhere)", "photon"]);
 });
 
-test("a rename shows its name while plxd answers, then plxd's error under the projects list", async () => {
+test("a rename plxd refuses keeps the name and shows plxd's error over the list", async () => {
   capabilities = { projectEdit: {} };
-  let release = () => {};
-  answers["project/update"] = async () => {
-    await new Promise<void>((resolve) => (release = resolve));
-    return { error: { code: -32602, message: "Invalid params: name must be at most 256 bytes" } };
-  };
+  answers["project/update"] = () => ({
+    error: { code: -32602, message: "Invalid params: name must be at most 256 bytes" },
+  });
   await renderApp();
-  await click(menuItem("ember", "Rename"));
+  await click(menuItem("ember", "Rename…"));
   typeInto(nameEditor()!, "a very long name");
-  press("Enter");
-  await settle();
-  expect(projectRows()).toEqual(["photon3h", "a very long name3d"]);
-  await act(async () => release());
-  await settle();
-  expect(projectRows()).toEqual(["photon3h", "ember3d"]);
+  await submitIn(renameDialog());
+  expect(projectRows()).toEqual(["ember", "photon"]);
   expect(document.querySelector('#sidebar [role="alert"]')?.textContent).toBe(
     "Invalid params: name must be at most 256 bytes",
   );
 });
 
-test("Change icon opens the picker under the row's icon, and each pick saves the glyph and color together at once", async () => {
+test("Change icon… opens the picker under the Project's square, and each pick saves the glyph and color together at once", async () => {
   capabilities = { projectEdit: {} };
   // Held until released, as over a slow ssh link.
   const pending: (() => void)[] = [];
@@ -893,35 +868,33 @@ test("Change icon opens the picker under the row's icon, and each pick saves the
   };
   await renderApp();
   expect(rowIcon("ember")).toEqual(["layers", "text-accent"]);
-  const row = projectRow("ember");
-  expect(iconPicker(row)!.childElementCount).toBe(0);
 
-  await click(menuItem("ember", "Change icon"));
-  expect(popoverSources).toEqual([rowButton("ember").querySelector("[data-project-icon]")]);
-  expect(popoverSources[0]!.querySelector("svg")).not.toBeNull();
+  await click(menuItem("ember", "Change icon…"));
+  expect(popoverSources).toEqual([projectRow("ember")]);
+  const picker = openPicker();
   expect(
-    iconPicker(row)!
+    iconPicker(picker)!
       .querySelector('[role="option"][aria-selected="true"]')!
       .getAttribute("aria-label"),
   ).toBe("Layers");
 
   // A color, then an icon before the first answer: the second keeps the color.
-  await pickColor(row, "Violet");
-  await pickIcon(row, "Rocket");
+  await pickColor(picker, "Violet");
+  await pickIcon(picker, "Rocket");
   expect(calls("project/update")).toEqual([
     { project: "p-ember", icon: { name: "layers", color: "violet" } },
     { project: "p-ember", icon: { name: "rocket", color: "violet" } },
   ]);
   expect(hostsOf("project/update")).toEqual(["local", "local"]);
   // The picker stays open for the next pick.
-  expect(iconPicker(row)!.childElementCount).toBeGreaterThan(0);
+  expect(iconPicker(picker)!.childElementCount).toBeGreaterThan(0);
 
   await act(async () => pending.forEach((resolve) => resolve()));
   await settle();
   expect(rowIcon("ember")).toEqual(["rocket", "text-project-violet"]);
 
   // The accent sends the icon with no color (0032).
-  await pickColor(row, "Accent");
+  await pickColor(picker, "Accent");
   expect(calls("project/update").at(-1)).toEqual({ project: "p-ember", icon: { name: "rocket" } });
 });
 
@@ -934,7 +907,7 @@ test("another client's project.updated renames a row and changes its icon, in th
     name: "ember app",
     icon: { name: "rocket", color: "green" },
   });
-  expect(projectRows()).toEqual(["photon3h", "ember app3d"]);
+  expect(projectRows()).toEqual(["ember app", "photon"]);
   expect(rowIcon("ember app")).toEqual(["rocket", "text-project-green"]);
   expect(crumbs()).toEqual(["This Mac", "ember app"]);
   const crumbIcon = document.querySelector('[aria-label="Breadcrumb"] li:last-child svg');
@@ -973,10 +946,8 @@ test("with iconImages, Change icon uploads an image, and a Project's and its rep
   );
   await renderApp();
 
-  await click(menuItem("ember", "Change icon"));
-  const input = iconPicker(projectRow("ember"))!.querySelector<HTMLInputElement>(
-    'input[type="file"]',
-  )!;
+  await click(menuItem("ember", "Change icon…"));
+  const input = iconPicker(openPicker())!.querySelector<HTMLInputElement>('input[type="file"]')!;
   Object.defineProperty(input, "files", {
     value: [new File(["x"], "logo.png", { type: "image/png" })],
   });
@@ -994,7 +965,7 @@ test("with iconImages, Change icon uploads an image, and a Project's and its rep
     );
   const projectUrl = `data:image/webp;base64,${logo.data}`;
   const repoUrl = `data:image/png;base64,${repoLogo.data}`;
-  // The row has no repo line (PLX-340), so the repo's image draws in the Repos filter.
+  // The square has no repo line (PLX-340), so the repo's image draws in the Repos filter.
   expect(drawn(rowButton("ember"))).toEqual([projectUrl]);
   expect(drawn(document.querySelector('#sidebar [role="menu"][aria-label="Repos"]'))).toEqual([
     repoUrl,
@@ -1101,16 +1072,9 @@ test("Create Project's icon opens the picker, project/create sends the chosen ic
   expect(dialogIcon()).toEqual(["layers", "text-accent"]);
 });
 
-test("without projectEdit, a Project row has no actions and Create Project's icon is no button, and nothing sends an icon", async () => {
+test("without projectEdit, a Project's menu has no Rename or Change icon, Create Project's icon is no button, and nothing sends an icon", async () => {
   await renderApp();
-  expect(projectRow("ember").querySelector('button[aria-label="Project actions"]')).toBeNull();
-  expect(projectRow("ember").querySelector('[role="menu"]')).toBeNull();
-  expect(iconPicker(projectRow("ember"))).toBeNull();
-  const contextMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
-  act(() => void rowButton("ember").dispatchEvent(contextMenu));
-  expect(contextMenu.defaultPrevented).toBe(false);
-  // The age stays put on hover and focus.
-  expect(rowButton("ember").querySelector("[data-status]")!.className).not.toContain("invisible");
+  expect(menuItems("ember").map((b) => b.textContent)).toEqual(["Open", "Move left", "Move right"]);
 
   await openNewProject();
   expect(iconButton()).toBeNull();
@@ -1212,10 +1176,10 @@ test("with projectPermission, a Project not in Bypass offers Full access…, a o
   });
   await renderApp();
   expect(menuItem("photon", "Full access…")).toBeUndefined();
-  const access = projectRow("ember").querySelector<HTMLDialogElement>(
+  await click(menuItem("ember", "Full access…"));
+  const access = document.querySelector<HTMLDialogElement>(
     'dialog[aria-label="ember full access"]',
   )!;
-  await click(menuItem("ember", "Full access…"));
   expect(access.open).toBe(true);
   expect(access.textContent).toContain("Agents running now keep asking until they next start.");
   expect(access.textContent).toContain("You can't switch back.");
@@ -2111,12 +2075,6 @@ test("side panel visibility belongs to each thread, while entering a Project sti
   await click(threadButton("Thread 1"));
   expect(panel().hidden).toBe(true);
 });
-const sectionHeadings = () =>
-  [...document.querySelectorAll("#sidebar > div h2")].map((h) => h.textContent);
-const projectsToggle = () =>
-  document.querySelector<HTMLButtonElement>("#sidebar h2 button[aria-expanded]")!;
-const projectsSection = () =>
-  document.getElementById(projectsToggle().getAttribute("aria-controls")!)!;
 const newProjectButtons = () => [
   ...document.querySelectorAll('#sidebar button[aria-label="New project"]'),
 ];
@@ -2131,30 +2089,6 @@ const deleteDialog = () =>
     d.querySelector("h2")?.textContent?.startsWith("Delete this"),
   )!;
 
-test("Projects sit in a collapsible section above Threads, with no button beside its heading, and stay collapsed after a reload", async () => {
-  withThread();
-  await renderApp();
-  expect(sectionHeadings()).toEqual(["Projects", "Threads"]);
-  expect(sidebarTitles()).toEqual(["photon", "ember", "Fix the flaky test"]);
-  expect(newProjectButtons()).toHaveLength(0);
-
-  await click(projectsToggle());
-  expect(projectsToggle().getAttribute("aria-expanded")).toBe("false");
-  expect(projectsSection().hidden).toBe(true);
-
-  act(() => unmount());
-  await renderApp();
-  expect(projectsSection().hidden).toBe(true);
-  await click(projectsToggle());
-  expect(projectsSection().hidden).toBe(false);
-});
-
-const sectionToggle = (name: string) =>
-  [...document.querySelectorAll<HTMLButtonElement>("#sidebar h2 button[aria-expanded]")].find((b) =>
-    b.textContent?.startsWith(name),
-  )!;
-const sectionOf = (name: string) =>
-  document.getElementById(sectionToggle(name).getAttribute("aria-controls")!)!;
 const drawer = (name: string) =>
   [...document.querySelectorAll<HTMLDetailsElement>("#sidebar details")].find((d) =>
     d.querySelector("summary")?.textContent?.startsWith(name),
@@ -2166,26 +2100,7 @@ const threadTitles = () =>
     (t) => t.textContent,
   );
 
-test("Threads collapses like Projects and stays collapsed after a reload", async () => {
-  withThread();
-  await renderApp();
-  expect(sectionToggle("Threads").getAttribute("aria-expanded")).toBe("true");
-  expect(threadTitles()).toEqual(["Fix the flaky test"]);
-
-  await click(sectionToggle("Threads"));
-  expect(sectionOf("Threads").hidden).toBe(true);
-  await keyDown({ key: "Meta", metaKey: true });
-  expect(["photon", "ember"].map(statusOf)).toEqual(["⌘1", "⌘2"]);
-  expect(statusOf("Fix the flaky test")).toBe("Done");
-
-  act(() => unmount());
-  await renderApp();
-  expect(sectionOf("Threads").hidden).toBe(true);
-  await click(sectionToggle("Threads"));
-  expect(threadTitles()).toEqual(["Fix the flaky test"]);
-});
-
-test("a working thread moves to Working with its children, then back to Threads when it finishes", async () => {
+test("a working thread waits in Working, folded until opened, then comes back to Today when it finishes; a thread it started never lists", async () => {
   const running: Thread = {
     id: "t-run",
     repo: parallax.id,
@@ -2231,17 +2146,11 @@ test("a working thread moves to Working with its children, then back to Threads 
   });
   capabilities = { threadLineage: {} };
   await renderApp();
-  expect(drawer("Working")!.open).toBe(true);
+  // Working starts folded (0075).
+  expect(drawer("Working")!.open).toBe(false);
+  await click(drawer("Working")!.querySelector("summary"));
   expect(drawerTitles("Working")).toEqual(["Ship the sidebar"]);
   expect(threadTitles()).toEqual(["Read the docs"]);
-  expect(document.querySelector("#sidebar")!.textContent).not.toContain("No threads yet");
-
-  await click(
-    [...drawer("Working")!.querySelectorAll("button")].find((b) =>
-      b.textContent?.startsWith("1 thread"),
-    ),
-  );
-  expect(drawerTitles("Working")).toEqual(["Ship the sidebar", "Write the notes"]);
 
   await act(async () =>
     deliver({
@@ -2264,8 +2173,7 @@ test("a working thread moves to Working with its children, then back to Threads 
   );
   await settle();
   expect(drawer("Working")).toBeUndefined();
-  // The group stays open, so the child comes back with its parent.
-  expect(threadTitles()).toEqual(["Ship the sidebar", "Write the notes", "Read the docs"]);
+  expect(threadTitles()).toEqual(["Ship the sidebar", "Read the docs"]);
 
   sidebarPrefs.set({ ...sidebarDefaults, workingSection: false });
   act(() => unmount());
@@ -2481,14 +2389,14 @@ test("a thread's sidebar row shows its linked pull requests, colored by their ma
   expect(chip("t-open")?.closest("button")?.getAttribute("aria-current")).toBeNull();
 });
 
-test("with no Projects, Threads is the only section, and the toolbar's one button opens the add palette", async () => {
+test("with no Projects there are no favorites, and the toolbar's one button opens the add palette", async () => {
   answers["project/list"] = () => ({ result: { projects: [], seq: 7 } });
   await renderApp();
-  expect(sectionHeadings()).toEqual(["Threads"]);
+  expect(document.querySelector('#sidebar [aria-label="Favorites"]')).toBeNull();
   expect(newProjectButtons()).toHaveLength(0);
   await openPalette();
   expect(dialog().open).toBe(true);
-  expect(paletteOptions()).toHaveLength(4);
+  expect(paletteOptions()).toHaveLength(5);
   await act(async () => dialog().close());
 
   await act(async () =>
@@ -2502,19 +2410,11 @@ test("with no Projects, Threads is the only section, and the toolbar's one butto
       },
     }),
   );
-  expect(sectionHeadings()).toEqual(["Projects", "Threads"]);
+  expect(projectRows()).toEqual(["ember"]);
   expect(newProjectButtons()).toHaveLength(0);
 });
 
-test("a Project row is one line, with no repo line, and its agents in its tooltip", async () => {
-  withThread();
-  await renderApp();
-  expect(rowButton("ember").textContent).toBe("ember3d");
-  expect(rowButton("ember").title).toBe("2 agents");
-  expect(rowButton("photon").hasAttribute("title")).toBe(false);
-});
-
-test("search, the repo filter, and Mod+number cover both sections, and a collapsed section's rows get no numbers", async () => {
+test("search, the repo filter, and Mod+number cover the favorites and Today", async () => {
   withThread();
   await renderApp();
   const search = document.querySelector<HTMLInputElement>(
@@ -2522,9 +2422,10 @@ test("search, the repo filter, and Mod+number cover both sections, and a collaps
   )!;
   typeInto(search, "fla");
   expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
-  expect(projectsSection().textContent).toBe("Nothing matches");
+  expect(projectRows()).toEqual([]);
   typeInto(search, "emb");
-  expect(sidebarTitles()).toEqual(["ember"]);
+  expect(sidebarTitles()).toEqual([]);
+  expect(projectRows()).toEqual(["ember"]);
   typeInto(search, "");
 
   const repoChoice = (name: string) =>
@@ -2535,21 +2436,21 @@ test("search, the repo filter, and Mod+number cover both sections, and a collaps
     ].find((b) => b.textContent === name);
   // Neither Project's folder is a listed repository.
   await click(repoChoice("No repo"));
-  expect(sidebarTitles()).toEqual(["photon", "ember"]);
+  expect(projectRows()).toEqual(["ember", "photon"]);
+  expect(sidebarTitles()).toEqual([]);
   await click(repoChoice("parallax"));
+  expect(projectRows()).toEqual([]);
   expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
   await click(repoChoice("All threads"));
 
+  // The favorites' Projects first, then Today's threads.
   await keyDown({ key: "Meta", metaKey: true });
-  expect(["photon", "ember", "Fix the flaky test"].map(statusOf)).toEqual(["⌘1", "⌘2", "⌘3"]);
+  expect([rowButton("ember").textContent, rowButton("photon").textContent]).toEqual(["⌘1", "⌘2"]);
+  expect(statusOf("Fix the flaky test")).toBe("⌘3");
   await keyDown({ key: "2", code: "Digit2", metaKey: true });
   await settle();
-  expect(crumbs()).toEqual(["This Mac", "ember"]);
-
-  await click(projectsToggle());
-  await keyDown({ key: "Meta", metaKey: true });
-  expect(statusOf("Fix the flaky test")).toBe("⌘1");
-  await keyDown({ key: "1", code: "Digit1", metaKey: true });
+  expect(crumbs()).toEqual(["This Mac", "photon"]);
+  await keyDown({ key: "3", code: "Digit3", metaKey: true });
   await settle();
   expect(crumbs()).toEqual(["This Mac", "parallax", "Fix the flaky test"]);
 });
@@ -2563,9 +2464,14 @@ test("Delete… asks first, shows plxd's error in the dialog, then deletes the o
   await renderApp();
   await click(rowButton("ember"));
   expect(crumbs()).toEqual(["This Mac", "ember"]);
-  expect(
-    [...projectRow("ember").querySelectorAll('[role="menuitem"]')].map((b) => b.textContent),
-  ).toEqual(["Rename", "Change icon", "Delete…"]);
+  expect(menuItems("ember").map((b) => b.textContent)).toEqual([
+    "Open",
+    "Move left",
+    "Move right",
+    "Rename…",
+    "Change icon…",
+    "Delete…",
+  ]);
   expect(menuItem("ember", "Delete…")!.className).toContain("text-danger");
 
   await click(menuItem("ember", "Delete…"));
@@ -2586,7 +2492,8 @@ test("Delete… asks first, shows plxd's error in the dialog, then deletes the o
   await click(confirm());
   expect(calls("project/delete")).toEqual([{ project: "p-ember" }, { project: "p-ember" }]);
   expect(deleteDialog().open).toBe(false);
-  expect(sidebarTitles()).toEqual(["photon", "Fix the flaky test"]);
+  expect(projectRows()).toEqual(["photon"]);
+  expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
   expect(crumbs().at(-1)).toBe("New thread");
 });
 
@@ -2609,7 +2516,7 @@ test("without projectDelete there's no Delete…, and another client's project.d
     }),
   );
   await settle();
-  expect(sidebarTitles()).toEqual(["photon"]);
+  expect(projectRows()).toEqual(["photon"]);
   expect(crumbs().at(-1)).toBe("New thread");
 });
 
@@ -2629,10 +2536,10 @@ test("Autonomy… opens on the Project's level, one line on each, and Save sends
   await renderApp();
   // A Project in Bypass offers no mode.
   expect(menuItem("ember", "Full access…")).toBeUndefined();
-  const settings = projectRow("ember").querySelector<HTMLDialogElement>(
+  await click(menuItem("ember", "Autonomy…"));
+  const settings = document.querySelector<HTMLDialogElement>(
     'dialog[aria-label="ember autonomy"]',
   )!;
-  await click(menuItem("ember", "Autonomy…"));
   expect(settings.open).toBe(true);
   const levels = [...settings.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
   expect(levels.map((r) => [r.value, r.checked])).toEqual([
@@ -2930,167 +2837,6 @@ test("a new Needs you item notifies with Open Project, from the OS while the win
   expect(groupTitles("Waiting on you")).toEqual(["Write the docs"]);
   expect(childButton("Write the docs")!.textContent).toContain("asks which tone");
   act(() => toast()!.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click());
-});
-
-test("with spaces, the add palette offers New Space, which creates one and closes", async () => {
-  capabilities = { spaces: {} };
-  answers["space/create"] = (p) => {
-    const { id, name } = p as { id: string; name: string };
-    return { result: { repo: { ...repo(name, `/data/spaces/${id}`), id, space: true } } };
-  };
-  await renderApp();
-  await openPalette();
-  expect(paletteOptions()).toHaveLength(5);
-  await click(paletteOption("New Space"));
-  typeInto(dialog().querySelector("input")!, " Research ");
-  await openDialogPicker();
-  await pickColor(dialog(), "Teal");
-  await pickIcon(dialog(), "Rocket");
-  press("Enter");
-  await settle();
-  expect(calls("space/create")).toEqual([
-    { id: expect.any(String), name: "Research", icon: { name: "rocket", color: "teal" } },
-  ]);
-  expect(dialog().open).toBe(false);
-});
-
-test("with spaces, a Space's row in the Repos filter renames and deletes it, and the filter makes none", async () => {
-  capabilities = { spaces: {} };
-  const space: Repo = { ...repo("Reading", "/data/spaces/s1"), id: "s1", space: true };
-  let spaces = [space];
-  answers["thread/list"] = () => ({ result: { repos: spaces, threads: [], seq: 7 } });
-  answers["repo/update"] = (p) => {
-    const { repo: id, name } = p as { repo: string; name: string };
-    spaces = spaces.map((s) => (s.id === id ? { ...s, name } : s));
-    return { result: { repo: spaces.find((s) => s.id === id) } };
-  };
-  answers["space/delete"] = () => ({ result: {} });
-  await renderApp();
-  const filter = () =>
-    document.querySelector<HTMLElement>('#sidebar [role="menu"][aria-label="Repos"]')!;
-  const press = (label: string) => filter().querySelector<HTMLElement>(`[aria-label="${label}"]`);
-  const spaceDialog = (label: string) =>
-    document.querySelector<HTMLDialogElement>(`dialog[aria-label="${label}"]`)!;
-  const submit = async (d: HTMLDialogElement) => {
-    await act(async () =>
-      d
-        .querySelector("form")!
-        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
-    );
-    await settle();
-  };
-
-  expect(filter().textContent).not.toContain("New Space");
-
-  await click(press("Rename Reading"));
-  typeInto(spaceDialog("Rename Reading").querySelector("input")!, "Notes");
-  await submit(spaceDialog("Rename Reading"));
-  expect(calls("repo/update")).toEqual([{ repo: "s1", name: "Notes" }]);
-  expect(filter().textContent).toContain("Notes");
-
-  // Filtered to the Space, deleting it shows every repo again.
-  const trigger = () => document.querySelector('#sidebar [aria-label^="Showing "]')!;
-  await click(
-    [...filter().querySelectorAll('[role="menuitemradio"]')].find((b) => b.textContent === "Notes"),
-  );
-  expect(trigger().getAttribute("aria-label")).toBe("Showing Notes");
-  await click(press("Delete Notes"));
-  await submit(spaceDialog("Delete Notes"));
-  expect(calls("space/delete")).toEqual([{ space: "s1" }]);
-  expect(filter().textContent).not.toContain("Notes");
-  expect(trigger().getAttribute("aria-label")).toBe("Showing All threads");
-  expect(trigger().getAttribute("aria-pressed")).toBe("false");
-});
-
-test("⌥ and a digit opens an area, but not while typing, where it types a character (PLX-789)", async () => {
-  capabilities = { areas: {} };
-  withThread();
-  const launch = {
-    id: "a-launch",
-    name: "Launch",
-    color: "violet",
-    threads: [flaky.id],
-    projects: [],
-  };
-  answers["thread/list"] = () => ({
-    result: { repos: [parallax], threads: [flaky], areas: [launch], seq: 7 },
-  });
-  await renderApp();
-  const shown = () =>
-    document.querySelector('#sidebar [aria-label^="Showing "]')!.getAttribute("aria-label");
-  const search = document.querySelector<HTMLInputElement>('#sidebar input[type="search"]')!;
-  await act(
-    async () =>
-      void search.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "¡", code: "Digit1", altKey: true, bubbles: true }),
-      ),
-  );
-  expect(shown()).toBe("Showing All threads");
-  await keyDown({ key: "¡", code: "Digit1", altKey: true });
-  expect(shown()).toBe("Showing Launch");
-  expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
-  await keyDown({ key: "º", code: "Digit0", altKey: true });
-  expect(shown()).toBe("Showing All threads");
-});
-
-test("an area lists its Spaces and repos as folders, an empty one too, that open and close (PLX-852)", async () => {
-  capabilities = { areas: {}, areaRepos: {}, spaces: {} };
-  withThread();
-  const math: Repo = { ...repo("Calculus", "/data/spaces/s1"), id: "s1", space: true };
-  const school = {
-    id: "a-school",
-    name: "School",
-    color: "sky",
-    threads: [],
-    projects: [],
-    repos: [math.id, parallax.id],
-  };
-  answers["thread/list"] = () => ({
-    result: { repos: [parallax, math], threads: [flaky], areas: [school], seq: 7 },
-  });
-  await renderApp();
-  await keyDown({ key: "¡", code: "Digit1", altKey: true });
-  const folders = () => [...document.querySelectorAll<HTMLElement>("#sidebar li[data-folder]")];
-  expect(folders().map((f) => f.querySelector("button")!.textContent)).toEqual([
-    "Calculus",
-    "parallax1",
-  ]);
-  expect(folders()[0]!.textContent).toContain("No threads yet");
-  expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
-  expect(document.querySelector('#sidebar [aria-label="Threads"]')).toBeNull();
-
-  const toggle = folders()[1]!.querySelector("button")!;
-  await click(toggle);
-  expect(toggle.getAttribute("aria-expanded")).toBe("false");
-  expect(sidebarTitles()).toEqual([]);
-});
-
-test("an empty area's editor adds a whole Space (PLX-852)", async () => {
-  capabilities = { areas: {}, areaRepos: {}, spaces: {} };
-  withThread();
-  const math: Repo = { ...repo("Calculus", "/data/spaces/s1"), id: "s1", space: true };
-  const school = { id: "a-school", name: "School", color: "sky", threads: [], projects: [] };
-  answers["thread/list"] = () => ({
-    result: { repos: [parallax, math], threads: [flaky], areas: [school], seq: 7 },
-  });
-  answers["area/update"] = () => ({ result: { area: { ...school, repos: [math.id] } } });
-  await renderApp();
-  await keyDown({ key: "¡", code: "Digit1", altKey: true });
-  await click(
-    [...document.querySelectorAll("#sidebar button")].find((b) => b.textContent === "Pick threads"),
-  );
-  const editor = document.querySelector<HTMLDialogElement>("dialog[open]")!;
-  const calculus = [...editor.querySelectorAll('[role="checkbox"]')].find((b) =>
-    b.textContent?.startsWith("Calculus"),
-  )!;
-  expect(calculus.textContent).toBe("CalculusSpace");
-  await click(calculus);
-  await click(
-    [...editor.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Save")),
-  );
-  expect(calls("area/update")).toEqual([
-    expect.objectContaining({ area: school.id, repos: [math.id] }),
-  ]);
 });
 
 test("on a host without pins or titles, P and R on a row do nothing (PLX-789)", async () => {

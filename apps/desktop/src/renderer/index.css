@@ -1106,6 +1106,106 @@ body {
 :root.reduce-motion .row-flash {
   animation: none;
 }
+/* The sidebar's menus (0075): a popover grows in from where it opens, and fades on its way out. */
+.pop-in {
+  transition:
+    opacity 140ms ease-out,
+    scale 140ms ease-out,
+    translate 140ms ease-out,
+    overlay 140ms allow-discrete,
+    display 140ms allow-discrete;
+  transform-origin: var(--pop-origin, top left);
+}
+.pop-in:not(:popover-open) {
+  opacity: 0;
+  scale: 0.97;
+}
+@starting-style {
+  .pop-in:popover-open {
+    opacity: 0;
+    scale: 0.97;
+    translate: 0 -3px;
+  }
+}
+/* A line showing where a dragged row or square lands draws in from its ring. */
+.drop-line {
+  animation: drop-line 120ms ease-out;
+  transform-origin: left center;
+}
+@keyframes drop-line {
+  from {
+    opacity: 0;
+    scale: 0.6 1;
+  }
+}
+/* A segmented control's thumb: raised off its track, white in light and a step lighter in dark,
+   sliding to the chosen option. */
+.seg-thumb {
+  background: light-dark(var(--surface), color-mix(in srgb, var(--foreground) 13%, var(--surface)));
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 8%),
+    0 0 0 0.5px var(--border);
+  transition: transform 220ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+/* What arrives in the sidebar once its first load has settled (data-settled, Sidebar.tsx): a count
+   rolls up into place, a status dot pops, and a square or button grows in. */
+.tick {
+  display: inline-block;
+  transition:
+    translate 240ms cubic-bezier(0.23, 1, 0.32, 1),
+    opacity 240ms ease-out;
+}
+.dot-in {
+  transition:
+    scale 280ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    opacity 160ms ease-out;
+}
+.grow-in {
+  transition:
+    scale 220ms cubic-bezier(0.23, 1, 0.32, 1),
+    opacity 180ms ease-out;
+}
+@starting-style {
+  [data-settled] .tick {
+    translate: 0 0.45em;
+    opacity: 0;
+  }
+  [data-settled] .dot-in {
+    scale: 0.3;
+    opacity: 0;
+  }
+  [data-settled] .grow-in {
+    scale: 0.92;
+    opacity: 0;
+  }
+}
+/* A status that changed (AttentionMark.tsx, PinList.tsx), and a drawer's rows as it opens, rise
+   into place; the thread card beside a row fades in from it. */
+.rise-in {
+  animation: rise-in 240ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    translate: 0 3px;
+  }
+}
+.card-in {
+  animation: card-in 160ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+@keyframes card-in {
+  from {
+    opacity: 0;
+    translate: -4px 0;
+  }
+}
+:root.reduce-motion :is(.pop-in, .drop-line, .seg-thumb, .tick, .dot-in, .grow-in) {
+  transition: none;
+  animation: none;
+}
+:root.reduce-motion :is(.rise-in, .card-in) {
+  animation: none;
+}
 :root.reduce-motion {
   .plan-bar {
     transition: none;

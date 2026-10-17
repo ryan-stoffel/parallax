@@ -1084,7 +1084,8 @@ const handlers: { [M in Method]?: Handler<M> } = {
       reviewRequests: [],
       labels: number === 591 ? ["docs"] : ["feature", "app"],
       checks: [],
-      checksState: number === 591 ? "passed" : "pending",
+      checksState:
+        number === 591 || number === 612 ? "passed" : number === 41 ? "failed" : "pending",
     };
   },
   "agent/approve": (p) => {
@@ -1125,7 +1126,7 @@ const handlers: { [M in Method]?: Handler<M> } = {
       insertions: run?.status === "running" ? 715 : 0,
       deletions: 0,
       upstream: run?.diff ? null : "origin/develop",
-      ahead: run?.diff ? 1 : 0,
+      ahead: run?.diff ? 1 + (run.diff.files % 3) : 0,
       origin: true,
     };
   },

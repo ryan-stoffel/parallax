@@ -3,7 +3,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Columns2,
-  Plus,
+  Folder,
   GitFork,
   X,
   PanelBottom,
@@ -11,16 +11,9 @@ import {
   PanelRight,
   Workflow,
 } from "lucide-react";
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 
-import type {
-  Area,
-  InboxItem,
-  PreviewTab,
-  Repo,
-  RepoId,
-  Thread,
-} from "../protocol/generated/protocol";
+import type { InboxItem, PreviewTab, Repo, RepoId, Thread } from "../protocol/generated/protocol";
 import { type RepoAction } from "./Actions";
 import { AgentChat } from "./AgentChat";
 import { ChangesPanel, type ChangesRequest } from "./ChangesPanel";
@@ -37,7 +30,7 @@ import type { DocRef } from "./documents";
 import { OpenDocumentContext } from "./FileCards";
 import { panelWidths, SIDEBAR_MIN } from "./PanelResize";
 import { NewThreadPicker } from "./NewThreadPicker";
-import { Notifications, notify } from "./notifications";
+import { Notifications } from "./notifications";
 import { Onboarding } from "./Onboarding";
 import { useOnboarding } from "./firstRun";
 import { localId, useHosts } from "./hosts";
@@ -58,8 +51,6 @@ import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
 import type { NativeSubagent } from "./Subagents";
 import { attentionOf } from "./attention";
-import { AreaSwatch } from "./AreaEditor";
-import { parseScope, scopeStore, withMember } from "./areas";
 import {
   useAccountAlarms,
   useConnectionAlarms,
@@ -93,7 +84,8 @@ import {
   type ThreadsView,
 } from "./threads";
 import { isRunning } from "./transcript";
-import { appShortcut, Breadcrumb, IconButton, Menu, menuItem, TopBar, type Crumb } from "./ui";
+import { fileStarted, folderPath, pinLayout, startIn } from "./pins";
+import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { useUpdateAlarms } from "./Update";
 import { useShortcutLabel } from "./keybindings";
 import { draggedThread, threadDragType } from "./threadDrag";
@@ -241,6 +233,7 @@ export function App() {
     [hosts, views],
   );
   const { groups } = groupThreads(threads.state);
+  const pinFolders = pinLayout.use().folders;
   // The other computers' repositories, which New Thread and Mod+N's picker list too.
   const elsewhere = useMemo(() => otherRepos(hosts, views, host.id), [hosts, views, host.id]);
   // Every thread and Project the open host has listed, so a selection is dropped only once what it
@@ -458,31 +451,6 @@ export function App() {
     openHostThread(hostId, threadId);
   };
 
-  // New Thread joins the open area (PLX-789), unless the user takes the chip off or picks another.
-  const scope = parseScope(scopeStore.use());
-  const areasHere = "areas" in threads.capabilities ? threads.state.areas : [];
-  const [joinChoice, setJoinChoice] = useState<{ hostId: string; area: string | null }>();
-  const inNew = selection.kind === "new";
-  if (!inNew && joinChoice) setJoinChoice(undefined);
-  const joining = areasHere.find((a) =>
-    joinChoice?.hostId === host.id
-      ? a.id === joinChoice.area
-      : scope.kind === "area" && scope.hostId === host.id && a.id === scope.id,
-  );
-  // Read when a start answers, from the lists as they are then, so two quick starts both join.
-  const viewsNow = useRef(views);
-  useEffect(() => {
-    viewsNow.current = views;
-  });
-  const joinArea = async (hostId: string, threadId: string) => {
-    if (!joining) return;
-    const view = viewsNow.current[hostId] ?? idleThreads;
-    const area = view.state.areas.find((a) => a.id === joining.id);
-    const error =
-      area && (await view.updateArea(area.id, withMember(area, "thread", threadId, true)));
-    if (error)
-      notify({ tone: "error", title: `Couldn't add the thread to ${joining.name}`, body: error });
-  };
   useSnoozeAlarms(listed, openHostThread);
   useThreadAlarms(listed, openHostThread, settings ? [] : panes.map((id) => `${host.id}/${id}`));
   useConnectionAlarms(hosts);
@@ -540,14 +508,31 @@ export function App() {
     ];
     if (agentTitle) crumbs.push({ label: agentTitle, icon: <Workflow /> });
   } else {
-    const repo = {
-      label: group.name,
-      icon: <RepoIcon repo={threads.state.repos.find((r) => r.id === group.id)} />,
-      onClick:
-        selection.kind === "thread"
-          ? () => setSelection({ kind: "new", groupId: group.id })
-          : undefined,
-    };
+    const groupRepo = threads.state.repos.find((r) => r.id === group.id);
+    // A chat in a pinned folder shows the folder in No Repo's place (pins.ts). Nested folders read
+    // as a path: School / Math.
+    const path =
+      selection.kind === "thread" && (!groupRepo || groupRepo.scratch)
+        ? folderPath(pinFolders, `${host.id}/${selection.threadId}`)
+        : [];
+    const folder = path.at(-1);
+    const repo = folder
+      ? {
+          label: path.map((f) => f.name).join(" / "),
+          icon: (
+            <Folder
+              style={{ color: folder.color ? `var(--project-${folder.color})` : undefined }}
+            />
+          ),
+        }
+      : {
+          label: group.name,
+          icon: <RepoIcon repo={groupRepo} />,
+          onClick:
+            selection.kind === "thread"
+              ? () => setSelection({ kind: "new", groupId: group.id })
+              : undefined,
+        };
     const page =
       selection.kind === "thread"
         ? (threads.state.titles[selection.threadId] ?? "Thread")
@@ -833,7 +818,7 @@ export function App() {
       {onboarding && <Onboarding onStart={() => picker.current?.showModal()} />}
       <NewThreadPicker
         ref={picker}
-        groups={groups}
+        groups={groups.filter((g) => !g.space)}
         repos={threads.state.repos}
         hostName={host.name}
         elsewhere={elsewhere}
@@ -1149,18 +1134,14 @@ export function App() {
                         "runOptions" in connection.capabilities
                       }
                       onStarted={(threadId, background) => {
-                        void joinArea(host.id, threadId);
+                        // Started from a pinned folder's New thread: pinned there (pins.ts).
+                        if (startIn.get()) {
+                          void threads.update(threadId, { pinned: true });
+                          fileStarted(`${host.id}/${threadId}`);
+                        }
                         if (!background) setSelection({ kind: "thread", threadId, started: true });
                       }}
-                      chips={
-                        areasHere.length > 0 && (
-                          <JoinChip
-                            areas={areasHere}
-                            joining={joining}
-                            onJoin={(area) => setJoinChoice({ hostId: host.id, area })}
-                          />
-                        )
-                      }
+                      chips={<FolderChip />}
                       disabledReason={offline}
                       threadLinks={threadLinks}
                     />
@@ -1446,65 +1427,33 @@ export function App() {
 }
 
 /**
- * New Thread's area chip (PLX-789): "Joins <area>" while the thread will join one, which × takes
- * off, or else Add to an area, a menu of the host's areas.
+ * New Thread's folder chip (pins.ts): the pinned folder the thread goes in, from that folder's New
+ * thread, which × takes off.
  */
-function JoinChip({
-  areas,
-  joining,
-  onJoin,
-}: {
-  areas: Area[];
-  joining?: Area;
-  onJoin: (area: string | null) => void;
-}) {
-  const menuId = useId();
-  const chip =
-    "flex h-7 max-w-64 items-center gap-1.5 rounded-lg border border-border text-[12.5px] [&_svg]:size-3.5";
-  if (joining)
-    return (
-      <span title="It joins this area too" className={`${chip} pr-1 pl-2.5 text-foreground`}>
-        <AreaSwatch color={joining.color} />
-        <span className="min-w-0 truncate">Joins {joining.name}</span>
-        <button
-          type="button"
-          aria-label={`Don't add to ${joining.name}`}
-          onClick={() => onJoin(null)}
-          className="grid size-5 shrink-0 place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground"
-        >
-          <X />
-        </button>
-      </span>
-    );
+function FolderChip() {
+  const id = startIn.use();
+  const folders = pinLayout.use().folders;
+  const folder = id ? folders[id] : undefined;
+  if (!folder) return null;
   return (
-    <>
+    <span
+      title="It's pinned in this folder once it starts"
+      className="flex h-7 max-w-64 items-center gap-1.5 rounded-lg border border-border pr-1 pl-2.5 text-[12.5px] text-foreground [&_svg]:size-3.5"
+    >
+      <Folder
+        aria-hidden
+        style={{ color: folder.color ? `var(--project-${folder.color})` : undefined }}
+      />
+      <span className="min-w-0 truncate">Goes in {folder.name}</span>
       <button
         type="button"
-        popoverTarget={menuId}
-        aria-haspopup="menu"
-        className={`${chip} border-dashed px-2.5 text-muted-foreground hover:bg-hover hover:text-foreground`}
+        aria-label={`Don't put it in ${folder.name}`}
+        onClick={() => startIn.set(null)}
+        className="grid size-5 shrink-0 place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground"
       >
-        <Plus aria-hidden />
-        Add to an area
+        <X />
       </button>
-      <Menu id={menuId} label="Area" className="min-w-48 p-1">
-        {areas.map((a) => (
-          <button
-            key={a.id}
-            type="button"
-            role="menuitem"
-            className={menuItem}
-            onClick={(e) => {
-              e.currentTarget.closest<HTMLElement>("[popover]")?.hidePopover();
-              onJoin(a.id);
-            }}
-          >
-            <AreaSwatch color={a.color} />
-            <span className="min-w-0 truncate">{a.name}</span>
-          </button>
-        ))}
-      </Menu>
-    </>
+    </span>
   );
 }
 

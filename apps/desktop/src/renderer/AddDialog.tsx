@@ -6,7 +6,6 @@ import {
   FolderGit2,
   FolderOpen,
   Layers,
-  MessagesSquare,
   Search,
 } from "lucide-react";
 import {
@@ -22,18 +21,14 @@ import {
 import { flushSync } from "react-dom";
 
 import { githubSlug, isFolderName, type FolderListing } from "../preload/bridge";
-import type {
-  Project,
-  ProjectIcon as ProjectIconValue,
-  Repo,
-} from "../protocol/generated/protocol";
+import type { Project, Repo } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { localId, type Host } from "./hosts";
-import { IconPicker } from "./IconPicker";
+
 import { GitHubLogo } from "./logos";
 import { NewProjectForm } from "./NewProjectForm";
 import { connection, hostIcon } from "./RunTargetMenu";
-import { ProjectIcon } from "./Sidebar";
+
 import type { ThreadsView } from "./threads";
 import { uuidv7 } from "./uuidv7";
 import type { Workspace, WorkspaceSource } from "./WorkspaceMenu";
@@ -42,7 +37,7 @@ import type { Workspace, WorkspaceSource } from "./WorkspaceMenu";
 const kbd = "rounded-md bg-selected px-1.5 py-0.5 font-sans text-[11.5px] text-foreground";
 
 type Step =
-  | { kind: "menu" | "create" | "clone" | "computer" | "project" | "space" }
+  | { kind: "menu" | "create" | "clone" | "computer" | "project" }
   | { kind: "browse"; hostId?: string }
   | { kind: "cloneTo"; slug: string };
 
@@ -51,9 +46,8 @@ export type AddDialogHandle = { open: (start?: "project") => void };
 
 /**
  * The sidebar's add palette, a native modal <dialog> laid out like a command palette. Its menu
- * offers New repository, Local folder, Clone from GitHub, New Project, and, where the host has
- * Spaces, New Space, and each opens a step
- * of its own in the same dialog; Back returns to the step before. With more than one computer,
+ * offers New repository, Local folder, Clone from GitHub, and New Project, each opening a step of
+ * its own in the same dialog, and New folder, which closes it; Back returns to the step before. With more than one computer,
  * Local folder first asks which (PLX-769). The first three make or find a repository and
  * register it with its computer's plxd (`repo/add`), then close, or, when Create Project's
  * Workspace menu asked for it, return there with it chosen.
@@ -65,10 +59,11 @@ export function AddDialog({
   hostId,
   repos,
   create,
-  createSpace,
-  iconImageBytes,
+  onNewFolder,
   onCreated,
 }: {
+  /** New folder (pins.ts): an empty pinned folder, named in place. */
+  onNewFolder: () => void;
   ref: Ref<AddDialogHandle>;
   hosts: Host[];
   /** Why Local folder can't browse a computer, by id: offline, or a plxd without `hostFolders`. */
@@ -79,10 +74,6 @@ export function AddDialog({
   repos: Repo[];
   /** Creates a Project on the open host. */
   create: ThreadsView["createProject"];
-  /** Creates a Space on the open host, or undefined where its plxd has none. */
-  createSpace?: ThreadsView["createSpace"];
-  /** The open host's `iconImages` cap, or none where its plxd keeps no icon images. */
-  iconImageBytes?: number;
   onCreated: (hostId: string, project: Project) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -131,20 +122,15 @@ export function AddDialog({
       {step.kind === "menu" && (
         <MenuStep
           key={session}
-          spaces={!!createSpace}
           computers={hosts.length > 1}
           onBack={back}
-          onPick={(kind) =>
-            push(kind === "browse" && hosts.length > 1 ? { kind: "computer" } : { kind })
-          }
-        />
-      )}
-      {step.kind === "space" && createSpace && (
-        <SpaceStep
-          onBack={back}
-          create={createSpace}
-          maxImageBytes={iconImageBytes}
-          onDone={() => dialog.current?.close()}
+          onPick={(kind) => {
+            if (kind === "folder") {
+              dialog.current?.close();
+              return onNewFolder();
+            }
+            push(kind === "browse" && hosts.length > 1 ? { kind: "computer" } : { kind });
+          }}
         />
       )}
       {step.kind === "create" && <CreateStep {...steps} />}
@@ -192,7 +178,7 @@ export function AddDialog({
 type StepProps = { onBack: () => void; onAdded: (hostId: string, repo: Repo) => void };
 
 const menu: {
-  kind: WorkspaceSource | "project" | "space";
+  kind: WorkspaceSource | "project" | "folder";
   name: string;
   detail: string;
   icon: ReactNode;
@@ -222,25 +208,23 @@ const menu: {
     icon: <Layers />,
   },
   {
-    kind: "space",
-    name: "New Space",
-    detail: "A group of chats with no repository",
-    icon: <MessagesSquare />,
+    kind: "folder",
+    name: "New folder",
+    detail: "Keep chats and threads together in the sidebar",
+    icon: <Folder />,
   },
 ];
 
 /** The palette's first step: what to add, searchable. */
 function MenuStep({
-  spaces,
   computers,
   onBack,
   onPick,
 }: {
-  spaces: boolean;
   /** Whether there's more than one computer, so Local folder can be on any of them. */
   computers: boolean;
   onBack: () => void;
-  onPick: (kind: WorkspaceSource | "project" | "space") => void;
+  onPick: (kind: WorkspaceSource | "project" | "folder") => void;
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -251,9 +235,7 @@ function MenuStep({
         ? { ...m, detail: "Add a repository that's already on one of your computers" }
         : m,
     )
-    .filter(
-      (m) => (spaces || m.kind !== "space") && `${m.name} ${m.detail}`.toLowerCase().includes(q),
-    );
+    .filter((m) => `${m.name} ${m.detail}`.toLowerCase().includes(q));
   const list = useList(shown.length, active, setActive);
   return (
     <>
@@ -285,7 +267,7 @@ function MenuStep({
           list={list}
           label="Add"
           options={shown.map((m) => ({ id: m.kind, ...m }))}
-          onPick={(o) => onPick(o.id as WorkspaceSource | "project" | "space")}
+          onPick={(o) => onPick(o.id as WorkspaceSource | "project" | "folder")}
         />
         {shown.length === 0 && <Note>Nothing matches</Note>}
       </Body>
@@ -355,80 +337,6 @@ function ComputerStep({
         {shown.length === 0 && <Note>No computers match</Note>}
       </Body>
       <Footer keys={[navigate, ["Enter", "Pick"], close]} />
-    </>
-  );
-}
-
-/** New Space: an icon and a name, then `space/create`, and the palette closes. */
-function SpaceStep({
-  onBack,
-  create,
-  maxImageBytes,
-  onDone,
-}: {
-  onBack: () => void;
-  create: ThreadsView["createSpace"];
-  maxImageBytes?: number;
-  onDone: () => void;
-}) {
-  const pickerId = useId();
-  const [icon, setIcon] = useState<ProjectIconValue>();
-  const [name, setName] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const trimmed = name.trim();
-  const submit = async () => {
-    if (!trimmed || busy) return;
-    setBusy(true);
-    const failed = await create(trimmed, icon);
-    setBusy(false);
-    if (failed) setError(failed);
-    else onDone();
-  };
-  return (
-    <>
-      <Header
-        onBack={onBack}
-        action={
-          <Action
-            label={busy ? "Creating…" : "Create"}
-            keys="Enter"
-            disabled={!trimmed || busy}
-            onClick={() => void submit()}
-          />
-        }
-      >
-        <button
-          type="button"
-          popoverTarget={pickerId}
-          aria-haspopup="dialog"
-          aria-label="Choose icon"
-          title="Choose icon"
-          className="grid size-7 shrink-0 place-items-center rounded-md border border-border hover:bg-hover"
-        >
-          <ProjectIcon icon={icon} className="size-4" />
-        </button>
-        <input
-          ref={autofocus}
-          aria-label="Space name"
-          placeholder="Space name"
-          value={name}
-          autoComplete="off"
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key !== "Enter") return;
-            e.preventDefault();
-            void submit();
-          }}
-          className={field}
-        />
-      </Header>
-      <Body>
-        <Note>A Space groups chats that need no repository.</Note>
-        <Problem error={error} />
-      </Body>
-      <IconPicker id={pickerId} value={icon} onPick={setIcon} maxImageBytes={maxImageBytes} />
-      <Footer keys={[["Enter", "Create"], close]} />
     </>
   );
 }
