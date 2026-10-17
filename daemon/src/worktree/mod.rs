@@ -738,10 +738,9 @@ impl WorktreeManager {
 
     /// Puts back a run's worktree at `path` after the merged-worktree sweep removed it (PLX-781),
     /// so a message to its thread can resume there. `branch` is checked out when it still exists,
-    /// and otherwise made again from the default branch, fetched first, which holds the merged
-    /// work. Returns the
-    /// new worktree's git folder, to pin as [`CreatedWorktree::git_dir`] is, and the commit a
-    /// branch made again starts from, its new base.
+    /// and otherwise made again from origin's default branch, fetched first, which holds the
+    /// merged work. Returns the new worktree's git folder, to pin as [`CreatedWorktree::git_dir`]
+    /// is, and the commit a branch made again starts from, its new base.
     ///
     /// # Errors
     ///
@@ -776,9 +775,19 @@ impl WorktreeManager {
             let default = if remote.success() {
                 remote.stdout.trim().to_owned()
             } else {
-                self.default_branch(&repo_root)
+                // With no `origin/HEAD`, as after `remote add` and a push on git before 2.48.
+                let local = self
+                    .default_branch(&repo_root)
                     .await
-                    .unwrap_or_else(|_| "HEAD".to_owned())
+                    .unwrap_or_else(|_| "HEAD".to_owned());
+                if self
+                    .has_ref(&repo_root, &format!("refs/remotes/origin/{local}"))
+                    .await?
+                {
+                    format!("origin/{local}")
+                } else {
+                    local
+                }
             };
             Some(self.fetch_base(&repo_root, &default).await?)
         };
@@ -817,6 +826,10 @@ impl WorktreeManager {
                     .await;
                 if !removed.is_ok_and(|output| output.success()) {
                     warn!(path = %path.display(), "could not remove a worktree whose restore failed");
+                }
+                // A branch made here goes too, or the next restore would keep it and its old base.
+                if base.is_some() {
+                    let _ = self.run_git(&repo_root, &["branch", "-D", branch]).await;
                 }
                 Err(error)
             }
