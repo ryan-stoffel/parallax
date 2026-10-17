@@ -397,6 +397,15 @@ test("a pasted image sits above the text, with its name nowhere in it, and is se
   expect(box.textContent).toBe("");
   act(() => document.querySelector<HTMLElement>('[aria-label="Remove image 2"]')!.click());
   expect(thumbnails()).toEqual(["Image 1", "Image 2"]);
+  // Clicking one opens it large, with the others beside it.
+  HTMLDialogElement.prototype.showModal = vi.fn();
+  HTMLDialogElement.prototype.close = function () {
+    this.dispatchEvent(new Event("close"));
+  };
+  act(() => document.querySelector<HTMLElement>('[aria-label="Open image 2"]')!.click());
+  expect(document.querySelector("dialog")!.textContent).toBe("Image 22 / 2");
+  act(() => document.querySelector<HTMLElement>('dialog [aria-label="Close"]')!.click());
+  expect(document.querySelector("dialog")).toBeNull();
 
   type("What's wrong here?");
   await press("Enter");

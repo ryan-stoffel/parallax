@@ -64,6 +64,7 @@ import { accessPrefs } from "./accessPrefs";
 import { FileCard } from "./FileCard";
 import { Mention } from "./Mention";
 import { imageUrl, readImage, type ImageCaps } from "./images";
+import { Lightbox } from "./Lightbox";
 import { encodedImage, uploadFiles, withFiles, type UploadCaps } from "./uploads";
 import { ModelMenu } from "./ModelMenu";
 import { behaviorPrefs, newThreadPrefs, usageView } from "./prefs";
@@ -552,6 +553,8 @@ export function Composer({
   // The file going in pieces now, the share of it sent, and whether a piece failed.
   const [sending, setSending] = useState<{ file: File; share: number; failed?: boolean }>();
   const [images, setImages] = useState<PromptImage[]>(initial?.images ?? []);
+  // The image shown large, kept by identity so images put back ahead of it don't change it.
+  const [shown, setShown] = useState<PromptImage>();
   // Attached threads' run ids, shown as chips beside the images.
   const [threads, setThreads] = useState<string[]>(initial?.threads ?? []);
   // Run ids are the host's own, so they don't follow a New Thread draft to another computer.
@@ -1259,11 +1262,18 @@ export function Composer({
             ))}
             {images.map((image, i) => (
               <span key={i} className="relative">
-                <img
-                  src={imageUrl(image)}
-                  alt={`Image ${i + 1}`}
-                  className="size-14 rounded-xl border border-border object-cover"
-                />
+                <button
+                  type="button"
+                  aria-label={`Open image ${i + 1}`}
+                  onClick={() => setShown(image)}
+                  className="block cursor-zoom-in rounded-xl"
+                >
+                  <img
+                    src={imageUrl(image)}
+                    alt={`Image ${i + 1}`}
+                    className="size-14 rounded-xl border border-border object-cover"
+                  />
+                </button>
                 <button
                   type="button"
                   aria-label={`Remove image ${i + 1}`}
@@ -1292,6 +1302,14 @@ export function Composer({
               </p>
             )}
           </fieldset>
+        )}
+        {shown && images.includes(shown) && (
+          <Lightbox
+            images={images.map((image, i) => ({ src: imageUrl(image), name: `Image ${i + 1}` }))}
+            index={images.indexOf(shown)}
+            onIndex={(i) => setShown(images[i])}
+            onClose={() => setShown(undefined)}
+          />
         )}
         <div className="relative">
           {!text && (

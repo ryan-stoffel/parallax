@@ -212,7 +212,10 @@ test("a user message shows its images over its text: fetched by id, or at hand w
         kind: "pending",
         key: "p",
         text: "And this?",
-        images: [{ mediaType: "image/png", data: "BBBB" }],
+        images: [
+          { mediaType: "image/png", data: "BBBB" },
+          { mediaType: "image/png", data: "CCCC" },
+        ],
       }}
       live={false}
       open={false}
@@ -221,6 +224,12 @@ test("a user message shows its images over its text: fetched by id, or at hand w
   );
   expect(document.querySelector("img")?.getAttribute("src")).toBe(url("BBBB"));
   expect(document.body.textContent).toBe("And this?");
+
+  // Clicking one opens it large, with the others beside it.
+  HTMLDialogElement.prototype.showModal = vi.fn();
+  act(() => document.querySelectorAll<HTMLElement>('[aria-label="Open image"]')[1]!.click());
+  expect(document.querySelector("dialog img")?.getAttribute("src")).toBe(url("CCCC"));
+  expect(document.querySelector("dialog")!.textContent).toContain("Image.png2 / 2");
 });
 
 // The host's threads (PLX-378): one Codex thread the transcript's chips can open.

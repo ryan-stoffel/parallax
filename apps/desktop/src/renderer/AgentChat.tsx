@@ -1688,11 +1688,11 @@ export const RowView = memo(function RowView({
             </div>
           )}
           {images && images.length > 0 && (
-            <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
+            <MessageImages className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
               {images.map((image, i) => (
                 <MessageImage key={i} image={image} loadImage={loadImage} />
               ))}
-            </div>
+            </MessageImages>
           )}
           {/* The threads attached as context, which open from here (PLX-378). */}
           {threads && threads.length > 0 && (
@@ -1897,20 +1897,54 @@ function SentFile({ path }: { path: string }) {
 }
 
 /**
- * One of a user message's images, as a thumbnail: at hand, or fetched by id. The same height
- * either way, so the row doesn't jump when it loads. A tool call's is `zoomable`: clicking it opens
- * it large, with Download (PLX-834).
+ * A message's thumbnails, among `children`, laid out by `className`. Clicking one opens it large,
+ * with arrows to the others that loaded and Download (PLX-834).
+ */
+function MessageImages({ className, children }: { className: string; children: ReactNode }) {
+  const [shown, setShown] = useState<{ images: { src: string; name: string }[]; index: number }>();
+  return (
+    <div
+      className={className}
+      onClick={(e) => {
+        const open = (e.target as Element).closest("[data-open-image]");
+        if (!open) return;
+        const buttons = [...e.currentTarget.querySelectorAll("[data-open-image]")];
+        const images = buttons.map((button) => {
+          // A data: URL, `data:image/png;base64,...`.
+          const src = button.querySelector("img")!.getAttribute("src")!;
+          return { src, name: `Image.${src.slice("data:image/".length, src.indexOf(";"))}` };
+        });
+        setShown({ images, index: buttons.indexOf(open) });
+      }}
+    >
+      {children}
+      {shown && (
+        <Lightbox
+          images={shown.images}
+          index={shown.index}
+          onIndex={(index) => setShown({ ...shown, index })}
+          onClose={() => setShown(undefined)}
+          onDownload={(index) => {
+            const { src, name } = shown.images[index]!;
+            download(name, fromBase64(src.slice(src.indexOf(",") + 1)));
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * One of a message's images, as a thumbnail that opens in its `MessageImages`: at hand, or fetched
+ * by id. The same height either way, so the row doesn't jump when it loads.
  */
 function MessageImage({
   image,
   loadImage,
-  zoomable,
 }: {
   image: PromptImage | ImageId;
   loadImage?: (imageId: ImageId) => Promise<string | undefined>;
-  zoomable?: boolean;
 }) {
-  const [large, setLarge] = useState(false);
   // By id: its data URL once fetched, or null when plxd couldn't serve it.
   const [fetched, setFetched] = useState<{ id: ImageId; url: string | null }>();
   useEffect(() => {
@@ -1923,39 +1957,21 @@ function MessageImage({
   }, [image, loadImage]);
   const url =
     typeof image === "string" ? (fetched?.id === image ? fetched.url : undefined) : imageUrl(image);
-  if (url) {
-    const thumb = (
-      <img
-        src={url}
-        alt="Image"
-        className="h-32 max-w-60 rounded-xl border border-border object-cover"
-      />
-    );
-    if (!zoomable) return thumb;
-    // A data: URL, `data:image/png;base64,...`.
-    const name = `Image.${url.slice("data:image/".length, url.indexOf(";"))}`;
+  if (url)
     return (
-      <>
-        <button
-          type="button"
-          aria-label="Open image"
-          onClick={() => setLarge(true)}
-          className="cursor-zoom-in rounded-xl"
-        >
-          {thumb}
-        </button>
-        {large && (
-          <Lightbox
-            images={[{ src: url, name }]}
-            index={0}
-            onIndex={() => {}}
-            onClose={() => setLarge(false)}
-            onDownload={() => download(name, fromBase64(url.slice(url.indexOf(",") + 1)))}
-          />
-        )}
-      </>
+      <button
+        type="button"
+        aria-label="Open image"
+        data-open-image
+        className="cursor-zoom-in rounded-xl"
+      >
+        <img
+          src={url}
+          alt="Image"
+          className="h-32 max-w-60 rounded-xl border border-border object-cover"
+        />
+      </button>
     );
-  }
   return (
     <span
       role="img"
@@ -2306,11 +2322,11 @@ function ToolCall({
         {!!item.images?.length && (
           <div>
             <p className="mb-1 text-[11.5px] text-faint-foreground">Images</p>
-            <div className="flex flex-wrap gap-2">
+            <MessageImages className="flex flex-wrap gap-2">
               {item.images.map((id) => (
-                <MessageImage key={id} image={id} loadImage={loadImage} zoomable />
+                <MessageImage key={id} image={id} loadImage={loadImage} />
               ))}
-            </div>
+            </MessageImages>
           </div>
         )}
         {item.output !== undefined && <Block label="Output">{item.output}</Block>}
@@ -2971,7 +2987,7 @@ function EditMessage({
       className="ml-auto flex w-[85%] flex-col items-end gap-1.5 py-2"
     >
       {images.length > 0 && (
-        <div className="flex flex-wrap justify-end gap-1.5">
+        <MessageImages className="flex flex-wrap justify-end gap-1.5">
           {images.map((image, i) => (
             <div key={i} className="relative">
               <MessageImage image={image} loadImage={loadImage} />
@@ -2985,7 +3001,7 @@ function EditMessage({
               </button>
             </div>
           ))}
-        </div>
+        </MessageImages>
       )}
       <textarea
         autoFocus
