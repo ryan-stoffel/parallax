@@ -473,6 +473,8 @@ async fn a_message_makes_a_swept_worktree_again() {
         &[
             "clone",
             "-q",
+            "-b",
+            &main,
             origin.to_str().unwrap(),
             other.to_str().unwrap(),
         ],
