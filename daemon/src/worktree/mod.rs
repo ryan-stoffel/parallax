@@ -736,6 +736,73 @@ impl WorktreeManager {
         Ok(())
     }
 
+    /// Puts back a run's worktree at `path` after the merged-worktree sweep removed it (PLX-781),
+    /// so a message to its thread can resume there. `branch` is checked out when it still exists,
+    /// and otherwise made again from the default branch, which holds the merged work. Returns the
+    /// new worktree's git folder, to pin as [`CreatedWorktree::git_dir`] is, and the commit a
+    /// branch made again starts from, its new base.
+    ///
+    /// # Errors
+    ///
+    /// [`WorktreeError::NotAGitRepo`], or a git or filesystem failure.
+    pub async fn restore(
+        &self,
+        repo_path: &Path,
+        path: &Path,
+        branch: &str,
+    ) -> Result<(PathBuf, Option<String>), WorktreeError> {
+        let repo_root = self.repo_root(repo_path).await?;
+        let guard = self.lock_repo(&repo_root).await;
+        self.run_git_ok(&repo_root, &["worktree", "prune"]).await?;
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|source| WorktreeError::Io {
+                    path: parent.to_owned(),
+                    source,
+                })?;
+        }
+        let path_arg = path.to_string_lossy().into_owned();
+        let base = if self
+            .has_ref(&repo_root, &format!("refs/heads/{branch}"))
+            .await?
+        {
+            self.run_git_ok(
+                &repo_root,
+                &["worktree", "add", "--no-checkout", &path_arg, branch],
+            )
+            .await?;
+            None
+        } else {
+            let base = self
+                .default_branch(&repo_root)
+                .await
+                .unwrap_or_else(|_| "HEAD".to_owned());
+            let commit = self.resolve_commit(&repo_root, &base).await?;
+            self.run_git_ok(
+                &repo_root,
+                &[
+                    "worktree",
+                    "add",
+                    "--no-checkout",
+                    "-b",
+                    branch,
+                    &path_arg,
+                    &commit,
+                ],
+            )
+            .await?;
+            Some(commit)
+        };
+        drop(guard);
+        self.run_git_ok(path, &["reset", "--hard", "--quiet"])
+            .await?;
+        let git_dir = self
+            .run_git_ok(path, &["rev-parse", "--absolute-git-dir"])
+            .await?;
+        Ok((PathBuf::from(git_dir.trim()), base))
+    }
+
     /// Removes a folder plxd owns directly, with no git command, so nothing here may discover a
     /// repository from, or trust, whatever `path`'s own `.git` file says (#166, #171). `path`
     /// itself must be a real directory, never a symlink planted to route this removal elsewhere.

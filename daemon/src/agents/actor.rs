@@ -3127,6 +3127,13 @@ impl Actor {
             self.failed_to_start(error.message).await;
             return false;
         }
+        if paths.is_none()
+            && matches!(prepared.place, Place::Worker { .. })
+            && let Err(message) = self.restore_worktree().await
+        {
+            self.failed_to_start(message).await;
+            return false;
+        }
         self.checkpoint_before_turn().await;
         let Prepared {
             resolved,
@@ -3292,6 +3299,45 @@ impl Actor {
         super::checkout_paths(&self.daemon.agents, Path::new(repo_path))
             .await
             .map(Some)
+    }
+
+    /// Makes the run's worktree again, in git, its row, and here, when the merged-worktree sweep
+    /// removed it (PLX-781), so a message to a merged thread resumes it.
+    async fn restore_worktree(&mut self) -> Result<(), String> {
+        let Some(worktree) = &self.worktree else {
+            return Ok(());
+        };
+        if Path::new(&worktree.path).is_dir() {
+            return Ok(());
+        }
+        let (git_dir, base) = self
+            .daemon
+            .agents
+            .worktrees
+            .restore(
+                Path::new(&worktree.repo_path),
+                Path::new(&worktree.path),
+                &worktree.branch,
+            )
+            .await
+            .map_err(|error| format!("could not make the thread's worktree again: {error}"))?;
+        let git_dir = git_dir.to_string_lossy().into_owned();
+        let (id, stored_dir, stored_base) = (self.row.id, git_dir.clone(), base.clone());
+        store(&self.daemon, move |db| {
+            db.set_worktree_restored(id, &stored_dir, stored_base.as_deref())
+                .map_err(|error| store_error(&error))
+        })
+        .await
+        .map_err(|error| error.message)?;
+        info!(run = %self.id, path = %worktree.path, "made a merged thread's worktree again");
+        if let Some(worktree) = &mut self.worktree {
+            worktree.git_dir = git_dir;
+            if let Some(base) = base {
+                worktree.base = base;
+                worktree.base_dirty = false;
+            }
+        }
+        Ok(())
     }
 
     async fn worker_paths(&self) -> Result<(PathBuf, PathBuf), ErrorObject> {

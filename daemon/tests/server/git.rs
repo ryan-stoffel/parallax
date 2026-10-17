@@ -455,6 +455,36 @@ async fn a_thread_s_delete_is_refused_while_its_push_runs() {
     host.server.stop().await;
 }
 
+/// PLX-781's sweep removes a merged thread's worktree and branch; a message to it makes both again
+/// from the default branch and resumes there.
+#[tokio::test]
+async fn a_message_makes_a_swept_worktree_again() {
+    let tools = Tools::new();
+    let dir = temp_dir();
+    let params = project_params(dir.path());
+    let repo = PathBuf::from(&params.repo_path);
+    let host = start(dir, editing(), &tools);
+    let mut client = host.client().await;
+    let project = create(&mut client, params).await;
+    subscribe(&mut client, project.id, 0).await;
+    let start = start_params(project.id, "Rewrite the README");
+    let run_id = start.run_id;
+    let run = client.call::<AgentStart>(start).await.unwrap().run;
+    let (branch, worktree) = (run.branch.unwrap(), run.worktree_path.unwrap());
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    git(&repo, &["worktree", "remove", "--force", &worktree]);
+    git(&repo, &["branch", "-D", &branch]);
+
+    client
+        .call::<AgentSend>(send_params(run_id, TurnId::generate(), "One more thing"))
+        .await
+        .unwrap();
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    assert!(Path::new(&worktree).is_dir());
+    assert_eq!(status(&mut client, run_id).await.branch, Some(branch));
+    host.server.stop().await;
+}
+
 #[tokio::test]
 async fn a_missing_worktree_refuses_git_without_touching_the_checkout() {
     let tools = Tools::new();
