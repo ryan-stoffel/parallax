@@ -115,7 +115,12 @@ export function Mention({ token }: { token: string }) {
  * sentence or clause. */
 const tokens = /(?<=^|\s)(\/[\w:-]+|@[\w./-]*\.\w+)(?=$|\s|[,;:!?)]|\.(?:\s|$))/g;
 
-/** A sent prompt's text with its `/skill` and `@path` tokens drawn as chips. */
-export function withMentions(text: string): ReactNode[] {
-  return text.split(tokens).map((part, i) => (i % 2 ? <Mention key={i} token={part} /> : part));
+/** The `/skill` and `@path` tokens in sent text. */
+export const mentionsOf = (text: string) => text.match(tokens) ?? [];
+
+/** A sent prompt's text with its `known` `/skill` and `@path` tokens drawn as chips. */
+export function withMentions(text: string, known: (token: string) => boolean): ReactNode[] {
+  return text
+    .split(tokens)
+    .map((part, i) => (i % 2 && known(part) ? <Mention key={i} token={part} /> : part));
 }

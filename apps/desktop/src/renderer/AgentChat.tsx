@@ -78,7 +78,7 @@ import {
   type ToolLook,
 } from "./Approval";
 import { duration, useSeconds } from "./AttentionMark";
-import { Composer, tabItem, type ComposerProps, type Unanswered } from "./Composer";
+import { Composer, listCommands, tabItem, type ComposerProps, type Unanswered } from "./Composer";
 import { offlineReason, useConnection } from "./ConnectionStatus";
 import { describeError, githubProblem } from "./errors";
 import { ForkButton, ForkContext, type ForkTarget } from "./Fork";
@@ -114,7 +114,7 @@ import {
 import { locale } from "./locale";
 import { ClaudeLogo, GitHubLogo, LinearLogo, ParallaxGlyph } from "./logos";
 import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
-import { withMentions } from "./Mention";
+import { mentionsOf, withMentions } from "./Mention";
 import { dollarMath } from "./math";
 import { useCatalog, type Provider, type RunOptions } from "./models";
 import { kinds } from "./providers";
@@ -198,12 +198,14 @@ type ViewRow =
 
 /**
  * What a transcript's rows read: the run's worktree, which a tool row's paths read relative to,
- * and how to fetch one of the run's images by id, for a tool row's images (PLX-640).
+ * how to fetch one of the run's images by id, for a tool row's images (PLX-640), and which of a
+ * sent prompt's `/skill` and `@path` tokens name the thread's commands or files, as chips.
  */
 const RowContext = createContext<{
   root?: string;
   loadImage?: (imageId: ImageId) => Promise<string | undefined>;
-}>({});
+  known: (token: string) => boolean;
+}>({ known: () => false });
 
 /**
  * Focuses the composer's editor (Composer.tsx), as when the plan strip goes with focus in it: the
@@ -814,6 +816,7 @@ export function AgentChat({
                 turnDone={transcript.turnDone}
                 root={run?.worktreePath}
                 runId={runId}
+                backend={run?.backend}
                 // plxd logs a fork's copied history with its agent.started, at its creation (0050).
                 copiedAt={forked ? run?.createdAt : undefined}
                 onResend={resend}
@@ -1022,6 +1025,64 @@ function SubagentView({
 }
 
 /**
+ * Whether a sent prompt's `/name` or `@path` names one of the thread's commands or files, so only
+ * those are chips. Commands are fetched once a prompt has a `/name`, and files for each new `@path`.
+ */
+function useKnownMentions(
+  hostId: string | undefined,
+  backend: string | undefined,
+  runId: string | undefined,
+  rows: Row[],
+  sent: ReadonlyMap<string, SentMessage>,
+): (token: string) => boolean {
+  // One string, so the fetches run again only when a new token is sent.
+  const said = useMemo(() => {
+    const all = rows.flatMap((row) =>
+      row.kind === "user" || row.kind === "pending"
+        ? mentionsOf(row.text ?? (row.turnId && sent.get(row.turnId)?.text) ?? "")
+        : [],
+    );
+    return [...new Set(all)].join(" ");
+  }, [rows, sent]);
+  const wantsCommands = said.split(" ").some((t) => t[0] === "/");
+  const wantsPaths = said
+    .split(" ")
+    .filter((t) => t[0] === "@")
+    .join(" ");
+  // Each list with the thread it's for, so another thread's isn't used.
+  const key = `${hostId}/${backend}/${runId}`;
+  const [commands, setCommands] = useState<{ key: string; list: string[] }>();
+  const [paths, setPaths] = useState<{ key: string; list: string[] }>();
+  useEffect(() => {
+    if (!wantsCommands || !hostId || !backend) return;
+    let live = true;
+    void listCommands(hostId, backend, undefined, runId).then(
+      (list) => live && setCommands({ key, list: list.map((c) => c.text) }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [wantsCommands, key, hostId, backend, runId]);
+  useEffect(() => {
+    if (!wantsPaths || !hostId || !runId) return;
+    let live = true;
+    void window.parallax
+      .request(hostId, "repo/files", { runId })
+      .then((r) => live && setPaths({ key, list: "result" in r ? r.result.files : [] }));
+    return () => {
+      live = false;
+    };
+  }, [wantsPaths, key, hostId, runId]);
+  return useMemo(() => {
+    const names = new Set([
+      ...(commands?.key === key ? commands.list : []),
+      ...(paths?.key === key ? paths.list.map((p) => `@${p}`) : []),
+    ]);
+    return (token: string) => names.has(token);
+  }, [commands, paths, key]);
+}
+
+/**
  * The transcript as a virtualized list. It follows new output while scrolled to
  * the bottom, and stays put once the user scrolls up, or older rows come in above.
  */
@@ -1038,6 +1099,7 @@ export function TranscriptView({
   turnDone = false,
   root,
   runId,
+  backend,
   onEdit,
 }: {
   rows: Row[];
@@ -1051,6 +1113,8 @@ export function TranscriptView({
   root?: string;
   /** The run whose folder the agent's file links and images read from (PLX-834). */
   runId?: string;
+  /** The run's backend, whose commands a sent prompt's `/skill` chips name. */
+  backend?: string;
   onResend?: (turnId: string, message: SentMessage) => void;
   /** Fetches a message's image by id, as a data URL. */
   loadImage?: (imageId: ImageId) => Promise<string | undefined>;
@@ -1064,8 +1128,9 @@ export function TranscriptView({
   onEdit?: { key: string; edit: () => void };
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const rowContext = useMemo(() => ({ root, loadImage }), [root, loadImage]);
   const links = useContext(ThreadLinksContext);
+  const known = useKnownMentions(links?.hostId, backend, runId, rows, sent);
+  const rowContext = useMemo(() => ({ root, loadImage, known }), [root, loadImage, known]);
   // Threads' titles, to name the thread that sent a message or stopped this one (0041).
   const titles = links?.state.titles;
   const hostId = links?.hostId;
@@ -1517,6 +1582,7 @@ export const RowView = memo(function RowView({
   replyTurn,
   onEdit,
 }: RowProps) {
+  const { known } = useContext(RowContext);
   switch (row.kind) {
     case "work":
       if (row.subagents)
@@ -1641,7 +1707,7 @@ export const RowView = memo(function RowView({
             <div className="max-w-[85%] rounded-2xl bg-selected px-3.5 py-2 text-[14px] leading-relaxed whitespace-pre-wrap">
               {/* A follow-up from an older log, which has no text for it. */}
               {said !== undefined ? (
-                withMentions(said)
+                withMentions(said, known)
               ) : (
                 <span className="text-muted-foreground italic">Follow-up message</span>
               )}
