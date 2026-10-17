@@ -553,8 +553,8 @@ export function Composer({
   // The file going in pieces now, the share of it sent, and whether a piece failed.
   const [sending, setSending] = useState<{ file: File; share: number; failed?: boolean }>();
   const [images, setImages] = useState<PromptImage[]>(initial?.images ?? []);
-  // The image shown large, by its place in `images`.
-  const [shown, setShown] = useState<number>();
+  // The image shown large, kept by identity so images put back ahead of it don't change it.
+  const [shown, setShown] = useState<PromptImage>();
   // Attached threads' run ids, shown as chips beside the images.
   const [threads, setThreads] = useState<string[]>(initial?.threads ?? []);
   // Run ids are the host's own, so they don't follow a New Thread draft to another computer.
@@ -1265,7 +1265,7 @@ export function Composer({
                 <button
                   type="button"
                   aria-label={`Open image ${i + 1}`}
-                  onClick={() => setShown(i)}
+                  onClick={() => setShown(image)}
                   className="block cursor-zoom-in rounded-xl"
                 >
                   <img
@@ -1303,11 +1303,11 @@ export function Composer({
             )}
           </fieldset>
         )}
-        {shown !== undefined && images[shown] && (
+        {shown && images.includes(shown) && (
           <Lightbox
             images={images.map((image, i) => ({ src: imageUrl(image), name: `Image ${i + 1}` }))}
-            index={shown}
-            onIndex={setShown}
+            index={images.indexOf(shown)}
+            onIndex={(i) => setShown(images[i])}
             onClose={() => setShown(undefined)}
           />
         )}
