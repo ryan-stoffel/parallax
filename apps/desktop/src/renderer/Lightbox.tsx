@@ -2,10 +2,11 @@ import { ChevronLeft, ChevronRight, Download, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 /**
- * Screenshots shown large over the app: the shown one's name, its place among them and arrows (or
- * the arrow keys) to the others when there are several, and Close (or Escape, or a click beside
- * it). Clicking the image zooms in once at the cursor, which pans it; clicking again zooms out.
- * With `onDownload`, Download saves the shown one, as a tool call's image does (PLX-834).
+ * Screenshots shown large over the app: Close (or Escape, or a click beside it), arrows (or the
+ * arrow keys) to the others when there are several, and below the image, the shown one's name and
+ * its place among them. Clicking the image zooms in once at the cursor, which pans it; clicking
+ * again zooms out. With `onDownload`, Download saves the shown one, as a tool call's image does
+ * (PLX-834).
  */
 export function Lightbox({
   images,
@@ -51,15 +52,7 @@ export function Lightbox({
       onClick={(e) => e.target === e.currentTarget && dialog.current?.close()}
       className="m-0 h-full max-h-none w-full max-w-none bg-black/90 p-0 text-white outline-none backdrop:bg-transparent backdrop:backdrop-blur-sm"
     >
-      <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-3 px-4 py-3 text-[13px]">
-        <span className="min-w-0 flex-1 truncate font-medium" title={image.name}>
-          {image.name}
-        </span>
-        {many && (
-          <span className="shrink-0 text-white/70">
-            {index + 1} / {images.length}
-          </span>
-        )}
+      <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-end gap-3 px-4 py-3 text-[13px]">
         {onDownload && (
           <button
             type="button"
@@ -100,6 +93,16 @@ export function Lightbox({
             className="block max-h-[calc(100vh-7rem)] max-w-[calc(100vw-8rem)] object-contain transition-transform duration-150"
           />
         </span>
+      </div>
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center gap-3 px-16 py-4 text-[13px]">
+        <span className="min-w-0 truncate font-medium" title={image.name}>
+          {image.name}
+        </span>
+        {many && (
+          <span className="shrink-0 text-white/70">
+            {index + 1} / {images.length}
+          </span>
+        )}
       </div>
       {many && (
         <>

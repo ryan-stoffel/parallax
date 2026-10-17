@@ -221,6 +221,11 @@ test("a user message shows its images over its text: fetched by id, or at hand w
   );
   expect(document.querySelector("img")?.getAttribute("src")).toBe(url("BBBB"));
   expect(document.body.textContent).toBe("And this?");
+
+  // Clicking one opens it large.
+  HTMLDialogElement.prototype.showModal = vi.fn();
+  act(() => document.querySelector<HTMLElement>('[aria-label="Open image"]')!.click());
+  expect(document.querySelector("dialog img")?.getAttribute("src")).toBe(url("BBBB"));
 });
 
 // The host's threads (PLX-378): one Codex thread the transcript's chips can open.

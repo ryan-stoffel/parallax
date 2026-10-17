@@ -1898,17 +1898,15 @@ function SentFile({ path }: { path: string }) {
 
 /**
  * One of a user message's images, as a thumbnail: at hand, or fetched by id. The same height
- * either way, so the row doesn't jump when it loads. A tool call's is `zoomable`: clicking it opens
- * it large, with Download (PLX-834).
+ * either way, so the row doesn't jump when it loads. Clicking it opens it large, with Download
+ * (PLX-834).
  */
 function MessageImage({
   image,
   loadImage,
-  zoomable,
 }: {
   image: PromptImage | ImageId;
   loadImage?: (imageId: ImageId) => Promise<string | undefined>;
-  zoomable?: boolean;
 }) {
   const [large, setLarge] = useState(false);
   // By id: its data URL once fetched, or null when plxd couldn't serve it.
@@ -1924,14 +1922,6 @@ function MessageImage({
   const url =
     typeof image === "string" ? (fetched?.id === image ? fetched.url : undefined) : imageUrl(image);
   if (url) {
-    const thumb = (
-      <img
-        src={url}
-        alt="Image"
-        className="h-32 max-w-60 rounded-xl border border-border object-cover"
-      />
-    );
-    if (!zoomable) return thumb;
     // A data: URL, `data:image/png;base64,...`.
     const name = `Image.${url.slice("data:image/".length, url.indexOf(";"))}`;
     return (
@@ -1942,7 +1932,11 @@ function MessageImage({
           onClick={() => setLarge(true)}
           className="cursor-zoom-in rounded-xl"
         >
-          {thumb}
+          <img
+            src={url}
+            alt="Image"
+            className="h-32 max-w-60 rounded-xl border border-border object-cover"
+          />
         </button>
         {large && (
           <Lightbox
@@ -2308,7 +2302,7 @@ function ToolCall({
             <p className="mb-1 text-[11.5px] text-faint-foreground">Images</p>
             <div className="flex flex-wrap gap-2">
               {item.images.map((id) => (
-                <MessageImage key={id} image={id} loadImage={loadImage} zoomable />
+                <MessageImage key={id} image={id} loadImage={loadImage} />
               ))}
             </div>
           </div>
