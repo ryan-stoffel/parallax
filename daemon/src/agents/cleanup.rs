@@ -11,9 +11,10 @@
 //! which agents often rename it to, and hold nothing the merge didn't keep: no uncommitted changes,
 //! and a `HEAD` that is on `origin` or is one of a merged pull request's commits. A worktree kept
 //! from an earlier sweep's merge is checked again only every [`RECHECK_EVERY`] sweeps. The thread,
-//! its transcript, and its worktree row stay, so a later message fails to find the folder rather
-//! than running anywhere else. A merged pull request never changes, so each is read from GitHub
-//! once per plxd run, and a closed one is read again only every [`RECHECK_EVERY`] sweeps.
+//! its transcript, and its worktree row stay, and a later message makes the worktree again at the
+//! same path before it resumes (PLX-856). A merged pull request never changes, so each is read
+//! from GitHub once per plxd run, and a closed one is read again only every [`RECHECK_EVERY`]
+//! sweeps.
 
 use std::collections::HashMap;
 use std::path::Path;

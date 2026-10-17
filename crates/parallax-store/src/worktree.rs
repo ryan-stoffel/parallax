@@ -137,6 +137,30 @@ impl Store {
         }
         Ok(())
     }
+
+    /// Records run `id`'s worktree made again after the merged-worktree sweep (PLX-781): its new
+    /// git folder, and its new base when its branch was made again.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::NotFound`] if the run has no worktree, or a database error.
+    pub fn set_worktree_restored(
+        &self,
+        id: Uuid,
+        git_dir: &str,
+        base: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE worktrees SET git_dir = ?2, base = COALESCE(?3, base),
+             base_dirty = base_dirty AND ?3 IS NULL
+             WHERE id = ?1",
+            params![id.to_string(), git_dir, base],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::NotFound { id });
+        }
+        Ok(())
+    }
 }
 
 /// Inserts a new worktree row for run `id`, failing with [`StoreError::IdConflict`] if one

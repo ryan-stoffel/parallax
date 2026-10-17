@@ -736,6 +736,106 @@ impl WorktreeManager {
         Ok(())
     }
 
+    /// Puts back a run's worktree at `path` after the merged-worktree sweep removed it (PLX-781),
+    /// so a message to its thread can resume there. `branch` is checked out when it still exists,
+    /// and otherwise made again from origin's default branch, fetched first, which holds the
+    /// merged work. Returns the new worktree's git folder, to pin as [`CreatedWorktree::git_dir`]
+    /// is, and the commit a branch made again starts from, its new base.
+    ///
+    /// # Errors
+    ///
+    /// [`WorktreeError::NotAGitRepo`], or a git or filesystem failure.
+    pub async fn restore(
+        &self,
+        repo_path: &Path,
+        path: &Path,
+        branch: &str,
+    ) -> Result<(PathBuf, Option<String>), WorktreeError> {
+        let repo_root = self.repo_root(repo_path).await?;
+        let kept = self
+            .has_ref(&repo_root, &format!("refs/heads/{branch}"))
+            .await?;
+        // Fetched outside the repo lock, so a slow fetch holds up no other worktree: a merge in
+        // the app happens on GitHub, and the local `origin/<default>` doesn't have it yet.
+        let base = if kept {
+            None
+        } else {
+            // `origin/<default>` rather than the local default branch, which a merge never moves.
+            let remote = self
+                .run_git(
+                    &repo_root,
+                    &[
+                        "symbolic-ref",
+                        "--quiet",
+                        "--short",
+                        "refs/remotes/origin/HEAD",
+                    ],
+                )
+                .await?;
+            let default = if remote.success() {
+                remote.stdout.trim().to_owned()
+            } else {
+                // With no `origin/HEAD`, as after `remote add` and a push on git before 2.48.
+                let local = self
+                    .default_branch(&repo_root)
+                    .await
+                    .unwrap_or_else(|_| "HEAD".to_owned());
+                if self
+                    .has_ref(&repo_root, &format!("refs/remotes/origin/{local}"))
+                    .await?
+                {
+                    format!("origin/{local}")
+                } else {
+                    local
+                }
+            };
+            Some(self.fetch_base(&repo_root, &default).await?)
+        };
+        let guard = self.lock_repo(&repo_root).await;
+        self.run_git_ok(&repo_root, &["worktree", "prune"]).await?;
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|source| WorktreeError::Io {
+                    path: parent.to_owned(),
+                    source,
+                })?;
+        }
+        let path_arg = path.to_string_lossy().into_owned();
+        let mut add = vec!["worktree", "add", "--no-checkout"];
+        match &base {
+            None => add.extend([path_arg.as_str(), branch]),
+            Some(commit) => add.extend(["-b", branch, path_arg.as_str(), commit.as_str()]),
+        }
+        self.run_git_ok(&repo_root, &add).await?;
+        drop(guard);
+        // The one moment the worktree's `.git` file is trusted, as in `create_named` (#166).
+        let checked_out = match self.run_git_ok(path, &["reset", "--hard", "--quiet"]).await {
+            Ok(_) => {
+                self.run_git_ok(path, &["rev-parse", "--absolute-git-dir"])
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        match checked_out {
+            Ok(git_dir) => Ok((PathBuf::from(git_dir.trim()), base)),
+            Err(error) => {
+                // A half-made folder would pass for a restored one on the next launch.
+                let removed = self
+                    .run_git(&repo_root, &["worktree", "remove", "--force", &path_arg])
+                    .await;
+                if !removed.is_ok_and(|output| output.success()) {
+                    warn!(path = %path.display(), "could not remove a worktree whose restore failed");
+                }
+                // A branch made here goes too, or the next restore would keep it and its old base.
+                if base.is_some() {
+                    let _ = self.run_git(&repo_root, &["branch", "-D", branch]).await;
+                }
+                Err(error)
+            }
+        }
+    }
+
     /// Removes a folder plxd owns directly, with no git command, so nothing here may discover a
     /// repository from, or trust, whatever `path`'s own `.git` file says (#166, #171). `path`
     /// itself must be a real directory, never a symlink planted to route this removal elsewhere.
