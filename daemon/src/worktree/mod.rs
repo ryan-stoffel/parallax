@@ -738,7 +738,8 @@ impl WorktreeManager {
 
     /// Puts back a run's worktree at `path` after the merged-worktree sweep removed it (PLX-781),
     /// so a message to its thread can resume there. `branch` is checked out when it still exists,
-    /// and otherwise made again from the default branch, which holds the merged work. Returns the
+    /// and otherwise made again from the default branch, fetched first, which holds the merged
+    /// work. Returns the
     /// new worktree's git folder, to pin as [`CreatedWorktree::git_dir`] is, and the commit a
     /// branch made again starts from, its new base.
     ///
@@ -752,6 +753,35 @@ impl WorktreeManager {
         branch: &str,
     ) -> Result<(PathBuf, Option<String>), WorktreeError> {
         let repo_root = self.repo_root(repo_path).await?;
+        let kept = self
+            .has_ref(&repo_root, &format!("refs/heads/{branch}"))
+            .await?;
+        // Fetched outside the repo lock, so a slow fetch holds up no other worktree: a merge in
+        // the app happens on GitHub, and the local `origin/<default>` doesn't have it yet.
+        let base = if kept {
+            None
+        } else {
+            // `origin/<default>` rather than the local default branch, which a merge never moves.
+            let remote = self
+                .run_git(
+                    &repo_root,
+                    &[
+                        "symbolic-ref",
+                        "--quiet",
+                        "--short",
+                        "refs/remotes/origin/HEAD",
+                    ],
+                )
+                .await?;
+            let default = if remote.success() {
+                remote.stdout.trim().to_owned()
+            } else {
+                self.default_branch(&repo_root)
+                    .await
+                    .unwrap_or_else(|_| "HEAD".to_owned())
+            };
+            Some(self.fetch_base(&repo_root, &default).await?)
+        };
         let guard = self.lock_repo(&repo_root).await;
         self.run_git_ok(&repo_root, &["worktree", "prune"]).await?;
         if let Some(parent) = path.parent() {
@@ -763,44 +793,34 @@ impl WorktreeManager {
                 })?;
         }
         let path_arg = path.to_string_lossy().into_owned();
-        let base = if self
-            .has_ref(&repo_root, &format!("refs/heads/{branch}"))
-            .await?
-        {
-            self.run_git_ok(
-                &repo_root,
-                &["worktree", "add", "--no-checkout", &path_arg, branch],
-            )
-            .await?;
-            None
-        } else {
-            let base = self
-                .default_branch(&repo_root)
-                .await
-                .unwrap_or_else(|_| "HEAD".to_owned());
-            let commit = self.resolve_commit(&repo_root, &base).await?;
-            self.run_git_ok(
-                &repo_root,
-                &[
-                    "worktree",
-                    "add",
-                    "--no-checkout",
-                    "-b",
-                    branch,
-                    &path_arg,
-                    &commit,
-                ],
-            )
-            .await?;
-            Some(commit)
-        };
+        let mut add = vec!["worktree", "add", "--no-checkout"];
+        match &base {
+            None => add.extend([path_arg.as_str(), branch]),
+            Some(commit) => add.extend(["-b", branch, path_arg.as_str(), commit.as_str()]),
+        }
+        self.run_git_ok(&repo_root, &add).await?;
         drop(guard);
-        self.run_git_ok(path, &["reset", "--hard", "--quiet"])
-            .await?;
-        let git_dir = self
-            .run_git_ok(path, &["rev-parse", "--absolute-git-dir"])
-            .await?;
-        Ok((PathBuf::from(git_dir.trim()), base))
+        // The one moment the worktree's `.git` file is trusted, as in `create_named` (#166).
+        let checked_out = match self.run_git_ok(path, &["reset", "--hard", "--quiet"]).await {
+            Ok(_) => {
+                self.run_git_ok(path, &["rev-parse", "--absolute-git-dir"])
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        match checked_out {
+            Ok(git_dir) => Ok((PathBuf::from(git_dir.trim()), base)),
+            Err(error) => {
+                // A half-made folder would pass for a restored one on the next launch.
+                let removed = self
+                    .run_git(&repo_root, &["worktree", "remove", "--force", &path_arg])
+                    .await;
+                if !removed.is_ok_and(|output| output.success()) {
+                    warn!(path = %path.display(), "could not remove a worktree whose restore failed");
+                }
+                Err(error)
+            }
+        }
     }
 
     /// Removes a folder plxd owns directly, with no git command, so nothing here may discover a

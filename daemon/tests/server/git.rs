@@ -456,13 +456,27 @@ async fn a_thread_s_delete_is_refused_while_its_push_runs() {
 }
 
 /// PLX-781's sweep removes a merged thread's worktree and branch; a message to it makes both again
-/// from the default branch and resumes there.
+/// from the default branch, fetched first so it has a merge made on GitHub, and resumes there.
 #[tokio::test]
 async fn a_message_makes_a_swept_worktree_again() {
     let tools = Tools::new();
     let dir = temp_dir();
     let params = project_params(dir.path());
     let repo = PathBuf::from(&params.repo_path);
+    let origin = add_origin(&repo, dir.path());
+    let main = git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    git(&repo, &["push", "-q", "-u", "origin", &main]);
+    git(&repo, &["remote", "set-head", "origin", &main]);
+    let other = dir.path().join("other");
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
     let host = start(dir, editing(), &tools);
     let mut client = host.client().await;
     let project = create(&mut client, params).await;
@@ -472,6 +486,23 @@ async fn a_message_makes_a_swept_worktree_again() {
     let run = client.call::<AgentStart>(start).await.unwrap().run;
     let (branch, worktree) = (run.branch.unwrap(), run.worktree_path.unwrap());
     until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    // The pull request merges on GitHub, then the sweep removes the worktree and its branch.
+    fs::write(other.join("MERGED.md"), "merged\n").unwrap();
+    git(&other, &["add", "MERGED.md"]);
+    git(
+        &other,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "Merge",
+        ],
+    );
+    git(&other, &["push", "-q", "origin", &main]);
     git(&repo, &["worktree", "remove", "--force", &worktree]);
     git(&repo, &["branch", "-D", &branch]);
 
@@ -480,7 +511,7 @@ async fn a_message_makes_a_swept_worktree_again() {
         .await
         .unwrap();
     until(&mut client, updated_to(AgentStatus::Completed)).await;
-    assert!(Path::new(&worktree).is_dir());
+    assert!(Path::new(&worktree).join("MERGED.md").is_file());
     assert_eq!(status(&mut client, run_id).await.branch, Some(branch));
     host.server.stop().await;
 }
