@@ -836,7 +836,6 @@ export function App() {
         elsewhere={elsewhere}
         onPick={newThread}
         onPickElsewhere={pickRepoOn}
-        onDismiss={() => startIn.set(null)}
       />
       <Sidebar
         width={leftWidth}
