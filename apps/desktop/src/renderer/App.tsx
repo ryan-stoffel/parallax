@@ -634,8 +634,11 @@ export function App() {
   };
 
   // Opens New Thread on another computer with one of its repositories.
-  const pickRepoOn = (hostId: string, groupId: string) =>
+  // Mod+N's pick of another computer's repository, a plain New thread as `newThread` is.
+  const pickRepoOn = (hostId: string, groupId: string) => {
+    startIn.set(null);
     openOnHost(hostId, { kind: "new", groupId });
+  };
 
   // A plain New thread, so not in the folder a folder's New thread put it in.
   const newThread = (groupId = selection.kind === "project" ? undefined : group.id) => {
