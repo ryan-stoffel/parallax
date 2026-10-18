@@ -18,7 +18,6 @@ import {
   Plus,
   Star,
   Ungroup,
-  X,
 } from "lucide-react";
 import {
   Fragment,
@@ -49,9 +48,9 @@ import {
   moveOut,
   moveToEnd,
   pinDragType,
+  pinHintHidden,
   pinIcons,
   pinLayout,
-  pinHintHidden,
   pinNaming,
   pinOpen,
   placeAt,
@@ -432,7 +431,8 @@ export function PinList({
         } else pinRow(e);
         endDrag();
       }}
-      className="flex flex-col gap-px"
+      // A strip to drop on, even with nothing pinned and the hint hidden.
+      className="flex min-h-4 flex-col gap-px"
     >
       <ul className="flex flex-col gap-px">{tree(entries)}</ul>
       {rowOver && (
@@ -446,16 +446,14 @@ export function PinList({
         </p>
       )}
       {pins.length === 0 && !rowOver && !searching && !hintHidden && (
-        <div className="relative rounded-[10px] border border-dashed border-border px-6 py-3 text-center text-[12px] leading-snug text-faint-foreground">
+        <div className="flex flex-col items-center gap-1.5 rounded-[10px] border border-dashed border-border px-3 pt-3 pb-2 text-center text-[12px] leading-snug text-faint-foreground">
           Drag a thread here, or press P on it, to keep it here.
           <button
             type="button"
-            aria-label="Hide this hint"
-            title="Hide this hint"
             onClick={() => pinHintHidden.set(true)}
-            className="absolute top-1 right-1 grid size-5 place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+            className="rounded-md px-2 py-0.5 font-medium text-muted-foreground hover:bg-hover hover:text-foreground"
           >
-            <X aria-hidden />
+            Dismiss
           </button>
         </div>
       )}
