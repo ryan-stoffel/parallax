@@ -130,6 +130,11 @@ export const compactRows = stored<boolean>("parallax:compactRows", false, (raw, 
   typeof raw === "boolean" ? raw : fallback,
 );
 
+/** Whether the empty pins' "drag a thread here" hint was closed, so it stays away. */
+export const pinHintHidden = stored<boolean>("parallax:pinHintHidden", false, (raw, fallback) =>
+  typeof raw === "boolean" ? raw : fallback,
+);
+
 /** A folder to name in place, as one the add palette just made. */
 export const pinNaming = memory<string | null>(null);
 

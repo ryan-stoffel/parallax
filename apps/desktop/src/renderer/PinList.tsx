@@ -18,6 +18,7 @@ import {
   Plus,
   Star,
   Ungroup,
+  X,
 } from "lucide-react";
 import {
   Fragment,
@@ -50,6 +51,7 @@ import {
   pinDragType,
   pinIcons,
   pinLayout,
+  pinHintHidden,
   pinNaming,
   pinOpen,
   placeAt,
@@ -203,6 +205,7 @@ export function PinList({
   const [renaming, setRenaming] = useState<string>();
   const [dragKey, setDragKey] = useState<string>();
   const [rowOver, setRowOver] = useState(false);
+  const hintHidden = pinHintHidden.use();
   const menuId = useId();
   const [menuFor, setMenuFor] = useState<string>();
   const pickerId = useId();
@@ -437,10 +440,24 @@ export function PinList({
           Drop to pin
         </div>
       )}
-      {pins.length === 0 && !rowOver && (
+      {pins.length === 0 && !rowOver && searching && (
         <p className="rounded-[10px] border border-dashed border-border px-3 py-3 text-center text-[12px] leading-snug text-faint-foreground">
-          {searching ? "No pins match" : "Drag a thread here, or press P on it, to keep it here."}
+          No pins match
         </p>
+      )}
+      {pins.length === 0 && !rowOver && !searching && !hintHidden && (
+        <div className="relative rounded-[10px] border border-dashed border-border px-6 py-3 text-center text-[12px] leading-snug text-faint-foreground">
+          Drag a thread here, or press P on it, to keep it here.
+          <button
+            type="button"
+            aria-label="Hide this hint"
+            title="Hide this hint"
+            onClick={() => pinHintHidden.set(true)}
+            className="absolute top-1 right-1 grid size-5 place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+          >
+            <X aria-hidden />
+          </button>
+        </div>
       )}
 
       <Menu
