@@ -5,7 +5,7 @@ import path from "node:path";
 import { expect, test } from "@playwright/test";
 
 import { uuidv7 } from "../src/renderer/uuidv7";
-import { close, launch, printFailure, type Launched } from "./launch";
+import { close, launch, openThread, printFailure, type Launched } from "./launch";
 
 // How smooth the app stays with 30 threads streaming at once, one of them open (PLX-447): the
 // renderer's frame times and long tasks over 20 s, and the subscription bytes main sends it.
@@ -83,7 +83,7 @@ test("30 streaming threads, one open", async () => {
     expect(started).not.toHaveProperty("error");
   }
 
-  await page.getByRole("button", { name: new RegExp(`${name(1)}\\b`) }).click();
+  await openThread(page, new RegExp(`${name(1)}\\b`));
   const transcript = page.getByRole("log", { name: "Transcript" });
   await expect(transcript.getByText(name(1))).toBeVisible();
   await expect(transcript.getByText(/Delta \d+ of the load test/).first()).toBeVisible();

@@ -2,7 +2,7 @@
 // icon per pinned thread, with how Today shows its threads. They live on this computer until plxd
 // keeps them (PLX-858); a pin itself is `pinned` on the thread, in plxd (0073).
 import type { ProjectIcon as ProjectIconValue } from "../protocol/generated/protocol";
-import { stored } from "./stored";
+import { memory, stored } from "./stored";
 import { uuidv7 } from "./uuidv7";
 
 export interface PinFolder {
@@ -46,20 +46,21 @@ export const pinIcons = stored<Record<string, ProjectIconValue>>(
 
 /**
  * The folder a thread being started goes in, set by a folder's New thread and shown on the New
- * thread screen until it starts, when it's pinned there (`fileStarted`), or the user takes it off.
+ * thread screen until it starts, when it's pinned there (`fileStarted`), the user takes it off, or
+ * leaves the screen.
  */
-export const startIn = stored<string | null>("parallax:pinStartIn", null, (raw, fallback) =>
-  typeof raw === "string" ? raw : fallback,
-);
+export const startIn = memory<string | null>(null);
 
-/** Files the thread `key` just started into the folder `startIn` names, last. */
-export function fileStarted(key: string) {
+/**
+ * Files the thread `key` just started into the folder `startIn` names, last, and says whether it
+ * did: not once the folder's gone.
+ */
+export function fileStarted(key: string): boolean {
   const id = startIn.get();
-  if (!id) return;
   startIn.set(null);
   const layout = pinLayout.get();
-  const folder = layout.folders[id];
-  if (!folder) return;
+  const folder = id ? layout.folders[id] : undefined;
+  if (!id || !folder) return false;
   pinLayout.set({
     ...layout,
     folders: {
@@ -67,6 +68,7 @@ export function fileStarted(key: string) {
       [id]: { ...folder, items: [...folder.items.filter((k) => k !== key), key] },
     },
   });
+  return true;
 }
 
 /** The folder holding pin `key` directly, by the layout `folders`. */
@@ -129,9 +131,7 @@ export const compactRows = stored<boolean>("parallax:compactRows", false, (raw, 
 );
 
 /** A folder to name in place, as one the add palette just made. */
-export const pinNaming = stored<string | null>("parallax:pinNaming", null, (raw, fallback) =>
-  typeof raw === "string" ? raw : fallback,
-);
+export const pinNaming = memory<string | null>(null);
 
 /** An empty folder, last, at the top level from the add palette, or inside folder `inside`. */
 export function createFolder(inside?: string): string {
@@ -315,13 +315,17 @@ export function placeAt(entries: readonly PinEntry[], key: string, target: strin
   pinLayout.set(withItems(base, holder, items));
 }
 
-/** Moves `key`, a pin or `folder:<id>`, into folder `id`, last. A folder never moves into itself. */
-export function addToFolder(entries: readonly PinEntry[], id: string, key: string) {
+/**
+ * Moves `key`, a pin or `folder:<id>`, into folder `id`, last, or `first`. A folder never moves
+ * into itself.
+ */
+export function addToFolder(entries: readonly PinEntry[], id: string, key: string, first = false) {
   const layout = settled(pinLayout.get(), entries);
   if (!layout.folders[id]) return;
   if (key.startsWith("folder:") && folderWithin(layout, id, key.slice("folder:".length))) return;
   const base = without(layout, key);
-  pinLayout.set(withItems(base, id, [...itemsOf(base, id), key]));
+  const items = itemsOf(base, id);
+  pinLayout.set(withItems(base, id, first ? [key, ...items] : [...items, key]));
 }
 
 /** Moves `key` to the end of the top level. */
@@ -343,11 +347,12 @@ export function forgetPin(key: string) {
   pinLayout.set(without(pinLayout.get(), key));
 }
 
-export function renameFolder(id: string, name: string) {
+/** Changes folder `id`'s name or color. */
+export function updateFolder(id: string, change: Partial<Pick<PinFolder, "name" | "color">>) {
   const layout = pinLayout.get();
   const folder = layout.folders[id];
   if (folder)
-    pinLayout.set({ ...layout, folders: { ...layout.folders, [id]: { ...folder, name } } });
+    pinLayout.set({ ...layout, folders: { ...layout.folders, [id]: { ...folder, ...change } } });
 }
 
 /** Takes a folder apart, what's in it, nested folders included, in its place. */

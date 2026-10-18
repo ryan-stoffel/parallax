@@ -2,6 +2,7 @@
 // in the order the user drags them into.
 import {
   ArrowUpRight,
+  Check,
   CircleAlert,
   CircleDot,
   Ellipsis,
@@ -35,6 +36,7 @@ import {
 import type { Attention } from "./attention";
 import { DoneMark, WorkingMark } from "./AttentionMark";
 import { IconPicker } from "./IconPicker";
+import { iconColors } from "./projectIcons";
 import {
   addToFolder,
   containerOf,
@@ -52,15 +54,16 @@ import {
   pinNaming,
   pinOpen,
   placeAt,
-  renameFolder,
   setDraggedPin,
   startIn,
   ungroup,
+  updateFolder,
   wrapInFolder,
   type PinEntry,
 } from "./pins";
+import type { FavoriteAction } from "./Favorites";
 import { MenuKey } from "./Sidebar";
-import { Tick } from "./SidebarParts";
+import { shownRows, Tick } from "./SidebarParts";
 import { dragThread, draggedThread, threadDragType } from "./threadDrag";
 import { Menu, menuHeading, menuItem, openOnContextMenu } from "./ui";
 
@@ -77,6 +80,10 @@ export interface Pin {
   /** Its host and id: what its drag carries, so it drops on the composer like a row. */
   thread: { hostId: string; id: string };
   renamable: boolean;
+  /** Its thread's actions, as Archive and Delete, after the pin's own in its menu. */
+  actions: FavoriteAction[];
+  /** Its thread's keys, as E and ⌫, for those the pin doesn't take itself. */
+  onKeys: (e: ReactKeyboardEvent<HTMLElement>) => void;
 }
 
 type Folder = Extract<PinEntry, { kind: "folder" }>;
@@ -87,6 +94,10 @@ const urgency: Attention[] = ["needsYou", "failed", "done", "working", "monitori
 const topOf = (pins: Pin[]) => urgency.find((a) => pins.some((p) => p.attention === a));
 const reduced = () => document.documentElement.classList.contains("reduce-motion");
 const tinted = (tint: string) => ({ "--tint": tint }) as CSSProperties;
+// A folder's colors: the icons' palette, with no color, faint, in place of the accent.
+const folderColors = iconColors.map((c) =>
+  c.key ? c : { ...c, label: "No color", fill: "bg-faint-foreground" },
+);
 
 /**
  * Grows an element in as it arrives, as when a thread is pinned or a folder opens, but not on the
@@ -255,6 +266,9 @@ export function PinList({
         e.stopPropagation();
         const edge = dropAt?.key === target ? dropAt.edge : "after";
         const place = (key: string) => {
+          // After an open folder's row is first in it, where the line draws.
+          if (edge === "after" && folderId && isOpen(folderId))
+            return addToFolder(entries, folderId, key, true);
           if (edge !== "into")
             return placeAt(
               entries,
@@ -310,7 +324,8 @@ export function PinList({
           e.preventDefault();
           return onMarkUnread(pin.key);
         }
-        rowNav(e);
+        pin.onKeys(e);
+        if (!e.defaultPrevented) rowNav(e);
       }}
       drop={dropAt?.key === pin.key ? dropAt.edge : undefined}
       {...dropRow(pin.key)}
@@ -323,7 +338,7 @@ export function PinList({
       renaming={renaming === `folder:${entry.id}`}
       onRename={(name) => {
         setRenaming(undefined);
-        if (name !== undefined) renameFolder(entry.id, name.trim() || "Folder");
+        if (name !== undefined) updateFolder(entry.id, { name: name.trim() || "Folder" });
       }}
       onKeyDown={(e) => {
         if (e.key === "r" && !e.metaKey && !e.ctrlKey) {
@@ -555,6 +570,26 @@ export function PinList({
               <PinOff aria-hidden />
               Unpin
             </button>
+            {editing.actions.map((a) => (
+              <Fragment key={a.label}>
+                {a.danger && <hr className="my-1 border-border" />}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`${menuItem} ${a.danger ? "text-danger" : ""}`}
+                  onClick={close(() => {
+                    const row = document.querySelector<HTMLElement>(
+                      `[data-pin="${CSS.escape(editing.key)}"]`,
+                    );
+                    if (row) a.run(row);
+                  })}
+                >
+                  {a.icon}
+                  {a.label}
+                  {a.shortcut && <MenuKey>{a.shortcut}</MenuKey>}
+                </button>
+              </Fragment>
+            ))}
           </>
         )}
         {editingFolder && (
@@ -572,6 +607,27 @@ export function PinList({
               Rename folder
               <MenuKey>R</MenuKey>
             </button>
+            <div role="group" aria-label="Color" className="flex justify-between px-2.5 py-2">
+              {folderColors.map((c) => {
+                const checked = editingFolder.folder.color === c.key;
+                return (
+                  <button
+                    key={c.label}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={checked}
+                    aria-label={c.label}
+                    title={c.label}
+                    onClick={close(() => updateFolder(editingFolder.id, { color: c.key }))}
+                    className={`grid size-3.5 place-items-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 ${c.fill}`}
+                  >
+                    {checked && (
+                      <Check aria-hidden strokeWidth={3.5} className="size-2.5 text-background" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
             <button
               type="button"
               role="menuitem"
@@ -661,9 +717,7 @@ export function PinList({
 function rowNav(e: ReactKeyboardEvent<HTMLElement>) {
   if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  const rows = [...document.querySelectorAll<HTMLElement>("#sidebar [data-row]")].filter(
-    (r) => !r.closest("[inert]"),
-  );
+  const rows = shownRows();
   const next = rows[rows.indexOf(e.currentTarget) + (e.key === "ArrowDown" ? 1 : -1)];
   if (!next) return;
   e.preventDefault();

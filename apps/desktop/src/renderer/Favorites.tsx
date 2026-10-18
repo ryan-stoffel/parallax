@@ -6,6 +6,7 @@ import { useId, useLayoutEffect, useRef, useState, type DragEvent, type ReactNod
 import type { Attention } from "./attention";
 import { draggedPin, pinDragType, setDraggedPin } from "./pins";
 import { MenuKey } from "./Sidebar";
+import { shownRows } from "./SidebarParts";
 import { dragThread, draggedThread, threadDragType } from "./threadDrag";
 import { Menu, menuItem, openOnContextMenu } from "./ui";
 
@@ -25,23 +26,26 @@ export interface Favorite {
   actions?: FavoriteAction[];
 }
 
-/** One item in a favorite's menu, after Open and the moves. */
+/** One item in a favorite's or pin's menu, after its own, run with its square or row. */
 export interface FavoriteAction {
   label: string;
   icon: ReactNode;
   danger?: boolean;
+  /** The key that does it on a row, shown beside it. */
+  shortcut?: string;
   run: (square: HTMLElement) => void;
 }
 
 /** What a favorite's drag carries, so only the favorites take it as a move. */
 const favoriteDragType = "application/x-parallax-favorite";
 
-// A favorite's dot: only for what finished, failed, or waits on the user. Work in progress shows
-// nothing, as the Working drawer keeps it out of sight.
-const dotColor: Partial<Record<Attention, string>> = {
-  needsYou: "bg-warning",
-  failed: "bg-danger",
-  done: "bg-added",
+// A favorite's dot, and its words for a screen reader and the tooltip: only for what finished,
+// failed, or waits on the user. Work in progress shows nothing, as the Working drawer keeps it out
+// of sight.
+const dots: Partial<Record<Attention, { color: string; words: string }>> = {
+  needsYou: { color: "bg-warning", words: "needs you" },
+  failed: { color: "bg-danger", words: "failed" },
+  done: { color: "bg-added", words: "done" },
 };
 
 /**
@@ -49,7 +53,7 @@ const dotColor: Partial<Record<Attention, string>> = {
  * half the width each; folded, shorter. Dragging one between others moves it there. Dropping a
  * pinned thread, or a thread row, here makes it a favorite; dragging one back down to the pins, or
  * Remove from favorites, puts it back. Left and Right move between them, and with Alt, or Move left
- * and Move right in the menu, move one. None shows nothing.
+ * and Move right in the menu, move one. A opens one's menu. None shows nothing.
  */
 export function Favorites({
   items,
@@ -205,8 +209,13 @@ export function Favorites({
               type="button"
               data-row={f.key}
               // A thread's card names it.
-              title={f.thread && onRest ? undefined : f.title}
+              title={
+                f.thread && onRest
+                  ? undefined
+                  : `${f.title}${dots[f.attention] ? `, ${dots[f.attention]!.words}` : ""}`
+              }
               aria-label={f.title}
+              aria-description={dots[f.attention]?.words}
               aria-current={f.selected ? "page" : undefined}
               draggable={!!onReorder || !!f.thread}
               onDragStart={(e) => {
@@ -223,6 +232,12 @@ export function Favorites({
               onDragEnd={endDrag}
               onClick={() => onOpen(f.key)}
               onKeyDown={(e) => {
+                // A, as on a row, opens its menu.
+                if (e.key === "a" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                  e.preventDefault();
+                  setMenuFor(f.key);
+                  return triggers.current.get(f.key)?.click();
+                }
                 const by = e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
                 if (by && e.altKey) {
                   e.preventDefault();
@@ -232,9 +247,7 @@ export function Favorites({
                 const list = by
                   ? [...e.currentTarget.closest("ul")!.querySelectorAll<HTMLElement>("[data-row]")]
                   : e.key === "ArrowDown" || e.key === "ArrowUp"
-                    ? [...document.querySelectorAll<HTMLElement>("#sidebar [data-row]")].filter(
-                        (r) => !r.closest("[inert]"),
-                      )
+                    ? shownRows()
                     : [];
                 const next =
                   list[list.indexOf(e.currentTarget) + (by || (e.key === "ArrowDown" ? 1 : -1))];
@@ -249,10 +262,10 @@ export function Favorites({
               className={`relative grid w-full place-items-center rounded-[10px] transition-[height,background-color,transform,opacity] duration-250 ease-[cubic-bezier(0.23,1,0.32,1)] outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96] motion-reduce:transition-none [&_svg]:transition-[width,height] [&_svg]:duration-250 ${folded ? "h-8 [&_svg]:size-4" : "h-11 [&_svg]:size-5"} ${dragging === f.key ? "opacity-40" : ""} ${f.selected ? "bg-selected shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--foreground)_14%,transparent)]" : "bg-foreground/[0.045] hover:bg-foreground/[0.08]"}`}
             >
               {f.icon}
-              {dotColor[f.attention] && (
+              {dots[f.attention] && (
                 <span
                   aria-hidden
-                  className={`dot-in absolute size-[7px] rounded-full ${folded ? "top-1 right-1" : "top-1.5 right-1.5"} ${dotColor[f.attention]}`}
+                  className={`dot-in absolute size-[7px] rounded-full ${folded ? "top-1 right-1" : "top-1.5 right-1.5"} ${dots[f.attention]!.color}`}
                 />
               )}
               {f.badge && <span className="absolute right-1 bottom-1">{f.badge}</span>}
@@ -349,6 +362,7 @@ export function Favorites({
               >
                 {a.icon}
                 {a.label}
+                {a.shortcut && <MenuKey>{a.shortcut}</MenuKey>}
               </button>
             ))}
           </>

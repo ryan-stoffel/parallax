@@ -122,10 +122,7 @@ export type ThreadsAction =
   /** A repo's or a Project's own events: its runs and their permission requests. */
   | { type: "scope"; events: LoggedEvent[] }
   /** The permission requests runs wait on, from the shell's snapshot. */
-  | { type: "approvals"; events: LoggedEvent[] }
-  /** One area as plxd answered for it, or with only `id`, deleted (PLX-789). */
-  | { type: "area"; area: Area }
-  | { type: "area"; id: string };
+  | { type: "approvals"; events: LoggedEvent[] };
 
 /** Applies a snapshot, runs' titles, or a host-level event. Events are upserts, so a repeat is harmless. */
 export function threadsReducer(state: ThreadsState, action: ThreadsAction): ThreadsState {
@@ -187,14 +184,6 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
     }
     case "approvals":
       return { ...state, approvals: trackApprovals(state.approvals, action.events) };
-    case "area":
-      return {
-        ...state,
-        areas:
-          "area" in action
-            ? upsert(state.areas, action.area)
-            : state.areas.filter((a) => a.id !== action.id),
-      };
     case "event": {
       const e = action.event;
       switch (e.kind) {
@@ -559,25 +548,6 @@ export interface ThreadsView {
   update: (runId: string, change: ThreadChange) => Promise<string | undefined>;
   /** Sets a repo entry's icon. Resolves to an error message, or undefined. */
   updateRepo: (repo: string, icon: ProjectIconValue) => Promise<string | undefined>;
-  /**
-   * Makes a Space (0069), with `icon` if one was chosen, on a plxd with `spaces`. Resolves to an
-   * error message, or undefined.
-   */
-  createSpace: (name: string, icon?: ProjectIconValue) => Promise<string | undefined>;
-  /** Renames a Space. Resolves to an error message, or undefined. */
-  renameSpace: (space: string, name: string) => Promise<string | undefined>;
-  /** Deletes a Space and its chats. Resolves to an error message, or undefined. */
-  deleteSpace: (space: string) => Promise<string | undefined>;
-  /**
-   * Makes an area (PLX-789) with `id`, on a plxd with `areas`, which keeps only the members that
-   * are top-level threads or Projects. Reuse `id` to retry, or to bring a deleted one back.
-   * Resolves to an error message, or undefined.
-   */
-  createArea: (area: Area) => Promise<string | undefined>;
-  /** Renames, recolors, or replaces an area's members. Resolves to an error message, or undefined. */
-  updateArea: (id: string, change: AreaChange) => Promise<string | undefined>;
-  /** Deletes an area; its threads stay. Resolves to an error message, or undefined. */
-  deleteArea: (id: string) => Promise<string | undefined>;
 }
 
 /** What a fork runs on: absent keeps the thread's model and account. */
@@ -590,9 +560,6 @@ export type ThreadChange = {
   pinned?: boolean;
   title?: string;
 };
-
-/** What `area/update` changes. */
-export type AreaChange = Partial<Omit<Area, "id">>;
 
 /** What `project/update` changes: a project's name, icon, permission mode, or autonomy. */
 export type ProjectChange = Omit<ProjectUpdateParams, "project">;
@@ -867,57 +834,6 @@ export function useThreads(
         dispatch({ type: "event", event: { kind: "repo.updated", repo: answer.result.repo } });
         return undefined;
       },
-
-      async createSpace(name: string, icon?: ProjectIconValue) {
-        // A fresh id is safe to retry with: plxd returns the Space an id already made.
-        const answer = await window.parallax.request(hostId, "space/create", {
-          id: uuidv7(),
-          name,
-          ...(icon && { icon }),
-        });
-        if ("error" in answer) return describeError(answer.error);
-        dispatch({ type: "event", event: { kind: "repo.added", repo: answer.result.repo } });
-        return undefined;
-      },
-
-      async renameSpace(space: string, name: string) {
-        const answer = await window.parallax.request(hostId, "repo/update", { repo: space, name });
-        if ("error" in answer) return describeError(answer.error);
-        dispatch({ type: "event", event: { kind: "repo.updated", repo: answer.result.repo } });
-        return undefined;
-      },
-
-      async deleteSpace(space: string) {
-        const answer = await window.parallax.request(hostId, "space/delete", { space });
-        if ("error" in answer) return describeError(answer.error);
-        dispatch({ type: "event", event: { kind: "repo.removed", repo: space } });
-        return undefined;
-      },
-
-      // The answer is the one area; `areas.changed` brings the whole list right after.
-      async createArea(area: Area) {
-        const answer = await window.parallax.request(hostId, "area/create", area);
-        if ("error" in answer) return describeError(answer.error);
-        dispatch({ type: "area", area: answer.result.area });
-        return undefined;
-      },
-
-      async updateArea(id: string, change: AreaChange) {
-        const answer = await window.parallax.request(hostId, "area/update", {
-          area: id,
-          ...change,
-        });
-        if ("error" in answer) return describeError(answer.error);
-        dispatch({ type: "area", area: answer.result.area });
-        return undefined;
-      },
-
-      async deleteArea(id: string) {
-        const answer = await window.parallax.request(hostId, "area/delete", { area: id });
-        if ("error" in answer) return describeError(answer.error);
-        dispatch({ type: "area", id });
-        return undefined;
-      },
     }),
     [hostId, approvals, naming],
   );
@@ -956,10 +872,4 @@ export const idleThreads: ThreadsView = {
   startCoordinator: async () => ({ code: -32000, message: notConnected }),
   update: async () => notConnected,
   updateRepo: async () => notConnected,
-  createSpace: async () => notConnected,
-  renameSpace: async () => notConnected,
-  deleteSpace: async () => notConnected,
-  createArea: async () => notConnected,
-  updateArea: async () => notConnected,
-  deleteArea: async () => notConnected,
 };

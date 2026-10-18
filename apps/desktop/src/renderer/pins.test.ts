@@ -4,15 +4,19 @@ import {
   addToFolder,
   createFolder,
   entriesOf,
+  fileStarted,
   folderPath,
   makeFolder,
   moveOut,
   pinLayout,
   placeAt,
-  renameFolder as rename,
+  startIn,
   ungroup,
+  updateFolder,
   type PinEntry,
 } from "./pins";
+
+const rename = (id: string, name: string) => updateFolder(id, { name });
 
 /** The tree `entriesOf` shows for the pins `keys`, as nested arrays of keys and folder names. */
 const tree = (keys: string[]) => {
@@ -65,4 +69,24 @@ test("ungrouping puts what was in a folder, nested folders included, in its plac
   ungroup(entries(), folderId("Outer"));
   expect(tree(pins)).toEqual(["a", "b", "c", { Inner: ["d"] }]);
   expect(Object.values(pinLayout.get().folders).map((f) => f.name)).toEqual(["Inner"]);
+});
+
+test("a folder's New thread files only the thread it starts, and none once the folder's gone", () => {
+  const id = createFolder();
+  startIn.set(id);
+  expect(fileStarted("h/new")).toBe(true);
+  expect(pinLayout.get().folders[id]!.items).toEqual(["h/new"]);
+  // Used up: the next thread started anywhere isn't filed.
+  expect(startIn.get()).toBeNull();
+  expect(fileStarted("h/next")).toBe(false);
+
+  startIn.set("deleted-folder");
+  expect(fileStarted("h/later")).toBe(false);
+  expect(startIn.get()).toBeNull();
+});
+
+test("a drop after an open folder's row goes first inside it", () => {
+  rename(makeFolder(entries(), "b", "c"), "Work");
+  addToFolder(entries(), folderId("Work"), "a", true);
+  expect(tree(pins)).toEqual([{ Work: ["a", "b", "c"] }, "d"]);
 });

@@ -309,6 +309,8 @@ test("the sidebar leaves out threads another thread started, and opening one mar
   await renderApp();
   expect(sidebarTitles()).toEqual(["Fix the README", "Ship lineage"]);
   expect(toggle("2 threads")).toBeUndefined();
+  // Its running parent's row says the child failed, which shows nowhere else in the list.
+  expect(sidebarRow("Ship lineage")!.textContent).toContain("Failed");
 
   // Opening a child, here from its parent's chips, leaves its parent's row reading as open.
   await click(sidebarRow("Ship lineage"));

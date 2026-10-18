@@ -69,6 +69,22 @@ export function servePids(dataDir: string): number[] {
   return [...text.matchAll(/listening.* pid=(\d+)/g)].map((m) => Number.parseInt(m[1]!, 10));
 }
 
+/**
+ * Opens a thread from its sidebar row, found by its text. A working thread's row waits in the
+ * Working drawer, folded until opened (0075), and it can finish between looking and clicking,
+ * moving its row, so the pair is retried. The click lands at the row's left edge, since a short
+ * row's hover actions cover its middle.
+ */
+export async function openThread(page: Page, text: RegExp) {
+  const row = page.locator("#sidebar li[data-kind='thread'] > button").filter({ hasText: text });
+  await expect(async () => {
+    const working = page.locator("#sidebar details").filter({ hasText: /^Working/ });
+    if ((await working.count()) && (await working.getAttribute("open")) === null)
+      await working.locator("summary").click();
+    await row.first().click({ position: { x: 8, y: 8 }, timeout: 2000 });
+  }).toPass();
+}
+
 /** After a test that failed: plxd's log and the window's text. */
 export async function printFailure({ page, dataDir }: Launched) {
   const log = path.join(dataDir, "logs/plxd.log");

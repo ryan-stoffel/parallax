@@ -8,7 +8,7 @@ import path from "node:path";
 import { expect, test, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 
 import { uuidv7 } from "../src/renderer/uuidv7";
-import { close, launch, printFailure, servePids, type Launched } from "./launch";
+import { close, launch, openThread, printFailure, servePids, type Launched } from "./launch";
 
 // The built app against a real plxd whose workers are the fake backend playing agent.json
 // (PLX-16). See launch.ts for the plxd it needs.
@@ -220,7 +220,7 @@ test("a follow-up's text is still there after a reload (PLX-92)", async () => {
   await expect(said).toHaveCount(2);
 
   await page.reload();
-  await page.getByRole("button", { name: /Tidy up the README/ }).click();
+  await openThread(page, /Tidy up the README/);
   const transcript = page.getByRole("log", { name: "Transcript" });
   await expect(transcript.getByText("Check the links too")).toBeVisible();
   await expect(transcript.getByText("Follow-up message")).toHaveCount(0);
@@ -256,7 +256,7 @@ test("a pasted image sits in the composer, goes with the message, and outlives a
 
   // Rebuilt from the log, the image comes from plxd.
   await page.reload();
-  await page.getByRole("button", { name: /Tidy up the README/ }).click();
+  await openThread(page, /Tidy up the README/);
   await expect(sent).toBeVisible();
   expect(await sent.evaluate(width)).toBe(2000);
 });
@@ -613,8 +613,7 @@ test("attaches another thread with @, sends it with the message, and opens it fr
   await expect(transcript.getByText("Do what that thread did here")).toBeVisible();
   await expect(transcript.getByText("The fake agent is on it.")).toHaveCount(2);
   await page.reload();
-  // At its left edge: a short row's hover actions cover its middle.
-  await page.getByRole("button", { name: /Tidy up the docs/ }).click({ position: { x: 8, y: 8 } });
+  await openThread(page, /Tidy up the docs/);
   const sent = transcript.getByRole("button", { name: /Tidy up the README/ });
   await expect(sent).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("thread-sent.png") });
@@ -635,17 +634,7 @@ test("thread details opens children and stays docked beside the side panel", asy
   };
   const parent = await start("Plan the release");
   await start("Write the changelog", parent);
-  // While it works it waits in the Working drawer, folded until opened (0075); it can finish
-  // between looking and clicking, moving its row, so the pair is retried.
-  const row = page
-    .locator("#sidebar li[data-kind='thread'] > button")
-    .filter({ hasText: "Plan the release" });
-  await expect(async () => {
-    const working = page.locator("#sidebar details").filter({ hasText: /^Working/ });
-    if ((await working.count()) && (await working.getAttribute("open")) === null)
-      await working.locator("summary").click();
-    await row.click({ timeout: 2000 });
-  }).toPass();
+  await openThread(page, /Plan the release/);
   const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
   const current = breadcrumb.locator('ol > li > [aria-current="page"]');
   await expect(current).toHaveText("Plan the release");

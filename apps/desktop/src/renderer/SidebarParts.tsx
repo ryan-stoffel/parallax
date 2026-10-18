@@ -254,6 +254,15 @@ export function Fold({ open, children }: { open: boolean; children: ReactNode })
   );
 }
 
+/**
+ * The sidebar's rows, in order, matching `also` (a selector to append to `[data-row]`), less any
+ * in a shut `Fold` or closed folder: what Up, Down, and focus after a change move through.
+ */
+export const shownRows = (also = "") =>
+  [...document.querySelectorAll<HTMLElement>(`#sidebar [data-row]${also}`)].filter(
+    (r) => !r.closest("[inert]"),
+  );
+
 const summaryDot: Partial<Record<Attention, string>> = {
   failed: "bg-danger",
   done: "bg-added",

@@ -173,7 +173,15 @@ import {
   type PinFolder,
 } from "./pins";
 import { Favorites, type FavoriteAction } from "./Favorites";
-import { Fold, NewThreadRow, PinSummary, quietFor, Tick, TodayDivider } from "./SidebarParts";
+import {
+  Fold,
+  NewThreadRow,
+  PinSummary,
+  quietFor,
+  shownRows,
+  Tick,
+  TodayDivider,
+} from "./SidebarParts";
 import { PinList, type Pin as PinData } from "./PinList";
 
 const row =
@@ -370,7 +378,7 @@ const lastOpenStore = stored<Record<string, string>>("parallax:lastOpen", {}, re
 
 /** One row of the list: a thread, or a Project, with its host and what it asks of the user. */
 type Item = (
-  | { kind: "thread"; thread: Thread }
+  | { kind: "thread"; thread: Thread; run?: AgentRun }
   | { kind: "project"; project: Project; runs: AgentRun[] }
 ) & {
   key: string;
@@ -414,6 +422,9 @@ const mac = () => window.parallax.platform === "darwin";
 const modOnly = (e: { metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }) =>
   (mac() ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) && !e.altKey && !e.shiftKey;
 /** Text cut to fit a toast. */
+/** The threads auto-archive archived this session, each once, so an Undo sticks. */
+const autoArchived = new Set<string>();
+
 const short = (text: string) => (text.length > 30 ? `${text.slice(0, 28).trimEnd()}…` : text);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const working = (a: Attention) => a === "working" || a === "monitoring" || a === "waiting";
@@ -422,15 +433,15 @@ const working = (a: Attention) => a === "working" || a === "monitoring" || a ===
  * Slides sidebar rows out, each `stagger` ms after the one above, before they're archived; the
  * rows under them then close the gap (flip.ts). `done` settles once they're gone, and is absent
  * with nothing to slide, as under reduced motion, so archiving waits only on a slide. `restore`
- * brings them back, for an archive that failed.
+ * brings the rows `back`, every one by default, back, for archives that failed.
  */
 function sweepOut(keys: string[], to: string, stagger = 0) {
   const still = document.documentElement.classList.contains("reduce-motion");
-  const moves = (still ? [] : keys).flatMap((key, n) => {
-    const row = document.querySelector<HTMLElement>(`#sidebar [data-flip="${CSS.escape(key)}"]`);
-    if (typeof row?.animate !== "function") return [];
-    return [
-      row.animate(
+  const moves = new Map(
+    (still ? [] : keys).flatMap((key, n) => {
+      const row = document.querySelector<HTMLElement>(`#sidebar [data-flip="${CSS.escape(key)}"]`);
+      if (typeof row?.animate !== "function") return [];
+      const move = row.animate(
         [
           { opacity: 1, transform: "none" },
           { opacity: 0, transform: to },
@@ -442,15 +453,16 @@ function sweepOut(keys: string[], to: string, stagger = 0) {
           easing: "cubic-bezier(.4,0,1,1)",
           fill: "forwards",
         },
-      ),
-    ];
-  });
+      );
+      return [[key, move] as const];
+    }),
+  );
   return {
-    done: moves.length
-      ? Promise.all(moves.map((m) => m.finished.catch(() => {}))).then(() => {})
+    done: moves.size
+      ? Promise.all([...moves.values()].map((m) => m.finished.catch(() => {}))).then(() => {})
       : undefined,
-    restore: () => {
-      for (const m of moves) m.cancel();
+    restore: (back = keys) => {
+      for (const key of back) moves.get(key)?.cancel();
     },
   };
 }
@@ -512,7 +524,7 @@ export function ThreadList({
   const [flashing, setFlashing] = useState<ReadonlySet<string>>(new Set());
   // The row to focus after the next render: by key, or by place, as the one that takes an
   // archived row's place.
-  const focusNext = useRef<{ key?: string; index?: number }>(undefined);
+  const focusNext = useRef<{ key?: string; index?: number; after?: Element }>(undefined);
   // Bumped to render once more after setting `focusNext` outside a render, as when plxd answers.
   const [, refocus] = useState(0);
   const card = useRef<CardHandle>(null);
@@ -534,14 +546,14 @@ export function ThreadList({
   const pinFolders = pinLayout.use().folders;
 
   // A chosen repo that's gone, deleted or not loaded yet, shows everything, keeping the choice
-  // for its return. A scope from when areas showed (0073) shows everything too.
+  // for its return. A scope from when areas and Spaces showed (0073) shows everything too.
   const chosen = scopeStore.use();
   const parsed = parseScope(chosen);
   const scopeRepo =
     parsed.kind === "repo"
       ? hosts
           .find((h) => h.host.id === parsed.hostId)
-          ?.view.state.repos.find((r) => !r.scratch && r.id === parsed.id)
+          ?.view.state.repos.find((r) => !r.scratch && !r.space && r.id === parsed.id)
       : undefined;
   const scope: Scope =
     parsed.kind === "area" || (parsed.kind === "repo" && !scopeRepo) ? "all" : chosen;
@@ -558,15 +570,16 @@ export function ThreadList({
   };
 
   // What arrives animates in (index.css), but not the first load: the sidebar settles a moment
-  // after its threads first list.
+  // after its threads first list, and again each time the list mounts, as back from Settings.
   const loaded = hosts.some(({ view }) => view.state.threads.length > 0);
   useEffect(() => {
     if (!loaded) return;
-    const timer = window.setTimeout(
-      () => document.getElementById("sidebar")?.setAttribute("data-settled", ""),
-      400,
-    );
-    return () => window.clearTimeout(timer);
+    const sidebar = document.getElementById("sidebar");
+    const timer = window.setTimeout(() => sidebar?.setAttribute("data-settled", ""), 400);
+    return () => {
+      window.clearTimeout(timer);
+      sidebar?.removeAttribute("data-settled");
+    };
   }, [loaded]);
 
   const items: Item[] = hosts.flatMap(({ host: h, view }) => {
@@ -583,6 +596,7 @@ export function ThreadList({
         return {
           kind: "thread",
           thread: t,
+          run,
           key: `${h.id}/${t.id}`,
           host: h,
           view,
@@ -621,6 +635,26 @@ export function ThreadList({
     return [...threads, ...projects];
   });
   const byKey = new Map(items.map((i) => [i.key, i]));
+  // The thread at the top of `key`'s family, as far up as it lists; `key` for one no thread started.
+  const topOf = (key: string) => {
+    let top = key;
+    for (const seen = new Set<string>(); !seen.has(top);) {
+      seen.add(top);
+      const i = byKey.get(top);
+      const up =
+        i?.kind === "thread" && i.thread.parent ? `${i.host.id}/${i.thread.parent}` : undefined;
+      if (!up || !byKey.has(up)) break;
+      top = up;
+    }
+    return top;
+  };
+  // Threads another started don't list (0075), so one waiting on the user or failed says so on the
+  // row at the top of its family.
+  for (const i of items)
+    if (i.kind === "thread" && (i.attention === "needsYou" || i.attention === "failed")) {
+      const top = byKey.get(topOf(i.key))!;
+      top.attention = mostUrgent([top.attention, i.attention]);
+    }
   // Where a thread is, for its card: its repo, or its folder in place of No repo.
   const placeOf = (item: Item) => {
     const folder = folderHolding(pinFolders, item.key);
@@ -744,15 +778,7 @@ export function ThreadList({
         : undefined;
   // The row that reads as open: the open thread's, or while a thread another started is open, which
   // doesn't list, the row of the thread at the top of its family.
-  let openKey = selectedKey;
-  for (const seen = new Set<string>(); openKey && !seen.has(openKey);) {
-    seen.add(openKey);
-    const i = byKey.get(openKey);
-    const up =
-      i?.kind === "thread" && i.thread.parent ? `${i.host.id}/${i.thread.parent}` : undefined;
-    if (!up || !byKey.has(up)) break;
-    openKey = up;
-  }
+  const openKey = selectedKey && topOf(selectedKey);
   // Opening a thread marked unread reads it.
   useEffect(() => {
     if (selectedKey && unread.includes(selectedKey))
@@ -837,8 +863,9 @@ export function ThreadList({
 
   useLayoutEffect(() => {
     const next = focusNext.current;
-    if (!next) return;
-    const rows = [...document.querySelectorAll<HTMLElement>("#sidebar [data-row]")];
+    // The row E or S took away leaves once its host's change reaches the list, a render later.
+    if (!next || next.after?.isConnected) return;
+    const rows = shownRows();
     focusNext.current = undefined;
     const row =
       next.key !== undefined
@@ -919,7 +946,7 @@ export function ThreadList({
     const here = document.activeElement;
     if (focusAt === undefined || (here && here !== document.body && !here.closest("[data-row]")))
       return;
-    focusNext.current = { index: focusAt };
+    focusNext.current = { index: focusAt, after: here?.closest("[data-row]") ?? undefined };
     refocus((n) => n + 1);
   };
   // `focusAt` comes from E, for `focusAfter`.
@@ -951,7 +978,8 @@ export function ThreadList({
     const error = await item.view.update(t.id, { snoozedUntil: until.toISOString() });
     setActionError(error);
     if (error) return;
-    focusAfter(focusAt);
+    // A snoozed row snoozed again stays where it is, and so does focus.
+    focusAfter(isSnoozed(item) ? undefined : focusAt);
     const ending = until.getTime() <= Date.now();
     toast(ending ? "Unsnoozed" : `Snoozed until ${when(until)}`, () => {
       // A snooze that ended meanwhile ends now.
@@ -999,9 +1027,7 @@ export function ThreadList({
     const next = new Set(picked);
     const from = anchor.current;
     if (range && from) {
-      const keys = [
-        ...document.querySelectorAll<HTMLElement>('#sidebar [data-row][data-kind="thread"]'),
-      ].map((r) => r.dataset["row"]!);
+      const keys = shownRows('[data-kind="thread"]').map((r) => r.dataset["row"]!);
       const [a, b] = [keys.indexOf(from), keys.indexOf(item.key)];
       if (a >= 0 && b >= 0)
         for (const k of keys.slice(Math.min(a, b), Math.max(a, b) + 1)) next.add(k);
@@ -1024,7 +1050,7 @@ export function ThreadList({
       if (sweep.done) await sweep.done;
       errors.push(...(await Promise.all(list.map(({ item, t }) => item.view.archive(t.id, true)))));
       for (const k of keys) leaving.current.delete(k);
-      if (errors.some(Boolean)) sweep.restore();
+      sweep.restore(keys.filter((_, n) => errors[n]));
       setPicked(new Set());
       toast(`Archived ${n}`, () => {
         for (const { item, t } of list)
@@ -1064,9 +1090,7 @@ export function ThreadList({
   };
   const rowKeys = (e: ReactKeyboardEvent<HTMLElement>, item: Item) => {
     if (e.metaKey || e.ctrlKey || e.altKey || e.nativeEvent.isComposing) return;
-    const rows = [...document.querySelectorAll<HTMLElement>("#sidebar [data-row]")].filter(
-      (r) => !r.closest("[inert]"),
-    );
+    const rows = shownRows();
     const at = rows.indexOf(e.currentTarget);
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     const thread = item.kind === "thread";
@@ -1226,6 +1250,36 @@ export function ThreadList({
   // chosen for it, else its repo's, in its color.
   const pinIconsNow = pinIcons.use();
   const [unpinOver, setUnpinOver] = useState(false);
+  // A thread's own actions where it shows out of Today, pinned or a favorite, as on its row.
+  const threadActions = (i: Item & { kind: "thread" }): FavoriteAction[] => [
+    ...(i.host.id === host.id && selection.kind === "thread" && i.key !== openKey
+      ? [
+          {
+            label: "Open side by side",
+            icon: <Columns2 aria-hidden />,
+            run: () => onOpenBeside(i.thread.id),
+          },
+        ]
+      : []),
+    { label: "Archive", icon: <Archive aria-hidden />, shortcut: "E", run: () => void archive(i) },
+    ...("threadAttention" in i.view.capabilities
+      ? [
+          {
+            label: "Snooze for an hour",
+            icon: <AlarmClock aria-hidden />,
+            shortcut: "S",
+            run: () => void snoozeUntil(i, new Date(Date.now() + 3_600_000)),
+          },
+        ]
+      : []),
+    {
+      label: "Delete…",
+      icon: <Trash2 aria-hidden />,
+      danger: true,
+      shortcut: "⌫",
+      run: () => askDelete(i),
+    },
+  ];
   const pinOf = (i: Item & { kind: "thread" }): PinData => {
     const chosen = pinIconsNow[i.key];
     const repo = i.repo && !i.repo.scratch ? i.repo : undefined;
@@ -1248,6 +1302,10 @@ export function ThreadList({
       selected: i.key === openKey,
       thread: { hostId: i.host.id, id: i.thread.id },
       renamable: "threadLineage" in i.view.capabilities,
+      actions: threadActions(i),
+      onKeys: (e) => {
+        if (/^(e|s|backspace|delete)$/i.test(e.key)) rowKeys(e, i);
+      },
     };
   };
   // The pinned threads moved up into the favorites, which leave the pinned rows.
@@ -1440,30 +1498,36 @@ export function ThreadList({
     </div>
   );
 
-  // Clear archives every finished thread in Today already seen.
-  const clearable = topThreads.filter((i) => i.kind === "thread" && i.attention === "settled");
+  // Clear archives every finished thread in Today already seen, but not one waiting out a usage
+  // limit (0049), which resumes on its own.
+  const clearable = topThreads.filter(
+    (i) => i.kind === "thread" && i.attention === "settled" && i.run?.status !== "waiting",
+  );
   // Arc archives a tab left alone long enough; so does Today, for a finished thread you've seen
-  // that's been quiet longer than you chose. Each is archived once a session, so its Undo sticks.
+  // that's been quiet, neither prompted nor running, longer than you chose.
   const autoHours = autoClear.use();
-  const autoArchived = useRef(new Set<string>());
   useEffect(() => {
     if (autoHours === null) return;
     const cutoff = now - autoHours * 36e5;
     const stale = clearable.flatMap((i) =>
-      i.kind === "thread" && Date.parse(i.at) < cutoff && !autoArchived.current.has(i.key)
+      i.kind === "thread" &&
+      Math.max(Date.parse(i.at), i.run ? Date.parse(i.run.updatedAt) : 0) < cutoff &&
+      !autoArchived.has(i.key)
         ? [i]
         : [],
     );
     if (!stale.length) return;
-    for (const i of stale) autoArchived.current.add(i.key);
-    void Promise.all(stale.map((i) => i.view.archive(i.thread.id, true))).then(() =>
+    for (const i of stale) autoArchived.add(i.key);
+    void Promise.all(stale.map((i) => i.view.archive(i.thread.id, true))).then((errors) => {
+      const archived = stale.filter((_, n) => !errors[n]);
+      if (!archived.length) return;
       toast(
-        `Archived ${plural(stale.length, "thread")} quiet for over ${quietFor(autoHours)}`,
+        `Archived ${plural(archived.length, "thread")} quiet for over ${quietFor(autoHours)}`,
         () => {
-          for (const i of stale) void viewOf(i.host.id)?.archive(i.thread.id, false);
+          for (const i of archived) void viewOf(i.host.id)?.archive(i.thread.id, false);
         },
-      ),
-    );
+      );
+    });
   });
   const clearToday = async () => {
     const threads = clearable.flatMap((i) =>
@@ -1478,10 +1542,15 @@ export function ThreadList({
       35,
     );
     if (sweep.done) await sweep.done;
-    await Promise.all(threads.map((i) => i.view.archive(i.thread.id, true)));
+    const errors = await Promise.all(threads.map((i) => i.view.archive(i.thread.id, true)));
     for (const i of threads) leaving.current.delete(i.key);
-    toast(`Cleared ${plural(threads.length, "thread")}`, () => {
-      for (const i of threads) void viewOf(i.host.id)?.archive(i.thread.id, false);
+    // Those plxd didn't archive come back.
+    sweep.restore(threads.flatMap((i, n) => (errors[n] ? [i.key] : [])));
+    setActionError(errors.find(Boolean));
+    const cleared = threads.filter((_, n) => !errors[n]);
+    if (!cleared.length) return;
+    toast(`Cleared ${plural(cleared.length, "thread")}`, () => {
+      for (const i of cleared) void viewOf(i.host.id)?.archive(i.thread.id, false);
     });
   };
   // A Project's own menu items, where its plxd allows each (0043, PLX-803).
@@ -1542,6 +1611,7 @@ export function ThreadList({
         attention: i.attention,
         selected: i.key === openKey,
         thread: pin.thread,
+        actions: pin.actions,
       };
     }),
   ].sort((a, b) => favRank(a.key) - favRank(b.key) || 0);
@@ -1637,7 +1707,7 @@ export function ThreadList({
                 else e.currentTarget.blur();
               } else if (e.key === "Enter" || e.key === "ArrowDown") {
                 // Into the list: Enter opens the first row, Down focuses it.
-                const first = document.querySelector<HTMLElement>("#sidebar [data-row]");
+                const first = shownRows()[0];
                 if (!first) return;
                 e.preventDefault();
                 if (e.key === "Enter") first.click();
@@ -1733,7 +1803,11 @@ export function ThreadList({
       <Toasts />
       <AddDialog
         ref={addDialog}
-        onNewFolder={() => pinNaming.set(createFolder())}
+        onNewFolder={() => {
+          // Named in place, so the top unfolds to show it.
+          topCollapsed.set(false);
+          pinNaming.set(createFolder());
+        }}
         hosts={hosts.map((h) => h.host)}
         unbrowsable={unbrowsable(hosts)}
         hostId={host.id}
@@ -1915,7 +1989,6 @@ function useMinute() {
   return now;
 }
 
-/** A section's heading: its name and a chevron, which collapse the section `controls` names. */
 /**
  * A drawer pinned under the list, such as Working, Snoozed, or Archived, shown while it holds any
  * rows, which render only while it's open. It scrolls under a cap, and its summary sticks to the
@@ -2445,7 +2518,7 @@ function RowHead({
   words = [],
 }: {
   repo?: Repo;
-  /** The prototypes' pinned folder holding it (pins.ts), named in place of No repo. */
+  /** The pinned folder holding it (pins.ts), named in place of No repo. */
   folder?: PinFolder;
   status: ReactNode;
   words?: readonly string[];
@@ -2519,14 +2592,13 @@ function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: 
 }
 
 /**
- * A thread's row (0033): its repo and status (what it asks of the user, or how long ago it was
- * prompted), its title, then its worktree or local checkout icon and branch, a pin, linked pull
- * requests (the number of one, or +N for more), the other areas it's in, and provider. Under a
- * search, the words found are marked, and a match only in its messages shows a line of them.
- * Resting on it shows its card; hovering or focusing it swaps the status for Snooze, Archive, and
- * more actions, which also open by right-clicking the row: native popovers, so Escape and clicking
- * away close them. A row waiting on one command shows it, with Deny and Allow, on hover or focus.
- * Double-clicking the title renames it in place.
+ * A thread's row (0033, 0075): its repo and status (what it asks of the user, or how long ago it
+ * was prompted), its title, then its worktree or local checkout icon, branch, and git status, a
+ * pin, linked pull requests (the number of one, or +N for more) and their checks, and provider.
+ * Under a search, the words found are marked, and a match only in its messages shows a line of
+ * them. Resting on it shows its card; hovering or focusing it swaps the status for Snooze,
+ * Archive, and more actions, which also open by right-clicking the row: native popovers, so
+ * Escape and clicking away close them. Double-clicking the title renames it in place.
  */
 function ThreadRow({
   look,
@@ -3133,7 +3205,7 @@ function ThreadRow({
 }
 
 /**
- * The prototypes' git status beside a row's branch: commits not pushed, then uncommitted lines.
+ * The git status beside a row's branch: commits not pushed, then uncommitted lines.
  * plxd doesn't count commits behind yet.
  */
 function GitCounts({ git }: { git: GitStatus }) {

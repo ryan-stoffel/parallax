@@ -150,6 +150,10 @@ export function App() {
   const [prsOpen, setPrsOpen] = useState(false);
 
   useEffect(() => setPrsOpen(false), [selection]);
+  // A folder's New thread files only what starts from the New thread screen it opens.
+  useEffect(() => {
+    if (selection.kind !== "new") startIn.set(null);
+  }, [selection.kind]);
   const openSettings = (section: SettingsSection, hostId?: string) => {
     setPrsOpen(false);
     setSettings(section);
@@ -824,6 +828,7 @@ export function App() {
         elsewhere={elsewhere}
         onPick={newThread}
         onPickElsewhere={pickRepoOn}
+        onDismiss={() => startIn.set(null)}
       />
       <Sidebar
         width={leftWidth}
@@ -1135,10 +1140,8 @@ export function App() {
                       }
                       onStarted={(threadId, background) => {
                         // Started from a pinned folder's New thread: pinned there (pins.ts).
-                        if (startIn.get()) {
+                        if (fileStarted(`${host.id}/${threadId}`))
                           void threads.update(threadId, { pinned: true });
-                          fileStarted(`${host.id}/${threadId}`);
-                        }
                         if (!background) setSelection({ kind: "thread", threadId, started: true });
                       }}
                       chips={<FolderChip />}
