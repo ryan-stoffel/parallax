@@ -650,13 +650,14 @@ export function ThreadList({
   };
   // Threads another started don't list (0075), so the row at the top of a family also says when one
   // of them waits on the user, or failed since that row was last read. Counts and ⌥↓ go by each
-  // thread's own status. A family with one still working isn't cleared.
+  // thread's own status. A family with one still working, or waiting out a usage limit, isn't
+  // cleared.
   const familyNews = new Map<string, Attention>();
   const busyFamilies = new Set<string>();
   for (const i of items) {
     const top = byKey.get(topOf(i.key));
     if (i.kind !== "thread" || top === i || top?.kind !== "thread") continue;
-    if (working(i.attention)) busyFamilies.add(top.key);
+    if (working(i.attention) || i.run?.status === "waiting") busyFamilies.add(top.key);
     const read = top.thread.seenAt ? Date.parse(top.thread.seenAt) : 0;
     const failedSince = i.attention === "failed" && !!i.run && Date.parse(i.run.updatedAt) > read;
     if (i.attention === "needsYou" || failedSince)
@@ -988,11 +989,9 @@ export function ThreadList({
     const error = await item.view.update(t.id, { snoozedUntil: until.toISOString() });
     setActionError(error);
     if (error) return;
-    // A row that stays, as one already snoozed or that needs the user, keeps focus.
-    focusAfter(
-      item.key,
-      isSnoozed(item) || rowAttention(item) === "needsYou" ? undefined : focusAt,
-    );
+    // A row that stays, as one already snoozed or archived or that needs the user, keeps focus.
+    const stays = isSnoozed(item) || isArchived(item) || rowAttention(item) === "needsYou";
+    focusAfter(item.key, stays ? undefined : focusAt);
     const ending = until.getTime() <= Date.now();
     toast(ending ? "Unsnoozed" : `Snoozed until ${when(until)}`, () => {
       // A snooze that ended meanwhile ends now.

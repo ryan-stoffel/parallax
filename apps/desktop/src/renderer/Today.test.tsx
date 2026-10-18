@@ -250,9 +250,21 @@ test("moving on before plxd answers leaves focus where the user went", async () 
   expect(document.activeElement).toBe(search);
 });
 
-test("Clear leaves a thread one it started is still working for", async () => {
-  threads = [thread("lead", 30), thread("helper", 20, { parent: "lead" }), thread("plain", 10)];
-  runs = [run("lead", "completed", 30), run("helper", "running", 5), run("plain", "completed", 10)];
+test("Clear leaves a thread one it started is still working for, or waiting out a usage limit", async () => {
+  threads = [
+    thread("lead", 30),
+    thread("helper", 20, { parent: "lead" }),
+    thread("paused", 25),
+    thread("limited", 15, { parent: "paused" }),
+    thread("plain", 10),
+  ];
+  runs = [
+    run("lead", "completed", 30),
+    run("helper", "running", 5),
+    run("paused", "completed", 25),
+    run("limited", "waiting", 15),
+    run("plain", "completed", 10),
+  ];
   await renderApp();
   await act(async () => button("Clear")!.click());
   await waitForArchives(1);
@@ -306,14 +318,27 @@ test("S on a favorite thread snoozes it out of the favorites", async () => {
   expect(square()).toBeNull();
 });
 
-test("S on a row already snoozed keeps focus on it", async () => {
+test("S on a row already snoozed, or archived, keeps focus on it", async () => {
   capabilities = { threadAttention: {} };
-  sectionsStore.set({ all: { snoozed: true } });
-  threads = [thread("napping", 30, { snoozedUntil: ago(-120) }), thread("awake", 20)];
-  runs = [run("napping", "completed", 30), run("awake", "completed", 20)];
+  sectionsStore.set({ all: { snoozed: true, archived: true } });
+  threads = [
+    thread("napping", 30, { snoozedUntil: ago(-120) }),
+    thread("filed", 25, { archived: true }),
+    thread("awake", 20),
+  ];
+  runs = [
+    run("napping", "completed", 30),
+    run("filed", "completed", 25),
+    run("awake", "completed", 20),
+  ];
   await renderApp();
   await press(row("napping")!, "s");
   await act(() => vi.waitFor(() => expect(calls("thread/update")).toHaveLength(1)));
   await settle();
   expect(document.activeElement).toBe(row("napping"));
+
+  await press(row("filed")!, "s");
+  await act(() => vi.waitFor(() => expect(calls("thread/update")).toHaveLength(2)));
+  await settle();
+  expect(document.activeElement).toBe(row("filed"));
 });
