@@ -29,7 +29,6 @@ import {
   type CSSProperties,
   type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 
@@ -340,6 +339,7 @@ export function PinList({
         setRenaming(undefined);
         if (name !== undefined) updateFolder(entry.id, { name: name.trim() || "Folder" });
       }}
+      onStartRename={() => setRenaming(`folder:${entry.id}`)}
       onKeyDown={(e) => {
         if (e.key === "r" && !e.metaKey && !e.ctrlKey) {
           e.preventDefault();
@@ -731,16 +731,65 @@ const close = (then: () => void) => (e: { currentTarget: HTMLElement }) => {
   then();
 };
 
-// A row's surface: with something dragged into it, open, or at rest.
+// A row's surface: with something dragged into it, open, at rest, or its name being edited.
 const plainSurface = {
   target:
     "bg-[color-mix(in_srgb,var(--tint)_14%,transparent)] shadow-[inset_0_0_0_1.5px_color-mix(in_srgb,var(--tint)_55%,transparent)]",
   on: "bg-selected",
   rest: "hover:bg-hover",
+  editing:
+    "bg-[color-mix(in_srgb,var(--tint)_10%,var(--selected))] shadow-[inset_0_0_0_1.5px_color-mix(in_srgb,var(--tint)_70%,transparent)]",
 };
+const rowLook =
+  "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] transition-[background-color,transform] duration-100 outline-none";
 const moreButton =
   "grid size-5.5 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover/pin:opacity-100 group-has-[:focus-visible]/pin:opacity-100 hover:bg-[color-mix(in_srgb,var(--tint)_16%,transparent)] hover:text-foreground [&_svg]:size-3.5";
-const hideOnHover = "group-hover/pin:invisible group-has-[:focus-visible]/pin:invisible";
+const hideOnHover = "group-hover/pin:hidden group-has-[:focus-visible]/pin:hidden";
+// Room at a row's end for its hover buttons, so its name truncates before them: a pin's …, and a
+// folder's + and ….
+const roomForMore = "group-hover/pin:pr-8 group-has-[:focus-visible]/pin:pr-8";
+const roomForTwo = "group-hover/pin:pr-14 group-has-[:focus-visible]/pin:pr-14";
+
+/**
+ * A pin's or folder's name, edited in place where it shows, on a row with the editing surface.
+ * Enter or leaving it saves, Escape keeps the old name, and whichever comes first ends it, so the
+ * blur that follows Enter or Escape saves nothing more.
+ */
+function NameField({
+  label,
+  value,
+  onDone,
+}: {
+  label: string;
+  value: string;
+  onDone: (name: string | undefined) => void;
+}) {
+  const done = useRef(false);
+  const finish = (name: string | undefined) => {
+    if (done.current) return;
+    done.current = true;
+    onDone(name);
+  };
+  return (
+    <input
+      aria-label={label}
+      defaultValue={value}
+      autoFocus
+      spellCheck={false}
+      autoComplete="off"
+      onFocus={(e) => e.currentTarget.select()}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        // Enter and Escape belong to an input method while it composes.
+        if (e.nativeEvent.isComposing) return;
+        if (e.key === "Enter") finish(e.currentTarget.value);
+        else if (e.key === "Escape") finish(undefined);
+      }}
+      onBlur={(e) => finish(e.currentTarget.value)}
+      className="min-w-0 flex-1 bg-transparent p-0 text-foreground caret-(--tint) selection:bg-[color-mix(in_srgb,var(--tint)_35%,transparent)] focus-visible:outline-none"
+    />
+  );
+}
 
 function PinItem({
   pin,
@@ -786,59 +835,46 @@ function PinItem({
   const self = useArrival<HTMLLIElement>("scale(.94)");
   const bold = news(pin.attention);
   const state = drop === "into" ? "target" : pin.selected ? "on" : "rest";
-  const title = renaming ? (
-    <input
-      aria-label="Title"
-      defaultValue={pin.title}
-      autoFocus
-      spellCheck={false}
-      onFocus={(e) => e.currentTarget.select()}
-      onClick={(e) => e.stopPropagation()}
-      onKeyDown={(e) => {
-        if (e.nativeEvent.isComposing) return;
-        if (e.key === "Enter") onRename(e.currentTarget.value);
-        else if (e.key === "Escape") onRename(undefined);
-      }}
-      onBlur={(e) => onRename(e.currentTarget.value)}
-      className="w-full min-w-0 rounded-[5px] bg-background px-1 text-[12.5px] leading-[1.2] text-foreground outline-2 -outline-offset-1 outline-ring"
-    />
-  ) : null;
-  const button = {
-    type: "button" as const,
-    "data-row": pin.key,
-    "aria-current": pin.selected ? ("page" as const) : undefined,
-    onKeyDown: renaming ? undefined : onKeyDown,
-    draggable: draggable && !renaming,
-    onClick: renaming ? undefined : onOpen,
-    onDoubleClick: (e: ReactMouseEvent) => {
-      if (!(e.target as HTMLElement).closest("[data-pin-title]")) return;
-      e.preventDefault();
-      onStartRename();
-    },
-    onContextMenu: (e: ReactMouseEvent<HTMLElement>) => {
-      onLeave();
-      onMenu();
-      openOnContextMenu(e, more.current);
-    },
-    onDragStart,
-    onDragEnd,
-  };
-  const body = (
+  const icon = (
+    <span className="flex size-4 shrink-0 items-center justify-center [&_svg]:size-4">
+      {pin.icon}
+    </span>
+  );
+  // While renaming, the row is the field's frame, not a button that drags or opens.
+  const body = renaming ? (
+    <div className={`${rowLook} ${plainSurface.editing}`}>
+      {icon}
+      <NameField label="Title" value={pin.title} onDone={onRename} />
+    </div>
+  ) : (
     <button
-      {...button}
-      className={`flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] transition-[background-color,transform] duration-100 outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.985] ${plainSurface[state]}`}
+      type="button"
+      data-row={pin.key}
+      aria-current={pin.selected ? "page" : undefined}
+      onKeyDown={onKeyDown}
+      draggable={draggable}
+      onClick={onOpen}
+      onDoubleClick={(e) => {
+        if (!(e.target as HTMLElement).closest("[data-pin-title]")) return;
+        e.preventDefault();
+        onStartRename();
+      }}
+      onContextMenu={(e) => {
+        onLeave();
+        onMenu();
+        openOnContextMenu(e, more.current);
+      }}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      className={`${rowLook} focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.985] ${roomForMore} ${plainSurface[state]}`}
     >
-      <span className="flex size-4 shrink-0 items-center justify-center [&_svg]:size-4">
-        {pin.icon}
+      {icon}
+      <span
+        data-pin-title
+        className={`min-w-0 flex-1 truncate ${bold ? "font-medium text-foreground" : pin.selected ? "text-foreground" : "text-foreground/80"}`}
+      >
+        {pin.title}
       </span>
-      {title ?? (
-        <span
-          data-pin-title
-          className={`min-w-0 flex-1 truncate ${bold ? "font-medium text-foreground" : pin.selected ? "text-foreground" : "text-foreground/80"}`}
-        >
-          {pin.title}
-        </span>
-      )}
       {/* What finished, failed, or waits says so; work in progress is only an icon. */}
       <span className={`flex shrink-0 items-center ${hideOnHover}`}>
         <Status attention={pin.attention} words={bold} />
@@ -859,17 +895,19 @@ function PinItem({
     >
       {(drop === "before" || drop === "after") && <DropLine edge={drop} />}
       {body}
-      <button
-        ref={more}
-        type="button"
-        aria-label={`${pin.title} actions`}
-        title="Actions"
-        popoverTarget={menuId}
-        onClick={onMenu}
-        className={`absolute top-1/2 right-1 -translate-y-1/2 ${moreButton}`}
-      >
-        <Ellipsis />
-      </button>
+      {!renaming && (
+        <button
+          ref={more}
+          type="button"
+          aria-label={`${pin.title} actions`}
+          title="Actions"
+          popoverTarget={menuId}
+          onClick={onMenu}
+          className={`absolute top-1/2 right-1 -translate-y-1/2 ${moreButton}`}
+        >
+          <Ellipsis />
+        </button>
+      )}
     </li>
   );
 }
@@ -894,6 +932,7 @@ function FolderItem({
   onDragEnd,
   renaming,
   onRename,
+  onStartRename,
   onKeyDown,
   rowKey,
 }: {
@@ -903,6 +942,8 @@ function FolderItem({
   renaming: boolean;
   /** Ends a rename: saves `name`, or with undefined, keeps the old one. */
   onRename: (name: string | undefined) => void;
+  /** Starts a rename, as double-clicking its name does. */
+  onStartRename: () => void;
   onKeyDown: (e: ReactKeyboardEvent<HTMLElement>) => void;
   /** Starts a thread that's filed in the folder once it starts. */
   onNewThread: () => void;
@@ -927,52 +968,45 @@ function FolderItem({
   const more = useRef<HTMLButtonElement>(null);
   const top = topOf(pins);
   const bold = pins.some((p) => news(p.attention));
-  const button = {
-    type: "button" as const,
-    "data-row": rowKey,
-    "aria-expanded": open,
-    onClick: renaming ? undefined : onToggle,
-    onKeyDown: renaming ? undefined : onKeyDown,
-    onContextMenu: (e: ReactMouseEvent<HTMLElement>) => {
-      onMenu();
-      openOnContextMenu(e, more.current);
-    },
-  };
-  const body = (
+  const icon = (
+    <span className="grid size-4 shrink-0 place-items-center text-[color-mix(in_srgb,var(--tint)_80%,var(--foreground))] [&_svg]:size-4">
+      {open ? <FolderOpen aria-hidden /> : <Folder aria-hidden />}
+    </span>
+  );
+  // While renaming, the row is the field's frame, not a button that drags or toggles.
+  const body = renaming ? (
+    <div className={`${rowLook} ${plainSurface.editing}`}>
+      {icon}
+      <NameField label="Folder name" value={name} onDone={onRename} />
+    </div>
+  ) : (
     <button
-      {...button}
+      type="button"
+      data-row={rowKey}
+      aria-expanded={open}
+      onClick={onToggle}
+      onKeyDown={onKeyDown}
+      onDoubleClick={(e) => {
+        if (!(e.target as HTMLElement).closest("[data-folder-name]")) return;
+        e.preventDefault();
+        onStartRename();
+      }}
+      onContextMenu={(e) => {
+        onMenu();
+        openOnContextMenu(e, more.current);
+      }}
       draggable={draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className={`flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] transition-[background-color,transform] duration-100 outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.985] ${plainSurface[drop === "into" ? "target" : "rest"]}`}
+      className={`${rowLook} focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.985] ${roomForTwo} ${plainSurface[drop === "into" ? "target" : "rest"]}`}
     >
-      <span className="grid size-4 shrink-0 place-items-center text-[color-mix(in_srgb,var(--tint)_80%,var(--foreground))] [&_svg]:size-4">
-        {open ? <FolderOpen aria-hidden /> : <Folder aria-hidden />}
+      {icon}
+      <span
+        data-folder-name
+        className={`min-w-0 flex-1 truncate ${bold ? "font-medium text-foreground" : "text-foreground/80"}`}
+      >
+        {name}
       </span>
-      {renaming ? (
-        <input
-          aria-label="Folder name"
-          defaultValue={name}
-          autoFocus
-          spellCheck={false}
-          onFocus={(e) => e.currentTarget.select()}
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.nativeEvent.isComposing) return;
-            if (e.key === "Enter") onRename(e.currentTarget.value);
-            else if (e.key === "Escape") onRename(undefined);
-          }}
-          onBlur={(e) => onRename(e.currentTarget.value)}
-          className="min-w-0 flex-1 rounded-[5px] bg-background px-1 text-[13px] text-foreground outline-2 -outline-offset-1 outline-ring"
-        />
-      ) : (
-        <span
-          className={`min-w-0 flex-1 truncate ${bold ? "font-medium text-foreground" : "text-foreground/80"}`}
-        >
-          {name}
-        </span>
-      )}
       <span
         className={`flex shrink-0 items-center gap-1 text-[11.5px] text-faint-foreground tabular-nums ${hideOnHover}`}
       >
@@ -996,28 +1030,30 @@ function FolderItem({
     >
       {(drop === "before" || drop === "after") && <DropLine edge={drop} />}
       {body}
-      {
-        <button
-          type="button"
-          aria-label={`New thread in ${name}`}
-          title={`New thread in ${name}`}
-          onClick={onNewThread}
-          className={`absolute top-1/2 right-7 -translate-y-1/2 ${moreButton}`}
-        >
-          <Plus />
-        </button>
-      }
-      <button
-        ref={more}
-        type="button"
-        aria-label={`${name} actions`}
-        title="Actions"
-        popoverTarget={menuId}
-        onClick={onMenu}
-        className={`absolute top-1/2 right-1 -translate-y-1/2 ${moreButton}`}
-      >
-        <Ellipsis />
-      </button>
+      {!renaming && (
+        <>
+          <button
+            type="button"
+            aria-label={`New thread in ${name}`}
+            title={`New thread in ${name}`}
+            onClick={onNewThread}
+            className={`absolute top-1/2 right-7 -translate-y-1/2 ${moreButton}`}
+          >
+            <Plus />
+          </button>
+          <button
+            ref={more}
+            type="button"
+            aria-label={`${name} actions`}
+            title="Actions"
+            popoverTarget={menuId}
+            onClick={onMenu}
+            className={`absolute top-1/2 right-1 -translate-y-1/2 ${moreButton}`}
+          >
+            <Ellipsis />
+          </button>
+        </>
+      )}
     </li>
   );
 }
