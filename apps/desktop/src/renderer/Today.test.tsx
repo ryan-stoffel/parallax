@@ -7,7 +7,8 @@ import type { RpcResponse, ParallaxBridge } from "../preload/bridge";
 import type { AgentRun, Capabilities, Repo, Thread } from "../protocol/generated/protocol";
 import { App } from "./App";
 import { fakeWatch } from "./fakeWatch";
-import { autoClear } from "./pins";
+import { autoClear, pinFavorites } from "./pins";
+import { sectionsStore } from "./Sidebar";
 import { flushToasts } from "./undo";
 
 // Today's Clear, auto-archive, and keys (0075).
@@ -45,6 +46,7 @@ const run = (id: string, status: string, updated: number) =>
 
 let threads: Thread[];
 let runs: AgentRun[];
+let capabilities: Capabilities;
 type Answer = (params: Record<string, unknown>) => RpcResponse<unknown>;
 let answers: Record<string, Answer>;
 const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
@@ -68,12 +70,15 @@ beforeEach(() => {
   request.mockClear();
   localStorage.clear();
   autoClear.set(null);
-  const capabilities: Capabilities = {};
+  capabilities = {};
   answers = {
     "thread/list": () => ({ result: { repos: [parallax], threads, seq: 7 } }),
     "agent/list": () => ({ result: { runs, seq: 7 } }),
     "project/list": () => ({ result: { projects: [], seq: 7 } }),
     "thread/archive": archiving(),
+    "thread/update": (p) => ({
+      result: { thread: { ...threads.find((t) => t.id === p["runId"]), ...p } },
+    }),
   };
   window.parallax = {
     onProfile: () => () => {},
@@ -124,6 +129,12 @@ async function renderApp() {
 const settle = async () => {
   for (let i = 0; i < 10; i++) await act(async () => {});
 };
+const calls = (method: string) => request.mock.calls.filter(([, m]) => m === method);
+const press = (target: HTMLElement, key: string) =>
+  act(async () => {
+    target.focus();
+    target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+  });
 const archived = () =>
   request.mock.calls
     .filter(([, m, p]) => m === "thread/archive" && p["archived"])
@@ -237,4 +248,72 @@ test("moving on before plxd answers leaves focus where the user went", async () 
   await settle();
   expect(row("third")).toBeDefined();
   expect(document.activeElement).toBe(search);
+});
+
+test("Clear leaves a thread one it started is still working for", async () => {
+  threads = [thread("lead", 30), thread("helper", 20, { parent: "lead" }), thread("plain", 10)];
+  runs = [run("lead", "completed", 30), run("helper", "running", 5), run("plain", "completed", 10)];
+  await renderApp();
+  await act(async () => button("Clear")!.click());
+  await waitForArchives(1);
+  await settle();
+  expect(archived()).toEqual(["plain"]);
+});
+
+test("a snoozed thread wakes into Today when one it started needs the user", async () => {
+  threads = [
+    thread("napping", 30, { snoozedUntil: ago(-120) }),
+    thread("helper", 20, { parent: "napping" }),
+  ];
+  runs = [run("napping", "completed", 30), { ...run("helper", "running", 1), approvals: true }];
+  const ask = {
+    kind: "approvalRequested",
+    approvalId: "a1",
+    toolName: "Bash",
+    input: { command: "pnpm test" },
+    callId: "toolu_a1",
+    expiresAt: ago(-60),
+  };
+  answers["agent/events"] = (p) => ({
+    result: {
+      events:
+        p["runId"] === "helper" && p["after"] === 0
+          ? [
+              {
+                seq: 1,
+                time: ago(1),
+                event: { kind: "agent.output", runId: "helper", items: [ask] },
+              },
+            ]
+          : [],
+      more: false,
+    },
+  });
+  await renderApp();
+  expect(row("napping")?.textContent).toContain("Needs you");
+});
+
+test("S on a favorite thread snoozes it out of the favorites", async () => {
+  capabilities = { threadAttention: {} };
+  pinFavorites.set(["local/starred"]);
+  threads = [thread("starred", 30, { pinned: true }), thread("other", 20)];
+  runs = [run("starred", "completed", 30), run("other", "completed", 20)];
+  await renderApp();
+  const square = () => document.querySelector<HTMLElement>('#sidebar button[aria-label="starred"]');
+  await press(square()!, "s");
+  await act(() => vi.waitFor(() => expect(calls("thread/update")).toHaveLength(1)));
+  await settle();
+  expect(square()).toBeNull();
+});
+
+test("S on a row already snoozed keeps focus on it", async () => {
+  capabilities = { threadAttention: {} };
+  sectionsStore.set({ all: { snoozed: true } });
+  threads = [thread("napping", 30, { snoozedUntil: ago(-120) }), thread("awake", 20)];
+  runs = [run("napping", "completed", 30), run("awake", "completed", 20)];
+  await renderApp();
+  await press(row("napping")!, "s");
+  await act(() => vi.waitFor(() => expect(calls("thread/update")).toHaveLength(1)));
+  await settle();
+  expect(document.activeElement).toBe(row("napping"));
 });

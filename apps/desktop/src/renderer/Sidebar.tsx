@@ -650,11 +650,13 @@ export function ThreadList({
   };
   // Threads another started don't list (0075), so the row at the top of a family also says when one
   // of them waits on the user, or failed since that row was last read. Counts and ⌥↓ go by each
-  // thread's own status.
+  // thread's own status. A family with one still working isn't cleared.
   const familyNews = new Map<string, Attention>();
+  const busyFamilies = new Set<string>();
   for (const i of items) {
     const top = byKey.get(topOf(i.key));
     if (i.kind !== "thread" || top === i || top?.kind !== "thread") continue;
+    if (working(i.attention)) busyFamilies.add(top.key);
     const read = top.thread.seenAt ? Date.parse(top.thread.seenAt) : 0;
     const failedSince = i.attention === "failed" && !!i.run && Date.parse(i.run.updatedAt) > read;
     if (i.attention === "needsYou" || failedSince)
@@ -680,7 +682,8 @@ export function ThreadList({
     return p.kind === "repo" && item.host.id === p.hostId && item.repo?.id === p.id;
   };
   const isArchived = (i: Item) => i.kind === "thread" && !!i.thread.archived;
-  const isSnoozed = (i: Item) => i.kind === "thread" && snoozed(i.thread, i.attention, now);
+  // A snoozed thread wakes early when it, or one it started, needs the user.
+  const isSnoozed = (i: Item) => i.kind === "thread" && snoozed(i.thread, rowAttention(i), now);
   const needsYou = (i: Item) => i.attention === "needsYou" && !isArchived(i) && !doomed.has(i.key);
   const needsIn = (s: Scope) => items.filter((i) => needsYou(i) && inScope(i, s)).length;
   const outside =
@@ -985,7 +988,11 @@ export function ThreadList({
     const error = await item.view.update(t.id, { snoozedUntil: until.toISOString() });
     setActionError(error);
     if (error) return;
-    focusAfter(item.key, focusAt);
+    // A row that stays, as one already snoozed or that needs the user, keeps focus.
+    focusAfter(
+      item.key,
+      isSnoozed(item) || rowAttention(item) === "needsYou" ? undefined : focusAt,
+    );
     const ending = until.getTime() <= Date.now();
     toast(ending ? "Unsnoozed" : `Snoozed until ${when(until)}`, () => {
       // A snooze that ended meanwhile ends now.
@@ -1318,7 +1325,14 @@ export function ThreadList({
   const favoriteKeys = pinFavorites.use();
   const favoriteThreads = favoriteKeys.flatMap((k) => {
     const i = byKey.get(k);
-    return i?.kind === "thread" && i.thread.pinned && !isArchived(i) && matched.has(k) ? [i] : [];
+    return i?.kind === "thread" &&
+      i.thread.pinned &&
+      !isArchived(i) &&
+      !isSnoozed(i) &&
+      !doomed.has(k) &&
+      matched.has(k)
+      ? [i]
+      : [];
   });
   const pins = pinned.flatMap((i) =>
     i.kind === "thread" && !favoriteThreads.includes(i) ? [pinOf(i)] : [],
@@ -1505,9 +1519,13 @@ export function ThreadList({
   );
 
   // Clear archives every finished thread in Today already seen, but not one waiting out a usage
-  // limit (0049), which resumes on its own.
+  // limit (0049), which resumes on its own, or one whose family is still at work.
   const clearable = topThreads.filter(
-    (i) => i.kind === "thread" && rowAttention(i) === "settled" && i.run?.status !== "waiting",
+    (i) =>
+      i.kind === "thread" &&
+      rowAttention(i) === "settled" &&
+      i.run?.status !== "waiting" &&
+      !busyFamilies.has(i.key),
   );
   // Arc archives a tab left alone long enough; so does Today, for a finished thread you've seen
   // that's been quiet, neither prompted nor running, longer than you chose.
