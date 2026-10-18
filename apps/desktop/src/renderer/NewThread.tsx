@@ -1,5 +1,5 @@
-import { Folder, House, LoaderCircle, MessagesSquare, Plus } from "lucide-react";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { ChevronDown, Folder, House, LoaderCircle, MessagesSquare, Plus } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import type { AccountChoice, PromptImage, Repo, Role } from "../protocol/generated/protocol";
 import { TranscriptView } from "./AgentChat";
@@ -66,8 +66,8 @@ interface NewThreadProps {
   threadLinks?: ThreadLinks;
   /** The draft it reopens (PLX-788), by id. Read once, as it mounts. */
   draftId?: string;
-  /** Chips under the heading, such as the pinned folder the thread goes in (0075). */
-  chips?: ReactNode;
+  /** The pinned folder the thread goes in (0075), which the heading names in place of the repository. */
+  folder?: { name: string; color?: string };
 }
 
 /** One start of a thread. Retrying it reuses its run id, so plxd never makes a second thread (0007). */
@@ -157,7 +157,7 @@ export function NewThread({
   disabledReason,
   threadLinks,
   draftId: reopened,
-  chips,
+  folder,
 }: NewThreadProps) {
   // The no-repo start's shortcut, as Settings > Keybinds has it.
   const noRepoKeys = useShortcutLabel("noRepoThread");
@@ -233,7 +233,11 @@ export function NewThread({
     !repoless(group) && connection?.status === "connected" && "repoRefs" in connection.capabilities;
   // The picked ref, kept with its repository and workspace, so picking another drops it: a new
   // worktree's base never becomes a checkout's switch.
-  const [pickedRef, setPickedRef] = useState<{ groupId: string; checkout: boolean; ref: string }>();
+  const [pickedRef, setPickedRef] = useState<{
+    groupId: string;
+    checkout: boolean;
+    ref: string;
+  }>();
   const gitRef =
     refsAvailable && pickedRef?.groupId === group.id && pickedRef.checkout === checkout
       ? pickedRef.ref
@@ -399,55 +403,87 @@ export function NewThread({
       >
         {starting === undefined && (
           <>
-            <h1
-              className={`${repoless(group) ? "mb-7" : "mb-2"} text-center text-[24px] font-medium tracking-tight`}
-            >
-              {group.id === noRepo
-                ? "What should we work on "
-                : group.space
-                  ? "What should we talk about in "
-                  : "What should we build in "}
-              <button
-                type="button"
-                popoverTarget={repoMenu}
-                aria-haspopup="menu"
-                className="rounded-md underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground hover:decoration-solid"
-              >
-                {group.id === noRepo ? "without a repo" : group.name}
-              </button>
-              {shared && !repoless(group) && ` on ${hosts.find((h) => h.id === hostId)?.name}`}?
-            </h1>
-            {!repoless(group) && (
-              <div className={`relative text-center ${chips ? "mb-4" : "mb-9"}`}>
-                {/* Its shortcut, Mod+Shift+N unless rebound, shows under it on hover or focus. */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRepoError(undefined);
-                    setChoices(undefined);
-                    onGroupChange(noRepo);
-                  }}
-                  aria-keyshortcuts={noRepoBinding && ariaKeyshortcut(noRepoBinding)}
-                  className="group relative rounded-md text-[15px] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:text-foreground"
+            {folder ? (
+              <>
+                <h1 className="mb-2 text-center text-[24px] font-medium tracking-tight">
+                  What should we work on in{" "}
+                  <span
+                    style={{
+                      color: folder.color ? `var(--project-${folder.color})` : undefined,
+                    }}
+                  >
+                    {folder.name}
+                  </span>
+                  ?
+                </h1>
+                <div className="mb-9 text-center">
+                  <button
+                    type="button"
+                    popoverTarget={repoMenu}
+                    aria-haspopup="menu"
+                    aria-label={`Repository: ${group.id === noRepo ? "No repo" : group.name}`}
+                    className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[15px] text-muted-foreground hover:text-foreground focus-visible:text-foreground [&_svg]:size-3.5"
+                  >
+                    {group.id === noRepo ? (
+                      <House />
+                    ) : group.space ? (
+                      <MessagesSquare />
+                    ) : (
+                      <Folder />
+                    )}
+                    {group.id === noRepo ? "No repo" : group.name}
+                    <ChevronDown />
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h1
+                  className={`${repoless(group) ? "mb-7" : "mb-2"} text-center text-[24px] font-medium tracking-tight`}
                 >
-                  or start without a repo
-                  {noRepoKeys && (
-                    <kbd
-                      aria-hidden
-                      className="pointer-events-none invisible absolute top-full left-1/2 z-20 mt-1 -translate-x-1/2 rounded-md border border-border bg-surface px-2 py-1 font-sans text-[12px] text-muted-foreground group-hover:visible group-focus-visible:visible"
+                  {group.id === noRepo
+                    ? "What should we work on "
+                    : group.space
+                      ? "What should we talk about in "
+                      : "What should we build in "}
+                  <button
+                    type="button"
+                    popoverTarget={repoMenu}
+                    aria-haspopup="menu"
+                    className="rounded-md underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground hover:decoration-solid"
+                  >
+                    {group.id === noRepo ? "without a repo" : group.name}
+                  </button>
+                  {shared && !repoless(group) && ` on ${hosts.find((h) => h.id === hostId)?.name}`}?
+                </h1>
+                {!repoless(group) && (
+                  <div className="relative mb-9 text-center">
+                    {/* Its shortcut, Mod+Shift+N unless rebound, shows under it on hover or focus. */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRepoError(undefined);
+                        setChoices(undefined);
+                        onGroupChange(noRepo);
+                      }}
+                      aria-keyshortcuts={noRepoBinding && ariaKeyshortcut(noRepoBinding)}
+                      className="group relative rounded-md text-[15px] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:text-foreground"
                     >
-                      {noRepoKeys}
-                    </kbd>
-                  )}
-                </button>
-              </div>
+                      or start without a repo
+                      {noRepoKeys && (
+                        <kbd
+                          aria-hidden
+                          className="pointer-events-none invisible absolute top-full left-1/2 z-20 mt-1 -translate-x-1/2 rounded-md border border-border bg-surface px-2 py-1 font-sans text-[12px] text-muted-foreground group-hover:visible group-focus-visible:visible"
+                        >
+                          {noRepoKeys}
+                        </kbd>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </>
             )}
-            {chips && (
-              <div className={`mb-6 flex justify-center gap-1.5 ${repoless(group) ? "-mt-3" : ""}`}>
-                {chips}
-              </div>
-            )}
-            {/* Menu only: the repository name in the heading opens it. */}
+            {/* Menu only: the repository name in the heading, or under a folder's, opens it. */}
             <Picker
               id={repoMenu}
               button={false}
@@ -517,7 +553,10 @@ export function NewThread({
           uploadBytes={uploadBytes(connection)}
           menus={
             connection?.status === "connected" && "composerMenus" in connection.capabilities
-              ? { hostId, repo: group.id === noRepo || group.space ? undefined : group.id }
+              ? {
+                  hostId,
+                  repo: group.id === noRepo || group.space ? undefined : group.id,
+                }
               : undefined
           }
           // A new thread asks only through a plxd that sends its requests (PLX-196).
