@@ -505,7 +505,7 @@ export function ThreadList({
   const [doomed, setDoomed] = useState<ReadonlySet<string>>(new Set());
   // Threads sliding out to be archived, so a second E, click, or Clear meanwhile does nothing.
   const leaving = useRef(new Set<string>());
-  // Bumped when the last open thread is archived, to burst confetti out of the caught-up badge.
+  // Bumped when the last open thread is archived, to burst confetti out of the caught-up check.
   const [confetti, setConfetti] = useState(0);
   // It ends here rather than in Confetti, so a pop that never showed, say behind a draft row,
   // can't play later.
@@ -1976,38 +1976,27 @@ function Toasts() {
 }
 
 /**
- * Today's empty state, centered in the space it fills: a check badge over a title and a line.
- * Each new `burst` pops the badge and bursts confetti out of it; 0 shows it at rest.
+ * Today's empty state, centered in the space it fills. Each new `burst` pops its check and bursts
+ * confetti out of it; 0 shows it at rest.
  */
 function CaughtUp({ burst }: { burst: number }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 py-10 text-center">
-      <span
-        key={burst}
-        className={`caught-up-badge relative grid size-11 place-items-center rounded-full ${burst ? "caught-up-pop" : ""}`}
-      >
-        <Check aria-hidden className="size-5" strokeWidth={2.5} />
+    <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-6 text-[12.5px] text-faint-foreground">
+      <span key={burst} className={`relative ${burst ? "caught-up-pop" : ""}`}>
+        <CircleCheck aria-hidden className="size-5" strokeWidth={1.75} />
         {burst > 0 && <Confetti />}
       </span>
-      <div className="flex flex-col gap-0.5">
-        <p className="text-[13px] font-medium text-foreground">All caught up</p>
-        <p className="text-[12px] text-faint-foreground">Nothing needs you right now.</p>
-      </div>
+      All caught up
     </div>
   );
 }
 
-// Sixteen rays, evenly spaced over the 240° above the caught-up note's text, alternating near and
-// far, cycling the Project colors and green.
-const confettiRays = Array.from({ length: 16 }, (_, i) => ({
-  "--angle": `${150 + i * 16}deg`,
-  "--distance": i % 2 ? "40px" : "54px",
-  background: [
-    "var(--project-pink)",
-    "var(--project-yellow)",
-    "var(--project-sky)",
-    "var(--added)",
-  ][i % 4],
+// Twelve rays fanned over the 220° above the check, clear of the text under it, alternating near
+// and far, cycling the Project colors.
+const confettiRays = Array.from({ length: 12 }, (_, i) => ({
+  "--angle": `${160 + i * 20}deg`,
+  "--distance": i % 2 ? "18px" : "24px",
+  background: ["var(--project-pink)", "var(--project-yellow)", "var(--project-sky)"][i % 3],
 })) as CSSProperties[];
 
 /** One burst of confetti rays out of its parent's center, for archiving the last open thread. */

@@ -1048,44 +1048,20 @@ body {
     translate: 16px 0;
   }
 }
-/* Today's caught-up badge (Sidebar.tsx): a check on a soft green disc with a faint glow. */
-.caught-up-badge {
-  color: var(--added);
-  background: radial-gradient(
-    circle at 50% 30%,
-    color-mix(in srgb, var(--added) 22%, transparent),
-    color-mix(in srgb, var(--added) 8%, transparent)
-  );
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--added) 30%, transparent),
-    0 0 28px -6px color-mix(in srgb, var(--added) 45%, transparent);
-}
-/* Archiving the last open thread pops the badge, a ring swells off its edge, and confetti bursts
-   out of it: each ray turns to its --angle, then shoots from the edge to its --distance and fades. */
+/* Archiving the last open thread pops Today's caught-up check (Sidebar.tsx), green for a moment,
+   and bursts confetti out of it: each ray turns to its --angle, then shoots from the check's edge
+   to its --distance and fades. */
 .caught-up-pop {
-  animation: caught-up-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation: caught-up-pop 0.9s ease-out;
 }
 @keyframes caught-up-pop {
   from {
-    scale: 0.6;
+    scale: 0.8;
+    color: var(--added);
   }
-}
-.caught-up-pop::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  border: 1.5px solid var(--added);
-  pointer-events: none;
-  animation: caught-up-ring 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
-}
-@keyframes caught-up-ring {
-  from {
-    opacity: 0.7;
-  }
-  to {
-    opacity: 0;
-    scale: 1.9;
+  30% {
+    scale: 1;
+    color: var(--added);
   }
 }
 .confetti {
@@ -1096,17 +1072,17 @@ body {
 }
 .confetti > span {
   position: absolute;
-  width: 8px;
-  height: 2.5px;
-  margin: -1.25px 0 0 -4px;
-  border-radius: 2px;
-  animation: confetti 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  width: 5px;
+  height: 1.5px;
+  margin: -0.75px 0 0 -2.5px;
+  border-radius: 1px;
+  animation: confetti 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 @keyframes confetti {
   from {
-    transform: rotate(var(--angle)) translateX(20px) scaleX(0.3);
+    transform: rotate(var(--angle)) translateX(11px) scaleX(0.4);
   }
-  40% {
+  50% {
     opacity: 1;
   }
   to {
@@ -1114,8 +1090,7 @@ body {
     opacity: 0;
   }
 }
-:root.reduce-motion .confetti,
-:root.reduce-motion .caught-up-pop::after {
+:root.reduce-motion .confetti {
   display: none;
 }
 :root.reduce-motion .caught-up-pop {
