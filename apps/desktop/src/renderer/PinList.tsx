@@ -442,7 +442,7 @@ export function PinList({
         </div>
       )}
       {pins.length === 0 && !rowOver && searching && (
-        <p className="rounded-[10px] border border-dashed border-border px-3 py-3 text-center text-[12px] leading-snug text-faint-foreground">
+        <p className="rounded-xl border border-dashed border-border px-3 py-3 text-center text-[12px] leading-snug text-faint-foreground">
           No pins match
         </p>
       )}
