@@ -1083,7 +1083,7 @@ test("the row menu archives into Archived, and unarchives back", async () => {
       { timeout: 3000 },
     ),
   );
-  // It was the only open thread, so confetti pops beside the empty list's note.
+  // It was the only open thread, so confetti bursts out of the caught-up check.
   expect(document.querySelector("#sidebar .confetti")).not.toBeNull();
   await act(async () => drawer("Archived")!.querySelector("summary")!.click());
   expect(drawer("Archived")?.textContent).toContain("Fix the flaky test");

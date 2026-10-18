@@ -1048,25 +1048,39 @@ body {
     translate: 16px 0;
   }
 }
-/* Archiving the last open thread pops confetti just right of the empty list's note (Sidebar.tsx),
-   clear of its text: each ray turns to its --angle, then shoots out to its --distance and fades. */
+/* Archiving the last open thread pops Today's caught-up check (Sidebar.tsx), green for a moment,
+   and bursts confetti out of it: each ray turns to its --angle, then shoots from the check's edge
+   to its --distance and fades. */
+.caught-up-pop {
+  animation: caught-up-pop 0.9s ease-out;
+}
+@keyframes caught-up-pop {
+  from {
+    scale: 0.8;
+    color: var(--added);
+  }
+  30% {
+    scale: 1;
+    color: var(--added);
+  }
+}
 .confetti {
   position: absolute;
   top: 50%;
-  left: calc(100% + 30px);
+  left: 50%;
   pointer-events: none;
 }
 .confetti > span {
   position: absolute;
-  width: 6px;
-  height: 2px;
-  margin: -1px 0 0 -3px;
+  width: 5px;
+  height: 1.5px;
+  margin: -0.75px 0 0 -2.5px;
   border-radius: 1px;
   animation: confetti 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 @keyframes confetti {
   from {
-    transform: rotate(var(--angle)) translateX(4px) scaleX(0.4);
+    transform: rotate(var(--angle)) translateX(11px) scaleX(0.4);
   }
   50% {
     opacity: 1;
@@ -1078,6 +1092,9 @@ body {
 }
 :root.reduce-motion .confetti {
   display: none;
+}
+:root.reduce-motion .caught-up-pop {
+  animation: none;
 }
 /* The sidebar's areas (PLX-789): a thread that just finished flashes green once, and the undo
    toasts, the bulk bar, and the area editor rise or pop in. */
