@@ -14,6 +14,7 @@ import {
   MessageCircleQuestion,
   Palette,
   PencilLine,
+  Pin,
   PinOff,
   Plus,
   Star,
@@ -446,12 +447,24 @@ export function PinList({
         </p>
       )}
       {pins.length === 0 && !rowOver && !searching && !hintHidden && (
-        <div className="flex flex-col items-center gap-1.5 rounded-[10px] border border-dashed border-border px-3 pt-3 pb-2 text-center text-[12px] leading-snug text-faint-foreground">
-          Drag a thread here, or press P on it, to keep it here.
+        <div className="flex flex-col items-center rounded-xl border border-dashed border-border px-4 pt-4 pb-2.5 text-center">
+          <span className="grid size-7 place-items-center rounded-lg bg-surface text-muted-foreground ring-1 ring-border [&_svg]:size-3.5">
+            <Pin aria-hidden />
+          </span>
+          <p className="mt-2.5 text-[12.5px] font-medium text-muted-foreground">
+            Keep threads close
+          </p>
+          <p className="mt-0.5 text-[12px] leading-snug text-faint-foreground">
+            Drag one here, or press{" "}
+            <kbd className="rounded border border-border bg-surface px-1 font-sans text-[11px] leading-4 text-muted-foreground">
+              P
+            </kbd>{" "}
+            on it.
+          </p>
           <button
             type="button"
             onClick={() => pinHintHidden.set(true)}
-            className="rounded-md px-2 py-0.5 font-medium text-muted-foreground hover:bg-hover hover:text-foreground"
+            className="mt-3 h-6 rounded-md px-2.5 text-[11.5px] font-medium text-faint-foreground transition-colors hover:bg-hover hover:text-foreground"
           >
             Dismiss
           </button>
