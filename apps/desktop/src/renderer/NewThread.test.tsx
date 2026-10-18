@@ -382,6 +382,10 @@ test("a folder's New thread opens New Thread named for the folder, without the p
   expect(heading()).toBe("What should we work on in CSCI4150?");
   expect(control("Repository: parallax")).not.toBeNull();
   expect(document.body.textContent).not.toContain("Goes in");
+  expect(crumbs()).toEqual(["This Mac", "parallax", "New thread"]);
+  // With no repo, the crumb names the folder instead of No Repo.
+  await choose("Repository", "No Repo");
+  expect(crumbs()).toEqual(["This Mac", "CSCI4150", "New thread"]);
   // A plain New thread after it isn't in the folder.
   await act(async () => button("New thread")!.click());
   await act(async () =>
