@@ -12,6 +12,7 @@ import { flushToasts } from "./undo";
 import { drafts } from "./drafts";
 import { dragThread } from "./threadDrag";
 import { fakeWatch } from "./fakeWatch";
+import { pinLayout, startIn } from "./pins";
 import { sectionsStore } from "./Sidebar";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -61,6 +62,7 @@ beforeEach(() => {
   request.mockClear();
   capabilities = {};
   localStorage.clear();
+  startIn.set(null);
   // Working starts folded (0075); these tests read the rows in it.
   sectionsStore.set({ all: { working: true } });
   accessPrefs.set(accessDefaults);
@@ -361,6 +363,38 @@ test("the link under the heading switches New Thread to No Repo, showing its sho
   // No repo means no worktree or checkout to pick, only a computer.
   expect(control("Runs on: This Mac")).not.toBeNull();
   expect(document.body.textContent).not.toContain("New worktree");
+});
+
+test("a folder's New thread opens New Thread named for the folder, without the picker", async () => {
+  answers["thread/list"] = () => ({
+    result: { repos: [parallax], threads: [{ ...thread, pinned: true }], seq: 7 },
+  });
+  pinLayout.set({
+    order: ["folder:f1"],
+    folders: { f1: { name: "CSCI4150", items: ["local/t-1"] } },
+  });
+  await renderApp();
+  expect(heading()).toBe("What should we build in parallax?");
+  await act(async () => button("New thread in CSCI4150")!.click());
+  expect(
+    document.querySelector<HTMLDialogElement>('dialog[aria-label="New thread in"]')!.open,
+  ).toBe(false);
+  expect(heading()).toBe("What should we work on in CSCI4150?");
+  expect(control("Repository: parallax")).not.toBeNull();
+  expect(document.body.textContent).not.toContain("Goes in");
+  // A plain New thread after it isn't in the folder.
+  await act(async () => button("New thread")!.click());
+  await act(async () =>
+    [
+      ...document.querySelectorAll<HTMLElement>(
+        'dialog[aria-label="New thread in"] [role="option"]',
+      ),
+    ]
+      .find((o) => o.textContent?.startsWith("parallax"))!
+      .click(),
+  );
+  await settle();
+  expect(heading()).toBe("What should we build in parallax?");
 });
 
 test("a Space's new thread has no start-without-a-repo link, run target bar, or details", async () => {

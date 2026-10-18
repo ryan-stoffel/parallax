@@ -54,7 +54,6 @@ import {
   pinOpen,
   placeAt,
   setDraggedPin,
-  startIn,
   ungroup,
   updateFolder,
   wrapInFolder,
@@ -144,8 +143,8 @@ export function PinList({
   onFavorite: (key: string) => void;
   /** A pin dragged in from elsewhere landed here, as a favorite dragged back down. */
   onPlaced: (key: string) => void;
-  /** Opens New thread, for a folder's New thread, which files what it starts there. */
-  onNewThread: () => void;
+  /** Opens New thread for folder `id`'s New thread, which files what it starts there. */
+  onNewThread: (id: string) => void;
   pins: Pin[];
   searching: boolean;
   onOpen: (key: string) => void;
@@ -367,9 +366,8 @@ export function PinList({
       onMenu={() => setMenuFor(`folder:${entry.id}`)}
       onToggle={() => setOpen(entry.id, !isOpen(entry.id))}
       onNewThread={() => {
-        startIn.set(entry.id);
         setOpen(entry.id, true);
-        onNewThread();
+        onNewThread(entry.id);
       }}
       {...dropRow(`folder:${entry.id}`, entry.id)}
     />

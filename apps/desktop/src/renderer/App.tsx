@@ -238,6 +238,9 @@ export function App() {
   );
   const { groups } = groupThreads(threads.state);
   const pinFolders = pinLayout.use().folders;
+  // The pinned folder New Thread starts in, from that folder's New thread (pins.ts).
+  const startId = startIn.use();
+  const startFolder = startId ? pinFolders[startId] : undefined;
   // The other computers' repositories, which New Thread and Mod+N's picker list too.
   const elsewhere = useMemo(() => otherRepos(hosts, views, host.id), [hosts, views, host.id]);
   // Every thread and Project the open host has listed, so a selection is dropped only once what it
@@ -631,10 +634,15 @@ export function App() {
   };
 
   // Opens New Thread on another computer with one of its repositories.
-  const pickRepoOn = (hostId: string, groupId: string) =>
+  // Mod+N's pick of another computer's repository, a plain New thread as `newThread` is.
+  const pickRepoOn = (hostId: string, groupId: string) => {
+    startIn.set(null);
     openOnHost(hostId, { kind: "new", groupId });
+  };
 
+  // A plain New thread, so not in the folder a folder's New thread put it in.
   const newThread = (groupId = selection.kind === "project" ? undefined : group.id) => {
+    startIn.set(null);
     setSettings(null);
     setSelection({ kind: "new", groupId });
   };
@@ -828,7 +836,6 @@ export function App() {
         elsewhere={elsewhere}
         onPick={newThread}
         onPickElsewhere={pickRepoOn}
-        onDismiss={() => startIn.set(null)}
       />
       <Sidebar
         width={leftWidth}
@@ -848,7 +855,11 @@ export function App() {
             hosts={listed}
             host={host}
             selection={selection}
-            onSelect={openOnHost}
+            onSelect={(hostId, next) => {
+              // A draft opened from the list isn't in the folder either.
+              if (next.kind === "new") startIn.set(null);
+              openOnHost(hostId, next);
+            }}
             onOpenProject={openProject}
             onOpenSettings={openSettings}
             onOpenPullRequests={() => {
@@ -857,6 +868,10 @@ export function App() {
             }}
             onDelete={deleteThread}
             onNewThread={() => picker.current?.showModal()}
+            onNewFolderThread={(id) => {
+              newThread();
+              startIn.set(id);
+            }}
             split={split}
             onOpenBeside={openBeside}
             onClosePane={closePane}
@@ -1144,7 +1159,7 @@ export function App() {
                           void threads.update(threadId, { pinned: true });
                         if (!background) setSelection({ kind: "thread", threadId, started: true });
                       }}
-                      chips={<FolderChip />}
+                      folder={startFolder}
                       disabledReason={offline}
                       threadLinks={threadLinks}
                     />
@@ -1426,37 +1441,6 @@ export function App() {
         )}
       />
     </div>
-  );
-}
-
-/**
- * New Thread's folder chip (pins.ts): the pinned folder the thread goes in, from that folder's New
- * thread, which × takes off.
- */
-function FolderChip() {
-  const id = startIn.use();
-  const folders = pinLayout.use().folders;
-  const folder = id ? folders[id] : undefined;
-  if (!folder) return null;
-  return (
-    <span
-      title="It's pinned in this folder once it starts"
-      className="flex h-7 max-w-64 items-center gap-1.5 rounded-lg border border-border pr-1 pl-2.5 text-[12.5px] text-foreground [&_svg]:size-3.5"
-    >
-      <Folder
-        aria-hidden
-        style={{ color: folder.color ? `var(--project-${folder.color})` : undefined }}
-      />
-      <span className="min-w-0 truncate">Goes in {folder.name}</span>
-      <button
-        type="button"
-        aria-label={`Don't put it in ${folder.name}`}
-        onClick={() => startIn.set(null)}
-        className="grid size-5 shrink-0 place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground"
-      >
-        <X />
-      </button>
-    </span>
   );
 }
 

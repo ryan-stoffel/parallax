@@ -11,8 +11,7 @@ import { RowBadge, rowShortcut } from "./ui";
  * Mod+N's picker: which repository, or No Repo, a new thread goes in, laid out as Add Repository
  * is. Up and Down move, Enter picks, Mod+1 to Mod+9 pick that row, Escape closes. Open it with
  * `ref.current.showModal()`; picking closes it and calls `onPick` with the group's id, or for one
- * of the other computers' repositories, `onPickElsewhere` with its computer and entry. Closing it
- * without a pick calls `onDismiss`.
+ * of the other computers' repositories, `onPickElsewhere` with its computer and entry.
  */
 export function NewThreadPicker({
   ref,
@@ -22,7 +21,6 @@ export function NewThreadPicker({
   elsewhere,
   onPick,
   onPickElsewhere,
-  onDismiss,
 }: {
   ref: Ref<HTMLDialogElement>;
   /** Repositories and No Repo, as the sidebar groups them. */
@@ -34,7 +32,6 @@ export function NewThreadPicker({
   elsewhere: OtherRepo[];
   onPick: (groupId: string) => void;
   onPickElsewhere: (hostId: string, groupId: string) => void;
-  onDismiss?: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -68,12 +65,9 @@ export function NewThreadPicker({
     <dialog
       ref={ref}
       aria-label="New thread in"
-      onClose={(e) => {
+      onClose={() => {
         setQuery("");
         setActive(0);
-        // A pick's submit button sets the return value; Escape leaves it empty.
-        if (!e.currentTarget.returnValue) onDismiss?.();
-        e.currentTarget.returnValue = "";
       }}
       className="mx-auto mt-[14vh] w-[36rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-border bg-surface p-0 text-foreground shadow-composer backdrop:bg-black/50"
     >

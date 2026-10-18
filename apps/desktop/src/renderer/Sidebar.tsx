@@ -272,6 +272,8 @@ interface ThreadListProps {
   onDelete: (hostId: string, thread: Thread) => Promise<string | undefined>;
   /** New thread, which opens Mod+N's picker of the repository it goes in. */
   onNewThread: () => void;
+  /** Folder `id`'s New thread, which opens New thread on the open repository, without the picker. */
+  onNewFolderThread: (id: string) => void;
   /** The two threads open side by side (PLX-587), shown together above the list. */
   split?: Split;
   /** Opens a thread of the open host beside the open thread. */
@@ -488,6 +490,7 @@ export function ThreadList({
   onOpenPullRequests,
   onDelete,
   onNewThread,
+  onNewFolderThread,
   split,
   onOpenBeside,
   onClosePane,
@@ -1347,7 +1350,7 @@ export function ThreadList({
 
   const pinList = (
     <PinList
-      onNewThread={onNewThread}
+      onNewThread={onNewFolderThread}
       onFavorite={(key) => pinFavorites.set([...pinFavorites.get().filter((k) => k !== key), key])}
       onPlaced={unfavorite}
       onMarkUnread={(key) => {
