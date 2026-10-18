@@ -421,10 +421,10 @@ const mac = () => window.parallax.platform === "darwin";
 /** Whether a press is Mod (Cmd on macOS, Ctrl elsewhere) and nothing else, as with Mod+Z. */
 const modOnly = (e: { metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }) =>
   (mac() ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) && !e.altKey && !e.shiftKey;
-/** Text cut to fit a toast. */
 /** The threads auto-archive archived this session, each once, so an Undo sticks. */
 const autoArchived = new Set<string>();
 
+/** Text cut to fit a toast. */
 const short = (text: string) => (text.length > 30 ? `${text.slice(0, 28).trimEnd()}…` : text);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const working = (a: Attention) => a === "working" || a === "monitoring" || a === "waiting";
@@ -432,8 +432,8 @@ const working = (a: Attention) => a === "working" || a === "monitoring" || a ===
 /**
  * Slides sidebar rows out, each `stagger` ms after the one above, before they're archived; the
  * rows under them then close the gap (flip.ts). `done` settles once they're gone, and is absent
- * with nothing to slide, as under reduced motion, so archiving waits only on a slide. `restore`
- * brings the rows `back`, every one by default, back, for archives that failed.
+ * with nothing to slide, as under reduced motion, so archiving waits only on a slide.
+ * `restore(keys)` brings those rows back, every one by default, for archives that failed.
  */
 function sweepOut(keys: string[], to: string, stagger = 0) {
   const still = document.documentElement.classList.contains("reduce-motion");
@@ -524,7 +524,7 @@ export function ThreadList({
   const [flashing, setFlashing] = useState<ReadonlySet<string>>(new Set());
   // The row to focus after the next render: by key, or by place, as the one that takes an
   // archived row's place.
-  const focusNext = useRef<{ key?: string; index?: number; after?: Element }>(undefined);
+  const focusNext = useRef<{ key?: string; index?: number; skip?: string }>(undefined);
   // Bumped to render once more after setting `focusNext` outside a render, as when plxd answers.
   const [, refocus] = useState(0);
   const card = useRef<CardHandle>(null);
@@ -648,13 +648,20 @@ export function ThreadList({
     }
     return top;
   };
-  // Threads another started don't list (0075), so one waiting on the user or failed says so on the
-  // row at the top of its family.
-  for (const i of items)
-    if (i.kind === "thread" && (i.attention === "needsYou" || i.attention === "failed")) {
-      const top = byKey.get(topOf(i.key))!;
-      top.attention = mostUrgent([top.attention, i.attention]);
-    }
+  // Threads another started don't list (0075), so the row at the top of a family also says when one
+  // of them waits on the user, or failed since that row was last read. Counts and ⌥↓ go by each
+  // thread's own status.
+  const familyNews = new Map<string, Attention>();
+  for (const i of items) {
+    const top = byKey.get(topOf(i.key));
+    if (i.kind !== "thread" || top === i || top?.kind !== "thread") continue;
+    const read = top.thread.seenAt ? Date.parse(top.thread.seenAt) : 0;
+    const failedSince = i.attention === "failed" && !!i.run && Date.parse(i.run.updatedAt) > read;
+    if (i.attention === "needsYou" || failedSince)
+      familyNews.set(top.key, mostUrgent([familyNews.get(top.key) ?? top.attention, i.attention]));
+  }
+  // What a row shows, and where: its own status, or its family's news.
+  const rowAttention = (i: Item) => familyNews.get(i.key) ?? i.attention;
   // Where a thread is, for its card: its repo, or its folder in place of No repo.
   const placeOf = (item: Item) => {
     const folder = folderHolding(pinFolders, item.key);
@@ -768,7 +775,7 @@ export function ThreadList({
   // background work or a watched pull request stays there too).
   const pinned = pool.filter((i) => i.kind === "thread" && i.thread.pinned);
   const unpinned = pool.filter((i) => !pinned.includes(i));
-  const workingTops = workingSection ? unpinned.filter((i) => working(i.attention)) : [];
+  const workingTops = workingSection ? unpinned.filter((i) => working(rowAttention(i))) : [];
   const topThreads = unpinned.filter((i) => !workingTops.includes(i));
   const selectedKey =
     selection.kind === "thread"
@@ -863,9 +870,8 @@ export function ThreadList({
 
   useLayoutEffect(() => {
     const next = focusNext.current;
-    // The row E or S took away leaves once its host's change reaches the list, a render later.
-    if (!next || next.after?.isConnected) return;
-    const rows = shownRows();
+    if (!next) return;
+    const rows = shownRows().filter((r) => r.dataset["row"] !== next.skip);
     focusNext.current = undefined;
     const row =
       next.key !== undefined
@@ -940,13 +946,14 @@ export function ThreadList({
   };
 
   // What the user changes shows a toast with Undo, which puts back only what they changed.
-  // After E or S, once plxd answers: focus the row now at `focusAt`, the one that took its place,
-  // unless focus has moved on since, as into the search box.
-  const focusAfter = (focusAt?: number) => {
+  // After E or S on the row `key`, once plxd answers: focus the row now at `focusAt`, the one that
+  // took its place, unless focus has moved on since, as to another row or into the search box. The
+  // row that left can still list for a render, until its host's change arrives, so it's skipped.
+  const focusAfter = (key: string, focusAt?: number) => {
     const here = document.activeElement;
-    if (focusAt === undefined || (here && here !== document.body && !here.closest("[data-row]")))
-      return;
-    focusNext.current = { index: focusAt, after: here?.closest("[data-row]") ?? undefined };
+    const on = here?.closest<HTMLElement>("[data-row]")?.dataset["row"];
+    if (focusAt === undefined || (here && here !== document.body && on !== key)) return;
+    focusNext.current = { index: focusAt, skip: key };
     refocus((n) => n + 1);
   };
   // `focusAt` comes from E, for `focusAfter`.
@@ -962,7 +969,7 @@ export function ThreadList({
     leaving.current.delete(item.key);
     setActionError(error);
     if (error) return sweep?.restore();
-    focusAfter(focusAt);
+    focusAfter(item.key, focusAt);
     const lastOpen = items.every(
       (i) => i.kind !== "thread" || i.thread.archived || i.key === item.key,
     );
@@ -978,8 +985,7 @@ export function ThreadList({
     const error = await item.view.update(t.id, { snoozedUntil: until.toISOString() });
     setActionError(error);
     if (error) return;
-    // A snoozed row snoozed again stays where it is, and so does focus.
-    focusAfter(isSnoozed(item) ? undefined : focusAt);
+    focusAfter(item.key, focusAt);
     const ending = until.getTime() <= Date.now();
     toast(ending ? "Unsnoozed" : `Snoozed until ${when(until)}`, () => {
       // A snooze that ended meanwhile ends now.
@@ -1143,7 +1149,7 @@ export function ThreadList({
         title={item.title}
         run={view.state.runs[t.id]}
         repo={item.repo}
-        attention={item.attention}
+        attention={rowAttention(item)}
         selected={selected}
         picked={picked.has(item.key)}
         flash={flashing.has(item.key)}
@@ -1298,7 +1304,7 @@ export function ThreadList({
         : repo
           ? repoColor(repo)
           : "var(--faint-foreground)",
-      attention: i.attention,
+      attention: rowAttention(i),
       selected: i.key === openKey,
       thread: { hostId: i.host.id, id: i.thread.id },
       renamable: "threadLineage" in i.view.capabilities,
@@ -1420,7 +1426,7 @@ export function ThreadList({
     // opens them all.
     return [...groups].map(([key, g]) => {
       const open = !isFolded(key);
-      const urgent = mostUrgent(g.rows.map((i) => i.attention));
+      const urgent = mostUrgent(g.rows.map(rowAttention));
       return (
         <li key={key} className="mt-2 first:mt-0">
           <div className="sticky top-0 z-10 bg-sidebar">
@@ -1501,7 +1507,7 @@ export function ThreadList({
   // Clear archives every finished thread in Today already seen, but not one waiting out a usage
   // limit (0049), which resumes on its own.
   const clearable = topThreads.filter(
-    (i) => i.kind === "thread" && i.attention === "settled" && i.run?.status !== "waiting",
+    (i) => i.kind === "thread" && rowAttention(i) === "settled" && i.run?.status !== "waiting",
   );
   // Arc archives a tab left alone long enough; so does Today, for a finished thread you've seen
   // that's been quiet, neither prompted nor running, longer than you chose.
@@ -1608,10 +1614,11 @@ export function ThreadList({
         kind: "thread" as const,
         title: i.title,
         icon: pin.icon,
-        attention: i.attention,
+        attention: pin.attention,
         selected: i.key === openKey,
         thread: pin.thread,
         actions: pin.actions,
+        onKeys: pin.onKeys,
       };
     }),
   ].sort((a, b) => favRank(a.key) - favRank(b.key) || 0);
@@ -2011,6 +2018,8 @@ function Drawer<T>({
   onOpenChange: (open: boolean) => void;
 }) {
   const [pages, setPages] = useState(1);
+  // Its rows rise in as the user opens it, but not when it mounts open.
+  const [opened, setOpened] = useState(false);
   if (items.length === 0) return null;
   const visible = pageSize ? items.slice(0, pageSize * pages) : items;
   const remaining = items.length - visible.length;
@@ -2025,6 +2034,7 @@ function Drawer<T>({
       <summary
         onClick={(e) => {
           e.preventDefault();
+          setOpened(!open);
           onOpenChange(!open);
         }}
         className="sticky top-0 z-10 flex cursor-default list-none items-center gap-3 rounded-md bg-sidebar px-2 py-1.5 text-[12.5px] text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
@@ -2041,7 +2051,9 @@ function Drawer<T>({
           className="size-4 shrink-0 transition-transform group-open/drawer:rotate-180"
         />
       </summary>
-      {open && <ul className="rise-in flex flex-col gap-px">{visible.map(row)}</ul>}
+      {open && (
+        <ul className={`flex flex-col gap-px ${opened ? "rise-in" : ""}`}>{visible.map(row)}</ul>
+      )}
       {open && more > 0 && (
         <button
           type="button"

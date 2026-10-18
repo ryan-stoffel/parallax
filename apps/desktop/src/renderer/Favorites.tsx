@@ -1,7 +1,15 @@
 // The sidebar's favorites (pins.ts, 0075): the Projects, and any pinned thread moved up, as squares
 // that fill the row, above the pinned threads, as Arc's favorites sit above its tabs.
 import { ArrowLeft, ArrowRight, ArrowUpRight, StarOff } from "lucide-react";
-import { useId, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import {
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 
 import type { Attention } from "./attention";
 import { draggedPin, pinDragType, setDraggedPin } from "./pins";
@@ -24,6 +32,8 @@ export interface Favorite {
   thread?: { hostId: string; id: string };
   /** What else its menu offers, as a Project's Rename and Delete, each run with its square. */
   actions?: FavoriteAction[];
+  /** A thread's keys, as E and ⌫ on its row, for those the square doesn't take itself. */
+  onKeys?: (e: ReactKeyboardEvent<HTMLElement>) => void;
 }
 
 /** One item in a favorite's or pin's menu, after its own, run with its square or row. */
@@ -53,7 +63,8 @@ const dots: Partial<Record<Attention, { color: string; words: string }>> = {
  * half the width each; folded, shorter. Dragging one between others moves it there. Dropping a
  * pinned thread, or a thread row, here makes it a favorite; dragging one back down to the pins, or
  * Remove from favorites, puts it back. Left and Right move between them, and with Alt, or Move left
- * and Move right in the menu, move one. A opens one's menu. None shows nothing.
+ * and Move right in the menu, move one. A opens one's menu, and a thread's E, S, and ⌫ work as on
+ * its row. None shows nothing.
  */
 export function Favorites({
   items,
@@ -238,6 +249,8 @@ export function Favorites({
                   setMenuFor(f.key);
                   return triggers.current.get(f.key)?.click();
                 }
+                f.onKeys?.(e);
+                if (e.defaultPrevented) return;
                 const by = e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
                 if (by && e.altKey) {
                   e.preventDefault();

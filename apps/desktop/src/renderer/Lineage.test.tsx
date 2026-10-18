@@ -309,13 +309,19 @@ test("the sidebar leaves out threads another thread started, and opening one mar
   await renderApp();
   expect(sidebarTitles()).toEqual(["Fix the README", "Ship lineage"]);
   expect(toggle("2 threads")).toBeUndefined();
-  // Its running parent's row says the child failed, which shows nowhere else in the list.
-  expect(sidebarRow("Ship lineage")!.textContent).toContain("Failed");
+  // Its child failed before the parent was last read, so the parent's row doesn't say so.
+  expect(sidebarRow("Ship lineage")!.textContent).not.toContain("Failed");
 
   // Opening a child, here from its parent's chips, leaves its parent's row reading as open.
   await click(sidebarRow("Ship lineage"));
   await click(chip("Style the chips"));
   expect(sidebarRow("Ship lineage")!.getAttribute("aria-current")).toBe("page");
+});
+
+test("a parent's row says when a hidden child failed since it was last read (0075)", async () => {
+  runs[2] = { ...runs[2]!, updatedAt: "2026-10-01T13:00:00Z" };
+  await renderApp();
+  expect(sidebarRow("Ship lineage")!.textContent).toContain("Failed");
 });
 
 test("a Project's children never show in the main sidebar, only in its own view (0042)", async () => {

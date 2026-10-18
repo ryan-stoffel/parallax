@@ -205,3 +205,36 @@ test("E on Today's first row moves focus to the next row shown, past the folded 
   await settle();
   expect(document.activeElement).toBe(row("second"));
 });
+
+test("moving on before plxd answers leaves focus where the user went", async () => {
+  threads = [thread("third", 40), thread("second", 30), thread("first", 20)];
+  runs = [
+    run("third", "completed", 40),
+    run("second", "completed", 30),
+    run("first", "completed", 20),
+  ];
+  await renderApp();
+  const first = row("first")!;
+  await act(async () => {
+    first.focus();
+    first.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true }));
+    // Down while the row slides away, before plxd has archived it.
+    first.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  });
+  await waitForArchives(1);
+  await settle();
+  expect(document.activeElement).toBe(row("second"));
+
+  // A search that hides that row later doesn't pull focus back into the list.
+  const search = document.querySelector<HTMLInputElement>(
+    '#sidebar input[aria-label="Search threads and Projects"]',
+  )!;
+  await act(async () => {
+    search.focus();
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, "thi");
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await settle();
+  expect(row("third")).toBeDefined();
+  expect(document.activeElement).toBe(search);
+});
