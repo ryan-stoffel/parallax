@@ -505,7 +505,7 @@ export function ThreadList({
   const [doomed, setDoomed] = useState<ReadonlySet<string>>(new Set());
   // Threads sliding out to be archived, so a second E, click, or Clear meanwhile does nothing.
   const leaving = useRef(new Set<string>());
-  // Bumped when the last open thread is archived, to pop confetti beside the empty list's note.
+  // Bumped when the last open thread is archived, to burst confetti out of the caught-up badge.
   const [confetti, setConfetti] = useState(0);
   // It ends here rather than in Confetti, so a pop that never showed, say behind a draft row,
   // can't play later.
@@ -1484,38 +1484,36 @@ export function ThreadList({
       );
     });
   };
-  const threadList = (rows: Item[], empty: string) => (
-    <div {...unpinZone} className={`rounded-lg transition-colors ${unpinLook}`}>
-      <ul aria-label="Threads" className="flex flex-col gap-px">
-        {draftRows.map(({ draft, repo }) => (
-          <DraftRow
-            key={draft.id}
-            draft={draft}
-            repo={repo}
-            onOpen={() =>
-              onSelect(draft.hostId, { kind: "new", groupId: draft.groupId, draft: draft.id })
-            }
-          />
-        ))}
-        {grouped(rows)}
-      </ul>
-      {draftRows.length === 0 && rows.length === 0 && (
-        <p className={emptyNote}>
-          <span className="relative">
-            {words.length ? (
-              "Nothing matches"
-            ) : (
-              <span className="flex items-center gap-1.5 [&_svg]:size-3.5">
-                <CircleCheck aria-hidden />
-                {empty}
-              </span>
-            )}
-            {confetti > 0 && <Confetti key={confetti} />}
-          </span>
-        </p>
-      )}
-    </div>
-  );
+  const threadList = (rows: Item[]) => {
+    const empty = draftRows.length === 0 && rows.length === 0;
+    const caughtUp = empty && !words.length;
+    return (
+      // Caught up, it fills the space left so its note sits in the middle.
+      <div
+        {...unpinZone}
+        className={`rounded-lg transition-colors ${caughtUp ? "flex flex-1 flex-col" : ""} ${unpinLook}`}
+      >
+        <ul aria-label="Threads" className="flex flex-col gap-px">
+          {draftRows.map(({ draft, repo }) => (
+            <DraftRow
+              key={draft.id}
+              draft={draft}
+              repo={repo}
+              onOpen={() =>
+                onSelect(draft.hostId, { kind: "new", groupId: draft.groupId, draft: draft.id })
+              }
+            />
+          ))}
+          {grouped(rows)}
+        </ul>
+        {caughtUp ? (
+          <CaughtUp burst={confetti} />
+        ) : (
+          empty && <p className={emptyNote}>Nothing matches</p>
+        )}
+      </div>
+    );
+  };
 
   // Clear archives every finished thread in Today already seen, but not one waiting out a usage
   // limit (0049), which resumes on its own, or one whose family is still at work.
@@ -1698,7 +1696,7 @@ export function ThreadList({
         onGroup={(next) => todayGroup.set(next)}
       />
       <NewThreadRow onClick={onNewThread} selected={selection.kind === "new" && !selection.draft} />
-      {threadList(topThreads, "All caught up.")}
+      {threadList(topThreads)}
     </>
   );
 
@@ -1758,7 +1756,7 @@ export function ThreadList({
       <div
         onScroll={hideCard}
         data-flip-scroll
-        className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-2"
+        className="mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2 *:shrink-0"
       >
         {errors.map((e) => (
           <p key={e} role="alert" className="px-2 pb-1 text-[12px] text-danger">
@@ -1977,14 +1975,42 @@ function Toasts() {
   );
 }
 
-// Twelve rays, evenly spaced, alternating near and far, cycling the Project colors.
-const confettiRays = Array.from({ length: 12 }, (_, i) => ({
-  "--angle": `${i * 30}deg`,
-  "--distance": i % 2 ? "16px" : "24px",
-  background: ["var(--project-pink)", "var(--project-yellow)", "var(--project-sky)"][i % 3],
+/**
+ * Today's empty state, centered in the space it fills: a check badge over a title and a line.
+ * Each new `burst` pops the badge and bursts confetti out of it; 0 shows it at rest.
+ */
+function CaughtUp({ burst }: { burst: number }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 py-10 text-center">
+      <span
+        key={burst}
+        className={`caught-up-badge relative grid size-11 place-items-center rounded-full ${burst ? "caught-up-pop" : ""}`}
+      >
+        <Check aria-hidden className="size-5" strokeWidth={2.5} />
+        {burst > 0 && <Confetti />}
+      </span>
+      <div className="flex flex-col gap-0.5">
+        <p className="text-[13px] font-medium text-foreground">All caught up</p>
+        <p className="text-[12px] text-faint-foreground">Nothing needs you right now.</p>
+      </div>
+    </div>
+  );
+}
+
+// Sixteen rays, evenly spaced over the 240° above the caught-up note's text, alternating near and
+// far, cycling the Project colors and green.
+const confettiRays = Array.from({ length: 16 }, (_, i) => ({
+  "--angle": `${150 + i * 16}deg`,
+  "--distance": i % 2 ? "40px" : "54px",
+  background: [
+    "var(--project-pink)",
+    "var(--project-yellow)",
+    "var(--project-sky)",
+    "var(--added)",
+  ][i % 4],
 })) as CSSProperties[];
 
-/** One pop of confetti rays just right of its parent, for archiving the last open thread. */
+/** One burst of confetti rays out of its parent's center, for archiving the last open thread. */
 function Confetti() {
   return (
     <span aria-hidden className="confetti">

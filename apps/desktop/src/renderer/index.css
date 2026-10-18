@@ -1048,27 +1048,65 @@ body {
     translate: 16px 0;
   }
 }
-/* Archiving the last open thread pops confetti just right of the empty list's note (Sidebar.tsx),
-   clear of its text: each ray turns to its --angle, then shoots out to its --distance and fades. */
+/* Today's caught-up badge (Sidebar.tsx): a check on a soft green disc with a faint glow. */
+.caught-up-badge {
+  color: var(--added);
+  background: radial-gradient(
+    circle at 50% 30%,
+    color-mix(in srgb, var(--added) 22%, transparent),
+    color-mix(in srgb, var(--added) 8%, transparent)
+  );
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--added) 30%, transparent),
+    0 0 28px -6px color-mix(in srgb, var(--added) 45%, transparent);
+}
+/* Archiving the last open thread pops the badge, a ring swells off its edge, and confetti bursts
+   out of it: each ray turns to its --angle, then shoots from the edge to its --distance and fades. */
+.caught-up-pop {
+  animation: caught-up-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes caught-up-pop {
+  from {
+    scale: 0.6;
+  }
+}
+.caught-up-pop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1.5px solid var(--added);
+  pointer-events: none;
+  animation: caught-up-ring 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes caught-up-ring {
+  from {
+    opacity: 0.7;
+  }
+  to {
+    opacity: 0;
+    scale: 1.9;
+  }
+}
 .confetti {
   position: absolute;
   top: 50%;
-  left: calc(100% + 30px);
+  left: 50%;
   pointer-events: none;
 }
 .confetti > span {
   position: absolute;
-  width: 6px;
-  height: 2px;
-  margin: -1px 0 0 -3px;
-  border-radius: 1px;
-  animation: confetti 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  width: 8px;
+  height: 2.5px;
+  margin: -1.25px 0 0 -4px;
+  border-radius: 2px;
+  animation: confetti 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 @keyframes confetti {
   from {
-    transform: rotate(var(--angle)) translateX(4px) scaleX(0.4);
+    transform: rotate(var(--angle)) translateX(20px) scaleX(0.3);
   }
-  50% {
+  40% {
     opacity: 1;
   }
   to {
@@ -1076,8 +1114,12 @@ body {
     opacity: 0;
   }
 }
-:root.reduce-motion .confetti {
+:root.reduce-motion .confetti,
+:root.reduce-motion .caught-up-pop::after {
   display: none;
+}
+:root.reduce-motion .caught-up-pop {
+  animation: none;
 }
 /* The sidebar's areas (PLX-789): a thread that just finished flashes green once, and the undo
    toasts, the bulk bar, and the area editor rise or pop in. */
