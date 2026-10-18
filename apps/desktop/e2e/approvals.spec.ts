@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { close, launch, printFailure, type Launched } from "./launch";
+import { close, launch, openThread, printFailure, type Launched } from "./launch";
 
 // PLX-196: a thread whose fake agent asks before writing a long file and before a command, then
 // hands over its plan, as Claude Code does through plxd (0031). The fake prints each answer it
@@ -100,7 +100,7 @@ test("answers a thread's permission requests from the card over the composer, an
 
   // Rebuilt from the log, they're lines, never cards again.
   await page.reload();
-  await page.getByRole("button", { name: /Run the tests, then plan the release/ }).click();
+  await openThread(page, /Run the tests, then plan the release/);
   await expect(transcript.getByText("Always allowed", { exact: true })).toBeVisible();
   await expect(transcript.getByText("Kept planning", { exact: true })).toBeVisible();
   await expect(transcript.getByText("Proposed plan")).toBeVisible();

@@ -8,7 +8,7 @@ import path from "node:path";
 import { expect, test, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 
 import { uuidv7 } from "../src/renderer/uuidv7";
-import { close, launch, printFailure, servePids, type Launched } from "./launch";
+import { close, launch, openThread, printFailure, servePids, type Launched } from "./launch";
 
 // The built app against a real plxd whose workers are the fake backend playing agent.json
 // (PLX-16). See launch.ts for the plxd it needs.
@@ -220,7 +220,7 @@ test("a follow-up's text is still there after a reload (PLX-92)", async () => {
   await expect(said).toHaveCount(2);
 
   await page.reload();
-  await page.getByRole("button", { name: /Tidy up the README/ }).click();
+  await openThread(page, /Tidy up the README/);
   const transcript = page.getByRole("log", { name: "Transcript" });
   await expect(transcript.getByText("Check the links too")).toBeVisible();
   await expect(transcript.getByText("Follow-up message")).toHaveCount(0);
@@ -256,7 +256,7 @@ test("a pasted image sits in the composer, goes with the message, and outlives a
 
   // Rebuilt from the log, the image comes from plxd.
   await page.reload();
-  await page.getByRole("button", { name: /Tidy up the README/ }).click();
+  await openThread(page, /Tidy up the README/);
   await expect(sent).toBeVisible();
   expect(await sent.evaluate(width)).toBe(2000);
 });
@@ -329,8 +329,11 @@ test("creates a project on a repository it adds, and opens it (PLX-166)", async 
 
   await expect(dialog).toBeHidden();
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
-  // One row for the Project, in the sidebar's one list (0033).
-  await expect(page.locator('#sidebar li[data-kind="project"] [data-title]')).toHaveText(["ember"]);
+  // One favorite for the Project, atop the sidebar (0075).
+  await expect(page.locator('#sidebar [aria-label="Favorites"] button[data-row]')).toHaveAttribute(
+    "aria-label",
+    "ember",
+  );
 });
 
 test("chats with the project's coordinator, whose transcript outlives a reload and a plxd restart (PLX-46)", async () => {
@@ -363,7 +366,7 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
   await expect(transcript.getByText("The fake agent is on it.")).toHaveCount(2);
 
   await page.reload();
-  await page.locator('#sidebar li[data-kind="project"] > button').first().click();
+  await page.locator('#sidebar [aria-label="Favorites"] button[data-row]').first().click();
   await expect(transcript.getByText("Start with the changelog")).toBeVisible();
 
   // Stop plxd with the coordinator running. The app reconnects through a new `serve`, which
@@ -446,24 +449,21 @@ test("shows the project's tasks over its composer and on its Project tab, opens 
   await expect(transcript.getByText("From Parallax: subagents finished").first()).toBeVisible();
 });
 
-test("renames the project and picks its icon from its row, and both outlive a reload (PLX-230)", async () => {
-  // The last test left ember open. Its row's actions show on hover.
-  const projects = page.locator('#sidebar li[data-kind="project"]');
-  await projects.hover();
-  await projects.getByRole("button", { name: "Project actions" }).click();
-  await page.getByRole("menuitem", { name: "Rename" }).click();
-  const name = projects.getByRole("textbox", { name: "Project name" });
+test("renames the project and picks its icon from its favorite's menu, and both outlive a reload (PLX-230)", async () => {
+  // The last test left ember open. A right-click on its favorite opens its menu.
+  const square = page.locator('#sidebar [aria-label="Favorites"] button[data-row]').first();
+  await square.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename…" }).click();
+  const name = page.getByRole("dialog", { name: "Rename Project" }).getByRole("textbox");
   await expect(name).toBeFocused();
   await name.fill("ember app");
   await name.press("Enter");
-  const row = projects.locator(":scope > button").first();
-  await expect(row.locator("[data-title]")).toHaveText("ember app");
-  await expect(row).toBeFocused();
+  await expect(square).toHaveAttribute("aria-label", "ember app");
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember app");
 
-  // Right-clicking the row opens the same menu. A color, then an icon by keyboard.
-  await row.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Change icon" }).click();
+  // A color, then an icon by keyboard.
+  await square.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Change icon…" }).click();
   const picker = page.getByRole("dialog", { name: "Project icon" });
   const search = picker.getByRole("searchbox", { name: "Search icons" });
   await expect(search).toBeFocused();
@@ -477,7 +477,7 @@ test("renames the project and picks its icon from its row, and both outlive a re
   await expect(rocket).toHaveAttribute("aria-selected", "true");
   await rocket.press("Escape");
   await expect(picker).toBeHidden();
-  const icon = row.locator("[data-project-icon] svg");
+  const icon = square.locator("svg").first();
   await expect(icon).toHaveAttribute("class", /lucide-rocket .*text-project-green/);
 
   // The name and icon are the host's (0032).
@@ -613,8 +613,7 @@ test("attaches another thread with @, sends it with the message, and opens it fr
   await expect(transcript.getByText("Do what that thread did here")).toBeVisible();
   await expect(transcript.getByText("The fake agent is on it.")).toHaveCount(2);
   await page.reload();
-  // At its left edge: a short row's hover actions cover its middle.
-  await page.getByRole("button", { name: /Tidy up the docs/ }).click({ position: { x: 8, y: 8 } });
+  await openThread(page, /Tidy up the docs/);
   const sent = transcript.getByRole("button", { name: /Tidy up the README/ });
   await expect(sent).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("thread-sent.png") });
@@ -635,10 +634,7 @@ test("thread details opens children and stays docked beside the side panel", asy
   };
   const parent = await start("Plan the release");
   await start("Write the changelog", parent);
-  await page
-    .locator("#sidebar li[data-kind='thread'] > button")
-    .filter({ hasText: "Plan the release" })
-    .click();
+  await openThread(page, /Plan the release/);
   const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
   const current = breadcrumb.locator('ol > li > [aria-current="page"]');
   await expect(current).toHaveText("Plan the release");

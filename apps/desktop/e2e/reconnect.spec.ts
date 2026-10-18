@@ -6,7 +6,7 @@ import path from "node:path";
 import { expect, test } from "@playwright/test";
 
 import { uuidv7 } from "../src/renderer/uuidv7";
-import { close, launch, printFailure, type Launched } from "./launch";
+import { close, launch, openThread, printFailure, type Launched } from "./launch";
 
 // A dropped connection to a plxd that keeps running (0059): the app's subscriptions stay open,
 // and once `plxd attach` is back, main resumes each after its last event. plxd replays the short
@@ -53,7 +53,7 @@ test("a dropped connection resumes after the last event, with no fresh snapshot"
     `window.parallax.request("local", "thread/start", ${JSON.stringify({ runId: uuidv7(), prompt })})`,
   );
   expect(started).not.toHaveProperty("error");
-  await page.getByRole("button", { name: new RegExp(prompt) }).click();
+  await openThread(page, new RegExp(prompt));
   const transcript = page.getByRole("log", { name: "Transcript" });
   await expect(transcript).toContainText("Delta 5.");
 

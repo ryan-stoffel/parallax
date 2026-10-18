@@ -12,6 +12,7 @@ import { flushToasts } from "./undo";
 import { drafts } from "./drafts";
 import { dragThread } from "./threadDrag";
 import { fakeWatch } from "./fakeWatch";
+import { sectionsStore } from "./Sidebar";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. `openRowMenus` sends the rows' menus the event a browser sends as one
@@ -60,6 +61,8 @@ beforeEach(() => {
   request.mockClear();
   capabilities = {};
   localStorage.clear();
+  // Working starts folded (0075); these tests read the rows in it.
+  sectionsStore.set({ all: { working: true } });
   accessPrefs.set(accessDefaults);
   // A test that ends with text in New Thread leaves it as a draft.
   for (const d of drafts.get()) drafts.remove(d.id);
@@ -1039,7 +1042,13 @@ test("the row menu archives into Archived, and unarchives back", async () => {
 
   openRowMenus();
   await act(async () => button("Archive")!.click());
-  expect(calls("thread/archive")).toEqual([{ runId: thread.id, archived: true }]);
+  // The row slides away first, then it's archived (0075).
+  await act(() =>
+    vi.waitFor(
+      () => expect(calls("thread/archive")).toEqual([{ runId: thread.id, archived: true }]),
+      { timeout: 3000 },
+    ),
+  );
   // It was the only open thread, so confetti pops beside the empty list's note.
   expect(document.querySelector("#sidebar .confetti")).not.toBeNull();
   await act(async () => drawer("Archived")!.querySelector("summary")!.click());

@@ -63,7 +63,8 @@ function Working({ since }: { since: string }) {
 
 /**
  * A row's status, as its mark and a word: Working for how long since `since`, Monitoring or Waiting (PLX-777),
- * Needs you, Done, or Failed. Settled shows nothing. Done animates only when this row saw the thread finish.
+ * Needs you, Done, or Failed. Settled shows nothing. Done animates only when this row saw the thread finish,
+ * and a status that changed rises into place.
  */
 export function AttentionBadge({
   attention,
@@ -79,16 +80,18 @@ export function AttentionBadge({
   // Done animates only on a change from another state, never on the first render.
   const [shown, setShown] = useState(attention);
   const [animate, setAnimate] = useState(false);
+  const [changed, setChanged] = useState(false);
   if (shown !== attention) {
     setShown(attention);
     setAnimate(attention === "done");
+    setChanged(true);
   }
 
-  const look = "flex items-center gap-1 text-[11.5px] font-medium [&_svg]:size-3.5";
+  const look = `flex items-center gap-1 text-[11.5px] font-medium [&_svg]:size-3.5 ${changed ? "rise-in" : ""}`;
   switch (attention) {
     case "working":
       return (
-        <span className={`${look} text-working`}>
+        <span key={attention} className={`${look} text-working`}>
           <WorkingMark />
           {since ? <Working since={since} /> : count && count > 1 ? `${count} working` : "Working"}
         </span>
@@ -96,28 +99,28 @@ export function AttentionBadge({
     case "monitoring":
     case "waiting":
       return (
-        <span className={`${look} text-working`}>
+        <span key={attention} className={`${look} text-working`}>
           <Eye aria-hidden />
           {attention === "monitoring" ? "Monitoring" : "Waiting"}
         </span>
       );
     case "needsYou":
       return (
-        <span className={`${look} text-warning`}>
+        <span key={attention} className={`${look} text-warning`}>
           <MessageCircleQuestion aria-hidden />
           Needs you
         </span>
       );
     case "done":
       return (
-        <span className={`${look} text-added`}>
+        <span key={attention} className={`${look} text-added`}>
           <DoneMark animate={animate} />
           Done
         </span>
       );
     case "failed":
       return (
-        <span className={`${look} text-danger`}>
+        <span key={attention} className={`${look} text-danger`}>
           <CircleAlert aria-hidden />
           Failed
         </span>

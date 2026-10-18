@@ -66,7 +66,7 @@ interface NewThreadProps {
   threadLinks?: ThreadLinks;
   /** The draft it reopens (PLX-788), by id. Read once, as it mounts. */
   draftId?: string;
-  /** Chips under the heading, such as the area the thread joins (PLX-789). */
+  /** Chips under the heading, such as the pinned folder the thread goes in (0075). */
   chips?: ReactNode;
 }
 

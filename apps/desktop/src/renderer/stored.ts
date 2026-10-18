@@ -13,6 +13,23 @@ export function stored<T>(key: string, fallback: T, parse: (raw: unknown, fallba
   } catch {
     // Unreadable: the fallback.
   }
+  const kept = memory(value);
+  return {
+    ...kept,
+    set(next: T) {
+      try {
+        localStorage.setItem(key, JSON.stringify(next));
+      } catch {
+        // Storage is off: the change lasts until the window closes.
+      }
+      kept.set(next);
+    },
+  };
+}
+
+/** A value like `stored`'s that lasts only until the window closes. */
+export function memory<T>(initial: T) {
+  let value = initial;
   const listeners = new Set<() => void>();
   const subscribe = (listener: () => void) => {
     listeners.add(listener);
@@ -22,11 +39,6 @@ export function stored<T>(key: string, fallback: T, parse: (raw: unknown, fallba
     get: () => value,
     set(next: T) {
       value = next;
-      try {
-        localStorage.setItem(key, JSON.stringify(next));
-      } catch {
-        // Storage is off: the change lasts until the window closes.
-      }
       for (const listener of listeners) listener();
     },
     use: () => useSyncExternalStore(subscribe, () => value),

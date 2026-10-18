@@ -3,18 +3,20 @@ import {
   Archive,
   ArchiveRestore,
   ArrowLeft,
+  ArrowUp,
   Bot,
   CalendarClock,
   ChartNoAxesColumn,
   Check,
   ChevronDown,
   Columns2,
-  ChevronRight,
-  CornerDownRight,
   CircleAlert,
   CircleCheck,
+  CircleDashed,
+  CircleDot,
   CirclePause,
   CircleSlash,
+  CircleX,
   Ellipsis,
   FileDiff,
   Folder,
@@ -29,19 +31,17 @@ import {
   Layers,
   ListFilter,
   LoaderCircle,
-  MessageCircleQuestion,
-  Minus,
+  MessageSquare,
   Palette,
   PanelLeftClose,
-  Pencil,
   PencilLine,
   Pin,
   Plus,
   Search,
   Server,
   Settings,
+  ShieldCheck,
   SquareDashed,
-  SquarePen,
   SquareTerminal,
   Trash2,
   X,
@@ -57,6 +57,7 @@ import {
   type ComponentProps,
   type ComponentType,
   type CSSProperties,
+  type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -68,7 +69,7 @@ import {
 import type {
   AgentRun,
   AgentStatus,
-  Area,
+  GitStatus,
   Project,
   ProjectAutonomy,
   ProjectIcon as ProjectIconValue,
@@ -80,22 +81,15 @@ import type { Selection, SettingsSection, Split } from "./App";
 import { clock } from "./Approval";
 import { drafts, type Draft } from "./drafts";
 import { AddDialog, type AddDialogHandle } from "./AddDialog";
-import { AreaEditor, AreaSwatch, type AreaFields, type Candidate } from "./AreaEditor";
 import {
-  areaColor,
   highlight,
-  inArea,
   jumpTarget,
   parseScope,
-  revertEdit,
-  rootIds,
   scopeStore,
   searchMatch,
   searchWords,
-  withMember,
-  type Member,
   type Scope,
-} from "./areas";
+} from "./scope";
 import {
   attentionOf,
   initials,
@@ -123,7 +117,7 @@ import { iconColors, iconLook } from "./projectIcons";
 import { ForkMenu } from "./Fork";
 import { archivePageSize, sidebarPrefs } from "./sidebarPrefs";
 import { stored } from "./stored";
-import { describeError } from "./errors";
+
 import { useFlip } from "./flip";
 import { dragThread } from "./threadDrag";
 import {
@@ -141,7 +135,6 @@ import {
   ConfirmDialog,
   IconButton,
   Menu,
-  menuHeading,
   menuItem,
   menuPanel,
   moveFocus,
@@ -159,7 +152,37 @@ import { UpdateButton } from "./Update";
 import { clockOptions } from "./prefs";
 import { useShortcutLabel } from "./keybindings";
 import { flushToasts, toast, undo, useToasts } from "./undo";
-import { uuidv7 } from "./uuidv7";
+
+import {
+  autoClear,
+  compactRows,
+  createFolder,
+  draggedPin,
+  favoriteOrder,
+  folderHolding,
+  forgetPin,
+  pinDragType,
+  pinIcons,
+  pinFavorites,
+  pinLayout,
+  pinNaming,
+  pinUnread,
+  todayGroup,
+  todayFolded,
+  topCollapsed,
+  type PinFolder,
+} from "./pins";
+import { Favorites, type FavoriteAction } from "./Favorites";
+import {
+  Fold,
+  NewThreadRow,
+  PinSummary,
+  quietFor,
+  shownRows,
+  Tick,
+  TodayDivider,
+} from "./SidebarParts";
+import { PinList, type Pin as PinData } from "./PinList";
 
 const row =
   "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] hover:bg-hover";
@@ -302,6 +325,17 @@ function repoColor(repo: Repo) {
   return `var(--project-${palette[Math.abs(hash) % palette.length]!.key})`;
 }
 
+/** A pinned folder's icon in its color (pins.ts), where a thread's repo icon goes. */
+export function FolderMark({ folder, big }: { folder: PinFolder; big?: boolean }) {
+  return (
+    <Folder
+      aria-hidden
+      style={{ color: folder.color ? `var(--project-${folder.color})` : undefined }}
+      className={`${big ? "size-[18px]" : "size-4"} shrink-0 ${folder.color ? "" : "text-muted-foreground"}`}
+    />
+  );
+}
+
 /**
  * A repo's icon: the one the user chose, in a Project's shape (0033), or else its initials on a
  * tile in a color picked from its name. No Repo is a dashed square. `big` draws it at 18px, as a
@@ -328,22 +362,12 @@ export function RepoIcon({ repo, big }: { repo?: Repo; big?: boolean }) {
 // one shows switches at once.
 const cardDelay = 450;
 
-/** A scope's sections and drawers, by whether each is open. */
-type Sections = Record<
-  "pinned" | "projects" | "threads" | "working" | "snoozed" | "archived",
-  boolean
->;
-const sectionDefaults: Sections = {
-  pinned: true,
-  projects: true,
-  threads: true,
-  working: true,
-  snoozed: false,
-  archived: false,
-};
+/** A scope's drawers, by whether each is open. Working stays tucked away until asked for. */
+type Sections = Record<"working" | "snoozed" | "archived", boolean>;
+const sectionDefaults: Sections = { working: false, snoozed: false, archived: false };
 const record = <T,>(raw: unknown, fallback: Record<string, T>) =>
   raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, T>) : fallback;
-/** Which sections and drawers each scope has open (PLX-789), kept on this computer. */
+/** Which drawers each scope has open (PLX-789), kept on this computer. */
 export const sectionsStore = stored<Record<string, Partial<Sections>>>(
   "parallax:sections",
   {},
@@ -351,14 +375,10 @@ export const sectionsStore = stored<Record<string, Partial<Sections>>>(
 );
 /** Each scope's last open row, by key, so switching back reopens it. */
 const lastOpenStore = stored<Record<string, string>>("parallax:lastOpen", {}, record);
-/** The area folders (PLX-852) the user closed, as `host/repo`, kept on this computer. */
-const closedFoldersStore = stored<string[]>("parallax:closedFolders", [], (raw, fallback) =>
-  Array.isArray(raw) ? raw.filter((k): k is string => typeof k === "string") : fallback,
-);
 
 /** One row of the list: a thread, or a Project, with its host and what it asks of the user. */
 type Item = (
-  | { kind: "thread"; thread: Thread }
+  | { kind: "thread"; thread: Thread; run?: AgentRun }
   | { kind: "project"; project: Project; runs: AgentRun[] }
 ) & {
   key: string;
@@ -369,29 +389,20 @@ type Item = (
   /** When it was last prompted, for the order. */
   at: string;
   title: string;
-  /** What makes it an area member, and the areas it's in. */
-  member: Member;
-  areas: Area[];
   /** What search reads besides its messages: its title, repo, branch, and pull request numbers. */
   text: string;
 };
 
-/** A thread's one waiting request, when it is a single command the row can allow or deny. */
-type Ask = { approvalId: string; command: string };
-
-/** The request `item` waits on, if it's exactly one, and a command (PLX-789). */
-function askOf(item: Item): Ask | undefined {
-  if (item.kind !== "thread") return undefined;
-  const pending = item.view.state.approvals[item.thread.id]?.items ?? [];
-  const [only] = pending;
-  if (pending.length !== 1 || only?.kind !== "approval" || only.resolved) return undefined;
-  const { request } = only;
-  const input = request.input as Record<string, unknown> | null;
-  const command = request.toolName === "Bash" ? input?.["command"] : undefined;
-  return typeof command === "string" && command.trim()
-    ? { approvalId: request.approvalId, command }
-    : undefined;
-}
+/**
+ * A thread's attention, Done or Failed again while it's marked unread (pins.ts) and finished, as
+ * though never seen.
+ */
+const markedUnread = (attention: Attention, run: AgentRun | undefined, marked: boolean) =>
+  marked && attention === "settled" && run && !isRunning(run.status) && run.status !== "waiting"
+    ? run.status === "failed"
+      ? "failed"
+      : "done"
+    : attention;
 
 /**
  * Why Local folder can't browse a computer, by id. This computer's folders are read by main, so it
@@ -410,22 +421,62 @@ const mac = () => window.parallax.platform === "darwin";
 /** Whether a press is Mod (Cmd on macOS, Ctrl elsewhere) and nothing else, as with Mod+Z. */
 const modOnly = (e: { metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }) =>
   (mac() ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) && !e.altKey && !e.shiftKey;
+/** The threads auto-archive archived this session, each once, so an Undo sticks. */
+const autoArchived = new Set<string>();
+
 /** Text cut to fit a toast. */
 const short = (text: string) => (text.length > 30 ? `${text.slice(0, 28).trimEnd()}…` : text);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const working = (a: Attention) => a === "working" || a === "monitoring" || a === "waiting";
 
 /**
- * Search, the scope menu (areas, Spaces, and repos), a menu to create a Project or add a
- * repository, and New thread, then every host's pinned threads, Projects, and threads, each in a
- * collapsible section, most recently active first (0033, PLX-789). A thread row shows its repo,
- * how long ago it was prompted or what it asks of the user, its title, branch, and provider. A
- * thread's children (0041) and the strip under it read as one block, collapsed behind their count
- * and most urgent status, but a Project's children show only inside it, its row showing their
- * combined status (0042). While a top-level thread is working, it and its children sit in a
- * Working drawer above Snoozed and Archived, until it finishes. Each scope keeps which sections
- * and drawers are open. Rows that move slide to their place. Changes the user makes show a toast
- * with Undo, which ⌘Z also runs. Resting on a thread shows a card.
+ * Slides sidebar rows out, each `stagger` ms after the one above, before they're archived; the
+ * rows under them then close the gap (flip.ts). `done` settles once they're gone, and is absent
+ * with nothing to slide, as under reduced motion, so archiving waits only on a slide.
+ * `restore(keys)` brings those rows back, every one by default, for archives that failed.
+ */
+function sweepOut(keys: string[], to: string, stagger = 0) {
+  const still = document.documentElement.classList.contains("reduce-motion");
+  const moves = new Map(
+    (still ? [] : keys).flatMap((key, n) => {
+      const row = document.querySelector<HTMLElement>(`#sidebar [data-flip="${CSS.escape(key)}"]`);
+      if (typeof row?.animate !== "function") return [];
+      const move = row.animate(
+        [
+          { opacity: 1, transform: "none" },
+          { opacity: 0, transform: to },
+        ],
+        // A long sweep staggers only its first rows, so it never drags on.
+        {
+          duration: 180,
+          delay: Math.min(n, 8) * stagger,
+          easing: "cubic-bezier(.4,0,1,1)",
+          fill: "forwards",
+        },
+      );
+      return [[key, move] as const];
+    }),
+  );
+  return {
+    done: moves.size
+      ? Promise.all([...moves.values()].map((m) => m.finished.catch(() => {}))).then(() => {})
+      : undefined,
+    restore: (back = keys) => {
+      for (const key of back) moves.get(key)?.cancel();
+    },
+  };
+}
+
+/**
+ * Search, the repo filter, and a menu to create a Project or add a repository, then (0075) the
+ * favorites, every host's Projects and the pinned threads moved up, the pinned threads in their
+ * folders, a divider with Clear and the View panel, and Today: New thread and every other open
+ * thread, most recently active first, grouped as View says. A thread row shows its repo or folder,
+ * how long ago it was prompted or what it asks of the user, its title, branch, git status, and
+ * pull request. Threads another thread started don't list (0041); a Project's show only inside it
+ * (0042). While a thread is working it sits in a Working drawer above Snoozed and Archived, until it
+ * finishes. Rows that move slide to their place. Changes the user makes show a toast with Undo,
+ * which ⌘Z also runs. Resting on a thread shows a card.
  */
 export function ThreadList({
   hosts,
@@ -444,9 +495,7 @@ export function ThreadList({
   const addDialog = useRef<AddDialogHandle>(null);
   const deleteDialog = useRef<HTMLDialogElement>(null);
   const search = useRef<HTMLInputElement>(null);
-  const projectsId = useId();
-  const threadsId = useId();
-  const pinnedId = useId();
+  const projectDialogs = useRef<ProjectDialogsHandle>(null);
   // The thread or Project the delete dialog asks about.
   const [toDelete, setToDelete] = useState<Item>();
   const [deleting, setDeleting] = useState(false);
@@ -454,6 +503,8 @@ export function ThreadList({
   const [actionError, setActionError] = useState<string>();
   // Threads deleted with Undo still offered: hidden until the toast goes, then deleted.
   const [doomed, setDoomed] = useState<ReadonlySet<string>>(new Set());
+  // Threads sliding out to be archived, so a second E, click, or Clear meanwhile does nothing.
+  const leaving = useRef(new Set<string>());
   // Bumped when the last open thread is archived, to pop confetti beside the empty list's note.
   const [confetti, setConfetti] = useState(0);
   // It ends here rather than in Confetti, so a pop that never showed, say behind a draft row,
@@ -465,24 +516,15 @@ export function ThreadList({
   }, [confetti]);
   const [query, setQuery] = useState("");
   const { workingSection, pageArchived } = sidebarPrefs.use();
-  // The threads whose children show, by key, and the open thread whose groups were last opened.
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [revealed, setRevealed] = useState<string>();
   // The rows picked with ⌘-click, ⇧-click, or X, by key, and where a ⇧-click range starts.
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const anchor = useRef<string>(undefined);
   const [renaming, setRenaming] = useState<string>();
-  // The area editor, while it's open: a host's area to edit, or a new one.
-  const [editor, setEditor] = useState<{
-    hostId: string;
-    area?: Area;
-    initial?: { name?: string; threads?: string[]; projects?: string[] };
-  }>();
   // Threads that just finished, flashing once.
   const [flashing, setFlashing] = useState<ReadonlySet<string>>(new Set());
   // The row to focus after the next render: by key, or by place, as the one that takes an
   // archived row's place.
-  const focusNext = useRef<{ key?: string; index?: number }>(undefined);
+  const focusNext = useRef<{ key?: string; index?: number; skip?: string }>(undefined);
   // Bumped to render once more after setting `focusNext` outside a render, as when plxd answers.
   const [, refocus] = useState(0);
   const card = useRef<CardHandle>(null);
@@ -494,44 +536,32 @@ export function ThreadList({
     latest.current = hosts;
   });
   const viewOf = (hostId: string) => latest.current.find((h) => h.host.id === hostId)?.view;
-  // Changes that aren't moves, such as switching areas or typing a search, don't slide rows.
+  // Changes that aren't moves, such as switching repos or typing a search, don't slide rows.
   const quiet = useFlip("#sidebar");
 
   const open = hosts.find((h) => h.host.id === host.id)?.view;
   const many = hosts.length > 1;
+  // Threads marked unread (pins.ts) read as Done or Failed again until opened.
+  const unread = pinUnread.use();
+  const pinFolders = pinLayout.use().folders;
 
-  // Every host's areas, in order, where its plxd keeps them.
-  const listedAreas: ListedArea[] = hosts
-    .flatMap(({ host: h, view }) =>
-      "areas" in view.capabilities ? view.state.areas.map((area) => ({ host: h, view, area })) : [],
-    )
-    .map((a, index) => ({ ...a, index }));
-  const areaScope = (a: { host: Host; area: Area }): Scope => `area:${a.host.id}/${a.area.id}`;
-  // A chosen area or repo that's gone, deleted or not loaded yet, shows everything, keeping the
-  // choice for its return.
+  // A chosen repo that's gone, deleted or not loaded yet, shows everything, keeping the choice
+  // for its return. A scope from when areas and Spaces showed (0073) shows everything too.
   const chosen = scopeStore.use();
   const parsed = parseScope(chosen);
-  const scopeArea =
-    parsed.kind === "area"
-      ? listedAreas.find((a) => a.host.id === parsed.hostId && a.area.id === parsed.id)
-      : undefined;
   const scopeRepo =
     parsed.kind === "repo"
       ? hosts
           .find((h) => h.host.id === parsed.hostId)
-          ?.view.state.repos.find((r) => !r.scratch && r.id === parsed.id)
+          ?.view.state.repos.find((r) => !r.scratch && !r.space && r.id === parsed.id)
       : undefined;
   const scope: Scope =
-    (parsed.kind === "area" && !scopeArea) || (parsed.kind === "repo" && !scopeRepo)
-      ? "all"
-      : chosen;
-  const scopeLabel = scopeArea
-    ? { name: scopeArea.area.name, color: areaColor(scopeArea.area.color) }
-    : scopeRepo
-      ? { name: scopeRepo.name, color: repoColor(scopeRepo) }
-      : scope === "none"
-        ? { name: "No repo", color: "var(--faint-foreground)" }
-        : undefined;
+    parsed.kind === "area" || (parsed.kind === "repo" && !scopeRepo) ? "all" : chosen;
+  const scopeLabel = scopeRepo
+    ? { name: scopeRepo.name, color: repoColor(scopeRepo) }
+    : scope === "none"
+      ? { name: "No repo", color: "var(--faint-foreground)" }
+      : undefined;
   const sections = { ...sectionDefaults, ...sectionsStore.use()[scope] };
   const toggleSection = (name: keyof Sections, value = !sections[name]) => {
     quiet();
@@ -539,32 +569,45 @@ export function ThreadList({
     sectionsStore.set({ ...all, [scope]: { ...all[scope], [name]: value } });
   };
 
+  // What arrives animates in (index.css), but not the first load: the sidebar settles a moment
+  // after its threads first list, and again each time the list mounts, as back from Settings.
+  const loaded = hosts.some(({ view }) => view.state.threads.length > 0);
+  useEffect(() => {
+    if (!loaded) return;
+    const sidebar = document.getElementById("sidebar");
+    const timer = window.setTimeout(() => sidebar?.setAttribute("data-settled", ""), 400);
+    return () => {
+      window.clearTimeout(timer);
+      sidebar?.removeAttribute("data-settled");
+    };
+  }, [loaded]);
+
   const items: Item[] = hosts.flatMap(({ host: h, view }) => {
     const { state } = view;
     const repoOf = (id: string) => state.repos.find((r) => r.id === id);
-    const areas = "areas" in view.capabilities ? state.areas : [];
     // A Project's children show only inside it, and count toward its row's status (0042).
     const inProject = threadProjects(state);
-    const roots = rootIds(state.threads);
     const threads = state.threads
       .filter((t) => !inProject.get(t.id))
       .map((t): Item => {
         const run = state.runs[t.id];
         const repo = repoOf(t.repo);
         const title = state.titles[t.id] ?? "Thread";
-        const member: Member = { kind: "thread", root: roots.get(t.id) ?? t.id };
         return {
           kind: "thread",
           thread: t,
+          run,
           key: `${h.id}/${t.id}`,
           host: h,
           view,
           repo,
-          attention: attentionOf(t, run, asksOf(state, t.id), waitingOf(state, t.id)),
+          attention: markedUnread(
+            attentionOf(t, run, asksOf(state, t.id), waitingOf(state, t.id)),
+            run,
+            unread.includes(`${h.id}/${t.id}`),
+          ),
           at: lastPrompt(t),
           title,
-          member,
-          areas: areas.filter((a) => inArea(a, member)),
           text: [
             title,
             repo && !repo.scratch ? repo.name : "No repo",
@@ -575,7 +618,6 @@ export function ThreadList({
       });
     const projects = state.projects.map((p): Item => {
       const runs = projectRuns(state, p.id, inProject);
-      const member: Member = { kind: "project", id: p.id };
       return {
         kind: "project",
         project: p,
@@ -587,28 +629,62 @@ export function ThreadList({
         attention: projectAttention(runs, (id) => asksOf(state, id)),
         at: p.updatedAt,
         title: p.name,
-        member,
-        areas: areas.filter((a) => inArea(a, member)),
         text: p.name,
       };
     });
     return [...threads, ...projects];
   });
   const byKey = new Map(items.map((i) => [i.key, i]));
+  // The thread at the top of `key`'s family, as far up as it lists; `key` for one no thread started.
+  const topOf = (key: string) => {
+    let top = key;
+    for (const seen = new Set<string>(); !seen.has(top);) {
+      seen.add(top);
+      const i = byKey.get(top);
+      const up =
+        i?.kind === "thread" && i.thread.parent ? `${i.host.id}/${i.thread.parent}` : undefined;
+      if (!up || !byKey.has(up)) break;
+      top = up;
+    }
+    return top;
+  };
+  // Threads another started don't list (0075), so the row at the top of a family also says when one
+  // of them waits on the user, or failed since that row was last read. Counts and ⌥↓ go by each
+  // thread's own status. A family with one still working, or waiting out a usage limit, isn't
+  // cleared.
+  const familyNews = new Map<string, Attention>();
+  const busyFamilies = new Set<string>();
+  for (const i of items) {
+    const top = byKey.get(topOf(i.key));
+    if (i.kind !== "thread" || top === i || top?.kind !== "thread") continue;
+    if (working(i.attention) || i.run?.status === "waiting") busyFamilies.add(top.key);
+    const read = top.thread.seenAt ? Date.parse(top.thread.seenAt) : 0;
+    const failedSince = i.attention === "failed" && !!i.run && Date.parse(i.run.updatedAt) > read;
+    if (i.attention === "needsYou" || failedSince)
+      familyNews.set(top.key, mostUrgent([familyNews.get(top.key) ?? top.attention, i.attention]));
+  }
+  // What a row shows, and where: its own status, or its family's news.
+  const rowAttention = (i: Item) => familyNews.get(i.key) ?? i.attention;
+  // Where a thread is, for its card: its repo, or its folder in place of No repo.
+  const placeOf = (item: Item) => {
+    const folder = folderHolding(pinFolders, item.key);
+    if (folder && (!item.repo || item.repo.scratch))
+      return { name: folder.name, icon: <FolderMark folder={folder} /> };
+    return {
+      name: item.repo && !item.repo.scratch ? item.repo.name : "No Repo",
+      icon: <RepoIcon repo={item.repo} />,
+    };
+  };
 
   const inScope = (item: Item, s: Scope) => {
     const p = parseScope(s);
     if (p.kind === "all") return true;
     if (p.kind === "none") return !item.repo || item.repo.scratch;
-    if (item.host.id !== p.hostId) return false;
-    if (p.kind === "repo") return item.repo?.id === p.id;
-    if (item.areas.some((a) => a.id === p.id)) return true;
-    // A thread or Project in a repo entry or Space the area holds (PLX-852).
-    const area = item.view.state.areas.find((a) => a.id === p.id);
-    return !!item.repo && !!area?.repos?.includes(item.repo.id);
+    return p.kind === "repo" && item.host.id === p.hostId && item.repo?.id === p.id;
   };
   const isArchived = (i: Item) => i.kind === "thread" && !!i.thread.archived;
-  const isSnoozed = (i: Item) => i.kind === "thread" && snoozed(i.thread, i.attention, now);
+  // A snoozed thread wakes early when it, or one it started, needs the user.
+  const isSnoozed = (i: Item) => i.kind === "thread" && snoozed(i.thread, rowAttention(i), now);
   const needsYou = (i: Item) => i.attention === "needsYou" && !isArchived(i) && !doomed.has(i.key);
   const needsIn = (s: Scope) => items.filter((i) => needsYou(i) && inScope(i, s)).length;
   const outside =
@@ -669,21 +745,27 @@ export function ThreadList({
   const snippetOf = (i: Item) =>
     matched.get(i.key)?.length ? hits?.snippets.get(i.key) : undefined;
 
+  // Threads another thread started, subagents among them, don't list (0075).
   const shown = items
     .filter((i) => inScope(i, scope) && matched.has(i.key) && !doomed.has(i.key))
+    .filter((i) => !(i.kind === "thread" && i.thread.parent))
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   const projects = shown.filter((i) => i.kind === "project");
+  // The favorites stay in the order they're moved into (pins.ts), the rest after by name, so they
+  // don't shuffle as their Projects get busy.
+  const favOrder = favoriteOrder.use();
+  const favRank = (key: string) => {
+    const n = favOrder.indexOf(key);
+    return n < 0 ? Infinity : n;
+  };
+  projects.sort((a, b) => favRank(a.key) - favRank(b.key) || a.title.localeCompare(b.title));
   const pool = shown.filter((i) => i.kind === "thread" && !isArchived(i) && !isSnoozed(i));
   const snoozedItems = shown.filter((i) => !isArchived(i) && isSnoozed(i));
   const archived = shown.filter(isArchived);
-  // The Projects section shows once any host has a Project, even while search or the filter hides
-  // them all.
-  const hasProjects = items.some((i) => i.kind === "project" && inScope(i, scope));
-  // Unsent New Thread prompts (PLX-788), above the threads, on hosts still listed. An area lists
-  // only what it holds.
+  // Unsent New Thread prompts (PLX-788), above the threads, on hosts still listed.
   const draftRows = drafts.use().flatMap((d) => {
     const view = hosts.find((h) => h.host.id === d.hostId)?.view;
-    if (!view || scopeArea) return [];
+    if (!view) return [];
     const repo = view.state.repos.find((r) => r.id === d.groupId);
     const inRepo =
       scope === "all" ||
@@ -693,36 +775,11 @@ export function ThreadList({
       : [];
   });
 
-  // A thread whose parent is in the list nests under it (0041), oldest first, collapsed until
-  // opened or until one of them is the open thread.
-  const parentKey = (i: Item) =>
-    i.kind === "thread" && "threadLineage" in i.view.capabilities && i.thread.parent
-      ? `${i.host.id}/${i.thread.parent}`
-      : undefined;
-  const inList = new Set(pool.map((i) => i.key));
-  const children = new Map<string, Item[]>();
-  const created = (i: Item) => (i.kind === "thread" ? i.thread.createdAt : "");
-  for (const i of [...pool].sort((a, b) => created(a).localeCompare(created(b)))) {
-    const key = parentKey(i);
-    if (key && inList.has(key)) children.set(key, [...(children.get(key) ?? []), i]);
-  }
-  const tops = pool.filter((i) => !inList.has(parentKey(i) ?? ""));
-  // An area's repo entries and Spaces (PLX-852): folders that list every thread in them, shown
-  // even when they hold none.
-  const folders = (scopeArea?.area.repos ?? []).flatMap((id) => {
-    const repo = scopeArea!.view.state.repos.find((r) => r.id === id);
-    return repo ? [repo] : [];
-  });
-  const closedFolders = closedFoldersStore.use();
-  const folderKey = (repo: Repo) => `${scopeArea!.host.id}/${repo.id}`;
-  // Pinned threads stay put; the rest of a working family sits in Working (PLX-777: a thread
-  // waiting on background work or a watched pull request stays with them). A thread in a
-  // folder sits in it.
-  const pinned = tops.filter((i) => i.kind === "thread" && i.thread.pinned);
-  const inFolder = (i: Item, repo?: Repo) =>
-    !pinned.includes(i) && !!i.repo && (repo ? i.repo === repo : folders.includes(i.repo));
-  const unpinned = tops.filter((i) => !pinned.includes(i) && !inFolder(i));
-  const workingTops = workingSection ? unpinned.filter((i) => working(i.attention)) : [];
+  // Pinned threads stay put; the rest sit in Working while they work (PLX-777: a thread waiting on
+  // background work or a watched pull request stays there too).
+  const pinned = pool.filter((i) => i.kind === "thread" && i.thread.pinned);
+  const unpinned = pool.filter((i) => !pinned.includes(i));
+  const workingTops = workingSection ? unpinned.filter((i) => working(rowAttention(i))) : [];
   const topThreads = unpinned.filter((i) => !workingTops.includes(i));
   const selectedKey =
     selection.kind === "thread"
@@ -730,58 +787,52 @@ export function ThreadList({
       : selection.kind === "project"
         ? `${host.id}/${selection.projectId}`
         : undefined;
-  if (selectedKey !== revealed) {
-    setRevealed(selectedKey);
-    // Opens the groups the open thread is in, so its row shows. A loop of parents stops.
-    const byPool = new Map(pool.map((i) => [i.key, i]));
-    const opened = new Set(expanded);
-    const chosenItem = selectedKey === undefined ? undefined : byPool.get(selectedKey);
-    let up = chosenItem && parentKey(chosenItem);
-    while (up && byPool.has(up) && !opened.has(up)) {
-      opened.add(up);
-      up = parentKey(byPool.get(up)!);
-    }
-    if (opened.size !== expanded.size) setExpanded(opened);
-  }
-  // A closed folder holding the open thread's family opens as the thread does, so its row shows.
-  let top = selectedKey === undefined ? undefined : pool.find((i) => i.key === selectedKey);
-  for (const seen = new Set<string>(); top && !seen.has(top.key);) {
-    seen.add(top.key);
-    const up = parentKey(top);
-    const parent = up === undefined ? undefined : pool.find((i) => i.key === up);
-    if (!parent) break;
-    top = parent;
-  }
-  const hiddenIn = top && folders.find((r) => inFolder(top!, r));
-  const hiddenKey = hiddenIn && folderKey(hiddenIn);
+  // The row that reads as open: the open thread's, or while a thread another started is open, which
+  // doesn't list, the row of the thread at the top of its family.
+  const openKey = selectedKey && topOf(selectedKey);
+  // Opening a thread marked unread reads it.
   useEffect(() => {
-    if (hiddenKey && closedFoldersStore.get().includes(hiddenKey))
-      closedFoldersStore.set(closedFoldersStore.get().filter((k) => k !== hiddenKey));
-  }, [selectedKey]);
-  // The rows shown, in order, a group's children after their parent while it's open.
-  const flat = (i: Item): Item[] => [
-    i,
-    ...(expanded.has(i.key) ? (children.get(i.key) ?? []).flatMap(flat) : []),
-  ];
-  const pinnedRows = sections.pinned ? pinned.flatMap(flat) : [];
-  const folderRows = folders.flatMap((repo) =>
-    closedFolders.includes(folderKey(repo))
-      ? []
-      : tops.filter((i) => inFolder(i, repo)).flatMap(flat),
-  );
-  const threadRows = sections.threads ? topThreads.flatMap(flat) : [];
-  const workingRows = sections.working ? workingTops.flatMap(flat) : [];
-
-  // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held:
-  // Pinned's, then the Projects section's, then the open folders', then the threads', then
-  // Working's, each only while it's open.
-  const listed = [
-    ...pinnedRows,
-    ...(sections.projects ? projects : []),
-    ...folderRows,
-    ...threadRows,
-    ...workingRows,
-  ];
+    if (selectedKey && unread.includes(selectedKey))
+      pinUnread.set(pinUnread.get().filter((k) => k !== selectedKey));
+  }, [selectedKey, unread.includes(selectedKey ?? "")]);
+  // Today, grouped as its View says: under each repo, most recent first, or under each day, as a
+  // list over time reads.
+  const groupBy = todayGroup.use();
+  const compact = compactRows.use();
+  const foldedGroups = todayFolded.use();
+  // A search shows every match, folded or not.
+  const isFolded = (key: string) => !words.length && foldedGroups.includes(key);
+  const dayOf = (at: string) => {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    const day = new Date(at);
+    day.setHours(0, 0, 0, 0);
+    const days = Math.round((start.getTime() - day.getTime()) / 864e5);
+    return days <= 0
+      ? "Today"
+      : days === 1
+        ? "Yesterday"
+        : days < 7
+          ? "Earlier this week"
+          : "Older";
+  };
+  const repoOfRow = (i: Item) => (i.repo && !i.repo.scratch ? i.repo : undefined);
+  const groupKey = (i: Item) =>
+    groupBy === "repo" ? `${i.host.id}/${repoOfRow(i)?.id ?? "none"}` : dayOf(i.at);
+  // Today's rows in the order they show: each group where its newest row falls, and none from a
+  // folded group.
+  const groupPlace = new Map<string, number>();
+  for (const i of topThreads)
+    if (!groupPlace.has(groupKey(i))) groupPlace.set(groupKey(i), groupPlace.size);
+  const todayRows =
+    groupBy === "none"
+      ? topThreads
+      : topThreads
+          .filter((i) => !isFolded(groupKey(i)))
+          .sort((a, b) => groupPlace.get(groupKey(a))! - groupPlace.get(groupKey(b))!);
+  // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held: the
+  // favorites' Projects, then Today's threads, then Working's, while it's open.
+  const listed = [...projects, ...todayRows, ...(sections.working ? workingTops : [])];
   const modHeld = useModHeld();
   const openItem = (item: Item) =>
     onSelect(
@@ -806,18 +857,15 @@ export function ThreadList({
     lastOpenStore.set({ ...lastOpenStore.get(), [scope]: selectedKey! });
   });
 
-  // ⌥↓ and ⌥↑: the next or previous row that needs the user, switching to an area that holds it,
-  // or to every thread, when it's outside this scope.
+  // ⌥↓ and ⌥↑: the next or previous row that needs the user, switching to every thread when it's
+  // outside this scope.
   const jump = (step: 1 | -1) => {
     const key = jumpTarget(jumpList, selectedKey, step);
     const item = key ? byKey.get(key) : undefined;
     if (!item) return toast("Nothing needs you right now");
     if (!inScope(item, scope)) {
-      const home = listedAreas.find(
-        (a) => a.host.id === item.host.id && item.areas.some((x) => x.id === a.area.id),
-      );
-      setScope(home ? areaScope(home) : "all", false);
-      toast(`Switched to ${home ? home.area.name : "All threads"} for “${short(item.title)}”`);
+      setScope("all", false);
+      toast(`Switched to All threads for “${short(item.title)}”`);
     }
     if (!matched.has(item.key)) setQuery("");
     focusNext.current = { key: item.key };
@@ -827,7 +875,7 @@ export function ThreadList({
   useLayoutEffect(() => {
     const next = focusNext.current;
     if (!next) return;
-    const rows = [...document.querySelectorAll<HTMLElement>("#sidebar [data-row]")];
+    const rows = shownRows().filter((r) => r.dataset["row"] !== next.skip);
     focusNext.current = undefined;
     const row =
       next.key !== undefined
@@ -879,16 +927,6 @@ export function ThreadList({
       }
       const typing = prose || target.tagName === "INPUT" || target.tagName === "SELECT";
       if (typing) return;
-      // ⌥1 to ⌥9 open areas in order and ⌥0 shows every thread, by key position. Not while
-      // typing: ⌥ and a digit types a character there, such as { on a German layout.
-      const digit = /^Digit([0-9])$/.exec(e.code)?.[1];
-      if (digit !== undefined && plainAlt && listedAreas.length) {
-        const d = Number(digit);
-        const area = listedAreas[d - 1];
-        if (d !== 0 && !area) return;
-        e.preventDefault();
-        return setScope(area ? areaScope(area) : "all");
-      }
       if (modOnly(e) && e.code === "KeyZ") {
         if (undo()) e.preventDefault();
       } else if (e.key === "Escape" && picked.size) {
@@ -912,24 +950,30 @@ export function ThreadList({
   };
 
   // What the user changes shows a toast with Undo, which puts back only what they changed.
-  // After E or S, once plxd answers: focus the row now at `focusAt`, the one that took its place,
-  // unless focus has moved on since, as into the search box.
-  const focusAfter = (focusAt?: number) => {
+  // After E or S on the row `key`, once plxd answers: focus the row now at `focusAt`, the one that
+  // took its place, unless focus has moved on since, as to another row or into the search box. The
+  // row that left can still list for a render, until its host's change arrives, so it's skipped.
+  const focusAfter = (key: string, focusAt?: number) => {
     const here = document.activeElement;
-    if (focusAt === undefined || (here && here !== document.body && !here.closest("[data-row]")))
-      return;
-    focusNext.current = { index: focusAt };
+    const on = here?.closest<HTMLElement>("[data-row]")?.dataset["row"];
+    if (focusAt === undefined || (here && here !== document.body && on !== key)) return;
+    focusNext.current = { index: focusAt, skip: key };
     refocus((n) => n + 1);
   };
   // `focusAt` comes from E, for `focusAfter`.
   const archive = async (item: Item, focusAt?: number) => {
-    if (item.kind !== "thread") return;
+    if (item.kind !== "thread" || leaving.current.has(item.key)) return;
     const { thread: t, host: h } = item;
     const was = !!t.archived;
+    leaving.current.add(item.key);
+    // Archiving, the row slides away first; it comes back if plxd says no.
+    const sweep = was ? undefined : sweepOut([item.key], "translateX(-12px)");
+    if (sweep?.done) await sweep.done;
     const error = await item.view.archive(t.id, !was);
+    leaving.current.delete(item.key);
     setActionError(error);
-    if (error) return;
-    focusAfter(focusAt);
+    if (error) return sweep?.restore();
+    focusAfter(item.key, focusAt);
     const lastOpen = items.every(
       (i) => i.kind !== "thread" || i.thread.archived || i.key === item.key,
     );
@@ -945,12 +989,20 @@ export function ThreadList({
     const error = await item.view.update(t.id, { snoozedUntil: until.toISOString() });
     setActionError(error);
     if (error) return;
-    focusAfter(focusAt);
+    // A row that stays, as one already snoozed or archived or that needs the user, keeps focus.
+    const stays = isSnoozed(item) || isArchived(item) || rowAttention(item) === "needsYou";
+    focusAfter(item.key, stays ? undefined : focusAt);
     const ending = until.getTime() <= Date.now();
     toast(ending ? "Unsnoozed" : `Snoozed until ${when(until)}`, () => {
       // A snooze that ended meanwhile ends now.
       void viewOf(h.id)?.update(t.id, { snoozedUntil: was ?? new Date().toISOString() });
     });
+  };
+  const markUnread = (item: Item) => {
+    pinUnread.set([...pinUnread.get().filter((k) => k !== item.key), item.key]);
+    toast(`Marked “${short(item.title)}” unread`, () =>
+      pinUnread.set(pinUnread.get().filter((k) => k !== item.key)),
+    );
   };
   const pin = async (item: Item) => {
     if (item.kind !== "thread" || item.thread.parent) return;
@@ -977,22 +1029,6 @@ export function ThreadList({
         void viewOf(h.id)?.update(t.id, { title: was });
       });
   };
-  const setMember = (hostId: string, areaId: string, item: Item, on: boolean) => {
-    const view = viewOf(hostId);
-    const area = view?.state.areas.find((a) => a.id === areaId);
-    if (!view || !area) return Promise.resolve(undefined);
-    const id = item.member.kind === "thread" ? item.member.root : item.member.id;
-    return view.updateArea(areaId, withMember(area, item.member.kind, id, on));
-  };
-  const toggleArea = async (item: Item, area: Area, on: boolean) => {
-    const error = await setMember(item.host.id, area.id, item, on);
-    setActionError(error);
-    if (!error)
-      toast(on ? `Added to ${area.name}` : `Removed from ${area.name}`, () => {
-        void setMember(item.host.id, area.id, item, !on);
-      });
-  };
-
   // The picked threads that are still listed. Projects can't be picked.
   const pickedItems = [...picked].flatMap((k) => {
     const i = byKey.get(k);
@@ -1003,9 +1039,7 @@ export function ThreadList({
     const next = new Set(picked);
     const from = anchor.current;
     if (range && from) {
-      const keys = [
-        ...document.querySelectorAll<HTMLElement>('#sidebar [data-row][data-kind="thread"]'),
-      ].map((r) => r.dataset["row"]!);
+      const keys = shownRows('[data-kind="thread"]').map((r) => r.dataset["row"]!);
       const [a, b] = [keys.indexOf(from), keys.indexOf(item.key)];
       if (a >= 0 && b >= 0)
         for (const k of keys.slice(Math.min(a, b), Math.max(a, b) + 1)) next.add(k);
@@ -1021,7 +1055,14 @@ export function ThreadList({
     const n = plural(list.length, "thread");
     const errors: (string | undefined)[] = [];
     if (action === "archive") {
+      const keys = list.map(({ item }) => item.key);
+      if (keys.some((k) => leaving.current.has(k))) return;
+      for (const k of keys) leaving.current.add(k);
+      const sweep = sweepOut(keys, "translateX(-12px)", 25);
+      if (sweep.done) await sweep.done;
       errors.push(...(await Promise.all(list.map(({ item, t }) => item.view.archive(t.id, true)))));
+      for (const k of keys) leaving.current.delete(k);
+      sweep.restore(keys.filter((_, n) => errors[n]));
       setPicked(new Set());
       toast(`Archived ${n}`, () => {
         for (const { item, t } of list)
@@ -1059,45 +1100,9 @@ export function ThreadList({
     }
     setActionError(errors.find(Boolean));
   };
-  // The picked threads' area checkboxes: on, off, or mixed, for each area on their hosts.
-  const bulkAreas = listedAreas.flatMap((listed) => {
-    const ids = [
-      ...new Set(
-        pickedItems.flatMap((i) =>
-          i.host.id === listed.host.id && i.member.kind === "thread" ? [i.member.root] : [],
-        ),
-      ),
-    ];
-    if (!ids.length) return [];
-    const n = ids.filter((id) => listed.area.threads.includes(id)).length;
-    return [{ listed, ids, state: n === 0 ? false : n === ids.length ? true : ("mixed" as const) }];
-  });
-  const bulkArea = async ({ listed, ids, state }: (typeof bulkAreas)[number]) => {
-    const { area } = listed;
-    const add = state !== true;
-    // Only the ones that change, so Undo takes back exactly those.
-    const changed = ids.filter((id) => area.threads.includes(id) !== add);
-    const apply = (on: boolean) => {
-      const view = viewOf(listed.host.id);
-      const now = view?.state.areas.find((a) => a.id === area.id);
-      if (!view || !now) return Promise.resolve(undefined);
-      const threads = on
-        ? [...now.threads, ...changed.filter((id) => !now.threads.includes(id))]
-        : now.threads.filter((id) => !changed.includes(id));
-      return view.updateArea(area.id, { threads });
-    };
-    const error = await apply(add);
-    setActionError(error);
-    if (!error)
-      toast(
-        `${add ? "Added" : "Removed"} ${plural(changed.length, "thread")} ${add ? "to" : "from"} ${area.name}`,
-        () => void apply(!add),
-      );
-  };
-
   const rowKeys = (e: ReactKeyboardEvent<HTMLElement>, item: Item) => {
     if (e.metaKey || e.ctrlKey || e.altKey || e.nativeEvent.isComposing) return;
-    const rows = [...document.querySelectorAll<HTMLElement>("#sidebar [data-row]")];
+    const rows = shownRows();
     const at = rows.indexOf(e.currentTarget);
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     const thread = item.kind === "thread";
@@ -1118,6 +1123,7 @@ export function ThreadList({
     else if (key === "p" && can("areas") && item.kind === "thread" && !item.thread.parent)
       act(() => void pin(item), { key: item.key });
     else if (key === "r" && can("threadLineage")) act(() => setRenaming(item.key));
+    else if (key === "u" && thread && item.attention === "settled") act(() => markUnread(item));
     else if (key === "a")
       act(() =>
         e.currentTarget
@@ -1129,98 +1135,38 @@ export function ThreadList({
     else if ((key === "Backspace" || key === "Delete") && thread) act(() => askDelete(item));
   };
 
-  // A row's Areas menu: each of its host's areas as a checkbox, and New area…, which opens the
-  // editor with it picked. A child follows its root into its areas.
-  const areaMenuOf = (item: Item): AreaMenu | undefined => {
-    if (!("areas" in item.view.capabilities)) return undefined;
-    const parent =
-      item.kind === "thread" && item.member.kind === "thread" && item.member.root !== item.thread.id
-        ? (item.view.state.titles[item.member.root] ?? "its parent")
-        : undefined;
-    return {
-      parent,
-      areas: listedAreas
-        .filter((a) => a.host.id === item.host.id)
-        .map(({ area }) => ({
-          area,
-          on: item.areas.some((x) => x.id === area.id),
-        })),
-      onToggle: (area, on) => void toggleArea(item, area, on),
-      onNew: () =>
-        setEditor({
-          hostId: item.host.id,
-          initial:
-            item.kind === "thread"
-              ? { threads: [item.thread.id] }
-              : { projects: [item.project.id] },
-        }),
-    };
-  };
-
-  const row = (item: Item, inFamily = false) => itemRow(item, false, inFamily);
-  // `withAsk` shows a top-level thread's waiting approval inline, as in a folder.
-  const itemRow = (item: Item, nested: boolean, inFamily = false, withAsk = !nested) => {
+  // A thread's row. `nested`, under its repo's heading, it needn't name the repo.
+  const row = (item: Item, nested = false) => {
+    if (item.kind !== "thread") return null;
     const n = modHeld ? listed.indexOf(item) : -1;
     const badge = n >= 0 && n < 9 ? <RowBadge index={n} /> : undefined;
-    const selected = item.key === selectedKey;
-    const dots = item.areas.filter((a) => a.id !== scopeArea?.area.id);
-    if (item.kind === "project")
-      return (
-        <ProjectRow
-          key={item.key}
-          rowKey={item.key}
-          flip={!nested && !inFamily}
-          project={item.project}
-          runs={item.runs}
-          attention={item.attention}
-          host={many ? item.host : undefined}
-          selected={selected}
-          badge={badge}
-          words={words}
-          dots={dots}
-          editable={"projectEdit" in item.view.capabilities}
-          moded={"projectPermission" in item.view.capabilities}
-          autonomous={"projectAutonomy" in item.view.capabilities}
-          iconImageBytes={item.view.iconImageBytes}
-          areaMenu={areaMenuOf(item)}
-          onOpen={() => openItem(item)}
-          onKeys={(e) => rowKeys(e, item)}
-          onUpdate={async (change) =>
-            setActionError(await item.view.updateProject(item.project.id, change))
-          }
-          onDelete={"projectDelete" in item.view.capabilities ? () => askDelete(item) : undefined}
-        />
-      );
+    const selected = item.key === openKey;
     const { thread: t, view } = item;
     const pinnable = "areas" in view.capabilities && !t.parent;
-    const ask = withAsk ? askOf(item) : undefined;
     return (
       <ThreadRow
         key={item.key}
+        look={compact ? "compact" : undefined}
+        folder={folderHolding(pinFolders, item.key)}
         rowKey={item.key}
-        flip={!nested && !inFamily}
         thread={t}
         hostId={item.host.id}
         device={many && item.host.icon ? item.host : undefined}
         title={item.title}
         run={view.state.runs[t.id]}
         repo={item.repo}
-        attention={item.attention}
+        attention={rowAttention(item)}
         selected={selected}
         picked={picked.has(item.key)}
         flash={flashing.has(item.key)}
-        inFamily={inFamily}
         badge={badge}
         nested={nested}
         words={words}
         snippet={snippetOf(item)}
-        dots={dots}
-        ask={ask}
         renaming={renaming === item.key}
         snoozable={"threadAttention" in view.capabilities}
         renamable={"threadLineage" in view.capabilities}
         autoResumable={"autoResume" in view.capabilities}
-        areaMenu={areaMenuOf(item)}
         onOpen={(e) => {
           const mod = mac() ? e.metaKey : e.ctrlKey;
           if (mod || e.shiftKey) return pick(item, e.shiftKey);
@@ -1232,16 +1178,15 @@ export function ThreadList({
         onArchive={() => void archive(item)}
         onSnooze={(until) => void snoozeUntil(item, until)}
         onPin={pinnable ? () => void pin(item) : undefined}
+        onMarkUnread={
+          item.attention === "settled" &&
+          view.state.runs[t.id] &&
+          !isRunning(view.state.runs[t.id]!.status)
+            ? () => markUnread(item)
+            : undefined
+        }
         onRename={(title) => void rename(item, title)}
         onStartRename={() => setRenaming(item.key)}
-        onAnswer={async (approvalId, decision) => {
-          const answer = await window.parallax.request(item.host.id, "agent/approve", {
-            runId: t.id,
-            approvalId,
-            decision,
-          });
-          setActionError("error" in answer ? describeError(answer.error) : undefined);
-        }}
         onDelete={() => askDelete(item)}
         onOpenBeside={
           item.host.id === host.id && selection.kind === "thread" && !selected
@@ -1265,138 +1210,20 @@ export function ThreadList({
           });
           setActionError("error" in answer ? answer.error.message : undefined);
         }}
-        onRest={(el) =>
-          card.current?.show(el, {
-            title: item.title,
-            run: view.state.runs[t.id],
-            repo: {
-              name: item.repo && !item.repo.scratch ? item.repo.name : "No Repo",
-              icon: <RepoIcon repo={item.repo} />,
-            },
-            host: item.host,
-            snoozedUntil: t.snoozedUntil,
-          })
-        }
+        onRest={restCard(item)}
         onLeave={hideCard}
       />
     );
   };
-
-  // Every thread under `key`, at any depth, for its group's most urgent status.
-  const descendants = (key: string): Item[] =>
-    (children.get(key) ?? []).flatMap((c) => [c, ...descendants(c.key)]);
-  // A thread's row, then with children, a strip under it with their count and, while they're
-  // hidden, the most urgent one's status; the two read as one block, with one hover and tint.
-  // Open, the children list under it on a guide line.
-  const tree = (item: Item, nested: boolean, withAsk = !nested): ReactNode => {
-    const kids = children.get(item.key);
-    if (!kids) return itemRow(item, nested, false, withAsk);
-    const isOpen = expanded.has(item.key);
-    const toggle = () => {
-      quiet();
-      const next = new Set(expanded);
-      if (!next.delete(item.key)) next.add(item.key);
-      setExpanded(next);
-    };
-    const urgent = mostUrgent(descendants(item.key).map((c) => c.attention));
-    const block = (
-      <li
-        key={item.key}
-        data-flip={nested ? undefined : item.key}
-        data-family
-        className={`group/fam rounded-lg transition-colors duration-100 hover:bg-hover has-[[aria-current=page]]:hover:bg-hover ${isOpen ? "bg-hover/60" : ""}`}
-      >
-        <ul>{itemRow(item, nested, true, withAsk)}</ul>
-        <button
-          type="button"
-          aria-expanded={isOpen}
-          aria-label={`${isOpen ? "Hide" : "Show"} ${plural(kids.length, "child thread")}`}
-          onClick={toggle}
-          className={`-mt-1 flex w-full items-center gap-1.25 rounded-b-lg px-2 pt-0.5 text-left text-[11.5px] text-faint-foreground hover:text-foreground ${isOpen ? "pb-0.75" : "pb-1.5"}`}
-        >
-          <span className="flex w-4.5 justify-center">
-            <ChevronRight
-              aria-hidden
-              className={`size-3 shrink-0 transition-transform ${isOpen ? "rotate-90" : ""}`}
-            />
-          </span>
-          <CornerDownRight aria-hidden className="size-3 shrink-0" />
-          {plural(kids.length, "thread")}
-          {urgent !== "settled" && !isOpen && (
-            <span className="ml-auto">
-              <AttentionBadge attention={urgent} />
-            </span>
-          )}
-        </button>
-        {isOpen && (
-          <ul
-            aria-label={`Threads ${item.title} started`}
-            className="mb-1.25 ml-4.25 flex flex-col gap-px border-l border-foreground/14 pr-1 pl-1.75"
-          >
-            {kids.map((k) => tree(k, true))}
-          </ul>
-        )}
-      </li>
-    );
-    return block;
-  };
-
-  // An area's folder: a row with its icon, name, and thread count that opens and closes it, and,
-  // while closed, its most urgent thread's status. Open, its threads list under it on a guide
-  // line, or a note that it has none yet.
-  const folder = (repo: Repo): ReactNode => {
-    const key = folderKey(repo);
-    const isOpen = !closedFolders.includes(key);
-    const kids = tops.filter((i) => inFolder(i, repo));
-    const urgent = mostUrgent(
-      kids.flatMap((k) => [k, ...descendants(k.key)]).map((k) => k.attention),
-    );
-    return (
-      <li key={key} data-folder={key}>
-        <button
-          type="button"
-          aria-expanded={isOpen}
-          onClick={() => {
-            quiet();
-            closedFoldersStore.set(
-              isOpen ? [...closedFolders, key] : closedFolders.filter((k) => k !== key),
-            );
-          }}
-          className="flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] hover:bg-hover"
-        >
-          <span className="grid shrink-0 place-items-center">
-            <RepoIcon repo={repo} />
-          </span>
-          <span className="min-w-0 flex-1 truncate text-foreground/80">
-            <Marked text={repo.name} words={words} />
-          </span>
-          {urgent !== "settled" && !isOpen ? (
-            <AttentionBadge attention={urgent} />
-          ) : (
-            <span className="shrink-0 text-[11.5px] text-faint-foreground tabular-nums">
-              {kids.length || ""}
-            </span>
-          )}
-          <ChevronRight
-            aria-hidden
-            className={`size-3 shrink-0 text-faint-foreground transition-transform ${isOpen ? "rotate-90" : ""}`}
-          />
-        </button>
-        {isOpen && (
-          <ul
-            aria-label={`Threads in ${repo.name}`}
-            className="mb-1.25 ml-4.25 flex flex-col gap-px border-l border-foreground/14 pr-1 pl-1.75"
-          >
-            {kids.map((k) => tree(k, true, true))}
-            {kids.length === 0 && (
-              <li className="px-2 py-1 text-[12px] text-faint-foreground">
-                {words.length ? "Nothing matches" : "No threads yet"}
-              </li>
-            )}
-          </ul>
-        )}
-      </li>
-    );
+  const restCard = (item: Item) => (el: HTMLElement) => {
+    if (item.kind !== "thread") return;
+    card.current?.show(el, {
+      title: item.title,
+      run: item.view.state.runs[item.thread.id],
+      repo: placeOf(item),
+      host: item.host,
+      snoozedUntil: item.thread.snoozedUntil,
+    });
   };
 
   const confirmDelete = async () => {
@@ -1431,77 +1258,449 @@ export function ThreadList({
     else deleteDialog.current?.close();
   };
 
-  // Saves the editor's area: New area makes it and opens it, with Undo deleting it again.
-  const saveArea = async (hostId: string, fields: AreaFields, area?: Area) => {
-    const view = viewOf(hostId);
-    if (!view) return "Not connected";
-    if (area) {
-      const error = await view.updateArea(area.id, fields);
-      if (error) return error;
-      setEditor(undefined);
-      toast(`Saved ${fields.name}`, () => {
-        const view = viewOf(hostId);
-        const now = view?.state.areas.find((a) => a.id === area.id);
-        if (view && now) void view.updateArea(area.id, revertEdit(area, fields, now));
-      });
-      return undefined;
-    }
-    const created = { id: uuidv7(), ...fields };
-    const error = await view.createArea(created);
-    if (error) return error;
-    setEditor(undefined);
-    setQuery("");
-    setScope(`area:${hostId}/${created.id}`, false);
-    // It goes last among its host's areas, which list in the hosts' order.
-    const hostAt = (id: string) => hosts.findIndex((h) => h.host.id === id);
-    const index = listedAreas.filter((a) => hostAt(a.host.id) <= hostAt(hostId)).length;
-    toast(
-      `Created ${fields.name}${index < 9 ? ` · ${areaKey(index + 1)}` : ""}`,
-      () => void viewOf(hostId)?.deleteArea(created.id),
-    );
-    return undefined;
+  // The pinned threads, in the order and folders the user makes (pins.ts), each with the icon
+  // chosen for it, else its repo's, in its color.
+  const pinIconsNow = pinIcons.use();
+  const [unpinOver, setUnpinOver] = useState(false);
+  // A thread's own actions where it shows out of Today, pinned or a favorite, as on its row.
+  const threadActions = (i: Item & { kind: "thread" }): FavoriteAction[] => [
+    ...(i.host.id === host.id && selection.kind === "thread" && i.key !== openKey
+      ? [
+          {
+            label: "Open side by side",
+            icon: <Columns2 aria-hidden />,
+            run: () => onOpenBeside(i.thread.id),
+          },
+        ]
+      : []),
+    { label: "Archive", icon: <Archive aria-hidden />, shortcut: "E", run: () => void archive(i) },
+    ...("threadAttention" in i.view.capabilities
+      ? [
+          {
+            label: "Snooze for an hour",
+            icon: <AlarmClock aria-hidden />,
+            shortcut: "S",
+            run: () => void snoozeUntil(i, new Date(Date.now() + 3_600_000)),
+          },
+        ]
+      : []),
+    {
+      label: "Delete…",
+      icon: <Trash2 aria-hidden />,
+      danger: true,
+      shortcut: "⌫",
+      run: () => askDelete(i),
+    },
+  ];
+  const pinOf = (i: Item & { kind: "thread" }): PinData => {
+    const chosen = pinIconsNow[i.key];
+    const repo = i.repo && !i.repo.scratch ? i.repo : undefined;
+    return {
+      key: i.key,
+      title: i.title,
+      icon: chosen ? (
+        <ProjectIcon icon={chosen} className="size-4" />
+      ) : repo ? (
+        <RepoIcon repo={repo} />
+      ) : (
+        <MessageSquare aria-hidden className="size-4 text-muted-foreground" />
+      ),
+      tint: chosen?.color
+        ? `var(--project-${chosen.color})`
+        : repo
+          ? repoColor(repo)
+          : "var(--faint-foreground)",
+      attention: rowAttention(i),
+      selected: i.key === openKey,
+      thread: { hostId: i.host.id, id: i.thread.id },
+      renamable: "threadLineage" in i.view.capabilities,
+      actions: threadActions(i),
+      onKeys: (e) => {
+        if (/^(e|s|backspace|delete)$/i.test(e.key)) rowKeys(e, i);
+      },
+    };
   };
-  const deleteArea = async (hostId: string, area: Area) => {
-    const error = await viewOf(hostId)?.deleteArea(area.id);
-    if (error) return setActionError(error);
-    setEditor(undefined);
-    const was = scope;
-    toast(`Deleted ${area.name}`, () => {
-      // The same id brings it back, with the members that are still there.
-      void viewOf(hostId)
-        ?.createArea(area)
-        .then((e) => {
-          if (!e && was === `area:${hostId}/${area.id}`) scopeStore.set(was);
-        });
+  // The pinned threads moved up into the favorites, which leave the pinned rows.
+  const favoriteKeys = pinFavorites.use();
+  const favoriteThreads = favoriteKeys.flatMap((k) => {
+    const i = byKey.get(k);
+    return i?.kind === "thread" &&
+      i.thread.pinned &&
+      !isArchived(i) &&
+      !isSnoozed(i) &&
+      !doomed.has(k) &&
+      matched.has(k)
+      ? [i]
+      : [];
+  });
+  const pins = pinned.flatMap((i) =>
+    i.kind === "thread" && !favoriteThreads.includes(i) ? [pinOf(i)] : [],
+  );
+  const unfavorite = (key: string) => {
+    if (pinFavorites.get().includes(key))
+      pinFavorites.set(pinFavorites.get().filter((k) => k !== key));
+  };
+  const unpinKey = (key: string) => {
+    const item = byKey.get(key);
+    if (item?.kind === "thread" && item.thread.pinned) void pin(item);
+  };
+
+  const pinList = (
+    <PinList
+      onNewThread={onNewThread}
+      onFavorite={(key) => pinFavorites.set([...pinFavorites.get().filter((k) => k !== key), key])}
+      onPlaced={unfavorite}
+      onMarkUnread={(key) => {
+        const item = byKey.get(key);
+        if (item) markUnread(item);
+      }}
+      pins={pins}
+      searching={words.length > 0}
+      onOpen={(key) => {
+        const item = byKey.get(key);
+        if (item) openItem(item);
+      }}
+      onPinThread={(hostId, threadId) => {
+        const item = byKey.get(`${hostId}/${threadId}`);
+        if (item?.kind === "thread" && !item.thread.pinned && !item.thread.parent) void pin(item);
+      }}
+      onUnpin={unpinKey}
+      onRename={(key, title) => {
+        const item = byKey.get(key);
+        if (item) void rename(item, title);
+      }}
+      onRest={(key, el) => {
+        const item = byKey.get(key);
+        if (item) restCard(item)(el);
+      }}
+      onLeave={hideCard}
+    />
+  );
+  // A pinned thread dragged onto the thread list unpins.
+  const unpinZone = {
+    onDragOver: (e: ReactDragEvent<HTMLElement>) => {
+      if (!e.dataTransfer.types.includes(pinDragType)) return;
+      if (draggedPin()?.kind !== "thread") return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      setUnpinOver(true);
+    },
+    onDragLeave: (e: ReactDragEvent<HTMLElement>) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setUnpinOver(false);
+    },
+    onDrop: (e: ReactDragEvent<HTMLElement>) => {
+      setUnpinOver(false);
+      const dragged = draggedPin();
+      if (dragged?.kind !== "thread") return;
+      e.preventDefault();
+      forgetPin(dragged.key);
+      unfavorite(dragged.key);
+      unpinKey(dragged.key);
+    },
+  };
+  const unpinLook = unpinOver ? "bg-hover outline-1 outline-border outline-dashed" : "";
+  const newsDot: Partial<Record<Attention, string>> = {
+    failed: "bg-danger",
+    done: "bg-added",
+    needsYou: "bg-warning",
+  };
+  // Opening a thread in a folded group opens the group, so its row shows.
+  const openGroup = groupBy === "none" ? undefined : topThreads.find((i) => i.key === openKey);
+  const openGroupKey = openGroup && groupKey(openGroup);
+  useEffect(() => {
+    if (openGroupKey && todayFolded.get().includes(openGroupKey))
+      todayFolded.set(todayFolded.get().filter((k) => k !== openGroupKey));
+  }, [openKey]);
+  const grouped = (rows: Item[]): ReactNode => {
+    if (groupBy === "none") return rows.map((i) => row(i));
+    const groups = new Map<string, { label: ReactNode; rows: Item[] }>();
+    for (const i of rows) {
+      const repo = repoOfRow(i);
+      const key = groupKey(i);
+      const label =
+        groupBy === "repo" ? (
+          <>
+            <RepoIcon repo={repo} />
+            <span className="min-w-0 truncate">{repo?.name ?? "No repo"}</span>
+            {/* Repos on two computers can share a name. */}
+            {many && (
+              <span className="min-w-0 truncate font-normal text-faint-foreground">
+                {i.host.name}
+              </span>
+            )}
+          </>
+        ) : (
+          key
+        );
+      groups.set(key, { label, rows: [...(groups.get(key)?.rows ?? []), i] });
+    }
+    // Each group under a heading that folds it, which while folded shows whether anything in it
+    // finished or failed, and sticks to the top while its rows scroll under it. Alt-click folds or
+    // opens them all.
+    return [...groups].map(([key, g]) => {
+      const open = !isFolded(key);
+      const urgent = mostUrgent(g.rows.map(rowAttention));
+      return (
+        <li key={key} className="mt-2 first:mt-0">
+          <div className="sticky top-0 z-10 bg-sidebar">
+            <button
+              type="button"
+              aria-expanded={open}
+              disabled={words.length > 0}
+              onClick={(e) =>
+                todayFolded.set(
+                  e.altKey
+                    ? open
+                      ? [...new Set([...foldedGroups, ...groups.keys()])]
+                      : foldedGroups.filter((k) => !groups.has(k))
+                    : open
+                      ? [...foldedGroups, key]
+                      : foldedGroups.filter((k) => k !== key),
+                )
+              }
+              className="group/heading flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-[12px] font-medium text-muted-foreground transition-colors outline-none enabled:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-3.5 [&_svg]:shrink-0"
+            >
+              {g.label}
+              <span className="shrink-0 overflow-hidden rounded-full bg-foreground/[0.06] px-1.5 text-[10.5px] leading-4 text-faint-foreground">
+                <Tick value={g.rows.length} />
+              </span>
+              {!open && newsDot[urgent] && (
+                <span aria-hidden className={`dot-in size-1.5 rounded-full ${newsDot[urgent]}`} />
+              )}
+              <span aria-hidden className="mx-1 h-px flex-1 bg-border" />
+              <ChevronDown
+                aria-hidden
+                className={`text-faint-foreground transition-[transform,opacity] duration-200 ${open ? "opacity-0 group-enabled/heading:group-hover/heading:opacity-100" : "-rotate-90"}`}
+              />
+            </button>
+          </div>
+          <Fold open={open}>
+            {/* Under its repo's heading, a row needn't name the repo: title and status, then branch. */}
+            <ul className="flex flex-col gap-px">
+              {g.rows.map((i) => row(i, groupBy === "repo"))}
+            </ul>
+          </Fold>
+        </li>
+      );
     });
   };
-  const editorView = editor && viewOf(editor.hostId);
-  const candidates: Candidate[] = editor
-    ? items.flatMap((i) => {
-        if (i.host.id !== editor.hostId || isArchived(i)) return [];
-        if (i.kind === "thread" && i.member.kind === "thread" && i.member.root !== i.thread.id)
-          return [];
-        const repo = i.repo && !i.repo.scratch ? i.repo : undefined;
-        return [
-          {
-            kind: i.kind,
-            id: i.kind === "thread" ? i.thread.id : i.project.id,
-            title: i.title,
-            group: repo?.id ?? "",
-            groupName: repo?.name ?? "No repo",
-            groupIcon: <RepoIcon repo={repo} />,
-            attention: i.attention,
-            at: i.at,
-          },
-        ];
-      })
-    : [];
-  const newAreaHost = listedAreas.length
-    ? (
-        hosts.find((h) => h.host.id === host.id && "areas" in h.view.capabilities) ??
-        hosts.find((h) => "areas" in h.view.capabilities)
-      )?.host.id
-    : hosts.find((h) => "areas" in h.view.capabilities)?.host.id;
+  const threadList = (rows: Item[], empty: string) => (
+    <div {...unpinZone} className={`rounded-lg transition-colors ${unpinLook}`}>
+      <ul aria-label="Threads" className="flex flex-col gap-px">
+        {draftRows.map(({ draft, repo }) => (
+          <DraftRow
+            key={draft.id}
+            draft={draft}
+            repo={repo}
+            onOpen={() =>
+              onSelect(draft.hostId, { kind: "new", groupId: draft.groupId, draft: draft.id })
+            }
+          />
+        ))}
+        {grouped(rows)}
+      </ul>
+      {draftRows.length === 0 && rows.length === 0 && (
+        <p className={emptyNote}>
+          <span className="relative">
+            {words.length ? (
+              "Nothing matches"
+            ) : (
+              <span className="flex items-center gap-1.5 [&_svg]:size-3.5">
+                <CircleCheck aria-hidden />
+                {empty}
+              </span>
+            )}
+            {confetti > 0 && <Confetti key={confetti} />}
+          </span>
+        </p>
+      )}
+    </div>
+  );
+
+  // Clear archives every finished thread in Today already seen, but not one waiting out a usage
+  // limit (0049), which resumes on its own, or one whose family is still at work.
+  const clearable = topThreads.filter(
+    (i) =>
+      i.kind === "thread" &&
+      rowAttention(i) === "settled" &&
+      i.run?.status !== "waiting" &&
+      !busyFamilies.has(i.key),
+  );
+  // Arc archives a tab left alone long enough; so does Today, for a finished thread you've seen
+  // that's been quiet, neither prompted nor running, longer than you chose.
+  const autoHours = autoClear.use();
+  useEffect(() => {
+    if (autoHours === null) return;
+    const cutoff = now - autoHours * 36e5;
+    const stale = clearable.flatMap((i) =>
+      i.kind === "thread" &&
+      Math.max(Date.parse(i.at), i.run ? Date.parse(i.run.updatedAt) : 0) < cutoff &&
+      !autoArchived.has(i.key)
+        ? [i]
+        : [],
+    );
+    if (!stale.length) return;
+    for (const i of stale) autoArchived.add(i.key);
+    void Promise.all(stale.map((i) => i.view.archive(i.thread.id, true))).then((errors) => {
+      const archived = stale.filter((_, n) => !errors[n]);
+      if (!archived.length) return;
+      toast(
+        `Archived ${plural(archived.length, "thread")} quiet for over ${quietFor(autoHours)}`,
+        () => {
+          for (const i of archived) void viewOf(i.host.id)?.archive(i.thread.id, false);
+        },
+      );
+    });
+  });
+  const clearToday = async () => {
+    const threads = clearable.flatMap((i) =>
+      i.kind === "thread" && !leaving.current.has(i.key) ? [i] : [],
+    );
+    if (!threads.length) return;
+    for (const i of threads) leaving.current.add(i.key);
+    // Swept away first, top to bottom, as Arc's Clear does, then archived.
+    const sweep = sweepOut(
+      threads.map((i) => i.key),
+      "translateY(10px) scale(.97)",
+      35,
+    );
+    if (sweep.done) await sweep.done;
+    const errors = await Promise.all(threads.map((i) => i.view.archive(i.thread.id, true)));
+    for (const i of threads) leaving.current.delete(i.key);
+    // Those plxd didn't archive come back.
+    sweep.restore(threads.flatMap((i, n) => (errors[n] ? [i.key] : [])));
+    setActionError(errors.find(Boolean));
+    const cleared = threads.filter((_, n) => !errors[n]);
+    if (!cleared.length) return;
+    toast(`Cleared ${plural(cleared.length, "thread")}`, () => {
+      for (const i of cleared) void viewOf(i.host.id)?.archive(i.thread.id, false);
+    });
+  };
+  // A Project's own menu items, where its plxd allows each (0043, PLX-803).
+  const projectActions = (item: Item): FavoriteAction[] => {
+    if (item.kind !== "project") return [];
+    const { project, view } = item;
+    const open = (what: ProjectDialog) => (square: HTMLElement) =>
+      projectDialogs.current?.open(what, project, view, square);
+    const can = (capability: string) => capability in view.capabilities;
+    return [
+      ...(can("projectEdit")
+        ? [
+            { label: "Rename…", icon: <PencilLine aria-hidden />, run: open("rename") },
+            { label: "Change icon…", icon: <Palette aria-hidden />, run: open("icon") },
+          ]
+        : []),
+      ...(can("projectPermission") && project.permission !== "bypass"
+        ? [{ label: "Full access…", icon: <ShieldCheck aria-hidden />, run: open("access") }]
+        : []),
+      ...(can("projectAutonomy")
+        ? [{ label: "Autonomy…", icon: <Bot aria-hidden />, run: open("autonomy") }]
+        : []),
+      ...(can("projectDelete")
+        ? [
+            {
+              label: "Delete…",
+              icon: <Trash2 aria-hidden />,
+              danger: true,
+              run: () => askDelete(item),
+            },
+          ]
+        : []),
+    ];
+  };
+  // The favorites: the Projects, then the pinned threads moved up, in the order moved into.
+  const favorites = [
+    ...projects.map((p) => ({
+      key: p.key,
+      kind: "project" as const,
+      title: p.title,
+      icon: (
+        <ProjectIcon icon={p.kind === "project" ? p.project.icon : undefined} className="size-5" />
+      ),
+      attention: p.attention,
+      selected: p.key === openKey,
+      badge: modHeld && listed.indexOf(p) >= 0 && listed.indexOf(p) < 9 && (
+        <RowBadge index={listed.indexOf(p)} />
+      ),
+      actions: projectActions(p),
+    })),
+    ...favoriteThreads.map((i) => {
+      const pin = pinOf(i);
+      return {
+        key: i.key,
+        kind: "thread" as const,
+        title: i.title,
+        icon: pin.icon,
+        attention: pin.attention,
+        selected: i.key === openKey,
+        thread: pin.thread,
+        actions: pin.actions,
+        onKeys: pin.onKeys,
+      };
+    }),
+  ].sort((a, b) => favRank(a.key) - favRank(b.key) || 0);
+  // Folding needs something above to fold.
+  const folded = topCollapsed.use() && (favorites.length > 0 || pins.length > 0);
+  const list = (
+    <>
+      <Favorites
+        folded={folded}
+        items={favorites}
+        onReorder={
+          words.length
+            ? undefined
+            : (keys) =>
+                favoriteOrder.set([
+                  ...keys,
+                  ...favoriteOrder.get().filter((k) => !keys.includes(k)),
+                ])
+        }
+        onRest={(key, el) => {
+          const item = byKey.get(key);
+          if (item) restCard(item)(el);
+        }}
+        onLeave={hideCard}
+        onOpen={(key) => {
+          const item = byKey.get(key);
+          if (item) openItem(item);
+        }}
+        onAdd={(key) => {
+          forgetPin(key);
+          pinFavorites.set([...pinFavorites.get().filter((k) => k !== key), key]);
+        }}
+        onPinRow={(hostId, threadId) => {
+          const item = byKey.get(`${hostId}/${threadId}`);
+          if (item?.kind !== "thread" || item.thread.parent) return;
+          if (!item.thread.pinned) void pin(item);
+          pinFavorites.set([...pinFavorites.get().filter((k) => k !== item.key), item.key]);
+        }}
+        onRemove={unfavorite}
+      />
+      <Fold open={!folded || words.length > 0}>{pinList}</Fold>
+      <Fold open={folded && !words.length && pins.length > 0}>
+        <PinSummary
+          attention={pins.map((p) => p.attention)}
+          onUnfold={() => topCollapsed.set(false)}
+        />
+      </Fold>
+      <TodayDivider
+        folded={folded}
+        onFold={
+          favorites.length > 0 || pins.length > 0 ? (next) => topCollapsed.set(next) : undefined
+        }
+        clearable={clearable.length}
+        onClear={() => void clearToday()}
+        autoHours={autoHours}
+        onAutoHours={(hours) => autoClear.set(hours)}
+        compact={compact}
+        onCompact={(on) => compactRows.set(on)}
+        group={groupBy}
+        onGroup={(next) => todayGroup.set(next)}
+      />
+      <NewThreadRow onClick={onNewThread} selected={selection.kind === "new" && !selection.draft} />
+      {threadList(topThreads, "All caught up.")}
+    </>
+  );
 
   const errors = [...new Set([actionError, ...hosts.map((h) => h.view.error)].filter(Boolean))];
   const nothingShown =
@@ -1510,11 +1709,6 @@ export function ThreadList({
     !snoozedItems.length &&
     !archived.length &&
     !draftRows.length;
-  // An area with nothing in it that's still around asks for some.
-  const emptyArea =
-    scopeArea &&
-    !folders.length &&
-    !items.some((i) => inScope(i, scope) && !isArchived(i) && !doomed.has(i.key));
 
   return (
     <>
@@ -1537,7 +1731,7 @@ export function ThreadList({
                 else e.currentTarget.blur();
               } else if (e.key === "Enter" || e.key === "ArrowDown") {
                 // Into the list: Enter opens the first row, Down focuses it.
-                const first = document.querySelector<HTMLElement>("#sidebar [data-row]");
+                const first = shownRows()[0];
                 if (!first) return;
                 e.preventDefault();
                 if (e.key === "Enter") first.click();
@@ -1549,22 +1743,16 @@ export function ThreadList({
         </label>
         <ScopeMenu
           hosts={hosts}
-          areas={listedAreas}
           scope={scope}
           current={scopeLabel}
           onScope={(next) => setScope(next)}
           many={many}
           needs={needsIn}
           outside={outside}
-          newAreaHost={newAreaHost}
-          onEditArea={({ host: h, area }) => setEditor({ hostId: h.id, area })}
-          onNewArea={(hostId, name) => setEditor({ hostId, initial: { name } })}
         />
+        {/* New thread is the first row of Today. */}
         <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
           <FolderPlus />
-        </IconButton>
-        <IconButton label="New thread" command="newThread" onClick={onNewThread}>
-          <SquarePen />
         </IconButton>
       </div>
       <div
@@ -1587,7 +1775,7 @@ export function ThreadList({
             onClose={onClosePane}
           />
         )}
-        {words.length > 0 && nothingShown && !folders.length && !searching ? (
+        {words.length > 0 && nothingShown && !searching ? (
           <EmptyCard title={`No matches${scopeLabel ? ` in ${scopeLabel.name}` : ""}`}>
             Nothing matches “{query.trim()}”.
             {scope !== "all" && (
@@ -1596,120 +1784,14 @@ export function ThreadList({
               </button>
             )}
           </EmptyCard>
-        ) : emptyArea ? (
-          <EmptyCard
-            title={`Nothing in ${scopeArea.area.name} yet`}
-            mark={<AreaSwatch color={scopeArea.area.color} className="size-3 rounded-[4px]" />}
-          >
-            Add a thread from its ⋯ menu, or pick
-            {"areaRepos" in scopeArea.view.capabilities
-              ? " threads, Spaces, and repos"
-              : " a few"}{" "}
-            now.
-            <button
-              type="button"
-              onClick={() => setEditor({ hostId: scopeArea.host.id, area: scopeArea.area })}
-              className={cardButton}
-            >
-              Pick threads
-            </button>
-          </EmptyCard>
         ) : (
-          <>
-            {pinned.length > 0 && (
-              <>
-                <div className={sectionHeading}>
-                  <SectionToggle
-                    label="Pinned"
-                    collapsed={!sections.pinned}
-                    controls={pinnedId}
-                    onToggle={() => toggleSection("pinned")}
-                  />
-                </div>
-                <div id={pinnedId} hidden={!sections.pinned} className="mb-2">
-                  <ul aria-label="Pinned" className="flex flex-col gap-px">
-                    {pinned.map((i) => tree(i, false))}
-                  </ul>
-                </div>
-              </>
-            )}
-            {hasProjects && (
-              <>
-                {/* The heading holds only its toggle, so its name is just "Projects". */}
-                <div className={sectionHeading}>
-                  <SectionToggle
-                    label="Projects"
-                    collapsed={!sections.projects}
-                    controls={projectsId}
-                    onToggle={() => toggleSection("projects")}
-                  />
-                </div>
-                <div id={projectsId} hidden={!sections.projects} className="mb-2">
-                  <ul aria-label="Projects" className="flex flex-col gap-px">
-                    {projects.map((i) => row(i))}
-                  </ul>
-                  {projects.length === 0 && <p className={emptyNote}>Nothing matches</p>}
-                </div>
-              </>
-            )}
-            {folders.length > 0 && (
-              <ul aria-label="Spaces and repos" className="mb-2 flex flex-col gap-px">
-                {folders.map(folder)}
-              </ul>
-            )}
-            {/* Beside folders, the Threads section shows only with threads outside them. */}
-            {(!folders.length || topThreads.length > 0) && (
-              <>
-                <div className={sectionHeading}>
-                  <SectionToggle
-                    label="Threads"
-                    collapsed={!sections.threads}
-                    controls={threadsId}
-                    onToggle={() => toggleSection("threads")}
-                  />
-                </div>
-                <div id={threadsId} hidden={!sections.threads}>
-                  <ul aria-label="Threads" className="flex flex-col gap-px">
-                    {draftRows.map(({ draft, repo }) => (
-                      <DraftRow
-                        key={draft.id}
-                        draft={draft}
-                        repo={repo}
-                        onOpen={() =>
-                          onSelect(draft.hostId, {
-                            kind: "new",
-                            groupId: draft.groupId,
-                            draft: draft.id,
-                          })
-                        }
-                      />
-                    ))}
-                    {topThreads.map((i) => tree(i, false))}
-                  </ul>
-                  {draftRows.length === 0 && topThreads.length === 0 && (
-                    <p className={emptyNote}>
-                      <span className="relative">
-                        {workingTops.length
-                          ? "Everything else here is working."
-                          : pinned.length
-                            ? "Nothing else here."
-                            : words.length || scope !== "all"
-                              ? "Nothing matches"
-                              : "No threads yet"}
-                        {confetti > 0 && <Confetti key={confetti} />}
-                      </span>
-                    </p>
-                  )}
-                </div>
-              </>
-            )}
-          </>
+          list
         )}
       </div>
       <Drawer
         label="Working"
         items={workingTops}
-        row={(item) => tree(item, false)}
+        row={(item) => row(item)}
         open={sections.working}
         onOpenChange={(o) => toggleSection("working", o)}
       />
@@ -1731,12 +1813,6 @@ export function ThreadList({
       {pickedItems.length > 0 && (
         <BulkBar
           count={pickedItems.length}
-          areas={bulkAreas.map((b) => ({
-            key: `${b.listed.host.id}/${b.listed.area.id}`,
-            area: b.listed.area,
-            state: b.state,
-            onToggle: () => void bulkArea(b),
-          }))}
           can={{
             snooze: pickedItems.some((i) => "threadAttention" in i.view.capabilities),
             pin: pickedItems.some(
@@ -1751,38 +1827,19 @@ export function ThreadList({
       <Toasts />
       <AddDialog
         ref={addDialog}
+        onNewFolder={() => {
+          // Named in place, so the top unfolds to show it.
+          topCollapsed.set(false);
+          pinNaming.set(createFolder());
+        }}
         hosts={hosts.map((h) => h.host)}
         unbrowsable={unbrowsable(hosts)}
         hostId={host.id}
         repos={open?.state.repos ?? []}
         create={open?.createProject ?? (async () => "Not connected")}
-        createSpace={open && "spaces" in open.capabilities ? open.createSpace : undefined}
-        iconImageBytes={open?.iconImageBytes}
         onCreated={(hostId, project) => onOpenProject(hostId, project.id)}
       />
-      {editor && editorView && (
-        <AreaEditor
-          area={editor.area}
-          areas={editorView.state.areas}
-          candidates={candidates}
-          folders={
-            "areaRepos" in editorView.capabilities
-              ? editorView.state.repos
-                  .filter((r) => !r.scratch)
-                  .map((r) => ({
-                    id: r.id,
-                    name: r.name,
-                    icon: <RepoIcon repo={r} />,
-                    space: !!r.space,
-                  }))
-              : undefined
-          }
-          initial={editor.initial}
-          onSave={(fields) => saveArea(editor.hostId, fields, editor.area)}
-          onDelete={editor.area ? () => void deleteArea(editor.hostId, editor.area!) : undefined}
-          onClose={() => setEditor(undefined)}
-        />
-      )}
+      <ProjectDialogs ref={projectDialogs} onError={setActionError} />
       <ConfirmDialog
         ref={deleteDialog}
         title={toDelete?.kind === "project" ? "Delete this Project?" : "Delete this thread?"}
@@ -1802,8 +1859,6 @@ export function ThreadList({
           listed={hosts}
           onOpenSettings={onOpenSettings}
           onOpenPullRequests={onOpenPullRequests}
-          needs={jumpList.length}
-          onJump={() => jump(1)}
         />
       </div>
     </>
@@ -1813,20 +1868,11 @@ export function ThreadList({
 const cardButton =
   "mx-auto mt-3 flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1 text-[12.5px] font-medium text-foreground hover:bg-hover";
 
-/** A dashed card in place of the list, for an empty area or a search with no matches. */
-function EmptyCard({
-  title,
-  mark,
-  children,
-}: {
-  title: string;
-  mark?: ReactNode;
-  children: ReactNode;
-}) {
+/** A dashed card in place of the list, for a search with no matches. */
+function EmptyCard({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="mx-1 my-3.5 flex flex-col items-center rounded-xl border border-dashed border-border px-4 py-5 text-center text-[12.5px] leading-normal text-faint-foreground">
-      {mark}
-      <p className={`text-[13px] font-semibold text-foreground ${mark ? "mt-2" : ""}`}>{title}</p>
+      <p className="text-[13px] font-semibold text-foreground">{title}</p>
       <div className="mt-0.75">{children}</div>
     </div>
   );
@@ -1834,12 +1880,10 @@ function EmptyCard({
 
 /**
  * The bar over the footer while threads are picked (PLX-789): how many, then Archive, Snooze for
- * an hour, Pin, Area, whose menu adds them to or takes them out of each area (mixed while only
- * some are in it), and Clear, as Escape does.
+ * an hour, Pin, and Clear, as Escape does.
  */
 function BulkBar({
   count,
-  areas,
   can,
   onAction,
   onClear,
@@ -1847,11 +1891,9 @@ function BulkBar({
   count: number;
   /** Whether any picked thread's host keeps snoozes, and pins. */
   can: { snooze: boolean; pin: boolean };
-  areas: { key: string; area: Area; state: boolean | "mixed"; onToggle: () => void }[];
   onAction: (action: "archive" | "snooze" | "pin") => void;
   onClear: () => void;
 }) {
-  const menuId = useId();
   const button =
     "grid h-6 min-w-6 place-items-center rounded-md px-1 text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5";
   return (
@@ -1892,38 +1934,6 @@ function BulkBar({
       </button>
       <button
         type="button"
-        popoverTarget={menuId}
-        aria-haspopup="menu"
-        disabled={areas.length === 0}
-        className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[11.5px] text-muted-foreground hover:bg-hover hover:text-foreground disabled:opacity-40 [&_svg]:size-3.5"
-      >
-        <Layers aria-hidden />
-        Area
-      </button>
-      <Menu
-        id={menuId}
-        label="Add selected to an area"
-        align="end"
-        focus='[role="menuitemcheckbox"]'
-        className="min-w-48 p-1"
-      >
-        {areas.map((a) => (
-          <button
-            key={a.key}
-            type="button"
-            role="menuitemcheckbox"
-            aria-checked={a.state}
-            onClick={a.onToggle}
-            className={menuItem}
-          >
-            <CheckBox state={a.state} />
-            <AreaSwatch color={a.area.color} />
-            <span className="min-w-0 truncate">{a.area.name}</span>
-          </button>
-        ))}
-      </Menu>
-      <button
-        type="button"
         aria-label="Clear selection"
         title="Clear selection (Esc)"
         onClick={onClear}
@@ -1932,18 +1942,6 @@ function BulkBar({
         <X />
       </button>
     </div>
-  );
-}
-
-/** A menu checkbox's box: checked, mixed, or empty. */
-function CheckBox({ state }: { state: boolean | "mixed" }) {
-  return (
-    <span
-      aria-hidden
-      className={`grid size-3.75 shrink-0 place-items-center rounded-[4.5px] border-[1.5px] text-accent-foreground [&_svg]:size-2.5! ${state ? "border-accent bg-accent" : "border-border"}`}
-    >
-      {state === "mixed" ? <Minus strokeWidth={3.5} /> : state ? <Check strokeWidth={3.5} /> : null}
-    </span>
   );
 }
 
@@ -2015,37 +2013,6 @@ function useMinute() {
   return now;
 }
 
-/** A section's heading: its name and a chevron, which collapse the section `controls` names. */
-function SectionToggle({
-  label,
-  collapsed,
-  controls,
-  onToggle,
-}: {
-  label: string;
-  collapsed: boolean;
-  controls: string;
-  onToggle: () => void;
-}) {
-  return (
-    <h2 className="flex flex-1 self-stretch">
-      <button
-        type="button"
-        aria-expanded={!collapsed}
-        aria-controls={controls}
-        onClick={onToggle}
-        className="flex flex-1 items-center gap-1 text-left hover:text-foreground"
-      >
-        {label}
-        <ChevronRight
-          aria-hidden
-          className={`size-3.5 transition-transform ${collapsed ? "" : "rotate-90"}`}
-        />
-      </button>
-    </h2>
-  );
-}
-
 /**
  * A drawer pinned under the list, such as Working, Snoozed, or Archived, shown while it holds any
  * rows, which render only while it's open. It scrolls under a cap, and its summary sticks to the
@@ -2068,6 +2035,8 @@ function Drawer<T>({
   onOpenChange: (open: boolean) => void;
 }) {
   const [pages, setPages] = useState(1);
+  // Its rows rise in as the user opens it, but not when it mounts open.
+  const [opened, setOpened] = useState(false);
   if (items.length === 0) return null;
   const visible = pageSize ? items.slice(0, pageSize * pages) : items;
   const remaining = items.length - visible.length;
@@ -2082,12 +2051,16 @@ function Drawer<T>({
       <summary
         onClick={(e) => {
           e.preventDefault();
+          setOpened(!open);
           onOpenChange(!open);
         }}
         className="sticky top-0 z-10 flex cursor-default list-none items-center gap-3 rounded-md bg-sidebar px-2 py-1.5 text-[12.5px] text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
       >
         <span>
-          {label} <span className="text-faint-foreground tabular-nums">({items.length})</span>
+          {label}{" "}
+          <span className="text-faint-foreground">
+            (<Tick value={items.length} />)
+          </span>
         </span>
         <span aria-hidden className="h-px flex-1 bg-border" />
         <ChevronDown
@@ -2095,7 +2068,9 @@ function Drawer<T>({
           className="size-4 shrink-0 transition-transform group-open/drawer:rotate-180"
         />
       </summary>
-      {open && <ul className="flex flex-col gap-px">{visible.map(row)}</ul>}
+      {open && (
+        <ul className={`flex flex-col gap-px ${opened ? "rise-in" : ""}`}>{visible.map(row)}</ul>
+      )}
       {open && more > 0 && (
         <button
           type="button"
@@ -2110,42 +2085,22 @@ function Drawer<T>({
   );
 }
 
-/** One area as the scope menu lists it, with its host and its ⌥ number. */
-export interface ListedArea {
-  host: Host;
-  view: ThreadsView;
-  area: Area;
-  /** Its place among every host's areas, for ⌥1 to ⌥9. */
-  index: number;
-}
-
-/** ⌥ (Alt) and a digit, which opens an area, as this OS writes it. */
-export const areaKey = (digit: number | string) =>
-  window.parallax.platform === "darwin" ? `⌥${digit}` : `Alt+${digit}`;
-
 /**
- * The scope menu (PLX-789, 0033): a searchable menu of All threads, then Areas, Spaces, and
- * Repos, each row with how many of its threads need the user. Typing filters it, and with no
- * match it offers New area "<text>". An area's pencil, or → on its row, opens its editor. Where
- * the repo's plxd keeps icons, its gear opens the icon picker, and a Space's row renames or deletes
- * it. Spaces are made only from the add palette (AddDialog.tsx). Its button stays pressed while
- * an area or repo is chosen, with a dot in its color, and counts what needs the user elsewhere.
+ * The repo filter (PLX-789, 0033): a searchable menu of All threads, every repo, and No repo, each
+ * row with how many of its threads need the user. Where the repo's plxd keeps icons, its gear opens
+ * the icon picker. Its button stays pressed while a repo is chosen, with a dot in its color, and
+ * counts what needs the user elsewhere.
  */
 function ScopeMenu({
   hosts,
-  areas,
   scope,
   current,
   onScope,
   many,
   needs,
   outside,
-  newAreaHost,
-  onEditArea,
-  onNewArea,
 }: {
   hosts: HostThreads[];
-  areas: ListedArea[];
   scope: Scope;
   /** What's chosen, unless every thread is. */
   current?: { name: string; color: string };
@@ -2155,10 +2110,6 @@ function ScopeMenu({
   needs: (scope: Scope) => number;
   /** How many threads outside the chosen scope need the user. */
   outside: number;
-  /** The host a new area goes on, where its plxd keeps areas. */
-  newAreaHost?: string;
-  onEditArea: (listed: ListedArea) => void;
-  onNewArea: (hostId: string, name?: string) => void;
 }) {
   const menuId = useId();
   const pickerId = useId();
@@ -2166,44 +2117,17 @@ function ScopeMenu({
   const picker = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<{ view: ThreadsView; repo: Repo }>();
-  // The Space dialog's subject: a Space to rename or delete (0069).
-  const [spaceDialog, setSpaceDialog] = useState<
-    { kind: "rename" | "delete"; view: ThreadsView; repo: Repo } | undefined
-  >();
-  const [spaceName, setSpaceName] = useState("");
-  const [spaceError, setSpaceError] = useState<string>();
-  const spaceRef = useRef<HTMLDialogElement>(null);
-  const openSpaceDialog = (next: NonNullable<typeof spaceDialog>) => {
-    setSpaceName(next.repo.name);
-    setSpaceError(undefined);
-    setSpaceDialog(next);
-    menu.current?.hidePopover();
-    // After this render, which mounts the dialog.
-    queueMicrotask(() => spaceRef.current?.showModal());
-  };
-  const saveSpace = async () => {
-    if (!spaceDialog) return;
-    const { kind, view, repo } = spaceDialog;
-    const name = spaceName.trim();
-    const error =
-      kind === "rename" ? await view.renameSpace(repo.id, name) : await view.deleteSpace(repo.id);
-    setSpaceError(error);
-    if (error) spaceRef.current?.showModal();
-    else setSpaceDialog(undefined);
-  };
   const q = query.trim().toLowerCase();
-  const all = hosts.flatMap(({ host, view }) =>
-    view.state.repos.filter((r) => !r.scratch).map((repo) => ({ host, view, repo })),
-  );
-  const repos = all.filter((r) => !q || r.repo.name.toLowerCase().includes(q));
-  const spaces = repos.filter((r) => r.repo.space);
-  const plain = repos.filter((r) => !r.repo.space);
-  const shownAreas = areas.filter((a) => !q || a.area.name.toLowerCase().includes(q));
+  // Spaces (0069) don't list: pinned folders keep chats instead (0075).
+  const repos = hosts
+    .flatMap(({ host, view }) =>
+      view.state.repos.filter((r) => !r.scratch && !r.space).map((repo) => ({ host, view, repo })),
+    )
+    .filter((r) => !q || r.repo.name.toLowerCase().includes(q));
   const choose = (next: Scope) => {
     onScope(next);
     menu.current?.hidePopover();
   };
-  const hide = () => menu.current?.hidePopover();
   const check = (on: boolean) => (
     <Check aria-hidden className={`text-accent ${on ? "" : "hidden"}`} />
   );
@@ -2230,78 +2154,22 @@ function ScopeMenu({
   const actionButton =
     "grid size-6 place-items-center rounded-md text-faint-foreground hover:bg-background hover:text-foreground [&_svg]:size-3.5";
 
-  const areaRow = (listed: ListedArea) => {
-    const { host, area, index } = listed;
-    const key = `area:${host.id}/${area.id}` as const;
-    return (
-      <div key={key} className="group/area relative">
-        <button
-          type="button"
-          role="menuitemradio"
-          aria-checked={scope === key}
-          data-area={area.id}
-          onClick={() => choose(key)}
-          onKeyDown={(e) => {
-            if (e.key !== "ArrowRight") return;
-            e.preventDefault();
-            hide();
-            onEditArea(listed);
-          }}
-          className={`${menuItem} group-focus-within/area:pr-9 group-hover/area:pr-9`}
-        >
-          <AreaSwatch color={area.color} />
-          <span className="min-w-0 truncate">{area.name}</span>
-          <span className={trailing}>
-            {many && <span className="truncate">{host.name}</span>}
-            {count(needs(key))}
-            {check(scope === key)}
-            {index < 9 && (
-              <kbd className="font-sans group-focus-within/area:invisible group-hover/area:invisible">
-                {areaKey(index + 1)}
-              </kbd>
-            )}
-          </span>
-        </button>
-        <button
-          type="button"
-          aria-label={`Edit ${area.name}`}
-          title={`Edit ${area.name} (→)`}
-          tabIndex={-1}
-          onClick={() => {
-            hide();
-            onEditArea(listed);
-          }}
-          className={`${actionButton} absolute top-1/2 right-1 -translate-y-1/2 opacity-0 group-focus-within/area:opacity-100 group-hover/area:opacity-100`}
-        >
-          <Pencil />
-        </button>
-      </div>
-    );
-  };
-
   const row = ({ host, view, repo }: (typeof repos)[number]) => {
     const key = `repo:${host.id}/${repo.id}` as const;
-    const canEdit = repo.space && "spaces" in view.capabilities;
     const canIcon = "threadAttention" in view.capabilities;
-    // Room for the hover actions, which the row makes by pushing its content left.
-    const actions = (canEdit ? 2 : 0) + (canIcon ? 1 : 0);
     return (
-      <div
-        key={key}
-        style={{ "--actions": `${actions * 1.5 + 0.5}rem` } as CSSProperties}
-        className="group/repo relative"
-      >
+      <div key={key} className="group/repo relative">
         <button
           type="button"
           role="menuitemradio"
           aria-checked={scope === key}
-          className={`${menuItem} group-focus-within/repo:pr-(--actions) group-hover/repo:pr-(--actions)`}
+          className={`${menuItem} ${canIcon ? "group-focus-within/repo:pr-8 group-hover/repo:pr-8" : ""}`}
           onClick={() => choose(key)}
         >
           <RepoIcon repo={repo} />
           <span className="min-w-0 truncate">{repo.name}</span>
           <span
-            className={`${trailing} ${actions ? "group-focus-within/repo:hidden group-hover/repo:hidden" : ""}`}
+            className={`${trailing} ${canIcon ? "group-focus-within/repo:hidden group-hover/repo:hidden" : ""}`}
           >
             {many && <span className="truncate">{host.name}</span>}
             {count(needs(key))}
@@ -2309,28 +2177,6 @@ function ScopeMenu({
           </span>
         </button>
         <div className="absolute top-1/2 right-1 flex -translate-y-1/2 gap-0.5 opacity-0 group-hover/repo:opacity-100 focus-within:opacity-100">
-          {canEdit && (
-            <>
-              <button
-                type="button"
-                aria-label={`Rename ${repo.name}`}
-                title="Rename"
-                onClick={() => openSpaceDialog({ kind: "rename", view, repo })}
-                className={actionButton}
-              >
-                <Pencil />
-              </button>
-              <button
-                type="button"
-                aria-label={`Delete ${repo.name}`}
-                title="Delete"
-                onClick={() => openSpaceDialog({ kind: "delete", view, repo })}
-                className={actionButton}
-              >
-                <Trash2 />
-              </button>
-            </>
-          )}
           {canIcon && (
             <button
               type="button"
@@ -2350,13 +2196,10 @@ function ScopeMenu({
     );
   };
 
-  const offerAreas = newAreaHost !== undefined;
   const label = current?.name ?? "All threads";
   const title = current
-    ? `Showing ${current.name}${outside ? `. ${outside} waiting elsewhere` : ""} (${areaKey(0)} shows all)`
-    : offerAreas
-      ? "Areas, Spaces, and repos"
-      : "Filter by repo";
+    ? `Showing ${current.name}${outside ? `. ${outside} waiting elsewhere` : ""}`
+    : "Filter by repo";
   return (
     <>
       <button
@@ -2390,7 +2233,7 @@ function ScopeMenu({
         id={menuId}
         popover="auto"
         role="menu"
-        aria-label={offerAreas ? "Areas, Spaces, and repos" : "Repos"}
+        aria-label="Repos"
         onToggle={(e: ToggleEvent<HTMLDivElement>) => {
           if (e.newState === "open") e.currentTarget.querySelector("input")?.focus();
           else setQuery("");
@@ -2401,8 +2244,8 @@ function ScopeMenu({
         <label className="flex shrink-0 items-center gap-2 border-b border-border px-3.5 py-2.5">
           <Search aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
           <input
-            aria-label={offerAreas ? "Find an area, Space, or repo" : "Search repos"}
-            placeholder={offerAreas ? "Find an area, Space, or repo" : "Search repos…"}
+            aria-label="Search repos"
+            placeholder="Search repos…"
             value={query}
             autoComplete="off"
             onChange={(e) => setQuery(e.target.value)}
@@ -2431,52 +2274,11 @@ function ScopeMenu({
               <span className={trailing}>
                 {count(needs("all"))}
                 {check(scope === "all")}
-                {offerAreas && <kbd className="font-sans">{areaKey(0)}</kbd>}
               </span>
             </button>
           )}
-          {offerAreas && (!q || shownAreas.length > 0) && (
-            <>
-              {heading(
-                "Areas",
-                <button
-                  type="button"
-                  aria-label="New area"
-                  title="New area"
-                  tabIndex={-1}
-                  onClick={() => {
-                    hide();
-                    onNewArea(newAreaHost);
-                  }}
-                  className={`${actionButton} -my-1 ml-auto size-5`}
-                >
-                  <Plus />
-                </button>,
-              )}
-              {areas.length === 0 && (
-                <div className="px-2 pt-0.5 pb-2 text-[12px] leading-normal text-faint-foreground">
-                  Group threads from any repo, Project, or Space, then switch between them here.
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      hide();
-                      onNewArea(newAreaHost);
-                    }}
-                    className="mt-2 flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-[12px] font-medium text-foreground hover:bg-hover [&_svg]:size-3.5"
-                  >
-                    <Plus aria-hidden />
-                    New area
-                  </button>
-                </div>
-              )}
-              {shownAreas.map(areaRow)}
-            </>
-          )}
-          {spaces.length > 0 && heading("Spaces")}
-          {spaces.map(row)}
-          {(plain.length > 0 || !q) && heading("Repos")}
-          {plain.map(row)}
+          {(repos.length > 0 || !q) && heading("Repos")}
+          {repos.map(row)}
           {!q && (
             <button
               type="button"
@@ -2493,55 +2295,15 @@ function ScopeMenu({
               </span>
             </button>
           )}
-          {q && offerAreas && shownAreas.length === 0 && (
-            <button
-              type="button"
-              role="menuitem"
-              className={menuItem}
-              onClick={() => {
-                hide();
-                onNewArea(newAreaHost, query.trim());
-              }}
-            >
-              <Plus aria-hidden />
-              <span className="min-w-0 truncate">New area “{query.trim()}”</span>
-            </button>
-          )}
-          {q && !offerAreas && repos.length === 0 && (
+          {q && repos.length === 0 && (
             <p className="px-2 py-1.5 text-[12.5px] text-faint-foreground">No repos match</p>
           )}
         </div>
         <div className="flex shrink-0 gap-3 border-t border-border px-3.5 py-1.5 text-[11px] text-faint-foreground">
           <span>↑↓ move</span>
           <span>↵ open</span>
-          {areas.length > 0 && <span>→ edit area</span>}
         </div>
       </div>
-      {spaceDialog && (
-        <SettingDialog
-          ref={spaceRef}
-          label={`${spaceDialog.kind === "rename" ? "Rename" : "Delete"} ${spaceDialog.repo.name}`}
-          action={spaceDialog.kind === "rename" ? "Rename" : "Delete"}
-          onSave={() => void saveSpace()}
-        >
-          {spaceDialog.kind === "delete" ? (
-            <p className="text-[13px] text-muted-foreground">
-              Delete {spaceDialog.repo.name} and every chat in it? This can't be undone.
-            </p>
-          ) : (
-            <label className="block text-[13px]">
-              Name
-              <input
-                autoFocus
-                value={spaceName}
-                onChange={(e) => setSpaceName(e.target.value)}
-                className="mt-1 w-full rounded-md border border-border bg-transparent px-2 py-1.5 focus-visible:outline-none"
-              />
-            </label>
-          )}
-          {spaceError && <p className="mt-2 text-[12.5px] text-danger">{spaceError}</p>}
-        </SettingDialog>
-      )}
       {/* Each pick saves at once; the picker stays open for the next. */}
       <IconPicker
         ref={picker}
@@ -2556,19 +2318,14 @@ function ScopeMenu({
 
 /**
  * The footer's buttons: Profile, which shows the account's picture or initials and opens its menu
- * (ProfileMenu.tsx), Settings, Pull requests, and Usage, then how many threads need the user, which
- * goes to the next (⌥↓), and Update when `updatable` (Update.tsx).
+ * (ProfileMenu.tsx), Settings, Pull requests, and Usage, then Update when `updatable` (Update.tsx).
  */
 function Footer({
   listed,
   onOpenSettings,
   onOpenPullRequests,
-  needs,
-  onJump,
 }: Pick<ThreadListProps, "onOpenSettings" | "onOpenPullRequests"> & {
   listed: HostThreads[];
-  needs: number;
-  onJump: () => void;
 }) {
   return (
     <div className="flex items-center gap-1">
@@ -2583,95 +2340,8 @@ function Footer({
         <ChartNoAxesColumn />
       </IconButton>
       <span className="flex-1" />
-      {needs > 0 && (
-        <button
-          type="button"
-          onClick={onJump}
-          aria-label={`${needs} ${needs === 1 ? "needs" : "need"} you. Go to the next`}
-          title={`Go to the next thread that needs you (${altArrow("↓")})`}
-          className="flex h-6 items-center gap-1.25 rounded-md bg-warning/13 px-1.75 text-[11.5px] font-semibold text-warning tabular-nums hover:bg-warning/20 [&_svg]:size-3.5"
-        >
-          <MessageCircleQuestion aria-hidden />
-          {needs}
-          <kbd className="font-sans font-semibold opacity-75">{altArrow("↓")}</kbd>
-        </button>
-      )}
       {window.parallax.updatable && <UpdateButton />}
     </div>
-  );
-}
-
-/** ⌥ and an arrow, as this OS writes it. */
-const altArrow = (arrow: string) => (mac() ? `⌥${arrow}` : `Alt+${arrow}`);
-
-/** A row's Areas menu section (PLX-789). */
-interface AreaMenu {
-  /** For a child thread: its root's title, which it follows into areas. */
-  parent?: string;
-  areas: { area: Area; on: boolean }[];
-  onToggle: (area: Area, on: boolean) => void;
-  /** Opens New area with the row picked. */
-  onNew: () => void;
-}
-
-/**
- * A row menu's Areas: each of its host's areas as a checkbox, which leaves the menu open, then New
- * area…, or for a child thread, a note that it follows its parent instead.
- */
-function AreaMenuItems({ menu, onClose }: { menu: AreaMenu; onClose: () => void }) {
-  return (
-    <>
-      <p role="presentation" className={menuHeading}>
-        Areas
-      </p>
-      {menu.parent !== undefined ? (
-        <p className="px-2 pb-1.5 text-[12px] leading-normal text-faint-foreground">
-          Follows <b className="font-medium text-muted-foreground">{menu.parent}</b> into its areas.
-        </p>
-      ) : (
-        <>
-          {menu.areas.map(({ area, on }) => (
-            <button
-              key={area.id}
-              type="button"
-              role="menuitemcheckbox"
-              aria-checked={on}
-              onClick={() => menu.onToggle(area, !on)}
-              className={menuItem}
-            >
-              <CheckBox state={on} />
-              <AreaSwatch color={area.color} />
-              <span className="min-w-0 truncate">{area.name}</span>
-            </button>
-          ))}
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              onClose();
-              menu.onNew();
-            }}
-            className={menuItem}
-          >
-            <Plus aria-hidden />
-            New area…
-          </button>
-        </>
-      )}
-    </>
-  );
-}
-
-/** Dots in the colors of the areas a row is in. */
-function AreaDots({ areas }: { areas: Area[] }) {
-  return (
-    <span className="flex shrink-0 items-center gap-0.75">
-      {areas.map((a) => (
-        <span key={a.id} title={`In ${a.name}`} className="flex">
-          <AreaSwatch color={a.color} className="size-1.75 rounded-[2px]" />
-        </span>
-      ))}
-    </span>
   );
 }
 
@@ -2692,280 +2362,95 @@ function Marked({ text, words }: { text: string; words: readonly string[] }) {
   );
 }
 
+/** What a Project favorite's menu opens (Favorites.tsx). */
+type ProjectDialog = "rename" | "icon" | "access" | "autonomy";
+type ProjectDialogsHandle = {
+  open: (what: ProjectDialog, project: Project, view: ThreadsView, square: HTMLElement) => void;
+};
+
 /**
- * A Project's row, one line for its whole coordinator and subagents: its icon and name, then what
- * its runs ask of the user or its age. Its tooltip counts its agents, and names its host when there
- * are several. Where its host's plxd can edit or delete Projects, hovering or focusing it swaps the
- * status for its actions, which also open by right-clicking the row: Rename, which edits the name
- * in place, Change icon, which opens the icon picker under the row's icon, Full access…, which
- * moves a Project not yet in Bypass there for good (0042), as Create Project now starts every
- * one, Autonomy…, which sets who answers its children's questions (0043), and Delete….
+ * A Project's dialogs, opened from its favorite's menu: Rename, the icon picker under its square,
+ * Full access (a one-way move to Bypass), and Autonomy (0043). Each saves through `project/update`
+ * and reports plxd's error through `onError`. Only the one open is drawn.
  */
-function ProjectRow({
-  rowKey,
-  flip,
-  project,
-  runs,
-  attention,
-  host,
-  selected,
-  badge,
-  words,
-  dots,
-  areaMenu,
-  onKeys,
-  editable,
-  moded,
-  autonomous,
-  iconImageBytes,
-  onOpen,
-  onUpdate,
-  onDelete,
+function ProjectDialogs({
+  ref,
+  onError,
 }: {
-  project: Project;
-  runs: AgentRun[];
-  attention: Attention;
-  /** Its host, named when there is more than one. */
-  host?: Host;
-  selected: boolean;
-  /** Its Mod+number badge, shown in place of its status while Mod is held. */
-  badge?: ReactNode;
-  /** Its key in the list, for keyboard moves, and whether it slides when the list moves. */
-  rowKey: string;
-  flip: boolean;
-  /** A search's words, marked in its name. */
-  words: readonly string[];
-  /** The areas it's in, besides the one shown, as dots. */
-  dots: Area[];
-  areaMenu?: AreaMenu;
-  /** Keyboard triage on the focused row (PLX-789). */
-  onKeys: (e: ReactKeyboardEvent<HTMLElement>) => void;
-  editable: boolean;
-  /** Whether its host's plxd keeps its permission mode (`projectPermission`). */
-  moded: boolean;
-  /** Whether its host's plxd keeps its autonomy (`projectAutonomy`, 0043). */
-  autonomous: boolean;
-  /** Its host's cap on an icon image, where its plxd keeps them. */
-  iconImageBytes?: number;
-  onOpen: () => void;
-  /** Sends `project/update`, and settles once plxd has answered. */
-  onUpdate: (change: ProjectChange) => Promise<void>;
-  /** Asks to delete it, where its host's plxd can (`projectDelete`). */
-  onDelete?: () => void;
+  ref: RefObject<ProjectDialogsHandle | null>;
+  onError: (error?: string) => void;
 }) {
-  const menuId = useId();
-  const pickerId = useId();
-  const menu = useRef<HTMLDivElement>(null);
-  const actions = useRef<HTMLButtonElement>(null);
-  const button = useRef<HTMLButtonElement>(null);
-  const iconSpot = useRef<HTMLSpanElement>(null);
-  const picker = useRef<HTMLDivElement>(null);
-  const autonomyDialog = useRef<HTMLDialogElement>(null);
-  const accessDialog = useRef<HTMLDialogElement>(null);
-  // A Project made before full access was the only mode, such as one on Auto, can move to it.
-  const upgradable = moded && project.permission !== "bypass";
-  // The level picked in Autonomy…, which opens on the Project's own.
+  const [opened, setOpened] = useState<{
+    what: ProjectDialog;
+    project: Project;
+    view: ThreadsView;
+    square: HTMLElement;
+  }>();
+  const [name, setName] = useState("");
   const [autonomy, setAutonomy] = useState<ProjectAutonomy>("routine");
-  // The name the field opened with, while Rename is open.
-  const [renaming, setRenaming] = useState<string>();
-  // The new name, shown until plxd answers.
-  const [saving, setSaving] = useState<string>();
-  // Set while the name box is open, so Enter and the blur that follows save once.
-  const editing = useRef(false);
-  // After Enter or Escape, the row takes focus back from the name box.
-  const refocus = useRef(false);
+  const dialog = useRef<HTMLDialogElement>(null);
+  const picker = useRef<HTMLDivElement>(null);
+  const pickerId = useId();
+  useImperativeHandle(ref, () => ({
+    open(what, project, view, square) {
+      setName(project.name);
+      setAutonomy(project.autonomy ?? "routine");
+      setOpened({ what, project, view, square });
+    },
+  }));
+  // What was just opened shows once it's drawn.
   useEffect(() => {
-    if (renaming !== undefined || !refocus.current) return;
-    refocus.current = false;
-    button.current?.focus();
-  }, [renaming]);
-
-  const choose = (action: () => void) => () => {
-    menu.current?.hidePopover();
-    action();
+    if (opened?.what === "icon") picker.current?.showPopover({ source: opened.square });
+    else if (opened) dialog.current?.showModal();
+  }, [opened]);
+  const update = async (change: ProjectChange) => {
+    if (opened) onError(await opened.view.updateProject(opened.project.id, change));
   };
-  const startRename = () => {
-    editing.current = true;
-    setRenaming(project.name);
-  };
-  // An empty name, or the one the field opened with, saves nothing, even if another client has
-  // renamed the Project since.
-  const endRename = async (name: string | undefined, focusRow: boolean) => {
-    if (!editing.current) return;
-    editing.current = false;
-    refocus.current = focusRow;
-    setRenaming(undefined);
-    const next = name?.trim();
-    if (!next || next === renaming) return;
-    setSaving(next);
-    await onUpdate({ name: next });
-    setSaving(undefined);
-  };
-
-  const icon = <ProjectIcon icon={project.icon} className="size-4" />;
-  const actionable = editable || upgradable || autonomous || !!onDelete || !!areaMenu;
-  const tooltip =
-    [runs.length > 0 && `${runs.length} ${runs.length === 1 ? "agent" : "agents"}`, host?.name]
-      .filter(Boolean)
-      .join(" · ") || undefined;
+  const project = opened?.project;
+  const close = () => setOpened(undefined);
   return (
-    <li data-kind="project" data-flip={flip ? rowKey : undefined} className="group/row relative">
-      {renaming !== undefined ? (
-        <div
-          className={`${row} ${selected ? current : ""} outline-2 -outline-offset-2 outline-ring`}
-        >
-          <span className="grid shrink-0 place-items-center">{icon}</span>
-          <input
-            aria-label="Project name"
-            defaultValue={renaming}
-            autoFocus
-            spellCheck={false}
-            autoComplete="off"
-            onFocus={(e) => e.currentTarget.select()}
-            onKeyDown={(e) => {
-              // Enter and Escape belong to an input method while it composes.
-              if (e.nativeEvent.isComposing) return;
-              if (e.key === "Enter") void endRename(e.currentTarget.value, true);
-              else if (e.key === "Escape") void endRename(undefined, true);
-            }}
-            onBlur={(e) => void endRename(e.currentTarget.value, false)}
-            className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground focus-visible:outline-none"
-          />
-        </div>
-      ) : (
-        <button
-          ref={button}
-          type="button"
-          aria-current={selected ? "page" : undefined}
-          title={tooltip}
-          data-row={rowKey}
-          data-kind="project"
-          onClick={onOpen}
-          onKeyDown={onKeys}
-          onContextMenu={actionable ? (e) => openOnContextMenu(e, actions.current) : undefined}
-          className={`${row} ${selected ? current : ""} ${actionable ? "group-has-[:focus-visible]/row:pr-8 group-hover/row:pr-8" : ""}`}
-        >
-          <span ref={iconSpot} data-project-icon className="grid shrink-0 place-items-center">
-            {icon}
-          </span>
-          <span
-            data-title
-            className={`min-w-0 flex-1 truncate ${selected ? "text-foreground" : "text-foreground/80"}`}
-          >
-            {saving ?? <Marked text={project.name} words={words} />}
-          </span>
-          {dots.length > 0 && <AreaDots areas={dots} />}
-          <span
-            data-status
-            className={`shrink-0 text-[11.5px] text-faint-foreground ${actionable ? "group-has-[:focus-visible]/row:hidden group-hover/row:hidden" : ""}`}
-          >
-            {badge ??
-              (attention === "settled" ? (
-                age(project.updatedAt)
-              ) : (
-                <AttentionBadge
-                  attention={attention}
-                  count={runs.filter((r) => isRunning(r.status)).length}
-                />
-              ))}
-          </span>
-        </button>
-      )}
-      {actionable && renaming === undefined && (
-        <>
-          <div className="absolute top-1/2 right-1 -translate-y-1/2 opacity-0 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100">
-            <button
-              ref={actions}
-              type="button"
-              aria-label="Project actions"
-              title="Project actions"
-              popoverTarget={menuId}
-              className="grid size-5.5 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
-            >
-              <Ellipsis />
-            </button>
-          </div>
-          <Menu ref={menu} id={menuId} label="Project actions" align="end" className="min-w-52 p-1">
-            {areaMenu && (
-              <AreaMenuItems menu={areaMenu} onClose={() => menu.current?.hidePopover()} />
-            )}
-            {areaMenu && (editable || upgradable || autonomous || onDelete) && (
-              <div role="separator" className="my-1 h-px bg-border" />
-            )}
-            {editable && (
-              <>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={menuItem}
-                  onClick={choose(startRename)}
-                >
-                  Rename
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={menuItem}
-                  onClick={choose(() =>
-                    picker.current?.showPopover({ source: iconSpot.current ?? undefined }),
-                  )}
-                >
-                  Change icon
-                </button>
-              </>
-            )}
-            {upgradable && (
-              <button
-                type="button"
-                role="menuitem"
-                className={menuItem}
-                onClick={choose(() => accessDialog.current?.showModal())}
-              >
-                Full access…
-              </button>
-            )}
-            {autonomous && (
-              <button
-                type="button"
-                role="menuitem"
-                className={menuItem}
-                onClick={choose(() => {
-                  setAutonomy(project.autonomy ?? "routine");
-                  autonomyDialog.current?.showModal();
-                })}
-              >
-                Autonomy…
-              </button>
-            )}
-            {onDelete && (
-              <button
-                type="button"
-                role="menuitem"
-                className={`${menuItem} text-danger`}
-                onClick={choose(onDelete)}
-              >
-                Delete…
-              </button>
-            )}
-          </Menu>
-        </>
-      )}
+    <>
       {/* Each pick saves at once; the picker stays open for the next. */}
-      {editable && (
-        <IconPicker
-          ref={picker}
-          id={pickerId}
-          value={project.icon}
-          onPick={(next) => void onUpdate({ icon: next })}
-          maxImageBytes={iconImageBytes}
-        />
-      )}
-      {upgradable && (
+      <IconPicker
+        ref={picker}
+        id={pickerId}
+        value={project?.icon}
+        onPick={(icon) => void update({ icon })}
+        maxImageBytes={opened?.view.iconImageBytes}
+      />
+      {opened?.what === "rename" && (
         <SettingDialog
-          ref={accessDialog}
-          label={`${project.name} full access`}
+          ref={dialog}
+          label="Rename Project"
+          action="Rename"
+          onClose={close}
+          onSave={() => {
+            // An empty name, or the same one, saves nothing.
+            const next = name.trim();
+            if (next && next !== opened.project.name) void update({ name: next });
+          }}
+        >
+          <label className="block text-[13px] font-medium">
+            Name
+            <input
+              aria-label="Project name"
+              autoFocus
+              value={name}
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(e) => setName(e.target.value)}
+              className="mt-1 w-full rounded-md border border-border bg-transparent px-2 py-1.5 font-normal focus-visible:outline-none"
+            />
+          </label>
+        </SettingDialog>
+      )}
+      {opened?.what === "access" && (
+        <SettingDialog
+          ref={dialog}
+          label={`${opened.project.name} full access`}
           action="Give full access"
-          onSave={() => void onUpdate({ permission: "bypass" })}
+          onClose={close}
+          onSave={() => void update({ permission: "bypass" })}
         >
           <p className="text-[13px] font-medium">Full access</p>
           <p className="mt-1 text-[12.5px] text-muted-foreground">
@@ -2976,16 +2461,17 @@ function ProjectRow({
           </p>
         </SettingDialog>
       )}
-      {autonomous && (
+      {opened?.what === "autonomy" && (
         <SettingDialog
-          ref={autonomyDialog}
-          label={`${project.name} autonomy`}
-          onSave={() => void onUpdate({ autonomy })}
+          ref={dialog}
+          label={`${opened.project.name} autonomy`}
+          onClose={close}
+          onSave={() => void update({ autonomy })}
         >
           <AutonomyChoice value={autonomy} onChange={setAutonomy} />
         </SettingDialog>
       )}
-    </li>
+    </>
   );
 }
 
@@ -2995,18 +2481,21 @@ function SettingDialog({
   label,
   action = "Save",
   onSave,
+  onClose,
   children,
 }: {
   ref: RefObject<HTMLDialogElement | null>;
   label: string;
   action?: string;
   onSave: () => void;
+  onClose?: () => void;
   children: ReactNode;
 }) {
   return (
     <dialog
       ref={ref}
       aria-label={label}
+      onClose={onClose}
       className="m-auto w-[26rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
     >
       {/* Save is the submit button, so Enter on a radio saves. */}
@@ -3053,18 +2542,25 @@ export const backendLogos: Partial<Record<string, ComponentType<SVGProps<SVGSVGE
  */
 function RowHead({
   repo,
+  folder,
   status,
   words = [],
 }: {
   repo?: Repo;
+  /** The pinned folder holding it (pins.ts), named in place of No repo. */
+  folder?: PinFolder;
   status: ReactNode;
   words?: readonly string[];
 }) {
+  const inFolder = folder && (!repo || repo.scratch);
   return (
     <span className="flex w-full items-center gap-2 text-[12px] text-faint-foreground group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34">
-      <RepoIcon repo={repo} big />
+      {inFolder ? <FolderMark folder={folder} big /> : <RepoIcon repo={repo} big />}
       <span className="min-w-0 truncate">
-        <Marked text={repo && !repo.scratch ? repo.name : "No repo"} words={words} />
+        <Marked
+          text={inFolder ? folder.name : repo && !repo.scratch ? repo.name : "No repo"}
+          words={words}
+        />
       </span>
       <span
         data-status
@@ -3125,18 +2621,18 @@ function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: 
 }
 
 /**
- * A thread's row (0033): its repo and status (what it asks of the user, or how long ago it was
- * prompted), its title, then its worktree or local checkout icon and branch, a pin, linked pull
- * requests (the number of one, or +N for more), the other areas it's in, and provider. Under a
- * search, the words found are marked, and a match only in its messages shows a line of them.
- * Resting on it shows its card; hovering or focusing it swaps the status for Snooze, Archive, and
- * more actions, which also open by right-clicking the row: native popovers, so Escape and clicking
- * away close them. A row waiting on one command shows it, with Deny and Allow, on hover or focus.
- * Double-clicking the title renames it in place.
+ * A thread's row (0033, 0075): its repo and status (what it asks of the user, or how long ago it
+ * was prompted), its title, then its worktree or local checkout icon, branch, and git status, a
+ * pin, linked pull requests (the number of one, or +N for more) and their checks, and provider.
+ * Under a search, the words found are marked, and a match only in its messages shows a line of
+ * them. Resting on it shows its card; hovering or focusing it swaps the status for Snooze,
+ * Archive, and more actions, which also open by right-clicking the row: native popovers, so
+ * Escape and clicking away close them. Double-clicking the title renames it in place.
  */
 function ThreadRow({
+  look,
+  folder,
   rowKey,
-  flip,
   thread,
   hostId,
   device,
@@ -3147,26 +2643,22 @@ function ThreadRow({
   selected,
   picked,
   flash,
-  inFamily,
   badge,
   nested,
   words,
   snippet,
-  dots,
-  ask,
   renaming,
   snoozable,
   renamable,
   autoResumable,
-  areaMenu,
   onOpen,
   onKeys,
   onArchive,
   onSnooze,
   onPin,
+  onMarkUnread,
   onRename,
   onStartRename,
-  onAnswer,
   onDelete,
   onOpenBeside,
   onFork,
@@ -3174,9 +2666,12 @@ function ThreadRow({
   onRest,
   onLeave,
 }: {
-  /** Its key in the list, for keyboard moves, and whether it slides when the list moves. */
+  /** Today's one-line look (pins.ts): where it is, its title, and its status. */
+  look?: "compact";
+  /** The pinned folder holding it (pins.ts), named where it has no repo. */
+  folder?: PinFolder;
+  /** Its key in the list, for keyboard moves and sliding when the list moves. */
   rowKey: string;
-  flip: boolean;
   thread: Thread;
   /** Its host, which a drag onto the composer names (PLX-378). */
   hostId: string;
@@ -3191,20 +2686,14 @@ function ThreadRow({
   picked: boolean;
   /** Whether it just finished, so it flashes once. */
   flash: boolean;
-  /** Atop its children's strip, whose block has the hover. */
-  inFamily: boolean;
   /** Its Mod+number badge, shown in place of its status while Mod is held. */
   badge?: ReactNode;
-  /** Under its parent's row, which names the repo: its status goes beside its title instead. */
+  /** Under its repo's heading, which names the repo: its status goes beside its title instead. */
   nested?: boolean;
   /** A search's words, marked where they're found. */
   words: readonly string[];
   /** A line of its messages where the search found what its title and branch don't have. */
   snippet?: string;
-  /** The areas it's in, besides the one shown, as dots. */
-  dots: Area[];
-  /** The one command it waits on, which the row can allow or deny. */
-  ask?: Ask;
   /** Whether its title is being edited in place. */
   renaming: boolean;
   /** Whether its plxd keeps seen and snooze state (`threadAttention`). */
@@ -3213,7 +2702,6 @@ function ThreadRow({
   renamable: boolean;
   /** Whether its plxd resumes runs after usage limits (`autoResume`, 0049). */
   autoResumable: boolean;
-  areaMenu?: AreaMenu;
   /** A click: opens it, or with Mod or Shift, picks it. */
   onOpen: (e: MouseEvent<HTMLElement>) => void;
   /** Keyboard triage on the focused row (PLX-789). */
@@ -3222,10 +2710,11 @@ function ThreadRow({
   onSnooze: (until: Date) => void;
   /** Pins or unpins it, for a top-level thread where its plxd keeps pins. */
   onPin?: () => void;
+  /** Mark as unread (pins.ts), for a finished thread already seen. */
+  onMarkUnread?: () => void;
   /** Ends a rename: saves `title`, or with undefined, keeps the old one. */
   onRename: (title: string | undefined) => void;
   onStartRename: () => void;
-  onAnswer: (approvalId: string, decision: "allow" | "deny") => Promise<void>;
   onDelete: () => void;
   /** Opens it beside the open thread (PLX-587), while another thread of its host is open. */
   onOpenBeside?: () => void;
@@ -3248,8 +2737,6 @@ function ThreadRow({
   // focus, and cleared once it has hidden, so focus goes back to its button.
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  // The request being answered from the row, until its answer is in.
-  const [answering, setAnswering] = useState<string>();
   // Set while the title box is open, so Enter and the blur that follows save once.
   const editing = useRef(false);
   if (renaming) editing.current = true;
@@ -3271,32 +2758,38 @@ function ThreadRow({
   // Read once, not polled: a row's state is as of when the sidebar loaded it.
   const prs = usePullRequests(hostId, run?.id, run?.pullRequests ?? [], false, false);
   const prLook = majorityLook(prs);
-  // A checkout thread has no branch of its own: show the one its repository has out, read again
-  // as its run's status changes. A detached HEAD, or a plxd without `git`, leaves it unnamed.
-  const [checkoutBranch, setCheckoutBranch] = useState<string | null>(null);
-  const checkoutRun = run?.checkout ? run.id : undefined;
+  // A checkout thread has no branch of its own: show the one its repository has out. Every branch's
+  // status is read, for what's unpushed and uncommitted, again as its run's status changes. A
+  // detached HEAD, or a plxd without `git`, leaves it unnamed.
+  const [git, setGit] = useState<GitStatus | null>(null);
+  const statusRun = run?.checkout || run?.branch ? run.id : undefined;
   const runStatus = run?.status;
   useEffect(() => {
-    if (!checkoutRun) return;
+    if (!statusRun) return;
     let live = true;
     void window.parallax
-      .request(hostId, "agent/gitStatus", { runId: checkoutRun })
-      .then(
-        (answer) => live && setCheckoutBranch("result" in answer ? answer.result.branch : null),
-      );
+      .request(hostId, "agent/gitStatus", { runId: statusRun })
+      .then((answer) => live && setGit("result" in answer ? answer.result : null));
     return () => {
       live = false;
     };
-  }, [hostId, checkoutRun, runStatus]);
+  }, [hostId, statusRun, runStatus]);
+  const checkoutBranch = run?.checkout ? (git?.branch ?? null) : null;
   const branch = run?.checkout ? (checkoutBranch ?? "Local checkout") : run?.branch;
-  const hasDetails = !!(
-    branch ||
-    prs.urls.length ||
-    Logo ||
-    device ||
-    thread.pinned ||
-    dots.length
-  );
+  // The open pull requests' checks, as one: failed if any failed, else running if any are, else
+  // passed once all have.
+  const checks = prs.urls.flatMap((url) => {
+    const pr = prs.get(url)?.pr;
+    return pr?.state === "open" && pr.checksState ? [pr.checksState] : [];
+  });
+  const checksState = checks.includes("failed")
+    ? "failed"
+    : checks.includes("pending")
+      ? "pending"
+      : checks.length && checks.every((c) => c === "passed")
+        ? "passed"
+        : undefined;
+  const hasDetails = !!(branch || prs.urls.length || Logo || device || thread.pinned);
   const snoozedNow = !!thread.snoozedUntil && Date.parse(thread.snoozedUntil) > Date.now();
   const mainLabel = (
     <>
@@ -3360,13 +2853,11 @@ function ThreadRow({
     ? "bg-accent/14 ring-1 ring-accent/38 ring-inset"
     : selected
       ? current
-      : inFamily
-        ? ""
-        : "group-hover/row:bg-hover";
+      : "group-hover/row:bg-hover";
   return (
     <li
       data-kind="thread"
-      data-flip={flip ? rowKey : undefined}
+      data-flip={rowKey}
       className={`group/row relative rounded-lg transition-colors duration-100 ${rowLook} ${flash ? "row-flash" : ""}`}
       onMouseEnter={(e) => onRest(e.currentTarget)}
       onMouseLeave={onLeave}
@@ -3389,9 +2880,30 @@ function ThreadRow({
           onLeave();
           dragThread(e.dataTransfer, hostId, thread.id);
         }}
-        className="flex w-full cursor-pointer flex-col gap-1 rounded-lg px-2 py-[7px] text-left -outline-offset-2"
+        className={`flex w-full cursor-pointer flex-col gap-1 rounded-lg px-2 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${look === "compact" ? "py-[5px]" : "py-[7px]"}`}
       >
-        {nested ? (
+        {look === "compact" && !nested ? (
+          // One-line rows: where it is, its title, and its status.
+          <span className="flex w-full items-center gap-2 group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34">
+            {folder && (!repo || repo.scratch) ? (
+              <FolderMark folder={folder} />
+            ) : (
+              <RepoIcon repo={repo} />
+            )}
+            <span
+              data-title
+              className={`min-w-0 flex-1 truncate text-[13px] font-[450] transition-colors ${titleColor}`}
+            >
+              {titleText}
+            </span>
+            <span
+              data-status
+              className="shrink-0 text-[11.5px] text-faint-foreground group-has-[:focus-visible]/row:hidden group-hover/row:hidden"
+            >
+              {status}
+            </span>
+          </span>
+        ) : nested ? (
           <span className="flex w-full items-center gap-2 group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34">
             <span
               data-title
@@ -3408,7 +2920,7 @@ function ThreadRow({
           </span>
         ) : (
           <>
-            <RowHead repo={repo} status={status} words={words} />
+            <RowHead repo={repo} folder={folder} status={status} words={words} />
             <span
               data-title
               className={`w-full truncate text-[13px] font-[450] transition-colors ${titleColor}`}
@@ -3417,7 +2929,8 @@ function ThreadRow({
             </span>
           </>
         )}
-        {hasDetails && (
+        {/* One-line rows keep to one line under a repo's heading too. */}
+        {hasDetails && look !== "compact" && (
           <span className="flex w-full items-center gap-2 text-[11.5px] text-faint-foreground">
             <span className="flex min-w-0 flex-1 items-center gap-1">
               {run?.checkout ? (
@@ -3441,6 +2954,7 @@ function ThreadRow({
               <span className="min-w-0 truncate">
                 {branch && <Marked text={branch} words={words} />}
               </span>
+              {git && <GitCounts git={git} />}
             </span>
             {thread.pinned && (
               <span title="Pinned" role="img" aria-label="Pinned" className="flex shrink-0">
@@ -3468,9 +2982,9 @@ function ThreadRow({
                     <Marked text={`#${numberOf(prs.urls[0]!)}`} words={words} />
                   </span>
                 )}
+                {checksState && <ChecksMark state={checksState} />}
               </span>
             )}
-            {dots.length > 0 && <AreaDots areas={dots} />}
             {device?.icon && (
               <span
                 title={device.name}
@@ -3493,31 +3007,6 @@ function ThreadRow({
           </span>
         )}
       </Main>
-      {ask && !thread.archived && (
-        <div className="-mt-1 hidden items-center gap-1.25 px-2 pb-2 group-hover/row:flex group-has-[:focus-visible]/row:flex">
-          <code
-            title={ask.command}
-            className="min-w-0 flex-1 truncate rounded-md bg-code px-1.5 py-0.75 font-mono text-[10.5px] text-foreground"
-          >
-            {ask.command}
-          </code>
-          {(["deny", "allow"] as const).map((decision) => (
-            <button
-              key={decision}
-              type="button"
-              disabled={answering === ask.approvalId}
-              onClick={async () => {
-                setAnswering(ask.approvalId);
-                await onAnswer(ask.approvalId, decision);
-                setAnswering(undefined);
-              }}
-              className={`h-5.5 shrink-0 rounded-md px-2 text-[11.5px] font-medium disabled:opacity-50 ${decision === "allow" ? "bg-primary text-primary-foreground enabled:hover:opacity-90" : "border border-border bg-background enabled:hover:bg-hover"}`}
-            >
-              {decision === "allow" ? "Allow" : "Deny"}
-            </button>
-          ))}
-        </div>
-      )}
       <div className="absolute top-1 right-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100 [&_button]:cursor-pointer">
         {snoozable && (
           <button
@@ -3647,18 +3136,24 @@ function ThreadRow({
                 Open side by side
               </button>
             )}
-            {areaMenu && (
-              <>
-                {onOpenBeside && <div role="separator" className="my-1 h-px bg-border" />}
-                <AreaMenuItems menu={areaMenu} onClose={() => menu.current?.hidePopover()} />
-              </>
-            )}
-            {(onOpenBeside || areaMenu) && <div role="separator" className="my-1 h-px bg-border" />}
+            {onOpenBeside && <div role="separator" className="my-1 h-px bg-border" />}
             {onPin && (
               <button type="button" role="menuitem" className={menuItem} onClick={choose(onPin)}>
                 <Pin aria-hidden />
                 {thread.pinned ? "Unpin" : "Pin to top"}
                 <MenuKey>P</MenuKey>
+              </button>
+            )}
+            {onMarkUnread && (
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItem}
+                onClick={choose(onMarkUnread)}
+              >
+                <CircleDot aria-hidden />
+                Mark as unread
+                <MenuKey>U</MenuKey>
               </button>
             )}
             {renamable && (
@@ -3738,8 +3233,49 @@ function ThreadRow({
   );
 }
 
+/**
+ * The git status beside a row's branch: commits not pushed, then uncommitted lines.
+ * plxd doesn't count commits behind yet.
+ */
+function GitCounts({ git }: { git: GitStatus }) {
+  return (
+    <>
+      {git.ahead > 0 && (
+        <span
+          title={`${plural(git.ahead, "commit")} not pushed`}
+          className="flex shrink-0 items-center tabular-nums"
+        >
+          <ArrowUp aria-hidden className="size-3" />
+          {git.ahead}
+        </span>
+      )}
+      {git.changes > 0 && (
+        <span
+          title={`${plural(git.changes, "file")} uncommitted`}
+          className="shrink-0 tabular-nums"
+        >
+          <span className="text-added">+{git.insertions ?? 0}</span>{" "}
+          <span className="text-danger">−{git.deletions ?? 0}</span>
+        </span>
+      )}
+    </>
+  );
+}
+
+const checksLook = {
+  passed: { Icon: CircleCheck, color: "text-added", label: "Checks passed" },
+  failed: { Icon: CircleX, color: "text-danger", label: "Checks failed" },
+  pending: { Icon: CircleDashed, color: "text-warning", label: "Checks running" },
+};
+
+/** A pull request's checks, as one mark beside its number. */
+function ChecksMark({ state }: { state: keyof typeof checksLook }) {
+  const { Icon, color, label } = checksLook[state];
+  return <Icon role="img" aria-label={label} className={`ml-0.5 size-3 ${color}`} />;
+}
+
 /** A menu item's key, at its end. */
-function MenuKey({ children }: { children: string }) {
+export function MenuKey({ children }: { children: string }) {
   // Drawn from the attribute, so the item's name stays its whole text.
   return (
     <kbd
@@ -3843,10 +3379,25 @@ type CardHandle = { show: (row: HTMLElement, content: CardContent) => void; hide
 function RowCard({ ref }: { ref: RefObject<CardHandle | null> }) {
   const [card, setCard] = useState<ComponentProps<typeof ThreadCard>>();
   const timer = useRef<number>(undefined);
+  // The row it's for. One that went away under the pointer, as a pin moved into the favorites or
+  // a row archived, sends no mouseleave, so the next move off it hides the card.
+  const shownFor = useRef<HTMLElement>(undefined);
+  useEffect(() => {
+    if (!card) return;
+    const check = () => {
+      if (shownFor.current?.matches(":hover")) return;
+      window.clearTimeout(timer.current);
+      setCard(undefined);
+    };
+    document.addEventListener("pointermove", check);
+    return () => document.removeEventListener("pointermove", check);
+  }, [!card]);
   useImperativeHandle(ref, () => ({
     show(row, content) {
       window.clearTimeout(timer.current);
+      shownFor.current = row;
       const place = () => {
+        if (!row.isConnected) return;
         const rect = row.getBoundingClientRect();
         // A little clear of the sidebar, and kept on screen: it is at most about 15rem tall.
         const edge = (row.closest("#sidebar") ?? row).getBoundingClientRect().right;
@@ -3890,7 +3441,7 @@ function ThreadCard({
     <div
       role="tooltip"
       style={{ top, left }}
-      className="pointer-events-none fixed z-50 w-64 rounded-lg border border-border bg-surface p-3 text-foreground shadow-composer"
+      className="card-in pointer-events-none fixed z-50 w-64 rounded-lg border border-border bg-surface p-3 text-foreground shadow-composer transition-[top] duration-150 ease-out motion-reduce:transition-none"
     >
       <p className="line-clamp-2 text-[13px] font-medium">{title}</p>
       <ul className="mt-2 flex flex-col gap-1.5 text-[12.5px] text-muted-foreground [&_svg]:size-3.5 [&_svg]:shrink-0 [&>li]:flex [&>li]:min-w-0 [&>li]:items-center [&>li]:gap-2">

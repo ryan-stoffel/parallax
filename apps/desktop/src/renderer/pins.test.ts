@@ -1,0 +1,92 @@
+import { beforeEach, expect, test } from "vite-plus/test";
+
+import {
+  addToFolder,
+  createFolder,
+  entriesOf,
+  fileStarted,
+  folderPath,
+  makeFolder,
+  moveOut,
+  pinLayout,
+  placeAt,
+  startIn,
+  ungroup,
+  updateFolder,
+  type PinEntry,
+} from "./pins";
+
+const rename = (id: string, name: string) => updateFolder(id, { name });
+
+/** The tree `entriesOf` shows for the pins `keys`, as nested arrays of keys and folder names. */
+const tree = (keys: string[]) => {
+  const draw = (list: PinEntry[]): unknown[] =>
+    list.map((e) => (e.kind === "pin" ? e.key : { [e.folder.name]: draw(e.children) }));
+  return draw(entriesOf(pinLayout.get(), keys));
+};
+const pins = ["a", "b", "c", "d"];
+const entries = () => entriesOf(pinLayout.get(), pins);
+const folderId = (name: string) =>
+  Object.entries(pinLayout.get().folders).find(([, f]) => f.name === name)![0];
+beforeEach(() => pinLayout.set({ order: [], folders: {} }));
+
+test("pins it doesn't place show last, in order, and a folder of two takes the target's place", () => {
+  expect(tree(pins)).toEqual(["a", "b", "c", "d"]);
+  rename(makeFolder(entries(), "b", "d"), "Work");
+  expect(tree(pins)).toEqual(["a", { Work: ["b", "d"] }, "c"]);
+  // A pin filtered out, as by a search, leaves its folder; an empty folder still shows.
+  expect(tree(["a", "c"])).toEqual(["a", "c"]);
+  rename(createFolder(), "Empty");
+  expect(tree(["a", "c"])).toEqual(["a", "c", { Empty: [] }]);
+});
+
+test("folders nest, a pin moves before or after another wherever it is, and out one level", () => {
+  rename(makeFolder(entries(), "b", "c"), "Outer");
+  rename(createFolder(folderId("Outer")), "Inner");
+  addToFolder(entries(), folderId("Inner"), "a");
+  expect(tree(pins)).toEqual([{ Outer: ["b", "c", { Inner: ["a"] }] }, "d"]);
+  expect(folderPath(pinLayout.get().folders, "a").map((f) => f.name)).toEqual(["Outer", "Inner"]);
+
+  placeAt(entries(), "d", "b", false);
+  expect(tree(pins)).toEqual([{ Outer: ["d", "b", "c", { Inner: ["a"] }] }]);
+  moveOut(entries(), "a");
+  expect(tree(pins)).toEqual([{ Outer: ["d", "b", "c", { Inner: [] }, "a"] }]);
+});
+
+test("a folder never moves into itself or a folder inside it", () => {
+  rename(makeFolder(entries(), "a", "b"), "Outer");
+  rename(createFolder(folderId("Outer")), "Inner");
+  const before = pinLayout.get();
+  addToFolder(entries(), folderId("Inner"), `folder:${folderId("Outer")}`);
+  placeAt(entries(), `folder:${folderId("Outer")}`, `folder:${folderId("Inner")}`, true);
+  expect(pinLayout.get()).toEqual(before);
+});
+
+test("ungrouping puts what was in a folder, nested folders included, in its place", () => {
+  rename(makeFolder(entries(), "b", "c"), "Outer");
+  rename(createFolder(folderId("Outer")), "Inner");
+  addToFolder(entries(), folderId("Inner"), "d");
+  ungroup(entries(), folderId("Outer"));
+  expect(tree(pins)).toEqual(["a", "b", "c", { Inner: ["d"] }]);
+  expect(Object.values(pinLayout.get().folders).map((f) => f.name)).toEqual(["Inner"]);
+});
+
+test("a folder's New thread files only the thread it starts, and none once the folder's gone", () => {
+  const id = createFolder();
+  startIn.set(id);
+  expect(fileStarted("h/new")).toBe(true);
+  expect(pinLayout.get().folders[id]!.items).toEqual(["h/new"]);
+  // Used up: the next thread started anywhere isn't filed.
+  expect(startIn.get()).toBeNull();
+  expect(fileStarted("h/next")).toBe(false);
+
+  startIn.set("deleted-folder");
+  expect(fileStarted("h/later")).toBe(false);
+  expect(startIn.get()).toBeNull();
+});
+
+test("a drop after an open folder's row goes first inside it", () => {
+  rename(makeFolder(entries(), "b", "c"), "Work");
+  addToFolder(entries(), folderId("Work"), "a", true);
+  expect(tree(pins)).toEqual([{ Work: ["a", "b", "c"] }, "d"]);
+});

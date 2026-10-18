@@ -84,6 +84,9 @@ export const ids = {
   repoScratch: uuid(3),
   projectParallax: uuid(10),
   projectDocs: uuid(11),
+  projectMobile: uuid(12),
+  projectInfra: uuid(13),
+  projectLanding: uuid(14),
   coordinator: uuid(20),
   retry: uuid(21),
   palette: uuid(22),
@@ -108,6 +111,12 @@ export const ids = {
   webhooks: uuid(83),
   cart: uuid(84),
   approvalWebhooks: uuid(85),
+  rateLimit: uuid(120),
+  homework: uuid(121),
+  pricing: uuid(122),
+  physics: uuid(123),
+  essay: uuid(124),
+  names: uuid(125),
   areaLaunch: uuid(90),
   areaAcme: uuid(91),
 } as const;
@@ -183,6 +192,24 @@ export function createFixtures(now = Date.now()): Fixtures {
       createdAt: ago(60 * 26),
       updatedAt: ago(60 * 26),
     },
+    // More Projects, for how the sidebar holds a handful.
+    ...(
+      [
+        [ids.projectMobile, "mobile-app", "smartphone", "sky"],
+        [ids.projectInfra, "infra", "server", "orange"],
+        [ids.projectLanding, "landing-page", "rocket", "pink"],
+      ] as const
+    ).map(([id, name, icon, color], n): Project => ({
+      id,
+      name,
+      icon: { name: icon, color },
+      repoPath: DOCS_PATH,
+      branch: "main",
+      permission: "auto",
+      autonomy: "ask",
+      createdAt: ago(60 * 24 * (n + 2)),
+      updatedAt: ago(60 * 24 * (n + 2)),
+    })),
   ];
 
   const runs: AgentRun[] = [];
@@ -1200,6 +1227,7 @@ export function createFixtures(now = Date.now()): Fixtures {
     .raw(ago(29), { ...setupScript, runId: docsLinks.id, status: "failed", exitCode: 1 })
     .update(ago(29), { status: "failed", error: linksError })
     .finish(ago(29), { status: "failed", failure: "setupFailed", message: linksError });
+  docsLinks.error = linksError;
 
   // ---- A client's two repositories, grouped in an area (PLX-789) ---------------------------
 
@@ -1267,6 +1295,109 @@ export function createFixtures(now = Date.now()): Fixtures {
     .update(ago(60 * 29), { status: "completed" })
     .finish(ago(60 * 29), { status: "completed" });
   threads.find((t) => t.id === ids.updater)!.pinned = true;
+  threads.find((t) => t.id === ids.cart)!.pinned = true;
+
+  // ---- A task that just finished, and chats that go on for days (sidebar pins) ---------------
+
+  /** A no-repo chat: one question and answer, prompted again later. */
+  const chat = (c: {
+    id: string;
+    title: string;
+    slug: string;
+    prompt: string;
+    reply: string;
+    started: number;
+    updated: number;
+    seen?: number;
+  }) => {
+    const run = thread({ ...c, repo: ids.repoScratch, status: "completed" });
+    log(run)
+      .out(
+        ago(c.started),
+        session(),
+        { kind: "turnStarted" },
+        { kind: "text", text: c.reply },
+        {
+          kind: "turnFinished",
+        },
+      )
+      .update(ago(c.updated), { status: "completed" })
+      .finish(ago(c.updated), { status: "completed" });
+    threads.find((t) => t.id === c.id)!.pinned = true;
+  };
+  const rateLimit = thread({
+    id: ids.rateLimit,
+    repo: ids.repoParallax,
+    title: "Rate limit the attach endpoint",
+    slug: "attach-rate-limit",
+    prompt:
+      "Rate limit plxd attach per client key: a token bucket, 20 a minute, 429 with Retry-After.",
+    status: "completed",
+    started: 40,
+    updated: 12,
+    diff: { files: 3, insertions: 88, deletions: 9 },
+    pullRequests: ["https://github.com/ryan-stoffel/parallax/pull/612"],
+  });
+  log(rateLimit)
+    .out(
+      ago(40),
+      session(),
+      { kind: "turnStarted" },
+      { kind: "text", text: "Added a token bucket per client key in `attach.rs`, with tests." },
+      { kind: "turnFinished" },
+    )
+    .update(ago(12), { status: "completed" })
+    .finish(ago(12), { status: "completed" });
+  chat({
+    id: ids.homework,
+    title: "Linear algebra: eigenvalues walkthrough",
+    slug: "eigenvalues",
+    prompt:
+      "Walk me through finding the eigenvalues of a 3×3 matrix, step by step. I'll ask follow-ups.",
+    reply: "Start with the characteristic polynomial: det(A − λI) = 0. Expand along the first row.",
+    started: 60 * 24 * 3,
+    updated: 9,
+  });
+  chat({
+    id: ids.physics,
+    title: "Physics: torque and angular momentum",
+    slug: "torque",
+    prompt: "Explain torque and angular momentum like I'm studying for Thursday's exam.",
+    reply: "Torque is the rotational version of force: τ = r × F. Angular momentum is L = Iω.",
+    started: 60 * 24 * 5,
+    updated: 60 * 20,
+    seen: 60 * 19,
+  });
+  chat({
+    id: ids.essay,
+    title: "Essay outline: AI tutors and academic honesty",
+    slug: "essay-outline",
+    prompt: "Help me outline a 1,500 word essay on AI tutors and academic honesty.",
+    reply: "Here's a five-part outline, with a thesis that takes a side.",
+    started: 60 * 24 * 8,
+    updated: 60 * 24 * 2,
+    seen: 60 * 24 * 2,
+  });
+  chat({
+    id: ids.pricing,
+    title: "Brainstorm: Parallax pricing tiers",
+    slug: "pricing-tiers",
+    prompt:
+      "Let's brainstorm pricing tiers for Parallax. Solo, team, and what a free tier includes.",
+    reply: "Three tiers is the usual shape. Where the free tier ends matters most.",
+    started: 60 * 24 * 6,
+    updated: 60 * 26,
+    seen: 60 * 25,
+  });
+  chat({
+    id: ids.names,
+    title: "Names for the habit tracker",
+    slug: "habit-tracker-names",
+    prompt: "Give me names for a tiny habit tracker app. Short, friendly, and not taken.",
+    reply: "Streakly, Tally, and Daybook. Tally is the easiest to say.",
+    started: 60 * 24 * 3,
+    updated: 45,
+  });
 
   const areas: Area[] = [
     {
@@ -1435,6 +1566,9 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
       contextFile("scheduler.md", scheduler_md, 140, ids.scheduler),
     ],
     [ids.projectDocs]: [],
+    [ids.projectMobile]: [],
+    [ids.projectInfra]: [],
+    [ids.projectLanding]: [],
   };
 
   // ---- Memory -----------------------------------------------------------------------------------
@@ -1588,6 +1722,9 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
       ),
     ],
     [`project:${ids.projectDocs}`]: [],
+    [`project:${ids.projectMobile}`]: [],
+    [`project:${ids.projectInfra}`]: [],
+    [`project:${ids.projectLanding}`]: [],
     [`repo:${ids.repoDocs}`]: [],
   };
 
@@ -1837,8 +1974,20 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
     threads,
     runs,
     events,
-    inbox: { [ids.projectParallax]: inbox, [ids.projectDocs]: [] },
-    questions: { [ids.projectParallax]: questions, [ids.projectDocs]: [] },
+    inbox: {
+      [ids.projectParallax]: inbox,
+      [ids.projectDocs]: [],
+      [ids.projectMobile]: [],
+      [ids.projectInfra]: [],
+      [ids.projectLanding]: [],
+    },
+    questions: {
+      [ids.projectParallax]: questions,
+      [ids.projectDocs]: [],
+      [ids.projectMobile]: [],
+      [ids.projectInfra]: [],
+      [ids.projectLanding]: [],
+    },
     context,
     memory,
     providers,

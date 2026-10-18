@@ -15,6 +15,7 @@ import type {
 } from "../protocol/generated/protocol";
 import { App } from "./App";
 import { fakeWatch } from "./fakeWatch";
+import { sectionsStore } from "./Sidebar";
 
 // A thread's parent and children in the top bar and the sidebar (PLX-374, 0041).
 
@@ -68,6 +69,8 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
 beforeEach(() => {
   request.mockClear();
   localStorage.clear();
+  // Working starts folded (0075); these tests read the rows in it.
+  sectionsStore.set({ all: { working: true } });
   capabilities = { threadLineage: {} };
   threads = [
     thread("parent", 0, { title: "Ship lineage" }),
@@ -302,32 +305,26 @@ test("Mod+Alt+Up goes to the parent, and Mod+Alt+Right and Left cycle through th
   expect(chips()).toEqual(["Style the chips", "Write the test*"]);
 });
 
-test("the sidebar nests children under their parent, collapsed, with a count and the most urgent status", async () => {
+test("the sidebar leaves out threads another thread started, and opening one marks its parent's row (0075)", async () => {
   await renderApp();
   expect(sidebarTitles()).toEqual(["Fix the README", "Ship lineage"]);
-  const group = toggle("2 threads")!;
-  expect(group.getAttribute("aria-expanded")).toBe("false");
-  // Failed outranks Working.
-  expect(group.textContent).toBe("2 threadsFailed");
+  expect(toggle("2 threads")).toBeUndefined();
+  // Its child failed before the parent was last read, so the parent's row doesn't say so.
+  expect(sidebarRow("Ship lineage")!.textContent).not.toContain("Failed");
 
-  await click(group);
-  expect(sidebarTitles()).toEqual([
-    "Fix the README",
-    "Ship lineage",
-    "Style the chips",
-    "Write the test",
-  ]);
-  await click(group);
-  expect(sidebarTitles()).toEqual(["Fix the README", "Ship lineage"]);
-
-  // Opening a child, here from its parent's chips, opens its group.
+  // Opening a child, here from its parent's chips, leaves its parent's row reading as open.
   await click(sidebarRow("Ship lineage"));
   await click(chip("Style the chips"));
-  expect(group.getAttribute("aria-expanded")).toBe("true");
-  expect(sidebarRow("Style the chips")!.getAttribute("aria-current")).toBe("page");
+  expect(sidebarRow("Ship lineage")!.getAttribute("aria-current")).toBe("page");
 });
 
-test("a Project's children never show in the main sidebar, and its row shows their status (0042)", async () => {
+test("a parent's row says when a hidden child failed since it was last read (0075)", async () => {
+  runs[2] = { ...runs[2]!, updatedAt: "2026-10-01T13:00:00Z" };
+  await renderApp();
+  expect(sidebarRow("Ship lineage")!.textContent).toContain("Failed");
+});
+
+test("a Project's children never show in the main sidebar, only in its own view (0042)", async () => {
   const coordinator = {
     ...run("coord", "completed"),
     project: "p-ember",
@@ -356,18 +353,12 @@ test("a Project's children never show in the main sidebar, and its row shows the
     },
   });
   await renderApp();
-  await click(toggle("2 threads"));
-  expect(sidebarTitles()).toEqual([
-    "Fix the README",
-    "Ship lineage",
-    "Style the chips",
-    "Write the test",
-  ]);
-  const ember = document.querySelector('#sidebar li[data-kind="project"]');
-  expect(ember?.querySelector("[data-status]")?.textContent).toBe("Working");
+  expect(sidebarTitles()).toEqual(["Fix the README", "Ship lineage"]);
 
   // `agent/list {project}` has only the coordinator, so its Project tab lists the threads in it.
-  await click(ember?.querySelector("button"));
+  await click(
+    document.querySelector('#sidebar [aria-label="Favorites"] button[aria-label="ember"]'),
+  );
   const titles = (group: string) =>
     [...document.querySelectorAll(`#side-panel section[aria-label="${group}"] li > button`)].map(
       (b) => b.querySelector("span span")?.textContent,
