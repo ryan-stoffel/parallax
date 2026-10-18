@@ -637,7 +637,9 @@ export function App() {
   const pickRepoOn = (hostId: string, groupId: string) =>
     openOnHost(hostId, { kind: "new", groupId });
 
+  // A plain New thread, so not in the folder a folder's New thread put it in.
   const newThread = (groupId = selection.kind === "project" ? undefined : group.id) => {
+    startIn.set(null);
     setSettings(null);
     setSelection({ kind: "new", groupId });
   };
@@ -851,7 +853,11 @@ export function App() {
             hosts={listed}
             host={host}
             selection={selection}
-            onSelect={openOnHost}
+            onSelect={(hostId, next) => {
+              // A draft opened from the list isn't in the folder either.
+              if (next.kind === "new") startIn.set(null);
+              openOnHost(hostId, next);
+            }}
             onOpenProject={openProject}
             onOpenSettings={openSettings}
             onOpenPullRequests={() => {
@@ -860,7 +866,10 @@ export function App() {
             }}
             onDelete={deleteThread}
             onNewThread={() => picker.current?.showModal()}
-            onNewFolderThread={() => newThread()}
+            onNewFolderThread={(id) => {
+              newThread();
+              startIn.set(id);
+            }}
             split={split}
             onOpenBeside={openBeside}
             onClosePane={closePane}

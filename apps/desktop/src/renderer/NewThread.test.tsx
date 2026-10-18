@@ -382,6 +382,19 @@ test("a folder's New thread opens New Thread named for the folder, without the p
   expect(heading()).toBe("What should we work on in CSCI4150?");
   expect(control("Repository: parallax")).not.toBeNull();
   expect(document.body.textContent).not.toContain("Goes in");
+  // A plain New thread after it isn't in the folder.
+  await act(async () => button("New thread")!.click());
+  await act(async () =>
+    [
+      ...document.querySelectorAll<HTMLElement>(
+        'dialog[aria-label="New thread in"] [role="option"]',
+      ),
+    ]
+      .find((o) => o.textContent?.startsWith("parallax"))!
+      .click(),
+  );
+  await settle();
+  expect(heading()).toBe("What should we build in parallax?");
 });
 
 test("a Space's new thread has no start-without-a-repo link, run target bar, or details", async () => {

@@ -45,9 +45,9 @@ export const pinIcons = stored<Record<string, ProjectIconValue>>(
 );
 
 /**
- * The folder a thread being started goes in, set by a folder's New thread and shown on the New
- * thread screen until it starts, when it's pinned there (`fileStarted`), the user takes it off, or
- * leaves the screen.
+ * The folder a thread being started goes in, set by a folder's New thread and named in the New
+ * thread screen's heading until it starts, when it's pinned there (`fileStarted`), or the user
+ * leaves the screen or opens a plain New thread.
  */
 export const startIn = memory<string | null>(null);
 

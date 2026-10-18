@@ -414,7 +414,7 @@ export function NewThread({
                   >
                     {folder.name}
                   </span>
-                  ?
+                  {shared && !repoless(group) && ` on ${hosts.find((h) => h.id === hostId)?.name}`}?
                 </h1>
                 <div className="mb-9 text-center">
                   <button
