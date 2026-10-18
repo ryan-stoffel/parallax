@@ -14,6 +14,7 @@ import {
   MessageCircleQuestion,
   Palette,
   PencilLine,
+  Pin,
   PinOff,
   Plus,
   Star,
@@ -48,6 +49,7 @@ import {
   moveOut,
   moveToEnd,
   pinDragType,
+  pinHintHidden,
   pinIcons,
   pinLayout,
   pinNaming,
@@ -202,6 +204,7 @@ export function PinList({
   const [renaming, setRenaming] = useState<string>();
   const [dragKey, setDragKey] = useState<string>();
   const [rowOver, setRowOver] = useState(false);
+  const hintHidden = pinHintHidden.use();
   const menuId = useId();
   const [menuFor, setMenuFor] = useState<string>();
   const pickerId = useId();
@@ -427,7 +430,8 @@ export function PinList({
         } else pinRow(e);
         endDrag();
       }}
-      className="flex flex-col gap-px"
+      // A strip to drop on, even with nothing pinned and the hint hidden.
+      className="flex min-h-4 flex-col gap-px"
     >
       <ul className="flex flex-col gap-px">{tree(entries)}</ul>
       {rowOver && (
@@ -435,10 +439,34 @@ export function PinList({
           Drop to pin
         </div>
       )}
-      {pins.length === 0 && !rowOver && (
-        <p className="rounded-[10px] border border-dashed border-border px-3 py-3 text-center text-[12px] leading-snug text-faint-foreground">
-          {searching ? "No pins match" : "Drag a thread here, or press P on it, to keep it here."}
+      {pins.length === 0 && !rowOver && searching && (
+        <p className="rounded-xl border border-dashed border-border px-3 py-3 text-center text-[12px] leading-snug text-faint-foreground">
+          No pins match
         </p>
+      )}
+      {pins.length === 0 && !rowOver && !searching && !hintHidden && (
+        <div className="flex flex-col items-center rounded-xl border border-dashed border-border px-4 pt-4 pb-2.5 text-center">
+          <span className="grid size-7 place-items-center rounded-lg bg-surface text-muted-foreground ring-1 ring-border [&_svg]:size-3.5">
+            <Pin aria-hidden />
+          </span>
+          <p className="mt-2.5 text-[12.5px] font-medium text-muted-foreground">
+            Keep threads close
+          </p>
+          <p className="mt-0.5 text-[12px] leading-snug text-faint-foreground">
+            Drag one here, or press{" "}
+            <kbd className="rounded border border-border bg-surface px-1 font-sans text-[11px] leading-4 text-muted-foreground">
+              P
+            </kbd>{" "}
+            on it.
+          </p>
+          <button
+            type="button"
+            onClick={() => pinHintHidden.set(true)}
+            className="mt-3 h-6 rounded-md px-2.5 text-[11.5px] font-medium text-faint-foreground transition-colors hover:bg-hover hover:text-foreground"
+          >
+            Dismiss
+          </button>
+        </div>
       )}
 
       <Menu
