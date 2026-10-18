@@ -516,12 +516,16 @@ export function App() {
     if (agentTitle) crumbs.push({ label: agentTitle, icon: <Workflow /> });
   } else {
     const groupRepo = threads.state.repos.find((r) => r.id === group.id);
-    // A chat in a pinned folder shows the folder in No Repo's place (pins.ts). Nested folders read
-    // as a path: School / Math.
+    // A chat in a pinned folder, or a folder's New thread, shows the folder in No Repo's place
+    // (pins.ts). Nested folders read as a path: School / Math.
     const path =
-      selection.kind === "thread" && (!groupRepo || groupRepo.scratch)
-        ? folderPath(pinFolders, `${host.id}/${selection.threadId}`)
-        : [];
+      groupRepo && !groupRepo.scratch
+        ? []
+        : selection.kind === "thread"
+          ? folderPath(pinFolders, `${host.id}/${selection.threadId}`)
+          : startId && startFolder
+            ? [...folderPath(pinFolders, `folder:${startId}`), startFolder]
+            : [];
     const folder = path.at(-1);
     const repo = folder
       ? {
