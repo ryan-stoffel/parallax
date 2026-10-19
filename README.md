@@ -44,7 +44,7 @@ pnpm dev
 
 ## Usage data
 
-The installed app sends one `app_active` event to PostHog at launch and once a day while it runs, so we can count how many installs are in use. It carries a random id made for the install, the app's version and channel, and the OS and architecture. It carries no account, name, path, prompt, or code. Set `DO_NOT_TRACK=1` in the app's environment to turn it off.
+The installed app sends one `app_active` event to PostHog at launch and once a day while it runs, so we can count how many installs are in use. It carries a random id made for the install, the app's version and channel, and the OS and architecture. It carries no account, name, path, prompt, or code, and PostHog adds no location from it. Set `DO_NOT_TRACK=1` in the app's environment to turn it off. On macOS an app opened from the Dock or Finder doesn't read your shell profile, so run `launchctl setenv DO_NOT_TRACK 1` and restart the app.
 
 ## License
 
