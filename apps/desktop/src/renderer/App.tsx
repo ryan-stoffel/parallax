@@ -1262,6 +1262,7 @@ export function App() {
                         }
                       : undefined
                   }
+                  prs={selection.kind === "thread" ? { prs, onOpen: openPr } : undefined}
                   lineage={
                     openThread
                       ? {

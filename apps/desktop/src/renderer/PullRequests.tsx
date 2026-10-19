@@ -22,6 +22,7 @@ import {
   LoaderCircle,
   MessageCircleQuestionMark,
   MessageSquare,
+  Plus,
   RefreshCw,
   Tag,
   Users,
@@ -309,6 +310,75 @@ export function PullRequestList({
         {open} open · {prs.urls.length} linked · {synced ? `synced ${ago(synced)}` : "syncing…"}
       </p>
     </div>
+  );
+}
+
+/**
+ * Thread details' list of a thread's linked pull requests, newest first: each one's state, title,
+ * number, and checks, opening its view. Past the newest, they wait behind Show N more.
+ */
+export function LinkedPullRequests({
+  prs,
+  onOpen,
+}: {
+  prs: PullRequests;
+  onOpen: (url: string) => void;
+}) {
+  const [all, setAll] = useState(false);
+  const newest = [...prs.urls].reverse();
+  const more = newest.length - 1;
+  if (!newest.length) return null;
+  return (
+    <>
+      <ul aria-label="Linked pull requests">
+        {(all ? newest : newest.slice(0, 1)).map((url) => {
+          const { pr, error } = prs.get(url) ?? {};
+          const { Icon, color } = lookOf(pr);
+          const checks =
+            pr && (checkIcons[pr.checksState ?? ""] ?? (pr.checks.length ? noCheck : undefined));
+          return (
+            <li key={url}>
+              <button
+                type="button"
+                onClick={() => onOpen(url)}
+                title={pr ? `#${pr.number} ${pr.title}` : url}
+                className={`${menuItem} items-start`}
+              >
+                <Icon aria-hidden className={color} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">{pr?.title ?? repoOf(url)}</span>
+                  <span className="mt-0.5 flex items-center gap-2 text-[12px] text-faint-foreground">
+                    #{numberOf(url)}
+                    {checks && (
+                      <checks.Icon
+                        aria-label={`Checks ${pr.checksState ?? "skipped"}`}
+                        className={checks.color}
+                      />
+                    )}
+                    {!pr && (
+                      <span className={error ? "truncate text-danger" : ""}>
+                        {error ? describeError(error) : "Loading…"}
+                      </span>
+                    )}
+                  </span>
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {more > 0 && (
+        <button
+          type="button"
+          aria-expanded={all}
+          onClick={() => setAll(!all)}
+          className={`${menuItem} text-faint-foreground hover:text-foreground`}
+        >
+          <Plus aria-hidden className={all ? "rotate-45" : ""} />
+          {all ? "Show less" : `Show ${more} more`}
+        </button>
+      )}
+    </>
   );
 }
 
