@@ -18,8 +18,8 @@ Usage:
   plx-connect devices [--json]   List your devices on your tailnet
   plx-connect add <device>       Install Parallax on a device over SSH and connect it
   plx-connect setup              Install Parallax on this computer and connect it
-  plx-connect doctor             Check Parallax on this computer, fix what it can, and open
-                                 Claude Code to look into the rest and file an issue
+  plx-connect doctor             Check Parallax on this computer, fix what it can, and hand the
+                                 rest to claude or codex to look into and file an issue
 
 <device> is a host name, MagicDNS name, or Tailscale IP.
 
@@ -31,6 +31,8 @@ Options:
                              gets plxd alone)
   --dry-run                  Print the steps and install script without installing anything
   --json                     Print devices as JSON
+  --agent claude|codex       The agent doctor hands off to, without asking
+  --model <model>            The model doctor's agent uses (default: the agent's own)
   -h, --help                 Show this help
   -v, --version              Show plx-connect's version
 
@@ -73,7 +75,8 @@ async function main(argv) {
     case "setup":
       return setup(options);
     case "doctor":
-      return doctor();
+      if (values.agent !== undefined && values.agent !== "claude" && values.agent !== "codex") return usage(`--agent is claude or codex, not ${values.agent}.`);
+      return doctor({ agent: values.agent, model: values.model });
     default:
       return usage(`Unknown command: ${command}`);
   }
@@ -91,6 +94,8 @@ function parse(argv) {
       headless: { type: "boolean" },
       "dry-run": { type: "boolean" },
       json: { type: "boolean" },
+      agent: { type: "string" },
+      model: { type: "string" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
     },

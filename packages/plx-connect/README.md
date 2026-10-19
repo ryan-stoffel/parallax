@@ -18,7 +18,7 @@ npx plx-connect
 | `plx-connect devices [--json]` | Lists your devices on your tailnet, and whether each answers on Parallax Connect's port, 7340. |
 | `plx-connect add <device>` | Installs Parallax on a device over SSH and connects it. `<device>` is a host name, MagicDNS name, or Tailscale IP. |
 | `plx-connect setup` | Installs Parallax on this computer and connects it, for a device that can't take SSH. |
-| `plx-connect doctor` | Checks Parallax on this computer: plxd is installed, up to date, and running, Claude Code's sandbox packages on Linux, and an agent CLI on PATH. It offers a fix for each failed check it can fix, then offers to open Claude Code with the results to look into the problem and help you file an issue. Without Claude Code, it prints the prompt to paste into any agent. |
+| `plx-connect doctor` | Checks Parallax on this computer and hands what's left to your coding agent. See [Doctor](#doctor). |
 
 Options:
 
@@ -26,6 +26,24 @@ Options:
 - `--user <user>` and `--port <port>`: the SSH user and port for `add`.
 - `--headless`: install plxd alone, without the app, for `add` and `setup`. Linux always gets plxd alone.
 - `--dry-run`: print the steps and the install script without installing anything.
+- `--agent claude|codex` and `--model <model>`: the agent `doctor` hands off to, without asking, and its model.
+
+## Doctor
+
+```sh
+npx plx-connect doctor
+```
+
+It asks the running plxd for its version, health, and agents, then checks:
+
+- plxd is installed, running, answering, and running the binary on disk, not one a self-update replaced.
+- It's the newest release on its channel.
+- The project store is ok and its writes aren't queuing.
+- Each agent Parallax uses is installed and signed in.
+- git is on PATH, the disk has room, and plxd's log has no errors from the last 24 hours.
+- On Linux, bubblewrap and socat, which Claude Code's worker sandbox needs.
+
+For each failed check it can fix, it asks first: it starts plxd, runs an agent's own sign-in, or installs the sandbox packages. Then it writes `context.md` (this computer's facts and the results) and `prompt.md` (the [playbook](src/doctor-playbook.md)) to `doctor/<time>/` in the data folder. It offers to open Claude Code or Codex on them, as T3 Code's `t3 triage` does. The agent asks what went wrong, reads the logs and the store, checks Parallax's source and issues, and helps you file an issue with the `via-doctor` template. It posts only after you approve the text. Without either agent, the doctor prints the two files' paths to paste into any agent.
 
 ## Requirements
 
