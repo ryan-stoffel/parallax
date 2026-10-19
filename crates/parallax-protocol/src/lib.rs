@@ -46,6 +46,7 @@ mod git;
 mod handshake;
 mod host;
 mod id;
+mod import;
 mod inbox;
 pub mod jsonrpc;
 mod land;
@@ -136,6 +137,10 @@ pub use host::{
     HostUploadResult, HostVersionParams, HostVersionResult, QueueStats, StoreState, UploadId,
 };
 pub use id::InvalidId;
+pub use import::{
+    ImportSource, ImportableSession, ThreadImportParams, ThreadImportableParams,
+    ThreadImportableResult,
+};
 pub use inbox::{
     InboxItem, InboxItemId, InboxKind, InboxListParams, InboxListResult, InboxSeenParams,
     InboxSeenResult,

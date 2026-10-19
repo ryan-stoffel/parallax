@@ -129,7 +129,7 @@ export type SettingsSection =
 export function App() {
   const [theme, setTheme] = useThemePreference();
   const onboarding = useOnboarding();
-  useAppearanceEffects();
+  useAppearanceEffects(onboarding);
   const hosts = useHosts();
   const [hostId, setHostId] = useState(localId);
   // The open host, or this computer once the open one is removed.

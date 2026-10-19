@@ -405,7 +405,7 @@ pub(crate) async fn start_entry(
 
 /// A thread with no repo's scratch repository, under its scratch entry: made unless the run id is
 /// `taken`. `None` for a repo entry.
-async fn scratch_dir(
+pub(crate) async fn scratch_dir(
     daemon: &Daemon,
     entry: &parallax_store::Repo,
     run_id: RunId,

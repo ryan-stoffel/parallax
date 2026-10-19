@@ -263,6 +263,8 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         ThreadList => |_| threads::list(daemon),
         ThreadStart => |p| thread::start(context, p),
         ThreadFork => |p| thread::fork(context, p),
+        ThreadImportable => |_| crate::importer::importable(daemon),
+        ThreadImport => |p| thread::import(context, p),
         ThreadArchive => |p| threads::archive(daemon, p, context.command_id),
         ThreadUpdate => |p| threads::update(daemon, p, context.command_id),
         ThreadDelete => |p| thread::delete(context, p),

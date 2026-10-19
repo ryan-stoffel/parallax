@@ -35,13 +35,17 @@ import { ClaudeLogo, CursorLogo, OpenAILogo, OpenCodeLogo, ParallaxMark } from "
 import { agents, finishOnboarding, infoOf, ready, setUpAgents, type Agent } from "./firstRun";
 import { Avatar, useProfile } from "./profile";
 import { kindOf, loadProviders, useProviders } from "./providers";
+import { ImportSessions } from "./ImportSessions";
 import { IconButton } from "./ui";
 
 const SignInTerminal = lazy(() =>
   import("./SignInTerminal").then((m) => ({ default: m.SignInTerminal })),
 );
 
-const steps = ["Account", "Agents", "Tour", "Start"];
+const steps = ["Account", "Agents", "Import", "Tour", "Start"];
+
+/** The tour's step, whose arrows and Back move between its slides. */
+const tourStep = steps.indexOf("Tour");
 
 const bigPrimary =
   "flex items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-[13.5px] font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50 [&_svg]:size-4";
@@ -58,7 +62,8 @@ const capitalized = (text: string) =>
 
 /**
  * First-launch onboarding (PLX-806), a native modal <dialog> open while it's mounted: a Parallax
- * account, then this computer's agents, set up as it finds them, then a tour, then a first thread.
+ * account, then this computer's agents, set up as it finds them, then importing past sessions
+ * from other apps (PLX-881), then a tour, then a first thread.
  * Finishing, skipping, or Escape ends it for good; Start a thread then calls `onStart`.
  */
 export function Onboarding({ onStart }: { onStart: () => void }) {
@@ -100,7 +105,7 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
       onClose={finishOnboarding}
       onPointerMove={lean}
       onKeyDown={(e) => {
-        if (step !== 2) return;
+        if (step !== tourStep) return;
         if (e.key === "ArrowRight" && slide < tour.length - 1) setSlide(slide + 1);
         if (e.key === "ArrowLeft" && slide > 0) setSlide(slide - 1);
       }}
@@ -137,6 +142,8 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
           ) : step === 1 ? (
             <AgentsStep titleId={titleId} hostName={host.name} />
           ) : step === 2 ? (
+            <ImportStep titleId={titleId} />
+          ) : step === tourStep ? (
             <Tour titleId={titleId} slide={slide} onSlide={setSlide} />
           ) : (
             <DoneStep titleId={titleId} profile={profile} providers={providers} />
@@ -147,7 +154,9 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
           {step > 0 ? (
             <button
               type="button"
-              onClick={() => (step === 2 && slide > 0 ? setSlide(slide - 1) : setStep(step - 1))}
+              onClick={() =>
+                step === tourStep && slide > 0 ? setSlide(slide - 1) : setStep(step - 1)
+              }
               className={quiet}
             >
               <ArrowLeft aria-hidden />
@@ -167,12 +176,12 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
                 Not now
               </button>
             )
-          ) : step === 1 ? (
+          ) : step < tourStep ? (
             <button type="button" onClick={next} className={bigPrimary}>
               Continue
               <ArrowRight aria-hidden />
             </button>
-          ) : step === 2 ? (
+          ) : step === tourStep ? (
             <button
               type="button"
               onClick={() => (slide < tour.length - 1 ? setSlide(slide + 1) : next())}
@@ -528,6 +537,19 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
   );
 }
 
+/** Step three: past sessions from the Claude, Codex, and Cursor apps, to pick and import. */
+function ImportStep({ titleId }: { titleId: string }) {
+  return (
+    <div className="flex h-full flex-col">
+      <Heading id={titleId} title="Bring your history">
+        Pick past sessions from the Claude, Codex, and Cursor apps to continue here as threads. Find
+        this again in Settings &gt; Threads.
+      </Heading>
+      <ImportSessions className="onboard-rise min-h-0 flex-1" />
+    </div>
+  );
+}
+
 function Spinner() {
   return (
     <LoaderCircle aria-hidden className="size-4 shrink-0 animate-spin text-faint-foreground" />
@@ -782,7 +804,7 @@ const tour = [
   },
 ];
 
-/** Step three: what Parallax does, a slide each, its scene's layers leaning with the pointer. */
+/** Step four: what Parallax does, a slide each, its scene's layers leaning with the pointer. */
 function Tour({
   titleId,
   slide,
@@ -841,7 +863,7 @@ function Keys({ command, name }: { command: Command; name: string }) {
   );
 }
 
-/** Step four: what's set up, the keys worth knowing, and Start a thread. */
+/** Step five: what's set up, the keys worth knowing, and Start a thread. */
 function DoneStep({
   titleId,
   profile,

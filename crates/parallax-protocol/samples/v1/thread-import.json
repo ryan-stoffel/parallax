@@ -1,0 +1,75 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "thread/importable",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "sessions": [
+        {
+          "source": "codex",
+          "id": "01a0f32e-7691-7a10-ac8a-6f0ee7bc226a",
+          "title": "Finish the HW2 Wordle clone",
+          "cwd": "/Users/me/school/hw2",
+          "updatedAt": "2026-09-30T16:20:00Z",
+          "thread": "01a0f32e-7691-7a10-ac8a-6f0ee7bc226b"
+        },
+        {
+          "source": "claude",
+          "id": "local_0c3f828d-2b68-4364-9f64-d14a749eaaa4",
+          "title": "Fix the login redirect",
+          "cwd": "/Users/me/src/web",
+          "updatedAt": "2026-09-28T10:00:00Z"
+        },
+        {
+          "source": "cursor",
+          "id": "1c3b16b7-9083-42db-b6e6-e18c60ce2b3f",
+          "title": "Audit the dotfiles",
+          "updatedAt": "2026-09-17T14:28:19Z"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "thread/import",
+    "params": {
+      "source": "claude",
+      "id": "local_0c3f828d-2b68-4364-9f64-d14a749eaaa4",
+      "account": {
+        "kind": "subscription",
+        "backend": "claude"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "thread": {
+        "id": "01a0e2f0-1b2c-7d3e-8f4a-5b6c7d8e9f01",
+        "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+        "createdAt": "2026-10-19T19:00:00Z",
+        "lastPromptAt": "2026-10-19T19:00:00Z"
+      },
+      "run": {
+        "id": "01a0e2f0-1b2c-7d3e-8f4a-5b6c7d8e9f01",
+        "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+        "prompt": "The login page redirects back to itself after sign-in.",
+        "policy": "workspaceWrite",
+        "status": "completed",
+        "backend": "claude",
+        "accountId": "claude",
+        "checkout": true,
+        "worktreePath": "/Users/me/src/web",
+        "createdAt": "2026-10-19T19:00:00Z",
+        "updatedAt": "2026-10-19T19:00:00Z"
+      }
+    }
+  }
+]
