@@ -1681,6 +1681,8 @@ test("another Project's Agents view starts with an empty box and never gets a la
 
   await click(rowButton("photon"));
   expect(crumbs()).toEqual(["This Mac", "photon"]);
+  // Each Project's panel has its own tabs (PLX-872).
+  await openView("Agents");
   expect(box().value).toBe("");
   await act(async () => release());
   await settle();

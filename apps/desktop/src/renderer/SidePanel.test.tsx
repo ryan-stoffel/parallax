@@ -24,7 +24,9 @@ afterEach(() => {
 async function render(onClose = () => {}) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
-    root.render(<SidePanel open onClose={onClose} expanded={false} onExpandedChange={() => {}} />),
+    root.render(
+      <SidePanel scope="t" open onClose={onClose} expanded={false} onExpandedChange={() => {}} />,
+    ),
   );
   unmount = () => {
     root.unmount();
@@ -126,6 +128,7 @@ test("Projects keep pinned Knowledge and their view list", async () => {
   act(() =>
     root.render(
       <SidePanel
+        scope="project"
         open
         onClose={() => {}}
         expanded={false}
@@ -162,6 +165,7 @@ test("each thread shows its own last tab again, and pull request tabs are colore
     act(() =>
       root.render(
         <SidePanel
+          scope={runId}
           open
           onClose={() => {}}
           expanded={false}
@@ -193,12 +197,12 @@ test("each thread shows its own last tab again, and pull request tabs are colore
   expect(shown()!.textContent).toBe(a);
   await thread(b);
   expect(tabs()).toEqual(["#2*"]);
-  // A view every thread shares, shown in one, doesn't take over another's own tab.
+  // A view opened in one thread doesn't open in another (PLX-872).
   await click(openAView());
   await click(listButton("Terminal"));
   expect(tabs()).toEqual(["#2", "Terminal*"]);
   await thread(a);
-  expect(tabs()).toEqual(["#1*", "Terminal"]);
+  expect(tabs()).toEqual(["#1*"]);
   await thread(b);
   expect(tabs()).toEqual(["#2", "Terminal*"]);
 });

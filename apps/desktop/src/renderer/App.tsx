@@ -182,7 +182,11 @@ export function App() {
       ...panels,
       [panelKey]: typeof next === "function" ? next(panels[panelKey] ?? false) : next,
     }));
-  const [panelExpanded, setPanelExpanded] = useState(false);
+  // Full screen is per panel too.
+  const [expandedPanels, setExpandedPanels] = useState<Record<string, boolean>>({});
+  const panelExpanded = expandedPanels[panelKey] ?? false;
+  const setPanelExpanded = (next: boolean) =>
+    setExpandedPanels((panels) => ({ ...panels, [panelKey]: next }));
   // Thread details, docked at the thread's right, or floating over it when the row is narrow.
   const details = useThreadDetails();
   // The folders whose terminal drawer is open, by key (ThreadTerminal.tsx).
@@ -199,7 +203,8 @@ export function App() {
     const { tabs } = answer.result;
     setAgentTabs({ runId, tabs });
     const last = tabs.at(-1);
-    if (reveal && last) {
+    // Only the focused thread's own preview opens its panel, not the other side of a split's.
+    if (reveal && last && selection.kind === "thread" && selection.threadId === runId) {
       setPanelOpen(true);
       setBrowse({ agentTab: last.tabId });
     }
@@ -1310,6 +1315,7 @@ export function App() {
       </OpenDocumentContext>
 
       <SidePanel
+        scope={panelKey}
         width={rightWidth}
         onResize={(width) => resizePanel(1, width)}
         open={sidePanelOpen}

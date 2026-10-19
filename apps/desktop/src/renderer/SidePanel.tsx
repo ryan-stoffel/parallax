@@ -96,11 +96,27 @@ const surfaces: Surface[] = [
 ];
 
 const knowledgeSurface = surfaces.find((s) => s.name === "Knowledge")!;
+const browserSurface = surfaces.find((s) => s.name === "Browser")!;
+const terminalSurface = surfaces.find((s) => s.name === "Terminal")!;
 
 /**
- * The collapsible right column. Each view opens as a tab in its top bar, VS Code style; the + after
- * the tabs, or closing the last one, shows the list of views, where each view's letter opens it
- * while focus is in the panel. Open tabs stay mounted, so a view keeps its state behind another.
+ * One `scope`'s panel: its open views in tab order, and each in the order it was last shown, with
+ * the thread (`documents.runId`) it was shown in, as a Project's subagents share its panel; whether
+ * + is showing the list; and the page its Browser last opened.
+ */
+interface Scoped {
+  tabs: Surface[];
+  recent: [Surface, string | undefined][];
+  listing: boolean;
+  page?: { url?: string; agentTab?: string };
+}
+const unopened: Scoped = { tabs: [], recent: [], listing: false };
+
+/**
+ * The collapsible right column. Each `scope`, such as a thread or a Project, keeps its own tabs and
+ * Browser, so a view opened in one thread doesn't open in another (PLX-872). Each view opens as a
+ * tab in its top bar, VS Code style; the + after the tabs, or closing the last one, shows the list
+ * of views, where each view's letter opens it while focus is in the panel. Open tabs stay mounted, so a view keeps its state behind another.
  * The top bar keeps the hide button where the main pane shows it while the panel is closed.
  * Expanded, it fills everything right of the sidebar, and `leading` and `topBarClassName` stand in
  * for the hidden main pane's top-left corner. `agents`, `knowledge`, `files`, and `changesView` are
@@ -113,6 +129,7 @@ const knowledgeSurface = surfaces.find((s) => s.name === "Knowledge")!;
  * shown only while its thread, `documents.runId`, is open, as a pull request's is.
  */
 export function SidePanel({
+  scope,
   width = 416,
   onResize,
   open,
@@ -135,6 +152,7 @@ export function SidePanel({
   documents,
   project,
 }: {
+  scope: string;
   width?: number;
   onResize?: (width: number) => void;
   open: boolean;
@@ -166,18 +184,21 @@ export function SidePanel({
    * things wait on the user there. */
   project?: { home: ReactNode; waiting: number };
 }) {
-  // The open views in tab order, and each in the order it was last shown, with the thread
-  // (`documents.runId`) it was shown in. A thread shows the last one it showed that's still open,
-  // else the last one any thread showed, else the list.
-  const [tabs, setTabs] = useState<Surface[]>([]);
-  const [recent, setRecent] = useState<[Surface, string | undefined][]>([]);
+  // Each scope's panel. A thread shows the last view it showed that's still open, else the last one
+  // its scope showed, else the list.
+  const [scopes, setScopes] = useState<Record<string, Scoped>>({});
+  const { tabs, recent, listing } = scopes[scope] ?? unopened;
+  const update = (next: (panel: Scoped) => Partial<Scoped>) =>
+    setScopes((all) => {
+      const panel = all[scope] ?? unopened;
+      return { ...all, [scope]: { ...panel, ...next(panel) } };
+    });
   const thread = documents?.runId;
-  const setActive = (s: Surface) => {
-    setListing(false);
-    setRecent((all) => [...all.filter(([t, at]) => t !== s || at !== thread), [s, thread]]);
-  };
-  // Whether + is showing the list.
-  const [listing, setListing] = useState(false);
+  const setActive = (s: Surface) =>
+    update((panel) => ({
+      listing: false,
+      recent: [...panel.recent.filter(([t, at]) => t !== s || at !== thread), [s, thread]],
+    }));
 
   const available = project
     ? surfaces
@@ -187,7 +208,7 @@ export function SidePanel({
   const nameOf = (s: Surface) => (!project && s.name === "Changes" ? "Diff" : s.name);
   // A Project pins its Overview and Knowledge first, without close buttons.
   const pinned = project ? [overview, knowledgeSurface] : [];
-  // Another thread's pull request tabs stay open, but hidden.
+  // A pull request tab the thread no longer links stays open, but hidden.
   const shown = [
     ...pinned,
     ...tabs.filter(
@@ -208,7 +229,7 @@ export function SidePanel({
   const openView = (s: Surface) => {
     if (pinned.includes(s)) return setActive(s);
     const open = tabs.find((t) => t.key === s.key);
-    if (!open) setTabs([...tabs, s]);
+    if (!open) update((panel) => ({ tabs: [...panel.tabs, s] }));
     setActive(open ?? s);
   };
   // Closing the shown tab shows the one after it, or before it; closing the last collapses the
@@ -218,8 +239,10 @@ export function SidePanel({
     const i = shown.indexOf(s);
     const rest = shown.toSpliced(i, 1);
     const next = s === current ? rest[Math.min(i, rest.length - 1)] : current;
-    setTabs(tabs.filter((t) => t !== s));
-    setRecent((all) => all.filter(([t]) => t !== s));
+    update((panel) => ({
+      tabs: panel.tabs.filter((t) => t !== s),
+      recent: panel.recent.filter(([t]) => t !== s),
+    }));
     if (next && s === current) setActive(next);
     if (!rest.length) return onClose();
     document.getElementById(next ? `side-panel-tab-${next.key}` : "side-panel-open-view")?.focus();
@@ -232,7 +255,10 @@ export function SidePanel({
   const [browsed, setBrowsed] = useState(browse);
   if (browse !== browsed) {
     setBrowsed(browse);
-    if (browse) openView(surfaces.find((s) => s.name === "Browser")!);
+    if (browse) {
+      openView(browserSurface);
+      update(() => ({ page: browse }));
+    }
   }
   const [prOpened, setPrOpened] = useState(pullRequest);
   if (pullRequest !== prOpened) {
@@ -262,29 +288,25 @@ export function SidePanel({
     </div>
   );
   const viewOf = (s: Surface) =>
-    s === overview && project ? (
-      project.home
-    ) : s.name === "Browser" ? (
-      <Browser page={browse} remoteHost={remoteHost} agent={agentTabs} />
-    ) : s.name === "Agents" && agents ? (
-      agents
-    ) : s.name === "Knowledge" && knowledge ? (
-      knowledge
-    ) : s.name === "Terminal" && terminal ? (
-      terminal(open && s === current, emptyOf(s))
-    ) : s.name === "Files" && files ? (
-      files
-    ) : s.name === "Changes" && changesView ? (
-      changesView
-    ) : s.doc && documents ? (
-      documents.view(s.doc)
-    ) : s.url && pullRequests ? (
-      pullRequests.view(s.url)
-    ) : s.name === "Pull requests" && pullRequests?.urls.length ? (
-      pullRequests.list
-    ) : (
-      emptyOf(s)
-    );
+    s === overview && project
+      ? project.home
+      : s.name === "Agents" && agents
+        ? agents
+        : s.name === "Knowledge" && knowledge
+          ? knowledge
+          : s.name === "Terminal" && terminal
+            ? terminal(open && s === current, emptyOf(s))
+            : s.name === "Files" && files
+              ? files
+              : s.name === "Changes" && changesView
+                ? changesView
+                : s.doc && documents
+                  ? documents.view(s.doc)
+                  : s.url && pullRequests
+                    ? pullRequests.view(s.url)
+                    : s.name === "Pull requests" && pullRequests?.urls.length
+                      ? pullRequests.list
+                      : emptyOf(s);
 
   return (
     <aside
@@ -344,7 +366,11 @@ export function SidePanel({
             );
           })}
         </ul>
-        <IconButton id="side-panel-open-view" label="Open a view" onClick={() => setListing(true)}>
+        <IconButton
+          id="side-panel-open-view"
+          label="Open a view"
+          onClick={() => update(() => ({ listing: true }))}
+        >
           <Plus />
         </IconButton>
         <div className="ml-auto flex items-center gap-0.5">
@@ -365,11 +391,35 @@ export function SidePanel({
           </IconButton>
         </div>
       </TopBar>
-      {shown.map((s) => (
-        <div key={s.key} hidden={s !== current} className="flex min-h-0 flex-1 flex-col">
-          {viewOf(s)}
+      {shown
+        .filter((s) => s !== browserSurface && s !== terminalSurface)
+        .map((s) => (
+          <div key={s.key} hidden={s !== current} className="flex min-h-0 flex-1 flex-col">
+            {viewOf(s)}
+          </div>
+        ))}
+      {/* Browser and Terminal stay mounted while any scope has them open, so a thread's page and
+          shells are still there on coming back to it. The terminal pool shows the open thread's. */}
+      {Object.values(scopes).some((panel) => panel.tabs.includes(terminalSurface)) && (
+        <div hidden={current !== terminalSurface} className="flex min-h-0 flex-1 flex-col">
+          {viewOf(terminalSurface)}
         </div>
-      ))}
+      )}
+      {Object.entries(scopes)
+        .filter(([, panel]) => panel.tabs.includes(browserSurface))
+        .map(([key, panel]) => (
+          <div
+            key={`${key}/B`}
+            hidden={key !== scope || current !== browserSurface}
+            className="flex min-h-0 flex-1 flex-col"
+          >
+            <Browser
+              page={panel.page}
+              remoteHost={remoteHost}
+              agent={key === scope ? agentTabs : undefined}
+            />
+          </div>
+        ))}
       {!current && (
         <nav
           aria-labelledby="side-panel-views"
