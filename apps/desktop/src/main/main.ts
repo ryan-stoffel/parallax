@@ -63,6 +63,7 @@ import {
   writeTerminalApp,
 } from "./terminalApp";
 import { startStorage } from "./storage";
+import { startTelemetry } from "./telemetry";
 import { isNightly, startUpdater } from "./updater";
 import { broadcast } from "./windows";
 
@@ -566,6 +567,7 @@ void app.whenReady().then(async () => {
     browserSession.setUserAgent(browserSession.getUserAgent(), languages.join(","));
   startHosts(startAccount(), () => updateState.available?.version ?? app.getVersion());
   startStorage();
+  startTelemetry();
   // Under `pnpm dev`, Update follows main (scripts/channels.mjs). Nightly and stable are tags on it.
   if (!updater) process.send?.({ channel: "nightly" });
   const win = createWindow();
