@@ -975,6 +975,17 @@ describe("the ref picker", () => {
     expect(calls("thread/start")).toEqual([expect.objectContaining({ base: "main" })]);
   });
 
+  test("a new worktree starts from the checkout's branch without develop or main", async () => {
+    capabilities = { repoRefs: {} };
+    answers["repo/refs"] = () => ({ result: { refs: [{ name: "feature", current: true }] } });
+    await renderApp();
+    expect(button("From feature")).toBeDefined();
+    await send("Fix it");
+    expect(calls("thread/start")).toEqual([
+      expect.not.objectContaining({ base: expect.anything() }),
+    ]);
+  });
+
   test("the local checkout switches to the ref picked first", async () => {
     capabilities = { checkout: {}, repoRefs: {} };
     await renderApp();
