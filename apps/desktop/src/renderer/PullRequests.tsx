@@ -360,7 +360,7 @@ function CheckRow({
   const [open, setOpen] = useState(false);
   const { Icon, color } = checkIcons[check.state] ?? noCheck;
   const action =
-    "rounded-md px-1.5 py-0.5 text-[12px] text-muted-foreground hover:bg-hover hover:text-foreground";
+    "-my-0.5 rounded-md px-1.5 py-0.5 text-[12px] text-muted-foreground hover:bg-hover hover:text-foreground";
   return (
     <li className="group/check">
       <div className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] group-hover/check:bg-hover group-focus-within/check:bg-hover">
