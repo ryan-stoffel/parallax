@@ -25,6 +25,7 @@ import { linuxPackages } from "./scripts.mjs";
  * @property {string} [input] Piped to its stdin. Without it, the command runs in the terminal,
  *   for a sign-in that asks questions.
  * @property {boolean} [quiet] Drop its stdout, such as `plxd attach`'s JSON-RPC.
+ * @property {Record<string, string>} [env] Added to the doctor's environment.
  */
 
 /**
@@ -38,16 +39,18 @@ import { linuxPackages } from "./scripts.mjs";
 /** @typedef {{ name: string, result: Result }} Checked */
 
 /**
- * An agent as `providers/list` reports it. Only these fields are read: the rest includes the
- * provider's env values, which may hold keys, so none of it reaches the context file.
+ * An agent as `providers/list` reports it. Its env values may hold keys: `loginEnv` is only passed
+ * to the agent's own sign-in, as the app does, and none of them reaches the context file.
  * @typedef {object} Provider
- * @property {{ id: string, kind: string, name: string, enabled?: boolean }} instance
+ * @property {{ id: string, kind: string, name: string, enabled?: boolean, home?: string }} instance
  * @property {boolean} [installed]
  * @property {boolean} [signedIn]
  * @property {string} [version]
  * @property {string} [account]
  * @property {string} [note]
  * @property {string[]} [login]
+ * @property {{ name: string, value?: string }[]} [loginEnv]
+ * @property {string} [path] Where plxd found the agent's CLI.
  */
 
 /**
@@ -96,6 +99,33 @@ export const AGENTS = [
 ];
 
 const GiB = 1024 ** 3;
+
+/** The variable that points each agent kind at an instance's own home, as the app's `HOME_VARS`. */
+const HOME_VARS = /** @type {Record<string, string>} */ ({
+  claude: "CLAUDE_CONFIG_DIR",
+  codex: "CODEX_HOME",
+  antigravity: "GEMINI_HOME",
+  opencode: "OPENCODE_CONFIG_DIR",
+  hermes: "HERMES_HOME",
+});
+
+/**
+ * The fix that signs in to `provider`, as the app's `providerSignInCommand` runs it: its `login`
+ * argv with its `loginEnv` and its home's variable set, so a second Codex signs in to its own
+ * `CODEX_HOME`. A program named like the CLI plxd found runs from where plxd found it.
+ * @param {Provider} provider
+ * @returns {Fix | undefined}
+ */
+export function signInFix(provider) {
+  const [program, ...args] = provider.login ?? [];
+  if (!program) return undefined;
+  const { kind, home, name } = provider.instance;
+  const homeVar = HOME_VARS[kind];
+  const env = Object.fromEntries((provider.loginEnv ?? []).map((v) => [v.name, v.value ?? ""]));
+  if (homeVar && home) env[homeVar] = home;
+  const own = provider.path && path.basename(provider.path).replace(/\.\w+$/, "") === program;
+  return { title: `Sign in to ${name} (${[program, ...args].join(" ")})`, file: own && provider.path ? provider.path : program, args, env };
+}
 
 /**
  * Where plxd may be, in the desktop app's `LOCATE_PLXD` order: `~/.parallax-plxd`
@@ -239,7 +269,8 @@ const versionOf = (plxd) => capture(plxd, ["--version"]).stdout.trim().split(/\s
 
 /**
  * The pid in `plxd.lock` if that process is alive. A `serve` holds the lock and writes its pid
- * there; the file stays after it exits.
+ * there; the file stays after it exits, and the pid may be reused, so `gather` also checks that
+ * the process runs plxd.
  * @param {string} dataDir
  */
 function lockPid(dataDir) {
@@ -253,9 +284,9 @@ function lockPid(dataDir) {
   try {
     process.kill(pid, 0);
     return pid;
-  } catch (error) {
-    // EPERM: alive, run by another user.
-    return /** @type {NodeJS.ErrnoException} */ (error).code === "EPERM" ? pid : undefined;
+  } catch {
+    // Dead, or EPERM: another user's process, which can't be this user's plxd.
+    return undefined;
   }
 }
 
@@ -311,6 +342,7 @@ export function askPlxd(plxd, version, timeoutMs = 15_000) {
   return new Promise((resolve) => {
     /** @type {Record<string, unknown>} */
     const answers = {};
+    const received = new Set();
     let finished = false;
     const child = spawn(plxd, ["attach"], { stdio: ["pipe", "pipe", "ignore"] });
     const finish = () => {
@@ -336,9 +368,12 @@ export function askPlxd(plxd, version, timeoutMs = 15_000) {
           continue;
         }
         const request = typeof message.id === "number" ? requests[message.id - 1] : undefined;
-        if (request && message.result !== undefined) answers[request[0]] = message.result;
+        if (!request || received.has(request[0])) continue;
+        // An error reply counts as answered, so a refused request doesn't wait out the timeout.
+        received.add(request[0]);
+        if (message.result !== undefined) answers[request[0]] = message.result;
       }
-      if (Object.keys(answers).length === requests.length) finish();
+      if (received.size === requests.length) finish();
     });
     child.once("error", finish);
     child.once("exit", finish);
@@ -363,9 +398,11 @@ export async function gather(version, newest) {
   const plxd = plxdCandidates(platform, home, env).find(isFile) ?? findOnPath("plxd", env, platform);
   const plxdVersion = plxd && versionOf(plxd);
 
-  const pid = platform === "win32" ? undefined : lockPid(dataDir);
+  const lockedPid = platform === "win32" ? undefined : lockPid(dataDir);
+  const runningExe = lockedPid === undefined ? undefined : exeOf(lockedPid);
+  // A stale lock's pid reused by another program isn't plxd. Where the OS can't say, trust it.
+  const pid = runningExe === undefined || /^plxd(\.exe)?$/.test(path.basename(runningExe.replace(/ \(deleted\)$/, ""))) ? lockedPid : undefined;
   const running = platform === "win32" ? await probePipe(dataDir) : pid !== undefined;
-  const runningExe = pid === undefined ? undefined : exeOf(pid);
   const exeOnDisk = runningExe?.replace(/ \(deleted\)$/, "");
   const runningExeVersion = exeOnDisk && exeOnDisk !== plxd && isFile(exeOnDisk) ? versionOf(exeOnDisk) : exeOnDisk === plxd ? plxdVersion : undefined;
   const answers = running && plxd ? await askPlxd(plxd, version) : undefined;
@@ -464,7 +501,7 @@ export function evaluate(facts) {
   if (facts.runningExe?.endsWith(" (deleted)") || (runningVersion && facts.runningExeVersion && runningVersion !== facts.runningExeVersion)) {
     add("Restart", {
       state: "fail",
-      detail: `plxd ${runningVersion} is running, but its binary is now ${facts.runningExeVersion ?? "replaced"}. Quit and reopen Parallax to restart it.`,
+      detail: `${runningVersion ? `plxd ${runningVersion}` : "plxd"} is running, but its binary ${facts.runningExeVersion ? `is now ${facts.runningExeVersion}` : "was replaced"}. Quit and reopen Parallax to restart it.`,
     });
   }
 
@@ -493,11 +530,10 @@ export function evaluate(facts) {
       // plxd lists its default agents whether or not the user has any of them.
       if (!provider.installed) add(name, { state: "skip", detail: "not installed" });
       else if (provider.signedIn === false) {
-        const login = provider.login ?? [];
         add(name, {
           state: "fail",
           detail: `${version}isn't signed in`,
-          fix: login[0] ? { title: `Sign in to ${name} (${login.join(" ")})`, file: login[0], args: login.slice(1) } : undefined,
+          fix: signInFix(provider),
         });
       } else if (provider.note) add(name, { state: "warn", detail: `${version}${provider.note}` });
       else add(name, { state: "ok", detail: `${version}${provider.signedIn ? `signed in${provider.account ? ` (${provider.account})` : ""}` : "ready"}` });
@@ -550,15 +586,34 @@ const MARKS = { ok: "✓", warn: "!", fail: "✗", skip: "-" };
 /** One check as a line, with its name in a column and the home folder as `~`. @param {Checked} checked */
 export const line = ({ name, result }) => `${MARKS[result.state]} ${name.padEnd(14)} ${result.detail.replaceAll(os.homedir(), "~")}`;
 
+/**
+ * Ignores Ctrl+C and Ctrl+\ while a child has the terminal: the terminal sends them to the doctor
+ * too, which would exit and leave the child without it. Returns the function that stops ignoring.
+ */
+function holdSignals() {
+  const ignore = () => {};
+  process.on("SIGINT", ignore);
+  process.on("SIGQUIT", ignore);
+  return () => {
+    process.off("SIGINT", ignore);
+    process.off("SIGQUIT", ignore);
+  };
+}
+
 /** Runs `fix` and resolves when it exits. @param {Fix} fix */
 function runFix(fix) {
   return new Promise((resolve) => {
     const stdin = fix.input === undefined ? "inherit" : "pipe";
     // `exit`, not `close`: a `serve` that `attach` starts may hold its stdio open. A Windows
     // sign-in command may be an npm `.cmd` shim, which only a shell runs.
-    const child = spawn(fix.file, fix.args, { stdio: [stdin, fix.quiet ? "ignore" : "inherit", "inherit"], shell: process.platform === "win32" && fix.input === undefined });
-    child.once("error", (error) => (console.log(`  ${message(error)}`), resolve(undefined)));
-    child.once("exit", () => resolve(undefined));
+    const child = spawn(fix.file, fix.args, {
+      stdio: [stdin, fix.quiet ? "ignore" : "inherit", "inherit"],
+      env: { ...process.env, ...fix.env },
+      shell: process.platform === "win32" && fix.input === undefined,
+    });
+    const release = holdSignals();
+    child.once("error", (error) => (release(), console.log(`  ${message(error)}`), resolve(undefined)));
+    child.once("exit", () => (release(), resolve(undefined)));
     if (fix.input !== undefined) child.stdin?.end(fix.input);
   });
 }
@@ -672,9 +727,10 @@ export async function doctor(options) {
     const shell = /\.(cmd|bat)$/i.test(cli);
     return await new Promise((resolve) => {
       const child = spawn(shell ? `"${cli}"` : cli, shell ? args.map((arg) => `"${arg}"`) : args, { cwd: dir, stdio: "inherit", shell });
-      child.once("error", (error) => (console.log(`✗ Couldn't start ${agent.label}: ${message(error)}\n${paths}`), resolve(1)));
+      const release = holdSignals();
+      child.once("error", (error) => (release(), console.log(`✗ Couldn't start ${agent.label}: ${message(error)}\n${paths}`), resolve(1)));
       // A signal has no exit code: report it as a failure, not success.
-      child.once("exit", (code, signal) => resolve(code ?? (signal === null ? 0 : 1)));
+      child.once("exit", (code, signal) => (release(), resolve(code ?? (signal === null ? 0 : 1))));
     });
   } finally {
     prompt?.close();

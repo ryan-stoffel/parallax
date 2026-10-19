@@ -114,7 +114,7 @@ ${results.map(({ name, result }) => `- ${mark[result.state]} ${name}: ${result.d
 ${service}
 - plxd installed by plx-connect or the app over SSH: ${path.join(os.homedir(), ".parallax-plxd")}
 - Source cache (clone Parallax here): ${sourceCache}
-- API keys: in the login Keychain on macOS and the Secret Service on Linux. NEVER read them.
+- Secrets, NEVER read: API keys in the login Keychain (macOS) or Secret Service (Linux); ${data("providers.json")}, which can hold keys in plain text; and the agent CLIs' credential files. The playbook lists the rest.
 
 ## Recent plxd log warnings and errors (last 24 h)
 

@@ -121,7 +121,7 @@ Check these against the evidence before going deeper.
 | An agent isn't signed in | The context file says NOT signed in | `claude auth login` or `codex login`; Cursor signs in from the app |
 | Threads fail at once on Linux | `workerUnavailable`, with `bubblewrap and socat aren't installed`, the AppArmor `apparmor_restrict_unprivileged_userns` message, or a root or CAP_SETFCAP message | Install bubblewrap and socat; for AppArmor, the message names the sysctl |
 | Agents fail on NixOS | No `NIX_LD` and no `/run/current-system/sw/share/nix-ld/lib/ld.so` | `programs.nix-ld.enable = true;` in configuration.nix, then `sudo nixos-rebuild switch` |
-| Claude or Cursor threads fail to start | The note `Node.js 22.x or newer is required`, or `Couldn't install the …` SDK | Install Node 22.16 or newer with npm |
+| Claude or Cursor threads fail to start | The note `Node.js 22.16 or newer is required` (Claude) or `Node.js 22.13 or newer is required` (Cursor), or `Couldn't install the …` SDK | Install Node 22.16 or newer with npm |
 | API keys fail on Linux | `keychainUnavailable`: no unlocked Secret Service | Install and unlock a Secret Service (gnome-keyring, KeePassXC) |
 | Connect doesn't reach another computer | `connect/devices` shows Tailscale `missing` or `stopped`, or `listening: false`; `could not listen on …` or `refused a tailnet connection` in the log | Start Tailscale on both, signed in as the same Tailscale user and not tagged; on Windows, allow TCP 7340 in the firewall |
 | plxd stops at logout on Linux | Linger is off | `sudo loginctl enable-linger $USER` |
@@ -185,8 +185,9 @@ request, use a separate clean clone of `develop`, never the tag-pinned clone.
 - Show the user the complete issue and get an explicit yes before posting. Never post without it.
 - Under Filed by, name the agent and model that wrote it.
 - Without a signed-in `gh`, offer `gh auth login`, or build a prefilled
-  https://github.com/ryan-stoffel/parallax/issues/new URL with `template=via-doctor.yml`, `title`,
-  and `body` parameters. Print it, and open it in their browser only after they approve.
+  https://github.com/ryan-stoffel/parallax/issues/new URL with `title`, `body` (the template's
+  sections as `###` headings), and `labels=via-doctor` parameters, without `template`: GitHub
+  ignores `body` for an issue form. Print it, and open it in their browser only after they approve.
 - If the user pasted screenshots, remind them to drag the images into the issue after it's
   created; they can't be attached from here.
 - If an open issue already matches, offer to comment there with this user's environment and
@@ -200,8 +201,12 @@ Never read secrets:
 - API keys and provider secrets, in the macOS login Keychain or the Linux Secret Service under
   `io.github.ryan-stoffel.parallax`. Never run `security find-generic-password -w` or
   `secret-tool lookup`.
-- In the data folder: `remote-key`, `remote-hosts/`, `cursor-sdk/*/auth.json`, and the app's
-  `desktop/account` and `desktop/Partitions/`.
+- In the data folder: `providers.json` (a provider's env values, which can be keys stored in
+  plain text), `remote-key`, `remote-hosts/`, `cursor-sdk/*/auth.json`, `ollama-cloud/`, and the
+  app's `desktop/account` and `desktop/Partitions/`.
+- The agent CLIs' and gh's own credentials: `~/.claude/.credentials.json`, `~/.codex/auth.json`
+  (and an instance's own `CLAUDE_CONFIG_DIR` or `CODEX_HOME`), and `~/.config/gh/hosts.yml`. Use
+  their status commands instead: `claude auth status`, `codex login status`, `gh auth status`.
 - `providers/list`'s `env` and `loginEnv` values, and `PLXD_RELAY_TOKEN`.
 
 Scrub anything you quote in an issue or comment: keys, tokens, Tailscale addresses and device

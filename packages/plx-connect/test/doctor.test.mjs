@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { buildContext, buildLaunchPrompt, buildSeedPrompt } from "../src/doctor-prompt.mjs";
-import { duration, evaluate, findOnPath, parseLogProblems, plxdCandidates, resolveDataDir } from "../src/doctor.mjs";
+import { duration, evaluate, findOnPath, parseLogProblems, plxdCandidates, resolveDataDir, signInFix } from "../src/doctor.mjs";
 
 test("the data folder is ~/.parallax unless only the legacy folder exists", () => {
   const home = mkdtempSync(path.join(os.tmpdir(), "plx-doctor-test-"));
@@ -133,6 +133,23 @@ test("Connect is checked only while it's on, and fails without Tailscale", () =>
   const stopped = healthy();
   if (stopped.answers?.connect) stopped.answers.connect.tailscale = "stopped";
   assert.equal(check(stopped, "Connect")?.state, "fail");
+});
+
+test("a second instance signs in to its own home, with its login env, from plxd's CLI", () => {
+  const fix = signInFix({
+    instance: { id: "work-codex", kind: "codex", name: "Work Codex", home: "/Users/me/.parallax/codex/work" },
+    login: ["codex", "login"],
+    loginEnv: [{ name: "OPENAI_BASE_URL", value: "https://example.test" }],
+    path: "/opt/homebrew/bin/codex",
+  });
+  assert.equal(fix?.file, "/opt/homebrew/bin/codex");
+  assert.deepEqual(fix?.args, ["login"]);
+  assert.deepEqual(fix?.env, { OPENAI_BASE_URL: "https://example.test", CODEX_HOME: "/Users/me/.parallax/codex/work" });
+});
+
+test("a replaced binary without plxd's answer still reads well", () => {
+  const facts = { ...healthy(), answers: undefined, runningExe: "/home/me/.parallax-plxd/plxd (deleted)", runningExeVersion: undefined };
+  assert.equal(check(facts, "Restart")?.detail, "plxd is running, but its binary was replaced. Quit and reopen Parallax to restart it.");
 });
 
 test("an older plxd, a bad store, low disk, and log errors are reported", () => {
