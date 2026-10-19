@@ -9,6 +9,7 @@ import type { ParallaxBridge } from "../preload/bridge";
 import type { PrDiffResult, PullRequest } from "../protocol/generated/protocol";
 import {
   githubText,
+  LinkedPullRequests,
   linkedPr,
   parseDiff,
   PullRequestChip,
@@ -140,6 +141,24 @@ test("the list shows each pull request newest first, with the open and linked co
   expect(document.querySelector("p")!.textContent).toBe("1 open · 2 linked · synced just now");
   await click(document.querySelectorAll("li button")[1]);
   expect(onOpen).toHaveBeenCalledWith(url(40));
+});
+
+test("Thread details lists the newest pull request with its checks, the rest behind Show more", async () => {
+  read = {
+    [url(40)]: prOf(40, { state: "merged" }),
+    [url(41)]: prOf(41, { checksState: "failed" }),
+  };
+  const onOpen = vi.fn();
+  await render([url(40), url(41)], (prs) => <LinkedPullRequests prs={prs} onOpen={onOpen} />);
+  const rows = () => [...document.querySelectorAll("li")].map((li) => li.textContent);
+  expect(rows()).toEqual(["Change 41#41"]);
+  expect(document.querySelector('li [aria-label="Checks failed"]')).not.toBeNull();
+  await click(button("Show 1 more"));
+  expect(rows()).toEqual(["Change 41#41", "Change 40#40"]);
+  await click(document.querySelectorAll("li button")[1]);
+  expect(onOpen).toHaveBeenCalledWith(url(40));
+  await click(button("Show less"));
+  expect(rows()).toEqual(["Change 41#41"]);
 });
 
 test("the view shows the header, the checks' state, reviewers, labels, description, and comments newest first", async () => {

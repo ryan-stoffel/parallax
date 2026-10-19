@@ -203,6 +203,10 @@ export const menuPanel = (align: "start" | "end" | "center" = "start") =>
 export const menuItem =
   "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-hover [&_svg]:size-3.5 [&_svg]:shrink-0";
 
+/** A split row's chevron, after a thin divider from its main part. */
+export const splitChevron =
+  "relative grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground before:absolute before:inset-y-2 before:left-0 before:w-px before:bg-border hover:bg-hover hover:before:opacity-0 disabled:opacity-50 [&_svg]:size-4";
+
 /**
  * Opens a menu on a right-click by clicking its trigger. Where the right-click arrives while a
  * button is still down (a right-click on macOS and Linux, Control-click on macOS), the menu opens

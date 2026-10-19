@@ -7,7 +7,7 @@ import vscodeIcon from "./assets/vscode.svg";
 import ghosttyIcon from "./assets/ghostty.svg";
 import alacrittyIcon from "./assets/alacritty.svg";
 import { useShortcutLabel } from "./keybindings";
-import { appShortcut, Menu, menuItem } from "./ui";
+import { appShortcut, Menu, menuItem, splitChevron } from "./ui";
 
 /** Where the last target chosen is kept; Settings > General sets it too. */
 export const OPEN_TARGET_KEY = "parallax.openTarget";
@@ -144,7 +144,7 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
             popoverTarget={id}
             aria-haspopup="menu"
             aria-label="Choose editor or file manager"
-            className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover [&_svg]:size-4"
+            className={splitChevron}
           >
             <ChevronDown aria-hidden />
           </button>
@@ -185,7 +185,7 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
           aria-label="Choose terminal"
           disabled={!local || terminals.length === 0}
           title={!local ? terminalWhy : undefined}
-          className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover disabled:opacity-50 [&_svg]:size-4"
+          className={splitChevron}
         >
           <ChevronDown aria-hidden />
         </button>

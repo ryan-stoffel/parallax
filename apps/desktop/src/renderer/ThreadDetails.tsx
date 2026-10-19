@@ -5,6 +5,7 @@ import { Actions } from "./Actions";
 import { GitMenu } from "./GitMenu";
 import { LineageSection } from "./Lineage";
 import { OpenMenu } from "./OpenMenu";
+import { LinkedPullRequests } from "./PullRequests";
 import { hostIcon } from "./RunTargetMenu";
 import type { Host } from "./hosts";
 import { IconButton } from "./ui";
@@ -83,9 +84,9 @@ export function ThreadDetailsButton({ open, onToggle }: { open: boolean; onToggl
 }
 
 /**
- * The thread's host, launchers, repository actions, Git status, and lineage, docked at the
- * thread's right, left of the side panel. Mounted while hidden, so the Open and action
- * shortcuts keep working.
+ * The thread's host, launchers, repository actions, Git status, linked pull requests, and
+ * lineage, docked at the thread's right, left of the side panel. Mounted while hidden, so the
+ * Open and action shortcuts keep working.
  */
 export function ThreadDetails({
   mode,
@@ -94,6 +95,7 @@ export function ThreadDetails({
   worktree,
   actions,
   git,
+  prs,
   lineage,
 }: {
   mode: ThreadDetailsMode;
@@ -102,6 +104,7 @@ export function ThreadDetails({
   worktree?: boolean;
   actions?: ComponentProps<typeof Actions>;
   git?: ComponentProps<typeof GitMenu>;
+  prs?: ComponentProps<typeof LinkedPullRequests>;
   lineage?: Omit<ComponentProps<typeof LineageSection>, "visible">;
 }) {
   return (
@@ -118,11 +121,11 @@ export function ThreadDetails({
           : "shrink-0"
       }`}
     >
-      <div className="pointer-events-auto max-h-full overflow-y-auto rounded-xl border border-border bg-surface text-foreground shadow-composer [&_svg]:size-[18px] [&_img]:size-[18px]">
+      <div className="pointer-events-auto max-h-full overflow-y-auto rounded-2xl border border-border bg-surface text-foreground shadow-composer [&_img]:size-4 [&_svg]:size-4">
         <section aria-label="Workspace" className="p-2">
           <div
             title={folder ?? "No folder yet"}
-            className="flex items-center gap-2 px-2 py-2 text-[13px]"
+            className="flex items-center gap-0.5 px-2 py-1.5 text-[13px]"
           >
             <span aria-hidden className="shrink-0 text-muted-foreground">
               {hostIcon(host)}
@@ -132,14 +135,14 @@ export function ThreadDetails({
             ) : (
               <FolderOpen aria-hidden className="shrink-0 text-muted-foreground" />
             )}
-            <span className="truncate font-medium">{host.name}</span>
+            <span className="ml-2 truncate">{host.name}</span>
           </div>
           <OpenMenu hostId={host.id} folder={folder} />
           {actions && <Actions {...actions} />}
         </section>
         {git && (
           <section aria-label="Git" className="border-t border-border p-2">
-            <GitMenu {...git} />
+            <GitMenu {...git}>{prs && <LinkedPullRequests {...prs} />}</GitMenu>
           </section>
         )}
         {lineage && <LineageSection {...lineage} visible={mode !== "hidden"} />}

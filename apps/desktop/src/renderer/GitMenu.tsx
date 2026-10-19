@@ -1,13 +1,13 @@
 import {
   ChevronDown,
   CloudUpload,
-  Files,
+  FileDiff,
   GitBranch,
   GitCommitHorizontal,
   GitPullRequestArrow,
   type LucideIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type { AgentRun, GitStatus, RepoId } from "../protocol/generated/protocol";
@@ -16,7 +16,7 @@ import { describeError, githubProblem } from "./errors";
 import { titleOf } from "./threads";
 import { isRunning } from "./transcript";
 import { notify, type Notice } from "./notifications";
-import { Menu, menuItem } from "./ui";
+import { Menu, menuItem, splitChevron } from "./ui";
 
 export type GitAction = "commit" | "push" | "pr";
 
@@ -65,7 +65,8 @@ export function gitActions(
  * ends. Each action's result is a notification (PLX-507), except a failed commit, which stays in
  * its dialog; a push or Create PR that fails for `gh` offers `onSetUpGithub` (PLX-423). Absent
  * until the host's plxd has the `git` capability. A new repository thread reads its checkout
- * behind `repoGitStatus` and offers no writes until the thread starts.
+ * behind `repoGitStatus` and offers no writes until the thread starts. `children`, such as the
+ * thread's linked pull requests, show between the branch and Commit.
  */
 export function GitMenu({
   hostId,
@@ -75,6 +76,7 @@ export function GitMenu({
   onPrOpened,
   onSetUpGithub,
   onChanges,
+  children,
 }: {
   hostId: string;
   run?: AgentRun;
@@ -84,6 +86,7 @@ export function GitMenu({
   onPrOpened?: (url: string) => void;
   onSetUpGithub?: () => void;
   onChanges?: () => void;
+  children?: ReactNode;
 }) {
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
@@ -219,8 +222,8 @@ export function GitMenu({
 
   return (
     <>
-      <div className={`${menuItem} text-muted-foreground`} title={status?.branch ?? diagnostic}>
-        <GitBranch aria-hidden />
+      <div className={menuItem} title={status?.branch ?? diagnostic}>
+        <GitBranch aria-hidden className="text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate">
           {status
             ? (status.branch ?? "Detached HEAD")
@@ -232,6 +235,7 @@ export function GitMenu({
           <span className="shrink-0 text-[11.5px] text-faint-foreground">{status.ahead} ahead</span>
         )}
       </div>
+      {children}
       <div className="flex items-center">
         <button
           type="button"
@@ -248,9 +252,9 @@ export function GitMenu({
           popoverTarget={id}
           aria-haspopup="menu"
           aria-label="Git actions"
-          className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover [&_svg]:size-4"
+          className={splitChevron}
         >
-          <ChevronDown aria-hidden className="opacity-70" />
+          <ChevronDown aria-hidden />
         </button>
       </div>
       <Menu ref={menu} id={id} label="Git" align="end" className="w-80 p-1" focus="button:enabled">
@@ -277,14 +281,14 @@ export function GitMenu({
         disabled={!status || !onChanges}
         className={`${menuItem} disabled:opacity-50`}
       >
-        <Files aria-hidden />
+        <FileDiff aria-hidden />
         <span className="flex-1">Changes</span>
-        <span className="text-[12px] text-muted-foreground tabular-nums">
+        <span className="text-[12px] text-muted-foreground">
           {status ? (
-            <>
-              <span className="text-emerald-500">+{status.insertions ?? 0}</span>{" "}
+            <span className="font-mono">
+              <span className="text-added">+{status.insertions ?? 0}</span>{" "}
               <span className="text-danger">−{status.deletions ?? 0}</span>
-            </>
+            </span>
           ) : error ? (
             "Unavailable"
           ) : (
