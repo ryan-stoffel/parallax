@@ -28,19 +28,12 @@ test("every typed word has to match", () => {
   expect(titles("ghostty zebra")).toEqual([]);
 });
 
-test("a path lists sections, then a section's settings, and names each setting's place", () => {
-  expect(titles("/")).toHaveLength(11);
-  expect(titles("/gen")).toEqual(["General"]);
-  expect(searchSettings("/general")[0]).toMatchObject({ section: "general", path: "/general" });
-  const general = searchSettings("/general/");
-  expect(general.every((r) => r.section === "general")).toBe(true);
-  expect(general[0]!.path).toBe("/general/open-folders-in");
-  expect(searchSettings("/general/time")[0]).toMatchObject({
+test("a section's name finds it first, and a setting says where it is", () => {
+  expect(searchSettings("general")[0]).toEqual({ section: "general", title: "General" });
+  expect(searchSettings("time")[0]).toEqual({
+    section: "general",
     title: "Time format",
-    path: "/general/time-format",
-    anchor: "time-format",
     place: "General › Preferences",
+    anchor: "time-format",
   });
-  expect(searchSettings("/source-control")[0]!.section).toBe("sourceControl");
-  expect(titles("/nowhere/time")).toEqual([]);
 });

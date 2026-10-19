@@ -48,7 +48,6 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
-  Fragment,
   useEffect,
   useId,
   useImperativeHandle,
@@ -184,7 +183,7 @@ import {
   TodayDivider,
 } from "./SidebarParts";
 import { PinList, type Pin as PinData } from "./PinList";
-import { searchSettings, settingsSections, type SettingsResult } from "./settings/search";
+import { searchSettings, settingsSections } from "./settings/search";
 
 const row =
   "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] hover:bg-hover";
@@ -3558,11 +3557,10 @@ export const settingsNames = Object.fromEntries(
 ) as Record<SettingsSection, string>;
 
 /**
- * The sidebar while Settings is open: a search box, the sections under their groups, and Back to
- * app at the bottom. Typed words or a `/general/time-format` path list matching sections and
+ * The sidebar while Settings is open: a search box, the sections, and Back to app at the bottom.
+ * `/` anywhere outside a field focuses the box. Typed words list the matching sections and
  * settings in the sections' place (search.ts); Up and Down choose one, Enter or a click opens it,
- * Tab completes a path to the chosen one, and Escape clears. A path naming a section or setting
- * exactly opens it as it's typed.
+ * and Escape clears.
  */
 export function SettingsNav({
   section,
@@ -3576,61 +3574,80 @@ export function SettingsNav({
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
-  const results = query ? searchSettings(query) : [];
+  const box = useRef<HTMLInputElement>(null);
+  const results = query.trim() ? searchSettings(query) : [];
   const chosen = results[Math.min(active, results.length - 1)];
   const list = useId();
-  const open = (r: SettingsResult) => onSection(r.section, r.anchor);
-  const edit = (next: string) => {
-    setQuery(next);
-    setActive(0);
-    // A path is an address: naming a section or setting opens it.
-    const exact = next.startsWith("/")
-      ? searchSettings(next).find((r) => r.path === next.replace(/\/$/, ""))
-      : undefined;
-    if (exact) open(exact);
-  };
-  // The typed words, to mark in the results.
-  const words = query.startsWith("/") ? [] : (query.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+  const words = query.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (target.closest("input, textarea, select, [contenteditable]")) return;
+      e.preventDefault();
+      box.current?.focus();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="px-2 pb-2">
-        <label className="flex h-8 min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
+      <div className="px-2 pb-3">
+        <label className="sky-search flex h-9 min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 pr-1.5 pl-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
           <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
           <input
+            ref={box}
             type="search"
             role="combobox"
             aria-label="Search settings"
-            aria-expanded={!!query}
+            aria-expanded={results.length > 0}
             aria-controls={list}
             aria-activedescendant={chosen ? `${list}-${results.indexOf(chosen)}` : undefined}
-            placeholder="Search settings or type /"
+            placeholder="Search"
             value={query}
-            autoFocus
             spellCheck={false}
             autoComplete="off"
-            onChange={(e) => edit(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setActive(0);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
                 if (query) setQuery("");
                 else e.currentTarget.blur();
-              } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+              } else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && results.length) {
                 e.preventDefault();
                 const step = e.key === "ArrowDown" ? 1 : -1;
-                setActive((i) => (i + step + results.length) % Math.max(results.length, 1));
-              } else if (e.key === "Enter" && chosen) open(chosen);
-              else if (e.key === "Tab" && chosen && query.startsWith("/")) {
-                // Completes to the chosen section's settings, or the chosen setting.
-                e.preventDefault();
-                edit(chosen.anchor ? chosen.path : `${chosen.path}/`);
-              }
+                setActive((i) => (i + step + results.length) % results.length);
+              } else if (e.key === "Enter" && chosen) onSection(chosen.section, chosen.anchor);
             }}
-            className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none [&::-webkit-search-cancel-button]:hidden"
           />
+          {query ? (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => {
+                setQuery("");
+                box.current?.focus();
+              }}
+              className="grid size-6 shrink-0 place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground"
+            >
+              <X aria-hidden className="size-3.5" />
+            </button>
+          ) : (
+            <kbd
+              aria-hidden
+              className="grid size-6 shrink-0 place-items-center rounded-md border border-border/60 bg-background/60 font-sans text-[12px] text-faint-foreground"
+            >
+              /
+            </kbd>
+          )}
         </label>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2">
-        {query ? (
+        {query.trim() ? (
           <div
             id={list}
             role="listbox"
@@ -3641,53 +3658,53 @@ export function SettingsNav({
               const Icon = sectionIcons[r.section];
               return (
                 <button
-                  key={r.path}
+                  key={`${r.section}/${r.anchor ?? ""}`}
                   id={`${list}-${i}`}
                   type="button"
                   role="option"
                   aria-selected={r === chosen}
                   tabIndex={-1}
                   onMouseMove={() => setActive(i)}
-                  onClick={() => open(r)}
-                  className={`${row} items-start aria-selected:bg-selected`}
+                  onClick={() => onSection(r.section, r.anchor)}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left aria-selected:bg-selected"
                 >
-                  <Icon aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                  <span className="grid size-7 shrink-0 place-items-center rounded-md border border-border/60 bg-background/60 text-muted-foreground">
+                    <Icon aria-hidden className="size-3.5" />
+                  </span>
                   <span className="min-w-0">
-                    <span className="block truncate text-foreground">
+                    <span className="block truncate text-[13px] text-foreground">
                       <Marked text={r.title} words={words} />
                     </span>
-                    <span className="block truncate text-[11.5px] text-faint-foreground">
-                      {query.startsWith("/") ? r.path : r.place}
-                    </span>
+                    {r.place && (
+                      <span className="block truncate text-[11.5px] text-faint-foreground">
+                        {r.place}
+                      </span>
+                    )}
                   </span>
                 </button>
               );
             })}
             {results.length === 0 && (
-              <p className={emptyNote}>
-                {query.startsWith("/") ? "No setting at that path" : "No settings match"}
+              <p className="px-2 py-6 text-center text-[12.5px] text-faint-foreground">
+                No settings match “{query.trim()}”
               </p>
             )}
           </div>
         ) : (
           <div className="flex flex-col gap-px">
-            {settingsSections.map((s, i) => {
+            {settingsSections.map((s) => {
               const Icon = sectionIcons[s.id];
               return (
-                <Fragment key={s.id}>
-                  {s.group !== settingsSections[i - 1]?.group && (
-                    <h2 className={`${sectionHeading} ${i ? "mt-3" : ""}`}>{s.group}</h2>
-                  )}
-                  <button
-                    type="button"
-                    aria-current={s.id === section ? "page" : undefined}
-                    onClick={() => onSection(s.id)}
-                    className={`${row} ${s.id === section ? current : "text-foreground/80"}`}
-                  >
-                    <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-                    {s.name}
-                  </button>
-                </Fragment>
+                <button
+                  key={s.id}
+                  type="button"
+                  aria-current={s.id === section ? "page" : undefined}
+                  onClick={() => onSection(s.id)}
+                  className={`${row} ${s.id === section ? current : "text-foreground/80"}`}
+                >
+                  <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                  {s.name}
+                </button>
               );
             })}
           </div>

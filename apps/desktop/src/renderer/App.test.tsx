@@ -330,7 +330,7 @@ test("Ctrl+1 and Ctrl+2 focus the split's sides on macOS, and Ctrl+Shift+1 and 2
   bridge.platform = "darwin";
 });
 
-test("Settings' search opens a section by its path and a setting by a word from it", async () => {
+test("Settings' search opens a section or a setting by a word from it, and / focuses it", async () => {
   bridge.command = async () => ({ state: "unavailable", path: "", onPath: true });
   renderApp();
   act(() => {
@@ -344,20 +344,27 @@ test("Settings' search opens a section by its path and a setting by a word from 
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, value);
       box.dispatchEvent(new Event("input", { bubbles: true }));
     });
+  const enter = () =>
+    act(() => {
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
   const options = () =>
     [...document.querySelectorAll('[aria-label="Settings found"] [role="option"]')].map(
       (o) => o.textContent,
     );
 
-  type("/");
-  expect(options()).toHaveLength(11);
-  type("/threads");
+  act(() => {
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
+  });
+  expect(document.activeElement).toBe(box);
+
+  type("threads");
+  expect(options()[0]).toBe("Threads");
+  enter();
   expect(crumbs()).toEqual(["Settings", "Threads"]);
 
   type("clock");
   expect(options()[0]).toBe("Time formatGeneral › Preferences");
-  act(() => {
-    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  });
+  enter();
   expect(crumbs()).toEqual(["Settings", "General"]);
 });

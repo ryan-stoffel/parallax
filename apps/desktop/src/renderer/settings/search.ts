@@ -1,27 +1,19 @@
 import type { SettingsSection } from "../App";
 import { commands } from "../keybindings";
 
-/**
- * Settings' sections in the nav's order, each under its group, with words a search for it might
- * use. A section's path is `/` and its slug, as `/source-control`.
- */
-export const settingsSections: {
-  id: SettingsSection;
-  name: string;
-  group: string;
-  keywords?: string;
-}[] = [
-  { id: "general", name: "General", group: "App", keywords: "preferences basics" },
-  { id: "threads", name: "Threads", group: "App", keywords: "chats conversations defaults" },
-  { id: "appearance", name: "Appearance", group: "App", keywords: "look theme style display" },
-  { id: "keybinds", name: "Keybinds", group: "App", keywords: "shortcuts hotkeys keyboard" },
-  { id: "providers", name: "Providers", group: "Agents", keywords: "agents models accounts ai" },
-  { id: "usage", name: "Usage", group: "Agents", keywords: "tokens cost spend limits stats" },
-  { id: "schedules", name: "Schedules", group: "Agents", keywords: "cron timers automation" },
-  { id: "sourceControl", name: "Source control", group: "Projects", keywords: "git github" },
-  { id: "scripts", name: "Scripts", group: "Projects", keywords: "setup commands worktree" },
-  { id: "connections", name: "Connections", group: "System", keywords: "hosts computers ssh" },
-  { id: "storage", name: "Storage", group: "System", keywords: "disk space cleanup" },
+/** Settings' sections in the nav's order, with words a search for each might use. */
+export const settingsSections: { id: SettingsSection; name: string; keywords?: string }[] = [
+  { id: "general", name: "General", keywords: "preferences basics" },
+  { id: "threads", name: "Threads", keywords: "chats conversations defaults" },
+  { id: "appearance", name: "Appearance", keywords: "look theme style display" },
+  { id: "keybinds", name: "Keybinds", keywords: "shortcuts hotkeys keyboard" },
+  { id: "providers", name: "Providers", keywords: "agents models accounts ai" },
+  { id: "usage", name: "Usage", keywords: "tokens cost spend limits stats" },
+  { id: "schedules", name: "Schedules", keywords: "cron timers automation" },
+  { id: "sourceControl", name: "Source control", keywords: "git github" },
+  { id: "scripts", name: "Scripts", keywords: "setup commands worktree" },
+  { id: "connections", name: "Connections", keywords: "hosts computers ssh" },
+  { id: "storage", name: "Storage", keywords: "disk space cleanup" },
 ];
 
 /**
@@ -37,7 +29,7 @@ export interface SettingEntry {
   anchor?: string;
 }
 
-/** A title as a path segment and a `data-setting`: "Time format" → "time-format". */
+/** A title as a `data-setting`: "Time format" → "time-format". */
 export const anchorOf = (title: string) =>
   title
     .toLowerCase()
@@ -302,34 +294,27 @@ function entries(
   }));
 }
 
-/** A search's hit: a section, or a setting on one, with its path and the `data-setting` to show. */
+/** A search's hit: a section, or a setting on one with the `data-setting` to show. */
 export interface SettingsResult {
   section: SettingsSection;
   title: string;
-  /** Where it is, for people: "General › Notifications". */
-  place: string;
-  path: string;
+  /** Where a setting is, for people: "General › Preferences". None for a section. */
+  place?: string;
   anchor?: string;
 }
-
-const slugOf = (id: SettingsSection) => anchorOf(settingsSections.find((s) => s.id === id)!.name);
 
 const sectionResult = (s: (typeof settingsSections)[number]): SettingsResult => ({
   section: s.id,
   title: s.name,
-  place: s.group,
-  path: `/${anchorOf(s.name)}`,
 });
 
 const settingResult = (e: SettingEntry): SettingsResult => {
-  const anchor = e.anchor ?? anchorOf(e.title);
   const name = settingsSections.find((s) => s.id === e.section)!.name;
   return {
     section: e.section,
     title: e.title,
     place: e.group && e.group !== e.title ? `${name} › ${e.group}` : name,
-    path: `/${slugOf(e.section)}/${anchor}`,
-    anchor,
+    anchor: e.anchor ?? anchorOf(e.title),
   };
 };
 
@@ -429,7 +414,6 @@ const sectionFields = (s: (typeof settingsSections)[number]) => ({
   fields: [
     [s.name, 10],
     [s.keywords, 6],
-    [s.group, 3],
   ] as [string | undefined, number][],
 });
 
@@ -445,25 +429,8 @@ const settingFields = (e: SettingEntry) => ({
 });
 
 /**
- * Settings matching `query`. Words find sections and settings by any word of theirs, best first.
- * A path walks them: `/` lists the sections, `/gen` those starting so, `/general/` General's
- * settings, and `/general/time` those of General's matching "time".
+ * Sections and settings matching `query`, best first: each typed word must match a word of
+ * theirs, so "general" finds General and "clock" finds Time format.
  */
-export function searchSettings(query: string): SettingsResult[] {
-  if (!query.startsWith("/"))
-    return byWords(query, [
-      ...settingsSections.map(sectionFields),
-      ...settingsIndex.map(settingFields),
-    ]);
-  const [head = "", ...rest] = query.slice(1).split("/");
-  if (!rest.length)
-    return settingsSections
-      .filter((s) => anchorOf(s.name).startsWith(head.toLowerCase()))
-      .map(sectionResult);
-  const section =
-    settingsSections.find((s) => anchorOf(s.name) === head.toLowerCase()) ??
-    settingsSections.find((s) => anchorOf(s.name).startsWith(head.toLowerCase()));
-  if (!section) return [];
-  const tail = rest.join(" ").replace(/-/g, " ");
-  return byWords(tail, settingsIndex.filter((e) => e.section === section.id).map(settingFields));
-}
+export const searchSettings = (query: string): SettingsResult[] =>
+  byWords(query, [...settingsSections.map(sectionFields), ...settingsIndex.map(settingFields)]);
