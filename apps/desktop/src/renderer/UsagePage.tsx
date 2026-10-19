@@ -510,11 +510,17 @@ function History({
 }
 
 /**
+ * Each host's last `usage/daily` result by `since`, kept while the app runs, so reopening the page
+ * or a range shows it at once while it asks again.
+ */
+export const lastDaily = new Map<string, UsageDailyResult>();
+
+/**
  * Asks one host for its days since `since` in this time zone once it's connected, and again
  * whenever `since` or `refresh` change, and hands them to `onLoad` (without days while it waits,
- * and undefined when it has none to give). A refresh keeps the last answer until the next
- * arrives; a new `since` drops it, since its days are for another range. Shows why the host has
- * nothing, if it doesn't, and each source it couldn't read.
+ * and undefined when it has none to give). Until the answer arrives it shows the last result for
+ * this host and `since`, if it has one. Shows why the host has nothing, if it doesn't, and each
+ * source it couldn't read.
  */
 function HostUsageLoader({
   host,
@@ -540,6 +546,7 @@ function HostUsageLoader({
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     void track(window.parallax.request(host.id, "usage/daily", { since, timeZone })).then(
       (answer) => {
+        if ("result" in answer) lastDaily.set(`${host.id} ${since}`, answer.result);
         if (!stopped)
           setAnswer({ since, value: "result" in answer ? answer.result : answer.error });
       },
@@ -548,7 +555,7 @@ function HostUsageLoader({
       stopped = true;
     };
   }, [host.id, connected, since, refresh, track]);
-  const current = answer?.since === since ? answer.value : undefined;
+  const current = answer?.since === since ? answer.value : lastDaily.get(`${host.id} ${since}`);
   const result = connected && current && "days" in current ? current : undefined;
   // Still on its way: connecting, or failed but retrying by itself. It waits with the skeleton.
   const coming = !connected && (connection?.status !== "failed" || connection.retrying);

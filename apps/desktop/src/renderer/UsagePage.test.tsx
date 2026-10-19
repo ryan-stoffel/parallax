@@ -8,6 +8,7 @@ import type { UsageDay } from "../protocol/generated/protocol";
 import {
   attribute,
   buckets,
+  lastDaily,
   niceTop,
   resetTime,
   stack,
@@ -237,7 +238,10 @@ test("a chart's axis tops out at four even steps", () => {
 });
 
 let unmount = () => {};
-afterEach(() => act(() => unmount()));
+afterEach(() => {
+  act(() => unmount());
+  lastDaily.clear();
+});
 
 /** Renders the page for one connected host whose methods answer with `answers`. */
 async function renderPage(
@@ -424,6 +428,14 @@ test("an answer for a range left behind doesn't replace the range shown", async 
   await settle();
   expect(document.querySelectorAll("[data-bar]")).toHaveLength(90);
   expect(document.querySelector('div[aria-busy="true"]')).toBeNull();
+});
+
+test("reopening the page shows the last answer while it asks again", async () => {
+  await renderPage({ "usage/daily": daily([usage(now, "claude", "opus", 100, 2_000_000)]) });
+  act(() => unmount());
+  await renderPage({ "usage/daily": () => new Promise(() => {}) });
+  expect(document.querySelectorAll("[data-bar]")).toHaveLength(30);
+  expect(document.querySelector('[aria-label="Refresh"]')!.getAttribute("aria-busy")).toBe("true");
 });
 
 test("a new range keeps the last one in view, dimmed, until its answer comes", async () => {
