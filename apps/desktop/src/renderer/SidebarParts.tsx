@@ -1,18 +1,16 @@
 // Pieces of the sidebar (0075): the divider over Today with its View panel, the pins' folded
-// summary, the New thread row, and the small animated parts they share.
+// summary, and the small animated parts they share.
 import {
   ArrowDown,
   ChevronDown,
   ChevronsDownUp,
   ChevronsUpDown,
   Pin,
-  Plus,
   SlidersHorizontal,
 } from "lucide-react";
 import { useId, useState, type ReactNode, type ToggleEvent } from "react";
 
 import type { Attention } from "./attention";
-import { useShortcutLabel } from "./keybindings";
 import { menuPanel } from "./ui";
 
 /** Today's auto-archive choices, in hours, and never. */
@@ -313,29 +311,6 @@ export function PinSummary({
         aria-hidden
         className="ml-auto text-faint-foreground opacity-0 transition-opacity group-hover/sum:opacity-100"
       />
-    </button>
-  );
-}
-
-/** New thread, as a thread row's first line, as Arc's New Tab row, reading as open on the New
- * thread screen. */
-export function NewThreadRow({ onClick, selected }: { onClick: () => void; selected: boolean }) {
-  const keys = useShortcutLabel("newThread");
-  return (
-    <button
-      type="button"
-      aria-label="New thread"
-      onClick={onClick}
-      aria-current={selected ? "page" : undefined}
-      className={`group/new flex w-full items-center gap-2 rounded-lg px-2 py-[7px] text-left text-[13px] transition-[background-color,color,transform] duration-100 hover:text-foreground active:scale-[0.985] [&_svg]:size-4 ${selected ? "bg-selected text-foreground" : "text-muted-foreground hover:bg-hover"}`}
-    >
-      <Plus aria-hidden />
-      New thread
-      {keys && (
-        <kbd className="ml-auto font-sans text-[11px] text-faint-foreground opacity-0 transition-opacity group-hover/new:opacity-100">
-          {keys}
-        </kbd>
-      )}
     </button>
   );
 }

@@ -42,6 +42,7 @@ import {
   Settings,
   ShieldCheck,
   SquareDashed,
+  SquarePen,
   SquareTerminal,
   Trash2,
   X,
@@ -173,15 +174,7 @@ import {
   type PinFolder,
 } from "./pins";
 import { Favorites, type FavoriteAction } from "./Favorites";
-import {
-  Fold,
-  NewThreadRow,
-  PinSummary,
-  quietFor,
-  shownRows,
-  Tick,
-  TodayDivider,
-} from "./SidebarParts";
+import { Fold, PinSummary, quietFor, shownRows, Tick, TodayDivider } from "./SidebarParts";
 import { PinList, type Pin as PinData } from "./PinList";
 import { searchSettings, settingsSections } from "./settings/search";
 
@@ -471,10 +464,10 @@ function sweepOut(keys: string[], to: string, stagger = 0) {
 }
 
 /**
- * Search, the repo filter, and a menu to create a Project or add a repository, then (0075) the
- * favorites, every host's Projects and the pinned threads moved up, the pinned threads in their
- * folders, a divider with Clear and the View panel, and Today: New thread and every other open
- * thread, most recently active first, grouped as View says. A thread row shows its repo or folder,
+ * Search, the repo filter, a menu to create a Project or add a repository, and New thread, then
+ * (0075) the favorites, every host's Projects and the pinned threads moved up, the pinned threads
+ * in their folders, a divider with Clear and the View panel, and Today: every other open thread,
+ * most recently active first, grouped as View says. A thread row shows its repo or folder,
  * how long ago it was prompted or what it asks of the user, its title, branch, git status, and
  * pull request. Threads another thread started don't list (0041); a Project's show only inside it
  * (0042). While a thread is working it sits in a Working drawer above Snoozed and Archived, until it
@@ -1704,7 +1697,6 @@ export function ThreadList({
         group={groupBy}
         onGroup={(next) => todayGroup.set(next)}
       />
-      <NewThreadRow onClick={onNewThread} selected={selection.kind === "new" && !selection.draft} />
       {threadList(topThreads)}
     </>
   );
@@ -1757,9 +1749,16 @@ export function ThreadList({
           needs={needsIn}
           outside={outside}
         />
-        {/* New thread is the first row of Today. */}
         <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
           <FolderPlus />
+        </IconButton>
+        <IconButton
+          label="New thread"
+          command="newThread"
+          aria-pressed={selection.kind === "new" && !selection.draft}
+          onClick={onNewThread}
+        >
+          <SquarePen />
         </IconButton>
       </div>
       <div
