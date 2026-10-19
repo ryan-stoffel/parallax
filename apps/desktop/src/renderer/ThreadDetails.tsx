@@ -84,9 +84,9 @@ export function ThreadDetailsButton({ open, onToggle }: { open: boolean; onToggl
 }
 
 /**
- * The thread's host, launchers, repository actions, Git status, linked pull requests, and lineage, docked at the
- * thread's right, left of the side panel. Mounted while hidden, so the Open and action
- * shortcuts keep working.
+ * The thread's host, launchers, repository actions, Git status, linked pull requests, and
+ * lineage, docked at the thread's right, left of the side panel. Mounted while hidden, so the
+ * Open and action shortcuts keep working.
  */
 export function ThreadDetails({
   mode,
@@ -125,13 +125,17 @@ export function ThreadDetails({
         <section aria-label="Workspace" className="p-2">
           <div
             title={folder ?? "No folder yet"}
-            className="flex items-center px-2 py-1.5 text-[13px]"
+            className="flex items-center gap-0.5 px-2 py-1.5 text-[13px]"
           >
-            <span aria-hidden className="flex shrink-0 items-center gap-0.5 text-muted-foreground">
+            <span aria-hidden className="shrink-0 text-muted-foreground">
               {hostIcon(host)}
-              {worktree ? <FolderGit2 /> : <FolderOpen />}
             </span>
-            <span className="ml-2.5 truncate">{host.name}</span>
+            {worktree ? (
+              <FolderGit2 aria-hidden className="shrink-0 text-muted-foreground" />
+            ) : (
+              <FolderOpen aria-hidden className="shrink-0 text-muted-foreground" />
+            )}
+            <span className="ml-2 truncate">{host.name}</span>
           </div>
           <OpenMenu hostId={host.id} folder={folder} />
           {actions && <Actions {...actions} />}

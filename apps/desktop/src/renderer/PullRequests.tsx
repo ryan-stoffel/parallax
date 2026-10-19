@@ -351,7 +351,7 @@ export function LinkedPullRequests({
                     #{numberOf(url)}
                     {checks && (
                       <checks.Icon
-                        aria-label={`Checks ${pr.checksState ?? "skipped"}`}
+                        aria-label={`Checks ${pr.checksState === "pending" ? "running" : (pr.checksState ?? "skipped")}`}
                         className={checks.color}
                       />
                     )}
