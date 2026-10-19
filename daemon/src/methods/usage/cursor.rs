@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use futures_util::{StreamExt, TryStreamExt, stream};
 use jiff::Timestamp;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
@@ -23,9 +24,12 @@ use crate::backend::process::{Launcher, ProcessSpec, StdinMode};
 use crate::detect::run_spec;
 
 const URL: &str = "https://cursor.com/api/dashboard/get-filtered-usage-events";
-const PAGE_SIZE: usize = 500;
+/// The most the API gives a page: it answers 2,000 with no events.
+const PAGE_SIZE: usize = 1000;
 /// 100,000 events, far more than 180 days of one person's use.
-const MAX_PAGES: u32 = 200;
+const MAX_PAGES: u32 = 100;
+/// Pages asked for at once. Each takes about a second (PLX-875).
+const CONCURRENT_PAGES: usize = 8;
 const PAGE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Cursor's usage since local midnight of `since` in `zone`, by local day and model. No Cursor,
@@ -54,23 +58,36 @@ pub(super) async fn daily(
         .timestamp()
         .as_millisecond();
     let end = Timestamp::now().as_millisecond();
-    let mut events = Vec::new();
-    for page in 1..=MAX_PAGES {
-        let answer = fetch(launcher, &cookie, start, end, page).await?;
-        let fetched = answer.usage_events_display.len();
-        events.extend(answer.usage_events_display);
-        if last_page(fetched, events.len(), answer.total_usage_events_count) {
-            break;
+    let first = fetch(launcher, &cookie, start, end, 1).await?;
+    let mut events = first.usage_events_display;
+    if let Some(total) = first.total_usage_events_count {
+        // The total says how many pages there are, so the rest can come at once.
+        let rest: Vec<Page> = stream::iter(2..=page_count(events.len(), total))
+            .map(|page| fetch(launcher, &cookie, start, end, page))
+            .buffered(CONCURRENT_PAGES)
+            .try_collect()
+            .await?;
+        events.extend(rest.into_iter().flat_map(|page| page.usage_events_display));
+    } else if !events.is_empty() {
+        // Without one, page until an empty page.
+        for page in 2..=MAX_PAGES {
+            let answer = fetch(launcher, &cookie, start, end, page).await?;
+            if answer.usage_events_display.is_empty() {
+                break;
+            }
+            events.extend(answer.usage_events_display);
         }
     }
     Ok(rows(events, zone))
 }
 
-/// Whether paging is done after a page of `fetched` events, with `collected` in all: on an empty
-/// page, or once `total`, when the API says it, is in. Not on a short page: the API may cap the
-/// page size below what plxd asked for.
-fn last_page(fetched: usize, collected: usize, total: Option<u64>) -> bool {
-    fetched == 0 || total.is_some_and(|total| collected as u64 >= total)
+/// How many pages hold `total` events when the first held `first`, at most `MAX_PAGES`. The first
+/// page's length is the page size: the API may cap it below what plxd asked for.
+fn page_count(first: usize, total: u64) -> u32 {
+    if first == 0 {
+        return 1;
+    }
+    u32::try_from(total.div_ceil(first as u64)).map_or(MAX_PAGES, |pages| pages.clamp(1, MAX_PAGES))
 }
 
 /// Cursor desktop's state database, where it keeps its sign-in.
@@ -281,7 +298,7 @@ mod tests {
     use jiff::tz::TimeZone;
     use parallax_protocol::{CliKind, UsageDay};
 
-    use super::{Page, last_page, rows, user_id};
+    use super::{MAX_PAGES, Page, page_count, rows, user_id};
 
     #[test]
     fn the_user_id_comes_from_the_tokens_subject() {
@@ -292,12 +309,13 @@ mod tests {
     }
 
     #[test]
-    fn paging_ends_on_an_empty_page_or_the_total_not_a_short_page() {
-        // No total, and fewer events than asked for: the API may cap the page size.
-        assert!(!last_page(100, 100, None));
-        assert!(last_page(0, 100, None));
-        assert!(!last_page(100, 100, Some(250)));
-        assert!(last_page(50, 250, Some(250)));
+    fn the_page_count_follows_the_first_pages_length_up_to_the_cap() {
+        assert_eq!(page_count(1000, 11_317), 12);
+        // The API capped the page below what plxd asked for.
+        assert_eq!(page_count(500, 11_317), 23);
+        assert_eq!(page_count(40, 40), 1);
+        assert_eq!(page_count(0, 0), 1);
+        assert_eq!(page_count(1, u64::MAX), MAX_PAGES);
     }
 
     #[test]
