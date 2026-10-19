@@ -93,13 +93,14 @@ import { draggedThread, threadDragType } from "./threadDrag";
 /**
  * The main pane: a Project's coordinator chat, or with `agentId` one of its subagents' chats, a
  * thread (its id is its run's; `started` when New Thread just started it, until anything else is
- * selected; `subagent` when one of its agent's own subagents is open, by its call's id), a new
+ * selected; `subagent` when one of its agent's own subagents is open, by its call's id; `pr` when
+ * its sidebar row's PR number opened it, which shows that pull request in the side panel), a new
  * thread in a sidebar group (`threads.ts`; with no group, it's the first repository's; `draft` when
  * it reopens one, by id, PLX-788).
  */
 export type Selection =
   | { kind: "project"; projectId: string; agentId?: string }
-  | { kind: "thread"; threadId: string; started?: boolean; subagent?: string }
+  | { kind: "thread"; threadId: string; started?: boolean; subagent?: string; pr?: string }
   | { kind: "new"; groupId?: string; draft?: string };
 
 /** Two threads on one host open side by side (PLX-587), left then right. */
@@ -373,6 +374,12 @@ export function App() {
     setPanelOpen(true);
     setShowPr({ url });
   };
+  // Runs once the selection's own panel state is current, which `openPr` sets.
+  const selectedPr = selection.kind === "thread" ? selection.pr : undefined;
+  useEffect(() => {
+    if (selectedPr) openPr(selectedPr);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection]);
   // Shrinks an expanded side panel, which hides the main pane the chat opens in.
   const openAgent = (id?: string) => {
     if (!project) return;

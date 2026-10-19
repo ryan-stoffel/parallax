@@ -1177,6 +1177,11 @@ export function ThreadList({
           anchor.current = item.key;
           openItem(item);
         }}
+        onOpenPr={(pr) => {
+          setPicked(new Set());
+          anchor.current = item.key;
+          onSelect(item.host.id, { kind: "thread", threadId: t.id, pr });
+        }}
         onKeys={(e) => rowKeys(e, item)}
         onArchive={() => void archive(item)}
         onSnooze={(until) => void snoozeUntil(item, until)}
@@ -2670,6 +2675,7 @@ function ThreadRow({
   renamable,
   autoResumable,
   onOpen,
+  onOpenPr,
   onKeys,
   onArchive,
   onSnooze,
@@ -2722,6 +2728,8 @@ function ThreadRow({
   autoResumable: boolean;
   /** A click: opens it, or with Mod or Shift, picks it. */
   onOpen: (e: MouseEvent<HTMLElement>) => void;
+  /** Opens it with the pull request `url` in its side panel. */
+  onOpenPr: (url: string) => void;
   /** Keyboard triage on the focused row (PLX-789). */
   onKeys: (e: ReactKeyboardEvent<HTMLElement>) => void;
   onArchive: () => void;
@@ -2988,13 +2996,13 @@ function ThreadRow({
                 {prs.urls.length > 1 ? (
                   <span>+{prs.urls.length - 1}</span>
                 ) : (
-                  // Inside the row's button, so a span: clicking it opens the PR on GitHub
-                  // (PLX-809), not the thread.
+                  // Inside the row's button, so a span: clicking it opens the thread with the PR
+                  // in its side panel, not GitHub.
                   <span
                     className="hover:underline"
                     onClick={(e) => {
                       e.stopPropagation();
-                      window.open(prs.urls[0], "_blank");
+                      onOpenPr(prs.urls[0]!);
                     }}
                   >
                     <Marked text={`#${numberOf(prs.urls[0]!)}`} words={words} />

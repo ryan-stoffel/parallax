@@ -2342,6 +2342,7 @@ test("a thread's sidebar row shows its linked pull requests, colored by their ma
     diff,
     pullRequests,
   });
+  capabilities = { pullRequests: {} };
   const ids = ["t-none", "t-open", "t-merged", "t-closed"];
   answers["thread/list"] = () => ({
     result: {
@@ -2381,12 +2382,16 @@ test("a thread's sidebar row shows its linked pull requests, colored by their ma
   expect(chip("t-merged")?.textContent).toBe("+2");
   expect(chip("t-closed")?.className).toContain("text-danger");
 
-  // Clicking a lone PR's number opens it on GitHub, not the thread (PLX-809).
+  // Clicking a lone PR's number opens the thread with that PR in its side panel, not GitHub.
   const open = vi.fn();
   window.open = open;
   await click(chip("t-open")?.querySelector("span.hover\\:underline"));
-  expect(open).toHaveBeenCalledWith(url(1), "_blank");
-  expect(chip("t-open")?.closest("button")?.getAttribute("aria-current")).toBeNull();
+  expect(open).not.toHaveBeenCalled();
+  expect(chip("t-open")?.closest("button")?.getAttribute("aria-current")).toBe("page");
+  const tab = document.querySelector(
+    '#side-panel [aria-label="Open views"] button[aria-current="true"]',
+  );
+  expect(tab?.textContent).toBe("#1");
 });
 
 test("with no Projects there are no favorites, and the toolbar's one button opens the add palette", async () => {
