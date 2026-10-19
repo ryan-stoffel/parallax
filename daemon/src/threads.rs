@@ -1013,8 +1013,9 @@ pub(crate) async fn refs(
     Ok(RepoRefsResult { refs })
 }
 
-/// Removes a scratch repository made for a `thread/start` that didn't create its run.
-async fn remove_unused_scratch(daemon: &Arc<Daemon>, run_id: RunId, dir: &Path) {
+/// Removes a scratch repository made for a `thread/start` or `thread/import` that didn't create
+/// its run.
+pub(crate) async fn remove_unused_scratch(daemon: &Arc<Daemon>, run_id: RunId, dir: &Path) {
     let exists = store(daemon, move |db| {
         db.get_run(run_id.into())
             .map(|row| row.is_some())

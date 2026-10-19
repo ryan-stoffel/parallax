@@ -164,17 +164,15 @@ pub(crate) async fn import(
     };
     let run_id = run_id(&session)
         .ok_or_else(|| ErrorObject::internal_error("an import's run id isn't a valid run id"))?;
-    let taken = store(&daemon, move |db| {
-        db.get_run(run_id.into())
-            .map(|row| row.is_some())
-            .map_err(|e| store_error(&e))
-    })
-    .await?;
+    // Imported before: its thread as it is now, whatever its follow-ups changed since.
+    if let Some(done) = imported(&daemon, run_id).await? {
+        return Ok(done);
+    }
     let repo = match &session.cwd {
         Some(cwd) => repo_of(&daemon, cwd).await,
         None => None,
     };
-    let (scope, scratch) = workspace(&daemon, repo, run_id, taken).await?;
+    let (scope, scratch) = workspace(&daemon, repo, run_id).await?;
     let title = threads::check_title(&truncate_to(&session.title, MAX_THREAD_TITLE_BYTES))?;
     let new = NewRun {
         run_id,
@@ -211,11 +209,23 @@ pub(crate) async fn import(
             }),
         }),
     };
-    let mut created = agents::create(Arc::clone(&daemon), new).await?;
+    let scratch = new
+        .thread
+        .as_ref()
+        .and_then(|thread| thread.scratch.clone());
+    let mut created = match agents::create(Arc::clone(&daemon), new).await {
+        Ok(created) => created,
+        Err(error) => {
+            if let Some(dir) = scratch {
+                threads::remove_unused_scratch(&daemon, run_id, &dir).await;
+            }
+            return Err(error);
+        }
+    };
     let thread = created
         .thread
         .ok_or_else(|| ErrorObject::internal_error("an imported thread has no thread row"))?;
-    if !taken && let Some(session_id) = resumable(&session, &created.run, repo.is_some()) {
+    if let Some(session_id) = resumable(&session, &created.run, repo.is_some()) {
         match keep_session(&daemon, run_id, session_id).await {
             Ok(run) => created.run = run,
             Err(error) => {
@@ -229,13 +239,30 @@ pub(crate) async fn import(
     })
 }
 
-/// Where an import works: `repo`'s checkout, or else a scratch repository of its own, made unless
-/// the run id is `taken`.
+/// The thread run `id` already imported, if it was.
+async fn imported(daemon: &Daemon, id: RunId) -> Result<Option<ThreadStartResult>, ErrorObject> {
+    store(daemon, move |db| {
+        let error = |e| store_error(&e);
+        let (Some(thread), Some(run)) = (
+            db.get_thread(id.into()).map_err(error)?,
+            db.get_run(id.into()).map_err(error)?,
+        ) else {
+            return Ok(None);
+        };
+        let worktree = db.get_worktree(id.into()).map_err(error)?;
+        Ok(Some(ThreadStartResult {
+            thread: threads::thread_entry(&thread)?,
+            run: agent_run(&run, worktree.as_ref())?,
+        }))
+    })
+    .await
+}
+
+/// Where an import works: `repo`'s checkout, or else a scratch repository of its own.
 async fn workspace(
     daemon: &Arc<Daemon>,
     repo: Option<RepoId>,
     run_id: RunId,
-    taken: bool,
 ) -> Result<(ProjectId, Option<PathBuf>), ErrorObject> {
     let invalid = |_| ErrorObject::internal_error("a repo entry has an invalid id");
     if let Some(repo) = repo {
@@ -248,7 +275,7 @@ async fn workspace(
     let scope = ProjectId::try_from(entry.id).map_err(invalid)?;
     Ok((
         scope,
-        threads::scratch_dir(daemon, &entry, run_id, taken).await?,
+        threads::scratch_dir(daemon, &entry, run_id, false).await?,
     ))
 }
 
@@ -496,16 +523,23 @@ fn modified(path: &Path) -> Option<Timestamp> {
 
 // Claude
 
-/// The Claude desktop app's Claude Code sessions.
+/// The Claude desktop app's Claude Code sessions that still have a transcript.
 fn claude_sessions(homes: &Homes) -> Vec<Session> {
     let Some(app) = &homes.claude_app else {
         return Vec::new();
     };
     let root = app.join("claude-code-sessions");
     let local = |name: &str| name.starts_with("local_") && has_extension(name, "json");
+    // One whose transcript Claude Code has since cleaned up has nothing to import.
     files(&root, 2, &local)
         .iter()
         .filter_map(|path| claude_session(&fs::read_to_string(path).ok()?))
+        .filter(|session| {
+            session
+                .resume
+                .as_deref()
+                .is_some_and(|cli| claude_transcript(homes, cli).is_some())
+        })
         .collect()
 }
 

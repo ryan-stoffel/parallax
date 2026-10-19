@@ -99,6 +99,12 @@ export function ImportSessions({ className = "" }: { className?: string }) {
           : "Parallax couldn't start on this computer, so it can't look for sessions."}
       </p>
     );
+  if (!sessions && errors.length)
+    return (
+      <p role="alert" className={`text-[13px] text-danger ${className}`}>
+        {errors[0]}
+      </p>
+    );
   if (!sessions)
     return (
       <p
