@@ -71,6 +71,7 @@ import { ScheduleSettings } from "./settings/ScheduleSettings";
 import { ScriptSettings } from "./settings/ScriptSettings";
 import { SourceControlSettings } from "./settings/SourceControlSettings";
 import { StorageSettings } from "./settings/StorageSettings";
+import { ThreadSettings } from "./settings/ThreadSettings";
 import type { ThreadsView } from "./threads";
 import { IconButton, Segmented } from "./ui";
 import { periods, UsageLines, useUsage, type Period } from "./Usage";
@@ -90,19 +91,48 @@ interface SettingsProps {
   onThemeChange: (theme: ThemePreference) => void;
   /** The host Source control opens on, as Set up GitHub picks it (PLX-423). */
   sourceControlHost?: string;
+  /** The setting search picked, scrolled to and flashed once it shows. */
+  focus?: { anchor: string };
 }
 
-/** The Settings page body. The sidebar's SettingsNav picks the section. */
+/**
+ * Scrolls to the first shown element with `focus`'s `data-setting` and flashes it. A page that
+ * loads its rows gets a second to show it.
+ */
+function useScrollTo(focus?: { anchor: string }) {
+  useEffect(() => {
+    if (!focus) return;
+    let tries = 0;
+    const timer = setInterval(() => {
+      const found = [
+        ...document.querySelectorAll<HTMLElement>(`[data-setting="${CSS.escape(focus.anchor)}"]`),
+      ].find((e) => !e.closest("[hidden]"));
+      if (!found && ++tries < 20) return;
+      clearInterval(timer);
+      found?.scrollIntoView?.({ block: "center" });
+      found?.animate?.(
+        [{ backgroundColor: "var(--selected)" }, { backgroundColor: "transparent" }],
+        { duration: 1600, easing: "ease-out" },
+      );
+    }, 50);
+    return () => clearInterval(timer);
+  }, [focus]);
+}
+
+/** The Settings page body. The sidebar's SettingsNav picks the section, or its search a setting. */
 export function Settings({
   section,
   listed,
   theme,
   onThemeChange,
   sourceControlHost,
+  focus,
 }: SettingsProps) {
   const hosts = useHosts();
+  useScrollTo(focus);
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
+    // Keyed by section, so each opens at its top.
+    <div key={section} className="min-h-0 flex-1 overflow-y-auto">
       <div
         className={`mx-auto px-8 pt-6 pb-16 ${section === "providers" || section === "usage" ? "max-w-5xl" : "max-w-3xl"}`}
       >
@@ -110,6 +140,8 @@ export function Settings({
           <UsagePage hosts={hosts} />
         ) : section === "general" ? (
           <GeneralSettings />
+        ) : section === "threads" ? (
+          <ThreadSettings />
         ) : section === "appearance" ? (
           <AppearanceSettings theme={theme} onThemeChange={onThemeChange} />
         ) : section === "keybinds" ? (
@@ -1430,7 +1462,7 @@ function EnvSection({
             </label>
           </div>
           <label className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
-            <input type="checkbox" checked={secret} onChange={(e) => setSecret(e.target.checked)} />
+            <Switch label="Secret" checked={secret} onChange={setSecret} />
             Secret: kept in the host's keychain, and never shown again
           </label>
           <div className="flex justify-end gap-2">

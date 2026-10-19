@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import type { Host } from "../hosts";
 import { Picker } from "../ui";
+import { anchorOf } from "./search";
 
 // What every Settings page is built from.
 
@@ -40,7 +41,7 @@ export function Section({
   children: ReactNode;
 }) {
   return (
-    <section aria-label={title} className="mb-8">
+    <section aria-label={title} data-setting={anchorOf(title)} className="mb-8 scroll-mt-6">
       <div className="mb-2 flex min-h-7 items-center justify-between gap-4">
         <h2 className="text-[12.5px] font-medium text-muted-foreground">{title}</h2>
         {action}
@@ -50,7 +51,10 @@ export function Section({
   );
 }
 
-/** A setting: its title and what it does on the left, its control on the right. */
+/**
+ * A setting: its title and what it does on the left, its control on the right. A text title is
+ * its `data-setting`, which Settings' search scrolls to.
+ */
 export function Row({
   title,
   description,
@@ -61,7 +65,10 @@ export function Row({
   children?: ReactNode;
 }) {
   return (
-    <div className={settingRow}>
+    <div
+      data-setting={typeof title === "string" ? anchorOf(title) : undefined}
+      className={settingRow}
+    >
       <div className="min-w-0">
         <span className="block text-[13px] font-medium">{title}</span>
         {description && (

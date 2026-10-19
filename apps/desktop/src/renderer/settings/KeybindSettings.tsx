@@ -17,6 +17,7 @@ import {
 } from "../keybindings";
 import { rowShortcut, shortcut } from "../ui";
 import { PageTitle, quietButton, Row, Section, settingRow } from "./parts";
+import { anchorOf } from "./search";
 
 const kbd =
   "inline-flex items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5 font-sans text-[12px] text-foreground";
@@ -113,7 +114,7 @@ function CommandRow({ command, name }: { command: Command; name: string }) {
   };
 
   return (
-    <div className={`${settingRow} flex-wrap`}>
+    <div data-setting={anchorOf(name)} className={`${settingRow} flex-wrap`}>
       <div className="min-w-0">
         <span className="block text-[13px] font-medium">{name}</span>
         {refused && (

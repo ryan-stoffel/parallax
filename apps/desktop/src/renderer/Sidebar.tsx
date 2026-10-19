@@ -48,6 +48,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  Fragment,
   useEffect,
   useId,
   useImperativeHandle,
@@ -183,6 +184,7 @@ import {
   TodayDivider,
 } from "./SidebarParts";
 import { PinList, type Pin as PinData } from "./PinList";
+import { searchSettings, settingsSections, type SettingsResult } from "./settings/search";
 
 const row =
   "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] hover:bg-hover";
@@ -3537,52 +3539,166 @@ export function age(time: string, now = Date.now()): string {
   return days < 7 ? `${days}d` : `${Math.floor(days / 7)}w`;
 }
 
-/** Each Settings section's name and icon, in the nav's order. */
-const sections: { id: SettingsSection; name: string; Icon: LucideIcon }[] = [
-  { id: "usage", name: "Usage", Icon: ChartNoAxesColumn },
-  { id: "general", name: "General", Icon: Settings },
-  { id: "appearance", name: "Appearance", Icon: Palette },
-  { id: "keybinds", name: "Keybinds", Icon: Keyboard },
-  { id: "providers", name: "Providers", Icon: Bot },
-  { id: "sourceControl", name: "Source control", Icon: GitBranch },
-  { id: "schedules", name: "Schedules", Icon: CalendarClock },
-  { id: "scripts", name: "Scripts", Icon: SquareTerminal },
-  { id: "storage", name: "Storage", Icon: HardDrive },
-  { id: "connections", name: "Connections", Icon: Server },
-];
-export const settingsNames = Object.fromEntries(sections.map((s) => [s.id, s.name])) as Record<
-  SettingsSection,
-  string
->;
+/** Each Settings section's icon. */
+const sectionIcons: Record<SettingsSection, LucideIcon> = {
+  general: Settings,
+  threads: MessageSquare,
+  appearance: Palette,
+  keybinds: Keyboard,
+  providers: Bot,
+  usage: ChartNoAxesColumn,
+  schedules: CalendarClock,
+  sourceControl: GitBranch,
+  scripts: SquareTerminal,
+  connections: Server,
+  storage: HardDrive,
+};
+export const settingsNames = Object.fromEntries(
+  settingsSections.map((s) => [s.id, s.name]),
+) as Record<SettingsSection, string>;
 
-/** The sidebar while Settings is open. */
+/**
+ * The sidebar while Settings is open: a search box, the sections under their groups, and Back to
+ * app at the bottom. Typed words or a `/general/time-format` path list matching sections and
+ * settings in the sections' place (search.ts); Up and Down choose one, Enter or a click opens it,
+ * Tab completes a path to the chosen one, and Escape clears. A path naming a section or setting
+ * exactly opens it as it's typed.
+ */
 export function SettingsNav({
   section,
   onSection,
   onBack,
 }: {
   section: SettingsSection;
-  onSection: (section: SettingsSection) => void;
+  /** Opens a section, scrolled to the setting with `anchor` as its `data-setting`. */
+  onSection: (section: SettingsSection, anchor?: string) => void;
   onBack: () => void;
 }) {
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const results = query ? searchSettings(query) : [];
+  const chosen = results[Math.min(active, results.length - 1)];
+  const list = useId();
+  const open = (r: SettingsResult) => onSection(r.section, r.anchor);
+  const edit = (next: string) => {
+    setQuery(next);
+    setActive(0);
+    // A path is an address: naming a section or setting opens it.
+    const exact = next.startsWith("/")
+      ? searchSettings(next).find((r) => r.path === next.replace(/\/$/, ""))
+      : undefined;
+    if (exact) open(exact);
+  };
+  // The typed words, to mark in the results.
+  const words = query.startsWith("/") ? [] : (query.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+
   return (
-    <div className="flex flex-col gap-px px-2">
-      <button type="button" onClick={onBack} className={`${row} mb-3 text-muted-foreground`}>
-        <ArrowLeft className="size-4" />
-        Back to app
-      </button>
-      {sections.map((s) => (
-        <button
-          key={s.id}
-          type="button"
-          aria-current={s.id === section ? "page" : undefined}
-          onClick={() => onSection(s.id)}
-          className={`${row} ${s.id === section ? current : "text-foreground/80"}`}
-        >
-          <s.Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-          {s.name}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="px-2 pb-2">
+        <label className="flex h-8 min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
+          <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+          <input
+            type="search"
+            role="combobox"
+            aria-label="Search settings"
+            aria-expanded={!!query}
+            aria-controls={list}
+            aria-activedescendant={chosen ? `${list}-${results.indexOf(chosen)}` : undefined}
+            placeholder="Search settings or type /"
+            value={query}
+            autoFocus
+            spellCheck={false}
+            autoComplete="off"
+            onChange={(e) => edit(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                if (query) setQuery("");
+                else e.currentTarget.blur();
+              } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault();
+                const step = e.key === "ArrowDown" ? 1 : -1;
+                setActive((i) => (i + step + results.length) % Math.max(results.length, 1));
+              } else if (e.key === "Enter" && chosen) open(chosen);
+              else if (e.key === "Tab" && chosen && query.startsWith("/")) {
+                // Completes to the chosen section's settings, or the chosen setting.
+                e.preventDefault();
+                edit(chosen.anchor ? chosen.path : `${chosen.path}/`);
+              }
+            }}
+            className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
+          />
+        </label>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-2">
+        {query ? (
+          <div
+            id={list}
+            role="listbox"
+            aria-label="Settings found"
+            className="flex flex-col gap-px"
+          >
+            {results.map((r, i) => {
+              const Icon = sectionIcons[r.section];
+              return (
+                <button
+                  key={r.path}
+                  id={`${list}-${i}`}
+                  type="button"
+                  role="option"
+                  aria-selected={r === chosen}
+                  tabIndex={-1}
+                  onMouseMove={() => setActive(i)}
+                  onClick={() => open(r)}
+                  className={`${row} items-start aria-selected:bg-selected`}
+                >
+                  <Icon aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0">
+                    <span className="block truncate text-foreground">
+                      <Marked text={r.title} words={words} />
+                    </span>
+                    <span className="block truncate text-[11.5px] text-faint-foreground">
+                      {query.startsWith("/") ? r.path : r.place}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+            {results.length === 0 && (
+              <p className={emptyNote}>
+                {query.startsWith("/") ? "No setting at that path" : "No settings match"}
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-px">
+            {settingsSections.map((s, i) => {
+              const Icon = sectionIcons[s.id];
+              return (
+                <Fragment key={s.id}>
+                  {s.group !== settingsSections[i - 1]?.group && (
+                    <h2 className={`${sectionHeading} ${i ? "mt-3" : ""}`}>{s.group}</h2>
+                  )}
+                  <button
+                    type="button"
+                    aria-current={s.id === section ? "page" : undefined}
+                    onClick={() => onSection(s.id)}
+                    className={`${row} ${s.id === section ? current : "text-foreground/80"}`}
+                  >
+                    <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                    {s.name}
+                  </button>
+                </Fragment>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      <div className="border-t border-border p-2">
+        <button type="button" onClick={onBack} className={`${row} text-muted-foreground`}>
+          <ArrowLeft className="size-4" />
+          Back to app
         </button>
-      ))}
+      </div>
     </div>
   );
 }

@@ -150,9 +150,12 @@ test("the footer's Usage opens Settings > Usage, and Update shows when it's read
   act(() => button("Usage")!.click());
   const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
   expect(crumbs.map((li) => li.textContent)).toEqual(["Settings", "Usage"]);
-  // Settings' nav lists it first, before General, and the side panel is a chat's.
+  // Settings' nav lists it under Agents, after Providers, and the side panel is a chat's.
   const nav = [...document.querySelectorAll("#sidebar button")].map((b) => b.textContent);
-  expect(nav.slice(nav.indexOf("Usage"), nav.indexOf("Usage") + 2)).toEqual(["Usage", "General"]);
+  expect(nav.slice(nav.indexOf("Usage") - 1, nav.indexOf("Usage") + 1)).toEqual([
+    "Providers",
+    "Usage",
+  ]);
   expect(document.querySelector('main [aria-controls="side-panel"]')).toBeNull();
   // The range stays in the header on Limits, but can't be changed there.
   const range = document.querySelector<HTMLFieldSetElement>('main [aria-label="Usage range"]')!;
@@ -325,4 +328,36 @@ test("Ctrl+1 and Ctrl+2 focus the split's sides on macOS, and Ctrl+Shift+1 and 2
   expect(press({ code: "Digit1", ctrlKey: true, shiftKey: true })).toBe("leftThread");
   expect(press({ code: "Digit2", ctrlKey: true, shiftKey: true })).toBe("rightThread");
   bridge.platform = "darwin";
+});
+
+test("Settings' search opens a section by its path and a setting by a word from it", async () => {
+  bridge.command = async () => ({ state: "unavailable", path: "", onPath: true });
+  renderApp();
+  act(() => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "Comma", key: ",", metaKey: true }));
+  });
+  const crumbs = () =>
+    [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
+  const box = document.querySelector<HTMLInputElement>('input[aria-label="Search settings"]')!;
+  const type = (value: string) =>
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, value);
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  const options = () =>
+    [...document.querySelectorAll('[aria-label="Settings found"] [role="option"]')].map(
+      (o) => o.textContent,
+    );
+
+  type("/");
+  expect(options()).toHaveLength(11);
+  type("/threads");
+  expect(crumbs()).toEqual(["Settings", "Threads"]);
+
+  type("clock");
+  expect(options()[0]).toBe("Time formatGeneral › Preferences");
+  act(() => {
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  expect(crumbs()).toEqual(["Settings", "General"]);
 });

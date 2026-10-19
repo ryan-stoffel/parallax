@@ -228,7 +228,7 @@ export function AppearanceSettings({
         <Row title="Dark theme" description="Shown in dark mode.">
           {themePicker("dark")}
         </Row>
-        <div className="px-4 py-3">
+        <div data-setting="installed-themes" className="px-4 py-3">
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">
               <span className="block text-[13px] font-medium">Installed themes</span>
