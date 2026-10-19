@@ -10,6 +10,7 @@ import { applyAppearance, type Appearance } from "./appearance";
 import { models } from "./models";
 import { behaviorDefaults, behaviorPrefs, setBehaviorPrefs } from "./prefs";
 import { Settings } from "./Settings";
+import { anchorOf, settingsIndex } from "./settings/search";
 import { accessDefaults, accessPrefs } from "./accessPrefs";
 import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
 import { appShortcut } from "./ui";
@@ -1355,11 +1356,31 @@ describe("on a plxd with providers", () => {
   });
 });
 
-test("General's sidebar switches turn the Working section and archive pages off", async () => {
-  sidebarPrefs.set(sidebarDefaults);
+test("each setting the search indexes on this computer's pages is there to scroll to", async () => {
   window.parallax.openTargets = async () => [];
   window.parallax.version = async () => "1.2.3";
-  await renderSettings("general");
+  const missing: string[] = [];
+  for (const page of ["general", "threads", "appearance", "keybinds"] as const) {
+    await renderSettings(page);
+    for (const e of settingsIndex.filter((e) => e.section === page))
+      if (!document.querySelector(`[data-setting="${e.anchor ?? anchorOf(e.title)}"]`))
+        missing.push(`${page}: ${e.title}`);
+    act(() => unmount());
+  }
+  // Only these wait on what this test's computer lacks: an installable command, an app that
+  // updates itself, a plxd that continues after restarts, and a window that can be see-through.
+  expect(missing).toEqual([
+    "general: Terminal command",
+    "general: Download updates automatically",
+    "threads: Continue threads after restarts",
+    "appearance: Background",
+    "appearance: Background opacity",
+  ]);
+});
+
+test("Threads' sidebar switches turn the Working section and archive pages off", async () => {
+  sidebarPrefs.set(sidebarDefaults);
+  await renderSettings("threads");
   const working = document.querySelector<HTMLButtonElement>(
     '[role="switch"][aria-label="Working section"]',
   )!;
@@ -1378,7 +1399,7 @@ test("General's sidebar switches turn the Working section and archive pages off"
   sidebarPrefs.set(sidebarDefaults);
 });
 
-test("General's New threads and Behavior settings are kept (PLX-538)", async () => {
+test("General's notifications and preferences are kept, and Threads has New threads (PLX-538)", async () => {
   window.parallax.openTargets = async () => [];
   window.parallax.version = async () => "1.2.3";
   await renderSettings("general");
@@ -1387,15 +1408,15 @@ test("General's New threads and Behavior settings are kept (PLX-538)", async () 
   await click(sw("System notifications"));
   expect(behaviorPrefs.get().systemNotifications).toBe(false);
   expect(picked("Time format")).toBe("System default");
-  expect(section("New threads").textContent).toContain("Permissions");
   setBehaviorPrefs(behaviorDefaults);
+  act(() => unmount());
+  await renderSettings("threads");
+  expect(section("New threads").textContent).toContain("Permissions");
 });
 
-test("General's Legacy Plan mode switch lists Plan in the Access picker", async () => {
+test("Threads' Legacy Plan mode switch lists Plan in the Access picker", async () => {
   accessPrefs.set(accessDefaults);
-  window.parallax.openTargets = async () => [];
-  window.parallax.version = async () => "1.2.3";
-  await renderSettings("general");
+  await renderSettings("threads");
   const legacy = document.querySelector<HTMLButtonElement>(
     '[role="switch"][aria-label="Legacy Plan mode"]',
   )!;

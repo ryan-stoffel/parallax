@@ -112,6 +112,7 @@ export interface Split {
 export type SettingsSection =
   | "usage"
   | "general"
+  | "threads"
   | "appearance"
   | "keybinds"
   | "providers"
@@ -147,6 +148,8 @@ export function App() {
   const [settings, setSettings] = useState<SettingsSection | null>(null);
   // The host Set up GitHub opened Source control on (PLX-423).
   const [settingsHost, setSettingsHost] = useState<string>();
+  // The setting Settings' search picked last, to scroll to; a new object each pick.
+  const [settingsFocus, setSettingsFocus] = useState<{ anchor: string }>();
   // The Pull requests page shows in place of the chat; opening a thread or Settings closes it.
   const [prsOpen, setPrsOpen] = useState(false);
 
@@ -159,6 +162,7 @@ export function App() {
     setPrsOpen(false);
     setSettings(section);
     setSettingsHost(hostId);
+    setSettingsFocus(undefined);
   };
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // Keep each host's chats independent when switching between them.
@@ -858,8 +862,14 @@ export function App() {
         {settings ? (
           <SettingsNav
             section={settings}
-            onSection={(section) => openSettings(section)}
-            onBack={() => setSettings(null)}
+            onSection={(section, anchor) => {
+              openSettings(section);
+              setSettingsFocus(anchor ? { anchor } : undefined);
+            }}
+            onBack={() => {
+              setSettings(null);
+              setSettingsFocus(undefined);
+            }}
           />
         ) : (
           <ThreadList
@@ -905,6 +915,7 @@ export function App() {
                 theme={theme}
                 onThemeChange={setTheme}
                 sourceControlHost={settingsHost}
+                focus={settingsFocus}
               />
             </>
           ) : prsOpen ? (

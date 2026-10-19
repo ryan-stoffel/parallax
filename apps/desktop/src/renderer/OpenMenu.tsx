@@ -29,6 +29,15 @@ export const targetIcon = (target: OpenTarget, appIcons: Partial<Record<OpenTarg
   return src ? <img src={src} alt="" className="size-4 shrink-0" /> : marks[target];
 };
 
+/**
+ * A terminal app's icon: Ghostty's and Alacritty's own artwork, else `appIcon` (main's icon for the
+ * chosen terminal) or the terminal mark.
+ */
+export const terminalIcon = (name: string | null, appIcon?: string) => {
+  const src = name === "Ghostty" ? ghosttyIcon : name === "Alacritty" ? alacrittyIcon : appIcon;
+  return src ? <img src={src} alt="" className="size-4 shrink-0" /> : marks.terminal;
+};
+
 /** A target's name for people; the terminal's is the chosen app's, `terminal`. */
 export const nameOf = (target: OpenTarget, terminal?: string | null) => {
   if (target === "cursor") return "Cursor";
@@ -64,16 +73,10 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
     void window.parallax.openTargetIcons().then(setAppIcons);
     void window.parallax.terminalApps().then(setTerminals);
   }, [terminalChosen]);
-  const terminalIcon = (name: string | null) => {
-    const src = name === "Ghostty" ? ghosttyIcon : name === "Alacritty" ? alacrittyIcon : undefined;
-    return src ? (
-      <img src={src} alt="" className="size-4 shrink-0" />
-    ) : (
-      targetIcon("terminal", name === terminal ? appIcons : {})
-    );
-  };
+  const iconOf = (name: string | null) =>
+    terminalIcon(name, name === terminal ? appIcons.terminal : undefined);
   const icon = (target: OpenTarget) =>
-    target === "terminal" ? terminalIcon(terminal) : targetIcon(target, appIcons);
+    target === "terminal" ? iconOf(terminal) : targetIcon(target, appIcons);
   useEffect(() => {
     let live = true;
     void window.parallax.openTargets(hostId).then((found) => {
@@ -207,7 +210,7 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
             onClick={() => void chooseTerminal(app)}
             className={menuItem}
           >
-            {terminalIcon(app.name)}
+            {iconOf(app.name)}
             <span className="flex-1">{app.name}</span>
             {app.name === terminal && <Check aria-hidden className="text-muted-foreground" />}
           </button>

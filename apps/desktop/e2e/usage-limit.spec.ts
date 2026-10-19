@@ -73,9 +73,9 @@ test("a limited thread waits with Resume now and Cancel, and both switches chang
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   await page.keyboard.press("Escape");
 
-  // The host's switch, in Settings > General.
+  // The host's switch, in Settings > Threads.
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("button", { name: "General", exact: true }).click();
+  await page.getByRole("button", { name: "Threads", exact: true }).click();
   const hostSwitch = page.getByRole("switch", { name: "Resume after a usage limit" });
   await expect(hostSwitch).toHaveAttribute("aria-checked", "true");
   await hostSwitch.click();

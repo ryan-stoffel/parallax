@@ -1,36 +1,13 @@
-import { SquareTerminal } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { CommandStatus, OpenTarget, TerminalApp } from "../../preload/bridge";
-import type {
-  AgentPermission,
-  HostSettings,
-  HostSettingsSetParams,
-} from "../../protocol/generated/protocol";
-import { accessOptions } from "../Composer";
-import { useConnection } from "../ConnectionStatus";
-import { EffortMenu } from "../EffortMenu";
-import { localId, useHosts } from "../hosts";
-import { ModelMenu } from "../ModelMenu";
-import { models, useCatalog, type Provider } from "../models";
-import { nameOf, OPEN_TARGET_KEY, TERMINAL_CHOSEN, targetIcon } from "../OpenMenu";
-import {
-  behaviorPrefs,
-  newThreadPrefs,
-  setBehaviorPrefs,
-  setNewThreadPrefs,
-  type BehaviorPrefs,
-} from "../prefs";
-import { workspaces } from "../RunTargetMenu";
-import { accessPrefs } from "../accessPrefs";
-import { archivePageSize, sidebarPrefs, type SidebarPrefs } from "../sidebarPrefs";
+import { localId } from "../hosts";
+import { nameOf, OPEN_TARGET_KEY, TERMINAL_CHOSEN, targetIcon, terminalIcon } from "../OpenMenu";
+import { behaviorPrefs, setBehaviorPrefs, type BehaviorPrefs } from "../prefs";
 import { Picker } from "../ui";
 import { updatePrefs, type UpdatePrefs } from "../updateEverything";
 import { notices } from "./licenses";
-import { HostPicker, PageTitle, quietButton, Row, Section, Switch } from "./parts";
-
-/** The composer's own pickers are borderless; on a settings row they get the select's outline. */
-const pickerBox = "rounded-lg border border-border bg-background";
+import { PageTitle, quietButton, Row, Section, Switch } from "./parts";
 
 /**
  * The `parallax` command that opens Parallax in a terminal (PLX-750): installs, reinstalls, or
@@ -127,9 +104,8 @@ function Updates() {
 }
 
 /**
- * Settings > General: what new threads start with, the sidebar's organization, where Open sends a
- * folder, how the app behaves, usage limits on a host, how it updates, and the app's version and
- * bundled-font notices.
+ * Settings > General: where Open sends a folder, notifications, the clock and send key, how the
+ * app updates, and its version and bundled-font notices.
  */
 export function GeneralSettings() {
   const [showNotices, setShowNotices] = useState(false);
@@ -158,97 +134,63 @@ export function GeneralSettings() {
     window.dispatchEvent(new Event(TERMINAL_CHOSEN));
   };
   const current = targets?.find((t) => t === chosen) ?? targets?.[0];
-  const sidebar = sidebarPrefs.use();
-  const setSidebar = (patch: Partial<SidebarPrefs>) =>
-    sidebarPrefs.set({ ...sidebarPrefs.get(), ...patch });
 
   return (
     <>
-      <PageTitle title="General" />
-      <NewThreads />
-      <Section title="Organization">
-        <Row
-          title="Working section"
-          description="While a thread is working, list it under Working, above Archived. Off keeps it in Threads."
-        >
-          <Switch
-            label="Working section"
-            checked={sidebar.workingSection}
-            onChange={(workingSection) => setSidebar({ workingSection })}
-          />
-        </Row>
-        <Row
-          title="Archive pages"
-          description={`Show ${archivePageSize} archived threads at a time, with Show more for the rest. Off lists them all.`}
-        >
-          <Switch
-            label="Archive pages"
-            checked={sidebar.pageArchived}
-            onChange={(pageArchived) => setSidebar({ pageArchived })}
-          />
-        </Row>
-      </Section>
-      <Section title="Access">
-        <Row
-          title="Legacy Plan mode"
-          description="List Plan in the Access picker. A thread already in Plan keeps it either way."
-        >
-          <Switch
-            label="Legacy Plan mode"
-            checked={accessPrefs.use().legacyPlan}
-            onChange={(legacyPlan) => accessPrefs.set({ legacyPlan })}
-          />
-        </Row>
-      </Section>
+      <PageTitle title="General">
+        How Parallax opens folders, tells you what happened, and keeps itself up to date.
+      </PageTitle>
       <Section title="Open">
         <Row
           title="Open folders in"
           description="What Open and its shortcut use, until you pick another from its menu."
         >
           {current ? (
-            <span className={pickerBox}>
-              <Picker
-                label="Open folders in"
-                value={current}
-                onChange={(value) => {
-                  localStorage.setItem(OPEN_TARGET_KEY, value);
-                  setChosen(value);
-                }}
-                options={(targets ?? []).map((t) => ({
-                  value: t,
-                  label: nameOf(t, terminal),
-                  icon: targetIcon(t, icons),
-                }))}
-                align="end"
-              />
-            </span>
+            <Picker
+              field
+              label="Open folders in"
+              value={current}
+              onChange={(value) => {
+                localStorage.setItem(OPEN_TARGET_KEY, value);
+                setChosen(value);
+              }}
+              options={(targets ?? []).map((t) => ({
+                value: t,
+                label: nameOf(t, terminal),
+                icon: targetIcon(t, icons),
+              }))}
+              align="end"
+              className="w-56"
+            />
           ) : (
             targets && <span className="text-[13px] text-muted-foreground">No apps found</span>
           )}
         </Row>
         <Row title="Terminal" description="The terminal used to open folders on this computer.">
-          <span className={pickerBox}>
-            <Picker
-              label="Terminal"
-              value={terminals.find((app) => app.name === terminal)?.path ?? "none"}
-              onChange={(value) => void chooseTerminal(value)}
-              options={
-                terminals.length
-                  ? terminals.map((app) => ({
-                      value: app.path,
-                      label: app.name,
-                      icon: <SquareTerminal />,
-                    }))
-                  : [{ value: "none", label: "No terminals found", icon: <SquareTerminal /> }]
-              }
-              align="end"
-            />
-          </span>
+          <Picker
+            field
+            label="Terminal"
+            value={terminals.find((app) => app.name === terminal)?.path ?? "none"}
+            onChange={(value) => void chooseTerminal(value)}
+            options={
+              terminals.length
+                ? terminals.map((app) => ({
+                    value: app.path,
+                    label: app.name,
+                    icon: terminalIcon(
+                      app.name,
+                      app.name === terminal ? icons.terminal : undefined,
+                    ),
+                  }))
+                : [{ value: "none", label: "No terminals found", icon: terminalIcon(null) }]
+            }
+            align="end"
+            className="w-56"
+          />
         </Row>
         <TerminalCommand />
       </Section>
       <Behavior />
-      <UsageLimits />
       <Updates />
       <Section title="About">
         <Row title="Version">
@@ -286,293 +228,90 @@ export function GeneralSettings() {
   );
 }
 
-/**
- * What a new thread starts with, picked with the composer's own menus (`newThreadPrefs`). The
- * model list is this computer's; a thread on a host that lacks the model starts on that host's
- * first. The naming model is any Claude Code or Codex model; a host that lacks it names threads
- * with the thread's own provider's default (0058).
- */
-function NewThreads() {
-  const catalog = useCatalog(localId);
-  const prefs = newThreadPrefs.use();
-  const blocked: Partial<Record<Provider, string>> = {};
-  for (const i of catalog.instances)
-    if (!i.enabled) blocked[i.id] = `${i.name} is turned off in Settings > Providers.`;
-  const choices = catalog.models.filter((m) => !blocked[m.provider]);
-  const model =
-    choices.find((m) => m.provider === prefs.model?.provider && m.id === prefs.model.id) ??
-    choices[0];
-  const instance = catalog.instances.find((i) => i.id === model?.provider);
-  // Plan is legacy: listed only while Legacy Plan mode is on (accessPrefs).
-  const legacyPlan = accessPrefs.use().legacyPlan;
-  const permissions = (instance?.permissions ?? []).filter((p) => p !== "plan" || legacyPlan);
-  const permission = permissions.includes(prefs.permission) ? prefs.permission : "edit";
-  const contexts = model?.contexts ?? [];
-  const context =
-    prefs.context !== undefined && contexts.includes(prefs.context) ? prefs.context : contexts[0];
-  const hasFast = !!model?.fast;
-  const workspace = workspaces.find((w) => w.value === prefs.workspace) ?? workspaces[0]!;
-  const namers = catalog.instances.filter((i) => i.kind === "claude" || i.kind === "codex");
-  const namerCatalog = {
-    ...catalog,
-    instances: namers,
-    models: catalog.models.filter((m) => namers.some((i) => i.id === m.provider)),
-  };
-  const naming = prefs.naming;
-  const namer = [...namerCatalog.models, ...models].find(
-    (m) => m.provider === naming.provider && m.id === naming.id,
-  ) ?? { id: naming.id, name: naming.id, provider: naming.provider, contexts: [] };
-
-  return (
-    <Section title="New threads">
-      <Row title="Model" description="The model a new thread starts on.">
-        {model ? (
-          <span className={pickerBox}>
-            <ModelMenu
-              catalog={catalog}
-              unavailable={blocked}
-              value={model}
-              onChange={(m) =>
-                setNewThreadPrefs({ model: { provider: m.provider, id: m.id }, context: undefined })
-              }
-            />
-          </span>
-        ) : (
-          <span className="text-[13px] text-muted-foreground">No models</span>
-        )}
-      </Row>
-      {/* A backend that maps no efforts (Cursor) has none to default. */}
-      {model && instance?.efforts !== false && (
-        <Row
-          title="Reasoning"
-          description="How hard it thinks, and its context window and fast mode where the model has them."
-        >
-          <span className={pickerBox}>
-            <EffortMenu
-              value={prefs.effort}
-              onChange={(effort) => setNewThreadPrefs({ effort })}
-              contexts={contexts}
-              context={context}
-              onContext={(next) => setNewThreadPrefs({ context: next })}
-              fastMode={hasFast ? instance?.kind : undefined}
-              fast={hasFast && prefs.fast}
-              onFast={(fast) => setNewThreadPrefs({ fast })}
-            />
-          </span>
-        </Row>
-      )}
-      {permissions.length > 1 && (
-        <Row title="Permissions" description="What a new thread may do without asking.">
-          <span className={pickerBox}>
-            <Picker
-              label="Permissions"
-              value={permission}
-              onChange={(value) => setNewThreadPrefs({ permission: value as AgentPermission })}
-              options={permissions.map((p) => accessOptions[p])}
-              align="end"
-              panelClassName="w-[25rem]"
-            />
-          </span>
-        </Row>
-      )}
-      <Row
-        title="Workspace"
-        description="Where a thread in a repository works. Each thread's menu can pick another."
-      >
-        <span className={pickerBox}>
-          <Picker
-            label="Workspace"
-            value={workspace.value}
-            onChange={(value) => setNewThreadPrefs({ workspace: value as typeof prefs.workspace })}
-            options={workspaces}
-            align="end"
-            panelClassName="w-[24rem]"
-          />
-        </span>
-      </Row>
-      <Row
-        title="Naming model"
-        description="Names a new thread and its branch from its first message, after it starts."
-      >
-        <span className="flex gap-2">
-          <span className={pickerBox}>
-            <ModelMenu
-              catalog={namerCatalog}
-              unavailable={blocked}
-              value={namer}
-              onChange={(m) => setNewThreadPrefs({ naming: { provider: m.provider, id: m.id } })}
-            />
-          </span>
-          <span className={pickerBox}>
-            <EffortMenu
-              value={prefs.namingEffort}
-              onChange={(namingEffort) => setNewThreadPrefs({ namingEffort })}
-            />
-          </span>
-        </span>
-      </Row>
-    </Section>
-  );
-}
-
-/** Notifications, the clock, and what sends a prompt (`behaviorPrefs`). */
+/** Notifications, then the clock, what sends a prompt, and where pull requests open (`behaviorPrefs`). */
 function Behavior() {
   const prefs = behaviorPrefs.use();
   const set = (patch: Partial<BehaviorPrefs>) => setBehaviorPrefs(patch);
   const mac = window.parallax.platform === "darwin";
   return (
-    <Section title="Behavior">
-      <Row
-        title="System notifications"
-        description="An alert from your computer when a thread finishes, fails, or needs you while Parallax isn't in front."
-      >
-        <Switch
-          label="System notifications"
-          checked={prefs.systemNotifications}
-          onChange={(systemNotifications) => set({ systemNotifications })}
-        />
-      </Row>
-      <Row
-        title="In-app notifications"
-        description="A toast when a thread finishes, fails, or needs you."
-      >
-        <Switch
-          label="In-app notifications"
-          checked={prefs.inAppNotifications}
-          onChange={(inAppNotifications) => set({ inAppNotifications })}
-        />
-      </Row>
-      <Row title="Time format" description="System default follows your OS clock preference.">
-        <Picker
-          field
-          label="Time format"
-          value={prefs.timeFormat}
-          onChange={(v) => set({ timeFormat: v as BehaviorPrefs["timeFormat"] })}
-          options={[
-            { value: "system", label: "System default" },
-            { value: "12", label: "12-hour" },
-            { value: "24", label: "24-hour" },
-          ]}
-          className="w-48"
-          panelClassName="min-w-48"
-        />
-      </Row>
-      <Row
-        title="Send shortcut"
-        description={
-          prefs.sendKey === "enter"
-            ? "Enter sends. Shift+Enter starts a new line."
-            : `${mac ? "⌘ Enter" : "Ctrl+Enter"} sends. Enter starts a new line.`
-        }
-      >
-        <Picker
-          field
-          label="Send shortcut"
-          value={prefs.sendKey}
-          onChange={(v) => set({ sendKey: v as BehaviorPrefs["sendKey"] })}
-          options={[
-            { value: "enter", label: "Enter" },
-            { value: "modEnter", label: mac ? "⌘ Enter" : "Ctrl+Enter" },
-          ]}
-          className="w-48"
-          panelClassName="min-w-48"
-        />
-      </Row>
-      <Row
-        title="Open pull requests in"
-        description="Where Open on GitHub goes: your system browser, or the Browser in the side panel."
-      >
-        <Picker
-          field
-          label="Open pull requests in"
-          value={prefs.openPrsIn}
-          onChange={(v) => set({ openPrsIn: v as BehaviorPrefs["openPrsIn"] })}
-          options={[
-            { value: "external", label: "System browser" },
-            { value: "browser", label: "Side panel browser" },
-          ]}
-          className="w-48"
-          panelClassName="min-w-48"
-        />
-      </Row>
-    </Section>
-  );
-}
-
-/**
- * Whether a host's runs wait out a usage limit and resume when it resets (`host/settings`, 0049),
- * and whether a plain thread's turn a plxd restart cut off continues once plxd is up (0060). Both
- * are off by default. A thread's own toggle, in its menu, overrides the first.
- */
-function UsageLimits() {
-  const hosts = useHosts();
-  const [hostId, setHostId] = useState(localId);
-  const connection = useConnection(hostId);
-  const supported = connection?.status === "connected" && "autoResume" in connection.capabilities;
-  const [settings, setSettings] = useState<HostSettings>();
-  const [error, setError] = useState<string>();
-  useEffect(() => {
-    setSettings(undefined);
-    setError(undefined);
-    if (!supported) return;
-    let stale = false;
-    void window.parallax.request(hostId, "host/settings/get", {}).then((answer) => {
-      if (stale) return;
-      if ("error" in answer) setError(answer.error.message);
-      else setSettings(answer.result);
-    });
-    return () => {
-      stale = true;
-    };
-  }, [hostId, supported]);
-  const set = async (
-    change: Pick<HostSettingsSetParams, "autoResume" | "continueAfterRestart">,
-  ) => {
-    const before = settings;
-    setSettings((prev) => prev && { ...prev, ...change });
-    const answer = await window.parallax.request(hostId, "host/settings/set", change);
-    if ("error" in answer) {
-      setSettings(before);
-      setError(answer.error.message);
-    } else {
-      setSettings(answer.result);
-      setError(undefined);
-    }
-  };
-
-  return (
-    <Section
-      title="Resuming threads"
-      action={<HostPicker hosts={hosts} value={hostId} onChange={setHostId} />}
-    >
-      <Row
-        title="Resume after a usage limit"
-        description={
-          error ??
-          (connection?.status === "connected" && !supported
-            ? "This host's plxd can't resume threads after a usage limit."
-            : "A thread a usage limit stopped continues once the limit resets. Each thread's menu can override this. A Project's threads always do.")
-        }
-      >
-        <Switch
-          label="Resume after a usage limit"
-          checked={settings?.autoResume ?? false}
-          disabled={settings === undefined}
-          onChange={(next) => void set({ autoResume: next })}
-        />
-      </Row>
-      {settings?.continueAfterRestart !== undefined && (
+    <>
+      <Section title="Notifications">
         <Row
-          title="Continue threads after restarts"
-          description="A thread that was working when plxd restarted, as after an update, is told to continue where it left off. Either way, its queued messages wait for Resume."
+          title="System notifications"
+          description="An alert from your computer when a thread finishes, fails, or needs you while Parallax isn't in front."
         >
           <Switch
-            label="Continue threads after restarts"
-            checked={settings.continueAfterRestart}
-            onChange={(next) => void set({ continueAfterRestart: next })}
+            label="System notifications"
+            checked={prefs.systemNotifications}
+            onChange={(systemNotifications) => set({ systemNotifications })}
           />
         </Row>
-      )}
-    </Section>
+        <Row
+          title="In-app notifications"
+          description="A toast when a thread finishes, fails, or needs you."
+        >
+          <Switch
+            label="In-app notifications"
+            checked={prefs.inAppNotifications}
+            onChange={(inAppNotifications) => set({ inAppNotifications })}
+          />
+        </Row>
+      </Section>
+      <Section title="Preferences">
+        <Row title="Time format" description="System default follows your OS clock preference.">
+          <Picker
+            field
+            label="Time format"
+            value={prefs.timeFormat}
+            onChange={(v) => set({ timeFormat: v as BehaviorPrefs["timeFormat"] })}
+            options={[
+              { value: "system", label: "System default" },
+              { value: "12", label: "12-hour" },
+              { value: "24", label: "24-hour" },
+            ]}
+            className="w-48"
+            panelClassName="min-w-48"
+          />
+        </Row>
+        <Row
+          title="Send shortcut"
+          description={
+            prefs.sendKey === "enter"
+              ? "Enter sends. Shift+Enter starts a new line."
+              : `${mac ? "⌘ Enter" : "Ctrl+Enter"} sends. Enter starts a new line.`
+          }
+        >
+          <Picker
+            field
+            label="Send shortcut"
+            value={prefs.sendKey}
+            onChange={(v) => set({ sendKey: v as BehaviorPrefs["sendKey"] })}
+            options={[
+              { value: "enter", label: "Enter" },
+              { value: "modEnter", label: mac ? "⌘ Enter" : "Ctrl+Enter" },
+            ]}
+            className="w-48"
+            panelClassName="min-w-48"
+          />
+        </Row>
+        <Row
+          title="Open pull requests in"
+          description="Where Open on GitHub goes: your system browser, or the Browser in the side panel."
+        >
+          <Picker
+            field
+            label="Open pull requests in"
+            value={prefs.openPrsIn}
+            onChange={(v) => set({ openPrsIn: v as BehaviorPrefs["openPrsIn"] })}
+            options={[
+              { value: "external", label: "System browser" },
+              { value: "browser", label: "Side panel browser" },
+            ]}
+            className="w-48"
+            panelClassName="min-w-48"
+          />
+        </Row>
+      </Section>
+    </>
   );
 }
