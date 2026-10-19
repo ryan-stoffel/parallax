@@ -36,7 +36,10 @@ export const anchorOf = (title: string) =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
 
-/** Every setting, by page. Keep in step with the pages: search.test.ts checks each renders. */
+/**
+ * Every setting, by page. Keep in step with the pages: Settings.test.tsx checks those on General,
+ * Threads, Appearance, and Keybinds render.
+ */
 export const settingsIndex: SettingEntry[] = [
   // General
   ...entries("general", "Open", [

@@ -150,7 +150,7 @@ test("the footer's Usage opens Settings > Usage, and Update shows when it's read
   act(() => button("Usage")!.click());
   const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
   expect(crumbs.map((li) => li.textContent)).toEqual(["Settings", "Usage"]);
-  // Settings' nav lists it under Agents, after Providers, and the side panel is a chat's.
+  // Settings' nav lists it after Providers, and the side panel is a chat's.
   const nav = [...document.querySelectorAll("#sidebar button")].map((b) => b.textContent);
   expect(nav.slice(nav.indexOf("Usage") - 1, nav.indexOf("Usage") + 1)).toEqual([
     "Providers",

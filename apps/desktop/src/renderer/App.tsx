@@ -162,6 +162,7 @@ export function App() {
     setPrsOpen(false);
     setSettings(section);
     setSettingsHost(hostId);
+    setSettingsFocus(undefined);
   };
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // Keep each host's chats independent when switching between them.
@@ -865,7 +866,10 @@ export function App() {
               openSettings(section);
               setSettingsFocus(anchor ? { anchor } : undefined);
             }}
-            onBack={() => setSettings(null)}
+            onBack={() => {
+              setSettings(null);
+              setSettingsFocus(undefined);
+            }}
           />
         ) : (
           <ThreadList
