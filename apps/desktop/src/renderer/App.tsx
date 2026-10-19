@@ -199,7 +199,8 @@ export function App() {
     const { tabs } = answer.result;
     setAgentTabs({ runId, tabs });
     const last = tabs.at(-1);
-    if (reveal && last) {
+    // Only the focused thread's own preview opens its panel, not the other side of a split's.
+    if (reveal && last && selection.kind === "thread" && selection.threadId === runId) {
       setPanelOpen(true);
       setBrowse({ agentTab: last.tabId });
     }
