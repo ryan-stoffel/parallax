@@ -600,16 +600,28 @@ function holdSignals() {
   };
 }
 
+/**
+ * Spawns `file`. On Windows, an npm `.cmd` shim, or a bare name that may resolve to one, only
+ * runs through cmd.exe, which splits on spaces, so the file and each argument are quoted. No
+ * argument the doctor passes holds a `"`.
+ * @param {string} file
+ * @param {string[]} args
+ * @param {import("node:child_process").SpawnOptions} options
+ */
+export function spawnCommand(file, args, options) {
+  const shell = process.platform === "win32" && (/\.(cmd|bat)$/i.test(file) || !/[\\/]/.test(file));
+  const quote = (/** @type {string} */ arg) => `"${arg}"`;
+  return shell ? spawn(quote(file), args.map(quote), { ...options, shell: true }) : spawn(file, args, options);
+}
+
 /** Runs `fix` and resolves when it exits. @param {Fix} fix */
 function runFix(fix) {
   return new Promise((resolve) => {
     const stdin = fix.input === undefined ? "inherit" : "pipe";
-    // `exit`, not `close`: a `serve` that `attach` starts may hold its stdio open. A Windows
-    // sign-in command may be an npm `.cmd` shim, which only a shell runs.
-    const child = spawn(fix.file, fix.args, {
+    // `exit`, not `close`: a `serve` that `attach` starts may hold its stdio open.
+    const child = spawnCommand(fix.file, fix.args, {
       stdio: [stdin, fix.quiet ? "ignore" : "inherit", "inherit"],
       env: { ...process.env, ...fix.env },
-      shell: process.platform === "win32" && fix.input === undefined,
     });
     const release = holdSignals();
     child.once("error", (error) => (release(), console.log(`  ${message(error)}`), resolve(undefined)));
@@ -724,9 +736,8 @@ export async function doctor(options) {
     // One line naming the prompt file: cmd.exe, which runs an npm `.cmd` shim, can't carry the
     // multi-line playbook as an argument. It has no `"`, so quoting it for cmd.exe is safe.
     const args = [...(options.model ? ["--model", options.model] : []), buildLaunchPrompt(promptFile)];
-    const shell = /\.(cmd|bat)$/i.test(cli);
     return await new Promise((resolve) => {
-      const child = spawn(shell ? `"${cli}"` : cli, shell ? args.map((arg) => `"${arg}"`) : args, { cwd: dir, stdio: "inherit", shell });
+      const child = spawnCommand(cli, args, { cwd: dir, stdio: "inherit" });
       const release = holdSignals();
       child.once("error", (error) => (release(), console.log(`✗ Couldn't start ${agent.label}: ${message(error)}\n${paths}`), resolve(1)));
       // A signal has no exit code: report it as a failure, not success.
