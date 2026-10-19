@@ -177,7 +177,9 @@ test("on a plxd with fileChunks, a file too large to show downloads, read in sli
 });
 
 test("with no thread open, or a plxd without files, the view says so and asks nothing", async () => {
-  await render(<SidePanel open onClose={() => {}} expanded={false} onExpandedChange={() => {}} />);
+  await render(
+    <SidePanel scope="t" open onClose={() => {}} expanded={false} onExpandedChange={() => {}} />,
+  );
   const files = [...document.querySelectorAll<HTMLButtonElement>("nav button")].find((b) =>
     b.textContent?.startsWith("Files"),
   )!;

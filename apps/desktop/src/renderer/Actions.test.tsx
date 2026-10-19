@@ -308,6 +308,7 @@ test("a folder's tabs that plxd still runs come back, as after a restart", async
 test("a preview opens the side panel's Browser view at its URL", () => {
   const panel = (browse?: { url: string }) => (
     <SidePanel
+      scope="t"
       open
       onClose={() => {}}
       expanded={false}

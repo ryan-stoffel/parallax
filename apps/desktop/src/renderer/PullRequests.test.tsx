@@ -499,6 +499,7 @@ test("the side panel opens a pull request's tab, or the list, and hides tabs the
     act(() =>
       root!.render(
         <SidePanel
+          scope="t"
           open
           onClose={() => {}}
           expanded={false}
