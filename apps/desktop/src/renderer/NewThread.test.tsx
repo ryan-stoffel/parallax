@@ -941,12 +941,12 @@ describe("the ref picker", () => {
     });
   });
 
-  test("a new worktree starts from the checkout's branch, or from the ref picked", async () => {
+  test("a new worktree starts from develop, or from the ref picked", async () => {
     capabilities = { repoRefs: {} };
     await renderApp();
-    expect(button("From develop")).toBeDefined();
-    await choose("Ref", "origin/develop");
     expect(button("From origin/develop")).toBeDefined();
+    await choose("Ref", "featureworktree");
+    expect(button("From feature")).toBeDefined();
     await send("Fix it");
     expect(calls("thread/start")).toEqual([
       {
@@ -954,8 +954,35 @@ describe("the ref picker", () => {
         prompt: "Fix it",
         repo: parallax.id,
         branchSlug: "fix-it",
-        base: "origin/develop",
+        base: "feature",
       },
+    ]);
+  });
+
+  test("a new worktree starts from main without develop, not the checkout's branch", async () => {
+    capabilities = { repoRefs: {} };
+    answers["repo/refs"] = () => ({
+      result: {
+        refs: [
+          { name: "feature", current: true },
+          { name: "main", default: true },
+        ],
+      },
+    });
+    await renderApp();
+    expect(button("From main")).toBeDefined();
+    await send("Fix it");
+    expect(calls("thread/start")).toEqual([expect.objectContaining({ base: "main" })]);
+  });
+
+  test("a new worktree starts from the checkout's branch without develop or main", async () => {
+    capabilities = { repoRefs: {} };
+    answers["repo/refs"] = () => ({ result: { refs: [{ name: "feature", current: true }] } });
+    await renderApp();
+    expect(button("From feature")).toBeDefined();
+    await send("Fix it");
+    expect(calls("thread/start")).toEqual([
+      expect.not.objectContaining({ base: expect.anything() }),
     ]);
   });
 

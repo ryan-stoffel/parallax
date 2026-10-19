@@ -11,15 +11,21 @@ const maxRows = 100;
 /** The most of a label's end that stays visible when it is cut in the middle. */
 const tailLength = 12;
 
+/**
+ * The refs a new worktree starts from until one is picked, the first that exists: `develop`, else
+ * `main`, each remote-tracking first since the local one is often stale (PLX-869).
+ */
+const baseOrder = ["origin/develop", "develop", "origin/main", "main"];
+
 /** A ref's quiet note in the menu. */
 const hint = (r: RepoRef) =>
   r.current ? "current" : r.worktree ? "worktree" : r.default ? "default" : undefined;
 
 /**
  * New Thread's ref picker, for a plxd with `repoRefs`. For a new worktree its button reads
- * `From <ref>`, the checkout's branch until one is picked. For the current checkout it reads the
- * picked ref, or `Select ref`. Its menu searches the repository's branches from `repo/refs`, asked
- * again each time it opens.
+ * `From <ref>`, and picks the first of `baseOrder` the repository has, else it reads the checkout's
+ * branch. For the current checkout it reads the picked ref, or `Select ref`. Its menu searches the
+ * repository's branches from `repo/refs`, asked again each time it opens.
  */
 export function RefMenu({
   hostId,
@@ -47,16 +53,20 @@ export function RefMenu({
     const refs = "error" in answer ? describeError(answer.error) : answer.result.refs;
     setAll((prev) => ({ ...prev, [repo]: refs }));
   }, [hostId, repo]);
-  // On mount too, for the checkout's branch in a new worktree's label.
+  // On mount too, for a new worktree's default base.
   useEffect(() => void load(), [load]);
 
   const list = typeof refs === "object" ? refs : [];
   const q = query.trim().toLowerCase();
   const matches = q ? list.filter((r) => r.name.toLowerCase().includes(q)) : list;
   const shown = matches.slice(0, maxRows);
+  const base = checkout ? undefined : baseOrder.find((name) => list.some((r) => r.name === name));
+  useEffect(() => {
+    if (value === undefined && base) onChange(base);
+  }, [value, base]);
   const label = checkout
     ? (value ?? "Select ref")
-    : `From ${value ?? list.find((r) => r.current)?.name ?? "HEAD"}`;
+    : `From ${value ?? base ?? list.find((r) => r.current)?.name ?? "HEAD"}`;
   // Where the label's visible end starts: its last word, after a `-`, `/`, or space, up to
   // `tailLength` characters of it.
   const tail = Math.max(
