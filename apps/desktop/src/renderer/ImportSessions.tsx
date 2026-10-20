@@ -166,12 +166,14 @@ export function ImportChats({ className = "" }: { className?: string }) {
   const [reading, setReading] = useState(false);
   const [error, setError] = useState<string>();
 
+  // Which of `list` are imported. Throws, in words, when plxd can't say, so no chat is marked by
+  // another export's answer.
   const refresh = useCallback(async (list: ExportedChat[]) => {
     const answer = await window.parallax.request(localId, "thread/importedChats", {
       chats: list.map(({ source, id, createdAt }) => ({ source, id, createdAt })),
     });
-    if ("error" in answer) setError(describeError(answer.error));
-    else setThreads(answer.result.threads);
+    if ("error" in answer) throw new Error(describeError(answer.error));
+    setThreads(answer.result.threads);
   }, []);
   const open = async (picked: File | undefined) => {
     if (!picked) return;
@@ -206,6 +208,7 @@ export function ImportChats({ className = "" }: { className?: string }) {
           type="button"
           onClick={() => {
             setChats(undefined);
+            setThreads([]);
             setError(undefined);
           }}
           className="shrink-0 rounded-md px-1.5 py-0.5 font-medium hover:bg-hover hover:text-foreground"
@@ -213,6 +216,11 @@ export function ImportChats({ className = "" }: { className?: string }) {
           Choose another
         </button>
       </p>
+      {error && (
+        <p role="alert" className="text-[12.5px] text-danger">
+          {error}
+        </p>
+      )}
       <SessionList
         className="min-h-0 flex-1"
         apps={chatApps}
@@ -232,7 +240,9 @@ export function ImportChats({ className = "" }: { className?: string }) {
           });
           return "error" in answer ? describeError(answer.error) : undefined;
         }}
-        onImported={() => refresh(chats)}
+        onImported={() =>
+          refresh(chats).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+        }
       />
     </div>
   );

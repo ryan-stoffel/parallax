@@ -17,6 +17,8 @@ export type ExportedChat = {
 const MAX_MESSAGE_CHARS = 32 * 1024;
 /** The most characters one chat sends, so its request stays under the 8 MiB frame. */
 const MAX_CHAT_CHARS = 2 * 1024 * 1024;
+/** The most messages one chat sends, as plxd takes (`MAX_CHAT_MESSAGES`). */
+const MAX_CHAT_MESSAGES = 10_000;
 
 type Json = Record<string, unknown>;
 const isObject = (v: unknown): v is Json => typeof v === "object" && v !== null;
@@ -29,14 +31,18 @@ function iso(v: unknown): string | undefined {
 }
 
 /**
- * `messages` sized to send: each cut to `MAX_MESSAGE_CHARS`, and, past `MAX_CHAT_CHARS` in all,
- * the first kept with the newest that fit.
+ * `messages` sized to send: each cut to `MAX_MESSAGE_CHARS`, and, past `MAX_CHAT_CHARS` or
+ * `MAX_CHAT_MESSAGES` in all, the first kept with the newest that fit.
  */
 function fit(messages: ChatMessage[]): ChatMessage[] {
   const cut = messages.map((m) => ({ ...m, text: m.text.slice(0, MAX_MESSAGE_CHARS) }));
   let budget = MAX_CHAT_CHARS - (cut[0]?.text.length ?? 0);
   const kept: ChatMessage[] = [];
-  for (let i = cut.length - 1; i > 0 && budget >= cut[i]!.text.length; i--) {
+  for (
+    let i = cut.length - 1;
+    i > 0 && budget >= cut[i]!.text.length && kept.length < MAX_CHAT_MESSAGES - 1;
+    i--
+  ) {
     budget -= cut[i]!.text.length;
     kept.unshift(cut[i]!);
   }
@@ -67,8 +73,18 @@ function chatgpt(c: Json): ExportedChat | undefined {
     if (meta["is_visually_hidden_from_conversation"] === true) continue;
     if (m["recipient"] !== undefined && m["recipient"] !== "all") continue;
     if (!["text", "multimodal_text"].includes(text(content["content_type"]))) continue;
+    // Typed text is a string part; a voice chat's spoken turn is an audio transcription's text.
     const parts = Array.isArray(content["parts"]) ? content["parts"] : [];
-    const body = parts.filter((p) => typeof p === "string").join("\n");
+    const body = parts
+      .map((p) =>
+        typeof p === "string"
+          ? p
+          : isObject(p) && p["content_type"] === "audio_transcription"
+            ? text(p["text"])
+            : "",
+      )
+      .filter(Boolean)
+      .join("\n");
     if (body.trim()) messages.push({ role: role === "user" ? "user" : "assistant", text: body });
   }
   const id = text(c["conversation_id"]) || text(c["id"]);
@@ -89,13 +105,13 @@ function claude(c: Json): ExportedChat | undefined {
   const messages: ChatMessage[] = [];
   for (const m of Array.isArray(c["chat_messages"]) ? c["chat_messages"] : []) {
     if (!isObject(m)) continue;
+    // The text blocks first: `text` stands a placeholder line in for each tool block.
     const blocks = Array.isArray(m["content"]) ? m["content"] : [];
     const body =
-      text(m["text"]) ||
       blocks
         .filter((b) => isObject(b) && b["type"] === "text")
         .map((b) => text((b as Json)["text"]))
-        .join("\n\n");
+        .join("\n\n") || text(m["text"]);
     const sender = m["sender"];
     if (body.trim() && (sender === "human" || sender === "assistant"))
       messages.push({ role: sender === "human" ? "user" : "assistant", text: body });

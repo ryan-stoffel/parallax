@@ -146,3 +146,42 @@ test("an export .zip's conversations.json is read, newest first, and anything el
   );
   await expect(readExport(new File([strToU8("nope")], "bad.zip"))).rejects.toThrow("isn't a .zip");
 });
+
+test("tool blocks' placeholder text and voice turns are read as the export means them", () => {
+  const withTool = {
+    ...claude,
+    chat_messages: [
+      {
+        sender: "human",
+        text: "Search for it",
+        content: [{ type: "text", text: "Search for it" }],
+      },
+      {
+        sender: "assistant",
+        text: "Found it.\n```\nThis block is not supported on your current device yet.\n```",
+        content: [{ type: "tool_use" }, { type: "text", text: "Found it." }],
+      },
+    ],
+  };
+  expect(parseExport([withTool])[0]!.messages[1]).toEqual({ role: "assistant", text: "Found it." });
+  const voice = structuredClone(chatgpt);
+  voice.mapping.u2.message.content = {
+    content_type: "multimodal_text",
+    parts: [{ content_type: "audio_transcription", text: "Plan Lisbon, out loud" }],
+  } as never;
+  expect(parseExport([voice])[0]!.messages[0]).toEqual({
+    role: "user",
+    text: "Plan Lisbon, out loud",
+  });
+});
+
+test("a chat with more messages than plxd takes keeps its first and newest", () => {
+  const many = Array.from({ length: 10_500 }, (_, i) => ({
+    sender: i % 2 ? "assistant" : "human",
+    text: `m${i}`,
+  }));
+  const kept = parseExport([{ ...claude, chat_messages: many }])[0]!.messages;
+  expect(kept).toHaveLength(10_000);
+  expect(kept[0]!.text).toBe("m0");
+  expect(kept.at(-1)!.text).toBe("m10499");
+});
