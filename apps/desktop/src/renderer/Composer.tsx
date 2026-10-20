@@ -1129,9 +1129,13 @@ export function Composer({
     },
   });
 
+  // Empty while a send uploads its files, since what the box shows is on its way.
   useEffect(() => {
-    if (contents) contents.current = { text, doc: editor.getJSON(), images, files, threads };
-  }, [contents, editor, text, images, files, threads]);
+    if (!contents) return;
+    contents.current = uploading
+      ? { text: "", doc: { type: "doc" }, images: [], files: [], threads: [] }
+      : { text, doc: editor.getJSON(), images, files, threads };
+  }, [contents, editor, text, images, files, threads, uploading]);
 
   // Tokens typed or recalled before their list arrived become chips once it does.
   useEffect(() => {

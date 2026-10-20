@@ -953,7 +953,8 @@ export function AgentChat({
             connected && "composerMenus" in connection.capabilities ? { hostId, runId } : undefined
           }
           attach={attachThreads(connection, threadLinks, runId)}
-          initial={draft}
+          // What the box last held, where a subagent's view took it away, else the saved draft.
+          initial={contents.current ?? draft}
           contents={contents}
         />
       </div>
