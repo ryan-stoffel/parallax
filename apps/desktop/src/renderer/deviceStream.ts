@@ -269,8 +269,6 @@ const ORIENTATIONS: DeviceOrientation[] = [
   "landscape_right",
 ];
 
-let nextStream = 0;
-
 /**
  * A live view of `deviceId` on host `hostId`, drawn onto `canvas`. It reconnects a second after
  * its streams end, until `stop`.
@@ -429,7 +427,8 @@ export function createDeviceStream(
     onEnd: (error?: string) => void,
   ) => {
     const session = generation;
-    const id = `${kind}:${deviceId}:${++nextStream}`;
+    // Unique across reloads too, so a late close for a stream from before one never meets it.
+    const id = `${kind}:${deviceId}:${crypto.randomUUID()}`;
     const current = () =>
       !stopped && session === generation && (kind === "video" ? video : control) === id;
     if (kind === "video") video = id;
