@@ -138,6 +138,13 @@ export const settingsIndex: SettingEntry[] = [
       "restart plxd update crash interrupted",
     ],
   ]),
+  ...entries("threads", "Import", [
+    [
+      "Import sessions",
+      "Continue Claude, Codex, and Cursor sessions as threads",
+      "import history past migrate desktop app claude codex cursor chats",
+    ],
+  ]),
   // Appearance
   ...entries("appearance", "Theme", [
     [

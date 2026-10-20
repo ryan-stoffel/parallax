@@ -78,12 +78,12 @@ use crate::{
     TerminalListResult, TerminalOpenParams, TerminalOutputParams, TerminalResizeParams,
     TerminalResult, TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult,
     ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams,
-    ThreadHistoryResult, ThreadListParams, ThreadListResult, ThreadMergeBackParams,
-    ThreadMergeBackResult, ThreadRunsParams, ThreadRunsResult, ThreadSearchParams,
-    ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
-    ThreadUpdateResult, TurnDiffParams, TurnDiffResult, UsageDailyParams, UsageDailyResult,
-    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams,
-    UsageLimitsResult,
+    ThreadHistoryResult, ThreadImportParams, ThreadImportableParams, ThreadImportableResult,
+    ThreadListParams, ThreadListResult, ThreadMergeBackParams, ThreadMergeBackResult,
+    ThreadRunsParams, ThreadRunsResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams,
+    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams, TurnDiffResult,
+    UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult, UsageHistoryParams,
+    UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -337,6 +337,12 @@ method_table! {
         /// turns, in a workspace of the same kind (0050). Idempotent on its client-generated
         /// run id. Gated on the `threadFork` capability.
         ThreadFork = "thread/fork": ThreadForkParams => ThreadStartResult;
+        /// `thread/importable`: the past sessions the Claude, Codex, and Cursor desktop apps
+        /// keep on the host (PLX-881). Gated on the `threadImport` capability.
+        ThreadImportable = "thread/importable": ThreadImportableParams => ThreadImportableResult;
+        /// `thread/import`: makes one of those sessions a thread, at rest with its
+        /// conversation. Idempotent on the session. Gated on the `threadImport` capability.
+        ThreadImport = "thread/import": ThreadImportParams => ThreadStartResult;
         /// `thread/archive`: archives a normal thread or brings it back.
         ThreadArchive = "thread/archive": ThreadArchiveParams => ThreadArchiveResult;
         /// `thread/update`: marks a normal thread seen or snoozes it (0033), gated on the
@@ -711,6 +717,8 @@ mod tests {
                 "repo/add",
                 "thread/start",
                 "thread/fork",
+                "thread/importable",
+                "thread/import",
                 "thread/archive",
                 "thread/update",
                 "repo/update",

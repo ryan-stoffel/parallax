@@ -405,7 +405,7 @@ pub(crate) async fn start_entry(
 
 /// A thread with no repo's scratch repository, under its scratch entry: made unless the run id is
 /// `taken`. `None` for a repo entry.
-async fn scratch_dir(
+pub(crate) async fn scratch_dir(
     daemon: &Daemon,
     entry: &parallax_store::Repo,
     run_id: RunId,
@@ -1013,8 +1013,9 @@ pub(crate) async fn refs(
     Ok(RepoRefsResult { refs })
 }
 
-/// Removes a scratch repository made for a `thread/start` that didn't create its run.
-async fn remove_unused_scratch(daemon: &Arc<Daemon>, run_id: RunId, dir: &Path) {
+/// Removes a scratch repository made for a `thread/start` or `thread/import` that didn't create
+/// its run.
+pub(crate) async fn remove_unused_scratch(daemon: &Arc<Daemon>, run_id: RunId, dir: &Path) {
     let exists = store(daemon, move |db| {
         db.get_run(run_id.into())
             .map(|row| row.is_some())

@@ -9,6 +9,7 @@ import { accessPrefs } from "../accessPrefs";
 import { accessOptions } from "../Composer";
 import { useConnection } from "../ConnectionStatus";
 import { EffortMenu } from "../EffortMenu";
+import { ImportButton } from "../ImportSessions";
 import { localId, useHosts } from "../hosts";
 import { ModelMenu } from "../ModelMenu";
 import { models, useCatalog, type Provider } from "../models";
@@ -22,8 +23,8 @@ import { HostPicker, PageTitle, Row, Section, Switch } from "./parts";
 const pickerBox = "rounded-lg border border-border bg-background";
 
 /**
- * Settings > Threads: what a new thread starts with, how the sidebar lists threads, and whether a
- * host's threads resume after a usage limit or a restart.
+ * Settings > Threads: what a new thread starts with, how the sidebar lists threads, whether a
+ * host's threads resume after a usage limit or a restart, and importing past sessions (PLX-881).
  */
 export function ThreadSettings() {
   const sidebar = sidebarPrefs.use();
@@ -58,6 +59,14 @@ export function ThreadSettings() {
         </Row>
       </Section>
       <Resuming />
+      <Section title="Import">
+        <Row
+          title="Import sessions"
+          description="Bring past sessions from the Claude, Codex, and Cursor desktop apps into Archived as threads on this computer."
+        >
+          <ImportButton />
+        </Row>
+      </Section>
     </>
   );
 }

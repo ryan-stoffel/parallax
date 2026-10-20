@@ -34,7 +34,7 @@ pub(super) const MAX_APPROVAL_INPUT_BYTES: usize = 256 * 1024;
 /// `Reasoning`, `Notice.detail`, `Warning.detail`, `TurnFinished.result`, `TurnStarted.text` — in
 /// bytes, at the same cap as a tool's output (#190 N8). Without this, one item near 0007's 8 MiB
 /// frame would close every subscriber and then be replayed again on every reconnect.
-pub(super) const MAX_TEXT_ITEM_BYTES: usize = 32 * 1024;
+pub(crate) const MAX_TEXT_ITEM_BYTES: usize = 32 * 1024;
 
 /// The longest a short identifier gets to be, in bytes: `ToolCall`'s `call_id` and `name`,
 /// `ToolResult`'s `call_id`, `SessionStarted`'s `session_id` and `model`, and every `message_id`.
@@ -260,7 +260,7 @@ pub(super) fn outcome(outcome: &Outcome) -> (AgentOutcome, &'static str, Option<
 }
 
 /// `text` cut to at most `max` bytes on a character boundary, with a note when it was cut.
-pub(super) fn truncate(text: &str, max: usize) -> String {
+pub(crate) fn truncate(text: &str, max: usize) -> String {
     if text.len() <= max {
         return text.to_owned();
     }

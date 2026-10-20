@@ -322,6 +322,16 @@ export type ParallaxRequests = {
 	 */
 	"thread/fork": { params: ThreadForkParams, result: ThreadStartResult },
 	/**
+	 * `thread/importable`: the past sessions the Claude, Codex, and Cursor desktop apps
+	 * keep on the host (PLX-881). Gated on the `threadImport` capability.
+	 */
+	"thread/importable": { params: ThreadImportableParams, result: ThreadImportableResult },
+	/**
+	 * `thread/import`: makes one of those sessions a thread, at rest with its
+	 * conversation. Idempotent on the session. Gated on the `threadImport` capability.
+	 */
+	"thread/import": { params: ThreadImportParams, result: ThreadStartResult },
+	/**
 	 * `thread/archive`: archives a normal thread or brings it back.
 	 */
 	"thread/archive": { params: ThreadArchiveParams, result: ThreadArchiveResult },
@@ -818,6 +828,8 @@ export const REQUEST_METHODS = [
 	"repo/add",
 	"thread/start",
 	"thread/fork",
+	"thread/importable",
+	"thread/import",
 	"thread/archive",
 	"thread/update",
 	"repo/update",
@@ -5272,6 +5284,79 @@ export type ThreadForkParams = {
 	 * none, as for a fork the user makes.
 	 */
 	parent?: RunId,
+};
+
+/**
+ * Params of `thread/importable`.
+ */
+export type ThreadImportableParams = Record<symbol, never>;
+
+/**
+ * Result of `thread/importable`.
+ */
+export type ThreadImportableResult = {
+	/**
+	 * Every app's sessions on the host, the most recently active first. An app that isn't
+	 * installed, or whose files can't be read, adds none.
+	 */
+	sessions: Array<ImportableSession>,
+};
+
+/**
+ * A session `thread/import` can import.
+ */
+export type ImportableSession = {
+	/**
+	 * The app it comes from.
+	 */
+	source: ImportSource,
+	/**
+	 * The app's id for it.
+	 */
+	id: string,
+	/**
+	 * Its title in the app, or else its first message, cut short.
+	 */
+	title: string,
+	/**
+	 * The folder it worked in, when the app records one.
+	 */
+	cwd?: string,
+	/**
+	 * When it was last active.
+	 */
+	updatedAt: string,
+	/**
+	 * The thread it was imported as. Absent until it is.
+	 */
+	thread?: RunId,
+};
+
+/**
+ * The desktop app a session comes from.
+ */
+export type ImportSource = "claude" | "codex" | "cursor";
+
+/**
+ * Params of `thread/import`: makes a session an archived thread, in its folder's own checkout
+ * when that folder is a repository, else with no repo. Idempotent: a session already imported returns its
+ * thread. Fails with `invalidParams` for a session the app no longer has, or one with no
+ * messages. Answers with `thread/start`'s result.
+ */
+export type ThreadImportParams = {
+	/**
+	 * The app it comes from.
+	 */
+	source: ImportSource,
+	/**
+	 * The app's id for it, as `thread/importable` listed it.
+	 */
+	id: string,
+	/**
+	 * The account the thread's follow-ups run on. Absent means the built-in agent of the
+	 * session's app: `claude`, `codex`, or `cursor`.
+	 */
+	account?: AccountChoice,
 };
 
 /**

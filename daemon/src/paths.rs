@@ -78,6 +78,22 @@ fn legacy_location(home: &Path) -> Option<PathBuf> {
     Some(data_home.join("parallax"))
 }
 
+/// Where desktop apps such as Cursor and Claude keep their files: `~/Library/Application Support`
+/// on macOS, `%APPDATA%` on Windows, and `$XDG_CONFIG_HOME` (when absolute) or `~/.config` on
+/// Linux.
+pub(crate) fn app_config_dir() -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        return Some(std::env::home_dir()?.join("Library/Application Support"));
+    }
+    if cfg!(windows) {
+        return std::env::var_os("APPDATA").map(PathBuf::from);
+    }
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .or_else(|| std::env::home_dir().map(|home| home.join(".config")))
+}
+
 #[cfg(target_os = "macos")]
 const GETCONF: &str = "/usr/bin/getconf";
 

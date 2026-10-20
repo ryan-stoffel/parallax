@@ -92,17 +92,7 @@ fn page_count(first: usize, total: u64) -> u32 {
 
 /// Cursor desktop's state database, where it keeps its sign-in.
 fn state_db() -> Option<PathBuf> {
-    let config = if cfg!(target_os = "macos") {
-        std::env::home_dir()?.join("Library/Application Support")
-    } else if cfg!(windows) {
-        PathBuf::from(std::env::var_os("APPDATA")?)
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .filter(|dir| dir.is_absolute())
-            .or_else(|| std::env::home_dir().map(|home| home.join(".config")))?
-    };
-    Some(config.join("Cursor/User/globalStorage/state.vscdb"))
+    Some(crate::paths::app_config_dir()?.join("Cursor/User/globalStorage/state.vscdb"))
 }
 
 /// Cursor's access token, or `None` when it's signed out. Read-only: the database is Cursor's,

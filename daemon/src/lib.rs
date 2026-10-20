@@ -63,6 +63,7 @@ mod event_log;
 mod github;
 mod graph;
 mod images;
+mod importer;
 mod json;
 pub mod keystore;
 pub mod launch_agent;

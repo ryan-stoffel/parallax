@@ -143,6 +143,8 @@ pub(crate) fn initialize(
 /// `thread/start`'s `parent` and `title`, and `thread/update`'s `title` and `settled`, which an
 /// older plxd would silently drop.
 /// `threadFork` (PLX-375, 0050): `thread/fork`.
+/// `threadImport` (PLX-881): `thread/importable` and `thread/import`, past sessions from the
+/// Claude, Codex, and Cursor desktop apps.
 /// `threadNaming` (PLX-610, 0058): `thread/start` takes `naming`, which an older plxd would
 /// silently ignore, to name the thread and its branch with the user's own model, and
 /// `agent.updated` carries `branch` when plxd renamed it.
@@ -329,6 +331,7 @@ fn capabilities_advertised() -> Capabilities {
             ]),
         ),
         ("threadFork".to_owned(), serde_json::Map::new()),
+        ("threadImport".to_owned(), serde_json::Map::new()),
         ("threadLineage".to_owned(), serde_json::Map::new()),
         ("threadNaming".to_owned(), serde_json::Map::new()),
         ("threadTools".to_owned(), serde_json::Map::new()),

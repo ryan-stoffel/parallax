@@ -200,9 +200,11 @@ const family = (name: string) => name.replace(/["';{}\\]/g, "").trim();
 
 /**
  * Paints `appearance` on <html>: the fonts as variables index.css reads, and classes for
- * the color theme, contrast, motion, and diff colors.
+ * the color theme, contrast, motion, and diff colors. `onboarding` ignores the OS's Reduce
+ * motion, which Windows reports whenever its Animation effects are off (PLX-881), so the tour
+ * plays unless Parallax's own setting asks for less.
  */
-export function applyAppearance(appearance: Appearance) {
+export function applyAppearance(appearance: Appearance, onboarding = false) {
   const root = document.documentElement;
   const ui = family(appearance.uiFont);
   const code = family(appearance.codeFont);
@@ -221,7 +223,8 @@ export function applyAppearance(appearance: Appearance) {
   root.classList.toggle("contrast-more", more);
   root.classList.toggle(
     "reduce-motion",
-    appearance.motion === "reduce" || matchMedia("(prefers-reduced-motion: reduce)").matches,
+    appearance.motion === "reduce" ||
+      (!onboarding && matchMedia("(prefers-reduced-motion: reduce)").matches),
   );
   root.classList.toggle("diff-blue-orange", appearance.diffColors === "blueOrange");
   // index.css mixes the panes' colors with transparent by --tint, over what shows through.
@@ -232,10 +235,10 @@ export function applyAppearance(appearance: Appearance) {
 
 /**
  * Keeps the saved appearance applied: the page, its zoom, and the added themes' CSS with the
- * colors changed over them. Call once,
+ * colors changed over them, with the OS's Reduce motion ignored while `onboarding`. Call once,
  * at the app root.
  */
-export function useAppearanceEffects() {
+export function useAppearanceEffects(onboarding = false) {
   const current = useAppearance();
   const added = useAddedThemes();
   // After index.css in <head>, so a theme's tokens win over Parallax's. Changed colors win over
@@ -253,15 +256,15 @@ export function useAppearanceEffects() {
     // The shown themes' classes, so Parallax's changed colors apply where a picked theme is gone.
     const { light, dark } = shownThemes(current, added);
     const shown = { ...current, lightTheme: light, darkTheme: dark };
-    applyAppearance(shown);
+    applyAppearance(shown, onboarding);
     // The OS's Increase contrast and Reduce motion, which "system" follows.
     const media = ["(prefers-contrast: more)", "(prefers-reduced-motion: reduce)"].map(matchMedia);
-    const apply = () => applyAppearance(shown);
+    const apply = () => applyAppearance(shown, onboarding);
     for (const m of media) m.addEventListener("change", apply);
     return () => {
       for (const m of media) m.removeEventListener("change", apply);
     };
-  }, [current, added]);
+  }, [current, added, onboarding]);
   useLayoutEffect(() => window.parallax.setZoom(current.uiSize / 13), [current.uiSize]);
   useLayoutEffect(
     () => window.parallax.setWindowLook?.({ material: current.windowMaterial }),
