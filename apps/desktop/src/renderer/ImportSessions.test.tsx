@@ -64,13 +64,14 @@ test("picking an app's sessions imports each on that app's agent, then lists the
 
   expect(document.body.textContent).toContain("1 of 4 imported");
   expect(box("Import Already here")).toBeNull();
-  await act(async () => box("Select all from Codex").click());
+  const button = (name: string) =>
+    [...document.querySelectorAll("button")].find((b) => b.textContent === name)!;
+  await act(async () => box("Codex").click());
+  expect(box("Import Fix the login redirect")).toBeNull();
+  await act(async () => button("Select all").click());
   expect(box("Import Finish HW2").checked).toBe(true);
-  expect(box("Import Fix the login redirect").checked).toBe(false);
-  const button = [...document.querySelectorAll("button")].find(
-    (b) => b.textContent === "Import 2",
-  )!;
-  await act(async () => button.click());
+  expect(document.body.textContent).toContain("2 selected");
+  await act(async () => button("Import 2").click());
 
   const imports = request.mock.calls.filter(([, method]) => method === "thread/import");
   expect(imports.map(([, , params]) => params)).toEqual([
@@ -78,5 +79,5 @@ test("picking an app's sessions imports each on that app's agent, then lists the
     { source: "codex", id: "x2", account: { kind: "subscription", backend: "codex" } },
   ]);
   expect(document.body.textContent).toContain("3 of 4 imported");
-  expect(box("Select all from Codex").disabled).toBe(true);
+  expect(button("Select all").disabled).toBe(true);
 });
