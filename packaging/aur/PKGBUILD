@@ -22,10 +22,11 @@ sha256sums_x86_64=(4325118a6a6aad2fd8eee3c144c15addd55da0db1cd85f9779604e35bdb8d
 sha256sums_aarch64=(49b7d4c7e6ce39558bd7a121ad369b2054c25c1e6c67bc5515f24b0306543c17)
 
 prepare() {
-  local appimage=(parallax-*.AppImage)
-  chmod +x "${appimage[0]}"
+  # By name: without makepkg -C, $srcdir still links the last nightly's AppImage.
+  local appimage="parallax-$pkgver-nightly-linux-${CARCH/aarch64/arm64}.AppImage"
+  chmod +x "$appimage"
   rm -rf squashfs-root
-  "./${appimage[0]}" --appimage-extract > /dev/null
+  "./$appimage" --appimage-extract > /dev/null
 }
 
 package() {

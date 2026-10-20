@@ -19,7 +19,8 @@ if [ "${DRY_RUN:-}" = 1 ]; then
   x86_64=$(printf '0%.0s' {1..64})
   aarch64=$x86_64
 else
-  assets=$(gh api "repos/$GH_REPO/releases/tags/$TAG")
+  # A release whose builds all failed stays a draft, which this job's token can't read.
+  assets=$(gh api "repos/$GH_REPO/releases/tags/$TAG") || assets='{"assets": []}'
   digest() {
     jq -r --arg name "parallax-$version-linux-$1.AppImage" \
       '.assets[] | select(.name == $name) | .digest | ltrimstr("sha256:")' <<< "$assets"
