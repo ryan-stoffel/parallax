@@ -296,7 +296,12 @@ export class WebHost {
     // Set first: plxd may relay the stream's first messages before it answers.
     this.deviceStreams.set(params.streamId, listener);
     const answer = await this.request("device/stream", params);
-    if (!("error" in answer)) return undefined;
+    if (!("error" in answer)) {
+      // Closed while it opened: plxd hadn't listed it yet, so it takes the close now.
+      if (this.deviceStreams.get(params.streamId) !== listener)
+        this.notify("device/close", { streamId: params.streamId });
+      return undefined;
+    }
     if (this.deviceStreams.get(params.streamId) === listener)
       this.deviceStreams.delete(params.streamId);
     return answer.error.message;

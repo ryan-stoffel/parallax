@@ -410,7 +410,13 @@ export class Connection {
     this.deviceStreams.set(params.streamId, listener);
     // Its first stream starts the device hub, which can take a while.
     const answer = await this.request("device/stream", params, 60_000);
-    if (!("error" in answer)) return undefined;
+    if (!("error" in answer)) {
+      // Closed while it opened: plxd hadn't listed it yet, so it takes the close now.
+      if (this.deviceStreams.get(params.streamId) !== listener) {
+        this.client?.notify("device/close", { streamId: params.streamId });
+      }
+      return undefined;
+    }
     if (this.deviceStreams.get(params.streamId) === listener) {
       this.deviceStreams.delete(params.streamId);
     }

@@ -282,7 +282,10 @@ impl Devices {
             replies.clone(),
             stopped.clone(),
             id.clone(),
-            Arc::clone(&self.streams),
+            Listed {
+                streams: Arc::clone(&self.streams),
+                own: send.clone(),
+            },
         ));
         streams.push(Relay {
             replies: replies.clone(),
@@ -547,7 +550,7 @@ async fn relay(
     replies: mpsc::Sender<Reply>,
     stopped: CancellationToken,
     id: String,
-    streams: Arc<Mutex<Vec<Relay>>>,
+    listed: Listed,
 ) {
     let data = |data: String, text: bool| {
         Reply::Notification(notification::<DeviceData>(DeviceDataParams {
@@ -603,16 +606,9 @@ async fn relay(
             }
         },
     };
-    // Gone from the list unless `device/close` or a new stream of the same name took it out first,
-    // which also means the app isn't waiting for an end.
-    let listed = {
-        let mut streams = lock(&streams);
-        let at = streams
-            .iter()
-            .position(|relay| relay.id == id && relay.replies.same_channel(&replies));
-        at.map(|at| streams.remove(at)).is_some()
-    };
-    if !listed {
+    // Still listed unless `device/close` or a new stream of the same name took it out first, which
+    // also means the app isn't waiting for an end.
+    if !listed.take() {
         return;
     }
     let end = notification::<DeviceEnd>(DeviceEndParams {
@@ -620,6 +616,30 @@ async fn relay(
         error,
     });
     let _ = replies.send(Reply::Notification(end)).await;
+}
+
+/// A relay's own entry in the list, by its sender, which leaves the list when the relay ends,
+/// however it ends: its connection stopping included.
+struct Listed {
+    streams: Arc<Mutex<Vec<Relay>>>,
+    own: mpsc::Sender<Message>,
+}
+
+impl Listed {
+    /// Takes the entry out. Returns whether it was still there.
+    fn take(&self) -> bool {
+        let mut streams = lock(&self.streams);
+        let at = streams
+            .iter()
+            .position(|relay| relay.send.same_channel(&self.own));
+        at.map(|at| streams.remove(at)).is_some()
+    }
+}
+
+impl Drop for Listed {
+    fn drop(&mut self) {
+        self.take();
+    }
 }
 
 fn close_relay(streams: &mut Vec<Relay>, replies: &mpsc::Sender<Reply>, id: &str) {

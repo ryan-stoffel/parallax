@@ -1,7 +1,12 @@
 use parallax_protocol::{DevicePlatform, DeviceStreamKind};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-use super::{Chunked, get, newest_iphone, upstream_path};
+use std::sync::{Arc, Mutex};
+
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+
+use super::{Chunked, Listed, Relay, Upstream, get, newest_iphone, relay, upstream_path};
 
 #[test]
 fn a_chunked_body_decodes_however_it_is_split() {
@@ -96,4 +101,48 @@ fn a_new_simulator_is_the_newest_runtimes_first_pro_iphone() {
     );
     let none = newest_iphone(br#"{"runtimes": []}"#).err().unwrap();
     assert!(none.starts_with("No iOS runtime is installed."), "{none}");
+}
+
+#[tokio::test]
+async fn a_relay_leaves_the_list_when_its_connection_stops() {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = vec![0; 1024];
+        let _ = socket.read(&mut request).await.unwrap();
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+            .await
+            .unwrap();
+        // The body never ends, as a device's video doesn't.
+        std::future::pending::<()>().await;
+    });
+    let body = get(port, "/").await.unwrap();
+    let streams = Arc::new(Mutex::new(Vec::new()));
+    let (replies, _received) = mpsc::channel(8);
+    let (send, outgoing) = mpsc::channel(8);
+    let stopped = CancellationToken::new();
+    let task = tokio::spawn(relay(
+        Upstream::Body(body),
+        outgoing,
+        replies.clone(),
+        stopped.clone(),
+        "video:1".to_owned(),
+        Listed {
+            streams: Arc::clone(&streams),
+            own: send.clone(),
+        },
+    ));
+    streams.lock().unwrap().push(Relay {
+        replies,
+        id: "video:1".to_owned(),
+        send,
+        task: task.abort_handle(),
+    });
+    stopped.cancel();
+    task.await.unwrap();
+    assert!(streams.lock().unwrap().is_empty());
 }
