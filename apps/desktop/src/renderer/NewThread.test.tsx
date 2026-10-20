@@ -9,7 +9,7 @@ import type { Capabilities, ErrorKind, Repo, Thread } from "../protocol/generate
 import { accessDefaults, accessPrefs } from "./accessPrefs";
 import { App } from "./App";
 import { flushToasts } from "./undo";
-import { drafts } from "./drafts";
+import { drafts, threadDrafts } from "./drafts";
 import { dragThread } from "./threadDrag";
 import { fakeWatch } from "./fakeWatch";
 import { pinLayout, startIn } from "./pins";
@@ -68,6 +68,7 @@ beforeEach(() => {
   accessPrefs.set(accessDefaults);
   // A test that ends with text in New Thread leaves it as a draft.
   for (const d of drafts.get()) drafts.remove(d.id);
+  for (const key of Object.keys(threadDrafts.get())) threadDrafts.remove(key);
   answers = {
     "thread/list": () => ({ result: { repos: [parallax], threads: [thread], seq: 7 } }),
     "agent/list": () => ({
@@ -480,6 +481,54 @@ test("leaving New Thread keeps its prompt as a draft atop Threads, which reopens
     expect.objectContaining({ prompt: "Tidy the README", threads: [thread.id] }),
   ]);
   expect(draft()).toBeNull();
+});
+
+test("leaving a thread keeps its unsent prompt as a draft, which coming back restores (PLX-887)", async () => {
+  // Seen and finished, so their rows show no news in place of a draft.
+  const seen = {
+    repo: parallax.id,
+    createdAt: "2026-09-26T12:00:01Z",
+    seenAt: "2026-09-26T13:00:00Z",
+  };
+  const done = (id: string, prompt: string) => ({
+    ...run(id, prompt, "completed"),
+    updatedAt: "2026-09-26T12:30:00Z",
+  });
+  answers["thread/list"] = () => ({
+    result: {
+      repos: [parallax],
+      threads: [
+        { ...seen, id: "t-1" },
+        { ...seen, id: "t-2" },
+      ],
+      seq: 7,
+    },
+  });
+  answers["agent/list"] = () => ({
+    result: { runs: [done("t-1", "Fix the flaky test"), done("t-2", "Tidy the README")], seq: 7 },
+  });
+  await renderApp();
+  const drafted = (title: string) =>
+    threadRow(title)!.closest("li")!.textContent!.includes("Draft");
+  const open = async (title: string) => {
+    await act(async () => (threadRow(title) as HTMLElement).click());
+    await settle();
+  };
+
+  await open("Fix the flaky test");
+  act(() => void composer().editor!.commands.setContent("Half a thought"));
+  await open("Tidy the README");
+  expect(composer().textContent).toBe("");
+  expect(drafted("Fix the flaky test")).toBe(true);
+
+  await open("Fix the flaky test");
+  expect(composer().textContent).toBe("Half a thought");
+  expect(drafted("Fix the flaky test")).toBe(false);
+
+  // An emptied box leaves no draft behind.
+  act(() => void composer().editor!.commands.setContent(""));
+  await open("Tidy the README");
+  expect(drafted("Fix the flaky test")).toBe(false);
 });
 
 test("a new thread asks plxd to forward its permission requests only when plxd advertises approvals (PLX-196)", async () => {

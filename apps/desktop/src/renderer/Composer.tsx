@@ -487,7 +487,7 @@ export interface ComposerProps {
   attach?: AttachThreads;
   /** What the box starts with, such as a reopened draft (PLX-788). Read once, as it mounts. */
   initial?: ComposerContents;
-  /** Kept up to date with what the box holds, for New Thread to save as a draft as it closes. */
+  /** Kept up to date with what the box holds, for its screen to save as a draft as it closes. */
   contents?: RefObject<ComposerContents | undefined>;
 }
 

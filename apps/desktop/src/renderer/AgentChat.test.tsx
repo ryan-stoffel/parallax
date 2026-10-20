@@ -34,6 +34,7 @@ import {
   TranscriptView,
 } from "./AgentChat";
 import { Composer } from "./Composer";
+import { threadDrafts } from "./drafts";
 import { ForkContext } from "./Fork";
 import { GitHubLogo, LinearLogo } from "./logos";
 import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
@@ -77,6 +78,8 @@ function render(node: ReactNode) {
   unmount = () => {
     root.unmount();
     document.body.innerHTML = "";
+    // What's left in the box would come back as a draft in the next render of the run.
+    for (const key of Object.keys(threadDrafts.get())) threadDrafts.remove(key);
     unmount = () => {};
   };
 }
