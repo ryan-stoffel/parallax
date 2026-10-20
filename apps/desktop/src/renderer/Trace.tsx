@@ -109,7 +109,7 @@ export function TraceCollapsibleTrigger({ className, children }: ComponentProps<
     <summary
       data-slot="trace-collapsible-trigger"
       className={cx(
-        "flex w-fit max-w-full min-w-0 cursor-default list-none items-center gap-1 rounded-md text-left text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden",
+        "flex w-fit max-w-full min-w-0 list-none items-center gap-1 rounded-md text-left text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden",
         className,
       )}
     >

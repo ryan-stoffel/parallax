@@ -118,7 +118,7 @@ export function SubagentRow({ sub }: { sub: Subagent }) {
       type="button"
       aria-label={`Open subagent: ${title}, ${subagentLabels[state]}`}
       onClick={() => context.open(sub.callId)}
-      className="group flex w-full min-w-0 cursor-default items-center gap-3 rounded-xl py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      className="group flex w-full min-w-0 items-center gap-3 rounded-xl py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
     >
       <Avatar sub={sub} state={state} />
       <span className="flex min-w-0 flex-1 flex-col">
@@ -171,7 +171,7 @@ export function SubagentCard({
   const last = Math.max(...subs.flatMap((s) => s.items.map((i) => Date.parse(i.at ?? ""))));
   return (
     <TraceCollapsible open={open} onOpenChange={(next) => onToggle(id, next)}>
-      <summary className="group flex w-full min-w-0 cursor-default list-none items-center gap-3 rounded-xl py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden">
+      <summary className="group flex w-full min-w-0 list-none items-center gap-3 rounded-xl py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden">
         <span className="flex shrink-0 -space-x-2">
           {subs.slice(0, 3).map((s) => (
             <Avatar key={s.callId} sub={s} />

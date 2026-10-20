@@ -607,7 +607,7 @@ body {
     button,
     select,
     summary,
-    label:has(input[type="checkbox"], input[type="radio"]),
+    label:has(input:is([type="checkbox"], [type="radio"]):not(:disabled)),
     input:is([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]),
     input:is([type="button"], [type="submit"], [type="reset"]),
     [role="button"],

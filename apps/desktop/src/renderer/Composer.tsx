@@ -1218,7 +1218,7 @@ export function Composer({
                     entry.pick();
                   }}
                   onMouseMove={() => setActive(i)}
-                  className={`${menuItem} cursor-default ${i === highlighted ? "bg-hover" : ""}`}
+                  className={`${menuItem} ${i === highlighted ? "bg-hover" : ""}`}
                 >
                   {entry.icon}
                   <span className={entry.meta ? "min-w-0 truncate" : "shrink-0"}>
