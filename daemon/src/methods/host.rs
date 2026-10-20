@@ -143,6 +143,8 @@ pub(crate) fn initialize(
 /// `thread/start`'s `parent` and `title`, and `thread/update`'s `title` and `settled`, which an
 /// older plxd would silently drop.
 /// `threadFork` (PLX-375, 0050): `thread/fork`.
+/// `chatImport` (PLX-883): `thread/importChat` and `thread/importedChats`, chats from `ChatGPT` and
+/// `claude.ai` data exports.
 /// `threadImport` (PLX-881): `thread/importable` and `thread/import`, past sessions from the
 /// Claude, Codex, and Cursor desktop apps.
 /// `threadNaming` (PLX-610, 0058): `thread/start` takes `naming`, which an older plxd would
@@ -254,6 +256,7 @@ fn capabilities_advertised() -> Capabilities {
         ("areaRepos".to_owned(), serde_json::Map::new()),
         ("areas".to_owned(), serde_json::Map::new()),
         ("autoResume".to_owned(), serde_json::Map::new()),
+        ("chatImport".to_owned(), serde_json::Map::new()),
         ("checkpoints".to_owned(), serde_json::Map::new()),
         ("checks".to_owned(), serde_json::Map::new()),
         ("checkout".to_owned(), serde_json::Map::new()),

@@ -138,8 +138,9 @@ pub use host::{
 };
 pub use id::InvalidId;
 pub use import::{
-    ImportSource, ImportableSession, ThreadImportParams, ThreadImportableParams,
-    ThreadImportableResult,
+    ChatMessage, ChatRef, ChatRole, ImportSource, ImportableSession, MAX_CHAT_MESSAGES,
+    ThreadImportChatParams, ThreadImportParams, ThreadImportableParams, ThreadImportableResult,
+    ThreadImportedChatsParams, ThreadImportedChatsResult,
 };
 pub use inbox::{
     InboxItem, InboxItemId, InboxKind, InboxListParams, InboxListResult, InboxSeenParams,

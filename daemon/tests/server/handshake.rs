@@ -37,6 +37,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("areaRepos".to_owned(), serde_json::Map::new()),
             ("areas".to_owned(), serde_json::Map::new()),
             ("autoResume".to_owned(), serde_json::Map::new()),
+            ("chatImport".to_owned(), serde_json::Map::new()),
             ("checkpoints".to_owned(), serde_json::Map::new()),
             ("checks".to_owned(), serde_json::Map::new()),
             ("checkout".to_owned(), serde_json::Map::new()),

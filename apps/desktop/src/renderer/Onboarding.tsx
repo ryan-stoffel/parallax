@@ -35,7 +35,7 @@ import { ClaudeLogo, CursorLogo, OpenAILogo, OpenCodeLogo, ParallaxMark } from "
 import { agents, finishOnboarding, infoOf, ready, setUpAgents, type Agent } from "./firstRun";
 import { Avatar, useProfile } from "./profile";
 import { kindOf, loadProviders, useProviders } from "./providers";
-import { ImportSessions } from "./ImportSessions";
+import { ImportStepBody } from "./ImportSessions";
 import { IconButton } from "./ui";
 
 const SignInTerminal = lazy(() =>
@@ -537,7 +537,10 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
   );
 }
 
-/** Step three: past sessions from the Claude, Codex, and Cursor apps, to pick and import. */
+/**
+ * Step three: past sessions from the Claude, Codex, and Cursor apps, or chats from a ChatGPT or
+ * Claude export, to pick and import.
+ */
 function ImportStep({ titleId }: { titleId: string }) {
   return (
     <div className="flex h-full flex-col">
@@ -545,7 +548,7 @@ function ImportStep({ titleId }: { titleId: string }) {
         Pick past sessions from the Claude, Codex, and Cursor apps. Each lands in Archived as a
         thread you can pick up again. Find this in Settings &gt; Threads.
       </Heading>
-      <ImportSessions className="onboard-rise min-h-0 flex-1" />
+      <ImportStepBody className="onboard-rise min-h-0 flex-1" />
     </div>
   );
 }

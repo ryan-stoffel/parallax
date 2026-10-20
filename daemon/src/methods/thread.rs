@@ -2,7 +2,8 @@
 //! behind the `threads` capability, `thread/fork` (0050), behind `threadFork`, `thread/update`
 //! and `repo/update` (0033), behind `threadAttention` (and `threadLineage` for its title and
 //! settled flag, 0041), `repo/refs`, behind `repoRefs`, and `thread/search` (PLX-372), behind
-//! `threadContext`, and `thread/import` (PLX-881), behind `threadImport`. The logic is [`crate::threads`]; methods that only forward to it route there
+//! `threadContext`, `thread/import` (PLX-881), behind `threadImport`, and `thread/importChat` (PLX-883), behind
+//! `chatImport`. The logic is [`crate::threads`]; methods that only forward to it route there
 //! straight from `mod.rs`.
 //! `repo/files` is `composer.rs`'s, behind `composerMenus`.
 
@@ -11,7 +12,7 @@ use std::sync::Arc;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     SpaceDeleteParams, SpaceDeleteResult, ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams,
-    ThreadImportParams, ThreadStartParams, ThreadStartResult,
+    ThreadImportChatParams, ThreadImportParams, ThreadStartParams, ThreadStartResult,
 };
 
 use super::Context;
@@ -55,6 +56,18 @@ pub(super) async fn import(
         .daemon
         .agents
         .detached(crate::importer::import(daemon, params))
+        .await
+}
+
+pub(super) async fn import_chat(
+    context: &Context,
+    params: ThreadImportChatParams,
+) -> Result<ThreadStartResult, ErrorObject> {
+    let daemon = Arc::clone(&context.daemon);
+    context
+        .daemon
+        .agents
+        .detached(crate::importer::import_chat(daemon, params))
         .await
 }
 

@@ -144,6 +144,11 @@ export const settingsIndex: SettingEntry[] = [
       "Continue Claude, Codex, and Cursor sessions as threads",
       "import history past migrate desktop app claude codex cursor chats",
     ],
+    [
+      "Import chats",
+      "Bring in chats from a ChatGPT or Claude export",
+      "import chatgpt openai claude.ai export zip conversations history",
+    ],
   ]),
   // Appearance
   ...entries("appearance", "Theme", [

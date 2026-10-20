@@ -13,9 +13,12 @@
 //!
 //! An import is a thread shaped like a fork (0050): its prompt is the session's first message,
 //! its log the rest of the conversation, the user's messages and the agent's replies, and no CLI
-//! runs until the first follow-up. It starts archived. A session in a repository's root works in that checkout, as
-//! it did in the app; any other has no repo. Its run id is a version 7 UUID made from the session
-//! (its start time, then a hash of its app and id), so importing it again finds the same thread.
+//! runs until the first follow-up. It starts archived. A session in a repository's root works in
+//! that checkout, as it did in the app; any other has no repo. Its run id is a version 7 UUID made
+//! from the session (its start time, then a hash of its app and id), so importing it again finds
+//! the same thread. `thread/importChat` (PLX-883) takes a chat the client read from a `ChatGPT` or
+//! `claude.ai` data export instead, which always has no repo and no session.
+//!
 //! A Codex thread keeps its session, which a follow-up resumes, falling back to a handoff. A Claude
 //! one keeps it only in its own folder, where Claude Code looks for it. Every other follow-up tells
 //! a new session the conversation (0014).
@@ -29,9 +32,10 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountChoice, AgentOutputItem, ImportSource, ImportableSession, MAX_THREAD_TITLE_BYTES,
-    ProjectId, RepoAddParams, RepoId, RunId, ThreadArchiveParams, ThreadImportParams,
-    ThreadImportableResult, ThreadStartResult, TurnId,
+    AccountChoice, AgentOutputItem, ChatRole, ImportSource, ImportableSession, MAX_CHAT_MESSAGES,
+    MAX_THREAD_TITLE_BYTES, ProjectId, RepoAddParams, RepoId, RunId, ThreadArchiveParams,
+    ThreadImportChatParams, ThreadImportParams, ThreadImportableResult, ThreadImportedChatsParams,
+    ThreadImportedChatsResult, ThreadStartResult, TurnId,
 };
 use parallax_store::ThreadFields;
 use rusqlite::{Connection, OpenFlags};
@@ -157,9 +161,109 @@ pub(crate) async fn import(
             app_name(source)
         )));
     };
-    let Some((prompt, transcript)) = transcript(source, &messages) else {
+    create(daemon, session, &messages, account).await
+}
+
+/// `thread/importChat` (PLX-883): see [`ThreadImportChatParams`].
+pub(crate) async fn import_chat(
+    daemon: Arc<Daemon>,
+    params: ThreadImportChatParams,
+) -> Result<ThreadStartResult, ErrorObject> {
+    let ThreadImportChatParams {
+        source,
+        id,
+        title,
+        created_at,
+        messages,
+        account,
+    } = params;
+    if !matches!(source, ImportSource::Chatgpt | ImportSource::ClaudeChat) {
+        return Err(ErrorObject::invalid_params(
+            "thread/importChat imports chatgpt and claudeChat chats; use thread/import for the rest",
+        ));
+    }
+    if messages.len() > MAX_CHAT_MESSAGES {
         return Err(ErrorObject::invalid_params(format!(
-            "session {id} has no messages to import"
+            "a chat has at most {MAX_CHAT_MESSAGES} messages"
+        )));
+    }
+    let messages: Vec<Message> = messages
+        .into_iter()
+        .filter(|m| !m.text.trim().is_empty())
+        .map(|m| match m.role {
+            ChatRole::User => Message::User(m.text),
+            ChatRole::Assistant => Message::Agent(m.text),
+        })
+        .collect();
+    let title = title.trim();
+    let session = Session {
+        source,
+        title: if title.is_empty() {
+            "Imported chat"
+        } else {
+            title
+        }
+        .to_owned(),
+        id,
+        cwd: None,
+        started: created_at,
+        updated: created_at,
+        resume: None,
+    };
+    create(daemon, session, &messages, account).await
+}
+
+/// `thread/importedChats` (PLX-883): each chat's thread, if it was imported.
+pub(crate) async fn imported_chats(
+    daemon: &Daemon,
+    params: ThreadImportedChatsParams,
+) -> Result<ThreadImportedChatsResult, ErrorObject> {
+    let ids: Vec<Option<RunId>> = params
+        .chats
+        .into_iter()
+        .map(|chat| {
+            run_id(&Session {
+                source: chat.source,
+                id: chat.id,
+                title: String::new(),
+                cwd: None,
+                started: chat.created_at,
+                updated: chat.created_at,
+                resume: None,
+            })
+        })
+        .collect();
+    store(daemon, move |db| {
+        let mut threads = Vec::with_capacity(ids.len());
+        for id in ids {
+            let found = match id {
+                Some(id) => db
+                    .get_thread(id.into())
+                    .map_err(|e| store_error(&e))?
+                    .map(|_| id),
+                None => None,
+            };
+            threads.push(found);
+        }
+        Ok(ThreadImportedChatsResult { threads })
+    })
+    .await
+}
+
+/// Makes `session`, with its conversation `messages`, an archived thread: in its folder's
+/// checkout when that's a repository's root, else with no repo. Returns the thread it already is
+/// when it was imported before.
+async fn create(
+    daemon: Arc<Daemon>,
+    session: Session,
+    messages: &[Message],
+    account: Option<AccountChoice>,
+) -> Result<ThreadStartResult, ErrorObject> {
+    let source = session.source;
+    let Some((prompt, transcript)) = transcript(source, messages) else {
+        return Err(ErrorObject::invalid_params(format!(
+            "{} has no message from the user to import",
+            session.id
         )));
     };
     let run_id = run_id(&session)
@@ -360,17 +464,18 @@ fn resumable(
 /// The built-in backend a source's sessions ran on.
 fn backend_of(source: ImportSource) -> &'static str {
     match source {
-        ImportSource::Claude => "claude",
-        ImportSource::Codex => "codex",
+        ImportSource::Claude | ImportSource::ClaudeChat => "claude",
+        ImportSource::Codex | ImportSource::Chatgpt => "codex",
         ImportSource::Cursor => "cursor",
     }
 }
 
 fn app_name(source: ImportSource) -> &'static str {
     match source {
-        ImportSource::Claude => "Claude",
+        ImportSource::Claude | ImportSource::ClaudeChat => "Claude",
         ImportSource::Codex => "Codex",
         ImportSource::Cursor => "Cursor",
+        ImportSource::Chatgpt => "ChatGPT",
     }
 }
 
@@ -400,7 +505,12 @@ fn transcript(
     };
     let mut items = vec![
         AgentOutputItem::Notice {
-            detail: format!("Imported from the {} app.", app_name(source)),
+            detail: match source {
+                ImportSource::Chatgpt | ImportSource::ClaudeChat => {
+                    format!("Imported from a {} export.", app_name(source))
+                }
+                _ => format!("Imported from the {} app.", app_name(source)),
+            },
         },
         AgentOutputItem::TurnStarted {
             turn_id: None,
@@ -484,6 +594,7 @@ fn list(homes: &Homes) -> Vec<Session> {
 /// Session `id` of `source` and its conversation.
 fn load(homes: &Homes, source: ImportSource, id: &str) -> Option<(Session, Vec<Message>)> {
     match source {
+        ImportSource::Chatgpt | ImportSource::ClaudeChat => None,
         ImportSource::Claude => {
             let session = claude_sessions(homes).into_iter().find(|s| s.id == id)?;
             let file = claude_transcript(homes, session.resume.as_deref()?)?;
