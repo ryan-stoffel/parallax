@@ -13,7 +13,7 @@
 //!
 //! An import is a thread shaped like a fork (0050): its prompt is the session's first message,
 //! its log the rest of the conversation, the user's messages and the agent's replies, and no CLI
-//! runs until the first follow-up. A session in a repository's root works in that checkout, as
+//! runs until the first follow-up. It starts archived. A session in a repository's root works in that checkout, as
 //! it did in the app; any other has no repo. Its run id is a version 7 UUID made from the session
 //! (its start time, then a hash of its app and id), so importing it again finds the same thread.
 //! A Codex thread keeps its session, which a follow-up resumes, falling back to a handoff. A Claude
@@ -30,8 +30,8 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AccountChoice, AgentOutputItem, ImportSource, ImportableSession, MAX_THREAD_TITLE_BYTES,
-    ProjectId, RepoAddParams, RepoId, RunId, ThreadImportParams, ThreadImportableResult,
-    ThreadStartResult, TurnId,
+    ProjectId, RepoAddParams, RepoId, RunId, ThreadArchiveParams, ThreadImportParams,
+    ThreadImportableResult, ThreadStartResult, TurnId,
 };
 use parallax_store::ThreadFields;
 use rusqlite::{Connection, OpenFlags};
@@ -234,9 +234,29 @@ pub(crate) async fn import(
         }
     }
     Ok(ThreadStartResult {
-        thread: threads::thread_entry(&thread)?,
+        thread: archive(&daemon, run_id, thread).await?,
         run: created.run,
     })
+}
+
+/// Archives new import `thread`, so a history brought in all at once doesn't fill the sidebar's
+/// Today, and returns it. One that can't be archived is returned as it is.
+async fn archive(
+    daemon: &Arc<Daemon>,
+    run_id: RunId,
+    thread: parallax_store::Thread,
+) -> Result<parallax_protocol::Thread, ErrorObject> {
+    let archived = ThreadArchiveParams {
+        run_id,
+        archived: true,
+    };
+    match threads::archive(daemon, archived, None).await {
+        Ok(done) => Ok(done.thread),
+        Err(error) => {
+            warn!(run = %run_id, error = %error.message, "could not archive an imported thread");
+            threads::thread_entry(&thread)
+        }
+    }
 }
 
 /// The thread run `id` already imported, if it was.

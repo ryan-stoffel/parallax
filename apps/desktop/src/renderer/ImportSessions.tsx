@@ -34,9 +34,9 @@ function accountFor(source: ImportSource, providers: ProviderInfo[] | undefined)
 
 /**
  * This computer's past sessions from the Claude, Codex, and Cursor desktop apps (PLX-881), the
- * most recent first and filtered by app, to pick and import as threads (`thread/importable`,
- * `thread/import`). One already imported says so. Onboarding and Settings > Threads' Import
- * sessions show it.
+ * most recent first and filtered by app, to pick and import as archived threads
+ * (`thread/importable`, `thread/import`). One already imported says so. Onboarding and Settings >
+ * Threads' Import sessions show it.
  */
 export function ImportSessions({ className = "" }: { className?: string }) {
   const connection = useConnection(localId);
@@ -361,7 +361,8 @@ export function ImportButton() {
                 Import sessions
               </h2>
               <p className="mt-0.5 text-[12.5px] text-muted-foreground">
-                Continue past sessions from the Claude, Codex, and Cursor apps as threads.
+                Bring past sessions from the Claude, Codex, and Cursor apps into Archived as
+                threads.
               </p>
             </div>
             <IconButton label="Close" onClick={() => dialog.current?.close()}>

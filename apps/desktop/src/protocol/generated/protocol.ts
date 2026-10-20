@@ -5338,8 +5338,8 @@ export type ImportableSession = {
 export type ImportSource = "claude" | "codex" | "cursor";
 
 /**
- * Params of `thread/import`: makes a session a thread, in its folder's own checkout when that
- * folder is a repository, else with no repo. Idempotent: a session already imported returns its
+ * Params of `thread/import`: makes a session an archived thread, in its folder's own checkout
+ * when that folder is a repository, else with no repo. Idempotent: a session already imported returns its
  * thread. Fails with `invalidParams` for a session the app no longer has, or one with no
  * messages. Answers with `thread/start`'s result.
  */

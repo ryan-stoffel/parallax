@@ -55,7 +55,8 @@
         "id": "01a0e2f0-1b2c-7d3e-8f4a-5b6c7d8e9f01",
         "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
         "createdAt": "2026-10-19T19:00:00Z",
-        "lastPromptAt": "2026-10-19T19:00:00Z"
+        "lastPromptAt": "2026-10-19T19:00:00Z",
+        "archived": true
       },
       "run": {
         "id": "01a0e2f0-1b2c-7d3e-8f4a-5b6c7d8e9f01",
