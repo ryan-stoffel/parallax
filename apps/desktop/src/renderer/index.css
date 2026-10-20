@@ -503,7 +503,6 @@ body {
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
   user-select: none;
-  cursor: default;
 }
 
 /* The window's panes, the main pane, side panel, and sidebar, paint these, and Settings' cards
@@ -595,6 +594,35 @@ body {
   }
   :focus:not(:focus-visible) {
     outline: none;
+  }
+}
+
+/* Cursors, the same on every OS. The body leaves Chromium's `cursor: auto`, which shows the I-beam
+   over fields and over text that can be selected (select-text) and the arrow over the rest. What
+   can be clicked shows the hand, unless it's disabled. In the base layer, so cursor-* utilities
+   still win. */
+@layer base {
+  :where(
+    a[href],
+    button,
+    select,
+    summary,
+    label:has(input[type="checkbox"], input[type="radio"]),
+    input:is([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]),
+    input:is([type="button"], [type="submit"], [type="reset"]),
+    [role="button"],
+    [role="link"],
+    [role="tab"],
+    [role="option"],
+    [role="switch"],
+    [role="checkbox"],
+    [role="radio"],
+    [role^="menuitem"]
+  ) {
+    cursor: pointer;
+  }
+  :where(:disabled, [aria-disabled="true"]) {
+    cursor: default;
   }
 }
 
