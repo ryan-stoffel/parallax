@@ -3,8 +3,10 @@
 //! its device hub and hands the agent its `agent-device` CLI; these run `xcrun simctl` for iOS
 //! Simulators on macOS and the Android SDK's `adb` and `emulator` directly, from `plxd mcp`.
 //!
-//! Parallax has no Device panel, so opening an iOS Simulator shows it in Simulator.app, and an
-//! Android emulator opens its own window. The devices a thread opened (T3's sessions) are kept in
+//! The app's Device panel shows what they open (PLX-886): it finds `device_open` in the thread's
+//! transcript and asks `device/state` for the thread's devices, which [`crate::devices`] reads
+//! from the same sessions file, and an Android emulator also opens its own window. `serve` lists,
+//! boots, and captures devices with this module's functions too. The devices a thread opened (T3's sessions) are kept in
 //! `tmp/devices/<run>.json` in plxd's data folder, so they last across the thread's turns until
 //! plxd restarts, as T3's last until its server does. The only device host is this computer,
 //! `local`.
@@ -35,7 +37,7 @@ const LOCAL: &str = "local";
 const BOOT_TIMEOUT: Duration = Duration::from_mins(3);
 
 /// The longest any other device command takes.
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How often a booting emulator is checked.
 const BOOT_POLL: Duration = Duration::from_secs(1);
@@ -113,7 +115,7 @@ pub fn definitions() -> Vec<Value> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-enum Platform {
+pub(crate) enum Platform {
     Ios,
     Android,
 }
@@ -121,24 +123,24 @@ enum Platform {
 /// A simulator, emulator, or connected phone, as T3's `DeviceSummary`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Device {
+pub(crate) struct Device {
     host_id: &'static str,
     /// The simulator's udid, or the adb serial (an AVD's name while it isn't running).
-    id: String,
-    platform: Platform,
-    name: String,
+    pub id: String,
+    pub platform: Platform,
+    pub name: String,
     /// Such as "iOS 18.0" or "Android 15".
-    version: String,
-    booted: bool,
-    physical: bool,
+    pub version: String,
+    pub booted: bool,
+    pub physical: bool,
 }
 
 /// A device the thread opened, as T3's `DeviceSession`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Session {
+pub(crate) struct Session {
     host_id: String,
-    device_id: String,
+    pub device_id: String,
     platform: Platform,
 }
 
@@ -173,37 +175,44 @@ struct CloseArgs {
 }
 
 /// Where each platform's commands are, or why this computer can't run it.
-struct Toolchain {
-    ios: Result<Ios, String>,
-    android: Result<Android, String>,
+pub(crate) struct Toolchain {
+    pub ios: Result<Ios, String>,
+    pub android: Result<Android, String>,
 }
 
-struct Ios {
-    xcrun: PathBuf,
-    /// macOS's `open`, which shows a booted simulator in Simulator.app. None in tests.
-    open: Option<PathBuf>,
+pub(crate) struct Ios {
+    pub xcrun: PathBuf,
 }
 
-struct Android {
-    adb: PathBuf,
-    emulator: PathBuf,
+pub(crate) struct Android {
+    pub adb: PathBuf,
+    pub emulator: PathBuf,
+}
+
+impl Android {
+    /// The SDK's folder: `<sdk>/platform-tools/adb`'s grandparent.
+    pub(crate) fn sdk_root(&self) -> Option<&Path> {
+        self.adb.parent()?.parent()
+    }
 }
 
 impl Toolchain {
     /// What this computer has, found as T3 finds it.
-    fn detect() -> Self {
-        let path = std::env::var_os("PATH");
+    pub(crate) fn detect() -> Self {
+        Self::detect_with(|name| std::env::var_os(name))
+    }
+
+    /// [`Self::detect`], reading variables with `env`, such as `serve`'s login-shell environment.
+    pub(crate) fn detect_with(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Self {
+        let path = env("PATH");
         let ios = if cfg!(target_os = "macos") {
             crate::backend::process::find_program("xcrun".as_ref(), path.as_deref())
-                .map(|xcrun| Ios {
-                    xcrun,
-                    open: Some(PathBuf::from("/usr/bin/open")),
-                })
+                .map(|xcrun| Ios { xcrun })
                 .map_err(|_| "Xcode command line tools were not found.".to_owned())
         } else {
             Err("iOS Simulators need macOS with Xcode.".to_owned())
         };
-        let var = |name| std::env::var_os(name).filter(|value| !value.is_empty());
+        let var = |name| env(name).filter(|value| !value.is_empty());
         let explicit = var("ANDROID_HOME").or_else(|| var("ANDROID_SDK_ROOT"));
         let home = var("HOME").or_else(|| var("USERPROFILE"));
         let local_app_data = var("LOCALAPPDATA");
@@ -274,7 +283,7 @@ impl Devices {
     pub fn new(temp: &Path, run: RunId) -> Self {
         Self {
             tools: Toolchain::detect(),
-            sessions: temp.join("devices").join(format!("{run}.json")),
+            sessions: sessions_file(temp, run),
         }
     }
 
@@ -337,42 +346,7 @@ impl Devices {
         if let Ok(android) = &self.tools.android {
             devices.extend(android_devices(android).await.unwrap_or_default());
         }
-        let mut device = pick(devices, &args)?;
-        match device.platform {
-            Platform::Ios => {
-                let ios = self.tools.ios.as_ref()?;
-                if !device.booted {
-                    let xcrun = &ios.xcrun;
-                    let failed = |error: String| boot_failed(&device.id, &error);
-                    run(xcrun, &["simctl", "boot", &device.id], BOOT_TIMEOUT)
-                        .await
-                        .map_err(failed)?;
-                    run(xcrun, &["simctl", "bootstatus", &device.id], BOOT_TIMEOUT)
-                        .await
-                        .map_err(failed)?;
-                    device.booted = true;
-                }
-                if let Some(open) = &ios.open {
-                    // Shows it to the user, as T3's Device panel would. Without a desktop, as
-                    // over SSH, it fails, and the simulator runs headless.
-                    let args = [
-                        "-a",
-                        "Simulator",
-                        "--args",
-                        "-CurrentDeviceUDID",
-                        &device.id,
-                    ];
-                    let _ = run(open, &args, COMMAND_TIMEOUT).await;
-                }
-            }
-            Platform::Android => {
-                let android = self.tools.android.as_ref()?;
-                if !device.booted {
-                    let serial = boot_avd(android, &device.id).await?;
-                    device = android_device(android, serial).await;
-                }
-            }
-        }
+        let device = boot(&self.tools, pick(devices, &args)?).await?;
         let mut sessions = self.read_sessions()?;
         sessions.retain(|session| session.device_id != device.id);
         sessions.push(Session {
@@ -404,34 +378,19 @@ impl Devices {
             });
         };
         let id = &session.device_id;
-        let (device, png) = match session.platform {
+        let device = match session.platform {
             Platform::Ios => {
                 let ios = self.tools.ios.as_ref()?;
                 let devices = ios_devices(ios).await?;
                 let device = devices.into_iter().find(|device| device.id == *id);
-                let device = device.ok_or_else(|| not_found(id))?;
-                // simctl writes `-` as a file named `-`, not to stdout, so it gets a file.
-                let file = tempfile::Builder::new()
-                    .prefix("plxd-screenshot-")
-                    .suffix(".png")
-                    .tempfile()
-                    .map_err(|error| {
-                        format!("could not make a file for the screenshot: {error}")
-                    })?;
-                let path = file.path().to_string_lossy();
-                let args = ["simctl", "io", id, "screenshot", "--type=png", &path];
-                run(&ios.xcrun, &args, COMMAND_TIMEOUT).await?;
-                let png = std::fs::read(file.path())
-                    .map_err(|error| format!("could not read the screenshot: {error}"))?;
-                (device, png)
+                device.ok_or_else(|| not_found(id))?
             }
             Platform::Android => {
                 let android = self.tools.android.as_ref()?;
-                let device = android_device(android, id.clone()).await;
-                let args = ["-s", id, "exec-out", "screencap", "-p"];
-                (device, run(&android.adb, &args, COMMAND_TIMEOUT).await?)
+                android_device(android, id.clone()).await
             }
         };
+        let png = screen(&self.tools, session.platform, id).await?;
         let (width, height) = png_size(&png).ok_or("The device's screenshot was not a PNG.")?;
         let text = pretty(&json!({
             "device": device,
@@ -457,32 +416,14 @@ impl Devices {
         self.write_sessions(&kept)?;
         if args.shutdown {
             for session in &closing {
-                let id = session.device_id.as_str();
-                match session.platform {
-                    Platform::Ios => {
-                        let ios = self.tools.ios.as_ref()?;
-                        run(&ios.xcrun, &["simctl", "shutdown", id], BOOT_TIMEOUT).await?;
-                    }
-                    // A phone isn't powered off; only an emulator is.
-                    Platform::Android if id.starts_with("emulator-") => {
-                        let android = self.tools.android.as_ref()?;
-                        run(&android.adb, &["-s", id, "emu", "kill"], COMMAND_TIMEOUT).await?;
-                    }
-                    Platform::Android => {}
-                }
+                shutdown(&self.tools, session.platform, &session.device_id).await?;
             }
         }
         Ok("{}".to_owned())
     }
 
     fn read_sessions(&self) -> Result<Vec<Session>, String> {
-        match std::fs::read(&self.sessions) {
-            Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or_default()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(error) => Err(format!(
-                "could not read this thread's open devices: {error}"
-            )),
-        }
+        read_sessions(&self.sessions)
     }
 
     fn write_sessions(&self, sessions: &[Session]) -> Result<(), String> {
@@ -493,6 +434,98 @@ impl Devices {
         }
         let json = serde_json::to_vec(sessions).map_err(|error| error.to_string())?;
         std::fs::write(&self.sessions, json).map_err(failed)
+    }
+}
+
+/// The devices a thread opened, from its sessions file.
+pub(crate) fn read_sessions(path: &Path) -> Result<Vec<Session>, String> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or_default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(format!(
+            "could not read this thread's open devices: {error}"
+        )),
+    }
+}
+
+/// The sessions file of thread `run`, in plxd's data folder's `tmp/`.
+pub(crate) fn sessions_file(temp: &Path, run: RunId) -> PathBuf {
+    temp.join("devices").join(format!("{run}.json"))
+}
+
+/// Boots `device` unless it's running, and waits until it has: the device as it is then, an
+/// AVD's under its emulator's serial.
+pub(crate) async fn boot(tools: &Toolchain, mut device: Device) -> Result<Device, String> {
+    if device.booted {
+        return Ok(device);
+    }
+    match device.platform {
+        Platform::Ios => {
+            let xcrun = &tools.ios.as_ref()?.xcrun;
+            let failed = |error: String| boot_failed(&device.id, &error);
+            run(xcrun, &["simctl", "boot", &device.id], BOOT_TIMEOUT)
+                .await
+                .map_err(failed)?;
+            run(xcrun, &["simctl", "bootstatus", &device.id], BOOT_TIMEOUT)
+                .await
+                .map_err(failed)?;
+            device.booted = true;
+            Ok(device)
+        }
+        Platform::Android => {
+            let android = tools.android.as_ref()?;
+            let serial = boot_avd(android, &device.id).await?;
+            Ok(android_device(android, serial).await)
+        }
+    }
+}
+
+/// Powers a simulator or emulator off. A phone isn't powered off.
+pub(crate) async fn shutdown(
+    tools: &Toolchain,
+    platform: Platform,
+    id: &str,
+) -> Result<(), String> {
+    match platform {
+        Platform::Ios => {
+            let ios = tools.ios.as_ref()?;
+            run(&ios.xcrun, &["simctl", "shutdown", id], BOOT_TIMEOUT).await?;
+        }
+        Platform::Android if id.starts_with("emulator-") => {
+            let android = tools.android.as_ref()?;
+            run(&android.adb, &["-s", id, "emu", "kill"], COMMAND_TIMEOUT).await?;
+        }
+        Platform::Android => {}
+    }
+    Ok(())
+}
+
+/// A PNG of booted device `id`'s screen.
+pub(crate) async fn screen(
+    tools: &Toolchain,
+    platform: Platform,
+    id: &str,
+) -> Result<Vec<u8>, String> {
+    match platform {
+        Platform::Ios => {
+            let ios = tools.ios.as_ref()?;
+            // simctl writes `-` as a file named `-`, not to stdout, so it gets a file.
+            let file = tempfile::Builder::new()
+                .prefix("plxd-screenshot-")
+                .suffix(".png")
+                .tempfile()
+                .map_err(|error| format!("could not make a file for the screenshot: {error}"))?;
+            let path = file.path().to_string_lossy();
+            let args = ["simctl", "io", id, "screenshot", "--type=png", &path];
+            run(&ios.xcrun, &args, COMMAND_TIMEOUT).await?;
+            std::fs::read(file.path())
+                .map_err(|error| format!("could not read the screenshot: {error}"))
+        }
+        Platform::Android => {
+            let android = tools.android.as_ref()?;
+            let args = ["-s", id, "exec-out", "screencap", "-p"];
+            run(&android.adb, &args, COMMAND_TIMEOUT).await
+        }
     }
 }
 
@@ -575,7 +608,9 @@ fn quick_start(device: &Device) -> String {
     let (name, version, id) = (&device.name, &device.version, &device.id);
     let lines = match device.platform {
         Platform::Ios => vec![
-            format!("{name} ({version}) is open in Simulator, where the user can watch it."),
+            format!(
+                "{name} ({version}) is open in Parallax's Device panel, where the user can watch it."
+            ),
             format!("Drive it with xcrun simctl, passing its udid {id}:"),
             format!("  xcrun simctl install {id} <path-to-.app>"),
             format!("  xcrun simctl launch {id} <bundle-id>"),
@@ -585,7 +620,7 @@ fn quick_start(device: &Device) -> String {
         ],
         Platform::Android => vec![
             format!(
-                "{name} ({version}) is open in its emulator window, where the user can watch it."
+                "{name} ({version}) is open in Parallax's Device panel, where the user can watch it."
             ),
             format!("Drive it with adb, passing its serial {id}:"),
             format!("  adb -s {id} install <path-to-.apk>"),
@@ -601,7 +636,7 @@ fn quick_start(device: &Device) -> String {
 
 /// Runs `program` with `args` and returns its stdout, or why it failed.
 // ponytail: a command that runs past `limit` is left running; kill it if a hung adb ever piles up.
-async fn run(program: &Path, args: &[&str], limit: Duration) -> Result<Vec<u8>, String> {
+pub(crate) async fn run(program: &Path, args: &[&str], limit: Duration) -> Result<Vec<u8>, String> {
     let name = program.file_stem().unwrap_or_default().to_string_lossy();
     let shown = format!("{name} {}", args.join(" "));
     let mut command = Command::new(program);
@@ -636,7 +671,7 @@ struct SimctlDevice {
 }
 
 /// The available iOS Simulators.
-async fn ios_devices(ios: &Ios) -> Result<Vec<Device>, String> {
+pub(crate) async fn ios_devices(ios: &Ios) -> Result<Vec<Device>, String> {
     let args = ["simctl", "list", "devices", "available", "--json"];
     let listed = run(&ios.xcrun, &args, COMMAND_TIMEOUT).await?;
     let listed: SimctlList = serde_json::from_slice(&listed)
@@ -667,7 +702,7 @@ async fn ios_devices(ios: &Ios) -> Result<Vec<Device>, String> {
 }
 
 /// The running emulators and connected phones, then the AVDs that aren't running.
-async fn android_devices(android: &Android) -> Result<Vec<Device>, String> {
+pub(crate) async fn android_devices(android: &Android) -> Result<Vec<Device>, String> {
     let mut devices = Vec::new();
     for serial in serials(android).await? {
         devices.push(android_device(android, serial).await);

@@ -11,6 +11,7 @@ import {
   ErrorCodes,
   REQUEST_METHODS,
   type CliKind,
+  type DeviceStreamParams,
   type RelayHost,
 } from "../protocol/generated/protocol";
 import {
@@ -40,6 +41,7 @@ import {
 } from "./connect";
 import type { Account } from "./account";
 import { backoffMs, Connection, LOCATE_PLXD, sshCommand } from "./connection";
+import { closeDeviceStream, openDeviceStream, sendDeviceStream } from "./devices";
 import { HostUpdater } from "./hostUpdate";
 import { installPlxd } from "./installPlxd";
 import {
@@ -396,6 +398,20 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   });
   ipcMain.on("parallax:closeTerminal", (event, id: unknown) => {
     if (isTerminalId(id)) closeTerminal(event.sender, id);
+  });
+  // A window's device streams (PLX-886), by an id it picks, through its host's plxd.
+  ipcMain.handle("parallax:openDeviceStream", (event, hostId: unknown, params: unknown) => {
+    if (typeof hostId !== "string" || !isDeviceStreamParams(params)) return "invalid stream";
+    const host = connections.get(hostId);
+    if (!host) return "That host isn't in Parallax anymore.";
+    return openDeviceStream(event.sender, host, params);
+  });
+  ipcMain.on("parallax:sendDeviceStream", (event, id: unknown, data: unknown) => {
+    if (typeof id === "string" && (typeof data === "string" || data instanceof Uint8Array))
+      sendDeviceStream(event.sender, id, data);
+  });
+  ipcMain.on("parallax:closeDeviceStream", (event, id: unknown) => {
+    if (typeof id === "string") closeDeviceStream(event.sender, id);
   });
 
   powerMonitor.on("resume", () => {
@@ -1391,6 +1407,14 @@ function connection(hostId: unknown): Connection {
 /** A terminal's id, which its window picks. */
 const isTerminalId = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0 && value.length <= 500;
+
+/** A device stream to open: its window's id for it, a device, and what it carries (PLX-886). */
+const isDeviceStreamParams = (value: unknown): value is DeviceStreamParams =>
+  isObject(value) &&
+  isTerminalId(value["streamId"]) &&
+  typeof value["deviceId"] === "string" &&
+  (value["platform"] === "ios" || value["platform"] === "android") &&
+  (value["kind"] === "video" || value["kind"] === "control");
 
 /** A thread's setup or settle script terminal's plxd id: `setup-<id>` or `settle-<id>-<8 hex>`. */
 const isScriptTerminal = (value: unknown): value is string =>

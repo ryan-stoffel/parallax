@@ -76,7 +76,7 @@ fn ios(dir: &Path) -> Ios {
   io) cp "$D/shot.png" "$6" ;;
 esac"#,
     );
-    Ios { xcrun, open: None }
+    Ios { xcrun }
 }
 
 fn devices(dir: &TempDir, tools: Toolchain) -> Devices {

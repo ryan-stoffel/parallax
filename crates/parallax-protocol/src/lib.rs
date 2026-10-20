@@ -39,6 +39,7 @@ mod connect;
 mod context;
 mod defaults;
 mod delegation;
+mod device;
 mod error;
 mod events;
 pub mod framing;
@@ -118,6 +119,12 @@ pub use delegation::{
     CompletionWake, DelegatedTask, SecretAnswerParams, SecretAnswerResult, SecretChoice,
     SecretRequestParams, SecretRequestResult, TaskDelegateParams, TaskDelivery, TaskStatusParams,
     ThreadMergeBackParams, ThreadMergeBackResult,
+};
+pub use device::{
+    DeviceCloseParams, DeviceCreateParams, DeviceDataParams, DeviceEndParams, DeviceHubState,
+    DeviceInfo, DeviceOkResult, DevicePlatform, DevicePlatformState, DeviceResult,
+    DeviceScreenshotResult, DeviceSetupParams, DeviceStateParams, DeviceStateResult,
+    DeviceStreamKind, DeviceStreamParams, DeviceStreamResult, DeviceTarget,
 };
 pub use error::{ErrorData, ErrorKind, IncompatibleProtocolDetail};
 pub use events::{

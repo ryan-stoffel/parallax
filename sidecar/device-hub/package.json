@@ -1,0 +1,11 @@
+{
+  "name": "parallax-device-hub",
+  "private": true,
+  "description": "Expo's device hub, which plxd runs to stream simulators and emulators to the Device panel. It is not a package anyone installs.",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "expo-device-hub": "0.15.3"
+  }
+}

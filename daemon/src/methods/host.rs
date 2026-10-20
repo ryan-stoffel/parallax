@@ -240,6 +240,8 @@ pub(crate) fn initialize(
 /// `delegation` (PLX-648, 0063): `task/delegate`, `task/status`, and `thread/mergeBack`.
 /// `secrets` (PLX-648, 0063): `secret/request`, `secret/answer`, the `secretRequested` and
 /// `secretResolved` transcript items, and `secretRef` in `schedule/save`.
+/// `devices` (PLX-886): every `device/*` method and notification.
+#[expect(clippy::too_many_lines, reason = "one line per capability")]
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
@@ -280,6 +282,7 @@ fn capabilities_advertised() -> Capabilities {
             "fileUploads".to_owned(),
             serde_json::Map::from_iter([("maxBytes".to_owned(), MAX_UPLOAD_BYTES.into())]),
         ),
+        ("devices".to_owned(), serde_json::Map::new()),
         ("files".to_owned(), serde_json::Map::new()),
         ("git".to_owned(), serde_json::Map::new()),
         ("repoGitStatus".to_owned(), serde_json::Map::new()),

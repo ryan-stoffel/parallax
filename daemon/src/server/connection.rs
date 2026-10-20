@@ -27,8 +27,8 @@ use parallax_protocol::jsonrpc::{
     Response,
 };
 use parallax_protocol::methods::{
-    CancelRequest, EventsEvent, EventsResync, Initialize, NotificationMethod, RequestMethod,
-    TerminalDetach, TerminalResize, TerminalWrite,
+    CancelRequest, DeviceClose, DeviceSend, EventsEvent, EventsResync, Initialize,
+    NotificationMethod, RequestMethod, TerminalDetach, TerminalResize, TerminalWrite,
 };
 use parallax_protocol::{
     ErrorKind, EventsResyncParams, TerminalKey, TerminalResizeParams, TerminalWriteParams,
@@ -351,6 +351,18 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             }) = notification.params()
             {
                 terminals.detach(thread_id, terminal_id, &self.replies);
+            }
+            return;
+        }
+        if self.session.is_some() && notification.method == DeviceSend::NAME {
+            if let Ok(params) = notification.params() {
+                self.daemon.devices.send(&self.replies, params);
+            }
+            return;
+        }
+        if self.session.is_some() && notification.method == DeviceClose::NAME {
+            if let Ok(params) = notification.params() {
+                self.daemon.devices.close(&self.replies, &params);
             }
             return;
         }

@@ -59,6 +59,7 @@ mod commands;
 mod context;
 mod delegation;
 mod detect;
+mod devices;
 mod event_log;
 mod github;
 mod graph;

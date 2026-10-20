@@ -208,6 +208,7 @@ mod tests {
         for (sdk, repo) in [
             (&crate::backend::claude::sdk::SDK, "claude"),
             (&crate::backend::cursor_sdk::SDK, "cursor"),
+            (&crate::devices::HUB, "device-hub"),
         ] {
             let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../sidecar")

@@ -4,6 +4,7 @@ import { ErrorCodes } from "../protocol/generated/protocol";
 import type {
   BrowserAction,
   ConnectionState,
+  DeviceStreamMessage,
   Profile,
   SubscriptionMessage,
   TerminalMessage,
@@ -49,6 +50,14 @@ const terminals = new Map<string, (message: TerminalMessage) => void>();
 ipcRenderer.on("parallax:terminal", (_event, id: string, message: TerminalMessage) =>
   terminals.get(id)?.(message),
 );
+
+// Each device stream's listener, by its id (PLX-886). An end forgets it.
+const deviceStreams = new Map<string, (message: DeviceStreamMessage) => void>();
+ipcRenderer.on("parallax:device", (_event, id: string, message: DeviceStreamMessage) => {
+  const listener = deviceStreams.get(id);
+  if (message.type === "end") deviceStreams.delete(id);
+  listener?.(message);
+});
 
 /**
  * Calls `listener` with each value main sends on `channel`, and first, with `read`, with the
@@ -149,6 +158,22 @@ const bridge: ParallaxBridge = {
     return () => {
       if (terminals.get(id) === listener) terminals.delete(id);
     };
+  },
+
+  async openDeviceStream(hostId, params, listener) {
+    deviceStreams.set(params.streamId, listener);
+    const error = (await ipcRenderer.invoke("parallax:openDeviceStream", hostId, params)) as
+      | string
+      | undefined;
+    if (error && deviceStreams.get(params.streamId) === listener) {
+      deviceStreams.delete(params.streamId);
+    }
+    return error;
+  },
+  sendDeviceStream: (id, data) => ipcRenderer.send("parallax:sendDeviceStream", id, data),
+  closeDeviceStream(id) {
+    deviceStreams.delete(id);
+    ipcRenderer.send("parallax:closeDeviceStream", id);
   },
 
   openTargets: (hostId) => ipcRenderer.invoke("parallax:openTargets", hostId),
