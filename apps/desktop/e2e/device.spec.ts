@@ -11,6 +11,7 @@ test.afterAll(() => close(launched));
 // An agent's device_open opens the thread's Device view (PLX-886), which lists the host's
 // devices, or says why it has none.
 test("an agent opening a device shows the Device view", async () => {
+  test.setTimeout(120_000);
   launched = await launch("device.json");
   const { page } = launched;
   await expect
@@ -31,8 +32,9 @@ test("an agent opening a device shows the Device view", async () => {
     "aria-current",
     "true",
   );
-  // The fake device isn't on this host, so the view lists what is.
-  await expect(panel.getByRole("heading", { name: "Devices" })).toBeVisible();
+  // The fake device isn't on this host, so the view lists what is. A cold Mac runner's first
+  // simctl listing can take a while.
+  await expect(panel.getByRole("heading", { name: "Devices" })).toBeVisible({ timeout: 60_000 });
   await expect(panel.getByRole("region", { name: "Android Emulators" })).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("device-view.png") });
 });

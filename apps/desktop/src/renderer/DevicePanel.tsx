@@ -154,10 +154,9 @@ export function DevicePanel({
   if (!state) {
     return (
       <Centered>
-        <LoaderCircle
-          aria-label="Loading devices"
-          className="size-5 animate-spin text-faint-foreground"
-        />
+        <LoaderCircle aria-hidden className="size-5 animate-spin text-faint-foreground" />
+        {/* Xcode's simulator service can take a while to start the first time. */}
+        <p className="text-[12.5px] text-muted-foreground">Looking for devices…</p>
       </Centered>
     );
   }
