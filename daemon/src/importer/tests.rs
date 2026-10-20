@@ -227,3 +227,13 @@ fn a_session_imports_under_one_run_id() {
     };
     assert_ne!(run_id(&other_app), Some(id));
 }
+
+#[test]
+fn an_exported_chat_says_it_came_from_an_export() {
+    let (_, events) = transcript(ImportSource::Chatgpt, &[user("Plan a trip")]).unwrap();
+    let Some(AgentOutputItem::Notice { detail }) = events.first().and_then(|items| items.first())
+    else {
+        panic!("no notice: {events:?}");
+    };
+    assert_eq!(detail, "Imported from a ChatGPT export.");
+}

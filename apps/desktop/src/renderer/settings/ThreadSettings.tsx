@@ -24,7 +24,8 @@ const pickerBox = "rounded-lg border border-border bg-background";
 
 /**
  * Settings > Threads: what a new thread starts with, how the sidebar lists threads, whether a
- * host's threads resume after a usage limit or a restart, and importing past sessions (PLX-881).
+ * host's threads resume after a usage limit or a restart, and importing past sessions (PLX-881)
+ * and exported chats (PLX-883).
  */
 export function ThreadSettings() {
   const sidebar = sidebarPrefs.use();
@@ -64,7 +65,13 @@ export function ThreadSettings() {
           title="Import sessions"
           description="Bring past sessions from the Claude, Codex, and Cursor desktop apps into Archived as threads on this computer."
         >
-          <ImportButton />
+          <ImportButton what="sessions" />
+        </Row>
+        <Row
+          title="Import chats"
+          description="Bring chats from a ChatGPT or Claude data export (.zip) into Archived as threads."
+        >
+          <ImportButton what="chats" />
         </Row>
       </Section>
     </>

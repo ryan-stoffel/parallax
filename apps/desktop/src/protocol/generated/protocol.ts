@@ -332,6 +332,15 @@ export type ParallaxRequests = {
 	 */
 	"thread/import": { params: ThreadImportParams, result: ThreadStartResult },
 	/**
+	 * `thread/importChat`: makes a chat from a `ChatGPT` or `claude.ai` data export an archived
+	 * thread (PLX-883). Idempotent on the chat. Gated on the `chatImport` capability.
+	 */
+	"thread/importChat": { params: ThreadImportChatParams, result: ThreadStartResult },
+	/**
+	 * `thread/importedChats`: which exported chats are imported. Gated on `chatImport`.
+	 */
+	"thread/importedChats": { params: ThreadImportedChatsParams, result: ThreadImportedChatsResult },
+	/**
 	 * `thread/archive`: archives a normal thread or brings it back.
 	 */
 	"thread/archive": { params: ThreadArchiveParams, result: ThreadArchiveResult },
@@ -830,6 +839,8 @@ export const REQUEST_METHODS = [
 	"thread/fork",
 	"thread/importable",
 	"thread/import",
+	"thread/importChat",
+	"thread/importedChats",
 	"thread/archive",
 	"thread/update",
 	"repo/update",
@@ -5335,7 +5346,7 @@ export type ImportableSession = {
 /**
  * The desktop app a session comes from.
  */
-export type ImportSource = "claude" | "codex" | "cursor";
+export type ImportSource = "claude" | "codex" | "cursor" | "chatgpt" | "claudeChat";
 
 /**
  * Params of `thread/import`: makes a session an archived thread, in its folder's own checkout
@@ -5357,6 +5368,99 @@ export type ThreadImportParams = {
 	 * session's app: `claude`, `codex`, or `cursor`.
 	 */
 	account?: AccountChoice,
+};
+
+/**
+ * Params of `thread/importChat`, behind the `chatImport` capability (PLX-883): makes a chat the
+ * client read from a `ChatGPT` or `claude.ai` data export an archived thread with no repo, whose
+ * first follow-up tells a new session the chat. Idempotent on `source`, `id`, and `createdAt`: a
+ * chat already imported returns its thread. Fails with `invalidParams` for another `source`, a
+ * chat with no message from the user, or more than [`MAX_CHAT_MESSAGES`] messages. Answers with
+ * `thread/start`'s result.
+ */
+export type ThreadImportChatParams = {
+	/**
+	 * `chatgpt` or `claudeChat`.
+	 */
+	source: ImportSource,
+	/**
+	 * The export's id for the chat.
+	 */
+	id: string,
+	/**
+	 * Its title in the export.
+	 */
+	title: string,
+	/**
+	 * When it started.
+	 */
+	createdAt: string,
+	/**
+	 * Its messages, oldest first. Each is cut to 32 KiB.
+	 */
+	messages: Array<ChatMessage>,
+	/**
+	 * The account the thread's follow-ups run on. Absent means `codex` for `ChatGPT` and `claude`
+	 * for Claude.
+	 */
+	account?: AccountChoice,
+};
+
+/**
+ * One message of an exported chat.
+ */
+export type ChatMessage = {
+	/**
+	 * Who wrote it.
+	 */
+	role: ChatRole,
+	/**
+	 * Its text.
+	 */
+	text: string,
+};
+
+/**
+ * Who wrote a message of an exported chat.
+ */
+export type ChatRole = "user" | "assistant";
+
+/**
+ * Params of `thread/importedChats`, behind `chatImport`: which of `chats` are imported.
+ */
+export type ThreadImportedChatsParams = {
+	/**
+	 * The chats.
+	 */
+	chats: Array<ChatRef>,
+};
+
+/**
+ * An exported chat, as `thread/importedChats` asks after it.
+ */
+export type ChatRef = {
+	/**
+	 * `chatgpt` or `claudeChat`.
+	 */
+	source: ImportSource,
+	/**
+	 * The export's id for it.
+	 */
+	id: string,
+	/**
+	 * When it started.
+	 */
+	createdAt: string,
+};
+
+/**
+ * Result of `thread/importedChats`.
+ */
+export type ThreadImportedChatsResult = {
+	/**
+	 * Each chat's thread, in `chats`' order, or `null` where it isn't imported.
+	 */
+	threads: Array<RunId | null>,
 };
 
 /**

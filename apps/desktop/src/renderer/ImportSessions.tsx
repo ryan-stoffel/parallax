@@ -1,7 +1,16 @@
-import { Check, Download, Folder, LoaderCircle, X } from "lucide-react";
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { ArrowLeft, Check, Download, FileArchive, Folder, LoaderCircle, X } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type DragEvent,
+  type ReactNode,
+} from "react";
 
 import type { ImportSource, ImportableSession, ProviderInfo } from "../protocol/generated/protocol";
+import { readExport, type ExportedChat } from "./chatExports";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId } from "./hosts";
@@ -10,26 +19,70 @@ import { loadProviders, useProviders } from "./providers";
 import { age } from "./Sidebar";
 import { IconButton, segment } from "./ui";
 
-/** The apps sessions import from, in the order they're listed. */
-const apps: { source: ImportSource; name: string; Logo: typeof ClaudeLogo }[] = [
+type App = { source: ImportSource; name: string; Logo: typeof ClaudeLogo };
+
+/** The desktop apps sessions import from (PLX-881), in the order they're listed. */
+const sessionApps: App[] = [
   { source: "claude", name: "Claude", Logo: ClaudeLogo },
   { source: "codex", name: "Codex", Logo: OpenAILogo },
   { source: "cursor", name: "Cursor", Logo: CursorLogo },
 ];
 
-const keyOf = (s: ImportableSession) => `${s.source}:${s.id}`;
+/** The exports chats import from (PLX-883). */
+const chatApps: App[] = [
+  { source: "chatgpt", name: "ChatGPT", Logo: OpenAILogo },
+  { source: "claudeChat", name: "Claude", Logo: ClaudeLogo },
+];
+
+/** The agent kind each source's imports continue on. */
+const kindOf: Record<ImportSource, string> = {
+  claude: "claude",
+  codex: "codex",
+  cursor: "cursor",
+  chatgpt: "codex",
+  claudeChat: "claude",
+};
 
 /**
- * The account an import from `source` runs its follow-ups on: that app's own agent when it's on,
- * else the first agent that is. With none, plxd picks the app's own.
+ * The account an import from `source` runs its follow-ups on: that source's own agent when it's
+ * on, else the first agent that is. With none, plxd picks the source's own.
  */
 function accountFor(source: ImportSource, providers: ProviderInfo[] | undefined) {
+  const kind = kindOf[source];
   const on = providers?.filter((p) => p.instance.enabled);
   const info =
-    on?.find((p) => p.instance.id === source) ??
-    on?.find((p) => p.instance.kind === source) ??
-    on?.[0];
+    on?.find((p) => p.instance.id === kind) ?? on?.find((p) => p.instance.kind === kind) ?? on?.[0];
   return info && ({ kind: "subscription", backend: info.instance.id } as const);
+}
+
+/** One row of `SessionList`: a session or a chat. */
+type Item = {
+  key: string;
+  source: ImportSource;
+  title: string;
+  folder?: string | undefined;
+  /** When it was last active, ISO. */
+  at: string;
+  /** Its thread, once imported. */
+  thread?: string | undefined;
+};
+
+/** Whether this computer's plxd can import, in words when it can't; `undefined` while connecting. */
+function useImport(capability: "threadImport" | "chatImport") {
+  const connection = useConnection(localId);
+  const connected = connection?.status === "connected";
+  const supported = connected && capability in connection.capabilities;
+  const why =
+    connection?.status === "failed"
+      ? "Parallax couldn't start on this computer, so it can't import."
+      : connected && !supported
+        ? "This computer's plxd can't import these yet. Update it, then try again."
+        : undefined;
+  useEffect(() => {
+    // The agents imports run on: listed here, as Settings > Threads may be the first to need them.
+    if (supported) void loadProviders(localId);
+  }, [supported]);
+  return { supported, why, providers: useProviders(localId)?.providers };
 }
 
 /**
@@ -39,72 +92,24 @@ function accountFor(source: ImportSource, providers: ProviderInfo[] | undefined)
  * Threads' Import sessions show it.
  */
 export function ImportSessions({ className = "" }: { className?: string }) {
-  const connection = useConnection(localId);
-  const providers = useProviders(localId)?.providers;
-  const connected = connection?.status === "connected";
-  const supported = connected && "threadImport" in connection.capabilities;
+  const { supported, why, providers } = useImport("threadImport");
   const [sessions, setSessions] = useState<ImportableSession[]>();
-  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
-  const [progress, setProgress] = useState<{ done: number; total: number }>();
-  const [errors, setErrors] = useState<string[]>([]);
-  const [filter, setFilter] = useState<ImportSource | "all">("all");
-  const id = useId();
+  const [error, setError] = useState<string>();
 
   const load = useCallback(async () => {
     const answer = await window.parallax.request(localId, "thread/importable", {});
-    if ("error" in answer) setErrors([describeError(answer.error)]);
+    if ("error" in answer) setError(describeError(answer.error));
     else setSessions(answer.result.sessions);
   }, []);
   useEffect(() => {
-    if (!supported) return;
-    void load();
-    // The agents imports run on: listed here, as Settings > Threads may be the first to need them.
-    void loadProviders(localId);
+    if (supported) void load();
   }, [supported, load]);
 
-  const open = sessions?.filter((s) => !s.thread) ?? [];
-  const toggle = (keys: string[], on: boolean) =>
-    setPicked((now) => {
-      const next = new Set(now);
-      for (const key of keys) {
-        if (on) next.add(key);
-        else next.delete(key);
-      }
-      return next;
-    });
-
-  const importPicked = async () => {
-    const chosen = open.filter((s) => picked.has(keyOf(s)));
-    const failed: string[] = [];
-    setErrors([]);
-    for (const [i, session] of chosen.entries()) {
-      setProgress({ done: i, total: chosen.length });
-      const account = accountFor(session.source, providers);
-      const answer = await window.parallax.request(localId, "thread/import", {
-        source: session.source,
-        id: session.id,
-        ...(account && { account }),
-      });
-      if ("error" in answer) failed.push(`${session.title}: ${describeError(answer.error)}`);
-    }
-    setProgress(undefined);
-    setPicked(new Set());
-    setErrors(failed);
-    await load();
-  };
-
-  if (connection?.status === "failed" || (connected && !supported))
-    return (
-      <Notice className={className}>
-        {connected
-          ? "This computer's plxd can't import sessions yet. Update it, then try again."
-          : "Parallax couldn't start on this computer, so it can't look for sessions."}
-      </Notice>
-    );
-  if (!sessions && errors.length)
+  if (why) return <Notice className={className}>{why}</Notice>;
+  if (!sessions && error)
     return (
       <Notice className={className} alert>
-        {errors[0]}
+        {error}
       </Notice>
     );
   if (!sessions)
@@ -117,15 +122,265 @@ export function ImportSessions({ className = "" }: { className?: string }) {
   if (sessions.length === 0)
     return (
       <Notice className={className}>
-        <AppLogos className="mb-3" />
+        <AppLogos apps={sessionApps} className="mb-3" />
         No sessions from the Claude, Codex, or Cursor desktop apps on this computer.
       </Notice>
     );
+  return (
+    <SessionList
+      className={className}
+      apps={sessionApps}
+      items={sessions.map((s) => ({
+        key: `${s.source}:${s.id}`,
+        source: s.source,
+        title: s.title,
+        folder: s.cwd?.split(/[\\/]/).filter(Boolean).pop(),
+        at: s.updatedAt,
+        thread: s.thread,
+      }))}
+      importItem={async (item) => {
+        const session = sessions.find((s) => `${s.source}:${s.id}` === item.key)!;
+        const account = accountFor(session.source, providers);
+        const answer = await window.parallax.request(localId, "thread/import", {
+          source: session.source,
+          id: session.id,
+          ...(account && { account }),
+        });
+        return "error" in answer ? describeError(answer.error) : undefined;
+      }}
+      onImported={load}
+    />
+  );
+}
+
+/**
+ * Chats from a ChatGPT or Claude data export (PLX-883): first asks for the export's .zip, then
+ * lists its chats as `ImportSessions` lists sessions, to import as archived threads with no repo
+ * (`thread/importChat`, `thread/importedChats`).
+ */
+export function ImportChats({ className = "" }: { className?: string }) {
+  const { supported, why, providers } = useImport("chatImport");
+  const [chats, setChats] = useState<ExportedChat[]>();
+  const [file, setFile] = useState<string>();
+  const [threads, setThreads] = useState<(string | null)[]>([]);
+  const [reading, setReading] = useState(false);
+  const [error, setError] = useState<string>();
+
+  const refresh = useCallback(async (list: ExportedChat[]) => {
+    const answer = await window.parallax.request(localId, "thread/importedChats", {
+      chats: list.map(({ source, id, createdAt }) => ({ source, id, createdAt })),
+    });
+    if ("error" in answer) setError(describeError(answer.error));
+    else setThreads(answer.result.threads);
+  }, []);
+  const open = async (picked: File | undefined) => {
+    if (!picked) return;
+    setReading(true);
+    setError(undefined);
+    try {
+      const list = await readExport(picked);
+      await refresh(list);
+      setChats(list);
+      setFile(picked.name);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+    setReading(false);
+  };
+
+  if (why) return <Notice className={className}>{why}</Notice>;
+  if (!supported)
+    return (
+      <Notice className={className}>
+        <LoaderCircle aria-hidden className="size-5 animate-spin text-faint-foreground" />
+      </Notice>
+    );
+  if (!chats)
+    return <ExportDrop className={className} reading={reading} error={error} onFile={open} />;
+  return (
+    <div className={`flex min-h-0 flex-col gap-3 ${className}`}>
+      <p className="flex items-center gap-2 text-[12.5px] text-muted-foreground [&_svg]:size-3.5">
+        <FileArchive aria-hidden className="shrink-0" />
+        <span className="min-w-0 truncate">{file}</span>
+        <button
+          type="button"
+          onClick={() => {
+            setChats(undefined);
+            setError(undefined);
+          }}
+          className="shrink-0 rounded-md px-1.5 py-0.5 font-medium hover:bg-hover hover:text-foreground"
+        >
+          Choose another
+        </button>
+      </p>
+      <SessionList
+        className="min-h-0 flex-1"
+        apps={chatApps}
+        items={chats.map((c, i) => ({
+          key: `${c.source}:${c.id}`,
+          source: c.source,
+          title: c.title,
+          at: c.updatedAt,
+          thread: threads[i] ?? undefined,
+        }))}
+        importItem={async (item) => {
+          const chat = chats.find((c) => `${c.source}:${c.id}` === item.key)!;
+          const account = accountFor(chat.source, providers);
+          const answer = await window.parallax.request(localId, "thread/importChat", {
+            ...chat,
+            ...(account && { account }),
+          });
+          return "error" in answer ? describeError(answer.error) : undefined;
+        }}
+        onImported={() => refresh(chats)}
+      />
+    </div>
+  );
+}
+
+/** Asks for an export's .zip, by drop or by Choose, and says how to get one. */
+function ExportDrop({
+  className,
+  reading,
+  error,
+  onFile,
+}: {
+  className: string;
+  reading: boolean;
+  error: string | undefined;
+  onFile: (file: File | undefined) => void;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  const [over, setOver] = useState(false);
+  const drop = (e: DragEvent) => {
+    e.preventDefault();
+    setOver(false);
+    onFile(e.dataTransfer.files[0]);
+  };
+  return (
+    <div className={`flex min-h-0 flex-col gap-4 overflow-y-auto ${className}`}>
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setOver(true);
+        }}
+        onDragLeave={() => setOver(false)}
+        onDrop={drop}
+        className={`flex min-h-44 flex-col items-center justify-center rounded-xl border border-dashed px-6 py-8 text-center transition-colors ${over ? "border-accent bg-accent/8" : "border-border"}`}
+      >
+        <AppLogos apps={chatApps} className="mb-3" />
+        <p className="text-[13.5px] font-medium">Drop your export&apos;s .zip here</p>
+        <p className="mt-1 text-[12.5px] text-muted-foreground">
+          From ChatGPT or Claude. Each emails you a link to it once it's ready.
+        </p>
+        <input
+          ref={input}
+          type="file"
+          accept=".zip,.json,application/zip"
+          aria-label="Export .zip"
+          className="sr-only"
+          onChange={(e) => {
+            onFile(e.target.files?.[0]);
+            e.target.value = "";
+          }}
+        />
+        <button
+          type="button"
+          disabled={reading}
+          onClick={() => input.current?.click()}
+          className="mt-4 flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-1.5 text-[13px] font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50 [&_svg]:size-3.5"
+        >
+          {reading ? (
+            <LoaderCircle aria-hidden className="animate-spin" />
+          ) : (
+            <FileArchive aria-hidden />
+          )}
+          {reading ? "Reading…" : "Choose .zip…"}
+        </button>
+        {error && (
+          <p role="alert" className="mt-3 text-[12.5px] text-danger">
+            {error}
+          </p>
+        )}
+      </div>
+      <div className="grid grid-cols-2 gap-3 text-[12.5px]">
+        {[
+          {
+            app: chatApps[0]!,
+            steps: "Settings › Data controls › Export data. ChatGPT emails you a link to the .zip.",
+          },
+          {
+            app: chatApps[1]!,
+            steps: "Settings › Privacy › Export data. Claude emails you a link to the .zip.",
+          },
+        ].map(({ app, steps }) => (
+          <div key={app.source} className="rounded-xl border border-border bg-surface p-3">
+            <p className="mb-1 flex items-center gap-1.5 font-medium [&_svg]:size-3.5">
+              <app.Logo />
+              From {app.name}
+            </p>
+            <p className="text-muted-foreground">{steps}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * `items` to pick and import, the newest first, filtered by `apps`, with Select all, a count, and
+ * progress while `importItem` imports each picked one in turn, answering an error in words or
+ * nothing. `onImported` then lists them again.
+ */
+function SessionList({
+  className,
+  apps,
+  items,
+  importItem,
+  onImported,
+}: {
+  className: string;
+  apps: App[];
+  items: Item[];
+  importItem: (item: Item) => Promise<string | undefined>;
+  onImported: () => Promise<void>;
+}) {
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+  const [progress, setProgress] = useState<{ done: number; total: number }>();
+  const [errors, setErrors] = useState<string[]>([]);
+  const [filter, setFilter] = useState<ImportSource | "all">("all");
+  const id = useId();
+
+  const open = items.filter((s) => !s.thread);
+  const toggle = (keys: string[], on: boolean) =>
+    setPicked((now) => {
+      const next = new Set(now);
+      for (const key of keys) {
+        if (on) next.add(key);
+        else next.delete(key);
+      }
+      return next;
+    });
+
+  const importPicked = async () => {
+    const chosen = open.filter((s) => picked.has(s.key));
+    const failed: string[] = [];
+    setErrors([]);
+    for (const [i, item] of chosen.entries()) {
+      setProgress({ done: i, total: chosen.length });
+      const error = await importItem(item);
+      if (error) failed.push(`${item.title}: ${error}`);
+    }
+    setProgress(undefined);
+    setPicked(new Set());
+    setErrors(failed);
+    await onImported();
+  };
 
   const busy = !!progress;
-  const count = open.filter((s) => picked.has(keyOf(s))).length;
-  const shown = sessions.filter((s) => filter === "all" || s.source === filter);
-  const shownOpen = shown.filter((s) => !s.thread).map(keyOf);
+  const count = open.filter((s) => picked.has(s.key)).length;
+  const shown = items.filter((s) => filter === "all" || s.source === filter);
+  const shownOpen = shown.filter((s) => !s.thread).map((s) => s.key);
   const allShown = shownOpen.length > 0 && shownOpen.every((key) => picked.has(key));
   return (
     <div className={`flex min-h-0 flex-col gap-3 ${className}`}>
@@ -138,8 +393,8 @@ export function ImportSessions({ className = "" }: { className?: string }) {
           {[{ source: "all" as const, name: "All" }, ...apps].map((app) => {
             const n =
               app.source === "all"
-                ? sessions.length
-                : sessions.filter((s) => s.source === app.source).length;
+                ? items.length
+                : items.filter((s) => s.source === app.source).length;
             if (n === 0) return null;
             return (
               <label key={app.source} className={segment}>
@@ -173,11 +428,12 @@ export function ImportSessions({ className = "" }: { className?: string }) {
       >
         {shown.map((s) => (
           <SessionRow
-            key={keyOf(s)}
-            session={s}
-            picked={picked.has(keyOf(s))}
+            key={s.key}
+            item={s}
+            app={apps.find((a) => a.source === s.source)!}
+            picked={picked.has(s.key)}
             disabled={busy}
-            onToggle={(on) => toggle([keyOf(s)], on)}
+            onToggle={(on) => toggle([s.key], on)}
           />
         ))}
       </ul>
@@ -190,7 +446,7 @@ export function ImportSessions({ className = "" }: { className?: string }) {
                 ? `${errors.length} couldn't be imported.`
                 : count
                   ? `${count} selected`
-                  : `${sessions.length - open.length} of ${sessions.length} imported`}
+                  : `${items.length - open.length} of ${items.length} imported`}
           </p>
           {progress && (
             <span className="mt-1.5 block h-1 max-w-48 overflow-hidden rounded-full bg-selected">
@@ -245,7 +501,7 @@ function Notice({
 }
 
 /** The three apps' logos, overlapping. */
-function AppLogos({ className = "" }: { className?: string }) {
+function AppLogos({ apps, className = "" }: { apps: App[]; className?: string }) {
   return (
     <span aria-hidden className={`flex shrink-0 -space-x-1.5 ${className}`}>
       {apps.map(({ source, Logo }) => (
@@ -260,20 +516,21 @@ function AppLogos({ className = "" }: { className?: string }) {
   );
 }
 
-/** One session: a box to pick it, its app, title, folder, and age, or Imported once it is. */
+/** One session or chat: a box to pick it, its app, title, folder, and age, or Imported. */
 function SessionRow({
-  session: s,
+  item: s,
+  app,
   picked,
   disabled,
   onToggle,
 }: {
-  session: ImportableSession;
+  item: Item;
+  app: App;
   picked: boolean;
   disabled: boolean;
   onToggle: (on: boolean) => void;
 }) {
-  const app = apps.find((a) => a.source === s.source)!;
-  const folder = s.cwd?.split(/[\\/]/).filter(Boolean).pop();
+  const folder = s.folder;
   return (
     <li>
       <label
@@ -316,7 +573,7 @@ function SessionRow({
                 <span aria-hidden>·</span>
               </>
             )}
-            <span className="shrink-0">{age(s.updatedAt)}</span>
+            <span className="shrink-0">{age(s.at)}</span>
           </span>
         </span>
         {s.thread && (
@@ -329,11 +586,30 @@ function SessionRow({
   );
 }
 
-/** Settings > Threads' Import sessions: opens `ImportSessions` in a modal <dialog>. */
-export function ImportButton() {
+/** What `ImportButton` opens: this computer's app sessions, or an export's chats. */
+const imports = {
+  sessions: {
+    label: "Import sessions…",
+    title: "Import sessions",
+    line: "Bring past sessions from the Claude, Codex, and Cursor apps into Archived as threads.",
+    apps: sessionApps,
+    List: ImportSessions,
+  },
+  chats: {
+    label: "Import chats…",
+    title: "Import chats",
+    line: "Bring chats from a ChatGPT or Claude data export into Archived as threads.",
+    apps: chatApps,
+    List: ImportChats,
+  },
+};
+
+/** Settings > Threads' Import sessions and Import chats: opens `what` in a modal <dialog>. */
+export function ImportButton({ what }: { what: keyof typeof imports }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const [open, setOpen] = useState(false);
+  const { label, title, line, apps, List } = imports[what];
   return (
     <>
       <button
@@ -345,7 +621,7 @@ export function ImportButton() {
         className="flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-[12.5px] font-medium hover:bg-hover [&_svg]:size-3.5"
       >
         <Download aria-hidden />
-        Import sessions…
+        {label}
       </button>
       <dialog
         ref={dialog}
@@ -355,23 +631,51 @@ export function ImportButton() {
       >
         <div className="flex h-full flex-col px-6 pt-5 pb-5">
           <div className="mb-4 flex items-start gap-3">
-            <AppLogos className="mt-0.5" />
+            <AppLogos apps={apps} className="mt-0.5" />
             <div className="min-w-0 flex-1">
               <h2 id={titleId} className="font-brand text-[17px] font-semibold tracking-tight">
-                Import sessions
+                {title}
               </h2>
-              <p className="mt-0.5 text-[12.5px] text-muted-foreground">
-                Bring past sessions from the Claude, Codex, and Cursor apps into Archived as
-                threads.
-              </p>
+              <p className="mt-0.5 text-[12.5px] text-muted-foreground">{line}</p>
             </div>
             <IconButton label="Close" onClick={() => dialog.current?.close()}>
               <X aria-hidden />
             </IconButton>
           </div>
-          {open && <ImportSessions className="min-h-0 flex-1" />}
+          {open && <List className="min-h-0 flex-1" />}
         </div>
       </dialog>
     </>
+  );
+}
+
+/**
+ * Onboarding's import step (PLX-881): the app sessions, with a way over to an export's chats
+ * (PLX-883) and back.
+ */
+export function ImportStepBody({ className = "" }: { className?: string }) {
+  const [chats, setChats] = useState(false);
+  const link =
+    "flex items-center gap-1.5 self-start rounded-md px-1.5 py-1 text-[12.5px] font-medium text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5";
+  return (
+    <div className={`flex min-h-0 flex-col gap-2 ${className}`}>
+      {chats ? (
+        <>
+          <button type="button" onClick={() => setChats(false)} className={link}>
+            <ArrowLeft aria-hidden />
+            Back to app sessions
+          </button>
+          <ImportChats className="min-h-0 flex-1" />
+        </>
+      ) : (
+        <>
+          <ImportSessions className="min-h-0 flex-1" />
+          <button type="button" onClick={() => setChats(true)} className={link}>
+            <FileArchive aria-hidden />
+            Import ChatGPT or Claude chats from an export…
+          </button>
+        </>
+      )}
+    </div>
   );
 }

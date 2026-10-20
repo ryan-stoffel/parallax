@@ -265,6 +265,8 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         ThreadFork => |p| thread::fork(context, p),
         ThreadImportable => |_| crate::importer::importable(daemon),
         ThreadImport => |p| thread::import(context, p),
+        ThreadImportChat => |p| thread::import_chat(context, p),
+        ThreadImportedChats => |p| crate::importer::imported_chats(daemon, p),
         ThreadArchive => |p| threads::archive(daemon, p, context.command_id),
         ThreadUpdate => |p| threads::update(daemon, p, context.command_id),
         ThreadDelete => |p| thread::delete(context, p),

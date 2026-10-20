@@ -78,12 +78,13 @@ use crate::{
     TerminalListResult, TerminalOpenParams, TerminalOutputParams, TerminalResizeParams,
     TerminalResult, TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult,
     ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams,
-    ThreadHistoryResult, ThreadImportParams, ThreadImportableParams, ThreadImportableResult,
-    ThreadListParams, ThreadListResult, ThreadMergeBackParams, ThreadMergeBackResult,
-    ThreadRunsParams, ThreadRunsResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams,
-    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams, TurnDiffResult,
-    UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult, UsageHistoryParams,
-    UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
+    ThreadHistoryResult, ThreadImportChatParams, ThreadImportParams, ThreadImportableParams,
+    ThreadImportableResult, ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams,
+    ThreadListResult, ThreadMergeBackParams, ThreadMergeBackResult, ThreadRunsParams,
+    ThreadRunsResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
+    ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams, TurnDiffResult, UsageDailyParams,
+    UsageDailyResult, UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
+    UsageLimitsParams, UsageLimitsResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -343,6 +344,11 @@ method_table! {
         /// `thread/import`: makes one of those sessions a thread, at rest with its
         /// conversation. Idempotent on the session. Gated on the `threadImport` capability.
         ThreadImport = "thread/import": ThreadImportParams => ThreadStartResult;
+        /// `thread/importChat`: makes a chat from a `ChatGPT` or `claude.ai` data export an archived
+        /// thread (PLX-883). Idempotent on the chat. Gated on the `chatImport` capability.
+        ThreadImportChat = "thread/importChat": ThreadImportChatParams => ThreadStartResult;
+        /// `thread/importedChats`: which exported chats are imported. Gated on `chatImport`.
+        ThreadImportedChats = "thread/importedChats": ThreadImportedChatsParams => ThreadImportedChatsResult;
         /// `thread/archive`: archives a normal thread or brings it back.
         ThreadArchive = "thread/archive": ThreadArchiveParams => ThreadArchiveResult;
         /// `thread/update`: marks a normal thread seen or snoozes it (0033), gated on the
@@ -719,6 +725,8 @@ mod tests {
                 "thread/fork",
                 "thread/importable",
                 "thread/import",
+                "thread/importChat",
+                "thread/importedChats",
                 "thread/archive",
                 "thread/update",
                 "repo/update",
