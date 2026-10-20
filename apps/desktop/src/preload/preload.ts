@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webFrame } from "electron";
 
 import { ErrorCodes } from "../protocol/generated/protocol";
 import type {
+  BrowserAction,
   ConnectionState,
   Profile,
   SubscriptionMessage,
@@ -74,6 +75,11 @@ const bridge: ParallaxBridge = {
   createRepo: (name) => ipcRenderer.invoke("parallax:createRepo", name),
   cloneRepo: (slug, dest) => ipcRenderer.invoke("parallax:cloneRepo", slug, dest),
   copyPicture: (rect) => ipcRenderer.invoke("parallax:copyPicture", rect) as Promise<void>,
+  onBrowser(listener) {
+    const forward = (_event: unknown, id: number, action: BrowserAction) => listener(id, action);
+    ipcRenderer.on("parallax:browser", forward);
+    return () => ipcRenderer.removeListener("parallax:browser", forward);
+  },
   updatable: process.argv.includes("--parallax-updatable"),
   firstRun: process.argv.includes("--parallax-first-run"),
   locale: validLocale(

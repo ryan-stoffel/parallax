@@ -1,5 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
+import { fillViewport } from "./AgentBrowser";
 import { browserUrl, searchUrl, shortUrl } from "./Browser";
 
 test("a host without a scheme is https, or http when it's local, and only http and https pages open", () => {
@@ -49,4 +50,11 @@ test("the unfocused address drops the scheme and a lone trailing slash", () => {
   expect(shortUrl("https://example.com/")).toBe("example.com");
   expect(shortUrl("http://localhost:5173/app/")).toBe("localhost:5173/app/");
   expect(shortUrl("https://www.google.com/search?q=x")).toBe("www.google.com/search?q=x");
+});
+
+test("fill lays a page out at desktop width in the panel's shape", () => {
+  // A side panel narrower than a desktop gets the desktop's width, at the panel's height for it.
+  expect(fillViewport(416, 832)).toEqual({ width: 1280, height: 2560 });
+  // A wider one keeps its own size.
+  expect(fillViewport(1600, 900)).toEqual({ width: 1600, height: 900 });
 });

@@ -10,11 +10,28 @@ const modifiers = (e: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shi
 
 const buttons = ["left", "middle", "right"] as const;
 
+/** The narrowest viewport fill mode gives a page, so a site shows its desktop layout. */
+export const DESKTOP_WIDTH = 1280;
+
+/**
+ * The viewport fill mode asks for in a `width` by `height` panel: the panel's own shape, at least
+ * {@link DESKTOP_WIDTH} wide, which the view then scales down to the panel's width.
+ */
+export function fillViewport(width: number, height: number) {
+  const wide = Math.max(width, DESKTOP_WIDTH);
+  return { width: wide, height: Math.round((height * wide) / width) };
+}
+
+/** A page side plxd accepts, 200 to 4096 CSS pixels. */
+const clampSide = (n: number) => Math.min(4096, Math.max(200, Math.round(n)));
+
 /**
  * An agent's browser tab (PLX-639), which runs in the host's headless browser: its screencast,
  * long-polled from plxd, and the user's mouse, wheel, and keys sent back, which take control from
- * the agent until Hand back. The address bar opens a page too, and the size bar fills the panel or
- * fixes the page at a size, drawn centered and scaled down to fit (PLX-810).
+ * the agent until Hand back. The address bar opens a page too. Fill lays the page out at desktop
+ * width in the panel's shape (PLX-888), and the size bar or the page's bottom-right corner fixes
+ * it at a size (PLX-810). Either way the page scales down to the panel's width, and a page taller
+ * than the panel scrolls.
  */
 export function AgentBrowser({
   hostId,
@@ -35,6 +52,13 @@ export function AgentBrowser({
   const [panel, setPanel] = useState({ width: 0, height: 0 });
   const view = useRef<HTMLImageElement>(null);
   const lastMove = useRef(0);
+  // The corner drag: where it started, in client and page pixels, and the size it has reached.
+  const [drag, setDrag] = useState<{
+    x: number;
+    y: number;
+    start: { width: number; height: number };
+    size: { width: number; height: number };
+  }>();
   // Whether the view takes up any space: a hidden side panel or view has none. Hidden, it pulls
   // no frames, so plxd tells the agent nobody is watching, and the tab keeps its last size.
   const [shown, setShown] = useState(true);
@@ -78,7 +102,7 @@ export function AgentBrowser({
       setPanel({ width, height });
       if (width === 0 || height === 0) return;
       timer = setTimeout(() => {
-        const input: PreviewInput = { kind: "viewport", width, height };
+        const input: PreviewInput = { kind: "viewport", ...fillViewport(width, height) };
         void window.parallax.request(hostId, "preview/input", { runId, tabId: tab.tabId, input });
       }, 150);
     });
@@ -99,12 +123,58 @@ export function AgentBrowser({
     setState((s) => ({ ...s, fixed: input.kind === "fixed" }));
     setDraft(undefined);
   };
-  const scale = frame ? Math.min(1, panel.width / frame.width, panel.height / frame.height) : 1;
+  // The page fits the panel's width, and scrolls when it's taller. Fill's page has the panel's
+  // shape, so it never scrolls, and a rounding pixel can't add a scrollbar that resizes it.
+  const scale = frame ? Math.min(1, panel.width / frame.width) : 1;
   // A point on the image, in the page's CSS pixels.
   const at = (e: { clientX: number; clientY: number }) => {
     const box = view.current!.getBoundingClientRect();
     const scale = (frame?.width ?? box.width) / box.width;
     return { x: (e.clientX - box.left) * scale, y: (e.clientY - box.top) * scale };
+  };
+
+  // The wheel scrolls the view while the page is taller than it and it can go that way, and
+  // scrolls the page otherwise. React's wheel listener is passive, so it can't keep the view still.
+  useEffect(() => {
+    const el = area.current;
+    if (!el || !frame) return;
+    const wheel = (e: WheelEvent) => {
+      const room =
+        e.deltaY < 0 ? el.scrollTop > 0 : el.scrollTop + el.clientHeight < el.scrollHeight;
+      if (e.deltaY !== 0 && room) return;
+      e.preventDefault();
+      send({ kind: "wheel", ...at(e), deltaX: e.deltaX, deltaY: e.deltaY });
+    };
+    el.addEventListener("wheel", wheel, { passive: false });
+    return () => el.removeEventListener("wheel", wheel);
+  });
+
+  // The corner's drag fixes the page at the size it reaches, in page pixels at the scale it began.
+  const resize = {
+    onPointerDown(e: PointerEvent) {
+      if (!frame || e.button !== 0) return;
+      e.stopPropagation();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      const start = { width: frame.width, height: frame.height };
+      setDrag({ x: e.clientX, y: e.clientY, start, size: start });
+    },
+    onPointerMove(e: PointerEvent) {
+      if (!drag) return;
+      setDrag({
+        ...drag,
+        size: {
+          width: clampSide(drag.start.width + (e.clientX - drag.x) / scale),
+          height: clampSide(drag.start.height + (e.clientY - drag.y) / scale),
+        },
+      });
+    },
+    onPointerUp() {
+      if (!drag) return;
+      const { size: reached, start } = drag;
+      setDrag(undefined);
+      if (reached.width !== start.width || reached.height !== start.height)
+        size({ kind: "fixed", ...reached });
+    },
   };
   const pointer = (event: "down" | "up" | "move") => (e: PointerEvent) => {
     if (!frame) return;
@@ -112,7 +182,7 @@ export function AgentBrowser({
       // Moves only while a button is down or the user already has control, at most every 50 ms.
       if ((!e.buttons && !state.human) || e.timeStamp - lastMove.current < 50) return;
       lastMove.current = e.timeStamp;
-    } else e.currentTarget.parentElement?.focus();
+    } else area.current?.focus();
     send({
       kind: "mouse",
       event,
@@ -191,7 +261,7 @@ export function AgentBrowser({
             <input
               aria-label={`Page ${side}`}
               inputMode="numeric"
-              value={draft?.[side] ?? String(frame?.[side] ?? "")}
+              value={draft?.[side] ?? String(drag?.size[side] ?? frame?.[side] ?? "")}
               // The first keystroke starts a draft from the page's size, so the other field keeps it.
               onChange={(e) =>
                 setDraft((d) => ({
@@ -223,24 +293,56 @@ export function AgentBrowser({
         aria-label="Agent's browser tab"
         onKeyDown={key(true)}
         onKeyUp={key(false)}
-        onWheel={(e) =>
-          frame && send({ kind: "wheel", ...at(e), deltaX: e.deltaX, deltaY: e.deltaY })
-        }
-        className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-background outline-none ${state.human ? "ring-2 ring-ring ring-inset" : ""}`}
+        className={`relative flex min-h-0 flex-1 bg-background ${state.fixed ? "overflow-auto" : "overflow-hidden"} outline-none ${state.human ? "ring-2 ring-ring ring-inset" : ""}`}
       >
         {frame && (
-          <img
-            ref={view}
-            alt={state.title || "The agent's page"}
-            src={`data:image/jpeg;base64,${frame.data}`}
-            draggable={false}
-            onPointerDown={pointer("down")}
-            onPointerUp={pointer("up")}
-            onPointerMove={pointer("move")}
-            onContextMenu={(e) => e.preventDefault()}
-            style={{ width: frame.width * scale, height: frame.height * scale }}
-            className={`block shrink-0 select-none ${state.fixed ? "shadow-md ring-1 ring-border" : ""}`}
-          />
+          // Auto margins center a page smaller than the view and let a taller one scroll from its top.
+          <div className="group relative m-auto shrink-0">
+            <img
+              ref={view}
+              alt={state.title || "The agent's page"}
+              src={`data:image/jpeg;base64,${frame.data}`}
+              draggable={false}
+              onPointerDown={pointer("down")}
+              onPointerUp={pointer("up")}
+              onPointerMove={pointer("move")}
+              onContextMenu={(e) => e.preventDefault()}
+              style={{ width: frame.width * scale, height: frame.height * scale }}
+              className={`block select-none ${state.fixed ? "shadow-md ring-1 ring-border" : ""}`}
+            />
+            {drag && (
+              <div
+                aria-hidden
+                style={{ width: drag.size.width * scale, height: drag.size.height * scale }}
+                className="pointer-events-none absolute top-0 left-0 rounded-sm border-2 border-dashed border-ring bg-ring/10"
+              >
+                <span className="absolute right-1 bottom-1 rounded bg-foreground px-1.5 py-0.5 text-[11px] text-background tabular-nums">
+                  {drag.size.width} × {drag.size.height}
+                </span>
+              </div>
+            )}
+            <div
+              role="separator"
+              aria-label="Resize page"
+              title="Drag to resize the page. Double-click to fill the panel."
+              {...resize}
+              onDoubleClick={() => size({ kind: "fill" })}
+              className={`absolute right-0 bottom-0 size-5 cursor-nwse-resize touch-none transition-opacity ${drag ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+            >
+              <svg
+                viewBox="0 0 20 20"
+                aria-hidden
+                className="size-full text-muted-foreground drop-shadow"
+              >
+                <path
+                  d="M18 8 8 18M18 13l-5 5"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </div>
+          </div>
         )}
         {(gone || !frame) && (
           <p className="absolute inset-0 grid place-items-center text-[12.5px] text-muted-foreground">

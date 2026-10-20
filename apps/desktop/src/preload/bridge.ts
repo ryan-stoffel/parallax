@@ -177,6 +177,11 @@ export interface ParallaxBridge {
   /** Copies a picture of this window's `rect`, in CSS pixels, to the clipboard. Rejects for an empty or invalid one. */
   copyPicture(rect: { x: number; y: number; width: number; height: number }): Promise<void>;
   /**
+   * Calls `listener` with what a side panel browser's page asks of the tab that shows it, by its
+   * webview's `getWebContentsId()` (Browser.tsx). Returns the unsubscribe function.
+   */
+  onBrowser(listener: (webContentsId: number, action: BrowserAction) => void): () => void;
+  /**
    * Whether `update` can run: in a packaged app, which installs releases (PLX-68), or under
    * `pnpm dev`, from a checkout (PLX-204).
    */
@@ -688,3 +693,15 @@ export type ConnectionError = {
   /** The end of attach's stderr, and ssh's for a host, if they wrote any. */
   stderr?: string;
 };
+
+/**
+ * What a side panel browser's page asks of its tab, from main: open a page in a new tab (a popup
+ * or "Open Link in New Tab"), show its favicon, as a data url the app's CSP allows, or Cmd/Ctrl+L,
+ * T, or W pressed in the page.
+ */
+export type BrowserAction =
+  | { kind: "open"; url: string }
+  | { kind: "icon"; url: string }
+  | { kind: "address" }
+  | { kind: "newTab" }
+  | { kind: "closeTab" };

@@ -20,6 +20,7 @@ import path from "node:path";
 import {
   THEME_PREFERENCES,
   blurSupported,
+  type BrowserAction,
   needsTransparentWindow,
   type OpenTarget,
   type RegistryAgent,
@@ -52,7 +53,7 @@ import {
 import type { CommandStatus } from "../preload/bridge";
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
 import { renderPage, savedHost, startHosts, streamFile } from "./hosts";
-import { isBrowsable, isOpenableExternally, mayNavigate } from "./links";
+import { browserShortcut, isBrowsable, isOpenableExternally, mayNavigate } from "./links";
 import { appDataDir, dataDir } from "./plxd";
 import { cloneRepo, createRepo, listFolders } from "./repos";
 import {
@@ -147,19 +148,21 @@ const browserPartition = "persist:browser";
 
 // No page of the app's may navigate, except to reload itself, or open windows. Https links go to
 // the system browser. `webContents.reload()` (the menu's Reload) never emits `will-navigate`. The
-// side panel's browser, a webview, may go to any http or https page, and loads the windows its
-// pages open in itself.
+// side panel's browser, a webview, may go to any http or https page, and the windows its pages
+// open become new tabs (Browser.tsx).
 app.on("web-contents-created", (_event, contents) => {
   const inBrowser = contents.getType() === "webview";
+  // Asks the browser tab that shows this page for something, over `onBrowser` (bridge.ts).
+  const tell = (action: BrowserAction) =>
+    contents.hostWebContents?.send("parallax:browser", contents.id, action);
   contents.on("will-navigate", (event) => {
     if (mayNavigate(event.url, contents.getURL(), inBrowser)) return;
     event.preventDefault();
     if (!inBrowser && isOpenableExternally(event.url)) void shell.openExternal(event.url);
   });
   contents.setWindowOpenHandler(({ url }) => {
-    // The view shows a load's error, so the rejection needs no handling here.
     if (inBrowser) {
-      if (isBrowsable(url)) contents.loadURL(url).catch(() => {});
+      if (isBrowsable(url)) tell({ kind: "open", url });
     } else if (isOpenableExternally(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
@@ -177,12 +180,65 @@ app.on("web-contents-created", (_event, contents) => {
       partition: browserPartition,
     });
   });
+  // Chrome's page shortcuts, which also keep the default menu's Cmd+R and Cmd+W from reloading
+  // or closing the app while a page has focus.
+  if (inBrowser)
+    contents.on("before-input-event", (event, input) => {
+      const shortcut = browserShortcut(input, process.platform);
+      if (!shortcut) return;
+      event.preventDefault();
+      const history = contents.navigationHistory;
+      if (shortcut === "reload") contents.reload();
+      else if (shortcut === "back") history.goBack();
+      else if (shortcut === "forward") history.goForward();
+      // Chrome's zoom, a level at a time, which the session keeps for the page's site.
+      else if (shortcut === "zoomIn") contents.setZoomLevel(contents.getZoomLevel() + 1);
+      else if (shortcut === "zoomOut") contents.setZoomLevel(contents.getZoomLevel() - 1);
+      else if (shortcut === "resetZoom") contents.setZoomLevel(0);
+      else tell({ kind: shortcut });
+    });
+  // The app's CSP takes no image from the web, so main fetches a page's favicon in the browser's
+  // session and hands its tab the image inline. Large or non-image answers are left out.
+  if (inBrowser)
+    contents.on("page-favicon-updated", async (_event, favicons) => {
+      const url = favicons.find(isBrowsable);
+      const answer = url && (await contents.session.fetch(url).catch(() => undefined));
+      const type = answer && answer.ok ? (answer.headers.get("content-type") ?? "") : "";
+      if (!answer || !type.startsWith("image/")) return;
+      const bytes = Buffer.from(await answer.arrayBuffer());
+      if (bytes.length <= 256 * 1024)
+        tell({ kind: "icon", url: `data:${type};base64,${bytes.toString("base64")}` });
+    });
   // Electron has no context menu of its own. Right-click offers the Edit menu's actions: all of
-  // them in a text box, Copy on selected text.
-  contents.on("context-menu", (_event, { isEditable, selectionText }) => {
+  // them in a text box, Copy on selected text. A browser page's menu is Chrome's: a link's, the
+  // page's Back, Forward, and Reload when there's nothing to edit or copy, and Inspect.
+  contents.on("context-menu", (_event, { isEditable, selectionText, linkURL, x, y }) => {
     const roles = isEditable ? (["cut", "copy", "paste", "selectAll"] as const) : ["copy" as const];
-    if (isEditable || selectionText)
-      Menu.buildFromTemplate(roles.map((role) => ({ role }))).popup();
+    const edit = isEditable || selectionText ? roles.map((role) => ({ role })) : [];
+    if (!inBrowser) {
+      if (edit.length) Menu.buildFromTemplate(edit).popup();
+      return;
+    }
+    const history = contents.navigationHistory;
+    const separator = { type: "separator" } as const;
+    const link = isBrowsable(linkURL)
+      ? [
+          { label: "Open Link in New Tab", click: () => tell({ kind: "open", url: linkURL }) },
+          { label: "Copy Link Address", click: () => clipboard.writeText(linkURL) },
+          separator,
+        ]
+      : [];
+    const page = [
+      { label: "Back", enabled: history.canGoBack(), click: () => history.goBack() },
+      { label: "Forward", enabled: history.canGoForward(), click: () => history.goForward() },
+      { label: "Reload", click: () => contents.reload() },
+      separator,
+    ];
+    Menu.buildFromTemplate([
+      ...link,
+      ...(edit.length ? [...edit, separator] : link.length ? [] : page),
+      { label: "Inspect", click: () => contents.inspectElement(x, y) },
+    ]).popup();
   });
 });
 

@@ -18,6 +18,39 @@ export function isBrowsable(url: string): boolean {
   return protocol === "http:" || protocol === "https:";
 }
 
+// Chrome's page shortcuts, by key, with Cmd on macOS and Ctrl elsewhere.
+const browserShortcuts = {
+  r: "reload",
+  "[": "back",
+  "]": "forward",
+  "=": "zoomIn",
+  "-": "zoomOut",
+  "0": "resetZoom",
+  l: "address",
+  t: "newTab",
+  w: "closeTab",
+} as const;
+
+/**
+ * What Cmd (macOS) or Ctrl (elsewhere) with a key does in a side panel browser's page, as Chrome
+ * does, or undefined for a press it leaves to the page and the app's menu.
+ */
+export function browserShortcut(
+  input: {
+    type: string;
+    key: string;
+    meta: boolean;
+    control: boolean;
+    alt: boolean;
+    shift: boolean;
+  },
+  platform: NodeJS.Platform,
+): (typeof browserShortcuts)[keyof typeof browserShortcuts] | undefined {
+  const mod = platform === "darwin" ? input.meta && !input.control : input.control && !input.meta;
+  if (input.type !== "keyDown" || !mod || input.alt || input.shift) return undefined;
+  return browserShortcuts[input.key.toLowerCase() as keyof typeof browserShortcuts];
+}
+
 /**
  * Whether a page may navigate to `url`: the side panel's browser, to any page it may show; the
  * app's own pages, only to reload.
