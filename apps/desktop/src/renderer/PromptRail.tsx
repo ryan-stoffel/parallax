@@ -73,7 +73,7 @@ export function PromptRail({
             onMouseEnter={(e) => show(at, e.currentTarget)}
             onFocus={(e) => show(at, e.currentTarget)}
             onClick={() => onJump(p)}
-            className="group flex h-2.5 w-5 shrink-0 cursor-default items-center px-0.5 focus-visible:outline-none"
+            className="group flex h-2.5 w-5 shrink-0 items-center px-0.5 focus-visible:outline-none"
           >
             <span
               className={`h-0.5 w-2.5 rounded-full transition-[width,background-color] group-hover:w-4 group-hover:bg-foreground group-focus-visible:w-4 group-focus-visible:bg-foreground ${

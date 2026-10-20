@@ -2077,7 +2077,7 @@ function Drawer<T>({
           setOpened(!open);
           onOpenChange(!open);
         }}
-        className="sticky top-0 z-10 flex cursor-default list-none items-center gap-3 rounded-md bg-sidebar px-2 py-1.5 text-[12.5px] text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
+        className="sticky top-0 z-10 flex list-none items-center gap-3 rounded-md bg-sidebar px-2 py-1.5 text-[12.5px] text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
       >
         <span>
           {label}{" "}

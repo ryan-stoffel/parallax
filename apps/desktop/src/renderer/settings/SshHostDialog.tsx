@@ -195,7 +195,7 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
                     pick(choice);
                   }}
                   onMouseEnter={() => setActive(i)}
-                  className={`flex cursor-default items-center justify-between rounded-md px-2.5 py-1.5 text-[13px] ${i === active ? "bg-hover" : ""}`}
+                  className={`flex items-center justify-between rounded-md px-2.5 py-1.5 text-[13px] ${i === active ? "bg-hover" : ""}`}
                 >
                   <span className="truncate font-mono text-[12.5px]">{choice}</span>
                   <span className="text-[12px] text-faint-foreground">
