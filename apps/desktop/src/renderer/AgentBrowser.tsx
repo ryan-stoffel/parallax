@@ -168,7 +168,8 @@ export function AgentBrowser({
         },
       });
     },
-    onPointerUp() {
+    // Releasing the button, or a cancel, ends the capture, and with it the drag.
+    onLostPointerCapture() {
       if (!drag) return;
       const { size: reached, start } = drag;
       setDrag(undefined);

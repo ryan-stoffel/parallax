@@ -153,8 +153,10 @@ const browserPartition = "persist:browser";
 app.on("web-contents-created", (_event, contents) => {
   const inBrowser = contents.getType() === "webview";
   // Asks the browser tab that shows this page for something, over `onBrowser` (bridge.ts).
-  const tell = (action: BrowserAction) =>
-    contents.hostWebContents?.send("parallax:browser", contents.id, action);
+  const tell = (action: BrowserAction) => {
+    const host = contents.isDestroyed() ? undefined : contents.hostWebContents;
+    if (host && !host.isDestroyed()) host.send("parallax:browser", contents.id, action);
+  };
   contents.on("will-navigate", (event) => {
     if (mayNavigate(event.url, contents.getURL(), inBrowser)) return;
     event.preventDefault();
@@ -189,6 +191,7 @@ app.on("web-contents-created", (_event, contents) => {
       event.preventDefault();
       const history = contents.navigationHistory;
       if (shortcut === "reload") contents.reload();
+      else if (shortcut === "hardReload") contents.reloadIgnoringCache();
       else if (shortcut === "back") history.goBack();
       else if (shortcut === "forward") history.goForward();
       // Chrome's zoom, a level at a time, which the session keeps for the page's site.
@@ -198,16 +201,12 @@ app.on("web-contents-created", (_event, contents) => {
       else tell({ kind: shortcut });
     });
   // The app's CSP takes no image from the web, so main fetches a page's favicon in the browser's
-  // session and hands its tab the image inline. Large or non-image answers are left out.
+  // session and hands its tab the image inline.
   if (inBrowser)
-    contents.on("page-favicon-updated", async (_event, favicons) => {
-      const url = favicons.find(isBrowsable);
-      const answer = url && (await contents.session.fetch(url).catch(() => undefined));
-      const type = answer && answer.ok ? (answer.headers.get("content-type") ?? "") : "";
-      if (!answer || !type.startsWith("image/")) return;
-      const bytes = Buffer.from(await answer.arrayBuffer());
-      if (bytes.length <= 256 * 1024)
-        tell({ kind: "icon", url: `data:${type};base64,${bytes.toString("base64")}` });
+    contents.on("page-favicon-updated", (_event, favicons) => {
+      void favicon(contents.session, favicons.find(isBrowsable)).then(
+        (url) => url && tell({ kind: "icon", url }),
+      );
     });
   // Electron has no context menu of its own. Right-click offers the Edit menu's actions: all of
   // them in a text box, Copy on selected text. A browser page's menu is Chrome's: a link's, the
@@ -241,6 +240,30 @@ app.on("web-contents-created", (_event, contents) => {
     ]).popup();
   });
 });
+
+/**
+ * A favicon as a data url, or undefined for none, an error, an answer that isn't an image, or one
+ * over 256 KB, which it stops reading there, so a page can't make main buffer an endless body.
+ */
+async function favicon(session: Electron.Session, url: string | undefined) {
+  if (!url) return undefined;
+  try {
+    const answer = await session.fetch(url);
+    const type = answer.headers.get("content-type") ?? "";
+    if (!answer.ok || !type.startsWith("image/") || !answer.body) return undefined;
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    // Leaving the loop early cancels the rest of the body.
+    for await (const chunk of answer.body) {
+      size += chunk.length;
+      if (size > 256 * 1024) return undefined;
+      chunks.push(chunk);
+    }
+    return `data:${type};base64,${Buffer.concat(chunks).toString("base64")}`;
+  } catch {
+    return undefined;
+  }
+}
 
 ipcMain.handle("parallax:version", () => app.getVersion());
 

@@ -305,7 +305,8 @@ function Tab({
     const el = view.current;
     if (!el) return;
     let stopAsking = () => {};
-    // The page's webContents exists once the webview attaches, so its asks find this tab then.
+    // The page's webContents exists once the webview attaches, so its asks find this tab from
+    // then on, before its first page is ready.
     const ready = () => {
       stopAsking();
       stopAsking = onAsk(el.getWebContentsId(), (action) => {
@@ -335,7 +336,7 @@ function Tab({
     const starting = (e: { isMainFrame: boolean; isInPlace: boolean }) => {
       if (e.isMainFrame && !e.isInPlace) leaving();
     };
-    el.addEventListener("dom-ready", ready);
+    el.addEventListener("did-attach", ready);
     el.addEventListener("did-navigate", navigated);
     el.addEventListener("did-navigate-in-page", navigated);
     el.addEventListener("did-start-navigation", starting);
@@ -345,7 +346,7 @@ function Tab({
     el.addEventListener("page-title-updated", titled);
     return () => {
       stopAsking();
-      el.removeEventListener("dom-ready", ready);
+      el.removeEventListener("did-attach", ready);
       el.removeEventListener("did-navigate", navigated);
       el.removeEventListener("did-navigate-in-page", navigated);
       el.removeEventListener("did-start-navigation", starting);

@@ -65,7 +65,8 @@ test("a browser page takes Chrome's shortcuts with Cmd on macOS and Ctrl elsewhe
   // The other platform's modifier, Shift, a key it doesn't know, or a key coming up pass through.
   expect(browserShortcut(press("r", { control: true }), "darwin")).toBeUndefined();
   expect(browserShortcut(press("r", { meta: true }), "linux")).toBeUndefined();
-  expect(browserShortcut(press("r", { meta: true, shift: true }), "darwin")).toBeUndefined();
+  expect(browserShortcut(press("R", { meta: true, shift: true }), "darwin")).toBe("hardReload");
+  expect(browserShortcut(press("t", { meta: true, shift: true }), "darwin")).toBeUndefined();
   expect(browserShortcut(press("k", { meta: true }), "darwin")).toBeUndefined();
   expect(
     browserShortcut({ ...press("r", { meta: true }), type: "keyUp" }, "darwin"),

@@ -45,9 +45,11 @@ export function browserShortcut(
     shift: boolean;
   },
   platform: NodeJS.Platform,
-): (typeof browserShortcuts)[keyof typeof browserShortcuts] | undefined {
+): (typeof browserShortcuts)[keyof typeof browserShortcuts] | "hardReload" | undefined {
   const mod = platform === "darwin" ? input.meta && !input.control : input.control && !input.meta;
-  if (input.type !== "keyDown" || !mod || input.alt || input.shift) return undefined;
+  if (input.type !== "keyDown" || !mod || input.alt) return undefined;
+  // Shift makes Reload Chrome's hard reload, and leaves every other key to the page.
+  if (input.shift) return input.key.toLowerCase() === "r" ? "hardReload" : undefined;
   return browserShortcuts[input.key.toLowerCase() as keyof typeof browserShortcuts];
 }
 
