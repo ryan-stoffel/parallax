@@ -402,7 +402,7 @@ export function NewThread({
             {folder ? (
               <>
                 {/* One line: only the name shrinks, truncating with an ellipsis. */}
-                <h1 className="mb-2 flex justify-center text-[24px] font-medium tracking-tight whitespace-pre">
+                <h1 className="mb-2 flex justify-center-safe text-[24px] font-medium tracking-tight whitespace-pre">
                   What should we work on in{" "}
                   <span
                     title={folder.name}
@@ -440,7 +440,7 @@ export function NewThread({
             ) : (
               <>
                 <h1
-                  className={`${repoless(group) ? "mb-7" : "mb-2"} flex justify-center text-[24px] font-medium tracking-tight whitespace-pre`}
+                  className={`${repoless(group) ? "mb-7" : "mb-2"} flex justify-center-safe text-[24px] font-medium tracking-tight whitespace-pre`}
                 >
                   {group.id === noRepo
                     ? "What should we work on "
