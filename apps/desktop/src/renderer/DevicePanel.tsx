@@ -50,12 +50,18 @@ const PERSPECTIVE = 1800;
 const watched = new Map<string, string>();
 /** Each host's last `device/state`, so the view draws at once and refreshes behind it. */
 const states = new Map<string, DeviceStateResult>();
-/** Each device's artwork from its host's Xcode or Android Studio, by host and device, or null. */
+/**
+ * Each device's artwork from its host's Xcode or Android Studio, or null for none, by host and
+ * device: its name too, since another emulator can take a stopped one's serial.
+ */
 const chromes = new Map<string, DeviceChrome | null>();
 
-/** Fetches device `device`'s artwork once per app: undefined while it loads, null for none. */
+/**
+ * Fetches device `device`'s artwork once per app: undefined while it loads, null for none. A
+ * failed request isn't kept, so the next view asks again.
+ */
 function useChrome(hostId: string, device: DeviceInfo) {
-  const key = `${hostId}/${device.id}`;
+  const key = `${hostId}/${device.id}/${device.name}`;
   const [chrome, setChrome] = useState(() => chromes.get(key));
   const [seen, setSeen] = useState(key);
   if (seen !== key) {
@@ -69,7 +75,7 @@ function useChrome(hostId: string, device: DeviceInfo) {
       .request(hostId, "device/chrome", { deviceId: device.id, platform: device.platform })
       .then((answer) => {
         const found = "error" in answer ? null : (answer.result.chrome ?? null);
-        chromes.set(key, found);
+        if (!("error" in answer)) chromes.set(key, found);
         if (live) setChrome(found);
       });
     return () => {
@@ -146,10 +152,18 @@ export function DevicePanel({
   const live = !!device?.booted && !!result?.hub.installed;
   useEffect(() => {
     if (!shown) return;
-    void refresh();
-    if (live) return;
-    const timer = setInterval(() => void refresh(), REFRESH_MS);
-    return () => clearInterval(timer);
+    // Each refresh waits for the last to answer: a cold Mac's first listing can take a while.
+    let on = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async () => {
+      await refresh();
+      if (on && !live) timer = setTimeout(() => void tick(), REFRESH_MS);
+    };
+    void tick();
+    return () => {
+      on = false;
+      clearTimeout(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shown, hostId, runId, live, request]);
 
@@ -834,6 +848,8 @@ function Viewer({
   // State, not a ref: the canvas appears once the artwork has loaded, and the stream waits for it.
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
   const area = useRef<HTMLDivElement>(null);
+  // The flat artwork's stage, which its touches are measured from.
+  const flat = useRef<HTMLDivElement>(null);
   const stream = useRef<DeviceStream>(null);
   const [status, setStatus] = useState<{ status: DeviceStreamStatus; detail?: string }>({
     status: "connecting",
@@ -904,6 +920,8 @@ function Viewer({
   const turn: Turn = { pitch: orbit.pitch, yaw: orbit.yaw, roll };
   const turned = orbit.pitch !== 0 || orbit.yaw !== 0;
 
+  // An Android phone's model is built to its screen's shape, so it's rebuilt if that changes.
+  const pixelAspect = ios ? 0 : short / long;
   useEffect(() => {
     if (!want3d || !gl || !canvas) return;
     let live = true;
@@ -916,6 +934,7 @@ function Viewer({
           source: canvas,
           platform: device.platform,
           name: device.name,
+          aspect: pixelAspect,
         });
       } catch {
         return;
@@ -933,7 +952,7 @@ function Viewer({
       model.current = null;
       setModelShown(false);
     };
-  }, [want3d, gl, canvas, device.platform, device.name]);
+  }, [want3d, gl, canvas, device.platform, device.name, pixelAspect]);
   useEffect(() => {
     model.current?.setPose(orbit.pitch, orbit.yaw, roll);
   }, [orbit, roll, modelShown]);
@@ -945,6 +964,9 @@ function Viewer({
   }, [box, gl, modelShown]);
 
   const ready = streaming && status.status === "streaming";
+  // The model stands in for the artwork once the stream is live: until then the artwork shows
+  // what the device is waiting on, and its buttons, such as Try again.
+  const modelOn = modelShown && ready;
   const touching = useRef(false);
   // A touch on the screen, traced back through the device's turn onto the screen's own pixels.
   const touch =
@@ -958,7 +980,7 @@ function Viewer({
       } else if (!touching.current) return;
       event.stopPropagation();
       if (phase === "end") touching.current = false;
-      const stage = area.current?.firstElementChild?.getBoundingClientRect();
+      const stage = flat.current?.getBoundingClientRect();
       if (!stage || !chrome) return;
       const hit = unproject(
         turn,
@@ -980,11 +1002,12 @@ function Viewer({
   // Dragging around the device turns it, with a little momentum after letting go.
   const drag = useRef<{ x: number; y: number; vx: number; vy: number; t: number }>(null);
   const glide = useRef(0);
-  // In the 3D model, a touch is wherever the pointer meets its screen.
-  const touching3d = useRef(false);
+  // In the 3D model, a touch is wherever the pointer meets its screen. It ends where it last did,
+  // when let go off the screen.
+  const touching3d = useRef<{ x: number; y: number }>(null);
   const modelPoint = (event: React.PointerEvent, captured: boolean) => {
     const rect = gl?.getBoundingClientRect();
-    if (!rect || !model.current || !modelShown) return null;
+    if (!rect || !model.current || !modelOn) return null;
     return model.current.screenPoint(
       (event.clientX - rect.left) / rect.width,
       (event.clientY - rect.top) / rect.height,
@@ -997,7 +1020,7 @@ function Viewer({
     event.currentTarget.setPointerCapture(event.pointerId);
     const hit = ready ? modelPoint(event, false) : null;
     if (hit) {
-      touching3d.current = true;
+      touching3d.current = hit;
       (area.current?.querySelector('[role="application"]') as HTMLElement | null)?.focus();
       stream.current?.touchRaw("begin", hit.x, hit.y);
       return;
@@ -1009,7 +1032,10 @@ function Viewer({
   const onStageMove = (event: React.PointerEvent<HTMLDivElement>) => {
     if (touching3d.current) {
       const hit = modelPoint(event, true);
-      if (hit) stream.current?.touchRaw("move", hit.x, hit.y);
+      if (hit) {
+        touching3d.current = hit;
+        stream.current?.touchRaw("move", hit.x, hit.y);
+      }
       return;
     }
     const d = drag.current;
@@ -1026,9 +1052,9 @@ function Viewer({
   };
   const onStageUp = (event: React.PointerEvent<HTMLDivElement>) => {
     if (touching3d.current) {
-      touching3d.current = false;
-      const hit = modelPoint(event, true);
-      if (hit) stream.current?.touchRaw("end", hit.x, hit.y);
+      const last = modelPoint(event, true) ?? touching3d.current;
+      touching3d.current = null;
+      stream.current?.touchRaw("end", last.x, last.y);
       return;
     }
     const d = drag.current;
@@ -1200,13 +1226,14 @@ function Viewer({
           <canvas
             ref={setGl}
             aria-hidden
-            className={`absolute inset-x-0 top-0 bottom-16 size-auto transition-opacity duration-200 ${modelShown ? "opacity-100" : "opacity-0"}`}
+            className={`absolute inset-x-0 top-0 bottom-16 size-auto transition-opacity duration-200 ${modelOn ? "opacity-100" : "opacity-0"}`}
             style={{ width: "100%", height: "calc(100% - 4rem)" }}
           />
         )}
         {chrome && (
           <div
-            className={`relative shrink-0 animate-[device-in_240ms_ease-out] ${modelShown ? "pointer-events-none opacity-0" : ""}`}
+            ref={flat}
+            className={`relative shrink-0 animate-[device-in_240ms_ease-out] ${modelOn ? "pointer-events-none opacity-0" : ""}`}
             style={{ width: across * k, height: down * k, perspective: PERSPECTIVE }}
           >
             <div

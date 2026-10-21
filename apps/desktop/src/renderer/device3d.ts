@@ -291,12 +291,16 @@ function release(root: Object3D, keep: Texture) {
   });
 }
 
-/** Renders `platform` device `name` in 3D on `canvas`, its screen drawn from `source`. */
+/**
+ * Renders `platform` device `name` in 3D on `canvas`, its screen drawn from `source`. An Android
+ * phone's screen is `aspect` wide for its height.
+ */
 export function createDevice3d(options: {
   canvas: HTMLCanvasElement;
   source: HTMLCanvasElement;
   platform: DevicePlatform;
   name: string;
+  aspect: number;
 }): Device3d {
   const renderer = new WebGLRenderer({ canvas: options.canvas, alpha: true, antialias: true });
   renderer.outputColorSpace = SRGBColorSpace;
@@ -317,6 +321,9 @@ export function createDevice3d(options: {
   texture.minFilter = LinearFilter;
   texture.magFilter = LinearFilter;
   texture.generateMipmaps = false;
+  // A texture keeps the size it was first uploaded at: one from a canvas that has since changed
+  // size, such as before the first frame or after a turn to landscape, is uploaded afresh.
+  let uploaded = { width: options.source.width, height: options.source.height };
 
   const root = new Group();
   const orientation = new Group();
@@ -428,10 +435,7 @@ export function createDevice3d(options: {
   };
   const ready = (async () => {
     if (options.platform === "android") {
-      const { width, height } = options.source;
-      const aspect =
-        width && height ? Math.min(width, height) / Math.max(width, height) : 1080 / 2424;
-      install(pixel(texture, aspect));
+      install(pixel(texture, options.aspect));
       return;
     }
     const url = appleModel(options.name);
@@ -458,8 +462,15 @@ export function createDevice3d(options: {
       invalidate();
     },
     frame() {
+      const { width, height } = options.source;
       if (duo) duo.draw(options.source);
-      else texture.needsUpdate = true;
+      else {
+        if (width !== uploaded.width || height !== uploaded.height) {
+          uploaded = { width, height };
+          texture.dispose();
+        }
+        texture.needsUpdate = true;
+      }
       invalidate();
     },
     fold(display, angle) {
