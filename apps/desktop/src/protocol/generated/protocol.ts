@@ -4653,6 +4653,14 @@ export type DevicePlatformState = {
 	 * Why it can't, such as a missing Android SDK. Absent when it can.
 	 */
 	unavailable?: string,
+	/**
+	 * What it can run but not show yet, such as Android video without ffmpeg.
+	 */
+	warning?: string,
+	/**
+	 * Whether `device/create` can make one of its devices here.
+	 */
+	canCreate?: boolean,
 };
 
 /**
@@ -4690,9 +4698,15 @@ export type DeviceResult = {
 };
 
 /**
- * Params of `device/create`: a new iPhone Simulator on the newest iOS runtime.
+ * Params of `device/create`: a new iPhone Simulator on the newest iOS runtime, or a new Pixel
+ * emulator on the newest system image the Android SDK has.
  */
-export type DeviceCreateParams = Record<symbol, never>;
+export type DeviceCreateParams = {
+	/**
+	 * Which platform's device to make. Absent makes an iPhone.
+	 */
+	platform?: DevicePlatform,
+};
 
 /**
  * Result of `device/screenshot`.

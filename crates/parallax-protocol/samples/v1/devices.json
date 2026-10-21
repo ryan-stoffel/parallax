@@ -10,7 +10,7 @@
     "id": 1,
     "result": {
       "platforms": [
-        { "platform": "ios" },
+        { "platform": "ios", "canCreate": true },
         {
           "platform": "android",
           "unavailable": "Android SDK was not found. Install it with Android Studio or set ANDROID_HOME to your SDK directory."
@@ -31,7 +31,7 @@
   },
   { "jsonrpc": "2.0", "id": 2, "method": "device/setup", "params": {} },
   { "jsonrpc": "2.0", "id": 2, "result": {} },
-  { "jsonrpc": "2.0", "id": 3, "method": "device/create", "params": {} },
+  { "jsonrpc": "2.0", "id": 3, "method": "device/create", "params": { "platform": "ios" } },
   {
     "jsonrpc": "2.0",
     "id": 3,

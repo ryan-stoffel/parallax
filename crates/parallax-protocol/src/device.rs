@@ -52,6 +52,13 @@ pub struct DevicePlatformState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub unavailable: Option<String>,
+    /// What it can run but not show yet, such as Android video without ffmpeg.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub warning: Option<String>,
+    /// Whether `device/create` can make one of its devices here.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub can_create: bool,
 }
 
 /// A simulator, emulator, or phone.
@@ -107,10 +114,16 @@ pub struct DeviceTarget {
     pub platform: DevicePlatform,
 }
 
-/// Params of `device/create`: a new iPhone Simulator on the newest iOS runtime.
+/// Params of `device/create`: a new iPhone Simulator on the newest iOS runtime, or a new Pixel
+/// emulator on the newest system image the Android SDK has.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct DeviceCreateParams {}
+pub struct DeviceCreateParams {
+    /// Which platform's device to make. Absent makes an iPhone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub platform: Option<DevicePlatform>,
+}
 
 /// Result of `device/boot` and `device/create`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]

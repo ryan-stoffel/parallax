@@ -145,9 +145,27 @@ impl Devices {
                 }
                 Err(why) => Some(why),
             };
+            let ready = unavailable.is_none();
+            let (warning, can_create) = match platform {
+                DevicePlatform::Ios => (None, ready),
+                DevicePlatform::Android => {
+                    let env = self.launcher.base();
+                    let sdk = tools.android.as_ref().ok().and_then(|a| a.sdk_root());
+                    let warning =
+                        (ready && !android::has_ffmpeg(env)).then(android::ffmpeg_missing);
+                    let can_create = sdk.is_some_and(|sdk| {
+                        android::system_image(sdk).is_some()
+                            && android::avdmanager(sdk).is_some()
+                            && android::java(env).is_some()
+                    });
+                    (warning, ready && can_create)
+                }
+            };
             platforms.push(DevicePlatformState {
                 platform,
                 unavailable,
+                warning,
+                can_create,
             });
         }
         devices.sort_by_key(|device| !device.booted);
@@ -229,7 +247,12 @@ impl Devices {
                 .map_err(failed)?,
             (DevicePlatform::Android, _, Ok(android)) => self
                 .chromes
-                .android(&android.adb, android.sdk_root(), &target.device_id)
+                .android(
+                    &android.adb,
+                    android.sdk_root(),
+                    self.launcher.base(),
+                    &target.device_id,
+                )
                 .await
                 .map_err(failed)?,
             _ => None,
@@ -238,8 +261,14 @@ impl Devices {
     }
 
     /// `device/create`: an iPhone Simulator of the newest model the newest iOS runtime runs.
-    pub(crate) async fn create(&self, _: DeviceCreateParams) -> Result<DeviceResult, ErrorObject> {
+    pub(crate) async fn create(
+        &self,
+        params: DeviceCreateParams,
+    ) -> Result<DeviceResult, ErrorObject> {
         let tools = self.tools();
+        if params.platform == Some(DevicePlatform::Android) {
+            return self.create_android(&tools).await;
+        }
         let ios = tools.ios.as_ref().map_err(|why| failed(why.clone()))?;
         let args = ["simctl", "list", "runtimes", "available", "--json"];
         let listed = tools::run(&ios.xcrun, &args, tools::COMMAND_TIMEOUT)
@@ -268,6 +297,41 @@ impl Devices {
         })
     }
 
+    /// `device/create` for Android: a Pixel AVD on the newest system image the SDK has.
+    async fn create_android(&self, tools: &Toolchain) -> Result<DeviceResult, ErrorObject> {
+        let android = tools.android.as_ref().map_err(|why| failed(why.clone()))?;
+        let sdk = android
+            .sdk_root()
+            .ok_or_else(|| failed("Android SDK was not found.".to_owned()))?
+            .to_owned();
+        let image = android::system_image(&sdk).ok_or_else(|| {
+            failed(
+                "The Android SDK has no system image. Add one in Android Studio's Device Manager."
+                    .to_owned(),
+            )
+        })?;
+        let env = self.launcher.base().clone();
+        let taken = android::avd_home(&env)
+            .map(|home| android::avd_names(&home))
+            .unwrap_or_default();
+        let api = image.api;
+        let (name, _) =
+            tokio::task::spawn_blocking(move || android::create(&sdk, &image, &env, &taken))
+                .await
+                .map_err(|error| failed(error.to_string()))?
+                .map_err(failed)?;
+        Ok(DeviceResult {
+            device: DeviceInfo {
+                id: name.clone(),
+                platform: DevicePlatform::Android,
+                name,
+                version: format!("Android API {api}"),
+                booted: false,
+                physical: false,
+            },
+        })
+    }
+
     /// `device/stream`: starts the hub if it isn't running, connects to the stream, and relays it
     /// to `replies` until it ends, `device/close`, or `stopped`.
     pub(crate) async fn stream(
@@ -276,6 +340,10 @@ impl Devices {
         replies: &mpsc::Sender<Reply>,
         stopped: &CancellationToken,
     ) -> Result<DeviceStreamResult, ErrorObject> {
+        if params.platform == DevicePlatform::Android && !android::has_ffmpeg(self.launcher.base())
+        {
+            return Err(failed(android::ffmpeg_missing()));
+        }
         let port = self.hub().await.map_err(failed)?;
         let path = upstream_path(params.platform, params.kind, &params.device_id);
         let upstream = match params.kind {
@@ -917,6 +985,7 @@ fn newest_iphone(listed: &[u8]) -> Result<(Runtime, DeviceKind), String> {
         .ok_or_else(|| "The iOS runtime runs no iPhone.".to_owned())
 }
 
+mod android;
 mod chrome;
 #[cfg(test)]
 mod tests;

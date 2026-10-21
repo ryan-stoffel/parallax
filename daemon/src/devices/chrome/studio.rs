@@ -14,28 +14,38 @@ use data_encoding::BASE64;
 use parallax_protocol::{DeviceChrome, DeviceChromeLayer, DeviceRect};
 
 use super::Chromes;
+use crate::backend::process::Environment;
+use crate::devices::android;
 use crate::mcp::device as tools;
 
 impl Chromes {
-    /// Emulator `serial`'s artwork, or `None` when there's no skin for it.
+    /// Emulator `id`'s artwork, by its serial while it runs or its AVD's name while it doesn't, or
+    /// `None` when there's no skin for it.
     pub(crate) async fn android(
         &self,
         adb: &Path,
         sdk: Option<&Path>,
-        serial: &str,
+        env: &Environment,
+        id: &str,
     ) -> Result<Option<DeviceChrome>, String> {
-        if !serial.starts_with("emulator-") {
-            return Ok(None);
-        }
-        let args = ["-s", serial, "emu", "avd", "path"];
-        let Ok(path) = tools::run(adb, &args, tools::COMMAND_TIMEOUT).await else {
-            return Ok(None);
+        let avd = if id.starts_with("emulator-") {
+            let args = ["-s", id, "emu", "avd", "path"];
+            let Ok(path) = tools::run(adb, &args, tools::COMMAND_TIMEOUT).await else {
+                return Ok(None);
+            };
+            let path = String::from_utf8_lossy(&path);
+            let Some(avd) = path.lines().map(str::trim).find(|line| !line.is_empty()) else {
+                return Ok(None);
+            };
+            PathBuf::from(avd)
+        } else {
+            // A phone over USB has a serial but no AVD, and no folder by that name.
+            let Some(home) = android::avd_home(env) else {
+                return Ok(None);
+            };
+            home.join(format!("{id}.avd"))
         };
-        let path = String::from_utf8_lossy(&path);
-        let Some(avd) = path.lines().map(str::trim).find(|line| !line.is_empty()) else {
-            return Ok(None);
-        };
-        let Some(skin) = skin(Path::new(avd), sdk) else {
+        let Some(skin) = skin(&avd, sdk) else {
             return Ok(None);
         };
         let key = format!("android:{}", skin.display());

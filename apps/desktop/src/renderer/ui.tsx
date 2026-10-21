@@ -258,7 +258,7 @@ export function Menu({
   ...props
 }: {
   label: string;
-  align?: "start" | "end";
+  align?: "start" | "end" | "center";
   className: string;
   focus?: string;
   onOpen?: () => void;

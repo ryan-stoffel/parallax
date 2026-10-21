@@ -1,19 +1,21 @@
 import {
+  ArrowUpRight,
   Camera,
   Check,
-  ChevronLeft,
-  ChevronRight,
+  ChevronDown,
   Circle,
-  CircleAlert,
+  Copy,
   House,
   LayoutGrid,
   LoaderCircle,
   Plus,
   Power,
   RotateCw,
+  Rotate3d,
+  TriangleAlert,
   Triangle,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import type {
   DeviceChrome,
@@ -21,6 +23,7 @@ import type {
   DevicePlatform,
   DeviceStateResult,
 } from "../protocol/generated/protocol";
+import { plainChrome, unproject, type Turn } from "./deviceSpace";
 import {
   ORIENTATIONS,
   createDeviceStream,
@@ -29,25 +32,54 @@ import {
   type DeviceStream,
   type DeviceStreamStatus,
 } from "./deviceStream";
-import { IconButton } from "./ui";
+import { Menu, menuItem } from "./ui";
 
 /** How often the device list refreshes while it shows, or while the hub installs. */
 const REFRESH_MS = 3_000;
+/** The 3D view's perspective, in pixels: a phone held at arm's length. */
+const PERSPECTIVE = 1800;
 
 /**
  * The device each thread last watched, by host and thread, so coming back shows it again. An
- * empty id means the list was chosen over the device the panel would otherwise open.
+ * empty id means the gallery was chosen over the device the panel would otherwise open.
  */
 const watched = new Map<string, string>();
 /** Each host's last `device/state`, so the view draws at once and refreshes behind it. */
 const states = new Map<string, DeviceStateResult>();
-/** Each simulator's Xcode artwork, by host and device, or null where there's none. */
+/** Each device's artwork from its host's Xcode or Android Studio, by host and device, or null. */
 const chromes = new Map<string, DeviceChrome | null>();
+
+/** Fetches device `device`'s artwork once per app: undefined while it loads, null for none. */
+function useChrome(hostId: string, device: DeviceInfo) {
+  const key = `${hostId}/${device.id}`;
+  const [chrome, setChrome] = useState(() => chromes.get(key));
+  const [seen, setSeen] = useState(key);
+  if (seen !== key) {
+    setSeen(key);
+    setChrome(chromes.get(key));
+  }
+  useEffect(() => {
+    if (chromes.has(key)) return;
+    let live = true;
+    void window.parallax
+      .request(hostId, "device/chrome", { deviceId: device.id, platform: device.platform })
+      .then((answer) => {
+        const found = "error" in answer ? null : (answer.result.chrome ?? null);
+        chromes.set(key, found);
+        if (live) setChrome(found);
+      });
+    return () => {
+      live = false;
+    };
+  }, [key, hostId, device.id, device.platform]);
+  return chrome;
+}
 
 /**
  * The Device panel (PLX-886): the host's iOS Simulators and Android Emulators, and a live,
- * touchable view of one, streamed through plxd. `shown` is whether it's on screen; only then does
- * it stream. Each new `request` shows its device, such as one the thread's agent opened.
+ * touchable view of one, streamed through plxd, in its host's own Xcode or Android Studio artwork,
+ * which turns in 3D. `shown` is whether it's on screen; only then does it stream. Each new
+ * `request` shows its device, such as one the thread's agent opened.
  */
 export function DevicePanel({
   hostId,
@@ -65,9 +97,9 @@ export function DevicePanel({
     states.get(hostId),
   );
   const [selected, setSelected] = useState(() => watched.get(key));
-  // Devices starting or stopping, by id, and the AVD whose emulator is starting under it.
+  // Devices starting or stopping, by id, and devices being made, by platform.
   const [busy, setBusy] = useState<Record<string, "start" | "stop">>({});
-  const [failure, setFailure] = useState<string>();
+  const [failure, setFailure] = useState<{ id: string; message: string }>();
   const [seenKey, setSeenKey] = useState(key);
   if (key !== seenKey) {
     setSeenKey(key);
@@ -126,7 +158,7 @@ export function DevicePanel({
     setFailure(undefined);
     const error = await run();
     setBusy((all) => Object.fromEntries(Object.entries(all).filter(([each]) => each !== id)));
-    if (error) setFailure(error);
+    if (error) setFailure({ id, message: error });
     await refresh();
   };
   // Opens the device at once; it boots in its frame.
@@ -143,9 +175,9 @@ export function DevicePanel({
       return undefined;
     });
   };
-  const create = () =>
-    act("new", "start", async () => {
-      const answer = await window.parallax.request(hostId, "device/create", {});
+  const create = (platform: DevicePlatform) =>
+    act(`new:${platform}`, "start", async () => {
+      const answer = await window.parallax.request(hostId, "device/create", { platform });
       if ("error" in answer) return answer.error.message;
       await refresh();
       start(answer.result.device);
@@ -163,17 +195,19 @@ export function DevicePanel({
   const setUp = async () => {
     setFailure(undefined);
     const answer = await window.parallax.request(hostId, "device/setup", {});
-    if ("error" in answer) setFailure(answer.error.message);
+    if ("error" in answer) setFailure({ id: "hub", message: answer.error.message });
     await refresh();
   };
 
   if (!state) return <Skeleton />;
   if ("error" in state) {
     return (
-      <div className="flex flex-1 items-center justify-center gap-2 px-8 pb-16 text-[13px]">
-        <CircleAlert aria-hidden className="size-4 shrink-0 text-danger" />
-        {state.error}
-      </div>
+      <Notice
+        icon={<TriangleAlert className="text-warning" />}
+        title="Devices aren't available"
+        detail={state.error}
+        action={<Pill onClick={() => void refresh()}>Try again</Pill>}
+      />
     );
   }
   if (device) {
@@ -182,53 +216,110 @@ export function DevicePanel({
         key={`${hostId}/${device.id}`}
         hostId={hostId}
         device={device}
+        devices={state.devices}
         shown={shown}
         hub={state.hub}
         booting={busy[device.id] === "start" || !device.booted}
         stopping={busy[device.id] === "stop"}
-        failure={failure}
+        failure={failure?.id === device.id || failure?.id === "hub" ? failure.message : undefined}
+        onRetry={() => (device.booted ? void refresh() : start(device))}
         onSetUp={() => void setUp()}
-        onBack={() => select("")}
+        onOpen={(target) => (target.booted ? select(target.id) : start(target))}
+        onGallery={() => select("")}
         onPowerOff={() => void powerOff(device)}
       />
     );
   }
   return (
-    <Picker
+    <Gallery
+      hostId={hostId}
       state={state}
       busy={busy}
-      failure={failure}
+      failure={failure?.message}
+      onDismiss={() => setFailure(undefined)}
       onOpen={(target) => (target.booted ? select(target.id) : start(target))}
-      onCreate={() => void create()}
+      onCreate={(platform) => void create(platform)}
     />
   );
 }
 
-/** Rows while the first list loads, where it will be. */
+/** Cards where the gallery will be, while the first list loads. */
 function Skeleton() {
   return (
-    <div aria-busy className="flex flex-col gap-1 p-2">
+    <div aria-busy className="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3 p-4">
       {[0, 1, 2].map((i) => (
-        <div key={i} className="flex h-11 items-center gap-3 px-2">
-          <div className="size-7 animate-pulse rounded-lg bg-selected" />
-          <div
-            className="h-3 animate-pulse rounded-full bg-selected"
-            style={{ width: `${48 - i * 9}%` }}
-          />
+        <div key={i} className="flex flex-col items-center gap-3 rounded-2xl p-3">
+          <div className="h-[180px] w-[86px] animate-pulse rounded-[18px] bg-selected" />
+          <div className="h-2.5 w-16 animate-pulse rounded-full bg-selected" />
         </div>
       ))}
     </div>
   );
 }
 
+/** A centered message, for the whole panel. */
+function Notice({
+  icon,
+  title,
+  detail,
+  action,
+}: {
+  icon: ReactNode;
+  title: string;
+  detail?: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-2 px-10 pb-16 text-center [&>svg]:size-5">
+      {icon}
+      <p className="text-[13.5px] font-medium">{title}</p>
+      {detail && <p className="max-w-80 text-[12.5px] text-muted-foreground">{detail}</p>}
+      {action && <div className="mt-1">{action}</div>}
+    </div>
+  );
+}
+
+function Pill({
+  children,
+  onClick,
+  href,
+  dark,
+  title,
+}: {
+  children: ReactNode;
+  onClick?: () => void;
+  href?: string;
+  dark?: boolean;
+  title?: string;
+}) {
+  const look = `inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[12.5px] font-medium transition-[transform,background-color] duration-100 active:scale-95 [&_svg]:size-3.5 ${
+    dark ? "bg-white text-black hover:bg-white/90" : "bg-selected text-foreground hover:bg-hover"
+  }`;
+  return href ? (
+    <a href={href} target="_blank" rel="noreferrer" title={title} className={look}>
+      {children}
+    </a>
+  ) : (
+    <button type="button" title={title} onClick={onClick} className={look}>
+      {children}
+    </button>
+  );
+}
+
 /** Apple's and Android's marks, for each device's platform. */
-function PlatformMark({ platform }: { platform: DevicePlatform }) {
+function PlatformMark({
+  platform,
+  className = "size-3.5",
+}: {
+  platform: DevicePlatform;
+  className?: string;
+}) {
   return platform === "ios" ? (
-    <svg viewBox="0 0 24 24" aria-hidden className="size-3.5 fill-current">
+    <svg viewBox="0 0 24 24" aria-hidden className={`${className} fill-current`}>
       <path d="M16.37 12.6c-.02-2.16 1.77-3.2 1.85-3.25-1-1.47-2.57-1.67-3.13-1.7-1.33-.13-2.6.79-3.28.79-.68 0-1.72-.77-2.83-.75-1.45.02-2.8.85-3.55 2.15-1.52 2.63-.39 6.52 1.09 8.66.72 1.04 1.58 2.22 2.71 2.18 1.09-.04 1.5-.7 2.82-.7 1.31 0 1.68.7 2.83.68 1.17-.02 1.91-1.06 2.62-2.11.83-1.21 1.17-2.38 1.19-2.44-.03-.01-2.28-.88-2.32-3.47ZM14.2 6.25c.6-.73 1-1.73.89-2.75-.86.04-1.9.57-2.52 1.3-.55.64-1.04 1.67-.91 2.66.96.07 1.94-.49 2.54-1.21Z" />
     </svg>
   ) : (
-    <svg viewBox="0 0 24 24" aria-hidden className="size-3.5 fill-current">
+    <svg viewBox="0 0 24 24" aria-hidden className={`${className} fill-current`}>
       <path d="M17.6 9.48 19.44 6.3a.38.38 0 0 0-.66-.38l-1.86 3.22a11.5 11.5 0 0 0-9.84 0L5.22 5.92a.38.38 0 0 0-.66.38L6.4 9.48A10.8 10.8 0 0 0 1 18h22a10.8 10.8 0 0 0-5.4-8.52ZM7 15.25a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5Zm10 0a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5Z" />
     </svg>
   );
@@ -237,143 +328,500 @@ function PlatformMark({ platform }: { platform: DevicePlatform }) {
 /** A device's name as people write it: an AVD's `Pixel_9` as Pixel 9. */
 const nameOf = (device: DeviceInfo) => device.name.replaceAll("_", " ");
 
-const row =
-  "group flex h-11 w-full items-center gap-3 rounded-xl px-2 text-left text-[13.5px] transition-[background-color,transform] duration-100 hover:bg-hover active:scale-[0.985] disabled:pointer-events-none";
-const tile =
-  "grid size-7 shrink-0 place-items-center rounded-lg bg-selected text-foreground transition-colors";
+/** Where to get what a platform is missing, and how to say it short. */
+function missingOf(platform: DevicePlatform, why: string) {
+  if (platform === "ios") {
+    return why.includes("macOS")
+      ? {
+          title: "iPhone needs a Mac",
+          detail: "Pair a Mac running Parallax to use its simulators.",
+        }
+      : {
+          title: "Get Xcode for iPhone",
+          href: "https://apps.apple.com/app/xcode/id497799835",
+          link: "Get Xcode",
+        };
+  }
+  return {
+    title: why.startsWith("Android SDK was not found") ? "Get Android Studio for Android" : why,
+    href: "https://developer.android.com/studio",
+    link: "Android Studio",
+  };
+}
 
-/** Every device as one row, running ones first, then New iPhone, then what this host can't run. */
-function Picker({
+/**
+ * The host's devices as their own artwork, running ones first, then a new iPhone or Pixel where
+ * the host can make one, then what it's missing.
+ */
+function Gallery({
+  hostId,
   state,
   busy,
   failure,
+  onDismiss,
   onOpen,
   onCreate,
 }: {
+  hostId: string;
   state: DeviceStateResult;
   busy: Record<string, "start" | "stop">;
   failure?: string;
+  onDismiss: () => void;
   onOpen: (device: DeviceInfo) => void;
-  onCreate: () => void;
+  onCreate: (platform: DevicePlatform) => void;
 }) {
-  const unavailable = (platform: DevicePlatform) =>
-    state.platforms.find((p) => p.platform === platform)?.unavailable;
+  const platform = (p: DevicePlatform) => state.platforms.find((each) => each.platform === p);
   // A version tells same-named devices apart; otherwise the name says enough.
   const named = (d: DeviceInfo) =>
     state.devices.filter((other) => other.name === d.name).length > 1
       ? `${nameOf(d)} · ${d.version.replace(/^(iOS|Android) /, "")}`
       : nameOf(d);
-  const missing = (["ios", "android"] as const).filter(unavailable);
-  // Nothing to list, and nothing to make: only what's missing shows, in the middle.
-  const empty = state.devices.length === 0 && !!unavailable("ios");
+  const makes = (["ios", "android"] as const).filter((p) => platform(p)?.canCreate);
+  const missing = (["ios", "android"] as const).flatMap((p) => {
+    const why = platform(p)?.unavailable;
+    return why ? [{ platform: p, why, ...missingOf(p, why) }] : [];
+  });
+  const warnings = state.platforms.flatMap((p) => (p.warning ? [p.warning] : []));
+  const empty = state.devices.length === 0 && makes.length === 0;
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-2">
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       {failure && (
-        <p
-          role="alert"
-          className="mx-2 mb-1 flex items-center gap-2 py-1.5 text-[12.5px] text-danger"
-        >
-          <CircleAlert aria-hidden className="size-3.5 shrink-0" />
-          <span className="min-w-0 truncate" title={failure}>
-            {failure}
-          </span>
-        </p>
-      )}
-      <ul aria-label="Devices" hidden={empty}>
-        {state.devices.map((d) => (
-          <li key={d.id}>
-            <button
-              type="button"
-              title={`${nameOf(d)}, ${d.version}${d.booted ? ", running" : ""}`}
-              onClick={() => onOpen(d)}
-              disabled={!!busy[d.id]}
-              className={row}
-            >
-              <span className={`${tile} relative`}>
-                <PlatformMark platform={d.platform} />
-                {d.booted && (
-                  <span
-                    aria-hidden
-                    className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-added ring-2 ring-pane"
-                  />
-                )}
-              </span>
-              <span className="min-w-0 flex-1 truncate font-medium">{named(d)}</span>
-              {busy[d.id] ? (
-                <LoaderCircle aria-hidden className="size-4 animate-spin text-faint-foreground" />
-              ) : (
-                <ChevronRight
-                  aria-hidden
-                  className="size-4 text-faint-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
-                />
-              )}
-            </button>
-          </li>
-        ))}
-        {!unavailable("ios") && (
-          <li>
-            <button type="button" onClick={onCreate} disabled={!!busy["new"]} className={row}>
-              <span className={`${tile} bg-transparent ring-1 ring-border ring-inset`}>
-                {busy["new"] ? (
-                  <LoaderCircle aria-hidden className="size-3.5 animate-spin" />
-                ) : (
-                  <Plus aria-hidden className="size-3.5" />
-                )}
-              </span>
-              <span className="font-medium">New iPhone</span>
-            </button>
-          </li>
-        )}
-      </ul>
-      {missing.length > 0 && (
         <div
-          className={`flex flex-wrap gap-1.5 px-2 ${empty ? "my-auto justify-center pb-16" : "mt-auto pt-4"}`}
+          role="alert"
+          className="mx-4 mt-4 flex items-start gap-2 rounded-xl bg-danger/10 px-3 py-2.5 text-[12.5px] text-danger"
         >
-          {missing.map((platform) => (
-            <span
-              key={platform}
-              title={unavailable(platform)}
-              className="flex cursor-help items-center gap-1.5 rounded-full bg-selected px-2.5 py-1 text-[12px] text-muted-foreground"
-            >
-              <PlatformMark platform={platform} />
-              {platform === "ios" ? "Needs Xcode on a Mac" : "Needs the Android SDK"}
-            </span>
-          ))}
+          <TriangleAlert aria-hidden className="mt-px size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1">{failure}</span>
+          <button type="button" onClick={onDismiss} className="font-medium hover:underline">
+            Dismiss
+          </button>
         </div>
+      )}
+      {warnings.map((warning) => (
+        <Warning key={warning} text={warning} />
+      ))}
+      {empty ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-6 px-8 pb-16">
+          <EmptyPhone />
+          <div className="flex flex-col items-center gap-3">
+            {missing.map((m) => (
+              <Missing key={m.platform} {...m} />
+            ))}
+          </div>
+        </div>
+      ) : (
+        <>
+          <ul
+            aria-label="Devices"
+            className="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-2 p-4"
+          >
+            {state.devices.map((d) => (
+              <li key={d.id}>
+                <Card
+                  label={named(d)}
+                  title={`${nameOf(d)}, ${d.version}${d.booted ? ", running" : ""}`}
+                  running={d.booted}
+                  busy={!!busy[d.id]}
+                  onClick={() => onOpen(d)}
+                >
+                  <Thumbnail hostId={hostId} device={d} />
+                </Card>
+              </li>
+            ))}
+            {makes.map((p) => (
+              <li key={`new:${p}`}>
+                <Card
+                  label={p === "ios" ? "New iPhone" : "New Pixel"}
+                  busy={!!busy[`new:${p}`]}
+                  onClick={() => onCreate(p)}
+                >
+                  <div className="grid h-[180px] w-[86px] place-items-center rounded-[18px] border-[1.5px] border-dashed border-border text-muted-foreground transition-colors group-hover:border-faint-foreground group-hover:text-foreground">
+                    <Plus aria-hidden className="size-5" />
+                  </div>
+                </Card>
+              </li>
+            ))}
+          </ul>
+          {missing.length > 0 && (
+            <div className="mt-auto flex flex-wrap justify-center gap-2 px-4 pt-2 pb-6">
+              {missing.map((m) => (
+                <Missing key={m.platform} {...m} />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
 }
 
+/** A phone outline, for a host with no devices. */
+function EmptyPhone() {
+  return (
+    <div className="relative h-[132px] w-[64px] rounded-[16px] border-[1.5px] border-border">
+      <div className="absolute top-2 left-1/2 h-1.5 w-5 -translate-x-1/2 rounded-full bg-border" />
+    </div>
+  );
+}
+
+/** A platform this host can't run yet, and where to get what it needs. */
+function Missing({
+  platform,
+  why,
+  title,
+  detail,
+  href,
+  link,
+}: {
+  platform: DevicePlatform;
+  why: string;
+  title: string;
+  detail?: string;
+  href?: string;
+  link?: string;
+}) {
+  return (
+    <div
+      title={why}
+      className="flex items-center gap-2.5 rounded-full bg-selected py-1 pr-1 pl-3 text-[12.5px]"
+    >
+      <PlatformMark platform={platform} />
+      <span className="font-medium">{title}</span>
+      {detail && <span className="text-muted-foreground">{detail}</span>}
+      {href && link ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 rounded-full bg-pane px-2.5 py-1 font-medium hover:bg-hover [&_svg]:size-3"
+        >
+          {link}
+          <ArrowUpRight aria-hidden />
+        </a>
+      ) : (
+        <span className="pr-2" />
+      )}
+    </div>
+  );
+}
+
+/** What a platform can run but not show yet, with its fix to copy. */
+function Warning({ text }: { text: string }) {
+  const command = /`([^`]+)`/.exec(text)?.[1];
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="mx-4 mt-4 flex items-center gap-2.5 rounded-xl bg-warning/10 py-2 pr-2 pl-3 text-[12.5px]">
+      <TriangleAlert aria-hidden className="size-3.5 shrink-0 text-warning" />
+      <span className="min-w-0 flex-1">{text.replace(/ Install it with.*$/, "")}</span>
+      {command && (
+        <button
+          type="button"
+          title={`Copy ${command}`}
+          onClick={() => {
+            void navigator.clipboard.writeText(command);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1_500);
+          }}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-pane px-2 py-1 font-mono text-[11.5px] hover:bg-hover [&_svg]:size-3"
+        >
+          {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+          {command}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** One gallery card: a device's picture, and its name, with a dot while it runs. */
+function Card({
+  label,
+  title,
+  running,
+  busy,
+  onClick,
+  children,
+}: {
+  label: string;
+  title?: string;
+  running?: boolean;
+  busy: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      disabled={busy}
+      className="group flex w-full flex-col items-center gap-3 rounded-2xl px-2 pt-4 pb-3 outline-none transition-colors hover:bg-hover focus-visible:bg-hover disabled:pointer-events-none"
+    >
+      <div className="relative grid h-[196px] place-items-center [perspective:900px]">
+        <div className="[transform:rotateY(-24deg)_rotateX(6deg)] transition-transform duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)] [transform-style:preserve-3d] group-hover:[transform:rotateY(0deg)_rotateX(0deg)_translateY(-3px)]">
+          {children}
+        </div>
+        {busy && (
+          <div className="absolute inset-0 grid place-items-center">
+            <LoaderCircle aria-hidden className="size-5 animate-spin text-white drop-shadow" />
+          </div>
+        )}
+      </div>
+      <span className="flex max-w-full items-center gap-1.5 text-[12.5px] font-medium">
+        {running && (
+          <span aria-label="Running" className="size-1.5 shrink-0 rounded-full bg-added" />
+        )}
+        <span className="truncate">{label}</span>
+      </span>
+    </button>
+  );
+}
+
+/** A device's own artwork, small, with its screen dark. */
+function Thumbnail({ hostId, device }: { hostId: string; device: DeviceInfo }) {
+  const chrome = useChrome(hostId, device);
+  if (chrome === undefined) {
+    return <div className="h-[180px] w-[86px] animate-pulse rounded-[18px] bg-selected" />;
+  }
+  const art =
+    chrome ??
+    plainChrome(device.platform === "ios" ? 1206 / 2622 : 1080 / 2400, device.platform === "ios");
+  const k = 180 / art.height;
+  const ios = device.platform === "ios";
+  return (
+    <div
+      className="relative"
+      style={{ width: art.width * k, height: art.height * k, transformStyle: "preserve-3d" }}
+    >
+      <Body chrome={art} k={k} depth={art.height * k * 0.058} ios={ios} />
+      <Art
+        chrome={art}
+        k={k}
+        screen={
+          // A dark screen with a little light on it, as a phone looks off.
+          <div
+            className={`size-full ${ios ? "bg-[radial-gradient(120%_70%_at_30%_10%,#2a3346_0%,#0b0d12_60%)]" : "bg-[radial-gradient(120%_70%_at_70%_15%,#24302b_0%,#0a0c0b_60%)]"}`}
+          />
+        }
+      />
+    </div>
+  );
+}
+
 /**
- * A device in its frame: booting, waiting for streaming to be enabled, or live, where it takes
- * clicks as touches and keys while focused.
+ * Artwork `chrome` at `k` pixels a unit: its layers under the screen, `screen` in the screen's
+ * shape, then its layers over it. With no layers, a plain slab.
+ */
+function Art({
+  chrome,
+  k,
+  screen,
+  screenProps,
+  onPower,
+}: {
+  chrome: DeviceChrome;
+  k: number;
+  screen: ReactNode;
+  screenProps?: React.HTMLAttributes<HTMLDivElement>;
+  onPower?: () => void;
+}) {
+  const layer = (l: DeviceChrome["layers"][number]) => (
+    <img
+      key={l.name}
+      alt=""
+      draggable={false}
+      src={l.image}
+      title={l.name === "power" && onPower ? "Lock" : undefined}
+      onClick={l.name === "power" ? onPower : undefined}
+      style={
+        {
+          left: l.rect.x * k,
+          top: l.rect.y * k,
+          width: l.rect.width * k,
+          height: l.rect.height * k,
+          "--pop": `${(l.hoverX ?? 0) * k}px`,
+        } as React.CSSProperties
+      }
+      className={
+        l.above || l.name === "bezel" || l.name === "back"
+          ? "pointer-events-none absolute select-none [backface-visibility:hidden]"
+          : "absolute transition-transform duration-150 ease-out select-none [backface-visibility:hidden] hover:translate-x-(--pop)"
+      }
+    />
+  );
+  const plain = chrome.layers.length === 0;
+  return (
+    <>
+      {plain && (
+        <div
+          className="absolute inset-0 bg-linear-to-b from-[#2b2b2e] via-[#141416] to-[#1f1f22] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] [backface-visibility:hidden]"
+          style={{ borderRadius: ((chrome.cornerRadius ?? 0) + chrome.screen.x) * k }}
+        />
+      )}
+      {chrome.layers.filter((l) => !l.above).map(layer)}
+      <div
+        {...screenProps}
+        className={`absolute overflow-hidden bg-black select-none [backface-visibility:hidden] ${screenProps?.className ?? ""}`}
+        style={{
+          left: chrome.screen.x * k,
+          top: chrome.screen.y * k,
+          width: chrome.screen.width * k,
+          height: chrome.screen.height * k,
+          ...(chrome.mask
+            ? { maskImage: `url(${chrome.mask})`, maskSize: "100% 100%" }
+            : { borderRadius: (chrome.cornerRadius ?? 0) * k }),
+        }}
+      >
+        {screen}
+      </div>
+      {chrome.layers.filter((l) => l.above).map(layer)}
+    </>
+  );
+}
+
+/**
+ * The device's body behind its face, for the 3D view: slices of its outline stacked `depth` deep,
+ * and a back with a camera.
+ */
+function Body({
+  chrome,
+  k,
+  depth,
+  ios,
+}: {
+  chrome: DeviceChrome;
+  k: number;
+  depth: number;
+  ios: boolean;
+}) {
+  // The outline is the bezel's, or for a plain frame, a rounded rectangle.
+  const outline = chrome.layers.find((l) => l.name === "bezel" || l.name === "back");
+  const rect = outline?.rect ?? { x: 0, y: 0, width: chrome.width, height: chrome.height };
+  // An emulator's frame is clear where its screen goes, so the screen's area fills it in.
+  const screenArea = [
+    (chrome.screen.x - rect.x) * k,
+    (chrome.screen.y - rect.y) * k,
+    chrome.screen.width * k,
+    chrome.screen.height * k,
+  ];
+  const shape: React.CSSProperties = outline
+    ? {
+        maskImage: `url(${outline.image}), linear-gradient(#000, #000)`,
+        maskSize: `100% 100%, ${screenArea[2]}px ${screenArea[3]}px`,
+        maskPosition: `0 0, ${screenArea[0]}px ${screenArea[1]}px`,
+        maskRepeat: "no-repeat",
+      }
+    : { borderRadius: ((chrome.cornerRadius ?? 0) + chrome.screen.x) * k };
+  const box = {
+    left: rect.x * k,
+    top: rect.y * k,
+    width: rect.width * k,
+    height: rect.height * k,
+  };
+  const slices = 14;
+  return (
+    <>
+      {Array.from({ length: slices }, (_, i) => {
+        const t = (i + 1) / (slices + 1);
+        // A brushed band: lighter in the middle of the edge, as light catches the frame.
+        const light = Math.round(54 + 26 * Math.sin(t * Math.PI));
+        return (
+          <div
+            key={i}
+            aria-hidden
+            className="pointer-events-none absolute"
+            style={{
+              ...box,
+              ...shape,
+              background: `rgb(${light} ${light} ${light + 3})`,
+              transform: `translateZ(${-t * depth}px)`,
+            }}
+          />
+        );
+      })}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute [backface-visibility:hidden]"
+        style={{
+          ...box,
+          ...shape,
+          background: ios
+            ? "linear-gradient(160deg, #3b3a38 0%, #262524 55%, #1d1c1b 100%)"
+            : "linear-gradient(160deg, #2a2c30 0%, #1b1c1f 60%, #141518 100%)",
+          transform: `translateZ(${-depth}px) rotateY(180deg)`,
+        }}
+      >
+        {ios ? (
+          <div
+            className="absolute rounded-[22%] bg-linear-to-br from-[#4a4946] to-[#2b2a28] shadow-[0_1px_0_rgb(255_255_255/0.12)_inset]"
+            style={{ right: "7%", top: "3.5%", width: "44%", aspectRatio: "1" }}
+          >
+            {[
+              ["14%", "14%"],
+              ["14%", "56%"],
+              ["56%", "35%"],
+            ].map(([left, top]) => (
+              <div
+                key={`${left}${top}`}
+                className="absolute rounded-full bg-[#0b0b0c] ring-[3px] ring-[#57554f]"
+                style={{ left, top, width: "30%", aspectRatio: "1" }}
+              />
+            ))}
+          </div>
+        ) : (
+          <div
+            className="absolute flex items-center gap-[4%] rounded-full bg-linear-to-b from-[#3a3c41] to-[#1f2023] px-[6%]"
+            style={{ left: "7%", right: "7%", top: "8%", height: "9%" }}
+          >
+            {[0, 1].map((i) => (
+              <div
+                key={i}
+                className="h-[62%] rounded-full bg-[#09090a] ring-2 ring-[#4b4d52]"
+                style={{ aspectRatio: "1" }}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+/**
+ * A device in its artwork: booting, waiting for streaming to be enabled, or live, where it takes
+ * clicks as touches and keys while focused. Dragging around it turns it in 3D; double-clicking
+ * there turns it back.
  */
 function Viewer({
   hostId,
   device,
+  devices,
   shown,
   hub,
   booting,
   stopping,
   failure,
+  onRetry,
   onSetUp,
-  onBack,
+  onOpen,
+  onGallery,
   onPowerOff,
 }: {
   hostId: string;
   device: DeviceInfo;
+  devices: DeviceInfo[];
   shown: boolean;
   hub: DeviceStateResult["hub"];
   booting: boolean;
   stopping: boolean;
   failure?: string;
+  onRetry: () => void;
   onSetUp: () => void;
-  onBack: () => void;
+  onOpen: (device: DeviceInfo) => void;
+  onGallery: () => void;
   onPowerOff: () => void;
 }) {
   const ios = device.platform === "ios";
-  // State, not a ref: the canvas appears once Xcode's artwork has loaded, and the stream waits for it.
+  // State, not a ref: the canvas appears once the artwork has loaded, and the stream waits for it.
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
   const area = useRef<HTMLDivElement>(null);
   const stream = useRef<DeviceStream>(null);
@@ -381,24 +829,15 @@ function Viewer({
     status: "connecting",
   });
   const [screen, setScreen] = useState<DeviceScreen>();
-  // Which way the simulator faces, as Rotate turned it.
-  const [facing, setFacing] = useState<DeviceOrientation>("portrait");
   const [attempt, setAttempt] = useState(0);
   const [copied, setCopied] = useState(false);
   const [box, setBox] = useState({ width: 0, height: 0 });
+  // Which way the device faces, as Rotate turned it, and how the user has turned it in 3D.
+  const [facing, setFacing] = useState<DeviceOrientation>("portrait");
+  const [orbit, setOrbit] = useState({ pitch: 0, yaw: 0 });
+  const [dragging, setDragging] = useState(false);
   const streaming = shown && !booting && hub.installed;
-  const chromeKey = `${hostId}/${device.id}`;
-  const [chrome, setChrome] = useState(() => chromes.get(chromeKey));
-  useEffect(() => {
-    if (chrome !== undefined) return;
-    void window.parallax
-      .request(hostId, "device/chrome", { deviceId: device.id, platform: device.platform })
-      .then((answer) => {
-        const found = "error" in answer ? null : (answer.result.chrome ?? null);
-        chromes.set(chromeKey, found);
-        setChrome(found);
-      });
-  }, [chrome, chromeKey, hostId, device.id, device.platform]);
+  const found = useChrome(hostId, device);
 
   useEffect(() => {
     if (!streaming || !canvas) return;
@@ -419,7 +858,6 @@ function Viewer({
     };
   }, [hostId, device.id, device.platform, streaming, attempt, canvas]);
 
-  // The screen fits the panel at the device's aspect, with room for its bezel and the controls.
   useLayoutEffect(() => {
     const element = area.current;
     if (!element) return;
@@ -430,91 +868,103 @@ function Viewer({
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  // serve-sim streams the simulator's framebuffer as it is, so a simulator turned sideways shows
-  // its frames turned back, as T3 does.
-  const sideways =
-    screen?.orientation === "landscape_left" || screen?.orientation === "landscape_right";
-  const turn =
-    !ios || !screen || screen.width > screen.height
-      ? 0
-      : screen.orientation === "landscape_left"
-        ? 90
-        : screen.orientation === "landscape_right"
-          ? -90
-          : screen.orientation === "portrait_upside_down"
-            ? 180
-            : 0;
+
+  // The artwork is portrait. A device with none gets a plain frame at its screen's shape.
   const long = screen ? Math.max(screen.width, screen.height) : ios ? 2622 : 2400;
   const short = screen ? Math.min(screen.width, screen.height) : ios ? 1206 : 1080;
-  const aspect = sideways ? long / short : short / long;
-  const bezel = 0.035;
-  const fit = Math.min(
-    box.width / (aspect * (1 + bezel * 2)),
-    box.height / (1 + bezel * 2 * aspect),
-  );
-  const width = Math.max(0, Math.floor(fit * aspect));
-  const height = Math.max(0, Math.floor(fit));
-  const pad = Math.round(Math.min(width, height) * bezel * 1.6);
-  // iPhones' screens round more than Android phones'.
-  const radius = Math.round(Math.min(width, height) * (ios ? 0.13 : 0.08));
-  // In Xcode's artwork the whole device turns, as in Simulator, whether or not its app turns with
-  // it, and its framebuffer turns with it.
-  const facingTurn = {
-    portrait: 0,
-    landscape_left: 90,
-    portrait_upside_down: 180,
-    landscape_right: -90,
-  }[facing];
-  const facingSideways = facingTurn === 90 || facingTurn === -90;
-  const across = chrome ? (facingSideways ? chrome.height : chrome.width) : 0;
-  const down = chrome ? (facingSideways ? chrome.width : chrome.height) : 0;
+  const chrome = found === undefined ? undefined : (found ?? plainChrome(short / long, ios));
+  const roll = { portrait: 0, landscape_left: 90, portrait_upside_down: 180, landscape_right: -90 }[
+    facing
+  ];
+  const sideways = roll === 90 || roll === -90;
+  const across = chrome ? (sideways ? chrome.height : chrome.width) : 0;
+  const down = chrome ? (sideways ? chrome.width : chrome.height) : 0;
   const k = chrome ? Math.min(box.width / across, box.height / down) : 0;
+  // A phone is about 6% as thick as it is tall.
+  const depth = chrome ? Math.max(chrome.width, chrome.height) * k * 0.058 : 0;
+  const turn: Turn = { pitch: orbit.pitch, yaw: orbit.yaw, roll };
+  const turned = orbit.pitch !== 0 || orbit.yaw !== 0;
 
-  const point = (event: React.PointerEvent<HTMLElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    return {
-      x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
-      y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
-    };
-  };
+  const ready = streaming && status.status === "streaming";
   const touching = useRef(false);
-  const touch = (phase: "begin" | "move" | "end") => (event: React.PointerEvent<HTMLElement>) => {
-    if (phase === "begin") {
-      // Until the stream shows, the screen's buttons take clicks, not the device.
-      if (event.button !== 0 || !ready) return;
-      event.currentTarget.setPointerCapture(event.pointerId);
-      (event.currentTarget.parentElement as HTMLElement | null)?.focus();
-      touching.current = true;
-    } else if (!touching.current) return;
-    if (phase === "end") touching.current = false;
-    const { x, y } = point(event);
-    stream.current?.touch(phase, x, y);
-  };
-
-  // A touch on Xcode's artwork, turned back into the framebuffer's own coordinates.
-  const touchRaw =
-    (phase: "begin" | "move" | "end") => (event: React.PointerEvent<HTMLElement>) => {
+  // A touch on the screen, traced back through the device's turn onto the screen's own pixels.
+  const touch =
+    (phase: "begin" | "move" | "end") => (event: React.PointerEvent<HTMLDivElement>) => {
       if (phase === "begin") {
-        if (event.button !== 0 || !ready) return;
+        if (event.button !== 0 || !ready || !chrome) return;
+        event.stopPropagation();
         event.currentTarget.setPointerCapture(event.pointerId);
-        (event.currentTarget.parentElement as HTMLElement | null)?.focus();
+        (area.current?.querySelector('[role="application"]') as HTMLElement | null)?.focus();
         touching.current = true;
       } else if (!touching.current) return;
+      event.stopPropagation();
       if (phase === "end") touching.current = false;
-      const element = event.currentTarget;
-      const rect = element.getBoundingClientRect();
-      const dx = event.clientX - (rect.left + rect.width / 2);
-      const dy = event.clientY - (rect.top + rect.height / 2);
-      const angle = (-facingTurn * Math.PI) / 180;
-      const x = dx * Math.cos(angle) - dy * Math.sin(angle);
-      const y = dx * Math.sin(angle) + dy * Math.cos(angle);
+      const stage = area.current?.firstElementChild?.getBoundingClientRect();
+      if (!stage || !chrome) return;
+      const hit = unproject(
+        turn,
+        PERSPECTIVE,
+        event.clientX - (stage.left + stage.width / 2),
+        event.clientY - (stage.top + stage.height / 2),
+      );
+      if (!hit) return;
+      const left = (chrome.screen.x - chrome.width / 2) * k;
+      const top = (chrome.screen.y - chrome.height / 2) * k;
       const clamp = (v: number) => Math.min(1, Math.max(0, v));
       stream.current?.touchRaw(
         phase,
-        clamp(x / element.offsetWidth + 0.5),
-        clamp(y / element.offsetHeight + 0.5),
+        clamp((hit[0] - left) / (chrome.screen.width * k)),
+        clamp((hit[1] - top) / (chrome.screen.height * k)),
       );
     };
+
+  // Dragging around the device turns it, with a little momentum after letting go.
+  const drag = useRef<{ x: number; y: number; vx: number; vy: number; t: number }>(null);
+  const glide = useRef(0);
+  const onStageDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || !chrome) return;
+    cancelAnimationFrame(glide.current);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drag.current = { x: event.clientX, y: event.clientY, vx: 0, vy: 0, t: performance.now() };
+    setDragging(true);
+  };
+  const onStageMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (!d) return;
+    const now = performance.now();
+    const dx = event.clientX - d.x;
+    const dy = event.clientY - d.y;
+    const dt = Math.max(1, now - d.t);
+    drag.current = { x: event.clientX, y: event.clientY, vx: dx / dt, vy: dy / dt, t: now };
+    setOrbit((o) => ({
+      yaw: o.yaw + dx * 0.45,
+      pitch: Math.max(-65, Math.min(65, o.pitch - dy * 0.35)),
+    }));
+  };
+  const onStageUp = () => {
+    const d = drag.current;
+    drag.current = null;
+    setDragging(false);
+    if (!d || performance.now() - d.t > 80) return;
+    let { vx, vy } = d;
+    const step = () => {
+      vx *= 0.93;
+      vy *= 0.93;
+      if (Math.abs(vx) + Math.abs(vy) < 0.01) return;
+      setOrbit((o) => ({
+        yaw: o.yaw + vx * 16 * 0.45,
+        pitch: Math.max(-65, Math.min(65, o.pitch - vy * 16 * 0.35)),
+      }));
+      glide.current = requestAnimationFrame(step);
+    };
+    glide.current = requestAnimationFrame(step);
+  };
+  const faceFront = () => {
+    cancelAnimationFrame(glide.current);
+    // The shortest way back to facing front.
+    setOrbit((o) => ({ pitch: 0, yaw: Math.round(o.yaw / 360) * 360 }));
+  };
+  useEffect(() => () => cancelAnimationFrame(glide.current), []);
 
   const screenshot = async () => {
     const answer = await window.parallax.request(hostId, "device/screenshot", {
@@ -531,80 +981,65 @@ function Viewer({
   };
 
   const press = (button: Parameters<DeviceStream["button"]>[0]) => stream.current?.button(button);
-  const ready = streaming && status.status === "streaming";
   const why = failure ?? hub.failure;
 
   // What the screen shows until the stream does.
   let overlay: ReactNode = null;
-  if (!hub.installed && !booting) {
+  const message = (text: string, action: ReactNode) => (
+    <div className="flex max-w-[78%] flex-col items-center gap-3 text-center">
+      <TriangleAlert aria-hidden className="size-5 text-white/70" />
+      <p className="line-clamp-4 text-[12.5px] leading-snug text-white/85">{text}</p>
+      {action}
+    </div>
+  );
+  if (failure && booting) {
+    overlay = message(
+      failure,
+      <Pill dark onClick={onRetry}>
+        Try again
+      </Pill>,
+    );
+  } else if (!hub.installed && !booting) {
     overlay = hub.installing ? (
       <LoaderCircle aria-label="Enabling streaming" className="size-5 animate-spin" />
+    ) : why ? (
+      message(
+        why,
+        <Pill dark onClick={onSetUp}>
+          Try again
+        </Pill>,
+      )
     ) : (
-      <button
-        type="button"
-        title={
-          why ??
-          "Installs Expo's device hub with npm into Parallax's tools folder on this host, once."
-        }
+      <Pill
+        dark
         onClick={onSetUp}
-        className="rounded-full bg-white px-4 py-2 text-[13px] font-medium text-black transition-transform hover:scale-[1.03] active:scale-95"
+        title="Installs Expo's device hub with npm into Parallax's tools folder on this host, once."
       >
-        {why ? "Try again" : "Enable streaming"}
-      </button>
+        Enable streaming
+      </Pill>
     );
   } else if (booting || (streaming && status.status === "connecting")) {
     overlay = <LoaderCircle aria-label="Connecting" className="size-5 animate-spin" />;
   } else if (status.status === "error") {
-    overlay = (
-      <button
-        type="button"
-        title={status.detail}
+    overlay = message(
+      status.detail ?? "The stream stopped.",
+      <Pill
+        dark
         onClick={() => {
           setStatus({ status: "connecting" });
           setAttempt((n) => n + 1);
         }}
-        className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-[12.5px] font-medium text-white transition-transform hover:bg-white/25 active:scale-95 [&_svg]:size-3.5"
       >
-        <RotateCw aria-hidden />
         Reconnect
-      </button>
+      </Pill>,
     );
   }
-
-  // One piece of the device's artwork. The bezel casts the device's shadow; a side button pops out
-  // under the pointer as in Simulator; what's drawn over the screen lets touches through.
-  const art = (layer: DeviceChrome["layers"][number]) => (
-    <img
-      key={layer.name}
-      alt=""
-      draggable={false}
-      src={layer.image}
-      title={layer.name === "power" ? "Lock" : undefined}
-      onClick={layer.name === "power" ? () => press("power") : undefined}
-      style={
-        {
-          left: layer.rect.x * k,
-          top: layer.rect.y * k,
-          width: layer.rect.width * k,
-          height: layer.rect.height * k,
-          "--pop": `${(layer.hoverX ?? 0) * k}px`,
-        } as React.CSSProperties
-      }
-      className={
-        layer.above
-          ? "pointer-events-none absolute select-none"
-          : layer.name === "bezel" || layer.name === "back"
-            ? "pointer-events-none absolute drop-shadow-[0_22px_40px_rgb(0_0_0/0.35)]"
-            : "absolute transition-transform duration-150 ease-out select-none hover:translate-x-(--pop)"
-      }
-    />
-  );
 
   // The device takes keys while focused: typing, and pasting as typing.
   const keyboard = {
     tabIndex: 0,
     role: "application",
-    "aria-label": `${device.name} screen`,
+    "aria-label": `${nameOf(device)} screen`,
     onKeyDown: (event: React.KeyboardEvent) => {
       // ⌘V and Ctrl+V paste; other shortcuts stay the app's.
       if (event.metaKey || (event.ctrlKey && event.key.toLowerCase() === "v")) return;
@@ -633,35 +1068,23 @@ function Viewer({
       {icon}
     </button>
   );
+  const menuId = useId();
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <div className="flex h-10 shrink-0 items-center gap-1 px-1.5">
-        <IconButton label="All devices" onClick={onBack}>
-          <ChevronLeft />
-        </IconButton>
-        <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] font-medium">
-          <span className="text-muted-foreground">
-            <PlatformMark platform={device.platform} />
-          </span>
-          <span className="truncate" title={`${nameOf(device)}, ${device.version}`}>
-            {nameOf(device)}
-          </span>
-        </span>
-        {!device.physical && (
-          <IconButton label="Power off" disabled={stopping || booting} onClick={onPowerOff}>
-            {stopping ? <LoaderCircle className="animate-spin" /> : <Power />}
-          </IconButton>
-        )}
-      </div>
       <div
         ref={area}
-        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-5 pt-2 pb-16"
+        onPointerDown={onStageDown}
+        onPointerMove={onStageMove}
+        onPointerUp={onStageUp}
+        onPointerCancel={onStageUp}
+        onDoubleClick={faceFront}
+        className={`relative flex min-h-0 flex-1 touch-none items-center justify-center overflow-hidden px-6 pt-6 pb-20 select-none ${dragging ? "cursor-grabbing" : "cursor-grab"}`}
       >
-        {chrome ? (
+        {chrome && (
           <div
             className="relative shrink-0 animate-[device-in_240ms_ease-out]"
-            style={{ width: across * k, height: down * k }}
+            style={{ width: across * k, height: down * k, perspective: PERSPECTIVE }}
           >
             <div
               {...keyboard}
@@ -670,98 +1093,126 @@ function Viewer({
                 height: chrome.height * k,
                 left: (across - chrome.width) * k * 0.5,
                 top: (down - chrome.height) * k * 0.5,
-                transform: `rotate(${facingTurn}deg)`,
+                transform: `rotateX(${turn.pitch}deg) rotateY(${turn.yaw}deg) rotateZ(${roll}deg)`,
+                transformStyle: "preserve-3d",
               }}
-              className="absolute outline-none transition-transform duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)]"
+              className={`absolute outline-none ${dragging ? "" : "transition-transform duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)]"}`}
             >
-              {chrome.layers.filter((layer) => !layer.above).map(art)}
+              {/* The device's shadow on the stage, under its face. */}
               <div
-                className="absolute touch-none overflow-hidden bg-black select-none"
-                style={{
-                  left: chrome.screen.x * k,
-                  top: chrome.screen.y * k,
-                  width: chrome.screen.width * k,
-                  height: chrome.screen.height * k,
-                  ...(chrome.mask
-                    ? { maskImage: `url(${chrome.mask})`, maskSize: "100% 100%" }
-                    : { borderRadius: (chrome.cornerRadius ?? 0) * k }),
-                }}
-                onPointerDown={touchRaw("begin")}
-                onPointerMove={touchRaw("move")}
-                onPointerUp={touchRaw("end")}
-                onPointerCancel={touchRaw("end")}
-              >
-                <canvas
-                  ref={setCanvas}
-                  className={`size-full transition-opacity duration-300 ${ready ? "opacity-100" : "opacity-30"}`}
-                />
-                {overlay && (
-                  <div
-                    className="absolute inset-0 flex items-center justify-center text-white/80"
-                    style={facingTurn ? { transform: `rotate(${-facingTurn}deg)` } : undefined}
-                  >
-                    {overlay}
-                  </div>
-                )}
-              </div>
-              {chrome.layers.filter((layer) => layer.above).map(art)}
-            </div>
-          </div>
-        ) : chrome === undefined ? null : (
-          <div
-            {...keyboard}
-            style={{
-              padding: pad,
-              borderRadius: radius + pad,
-              width: width + pad * 2,
-              height: height + pad * 2,
-            }}
-            className="relative shrink-0 bg-linear-to-b from-[#2a2a2d] via-[#121214] to-[#1d1d20] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1),0_0_0_1px_rgb(0_0_0/0.35),0_24px_60px_-18px_rgb(0_0_0/0.55)] outline-none focus-visible:shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1),0_0_0_2px_var(--ring),0_24px_60px_-18px_rgb(0_0_0/0.55)]"
-          >
-            <div
-              className="relative size-full touch-none overflow-hidden bg-black select-none"
-              style={{ borderRadius: radius }}
-              onPointerDown={touch("begin")}
-              onPointerMove={touch("move")}
-              onPointerUp={touch("end")}
-              onPointerCancel={touch("end")}
-            >
-              <canvas
-                ref={setCanvas}
-                style={
-                  turn === 90 || turn === -90
-                    ? {
-                        width: height,
-                        height: width,
-                        left: (width - height) / 2,
-                        top: (height - width) / 2,
-                        transform: `rotate(${turn}deg)`,
-                      }
-                    : { width, height, transform: turn ? `rotate(${turn}deg)` : undefined }
-                }
-                className={`absolute top-0 left-0 transition-opacity duration-300 ${ready ? "opacity-100" : "opacity-30"}`}
+                aria-hidden
+                className="pointer-events-none absolute inset-[6%] rounded-[12%] bg-black/30 blur-2xl"
+                style={{ transform: `translateZ(${-depth - 1}px)` }}
               />
-              {overlay && (
-                <div className="absolute inset-0 flex items-center justify-center text-white/80">
-                  {overlay}
-                </div>
-              )}
+              <Body chrome={chrome} k={k} depth={depth} ios={ios} />
+              <Art
+                chrome={chrome}
+                k={k}
+                onPower={() => press("power")}
+                screenProps={{
+                  className: "touch-none cursor-default",
+                  onPointerDown: touch("begin"),
+                  onPointerMove: touch("move"),
+                  onPointerUp: touch("end"),
+                  onPointerCancel: touch("end"),
+                }}
+                screen={
+                  <>
+                    <canvas
+                      ref={setCanvas}
+                      className={`size-full transition-opacity duration-300 ${ready ? "opacity-100" : "opacity-30"}`}
+                    />
+                    {overlay && (
+                      <div
+                        className="absolute inset-0 flex items-center justify-center text-white/80"
+                        style={roll ? { transform: `rotate(${-roll}deg)` } : undefined}
+                        onPointerDown={(event) => event.stopPropagation()}
+                      >
+                        {overlay}
+                      </div>
+                    )}
+                  </>
+                }
+              />
             </div>
           </div>
         )}
       </div>
-      <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+      <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-3">
         <div
           role="toolbar"
           aria-label="Device controls"
-          className="pointer-events-auto flex items-center gap-0.5 rounded-full border border-border bg-surface/90 p-1 shadow-[0_8px_24px_-10px_rgb(0_0_0/0.3)] backdrop-blur"
+          className="pointer-events-auto flex max-w-full items-center gap-0.5 rounded-full border border-border bg-surface/90 p-1 shadow-[0_10px_30px_-12px_rgb(0_0_0/0.35)] backdrop-blur-xl"
         >
+          <button
+            type="button"
+            popoverTarget={menuId}
+            className="flex min-w-0 items-center gap-1.5 rounded-full py-1.5 pr-2 pl-2.5 text-[12.5px] font-medium transition-colors hover:bg-hover [&_svg]:size-3.5 [&_svg]:shrink-0"
+          >
+            <span className="relative text-muted-foreground">
+              <PlatformMark platform={device.platform} />
+            </span>
+            <span className="max-w-32 truncate">{nameOf(device)}</span>
+            <ChevronDown aria-hidden className="text-faint-foreground" />
+          </button>
+          <Menu id={menuId} label="Devices" align="center" className="mb-2 w-56 p-1">
+            {devices.map((d) => (
+              <button
+                key={d.id}
+                type="button"
+                role="menuitem"
+                className={menuItem}
+                onClick={() => {
+                  document.getElementById(menuId)?.hidePopover();
+                  if (d.id !== device.id) onOpen(d);
+                }}
+              >
+                <PlatformMark platform={d.platform} />
+                <span className="min-w-0 flex-1 truncate">{nameOf(d)}</span>
+                {d.id === device.id ? (
+                  <Check aria-label="Showing" />
+                ) : (
+                  d.booted && (
+                    <span aria-label="Running" className="size-1.5 rounded-full bg-added" />
+                  )
+                )}
+              </button>
+            ))}
+            <div className="my-1 h-px bg-border" />
+            <button
+              type="button"
+              role="menuitem"
+              className={menuItem}
+              onClick={() => {
+                document.getElementById(menuId)?.hidePopover();
+                onGallery();
+              }}
+            >
+              <LayoutGrid aria-hidden />
+              All devices
+            </button>
+            {!device.physical && (
+              <button
+                type="button"
+                role="menuitem"
+                disabled={stopping || booting}
+                className={`${menuItem} text-danger disabled:opacity-50`}
+                onClick={() => {
+                  document.getElementById(menuId)?.hidePopover();
+                  onPowerOff();
+                }}
+              >
+                <Power aria-hidden />
+                Power off
+              </button>
+            )}
+          </Menu>
+          <span aria-hidden className="mx-0.5 h-4 w-px bg-border" />
           {ios ? (
             <>
               {control("Home", <House />, () => press("home"))}
               {control("App switcher", <LayoutGrid />, () => press("appSwitcher"))}
               {control("Rotate", <RotateCw />, () => {
-                if (!chrome) return stream.current?.rotate();
                 const next =
                   ORIENTATIONS[(ORIENTATIONS.indexOf(facing) + 1) % ORIENTATIONS.length]!;
                 setFacing(next);
@@ -775,12 +1226,18 @@ function Viewer({
               {control("Recents", <LayoutGrid />, () => press("recents"))}
             </>
           )}
-          <span aria-hidden className="mx-1 h-4 w-px bg-border" />
           {control(
             copied ? "Copied screenshot" : "Copy screenshot",
             copied ? <Check /> : <Camera />,
             () => void screenshot(),
             booting || !device.booted,
+          )}
+          {turned && control("Face front", <Rotate3d />, faceFront, false)}
+          {stopping && (
+            <LoaderCircle
+              aria-label="Powering off"
+              className="mx-2 size-4 animate-spin text-muted-foreground"
+            />
           )}
         </div>
       </div>
