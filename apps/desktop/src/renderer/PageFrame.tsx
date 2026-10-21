@@ -1,8 +1,8 @@
-import { Monitor } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ChevronDown, Monitor, PanelRight, Scaling } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { stored } from "./stored";
-import { IconButton } from "./ui";
+import { Menu, menuButton, MenuOption } from "./ui";
 
 /** A page's size in CSS pixels. */
 export interface Size {
@@ -105,12 +105,12 @@ export function PageFrame({
     <div
       ref={area}
       // One tree for both looks, so switching never remounts the page, a webview included.
-      className={`flex min-h-0 flex-1 flex-col items-center justify-center ${bare ? "" : "px-3 pt-5 pb-1"}`}
+      className={`flex min-h-0 flex-1 flex-col items-center justify-center transition-[padding] duration-200 ${bare ? "" : "px-3 pt-5 pb-1"}`}
     >
       {size && (
         <div
           style={{ width: size.width * scale, height: size.height * scale }}
-          className={`group relative shrink-0 bg-background ${bare ? "" : `rounded-md shadow-lg ring-1 ring-border ${className}`}`}
+          className={`group relative shrink-0 bg-background ${drag ? "" : "transition-[width,height,border-radius,box-shadow] duration-200 ease-out"} ${bare ? "" : `rounded-md shadow-lg ring-1 ring-border ${className}`}`}
         >
           <div className={`size-full overflow-hidden ${bare ? "" : "rounded-md"}`}>
             {children(scale)}
@@ -222,17 +222,76 @@ export function PageFrame({
 }
 
 /**
- * The toolbar's switch between the monitor fit and the panel fit, which also drops a size the
- * user set.
+ * The toolbar's View menu: Desktop, the monitor fit, or Panel, the panel fit, with the user's own
+ * size as Custom while there is one. Its trigger shows the view in use.
  */
-export function FitToggle({ fit, onFit }: { fit: Fit; onFit: (fit: Fit) => void }) {
+export function ViewMenu({
+  fit,
+  size,
+  fixed,
+  onFit,
+}: {
+  fit: Fit;
+  size?: Size;
+  fixed: boolean;
+  onFit: (fit: Fit) => void;
+}) {
+  const id = useId();
+  const menu = useRef<HTMLDivElement>(null);
+  const choose = (next: Fit) => {
+    onFit(next);
+    menu.current?.hidePopover();
+  };
+  const Icon = fixed ? Scaling : fit === "monitor" ? Monitor : PanelRight;
   return (
-    <IconButton
-      label="Monitor view"
-      aria-pressed={fit === "monitor"}
-      onClick={() => onFit(fit === "monitor" ? "panel" : "monitor")}
-    >
-      <Monitor />
-    </IconButton>
+    <>
+      <button
+        type="button"
+        popoverTarget={id}
+        aria-haspopup="menu"
+        aria-label="View"
+        title="View"
+        className={`${menuButton} shrink-0 gap-0.5 px-1.5`}
+      >
+        <Icon aria-hidden />
+        <ChevronDown aria-hidden className="size-3! opacity-60" />
+      </button>
+      <Menu ref={menu} id={id} label="View" align="end" className="w-68 p-1">
+        <MenuOption
+          option={{
+            value: "monitor",
+            label: "Desktop",
+            icon: <Monitor aria-hidden />,
+            hint: `${MONITOR.width} × ${MONITOR.height}`,
+            description: "The site as on a monitor, scaled to fit the panel",
+          }}
+          checked={!fixed && fit === "monitor"}
+          onClick={() => choose("monitor")}
+        />
+        <MenuOption
+          option={{
+            value: "panel",
+            label: "Panel",
+            icon: <PanelRight aria-hidden />,
+            description: "The site at the panel's size, like a normal browser",
+          }}
+          checked={!fixed && fit === "panel"}
+          onClick={() => choose("panel")}
+        />
+        {fixed && size && (
+          <MenuOption
+            option={{
+              value: "custom",
+              label: "Custom",
+              icon: <Scaling aria-hidden />,
+              hint: `${size.width} × ${size.height}`,
+              description: "Drag the window's corner or type a size under it",
+            }}
+            checked
+            onClick={() => menu.current?.hidePopover()}
+          />
+        )}
+      </Menu>
+    </>
   );
 }

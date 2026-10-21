@@ -53,7 +53,20 @@ import {
 import type { CommandStatus } from "../preload/bridge";
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
 import { renderPage, savedHost, startHosts, streamFile } from "./hosts";
-import { browserShortcut, isBrowsable, isOpenableExternally, mayNavigate } from "./links";
+import {
+  addUnpacked,
+  installExtension,
+  listExtensions,
+  loadExtensions,
+  removeExtension,
+} from "./extensions";
+import {
+  browserShortcut,
+  isBrowsable,
+  isExtensionPage,
+  isOpenableExternally,
+  mayNavigate,
+} from "./links";
 import { appDataDir, dataDir } from "./plxd";
 import { cloneRepo, createRepo, listFolders } from "./repos";
 import {
@@ -168,10 +181,11 @@ app.on("web-contents-created", (_event, contents) => {
     } else if (isOpenableExternally(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
-  // A webview may show only an http or https page, in the browser's session, with no preload or
-  // Node, so its pages never reach `window.parallax`.
+  // A webview may show only an http or https page, or an extension's popup, in the browser's
+  // session, with no preload or Node, so its pages never reach `window.parallax`.
   contents.on("will-attach-webview", (event, webPreferences, params) => {
-    if (!isBrowsable(params["src"] ?? "")) return event.preventDefault();
+    const src = params["src"] ?? "";
+    if (!isBrowsable(src) && !isExtensionPage(src)) return event.preventDefault();
     delete webPreferences.preload;
     Object.assign(webPreferences, {
       nodeIntegration: false,
@@ -180,6 +194,8 @@ app.on("web-contents-created", (_event, contents) => {
       sandbox: true,
       webSecurity: true,
       partition: browserPartition,
+      // An extension's popup sizes itself to its content, as in Chrome.
+      enablePreferredSizeMode: isExtensionPage(src),
     });
   });
   // Chrome's page shortcuts, which also keep the default menu's Cmd+R and Cmd+W from reloading
@@ -200,13 +216,15 @@ app.on("web-contents-created", (_event, contents) => {
       else if (shortcut === "resetZoom") contents.setZoomLevel(0);
       else tell({ kind: shortcut });
     });
-  // The app's CSP takes no image from the web, so main fetches a page's favicon in the browser's
-  // session and hands its tab the image inline.
+  if (inBrowser)
+    contents.on("preferred-size-changed", (_event, { width, height }) =>
+      tell({ kind: "size", width, height }),
+    );
+  // The app's CSP takes no image from the web, so main fetches a page's favicon and hands its tab
+  // the image inline.
   if (inBrowser)
     contents.on("page-favicon-updated", (_event, favicons) => {
-      void favicon(contents.session, favicons.find(isBrowsable)).then(
-        (url) => url && tell({ kind: "icon", url }),
-      );
+      void favicon(favicons.find(isBrowsable)).then((url) => url && tell({ kind: "icon", url }));
     });
   // Electron has no context menu of its own. Right-click offers the Edit menu's actions: all of
   // them in a text box, Copy on selected text. A browser page's menu is Chrome's: a link's, the
@@ -245,10 +263,11 @@ app.on("web-contents-created", (_event, contents) => {
  * A favicon as a data url, or undefined for none, an error, an answer that isn't an image, or one
  * over 256 KB, which it stops reading there, so a page can't make main buffer an endless body.
  */
-async function favicon(session: Electron.Session, url: string | undefined) {
+async function favicon(url: string | undefined) {
   if (!url) return undefined;
   try {
-    const answer = await session.fetch(url);
+    // In the app's own session, which extensions' request hooks can't break.
+    const answer = await net.fetch(url);
     const type = answer.headers.get("content-type") ?? "";
     if (!answer.ok || !type.startsWith("image/") || !answer.body) return undefined;
     const chunks: Uint8Array[] = [];
@@ -313,6 +332,24 @@ app.on("browser-window-focus", () => {
   if (updater) updater.checkSoon();
   else if (process.connected) process.send?.("check");
 });
+
+// The side panel browser's Chrome extensions (extensions.ts).
+const browserSession = () => session.fromPartition(browserPartition);
+ipcMain.handle("parallax:extensions", () => listExtensions(browserSession()));
+ipcMain.handle("parallax:installExtension", (_event, text: unknown) =>
+  installExtension(browserSession(), typeof text === "string" ? text : ""),
+);
+ipcMain.handle("parallax:loadUnpackedExtension", async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const options = { properties: ["openDirectory" as const], buttonLabel: "Load Extension" };
+  const { canceled, filePaths } = await (win
+    ? dialog.showOpenDialog(win, options)
+    : dialog.showOpenDialog(options));
+  return canceled || !filePaths[0] ? undefined : addUnpacked(browserSession(), filePaths[0]);
+});
+ipcMain.handle("parallax:removeExtension", (_event, id: unknown) =>
+  typeof id === "string" ? removeExtension(browserSession(), id) : undefined,
+);
 
 // New Thread's "Add repository…" and the add palette's "Choose in Finder": a folder on this Mac,
 // sheet-attached to the asking window.
@@ -644,6 +681,8 @@ void app.whenReady().then(async () => {
   const languages = app.getPreferredSystemLanguages().filter((tag) => validLocale(tag));
   if (languages.length > 0)
     browserSession.setUserAgent(browserSession.getUserAgent(), languages.join(","));
+  // Before any window, so a page's content scripts are there when it loads.
+  await loadExtensions(browserSession);
   startHosts(startAccount(), () => updateState.available?.version ?? app.getVersion());
   startStorage();
   startTelemetry();

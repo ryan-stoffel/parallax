@@ -52,7 +52,11 @@ const cspMeta: Plugin = {
 // so the packaged app needs nothing from node_modules (PLX-66).
 const external = ["electron"];
 const electronBundle = (name: "main" | "preload"): PackUserConfig => ({
-  entry: { [name]: `src/${name}/${name}.ts` },
+  entry: {
+    [name]: `src/${name}/${name}.ts`,
+    // The side panel browser's fill-in for Chrome extension APIs (extensionShim.ts).
+    ...(name === "preload" && { extensionShim: "src/preload/extensionShim.ts" }),
+  },
   outDir: `dist/${name}`,
   format: "cjs",
   platform: "node",

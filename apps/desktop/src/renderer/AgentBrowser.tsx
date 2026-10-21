@@ -11,7 +11,7 @@ import {
 
 import type { PreviewInput, PreviewTab } from "../protocol/generated/protocol";
 import { shortUrl } from "./Browser";
-import { browserFit, FitToggle, fitSize, PageFrame, type Fit, type Size } from "./PageFrame";
+import { browserFit, fitSize, PageFrame, ViewMenu, type Fit, type Size } from "./PageFrame";
 
 /** The DevTools modifier bits of an event: Alt 1, Control 2, Meta 4, Shift 8. */
 const modifiers = (e: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) =>
@@ -174,7 +174,12 @@ export function AgentBrowser({
             className={`w-full rounded-md bg-selected py-1 pr-2 text-[12.5px] focus-visible:outline-2 focus-visible:outline-ring ${logo ? "pl-7" : "pl-2"}`}
           />
         </div>
-        <FitToggle fit={fit} onFit={refit} />
+        <ViewMenu
+          fit={fit}
+          fixed={!!state.fixed}
+          size={frame && { width: frame.width, height: frame.height }}
+          onFit={refit}
+        />
         <button
           type="button"
           onClick={() => send({ kind: "control", take: !state.human })}

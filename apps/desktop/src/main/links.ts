@@ -53,10 +53,16 @@ export function browserShortcut(
   return browserShortcuts[input.key.toLowerCase() as keyof typeof browserShortcuts];
 }
 
+/** Whether a url is a Chrome extension's page, such as its popup (extensions.ts). */
+export const isExtensionPage = (url: string) => URL.parse(url)?.protocol === "chrome-extension:";
+
 /**
  * Whether a page may navigate to `url`: the side panel's browser, to any page it may show; the
  * app's own pages, only to reload.
  */
 export function mayNavigate(url: string, currentUrl: string, inBrowser: boolean): boolean {
-  return inBrowser ? isBrowsable(url) : isReload(url, currentUrl);
+  if (!inBrowser) return isReload(url, currentUrl);
+  // An extension's page may go to another of its own pages.
+  if (isExtensionPage(url)) return URL.parse(url)?.host === URL.parse(currentUrl)?.host;
+  return isBrowsable(url);
 }

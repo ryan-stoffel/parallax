@@ -72,3 +72,11 @@ test("a browser page takes Chrome's shortcuts with Cmd on macOS and Ctrl elsewhe
     browserShortcut({ ...press("r", { meta: true }), type: "keyUp" }, "darwin"),
   ).toBeUndefined();
 });
+
+test("an extension's page may go only to its own pages", () => {
+  const popup = "chrome-extension://abc/popup.html";
+  expect(mayNavigate("chrome-extension://abc/options.html", popup, true)).toBe(true);
+  expect(mayNavigate("chrome-extension://xyz/popup.html", popup, true)).toBe(false);
+  expect(mayNavigate(popup, "https://example.com/", true)).toBe(false);
+  expect(mayNavigate("https://example.com/", popup, true)).toBe(true);
+});

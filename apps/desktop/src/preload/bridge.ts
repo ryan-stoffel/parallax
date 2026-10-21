@@ -181,6 +181,13 @@ export interface ParallaxBridge {
    * webview's `getWebContentsId()` (Browser.tsx). Returns the unsubscribe function.
    */
   onBrowser(listener: (webContentsId: number, action: BrowserAction) => void): () => void;
+  /** The side panel browser's Chrome extensions (PLX-888). */
+  extensions(): Promise<ExtensionInfo[]>;
+  /** Installs an extension from a Chrome Web Store link or id. Resolves to it or an error. */
+  installExtension(text: string): Promise<ExtensionInfo | string>;
+  /** Asks for an unpacked extension's folder and loads it: it, an error, or undefined if canceled. */
+  loadUnpackedExtension(): Promise<ExtensionInfo | string | undefined>;
+  removeExtension(id: string): Promise<void>;
   /**
    * Whether `update` can run: in a packaged app, which installs releases (PLX-68), or under
    * `pnpm dev`, from a checkout (PLX-204).
@@ -696,12 +703,25 @@ export type ConnectionError = {
 
 /**
  * What a side panel browser's page asks of its tab, from main: open a page in a new tab (a popup
- * or "Open Link in New Tab"), show its favicon, as a data url the app's CSP allows, or Cmd/Ctrl+L,
- * T, or W pressed in the page.
+ * or "Open Link in New Tab"), show its favicon, as a data url the app's CSP allows, Cmd/Ctrl+L,
+ * T, or W pressed in the page, or, for an extension's popup, the size its content wants.
  */
 export type BrowserAction =
   | { kind: "open"; url: string }
   | { kind: "icon"; url: string }
+  | { kind: "size"; width: number; height: number }
   | { kind: "address" }
   | { kind: "newTab" }
   | { kind: "closeTab" };
+
+/**
+ * A Chrome extension in the side panel's browser: its name, its toolbar icon as a data url, and
+ * its popup's page, if it has one.
+ */
+export interface ExtensionInfo {
+  id: string;
+  name: string;
+  version: string;
+  icon?: string;
+  popup?: string;
+}

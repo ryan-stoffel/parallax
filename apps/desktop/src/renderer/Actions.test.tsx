@@ -42,6 +42,7 @@ beforeEach(() => {
     platform: "darwin",
     terminalInput,
     closeTerminal,
+    extensions: () => Promise.resolve([]),
     request: () =>
       Promise.resolve({
         result: { terminals: running.map((terminalId) => ({ threadId: "t3", terminalId })) },

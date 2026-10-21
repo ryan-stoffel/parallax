@@ -80,6 +80,10 @@ const bridge: ParallaxBridge = {
     ipcRenderer.on("parallax:browser", forward);
     return () => ipcRenderer.removeListener("parallax:browser", forward);
   },
+  extensions: () => ipcRenderer.invoke("parallax:extensions"),
+  installExtension: (text) => ipcRenderer.invoke("parallax:installExtension", text),
+  loadUnpackedExtension: () => ipcRenderer.invoke("parallax:loadUnpackedExtension"),
+  removeExtension: (id) => ipcRenderer.invoke("parallax:removeExtension", id),
   updatable: process.argv.includes("--parallax-updatable"),
   firstRun: process.argv.includes("--parallax-first-run"),
   locale: validLocale(

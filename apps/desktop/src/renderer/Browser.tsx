@@ -5,12 +5,13 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { BrowserAction } from "../preload/bridge";
 import type { PreviewTab } from "../protocol/generated/protocol";
 import { AgentBrowser, type Driver } from "./AgentBrowser";
+import { Extensions } from "./Extensions";
 import {
   browserFit,
-  FitToggle,
   fitSize,
   MONITOR,
   PageFrame,
+  ViewMenu,
   type Fit,
   type Size,
 } from "./PageFrame";
@@ -61,7 +62,7 @@ export const shortUrl = (url: string) =>
 // listener however many tabs there are.
 const asks = new Map<number, (action: BrowserAction) => void>();
 let listening = false;
-function onAsk(id: number, handler: (action: BrowserAction) => void) {
+export function onAsk(id: number, handler: (action: BrowserAction) => void) {
   if (!listening) {
     listening = true;
     window.parallax.onBrowser((from, action) => asks.get(from)?.(action));
@@ -403,13 +404,7 @@ function Tab({
 
   return (
     <div className={`min-h-0 flex-1 flex-col ${shown ? "flex" : "hidden"}`}>
-      <form
-        className="flex items-center gap-0.5 border-b border-border px-2 pb-1.5"
-        onSubmit={(e) => {
-          e.preventDefault();
-          open(address);
-        }}
-      >
+      <div className="flex items-center gap-0.5 border-b border-border px-2 pb-1.5">
         <IconButton label="Back" disabled={!history.back} onClick={() => view.current?.goBack()}>
           <ArrowLeft />
         </IconButton>
@@ -429,25 +424,36 @@ function Tab({
             <RotateCw />
           </IconButton>
         )}
-        <input
-          ref={addressBar}
-          autoFocus
-          aria-label="Address"
-          placeholder="Search Google or type a URL"
-          spellCheck={false}
-          value={editing ? address : shortUrl(address)}
-          onChange={(e) => setAddress(e.target.value)}
-          onFocus={(e) => {
-            setEditing(true);
-            // The full url replaces the short one first, so select it once it renders.
-            const input = e.target;
-            requestAnimationFrame(() => input.select());
+        {/* The address bar alone is the form, so Enter opens it whatever else the toolbar holds:
+            a form with two text fields and no submit button doesn't submit on Enter. */}
+        <form
+          className="ml-1 flex min-w-0 flex-1"
+          onSubmit={(e) => {
+            e.preventDefault();
+            open(address);
           }}
-          onBlur={() => setEditing(false)}
-          className="ml-1 min-w-0 flex-1 rounded-md bg-selected px-2 py-1 text-[12.5px] placeholder:text-faint-foreground focus-visible:outline-2 focus-visible:outline-ring"
-        />
-        <FitToggle fit={fit} onFit={refit} />
-      </form>
+        >
+          <input
+            ref={addressBar}
+            autoFocus
+            aria-label="Address"
+            placeholder="Search Google or type a URL"
+            spellCheck={false}
+            value={editing ? address : shortUrl(address)}
+            onChange={(e) => setAddress(e.target.value)}
+            onFocus={(e) => {
+              setEditing(true);
+              // The full url replaces the short one first, so select it once it renders.
+              const input = e.target;
+              requestAnimationFrame(() => input.select());
+            }}
+            onBlur={() => setEditing(false)}
+            className="min-w-0 flex-1 rounded-md bg-selected px-2 py-1 text-[12.5px] placeholder:text-faint-foreground focus-visible:outline-2 focus-visible:outline-ring"
+          />
+        </form>
+        <Extensions onOpen={(url) => ask({ kind: "open", url })} />
+        <ViewMenu fit={fit} fixed={!!fixed} size={pageSize} onFit={refit} />
+      </div>
       {remoteHost && (
         <p className="border-b border-border px-3 py-1.5 text-[12px] text-muted-foreground">
           Pages load on this computer, so localhost isn't {remoteHost}. Forwarding its ports isn't
