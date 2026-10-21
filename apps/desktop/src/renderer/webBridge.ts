@@ -7,6 +7,7 @@
 
 import type {
   ConnectionState,
+  DeviceStreamMessage,
   HostResponse,
   ParallaxBridge,
   RpcError,
@@ -18,6 +19,9 @@ import type {
   WatchParams,
 } from "../preload/bridge";
 import type {
+  DeviceDataParams,
+  DeviceEndParams,
+  DeviceStreamParams,
   EventsEventParams,
   EventsResyncParams,
   InitializeResult,
@@ -200,6 +204,8 @@ export class WebHost {
   readonly terminals = new Map<string, TerminalOpenParams>();
   /** Who shows each terminal, by its id. */
   readonly terminalListeners = new Map<string, (message: TerminalMessage) => void>();
+  /** Who gets each device stream's messages (PLX-886), by its id. */
+  readonly deviceStreams = new Map<string, (message: DeviceStreamMessage) => void>();
 
   constructor(
     private readonly open: OpenSocket,
@@ -244,9 +250,16 @@ export class WebHost {
     if (this.state.status !== "connected" || logId === undefined) {
       return Promise.resolve({ error: { code: INTERNAL_ERROR, message: "not connected" } });
     }
+    // An emulator can take minutes to boot, past plxd's own 3 minute wait, and a cold Mac's
+    // simulators over 30 seconds to list (PLX-886).
+    const timeout =
+      method === "device/boot" || method === "device/state" ? 4 * 60_000 : REQUEST_TIMEOUT_MS;
     return new Promise((resolve) =>
-      this.send(method, params, (response) =>
-        resolve("result" in response ? { ...response, logId } : response),
+      this.send(
+        method,
+        params,
+        (response) => resolve("result" in response ? { ...response, logId } : response),
+        timeout,
       ),
     );
   }
@@ -282,6 +295,25 @@ export class WebHost {
     return answer.error.message;
   }
 
+  /** See `ParallaxBridge.openDeviceStream`. */
+  async openDeviceStream(
+    params: DeviceStreamParams,
+    listener: (message: DeviceStreamMessage) => void,
+  ): Promise<string | undefined> {
+    // Set first: plxd may relay the stream's first messages before it answers.
+    this.deviceStreams.set(params.streamId, listener);
+    const answer = await this.request("device/stream", params);
+    if (!("error" in answer)) {
+      // Closed while it opened: plxd hadn't listed it yet, so it takes the close now.
+      if (this.deviceStreams.get(params.streamId) !== listener)
+        this.notify("device/close", { streamId: params.streamId });
+      return undefined;
+    }
+    if (this.deviceStreams.get(params.streamId) === listener)
+      this.deviceStreams.delete(params.streamId);
+    return answer.error.message;
+  }
+
   /** Sends a notification, which gets no response. */
   notify(method: string, params: unknown): void {
     if (this.socket?.readyState === WebSocket.OPEN)
@@ -305,7 +337,12 @@ export class WebHost {
     void this.connect();
   }
 
-  send(method: string, params: unknown, done?: Pending["done"]): void {
+  send(
+    method: string,
+    params: unknown,
+    done?: Pending["done"],
+    timeoutMs = REQUEST_TIMEOUT_MS,
+  ): void {
     const socket = this.socket;
     if (socket?.readyState !== WebSocket.OPEN) {
       done?.({ error: { code: INTERNAL_ERROR, message: "not connected" } });
@@ -317,7 +354,7 @@ export class WebHost {
         this.pending.delete(id);
         this.notify("$/cancelRequest", { id });
         done({ error: { code: -32800, message: `${method} timed out` } });
-      }, REQUEST_TIMEOUT_MS);
+      }, timeoutMs);
       this.pending.set(id, { done, timer });
     }
     socket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
@@ -412,6 +449,19 @@ export class WebHost {
   }
 
   private notified(method: string, params: unknown): void {
+    if (method === "device/data") {
+      const { streamId, data, text } = params as DeviceDataParams;
+      const bytes = () => Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+      this.deviceStreams.get(streamId)?.({ type: "data", data: text ? data : bytes() });
+      return;
+    }
+    if (method === "device/end") {
+      const { streamId, error } = params as DeviceEndParams;
+      const listener = this.deviceStreams.get(streamId);
+      this.deviceStreams.delete(streamId);
+      listener?.({ type: "end", error });
+      return;
+    }
     if (method === "terminal/output") {
       const { data, replay, terminalId } = params as TerminalOutputParams;
       this.terminalListeners.get(terminalId)?.({ type: replay ? "replay" : "data", data });
@@ -466,6 +516,10 @@ export class WebHost {
     for (const watch of this.watches) watch.id = undefined;
     // plxd ends a command with the connection that opened it.
     for (const [id, params] of this.terminals) if (params.command) this.endTerminal(id, -1);
+    // plxd closes a connection's device streams with it.
+    const streams = [...this.deviceStreams.values()];
+    this.deviceStreams.clear();
+    for (const listener of streams) listener({ type: "end", error: message });
     this.fail(message);
   }
 
@@ -601,6 +655,20 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
         host.terminals.delete(id);
         if (params) host.notify("terminal/detach", { threadId: params.threadId, terminalId: id });
       };
+    },
+
+    openDeviceStream: async (hostId, params, listener) =>
+      hostId === LOCAL ? host.openDeviceStream(params, listener) : NOT_HERE,
+    sendDeviceStream: (streamId, data) => {
+      if (typeof data === "string") host.notify("device/send", { streamId, data, text: true });
+      else {
+        let binary = "";
+        for (const byte of data) binary += String.fromCharCode(byte);
+        host.notify("device/send", { streamId, data: btoa(binary) });
+      }
+    },
+    closeDeviceStream: (streamId) => {
+      if (host.deviceStreams.delete(streamId)) host.notify("device/close", { streamId });
     },
 
     openTargets: async () => [],

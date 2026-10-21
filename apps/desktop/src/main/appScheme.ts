@@ -17,7 +17,11 @@ const rendererDir = path.join(__dirname, "../renderer");
  */
 export function registerAppScheme(): void {
   protocol.registerSchemesAsPrivileged([
-    { scheme: "app", privileges: { standard: true, secure: true, codeCache: true } },
+    // fetch for the bundled files the renderer reads, such as the Device view's 3D models.
+    {
+      scheme: "app",
+      privileges: { standard: true, secure: true, codeCache: true, supportFetchAPI: true },
+    },
     { scheme: "plx-render", privileges: { standard: true, secure: true, stream: true } },
     {
       scheme: "plx-file",

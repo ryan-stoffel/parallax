@@ -112,10 +112,11 @@ test("closing a tab keeps focus in the panel", async () => {
   expect(document.activeElement).toBe(tab("D"));
 });
 
-test("normal threads offer only their five views in order", async () => {
+test("normal threads offer only their six views in order", async () => {
   await render();
   expect([...panel().querySelectorAll("nav button span")].map((s) => s.textContent)).toEqual([
     "Browser",
+    "Device",
     "Terminal",
     "Files",
     "Diff",

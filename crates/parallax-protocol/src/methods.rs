@@ -43,7 +43,10 @@ use crate::{
     ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
     ContextWriteResult, CursorInstallParams, CursorInstallResult, CursorSignInCancelParams,
     CursorSignInCancelResult, CursorSignInParams, CursorSignInResult, CursorSignOutParams,
-    CursorSignOutResult, DelegatedTask, DispatchResult, EventsEventParams, EventsResyncParams,
+    CursorSignOutResult, DelegatedTask, DeviceChromeResult, DeviceCloseParams, DeviceCreateParams,
+    DeviceDataParams, DeviceEndParams, DeviceOkResult, DeviceResult, DeviceScreenshotResult,
+    DeviceSetupParams, DeviceStateParams, DeviceStateResult, DeviceStreamParams,
+    DeviceStreamResult, DeviceTarget, DispatchResult, EventsEventParams, EventsResyncParams,
     EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult,
     FullThreadDiffParams, GitStatus, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
     GithubSignInCancelResult, GithubSignInParams, GithubStatus, GithubStatusParams,
@@ -281,6 +284,28 @@ method_table! {
         /// `preview/input`: the user's control, mouse, wheel, keys, viewport, or address bar on a
         /// tab.
         PreviewInputSend = "preview/input": PreviewInputParams => PreviewInputResult;
+        /// `device/state`: what the host can run, its simulators and emulators, the device hub,
+        /// and the devices a thread's agent opened (PLX-886). Gated on the `devices` capability,
+        /// like every `device/*` method.
+        DeviceState = "device/state": DeviceStateParams => DeviceStateResult;
+        /// `device/setup`: starts installing the device hub plxd pins, and answers at once.
+        /// `device/state` reports it installing, then installed or why it failed.
+        DeviceSetup = "device/setup": DeviceSetupParams => DeviceOkResult;
+        /// `device/boot`: starts a simulator or emulator and answers once it has booted.
+        DeviceBoot = "device/boot": DeviceTarget => DeviceResult;
+        /// `device/shutdown`: powers a simulator or emulator off.
+        DeviceShutdown = "device/shutdown": DeviceTarget => DeviceOkResult;
+        /// `device/create`: makes an iPhone Simulator on the newest iOS runtime.
+        DeviceCreate = "device/create": DeviceCreateParams => DeviceResult;
+        /// `device/screenshot`: a PNG of a booted device's screen.
+        DeviceScreenshot = "device/screenshot": DeviceTarget => DeviceScreenshotResult;
+        /// `device/chrome`: a simulator's bezel and buttons as Xcode's Simulator draws them, from
+        /// the host's Xcode, or none for a device it has no artwork for.
+        DeviceChrome = "device/chrome": DeviceTarget => DeviceChromeResult;
+        /// `device/stream`: opens a stream to a booted device through the device hub, starting it,
+        /// and sends its messages to this connection as `device/data`, then `device/end`. Fails
+        /// with `invalidParams` while the hub isn't installed.
+        DeviceStream = "device/stream": DeviceStreamParams => DeviceStreamResult;
         /// `agent/diff`: the files that differ between a run's base and its latest commit, each
         /// with its stats and a size-capped unified diff (#157). Gated on the `agentReview`
         /// capability, like every review method.
@@ -632,6 +657,14 @@ method_table! {
         TerminalOutput = "terminal/output": TerminalOutputParams;
         /// `terminal/exit`: a terminal's program exited, and the terminal closed.
         TerminalExit = "terminal/exit": TerminalExitParams;
+        /// `device/send`: a message on a device stream, in the order sent. The client sends it.
+        DeviceSend = "device/send": DeviceDataParams;
+        /// `device/close`: closes a device stream. The client sends it.
+        DeviceClose = "device/close": DeviceCloseParams;
+        /// `device/data`: a message on a device stream. plxd sends it.
+        DeviceData = "device/data": DeviceDataParams;
+        /// `device/end`: a device stream ended other than by `device/close`. plxd sends it.
+        DeviceEnd = "device/end": DeviceEndParams;
     }
 }
 
@@ -705,6 +738,14 @@ mod tests {
                 "preview/list",
                 "preview/frame",
                 "preview/input",
+                "device/state",
+                "device/setup",
+                "device/boot",
+                "device/shutdown",
+                "device/create",
+                "device/screenshot",
+                "device/chrome",
+                "device/stream",
                 "agent/diff",
                 "agent/file",
                 "agent/files",
@@ -822,6 +863,10 @@ mod tests {
                 "terminal/detach",
                 "terminal/output",
                 "terminal/exit",
+                "device/send",
+                "device/close",
+                "device/data",
+                "device/end",
             ]
         );
         assert_eq!(names.0.iter().collect::<BTreeSet<_>>().len(), names.0.len());

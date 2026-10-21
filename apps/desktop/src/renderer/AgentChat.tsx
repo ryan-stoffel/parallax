@@ -266,6 +266,7 @@ export function AgentChat({
   onOpenSubagent,
   onSubagents,
   onPreview,
+  onDevice,
   forked,
   onFork,
   onOpenChanges,
@@ -340,6 +341,8 @@ export function AgentChat({
    * and whether the newest opened a tab the user should see.
    */
   onPreview?: (runId: string, reveal: boolean) => void;
+  /** The thread's agent opened a device with `device_open` (PLX-886), the one its result names. */
+  onDevice?: (runId: string, deviceId?: string) => void;
   /** Whether the thread is a fork (0050), whose history copied from the original shows muted. */
   forked?: boolean;
   /**
@@ -662,6 +665,20 @@ export function AgentChat({
     // `previews` is new each render; its count says when it changed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewCount, onPreview, runId]);
+  // Each new device_open that worked shows its device in the side panel (PLX-886).
+  const devicesOpened = items.filter(
+    (i) => i.kind === "tool" && i.name === `${plxdTools}device_open` && i.status === "ok",
+  );
+  const lastOpened = devicesOpened.at(-1);
+  const openedDevice = lastOpened?.kind === "tool" ? openedDeviceId(lastOpened.output) : undefined;
+  const seenDevices = useRef<number>(undefined);
+  useEffect(() => {
+    const seen = seenDevices.current;
+    seenDevices.current = devicesOpened.length;
+    if (seen !== undefined && devicesOpened.length > seen) onDevice?.(runId, openedDevice);
+    // `devicesOpened` is new each render; its length says when it changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [devicesOpened.length, onDevice, runId]);
   const subagents = useMemo(
     () =>
       onOpenSubagent && {
@@ -3242,4 +3259,14 @@ function OpenPr({
       {opening ? "Opening PR…" : "Open PR"}
     </button>
   );
+}
+
+/** The device a `device_open` result names: `{"device": {"id": …}}`. */
+function openedDeviceId(output?: string): string | undefined {
+  try {
+    const id = (JSON.parse(output ?? "") as { device?: { id?: unknown } }).device?.id;
+    return typeof id === "string" ? id : undefined;
+  } catch {
+    return undefined;
+  }
 }

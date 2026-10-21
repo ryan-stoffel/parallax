@@ -25,6 +25,7 @@ import { FilesPanel } from "./FilesPanel";
 import { useInbox } from "./Inbox";
 import { KnowledgePanel } from "./Knowledge";
 import { NewThread } from "./NewThread";
+import { DevicePanel } from "./DevicePanel";
 import { DocumentView } from "./DocumentView";
 import type { DocRef } from "./documents";
 import { OpenDocumentContext } from "./FileCards";
@@ -208,6 +209,20 @@ export function App() {
       setPanelOpen(true);
       setBrowse({ agentTab: last.tabId });
     }
+  };
+  // The device the side panel's Device view last showed for an agent (PLX-886).
+  const [showDevice, setShowDevice] = useState<{ deviceId?: string }>();
+  const showAgentDevice = async (runId: string, named?: string) => {
+    // Only the focused thread's own device opens its panel, not the other side of a split's.
+    if (selection.kind !== "thread" || selection.threadId !== runId) return;
+    let deviceId = named;
+    if (!deviceId) {
+      const answer = await window.parallax.request(host.id, "device/state", { runId });
+      deviceId = "error" in answer ? undefined : answer.result.open.at(-1);
+    }
+    if (!deviceId) return;
+    setPanelOpen(true);
+    setShowDevice({ deviceId });
   };
   // The pull request the side panel last opened, or with no URL its Pull requests view.
   const [showPr, setShowPr] = useState<{ url?: string }>();
@@ -1116,6 +1131,7 @@ export function App() {
                               onOpenSubagent={openSubagent}
                               onSubagents={reportNative}
                               onPreview={(runId, reveal) => void showPreviews(runId, reveal)}
+                              onDevice={(runId, deviceId) => void showAgentDevice(runId, deviceId)}
                               strip={
                                 paneParent
                                   ? {
@@ -1333,6 +1349,10 @@ export function App() {
             : undefined
         }
         pullRequest={showPr}
+        showDevice={showDevice}
+        device={(shown) => (
+          <DevicePanel hostId={host.id} runId={threadRun?.id} shown={shown} request={showDevice} />
+        )}
         documents={{
           runId: filesRunId,
           open: showDoc,

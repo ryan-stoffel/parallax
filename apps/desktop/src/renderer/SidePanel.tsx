@@ -15,6 +15,7 @@ import {
   PanelRight,
   Plus,
   Presentation,
+  Smartphone,
   Terminal,
   Workflow,
   X,
@@ -89,6 +90,12 @@ const surfaces: Surface[] = [
   },
   { name: "Browser", icon: Globe, key: "B" },
   {
+    name: "Device",
+    icon: Smartphone,
+    key: "M",
+    empty: { title: "No devices here", hint: "Simulators and emulators show up here." },
+  },
+  {
     name: "Pull requests",
     icon: GitPullRequest,
     key: "P",
@@ -98,6 +105,7 @@ const surfaces: Surface[] = [
 
 const knowledgeSurface = surfaces.find((s) => s.name === "Knowledge")!;
 const browserSurface = surfaces.find((s) => s.name === "Browser")!;
+const deviceSurface = surfaces.find((s) => s.name === "Device")!;
 const terminalSurface = surfaces.find((s) => s.name === "Terminal")!;
 
 /**
@@ -127,7 +135,8 @@ const unopened: Scoped = { tabs: [], recent: [], listing: false };
  * linked pull requests (PLX-319): its URLs, each one's read, the Pull requests view, and each one's
  * view, shown in a `#n` tab, colored by its state, only while the thread links it. Each new `pullRequest` opens that URL's tab, or without
  * one the Pull requests view. Each new `documents.open` opens that presented file's tab (PLX-755),
- * shown only while its thread, `documents.runId`, is open, as a pull request's is.
+ * shown only while its thread, `documents.runId`, is open, as a pull request's is. `device` draws
+ * the Device view (PLX-886), told whether it's shown, and each new `showDevice` opens it.
  */
 export function SidePanel({
   scope,
@@ -152,6 +161,8 @@ export function SidePanel({
   pullRequest,
   documents,
   project,
+  device,
+  showDevice,
 }: {
   scope: string;
   width?: number;
@@ -184,6 +195,8 @@ export function SidePanel({
   /** An open Project, whose home the panel rests on, with Knowledge beside it, and how many
    * things wait on the user there. */
   project?: { home: ReactNode; waiting: number };
+  device?: (shown: boolean) => ReactNode;
+  showDevice?: object;
 }) {
   // Each scope's panel. A thread shows the last view it showed that's still open, else the last one
   // its scope showed, else the list.
@@ -203,7 +216,7 @@ export function SidePanel({
 
   const available = project
     ? surfaces
-    : ["Browser", "Terminal", "Files", "Changes", "Pull requests"].map((name) =>
+    : ["Browser", "Device", "Terminal", "Files", "Changes", "Pull requests"].map((name) =>
         surfaces.find((s) => s.name === name)!,
       );
   const nameOf = (s: Surface) => (!project && s.name === "Changes" ? "Diff" : s.name);
@@ -265,6 +278,11 @@ export function SidePanel({
       update(() => ({ page: browse }));
     }
   }
+  const [deviceShown, setDeviceShown] = useState(showDevice);
+  if (showDevice !== deviceShown) {
+    setDeviceShown(showDevice);
+    if (showDevice) openView(deviceSurface);
+  }
   const [prOpened, setPrOpened] = useState(pullRequest);
   if (pullRequest !== prOpened) {
     setPrOpened(pullRequest);
@@ -301,17 +319,19 @@ export function SidePanel({
           ? knowledge
           : s.name === "Terminal" && terminal
             ? terminal(open && s === current, emptyOf(s))
-            : s.name === "Files" && files
-              ? files
-              : s.name === "Changes" && changesView
-                ? changesView
-                : s.doc && documents
-                  ? documents.view(s.doc)
-                  : s.url && pullRequests
-                    ? pullRequests.view(s.url)
-                    : s.name === "Pull requests" && pullRequests?.urls.length
-                      ? pullRequests.list
-                      : emptyOf(s);
+            : s.name === "Device" && device
+              ? device(open && s === current)
+              : s.name === "Files" && files
+                ? files
+                : s.name === "Changes" && changesView
+                  ? changesView
+                  : s.doc && documents
+                    ? documents.view(s.doc)
+                    : s.url && pullRequests
+                      ? pullRequests.view(s.url)
+                      : s.name === "Pull requests" && pullRequests?.urls.length
+                        ? pullRequests.list
+                        : emptyOf(s);
 
   return (
     <aside

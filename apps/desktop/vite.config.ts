@@ -9,24 +9,27 @@ import type { PackUserConfig } from "vite-plus/pack";
 // alike under the dev server and the built app's app:// scheme (appScheme.ts).
 // Inline styles are allowed: xterm.js (SignInTerminal) sizes and colors its
 // rows with <style> tags it writes, as Vite's dev server does. Scripts stay
-// 'self', except for React Refresh's inline preamble in dev. The dev server's
+// 'self', except for React Refresh's inline preamble in dev, and may compile
+// WebAssembly, which the Device view's 3D models decode their meshes with
+// (PLX-886). The dev server's
 // HMR websocket is same-origin, so 'self'. Images may be data: URLs, which is
 // how a message's images show (PLX-193), or GitHub's, which a pull request's
 // description and comments show (PLX-517); agent Markdown loads only images in its thread's
 // folder (PLX-834). blob: is those, and the images and videos an agent presented (PLX-785), made
 // from bytes plxd read.
 // Open VSX, and the host its downloads redirect to, is where Settings > Appearance searches for
-// and downloads color themes, with their icons.
+// and downloads color themes, with their icons. connect-src blob: is the textures in the Device
+// panel's 3D models, which three.js decodes by fetching blob: URLs it makes (PLX-886).
 const csp = (dev: boolean) =>
   [
     "default-src 'self'",
-    dev && "script-src 'self' 'unsafe-inline'",
+    `script-src 'self' 'wasm-unsafe-eval'${dev ? " 'unsafe-inline'" : ""}`,
     "style-src 'self' 'unsafe-inline'",
     // KaTeX's fonts, which Vite inlines as data: URLs when small.
     "font-src 'self' data:",
     // crx: is the side panel browser's extension icons (Extensions.tsx).
     "img-src 'self' data: blob: crx: https://github.com https://*.githubusercontent.com https://open-vsx.org https://openvsx.eclipsecontent.org",
-    "connect-src 'self' https://open-vsx.org https://openvsx.eclipsecontent.org",
+    "connect-src 'self' blob: https://open-vsx.org https://openvsx.eclipsecontent.org",
     // html_render pages (PLX-639), which main serves with a policy of their own, and browser
     // recordings. plx-file: is presented videos, which main streams from their host (PLX-836).
     "frame-src plx-render:",

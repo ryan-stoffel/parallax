@@ -3,6 +3,7 @@
 import type {
   Capabilities,
   CliKind,
+  DeviceStreamParams,
   ErrorData,
   EventsEventParams,
   EventsSubscribeParams,
@@ -398,6 +399,22 @@ export interface ParallaxBridge {
   onTerminal(id: string, listener: (message: TerminalMessage) => void): () => void;
 
   /**
+   * Opens this window's device stream `params.streamId` on a host (PLX-886), in place of any it
+   * had with that id: plxd connects to its device hub and relays the stream, whose messages go to
+   * `listener` until it ends or `closeDeviceStream`. Resolves to an error for people, or undefined
+   * once it's open. A window's streams close when it reloads or closes.
+   */
+  openDeviceStream(
+    hostId: string,
+    params: DeviceStreamParams,
+    listener: (message: DeviceStreamMessage) => void,
+  ): Promise<string | undefined>;
+  /** Sends bytes, or a text message, on device stream `streamId`. */
+  sendDeviceStream(streamId: string, data: Uint8Array | string): void;
+  /** Closes device stream `streamId`. */
+  closeDeviceStream(streamId: string): void;
+
+  /**
    * Where `openFolder` can open a folder on a host: the editors this computer has, and the file
    * manager and chosen terminal for this computer's own folders. Empty for an unknown host.
    */
@@ -524,6 +541,14 @@ export type RegistryAgent = {
   };
 };
 
+/**
+ * A device stream's message (PLX-886): bytes, or a socket's text message, then its end, with why
+ * when it failed.
+ */
+export type DeviceStreamMessage =
+  | { type: "data"; data: Uint8Array | string }
+  | { type: "end"; error?: string };
+
 /** What a terminal printed, all it kept so far (`replay`, which replaces what's shown), or its exit. */
 export type TerminalMessage =
   | { type: "data" | "replay"; data: string }
@@ -630,6 +655,8 @@ export const withheldMethods = [
   "relay/remove",
   "terminal/open",
   "terminal/close",
+  // A window's device streams go through `openDeviceStream`, which routes what plxd relays.
+  "device/stream",
 ] as const satisfies readonly (keyof ParallaxRequests)[];
 
 /** The methods the renderer may call: every request but `withheldMethods`. */

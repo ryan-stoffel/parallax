@@ -306,6 +306,8 @@ pub(crate) struct Daemon {
     pub relay: crate::relay::Relay,
     /// Agents' browser tabs (PLX-639).
     pub previews: crate::preview::Previews,
+    /// The Device panel's simulators, emulators, and device hub (PLX-886).
+    pub devices: crate::devices::Devices,
     /// The scheduled tasks' timer and webhook rate limits (0063).
     pub schedules: crate::schedules::Schedules,
     /// The pull request watches' sweep (0063).
@@ -459,6 +461,7 @@ impl Server {
             }),
             cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher.clone()),
             previews: crate::preview::Previews::new(launcher.clone()),
+            devices: crate::devices::Devices::new(launcher.clone()),
             providers,
             commands: crate::commands::Commands::new(),
             orchestrator: crate::orchestrator::Orchestrator::default(),
@@ -862,6 +865,7 @@ impl Daemon {
             commands: crate::commands::Commands::new(),
             orchestrator: crate::orchestrator::Orchestrator::default(),
             previews: crate::preview::Previews::new(launcher.clone()),
+            devices: crate::devices::Devices::new(launcher.clone()),
             cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher.clone()),
             connect: tailnet::Connect::new(
                 Arc::new(crate::tailnet::Absent),

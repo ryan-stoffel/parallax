@@ -1953,6 +1953,9 @@ export const mockBridge: ParallaxBridge = {
     terminalListeners.set(id, listener);
     return () => terminalListeners.delete(id);
   },
+  openDeviceStream: () => delay("Devices don't stream in the preview."),
+  sendDeviceStream: noop,
+  closeDeviceStream: noop,
 
   openTargets: (hostId) =>
     delay(

@@ -4,6 +4,9 @@ import {
   ErrorCodes,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
+  type DeviceDataParams,
+  type DeviceEndParams,
+  type DeviceStreamParams,
   type EventsEventParams,
   type EventsResyncParams,
   type EventsSubscribeParams,
@@ -22,6 +25,7 @@ import {
 import type {
   ConnectionError,
   ConnectionState,
+  DeviceStreamMessage,
   HostResponse,
   RpcError,
   RpcResponse,
@@ -240,6 +244,8 @@ export class Connection {
   private readonly subscriptions = new Set<Subscription>();
   private readonly watches = new Set<Watch>();
   private readonly terminals = new Map<string, Terminal>();
+  /** The device streams this connection opened (PLX-886), by plxd's id for each. */
+  private readonly deviceStreams = new Map<string, (message: DeviceStreamMessage) => void>();
   private readonly reconnectWaiters = new Set<() => void>();
 
   constructor(private readonly options: ConnectionOptions) {}
@@ -387,6 +393,49 @@ export class Connection {
     if ("error" in answer) return answer.error.message;
     this.detachUnshown(params);
     return undefined;
+  }
+
+  /**
+   * Opens device stream `params` (PLX-886), passing what plxd relays on it to `listener` until it
+   * ends, which a disconnect also does. Resolves to an error for people, or undefined once open.
+   */
+  async openDeviceStream(
+    params: DeviceStreamParams,
+    listener: (message: DeviceStreamMessage) => void,
+  ): Promise<string | undefined> {
+    if (this.state.status === "connected" && !this.state.capabilities["devices"]) {
+      return "This host's plxd is too old to show devices. Update Parallax there.";
+    }
+    // Set first: plxd may relay the stream's first messages before it answers.
+    this.deviceStreams.set(params.streamId, listener);
+    // Its first stream starts the device hub, which can take a while.
+    const answer = await this.request("device/stream", params, 60_000);
+    if (!("error" in answer)) {
+      // Closed while it opened: plxd hadn't listed it yet, so it takes the close now.
+      if (this.deviceStreams.get(params.streamId) !== listener) {
+        this.client?.notify("device/close", { streamId: params.streamId });
+      }
+      return undefined;
+    }
+    if (this.deviceStreams.get(params.streamId) === listener) {
+      this.deviceStreams.delete(params.streamId);
+    }
+    return answer.error.message;
+  }
+
+  /** Sends `data` on a device stream: bytes, or a text message. */
+  sendDeviceStream(streamId: string, data: Uint8Array | string): void {
+    this.client?.notify(
+      "device/send",
+      typeof data === "string"
+        ? { streamId, data, text: true }
+        : { streamId, data: Buffer.from(data).toString("base64") },
+    );
+  }
+
+  /** Closes a device stream. Its listener hears nothing more. */
+  closeDeviceStream(streamId: string): void {
+    if (this.deviceStreams.delete(streamId)) this.client?.notify("device/close", { streamId });
   }
 
   /** Types `data` into a terminal, in order with what was typed before. */
@@ -618,6 +667,21 @@ export class Connection {
   }
 
   private onNotification(method: string, params: unknown): void {
+    if (method === "device/data") {
+      const { streamId, data, text } = params as DeviceDataParams;
+      this.deviceStreams.get(streamId)?.({
+        type: "data",
+        data: text ? data : Buffer.from(data, "base64"),
+      });
+      return;
+    }
+    if (method === "device/end") {
+      const { streamId, error } = params as DeviceEndParams;
+      const listener = this.deviceStreams.get(streamId);
+      this.deviceStreams.delete(streamId);
+      listener?.({ type: "end", error });
+      return;
+    }
     if (method === "terminal/output") {
       const { data, replay, ...key } = params as TerminalOutputParams;
       const message: TerminalMessage = { type: replay ? "replay" : "data", data };
@@ -710,6 +774,11 @@ export class Connection {
     for (const [key, terminal] of this.terminals) {
       if (terminal.params.command) this.endTerminal(key, -1);
     }
+    // plxd closes a connection's device streams with it.
+    const streams = [...this.deviceStreams.values()];
+    this.deviceStreams.clear();
+    for (const listener of streams)
+      listener({ type: "end", error: "The connection to plxd ended." });
     child?.kill();
   }
 

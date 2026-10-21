@@ -229,6 +229,44 @@ export type ParallaxRequests = {
 	 */
 	"preview/input": { params: PreviewInputParams, result: PreviewInputResult },
 	/**
+	 * `device/state`: what the host can run, its simulators and emulators, the device hub,
+	 * and the devices a thread's agent opened (PLX-886). Gated on the `devices` capability,
+	 * like every `device/*` method.
+	 */
+	"device/state": { params: DeviceStateParams, result: DeviceStateResult },
+	/**
+	 * `device/setup`: starts installing the device hub plxd pins, and answers at once.
+	 * `device/state` reports it installing, then installed or why it failed.
+	 */
+	"device/setup": { params: DeviceSetupParams, result: DeviceOkResult },
+	/**
+	 * `device/boot`: starts a simulator or emulator and answers once it has booted.
+	 */
+	"device/boot": { params: DeviceTarget, result: DeviceResult },
+	/**
+	 * `device/shutdown`: powers a simulator or emulator off.
+	 */
+	"device/shutdown": { params: DeviceTarget, result: DeviceOkResult },
+	/**
+	 * `device/create`: makes an iPhone Simulator on the newest iOS runtime.
+	 */
+	"device/create": { params: DeviceCreateParams, result: DeviceResult },
+	/**
+	 * `device/screenshot`: a PNG of a booted device's screen.
+	 */
+	"device/screenshot": { params: DeviceTarget, result: DeviceScreenshotResult },
+	/**
+	 * `device/chrome`: a simulator's bezel and buttons as Xcode's Simulator draws them, from
+	 * the host's Xcode, or none for a device it has no artwork for.
+	 */
+	"device/chrome": { params: DeviceTarget, result: DeviceChromeResult },
+	/**
+	 * `device/stream`: opens a stream to a booted device through the device hub, starting it,
+	 * and sends its messages to this connection as `device/data`, then `device/end`. Fails
+	 * with `invalidParams` while the hub isn't installed.
+	 */
+	"device/stream": { params: DeviceStreamParams, result: DeviceStreamResult },
+	/**
 	 * `agent/diff`: the files that differ between a run's base and its latest commit, each
 	 * with its stats and a size-capped unified diff (#157). Gated on the `agentReview`
 	 * capability, like every review method.
@@ -819,6 +857,14 @@ export const REQUEST_METHODS = [
 	"preview/list",
 	"preview/frame",
 	"preview/input",
+	"device/state",
+	"device/setup",
+	"device/boot",
+	"device/shutdown",
+	"device/create",
+	"device/screenshot",
+	"device/chrome",
+	"device/stream",
 	"agent/diff",
 	"agent/file",
 	"agent/files",
@@ -969,6 +1015,22 @@ export type ParallaxNotifications = {
 	 * `terminal/exit`: a terminal's program exited, and the terminal closed.
 	 */
 	"terminal/exit": TerminalExitParams,
+	/**
+	 * `device/send`: a message on a device stream, in the order sent. The client sends it.
+	 */
+	"device/send": DeviceDataParams,
+	/**
+	 * `device/close`: closes a device stream. The client sends it.
+	 */
+	"device/close": DeviceCloseParams,
+	/**
+	 * `device/data`: a message on a device stream. plxd sends it.
+	 */
+	"device/data": DeviceDataParams,
+	/**
+	 * `device/end`: a device stream ended other than by `device/close`. plxd sends it.
+	 */
+	"device/end": DeviceEndParams,
 };
 
 /**
@@ -4493,6 +4555,291 @@ export type PreviewMouse = "down" | "up" | "move";
  * Result of `preview/input`.
  */
 export type PreviewInputResult = Record<symbol, never>;
+
+/**
+ * Params of `device/state`.
+ */
+export type DeviceStateParams = {
+	/**
+	 * A thread whose agent's open devices to include in `open`.
+	 */
+	runId?: RunId,
+};
+
+/**
+ * Result of `device/state`: what the host can run, its devices, and the hub.
+ */
+export type DeviceStateResult = {
+	/**
+	 * iOS, then Android.
+	 */
+	platforms: Array<DevicePlatformState>,
+	/**
+	 * Every simulator and emulator, booted first.
+	 */
+	devices: Array<DeviceInfo>,
+	/**
+	 * The device hub.
+	 */
+	hub: DeviceHubState,
+	/**
+	 * The devices `runId`'s agent opened with `device_open`, most recent last.
+	 */
+	open: Array<string>,
+};
+
+/**
+ * How the device hub stands. It installs only when the user asks (`device/setup`).
+ */
+export type DeviceHubState = {
+	/**
+	 * Whether the pinned hub is installed.
+	 */
+	installed: boolean,
+	/**
+	 * Whether it is being installed.
+	 */
+	installing: boolean,
+	/**
+	 * Why the last install or start failed.
+	 */
+	failure?: string,
+};
+
+/**
+ * A simulator, emulator, or phone.
+ */
+export type DeviceInfo = {
+	/**
+	 * The simulator's udid, the adb serial, or an AVD's name while it isn't running.
+	 */
+	id: string,
+	/**
+	 * Its platform.
+	 */
+	platform: DevicePlatform,
+	/**
+	 * Such as "iPhone 17 Pro".
+	 */
+	name: string,
+	/**
+	 * Such as "iOS 26.5" or "Android 15".
+	 */
+	version: string,
+	/**
+	 * Whether it is running.
+	 */
+	booted: boolean,
+	/**
+	 * A phone over USB or Wi-Fi rather than an emulator.
+	 */
+	physical?: boolean,
+};
+
+/**
+ * A device's platform.
+ */
+export type DevicePlatform = "ios" | "android";
+
+/**
+ * Whether the host can run a platform's devices.
+ */
+export type DevicePlatformState = {
+	/**
+	 * The platform.
+	 */
+	platform: DevicePlatform,
+	/**
+	 * Why it can't, such as a missing Android SDK. Absent when it can.
+	 */
+	unavailable?: string,
+	/**
+	 * What it can run but not show yet, such as Android video without ffmpeg.
+	 */
+	warning?: string,
+	/**
+	 * Whether `device/create` can make one of its devices here.
+	 */
+	canCreate?: boolean,
+};
+
+/**
+ * Params of `device/setup`: installs the device hub in the background.
+ */
+export type DeviceSetupParams = Record<symbol, never>;
+
+/**
+ * Result of `device/setup` and `device/shutdown`.
+ */
+export type DeviceOkResult = Record<symbol, never>;
+
+/**
+ * Params of `device/boot`, `device/shutdown`, and `device/screenshot`.
+ */
+export type DeviceTarget = {
+	/**
+	 * The device, from `device/state`.
+	 */
+	deviceId: string,
+	/**
+	 * Its platform.
+	 */
+	platform: DevicePlatform,
+};
+
+/**
+ * Result of `device/boot` and `device/create`.
+ */
+export type DeviceResult = {
+	/**
+	 * The device as it stands now.
+	 */
+	device: DeviceInfo,
+};
+
+/**
+ * Params of `device/create`: a new iPhone Simulator on the newest iOS runtime, or a new Pixel
+ * emulator on the newest system image the Android SDK has.
+ */
+export type DeviceCreateParams = {
+	/**
+	 * Which platform's device to make. Absent makes an iPhone.
+	 */
+	platform?: DevicePlatform,
+};
+
+/**
+ * Result of `device/screenshot`.
+ */
+export type DeviceScreenshotResult = {
+	/**
+	 * A PNG of the screen, in base64.
+	 */
+	png: string,
+};
+
+/**
+ * Result of `device/chrome`: the device as Xcode's Simulator or Android Studio's emulator draws
+ * it, from the host's own Xcode or Android Studio.
+ */
+export type DeviceChromeResult = {
+	/**
+	 * The artwork, or absent when there's none.
+	 */
+	chrome?: DeviceChrome,
+};
+
+/**
+ * A device's artwork: its bezel and buttons around its screen, in the artwork's own units (points
+ * for a simulator, pixels for an emulator), in its natural orientation.
+ */
+export type DeviceChrome = {
+	/**
+	 * The whole device's width, side buttons included.
+	 */
+	width: number,
+	/**
+	 * The whole device's height.
+	 */
+	height: number,
+	/**
+	 * Where the screen is.
+	 */
+	screen: DeviceRect,
+	/**
+	 * The screen's shape, an image data URL whose alpha masks it.
+	 */
+	mask?: string,
+	/**
+	 * The radius of the screen's corners, when no mask or layer shapes them.
+	 */
+	cornerRadius?: number,
+	/**
+	 * The bezel, buttons, and overlays, in drawing order.
+	 */
+	layers: Array<DeviceChromeLayer>,
+};
+
+/**
+ * One piece of a device's artwork.
+ */
+export type DeviceChromeLayer = {
+	/**
+	 * Such as `bezel`, `power`, or `volume-up`.
+	 */
+	name: string,
+	/**
+	 * The image, as a data URL.
+	 */
+	image: string,
+	/**
+	 * Where it's drawn.
+	 */
+	rect: DeviceRect,
+	/**
+	 * Whether it's drawn over the screen, as an emulator's camera cutout is.
+	 */
+	above?: boolean,
+	/**
+	 * How far a button moves out while the pointer is over it, as Simulator shows it.
+	 */
+	hoverX?: number,
+};
+
+/**
+ * A rectangle, in points.
+ */
+export type DeviceRect = {
+	/**
+	 * Its left.
+	 */
+	x: number,
+	/**
+	 * Its top.
+	 */
+	y: number,
+	/**
+	 * Its width.
+	 */
+	width: number,
+	/**
+	 * Its height.
+	 */
+	height: number,
+};
+
+/**
+ * Params of `device/stream`: opens a stream to a booted device through the hub, starting the hub
+ * first. Its messages arrive as `device/data` until `device/end`.
+ */
+export type DeviceStreamParams = {
+	/**
+	 * The client's name for it, unique on this connection. Reusing one closes the old stream.
+	 */
+	streamId: string,
+	/**
+	 * The device.
+	 */
+	deviceId: string,
+	/**
+	 * Its platform.
+	 */
+	platform: DevicePlatform,
+	/**
+	 * What it carries.
+	 */
+	kind: DeviceStreamKind,
+};
+
+/**
+ * What a `device/stream` carries.
+ */
+export type DeviceStreamKind = "video" | "control";
+
+/**
+ * Result of `device/stream`: the stream is open.
+ */
+export type DeviceStreamResult = Record<symbol, never>;
 
 /**
  * Params of `agent/diff`.
@@ -9029,6 +9376,50 @@ export type TerminalExitParams = {
 	 * The program's exit code, or -1 if it has none.
 	 */
 	exitCode: number,
+};
+
+/**
+ * Params of `device/data` (plxd to the app) and `device/send` (the app to plxd): one message on
+ * a stream. A video stream's messages are pieces of its body, a control stream's are its
+ * socket's messages.
+ */
+export type DeviceDataParams = {
+	/**
+	 * The stream.
+	 */
+	streamId: string,
+	/**
+	 * Binary data in base64, or the text of a text message.
+	 */
+	data: string,
+	/**
+	 * Whether `data` is a text message rather than base64.
+	 */
+	text?: boolean,
+};
+
+/**
+ * Params of `device/close`: the app is done with a stream.
+ */
+export type DeviceCloseParams = {
+	/**
+	 * The stream.
+	 */
+	streamId: string,
+};
+
+/**
+ * Params of `device/end`: a stream ended, other than by `device/close`.
+ */
+export type DeviceEndParams = {
+	/**
+	 * The stream.
+	 */
+	streamId: string,
+	/**
+	 * Why, when it failed.
+	 */
+	error?: string,
 };
 
 /**
