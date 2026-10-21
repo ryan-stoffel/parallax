@@ -330,7 +330,7 @@ function Heading({ id, title, children }: { id: string; title: string; children:
 function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }) {
   const connection = useConnection(localId);
   const providers = useProviders(localId)?.providers;
-  // Until the first setup ends, every row is still looking.
+  // Until the first setup ends, a row plxd hasn't probed yet is still looking.
   const [scanned, setScanned] = useState(false);
   const [error, setError] = useState<string>();
   // The agent installing in the background (npm, Cursor's SDK), if any.
@@ -431,9 +431,10 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
           {agents.map((agent, i) => {
             const info = infoOf(providers, agent);
             const Logo = kindOf(agent.kind).Logo;
+            const looking = !scanned && !info;
             let line: string;
             let action: ReactNode = null;
-            if (!scanned) {
+            if (looking) {
               line = "Looking…";
               action = <Spinner />;
             } else if (working === agent.id || info?.installing) {
@@ -494,14 +495,14 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
                 <div className="min-w-0 flex-1">
                   <p className="flex items-baseline gap-2">
                     <span className="text-[13.5px] font-medium">{agent.name}</span>
-                    {scanned && info?.version && (
+                    {info?.version && (
                       <span className="truncate font-mono text-[11.5px] text-faint-foreground">
                         {info.version}
                       </span>
                     )}
                   </p>
                   <p
-                    className={`truncate text-[12.5px] text-muted-foreground ${scanned ? "" : "onboard-scan"}`}
+                    className={`truncate text-[12.5px] text-muted-foreground ${looking ? "onboard-scan" : ""}`}
                   >
                     {line}
                   </p>

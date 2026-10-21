@@ -109,6 +109,9 @@ const UPDATE_TIMEOUT_MS = 15 * 60_000;
  */
 const DEVICE_TIMEOUT_MS = 4 * 60_000;
 
+/** How long `providers/list` and `providers/save` may take: each probes agents (PLX-901). */
+const PROBE_TIMEOUT_MS = 2 * 60_000;
+
 /**
  * Every host's connection, by host id: `local`, each saved SSH host, each Connect device, and each
  * LAN computer.
@@ -230,13 +233,16 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
       // plxd validates the params' shape; they only have to be an object to be sent.
       if (!isObject(params)) return invalid(ErrorCodes.InvalidParams, "params must be an object");
       // A provider's own update downloads it, which can take minutes (PLX-746), and an emulator
-      // can take minutes to boot, or a cold Mac's simulators to list (PLX-886).
+      // can take minutes to boot, or a cold Mac's simulators to list (PLX-886). A list or save
+      // probes agents, each in steps of up to 20 s, which can pass the usual 30 s.
       const timeout =
         method === "providers/upgrade"
           ? UPDATE_TIMEOUT_MS
           : method === "device/boot" || method === "device/state"
             ? DEVICE_TIMEOUT_MS
-            : undefined;
+            : method === "providers/list" || method === "providers/save"
+              ? PROBE_TIMEOUT_MS
+              : undefined;
       return host.request(method as RendererMethod, params as never, timeout);
     },
   );
