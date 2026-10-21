@@ -16,8 +16,8 @@
 //! - `tmp/`: files plxd writes for a run and deletes when it ends, such as a Claude worker's
 //!   `CLAUDE_ENV_FILE` (PLX-126) and a Codex thread's prompt images (PLX-191). See
 //!   [`DataDir::temp_dir`].
-//! - `tools/`: CLIs plxd installs itself, which is only `gh` (`tools/gh/`, PLX-423). See
-//!   [`DataDir::tools_dir`].
+//! - `tools/`: CLIs plxd installs itself: `gh` (`tools/gh/`, PLX-423), and on Linux the `bwrap`
+//!   and `socat` a release plxd carries (`tools/sandbox/`, PLX-895). See [`DataDir::tools_dir`].
 //! - `logs/plxd.log`: the log.
 //!
 //! One folder is outside it: `/tmp/parallax-<hash>/`, which holds each worker run's own temp folder
@@ -52,6 +52,10 @@ const DEFAULT_DATA_DIR: &str = ".parallax";
 
 /// The data folder's [`DataDir::uploads_dir`], by name.
 pub const UPLOADS_DIR: &str = "uploads";
+
+/// Where in the data folder a Linux plxd built with its own `bwrap` and `socat` puts them for
+/// Claude Code's worker sandbox (PLX-895, `linux_sandbox::bundled_dir`).
+pub const SANDBOX_TOOLS_DIR: &str = "tools/sandbox";
 
 /// `default`, unless it doesn't exist and the `legacy` folder does.
 fn pick_default(default: PathBuf, legacy: Option<PathBuf>) -> PathBuf {

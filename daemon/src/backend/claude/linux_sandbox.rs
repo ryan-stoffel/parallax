@@ -11,15 +11,62 @@
 //!
 //! [`check_host`] also refuses a Claude Code that runs with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` on,
 //! which widens every command's writes on Linux (PLX-112).
+//!
+//! A release plxd carries static builds of `bwrap` and `socat` ([`BUNDLED`], PLX-895), so a host
+//! needs neither installed. [`check_host`] writes them to [`bundled_dir`], which every process
+//! plxd starts has last on its `PATH`, so a host's own copies still win, and which a worker's
+//! commands may read, since its `socat` relays run inside the sandbox.
 
+use std::io::{self, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
 use super::{WORKER_MIN_VERSION, scrubbed};
 use crate::backend::process::{Launcher, ProcessSpec};
 use crate::detect::{PROBE_TIMEOUT, Ran, resolve, run, run_spec};
+
+/// The static `bwrap` and `socat` this plxd carries, by name. `scripts/ci/build-sandbox-tools`
+/// builds them, and `scripts/ci/package-app` embeds them with the `sandbox-tools` feature and
+/// `PLX_SANDBOX_TOOLS` naming their folder. Other builds carry none and use the host's.
+pub const BUNDLED: &[(&str, &[u8])] = &[
+    #[cfg(feature = "sandbox-tools")]
+    (
+        "bwrap",
+        include_bytes!(concat!(env!("PLX_SANDBOX_TOOLS"), "/bwrap")),
+    ),
+    #[cfg(feature = "sandbox-tools")]
+    (
+        "socat",
+        include_bytes!(concat!(env!("PLX_SANDBOX_TOOLS"), "/socat")),
+    ),
+];
+
+/// Where [`BUNDLED`] goes in the data folder `data_dir`, if this plxd carries any.
+#[must_use]
+pub fn bundled_dir(data_dir: &Path) -> Option<PathBuf> {
+    (!BUNDLED.is_empty()).then(|| data_dir.join(crate::paths::SANDBOX_TOOLS_DIR))
+}
+
+/// Writes each of `tools` into `dir` as an executable, unless the file there already holds it.
+/// Each goes through a temp file and a rename, so a worker already running the old copy keeps it.
+fn install(dir: &Path, tools: &[(&str, &[u8])]) -> io::Result<()> {
+    for &(name, bytes) in tools {
+        let path = dir.join(name);
+        if std::fs::read(&path).is_ok_and(|current| current == bytes) {
+            continue;
+        }
+        std::fs::create_dir_all(dir)?;
+        let mut file = tempfile::NamedTempFile::new_in(dir)?;
+        file.write_all(bytes)?;
+        file.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o755))?;
+        file.persist(&path)?;
+    }
+    Ok(())
+}
 
 /// The namespaces Claude Code's sandbox puts each command in (sandbox-runtime's bubblewrap
 /// arguments): a new session, user, and PID namespace with no capabilities, and a fresh `/proc`.
@@ -72,7 +119,8 @@ const STATUS_MIN_VERSION: &str = "2.1.275";
 /// Checks that Claude Code's sandbox works here with its seccomp filter, for workers that run
 /// `claude` through `launcher`:
 ///
-/// 1. `bwrap` and `socat` resolve on the launcher's `PATH`, where Claude Code looks for them.
+/// 1. `bwrap` and `socat` resolve on the launcher's `PATH`, where Claude Code looks for them,
+///    after [`BUNDLED`] is written to [`bundled_dir`].
 /// 2. `claude` doesn't run with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` on ([`check_scrub_flag`]).
 /// 3. Inside bwrap alone, `socat` connects to a Unix socket plxd listens on. If it can't, bwrap
 ///    can't sandbox here, as on Ubuntu 24.04 and later without a profile for it.
@@ -82,6 +130,14 @@ const STATUS_MIN_VERSION: &str = "2.1.275";
 ///
 /// What is missing or broken, and the fix, as a message for `workerUnavailable`.
 pub async fn check_host(launcher: &Launcher, claude: &Path) -> Result<(), String> {
+    if let Some(dir) = bundled_dir(launcher.data_dir().root()) {
+        install(&dir, BUNDLED).map_err(|error| {
+            format!(
+                "could not write plxd's bubblewrap and socat to {}: {error}",
+                dir.display()
+            )
+        })?;
+    }
     let (bwrap, socat) = match (resolve(launcher, "bwrap"), resolve(launcher, "socat")) {
         (Some(bwrap), Some(socat)) => (bwrap, socat),
         (bwrap, socat) => {
@@ -115,7 +171,11 @@ pub async fn check_host(launcher: &Launcher, claude: &Path) -> Result<(), String
                     .into(),
             );
         }
-        _ => return Err(bwrap_problem(&alone)),
+        _ => {
+            let ours = bundled_dir(launcher.data_dir().root())
+                .is_some_and(|dir| Path::new(bwrap).starts_with(dir));
+            return Err(bwrap_problem(&alone, ours));
+        }
     }
 
     let helper = [&[claude][..], &connect].concat();
@@ -260,14 +320,23 @@ async fn sandboxed(
         .map_err(|error| format!("checking Claude Code's worker sandbox failed: {error}"))
 }
 
-/// Why bwrap couldn't run a command, from how it failed.
-fn bwrap_problem(ran: &Ran) -> String {
+/// Why bwrap couldn't run a command, from how it failed, and whether it was plxd's own copy. The
+/// profile that lets bwrap past `AppArmor` names its path, and Claude Code's docs give one for the
+/// distro's `/usr/bin/bwrap`, so for plxd's copy the fix is the distro's package.
+fn bwrap_problem(ran: &Ran, ours: bool) -> String {
     let apparmor = std::fs::read_to_string(APPARMOR_USERNS).is_ok_and(|value| value.trim() == "1");
     if apparmor {
-        return "AppArmor keeps bubblewrap from creating the user namespaces Claude Code's worker \
-                sandbox needs (kernel.apparmor_restrict_unprivileged_userns is 1); add an AppArmor \
-                profile for bwrap, as Claude Code's sandboxing docs describe"
-            .into();
+        let fix = if ours {
+            "install bubblewrap with the package manager and add an AppArmor profile for \
+             /usr/bin/bwrap"
+        } else {
+            "add an AppArmor profile for bwrap"
+        };
+        return format!(
+            "AppArmor keeps bubblewrap from creating the user namespaces Claude Code's worker \
+             sandbox needs (kernel.apparmor_restrict_unprivileged_userns is 1); {fix}, as Claude \
+             Code's sandboxing docs describe"
+        );
     }
     format!(
         "bubblewrap can't create Claude Code's worker sandbox here: {}",
@@ -341,7 +410,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
 
-    use super::{check_host, helper_problem, missing_packages, read_status, status_spec};
+    use super::{check_host, helper_problem, install, missing_packages, read_status, status_spec};
     use crate::backend::claude::ClaudeBackend;
     use crate::backend::process::{Environment, Launcher};
     use crate::backend::{
@@ -384,6 +453,29 @@ mod tests {
         script(&bin, "bwrap", "exit 0");
         let error = check_host(&only, &claude).await.unwrap_err();
         assert!(error.starts_with("socat isn't installed"), "{error}");
+    }
+
+    #[test]
+    fn bundled_tools_are_written_executable_and_rewritten_when_they_differ() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = dir.path().join("tools/sandbox");
+        install(&tools, &[("bwrap", b"one"), ("socat", b"two")]).unwrap();
+        let bwrap = tools.join("bwrap");
+        assert_eq!(fs::read(&bwrap).unwrap(), b"one");
+        assert_eq!(
+            fs::metadata(&bwrap).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        assert_eq!(fs::read(tools.join("socat")).unwrap(), b"two");
+
+        fs::write(&bwrap, "tampered").unwrap();
+        install(&tools, &[("bwrap", b"one")]).unwrap();
+        assert_eq!(fs::read(&bwrap).unwrap(), b"one");
+        assert_eq!(
+            fs::read_dir(&tools).unwrap().count(),
+            2,
+            "no temp file left"
+        );
     }
 
     #[test]

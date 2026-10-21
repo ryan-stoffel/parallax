@@ -84,7 +84,6 @@ const healthy = () => ({
   freeBytes: 100 * 1024 ** 3,
   worktrees: 3,
   log: { errors: 0, warnings: 0, recent: [] },
-  sandboxMissing: undefined,
   agentClis: { claude: "/opt/homebrew/bin/claude", codex: undefined },
 });
 

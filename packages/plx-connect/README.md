@@ -41,9 +41,8 @@ It asks the running plxd for its version, health, and agents, then checks:
 - The project store is ok and its writes aren't queuing.
 - Each agent Parallax uses is installed and signed in.
 - git is on PATH, the disk has room, and plxd's log has no errors from the last 24 hours.
-- On Linux, bubblewrap and socat, which Claude Code's worker sandbox needs.
 
-For each failed check it can fix, it asks first: it starts plxd, runs an agent's own sign-in, or installs the sandbox packages. Then it writes `context.md` (this computer's facts and the results) and `prompt.md` (the [playbook](src/doctor-playbook.md)) to `doctor/<time>/` in the data folder. It offers to open Claude Code or Codex on them, as T3 Code's `t3 triage` does. The agent asks what went wrong, reads the logs and the store, checks Parallax's source and issues, and helps you file an issue with the `via-doctor` template. It posts only after you approve the text. Without either agent, the doctor prints the two files' paths to paste into any agent.
+For each failed check it can fix, it asks first: it starts plxd or runs an agent's own sign-in. Then it writes `context.md` (this computer's facts and the results) and `prompt.md` (the [playbook](src/doctor-playbook.md)) to `doctor/<time>/` in the data folder. It offers to open Claude Code or Codex on them, as T3 Code's `t3 triage` does. The agent asks what went wrong, reads the logs and the store, checks Parallax's source and issues, and helps you file an issue with the `via-doctor` template. It posts only after you approve the text. Without either agent, the doctor prints the two files' paths to paste into any agent.
 
 ## Requirements
 
@@ -51,4 +50,4 @@ For each failed check it can fix, it asks first: it starts plxd, runs an agent's
 - Tailscale on both computers, logged in as the same Tailscale user. Tagged and shared devices can't join.
 - For `add`, SSH on the device: Remote Login on macOS, OpenSSH Server on Windows, or sshd on Linux. On macOS and Linux, SSH asks for the password at most once.
 - Parallax builds for macOS on Apple silicon, Windows x64 and arm64, and Linux x64 and arm64.
-- On Linux, Claude Code's sandbox needs bubblewrap and socat. plx-connect installs them when it can do so without a password: with `nix profile install` on NixOS, or with the package manager as root or with passwordless sudo. Otherwise it prints what to install. NixOS also needs `programs.nix-ld.enable = true;` to run agent CLIs.
+- On Linux, plxd brings the bubblewrap and socat Claude Code's sandbox needs. Ubuntu 24.04 and later also need the distro's `bubblewrap` and the AppArmor profile from Claude Code's sandboxing docs. NixOS needs `programs.nix-ld.enable = true;` to run agent CLIs.

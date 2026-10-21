@@ -178,4 +178,4 @@ Windows and Linux are supported, for the app and for `plxd`. This supersedes PLA
   - Windows: `keyring-core`, `windows-native-keyring-store`, and `windows-sys`, which tokio already pulls in there.
   - Each is a target-specific dependency, so the macOS build doesn't change. `nix` and `rustix` become Unix-only.
 - **Headless hosts** can use subscriptions everywhere. They can't store API keys unless `serve` runs from the service in a logged-in session (macOS, Windows) or has a Secret Service (Linux).
-- **Linux hosts need setup for workers.** Without `bubblewrap`, `socat`, and the seccomp filter, and on Ubuntu 24.04 and later an AppArmor profile for `bwrap`, a Linux host runs only no-write agents.
+- **Linux hosts need setup for workers.** Without the seccomp filter, and on Ubuntu 24.04 and later the distro's `bubblewrap` with an AppArmor profile for `bwrap`, a Linux host runs only no-write agents. A release plxd brings `bwrap` and `socat` itself (PLX-895).

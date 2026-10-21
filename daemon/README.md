@@ -110,7 +110,7 @@ Key accounts go in the Secret Service, the D-Bus API that GNOME Keyring and KeeP
 
 To check a host by hand, run `cargo test -p plxd --test secret_service_manual -- --ignored` on it. The test uses a throwaway service name and cleans up after itself.
 
-Workers on Linux need `bubblewrap` and `socat`, and on Ubuntu 24.04 and later an AppArmor profile that lets `bwrap` create user namespaces ([0013](../docs/decisions/0013-worker-sandbox.md#claude-code-on-linux)). plxd checks for them before each worker starts, including Claude Code's seccomp filter, and `agent/start` fails with `workerUnavailable` naming whatever is missing.
+Workers on Linux need `bwrap` and `socat`. A release plxd carries static builds of both and uses them when the host has none (PLX-895). A plxd built from source needs the distro's `bubblewrap` and `socat`, unless built with `--features sandbox-tools` and `PLX_SANDBOX_TOOLS` naming a folder from `scripts/ci/build-sandbox-tools`. On Ubuntu 24.04 and later, AppArmor also needs the distro's `bubblewrap` and a profile that lets `/usr/bin/bwrap` create user namespaces ([0013](../docs/decisions/0013-worker-sandbox.md#claude-code-on-linux)). plxd checks all of this before each worker starts, including Claude Code's seccomp filter, and `agent/start` fails with `workerUnavailable` naming whatever is missing.
 
 ## Using a Windows host over SSH
 
