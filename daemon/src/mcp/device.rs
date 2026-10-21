@@ -5,7 +5,7 @@
 //!
 //! The app's Device panel shows what they open (PLX-886): it finds `device_open` in the thread's
 //! transcript and asks `device/state` for the thread's devices, which [`crate::devices`] reads
-//! from the same sessions file, and an Android emulator also opens its own window. `serve` lists,
+//! from the same sessions file. Devices boot headless (PLX-903): the panel is their only window. `serve` lists,
 //! boots, and captures devices with this module's functions too. The devices a thread opened (T3's sessions) are kept in
 //! `tmp/devices/<run>.json` in plxd's data folder, so they last across the thread's turns until
 //! plxd restarts, as T3's last until its server does. The only device host is this computer,
@@ -71,7 +71,7 @@ pub fn definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_open",
-            "description": "Open a simulator or emulator for this thread: boots it if needed and shows its window so the user can watch. Returns how to drive it with simctl or adb.",
+            "description": "Open a simulator or emulator for this thread: boots it headless if needed and shows it in Parallax's Device panel, where the user can watch. Do not open Simulator, Device Hub, or an emulator window yourself. Returns how to drive it with simctl or adb.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -792,11 +792,12 @@ fn first_line(output: Result<Vec<u8>, String>) -> Option<String> {
     (!line.is_empty()).then_some(line)
 }
 
-/// Starts AVD `name` and waits until it has booted: its serial.
+/// Starts AVD `name` without a window, since the Device panel shows it, and waits until it has
+/// booted: its serial.
 async fn boot_avd(android: &Android, name: &str) -> Result<String, String> {
     let mut command = Command::new(&android.emulator);
     command
-        .args(["-avd", name])
+        .args(["-avd", name, "-no-window"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
