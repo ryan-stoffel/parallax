@@ -60,15 +60,21 @@ export function AgentBrowser({
   // mode, as the user's fit says (PageFrame.tsx).
   const room = useRef<Size>(undefined);
   const fit = browserFit.use();
-  const viewport = () =>
-    room.current &&
-    request({ kind: "viewport", ...fitSize(room.current.width, room.current.height, fit) });
+  // The fit as it is now, not as this render saw it, since a timer or a request may call it late.
+  const viewport = () => {
+    if (!room.current) return;
+    const { width, height } = room.current;
+    void request({ kind: "viewport", ...fitSize(width, height, browserFit.get()) });
+  };
+  // Another tab's switch changes the fit too.
   useEffect(() => {
     viewport();
   }, [fit]);
+  // plxd runs requests at once, and a viewport that lands while the tab is still fixed only
+  // notes the room, so the new fit's viewport follows Fill's answer.
   const refit = (next: Fit) => {
     browserFit.set(next);
-    size({ kind: "fill" });
+    void size({ kind: "fill" }).then(viewport);
   };
 
   useEffect(() => {
@@ -97,15 +103,17 @@ export function AgentBrowser({
   }, [hostId, runId, tab.tabId, shown]);
 
   const request = (input: PreviewInput) =>
-    void window.parallax.request(hostId, "preview/input", { runId, tabId: tab.tabId, input });
+    window.parallax
+      .request(hostId, "preview/input", { runId, tabId: tab.tabId, input })
+      .catch(() => undefined);
   const send = (input: PreviewInput) => {
-    request(input);
+    void request(input);
     setState((s) => ({ ...s, human: input.kind !== "control" || input.take }));
   };
   // Sizing never takes control.
   const size = (input: Extract<PreviewInput, { kind: "fixed" | "fill" }>) => {
-    request(input);
     setState((s) => ({ ...s, fixed: input.kind === "fixed" }));
+    return request(input);
   };
   // A point on the image, in the page's CSS pixels.
   const at = (e: { clientX: number; clientY: number }) => {
