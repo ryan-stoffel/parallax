@@ -1,0 +1,44 @@
+# Maintainer: Ryan Stoffel <stoffel.thomas.ryan@gmail.com>
+#
+# The AUR's parallax-nightly-bin (PLX-889): the nightly's AppImage, unpacked into /opt, so
+# `yay -S parallax-nightly-bin` installs it and `yay` updates it. release.yml's aur job sets
+# pkgver and the sha256sums for each nightly (scripts/ci/publish-aur); the values here are
+# one nightly's, so `makepkg` works from this folder. An unpacked install has no APPIMAGE, so
+# the app's own updater stays off and pacman owns updates.
+pkgname=parallax-nightly-bin
+pkgver=2610.11917.12714
+pkgrel=1
+pkgdesc="Desktop app that runs coding agents on computers you own (nightly)"
+arch=(x86_64 aarch64)
+url="https://github.com/ryan-stoffel/parallax"
+license=(Apache-2.0)
+depends=(alsa-lib gtk3 nss)
+options=(!strip !debug)
+_release="$url/releases/download/v$pkgver-nightly/parallax-$pkgver-nightly-linux"
+source_x86_64=("$_release-x86_64.AppImage")
+source_aarch64=("$_release-arm64.AppImage")
+noextract=("${source_x86_64[0]##*/}" "${source_aarch64[0]##*/}")
+sha256sums_x86_64=(4325118a6a6aad2fd8eee3c144c15addd55da0db1cd85f9779604e35bdb8dec5)
+sha256sums_aarch64=(49b7d4c7e6ce39558bd7a121ad369b2054c25c1e6c67bc5515f24b0306543c17)
+
+prepare() {
+  # By name: without makepkg -C, $srcdir still links the last nightly's AppImage.
+  local appimage="parallax-$pkgver-nightly-linux-${CARCH/aarch64/arm64}.AppImage"
+  chmod +x "$appimage"
+  rm -rf squashfs-root
+  "./$appimage" --appimage-extract > /dev/null
+}
+
+package() {
+  local app="$pkgdir/opt/parallax-nightly"
+  install -d "$pkgdir/opt" "$pkgdir/usr/bin" "$pkgdir/usr/share/applications"
+  cp -a --no-preserve=ownership squashfs-root "$app"
+  cd "$app"
+  mv usr/share/icons "$pkgdir/usr/share/"
+  sed 's/^Exec=AppRun/Exec=parallax-nightly/; /^X-AppImage-/d' parallax-desktop.desktop \
+    > "$pkgdir/usr/share/applications/parallax-desktop.desktop"
+  # The AppImage's own files: AppRun, its icon links, and the libraries AppRun puts on the
+  # library path, which Arch has.
+  rm -r AppRun .DirIcon usr parallax-desktop.desktop parallax-desktop.png
+  ln -s /opt/parallax-nightly/parallax-desktop "$pkgdir/usr/bin/parallax-nightly"
+}

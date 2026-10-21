@@ -26,6 +26,16 @@ The sidebar lists projects and threads. The main pane is the chat. A thread star
 
 The full plan is in [docs/PLAN.md](docs/PLAN.md).
 
+## Install
+
+Installers for macOS, Windows, and Linux are on the [releases page](https://github.com/ryan-stoffel/parallax/releases). On Arch Linux and Omarchy, install the nightly from the AUR:
+
+```sh
+yay -S parallax-nightly-bin
+```
+
+`yay` updates it with the rest of the system.
+
 ## Run it
 
 `plxd` builds with Cargo. The app needs Node 24 and pnpm through corepack (`corepack enable`). Run pnpm inside `apps/desktop`, where corepack finds the pinned version.

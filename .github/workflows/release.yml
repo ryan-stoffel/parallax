@@ -296,6 +296,32 @@ jobs:
           DRY_RUN: ${{ needs.plan.outputs.dry_run }}
         run: scripts/ci/finish-release windows
 
+  # Points the AUR's parallax-nightly-bin at the nightly's AppImages, so `yay -S
+  # parallax-nightly-bin` installs it on Arch and Omarchy and `yay` updates it (PLX-889). Off the
+  # path to the update. Stable releases aren't on the AUR. A dry run prints the package.
+  aur:
+    needs: [plan, build]
+    if: ${{ !cancelled() && needs.plan.outputs.build == 'true' && needs.plan.outputs.channel == 'nightly' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            packaging/aur
+            scripts/ci
+
+      # The key reaches only this step.
+      - name: Publish to the AUR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          DRY_RUN: ${{ needs.plan.outputs.dry_run }}
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: scripts/ci/publish-aur
+
   # Notarizes the published dmg, which also notarizes the app inside it, off the path to the
   # update: Squirrel.Mac needs the update signed, not notarized (0030). Until it's done, a dmg
   # downloaded by hand may get a Gatekeeper prompt. Without a staple, Gatekeeper finds the ticket
