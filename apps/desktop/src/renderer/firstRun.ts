@@ -90,9 +90,9 @@ export function plan(providers: ProviderInfo[]): { remove: string[]; save: Provi
 }
 
 /**
- * Sets up `hostId`'s agents: adds each agent it lacks, turned off, which plxd probes as it saves,
- * then applies `plan`. `refresh` probes the ones it has again, as after a sign-in or an install.
- * Resolves to an error for people.
+ * Sets up `hostId`'s agents: adds each agent it lacks, turned off and all at once, which plxd
+ * probes as it saves, then applies `plan`. `refresh` probes the ones it has again, as after a
+ * sign-in or an install. Resolves to an error for people.
  */
 export function setUpAgents(hostId: string, refresh = false): Promise<string | undefined> {
   const next = queue.then(() => setUp(hostId, refresh));
@@ -106,19 +106,28 @@ let queue: Promise<unknown> = Promise.resolve();
 async function setUp(hostId: string, refresh: boolean): Promise<string | undefined> {
   const failed = await loadProviders(hostId, refresh);
   if (failed) return failed;
-  for (const agent of agents) {
-    if (infoOf(listedProviders(hostId)?.providers, agent)) continue;
-    const added = await saveProvider(hostId, {
-      id: agent.id,
-      kind: agent.kind,
-      name: agent.name,
-      enabled: false,
-      ...(agent.program && { program: agent.program }),
-      args: agent.args ?? [],
-      env: agent.env ?? [],
-      models: [],
-    });
-    if (added) return added;
+  // At once, so one slow probe (an agent waiting to sign in takes 20 s) doesn't hold up the rest.
+  const missing = agents.filter((agent) => !infoOf(listedProviders(hostId)?.providers, agent));
+  const added = await Promise.all(
+    missing.map((agent) =>
+      saveProvider(hostId, {
+        id: agent.id,
+        kind: agent.kind,
+        name: agent.name,
+        enabled: false,
+        ...(agent.program && { program: agent.program }),
+        args: agent.args ?? [],
+        env: agent.env ?? [],
+        models: [],
+      }),
+    ),
+  );
+  const failedAdd = added.find(Boolean);
+  if (failedAdd) return failedAdd;
+  // Saves answer in any order, so the last may predate another's add. Every probe is cached now.
+  if (missing.length > 0) {
+    const reloaded = await loadProviders(hostId);
+    if (reloaded) return reloaded;
   }
   const { remove, save } = plan(listedProviders(hostId)?.providers ?? []);
   for (const instance of save) {

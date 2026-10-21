@@ -281,6 +281,17 @@ struct Stored {
     secrets: Option<AccountId>,
 }
 
+/// What a probe of an instance depends on: its settings but `enabled`, and where its secrets are.
+type Probed = (ProviderInstance, Option<AccountId>);
+
+fn probed(entry: &Stored) -> Probed {
+    let instance = ProviderInstance {
+        enabled: false,
+        ..entry.instance.clone()
+    };
+    (instance, entry.secrets)
+}
+
 /// What a probe found, kept for [`CACHE_TTL`].
 #[derive(Clone, Debug, Default)]
 struct Found {
@@ -307,7 +318,11 @@ pub struct Providers {
     launcher: Launcher,
     registry: BackendRegistry,
     stored: Mutex<Vec<Stored>>,
-    cache: Mutex<HashMap<String, (Instant, Found)>>,
+    /// Each instance's last probe: when it ended, what it probed ([`probed`]), and what it found.
+    cache: Mutex<HashMap<String, (Instant, Probed, Found)>>,
+    /// One lock per instance, held while [`Self::found`] probes it, so lists running at once, as
+    /// onboarding's saves do, wait on one probe instead of each starting their own.
+    probing: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// The backends plxd registered at startup under the built-in instances' ids, which a
     /// built-in instance with no settings runs.
     defaults: HashMap<String, Arc<dyn Backend>>,
@@ -370,6 +385,7 @@ impl Providers {
             defaults,
             stored: Mutex::new(Vec::new()),
             cache: Mutex::new(HashMap::new()),
+            probing: Mutex::new(HashMap::new()),
         };
         for (id, ..) in BUILT_IN {
             if !stored.iter().any(|s| s.instance.id == *id) {
@@ -440,7 +456,7 @@ impl Providers {
                 .lock()
                 .await
                 .get(&entry.instance.id)
-                .map(|(_, found)| found.clone());
+                .map(|(_, _, found)| found.clone());
             let found = match cached {
                 Some(found) => found,
                 None => match detected_cli(&entry.instance.id) {
@@ -502,7 +518,10 @@ impl Providers {
             None => stored.push(entry.clone()),
         }
         self.write(&stored)?;
-        self.cache.lock().await.remove(&entry.instance.id);
+        // Turning an instance on or off changes nothing a probe finds, so its last one stands.
+        if old.as_ref().map(probed) != Some(probed(&entry)) {
+            self.cache.lock().await.remove(&entry.instance.id);
+        }
         self.register(&entry);
         Ok(())
     }
@@ -660,20 +679,34 @@ impl Providers {
     /// `entry`'s state: from the cache while it's fresh, else probed.
     async fn found(&self, detector: &CliDetector, entry: &Stored, refresh: bool) -> Found {
         let id = &entry.instance.id;
-        if !refresh
-            && let Some((at, found)) = self.cache.lock().await.get(id)
-            && at.elapsed() < CACHE_TTL
-        {
-            return found.clone();
+        if !refresh && let Some(found) = self.cached(entry, None).await {
+            return found;
+        }
+        let asked = Instant::now();
+        let probing = Arc::clone(self.probing.lock().await.entry(id.clone()).or_default());
+        let _probing = probing.lock().await;
+        // Another list may have probed it while this one waited, which a `refresh` takes when
+        // that probe ended after it asked.
+        if let Some(found) = self.cached(entry, refresh.then_some(asked)).await {
+            return found;
         }
         let found = self.probe(detector, entry, refresh).await;
         let mut cache = self.cache.lock().await;
         if found.installing {
             cache.remove(id);
         } else {
-            cache.insert(id.clone(), (Instant::now(), found.clone()));
+            cache.insert(id.clone(), (Instant::now(), probed(entry), found.clone()));
         }
         found
+    }
+
+    /// `entry`'s cached state, from a probe of its current settings that ended after `since`, or
+    /// without one, within [`CACHE_TTL`].
+    async fn cached(&self, entry: &Stored, since: Option<Instant>) -> Option<Found> {
+        let cache = self.cache.lock().await;
+        let (at, settings, found) = cache.get(&entry.instance.id)?;
+        let recent = since.map_or_else(|| at.elapsed() < CACHE_TTL, |since| *at >= since);
+        (recent && *settings == probed(entry)).then(|| found.clone())
     }
 
     #[expect(clippy::too_many_lines, reason = "one probe, with each kind's steps")]
@@ -1914,6 +1947,106 @@ mod tests {
         let reloaded = Providers::load(dir.path(), keys(), &launcher(), &registry);
         assert!(reloaded.stored.lock().await.is_empty(), "not seeded again");
         assert!(registry.by_backend_name("codex").is_none());
+    }
+
+    /// Lists at once, refreshes too, share one probe of an instance, and turning it on or off
+    /// keeps that probe, so onboarding's saves don't run a slow agent again for each one. A change
+    /// a probe reads, a secret included, probes again.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn lists_at_once_share_a_probe_and_turning_on_keeps_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let runs = dir.path().join("runs");
+        // Each run, `--version` or the ACP probe, adds a line and takes a moment.
+        std::fs::write(
+            bin.join("grok"),
+            format!("#!/bin/sh\necho >> '{}'\nsleep 0.3\n", runs.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(bin.join("grok"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let env: Environment = [("PATH", bin.display().to_string())].into_iter().collect();
+        let launcher = Launcher::new(DataDir::new(dir.path().join("data")).unwrap(), env);
+        let providers = Providers::load(
+            dir.path(),
+            Arc::new(MemoryKeyStore::new()),
+            &launcher,
+            &BackendRegistry::new(),
+        );
+        let grok = ProviderInstance {
+            id: "grok-build".into(),
+            kind: ProviderKind::GrokBuild,
+            name: "Grok Build".into(),
+            enabled: false,
+            program: None,
+            home: None,
+            args: Vec::new(),
+            env: Vec::new(),
+            models: Vec::new(),
+            reserve: None,
+        };
+        providers.save(grok.clone()).await.unwrap();
+        let detector = crate::detect::CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT);
+        let ran = || {
+            std::fs::read_to_string(&runs)
+                .unwrap_or_default()
+                .lines()
+                .count()
+        };
+
+        let (a, b) = tokio::join!(
+            providers.list(&detector, false),
+            providers.list(&detector, false)
+        );
+        let installed = |list: &parallax_protocol::ProvidersListResult| {
+            list.providers
+                .iter()
+                .any(|p| p.instance.id == "grok-build" && p.installed)
+        };
+        assert!(installed(&a) && installed(&b));
+        assert_eq!(ran(), 2, "one `--version` and one ACP probe");
+
+        providers
+            .save(ProviderInstance {
+                enabled: true,
+                ..grok.clone()
+            })
+            .await
+            .unwrap();
+        providers.list(&detector, false).await;
+        assert_eq!(ran(), 2, "turning it on kept its probe");
+
+        providers
+            .save(ProviderInstance {
+                args: vec!["--verbose".into()],
+                ..grok.clone()
+            })
+            .await
+            .unwrap();
+        providers.list(&detector, false).await;
+        assert_eq!(ran(), 4, "a setting a probe reads probes again");
+
+        tokio::join!(
+            providers.list(&detector, true),
+            providers.list(&detector, true)
+        );
+        assert_eq!(ran(), 6, "refreshes at once share a probe too");
+
+        providers
+            .save(ProviderInstance {
+                env: vec![ProviderEnvVar {
+                    name: "XAI_API_KEY".into(),
+                    value: Some("key".into()),
+                    secret: true,
+                }],
+                ..grok
+            })
+            .await
+            .unwrap();
+        providers.list(&detector, false).await;
+        assert_eq!(ran(), 8, "a new secret probes again");
     }
 
     #[cfg(unix)]
