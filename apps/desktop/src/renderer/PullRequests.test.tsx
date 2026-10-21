@@ -8,8 +8,10 @@ import samples from "../../../../crates/parallax-protocol/samples/v1/pull-reques
 import type { ParallaxBridge } from "../preload/bridge";
 import type { PrDiffResult, PullRequest } from "../protocol/generated/protocol";
 import {
+  fileKind,
   githubText,
   LinkedPullRequests,
+  lineBreakdown,
   linkedPr,
   parseDiff,
   PullRequestChip,
@@ -653,6 +655,41 @@ test("parseDiff numbers each side, and keeps renames and binary files", () => {
       ].join("\n"),
     ).map((f) => f.path),
   ).toEqual(["x b/y.bin", "caf\\303\\251.md"]);
+});
+
+test("fileKind sorts paths into code, tests, mocks, docs, and generated files", () => {
+  const kinds = {
+    "daemon/src/worktree/pull_request.rs": "Code",
+    "apps/desktop/src/renderer/Latest.tsx": "Code",
+    "daemon/tests/server/pull_requests.rs": "Tests",
+    "apps/desktop/e2e/threads.spec.ts": "Tests",
+    "apps/desktop/src/renderer/PullRequests.test.tsx": "Tests",
+    "pkg/run_test.go": "Tests",
+    "apps/desktop/preview/mockBridge.ts": "Mocks",
+    "crates/parallax-protocol/samples/v1/pr-diff.json": "Mocks",
+    "daemon/tests/fixtures/claude.jsonl": "Mocks",
+    "docs/PLAN.md": "Docs",
+    "README.md": "Docs",
+    "docs/spec/api.md": "Docs",
+    "requirements.txt": "Code",
+    "Cargo.lock": "Generated",
+    "apps/desktop/pnpm-lock.yaml": "Generated",
+    "apps/desktop/src/protocol/generated/protocol.ts": "Generated",
+  };
+  expect(Object.fromEntries(Object.keys(kinds).map((p) => [p, fileKind(p)]))).toEqual(kinds);
+});
+
+test("lineBreakdown adds up each kind, and puts lines in unlisted files under Other", () => {
+  const files = [
+    { path: "src/a.ts", additions: 10, deletions: 2 },
+    { path: "src/a.test.ts", additions: 5, deletions: 0 },
+    { path: "src/b.ts", additions: 1, deletions: 1 },
+  ];
+  expect(lineBreakdown(prOf(1, { additions: 20, deletions: 3, files }))).toEqual([
+    { kind: "Code", additions: 11, deletions: 3 },
+    { kind: "Tests", additions: 5, deletions: 0 },
+    { kind: "Other", additions: 4, deletions: 0 },
+  ]);
 });
 
 test("Open on GitHub goes to the side panel's Browser when Settings says so", async () => {

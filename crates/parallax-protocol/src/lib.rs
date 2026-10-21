@@ -180,8 +180,8 @@ pub use provider::{
     ProvidersUpdatesParams, ProvidersUpdatesResult, ProvidersUpgradeParams, ProvidersUpgradeResult,
 };
 pub use pull_request::{
-    PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrMergeMethod,
-    PrMergeState, PrReview, PrReviewState, PrState, PrViewParams, PullRequest,
+    PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrFile,
+    PrMergeMethod, PrMergeState, PrReview, PrReviewState, PrState, PrViewParams, PullRequest,
 };
 pub use question::{
     Question, QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionId,

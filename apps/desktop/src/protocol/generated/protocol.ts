@@ -5976,6 +5976,11 @@ export type PullRequest = {
 	 */
 	deletions: number,
 	/**
+	 * The files it changes, as GitHub lists them: at most its first 100. Absent means none, or a
+	 * plxd without them.
+	 */
+	files?: Array<PrFile>,
+	/**
 	 * Its description, in Markdown.
 	 */
 	body: string,
@@ -6114,6 +6119,24 @@ export type PrCommit = {
 	 * When it was committed, in RFC 3339 UTC.
 	 */
 	committedAt: string,
+};
+
+/**
+ * One file a pull request changes, with its lines added and removed.
+ */
+export type PrFile = {
+	/**
+	 * Its path in the repository.
+	 */
+	path: string,
+	/**
+	 * Lines added.
+	 */
+	additions: number,
+	/**
+	 * Lines removed.
+	 */
+	deletions: number,
 };
 
 /**
