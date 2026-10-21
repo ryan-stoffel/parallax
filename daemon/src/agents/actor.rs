@@ -563,6 +563,10 @@ pub(super) struct Actor {
     /// The permission requests plxd asked for computer use (PLX-897), which `agent/approve`
     /// answers here rather than in the CLI: each one's app and the `computer/ask`s waiting on it.
     computer_asks: HashMap<ApprovalId, ComputerAsk>,
+    /// How a computer use request ended while no `computer/ask` waited on it, as between two of
+    /// its 50 s rounds, by app in lowercase, until the next ask for the app takes it. Not Always
+    /// allow, which is saved.
+    computer_answers: HashMap<String, AgentApproveResult>,
     /// The tool calls running `gh pr create`, by call id, until their results link the pull
     /// requests they print (PLX-318).
     pr_calls: HashSet<String>,
@@ -619,6 +623,7 @@ impl Actor {
             resumes: Resumes::default(),
             approvals: Approvals::default(),
             computer_asks: HashMap::new(),
+            computer_answers: HashMap::new(),
             pr_calls: HashSet::new(),
             senders: HashMap::new(),
             cursor: None,
@@ -1892,6 +1897,10 @@ impl Actor {
     /// resolution will come. Stopping or cancelling the run resolves it as it does the CLI's.
     async fn ask_computer(&mut self, app: String) -> oneshot::Receiver<AgentApproveResult> {
         let (resolved, resolution) = oneshot::channel();
+        if let Some(answer) = self.computer_answers.remove(&app.to_lowercase()) {
+            let _ = resolved.send(answer);
+            return resolution;
+        }
         if let Some(asked) = self
             .computer_asks
             .values_mut()
@@ -1953,8 +1962,14 @@ impl Actor {
     /// nothing to one that already ended.
     async fn resolve_approval(&mut self, approval_id: ApprovalId, resolution: AgentApproveResult) {
         if let Some(asked) = self.computer_asks.remove(&approval_id) {
+            let mut taken = false;
             for waiter in asked.waiting {
-                let _ = waiter.send(resolution.clone());
+                taken |= waiter.send(resolution.clone()).is_ok();
+            }
+            // Always allow is saved in the file, which every later ask reads first.
+            if !taken && !resolution.always {
+                self.computer_answers
+                    .insert(asked.app.to_lowercase(), resolution.clone());
             }
         }
         let item = convert::approval_resolved(approval_id, &resolution);

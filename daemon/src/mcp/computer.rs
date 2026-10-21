@@ -468,13 +468,21 @@ impl Computer {
             self.allow(binding, &app.name).await?;
             return Ok(app);
         }
-        let name = wanted.trim().trim_end_matches(".app");
-        refuse_blocked(name, &bundle_id(name).await)?;
-        self.allow(binding, name).await?;
-        launch(name).await?;
+        let wanted = wanted.trim().trim_end_matches(".app");
+        // Its real name, which the user is asked about and Always allow keeps, even when the
+        // model named it by bundle id.
+        let (id, name) = installed(wanted).await.ok_or_else(|| {
+            format!(
+                "No app named {wanted} is installed. Call computer_list_apps for the apps running."
+            )
+        })?;
+        refuse_blocked(&name, &id)?;
+        self.allow(binding, &name).await?;
+        launch(&id).await?;
         let deadline = tokio::time::Instant::now() + LAUNCH;
         loop {
-            if let Some(app) = computer::find(&running().await?, name).cloned() {
+            if let Some(app) = computer::find(&running().await?, &id).cloned() {
+                refuse_blocked(&app.name, &app.bundle_id)?;
                 self.lock_allowed().insert(app.name.clone());
                 return Ok(app);
             }
@@ -894,24 +902,28 @@ fn refuse_blocked(name: &str, bundle_id: &str) -> Result<(), String> {
     }
 }
 
-/// The bundle id of the installed app `name` names, read without opening it, or `name` itself
-/// when it is one or no app has that name.
-async fn bundle_id(name: &str) -> String {
-    let script = format!("id of application \"{}\"", name.replace(['"', '\\'], ""));
-    let found = blocking(move || {
+/// The bundle id and name of the installed app `wanted` names, by name or bundle id, read
+/// without opening it, or `None` when no app has that name.
+async fn installed(wanted: &str) -> Option<(String, String)> {
+    let wanted = wanted.replace(['"', '\\'], "");
+    let script = if wanted.contains('.') {
+        format!("tell application id \"{wanted}\" to return (id as text) & linefeed & name")
+    } else {
+        format!("tell application \"{wanted}\" to return (id as text) & linefeed & name")
+    };
+    let output = blocking(move || {
         Command::new("/usr/bin/osascript")
             .args(["-e", &script])
             .stdin(Stdio::null())
             .output()
             .map_err(|error| error.to_string())
     })
-    .await;
-    match found {
-        Ok(output) if output.status.success() => {
-            String::from_utf8_lossy(&output.stdout).trim().to_owned()
-        }
-        _ => name.to_owned(),
-    }
+    .await
+    .ok()
+    .filter(|output| output.status.success())?;
+    let found = String::from_utf8_lossy(&output.stdout);
+    let (id, name) = found.trim().split_once('\n')?;
+    Some((id.to_owned(), name.to_owned()))
 }
 
 /// Opens the app `wanted` names, by bundle id or name.

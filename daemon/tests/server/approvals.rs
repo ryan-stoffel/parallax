@@ -804,15 +804,24 @@ async fn computer_use_asks_in_the_transcript_and_remembers_always() {
         .unwrap();
     assert!(forgot.apps.is_empty());
 
-    // Once forgotten it asks again, and a denial says no to the call waiting on it.
-    let asking =
-        tokio::spawn(async move { second.call::<ComputerAsk>(ask("Notes", 50_000)).await });
+    // Once forgotten it asks again. A denial between two rounds reaches the next one.
+    let asked = second.call::<ComputerAsk>(ask("Notes", 50)).await.unwrap();
+    assert_eq!(status(asked), ComputerAnswer::Pending);
     let events = until(&mut client, |event| !requested(event).is_empty()).await;
     let approval_id = events.iter().flat_map(requested).next().unwrap();
     let deny = answer(run_id, approval_id, AgentApprovalAnswer::Deny);
     client.call::<AgentApprove>(deny).await.unwrap();
+    let next = second.call::<ComputerAsk>(ask("Notes", 50)).await.unwrap();
+    assert_eq!(status(next), ComputerAnswer::Denied);
+
+    // And a call waiting when the user answers gets it at once.
+    let asking = tokio::spawn(async move { second.call::<ComputerAsk>(ask("Mail", 50_000)).await });
+    let events = until(&mut client, |event| !requested(event).is_empty()).await;
+    let approval_id = events.iter().flat_map(requested).next().unwrap();
+    let allow = answer(run_id, approval_id, AgentApprovalAnswer::Allow);
+    client.call::<AgentApprove>(allow).await.unwrap();
     assert_eq!(
         status(asking.await.unwrap().unwrap()),
-        ComputerAnswer::Denied
+        ComputerAnswer::Allowed
     );
 }
