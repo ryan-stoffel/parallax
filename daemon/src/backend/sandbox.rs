@@ -190,6 +190,20 @@ fn worker_temp_dir(tmpdir: Option<std::ffi::OsString>) -> PathBuf {
         .map_or_else(|| PathBuf::from("/tmp"), PathBuf::from)
 }
 
+/// The folder of plxd's own `bwrap` and `socat` in `data_dir`, on Linux when this plxd carries
+/// them.
+fn bundled_tools(data_dir: &Path) -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        super::claude::linux_sandbox::bundled_dir(data_dir)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = data_dir;
+        None
+    }
+}
+
 /// The unreadable path of `sandbox` that `temp` is inside, if any. Claude Code puts its network
 /// proxy's sockets in the temp folder, so a deny over it cuts a worker's commands off the network
 /// (PLX-107). Allowing the folder instead would reopen what the deny hides.
@@ -214,7 +228,8 @@ pub struct WorkerSandbox {
     pub writable: Vec<PathBuf>,
     /// Paths inside the writable folders that commands may read but not write: the worktree's
     /// `.git` file and the repository's git folder it points into, since plxd commits for every
-    /// backend (0013), and the data folder's uploads, the files attached to messages (0071).
+    /// backend (0013), the data folder's uploads, the files attached to messages (0071), and on
+    /// Linux plxd's own `bwrap` and `socat`, whose relays run inside the sandbox (PLX-895).
     pub read_only: Vec<PathBuf>,
     /// Paths commands may not read: [`unreadable_in_home`], on Linux the user's runtime folder,
     /// plxd's data folder, the folder that holds every run's temp folder, and Claude Code's
@@ -264,11 +279,14 @@ impl WorkerSandbox {
             .collect();
         Self {
             writable: vec![context.to_owned()],
-            read_only: vec![
+            read_only: [
                 worktree.join(".git"),
                 git_dir.to_owned(),
                 data_dir.join(crate::paths::UPLOADS_DIR),
-            ],
+            ]
+            .into_iter()
+            .chain(bundled_tools(data_dir))
+            .collect(),
             unreadable,
             temp: temp.to_owned(),
         }

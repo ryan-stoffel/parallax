@@ -13,8 +13,11 @@ workspace = true
 
 # `fake-backend` lets `PLXD_FAKE_BACKEND` run workers on the fake backend, for the app's end-to-end
 # tests (PLX-16). Test builds only: it refuses to compile without debug assertions.
+# `sandbox-tools` embeds the static `bwrap` and `socat` in the folder `PLX_SANDBOX_TOOLS` names, on
+# Linux, so workers need neither installed (PLX-895). Release builds (scripts/ci/package-app).
 [features]
 fake-backend = []
+sandbox-tools = []
 
 [dependencies]
 clap = { workspace = true, features = ["derive", "env"] }

@@ -4,7 +4,8 @@
 //! reaches Anthropic, and no login is used.
 //!
 //! Skipped when `PLX_SANDBOX_CLAUDE` is unset. CI's Linux legs install bubblewrap, socat, and a
-//! pinned Claude Code, and set it.
+//! pinned Claude Code, and set it. A plxd built with `--features sandbox-tools` needs neither
+//! installed (PLX-895).
 #![cfg(unix)]
 
 mod common;
@@ -97,14 +98,10 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
     }
     fs::write(worktree.join("probe.sh"), probe).unwrap();
 
-    let (stdout, transcript) = run_worker(
-        &claude,
-        &request,
-        &root,
-        &home,
-        &[("ANTHROPIC_API_KEY", "sk-ant-parallax-sandbox-test")],
-    )
-    .await;
+    let path = plxd_path(&claude, &data, &worktree).await;
+    let mut env = vec![("ANTHROPIC_API_KEY", "sk-ant-parallax-sandbox-test")];
+    env.extend(path.as_deref().map(|path| ("PATH", path)));
+    let (stdout, transcript) = run_worker(&claude, &request, &root, &home, &env).await;
 
     let result = tool_result(&stdout).unwrap_or_else(|| panic!("no Bash result:\n{transcript}"));
     assert!(result.contains("wrote-inside"), "{transcript}");
@@ -121,6 +118,28 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
             listener.accept().is_err(),
             "a Unix socket connect got through"
         );
+    }
+}
+
+/// On Linux, runs the check plxd runs before a worker starts, which also writes out the bwrap and
+/// socat a release plxd carries (PLX-895), and returns the `PATH` plxd gives the worker, which
+/// ends in their folder. `None` elsewhere.
+#[allow(clippy::unused_async, reason = "awaits only on Linux")]
+async fn plxd_path(claude: &std::ffi::OsStr, data: &Path, cwd: &Path) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        use plxd::backend::process::{Environment, Launcher, ProcessSpec};
+        let launcher = Launcher::new(DataDir::new(data).unwrap(), Environment::inherited());
+        plxd::backend::claude::linux_sandbox::check_host(&launcher, Path::new(claude))
+            .await
+            .unwrap();
+        let env = launcher.environment(&ProcessSpec::new(claude, cwd));
+        Some(env.get("PATH")?.to_str().unwrap().to_owned())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (claude, data, cwd);
+        None
     }
 }
 
@@ -208,14 +227,10 @@ async fn a_worker_s_temp_is_its_own() {
         writeln!(probe, "echo x > '{}'", file.display()).unwrap();
     }
     fs::write(worktree.join("probe.sh"), probe).unwrap();
-    let (stdout, transcript) = run_worker(
-        &claude,
-        &request,
-        &root,
-        &home,
-        &[("ANTHROPIC_API_KEY", "sk-ant-parallax-sandbox-test")],
-    )
-    .await;
+    let path = plxd_path(&claude, &data, &worktree).await;
+    let mut env = vec![("ANTHROPIC_API_KEY", "sk-ant-parallax-sandbox-test")];
+    env.extend(path.as_deref().map(|path| ("PATH", path)));
+    let (stdout, transcript) = run_worker(&claude, &request, &root, &home, &env).await;
     let written: Vec<&PathBuf> = planted.iter().filter(|file| file.exists()).collect();
     if made_tmp_claude {
         fs::remove_dir_all("/tmp/claude").unwrap();

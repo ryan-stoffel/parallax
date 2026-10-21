@@ -15,7 +15,6 @@ import { createInterface } from "node:readline/promises";
 
 import { buildContext, buildLaunchPrompt, buildSeedPrompt } from "./doctor-prompt.mjs";
 import { fetchReleases, pickRelease } from "./releases.mjs";
-import { linuxPackages } from "./scripts.mjs";
 
 /**
  * @typedef {object} Fix A command that fixes a failed check.
@@ -84,7 +83,6 @@ import { linuxPackages } from "./scripts.mjs";
  * @property {number | undefined} freeBytes Free space where the data folder is.
  * @property {number | undefined} worktrees How many run worktrees the data folder holds.
  * @property {LogProblems | undefined} log
- * @property {string[] | undefined} sandboxMissing Linux only.
  * @property {Record<string, string | undefined>} agentClis `claude` and `codex` on PATH.
  */
 
@@ -442,17 +440,9 @@ export async function gather(version, newest) {
   const logFile = path.join(dataDir, "logs", "plxd.log");
   const log = isFile(logFile) ? parseLogProblems(readTail(logFile, 4 * 1024 * 1024), new Date()) : undefined;
 
-  /** @type {string[] | undefined} */
-  let sandboxMissing;
-  if (platform === "linux") {
-    // Nix profiles too, as the install script's `has` does: a non-login shell may not have them on PATH.
-    const has = (/** @type {string} */ command) =>
-      findOnPath(command, env, platform) || [".nix-profile/bin", ".local/state/nix/profile/bin"].some((dir) => isFile(path.join(home, dir, command)));
-    sandboxMissing = [["bwrap", "bubblewrap"], ["socat", "socat"]].flatMap(([command, pkg]) => (has(command ?? "") ? [] : [pkg ?? ""]));
-  }
   const agentClis = Object.fromEntries(AGENTS.map(({ id }) => [id, findOnPath(id, env, platform)]));
 
-  return { platform, dataDir, dataDirExists, plxd, plxdVersion, pid, running, runningExe, runningExeVersion, answers, newest, git, freeBytes, worktrees, log, sandboxMissing, agentClis };
+  return { platform, dataDir, dataDirExists, plxd, plxdVersion, pid, running, runningExe, runningExeVersion, answers, newest, git, freeBytes, worktrees, log, agentClis };
 }
 
 /** `seconds` as `2 d 3 h`, `3 h 12 m`, or `12 m`. @param {number} seconds */
@@ -566,15 +556,6 @@ export function evaluate(facts) {
     add("plxd log", errors > 0 ? { state: "warn", detail: `${counts}. Latest error: ${lastError?.slice(0, 160)}` } : { state: "ok", detail: counts });
   }
 
-  if (facts.sandboxMissing) {
-    const missing = facts.sandboxMissing;
-    add(
-      "Sandbox",
-      missing.length === 0
-        ? { state: "ok", detail: "bubblewrap and socat, for Claude Code's worker sandbox" }
-        : { state: "fail", detail: `missing ${missing.join(" and ")}, which Claude Code's worker sandbox needs`, fix: { title: `Install ${missing.join(" and ")}`, file: "sh", args: ["-s"], input: linuxPackages } },
-    );
-  }
   return out;
 }
 

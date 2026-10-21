@@ -1,0 +1,42 @@
+#!/bin/sh
+# Builds static `bwrap` and `socat` for this machine's arch into the folder $1 (PLX-895), for the
+# Linux plxd to embed: Claude Code's worker sandbox needs both on PATH (0013), and a static build
+# runs on any distro, NixOS included. Built in Alpine, against musl, from pinned upstream sources.
+# Their tarballs stay in $1 too, for the release to attach: bubblewrap is LGPL-2.0-or-later and
+# socat GPL-2.0, so their source goes out with the binaries. Needs Docker.
+set -eu
+
+out=$1
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
+
+bubblewrap=bubblewrap-0.13.1.tar.xz
+socat=socat-1.8.1.3.tar.gz
+cd "$out"
+[ -f "$bubblewrap" ] || curl -fsSL --retry 3 -o "$bubblewrap" "https://github.com/containers/bubblewrap/releases/download/v0.13.1/$bubblewrap"
+# socat's site serves https with a self-signed certificate. The checksum below is what's trusted.
+[ -f "$socat" ] || curl -fsSL --retry 3 -o "$socat" "http://www.dest-unreach.org/socat/download/$socat"
+if command -v sha256sum >/dev/null 2>&1; then check="sha256sum -c -"; else check="shasum -a 256 -c -"; fi
+$check <<EOF
+0e85c8702248b8dd64144f594147553650cdd0e4c951690345faace79c217c4d  $bubblewrap
+06602ffd591e98c75b3dc1d66f0f19136cc666b0b2d95caad987d6ab2cb28097  $socat
+EOF
+
+docker run --rm -v "$out:/out" -e OWNER="$(id -u):$(id -g)" -e BUBBLEWRAP="$bubblewrap" -e SOCAT="$socat" \
+  alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8 sh -euxc '
+    apk add --no-cache build-base meson libcap-dev libcap-static linux-headers >/dev/null
+    cd /tmp
+    tar xf "/out/$BUBBLEWRAP"
+    cd "${BUBBLEWRAP%.tar.xz}"
+    meson setup build --prefer-static -Dc_link_args=-static -Dselinux=disabled -Dman=disabled \
+      -Dtests=false -Dbash_completion=disabled -Dzsh_completion=disabled
+    meson compile -C build bwrap
+    install -s -m 755 build/bwrap /out/bwrap
+    cd /tmp
+    tar xf "/out/$SOCAT"
+    cd "${SOCAT%.tar.gz}"
+    ./configure LDFLAGS=-static --disable-openssl --disable-readline --disable-libwrap >/dev/null
+    make -j"$(nproc)" socat >/dev/null
+    install -s -m 755 socat /out/socat
+    chown "$OWNER" /out/bwrap /out/socat
+  '

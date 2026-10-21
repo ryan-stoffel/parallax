@@ -49,7 +49,8 @@ the agent CLIs it runs, git worktrees, and the SQLite store. The app is only a c
   while no agent is running a turn.
 - plxd runs each agent's own CLI: `claude`, `codex`, the Cursor SDK through Node, or an ACP agent.
   Claude Code runs through a Node sidecar whose SDK plxd installs in `tools/` in the data folder.
-  Workers run sandboxed: on Linux that needs bubblewrap and socat.
+  Workers run sandboxed: on Linux with bubblewrap and socat, which a release plxd carries in
+  `tools/sandbox/` and uses when the host has none.
 - Each thread runs in its own git worktree under `worktrees/` in the data folder.
 - Parallax Connect, when on, has plxd listen on TCP 7340 on its own Tailscale address, for the
   user's other computers. SSH hosts are reached with `ssh … plxd attach`, falling back to plxd in
@@ -119,7 +120,7 @@ Check these against the evidence before going deeper.
 | "Update plxd" or "Update the app", or a stale running version | The context file's running version differs from the binary's, or plxd reports `0.1.0` (its `plxd.version` file is missing) | Quit and reopen Parallax once agents are idle, or run `~/.parallax-plxd/plxd service install --replace` |
 | An agent isn't found | `accounts/list` or the context file shows it not installed, while the user's shell finds it | Put its folder on the login shell's PATH, or in `~/.config/environment.d/*.conf` on Linux |
 | An agent isn't signed in | The context file says NOT signed in | `claude auth login` or `codex login`; Cursor signs in from the app |
-| Threads fail at once on Linux | `workerUnavailable`, with `bubblewrap and socat aren't installed`, the AppArmor `apparmor_restrict_unprivileged_userns` message, or a root or CAP_SETFCAP message | Install bubblewrap and socat; for AppArmor, the message names the sysctl |
+| Threads fail at once on Linux | `workerUnavailable`, with `bubblewrap and socat aren't installed`, the AppArmor `apparmor_restrict_unprivileged_userns` message, or a root or CAP_SETFCAP message | Install bubblewrap and socat (a release plxd brings its own, so missing ones mean a plxd built from source); for AppArmor, install the distro's bubblewrap and add the profile the message names |
 | Agents fail on NixOS | No `NIX_LD` and no `/run/current-system/sw/share/nix-ld/lib/ld.so` | `programs.nix-ld.enable = true;` in configuration.nix, then `sudo nixos-rebuild switch` |
 | Claude or Cursor threads fail to start | The note `Node.js 22.16 or newer is required` (Claude) or `Node.js 22.13 or newer is required` (Cursor), or `Couldn't install the …` SDK | Install Node 22.16 or newer with npm |
 | API keys fail on Linux | `keychainUnavailable`: no unlocked Secret Service | Install and unlock a Secret Service (gnome-keyring, KeePassXC) |

@@ -122,11 +122,9 @@ ${posixTail}`;
 /**
  * Linux: downloads the release's static plxd, so no AppImage runtime has to run (NixOS won't run
  * one), and links `~/.local/bin/plxd` to it, where earlier installs put plxd, so `plxd` stays on
- * PATH and their service runs this one until `service install --replace` moves it over. Then
- * installs bubblewrap and socat, which Claude Code's worker sandbox needs (0013), when it can
- * without a password: `nix profile install` on NixOS (unless the user's profile is nix-env's),
- * else the package manager as root or with passwordless sudo. Otherwise, and for nix-ld on NixOS,
- * which agent CLIs' generic Linux binaries need, it says what to do. Then turns on lingering, so
+ * PATH and their service runs this one until `service install --replace` moves it over. That plxd
+ * carries the bubblewrap and socat Claude Code's worker sandbox needs (PLX-895). On NixOS, says
+ * when nix-ld, which agent CLIs' generic Linux binaries need, is off. Then turns on lingering, so
  * plxd's user service runs with nobody logged in.
  * @param {Installer} installer
  */
@@ -138,65 +136,14 @@ mkdir -p "$HOME/.local/bin"
 rm -f "$HOME/.local/bin/plxd.version"
 ln -sf "$plxd" "$HOME/.local/bin/plxd"
 echo "Linked ~/.local/bin/plxd to it"
-${linuxPackages}
+if [ -e /etc/NIXOS ] && [ -z "\${NIX_LD:-}" ] && [ ! -e /run/current-system/sw/share/nix-ld/lib/ld.so ]; then
+  echo "warning: agent CLIs such as Claude Code ship generic Linux binaries, which NixOS runs only with nix-ld. Add programs.nix-ld.enable = true; to configuration.nix, then run sudo nixos-rebuild switch."
+fi
 if ! loginctl enable-linger "$(id -un)" >/dev/null 2>&1; then
   echo "warning: loginctl enable-linger failed, so plxd runs only while you're logged in."
 fi
 ${posixTail}`;
 }
-
-/**
- * The part of the Linux script that sees to Claude Code's sandbox packages and, on NixOS, nix-ld.
- * `has` also looks in Nix profiles, which a non-login shell may not have on its PATH. `doctor`
- * runs it alone as its fix for missing sandbox packages.
- */
-export const linuxPackages = `has() {
-  command -v "$1" >/dev/null 2>&1 || [ -x "$HOME/.nix-profile/bin/$1" ] || [ -x "$HOME/.local/state/nix/profile/bin/$1" ]
-}
-missing() {
-  m=
-  has bwrap || m=bubblewrap
-  has socat || m="$m socat"
-  echo $m
-}
-nixos=
-[ -e /etc/NIXOS ] && nixos=1
-packages=$(missing)
-if [ -n "$packages" ]; then
-  echo "Installing $packages for Claude Code's worker sandbox"
-  sudo=
-  [ "$(id -u)" = 0 ] || sudo="sudo -n"
-  {
-    # nix profile would turn a nix-env profile into one nix-env refuses, so that one is left alone.
-    if [ -n "$nixos" ] && [ ! -e "$HOME/.nix-profile/manifest.nix" ] && [ ! -e "$HOME/.local/state/nix/profile/manifest.nix" ]; then
-      # shellcheck disable=SC2046 # one package per word
-      nix --extra-experimental-features 'nix-command flakes' profile install $(printf 'nixpkgs#%s ' $packages)
-    elif [ -n "$nixos" ]; then
-      :
-    elif command -v apt-get >/dev/null 2>&1; then
-      $sudo apt-get install -y $packages
-    elif command -v dnf >/dev/null 2>&1; then
-      $sudo dnf install -y $packages
-    elif command -v pacman >/dev/null 2>&1; then
-      $sudo pacman -S --noconfirm --needed $packages
-    elif command -v zypper >/dev/null 2>&1; then
-      $sudo zypper --non-interactive install $packages
-    elif command -v apk >/dev/null 2>&1; then
-      $sudo apk add $packages
-    fi
-  } </dev/null >/dev/null 2>&1 || true
-  packages=$(missing)
-  if [ -z "$packages" ]; then
-    echo "Installed Claude Code's sandbox packages"
-  elif [ -n "$nixos" ]; then
-    echo "warning: Claude Code's worker sandbox needs $packages. Add to environment.systemPackages in configuration.nix, then run sudo nixos-rebuild switch."
-  else
-    echo "warning: Claude Code's worker sandbox needs $packages, which plx-connect couldn't install without a password. Install with your package manager, such as: sudo apt install $packages"
-  fi
-fi
-if [ -n "$nixos" ] && [ -z "\${NIX_LD:-}" ] && [ ! -e /run/current-system/sw/share/nix-ld/lib/ld.so ]; then
-  echo "warning: agent CLIs such as Claude Code ship generic Linux binaries, which NixOS runs only with nix-ld. Add programs.nix-ld.enable = true; to configuration.nix, then run sudo nixos-rebuild switch."
-fi`;
 
 /**
  * What every POSIX script ends with, once `$plxd` is in place: Parallax Connect on, then plxd's

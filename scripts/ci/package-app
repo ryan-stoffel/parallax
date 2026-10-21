@@ -41,15 +41,24 @@ esac
 exe=
 case $host in *-windows-*) exe=.exe ;; esac
 
+# Linux's plxd carries static bwrap and socat for Claude Code's worker sandbox (PLX-895). Built
+# even when PLXD_BIN is cached, since the release attaches their sources below.
+if [ "$(uname -s)" = Linux ]; then
+  scripts/ci/build-sandbox-tools target/sandbox-tools
+fi
+
 if [ -n "${PLXD_BIN:-}" ] && [ -f "$PLXD_BIN" ]; then
   plxd=$PLXD_BIN
 else
   triple=$host
+  features=
   if [ "$(uname -s)" = Linux ]; then
     triple=$arch-unknown-linux-musl
     rustup target add "$triple"
+    features=sandbox-tools
+    export PLX_SANDBOX_TOOLS="$PWD/target/sandbox-tools"
   fi
-  cargo build --release --locked -p plxd --target "$triple"
+  cargo build --release --locked -p plxd --target "$triple" --features "$features"
   plxd=target/$triple/release/plxd$exe
   if [ -n "${PLXD_BIN:-}" ]; then
     mkdir -p "$(dirname "$PLXD_BIN")"
@@ -92,3 +101,9 @@ esac
 # writes `<hex> *<name>`.
 if command -v sha256sum >/dev/null 2>&1; then sum=$(sha256sum "release/$name"); else sum=$(shasum -a 256 "release/$name"); fi
 printf '%s  %s\n' "${sum%% *}" "$name" > "release/$name.sha256"
+
+# The sources of the bwrap and socat inside Linux's plxd, which their licenses (LGPL-2.0-or-later,
+# GPL-2.0) have go out with them. One per arch, so each Linux build attaches its own.
+case $host in
+  *-linux-*) (cd ../../target/sandbox-tools && tar -cf "$OLDPWD/release/parallax-$version-linux-${builder_arch#--}-sandbox-sources.tar" ./*.tar.*) ;;
+esac

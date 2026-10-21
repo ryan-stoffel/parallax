@@ -144,7 +144,7 @@ On Linux and WSL2, Claude Code sandboxes Bash with bubblewrap and relays its pro
   - It runs every sandboxed command inside bwrap as `ARGV0=apply-seccomp /proc/self/fd/3 <shell> -c <command>`, where fd 3 is its own binary. That is what the 2.1.283 linux-x64 build does: `seccomp: {applyPath: "/proc/self/fd/3", argv0: "apply-seccomp"}` whenever it runs as a standalone executable [13].
   - `npm install -g @anthropic-ai/sandbox-runtime`, which Claude's docs still suggest, is only a fallback for a build without the helper. So plxd doesn't look for that package: a native Claude never reads it.
 - **How plxd checks** (`backend::claude::linux_sandbox::check_host`). Before each Claude worker starts or resumes, after the version check, with no cache:
-  1. `bwrap` and `socat` must resolve on the agents' `PATH`, where Claude Code looks for them.
+  1. `bwrap` and `socat` must resolve on the agents' `PATH`, where Claude Code looks for them. A release plxd carries static builds of both (PLX-895). It writes them to `tools/sandbox/` in the data folder first, and every process it starts has that folder last on its `PATH`, so a host's own copies win. A worker's commands may read the folder, since Claude Code runs its `socat` relays inside the sandbox.
   2. `claude --restricted sandbox status` must show that `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` is off (PLX-112).
      - Its `autoAllowBashIfSandboxedSource` is `"unsupported"` on Linux exactly when the flag is on. The other values in 2.1.283 are `default`, `settings`, and `policy`.
      - The check fails closed. It accepts only a run that exits 0 and prints `statusVersion` 3 with one of those three values. It refuses everything else: the flag, a non-zero exit, unreadable output, another `statusVersion`, or an unknown value.
@@ -156,7 +156,7 @@ On Linux and WSL2, Claude Code sandboxes Bash with bubblewrap and relays its pro
   4. The same bwrap runs the detected `claude` as `ARGV0=apply-seccomp`, which runs the same connect. The connect must be refused.
 
   Each failure is `workerUnavailable` and names what is wrong: bubblewrap, socat, the scrub flag, the AppArmor profile, or the filter. The check runs the same binary and helper the worker will use, so it can't pass on a file Claude Code doesn't load. It can't catch a later Claude Code that stops running its helper. `WORKER_MIN_VERSION` and `daemon/tests/sandbox.rs` cover that. CI runs the test against a pinned Claude Code on Linux.
-- **Setup.** Install Claude Code 2.1.275 or later, `bubblewrap`, and `socat`. On Ubuntu 24.04 and later, also add the AppArmor profile for `/usr/bin/bwrap` from Claude's docs [1]. WSL1 isn't supported. Nor is plxd running as root: Claude's sandbox adds `CAP_SETFCAP` for uid 0 and the check doesn't, so the check refuses.
+- **Setup.** Install Claude Code 2.1.275 or later. A release plxd brings `bwrap` and `socat` (PLX-895); a plxd built without `--features sandbox-tools` needs the distro's `bubblewrap` and `socat`. On Ubuntu 24.04 and later, AppArmor stops any `bwrap` without a profile, plxd's included, so install the distro's `bubblewrap` and add the AppArmor profile for `/usr/bin/bwrap` from Claude's docs [1]. WSL1 isn't supported. Nor is plxd running as root: Claude's sandbox adds `CAP_SETFCAP` for uid 0 and the check doesn't, so the check refuses.
 
 ### Codex
 
