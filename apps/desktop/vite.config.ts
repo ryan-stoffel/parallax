@@ -53,7 +53,11 @@ const cspMeta: Plugin = {
 // so the packaged app needs nothing from node_modules (PLX-66).
 const external = ["electron"];
 const electronBundle = (name: "main" | "preload"): PackUserConfig => ({
-  entry: { [name]: `src/${name}/${name}.ts` },
+  entry: {
+    [name]: `src/${name}/${name}.ts`,
+    // Points extensions' `browser` namespace at the filled-in `chrome` (extensionBrowser.ts).
+    ...(name === "preload" && { extensionBrowser: "src/preload/extensionBrowser.ts" }),
+  },
   // electron-chrome-extensions finds its preload for extensions' pages beside the bundle that
   // inlines it, since the packaged app has no node_modules (extensions.ts).
   ...(name === "main" && {

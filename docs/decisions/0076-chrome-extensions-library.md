@@ -17,6 +17,6 @@ Ryan wants Chrome extensions such as password managers in the side panel browser
 
 ## Consequences
 
-- Dark Reader and Bitwarden work, popups included. 1Password installs, but its popup waits on a background that never answers, likely because Electron has no native messaging or offscreen documents.
-- Native messaging, which desktop-app integrations such as 1Password's unlock need, stays out of reach in Electron. Running a real Chrome is the way to get it.
+- Dark Reader, Bitwarden, and 1Password work, popups included. 1Password needed `browser` pointed at the filled-in `chrome`: Chromium gives extensions a separate `browser` namespace, which the library doesn't fill in, and 1Password uses it.
+- The library supports native messaging, through the native host manifests Chrome reads. Store installs keep their store ids, so a desktop app's host lists them in `allowed_origins` and the extension can start that host from Parallax, as it would from Chrome. Whether a desktop app accepts the connection is up to it: 1Password's browser helper checks which browser is calling, so its desktop unlock may need Parallax added as a trusted browser in 1Password's settings.
 - The library's preload ships beside `main.cjs`, which `vite.config.ts` copies there, since the packaged app has no `node_modules`.

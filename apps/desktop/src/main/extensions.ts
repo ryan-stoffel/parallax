@@ -55,6 +55,9 @@ export function startExtensions(
     },
   });
   chrome.on("browser-action-popup-created", fitPopup);
+  const filePath = path.join(__dirname, "../preload/extensionBrowser.cjs");
+  for (const type of ["frame", "service-worker"] as const)
+    session.registerPreloadScript({ type, filePath });
   // The toolbar's extension buttons draw their icons from crx:// in the app's own session.
   ElectronChromeExtensions.handleCRXProtocol(sessions.defaultSession);
 }

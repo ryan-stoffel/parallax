@@ -414,7 +414,15 @@ function Tab({
     const starting = (e: { isMainFrame: boolean; isInPlace: boolean }) => {
       if (e.isMainFrame && !e.isInPlace) leaving();
     };
+    // The webview may attach before this runs, so it tries now, then on attaching and on its
+    // first page, whichever comes first; `ready` is the same each time.
+    try {
+      ready();
+    } catch {
+      // Not attached yet: getWebContentsId throws until it is.
+    }
     el.addEventListener("did-attach", ready);
+    el.addEventListener("dom-ready", ready);
     el.addEventListener("did-navigate", navigated);
     el.addEventListener("did-navigate-in-page", navigated);
     el.addEventListener("did-start-navigation", starting);
@@ -425,6 +433,7 @@ function Tab({
     return () => {
       stopAsking();
       el.removeEventListener("did-attach", ready);
+      el.removeEventListener("dom-ready", ready);
       el.removeEventListener("did-navigate", navigated);
       el.removeEventListener("did-navigate-in-page", navigated);
       el.removeEventListener("did-start-navigation", starting);

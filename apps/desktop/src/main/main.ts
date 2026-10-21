@@ -346,7 +346,8 @@ function tellTab(tab: Electron.WebContents, action: BrowserAction) {
 const browserSession = () => session.fromPartition(browserPartition);
 ipcMain.on("parallax:selectBrowserTab", (_event, id: unknown) => {
   const tab = typeof id === "number" ? webContents.fromId(id) : undefined;
-  if (tab && tab.session === browserSession()) selectTab(tab);
+  // Every webview is in the browser's session (will-attach-webview below).
+  if (tab && tab.getType() === "webview") selectTab(tab);
 });
 ipcMain.handle("parallax:extensions", () => listExtensions(browserSession()));
 ipcMain.handle("parallax:installExtension", (_event, text: unknown) =>
