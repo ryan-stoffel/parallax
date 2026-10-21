@@ -3,12 +3,34 @@
     "jsonrpc": "2.0",
     "id": 1,
     "method": "computer/ask",
-    "params": { "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01", "app": "Notes" }
+    "params": { "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01", "app": "Notes", "waitMs": 50000 }
   },
   {
     "jsonrpc": "2.0",
     "id": 1,
-    "result": { "allowed": true, "always": true }
+    "result": { "status": "pending" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "computer/ask",
+    "params": { "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01", "app": "Notes", "waitMs": 50000 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": { "status": "always" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "computer/ask",
+    "params": { "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01", "app": "Mail", "waitMs": 50000 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": { "status": "stopped" }
   },
   {
     "jsonrpc": "2.0",

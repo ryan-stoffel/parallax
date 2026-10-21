@@ -277,10 +277,21 @@ impl Element {
         checked(error, action)
     }
 
-    /// Sets the element's value, as typing into a text field or moving a slider does.
+    /// Sets the element's value, as typing into a text field or moving a slider does: a number
+    /// for an element whose value is one, and text otherwise.
     pub fn set_value(&self, value: &str) -> Result<(), String> {
         let name = CFString::new("AXValue");
-        let value = CFString::new(value);
+        let numeric = self
+            .attribute("AXValue")
+            .is_some_and(|current| current.instance_of::<CFNumber>());
+        let value: CFType = if numeric {
+            let number: f64 = value.trim().parse().map_err(|_| {
+                format!("The element's value is a number, and {value:?} isn't one.")
+            })?;
+            CFNumber::from(number).as_CFType()
+        } else {
+            CFString::new(value).as_CFType()
+        };
         // SAFETY: the element, name, and value are valid for the call.
         let error = unsafe {
             AXUIElementSetAttributeValue(

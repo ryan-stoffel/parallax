@@ -153,6 +153,12 @@ fn failed_text(prompt: &str, message: &str) -> String {
     )
 }
 
+/// A computer use permission request (PLX-897): the app, and where its resolution goes.
+struct ComputerAsk {
+    app: String,
+    waiting: Vec<oneshot::Sender<AgentApproveResult>>,
+}
+
 /// What an actor is asked to do.
 pub(super) enum Command {
     /// `agent/send` or `message.dispatch`, after the running turn, into it (PLX-370), or in
@@ -191,8 +197,8 @@ pub(super) enum Command {
         params: AgentApproveParams,
         reply: oneshot::Sender<Result<AgentApproveResult, ErrorObject>>,
     },
-    /// `computer/ask` (PLX-897): logs a permission request for `app` that plxd answers itself,
-    /// and replies at once with where its resolution will come.
+    /// `computer/ask` (PLX-897): logs a permission request for `app` that plxd answers itself, or
+    /// joins the one waiting for it, and replies at once with where its resolution will come.
     ComputerAsk {
         app: String,
         reply: oneshot::Sender<Result<oneshot::Receiver<AgentApproveResult>, ErrorObject>>,
@@ -555,8 +561,8 @@ pub(super) struct Actor {
     /// The permission requests its CLIs asked (PLX-222).
     approvals: Approvals,
     /// The permission requests plxd asked for computer use (PLX-897), which `agent/approve`
-    /// answers here rather than in the CLI, and where each one's resolution goes.
-    computer_asks: HashMap<ApprovalId, oneshot::Sender<AgentApproveResult>>,
+    /// answers here rather than in the CLI: each one's app and the `computer/ask`s waiting on it.
+    computer_asks: HashMap<ApprovalId, ComputerAsk>,
     /// The tool calls running `gh pr create`, by call id, until their results link the pull
     /// requests they print (PLX-318).
     pr_calls: HashSet<String>,
@@ -1792,19 +1798,9 @@ impl Actor {
         }
         let allow = decision == AgentApprovalAnswer::Allow;
         if self.computer_asks.contains_key(&approval_id) {
-            let resolution = AgentApproveResult {
-                decision: if allow {
-                    AgentApprovalDecision::Allowed
-                } else {
-                    AgentApprovalDecision::Denied
-                },
-                by: AgentApprovalBy::User,
-                always: allow && always,
-                message: if allow { None } else { message },
-            };
-            self.resolve_approval(approval_id, resolution.clone()).await;
-            self.flush().await;
-            return Ok(resolution);
+            return self
+                .approve_computer(approval_id, allow, always, message)
+                .await;
         }
         let answer = Answer {
             approval_id,
@@ -1857,10 +1853,54 @@ impl Actor {
         }
     }
 
+    /// `agent/approve` for a computer use request (PLX-897), which plxd answers rather than the
+    /// CLI. Always allow is saved here, where the answer lands, whether or not its asker waits.
+    async fn approve_computer(
+        &mut self,
+        approval_id: ApprovalId,
+        allow: bool,
+        always: bool,
+        message: Option<String>,
+    ) -> Result<AgentApproveResult, ErrorObject> {
+        if let Some(asked) = self.computer_asks.get(&approval_id)
+            && allow
+            && always
+        {
+            let root = self.daemon.data_dir.root().to_owned();
+            let app = asked.app.clone();
+            tokio::task::spawn_blocking(move || crate::computer::remember(&root, &app))
+                .await
+                .map_err(|error| ErrorObject::internal_error(error.to_string()))??;
+        }
+        let resolution = AgentApproveResult {
+            decision: if allow {
+                AgentApprovalDecision::Allowed
+            } else {
+                AgentApprovalDecision::Denied
+            },
+            by: AgentApprovalBy::User,
+            always: allow && always,
+            message: if allow { None } else { message },
+        };
+        self.resolve_approval(approval_id, resolution.clone()).await;
+        self.flush().await;
+        Ok(resolution)
+    }
+
     /// `computer/ask` (PLX-897): logs a request to use `app` as the CLI's would be, so the app's
-    /// approval card shows it, and returns where its resolution will come. Stopping or
-    /// cancelling the run resolves it as it does the CLI's requests.
+    /// approval card shows it, or joins the one already waiting for it, and returns where its
+    /// resolution will come. Stopping or cancelling the run resolves it as it does the CLI's.
     async fn ask_computer(&mut self, app: String) -> oneshot::Receiver<AgentApproveResult> {
+        let (resolved, resolution) = oneshot::channel();
+        if let Some(asked) = self
+            .computer_asks
+            .values_mut()
+            .find(|asked| asked.app.eq_ignore_ascii_case(&app))
+        {
+            asked.waiting.retain(|waiter| !waiter.is_closed());
+            asked.waiting.push(resolved);
+            return resolution;
+        }
         let request = ApprovalRequest {
             approval_id: ApprovalId::generate(),
             tool_name: crate::computer::APPROVAL_TOOL.to_owned(),
@@ -1869,11 +1909,14 @@ impl Actor {
             reason: None,
             blocked_path: None,
             subagent: None,
-            always_allow: vec![app],
+            always_allow: vec![app.clone()],
             interactive: false,
         };
-        let (resolved, resolution) = oneshot::channel();
-        self.computer_asks.insert(request.approval_id, resolved);
+        let asked = ComputerAsk {
+            app,
+            waiting: vec![resolved],
+        };
+        self.computer_asks.insert(request.approval_id, asked);
         self.approvals
             .add(request.approval_id, true, &request.input);
         self.push(convert::approval_requested(&request)).await;
@@ -1886,7 +1929,12 @@ impl Actor {
     /// stopping the run.
     async fn stop_approvals(&mut self, by: AgentApprovalBy) {
         for approval_id in self.approvals.pending() {
-            if let Some(live) = &self.live {
+            // A computer use request is plxd's, which the CLI never saw.
+            if let Some(live) = self
+                .live
+                .as_ref()
+                .filter(|_| !self.computer_asks.contains_key(&approval_id))
+            {
                 let decision = Decision::Deny {
                     message: approvals::STOPPED.to_owned(),
                     interrupt: true,
@@ -1904,8 +1952,10 @@ impl Actor {
     /// Records how a waiting permission request ended, and logs it as `approvalResolved`. Does
     /// nothing to one that already ended.
     async fn resolve_approval(&mut self, approval_id: ApprovalId, resolution: AgentApproveResult) {
-        if let Some(waiting) = self.computer_asks.remove(&approval_id) {
-            let _ = waiting.send(resolution.clone());
+        if let Some(asked) = self.computer_asks.remove(&approval_id) {
+            for waiter in asked.waiting {
+                let _ = waiter.send(resolution.clone());
+            }
         }
         let item = convert::approval_resolved(approval_id, &resolution);
         if self.approvals.resolve(approval_id, resolution) {

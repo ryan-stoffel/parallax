@@ -11,7 +11,8 @@ use crate::RunId;
 /// Params of `computer/ask`: may thread `runId` use `app`? An app the user always allows answers
 /// at once. Otherwise the run's transcript gets an `approvalRequested` item whose tool is
 /// `computer_use`, whose input is `{"app": app}`, and whose `alwaysAllow` is `[app]`, and the call
-/// waits for its `agent/approve`.
+/// waits up to `waitMs` for its `agent/approve`. Asking again for the same app while that request
+/// waits keeps waiting on it, so a caller asks again after each `pending`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ComputerAskParams {
@@ -19,17 +20,39 @@ pub struct ComputerAskParams {
     pub run_id: RunId,
     /// The app's name, as `computer_list_apps` shows it, such as `Notes`.
     pub app: String,
+    /// How long to wait for the user before answering `pending`, at most 50000, under plxd's
+    /// idle timeout.
+    pub wait_ms: u32,
 }
 
 /// Result of `computer/ask`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ComputerAskResult {
+    /// Where the request stands.
+    pub status: ComputerAnswer,
+}
+
+/// Where a `computer/ask` stands.
+///
+/// A newer plxd may send a value this version does not know; treat it as not allowed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ComputerAnswer {
+    /// The user hasn't answered yet: ask again to keep waiting.
+    Pending,
     /// The thread may use the app.
-    pub allowed: bool,
-    /// The user always allows it, on every thread.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub always: bool,
+    Allowed,
+    /// Every thread may use the app: the user always allows it.
+    Always,
+    /// The user said no.
+    Denied,
+    /// The run stopped, or its turn ended, before the user answered.
+    Stopped,
+    /// A value this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
 }
 
 /// Params of `computer/status`.

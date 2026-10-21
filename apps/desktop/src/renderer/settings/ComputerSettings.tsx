@@ -152,8 +152,8 @@ export function ComputerSettings() {
           </Section>
           <p className="flex items-start gap-2 px-1 text-[12px] leading-relaxed text-faint-foreground">
             <ShieldCheck aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-            Computer use never controls terminals, Parallax itself, or Keychain Access, and agents
-            are told not to type passwords, pay, or send messages unless you ask.
+            Computer use never controls terminals, script runners, Parallax itself, or Keychain
+            Access, and agents are told not to type passwords, pay, or send messages unless you ask.
           </p>
         </>
       )}

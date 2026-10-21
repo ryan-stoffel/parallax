@@ -4864,7 +4864,8 @@ export type DeviceStreamResult = Record<symbol, never>;
  * Params of `computer/ask`: may thread `runId` use `app`? An app the user always allows answers
  * at once. Otherwise the run's transcript gets an `approvalRequested` item whose tool is
  * `computer_use`, whose input is `{"app": app}`, and whose `alwaysAllow` is `[app]`, and the call
- * waits for its `agent/approve`.
+ * waits up to `waitMs` for its `agent/approve`. Asking again for the same app while that request
+ * waits keeps waiting on it, so a caller asks again after each `pending`.
  */
 export type ComputerAskParams = {
 	/**
@@ -4875,6 +4876,11 @@ export type ComputerAskParams = {
 	 * The app's name, as `computer_list_apps` shows it, such as `Notes`.
 	 */
 	app: string,
+	/**
+	 * How long to wait for the user before answering `pending`, at most 50000, under plxd's
+	 * idle timeout.
+	 */
+	waitMs: number,
 };
 
 /**
@@ -4882,14 +4888,17 @@ export type ComputerAskParams = {
  */
 export type ComputerAskResult = {
 	/**
-	 * The thread may use the app.
+	 * Where the request stands.
 	 */
-	allowed: boolean,
-	/**
-	 * The user always allows it, on every thread.
-	 */
-	always?: boolean,
+	status: ComputerAnswer,
 };
+
+/**
+ * Where a `computer/ask` stands.
+ *
+ * A newer plxd may send a value this version does not know; treat it as not allowed.
+ */
+export type ComputerAnswer = "pending" | "allowed" | "always" | "denied" | "stopped";
 
 /**
  * Params of `computer/status`.

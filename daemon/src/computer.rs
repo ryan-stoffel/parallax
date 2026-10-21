@@ -31,8 +31,8 @@ pub const APPROVAL_TOOL: &str = "computer_use";
 /// What a tool says when plxd lacks the Accessibility permission.
 pub const NO_ACCESSIBILITY: &str = "Parallax doesn't have the Accessibility permission, so it can't read or control apps. Ask the user to turn on plxd in System Settings > Privacy & Security > Accessibility, or to open Parallax Settings > Computer use.";
 
-/// The apps no thread may control, by bundle id prefix: terminals, which would get around a
-/// thread's sandbox and approvals, Parallax itself, and the keychain.
+/// The apps no thread may control, by bundle id prefix: terminals and script runners, which would
+/// get around a thread's sandbox and approvals, Parallax itself, and the keychain.
 const BLOCKED: &[(&str, &str)] = &[
     ("com.apple.Terminal", "a terminal"),
     ("com.googlecode.iterm2", "a terminal"),
@@ -44,6 +44,9 @@ const BLOCKED: &[(&str, &str)] = &[
     ("co.zeit.hyper", "a terminal"),
     ("dev.parallax.", "Parallax itself"),
     ("com.apple.keychainaccess", "the keychain"),
+    ("com.apple.ScriptEditor2", "a script runner"),
+    ("com.apple.Automator", "a script runner"),
+    ("com.apple.shortcuts", "a script runner"),
 ];
 
 /// A point on screen, in points from the main display's top left.
@@ -353,6 +356,32 @@ pub fn always_allowed(data_dir: &Path) -> Vec<String> {
         .apps
 }
 
+/// Held while the file of always-allowed apps is read and written back, so `agent/approve` and
+/// `computer/forget` never write over each other's change.
+static ALLOWED: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Changes the apps the user always allows with `change`, and saves them: the apps as saved.
+fn update_allowed(
+    data_dir: &Path,
+    change: impl FnOnce(&mut Vec<String>),
+) -> Result<Vec<String>, ErrorObject> {
+    let _held = ALLOWED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut apps = always_allowed(data_dir);
+    change(&mut apps);
+    save_allowed(data_dir, apps)
+}
+
+/// Always allows `app`, for Always allow on its request.
+///
+/// # Errors
+///
+/// When the file can't be saved.
+pub fn remember(data_dir: &Path, app: &str) -> Result<(), ErrorObject> {
+    update_allowed(data_dir, |apps| apps.push(app.to_owned())).map(drop)
+}
+
 fn save_allowed(data_dir: &Path, mut apps: Vec<String>) -> Result<Vec<String>, ErrorObject> {
     apps.sort_by_key(|app| app.to_lowercase());
     apps.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
@@ -377,8 +406,12 @@ fn unsupported() -> ErrorObject {
     ErrorObject::invalid_params("computer use needs a plxd on macOS")
 }
 
+/// The longest `computer/ask` waits before answering `pending`: under plxd's 90 s idle timeout,
+/// since the asker sends nothing while it waits.
+const MAX_ASK_WAIT_MS: u32 = 50_000;
+
 /// `computer/ask`: an always-allowed app answers at once; otherwise the thread's transcript asks
-/// the user, and Always allow saves the app.
+/// the user, and the actor saves the app on Always allow.
 pub(crate) async fn ask(
     daemon: std::sync::Arc<Daemon>,
     params: ComputerAskParams,
@@ -390,20 +423,14 @@ pub(crate) async fn ask(
     if app.is_empty() || app.len() > 256 {
         return Err(ErrorObject::invalid_params("app must be 1 to 256 bytes"));
     }
-    let root = daemon.data_dir.root().to_owned();
-    let mut apps = always_allowed(&root);
-    if apps.iter().any(|known| known.eq_ignore_ascii_case(&app)) {
+    let known = always_allowed(daemon.data_dir.root());
+    if known.iter().any(|known| known.eq_ignore_ascii_case(&app)) {
         return Ok(ComputerAskResult {
-            allowed: true,
-            always: true,
+            status: parallax_protocol::ComputerAnswer::Always,
         });
     }
-    let answer = crate::agents::computer_ask(daemon, params.run_id, app.clone()).await?;
-    if answer.allowed && answer.always {
-        apps.push(app);
-        save_allowed(&root, apps)?;
-    }
-    Ok(answer)
+    let wait = std::time::Duration::from_millis(params.wait_ms.min(MAX_ASK_WAIT_MS).into());
+    crate::agents::computer_ask(daemon, params.run_id, app, wait).await
 }
 
 /// `computer/status`.
@@ -422,10 +449,18 @@ pub(crate) async fn forget(
     daemon: &Daemon,
     params: ComputerForgetParams,
 ) -> Result<ComputerStatus, ErrorObject> {
+    if !cfg!(target_os = "macos") {
+        return Err(unsupported());
+    }
     let root = daemon.data_dir.root().to_owned();
-    let mut apps = always_allowed(&root);
-    apps.retain(|app| !app.eq_ignore_ascii_case(params.app.trim()));
-    save_allowed(&root, apps)?;
+    let app = params.app.trim().to_owned();
+    tokio::task::spawn_blocking(move || {
+        update_allowed(&root, |apps| {
+            apps.retain(|known| !known.eq_ignore_ascii_case(&app));
+        })
+    })
+    .await
+    .map_err(|error| ErrorObject::internal_error(error.to_string()))??;
     status(daemon, ComputerStatusParams::default()).await
 }
 

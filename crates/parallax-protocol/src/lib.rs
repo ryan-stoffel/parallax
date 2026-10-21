@@ -105,7 +105,7 @@ pub use composer::{
     AgentCommand, AgentCommandsParams, AgentCommandsResult, RepoFilesParams, RepoFilesResult,
 };
 pub use computer::{
-    ComputerAskParams, ComputerAskResult, ComputerForgetParams, ComputerStatus,
+    ComputerAnswer, ComputerAskParams, ComputerAskResult, ComputerForgetParams, ComputerStatus,
     ComputerStatusParams,
 };
 pub use connect::{

@@ -19,8 +19,8 @@ use std::process::{Command, Stdio};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use parallax_protocol::ComputerAskParams;
 use parallax_protocol::methods::ComputerAsk;
+use parallax_protocol::{ComputerAnswer, ComputerAskParams};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -316,6 +316,36 @@ enum Action {
     },
 }
 
+/// Where an action happens, once its target is found: an element, whose frame is read off the
+/// async runtime since that asks its app, or a point on screen in an area.
+enum Place {
+    Element(Element),
+    Fixed(Point, Rect),
+}
+
+impl Place {
+    /// The window's middle, in place of its corner.
+    fn centered(self) -> Self {
+        match self {
+            Self::Fixed(_, area) => Self::Fixed(area.center(), area),
+            element @ Self::Element(_) => element,
+        }
+    }
+
+    /// The point to act at, and the area around it, which a scroll moves by.
+    fn resolve(self) -> Result<(Point, Rect), String> {
+        match self {
+            Self::Element(element) => {
+                let frame = element
+                    .frame()
+                    .ok_or("The element has no place on screen.")?;
+                Ok((frame.center(), frame))
+            }
+            Self::Fixed(at, area) => Ok((at, area)),
+        }
+    }
+}
+
 /// Where an action happens: an element, a point in the screenshot, or the window's middle.
 enum Target {
     Element(usize),
@@ -430,44 +460,65 @@ impl Computer {
         self.state(&app).await
     }
 
-    /// The running app `wanted` names, opened if it isn't running, once the user allows it.
+    /// The running app `wanted` names, opened if it isn't running, once the user allows it. A
+    /// blocked or unallowed app is never opened.
     async fn open(&self, binding: &Binding, wanted: &str) -> Result<App, String> {
-        let mut app = computer::find(&running().await?, wanted).cloned();
-        if app.is_none() {
-            launch(wanted).await?;
-            let deadline = tokio::time::Instant::now() + LAUNCH;
-            while app.is_none() && tokio::time::Instant::now() < deadline {
-                tokio::time::sleep(Duration::from_millis(250)).await;
-                app = computer::find(&running().await?, wanted).cloned();
+        if let Some(app) = computer::find(&running().await?, wanted).cloned() {
+            refuse_blocked(&app.name, &app.bundle_id)?;
+            self.allow(binding, &app.name).await?;
+            return Ok(app);
+        }
+        let name = wanted.trim().trim_end_matches(".app");
+        refuse_blocked(name, &bundle_id(name).await)?;
+        self.allow(binding, name).await?;
+        launch(name).await?;
+        let deadline = tokio::time::Instant::now() + LAUNCH;
+        loop {
+            if let Some(app) = computer::find(&running().await?, name).cloned() {
+                self.lock_allowed().insert(app.name.clone());
+                return Ok(app);
             }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "{name} didn't open. Call computer_list_apps for the apps running."
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
-        let app = app.ok_or_else(|| {
-            format!("{wanted} didn't open. Call computer_list_apps for the apps running.")
-        })?;
-        if let Some(why) = computer::blocked(&app.bundle_id) {
-            return Err(format!(
-                "{} is {why}, which computer use can't control.",
-                app.name
-            ));
+    }
+
+    /// Asks the user, once per thread, whether it may use `app`, waiting as long as they take.
+    async fn allow(&self, binding: &Binding, app: &str) -> Result<(), String> {
+        if self.lock_allowed().contains(app) {
+            return Ok(());
         }
-        let known = self.lock_allowed().contains(&app.name);
-        if !known {
+        let answer = loop {
+            // Each call waits at most 50 s, under plxd's idle timeout, and the same request
+            // keeps waiting on the next.
             let answer = binding
                 .plxd
                 .call::<ComputerAsk>(ComputerAskParams {
                     run_id: binding.run,
-                    app: app.name.clone(),
+                    app: app.to_owned(),
+                    wait_ms: 50_000,
                 })
                 .await?;
-            if !answer.allowed {
-                return Err(format!(
-                    "The user didn't allow Parallax to use {}. Don't ask again; do the task another way or tell the user what you need.",
-                    app.name
-                ));
+            if answer.status != ComputerAnswer::Pending {
+                break answer.status;
             }
-            self.lock_allowed().insert(app.name.clone());
+        };
+        if answer == ComputerAnswer::Stopped {
+            return Err(format!(
+                "The turn ended before the user answered whether Parallax may use {app}."
+            ));
         }
-        Ok(app)
+        if !matches!(answer, ComputerAnswer::Allowed | ComputerAnswer::Always) {
+            return Err(format!(
+                "The user didn't allow Parallax to use {app}. Don't ask again; do the task another way or tell the user what you need."
+            ));
+        }
+        self.lock_allowed().insert(app.to_owned());
+        Ok(())
     }
 
     fn lock_allowed(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
@@ -498,22 +549,23 @@ impl Computer {
                 )
             })
         };
+        let window = snapshot.window;
         // A point in the screenshot, on screen.
-        let screen = |(x, y): (f64, f64)| Point {
-            x: snapshot.window.x + x * snapshot.window.width / f64::from(snapshot.image.0),
-            y: snapshot.window.y + y * snapshot.window.height / f64::from(snapshot.image.1),
+        let screen = |(x, y): (f64, f64)| {
+            if window.width <= 0.0 || window.height <= 0.0 {
+                return Err("The window has no place on screen. Use element_index.".to_owned());
+            }
+            Ok(Point {
+                x: window.x + x * window.width / f64::from(snapshot.image.0),
+                y: window.y + y * window.height / f64::from(snapshot.image.1),
+            })
         };
         let pid = app.pid;
-        let place = |target: &Target| -> Result<(Point, Rect), String> {
+        let place = |target: &Target| -> Result<Place, String> {
             Ok(match target {
-                Target::Element(index) => {
-                    let frame = element(*index)?
-                        .frame()
-                        .ok_or("The element has no place on screen.")?;
-                    (frame.center(), frame)
-                }
-                Target::Point(x, y) => (screen((*x, *y)), snapshot.window),
-                Target::Window => (snapshot.window.center(), snapshot.window),
+                Target::Element(index) => Place::Element(element(*index)?),
+                Target::Point(x, y) => Place::Fixed(screen((*x, *y))?, window),
+                Target::Window => Place::Fixed(screen((0.0, 0.0))?, window).centered(),
             })
         };
         let work: Box<dyn FnOnce() -> Result<(), String> + Send> = match action {
@@ -522,18 +574,17 @@ impl Computer {
                 button,
                 count,
             } => {
-                if let Target::Element(index) = target
-                    && button == Button::Left
-                    && count == 1
-                {
-                    let element = element(index)?;
-                    // Pressing it is what a click means, and needs no pointer.
-                    if element.actions().iter().any(|action| action == "AXPress") {
-                        return blocking(move || element.perform("AXPress")).await;
-                    }
-                }
-                let (at, _) = place(&target)?;
+                let place = place(&target)?;
                 Box::new(move || {
+                    // Pressing an element is what a plain click means, and needs no pointer.
+                    if let Place::Element(element) = &place
+                        && button == Button::Left
+                        && count == 1
+                        && element.actions().iter().any(|action| action == "AXPress")
+                    {
+                        return element.perform("AXPress");
+                    }
+                    let (at, _) = place.resolve()?;
                     macos::click(pid, at, button, count, 0);
                     Ok(())
                 })
@@ -552,25 +603,26 @@ impl Computer {
                 direction,
                 pages,
             } => {
-                let (at, area) = place(&target)?;
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "a scroll is far less than i32::MAX pixels"
-                )]
-                let by = |side: f64| (side * pages * 0.9).round() as i32;
-                let (dx, dy) = match direction.as_str() {
-                    "up" => (0, by(area.height)),
-                    "down" => (0, -by(area.height)),
-                    "left" => (by(area.width), 0),
-                    _ => (-by(area.width), 0),
-                };
+                let place = place(&target)?;
                 Box::new(move || {
+                    let (at, area) = place.resolve()?;
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "a scroll is far less than i32::MAX pixels"
+                    )]
+                    let by = |side: f64| (side * pages * 0.9).round() as i32;
+                    let (dx, dy) = match direction.as_str() {
+                        "up" => (0, by(area.height)),
+                        "down" => (0, -by(area.height)),
+                        "left" => (by(area.width), 0),
+                        _ => (-by(area.width), 0),
+                    };
                     macos::scroll(pid, at, dx, dy);
                     Ok(())
                 })
             }
             Action::Drag { from, to } => {
-                let (from, to) = (screen(from), screen(to));
+                let (from, to) = (screen(from)?, screen(to)?);
                 Box::new(move || {
                     macos::drag(pid, from, to);
                     Ok(())
@@ -775,8 +827,15 @@ async fn screenshot(pid: i32, frame: Rect) -> Result<Vec<u8>, String> {
             &["-x", "-o", &format!("-l{number}"), "-t", "png"],
             &path,
         )?;
-        let side = MAX_SIDE.to_string();
-        run("/usr/bin/sips", &["-Z", &side], &path)?;
+        let read = |path: &Path| {
+            std::fs::read(path).map_err(|error| format!("could not read the screenshot: {error}"))
+        };
+        // sips -Z enlarges a smaller image too, so only a larger one goes through it.
+        let large = super::device::png_size(&read(&path)?)
+            .is_some_and(|(width, height)| width.max(height) > MAX_SIDE);
+        if large {
+            run("/usr/bin/sips", &["-Z", &MAX_SIDE.to_string()], &path)?;
+        }
         std::fs::read(&path).map_err(|error| format!("could not read the screenshot: {error}"))
     })
     .await
@@ -823,6 +882,36 @@ async fn list_apps() -> Result<String, String> {
         .map(|app| json!({"name": app.name, "bundleId": app.bundle_id}))
         .collect();
     Ok(super::pretty(&json!({"apps": apps})))
+}
+
+/// Refuses an app computer use never controls.
+fn refuse_blocked(name: &str, bundle_id: &str) -> Result<(), String> {
+    match computer::blocked(bundle_id) {
+        Some(why) => Err(format!(
+            "{name} is {why}, which computer use can't control."
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The bundle id of the installed app `name` names, read without opening it, or `name` itself
+/// when it is one or no app has that name.
+async fn bundle_id(name: &str) -> String {
+    let script = format!("id of application \"{}\"", name.replace(['"', '\\'], ""));
+    let found = blocking(move || {
+        Command::new("/usr/bin/osascript")
+            .args(["-e", &script])
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|error| error.to_string())
+    })
+    .await;
+    match found {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        }
+        _ => name.to_owned(),
+    }
 }
 
 /// Opens the app `wanted` names, by bundle id or name.

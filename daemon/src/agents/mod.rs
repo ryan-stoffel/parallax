@@ -1930,22 +1930,27 @@ pub(crate) async fn approve(
     ask(&daemon, run_id, |reply| Command::Approve { params, reply }).await
 }
 
-/// `computer/ask` (PLX-897): asks the user in run `id`'s transcript whether it may use `app`, and
-/// waits for their answer through `agent/approve`.
+/// `computer/ask` (PLX-897): asks the user in run `id`'s transcript whether it may use `app`, or
+/// keeps waiting on the request already asking, for at most `wait`.
 pub(crate) async fn computer_ask(
     daemon: Arc<Daemon>,
     id: RunId,
     app: String,
+    wait: Duration,
 ) -> Result<parallax_protocol::ComputerAskResult, ErrorObject> {
+    use parallax_protocol::{AgentApprovalBy, AgentApprovalDecision, ComputerAnswer};
     let answered = ask(&daemon, id, |reply| Command::ComputerAsk { app, reply }).await?;
-    let resolution = answered
-        .await
-        .map_err(|_| ErrorObject::internal_error("plxd is stopping"))?;
-    let allowed = resolution.decision == parallax_protocol::AgentApprovalDecision::Allowed;
-    Ok(parallax_protocol::ComputerAskResult {
-        allowed,
-        always: allowed && resolution.always,
-    })
+    let status = match tokio::time::timeout(wait, answered).await {
+        Err(_) => ComputerAnswer::Pending,
+        Ok(Err(_)) => return Err(ErrorObject::internal_error("plxd is stopping")),
+        Ok(Ok(resolution)) => match (resolution.decision, resolution.by) {
+            (AgentApprovalDecision::Allowed, _) if resolution.always => ComputerAnswer::Always,
+            (AgentApprovalDecision::Allowed, _) => ComputerAnswer::Allowed,
+            (_, AgentApprovalBy::User) => ComputerAnswer::Denied,
+            _ => ComputerAnswer::Stopped,
+        },
+    };
+    Ok(parallax_protocol::ComputerAskResult { status })
 }
 
 pub(super) fn approval_not_found(run: RunId, approval: ApprovalId) -> ErrorObject {

@@ -1,5 +1,6 @@
 use super::{
-    App, Info, always_allowed, blocked, find, line, parse_apps, parse_key, save_allowed, shown,
+    App, Info, always_allowed, blocked, find, line, parse_apps, parse_key, remember, save_allowed,
+    shown,
 };
 
 const LSAPPINFO: &str = r#" 1) "loginwindow" ASN:0x0-0x2002:
@@ -42,6 +43,7 @@ fn terminals_parallax_and_the_keychain_are_blocked() {
         Some("Parallax itself")
     );
     assert_eq!(blocked("com.apple.keychainaccess"), Some("the keychain"));
+    assert_eq!(blocked("com.apple.ScriptEditor2"), Some("a script runner"));
     assert_eq!(blocked("com.apple.Notes"), None);
 }
 
@@ -112,4 +114,6 @@ fn always_allowed_apps_save_sorted_without_repeats() {
     let apps = ["Xcode", "notes", "Notes"].map(str::to_owned).to_vec();
     assert_eq!(save_allowed(dir.path(), apps).unwrap(), ["notes", "Xcode"]);
     assert_eq!(always_allowed(dir.path()), ["notes", "Xcode"]);
+    remember(dir.path(), "Mail").unwrap();
+    assert_eq!(always_allowed(dir.path()), ["Mail", "notes", "Xcode"]);
 }
