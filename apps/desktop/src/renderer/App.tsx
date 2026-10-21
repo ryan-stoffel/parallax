@@ -118,6 +118,7 @@ export type SettingsSection =
   | "keybinds"
   | "providers"
   | "sourceControl"
+  | "computerUse"
   | "schedules"
   | "scripts"
   | "storage"

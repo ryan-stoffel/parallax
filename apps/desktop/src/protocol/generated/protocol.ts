@@ -267,6 +267,22 @@ export type ParallaxRequests = {
 	 */
 	"device/stream": { params: DeviceStreamParams, result: DeviceStreamResult },
 	/**
+	 * `computer/ask`: whether a thread may use a desktop app with its `computer_*` tools
+	 * (PLX-897, decision 0077), asking the user in its transcript when they haven't always
+	 * allowed it. `plxd mcp` sends it. Gated on the `computerUse` capability, like every
+	 * `computer/*` method.
+	 */
+	"computer/ask": { params: ComputerAskParams, result: ComputerAskResult },
+	/**
+	 * `computer/status`: plxd's macOS permissions for computer use and the apps always
+	 * allowed, after asking macOS for the missing permissions with `request`.
+	 */
+	"computer/status": { params: ComputerStatusParams, result: ComputerStatus },
+	/**
+	 * `computer/forget`: stops always allowing an app.
+	 */
+	"computer/forget": { params: ComputerForgetParams, result: ComputerStatus },
+	/**
 	 * `agent/diff`: the files that differ between a run's base and its latest commit, each
 	 * with its stats and a size-capped unified diff (#157). Gated on the `agentReview`
 	 * capability, like every review method.
@@ -865,6 +881,9 @@ export const REQUEST_METHODS = [
 	"device/screenshot",
 	"device/chrome",
 	"device/stream",
+	"computer/ask",
+	"computer/status",
+	"computer/forget",
 	"agent/diff",
 	"agent/file",
 	"agent/files",
@@ -4840,6 +4859,88 @@ export type DeviceStreamKind = "video" | "control";
  * Result of `device/stream`: the stream is open.
  */
 export type DeviceStreamResult = Record<symbol, never>;
+
+/**
+ * Params of `computer/ask`: may thread `runId` use `app`? An app the user always allows answers
+ * at once. Otherwise the run's transcript gets an `approvalRequested` item whose tool is
+ * `computer_use`, whose input is `{"app": app}`, and whose `alwaysAllow` is `[app]`, and the call
+ * waits up to `waitMs` for its `agent/approve`. Asking again for the same app while that request
+ * waits keeps waiting on it, so a caller asks again after each `pending`.
+ */
+export type ComputerAskParams = {
+	/**
+	 * The thread asking.
+	 */
+	runId: RunId,
+	/**
+	 * The app's name, as `computer_list_apps` shows it, such as `Notes`.
+	 */
+	app: string,
+	/**
+	 * How long to wait for the user before answering `pending`, at most 50000, under plxd's
+	 * idle timeout.
+	 */
+	waitMs: number,
+};
+
+/**
+ * Result of `computer/ask`.
+ */
+export type ComputerAskResult = {
+	/**
+	 * Where the request stands.
+	 */
+	status: ComputerAnswer,
+};
+
+/**
+ * Where a `computer/ask` stands.
+ *
+ * A newer plxd may send a value this version does not know; treat it as not allowed.
+ */
+export type ComputerAnswer = "pending" | "allowed" | "always" | "denied" | "stopped";
+
+/**
+ * Params of `computer/status`.
+ */
+export type ComputerStatusParams = {
+	/**
+	 * Ask macOS for the permissions plxd lacks first, which shows its prompts.
+	 */
+	request?: boolean,
+};
+
+/**
+ * Result of `computer/status` and `computer/forget`.
+ */
+export type ComputerStatus = {
+	/**
+	 * plxd may read other apps' windows and act in them: macOS's Accessibility permission.
+	 */
+	accessibility: boolean,
+	/**
+	 * plxd may capture other apps' windows: macOS's Screen Recording permission.
+	 */
+	screenRecording: boolean,
+	/**
+	 * The program macOS lists under both permissions, such as `plxd`.
+	 */
+	program: string,
+	/**
+	 * The apps every thread may use without asking, by name, sorted.
+	 */
+	apps: Array<string>,
+};
+
+/**
+ * Params of `computer/forget`: ask again before a thread uses `app`.
+ */
+export type ComputerForgetParams = {
+	/**
+	 * The app, as `computer/status` lists it.
+	 */
+	app: string,
+};
 
 /**
  * Params of `agent/diff`.

@@ -35,6 +35,7 @@ mod approval;
 mod area;
 mod cli_account;
 mod composer;
+mod computer;
 mod connect;
 mod context;
 mod defaults;
@@ -102,6 +103,10 @@ pub use cli_account::{
 };
 pub use composer::{
     AgentCommand, AgentCommandsParams, AgentCommandsResult, RepoFilesParams, RepoFilesResult,
+};
+pub use computer::{
+    ComputerAnswer, ComputerAskParams, ComputerAskResult, ComputerForgetParams, ComputerStatus,
+    ComputerStatusParams,
 };
 pub use connect::{
     CONNECT_PORT, ConnectDevicesParams, ConnectDevicesResult, DEVICE_ICONS, MAX_DEVICE_NAME_CHARS,

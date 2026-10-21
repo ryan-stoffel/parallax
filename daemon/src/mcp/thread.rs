@@ -126,6 +126,9 @@ struct Server {
     devices: device::Devices,
     /// The delegation tools, with the requests they made (0063).
     delegation: super::delegation::Delegation,
+    /// The computer use tools, with the apps the caller may use (PLX-897).
+    #[cfg(target_os = "macos")]
+    computer: super::computer::Computer,
 }
 
 /// Checks that the bound run exists, then serves MCP on `input` and `output` until `input` ends.
@@ -155,6 +158,8 @@ pub async fn run(
         memory,
         devices: device::Devices::new(&binding.temp, binding.run),
         delegation: super::delegation::Delegation::default(),
+        #[cfg(target_os = "macos")]
+        computer: super::computer::Computer::default(),
     };
     super::serve(&server, input, output).await
 }
@@ -185,6 +190,7 @@ impl Tools for Server {
             device::TOOLS,
             super::triggers::TOOLS,
             super::delegation::TOOLS,
+            super::COMPUTER_TOOLS,
         ]
         .concat()
     }
@@ -205,6 +211,8 @@ impl Tools for Server {
             list.extend(device::definitions());
             list.extend(super::triggers::definitions());
             list.extend(super::delegation::definitions());
+            #[cfg(target_os = "macos")]
+            list.extend(super::computer::definitions());
         }
         tools
     }
@@ -212,6 +220,10 @@ impl Tools for Server {
     async fn call(&self, name: &str, arguments: Value) -> Result<Reply, String> {
         if name.starts_with("device_") {
             return self.devices.call(name, arguments).await;
+        }
+        #[cfg(target_os = "macos")]
+        if name.starts_with("computer_") {
+            return self.computer.call(&self.binding, name, arguments).await;
         }
         if super::files::TOOLS.contains(&name) {
             return super::files::call(&self.binding, name, arguments).await;

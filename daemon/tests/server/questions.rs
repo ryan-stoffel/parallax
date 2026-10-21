@@ -106,6 +106,7 @@ async fn tool_names(mcp: &mut Mcp) -> Vec<String> {
         device::TOOLS,
         triggers::TOOLS,
         delegation::TOOLS,
+        plxd::mcp::COMPUTER_TOOLS,
     ]
     .concat();
     let devices = names.split_off(names.len() - last.len());

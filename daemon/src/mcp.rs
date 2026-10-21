@@ -1,6 +1,7 @@
 //! `plxd mcp --thread <runId>`: a thread's Parallax tools, as an MCP server on stdio (decisions
 //! 0019 and 0041). The tools are [`thread`]'s, with [`question`]'s for a Project's threads,
-//! [`memory`]'s by the caller's role (0044), [`device`]'s (PLX-640), and [`triggers`]' schedule
+//! [`memory`]'s by the caller's role (0044), [`device`]'s (PLX-640), `computer`'s on macOS
+//! (PLX-897), and [`triggers`]' schedule
 //! and pull request tools and [`delegation`]'s (0063); this module is the server they share.
 //!
 //! A Project's coordinator gets the same server as any thread (PLX-380): its 0019 tools, bound to
@@ -33,6 +34,8 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::peer::Plxd;
 
+#[cfg(target_os = "macos")]
+pub mod computer;
 pub mod delegation;
 pub mod device;
 pub mod files;
@@ -43,6 +46,13 @@ pub mod preview;
 pub mod question;
 pub mod thread;
 pub mod triggers;
+
+/// The computer use tools (PLX-897): [`computer::TOOLS`] on macOS, and none elsewhere.
+#[cfg(target_os = "macos")]
+pub const COMPUTER_TOOLS: &[&str] = computer::TOOLS;
+/// The computer use tools (PLX-897): [`computer::TOOLS`] on macOS, and none elsewhere.
+#[cfg(not(target_os = "macos"))]
+pub const COMPUTER_TOOLS: &[&str] = &[];
 
 /// The server's name in a thread's `--mcp-config`, which prefixes its tools' names there.
 pub const SERVER: &str = "plxd";
@@ -204,6 +214,8 @@ async fn answer(binding: &impl Tools, request: &Request) -> Result<Value, ErrorO
             let instructions: Vec<&str> = [
                 ("present_files", files::INSTRUCTIONS),
                 ("pull_request_status", triggers::INSTRUCTIONS),
+                #[cfg(target_os = "macos")]
+                ("computer_get_app_state", computer::INSTRUCTIONS),
             ]
             .into_iter()
             .filter(|(tool, _)| names.contains(tool))

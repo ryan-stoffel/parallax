@@ -111,6 +111,9 @@ export const ids = {
   webhooks: uuid(83),
   cart: uuid(84),
   approvalWebhooks: uuid(85),
+  groceries: uuid(86),
+  approvalNotes: uuid(87),
+  approvalReminders: uuid(88),
   rateLimit: uuid(120),
   homework: uuid(121),
   pricing: uuid(122),
@@ -1294,6 +1297,74 @@ export function createFixtures(now = Date.now()): Fixtures {
     )
     .update(ago(60 * 29), { status: "completed" })
     .finish(ago(60 * 29), { status: "completed" });
+  // ---- Computer use (PLX-897): Notes always allowed, Reminders waiting for an answer ----------
+
+  const groceries = thread({
+    id: ids.groceries,
+    repo: ids.repoScratch,
+    title: "Weekend grocery list",
+    slug: "grocery-list",
+    prompt: "Put this week's groceries in a Notes list, then remind me Saturday at 9 to shop.",
+    status: "running",
+    started: 3,
+    updated: 0,
+  });
+  const notesTree = [
+    "App: Notes (com.apple.Notes), pid 812",
+    'Window: "Notes", 1180×760 points. The screenshot is 1568×1010 pixels; x and y count in it.',
+    "",
+    '0 standard window "Notes"',
+    "  1 toolbar",
+    "    2 button, New Note",
+    '    3 search text field, placeholder: "Search"',
+    "  4 table, Notes",
+    '    5 row "Groceries" (selected)',
+    '  6 text entry area, value: "Groceries"',
+  ].join("\n");
+  log(groceries).out(
+    ago(3),
+    session(),
+    { kind: "turnStarted" },
+    ...tool(
+      "mcp__plxd__computer_list_apps",
+      {},
+      '{"apps": [{"name": "Notes"}, {"name": "Reminders"}]}',
+    ),
+    {
+      kind: "approvalRequested",
+      approvalId: ids.approvalNotes,
+      toolName: "computer_use",
+      input: { app: "Notes" },
+      alwaysAllow: ["Notes"],
+      expiresAt: ahead(60),
+    },
+    {
+      kind: "approvalResolved",
+      approvalId: ids.approvalNotes,
+      decision: "allowed",
+      by: "user",
+      always: true,
+    },
+    ...tool("mcp__plxd__computer_get_app_state", { app: "Notes" }, notesTree),
+    ...tool("mcp__plxd__computer_click", { app: "Notes", element_index: 6 }, notesTree),
+    ...tool(
+      "mcp__plxd__computer_type_text",
+      { app: "Notes", text: "Oat milk\nEggs\nSpinach\nCoffee beans" },
+      notesTree,
+    ),
+    {
+      kind: "text",
+      text: "The list is in Notes under Groceries. Next, the Saturday reminder.",
+    },
+    {
+      kind: "approvalRequested",
+      approvalId: ids.approvalReminders,
+      toolName: "computer_use",
+      input: { app: "Reminders" },
+      alwaysAllow: ["Reminders"],
+      expiresAt: ahead(60),
+    },
+  );
   threads.find((t) => t.id === ids.updater)!.pinned = true;
   threads.find((t) => t.id === ids.cart)!.pinned = true;
 

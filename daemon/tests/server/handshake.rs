@@ -25,8 +25,14 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
     let init = client.initialize().await.unwrap();
     assert_eq!(init.protocol, 1);
     assert_eq!(init.plxd, plxd::version());
+    let mut capabilities = init.capabilities.clone();
+    // Computer use is macOS's alone (PLX-897).
     assert_eq!(
-        init.capabilities,
+        capabilities.0.remove("computerUse").is_some(),
+        cfg!(target_os = "macos")
+    );
+    assert_eq!(
+        capabilities,
         Capabilities(BTreeMap::from([
             ("accounts".to_owned(), serde_json::Map::new()),
             ("agentClis".to_owned(), serde_json::Map::new()),
