@@ -357,12 +357,15 @@ export function SidePanel({
                       <span className="sr-only">Browser: </span>
                       <span className="max-w-40 truncate">{front.title}</span>
                       {front.count > 1 && (
-                        <span
-                          aria-label={`${front.count} tabs`}
-                          className="rounded-[5px] bg-hover px-1 text-[10.5px] leading-4 font-medium text-muted-foreground tabular-nums"
-                        >
-                          {front.count}
-                        </span>
+                        <>
+                          <span className="sr-only">, {front.count} tabs</span>
+                          <span
+                            aria-hidden
+                            className="rounded-[5px] bg-hover px-1 text-[10.5px] leading-4 font-medium text-muted-foreground tabular-nums"
+                          >
+                            {front.count}
+                          </span>
+                        </>
                       )}
                     </>
                   ) : (
