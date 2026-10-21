@@ -97,8 +97,8 @@ export function crxKey(bytes: Uint8Array, id: string): string | undefined {
 }
 
 /**
- * A manifest with `key` added. Chromium also reads one with a byte order mark or comments, which
- * `JSON.parse` doesn't, so such a manifest stays as it was, and the extension gets a folder id.
+ * A manifest with `key` added. Chromium also reads one with comments, which `JSON.parse` doesn't,
+ * so such a manifest stays as it was, and the extension gets a folder id.
  */
 function withKey<T extends Uint8Array>(manifest: T, key: string): T | Uint8Array<ArrayBuffer> {
   try {
