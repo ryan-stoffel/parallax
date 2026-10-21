@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ryan-stoffel/parallax/releases"><img src="https://img.shields.io/github/v/release/ryan-stoffel/parallax?include_prereleases&label=release" alt="Latest nightly"></a>
+  <a href="https://github.com/ryan-stoffel/parallax/releases"><img src="https://img.shields.io/github/v/release/ryan-stoffel/parallax?include_prereleases&label=release" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-555" alt="macOS, Windows, and Linux">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 license"></a>
 </p>
@@ -87,7 +87,7 @@ irm https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/scripts/inst
 
 On macOS the app goes in /Applications. On Linux it's an AppImage in `~/.local/share/parallax-nightly`, with a launcher entry and a `parallax-nightly` command. On Windows it installs for your user, with no admin prompt. Every installer is also on the [releases page](https://github.com/ryan-stoffel/parallax/releases).
 
-Then sign in to at least one provider on the computer that runs the work. The app walks you through it on first launch, and Settings > Providers lists them all.
+Then sign in to at least one provider on the computer that runs the work. The app sets up this computer's agents on first launch, and Settings > Providers covers any computer.
 
 ## Build from source
 
