@@ -34,6 +34,7 @@ import {
   TranscriptView,
 } from "./AgentChat";
 import { Composer } from "./Composer";
+import { threadDrafts } from "./drafts";
 import { ForkContext } from "./Fork";
 import { GitHubLogo, LinearLogo } from "./logos";
 import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
@@ -77,8 +78,11 @@ function render(node: ReactNode) {
   unmount = () => {
     root.unmount();
     document.body.innerHTML = "";
+    // What's left in the box would come back as a draft in the next render of the run.
+    for (const key of Object.keys(threadDrafts.get())) threadDrafts.remove(key);
     unmount = () => {};
   };
+  return root;
 }
 
 // The composer's editor, which Tiptap keeps on its element for tests.
@@ -1470,6 +1474,19 @@ test("Stop or Esc before the agent answers puts the prompt back in the box, but 
     holdQueue: true,
   });
   expect(composer().textContent).toBe("");
+});
+
+test("the box keeps what it holds across a visit to a subagent (PLX-887)", async () => {
+  fakeBridge(4);
+  const chat = (subagent?: string) => (
+    <AgentChat hostId="local" runId={runId} subagent={subagent} />
+  );
+  const root = render(chat());
+  await settle();
+  act(() => void composer().editor!.commands.setContent("Half a thought"));
+  await act(async () => root.render(chat("sub-1")));
+  await act(async () => root.render(chat()));
+  expect(composer().textContent).toBe("Half a thought");
 });
 
 test("the pencil before the agent answers stops the run and sends the message as edited", async () => {

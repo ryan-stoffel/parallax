@@ -80,7 +80,7 @@ import type {
 import type { RpcError } from "../preload/bridge";
 import type { Selection, SettingsSection, Split } from "./App";
 import { clock } from "./Approval";
-import { drafts, type Draft } from "./drafts";
+import { drafts, threadDrafts, type Draft } from "./drafts";
 import { AddDialog, type AddDialogHandle } from "./AddDialog";
 import {
   highlight,
@@ -2610,6 +2610,16 @@ function majorityLook(prs: PullRequests) {
   return lookOf(best);
 }
 
+/** A draft's status: a New Thread draft's row, or a thread's with an unsent prompt (PLX-887). */
+function DraftStatus() {
+  return (
+    <span className="flex items-center gap-1 text-[11.5px] font-medium text-warning [&_svg]:size-3.5">
+      <PencilLine aria-hidden />
+      Draft
+    </span>
+  );
+}
+
 /**
  * An unsent New Thread prompt's row (PLX-788): its repo and a Draft status, then its first line,
  * outlined in the warning color. Opening it reopens New Thread with it, which takes it off the list.
@@ -2626,15 +2636,7 @@ function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: 
         onClick={onOpen}
         className="flex w-full flex-col gap-0.5 rounded-lg border border-warning px-2 py-1.5 text-left hover:bg-hover"
       >
-        <RowHead
-          repo={repo}
-          status={
-            <span className="flex items-center gap-1 text-[11.5px] font-medium text-warning [&_svg]:size-3.5">
-              <PencilLine aria-hidden />
-              Draft
-            </span>
-          }
-        />
+        <RowHead repo={repo} status={<DraftStatus />} />
         <span data-title className="w-full truncate text-[13px] text-foreground">
           {title}
         </span>
@@ -2823,6 +2825,8 @@ function ThreadRow({
       {thread.archived ? "Unarchive" : "Archive"}
     </>
   );
+  // An unsent prompt left in its composer (PLX-887): outlined, and Draft in place of its age.
+  const drafted = threadDrafts.use(`${hostId}/${thread.id}`);
   const status =
     badge ??
     (run?.status === "waiting" && attention === "settled" && !thread.archived ? (
@@ -2831,7 +2835,11 @@ function ThreadRow({
         {run.resumeAt ? `Resumes ${resumeTime(run.resumeAt)}` : "Waiting"}
       </span>
     ) : attention === "settled" ? (
-      age(lastPrompt(thread))
+      drafted ? (
+        <DraftStatus />
+      ) : (
+        age(lastPrompt(thread))
+      )
     ) : (
       <AttentionBadge attention={attention} since={lastPrompt(thread)} />
     ));
@@ -2875,11 +2883,12 @@ function ThreadRow({
   );
   // A rename's input can't sit in a button, so the row is a plain box while it's open.
   const Main = renaming ? "div" : "button";
+  // A draft outlines the row in the warning color, as a New Thread draft's row is (PLX-887).
   const rowLook = picked
     ? "bg-accent/14 ring-1 ring-accent/38 ring-inset"
     : selected
       ? current
-      : "group-hover/row:bg-hover";
+      : `group-hover/row:bg-hover ${drafted ? "ring-1 ring-warning ring-inset" : ""}`;
   return (
     <li
       data-kind="thread"

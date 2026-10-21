@@ -487,7 +487,7 @@ export interface ComposerProps {
   attach?: AttachThreads;
   /** What the box starts with, such as a reopened draft (PLX-788). Read once, as it mounts. */
   initial?: ComposerContents;
-  /** Kept up to date with what the box holds, for New Thread to save as a draft as it closes. */
+  /** Kept up to date with what the box holds, for its screen to save as a draft as it closes. */
   contents?: RefObject<ComposerContents | undefined>;
 }
 
@@ -1129,9 +1129,13 @@ export function Composer({
     },
   });
 
+  // Empty while a send uploads its files, since what the box shows is on its way.
   useEffect(() => {
-    if (contents) contents.current = { text, doc: editor.getJSON(), images, files, threads };
-  }, [contents, editor, text, images, files, threads]);
+    if (!contents) return;
+    contents.current = uploading
+      ? { text: "", doc: { type: "doc" }, images: [], files: [], threads: [] }
+      : { text, doc: editor.getJSON(), images, files, threads };
+  }, [contents, editor, text, images, files, threads, uploading]);
 
   // Tokens typed or recalled before their list arrived become chips once it does.
   useEffect(() => {

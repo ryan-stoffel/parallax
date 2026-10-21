@@ -26,10 +26,15 @@ export const isEmpty = (c: ComposerContents) =>
 // ponytail: in memory, so drafts last until the app quits. `File`s don't fit localStorage; keep
 // them on disk if drafts need to outlive the app.
 let list: readonly Draft[] = [];
+// Existing threads' unsent prompts (PLX-887), by `hostId/runId`.
+let byThread: Readonly<Record<string, ComposerContents>> = {};
 const listeners = new Set<() => void>();
+const changed = () => {
+  for (const listener of listeners) listener();
+};
 const set = (next: readonly Draft[]) => {
   list = next;
-  for (const listener of listeners) listener();
+  changed();
 };
 const subscribe = (listener: () => void) => {
   listeners.add(listener);
@@ -47,5 +52,26 @@ export const drafts = {
   put: (draft: Draft) => set([draft, ...list.filter((d) => d.id !== draft.id)]),
   remove: (id: string) => {
     if (list.some((d) => d.id === id)) set(list.filter((d) => d.id !== id));
+  },
+};
+
+/**
+ * The unsent prompts of existing threads (PLX-887), by `hostId/runId`. A thread takes its own out
+ * while it's open and puts it back as it closes, as New Thread does, so a row shows Draft only
+ * while nothing edits it.
+ */
+export const threadDrafts = {
+  get: () => byThread,
+  /** Whether the thread `key` has a draft, re-rendering only as that changes. */
+  use: (key: string) => useSyncExternalStore(subscribe, () => key in byThread),
+  put: (key: string, contents: ComposerContents) => {
+    byThread = { ...byThread, [key]: contents };
+    changed();
+  },
+  remove: (key: string) => {
+    if (!(key in byThread)) return;
+    const { [key]: _, ...rest } = byThread;
+    byThread = rest;
+    changed();
   },
 };

@@ -80,6 +80,7 @@ import {
 import { duration, useSeconds } from "./AttentionMark";
 import { Composer, listCommands, tabItem, type ComposerProps, type Unanswered } from "./Composer";
 import { offlineReason, useConnection } from "./ConnectionStatus";
+import { isEmpty, threadDrafts, type ComposerContents } from "./drafts";
 import { describeError, githubProblem } from "./errors";
 import { ForkButton, ForkContext, type ForkTarget } from "./Fork";
 import type { Host } from "./hosts";
@@ -369,6 +370,18 @@ export function AgentChat({
   } = useAgentRun(hostId, runId, connected);
   // Permission requests (PLX-196): those answered here read as answered at once.
   const { answers, answer, dismiss } = useAnswers(hostId);
+  // The box's unsent prompt (PLX-887): out of the store while the thread is open, and back in as
+  // it closes unless the box is empty. The pair nets out under StrictMode's extra mount.
+  const [draftKey] = useState(() => `${hostId}/${runId}`);
+  const [draft] = useState(() => threadDrafts.get()[draftKey]);
+  const contents = useRef<ComposerContents>(undefined);
+  useEffect(() => {
+    threadDrafts.remove(draftKey);
+    return () => {
+      const box = contents.current;
+      if (box && !isEmpty(box)) threadDrafts.put(draftKey, box);
+    };
+  }, [draftKey]);
   const [resendError, setResendError] = useState<string>();
   const [prError, setPrError] = useState<RpcError>();
   // Open PR's failure for `gh` missing or signed out, as a short line by Set up GitHub.
@@ -940,6 +953,9 @@ export function AgentChat({
             connected && "composerMenus" in connection.capabilities ? { hostId, runId } : undefined
           }
           attach={attachThreads(connection, threadLinks, runId)}
+          // What the box last held, where a subagent's view took it away, else the saved draft.
+          initial={contents.current ?? draft}
+          contents={contents}
         />
       </div>
     </SubagentsContext>
