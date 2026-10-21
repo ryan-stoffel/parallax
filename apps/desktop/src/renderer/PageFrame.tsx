@@ -1,6 +1,8 @@
+import { Monitor } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { stored } from "./stored";
+import { IconButton } from "./ui";
 
 /** A page's size in CSS pixels. */
 export interface Size {
@@ -37,8 +39,8 @@ const clampSide = (n: number) => Math.min(4096, Math.max(200, Math.round(n)));
 /**
  * A browser page as a window in the panel, as on a monitor (PLX-888): laid out at `size`, scaled
  * down to fit the area, centered with blank space around it. Its bottom-right corner drags to a
- * new size, and double-clicks back to the fitted one; the size under it can be typed too, and
- * Monitor or Panel there fits it again.
+ * new size, and double-clicks back to the fitted one; the size under it can be typed too. With
+ * the panel fit and no size of the user's, the page simply fills the panel, as in a browser.
  * `children` draws the page at the scale it's given. `onArea` hears the room the page has, 0 by 0
  * while hidden.
  */
@@ -67,6 +69,10 @@ export function PageFrame({
 }) {
   const area = useRef<HTMLDivElement>(null);
   const [room, setRoom] = useState<Size>({ width: 0, height: 0 });
+  // The page fills the panel edge to edge, with no window, pill, corner, or size fields.
+  const bare = !fixed && fit === "panel";
+  const fields = useRef(0);
+  fields.current = bare ? 0 : FIELDS;
   const latest = useRef(onArea);
   latest.current = onArea;
   useEffect(() => {
@@ -79,7 +85,7 @@ export function PageFrame({
       const box = entry!.contentRect;
       const next = {
         width: Math.round(box.width),
-        height: Math.max(0, Math.round(box.height) - FIELDS),
+        height: Math.max(0, Math.round(box.height) - fields.current),
       };
       if (next.width > 0 && next.height > 0) setRoom(next);
       latest.current?.(next);
@@ -98,15 +104,18 @@ export function PageFrame({
   return (
     <div
       ref={area}
-      className="flex min-h-0 flex-1 flex-col items-center justify-center px-3 pt-5 pb-1"
+      // One tree for both looks, so switching never remounts the page, a webview included.
+      className={`flex min-h-0 flex-1 flex-col items-center justify-center ${bare ? "" : "px-3 pt-5 pb-1"}`}
     >
       {size && (
         <div
           style={{ width: size.width * scale, height: size.height * scale }}
-          className={`group relative shrink-0 rounded-md bg-background shadow-lg ring-1 ring-border ${className}`}
+          className={`group relative shrink-0 bg-background ${bare ? "" : `rounded-md shadow-lg ring-1 ring-border ${className}`}`}
         >
-          <div className="size-full overflow-hidden rounded-md">{children(scale)}</div>
-          {overlay}
+          <div className={`size-full overflow-hidden ${bare ? "" : "rounded-md"}`}>
+            {children(scale)}
+          </div>
+          {!bare && overlay}
           {drag && (
             <div
               aria-hidden
@@ -115,6 +124,7 @@ export function PageFrame({
             />
           )}
           <div
+            hidden={bare}
             role="separator"
             aria-label="Resize page"
             title="Drag to resize the page. Double-click to fit it."
@@ -156,7 +166,7 @@ export function PageFrame({
           </div>
         </div>
       )}
-      {size && (
+      {size && !bare && (
         <form
           aria-label="Page size"
           style={{ height: FIELDS }}
@@ -196,26 +206,33 @@ export function PageFrame({
             </label>
           ))}
           {size && <span className="tabular-nums">· {Math.round(scale * 100)}%</span>}
-          <span role="group" aria-label="Fit" className="ml-1 flex rounded-md bg-selected p-0.5">
-            {(["monitor", "panel"] as const).map((option) => (
-              <button
-                key={option}
-                type="button"
-                aria-pressed={!fixed && fit === option}
-                title={
-                  option === "monitor"
-                    ? "Lay the page out as on a monitor, scaled to fit"
-                    : "Lay the page out at the panel's size"
-                }
-                onClick={() => onFit(option)}
-                className="rounded px-1.5 py-px capitalize hover:text-foreground aria-pressed:bg-background aria-pressed:text-foreground aria-pressed:shadow-sm"
-              >
-                {option}
-              </button>
-            ))}
-          </span>
+          {fixed && (
+            <button
+              type="button"
+              onClick={() => onFit(fit)}
+              className="ml-1 rounded px-1.5 py-0.5 text-foreground hover:bg-hover"
+            >
+              Fit
+            </button>
+          )}
         </form>
       )}
     </div>
+  );
+}
+
+/**
+ * The toolbar's switch between the monitor fit and the panel fit, which also drops a size the
+ * user set.
+ */
+export function FitToggle({ fit, onFit }: { fit: Fit; onFit: (fit: Fit) => void }) {
+  return (
+    <IconButton
+      label="Monitor view"
+      aria-pressed={fit === "monitor"}
+      onClick={() => onFit(fit === "monitor" ? "panel" : "monitor")}
+    >
+      <Monitor />
+    </IconButton>
   );
 }

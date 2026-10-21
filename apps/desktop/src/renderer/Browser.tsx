@@ -5,7 +5,15 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { BrowserAction } from "../preload/bridge";
 import type { PreviewTab } from "../protocol/generated/protocol";
 import { AgentBrowser, type Driver } from "./AgentBrowser";
-import { browserFit, fitSize, MONITOR, PageFrame, type Size } from "./PageFrame";
+import {
+  browserFit,
+  FitToggle,
+  fitSize,
+  MONITOR,
+  PageFrame,
+  type Fit,
+  type Size,
+} from "./PageFrame";
 import { backendLogos } from "./Sidebar";
 import { instanceLogo, instanceName } from "./providers";
 import { IconButton } from "./ui";
@@ -311,6 +319,10 @@ function Tab({
   const [area, setArea] = useState<Size>(MONITOR);
   const fit = browserFit.use();
   const pageSize = fixed ?? fitSize(area.width, area.height, fit);
+  const refit = (next: Fit) => {
+    browserFit.set(next);
+    setFixed(undefined);
+  };
   // The latest callbacks, for the webview's listeners, which mount once per page.
   const latest = useRef({ onChange, ask });
   latest.current = { onChange, ask };
@@ -434,6 +446,7 @@ function Tab({
           onBlur={() => setEditing(false)}
           className="ml-1 min-w-0 flex-1 rounded-md bg-selected px-2 py-1 text-[12.5px] placeholder:text-faint-foreground focus-visible:outline-2 focus-visible:outline-ring"
         />
+        <FitToggle fit={fit} onFit={refit} />
       </form>
       {remoteHost && (
         <p className="border-b border-border px-3 py-1.5 text-[12px] text-muted-foreground">
@@ -447,10 +460,7 @@ function Tab({
           fixed={!!fixed}
           fit={fit}
           onResize={setFixed}
-          onFit={(next) => {
-            browserFit.set(next);
-            setFixed(undefined);
-          }}
+          onFit={refit}
           // A hidden tab keeps the room it had, so its page doesn't lay out again.
           onArea={(room) => room.width > 0 && room.height > 0 && setArea(room)}
         >

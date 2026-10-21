@@ -11,7 +11,7 @@ import {
 
 import type { PreviewInput, PreviewTab } from "../protocol/generated/protocol";
 import { shortUrl } from "./Browser";
-import { browserFit, fitSize, PageFrame, type Size } from "./PageFrame";
+import { browserFit, FitToggle, fitSize, PageFrame, type Fit, type Size } from "./PageFrame";
 
 /** The DevTools modifier bits of an event: Alt 1, Control 2, Meta 4, Shift 8. */
 const modifiers = (e: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) =>
@@ -66,6 +66,10 @@ export function AgentBrowser({
   useEffect(() => {
     viewport();
   }, [fit]);
+  const refit = (next: Fit) => {
+    browserFit.set(next);
+    size({ kind: "fill" });
+  };
 
   useEffect(() => {
     if (!shown) return;
@@ -162,6 +166,7 @@ export function AgentBrowser({
             className={`w-full rounded-md bg-selected py-1 pr-2 text-[12.5px] focus-visible:outline-2 focus-visible:outline-ring ${logo ? "pl-7" : "pl-2"}`}
           />
         </div>
+        <FitToggle fit={fit} onFit={refit} />
         <button
           type="button"
           onClick={() => send({ kind: "control", take: !state.human })}
@@ -180,10 +185,7 @@ export function AgentBrowser({
         fixed={!!state.fixed}
         fit={fit}
         onResize={(next) => size({ kind: "fixed", ...next })}
-        onFit={(next) => {
-          browserFit.set(next);
-          size({ kind: "fill" });
-        }}
+        onFit={refit}
         onArea={(next) => {
           clearTimeout(timer.current);
           setShown(next.width > 0 && next.height > 0);
