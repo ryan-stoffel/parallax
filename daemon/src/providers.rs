@@ -281,6 +281,17 @@ struct Stored {
     secrets: Option<AccountId>,
 }
 
+/// What a probe of an instance depends on: its settings but `enabled`, and where its secrets are.
+type Probed = (ProviderInstance, Option<AccountId>);
+
+fn probed(entry: &Stored) -> Probed {
+    let instance = ProviderInstance {
+        enabled: false,
+        ..entry.instance.clone()
+    };
+    (instance, entry.secrets)
+}
+
 /// What a probe found, kept for [`CACHE_TTL`].
 #[derive(Clone, Debug, Default)]
 struct Found {
@@ -307,7 +318,8 @@ pub struct Providers {
     launcher: Launcher,
     registry: BackendRegistry,
     stored: Mutex<Vec<Stored>>,
-    cache: Mutex<HashMap<String, (Instant, Found)>>,
+    /// Each instance's last probe: when it ended, what it probed ([`probed`]), and what it found.
+    cache: Mutex<HashMap<String, (Instant, Probed, Found)>>,
     /// One lock per instance, held while [`Self::found`] probes it, so lists running at once, as
     /// onboarding's saves do, wait on one probe instead of each starting their own.
     probing: Mutex<HashMap<String, Arc<Mutex<()>>>>,
@@ -444,7 +456,7 @@ impl Providers {
                 .lock()
                 .await
                 .get(&entry.instance.id)
-                .map(|(_, found)| found.clone());
+                .map(|(_, _, found)| found.clone());
             let found = match cached {
                 Some(found) => found,
                 None => match detected_cli(&entry.instance.id) {
@@ -507,13 +519,7 @@ impl Providers {
         }
         self.write(&stored)?;
         // Turning an instance on or off changes nothing a probe finds, so its last one stands.
-        let same = old.is_some_and(|old| {
-            ProviderInstance {
-                enabled: entry.instance.enabled,
-                ..old.instance
-            } == entry.instance
-        });
-        if !same {
+        if old.as_ref().map(probed) != Some(probed(&entry)) {
             self.cache.lock().await.remove(&entry.instance.id);
         }
         self.register(&entry);
@@ -673,13 +679,15 @@ impl Providers {
     /// `entry`'s state: from the cache while it's fresh, else probed.
     async fn found(&self, detector: &CliDetector, entry: &Stored, refresh: bool) -> Found {
         let id = &entry.instance.id;
-        if !refresh && let Some(found) = self.fresh(id).await {
+        if !refresh && let Some(found) = self.cached(entry, None).await {
             return found;
         }
+        let asked = Instant::now();
         let probing = Arc::clone(self.probing.lock().await.entry(id.clone()).or_default());
         let _probing = probing.lock().await;
-        // Another list may have probed it while this one waited.
-        if !refresh && let Some(found) = self.fresh(id).await {
+        // Another list may have probed it while this one waited, which a `refresh` takes when
+        // that probe ended after it asked.
+        if let Some(found) = self.cached(entry, refresh.then_some(asked)).await {
             return found;
         }
         let found = self.probe(detector, entry, refresh).await;
@@ -687,16 +695,18 @@ impl Providers {
         if found.installing {
             cache.remove(id);
         } else {
-            cache.insert(id.clone(), (Instant::now(), found.clone()));
+            cache.insert(id.clone(), (Instant::now(), probed(entry), found.clone()));
         }
         found
     }
 
-    /// `id`'s cached state, while it's fresh.
-    async fn fresh(&self, id: &str) -> Option<Found> {
+    /// `entry`'s cached state, from a probe of its current settings that ended after `since`, or
+    /// without one, within [`CACHE_TTL`].
+    async fn cached(&self, entry: &Stored, since: Option<Instant>) -> Option<Found> {
         let cache = self.cache.lock().await;
-        let (at, found) = cache.get(id)?;
-        (at.elapsed() < CACHE_TTL).then(|| found.clone())
+        let (at, settings, found) = cache.get(&entry.instance.id)?;
+        let recent = since.map_or_else(|| at.elapsed() < CACHE_TTL, |since| *at >= since);
+        (recent && *settings == probed(entry)).then(|| found.clone())
     }
 
     #[expect(clippy::too_many_lines, reason = "one probe, with each kind's steps")]
@@ -1939,8 +1949,9 @@ mod tests {
         assert!(registry.by_backend_name("codex").is_none());
     }
 
-    /// Lists at once share one probe of an instance, and turning it on or off keeps that probe,
-    /// so onboarding's saves don't run a slow agent again for each one.
+    /// Lists at once, refreshes too, share one probe of an instance, and turning it on or off
+    /// keeps that probe, so onboarding's saves don't run a slow agent again for each one. A change
+    /// a probe reads, a secret included, probes again.
     #[cfg(unix)]
     #[tokio::test]
     async fn lists_at_once_share_a_probe_and_turning_on_keeps_it() {
@@ -2010,12 +2021,32 @@ mod tests {
         providers
             .save(ProviderInstance {
                 args: vec!["--verbose".into()],
-                ..grok
+                ..grok.clone()
             })
             .await
             .unwrap();
         providers.list(&detector, false).await;
         assert_eq!(ran(), 4, "a setting a probe reads probes again");
+
+        tokio::join!(
+            providers.list(&detector, true),
+            providers.list(&detector, true)
+        );
+        assert_eq!(ran(), 6, "refreshes at once share a probe too");
+
+        providers
+            .save(ProviderInstance {
+                env: vec![ProviderEnvVar {
+                    name: "XAI_API_KEY".into(),
+                    value: Some("key".into()),
+                    secret: true,
+                }],
+                ..grok
+            })
+            .await
+            .unwrap();
+        providers.list(&detector, false).await;
+        assert_eq!(ran(), 8, "a new secret probes again");
     }
 
     #[cfg(unix)]
