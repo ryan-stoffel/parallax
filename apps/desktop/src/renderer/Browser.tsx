@@ -194,7 +194,11 @@ export function Browser({
     })),
   ];
   const selected = shownTab ? `a:${shownTab.tabId}` : `o:${current}`;
-  const published = JSON.stringify([faces.map((f) => [f.key, f.title, f.url, f.icon]), selected]);
+  // The agent's name stands in for its logo, which arrives with it.
+  const published = JSON.stringify([
+    faces.map((f) => [f.key, f.title, f.url, f.icon, f.agent]),
+    selected,
+  ]);
   useEffect(() => {
     if (!scope) return;
     browserTabs.set({

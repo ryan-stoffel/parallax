@@ -549,7 +549,7 @@ function BrowserTab({
           aria-label={`Close ${tab.title}`}
           onClick={onClose}
           // A narrow tab has no room for it until hovered, as in Chrome.
-          className={`mr-1.5 size-5 shrink-0 place-items-center rounded-md hover:bg-hover ${selected ? "grid" : "hidden group-hover:grid focus-visible:grid"}`}
+          className={`mr-1.5 size-5 shrink-0 place-items-center rounded-md hover:bg-hover ${selected ? "grid" : "hidden group-focus-within:grid group-hover:grid"}`}
         >
           <X aria-hidden className="size-3" />
         </button>
