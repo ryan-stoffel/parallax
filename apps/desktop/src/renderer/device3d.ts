@@ -476,9 +476,9 @@ export function createDevice3d(options: {
     fold(display, angle) {
       if (!duo || !model || (display !== 1 && display !== 3)) return;
       duo.fold(display, angle);
-      // Turned so its live display faces front.
+      // Turned so the display it shows faces front.
       model.rotation.y = 0;
-      const facing = duo.facing(orientation);
+      const facing = duo.facing(orientation, angle);
       model.rotation.y = -Math.atan2(facing.x, facing.z);
       settle();
       fit();

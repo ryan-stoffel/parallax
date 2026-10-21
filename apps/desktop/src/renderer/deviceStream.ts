@@ -75,6 +75,7 @@ const IOS_ORIENTATION = 0x07;
 const IOS_HINGE = 0x10;
 const IOS_SCREEN = 0x82;
 const IOS_ADMITTED = 0x83;
+const IOS_HINGE_DONE = 0x90;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -501,6 +502,17 @@ export function createDeviceStream(
           admitted = true;
           return events.onInput(true);
         }
+        if (data[0] === IOS_HINGE_DONE) {
+          try {
+            const reply = JSON.parse(decoder.decode(data.subarray(1))) as { requestId?: number };
+            if (next && reply.requestId === next.after) {
+              const command = next.command;
+              next = undefined;
+              send(tagged(IOS_HINGE, { requestId: ++hinge, command }));
+            }
+          } catch {}
+          return;
+        }
         if (data[0] !== IOS_SCREEN) return;
         try {
           const config = JSON.parse(decoder.decode(data.subarray(1))) as DeviceScreen & {
@@ -623,8 +635,10 @@ export function createDeviceStream(
     }
   };
 
-  // The hub answers each hinge command by its id; the next screen it reports shows the fold.
+  // The hub answers each hinge command by its id; the next screen it reports shows the fold. It
+  // takes one command at a time, so a second waits for the first's answer.
   let hinge = 0;
+  let next: { after: number; command: unknown } | undefined;
   const hidKey = (usage: number, type: "down" | "up") => send(tagged(IOS_KEY, { type, usage }));
 
   return {
@@ -697,8 +711,14 @@ export function createDeviceStream(
       if (ios) send(tagged(IOS_ORIENTATION, { orientation }));
     },
     fold(pose) {
-      if (ios && screen?.fold)
-        send(tagged(IOS_HINGE, { requestId: ++hinge, command: { control: "pose", value: pose } }));
+      if (!ios || !screen?.fold) return;
+      send(tagged(IOS_HINGE, { requestId: ++hinge, command: { control: "pose", value: pose } }));
+      // Shut, the inside display stays live until the phone lies face down on it, which hands the
+      // screen to the cover, as T3 Code does.
+      next =
+        pose === "closed"
+          ? { after: hinge, command: { control: "physical", value: "facedown" } }
+          : undefined;
     },
   };
 }

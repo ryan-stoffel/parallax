@@ -13,7 +13,9 @@ replaces Apple's wallpaper with a mesh named `device-screen`, encodes textures a
 `iphone-duo.glb` is T3 Code's conversion of Apple's
 https://www.apple.com/105/media/us/iphone-duo/2026/9305e4b9-72d9-4c05-9381-b572adadd5e5/ar/iPhone_Duo_e-sim_Star-White_Variant.usdz,
 which keeps serve-sim's hinge rig (`left-half`, `right-half`) and its three display meshes
-(`cover-display`, `inner-display-left`, `inner-display-right`), compressed here with meshopt.
+(`cover-display`, `inner-display-left`, `inner-display-right`), compressed here with meshopt. Its
+back glass and camera plateau, which T3's conversion left metallic and rough, and the plateau black,
+are set to white glass (not metallic, roughness 0.38, clearcoat 0.6), and its logo to polished metal.
 
 A device with no model here, such as an 11-inch iPad or a Pro Max Apple only made the Pro's file
 for, turns as its flat artwork. Android phones have no such files; `device3d.ts` builds a Pixel 9.
