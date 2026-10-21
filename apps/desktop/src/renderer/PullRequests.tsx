@@ -601,9 +601,9 @@ export function fileKind(path: string): (typeof FILE_KINDS)[number] {
     return "Generated";
   if (/(^|\/)(__mocks__|mocks?|fixtures?|samples|testdata)\//i.test(path) || /mock/i.test(name))
     return "Mocks";
+  if (/\.(md|mdx|rst)$/i.test(name) || /(^|\/)docs\//i.test(path)) return "Docs";
   if (/(^|\/)(tests?|__tests__|e2e|spec)\//i.test(path) || /[._-](test|spec)\.\w+$/i.test(name))
     return "Tests";
-  if (/\.(md|mdx|rst|txt)$/i.test(name) || /(^|\/)docs\//i.test(path)) return "Docs";
   return "Code";
 }
 
