@@ -25,8 +25,8 @@ use futures_util::{SinkExt as _, StreamExt as _};
 use parallax_protocol::jsonrpc::{ErrorObject, Notification};
 use parallax_protocol::methods::{DeviceData, DeviceEnd, NotificationMethod};
 use parallax_protocol::{
-    DeviceCloseParams, DeviceCreateParams, DeviceDataParams, DeviceEndParams, DeviceHubState,
-    DeviceInfo, DeviceOkResult, DevicePlatform, DevicePlatformState, DeviceResult,
+    DeviceChromeResult, DeviceCloseParams, DeviceCreateParams, DeviceDataParams, DeviceEndParams,
+    DeviceHubState, DeviceInfo, DeviceOkResult, DevicePlatform, DevicePlatformState, DeviceResult,
     DeviceScreenshotResult, DeviceStateParams, DeviceStateResult, DeviceStreamKind,
     DeviceStreamParams, DeviceStreamResult, DeviceTarget,
 };
@@ -74,6 +74,8 @@ pub(crate) struct Devices {
     /// Why the hub last failed to start or stopped.
     hub_failure: Arc<Mutex<Option<String>>>,
     streams: Arc<Mutex<Vec<Relay>>>,
+    /// Simulators' artwork from Xcode, by device type.
+    chromes: chrome::Chromes,
 }
 
 /// The running hub. Dropping it stops it.
@@ -103,6 +105,7 @@ impl Devices {
             hub: tokio::sync::Mutex::default(),
             hub_failure: Arc::default(),
             streams: Arc::default(),
+            chromes: chrome::Chromes::default(),
         }
     }
 
@@ -209,6 +212,22 @@ impl Devices {
         Ok(DeviceScreenshotResult {
             png: BASE64.encode(&png),
         })
+    }
+
+    /// `device/chrome`: a simulator's artwork from the host's Xcode, or none.
+    pub(crate) async fn chrome(
+        &self,
+        target: DeviceTarget,
+    ) -> Result<DeviceChromeResult, ErrorObject> {
+        let chrome = match (target.platform, &self.tools().ios) {
+            (DevicePlatform::Ios, Ok(ios)) => self
+                .chromes
+                .get(&ios.xcrun, &target.device_id)
+                .await
+                .map_err(failed)?,
+            _ => None,
+        };
+        Ok(DeviceChromeResult { chrome })
     }
 
     /// `device/create`: an iPhone Simulator of the newest model the newest iOS runtime runs.
@@ -891,5 +910,6 @@ fn newest_iphone(listed: &[u8]) -> Result<(Runtime, DeviceKind), String> {
         .ok_or_else(|| "The iOS runtime runs no iPhone.".to_owned())
 }
 
+mod chrome;
 #[cfg(test)]
 mod tests;

@@ -299,6 +299,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         DeviceShutdown => |p| daemon.devices.shutdown(p),
         DeviceCreate => |p| daemon.devices.create(p),
         DeviceScreenshot => |p| daemon.devices.screenshot(p),
+        DeviceChrome => |p| daemon.devices.chrome(p),
         DeviceStream => |p| daemon.devices.stream(p, &context.replies, &context.stopped_reading),
         AgentDiff => |p| agents::review::diff(daemon, p.run_id),
         AgentFile => |p| agents::review::file(daemon, p),

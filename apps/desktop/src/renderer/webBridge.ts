@@ -250,9 +250,14 @@ export class WebHost {
     if (this.state.status !== "connected" || logId === undefined) {
       return Promise.resolve({ error: { code: INTERNAL_ERROR, message: "not connected" } });
     }
+    // An emulator can take minutes to boot, past plxd's own 3 minute wait (PLX-886).
+    const timeout = method === "device/boot" ? 4 * 60_000 : REQUEST_TIMEOUT_MS;
     return new Promise((resolve) =>
-      this.send(method, params, (response) =>
-        resolve("result" in response ? { ...response, logId } : response),
+      this.send(
+        method,
+        params,
+        (response) => resolve("result" in response ? { ...response, logId } : response),
+        timeout,
       ),
     );
   }
@@ -330,7 +335,12 @@ export class WebHost {
     void this.connect();
   }
 
-  send(method: string, params: unknown, done?: Pending["done"]): void {
+  send(
+    method: string,
+    params: unknown,
+    done?: Pending["done"],
+    timeoutMs = REQUEST_TIMEOUT_MS,
+  ): void {
     const socket = this.socket;
     if (socket?.readyState !== WebSocket.OPEN) {
       done?.({ error: { code: INTERNAL_ERROR, message: "not connected" } });
@@ -342,7 +352,7 @@ export class WebHost {
         this.pending.delete(id);
         this.notify("$/cancelRequest", { id });
         done({ error: { code: -32800, message: `${method} timed out` } });
-      }, REQUEST_TIMEOUT_MS);
+      }, timeoutMs);
       this.pending.set(id, { done, timer });
     }
     socket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));

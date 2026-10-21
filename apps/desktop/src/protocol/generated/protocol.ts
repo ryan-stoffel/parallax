@@ -256,6 +256,11 @@ export type ParallaxRequests = {
 	 */
 	"device/screenshot": { params: DeviceTarget, result: DeviceScreenshotResult },
 	/**
+	 * `device/chrome`: a simulator's bezel and buttons as Xcode's Simulator draws them, from
+	 * the host's Xcode, or none for a device it has no artwork for.
+	 */
+	"device/chrome": { params: DeviceTarget, result: DeviceChromeResult },
+	/**
 	 * `device/stream`: opens a stream to a booted device through the device hub, starting it,
 	 * and sends its messages to this connection as `device/data`, then `device/end`. Fails
 	 * with `invalidParams` while the hub isn't installed.
@@ -858,6 +863,7 @@ export const REQUEST_METHODS = [
 	"device/shutdown",
 	"device/create",
 	"device/screenshot",
+	"device/chrome",
 	"device/stream",
 	"agent/diff",
 	"agent/file",
@@ -4696,6 +4702,87 @@ export type DeviceScreenshotResult = {
 	 * A PNG of the screen, in base64.
 	 */
 	png: string,
+};
+
+/**
+ * Result of `device/chrome`: the device as Xcode's Simulator draws it, from the host's Xcode, in
+ * points. Absent for a device Xcode has no artwork for, such as an Android emulator.
+ */
+export type DeviceChromeResult = {
+	/**
+	 * The artwork, or absent when there's none.
+	 */
+	chrome?: DeviceChrome,
+};
+
+/**
+ * A device's Simulator artwork: its bezel and buttons around its screen, in points, portrait.
+ */
+export type DeviceChrome = {
+	/**
+	 * The whole device's width, side buttons included.
+	 */
+	width: number,
+	/**
+	 * The whole device's height.
+	 */
+	height: number,
+	/**
+	 * Where the screen is.
+	 */
+	screen: DeviceRect,
+	/**
+	 * The screen's shape, a PNG in base64 whose alpha masks it.
+	 */
+	mask: string,
+	/**
+	 * The bezel and buttons, in drawing order.
+	 */
+	layers: Array<DeviceChromeLayer>,
+};
+
+/**
+ * One piece of a device's artwork.
+ */
+export type DeviceChromeLayer = {
+	/**
+	 * Such as `bezel`, `power`, or `volume-up`.
+	 */
+	name: string,
+	/**
+	 * A PNG in base64.
+	 */
+	png: string,
+	/**
+	 * Where it's drawn.
+	 */
+	rect: DeviceRect,
+	/**
+	 * How far a button moves out while the pointer is over it, as Simulator shows it.
+	 */
+	hoverX?: number,
+};
+
+/**
+ * A rectangle, in points.
+ */
+export type DeviceRect = {
+	/**
+	 * Its left.
+	 */
+	x: number,
+	/**
+	 * Its top.
+	 */
+	y: number,
+	/**
+	 * Its width.
+	 */
+	width: number,
+	/**
+	 * Its height.
+	 */
+	height: number,
 };
 
 /**

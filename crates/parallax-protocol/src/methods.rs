@@ -43,12 +43,12 @@ use crate::{
     ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
     ContextWriteResult, CursorInstallParams, CursorInstallResult, CursorSignInCancelParams,
     CursorSignInCancelResult, CursorSignInParams, CursorSignInResult, CursorSignOutParams,
-    CursorSignOutResult, DelegatedTask, DeviceCloseParams, DeviceCreateParams, DeviceDataParams,
-    DeviceEndParams, DeviceOkResult, DeviceResult, DeviceScreenshotResult, DeviceSetupParams,
-    DeviceStateParams, DeviceStateResult, DeviceStreamParams, DeviceStreamResult, DeviceTarget,
-    DispatchResult, EventsEventParams, EventsResyncParams, EventsSubscribeParams,
-    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, FullThreadDiffParams,
-    GitStatus, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
+    CursorSignOutResult, DelegatedTask, DeviceChromeResult, DeviceCloseParams, DeviceCreateParams,
+    DeviceDataParams, DeviceEndParams, DeviceOkResult, DeviceResult, DeviceScreenshotResult,
+    DeviceSetupParams, DeviceStateParams, DeviceStateResult, DeviceStreamParams,
+    DeviceStreamResult, DeviceTarget, DispatchResult, EventsEventParams, EventsResyncParams,
+    EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult,
+    FullThreadDiffParams, GitStatus, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
     GithubSignInCancelResult, GithubSignInParams, GithubStatus, GithubStatusParams,
     HostFoldersParams, HostFoldersResult, HostHealthParams, HostHealthResult, HostReadUploadParams,
     HostReadUploadResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
@@ -299,6 +299,9 @@ method_table! {
         DeviceCreate = "device/create": DeviceCreateParams => DeviceResult;
         /// `device/screenshot`: a PNG of a booted device's screen.
         DeviceScreenshot = "device/screenshot": DeviceTarget => DeviceScreenshotResult;
+        /// `device/chrome`: a simulator's bezel and buttons as Xcode's Simulator draws them, from
+        /// the host's Xcode, or none for a device it has no artwork for.
+        DeviceChrome = "device/chrome": DeviceTarget => DeviceChromeResult;
         /// `device/stream`: opens a stream to a booted device through the device hub, starting it,
         /// and sends its messages to this connection as `device/data`, then `device/end`. Fails
         /// with `invalidParams` while the hub isn't installed.
@@ -741,6 +744,7 @@ mod tests {
                 "device/shutdown",
                 "device/create",
                 "device/screenshot",
+                "device/chrome",
                 "device/stream",
                 "agent/diff",
                 "agent/file",

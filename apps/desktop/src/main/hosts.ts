@@ -103,6 +103,8 @@ let targetVersion = () => app.getVersion();
  * provider's `providers/upgrade` gets as long.
  */
 const UPDATE_TIMEOUT_MS = 15 * 60_000;
+/** Longer than plxd's own 3 minute wait for a simulator or emulator to boot. */
+const BOOT_TIMEOUT_MS = 4 * 60_000;
 
 /**
  * Every host's connection, by host id: `local`, each saved SSH host, each Connect device, and each
@@ -224,8 +226,14 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
       if (!host) return invalid(ErrorCodes.InvalidParams, `unknown host: ${String(hostId)}`);
       // plxd validates the params' shape; they only have to be an object to be sent.
       if (!isObject(params)) return invalid(ErrorCodes.InvalidParams, "params must be an object");
-      // A provider's own update downloads it, which can take minutes (PLX-746).
-      const timeout = method === "providers/upgrade" ? UPDATE_TIMEOUT_MS : undefined;
+      // A provider's own update downloads it, which can take minutes (PLX-746), and an emulator
+      // can take minutes to boot (PLX-886).
+      const timeout =
+        method === "providers/upgrade"
+          ? UPDATE_TIMEOUT_MS
+          : method === "device/boot"
+            ? BOOT_TIMEOUT_MS
+            : undefined;
       return host.request(method as RendererMethod, params as never, timeout);
     },
   );

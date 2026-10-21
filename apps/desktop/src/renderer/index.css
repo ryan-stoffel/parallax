@@ -2031,3 +2031,11 @@ browser-action-list::part(badge) {
   border-radius: 4px;
   font-size: 9px;
 }
+
+/* A device settling into the Device view (PLX-886). */
+@keyframes device-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}

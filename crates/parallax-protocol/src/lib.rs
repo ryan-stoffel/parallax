@@ -121,10 +121,11 @@ pub use delegation::{
     ThreadMergeBackParams, ThreadMergeBackResult,
 };
 pub use device::{
-    DeviceCloseParams, DeviceCreateParams, DeviceDataParams, DeviceEndParams, DeviceHubState,
-    DeviceInfo, DeviceOkResult, DevicePlatform, DevicePlatformState, DeviceResult,
-    DeviceScreenshotResult, DeviceSetupParams, DeviceStateParams, DeviceStateResult,
-    DeviceStreamKind, DeviceStreamParams, DeviceStreamResult, DeviceTarget,
+    DeviceChrome, DeviceChromeLayer, DeviceChromeResult, DeviceCloseParams, DeviceCreateParams,
+    DeviceDataParams, DeviceEndParams, DeviceHubState, DeviceInfo, DeviceOkResult, DevicePlatform,
+    DevicePlatformState, DeviceRect, DeviceResult, DeviceScreenshotResult, DeviceSetupParams,
+    DeviceStateParams, DeviceStateResult, DeviceStreamKind, DeviceStreamParams, DeviceStreamResult,
+    DeviceTarget,
 };
 pub use error::{ErrorData, ErrorKind, IncompatibleProtocolDetail};
 pub use events::{

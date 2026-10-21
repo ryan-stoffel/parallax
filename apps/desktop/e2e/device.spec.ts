@@ -34,7 +34,6 @@ test("an agent opening a device shows the Device view", async () => {
   );
   // The fake device isn't on this host, so the view lists what is. A cold Mac runner's first
   // simctl listing can take a while.
-  await expect(panel.getByRole("heading", { name: "Devices" })).toBeVisible({ timeout: 60_000 });
-  await expect(panel.getByRole("region", { name: "Android Emulators" })).toBeVisible();
+  await expect(panel.getByRole("list", { name: "Devices" })).toBeVisible({ timeout: 60_000 });
   await page.screenshot({ path: test.info().outputPath("device-view.png") });
 });

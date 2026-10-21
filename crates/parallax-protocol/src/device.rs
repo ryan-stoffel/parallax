@@ -128,6 +128,63 @@ pub struct DeviceScreenshotResult {
     pub png: String,
 }
 
+/// Result of `device/chrome`: the device as Xcode's Simulator draws it, from the host's Xcode, in
+/// points. Absent for a device Xcode has no artwork for, such as an Android emulator.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceChromeResult {
+    /// The artwork, or absent when there's none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub chrome: Option<DeviceChrome>,
+}
+
+/// A device's Simulator artwork: its bezel and buttons around its screen, in points, portrait.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceChrome {
+    /// The whole device's width, side buttons included.
+    pub width: f64,
+    /// The whole device's height.
+    pub height: f64,
+    /// Where the screen is.
+    pub screen: DeviceRect,
+    /// The screen's shape, a PNG in base64 whose alpha masks it.
+    pub mask: String,
+    /// The bezel and buttons, in drawing order.
+    pub layers: Vec<DeviceChromeLayer>,
+}
+
+/// One piece of a device's artwork.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceChromeLayer {
+    /// Such as `bezel`, `power`, or `volume-up`.
+    pub name: String,
+    /// A PNG in base64.
+    pub png: String,
+    /// Where it's drawn.
+    pub rect: DeviceRect,
+    /// How far a button moves out while the pointer is over it, as Simulator shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub hover_x: Option<f64>,
+}
+
+/// A rectangle, in points.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceRect {
+    /// Its left.
+    pub x: f64,
+    /// Its top.
+    pub y: f64,
+    /// Its width.
+    pub width: f64,
+    /// Its height.
+    pub height: f64,
+}
+
 /// What a `device/stream` carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
