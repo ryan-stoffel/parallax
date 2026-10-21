@@ -5,11 +5,11 @@
 //!
 //! The app's Device panel shows what they open (PLX-886): it finds `device_open` in the thread's
 //! transcript and asks `device/state` for the thread's devices, which [`crate::devices`] reads
-//! from the same sessions file. Devices boot headless (PLX-903): the panel is their only window. `serve` lists,
-//! boots, and captures devices with this module's functions too. The devices a thread opened (T3's sessions) are kept in
-//! `tmp/devices/<run>.json` in plxd's data folder, so they last across the thread's turns until
-//! plxd restarts, as T3's last until its server does. The only device host is this computer,
-//! `local`.
+//! from the same sessions file. Devices boot headless (PLX-903): the panel is their only window.
+//! `serve` lists, boots, and captures devices with this module's functions too. The devices a
+//! thread opened (T3's sessions) are kept in `tmp/devices/<run>.json` in plxd's data folder, so
+//! they last across the thread's turns until plxd restarts, as T3's last until its server does.
+//! The only device host is this computer, `local`.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
