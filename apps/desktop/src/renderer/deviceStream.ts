@@ -26,6 +26,8 @@ export interface DeviceStreamEvents {
   onScreen: (screen: DeviceScreen) => void;
   /** Whether input reaches the device. */
   onInput: (connected: boolean) => void;
+  /** A new frame is on the canvas, for a view that copies it, such as the 3D view's screen. */
+  onFrame?: () => void;
 }
 
 export type DeviceButton = "home" | "back" | "recents" | "power" | "appSwitcher";
@@ -331,6 +333,7 @@ export function createDeviceStream(
       canvas.height = height;
     }
     context.drawImage(source, 0, 0, width, height);
+    events.onFrame?.();
     if (firstFrame) return;
     firstFrame = true;
     clearTimeout(frameTimer);

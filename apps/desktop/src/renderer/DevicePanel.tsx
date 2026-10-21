@@ -23,6 +23,7 @@ import type {
   DevicePlatform,
   DeviceStateResult,
 } from "../protocol/generated/protocol";
+import type { Device3d } from "./device3d";
 import { plainChrome, unproject, type Turn } from "./deviceSpace";
 import {
   ORIENTATIONS,
@@ -836,6 +837,12 @@ function Viewer({
   const [facing, setFacing] = useState<DeviceOrientation>("portrait");
   const [orbit, setOrbit] = useState({ pitch: 0, yaw: 0 });
   const [dragging, setDragging] = useState(false);
+  // The 3D model: wanted once the device is turned, shown once it has loaded. Until then, and if
+  // it can't load, the flat artwork turns instead.
+  const [want3d, setWant3d] = useState(false);
+  const [gl, setGl] = useState<HTMLCanvasElement | null>(null);
+  const model = useRef<Device3d>(null);
+  const [modelShown, setModelShown] = useState(false);
   const streaming = shown && !booting && hub.installed;
   const found = useChrome(hostId, device);
 
@@ -847,6 +854,7 @@ function Viewer({
       {
         onStatus: (next, detail) => setStatus({ status: next, detail }),
         onScreen: setScreen,
+        onFrame: () => model.current?.frame(),
         onInput: () => {},
       },
     );
@@ -885,6 +893,43 @@ function Viewer({
   const turn: Turn = { pitch: orbit.pitch, yaw: orbit.yaw, roll };
   const turned = orbit.pitch !== 0 || orbit.yaw !== 0;
 
+  useEffect(() => {
+    if (!want3d || !gl || !canvas) return;
+    let live = true;
+    let made: Device3d | undefined;
+    void import("./device3d").then(({ createDevice3d }) => {
+      if (!live) return;
+      try {
+        made = createDevice3d({
+          canvas: gl,
+          source: canvas,
+          platform: device.platform,
+          name: device.name,
+        });
+      } catch {
+        return;
+      }
+      model.current = made;
+      made.resize(gl.clientWidth, gl.clientHeight, window.devicePixelRatio);
+      made.ready.then(
+        () => live && setModelShown(true),
+        () => {},
+      );
+    });
+    return () => {
+      live = false;
+      made?.dispose();
+      model.current = null;
+      setModelShown(false);
+    };
+  }, [want3d, gl, canvas, device.platform, device.name]);
+  useEffect(() => {
+    model.current?.setPose(orbit.pitch, orbit.yaw, roll);
+  }, [orbit, roll, modelShown]);
+  useEffect(() => {
+    if (gl) model.current?.resize(gl.clientWidth, gl.clientHeight, window.devicePixelRatio);
+  }, [box, gl, modelShown]);
+
   const ready = streaming && status.status === "streaming";
   const touching = useRef(false);
   // A touch on the screen, traced back through the device's turn onto the screen's own pixels.
@@ -921,14 +966,38 @@ function Viewer({
   // Dragging around the device turns it, with a little momentum after letting go.
   const drag = useRef<{ x: number; y: number; vx: number; vy: number; t: number }>(null);
   const glide = useRef(0);
+  // In the 3D model, a touch is wherever the pointer meets its screen.
+  const touching3d = useRef(false);
+  const modelPoint = (event: React.PointerEvent, captured: boolean) => {
+    const rect = gl?.getBoundingClientRect();
+    if (!rect || !model.current || !modelShown) return null;
+    return model.current.screenPoint(
+      (event.clientX - rect.left) / rect.width,
+      (event.clientY - rect.top) / rect.height,
+      captured,
+    );
+  };
   const onStageDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || !chrome) return;
     cancelAnimationFrame(glide.current);
     event.currentTarget.setPointerCapture(event.pointerId);
+    const hit = ready ? modelPoint(event, false) : null;
+    if (hit) {
+      touching3d.current = true;
+      (area.current?.querySelector('[role="application"]') as HTMLElement | null)?.focus();
+      stream.current?.touchRaw("begin", hit.x, hit.y);
+      return;
+    }
+    setWant3d(true);
     drag.current = { x: event.clientX, y: event.clientY, vx: 0, vy: 0, t: performance.now() };
     setDragging(true);
   };
   const onStageMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (touching3d.current) {
+      const hit = modelPoint(event, true);
+      if (hit) stream.current?.touchRaw("move", hit.x, hit.y);
+      return;
+    }
     const d = drag.current;
     if (!d) return;
     const now = performance.now();
@@ -941,7 +1010,13 @@ function Viewer({
       pitch: Math.max(-65, Math.min(65, o.pitch - dy * 0.35)),
     }));
   };
-  const onStageUp = () => {
+  const onStageUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (touching3d.current) {
+      touching3d.current = false;
+      const hit = modelPoint(event, true);
+      if (hit) stream.current?.touchRaw("end", hit.x, hit.y);
+      return;
+    }
     const d = drag.current;
     drag.current = null;
     setDragging(false);
@@ -959,10 +1034,26 @@ function Viewer({
     };
     glide.current = requestAnimationFrame(step);
   };
+  // Turns back to facing front the shortest way, then shows the flat artwork again.
   const faceFront = () => {
     cancelAnimationFrame(glide.current);
-    // The shortest way back to facing front.
-    setOrbit((o) => ({ pitch: 0, yaw: Math.round(o.yaw / 360) * 360 }));
+    const from = orbit;
+    const to = { pitch: 0, yaw: Math.round(orbit.yaw / 360) * 360 };
+    const start = performance.now();
+    const step = () => {
+      const t = Math.min(1, (performance.now() - start) / 450);
+      const eased = 1 - (1 - t) ** 3;
+      setOrbit({
+        pitch: from.pitch + (to.pitch - from.pitch) * eased,
+        yaw: from.yaw + (to.yaw - from.yaw) * eased,
+      });
+      if (t < 1) glide.current = requestAnimationFrame(step);
+      else {
+        setOrbit({ pitch: 0, yaw: 0 });
+        setWant3d(false);
+      }
+    };
+    glide.current = requestAnimationFrame(step);
   };
   useEffect(() => () => cancelAnimationFrame(glide.current), []);
 
@@ -1081,9 +1172,17 @@ function Viewer({
         onDoubleClick={faceFront}
         className={`relative flex min-h-0 flex-1 touch-none items-center justify-center overflow-hidden px-6 pt-6 pb-20 select-none ${dragging ? "cursor-grabbing" : "cursor-grab"}`}
       >
+        {want3d && (
+          <canvas
+            ref={setGl}
+            aria-hidden
+            className={`absolute inset-x-0 top-0 bottom-16 size-auto transition-opacity duration-200 ${modelShown ? "opacity-100" : "opacity-0"}`}
+            style={{ width: "100%", height: "calc(100% - 4rem)" }}
+          />
+        )}
         {chrome && (
           <div
-            className="relative shrink-0 animate-[device-in_240ms_ease-out]"
+            className={`relative shrink-0 animate-[device-in_240ms_ease-out] ${modelShown ? "pointer-events-none opacity-0" : ""}`}
             style={{ width: across * k, height: down * k, perspective: PERSPECTIVE }}
           >
             <div
