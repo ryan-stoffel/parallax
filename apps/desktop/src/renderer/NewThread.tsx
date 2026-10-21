@@ -401,9 +401,12 @@ export function NewThread({
           <>
             {folder ? (
               <>
-                <h1 className="mb-2 text-center text-[24px] font-medium tracking-tight">
+                {/* One line: only the name shrinks, truncating with an ellipsis. */}
+                <h1 className="mb-2 flex justify-center text-[24px] font-medium tracking-tight whitespace-pre">
                   What should we work on in{" "}
                   <span
+                    title={folder.name}
+                    className="min-w-0 truncate"
                     style={{
                       color: folder.color ? `var(--project-${folder.color})` : undefined,
                     }}
@@ -418,7 +421,7 @@ export function NewThread({
                     popoverTarget={repoMenu}
                     aria-haspopup="menu"
                     aria-label={`Repository: ${group.id === noRepo ? "No repo" : group.name}`}
-                    className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[15px] text-muted-foreground hover:text-foreground focus-visible:text-foreground [&_svg]:size-3.5"
+                    className="inline-flex max-w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[15px] text-muted-foreground hover:text-foreground focus-visible:text-foreground [&_svg]:size-3.5 [&_svg]:shrink-0"
                   >
                     {group.id === noRepo ? (
                       <House />
@@ -427,7 +430,9 @@ export function NewThread({
                     ) : (
                       <Folder />
                     )}
-                    {group.id === noRepo ? "No repo" : group.name}
+                    <span className="truncate" title={group.id === noRepo ? undefined : group.name}>
+                      {group.id === noRepo ? "No repo" : group.name}
+                    </span>
                     <ChevronDown />
                   </button>
                 </div>
@@ -435,7 +440,7 @@ export function NewThread({
             ) : (
               <>
                 <h1
-                  className={`${repoless(group) ? "mb-7" : "mb-2"} text-center text-[24px] font-medium tracking-tight`}
+                  className={`${repoless(group) ? "mb-7" : "mb-2"} flex justify-center text-[24px] font-medium tracking-tight whitespace-pre`}
                 >
                   {group.id === noRepo
                     ? "What should we work on "
@@ -446,7 +451,8 @@ export function NewThread({
                     type="button"
                     popoverTarget={repoMenu}
                     aria-haspopup="menu"
-                    className="rounded-md underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground hover:decoration-solid"
+                    title={group.id === noRepo ? undefined : group.name}
+                    className="min-w-0 truncate rounded-md underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground hover:decoration-solid"
                   >
                     {group.id === noRepo ? "without a repo" : group.name}
                   </button>
