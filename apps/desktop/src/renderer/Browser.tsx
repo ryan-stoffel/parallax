@@ -4,7 +4,10 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { BrowserAction } from "../preload/bridge";
 import type { PreviewTab } from "../protocol/generated/protocol";
-import { AgentBrowser } from "./AgentBrowser";
+import { AgentBrowser, type Driver } from "./AgentBrowser";
+import { fitSize, MONITOR, PageFrame, type Size } from "./PageFrame";
+import { backendLogos } from "./Sidebar";
+import { instanceLogo, instanceName } from "./providers";
 import { IconButton } from "./ui";
 
 /** Google's results page for `query`. */
@@ -88,9 +91,10 @@ export function Browser({
 }: {
   page?: { url?: string; agentTab?: string };
   remoteHost?: string;
-  /** The open thread's agent tabs (PLX-639), which show before the user's own. */
-  agent?: { hostId: string; runId: string; tabs: PreviewTab[] };
+  /** The open thread's agent tabs (PLX-639), which show before the user's own, and its backend. */
+  agent?: { hostId: string; runId: string; tabs: PreviewTab[]; backend?: string };
 }) {
+  const driver = driverOf(agent?.backend);
   // The agent tab shown, by id, or undefined for the user's own tab `current`.
   const [agentTab, setAgentTab] = useState<string>();
   const shownTab = agent?.tabs.find((t) => t.tabId === agentTab);
@@ -141,8 +145,14 @@ export function Browser({
           key={t.tabId}
           selected={shownTab === t}
           label={t.title || shortUrl(t.url) || t.tabId}
-          title={`Agent: ${t.url}`}
-          icon={<Bot aria-label="Agent" className="size-3.5 shrink-0" />}
+          title={`${driver.name}: ${t.url}`}
+          icon={
+            driver.Logo ? (
+              <driver.Logo aria-label={driver.name} className="size-3.5 shrink-0" />
+            ) : (
+              <Bot aria-label={driver.name} className="size-3.5 shrink-0" />
+            )
+          }
           onSelect={() => setAgentTab(t.tabId)}
         />
       ))}
@@ -183,6 +193,7 @@ export function Browser({
           hostId={agent.hostId}
           runId={agent.runId}
           tab={shownTab}
+          driver={driver}
         />
       )}
       {/* Every own tab stays mounted, so its page keeps its state behind the others. */}
@@ -203,6 +214,22 @@ export function Browser({
     </div>
   );
 }
+
+// The CLIs' own names, which a provider instance's name stands in for otherwise.
+const backendNames: Partial<Record<string, string>> = {
+  claude: "Claude",
+  codex: "Codex",
+  cursor: "Cursor",
+};
+
+/** The agent driving a thread's tabs, by its backend: its name and provider's logo. */
+const driverOf = (backend?: string): Driver =>
+  backend
+    ? {
+        name: backendNames[backend] ?? instanceName(backend) ?? "The agent",
+        Logo: backendLogos[backend] ?? instanceLogo(backend),
+      }
+    : { name: "The agent" };
 
 /** A tab in the strip: its icon and title, and a close button for one of the user's own. */
 function TabButton({
@@ -279,6 +306,10 @@ function Tab({
   const [error, setError] = useState<{ url: string; description: string }>();
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState(false);
+  // The page's size: the one the user set, or the panel's fit (PageFrame.tsx).
+  const [fixed, setFixed] = useState<Size>();
+  const [area, setArea] = useState<Size>(MONITOR);
+  const pageSize = fixed ?? fitSize(area.width, area.height);
   // The latest callbacks, for the webview's listeners, which mount once per page.
   const latest = useRef({ onChange, ask });
   latest.current = { onChange, ask };
@@ -410,23 +441,41 @@ function Tab({
         </p>
       )}
       <div className="relative flex min-h-0 flex-1 flex-col">
-        {loading && (
-          <div
-            role="progressbar"
-            aria-label="Loading"
-            className="absolute inset-x-0 top-0 z-10 h-0.5 animate-pulse bg-ring"
-          />
-        )}
-        {src && (
-          // React drops a `true` attribute it doesn't know, so allowpopups is the empty string.
-          // Main loads the windows its pages open in it.
-          <webview
-            ref={view}
-            src={src}
-            {...{ allowpopups: "" as unknown as boolean }}
-            className="flex-1"
-          />
-        )}
+        <PageFrame
+          size={pageSize}
+          fixed={!!fixed}
+          onResize={setFixed}
+          onFit={() => setFixed(undefined)}
+          onArea={setArea}
+        >
+          {(scale) => (
+            <>
+              {loading && (
+                <div
+                  role="progressbar"
+                  aria-label="Loading"
+                  className="absolute inset-x-0 top-0 z-10 h-0.5 animate-pulse bg-ring"
+                />
+              )}
+              {src && (
+                // React drops a `true` attribute it doesn't know, so allowpopups is the empty
+                // string. The page lays out at the frame's size, drawn at its scale.
+                <webview
+                  ref={view}
+                  src={src}
+                  {...{ allowpopups: "" as unknown as boolean }}
+                  style={{
+                    width: pageSize.width,
+                    height: pageSize.height,
+                    transform: `scale(${scale})`,
+                    transformOrigin: "0 0",
+                  }}
+                  className="flex"
+                />
+              )}
+            </>
+          )}
+        </PageFrame>
         {(error || !src) && (
           <div className="solid absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-background px-8 pb-16 text-center">
             {error ? (

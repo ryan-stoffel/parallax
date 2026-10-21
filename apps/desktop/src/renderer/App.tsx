@@ -1329,7 +1329,7 @@ export function App() {
         changes={showChanges}
         agentTabs={
           threadRun && agentTabs?.runId === threadRun.id
-            ? { hostId: host.id, ...agentTabs }
+            ? { hostId: host.id, backend: threadRun.backend, ...agentTabs }
             : undefined
         }
         pullRequest={showPr}
