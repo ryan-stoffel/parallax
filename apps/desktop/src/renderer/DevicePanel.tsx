@@ -22,7 +22,9 @@ import type {
   DeviceStateResult,
 } from "../protocol/generated/protocol";
 import {
+  ORIENTATIONS,
   createDeviceStream,
+  type DeviceOrientation,
   type DeviceScreen,
   type DeviceStream,
   type DeviceStreamStatus,
@@ -367,13 +369,16 @@ function Viewer({
   onPowerOff: () => void;
 }) {
   const ios = device.platform === "ios";
-  const canvas = useRef<HTMLCanvasElement>(null);
+  // State, not a ref: the canvas appears once Xcode's artwork has loaded, and the stream waits for it.
+  const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
   const area = useRef<HTMLDivElement>(null);
   const stream = useRef<DeviceStream>(null);
   const [status, setStatus] = useState<{ status: DeviceStreamStatus; detail?: string }>({
     status: "connecting",
   });
   const [screen, setScreen] = useState<DeviceScreen>();
+  // Which way the simulator faces, as Rotate turned it.
+  const [facing, setFacing] = useState<DeviceOrientation>("portrait");
   const [attempt, setAttempt] = useState(0);
   const [copied, setCopied] = useState(false);
   const [box, setBox] = useState({ width: 0, height: 0 });
@@ -394,10 +399,10 @@ function Viewer({
   }, [chrome, chromeKey, hostId, device.id, device.platform]);
 
   useEffect(() => {
-    if (!streaming || !canvas.current) return;
+    if (!streaming || !canvas) return;
     const live = createDeviceStream(
       { hostId, deviceId: device.id, platform: device.platform },
-      canvas.current,
+      canvas,
       {
         onStatus: (next, detail) => setStatus({ status: next, detail }),
         onScreen: setScreen,
@@ -410,7 +415,7 @@ function Viewer({
       live.stop();
       if (stream.current === live) stream.current = null;
     };
-  }, [hostId, device.id, device.platform, streaming, attempt]);
+  }, [hostId, device.id, device.platform, streaming, attempt, canvas]);
 
   // The screen fits the panel at the device's aspect, with room for its bezel and the controls.
   useLayoutEffect(() => {
@@ -450,9 +455,17 @@ function Viewer({
   const pad = Math.round(Math.min(width, height) * bezel * 1.6);
   // iPhones' screens round more than Android phones'.
   const radius = Math.round(Math.min(width, height) * (ios ? 0.13 : 0.08));
-  // Xcode's artwork is portrait; turned sideways, the whole device turns, as in Simulator.
-  const across = chrome ? (sideways ? chrome.height : chrome.width) : 0;
-  const down = chrome ? (sideways ? chrome.width : chrome.height) : 0;
+  // In Xcode's artwork the whole device turns, as in Simulator, whether or not its app turns with
+  // it, and its framebuffer turns with it.
+  const facingTurn = {
+    portrait: 0,
+    landscape_left: 90,
+    portrait_upside_down: 180,
+    landscape_right: -90,
+  }[facing];
+  const facingSideways = facingTurn === 90 || facingTurn === -90;
+  const across = chrome ? (facingSideways ? chrome.height : chrome.width) : 0;
+  const down = chrome ? (facingSideways ? chrome.width : chrome.height) : 0;
   const k = chrome ? Math.min(box.width / across, box.height / down) : 0;
 
   const point = (event: React.PointerEvent<HTMLElement>) => {
@@ -475,6 +488,31 @@ function Viewer({
     const { x, y } = point(event);
     stream.current?.touch(phase, x, y);
   };
+
+  // A touch on Xcode's artwork, turned back into the framebuffer's own coordinates.
+  const touchRaw =
+    (phase: "begin" | "move" | "end") => (event: React.PointerEvent<HTMLElement>) => {
+      if (phase === "begin") {
+        if (event.button !== 0 || !ready) return;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        (event.currentTarget.parentElement as HTMLElement | null)?.focus();
+        touching.current = true;
+      } else if (!touching.current) return;
+      if (phase === "end") touching.current = false;
+      const element = event.currentTarget;
+      const rect = element.getBoundingClientRect();
+      const dx = event.clientX - (rect.left + rect.width / 2);
+      const dy = event.clientY - (rect.top + rect.height / 2);
+      const angle = (-facingTurn * Math.PI) / 180;
+      const x = dx * Math.cos(angle) - dy * Math.sin(angle);
+      const y = dx * Math.sin(angle) + dy * Math.cos(angle);
+      const clamp = (v: number) => Math.min(1, Math.max(0, v));
+      stream.current?.touchRaw(
+        phase,
+        clamp(x / element.offsetWidth + 0.5),
+        clamp(y / element.offsetHeight + 0.5),
+      );
+    };
 
   const screenshot = async () => {
     const answer = await window.parallax.request(hostId, "device/screenshot", {
@@ -601,9 +639,9 @@ function Viewer({
                 height: chrome.height * k,
                 left: (across - chrome.width) * k * 0.5,
                 top: (down - chrome.height) * k * 0.5,
-                transform: turn ? `rotate(${turn}deg)` : undefined,
+                transform: `rotate(${facingTurn}deg)`,
               }}
-              className="absolute outline-none"
+              className="absolute outline-none transition-transform duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)]"
             >
               {chrome.layers.map((layer) => (
                 <img
@@ -639,19 +677,19 @@ function Viewer({
                   maskImage: `url(data:image/png;base64,${chrome.mask})`,
                   maskSize: "100% 100%",
                 }}
-                onPointerDown={touch("begin")}
-                onPointerMove={touch("move")}
-                onPointerUp={touch("end")}
-                onPointerCancel={touch("end")}
+                onPointerDown={touchRaw("begin")}
+                onPointerMove={touchRaw("move")}
+                onPointerUp={touchRaw("end")}
+                onPointerCancel={touchRaw("end")}
               >
                 <canvas
-                  ref={canvas}
+                  ref={setCanvas}
                   className={`size-full transition-opacity duration-300 ${ready ? "opacity-100" : "opacity-30"}`}
                 />
                 {overlay && (
                   <div
                     className="absolute inset-0 flex items-center justify-center text-white/80"
-                    style={turn ? { transform: `rotate(${-turn}deg)` } : undefined}
+                    style={facingTurn ? { transform: `rotate(${-facingTurn}deg)` } : undefined}
                   >
                     {overlay}
                   </div>
@@ -679,7 +717,7 @@ function Viewer({
               onPointerCancel={touch("end")}
             >
               <canvas
-                ref={canvas}
+                ref={setCanvas}
                 style={
                   turn === 90 || turn === -90
                     ? {
@@ -712,7 +750,13 @@ function Viewer({
             <>
               {control("Home", <House />, () => press("home"))}
               {control("App switcher", <LayoutGrid />, () => press("appSwitcher"))}
-              {control("Rotate", <RotateCw />, () => stream.current?.rotate())}
+              {control("Rotate", <RotateCw />, () => {
+                if (!chrome) return stream.current?.rotate();
+                const next =
+                  ORIENTATIONS[(ORIENTATIONS.indexOf(facing) + 1) % ORIENTATIONS.length]!;
+                setFacing(next);
+                stream.current?.orient(next);
+              })}
             </>
           ) : (
             <>

@@ -35,12 +35,16 @@ export interface DeviceStream {
   stop(): void;
   /** A touch at `x` and `y` from 0 to 1 across the shown screen. */
   touch(phase: "begin" | "move" | "end", x: number, y: number): void;
+  /** iOS: a touch at `x` and `y` from 0 to 1 across the simulator's framebuffer, unturned. */
+  touchRaw(phase: "begin" | "move" | "end", x: number, y: number): void;
   key(event: KeyboardEvent, phase: "down" | "up"): void;
   /** Types `text`: as text on Android, as US keyboard keys on iOS. */
   text(text: string): void;
   button(button: DeviceButton): void;
   /** iOS: turns the simulator to its next orientation. */
   rotate(): void;
+  /** iOS: turns the simulator to `orientation`. */
+  orient(orientation: DeviceOrientation): void;
 }
 
 const RETRY_MS = 1_000;
@@ -262,7 +266,7 @@ const IOS_BUTTONS: Partial<Record<DeviceButton, string>> = {
   power: "lock",
 };
 
-const ORIENTATIONS: DeviceOrientation[] = [
+export const ORIENTATIONS: DeviceOrientation[] = [
   "portrait",
   "landscape_left",
   "portrait_upside_down",
@@ -605,6 +609,9 @@ export function createDeviceStream(
   return {
     start,
     stop,
+    touchRaw(phase, x, y) {
+      if (ios) send(tagged(IOS_TOUCH, { type: phase, x, y }));
+    },
     touch(phase, x, y) {
       if (ios) return send(tagged(IOS_TOUCH, { type: phase, ...raw(x, y) }));
       const action = phase === "begin" ? "down" : phase === "move" ? "move" : "up";
@@ -662,6 +669,9 @@ export function createDeviceStream(
       const current = screen?.orientation ?? "portrait";
       const next = ORIENTATIONS[(ORIENTATIONS.indexOf(current) + 1) % ORIENTATIONS.length];
       send(tagged(IOS_ORIENTATION, { orientation: next }));
+    },
+    orient(orientation) {
+      if (ios) send(tagged(IOS_ORIENTATION, { orientation }));
     },
   };
 }
