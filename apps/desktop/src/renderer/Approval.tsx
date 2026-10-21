@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronUp,
   ListRestart,
+  MousePointerClick,
   ShieldCheck,
   ShieldQuestion,
   ShieldX,
@@ -69,6 +70,10 @@ export type AnswerState =
 
 /** Whether a request is Claude Code's plan, which `ExitPlanMode` hands over for approval. */
 export const isPlan = (request: ApprovalRequest) => request.toolName === "ExitPlanMode";
+
+/** A computer use request (PLX-897): may the thread use an app on the user's Mac? */
+export const isComputer = (request: Pick<ApprovalRequest, "toolName">) =>
+  request.toolName === "computer_use";
 
 /**
  * The transcript's items with this window's answers in: a request answered here reads as resolved
@@ -179,10 +184,19 @@ export function outcomeOf({ request, resolved }: Approval, now = Date.now()): Ou
       who: "It ended before your answer reached it.",
     };
   const { decision, by, always } = resolved;
+  const computer = isComputer(request);
   if (decision === "allowed")
     return {
-      verb: plan ? "Approved the plan" : always ? "Always allowed" : "Approved",
-      who: `Approved by you${at}${always ? ", with its rules for the rest of the session" : ""}.`,
+      verb: plan
+        ? "Approved the plan"
+        : always
+          ? "Always allowed"
+          : computer
+            ? "Allowed"
+            : "Approved",
+      who: computer
+        ? `Allowed by you${at}, ${always ? "for every thread until you remove it in Settings" : "for this thread"}.`
+        : `Approved by you${at}${always ? ", with its rules for the rest of the session" : ""}.`,
       Icon: ShieldCheck,
       color: "text-muted-foreground",
     };
@@ -629,8 +643,11 @@ function Answers({
   onAnswer,
   onDismiss,
   disabledReason,
+  allow = plan ? "Approve plan" : "Approve",
 }: {
   plan: boolean;
+  /** What the button that allows says. */
+  allow?: string;
   state?: AnswerState;
   rules?: string[];
   rulesId: string;
@@ -730,7 +747,7 @@ function Answers({
         onClick={() => onAnswer("allow")}
         className={approveButton}
       >
-        {label("allow", plan ? "Approve plan" : "Approve")}
+        {label("allow", allow)}
       </button>
     </>
   );
@@ -844,6 +861,75 @@ function ApprovalCard({
           plan={false}
           state={state}
           rules={rules}
+          rulesId={rulesId}
+          onAnswer={onAnswer}
+          onDismiss={onDismiss}
+          disabledReason={disabledReason}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A computer use request (PLX-897) as Codex asks it: may Parallax use this app, with what that
+ * lets it do, then Deny, Always allow, which saves the app for every thread, and Allow, for this
+ * thread.
+ */
+function ComputerApprovalCard({
+  asked,
+  count,
+  state,
+  onAnswer,
+  onDismiss,
+  disabledReason,
+  focusRef,
+}: CardProps) {
+  const titleId = useId();
+  const statusId = useId();
+  const rulesId = useId();
+  const app = field(asked.approval.request.input, "app") || "this app";
+  return (
+    <div
+      ref={focusRef}
+      role="group"
+      tabIndex={-1}
+      aria-labelledby={titleId}
+      aria-describedby={statusId}
+      className="flex flex-col rounded-xl border border-border bg-surface focus-visible:outline-none"
+    >
+      <div className="flex items-start gap-3 px-4 pt-3.5">
+        <span
+          aria-hidden
+          className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-accent/10 text-accent ring-1 ring-accent/20 ring-inset"
+        >
+          <MousePointerClick className="size-[18px]" />
+        </span>
+        <div className="min-w-0 flex-1 pt-px">
+          <p id={titleId} className="text-[13.5px] font-medium">
+            Allow Parallax to use <span className="break-words">{app}</span>?
+          </p>
+          <p id={rulesId} className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">
+            While this thread works, Parallax can see the app's window and click, type, and scroll
+            in it. Your pointer and keyboard stay yours.
+          </p>
+        </div>
+        <span
+          id={statusId}
+          className="shrink-0 pt-0.5 pl-2 text-[12px] text-muted-foreground tabular-nums"
+        >
+          {statusText(state, count)}
+        </span>
+      </div>
+      <div className="px-4 pt-2 empty:hidden">
+        <Problem state={state} />
+      </div>
+      <div className="flex flex-wrap items-center justify-end gap-2 px-4 pt-3 pb-3">
+        <Answers
+          plan={false}
+          allow="Allow"
+          state={state}
+          rules={[app]}
           rulesId={rulesId}
           onAnswer={onAnswer}
           onDismiss={onDismiss}
@@ -1051,7 +1137,9 @@ export function ApprovalQueue({
       const tool = describe(head.approval.request.toolName, head.approval.request.input);
       const what = isPlan(head.approval.request)
         ? "the plan"
-        : [tool.label, tool.detail].filter(Boolean).join(": ");
+        : isComputer(head.approval.request)
+          ? `use ${tool.detail || "an app"}`
+          : [tool.label, tool.detail].filter(Boolean).join(": ");
       const from = head.from ? ` from ${head.from.label}` : "";
       const place = queue.length > 1 ? `, 1 of ${queue.length}` : "";
       parts.push(`Approval needed${from}${place}: ${what}.`);
@@ -1105,6 +1193,8 @@ export function ApprovalQueue({
             )}
             {isPlan(head.approval.request) ? (
               <PlanApprovalCard {...props} />
+            ) : isComputer(head.approval.request) ? (
+              <ComputerApprovalCard {...props} />
             ) : (
               <ApprovalCard {...props} />
             )}

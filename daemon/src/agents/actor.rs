@@ -81,9 +81,9 @@ use super::wake::{self, Wakes};
 use super::worker::{sandbox_path, worker_unavailable};
 use super::{Place, Prepared, RunOptions, prepare, store, store_error};
 use crate::backend::{
-    AccountRef, Answer, AnswerError, Backend, Credential, Decision, Event, EventStream, Failure,
-    FailureKind, FollowUp, ModelUsage, Outcome, Resume, Run, RunRequest, SendError, ThreadTools,
-    Usage, WorkerSandbox, is_compact,
+    AccountRef, Answer, AnswerError, ApprovalRequest, Backend, Credential, Decision, Event,
+    EventStream, Failure, FailureKind, FollowUp, ModelUsage, Outcome, Resume, Run, RunRequest,
+    SendError, ThreadTools, Usage, WorkerSandbox, is_compact,
     run_temp::{self, RunTemp},
 };
 use crate::routing;
@@ -191,6 +191,12 @@ pub(super) enum Command {
         params: AgentApproveParams,
         reply: oneshot::Sender<Result<AgentApproveResult, ErrorObject>>,
     },
+    /// `computer/ask` (PLX-897): logs a permission request for `app` that plxd answers itself,
+    /// and replies at once with where its resolution will come.
+    ComputerAsk {
+        app: String,
+        reply: oneshot::Sender<Result<oneshot::Receiver<AgentApproveResult>, ErrorObject>>,
+    },
     /// `agent/accept`.
     Accept {
         id: AcceptId,
@@ -280,6 +286,9 @@ impl Command {
                 let _ = reply.send(Err(error));
             }
             Self::Approve { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::ComputerAsk { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
             Self::Queue { reply, .. } => {
@@ -545,6 +554,9 @@ pub(super) struct Actor {
     resumes: Resumes,
     /// The permission requests its CLIs asked (PLX-222).
     approvals: Approvals,
+    /// The permission requests plxd asked for computer use (PLX-897), which `agent/approve`
+    /// answers here rather than in the CLI, and where each one's resolution goes.
+    computer_asks: HashMap<ApprovalId, oneshot::Sender<AgentApproveResult>>,
     /// The tool calls running `gh pr create`, by call id, until their results link the pull
     /// requests they print (PLX-318).
     pr_calls: HashSet<String>,
@@ -600,6 +612,7 @@ impl Actor {
             wakes: Wakes::default(),
             resumes: Resumes::default(),
             approvals: Approvals::default(),
+            computer_asks: HashMap::new(),
             pr_calls: HashSet::new(),
             senders: HashMap::new(),
             cursor: None,
@@ -1016,6 +1029,9 @@ impl Actor {
             Command::Approve { params, reply } => {
                 let answer = self.approve(params).await;
                 let _ = reply.send(answer);
+            }
+            Command::ComputerAsk { app, reply } => {
+                let _ = reply.send(Ok(self.ask_computer(app).await));
             }
             Command::Queue {
                 op,
@@ -1775,6 +1791,21 @@ impl Actor {
             Lookup::Pending { .. } => {}
         }
         let allow = decision == AgentApprovalAnswer::Allow;
+        if self.computer_asks.contains_key(&approval_id) {
+            let resolution = AgentApproveResult {
+                decision: if allow {
+                    AgentApprovalDecision::Allowed
+                } else {
+                    AgentApprovalDecision::Denied
+                },
+                by: AgentApprovalBy::User,
+                always: allow && always,
+                message: if allow { None } else { message },
+            };
+            self.resolve_approval(approval_id, resolution.clone()).await;
+            self.flush().await;
+            return Ok(resolution);
+        }
         let answer = Answer {
             approval_id,
             decision: if allow {
@@ -1826,6 +1857,31 @@ impl Actor {
         }
     }
 
+    /// `computer/ask` (PLX-897): logs a request to use `app` as the CLI's would be, so the app's
+    /// approval card shows it, and returns where its resolution will come. Stopping or
+    /// cancelling the run resolves it as it does the CLI's requests.
+    async fn ask_computer(&mut self, app: String) -> oneshot::Receiver<AgentApproveResult> {
+        let request = ApprovalRequest {
+            approval_id: ApprovalId::generate(),
+            tool_name: crate::computer::APPROVAL_TOOL.to_owned(),
+            input: serde_json::json!({ "app": app }),
+            call_id: None,
+            reason: None,
+            blocked_path: None,
+            subagent: None,
+            always_allow: vec![app],
+            interactive: false,
+        };
+        let (resolved, resolution) = oneshot::channel();
+        self.computer_asks.insert(request.approval_id, resolved);
+        self.approvals
+            .add(request.approval_id, true, &request.input);
+        self.push(convert::approval_requested(&request)).await;
+        self.inbox_approval("computer use").await;
+        self.flush().await;
+        resolution
+    }
+
     /// Denies every waiting permission request, ending the CLI's turn as well, because `by` is
     /// stopping the run.
     async fn stop_approvals(&mut self, by: AgentApprovalBy) {
@@ -1848,6 +1904,9 @@ impl Actor {
     /// Records how a waiting permission request ended, and logs it as `approvalResolved`. Does
     /// nothing to one that already ended.
     async fn resolve_approval(&mut self, approval_id: ApprovalId, resolution: AgentApproveResult) {
+        if let Some(waiting) = self.computer_asks.remove(&approval_id) {
+            let _ = waiting.send(resolution.clone());
+        }
         let item = convert::approval_resolved(approval_id, &resolution);
         if self.approvals.resolve(approval_id, resolution) {
             self.push(item).await;

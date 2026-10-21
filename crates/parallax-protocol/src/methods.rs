@@ -39,8 +39,9 @@ use crate::{
     AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams, AgentResumeNowParams,
     AgentRunResult, AgentSendParams, AgentStartParams, AgentStopTaskParams, AgentStopTaskResult,
     AgentWaitParams, AgentWaitResult, AreaCreateParams, AreaDeleteParams, AreaDeleteResult,
-    AreaResult, AreaUpdateParams, ConnectDevicesParams, ConnectDevicesResult, ContextListParams,
-    ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
+    AreaResult, AreaUpdateParams, ComputerAskParams, ComputerAskResult, ComputerForgetParams,
+    ComputerStatus, ComputerStatusParams, ConnectDevicesParams, ConnectDevicesResult,
+    ContextListParams, ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
     ContextWriteResult, CursorInstallParams, CursorInstallResult, CursorSignInCancelParams,
     CursorSignInCancelResult, CursorSignInParams, CursorSignInResult, CursorSignOutParams,
     CursorSignOutResult, DelegatedTask, DeviceChromeResult, DeviceCloseParams, DeviceCreateParams,
@@ -306,6 +307,16 @@ method_table! {
         /// and sends its messages to this connection as `device/data`, then `device/end`. Fails
         /// with `invalidParams` while the hub isn't installed.
         DeviceStream = "device/stream": DeviceStreamParams => DeviceStreamResult;
+        /// `computer/ask`: whether a thread may use a desktop app with its `computer_*` tools
+        /// (PLX-897, decision 0077), asking the user in its transcript when they haven't always
+        /// allowed it. `plxd mcp` sends it. Gated on the `computerUse` capability, like every
+        /// `computer/*` method.
+        ComputerAsk = "computer/ask": ComputerAskParams => ComputerAskResult;
+        /// `computer/status`: plxd's macOS permissions for computer use and the apps always
+        /// allowed, after asking macOS for the missing permissions with `request`.
+        ComputerStatusGet = "computer/status": ComputerStatusParams => ComputerStatus;
+        /// `computer/forget`: stops always allowing an app.
+        ComputerForget = "computer/forget": ComputerForgetParams => ComputerStatus;
         /// `agent/diff`: the files that differ between a run's base and its latest commit, each
         /// with its stats and a size-capped unified diff (#157). Gated on the `agentReview`
         /// capability, like every review method.
@@ -746,6 +757,9 @@ mod tests {
                 "device/screenshot",
                 "device/chrome",
                 "device/stream",
+                "computer/ask",
+                "computer/status",
+                "computer/forget",
                 "agent/diff",
                 "agent/file",
                 "agent/files",

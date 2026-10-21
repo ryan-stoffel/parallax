@@ -1,0 +1,45 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "computer/ask",
+    "params": { "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01", "app": "Notes" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": { "allowed": true, "always": true }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "computer/status",
+    "params": { "request": true }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "accessibility": true,
+      "screenRecording": false,
+      "program": "plxd",
+      "apps": ["Notes", "Xcode"]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "computer/forget",
+    "params": { "app": "Xcode" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "accessibility": true,
+      "screenRecording": true,
+      "program": "plxd",
+      "apps": ["Notes"]
+    }
+  }
+]

@@ -565,6 +565,28 @@ test("a thread's plxd tool calls read as what they did, and to what", () => {
   expect(summary("mcp__plxd__plan_approve", {})).toBe("Parallax: plan approve");
 });
 
+test("computer use calls read as what the agent did in which app (PLX-897)", () => {
+  const summary = (name: string, input: Record<string, string>) => {
+    row({ kind: "tool", key: "t", callId: "1", name, input });
+    const text = shown();
+    const icon = document.querySelector("summary svg.lucide-mouse-pointer-click");
+    act(() => unmount());
+    return [text, !!icon];
+  };
+  expect(summary("mcp__plxd__computer_get_app_state", { app: "Notes" })).toEqual([
+    "Looked at Notes",
+    true,
+  ]);
+  expect(summary("mcp__plxd__computer_type_text", { app: "Notes", text: "Milk\nEggs" })).toEqual([
+    "Typed in Notes: Milk",
+    true,
+  ]);
+  expect(summary("mcp__plxd__computer_press_key", { app: "Notes", key: "cmd+s" })[0]).toBe(
+    "Pressed a key in Notes: cmd+s",
+  );
+  expect(summary("mcp__plxd__computer_list_apps", {})[0]).toBe("Listed apps");
+});
+
 test("another MCP server's tool reads as the server and the tool, and a skill by its name", () => {
   const summary = (name: string, input: Record<string, string>) => {
     row({ kind: "tool", key: "t", callId: "1", name, input });

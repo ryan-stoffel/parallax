@@ -171,7 +171,8 @@ async fn a_thread_launches_waits_on_reads_searches_and_messages_a_child() {
             preview::TOOLS,
             device::TOOLS,
             triggers::TOOLS,
-            delegation::TOOLS
+            delegation::TOOLS,
+            plxd::mcp::COMPUTER_TOOLS,
         ]
         .concat()
     );

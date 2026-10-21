@@ -22,6 +22,7 @@ import {
   Info,
   ListChecks,
   LoaderCircle,
+  MousePointerClick,
   Pencil,
   Plug,
   Search,
@@ -2234,6 +2235,7 @@ const icons = {
   skill: Sparkles,
   mcp: Plug,
   plxd: ParallaxGlyph,
+  computer: MousePointerClick,
   planning: ListChecks,
   working: Hammer,
   compacting: FoldVertical,
@@ -2269,6 +2271,7 @@ const toolKinds: Partial<Record<string, Kind>> = {
 
 /** The kind of work a tool call does: a plxd or other MCP server's tool, or by its name. */
 function toolKind(name: string | null): Kind {
+  if (name === "computer_use" || name?.startsWith(computerTools)) return "computer";
   if (name?.startsWith(plxdTools)) return "plxd";
   if (mcpTool(name)) return "mcp";
   // The table's own names only, so "constructor" or "toString" is any other tool.
@@ -2600,6 +2603,8 @@ function callLabel(group: string, calls: number, files: number): string {
       return `Ran ${plural(calls, "agent", "agents")}`;
     case "skill":
       return `Used ${plural(calls, "skill", "skills")}`;
+    case "computer":
+      return `Used apps ${times(calls)}`;
     case "planning":
       return "Updated the plan";
     default:
@@ -2690,6 +2695,33 @@ const plxdLabels: Partial<Record<string, readonly [doing: string, done: string]>
   agent_diff: ["Reading a subagent's diff", "Read a subagent's diff"],
 };
 
+// Computer use (PLX-897), by what the agent is doing or did and in which app, such as "Clicked in
+// Notes", and what it typed, pressed, or set.
+const computerTools = `${plxdTools}computer_`;
+const computerLabels: Partial<Record<string, readonly [doing: string, done: string]>> = {
+  list_apps: ["Listing apps", "Listed apps"],
+  get_app_state: ["Looking at", "Looked at"],
+  click: ["Clicking in", "Clicked in"],
+  perform_secondary_action: ["Using a control in", "Used a control in"],
+  scroll: ["Scrolling", "Scrolled"],
+  drag: ["Dragging in", "Dragged in"],
+  type_text: ["Typing in", "Typed in"],
+  press_key: ["Pressing a key in", "Pressed a key in"],
+  set_value: ["Setting a value in", "Set a value in"],
+};
+
+function computerCall(item: Extract<Item, { kind: "tool" }>, doing: boolean) {
+  const tool = item.name?.startsWith(computerTools) ? item.name.slice(computerTools.length) : "";
+  const labels = computerLabels[tool];
+  if (!labels) return undefined;
+  const verb = labels[doing ? 0 : 1];
+  const app = toolHint(item.input, ["app"]);
+  return {
+    label: tool === "list_apps" ? verb : `${verb} ${app || "an app"}`,
+    detail: toolHint(item.input, ["text", "key", "action", "value"]),
+  };
+}
+
 /** A plxd tool's words for what it's doing and what it did, when this app knows the tool. */
 const plxdLabel = (name: string | null) =>
   name?.startsWith(plxdTools) ? plxdLabels[name.slice(plxdTools.length)] : undefined;
@@ -2700,6 +2732,8 @@ const plxdLabel = (name: string | null) =>
  * tool.
  */
 function plxdCall(item: Extract<Item, { kind: "tool" }>, doing = false) {
+  const computer = computerCall(item, doing);
+  if (computer) return computer;
   const labels = plxdLabel(item.name);
   return labels
     ? {
@@ -2737,6 +2771,8 @@ export function describeTool(name: string, input?: JsonValue): ToolLook {
   const Icon = icons[toolKind(name)];
   const mcp = mcpTool(name);
   if (mcp) return { Icon, label: mcp.server, detail: mcp.tool };
+  if (name === "computer_use")
+    return { Icon, label: "Computer use", detail: toolHint(input, ["app"]) };
   if (name === "Skill") return { Icon, label: "Skill", detail: skillName(input) };
   return { Icon, label: name, detail: toolHint(input) };
 }

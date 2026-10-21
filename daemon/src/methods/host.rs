@@ -241,6 +241,8 @@ pub(crate) fn initialize(
 /// `secrets` (PLX-648, 0063): `secret/request`, `secret/answer`, the `secretRequested` and
 /// `secretResolved` transcript items, and `secretRef` in `schedule/save`.
 /// `devices` (PLX-886): every `device/*` method and notification.
+/// `computerUse` (PLX-897, 0077), on macOS only: `computer/ask`, `computer/status`, and
+/// `computer/forget`.
 #[expect(clippy::too_many_lines, reason = "one line per capability")]
 fn capabilities_advertised() -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
@@ -248,7 +250,7 @@ fn capabilities_advertised() -> Capabilities {
         ("maxImageBytes".to_owned(), images::MAX_IMAGE_BYTES.into()),
         ("maxTotalBytes".to_owned(), images::MAX_TOTAL_BYTES.into()),
     ]);
-    Capabilities(BTreeMap::from([
+    let mut capabilities = Capabilities(BTreeMap::from([
         ("accounts".to_owned(), serde_json::Map::new()),
         ("agentClis".to_owned(), serde_json::Map::new()),
         ("agentReview".to_owned(), serde_json::Map::new()),
@@ -343,7 +345,13 @@ fn capabilities_advertised() -> Capabilities {
         ("threadTools".to_owned(), serde_json::Map::new()),
         ("threads".to_owned(), serde_json::Map::new()),
         ("worktreeCleanup".to_owned(), serde_json::Map::new()),
-    ]))
+    ]));
+    if cfg!(target_os = "macos") {
+        capabilities
+            .0
+            .insert("computerUse".to_owned(), serde_json::Map::new());
+    }
+    capabilities
 }
 
 /// `host/folders`: the folders in a folder on this host, read on the blocking pool.

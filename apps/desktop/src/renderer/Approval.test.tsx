@@ -266,6 +266,24 @@ test("Always allow shows only when the request offers rules, and sends always", 
   ]);
 });
 
+test("computer use asks to use an app as Codex does: Deny, Always allow, and Allow (PLX-897)", async () => {
+  const notes = { toolName: "computer_use", input: { app: "Notes" }, alwaysAllow: ["Notes"] };
+  output(asked("c1", { ...notes, callId: undefined }));
+  await renderChat();
+  const title = document.getElementById(card()!.getAttribute("aria-labelledby")!)!;
+  expect(title.textContent).toBe("Allow Parallax to use Notes?");
+  expect(card()!.textContent).toContain("click, type, and scroll");
+  expect(card()!.textContent).not.toContain("Always allow adds");
+  expect(buttons().map((b) => b.textContent)).toEqual(["Deny", "Always allow", "Allow"]);
+  expect(inCard("Allow")!.className).toContain("bg-send");
+  await click(inCard("Always allow"));
+  expect(approveCalls()).toEqual([{ runId, approvalId: "c1", decision: "allow", always: true }]);
+  expect(lines()).toEqual([expect.stringMatching(/^Always allowed Computer use: Notes/)]);
+  await emit(asked("c2", { ...notes, input: { app: "Xcode" }, alwaysAllow: ["Xcode"] }));
+  await click(inCard("Allow"));
+  expect(lines().at(-1)).toMatch(/^Allowed Computer use: Xcode/);
+});
+
 test("Always allow names every rule it adds in full, however many or long", async () => {
   const long = `Bash(${"node scripts/check-every-package-and-workspace.mjs --all ".repeat(6).trim()}:*)`;
   const rules = ["Bash(pnpm test:*)", "Bash(pnpm lint:*)", long];

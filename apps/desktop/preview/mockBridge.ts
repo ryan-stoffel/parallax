@@ -66,6 +66,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "checkout",
     "commandIds",
     "composerMenus",
+    "computerUse",
     "contextAndFast",
     "coordinator",
     "eventFilters",
@@ -243,6 +244,13 @@ function waiting(runIds: string[]): LoggedEvent[] {
 }
 
 const now = () => new Date().toISOString();
+
+const computer = {
+  accessibility: true,
+  screenRecording: false,
+  program: "plxd",
+  apps: ["Notes", "Xcode"],
+};
 
 // ---- Checkpoints (0062) ------------------------------------------------------------------------
 
@@ -1346,6 +1354,17 @@ const handlers: { [M in Method]?: Handler<M> } = {
   "queue/reorder": () => ({ messages: [] }),
   "queue/cancel": () => ({ messages: [] }),
   "queue/steer": () => ({ messages: [] }),
+
+  // Computer use (PLX-897): plxd has Accessibility but not Screen Recording yet, and Notes is
+  // always allowed, as the groceries thread left it.
+  "computer/status": (p) => {
+    if (p.request) computer.screenRecording = true;
+    return { ...computer, apps: [...computer.apps] };
+  },
+  "computer/forget": (p) => {
+    computer.apps = computer.apps.filter((app) => app !== p.app);
+    return { ...computer, apps: [...computer.apps] };
+  },
 
   "github/status": () => ({
     installed: true,

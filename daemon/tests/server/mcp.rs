@@ -230,6 +230,7 @@ async fn a_coordinator_launches_steers_and_records_through_the_thread_tools() {
             device::TOOLS,
             triggers::TOOLS,
             delegation::TOOLS,
+            plxd::mcp::COMPUTER_TOOLS,
         ]
         .concat()
     );
@@ -393,6 +394,7 @@ async fn the_context_tools_reach_only_the_callers_project() {
             + device::TOOLS.len()
             + triggers::TOOLS.len()
             + delegation::TOOLS.len()
+            + plxd::mcp::COMPUTER_TOOLS.len()
     );
     let unknown = outside
         .request(

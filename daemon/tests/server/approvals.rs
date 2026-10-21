@@ -736,3 +736,83 @@ async fn run_and_shell_subscriptions_get_only_their_part_of_the_scope() {
     );
     assert!(approvals.iter().any(|(run, _)| *run == sibling));
 }
+
+/// Computer use (PLX-897): `computer/ask` logs a request plxd answers itself, Always allow saves
+/// the app for every thread, and `computer/forget` makes it ask again.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn computer_use_asks_in_the_transcript_and_remembers_always() {
+    use parallax_protocol::methods::{ComputerAsk, ComputerForget};
+    use parallax_protocol::{ComputerAskParams, ComputerAskResult, ComputerForgetParams};
+
+    let host = host(vec![
+        init("computer-1"),
+        Step::AwaitFollowUp,
+        end_turn("Done."),
+    ]);
+    let (mut client, run_id) = start_worker(&host).await;
+    let ask = move |app: &str| ComputerAskParams {
+        run_id,
+        app: app.to_owned(),
+    };
+    let mut second = host.client().await;
+    let asking = tokio::spawn(async move {
+        let answer = second.call::<ComputerAsk>(ask("Notes")).await.unwrap();
+        (second, answer)
+    });
+    let events = until(&mut client, |event| !requested(event).is_empty()).await;
+    let approval_id = events.iter().flat_map(requested).next().unwrap();
+    let asked = items(&events)
+        .into_iter()
+        .find(|item| matches!(item, AgentOutputItem::ApprovalRequested { .. }));
+    let Some(AgentOutputItem::ApprovalRequested {
+        tool_name,
+        input,
+        always_allow,
+        ..
+    }) = asked
+    else {
+        unreachable!();
+    };
+    assert_eq!(tool_name, "computer_use");
+    assert_eq!(input, json!({"app": "Notes"}));
+    assert_eq!(always_allow, ["Notes"]);
+
+    let always = AgentApproveParams {
+        always: true,
+        ..answer(run_id, approval_id, AgentApprovalAnswer::Allow)
+    };
+    client.call::<AgentApprove>(always).await.unwrap();
+    let (mut second, answer_got) = asking.await.unwrap();
+    let allowed = ComputerAskResult {
+        allowed: true,
+        always: true,
+    };
+    assert_eq!(answer_got, allowed);
+    // Every thread may use it now, without asking.
+    assert_eq!(
+        second.call::<ComputerAsk>(ask("notes")).await.unwrap(),
+        allowed
+    );
+    let status = client
+        .call::<ComputerForget>(ComputerForgetParams {
+            app: "Notes".to_owned(),
+        })
+        .await
+        .unwrap();
+    assert!(status.apps.is_empty());
+
+    // Once forgotten it asks again, and a denial says no.
+    let asking = tokio::spawn(async move { second.call::<ComputerAsk>(ask("Notes")).await });
+    let events = until(&mut client, |event| !requested(event).is_empty()).await;
+    let approval_id = events.iter().flat_map(requested).next().unwrap();
+    let deny = answer(run_id, approval_id, AgentApprovalAnswer::Deny);
+    client.call::<AgentApprove>(deny).await.unwrap();
+    assert_eq!(
+        asking.await.unwrap().unwrap(),
+        ComputerAskResult {
+            allowed: false,
+            always: false,
+        }
+    );
+}

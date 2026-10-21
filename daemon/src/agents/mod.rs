@@ -1930,6 +1930,24 @@ pub(crate) async fn approve(
     ask(&daemon, run_id, |reply| Command::Approve { params, reply }).await
 }
 
+/// `computer/ask` (PLX-897): asks the user in run `id`'s transcript whether it may use `app`, and
+/// waits for their answer through `agent/approve`.
+pub(crate) async fn computer_ask(
+    daemon: Arc<Daemon>,
+    id: RunId,
+    app: String,
+) -> Result<parallax_protocol::ComputerAskResult, ErrorObject> {
+    let answered = ask(&daemon, id, |reply| Command::ComputerAsk { app, reply }).await?;
+    let resolution = answered
+        .await
+        .map_err(|_| ErrorObject::internal_error("plxd is stopping"))?;
+    let allowed = resolution.decision == parallax_protocol::AgentApprovalDecision::Allowed;
+    Ok(parallax_protocol::ComputerAskResult {
+        allowed,
+        always: allowed && resolution.always,
+    })
+}
+
 pub(super) fn approval_not_found(run: RunId, approval: ApprovalId) -> ErrorObject {
     ErrorObject::parallax(
         ErrorKind::ApprovalNotFound,

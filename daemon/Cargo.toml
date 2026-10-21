@@ -93,6 +93,8 @@ windows-sys = { workspace = true, features = [
 [target.'cfg(target_os = "macos")'.dependencies]
 notify = { workspace = true, features = ["macos_fsevent"] }
 security-framework.workspace = true
+# Computer use's Accessibility and Quartz calls (PLX-897). security-framework already builds it.
+core-foundation = "0.10"
 
 # API keys go in the Secret Service over D-Bus, in pure Rust: tokio and Rust crypto only, so the
 # static musl build links neither libdbus nor OpenSSL (0023).

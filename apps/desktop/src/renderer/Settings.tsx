@@ -66,6 +66,7 @@ import {
   StatusDot,
   Switch,
 } from "./settings/parts";
+import { ComputerSettings } from "./settings/ComputerSettings";
 import { ProviderModels } from "./settings/ProviderModels";
 import { ScheduleSettings } from "./settings/ScheduleSettings";
 import { ScriptSettings } from "./settings/ScriptSettings";
@@ -150,6 +151,8 @@ export function Settings({
           <ProvidersSettings />
         ) : section === "sourceControl" ? (
           <SourceControlSettings key={sourceControlHost} hostId={sourceControlHost} />
+        ) : section === "computerUse" ? (
+          <ComputerSettings />
         ) : section === "schedules" ? (
           <ScheduleSettings />
         ) : section === "scripts" ? (

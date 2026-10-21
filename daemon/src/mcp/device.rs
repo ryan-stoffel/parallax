@@ -844,7 +844,7 @@ async fn boot_avd(android: &Android, name: &str) -> Result<String, String> {
 }
 
 /// A PNG's width and height, from its IHDR chunk, or `None` if `png` isn't a PNG.
-fn png_size(png: &[u8]) -> Option<(u32, u32)> {
+pub(super) fn png_size(png: &[u8]) -> Option<(u32, u32)> {
     if !png.starts_with(b"\x89PNG\r\n\x1a\n") || png.get(12..16) != Some(b"IHDR") {
         return None;
     }

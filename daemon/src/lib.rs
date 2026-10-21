@@ -56,6 +56,7 @@ pub mod backend;
 mod browser;
 mod checkpoints;
 mod commands;
+mod computer;
 mod context;
 mod delegation;
 mod detect;

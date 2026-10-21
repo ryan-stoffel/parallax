@@ -11,6 +11,7 @@ export const settingsSections: { id: SettingsSection; name: string; keywords?: s
   { id: "usage", name: "Usage", keywords: "tokens cost spend limits stats" },
   { id: "schedules", name: "Schedules", keywords: "cron timers automation" },
   { id: "sourceControl", name: "Source control", keywords: "git github" },
+  { id: "computerUse", name: "Computer use", keywords: "desktop apps mac control accessibility" },
   { id: "scripts", name: "Scripts", keywords: "setup commands worktree" },
   { id: "connections", name: "Connections", keywords: "hosts computers ssh" },
   { id: "storage", name: "Storage", keywords: "disk space cleanup" },
@@ -247,6 +248,14 @@ export const settingsIndex: SettingEntry[] = [
   ]),
   ...entries("sourceControl", undefined, [
     ["Hosting", "The GitHub CLI on each host", "github gh cli pull requests sign in git"],
+  ]),
+  ...entries("computerUse", undefined, [
+    [
+      "Permissions",
+      "Accessibility and Screen Recording for plxd",
+      "accessibility screen recording privacy macos grant",
+    ],
+    ["Always allowed", "Apps every thread may use without asking", "apps allow remove"],
   ]),
   ...entries("scripts", undefined, [
     [
