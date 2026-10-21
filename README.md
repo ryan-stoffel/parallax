@@ -1,36 +1,79 @@
 <p align="center">
-  <img src="design/icon/masters/Parallax-dark-legacy-1024.png" alt="Parallax" width="160">
+  <img src="docs/images/readme/logo.svg" alt="Parallax" width="112">
 </p>
 
 <h1 align="center">Parallax</h1>
 
-<p align="center">An open-source desktop app that runs coding agents on computers you own.</p>
-
 <p align="center">
-  <img src="docs/images/agent.gif" alt="An agent working in Parallax: it starts a thread, reads the README, edits it, and replies." width="720">
-</p>
-
-Parallax is the Cursor Projects workflow on a machine you control. A project is one coordinator chat: it plans the work and hands pieces to subagents, each in its own git worktree, with a shared folder of project context. A thread is a single agent chat, in a repository or in none.
-
-The window is an Electron app for macOS, Windows, and Linux. The work runs in [`plxd`](daemon/README.md), a Rust daemon on the host: this computer, or another one you reach over SSH. A project on a remote host keeps running with the laptop closed. You sign in to each vendor's own CLI on the host, and Parallax runs that CLI. Claude Code, Codex, and Cursor are the ones it runs today, with API keys as a fallback.
-
-<p align="center">
-  <img src="docs/images/new-thread.png" alt="The Parallax window, ready for a new thread in a repository named website." width="720">
+  <b>Run coding agents on computers you own, and check on them from anywhere.</b><br>
+  Open source. Desktop app for macOS, Windows, and Linux, with a web app and an iOS app.
 </p>
 
 <p align="center">
-  <img src="docs/images/thread.png" alt="A thread after the agent read the README, edited it, and finished." width="720">
+  <a href="#install"><b>Install</b></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/ryan-stoffel/parallax/releases">Releases</a>
+  &nbsp;·&nbsp;
+  <a href="docs/PLAN.md">Plan</a>
 </p>
 
-The sidebar lists projects and threads. The main pane is the chat. A thread starts from the composer: pick a repository, say what you want, and the agent works in a worktree on the host. You review the result from the same window.
+<p align="center">
+  <a href="https://github.com/ryan-stoffel/parallax/releases"><img src="https://img.shields.io/github/v/release/ryan-stoffel/parallax?include_prereleases&label=release" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-555" alt="macOS, Windows, and Linux">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 license"></a>
+</p>
 
-The full plan is in [docs/PLAN.md](docs/PLAN.md).
+<p align="center">
+  <img src="docs/images/readme/demo.gif" alt="Parallax: a Project's coordinator chat, approving a subagent's command, then a thread with its diff in the side panel" width="900">
+</p>
+
+Parallax is a desktop app for the coding agents you already pay for: Claude Code, Codex, Cursor, OpenCode, Ollama Cloud, and any agent that speaks ACP. You give an agent a task, it works in its own git worktree, and you review the diff when it's done. Run one agent on one task, or hand a whole feature to a coordinator that splits it across several.
+
+The agents run in `plxd`, a Rust daemon, on whichever computer you choose: this one, a desktop at home, or a Linux server you reach over SSH. On another computer, a long task keeps going with your laptop closed. You sign in to each provider on that computer, and Parallax runs it with your subscription or API key.
+
+## Threads
+
+A thread is one agent working on one task. Pick a repository, say what you want, and the agent works in a fresh worktree. Every turn is checkpointed, so you can see what a turn changed and revert it. The side panel holds the diff, a terminal, the files, a browser the agent can drive, and the pull request.
+
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/readme/thread-light.png">
+  <img src="docs/images/readme/thread.png" alt="A thread that reworked the app's updater, with the diff of its three files in the side panel">
+</picture>
+
+## Projects
+
+A Project is for work bigger than one chat. Its coordinator plans the work, starts a subagent for each piece in its own worktree, and keeps a status board in the Project's shared notes. It answers routine questions itself and brings you only what needs you: an approval, a decision, a failed test.
+
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/readme/project-light.png">
+  <img src="docs/images/readme/project.png" alt="A Project's coordinator chat beside its status panel: three items waiting on you, two subagents working, two done">
+</picture>
+
+## Your computers
+
+- **Local, SSH, or Tailscale.** The app attaches to `plxd` on this computer, on any machine you can `ssh` into, or across your tailnet with Parallax Connect.
+- **Triggers.** Schedules, webhooks, and pull request watches wake an agent while you're away.
+- **Agent tools.** Agents can drive a browser, render HTML, and run the iOS Simulator and Android Emulator.
+
+## On your phone and in a browser
+
+In Settings > Connections, turn on Pair computers on this network, then choose Pair a device and enter the code it shows on the other device.
+
+- **Web app.** `plxd` serves the app over HTTPS. Turn on Open in a browser, open the address Settings shows, and enter the code.
+- **iOS app.** It finds your computers on the network, pairs with the same code, and lists your threads. Open one to read it, approve a request, or send a reply. A message sent offline goes out when the phone reconnects. The app lives in [`apps/mobile`](apps/mobile).
+
+<p align="center">
+  <img src="docs/images/readme/web.png" alt="The web app in a browser, showing a finished thread" width="520">
+  &nbsp;
+  <img src="docs/images/readme/mobile-threads.png" alt="The iOS app's thread list" width="130">
+  <img src="docs/images/readme/mobile-thread.png" alt="A thread open in the iOS app" width="130">
+</p>
 
 ## Install
 
-These commands install the latest nightly, and the app updates itself after that.
+These commands install the latest nightly. The app updates itself after that.
 
-macOS (Apple silicon) and Linux (x86_64 and arm64, including Omarchy):
+macOS (Apple silicon) and Linux (x64 and arm64):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/scripts/install.sh | sh
@@ -42,11 +85,11 @@ Windows (x64 and arm64), in PowerShell:
 irm https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/scripts/install.ps1 | iex
 ```
 
-On macOS the app goes in /Applications. On Linux it's an AppImage in `~/.local/share/parallax-nightly`, with a launcher entry and a `parallax-nightly` command. On Windows it installs for your user, with no admin prompt.
+On macOS the app goes in /Applications. On Linux it's an AppImage in `~/.local/share/parallax-nightly`, with a launcher entry and a `parallax-nightly` command. On Windows it installs for your user, with no admin prompt. Every installer is also on the [releases page](https://github.com/ryan-stoffel/parallax/releases).
 
-On Arch Linux and Omarchy, `yay -S parallax-nightly-bin` will install it from the AUR once the package is published there. AUR account registration is closed for now. Every installer is also on the [releases page](https://github.com/ryan-stoffel/parallax/releases).
+Then sign in to at least one provider on the computer that runs the work. The app sets up this computer's agents on first launch, and Settings > Providers covers any computer.
 
-## Run it
+## Build from source
 
 `plxd` builds with Cargo. The app needs Node 24 and pnpm through corepack (`corepack enable`). Run pnpm inside `apps/desktop`, where corepack finds the pinned version.
 
@@ -61,6 +104,8 @@ pnpm dev
 `pnpm check` formats, lints, and type-checks the app. `pnpm test` and `pnpm build` run the rest. `scripts/ci/check-rust` runs the same lint, build, and tests as CI for `plxd`.
 
 `pnpm exec vp dev -c preview/vite.config.ts` serves the renderer in a browser at http://localhost:5199/ with a fake `plxd` and no Electron ([apps/desktop/preview](apps/desktop/preview/README.md)).
+
+The design lives in [docs/PLAN.md](docs/PLAN.md), and the decisions behind it in [docs/decisions](docs/decisions/).
 
 ## Usage data
 
