@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ryan-stoffel/parallax/releases"><img src="https://img.shields.io/github/v/release/ryan-stoffel/parallax?include_prereleases&label=nightly" alt="Latest nightly"></a>
+  <a href="https://github.com/ryan-stoffel/parallax/releases"><img src="https://img.shields.io/github/v/release/ryan-stoffel/parallax?include_prereleases&label=release" alt="Latest nightly"></a>
   <img src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-555" alt="macOS, Windows, and Linux">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 license"></a>
 </p>
@@ -27,9 +27,9 @@
   <img src="docs/images/readme/demo.gif" alt="Parallax: a Project's coordinator chat, approving a subagent's command, then a thread with its diff in the side panel" width="900">
 </p>
 
-Parallax is a desktop app for the coding agents you already pay for: Claude Code, Codex, Cursor, OpenCode, and Ollama Cloud. You give an agent a task, it works in its own git worktree, and you review the diff when it's done. Run one agent on one task, or hand a whole feature to a coordinator that splits it across several.
+Parallax is a desktop app for the coding agents you already pay for: Claude Code, Codex, Cursor, OpenCode, Ollama Cloud, and any agent that speaks ACP. You give an agent a task, it works in its own git worktree, and you review the diff when it's done. Run one agent on one task, or hand a whole feature to a coordinator that splits it across several.
 
-The agents run in `plxd`, a Rust daemon, on whichever computer you choose: this one, a desktop at home, or a Linux server you reach over SSH. A long task keeps going with your laptop closed. You sign in to each vendor's own CLI on that computer, and Parallax drives it with your subscription.
+The agents run in `plxd`, a Rust daemon, on whichever computer you choose: this one, a desktop at home, or a Linux server you reach over SSH. On another computer, a long task keeps going with your laptop closed. You sign in to each provider on that computer, and Parallax runs it with your subscription or API key.
 
 ## Threads
 
@@ -52,15 +52,14 @@ A Project is for work bigger than one chat. Its coordinator plans the work, star
 ## Your computers
 
 - **Local, SSH, or Tailscale.** The app attaches to `plxd` on this computer, on any machine you can `ssh` into, or across your tailnet with Parallax Connect.
-- **Your subscriptions.** Parallax runs each vendor's official CLI with your sign-in. API keys work too.
 - **Triggers.** Schedules, webhooks, and pull request watches wake an agent while you're away.
 - **Agent tools.** Agents can drive a browser, render HTML, and run the iOS Simulator and Android Emulator.
 
 ## On your phone and in a browser
 
-Turn on remote access in Settings > Connections, then pair a device with the code it shows.
+In Settings > Connections, turn on Pair computers on this network, then choose Pair a device and enter the code it shows on the other device.
 
-- **Web app.** `plxd` serves the full app over HTTPS. Turn on Open in a browser, open the address Settings shows, and enter the code.
+- **Web app.** `plxd` serves the app over HTTPS. Turn on Open in a browser, open the address Settings shows, and enter the code.
 - **iOS app.** It finds your computers on the network, pairs with the same code, and lists your threads. Open one to read it, approve a request, or send a reply. A message sent offline goes out when the phone reconnects. The app lives in [`apps/mobile`](apps/mobile).
 
 <p align="center">
@@ -88,7 +87,7 @@ irm https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/scripts/inst
 
 On macOS the app goes in /Applications. On Linux it's an AppImage in `~/.local/share/parallax-nightly`, with a launcher entry and a `parallax-nightly` command. On Windows it installs for your user, with no admin prompt. Every installer is also on the [releases page](https://github.com/ryan-stoffel/parallax/releases).
 
-Then sign in to at least one agent CLI on the computer that runs the work, such as Claude Code (`claude`), Codex (`codex login`), or Cursor.
+Then sign in to at least one provider on the computer that runs the work. The app walks you through it on first launch, and Settings > Providers lists them all.
 
 ## Build from source
 
