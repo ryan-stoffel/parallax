@@ -1079,6 +1079,18 @@ const handlers: { [M in Method]?: Handler<M> } = {
       changedFiles: 6,
       additions: 211,
       deletions: 88,
+      files: [
+        { path: "apps/desktop/src/renderer/PullRequests.tsx", additions: 120, deletions: 40 },
+        { path: "daemon/src/worktree/pull_request.rs", additions: 18, deletions: 4 },
+        { path: "apps/desktop/src/renderer/PullRequests.test.tsx", additions: 44, deletions: 1 },
+        {
+          path: "crates/parallax-protocol/samples/v1/pull-requests.json",
+          additions: 21,
+          deletions: 19,
+        },
+        { path: "docs/decisions/0070-line-breakdown.md", additions: 6, deletions: 0 },
+        { path: "apps/desktop/pnpm-lock.yaml", additions: 2, deletions: 24 },
+      ],
       body: "",
       comments: [],
       reviewRequests: [],

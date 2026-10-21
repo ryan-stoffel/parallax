@@ -232,6 +232,18 @@ pub struct PrCommit {
     pub committed_at: Timestamp,
 }
 
+/// One file a pull request changes, with its lines added and removed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrFile {
+    /// Its path in the repository.
+    pub path: String,
+    /// Lines added.
+    pub additions: u64,
+    /// Lines removed.
+    pub deletions: u64,
+}
+
 /// Result of `pr/diff`: a pull request's changes as one unified diff, as `gh pr diff` prints it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -272,6 +284,10 @@ pub struct PullRequest {
     pub additions: u64,
     /// Lines removed.
     pub deletions: u64,
+    /// The files it changes, as GitHub lists them: at most its first 100. Absent means none, or a
+    /// plxd without them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<PrFile>,
     /// Its description, in Markdown.
     pub body: String,
     /// Its comments and the text of its reviews, oldest first.

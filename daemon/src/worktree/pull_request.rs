@@ -14,7 +14,7 @@ use std::path::Path;
 
 use jiff::Timestamp;
 use parallax_protocol::{
-    PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrMergeMethod,
+    PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrFile, PrMergeMethod,
     PrMergeState, PrReview, PrReviewState, PrState, PullRequest,
 };
 use serde::Deserialize;
@@ -29,7 +29,7 @@ const GH_AUTH_REQUIRED: i32 = 4;
 
 /// What `pr/view` asks `gh pr view` for: everything [`PullRequest`] has.
 const VIEW_FIELDS: &str = "--json=number,title,url,state,isDraft,author,updatedAt,baseRefName,\
-                           headRefName,changedFiles,additions,deletions,body,comments,reviews,\
+                           headRefName,changedFiles,additions,deletions,files,body,comments,reviews,\
                            reviewRequests,labels,statusCheckRollup,mergeStateStatus,\
                            autoMergeRequest,createdAt,closedAt,mergedAt,mergedBy,commits";
 
@@ -263,6 +263,8 @@ struct Viewed {
     changed_files: u64,
     additions: u64,
     deletions: u64,
+    #[serde(default)]
+    files: Vec<PrFile>,
     body: String,
     #[serde(default)]
     comments: Vec<Comment>,
@@ -461,6 +463,7 @@ fn parse_view(json: &str) -> Result<PullRequest, PrError> {
         changed_files: viewed.changed_files,
         additions: viewed.additions,
         deletions: viewed.deletions,
+        files: viewed.files,
         body: viewed.body,
         comments,
         review_requests: viewed
@@ -631,6 +634,7 @@ mod tests {
             "changedFiles": 1,
             "additions": 12,
             "deletions": 2,
+            "files": [{"path": "README.md", "additions": 12, "deletions": 2, "changeType": "MODIFIED"}],
             "body": "Explains the build.",
             "comments": [
                 {"author": {"login": "bot"}, "body": "Deployed.", "createdAt": "2026-10-02T12:09:00Z"},
@@ -679,6 +683,13 @@ mod tests {
                  "authors": [{"email": "a@example.com", "id": "", "login": "", "name": "Ann"}]}
             ]
         })
+    }
+
+    #[test]
+    fn gh_pr_view_s_files_keep_their_lines_changed() {
+        let pr = parse_view(&answer().to_string()).unwrap();
+        let files = json!([{"path": "README.md", "additions": 12, "deletions": 2}]);
+        assert_eq!(serde_json::to_value(&pr.files).unwrap(), files);
     }
 
     #[test]

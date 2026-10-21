@@ -592,6 +592,40 @@ function checksOf(pr: PullRequest): { Icon: LucideIcon; color: string; text: str
   return { ...(checkIcons[pr.checksState ?? ""] ?? noCheck), text };
 }
 
+const FILE_KINDS = ["Code", "Tests", "Mocks", "Docs", "Generated"] as const;
+
+/** What a changed file is, by its path, for the header's lines-changed breakdown. */
+export function fileKind(path: string): (typeof FILE_KINDS)[number] {
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  if (/(^|\/)generated\//i.test(path) || /(\.lockb?|-lock\.(json|yaml)|^go\.sum)$/.test(name))
+    return "Generated";
+  if (/(^|\/)(__mocks__|mocks?|fixtures?|samples|testdata)\//i.test(path) || /mock/i.test(name))
+    return "Mocks";
+  if (/(^|\/)(tests?|__tests__|e2e|spec)\//i.test(path) || /[._-](test|spec)\.\w+$/i.test(name))
+    return "Tests";
+  if (/\.(md|mdx|rst|txt)$/i.test(name) || /(^|\/)docs\//i.test(path)) return "Docs";
+  return "Code";
+}
+
+/**
+ * A pull request's lines added and removed by kind of file, each kind with any. Other is the lines
+ * in files GitHub didn't list, so the rows add up to its totals.
+ */
+export function lineBreakdown(
+  pr: PullRequest,
+): { kind: string; additions: number; deletions: number }[] {
+  const rows = [...FILE_KINDS, "Other"].map((kind) => ({ kind, additions: 0, deletions: 0 }));
+  for (const f of pr.files ?? []) {
+    const row = rows[FILE_KINDS.indexOf(fileKind(f.path))]!;
+    row.additions += f.additions;
+    row.deletions += f.deletions;
+  }
+  const other = rows.at(-1)!;
+  other.additions = Math.max(0, pr.additions - rows.reduce((n, r) => n + r.additions, 0));
+  other.deletions = Math.max(0, pr.deletions - rows.reduce((n, r) => n + r.deletions, 0));
+  return rows.filter((r) => r.additions || r.deletions);
+}
+
 /** A menu row: its icon, label, and an optional line under it. */
 function Item({
   Icon,
@@ -1344,11 +1378,45 @@ export function PullRequestView({
           >
             {pr.baseBranch} ← {pr.headBranch}
           </span>
-          <span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
+          {/* Its lines by kind of file show under it on hover or focus, when plxd lists its files. */}
+          <span
+            tabIndex={pr.files?.length ? 0 : undefined}
+            aria-describedby={pr.files?.length ? `${id}-lines` : undefined}
+            className="group relative flex shrink-0 items-center gap-1.5 rounded-md text-muted-foreground outline-none focus-visible:ring-1 focus-visible:ring-border"
+          >
             <FileDiff aria-hidden className="size-4" />
             {pr.changedFiles} {pr.changedFiles === 1 ? "file" : "files"}
             <span className="font-mono text-added">+{pr.additions.toLocaleString(locale())}</span>
             <span className="font-mono text-danger">−{pr.deletions.toLocaleString(locale())}</span>
+            {!!pr.files?.length && (
+              <span
+                id={`${id}-lines`}
+                role="tooltip"
+                className="pointer-events-none invisible absolute top-full right-0 z-20 mt-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 font-mono text-[12.5px] whitespace-nowrap shadow-composer group-hover:visible group-focus-visible:visible"
+              >
+                <table>
+                  <tbody>
+                    {[
+                      ...lineBreakdown(pr),
+                      { kind: "Total", additions: pr.additions, deletions: pr.deletions },
+                    ].map((r) => (
+                      <tr
+                        key={r.kind}
+                        className={r.kind === "Total" ? "border-t border-border" : undefined}
+                      >
+                        <td className="py-1 pr-6 font-sans text-foreground">{r.kind}</td>
+                        <td className="py-1 pr-4 text-right text-added">
+                          +{r.additions.toLocaleString(locale())}
+                        </td>
+                        <td className="py-1 text-right text-danger">
+                          −{r.deletions.toLocaleString(locale())}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </span>
+            )}
           </span>
         </div>
       </header>
