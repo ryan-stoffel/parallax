@@ -1,7 +1,7 @@
 import { strToU8, zipSync } from "fflate";
 import { expect, test } from "vite-plus/test";
 
-import { parseExport, readExport } from "./chatExports";
+import { parseExport, readExports } from "./chatExports";
 
 // A ChatGPT conversation whose user edited their first message: `current_node` follows the edit.
 const chatgpt = {
@@ -138,13 +138,66 @@ test("an export .zip's conversations.json is read, newest first, and anything el
     "conversations.json": strToU8(JSON.stringify([chatgpt, claude])),
     "users.json": strToU8("[]"),
   });
-  const chats = await readExport(new File([zip], "export.zip"));
+  const { chats, parts } = await readExports([new File([zip], "export.zip")]);
   expect(chats.map((c) => c.id)).toEqual(["k-1", "c-1"]);
+  expect(parts).toEqual([]);
   const empty = zipSync({ "users.json": strToU8("[]") });
-  await expect(readExport(new File([empty], "other.zip"))).rejects.toThrow(
-    "has no conversations.json",
+  await expect(readExports([new File([empty], "other.zip")])).rejects.toThrow(
+    "other.zip has no ChatGPT or Claude chats",
   );
-  await expect(readExport(new File([strToU8("nope")], "bad.zip"))).rejects.toThrow("isn't a .zip");
+  await expect(readExports([new File([strToU8("nope")], "bad.zip")])).rejects.toThrow(
+    "isn't a .zip",
+  );
+});
+
+test("Claude's export manifest gives its conversations parts to download", async () => {
+  const manifest = {
+    version: "1.0",
+    total_files: 3,
+    data_files: [
+      {
+        category: "light_metadata",
+        filename: "light_metadata-000.zip",
+        export_url: "https://claude.ai/export/x/download/1",
+      },
+      {
+        category: "conversations",
+        filename: "conversations-000.zip",
+        export_url: "https://claude.ai/export/x/download/2",
+      },
+      {
+        category: "conversations",
+        filename: "conversations-001.zip",
+        export_url: "javascript:alert(1)",
+      },
+    ],
+  };
+  const { chats, parts } = await readExports([
+    new File([JSON.stringify(manifest)], "manifest-ac84.json"),
+  ]);
+  expect(chats).toEqual([]);
+  expect(parts).toEqual([
+    { filename: "conversations-000.zip", url: "https://claude.ai/export/x/download/2" },
+  ]);
+});
+
+test("parts that hold a chat per file or JSON Lines are read together, each chat once", async () => {
+  const later = { ...claude, updated_at: "2026-09-01T00:00:00.000Z", name: "Monads, again" };
+  const perChat = zipSync({
+    "conversations/k-1.json": strToU8(JSON.stringify(claude)),
+    "conversations/c-1.json": strToU8(JSON.stringify(chatgpt)),
+  });
+  const lines = zipSync({
+    "conversations-001.jsonl": strToU8(`${JSON.stringify(later)}\nnot json\n`),
+  });
+  const { chats } = await readExports([
+    new File([perChat], "conversations-000.zip"),
+    new File([lines], "conversations-001.zip"),
+  ]);
+  expect(chats.map((c) => [c.id, c.title])).toEqual([
+    ["k-1", "Monads, again"],
+    ["c-1", "Plan a trip"],
+  ]);
 });
 
 test("tool blocks' placeholder text and voice turns are read as the export means them", () => {

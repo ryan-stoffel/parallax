@@ -10,7 +10,7 @@ import {
 } from "react";
 
 import type { ImportSource, ImportableSession, ProviderInfo } from "../protocol/generated/protocol";
-import { readExport, type ExportedChat } from "./chatExports";
+import { readExports, type ExportPart, type ExportedChat } from "./chatExports";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId } from "./hosts";
@@ -165,6 +165,8 @@ export function ImportChats({ className = "" }: { className?: string }) {
   const [threads, setThreads] = useState<(string | null)[]>([]);
   const [reading, setReading] = useState(false);
   const [error, setError] = useState<string>();
+  // A Claude export manifest's conversations parts, still to download (PLX-890).
+  const [parts, setParts] = useState<ExportPart[]>([]);
 
   // Which of `list` are imported. Throws, in words, when plxd can't say, so no chat is marked by
   // another export's answer.
@@ -175,15 +177,18 @@ export function ImportChats({ className = "" }: { className?: string }) {
     if ("error" in answer) throw new Error(describeError(answer.error));
     setThreads(answer.result.threads);
   }, []);
-  const open = async (picked: File | undefined) => {
-    if (!picked) return;
+  const open = async (picked: File[]) => {
+    if (!picked.length) return;
     setReading(true);
     setError(undefined);
     try {
-      const list = await readExport(picked);
-      await refresh(list);
-      setChats(list);
-      setFile(picked.name);
+      const read = await readExports(picked);
+      setParts(read.parts);
+      if (read.chats.length) {
+        await refresh(read.chats);
+        setChats(read.chats);
+        setFile(picked.map((f) => f.name).join(", "));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -198,7 +203,15 @@ export function ImportChats({ className = "" }: { className?: string }) {
       </Notice>
     );
   if (!chats)
-    return <ExportDrop className={className} reading={reading} error={error} onFile={open} />;
+    return (
+      <ExportDrop
+        className={className}
+        reading={reading}
+        error={error}
+        parts={parts}
+        onFiles={(files) => void open(files)}
+      />
+    );
   return (
     <div className={`flex min-h-0 flex-col gap-3 ${className}`}>
       <p className="flex items-center gap-2 text-[12.5px] text-muted-foreground [&_svg]:size-3.5">
@@ -248,27 +261,59 @@ export function ImportChats({ className = "" }: { className?: string }) {
   );
 }
 
-/** Asks for an export's .zip, by drop or by Choose, and says how to get one. */
+/**
+ * Asks for an export's files, by drop or by Choose, and says how to get them. With `parts`, from
+ * a Claude export manifest, it links each to download first.
+ */
 function ExportDrop({
   className,
   reading,
   error,
-  onFile,
+  parts,
+  onFiles,
 }: {
   className: string;
   reading: boolean;
   error: string | undefined;
-  onFile: (file: File | undefined) => void;
+  parts: ExportPart[];
+  onFiles: (files: File[]) => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
   const drop = (e: DragEvent) => {
     e.preventDefault();
     setOver(false);
-    onFile(e.dataTransfer.files[0]);
+    onFiles([...e.dataTransfer.files]);
   };
   return (
     <div className={`flex min-h-0 flex-col gap-4 overflow-y-auto ${className}`}>
+      {parts.length > 0 && (
+        <div className="rounded-xl border border-border bg-surface p-4 text-[12.5px]">
+          <p className="flex items-center gap-1.5 text-[13px] font-medium [&_svg]:size-3.5">
+            <ClaudeLogo />
+            That&apos;s Claude&apos;s export manifest
+          </p>
+          <p className="mt-1 text-muted-foreground">
+            Your chats are in {parts.length === 1 ? "this part" : "these parts"}. Download{" "}
+            {parts.length === 1 ? "it" : "each"} in your browser, then drop the .zip below.
+            Claude&apos;s links expire a day after the export, and may work only once.
+          </p>
+          <ul className="mt-3 flex flex-wrap gap-2">
+            {parts.map((part) => (
+              <li key={part.url}>
+                <button
+                  type="button"
+                  onClick={() => window.open(part.url, "_blank")}
+                  className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1 font-medium hover:bg-hover [&_svg]:size-3.5"
+                >
+                  <Download aria-hidden />
+                  {part.filename}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div
         onDragOver={(e) => {
           e.preventDefault();
@@ -279,18 +324,21 @@ function ExportDrop({
         className={`flex min-h-44 flex-col items-center justify-center rounded-xl border border-dashed px-6 py-8 text-center transition-colors ${over ? "border-accent bg-accent/8" : "border-border"}`}
       >
         <AppLogos apps={chatApps} className="mb-3" />
-        <p className="text-[13.5px] font-medium">Drop your export&apos;s .zip here</p>
+        <p className="text-[13.5px] font-medium">
+          {parts.length ? "Now drop the downloaded .zip here" : "Drop your export's .zip here"}
+        </p>
         <p className="mt-1 text-[12.5px] text-muted-foreground">
           From ChatGPT or Claude. Each emails you a link to it once it's ready.
         </p>
         <input
           ref={input}
           type="file"
-          accept=".zip,.json,application/zip"
+          accept=".zip,.json,.jsonl,application/zip"
+          multiple
           aria-label="Export .zip"
           className="sr-only"
           onChange={(e) => {
-            onFile(e.target.files?.[0]);
+            onFiles([...(e.target.files ?? [])]);
             e.target.value = "";
           }}
         />
@@ -321,7 +369,8 @@ function ExportDrop({
           },
           {
             app: chatApps[1]!,
-            steps: "Settings › Privacy › Export data. Claude emails you a link to the .zip.",
+            steps:
+              "Settings › Privacy › Export data. Claude emails you a manifest: drop it here to get your chats' download.",
           },
         ].map(({ app, steps }) => (
           <div key={app.source} className="rounded-xl border border-border bg-surface p-3">
