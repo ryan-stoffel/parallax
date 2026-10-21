@@ -97,6 +97,19 @@ export function crxKey(bytes: Uint8Array, id: string): string | undefined {
 }
 
 /**
+ * A manifest with `key` added. Chromium also reads one with a byte order mark or comments, which
+ * `JSON.parse` doesn't, so such a manifest stays as it was, and the extension gets a folder id.
+ */
+function withKey<T extends Uint8Array>(manifest: T, key: string): T | Uint8Array<ArrayBuffer> {
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(manifest));
+    return new TextEncoder().encode(JSON.stringify({ ...(parsed as object), key }));
+  } catch {
+    return manifest;
+  }
+}
+
+/**
  * Loads every listed folder into the browser's session. One that no longer loads, such as a
  * moved unpacked folder, is skipped with a warning and stays listed.
  */
@@ -136,10 +149,7 @@ export async function installExtension(
     // The store's own id, from the package's key, rather than one Electron makes from the folder.
     const key = crxKey(crx, id);
     const manifest = files["manifest.json"];
-    if (key && manifest)
-      files["manifest.json"] = new TextEncoder().encode(
-        JSON.stringify({ ...JSON.parse(new TextDecoder().decode(manifest)), key }),
-      );
+    if (key && manifest) files["manifest.json"] = withKey(manifest, key);
     const folder = path.join(root(), id);
     await rm(folder, { recursive: true, force: true });
     for (const [name, data] of Object.entries(files)) {
