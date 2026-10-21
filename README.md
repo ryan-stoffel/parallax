@@ -28,13 +28,23 @@ The full plan is in [docs/PLAN.md](docs/PLAN.md).
 
 ## Install
 
-Installers for macOS, Windows, and Linux are on the [releases page](https://github.com/ryan-stoffel/parallax/releases). On Arch Linux and Omarchy, install the nightly from the AUR:
+These commands install the latest nightly, and the app updates itself after that.
+
+macOS (Apple silicon) and Linux (x86_64 and arm64, including Omarchy):
 
 ```sh
-yay -S parallax-nightly-bin
+curl -fsSL https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/scripts/install.sh | sh
 ```
 
-`yay` updates it with the rest of the system.
+Windows (x64 and arm64), in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/scripts/install.ps1 | iex
+```
+
+On macOS the app goes in /Applications. On Linux it's an AppImage in `~/.local/share/parallax-nightly`, with a launcher entry and a `parallax-nightly` command. On Windows it installs for your user, with no admin prompt.
+
+On Arch Linux and Omarchy, `yay -S parallax-nightly-bin` will install it from the AUR once the package is published there. AUR account registration is closed for now. Every installer is also on the [releases page](https://github.com/ryan-stoffel/parallax/releases).
 
 ## Run it
 
