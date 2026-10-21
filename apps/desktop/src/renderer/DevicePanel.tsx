@@ -869,7 +869,8 @@ function Viewer({
   const [want3d, setWant3d] = useState(duo);
   const [gl, setGl] = useState<HTMLCanvasElement | null>(null);
   const model = useRef<Device3d>(null);
-  const [modelShown, setModelShown] = useState(false);
+  // The model on screen, once it has loaded: a rebuilt one is new, so it gets the turn again.
+  const [modelShown, setModelShown] = useState<Device3d | null>(null);
   const streaming = shown && !booting && hub.installed;
   const found = useChrome(hostId, device);
 
@@ -939,10 +940,11 @@ function Viewer({
       } catch {
         return;
       }
-      model.current = made;
-      made.resize(gl.clientWidth, gl.clientHeight, window.devicePixelRatio);
-      made.ready.then(
-        () => live && setModelShown(true),
+      const loaded = made;
+      model.current = loaded;
+      loaded.resize(gl.clientWidth, gl.clientHeight, window.devicePixelRatio);
+      loaded.ready.then(
+        () => live && setModelShown(loaded),
         () => {},
       );
     });
@@ -950,9 +952,11 @@ function Viewer({
       live = false;
       made?.dispose();
       model.current = null;
-      setModelShown(false);
+      setModelShown(null);
     };
-  }, [want3d, gl, canvas, device.platform, device.name, pixelAspect]);
+    // The Android model's shape is read here, not a dependency: a new shape keys a new canvas, `gl`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [want3d, gl, canvas, device.platform, device.name]);
   useEffect(() => {
     model.current?.setPose(orbit.pitch, orbit.yaw, roll);
   }, [orbit, roll, modelShown]);
@@ -966,8 +970,10 @@ function Viewer({
   const ready = streaming && status.status === "streaming";
   // The model stands in for the artwork once the stream is live: until then the artwork shows
   // what the device is waiting on, and its buttons, such as Try again.
-  const modelOn = modelShown && ready;
-  const touching = useRef(false);
+  const modelOn = !!modelShown && ready;
+  // The touch on the flat artwork's screen, where it last was: it ends there if let go where the
+  // screen can't be traced back.
+  const touching = useRef<{ x: number; y: number }>(null);
   // A touch on the screen, traced back through the device's turn onto the screen's own pixels.
   const touch =
     (phase: "begin" | "move" | "end") => (event: React.PointerEvent<HTMLDivElement>) => {
@@ -976,27 +982,37 @@ function Viewer({
         event.stopPropagation();
         event.currentTarget.setPointerCapture(event.pointerId);
         (area.current?.querySelector('[role="application"]') as HTMLElement | null)?.focus();
-        touching.current = true;
       } else if (!touching.current) return;
       event.stopPropagation();
-      if (phase === "end") touching.current = false;
+      const last = touching.current;
+      if (phase === "end") touching.current = null;
       const stage = flat.current?.getBoundingClientRect();
-      if (!stage || !chrome) return;
-      const hit = unproject(
-        turn,
-        PERSPECTIVE,
-        event.clientX - (stage.left + stage.width / 2),
-        event.clientY - (stage.top + stage.height / 2),
-      );
-      if (!hit) return;
-      const left = (chrome.screen.x - chrome.width / 2) * k;
-      const top = (chrome.screen.y - chrome.height / 2) * k;
+      const hit =
+        stage &&
+        chrome &&
+        unproject(
+          turn,
+          PERSPECTIVE,
+          event.clientX - (stage.left + stage.width / 2),
+          event.clientY - (stage.top + stage.height / 2),
+        );
       const clamp = (v: number) => Math.min(1, Math.max(0, v));
-      stream.current?.touchRaw(
-        phase,
-        clamp((hit[0] - left) / (chrome.screen.width * k)),
-        clamp((hit[1] - top) / (chrome.screen.height * k)),
-      );
+      const point =
+        hit && chrome
+          ? {
+              x: clamp(
+                (hit[0] - (chrome.screen.x - chrome.width / 2) * k) / (chrome.screen.width * k),
+              ),
+              y: clamp(
+                (hit[1] - (chrome.screen.y - chrome.height / 2) * k) / (chrome.screen.height * k),
+              ),
+            }
+          : phase === "end"
+            ? last
+            : null;
+      if (!point) return;
+      if (phase !== "end") touching.current = point;
+      stream.current?.touchRaw(phase, point.x, point.y);
     };
 
   // Dragging around the device turns it, with a little momentum after letting go.
@@ -1224,6 +1240,8 @@ function Viewer({
       >
         {want3d && (
           <canvas
+            // A new model takes a new canvas: the last one's context is gone with it.
+            key={pixelAspect}
             ref={setGl}
             aria-hidden
             className={`absolute inset-x-0 top-0 bottom-16 size-auto transition-opacity duration-200 ${modelOn ? "opacity-100" : "opacity-0"}`}
