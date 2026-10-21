@@ -3,7 +3,7 @@ import { expect, test, vi } from "vite-plus/test";
 
 vi.mock("electron", () => ({ app: {} }));
 
-const { crxZip, storeId } = await import("./extensions");
+const { crxId, crxKey, crxZip, storeId } = await import("./extensions");
 
 test("a Chrome Web Store link or a bare id gives the extension's id", () => {
   const id = "aeblfdkhhhdcdjpifhhbdiojplfjncoa";
@@ -29,4 +29,24 @@ test("a CRX's zip comes out from under its version 3 or 2 header", () => {
   expect(crxZip(crx(2, 3, 4))).toEqual(zip);
   expect(() => crxZip(zip)).toThrow("isn't a Chrome extension");
   expect(() => crxZip(crx(4, 0))).toThrow("version 4");
+});
+
+test("a CRX3's public key whose hash is the store id becomes the manifest's key", () => {
+  const key = new TextEncoder().encode("a public key");
+  const other = new TextEncoder().encode("another key");
+  // Protobuf: field 1 (bytes) inside a proof, proofs as field 2, then the CRX3 framing.
+  const bytes = (field: number, data: Uint8Array) => [(field << 3) | 2, data.length, ...data];
+  const header = new Uint8Array([
+    ...bytes(2, new Uint8Array(bytes(1, other))),
+    ...bytes(2, new Uint8Array(bytes(1, key))),
+  ]);
+  const crx = new Uint8Array(12 + header.length);
+  crx.set(new TextEncoder().encode("Cr24"));
+  new DataView(crx.buffer).setUint32(4, 3, true);
+  new DataView(crx.buffer).setUint32(8, header.length, true);
+  crx.set(header, 12);
+  const id = crxId(key);
+  expect(id).toMatch(/^[a-p]{32}$/);
+  expect(crxKey(crx, id)).toBe(Buffer.from(key).toString("base64"));
+  expect(crxKey(crx, "a".repeat(32))).toBeUndefined();
 });

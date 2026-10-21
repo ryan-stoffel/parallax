@@ -1,4 +1,4 @@
-import { Hand, MousePointer2 } from "lucide-react";
+import { Globe, Hand, MousePointer2 } from "lucide-react";
 import {
   useEffect,
   useRef,
@@ -10,7 +10,7 @@ import {
 } from "react";
 
 import type { PreviewInput, PreviewTab } from "../protocol/generated/protocol";
-import { shortUrl } from "./Browser";
+import { addressBox, addressInput, shortUrl } from "./Browser";
 import { browserFit, fitSize, PageFrame, ViewMenu, type Fit, type Size } from "./PageFrame";
 
 /** The DevTools modifier bits of an event: Alt 1, Control 2, Meta 4, Shift 8. */
@@ -150,40 +150,32 @@ export function AgentBrowser({
   };
 
   const { Logo } = driver;
-  const logo = Logo ? <Logo aria-hidden className="size-3.5 shrink-0" /> : null;
+  const logo = Logo ? <Logo aria-hidden className="size-3.5 shrink-0" /> : undefined;
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <form
-        className="flex items-center gap-1.5 border-b border-border px-2 pb-1.5"
+        className="flex items-center gap-1 border-b border-border px-2 pb-2"
         onSubmit={(e) => {
           e.preventDefault();
           if (address?.trim()) send({ kind: "navigate", url: address.trim() });
           setAddress(undefined);
         }}
       >
-        <div className="relative min-w-0 flex-1">
-          <span className="pointer-events-none absolute inset-y-0 left-2 flex items-center">
-            {logo}
-          </span>
+        <div className={addressBox}>
+          {logo ?? <Globe aria-hidden />}
           <input
             aria-label="Agent's address"
             spellCheck={false}
             value={address ?? shortUrl(state.url)}
             onChange={(e) => setAddress(e.target.value)}
             onBlur={() => setAddress(undefined)}
-            className={`w-full rounded-md bg-selected py-1 pr-2 text-[12.5px] focus-visible:outline-2 focus-visible:outline-ring ${logo ? "pl-7" : "pl-2"}`}
+            className={addressInput}
           />
         </div>
-        <ViewMenu
-          fit={fit}
-          fixed={!!state.fixed}
-          size={frame && { width: frame.width, height: frame.height }}
-          onFit={refit}
-        />
         <button
           type="button"
           onClick={() => send({ kind: "control", take: !state.human })}
-          className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[12px] text-foreground hover:bg-hover"
+          className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[12.5px] text-foreground hover:bg-hover"
         >
           {state.human ? (
             <MousePointer2 aria-hidden className="size-3.5" />
@@ -192,6 +184,12 @@ export function AgentBrowser({
           )}
           {state.human ? `Hand back to ${driver.name}` : "Take over"}
         </button>
+        <ViewMenu
+          fit={fit}
+          fixed={!!state.fixed}
+          size={frame && { width: frame.width, height: frame.height }}
+          onFit={refit}
+        />
       </form>
       <PageFrame
         size={frame && { width: frame.width, height: frame.height }}

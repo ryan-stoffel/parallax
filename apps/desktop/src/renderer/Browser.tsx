@@ -1,5 +1,16 @@
 import type { DidFailLoadEvent, PageTitleUpdatedEvent, WebviewTag } from "electron";
-import { ArrowLeft, ArrowRight, Bot, Globe, Plus, RotateCw, TriangleAlert, X } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Bot,
+  Code,
+  Globe,
+  Plus,
+  RotateCw,
+  Search,
+  TriangleAlert,
+  X,
+} from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { BrowserAction } from "../preload/bridge";
@@ -17,7 +28,7 @@ import {
 } from "./PageFrame";
 import { backendLogos } from "./Sidebar";
 import { instanceLogo, instanceName } from "./providers";
-import { IconButton } from "./ui";
+import { IconButton, menuItem } from "./ui";
 
 /** Google's results page for `query`. */
 export const searchUrl = (query: string) =>
@@ -53,6 +64,15 @@ export function browserUrl(address: string): string | undefined {
   if (/\.[a-z]{2,}$/i.test(host)) return url.href.replace(/^http:/, "https:");
   return searchUrl(text);
 }
+
+/**
+ * The address bar's box, as Chrome and Helium draw it: a rounded field with an icon before the
+ * text, ringed in the accent while focused. Its input takes `addressInput`.
+ */
+export const addressBox =
+  "flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-transparent bg-selected px-2.5 text-[13px] focus-within:border-ring focus-within:bg-background [&>svg]:size-3.5 [&>svg]:shrink-0 [&>svg]:text-muted-foreground";
+export const addressInput =
+  "h-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-faint-foreground";
 
 /** A url as the address bar shows it while unfocused: without its scheme or a lone trailing slash. */
 export const shortUrl = (url: string) =>
@@ -147,7 +167,7 @@ export function Browser({
     <div
       role="tablist"
       aria-label="Browser tabs"
-      className="flex shrink-0 items-center gap-0.5 overflow-x-auto px-2 pb-1.5"
+      className="flex shrink-0 items-center gap-1 overflow-x-auto px-2 pb-1"
     >
       {agent?.tabs.map((t) => (
         <TabButton
@@ -258,7 +278,7 @@ function TabButton({
 }) {
   return (
     <div
-      className={`group flex h-7 max-w-44 min-w-9 flex-1 items-center rounded-md text-[12px] ${selected ? "bg-selected text-foreground" : "text-muted-foreground hover:bg-hover"}`}
+      className={`group flex h-8 max-w-56 min-w-9 flex-1 items-center rounded-lg text-[12.5px] ${selected ? "bg-selected text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
     >
       <button
         type="button"
@@ -268,7 +288,7 @@ function TabButton({
         onClick={onSelect}
         // A middle click closes a tab, as in Chrome.
         onAuxClick={(e) => e.button === 1 && onClose?.()}
-        className="flex h-full min-w-0 flex-1 items-center gap-1.5 pl-2 text-left"
+        className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2.5 text-left"
       >
         {icon}
         <span className="truncate">{label}</span>
@@ -278,7 +298,7 @@ function TabButton({
           type="button"
           aria-label={`Close ${label}`}
           onClick={onClose}
-          className={`mr-1 grid size-4.5 shrink-0 place-items-center rounded hover:bg-hover ${selected ? "" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"}`}
+          className={`mr-1.5 grid size-5 shrink-0 place-items-center rounded-md hover:bg-hover ${selected ? "" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"}`}
         >
           <X aria-hidden className="size-3" />
         </button>
@@ -404,7 +424,7 @@ function Tab({
 
   return (
     <div className={`min-h-0 flex-1 flex-col ${shown ? "flex" : "hidden"}`}>
-      <div className="flex items-center gap-0.5 border-b border-border px-2 pb-1.5">
+      <div className="flex items-center gap-0.5 border-b border-border px-2 pb-2">
         <IconButton label="Back" disabled={!history.back} onClick={() => view.current?.goBack()}>
           <ArrowLeft />
         </IconButton>
@@ -427,12 +447,13 @@ function Tab({
         {/* The address bar alone is the form, so Enter opens it whatever else the toolbar holds:
             a form with two text fields and no submit button doesn't submit on Enter. */}
         <form
-          className="ml-1 flex min-w-0 flex-1"
+          className={`mx-1 ${addressBox}`}
           onSubmit={(e) => {
             e.preventDefault();
             open(address);
           }}
         >
+          <Search aria-hidden />
           <input
             ref={addressBar}
             autoFocus
@@ -448,11 +469,22 @@ function Tab({
               requestAnimationFrame(() => input.select());
             }}
             onBlur={() => setEditing(false)}
-            className="min-w-0 flex-1 rounded-md bg-selected px-2 py-1 text-[12.5px] placeholder:text-faint-foreground focus-visible:outline-2 focus-visible:outline-ring"
+            className={addressInput}
           />
         </form>
         <Extensions onOpen={(url) => ask({ kind: "open", url })} />
-        <ViewMenu fit={fit} fixed={!!fixed} size={pageSize} onFit={refit} />
+        <ViewMenu fit={fit} fixed={!!fixed} size={pageSize} onFit={refit}>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!src}
+            onClick={() => view.current?.openDevTools()}
+            className={`${menuItem} disabled:opacity-50`}
+          >
+            <Code aria-hidden />
+            Developer tools
+          </button>
+        </ViewMenu>
       </div>
       {remoteHost && (
         <p className="border-b border-border px-3 py-1.5 text-[12px] text-muted-foreground">

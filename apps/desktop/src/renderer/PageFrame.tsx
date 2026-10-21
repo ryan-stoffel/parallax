@@ -1,8 +1,8 @@
-import { ChevronDown, Monitor, PanelRight, Scaling } from "lucide-react";
+import { EllipsisVertical, Monitor, PanelRight, Scaling } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { stored } from "./stored";
-import { Menu, menuButton, MenuOption } from "./ui";
+import { IconButton, Menu, menuHeading, MenuOption } from "./ui";
 
 /** A page's size in CSS pixels. */
 export interface Size {
@@ -222,19 +222,22 @@ export function PageFrame({
 }
 
 /**
- * The toolbar's View menu: Desktop, the monitor fit, or Panel, the panel fit, with the user's own
- * size as Custom while there is one. Its trigger shows the view in use.
+ * The toolbar's ⋮ menu, as Chrome's: its View section, Desktop (the monitor fit) or Panel (the
+ * panel fit), with the user's own size as Custom while there is one, then `children`, such as
+ * Developer tools.
  */
 export function ViewMenu({
   fit,
   size,
   fixed,
   onFit,
+  children,
 }: {
   fit: Fit;
   size?: Size;
   fixed: boolean;
   onFit: (fit: Fit) => void;
+  children?: ReactNode;
 }) {
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
@@ -242,21 +245,13 @@ export function ViewMenu({
     onFit(next);
     menu.current?.hidePopover();
   };
-  const Icon = fixed ? Scaling : fit === "monitor" ? Monitor : PanelRight;
   return (
     <>
-      <button
-        type="button"
-        popoverTarget={id}
-        aria-haspopup="menu"
-        aria-label="View"
-        title="View"
-        className={`${menuButton} shrink-0 gap-0.5 px-1.5`}
-      >
-        <Icon aria-hidden />
-        <ChevronDown aria-hidden className="size-3! opacity-60" />
-      </button>
-      <Menu ref={menu} id={id} label="View" align="end" className="w-68 p-1">
+      <IconButton label="More" popoverTarget={id} aria-haspopup="menu">
+        <EllipsisVertical />
+      </IconButton>
+      <Menu ref={menu} id={id} label="More" align="end" className="w-68 p-1">
+        <p className={menuHeading}>View</p>
         <MenuOption
           option={{
             value: "monitor",
@@ -290,6 +285,13 @@ export function ViewMenu({
             checked
             onClick={() => menu.current?.hidePopover()}
           />
+        )}
+        {children && (
+          // Picking one of them closes the menu too.
+          <div onClick={() => menu.current?.hidePopover()}>
+            <div className="my-1 h-px bg-border" />
+            {children}
+          </div>
         )}
       </Menu>
     </>

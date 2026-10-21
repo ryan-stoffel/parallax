@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -44,6 +45,57 @@ export function crxZip(bytes: Uint8Array): Uint8Array {
   throw new Error(`Chrome extension package version ${version} isn't supported.`);
 }
 
+/** The Chrome extension id of a public key: its SHA-256's first 16 bytes, each hex digit as a to p. */
+export const crxId = (key: Uint8Array) =>
+  createHash("sha256")
+    .update(key)
+    .digest()
+    .subarray(0, 16)
+    .toString("hex")
+    .replace(/./g, (digit) => String.fromCharCode(97 + Number.parseInt(digit, 16)));
+
+/**
+ * The public key of a CRX3 whose id is `id`, as base64 for the manifest's `key`, so Electron gives
+ * the unpacked extension its Chrome Web Store id, which its site, sign-in redirects, and companion
+ * apps know it by. Its header is a protobuf: fields 2 and 3 are key proofs, whose field 1 is the key.
+ */
+export function crxKey(bytes: Uint8Array, id: string): string | undefined {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (bytes.length < 12 || view.getUint32(4, true) !== 3) return undefined;
+  // Each length-delimited field in `data`, as [field number, its bytes].
+  const fields = (data: Uint8Array) => {
+    const found: [number, Uint8Array][] = [];
+    let at = 0;
+    const varint = () => {
+      let value = 0;
+      for (let shift = 0; at < data.length; shift += 7) {
+        const byte = data[at++]!;
+        value += (byte & 0x7f) * 2 ** shift;
+        if (byte < 0x80) break;
+      }
+      return value;
+    };
+    while (at < data.length) {
+      const tag = varint();
+      const wire = tag & 7;
+      if (wire === 2) {
+        const length = varint();
+        found.push([tag >>> 3, data.subarray(at, at + length)]);
+        at += length;
+      } else if (wire === 0) varint();
+      else return found;
+    }
+    return found;
+  };
+  const header = bytes.subarray(12, 12 + view.getUint32(8, true));
+  for (const [field, proof] of fields(header)) {
+    if (field !== 2 && field !== 3) continue;
+    const key = fields(proof).find(([f]) => f === 1)?.[1];
+    if (key && crxId(key) === id) return Buffer.from(key).toString("base64");
+  }
+  return undefined;
+}
+
 /**
  * Loads every listed folder into the browser's session. One that no longer loads, such as a
  * moved unpacked folder, is skipped with a warning and stays listed.
@@ -79,7 +131,15 @@ export async function installExtension(
     // The app's own session, which no extension's request hooks can touch.
     const answer = await net.fetch(url);
     if (!answer.ok) return `The Chrome Web Store answered ${answer.status}.`;
-    const files = unzipSync(crxZip(new Uint8Array(await answer.arrayBuffer())));
+    const crx = new Uint8Array(await answer.arrayBuffer());
+    const files = unzipSync(crxZip(crx));
+    // The store's own id, from the package's key, rather than one Electron makes from the folder.
+    const key = crxKey(crx, id);
+    const manifest = files["manifest.json"];
+    if (key && manifest)
+      files["manifest.json"] = new TextEncoder().encode(
+        JSON.stringify({ ...JSON.parse(new TextDecoder().decode(manifest)), key }),
+      );
     const folder = path.join(root(), id);
     await rm(folder, { recursive: true, force: true });
     for (const [name, data] of Object.entries(files)) {

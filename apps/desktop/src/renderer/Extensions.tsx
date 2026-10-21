@@ -27,16 +27,18 @@ export function Extensions({ onOpen }: { onOpen: (url: string) => void }) {
   const menuId = useId();
   const menu = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const puzzle = useRef<HTMLSpanElement>(null);
   const [popup, setPopup] = useState<ExtensionInfo>();
   const [link, setLink] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
-  // Shows an extension's popup under `from`, the button that asked.
-  const open = (extension: ExtensionInfo, from: HTMLElement) => {
+  // Shows an extension's popup under `from`, the button that asked, or the Extensions button when
+  // it was a row of the menu, which closes first and so can't place it.
+  const open = (extension: ExtensionInfo, from: HTMLElement | null) => {
     menu.current?.hidePopover();
     setPopup(extension);
-    panel.current?.showPopover({ source: from } as ShowPopoverOptions);
+    panel.current?.showPopover({ source: from ?? undefined } as ShowPopoverOptions);
   };
   const added = (answer: ExtensionInfo | string | undefined) => {
     if (typeof answer === "string") setError(answer);
@@ -77,9 +79,11 @@ export function Extensions({ onOpen }: { onOpen: (url: string) => void }) {
           {icon(extension)}
         </button>
       ))}
-      <IconButton label="Extensions" popoverTarget={menuId} aria-haspopup="menu">
-        <Puzzle />
-      </IconButton>
+      <span ref={puzzle} className="flex">
+        <IconButton label="Extensions" popoverTarget={menuId} aria-haspopup="menu">
+          <Puzzle />
+        </IconButton>
+      </span>
       <Menu
         ref={menu}
         id={menuId}
@@ -98,7 +102,7 @@ export function Extensions({ onOpen }: { onOpen: (url: string) => void }) {
                 role="menuitem"
                 disabled={!extension.popup}
                 title={extension.popup ? `Open ${extension.name}` : "This extension has no popup"}
-                onClick={(e) => open(extension, e.currentTarget)}
+                onClick={() => open(extension, puzzle.current)}
                 className={`${menuItem} min-w-0 flex-1 disabled:hover:bg-transparent`}
               >
                 {icon(extension)}
