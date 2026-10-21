@@ -320,7 +320,10 @@ test("a preview opens the side panel's Browser view at its URL", () => {
   render(panel());
   expect(document.querySelector('input[aria-label="Address"]')).toBeNull();
   render(panel({ url: "localhost:5173" }));
-  expect(document.querySelector('[aria-current="true"]')?.textContent).toBe("Browser");
+  // The Browser tab shows the page in front.
+  expect(document.querySelector('[aria-current="true"]')?.textContent).toBe(
+    "Browser: localhost:5173",
+  );
   expect(document.querySelector<HTMLInputElement>('input[aria-label="Address"]')!.value).toBe(
     "http://localhost:5173/",
   );

@@ -6,6 +6,7 @@ import {
   type ComponentType,
   type KeyboardEvent,
   type PointerEvent,
+  type ReactNode,
   type SVGProps,
 } from "react";
 
@@ -37,11 +38,14 @@ export function AgentBrowser({
   runId,
   tab,
   driver,
+  switcher,
 }: {
   hostId: string;
   runId: string;
   tab: PreviewTab;
   driver: Driver;
+  /** The tabs button (Browser.tsx), which every toolbar shares. */
+  switcher: ReactNode;
 }) {
   const [frame, setFrame] = useState<{ data: string; width: number; height: number }>();
   const [state, setState] = useState(tab);
@@ -184,6 +188,7 @@ export function AgentBrowser({
           )}
           {state.human ? `Hand back to ${driver.name}` : "Take over"}
         </button>
+        {switcher}
         <ViewMenu
           fit={fit}
           fixed={!!state.fixed}

@@ -11,7 +11,15 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+  type SVGProps,
+} from "react";
 
 import type { BrowserAction } from "../preload/bridge";
 import type { PreviewTab } from "../protocol/generated/protocol";
@@ -28,7 +36,8 @@ import {
 } from "./PageFrame";
 import { backendLogos } from "./Sidebar";
 import { instanceLogo, instanceName } from "./providers";
-import { IconButton, menuItem } from "./ui";
+import { memory } from "./stored";
+import { IconButton, Menu, menuHeading, menuItem } from "./ui";
 
 /** Google's results page for `query`. */
 export const searchUrl = (query: string) =>
@@ -93,7 +102,7 @@ function onAsk(id: number, handler: (action: BrowserAction) => void) {
   };
 }
 
-/** One of the user's tabs, as the tab strip shows it. `load` is a page for it to open. */
+/** One of the user's tabs, as the tab switcher shows it. `load` is a page for it to open. */
 interface OwnTab {
   id: number;
   load?: { url: string };
@@ -106,9 +115,9 @@ let lastTab = 0;
 const ownTab = (url?: string): OwnTab => ({ id: ++lastTab, ...(url && { load: { url } }) });
 
 /**
- * The side panel's browser, laid out like Chrome (PLX-888): one strip of tabs, the agent's
- * (PLX-639) then the user's own, each with its favicon and title, and a new tab button. Each own
- * tab is a webview, which main keeps in its own session with no preload or Node (main.ts), and
+ * The side panel's browser, laid out like Chrome (PLX-888). Its tabs, the agent's (PLX-639) then
+ * the user's own, are in the toolbar's tab switcher, and the side panel's Browser tab shows the
+ * one in front, so the panel has one row of tabs. Each own tab is a webview, which main keeps in its own session with no preload or Node (main.ts), and
  * whose new windows open as tabs here. Each new `page` opens in the current tab while it's blank,
  * or else in a new one. `remoteHost`, the open host's name when it's an SSH host, notes that
  * localhost is this computer.
@@ -116,10 +125,13 @@ const ownTab = (url?: string): OwnTab => ({ id: ++lastTab, ...(url && { load: { 
 export function Browser({
   page,
   remoteHost,
+  scope,
   agent,
 }: {
   page?: { url?: string; agentTab?: string };
   remoteHost?: string;
+  /** The side panel scope it shows in, under which it reports the tab in front (`browserFronts`). */
+  scope?: string;
   /** The open thread's agent tabs (PLX-639), which show before the user's own, and its backend. */
   agent?: { hostId: string; runId: string; tabs: PreviewTab[]; backend?: string };
 }) {
@@ -132,8 +144,15 @@ export function Browser({
 
   const update = (id: number, patch: Partial<OwnTab>) =>
     setTabs((all) => all.map((t) => (t.id === id ? { ...t, ...patch } : t)));
-  // A new tab after `after`, or at the end, which becomes the current one.
+  // A new tab after `after`, or at the end, which becomes the current one. An empty new tab
+  // reuses a blank one, so they don't pile up.
   const newTab = (url?: string, after?: number) => {
+    const blank = !url && tabs.find((t) => !t.url && !t.load);
+    if (blank) {
+      setCurrent(blank.id);
+      setAgentTab(undefined);
+      return;
+    }
     const tab = ownTab(url);
     setTabs((all) => {
       const at = all.findIndex((t) => t.id === after);
@@ -163,59 +182,46 @@ export function Browser({
     }
   }, [page]);
 
-  const strip = (
-    <div
-      role="tablist"
-      aria-label="Browser tabs"
-      className="flex shrink-0 items-center gap-1 overflow-x-auto px-2 pb-1"
-    >
-      {agent?.tabs.map((t) => (
-        <TabButton
-          key={t.tabId}
-          selected={shownTab === t}
-          label={t.title || shortUrl(t.url) || t.tabId}
-          title={`${driver.name}: ${t.url}`}
-          icon={
-            driver.Logo ? (
-              <driver.Logo aria-label={driver.name} className="size-3.5 shrink-0" />
-            ) : (
-              <Bot aria-label={driver.name} className="size-3.5 shrink-0" />
-            )
-          }
-          onSelect={() => setAgentTab(t.tabId)}
-        />
-      ))}
-      {tabs.map((t) => (
-        <TabButton
-          key={t.id}
-          selected={!shownTab && t.id === current}
-          label={t.title || (t.url ? shortUrl(t.url) : "New Tab")}
-          title={t.url}
-          icon={
-            t.icon ? (
-              <img src={t.icon} alt="" className="size-3.5 shrink-0" />
-            ) : (
-              <Globe aria-hidden className="size-3.5 shrink-0" />
-            )
-          }
-          onSelect={() => {
-            setCurrent(t.id);
-            setAgentTab(undefined);
-          }}
-          onClose={() => close(t.id)}
-        />
-      ))}
-      <span className="shrink-0">
-        <IconButton label="New tab" onClick={() => newTab()}>
-          <Plus />
-        </IconButton>
-      </span>
-    </div>
+  // The side panel's Browser tab shows the tab in front: its icon, title, and how many there are.
+  const front = shownTab
+    ? { title: shownTab.title || shortUrl(shownTab.url) || "Agent's tab", Logo: driver.Logo ?? Bot }
+    : (() => {
+        const tab = tabs.find((t) => t.id === current);
+        return { title: tab?.title || (tab?.url ? shortUrl(tab.url) : "New Tab"), icon: tab?.icon };
+      })();
+  const count = (agent?.tabs.length ?? 0) + tabs.length;
+  useEffect(() => {
+    if (!scope) return;
+    browserFronts.set({ ...browserFronts.get(), [scope]: { ...front, count } });
+  }, [scope, front.title, "icon" in front && front.icon, "Logo" in front && front.Logo, count]);
+  useEffect(
+    () => () => {
+      if (!scope) return;
+      const { [scope]: _gone, ...rest } = browserFronts.get();
+      browserFronts.set(rest);
+    },
+    [scope],
+  );
+
+  // One switcher for every toolbar, the agent's tabs then the user's, as the panel's one tab list.
+  const switcher = (
+    <TabSwitcher
+      driver={driver}
+      agentTabs={agent?.tabs ?? []}
+      tabs={tabs}
+      selected={shownTab ? shownTab.tabId : current}
+      onAgent={setAgentTab}
+      onTab={(id) => {
+        setCurrent(id);
+        setAgentTab(undefined);
+      }}
+      onClose={close}
+      onNew={() => newTab()}
+    />
   );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {strip}
       {shownTab && agent && (
         <AgentBrowser
           key={shownTab.tabId}
@@ -223,6 +229,7 @@ export function Browser({
           runId={agent.runId}
           tab={shownTab}
           driver={driver}
+          switcher={switcher}
         />
       )}
       {/* Every own tab stays mounted, so its page keeps its state behind the others. */}
@@ -232,6 +239,7 @@ export function Browser({
           shown={!shownTab && t.id === current}
           load={t.load}
           remoteHost={remoteHost}
+          switcher={switcher}
           onChange={(patch) => update(t.id, patch)}
           onAsk={(action) => {
             if (action.kind === "open") newTab(action.url, t.id);
@@ -264,50 +272,144 @@ const driverOf = (backend?: string): Driver =>
       }
     : { name: "The agent" };
 
-/** A tab in the strip: its icon and title, and a close button for one of the user's own. */
-function TabButton({
+/** The tab in front of each side panel scope's browser, which its Browser view tab shows. */
+export interface BrowserFront {
+  title: string;
+  icon?: string;
+  Logo?: ComponentType<SVGProps<SVGSVGElement>>;
+  count: number;
+}
+export const browserFronts = memory<Readonly<Record<string, BrowserFront>>>({});
+
+/**
+ * The toolbar's tabs button, a rounded square with how many tabs there are, as on Chrome for
+ * phones, and its switcher: the agent's tabs, then the user's, each with its icon, title, and
+ * site, the user's with a close button, and New tab.
+ */
+function TabSwitcher({
+  driver,
+  agentTabs,
+  tabs,
   selected,
-  label,
-  title,
-  icon,
-  onSelect,
+  onAgent,
+  onTab,
   onClose,
+  onNew,
 }: {
-  selected: boolean;
-  label: string;
-  title?: string;
-  icon: ReactNode;
-  onSelect: () => void;
-  onClose?: () => void;
+  driver: Driver;
+  agentTabs: PreviewTab[];
+  tabs: OwnTab[];
+  selected: string | number;
+  onAgent: (tabId: string) => void;
+  onTab: (id: number) => void;
+  onClose: (id: number) => void;
+  onNew: () => void;
 }) {
-  return (
+  const id = useId();
+  const menu = useRef<HTMLDivElement>(null);
+  const count = agentTabs.length + tabs.length;
+  const pick = (choose: () => void) => () => {
+    choose();
+    menu.current?.hidePopover();
+  };
+  const host = (url?: string) => (url ? (URL.parse(url)?.host ?? url) : "");
+  const row = (
+    key: string | number,
+    icon: ReactNode,
+    title: string,
+    url: string | undefined,
+    onPick: () => void,
+    close?: () => void,
+  ) => (
     <div
-      className={`group flex h-8 max-w-56 min-w-9 flex-1 items-center rounded-lg text-[12.5px] ${selected ? "bg-selected text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
+      key={key}
+      className={`group flex items-center rounded-md ${selected === key ? "bg-selected" : "hover:bg-hover"}`}
     >
       <button
         type="button"
-        role="tab"
-        aria-selected={selected}
-        title={title}
-        onClick={onSelect}
-        // A middle click closes a tab, as in Chrome.
-        onAuxClick={(e) => e.button === 1 && onClose?.()}
-        className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2.5 text-left"
+        role="menuitemradio"
+        aria-checked={selected === key}
+        onClick={pick(onPick)}
+        className="flex min-w-0 flex-1 items-center gap-2.5 px-2 py-1.5 text-left"
       >
-        {icon}
-        <span className="truncate">{label}</span>
+        <span className="grid size-4 shrink-0 place-items-center">{icon}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] leading-5">{title}</span>
+          {url && (
+            <span className="block truncate text-[11.5px] leading-4 text-faint-foreground">
+              {host(url)}
+            </span>
+          )}
+        </span>
       </button>
-      {onClose && (
+      {close && (
         <button
           type="button"
-          aria-label={`Close ${label}`}
-          onClick={onClose}
-          className={`mr-1.5 grid size-5 shrink-0 place-items-center rounded-md hover:bg-hover ${selected ? "" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"}`}
+          aria-label={`Close ${title}`}
+          title={`Close ${title}`}
+          onClick={close}
+          className={`mr-1 grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground ${selected === key ? "" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"}`}
         >
-          <X aria-hidden className="size-3" />
+          <X aria-hidden className="size-3.5" />
         </button>
       )}
     </div>
+  );
+  const AgentLogo = driver.Logo ?? Bot;
+  return (
+    <>
+      <button
+        type="button"
+        popoverTarget={id}
+        aria-haspopup="menu"
+        aria-label={`Tabs, ${count} open`}
+        title="Tabs"
+        className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
+      >
+        <span className="grid h-4.5 min-w-4.5 place-items-center rounded-[5px] border-[1.5px] border-current px-0.5 text-[10px] leading-none font-semibold tabular-nums">
+          {count}
+        </span>
+      </button>
+      <Menu ref={menu} id={id} label="Tabs" align="end" className="w-80 p-1">
+        {agentTabs.length > 0 && (
+          <>
+            <p className={menuHeading}>{driver.name}</p>
+            {agentTabs.map((t) =>
+              row(
+                t.tabId,
+                <AgentLogo aria-hidden className="size-3.5" />,
+                t.title || shortUrl(t.url) || "Agent's tab",
+                t.url,
+                () => onAgent(t.tabId),
+              ),
+            )}
+            <p className={menuHeading}>Yours</p>
+          </>
+        )}
+        {tabs.map((t) =>
+          row(
+            t.id,
+            t.icon ? (
+              <img src={t.icon} alt="" className="size-4" />
+            ) : (
+              <Globe aria-hidden className="size-3.5 text-muted-foreground" />
+            ),
+            t.title || (t.url ? shortUrl(t.url) : "New Tab"),
+            t.url,
+            () => onTab(t.id),
+            () => onClose(t.id),
+          ),
+        )}
+        <div className="my-1 h-px bg-border" />
+        <button type="button" role="menuitem" onClick={pick(onNew)} className={menuItem}>
+          <Plus aria-hidden />
+          <span className="flex-1">New tab</span>
+          <kbd className="font-sans text-[11.5px] text-faint-foreground">
+            {window.parallax.platform === "darwin" ? "⌘T" : "Ctrl+T"}
+          </kbd>
+        </button>
+      </Menu>
+    </>
   );
 }
 
@@ -315,18 +417,21 @@ function TabButton({
  * One of the user's own tabs: back, forward, reload or stop, a loading bar, and an address bar
  * that opens a page or searches Google, over its webview. Each new `load` opens its url, even the
  * one already shown. It reports its page's url, title, and favicon, and passes on what its page
- * asks that the tab strip does, such as opening a tab.
+ * asks of the tab list, such as opening a tab.
  */
 function Tab({
   shown,
   load,
   remoteHost,
+  switcher,
   onChange,
   onAsk: ask,
 }: {
   shown: boolean;
   load?: { url: string };
   remoteHost?: string;
+  /** The tabs button (TabSwitcher), which every toolbar shares. */
+  switcher: ReactNode;
   onChange: (patch: Partial<OwnTab>) => void;
   onAsk: (action: BrowserAction) => void;
 }) {
@@ -495,6 +600,7 @@ function Tab({
           />
         </form>
         <Extensions tab={contentsId} />
+        {switcher}
         <ViewMenu fit={fit} fixed={!!fixed} size={pageSize} onFit={refit}>
           <button
             type="button"

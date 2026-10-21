@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { useState, type ComponentProps, type ReactNode } from "react";
 
-import { Browser } from "./Browser";
+import { Browser, browserFronts } from "./Browser";
 import type { DocRef } from "./documents";
 import { PanelResize } from "./PanelResize";
 import { lookOf, numberOf, type PullRequests } from "./PullRequests";
@@ -206,6 +206,8 @@ export function SidePanel({
         surfaces.find((s) => s.name === name)!,
       );
   const nameOf = (s: Surface) => (!project && s.name === "Changes" ? "Diff" : s.name);
+  // The Browser tab shows the page in front, as a browser's own tab would (Browser.tsx).
+  const front = browserFronts.use()[scope];
   // A Project pins its Overview and Knowledge first, without close buttons.
   const pinned = project ? [overview, knowledgeSurface] : [];
   // A pull request tab the thread no longer links stays open, but hidden.
@@ -343,8 +345,32 @@ export function SidePanel({
                   onClick={() => setActive(s)}
                   className={`flex items-center gap-1.5 py-1 pl-2 text-[13px] ${pinned.includes(s) ? "pr-2" : ""}`}
                 >
-                  <Icon aria-hidden className={`size-3.5 ${look?.color ?? ""}`} />
-                  {nameOf(s)}
+                  {s === browserSurface && front ? (
+                    <>
+                      {front.icon ? (
+                        <img src={front.icon} alt="" className="size-3.5 shrink-0" />
+                      ) : front.Logo ? (
+                        <front.Logo aria-hidden className="size-3.5 shrink-0" />
+                      ) : (
+                        <Icon aria-hidden className="size-3.5" />
+                      )}
+                      <span className="sr-only">Browser: </span>
+                      <span className="max-w-40 truncate">{front.title}</span>
+                      {front.count > 1 && (
+                        <span
+                          aria-label={`${front.count} tabs`}
+                          className="rounded-[5px] bg-hover px-1 text-[10.5px] leading-4 font-medium text-muted-foreground tabular-nums"
+                        >
+                          {front.count}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <Icon aria-hidden className={`size-3.5 ${look?.color ?? ""}`} />
+                      {nameOf(s)}
+                    </>
+                  )}
                   {s === overview && !!project?.waiting && (
                     <span className="font-mono text-[11px] text-warning tabular-nums">
                       {project.waiting}
@@ -414,6 +440,7 @@ export function SidePanel({
             className="flex min-h-0 flex-1 flex-col"
           >
             <Browser
+              scope={key}
               page={panel.page}
               remoteHost={remoteHost}
               agent={key === scope ? agentTabs : undefined}
