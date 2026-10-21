@@ -2825,7 +2825,7 @@ function ThreadRow({
       {thread.archived ? "Unarchive" : "Archive"}
     </>
   );
-  // An unsent prompt left in its composer (PLX-887), shown as a New Thread draft's row shows it.
+  // An unsent prompt left in its composer (PLX-887): outlined, and Draft in place of its age.
   const drafted = threadDrafts.use(`${hostId}/${thread.id}`);
   const status =
     badge ??
@@ -2883,11 +2883,12 @@ function ThreadRow({
   );
   // A rename's input can't sit in a button, so the row is a plain box while it's open.
   const Main = renaming ? "div" : "button";
+  // A draft outlines the row in the warning color, as a New Thread draft's row is (PLX-887).
   const rowLook = picked
     ? "bg-accent/14 ring-1 ring-accent/38 ring-inset"
     : selected
       ? current
-      : "group-hover/row:bg-hover";
+      : `group-hover/row:bg-hover ${drafted ? "ring-1 ring-warning ring-inset" : ""}`;
   return (
     <li
       data-kind="thread"

@@ -508,8 +508,13 @@ test("leaving a thread keeps its unsent prompt as a draft, which coming back res
     result: { runs: [done("t-1", "Fix the flaky test"), done("t-2", "Tidy the README")], seq: 7 },
   });
   await renderApp();
-  const drafted = (title: string) =>
-    threadRow(title)!.closest("li")!.textContent!.includes("Draft");
+  // Its Draft status and outline.
+  const drafted = (title: string) => {
+    const li = threadRow(title)!.closest("li")!;
+    const status = li.textContent!.includes("Draft");
+    expect(li.className.includes("ring-warning")).toBe(status);
+    return status;
+  };
   const open = async (title: string) => {
     await act(async () => (threadRow(title) as HTMLElement).click());
     await settle();
