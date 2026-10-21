@@ -94,7 +94,19 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
             path(&socket)
         )
         .unwrap();
+        // socat must run inside the sandbox, where Claude Code runs its network relays.
+        probe.push_str("socat -V >/dev/null && echo socat-ran\n");
         probe_registry_login(&mut probe, &mut request, &root);
+    }
+    // plxd's own bwrap, which the next worker runs, is readable but not writable (PLX-895).
+    let bundled_bwrap = data.join("tools/sandbox/bwrap");
+    if cfg!(feature = "sandbox-tools") {
+        writeln!(
+            probe,
+            "echo x > '{}' && echo wrote-tools",
+            path(&bundled_bwrap)
+        )
+        .unwrap();
     }
     fs::write(worktree.join("probe.sh"), probe).unwrap();
 
@@ -111,9 +123,14 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
     assert!(!stdout.contains(SECRET), "a secret was read:\n{result}");
     assert!(!home.join("outside").exists(), "{result}");
     assert!(!root.join("outside").exists(), "{result}");
+    if cfg!(feature = "sandbox-tools") {
+        assert!(!result.contains("wrote-tools"), "{result}");
+        assert_ne!(fs::read(&bundled_bwrap).unwrap(), b"x\n");
+    }
     assert_eq!(fs::read_to_string(worktree.join(".git")).unwrap(), git_file);
     if cfg!(target_os = "linux") {
         assert!(!result.contains("socket-connected"), "{result}");
+        assert!(result.contains("socat-ran"), "{result}");
         assert!(
             listener.accept().is_err(),
             "a Unix socket connect got through"

@@ -477,11 +477,12 @@ impl Launcher {
         env.extend(&spec.inject);
         // plxd's own bwrap and socat go last, so the host's win (PLX-895).
         #[cfg(target_os = "linux")]
-        if let Some(dir) = super::claude::linux_sandbox::bundled_dir(self.data_dir.root()) {
-            let path = env.get("PATH").map(std::env::split_paths);
-            if let Ok(path) = std::env::join_paths(path.into_iter().flatten().chain([dir])) {
-                env.set("PATH", path);
-            }
+        if let (Some(dir), Some(path)) = (
+            super::claude::linux_sandbox::bundled_dir(self.data_dir.root()),
+            env.get("PATH"),
+        ) && let Ok(path) = std::env::join_paths(std::env::split_paths(path).chain([dir]))
+        {
+            env.set("PATH", path);
         }
         env
     }

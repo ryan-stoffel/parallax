@@ -105,5 +105,5 @@ printf '%s  %s\n' "${sum%% *}" "$name" > "release/$name.sha256"
 # The sources of the bwrap and socat inside Linux's plxd, which their licenses (LGPL-2.0-or-later,
 # GPL-2.0) have go out with them. One per arch, so each Linux build attaches its own.
 case $host in
-  *-linux-*) (cd ../../target/sandbox-tools && tar -cf "$OLDPWD/release/parallax-$version-linux-${builder_arch#--}-sandbox-sources.tar" ./*.tar.*) ;;
+  *-linux-*) tar -cf "release/parallax-$version-linux-${builder_arch#--}-sandbox-sources.tar" -C ../../target/sandbox-tools $(cat ../../target/sandbox-tools/sources) ;;
 esac

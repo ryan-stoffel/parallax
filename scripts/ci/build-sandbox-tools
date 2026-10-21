@@ -17,6 +17,8 @@ cd "$out"
 # socat's site serves https with a self-signed certificate. The checksum below is what's trusted.
 [ -f "$socat" ] || curl -fsSL --retry 3 -o "$socat" "http://www.dest-unreach.org/socat/download/$socat"
 if command -v sha256sum >/dev/null 2>&1; then check="sha256sum -c -"; else check="shasum -a 256 -c -"; fi
+# The tarballs package-app attaches to the release, by name, so a stale one left in $1 isn't.
+echo "$bubblewrap $socat" > sources
 $check <<EOF
 0e85c8702248b8dd64144f594147553650cdd0e4c951690345faace79c217c4d  $bubblewrap
 06602ffd591e98c75b3dc1d66f0f19136cc666b0b2d95caad987d6ab2cb28097  $socat
