@@ -11,7 +11,7 @@ import {
 
 import type { PreviewInput, PreviewTab } from "../protocol/generated/protocol";
 import { shortUrl } from "./Browser";
-import { fitSize, PageFrame } from "./PageFrame";
+import { browserFit, fitSize, PageFrame, type Size } from "./PageFrame";
 
 /** The DevTools modifier bits of an event: Alt 1, Control 2, Meta 4, Shift 8. */
 const modifiers = (e: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) =>
@@ -56,6 +56,16 @@ export function AgentBrowser({
   const seen = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
+  // The room the page last had, which the tab's viewport fits while the agent leaves it in fill
+  // mode, as the user's fit says (PageFrame.tsx).
+  const room = useRef<Size>(undefined);
+  const fit = browserFit.use();
+  const viewport = () =>
+    room.current &&
+    request({ kind: "viewport", ...fitSize(room.current.width, room.current.height, fit) });
+  useEffect(() => {
+    viewport();
+  }, [fit]);
 
   useEffect(() => {
     if (!shown) return;
@@ -168,17 +178,18 @@ export function AgentBrowser({
       <PageFrame
         size={frame && { width: frame.width, height: frame.height }}
         fixed={!!state.fixed}
+        fit={fit}
         onResize={(next) => size({ kind: "fixed", ...next })}
-        onFit={() => size({ kind: "fill" })}
-        // The tab's viewport follows the space it has here, while the agent leaves it in fill mode.
-        onArea={({ width, height }) => {
+        onFit={(next) => {
+          browserFit.set(next);
+          size({ kind: "fill" });
+        }}
+        onArea={(next) => {
           clearTimeout(timer.current);
-          setShown(width > 0 && height > 0);
-          if (width === 0 || height === 0) return;
-          timer.current = setTimeout(
-            () => request({ kind: "viewport", ...fitSize(width, height) }),
-            150,
-          );
+          setShown(next.width > 0 && next.height > 0);
+          if (next.width === 0 || next.height === 0) return;
+          room.current = next;
+          timer.current = setTimeout(viewport, 150);
         }}
         className={state.human ? "ring-2 ring-ring" : "ring-2 ring-ring/40"}
         overlay={
@@ -192,7 +203,6 @@ export function AgentBrowser({
               <>
                 {logo}
                 {driver.name} is {state.recording ? "recording" : "browsing"}
-                <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-ring" />
               </>
             )}
           </div>

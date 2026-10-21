@@ -58,4 +58,6 @@ test("a page fits to a monitor until the panel holds one whole", () => {
   expect(fitSize(1600, 700)).toEqual({ width: 1280, height: 800 });
   // A bigger one shows the page at its own size.
   expect(fitSize(1600, 900)).toEqual({ width: 1600, height: 900 });
+  // The panel fit is the panel, whatever its size.
+  expect(fitSize(416, 900, "panel")).toEqual({ width: 416, height: 900 });
 });

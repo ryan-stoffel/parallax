@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { BrowserAction } from "../preload/bridge";
 import type { PreviewTab } from "../protocol/generated/protocol";
 import { AgentBrowser, type Driver } from "./AgentBrowser";
-import { fitSize, MONITOR, PageFrame, type Size } from "./PageFrame";
+import { browserFit, fitSize, MONITOR, PageFrame, type Size } from "./PageFrame";
 import { backendLogos } from "./Sidebar";
 import { instanceLogo, instanceName } from "./providers";
 import { IconButton } from "./ui";
@@ -309,7 +309,8 @@ function Tab({
   // The page's size: the one the user set, or the panel's fit (PageFrame.tsx).
   const [fixed, setFixed] = useState<Size>();
   const [area, setArea] = useState<Size>(MONITOR);
-  const pageSize = fixed ?? fitSize(area.width, area.height);
+  const fit = browserFit.use();
+  const pageSize = fixed ?? fitSize(area.width, area.height, fit);
   // The latest callbacks, for the webview's listeners, which mount once per page.
   const latest = useRef({ onChange, ask });
   latest.current = { onChange, ask };
@@ -444,8 +445,12 @@ function Tab({
         <PageFrame
           size={pageSize}
           fixed={!!fixed}
+          fit={fit}
           onResize={setFixed}
-          onFit={() => setFixed(undefined)}
+          onFit={(next) => {
+            browserFit.set(next);
+            setFixed(undefined);
+          }}
           // A hidden tab keeps the room it had, so its page doesn't lay out again.
           onArea={(room) => room.width > 0 && room.height > 0 && setArea(room)}
         >

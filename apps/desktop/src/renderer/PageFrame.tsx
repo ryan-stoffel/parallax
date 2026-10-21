@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
+import { stored } from "./stored";
+
 /** A page's size in CSS pixels. */
 export interface Size {
   width: number;
@@ -9,12 +11,22 @@ export interface Size {
 /** The monitor a page lays out on until the panel is at least as big (PLX-888). */
 export const MONITOR: Size = { width: 1280, height: 800 };
 
+/** How a page fits the panel when the user hasn't sized it: as on a monitor, or at the panel's size. */
+export type Fit = "monitor" | "panel";
+
+/** The fit every browser tab uses, kept on this computer. */
+export const browserFit = stored<Fit>("parallax.browserFit", "monitor", (raw, fallback) =>
+  raw === "monitor" || raw === "panel" ? raw : fallback,
+);
+
 /**
- * The size a page fits to in a `width` by `height` area: the area itself once a monitor fits in it
- * whole, or else the monitor, which the frame scales down to fit.
+ * The size a page fits to in a `width` by `height` area. A panel fit is the area itself. A monitor
+ * fit is the area once a monitor fits in it whole, or else the monitor, which the frame scales down.
  */
-export const fitSize = (width: number, height: number): Size =>
-  width >= MONITOR.width && height >= MONITOR.height ? { width, height } : MONITOR;
+export const fitSize = (width: number, height: number, fit: Fit = "monitor"): Size =>
+  fit === "panel" || (width >= MONITOR.width && height >= MONITOR.height)
+    ? { width, height }
+    : MONITOR;
 
 /** The height of the size fields under the window. */
 const FIELDS = 36;
@@ -25,13 +37,15 @@ const clampSide = (n: number) => Math.min(4096, Math.max(200, Math.round(n)));
 /**
  * A browser page as a window in the panel, as on a monitor (PLX-888): laid out at `size`, scaled
  * down to fit the area, centered with blank space around it. Its bottom-right corner drags to a
- * new size, and double-clicks back to the fitted one; the size under it can be typed too.
+ * new size, and double-clicks back to the fitted one; the size under it can be typed too, and
+ * Monitor or Panel there fits it again.
  * `children` draws the page at the scale it's given. `onArea` hears the room the page has, 0 by 0
  * while hidden.
  */
 export function PageFrame({
   size,
   fixed,
+  fit,
   onResize,
   onFit,
   onArea,
@@ -41,8 +55,9 @@ export function PageFrame({
 }: {
   size?: Size;
   fixed: boolean;
+  fit: Fit;
   onResize: (size: Size) => void;
-  onFit: () => void;
+  onFit: (fit: Fit) => void;
   onArea?: (area: Size) => void;
   /** The window's ring, such as who controls the page. */
   className?: string;
@@ -127,7 +142,7 @@ export function PageFrame({
               if (reached.width !== start.width || reached.height !== start.height)
                 onResize(reached);
             }}
-            onDoubleClick={onFit}
+            onDoubleClick={() => onFit(fit)}
             className={`absolute -right-1.5 -bottom-1.5 size-5 cursor-nwse-resize touch-none transition-opacity ${drag ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
           >
             <svg viewBox="0 0 20 20" aria-hidden className="size-full text-muted-foreground">
@@ -181,15 +196,24 @@ export function PageFrame({
             </label>
           ))}
           {size && <span className="tabular-nums">· {Math.round(scale * 100)}%</span>}
-          {fixed && (
-            <button
-              type="button"
-              onClick={onFit}
-              className="ml-1 rounded px-1.5 py-0.5 text-foreground hover:bg-hover"
-            >
-              Fit
-            </button>
-          )}
+          <span role="group" aria-label="Fit" className="ml-1 flex rounded-md bg-selected p-0.5">
+            {(["monitor", "panel"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={!fixed && fit === option}
+                title={
+                  option === "monitor"
+                    ? "Lay the page out as on a monitor, scaled to fit"
+                    : "Lay the page out at the panel's size"
+                }
+                onClick={() => onFit(option)}
+                className="rounded px-1.5 py-px capitalize hover:text-foreground aria-pressed:bg-background aria-pressed:text-foreground aria-pressed:shadow-sm"
+              >
+                {option}
+              </button>
+            ))}
+          </span>
         </form>
       )}
     </div>
