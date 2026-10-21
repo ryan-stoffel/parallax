@@ -264,6 +264,8 @@ function Picker({
       ? `${nameOf(d)} · ${d.version.replace(/^(iOS|Android) /, "")}`
       : nameOf(d);
   const missing = (["ios", "android"] as const).filter(unavailable);
+  // Nothing to list, and nothing to make: only what's missing shows, in the middle.
+  const empty = state.devices.length === 0 && !!unavailable("ios");
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-2">
       {failure && (
@@ -277,7 +279,7 @@ function Picker({
           </span>
         </p>
       )}
-      <ul aria-label="Devices">
+      <ul aria-label="Devices" hidden={empty}>
         {state.devices.map((d) => (
           <li key={d.id}>
             <button
@@ -324,7 +326,9 @@ function Picker({
         )}
       </ul>
       {missing.length > 0 && (
-        <div className="mt-auto flex flex-wrap gap-1.5 px-2 pt-4">
+        <div
+          className={`flex flex-wrap gap-1.5 px-2 ${empty ? "my-auto justify-center pb-16" : "mt-auto pt-4"}`}
+        >
           {missing.map((platform) => (
             <span
               key={platform}
