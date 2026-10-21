@@ -39,6 +39,7 @@ import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 import type { DevicePlatform } from "../protocol/generated/protocol";
+import { createDuo, type Duo } from "./deviceDuo";
 
 const models = import.meta.glob<string>("./assets/devices/*.glb", {
   query: "?url",
@@ -65,6 +66,8 @@ export interface Device3d {
    * past the screen's edge.
    */
   screenPoint(x: number, y: number, captured: boolean): { x: number; y: number } | null;
+  /** iPhone Duo: its live display, 1 the cover and 3 the inside, and its hinge, 0 to 180 degrees. */
+  fold(display: number, angle: number): void;
   dispose(): void;
 }
 
@@ -320,6 +323,8 @@ export function createDevice3d(options: {
   root.add(orientation);
   scene.add(root);
   let screen: Mesh | undefined;
+  let duo: Duo | undefined;
+  let model: Object3D | undefined;
   // The model's box, centered, in its own axes.
   let extent: Box3 | undefined;
   let viewport = { width: 0, height: 0 };
@@ -376,27 +381,51 @@ export function createDevice3d(options: {
     camera.updateProjectionMatrix();
   };
 
-  const install = (model: Object3D) => {
-    const screens: Mesh[] = [];
+  // Centers the model on its middle, so it turns about its own center: front to back for a phone,
+  // whose screen is already centered, and every way for the folding Duo.
+  const settle = () => {
+    if (!model) return;
+    model.position.set(0, 0, 0);
+    orientation.updateWorldMatrix(true, true);
+    const inverse = orientation.matrixWorld.clone().invert();
+    const box = new Box3();
     model.traverse((object) => {
-      if (object instanceof Mesh && object.name === "device-screen") screens.push(object);
+      if (!(object instanceof Mesh)) return;
+      object.geometry.computeBoundingBox();
+      box.union(
+        object.geometry
+          .boundingBox!.clone()
+          .applyMatrix4(inverse.clone().multiply(object.matrixWorld)),
+      );
     });
-    const found = screens[0];
-    if (!found) throw new Error("The device model has no screen.");
-    model.updateMatrixWorld(true);
-    screenUv(found.geometry);
-    found.material = new MeshBasicMaterial({ map: texture, toneMapped: false });
-    screen = found;
-    // Centered on its middle, front to back, so it turns about its own center.
-    const whole = new Box3().setFromObject(model);
-    const shift = -(whole.max.z + whole.min.z) / 2;
-    model.position.z += shift;
-    extent = whole.translate(new Vector3(0, 0, shift));
-    orientation.add(model);
+    const center = box.getCenter(new Vector3());
+    if (!duo) center.set(0, 0, center.z);
+    model.position.sub(center);
+    extent = box.translate(center.negate());
+  };
+
+  const install = (loaded: Object3D) => {
+    if (duo) {
+      // Its rig is in centimeters: scaled so its cover display is as tall as a phone's screen.
+      const cover = new Box3().setFromObject(loaded.getObjectByName("cover-display")!);
+      loaded.scale.setScalar(SCREEN_HEIGHT / cover.getSize(new Vector3()).y);
+    } else {
+      const screens: Mesh[] = [];
+      loaded.traverse((object) => {
+        if (object instanceof Mesh && object.name === "device-screen") screens.push(object);
+      });
+      const found = screens[0];
+      if (!found) throw new Error("The device model has no screen.");
+      screenUv(found.geometry);
+      found.material = new MeshBasicMaterial({ map: texture, toneMapped: false });
+      screen = found;
+    }
+    model = loaded;
+    orientation.add(loaded);
+    settle();
     fit();
     invalidate();
   };
-
   const ready = (async () => {
     if (options.platform === "android") {
       const { width, height } = options.source;
@@ -413,6 +442,7 @@ export function createDevice3d(options: {
       .setMeshoptDecoder(MeshoptDecoder)
       .parseAsync(await response.arrayBuffer(), "");
     if (disposed) return release(gltf.scene, texture);
+    if (/^iphone duo$/i.test(options.name)) duo = createDuo(gltf.scene);
     install(gltf.scene);
   })();
 
@@ -428,7 +458,20 @@ export function createDevice3d(options: {
       invalidate();
     },
     frame() {
-      texture.needsUpdate = true;
+      if (duo) duo.draw(options.source);
+      else texture.needsUpdate = true;
+      invalidate();
+    },
+    fold(display, angle) {
+      if (!duo || !model || (display !== 1 && display !== 3)) return;
+      duo.fold(display, angle);
+      // Turned so its live display faces front.
+      model.rotation.y = 0;
+      const facing = duo.facing(orientation);
+      model.rotation.y = -Math.atan2(facing.x, facing.z);
+      settle();
+      fit();
+      duo.draw(options.source);
       invalidate();
     },
     resize(width, height, pixelRatio) {
@@ -440,10 +483,11 @@ export function createDevice3d(options: {
       invalidate();
     },
     screenPoint(x, y, captured) {
-      if (!screen) return null;
       root.updateMatrixWorld(true);
       pointer.set(x * 2 - 1, 1 - y * 2);
       raycaster.setFromCamera(pointer, camera);
+      if (duo) return duo.screenPoint(raycaster);
+      if (!screen) return null;
       const hit = raycaster.intersectObject(screen, false)[0];
       if (hit) local.copy(hit.point);
       else if (captured) {
@@ -469,6 +513,7 @@ export function createDevice3d(options: {
       disposed = true;
       cancelAnimationFrame(pending);
       release(root, texture);
+      duo?.dispose();
       texture.dispose();
       scene.environment?.dispose();
       environment.dispose();

@@ -19,7 +19,12 @@ export interface DeviceScreen {
   width: number;
   height: number;
   orientation: DeviceOrientation;
+  /** A folding iPhone Duo's live display, 1 the cover and 3 the inside, and its hinge in degrees. */
+  fold?: { display: number; angle: number };
 }
+
+/** How an iPhone Duo can be folded: shut on its cover, half open as a book, or flat open. */
+export type DuoPose = "closed" | "book" | "open";
 
 export interface DeviceStreamEvents {
   onStatus: (status: DeviceStreamStatus, detail?: string) => void;
@@ -47,6 +52,8 @@ export interface DeviceStream {
   rotate(): void;
   /** iOS: turns the simulator to `orientation`. */
   orient(orientation: DeviceOrientation): void;
+  /** iPhone Duo: folds it to `pose`. */
+  fold(pose: DuoPose): void;
 }
 
 const RETRY_MS = 1_000;
@@ -65,6 +72,7 @@ const IOS_TOUCH = 0x03;
 const IOS_BUTTON = 0x04;
 const IOS_KEY = 0x06;
 const IOS_ORIENTATION = 0x07;
+const IOS_HINGE = 0x10;
 const IOS_SCREEN = 0x82;
 const IOS_ADMITTED = 0x83;
 
@@ -497,9 +505,17 @@ export function createDeviceStream(
         try {
           const config = JSON.parse(decoder.decode(data.subarray(1))) as DeviceScreen & {
             inputUnavailable?: boolean;
+            supportsHingeAngle?: boolean;
+            screenId?: number;
+            hingeAngle?: number;
           };
           if (config.inputUnavailable) events.onInput(false);
           screen = { width: config.width, height: config.height, orientation: config.orientation };
+          if (config.supportsHingeAngle && config.screenId !== undefined)
+            screen.fold = {
+              display: config.screenId,
+              angle: config.hingeAngle ?? (config.screenId === 1 ? 0 : 180),
+            };
           events.onScreen(screen);
         } catch {}
       },
@@ -607,6 +623,8 @@ export function createDeviceStream(
     }
   };
 
+  // The hub answers each hinge command by its id; the next screen it reports shows the fold.
+  let hinge = 0;
   const hidKey = (usage: number, type: "down" | "up") => send(tagged(IOS_KEY, { type, usage }));
 
   return {
@@ -677,6 +695,10 @@ export function createDeviceStream(
     },
     orient(orientation) {
       if (ios) send(tagged(IOS_ORIENTATION, { orientation }));
+    },
+    fold(pose) {
+      if (ios && screen?.fold)
+        send(tagged(IOS_HINGE, { requestId: ++hinge, command: { control: "pose", value: pose } }));
     },
   };
 }

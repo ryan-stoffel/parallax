@@ -12,6 +12,9 @@ import {
   Power,
   RotateCw,
   Rotate3d,
+  BookOpen,
+  Smartphone,
+  Tablet,
   TriangleAlert,
   Triangle,
 } from "lucide-react";
@@ -844,8 +847,10 @@ function Viewer({
   const [orbit, setOrbit] = useState({ pitch: 0, yaw: 0 });
   const [dragging, setDragging] = useState(false);
   // The 3D model: wanted once the device is turned, shown once it has loaded. Until then, and if
-  // it can't load, the flat artwork turns instead.
-  const [want3d, setWant3d] = useState(false);
+  // it can't load, the flat artwork turns instead. The folding iPhone Duo is always 3D: its
+  // artwork is only its cover.
+  const duo = /^iphone duo$/i.test(device.name);
+  const [want3d, setWant3d] = useState(duo);
   const [gl, setGl] = useState<HTMLCanvasElement | null>(null);
   const model = useRef<Device3d>(null);
   const [modelShown, setModelShown] = useState(false);
@@ -932,6 +937,9 @@ function Viewer({
   useEffect(() => {
     model.current?.setPose(orbit.pitch, orbit.yaw, roll);
   }, [orbit, roll, modelShown]);
+  useEffect(() => {
+    if (screen?.fold) model.current?.fold(screen.fold.display, screen.fold.angle);
+  }, [screen, modelShown]);
   useEffect(() => {
     if (gl) model.current?.resize(gl.clientWidth, gl.clientHeight, window.devicePixelRatio);
   }, [box, gl, modelShown]);
@@ -1057,7 +1065,7 @@ function Viewer({
       if (t < 1) glide.current = requestAnimationFrame(step);
       else if (front) {
         setOrbit({ pitch: 0, yaw: 0 });
-        setWant3d(false);
+        setWant3d(duo);
       }
     };
     glide.current = requestAnimationFrame(step);
@@ -1156,14 +1164,21 @@ function Viewer({
     },
   };
 
-  const control = (label: string, icon: ReactNode, onClick: () => void, disabled = !ready) => (
+  const control = (
+    label: string,
+    icon: ReactNode,
+    onClick: () => void,
+    disabled = !ready,
+    pressed?: boolean,
+  ) => (
     <button
       type="button"
       aria-label={label}
+      aria-pressed={pressed}
       title={label}
       disabled={disabled}
       onClick={onClick}
-      className="grid size-8 place-items-center rounded-full text-muted-foreground transition-[color,background-color,transform] duration-100 hover:bg-hover hover:text-foreground active:scale-90 disabled:opacity-35 [&_svg]:size-4"
+      className="grid size-8 place-items-center rounded-full text-muted-foreground transition-[color,background-color,transform] duration-100 hover:bg-hover hover:text-foreground active:scale-90 disabled:opacity-35 aria-pressed:bg-hover aria-pressed:text-foreground [&_svg]:size-4"
     >
       {icon}
     </button>
@@ -1326,6 +1341,23 @@ function Viewer({
                 setFacing(next);
                 stream.current?.orient(next);
               })}
+              {screen?.fold &&
+                (
+                  [
+                    ["closed", "Closed", <Smartphone />, screen.fold.angle === 0],
+                    [
+                      "book",
+                      "Book",
+                      <BookOpen />,
+                      screen.fold.angle > 0 && screen.fold.angle < 180,
+                    ],
+                    ["open", "Open", <Tablet />, screen.fold.angle === 180],
+                  ] as const
+                ).map(([pose, label, icon, pressed]) => (
+                  <span key={pose} className="contents">
+                    {control(label, icon, () => stream.current?.fold(pose), !ready, pressed)}
+                  </span>
+                ))}
             </>
           ) : (
             <>

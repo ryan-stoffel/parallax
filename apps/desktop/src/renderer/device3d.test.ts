@@ -10,6 +10,7 @@ test("each iOS device gets Apple's model of it, and one Apple has none of gets n
     ["iPad Air 13-inch (M3)", "ipad-air-m4"],
     ["iPad Pro 13-inch (M5) (16GB)", "ipad-pro-m5"],
     ["iPad (A16)", "ipad-a16"],
+    ["iPhone Duo", "iphone-duo"],
   ]) {
     expect(appleModel(name!)).toBe(`/src/renderer/assets/devices/${file}.glb`);
   }
