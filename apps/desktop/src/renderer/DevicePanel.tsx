@@ -697,16 +697,22 @@ function Body({
   // The outline is the bezel's, or for a plain frame, a rounded rectangle.
   const outline = chrome.layers.find((l) => l.name === "bezel" || l.name === "back");
   const rect = outline?.rect ?? { x: 0, y: 0, width: chrome.width, height: chrome.height };
-  // An emulator's frame is clear where its screen goes, so the screen's area fills it in.
+  // An emulator's frame is clear where its screen goes, so the screen's area fills it in, in the
+  // screen's own shape: a square one pokes out past a thin bezel's rounded corners.
   const screenArea = [
     (chrome.screen.x - rect.x) * k,
     (chrome.screen.y - rect.y) * k,
     chrome.screen.width * k,
     chrome.screen.height * k,
   ];
+  const screenShape = chrome.mask
+    ? `url(${chrome.mask})`
+    : `url("data:image/svg+xml,${encodeURIComponent(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${chrome.screen.width}" height="${chrome.screen.height}"><rect width="100%" height="100%" rx="${chrome.cornerRadius ?? 0}"/></svg>`,
+      )}")`;
   const shape: React.CSSProperties = outline
     ? {
-        maskImage: `url(${outline.image}), linear-gradient(#000, #000)`,
+        maskImage: `url(${outline.image}), ${screenShape}`,
         maskSize: `100% 100%, ${screenArea[2]}px ${screenArea[3]}px`,
         maskPosition: `0 0, ${screenArea[0]}px ${screenArea[1]}px`,
         maskRepeat: "no-repeat",

@@ -103,23 +103,33 @@ function rounded(width: number, height: number, radius: number) {
   return shape;
 }
 
-/** Maps the stream onto a flat screen `width` by `height`: its left edge left, its top up. */
-function screenUv(geometry: BufferGeometry, width: number, height: number) {
+/**
+ * Maps the stream onto a flat screen across its own extent: its left edge left, its top up. A
+ * compressed model's positions are quantized, with their offset and scale on its node, so they
+ * aren't centered on the origin.
+ */
+function screenUv(geometry: BufferGeometry) {
   const position = geometry.getAttribute("position");
+  geometry.computeBoundingBox();
+  const { min, max } = geometry.boundingBox!;
   const uv = new Float32BufferAttribute(new Float32Array(position.count * 2), 2);
   for (let i = 0; i < position.count; i++) {
-    uv.setXY(i, (position.getX(i) + width / 2) / width, (position.getY(i) + height / 2) / height);
+    uv.setXY(
+      i,
+      (position.getX(i) - min.x) / (max.x - min.x),
+      (position.getY(i) - min.y) / (max.y - min.y),
+    );
   }
   geometry.setAttribute("uv", uv);
 }
 
 /**
- * A Pixel 9, after Google's measurements (152.8 × 72.0 × 8.5 mm, a 6.3" 1080 × 2424 screen): a
- * satin aluminum frame, a frosted glass back, and the camera bar's pill with two lenses and a flash.
- * Its screen is `aspect` wide for its height.
+ * A Pixel 9, after Google's measurements (152.8 × 72.0 × 8.5 mm, and a 1080 × 2424 screen at
+ * 422 ppi, so 145.9 mm tall in bezels about 3.5 mm): a satin aluminum frame, a frosted glass back,
+ * and the camera bar's pill with two lenses and a flash. Its screen is `aspect` wide for its height.
  */
 function pixel(texture: Texture, aspect: number) {
-  const mm = SCREEN_HEIGHT / 140.6;
+  const mm = SCREEN_HEIGHT / 145.9;
   const screenWidth = SCREEN_HEIGHT * aspect;
   const width = 72 * mm;
   const height = 152.8 * mm;
@@ -181,10 +191,10 @@ function pixel(texture: Texture, aspect: number) {
   face.position.z = 0.001;
   group.add(face);
   const screenGeometry = new ShapeGeometry(
-    rounded(screenWidth, SCREEN_HEIGHT, (87 / 1080) * screenWidth),
+    rounded(screenWidth, SCREEN_HEIGHT, radius - 3.5 * mm),
     32,
   );
-  screenUv(screenGeometry, screenWidth, SCREEN_HEIGHT);
+  screenUv(screenGeometry);
   const screen = new Mesh(
     screenGeometry,
     new MeshBasicMaterial({ map: texture, toneMapped: false }),
@@ -374,9 +384,7 @@ export function createDevice3d(options: {
     const found = screens[0];
     if (!found) throw new Error("The device model has no screen.");
     model.updateMatrixWorld(true);
-    const bounds = new Box3().setFromObject(found);
-    const width = bounds.max.x - bounds.min.x;
-    screenUv(found.geometry, width, bounds.max.y - bounds.min.y);
+    screenUv(found.geometry);
     found.material = new MeshBasicMaterial({ map: texture, toneMapped: false });
     screen = found;
     // Centered on its middle, front to back, so it turns about its own center.
