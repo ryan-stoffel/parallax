@@ -1034,11 +1034,12 @@ function Viewer({
     };
     glide.current = requestAnimationFrame(step);
   };
-  // Turns back to facing front the shortest way, then shows the flat artwork again.
-  const faceFront = () => {
+  // Turns the device to `to`. Facing front again, it shows the flat artwork.
+  const turnTo = (to: { pitch: number; yaw: number }) => {
     cancelAnimationFrame(glide.current);
     const from = orbit;
-    const to = { pitch: 0, yaw: Math.round(orbit.yaw / 360) * 360 };
+    const front = to.pitch === 0 && to.yaw % 360 === 0;
+    if (!front) setWant3d(true);
     const start = performance.now();
     const step = () => {
       const t = Math.min(1, (performance.now() - start) / 450);
@@ -1048,13 +1049,15 @@ function Viewer({
         yaw: from.yaw + (to.yaw - from.yaw) * eased,
       });
       if (t < 1) glide.current = requestAnimationFrame(step);
-      else {
+      else if (front) {
         setOrbit({ pitch: 0, yaw: 0 });
         setWant3d(false);
       }
     };
     glide.current = requestAnimationFrame(step);
   };
+  // Back to facing front the shortest way.
+  const faceFront = () => turnTo({ pitch: 0, yaw: Math.round(orbit.yaw / 360) * 360 });
   useEffect(() => () => cancelAnimationFrame(glide.current), []);
 
   const screenshot = async () => {
@@ -1331,7 +1334,9 @@ function Viewer({
             () => void screenshot(),
             booting || !device.booted,
           )}
-          {turned && control("Face front", <Rotate3d />, faceFront, false)}
+          {turned
+            ? control("Face front", <Rotate3d />, faceFront, false)
+            : control("Turn in 3D", <Rotate3d />, () => turnTo({ pitch: 12, yaw: -32 }), false)}
           {stopping && (
             <LoaderCircle
               aria-label="Powering off"

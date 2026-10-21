@@ -1,6 +1,6 @@
 // The Device panel's 3D view (PLX-886): the device as a lit model in three.js, its screen the live
-// stream. iPhones and iPads are Apple's own models, from its AR product pages as T3 Code converted
-// them (assets/devices/NOTICE.md); Android phones are a Pixel 9 built here to its measurements.
+// stream. iPhones and iPads are Apple's own models of each, from its AR product pages
+// (assets/devices/NOTICE.md); Android phones are a Pixel 9 built here to its measurements.
 // The screen and framing follow T3 Code's phone viewer (MIT, T3 Tools Inc.): a model's screen is
 // one `device-screen` mesh, 2.2 units tall, centered and facing forward.
 
@@ -35,12 +35,16 @@ import {
   type Texture,
 } from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 import type { DevicePlatform } from "../protocol/generated/protocol";
-import ipadPro from "./assets/devices/ipad-pro-13-m5.glb?url";
-import iphoneProMax from "./assets/devices/iphone-18-pro-max.glb?url";
-import iphonePro from "./assets/devices/iphone-18-pro.glb?url";
+
+const models = import.meta.glob<string>("./assets/devices/*.glb", {
+  query: "?url",
+  import: "default",
+  eager: true,
+});
 
 /** A model's screen height, in scene units. */
 const SCREEN_HEIGHT = 2.2;
@@ -64,11 +68,23 @@ export interface Device3d {
   dispose(): void;
 }
 
-/** Apple's model for an iOS device, by its name: the closest one there is. */
-export function appleModel(name: string): string {
-  if (/ipad/i.test(name)) return ipadPro;
-  if (/pro max|plus/i.test(name)) return iphoneProMax;
-  return iphonePro;
+/**
+ * Apple's model of an iOS device, by its name, such as "iPhone 17 Pro" or "iPad Air 13-inch (M3)".
+ * Undefined for a device Apple has none of, or a renamed one: it turns as flat artwork instead.
+ */
+export function appleModel(name: string): string | undefined {
+  const n = name.toLowerCase();
+  // An 11-inch iPad's screen is narrower than the 13-inch one in each of these models.
+  const ipad = /^ipad (pro|air) 13-inch \((m\d)\)/.exec(n);
+  // The M3 iPad Air is the M4's body.
+  const id = ipad
+    ? `ipad-${ipad[1]}-${ipad[2]}`.replace("ipad-air-m3", "ipad-air-m4")
+    : n === "ipad (a16)"
+      ? "ipad-a16"
+      : n === "iphone se (3rd generation)"
+        ? "iphone-se-3"
+        : n.replaceAll(" ", "-");
+  return models[`./assets/devices/${id}.glb`];
 }
 
 /** A rounded rectangle centered on the origin. */
@@ -224,22 +240,25 @@ function pixel(texture: Texture, aspect: number) {
   flash.rotation.y = Math.PI;
   flash.position.set(-15 * mm, pillY, pillBack - 0.05 * mm);
   group.add(flash);
-  // Power above the volume rocker, on the right.
+  // Power above the volume rocker, on the right: pills 2.4 mm wide, standing 0.55 mm off the frame.
   for (const [y, length] of [
     [32 * mm, 13 * mm],
     [6 * mm, 26 * mm],
   ] as const) {
     const button = new Mesh(
-      new ExtrudeGeometry(rounded(1.2 * mm, length, 0.6 * mm), {
-        depth: 3 * mm,
+      new ExtrudeGeometry(rounded(2.4 * mm, length, 1.2 * mm), {
+        depth: 0.5 * mm,
         bevelEnabled: true,
-        bevelSize: 0.3 * mm,
-        bevelThickness: 0.3 * mm,
-        bevelSegments: 3,
+        bevelSize: 0.25 * mm,
+        bevelThickness: 0.25 * mm,
+        bevelSegments: 4,
+        curveSegments: 16,
       }),
       frame,
     );
-    button.position.set(width / 2 + 0.2 * mm, y, -depth / 2 - 1.5 * mm);
+    // Turned to face right: its width runs front to back, and it stands out along x.
+    button.rotation.y = Math.PI / 2;
+    button.position.set(width / 2 - 0.2 * mm, y, -depth / 2);
     group.add(button);
   }
   return group;
@@ -378,9 +397,13 @@ export function createDevice3d(options: {
       install(pixel(texture, aspect));
       return;
     }
-    const response = await fetch(appleModel(options.name));
+    const url = appleModel(options.name);
+    if (!url) throw new Error("There's no model of this device.");
+    const response = await fetch(url);
     if (!response.ok) throw new Error(`The device model didn't load (${response.status}).`);
-    const gltf = await new GLTFLoader().parseAsync(await response.arrayBuffer(), "");
+    const gltf = await new GLTFLoader()
+      .setMeshoptDecoder(MeshoptDecoder)
+      .parseAsync(await response.arrayBuffer(), "");
     if (disposed) return release(gltf.scene, texture);
     install(gltf.scene);
   })();
