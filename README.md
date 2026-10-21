@@ -64,10 +64,10 @@ Turn on remote access in Settings > Connections, then pair a device with the cod
 - **iOS app.** It finds your computers on the network, pairs with the same code, and lists your threads. Open one to read it, approve a request, or send a reply. A message sent offline goes out when the phone reconnects. The app lives in [`apps/mobile`](apps/mobile).
 
 <p align="center">
-  <img src="docs/images/readme/web.png" alt="The web app in a browser, showing a finished thread" width="620">
+  <img src="docs/images/readme/web.png" alt="The web app in a browser, showing a finished thread" width="520">
   &nbsp;
-  <img src="docs/images/readme/mobile-threads.png" alt="The iOS app's thread list" width="150">
-  <img src="docs/images/readme/mobile-thread.png" alt="A thread open in the iOS app" width="150">
+  <img src="docs/images/readme/mobile-threads.png" alt="The iOS app's thread list" width="130">
+  <img src="docs/images/readme/mobile-thread.png" alt="A thread open in the iOS app" width="130">
 </p>
 
 ## Install
