@@ -30,7 +30,7 @@ main() {
   fi
 
   if [ "$(uname -s)" = Darwin ] &&
-    [ "$(osascript -e 'application id "dev.parallax.desktop" is running')" = true ]; then
+    [ "$(osascript -e 'application id "dev.parallax.desktop" is running' 2> /dev/null)" = true ]; then
     echo "Quit Parallax, then run this again." >&2
     exit 1
   fi
