@@ -1397,7 +1397,13 @@ function Viewer({
                   >
                     <BookOpen />
                   </button>
-                  <Menu id={foldMenuId} label="Fold" align="center" className="mb-2 w-36 p-1">
+                  <Menu
+                    id={foldMenuId}
+                    label="Fold"
+                    align="center"
+                    focus='[aria-checked="true"]'
+                    className="mb-2 w-36 p-1"
+                  >
                     {(
                       [
                         ["closed", "Closed", screen.fold.angle === 0],
