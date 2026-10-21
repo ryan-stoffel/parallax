@@ -2,6 +2,7 @@ import { zipSync } from "fflate";
 import { expect, test, vi } from "vite-plus/test";
 
 vi.mock("electron", () => ({ app: {} }));
+vi.mock("electron-chrome-extensions", () => ({ ElectronChromeExtensions: class {} }));
 
 const { crxId, crxKey, crxZip, storeId } = await import("./extensions");
 

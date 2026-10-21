@@ -2011,3 +2011,23 @@ body {
     display: none;
   }
 }
+
+/* The side panel browser's extension buttons (Extensions.tsx), electron-chrome-extensions'
+   element, drawn like the toolbar's IconButtons. */
+browser-action-list {
+  display: flex;
+  gap: 2px;
+}
+browser-action-list::part(action) {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background-size: 16px;
+}
+browser-action-list::part(action):hover {
+  background-color: var(--hover);
+}
+browser-action-list::part(badge) {
+  border-radius: 4px;
+  font-size: 9px;
+}

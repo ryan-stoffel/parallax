@@ -12,6 +12,7 @@ import {
   protocol,
   session,
   shell,
+  webContents,
 } from "electron";
 import { existsSync, readFileSync, writeFileSync, promises as fs } from "node:fs";
 import { homedir } from "node:os";
@@ -54,11 +55,15 @@ import type { CommandStatus } from "../preload/bridge";
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
 import { renderPage, savedHost, startHosts, streamFile } from "./hosts";
 import {
+  addTab,
   addUnpacked,
+  extensionMenuItems,
   installExtension,
   listExtensions,
   loadExtensions,
   removeExtension,
+  selectTab,
+  startExtensions,
 } from "./extensions";
 import {
   browserShortcut,
@@ -165,11 +170,13 @@ const browserPartition = "persist:browser";
 // open become new tabs (Browser.tsx).
 app.on("web-contents-created", (_event, contents) => {
   const inBrowser = contents.getType() === "webview";
-  // Asks the browser tab that shows this page for something, over `onBrowser` (bridge.ts).
-  const tell = (action: BrowserAction) => {
-    const host = contents.isDestroyed() ? undefined : contents.hostWebContents;
-    if (host && !host.isDestroyed()) host.send("parallax:browser", contents.id, action);
-  };
+  const tell = (action: BrowserAction) => tellTab(contents, action);
+  // Each page's webview is a tab to the extensions (extensions.ts).
+  if (!inBrowser)
+    contents.on("did-attach-webview", (_event, tab) => {
+      const window = BrowserWindow.fromWebContents(contents);
+      if (window) addTab(tab, window);
+    });
   contents.on("will-navigate", (event) => {
     if (mayNavigate(event.url, contents.getURL(), inBrowser)) return;
     event.preventDefault();
@@ -181,8 +188,8 @@ app.on("web-contents-created", (_event, contents) => {
     } else if (isOpenableExternally(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
-  // A webview may show only an http or https page, or an extension's popup, in the browser's
-  // session, with no preload or Node, so its pages never reach `window.parallax`.
+  // A webview may show only an http or https page, or an extension's own page such as its options,
+  // in the browser's session, with no preload or Node, so its pages never reach `window.parallax`.
   contents.on("will-attach-webview", (event, webPreferences, params) => {
     const src = params["src"] ?? "";
     if (!isBrowsable(src) && !isExtensionPage(src)) return event.preventDefault();
@@ -194,8 +201,6 @@ app.on("web-contents-created", (_event, contents) => {
       sandbox: true,
       webSecurity: true,
       partition: browserPartition,
-      // An extension's popup sizes itself to its content, as in Chrome.
-      enablePreferredSizeMode: isExtensionPage(src),
     });
   });
   // Chrome's page shortcuts, which also keep the default menu's Cmd+R and Cmd+W from reloading
@@ -216,10 +221,6 @@ app.on("web-contents-created", (_event, contents) => {
       else if (shortcut === "resetZoom") contents.setZoomLevel(0);
       else tell({ kind: shortcut });
     });
-  if (inBrowser)
-    contents.on("preferred-size-changed", (_event, { width, height }) =>
-      tell({ kind: "size", width, height }),
-    );
   // The app's CSP takes no image from the web, so main fetches a page's favicon and hands its tab
   // the image inline.
   if (inBrowser)
@@ -229,7 +230,8 @@ app.on("web-contents-created", (_event, contents) => {
   // Electron has no context menu of its own. Right-click offers the Edit menu's actions: all of
   // them in a text box, Copy on selected text. A browser page's menu is Chrome's: a link's, the
   // page's Back, Forward, and Reload when there's nothing to edit or copy, and Inspect.
-  contents.on("context-menu", (_event, { isEditable, selectionText, linkURL, x, y }) => {
+  contents.on("context-menu", (_event, params) => {
+    const { isEditable, selectionText, linkURL, x, y } = params;
     const roles = isEditable ? (["cut", "copy", "paste", "selectAll"] as const) : ["copy" as const];
     const edit = isEditable || selectionText ? roles.map((role) => ({ role })) : [];
     if (!inBrowser) {
@@ -254,6 +256,7 @@ app.on("web-contents-created", (_event, contents) => {
     Menu.buildFromTemplate([
       ...link,
       ...(edit.length ? [...edit, separator] : link.length ? [] : page),
+      ...extensionMenuItems(contents, params),
       { label: "Inspect", click: () => contents.inspectElement(x, y) },
     ]).popup();
   });
@@ -333,8 +336,18 @@ app.on("browser-window-focus", () => {
   else if (process.connected) process.send?.("check");
 });
 
+/** Asks the browser tab that shows `tab`'s page for something, over `onBrowser` (bridge.ts). */
+function tellTab(tab: Electron.WebContents, action: BrowserAction) {
+  const host = tab.isDestroyed() ? undefined : tab.hostWebContents;
+  if (host && !host.isDestroyed()) host.send("parallax:browser", tab.id, action);
+}
+
 // The side panel browser's Chrome extensions (extensions.ts).
 const browserSession = () => session.fromPartition(browserPartition);
+ipcMain.on("parallax:selectBrowserTab", (_event, id: unknown) => {
+  const tab = typeof id === "number" ? webContents.fromId(id) : undefined;
+  if (tab && tab.session === browserSession()) selectTab(tab);
+});
 ipcMain.handle("parallax:extensions", () => listExtensions(browserSession()));
 ipcMain.handle("parallax:installExtension", (_event, text: unknown) =>
   installExtension(browserSession(), typeof text === "string" ? text : ""),
@@ -682,6 +695,7 @@ void app.whenReady().then(async () => {
   if (languages.length > 0)
     browserSession.setUserAgent(browserSession.getUserAgent(), languages.join(","));
   // Before any window, so a page's content scripts are there when it loads.
+  startExtensions(browserSession, tellTab);
   await loadExtensions(browserSession);
   startHosts(startAccount(), () => updateState.available?.version ?? app.getVersion());
   startStorage();

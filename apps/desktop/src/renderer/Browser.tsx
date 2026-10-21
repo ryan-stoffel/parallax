@@ -82,7 +82,7 @@ export const shortUrl = (url: string) =>
 // listener however many tabs there are.
 const asks = new Map<number, (action: BrowserAction) => void>();
 let listening = false;
-export function onAsk(id: number, handler: (action: BrowserAction) => void) {
+function onAsk(id: number, handler: (action: BrowserAction) => void) {
   if (!listening) {
     listening = true;
     window.parallax.onBrowser((from, action) => asks.get(from)?.(action));
@@ -237,6 +237,10 @@ export function Browser({
             if (action.kind === "open") newTab(action.url, t.id);
             else if (action.kind === "newTab") newTab();
             else if (action.kind === "closeTab") close(t.id);
+            else if (action.kind === "select") {
+              setCurrent(t.id);
+              setAgentTab(undefined);
+            }
           }}
         />
       ))}
@@ -335,6 +339,8 @@ function Tab({
   const [error, setError] = useState<{ url: string; description: string }>();
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState(false);
+  // The webview's webContents id, which extensions know the tab by, once it attaches.
+  const [contentsId, setContentsId] = useState<number>();
   // The page's size: the one the user set, or the panel's fit (PageFrame.tsx).
   const [fixed, setFixed] = useState<Size>();
   const [area, setArea] = useState<Size>(MONITOR);
@@ -348,8 +354,14 @@ function Tab({
   const latest = useRef({ onChange, ask });
   latest.current = { onChange, ask };
 
+  // Extensions see the shown tab as the active one.
+  useEffect(() => {
+    if (shown && contentsId !== undefined) window.parallax.selectBrowserTab(contentsId);
+  }, [shown, contentsId]);
+
   const open = (text: string) => {
-    const next = browserUrl(text);
+    // An extension's own pages, such as its options, open as they are.
+    const next = text.startsWith("chrome-extension://") ? text : browserUrl(text);
     if (!next) {
       if (text.trim()) setError({ url: text, description: "Only http and https pages open here." });
       return;
@@ -374,6 +386,7 @@ function Tab({
     // then on, before its first page is ready.
     const ready = () => {
       stopAsking();
+      setContentsId(el.getWebContentsId());
       stopAsking = onAsk(el.getWebContentsId(), (action) => {
         if (action.kind === "address") addressBar.current?.focus();
         else if (action.kind === "icon") latest.current.onChange({ icon: action.url });
@@ -472,7 +485,7 @@ function Tab({
             className={addressInput}
           />
         </form>
-        <Extensions onOpen={(url) => ask({ kind: "open", url })} />
+        <Extensions tab={contentsId} />
         <ViewMenu fit={fit} fixed={!!fixed} size={pageSize} onFit={refit}>
           <button
             type="button"

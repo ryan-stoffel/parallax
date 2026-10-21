@@ -510,6 +510,7 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     installExtension: () => Promise.resolve(NOT_HERE),
     loadUnpackedExtension: () => Promise.resolve(NOT_HERE),
     removeExtension: () => Promise.resolve(),
+    selectBrowserTab: () => {},
     updatable: false,
     locale: navigator.language,
     update: async () => NOT_HERE,

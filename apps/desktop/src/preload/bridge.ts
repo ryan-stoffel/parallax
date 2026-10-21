@@ -188,6 +188,8 @@ export interface ParallaxBridge {
   /** Asks for an unpacked extension's folder and loads it: it, an error, or undefined if canceled. */
   loadUnpackedExtension(): Promise<ExtensionInfo | string | undefined>;
   removeExtension(id: string): Promise<void>;
+  /** Tells extensions which browser tab is shown, by its webview's webContents id. */
+  selectBrowserTab(webContentsId: number): void;
   /**
    * Whether `update` can run: in a packaged app, which installs releases (PLX-68), or under
    * `pnpm dev`, from a checkout (PLX-204).
@@ -702,14 +704,14 @@ export type ConnectionError = {
 };
 
 /**
- * What a side panel browser's page asks of its tab, from main: open a page in a new tab (a popup
- * or "Open Link in New Tab"), show its favicon, as a data url the app's CSP allows, Cmd/Ctrl+L,
- * T, or W pressed in the page, or, for an extension's popup, the size its content wants.
+ * What a side panel browser's page asks of its tab, from main: open a page in a new tab (a popup,
+ * "Open Link in New Tab", or an extension's), show its favicon, as a data url the app's CSP
+ * allows, Cmd/Ctrl+L, T, or W pressed in the page, or be shown or closed for an extension.
  */
 export type BrowserAction =
   | { kind: "open"; url: string }
   | { kind: "icon"; url: string }
-  | { kind: "size"; width: number; height: number }
+  | { kind: "select" }
   | { kind: "address" }
   | { kind: "newTab" }
   | { kind: "closeTab" };

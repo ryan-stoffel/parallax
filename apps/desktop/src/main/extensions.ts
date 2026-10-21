@@ -2,14 +2,134 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { app, net, type Extension, type Session } from "electron";
+import {
+  app,
+  BrowserWindow,
+  net,
+  session as sessions,
+  type ContextMenuParams,
+  type Extension,
+  type Session,
+  type WebContents,
+} from "electron";
+import { ElectronChromeExtensions } from "electron-chrome-extensions";
 import { unzipSync } from "fflate";
 
-import type { ExtensionInfo } from "../preload/bridge";
+import type { BrowserAction, ExtensionInfo } from "../preload/bridge";
 
 // Chrome extensions in the side panel's browser (PLX-888). Electron loads unpacked folders only,
 // and only on each launch, so the folders are listed in a file and loaded again at startup. One
 // from the Chrome Web Store is downloaded and unpacked into a folder of its own here first.
+// electron-chrome-extensions supplies the Chrome APIs Electron lacks, such as tabs, windows, the
+// toolbar's actions and their popups, and context menus, over the browser's tabs, which are the
+// side panel's webviews.
+
+let chrome: ElectronChromeExtensions | undefined;
+// The browser tab shown last, which `chrome.tabs` calls active.
+let active: WebContents | undefined;
+// Tabs an extension asked for, each waiting for the next webview to attach.
+const waiting: ((tab: WebContents) => void)[] = [];
+// Asks a tab's browser view (Browser.tsx) for something, as main.ts does for its pages.
+let tellTab: (tab: WebContents, action: BrowserAction) => void = () => {};
+
+/**
+ * Sets up the Chrome extension APIs for the browser's session, before any extension loads.
+ * `tell` asks the renderer to open, show, or close a tab.
+ */
+export function startExtensions(
+  session: Session,
+  tell: (tab: WebContents, action: BrowserAction) => void,
+) {
+  tellTab = tell;
+  // ponytail: GPL-3.0 is the library's free license, which binds the app's distribution; Ryan
+  // decides between it and the Patron license (PLX-888).
+  chrome = new ElectronChromeExtensions({
+    license: "GPL-3.0",
+    session,
+    createTab: async (details) => [await openTab(details.url), hostWindow()],
+    selectTab: (tab) => tellTab(tab, { kind: "select" }),
+    removeTab: (tab) => tellTab(tab, { kind: "closeTab" }),
+    createWindow: async (details) => {
+      await openTab([details.url ?? []].flat()[0]);
+      return hostWindow();
+    },
+  });
+  chrome.on("browser-action-popup-created", fitPopup);
+  // The toolbar's extension buttons draw their icons from crx:// in the app's own session.
+  ElectronChromeExtensions.handleCRXProtocol(sessions.defaultSession);
+}
+
+// A page's preferred size, as Chrome sizes an extension's popup: its content's widest line, and
+// its height at the width it has.
+const measure = `(() => {
+  const html = document.documentElement;
+  const width = html.style.width;
+  html.style.width = "max-content";
+  const preferred = Math.ceil(html.getBoundingClientRect().width);
+  html.style.width = width;
+  return { width: preferred, height: Math.ceil(html.scrollHeight) };
+})()`;
+
+/**
+ * Sizes an extension's popup to its page while it's open. Electron 44 never reports a popup's
+ * preferred size, which the library waits on to size, place, and show it, so main measures the
+ * page and reports each change itself, through the event the library listens for.
+ */
+function fitPopup(popup: { browserWindow?: BrowserWindow; isDestroyed(): boolean }) {
+  let last = "";
+  const timer = setInterval(() => {
+    const page = popup.browserWindow?.webContents;
+    if (popup.isDestroyed() || !page || page.isDestroyed()) return clearInterval(timer);
+    void page
+      .executeJavaScript(measure)
+      .then((size: { width: number; height: number }) => {
+        if (JSON.stringify(size) === last || page.isDestroyed()) return;
+        last = JSON.stringify(size);
+        page.emit("preferred-size-changed", {}, size);
+      })
+      .catch(() => {});
+  }, 300);
+}
+
+/** A webview `window` attached: a tab for the extensions, and perhaps the one an extension asked for. */
+export function addTab(tab: WebContents, window: BrowserWindow) {
+  chrome?.addTab(tab, window);
+  waiting.shift()?.(tab);
+}
+
+/** The tab the user shows now, which extensions see as active. */
+export function selectTab(tab: WebContents) {
+  active = tab;
+  chrome?.selectTab(tab);
+}
+
+/** Extensions' items for a page's context menu. */
+export const extensionMenuItems = (tab: WebContents, params: ContextMenuParams) =>
+  chrome?.getContextMenuItems(tab, params) ?? [];
+
+const hostWindow = () => {
+  const host = active && !active.isDestroyed() ? active.hostWebContents : undefined;
+  const window = host && BrowserWindow.fromWebContents(host);
+  if (!window) throw new Error("Open the side panel's browser first.");
+  return window;
+};
+
+// ponytail: the next webview to attach answers the oldest request, so a tab the user opens at the
+// same moment can stand in for it; tag requests if that ever matters.
+async function openTab(url = "https://www.google.com/") {
+  if (!active || active.isDestroyed()) throw new Error("Open the side panel's browser first.");
+  const attached = new Promise<WebContents>((resolve, reject) => {
+    waiting.push(resolve);
+    setTimeout(() => {
+      const at = waiting.indexOf(resolve);
+      if (at < 0) return;
+      waiting.splice(at, 1);
+      reject(new Error("The tab didn't open."));
+    }, 10_000);
+  });
+  tellTab(active, { kind: "open", url });
+  return attached;
+}
 
 const root = () => path.join(app.getPath("userData"), "extensions");
 const listFile = () => path.join(root(), "extensions.json");
@@ -114,10 +234,6 @@ function withKey<T extends Uint8Array>(manifest: T, key: string): T | Uint8Array
  * moved unpacked folder, is skipped with a warning and stays listed.
  */
 export async function loadExtensions(session: Session) {
-  // The fill-in for APIs Electron lacks, in extensions' pages and workers (extensionShim.ts).
-  const filePath = path.join(__dirname, "../preload/extensionShim.cjs");
-  for (const type of ["frame", "service-worker"] as const)
-    session.registerPreloadScript({ type, filePath });
   for (const folder of await folders())
     await session.extensions
       .loadExtension(folder)
