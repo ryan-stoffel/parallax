@@ -5,21 +5,12 @@ import {
   Bot,
   Code,
   Globe,
-  Plus,
   RotateCw,
   Search,
   TriangleAlert,
   X,
 } from "lucide-react";
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type ComponentType,
-  type ReactNode,
-  type SVGProps,
-} from "react";
+import { useEffect, useRef, useState, type ComponentType, type SVGProps } from "react";
 
 import type { BrowserAction } from "../preload/bridge";
 import type { PreviewTab } from "../protocol/generated/protocol";
@@ -37,7 +28,7 @@ import {
 import { backendLogos } from "./Sidebar";
 import { instanceLogo, instanceName } from "./providers";
 import { memory } from "./stored";
-import { IconButton, Menu, menuHeading, menuItem } from "./ui";
+import { IconButton, menuItem } from "./ui";
 
 /** Google's results page for `query`. */
 export const searchUrl = (query: string) =>
@@ -102,7 +93,7 @@ function onAsk(id: number, handler: (action: BrowserAction) => void) {
   };
 }
 
-/** One of the user's tabs, as the tab switcher shows it. `load` is a page for it to open. */
+/** One of the user's tabs, as the top bar shows it. `load` is a page for it to open. */
 interface OwnTab {
   id: number;
   load?: { url: string };
@@ -116,8 +107,8 @@ const ownTab = (url?: string): OwnTab => ({ id: ++lastTab, ...(url && { load: { 
 
 /**
  * The side panel's browser, laid out like Chrome (PLX-888). Its tabs, the agent's (PLX-639) then
- * the user's own, are in the toolbar's tab switcher, and the side panel's Browser tab shows the
- * one in front, so the panel has one row of tabs. Each own tab is a webview, which main keeps in its own session with no preload or Node (main.ts), and
+ * the user's own, show in the side panel's top bar while it's in front (`browserTabs`), so the
+ * panel has one row of tabs. Each own tab is a webview, which main keeps in its own session with no preload or Node (main.ts), and
  * whose new windows open as tabs here. Each new `page` opens in the current tab while it's blank,
  * or else in a new one. `remoteHost`, the open host's name when it's an SSH host, notes that
  * localhost is this computer.
@@ -130,7 +121,7 @@ export function Browser({
 }: {
   page?: { url?: string; agentTab?: string };
   remoteHost?: string;
-  /** The side panel scope it shows in, under which it reports the tab in front (`browserFronts`). */
+  /** The side panel scope it shows in, under which it publishes its tabs (`browserTabs`). */
   scope?: string;
   /** The open thread's agent tabs (PLX-639), which show before the user's own, and its backend. */
   agent?: { hostId: string; runId: string; tabs: PreviewTab[]; backend?: string };
@@ -182,42 +173,54 @@ export function Browser({
     }
   }, [page]);
 
-  // The side panel's Browser tab shows the tab in front: its icon, title, and how many there are.
-  const front = shownTab
-    ? { title: shownTab.title || shortUrl(shownTab.url) || "Agent's tab", Logo: driver.Logo ?? Bot }
-    : (() => {
-        const tab = tabs.find((t) => t.id === current);
-        return { title: tab?.title || (tab?.url ? shortUrl(tab.url) : "New Tab"), icon: tab?.icon };
-      })();
-  const count = (agent?.tabs.length ?? 0) + tabs.length;
+  // The side panel's top bar draws these tabs while the Browser view is in front (SidePanel.tsx).
+  // Its buttons call the latest handlers, and the list is published only when what it shows
+  // changes, since publishing re-renders the panel.
+  const handlers = useRef({ setAgentTab, setCurrent, close, newTab });
+  handlers.current = { setAgentTab, setCurrent, close, newTab };
+  const faces: BrowserTabFace[] = [
+    ...(agent?.tabs ?? []).map((t) => ({
+      key: `a:${t.tabId}`,
+      title: t.title || shortUrl(t.url) || "Agent's tab",
+      url: t.url,
+      Logo: driver.Logo ?? Bot,
+      agent: driver.name,
+    })),
+    ...tabs.map((t) => ({
+      key: `o:${t.id}`,
+      title: t.title || (t.url ? shortUrl(t.url) : "New Tab"),
+      ...(t.url && { url: t.url }),
+      ...(t.icon && { icon: t.icon }),
+    })),
+  ];
+  const selected = shownTab ? `a:${shownTab.tabId}` : `o:${current}`;
+  const published = JSON.stringify([faces.map((f) => [f.key, f.title, f.url, f.icon]), selected]);
   useEffect(() => {
     if (!scope) return;
-    browserFronts.set({ ...browserFronts.get(), [scope]: { ...front, count } });
-  }, [scope, front.title, "icon" in front && front.icon, "Logo" in front && front.Logo, count]);
+    browserTabs.set({
+      ...browserTabs.get(),
+      [scope]: {
+        tabs: faces,
+        selected,
+        select: (key) => {
+          if (key.startsWith("a:")) handlers.current.setAgentTab(key.slice(2));
+          else {
+            handlers.current.setCurrent(Number(key.slice(2)));
+            handlers.current.setAgentTab(undefined);
+          }
+        },
+        close: (key) => key.startsWith("o:") && handlers.current.close(Number(key.slice(2))),
+        newTab: () => handlers.current.newTab(),
+      },
+    });
+  }, [scope, published]);
   useEffect(
     () => () => {
       if (!scope) return;
-      const { [scope]: _gone, ...rest } = browserFronts.get();
-      browserFronts.set(rest);
+      const { [scope]: _gone, ...rest } = browserTabs.get();
+      browserTabs.set(rest);
     },
     [scope],
-  );
-
-  // One switcher for every toolbar, the agent's tabs then the user's, as the panel's one tab list.
-  const switcher = (
-    <TabSwitcher
-      driver={driver}
-      agentTabs={agent?.tabs ?? []}
-      tabs={tabs}
-      selected={shownTab ? shownTab.tabId : current}
-      onAgent={setAgentTab}
-      onTab={(id) => {
-        setCurrent(id);
-        setAgentTab(undefined);
-      }}
-      onClose={close}
-      onNew={() => newTab()}
-    />
   );
 
   return (
@@ -229,7 +232,6 @@ export function Browser({
           runId={agent.runId}
           tab={shownTab}
           driver={driver}
-          switcher={switcher}
         />
       )}
       {/* Every own tab stays mounted, so its page keeps its state behind the others. */}
@@ -239,7 +241,6 @@ export function Browser({
           shown={!shownTab && t.id === current}
           load={t.load}
           remoteHost={remoteHost}
-          switcher={switcher}
           onChange={(patch) => update(t.id, patch)}
           onAsk={(action) => {
             if (action.kind === "open") newTab(action.url, t.id);
@@ -272,146 +273,28 @@ const driverOf = (backend?: string): Driver =>
       }
     : { name: "The agent" };
 
-/** The tab in front of each side panel scope's browser, which its Browser view tab shows. */
-export interface BrowserFront {
+/** A browser tab as the side panel's top bar draws it: its key is `a:` and an agent tab's id, or `o:` and an own tab's. */
+export interface BrowserTabFace {
+  key: string;
   title: string;
+  url?: string;
   icon?: string;
   Logo?: ComponentType<SVGProps<SVGSVGElement>>;
-  count: number;
+  /** The agent driving it, for an agent's tab. */
+  agent?: string;
 }
-export const browserFronts = memory<Readonly<Record<string, BrowserFront>>>({});
 
-/**
- * The toolbar's tabs button, a rounded square with how many tabs there are, as on Chrome for
- * phones, and its switcher: the agent's tabs, then the user's, each with its icon, title, and
- * site, the user's with a close button, and New tab.
- */
-function TabSwitcher({
-  driver,
-  agentTabs,
-  tabs,
-  selected,
-  onAgent,
-  onTab,
-  onClose,
-  onNew,
-}: {
-  driver: Driver;
-  agentTabs: PreviewTab[];
-  tabs: OwnTab[];
-  selected: string | number;
-  onAgent: (tabId: string) => void;
-  onTab: (id: number) => void;
-  onClose: (id: number) => void;
-  onNew: () => void;
-}) {
-  const id = useId();
-  const menu = useRef<HTMLDivElement>(null);
-  const count = agentTabs.length + tabs.length;
-  const pick = (choose: () => void) => () => {
-    choose();
-    menu.current?.hidePopover();
-  };
-  const host = (url?: string) => (url ? (URL.parse(url)?.host ?? url) : "");
-  const row = (
-    key: string | number,
-    icon: ReactNode,
-    title: string,
-    url: string | undefined,
-    onPick: () => void,
-    close?: () => void,
-  ) => (
-    <div
-      key={key}
-      className={`group flex items-center rounded-md ${selected === key ? "bg-selected" : "hover:bg-hover"}`}
-    >
-      <button
-        type="button"
-        role="menuitemradio"
-        aria-checked={selected === key}
-        onClick={pick(onPick)}
-        className="flex min-w-0 flex-1 items-center gap-2.5 px-2 py-1.5 text-left"
-      >
-        <span className="grid size-4 shrink-0 place-items-center">{icon}</span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] leading-5">{title}</span>
-          {url && (
-            <span className="block truncate text-[11.5px] leading-4 text-faint-foreground">
-              {host(url)}
-            </span>
-          )}
-        </span>
-      </button>
-      {close && (
-        <button
-          type="button"
-          aria-label={`Close ${title}`}
-          title={`Close ${title}`}
-          onClick={close}
-          className={`mr-1 grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground ${selected === key ? "" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"}`}
-        >
-          <X aria-hidden className="size-3.5" />
-        </button>
-      )}
-    </div>
-  );
-  const AgentLogo = driver.Logo ?? Bot;
-  return (
-    <>
-      <button
-        type="button"
-        popoverTarget={id}
-        aria-haspopup="menu"
-        aria-label={`Tabs, ${count} open`}
-        title="Tabs"
-        className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
-      >
-        <span className="grid h-4.5 min-w-4.5 place-items-center rounded-[5px] border-[1.5px] border-current px-0.5 text-[10px] leading-none font-semibold tabular-nums">
-          {count}
-        </span>
-      </button>
-      <Menu ref={menu} id={id} label="Tabs" align="end" className="w-80 p-1">
-        {agentTabs.length > 0 && (
-          <>
-            <p className={menuHeading}>{driver.name}</p>
-            {agentTabs.map((t) =>
-              row(
-                t.tabId,
-                <AgentLogo aria-hidden className="size-3.5" />,
-                t.title || shortUrl(t.url) || "Agent's tab",
-                t.url,
-                () => onAgent(t.tabId),
-              ),
-            )}
-            <p className={menuHeading}>Yours</p>
-          </>
-        )}
-        {tabs.map((t) =>
-          row(
-            t.id,
-            t.icon ? (
-              <img src={t.icon} alt="" className="size-4" />
-            ) : (
-              <Globe aria-hidden className="size-3.5 text-muted-foreground" />
-            ),
-            t.title || (t.url ? shortUrl(t.url) : "New Tab"),
-            t.url,
-            () => onTab(t.id),
-            () => onClose(t.id),
-          ),
-        )}
-        <div className="my-1 h-px bg-border" />
-        <button type="button" role="menuitem" onClick={pick(onNew)} className={menuItem}>
-          <Plus aria-hidden />
-          <span className="flex-1">New tab</span>
-          <kbd className="font-sans text-[11.5px] text-faint-foreground">
-            {window.parallax.platform === "darwin" ? "⌘T" : "Ctrl+T"}
-          </kbd>
-        </button>
-      </Menu>
-    </>
-  );
+/** A scope's browser tabs, which tab is in front, and what its top bar's buttons do. */
+export interface BrowserTabs {
+  tabs: BrowserTabFace[];
+  selected: string;
+  select: (key: string) => void;
+  close: (key: string) => void;
+  newTab: () => void;
 }
+
+/** Each side panel scope's browser tabs, by scope. */
+export const browserTabs = memory<Readonly<Record<string, BrowserTabs>>>({});
 
 /**
  * One of the user's own tabs: back, forward, reload or stop, a loading bar, and an address bar
@@ -423,15 +306,12 @@ function Tab({
   shown,
   load,
   remoteHost,
-  switcher,
   onChange,
   onAsk: ask,
 }: {
   shown: boolean;
   load?: { url: string };
   remoteHost?: string;
-  /** The tabs button (TabSwitcher), which every toolbar shares. */
-  switcher: ReactNode;
   onChange: (patch: Partial<OwnTab>) => void;
   onAsk: (action: BrowserAction) => void;
 }) {
@@ -600,7 +480,6 @@ function Tab({
           />
         </form>
         <Extensions tab={contentsId} />
-        {switcher}
         <ViewMenu fit={fit} fixed={!!fixed} size={pageSize} onFit={refit}>
           <button
             type="button"
