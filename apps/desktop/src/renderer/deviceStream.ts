@@ -35,7 +35,7 @@ export interface DeviceStream {
   stop(): void;
   /** A touch at `x` and `y` from 0 to 1 across the shown screen. */
   touch(phase: "begin" | "move" | "end", x: number, y: number): void;
-  /** iOS: a touch at `x` and `y` from 0 to 1 across the simulator's framebuffer, unturned. */
+  /** A touch at `x` and `y` from 0 to 1 across the device's own screen, however it's turned. */
   touchRaw(phase: "begin" | "move" | "end", x: number, y: number): void;
   key(event: KeyboardEvent, phase: "down" | "up"): void;
   /** Types `text`: as text on Android, as US keyboard keys on iOS. */
@@ -610,7 +610,9 @@ export function createDeviceStream(
     start,
     stop,
     touchRaw(phase, x, y) {
-      if (ios) send(tagged(IOS_TOUCH, { type: phase, x, y }));
+      if (ios) return send(tagged(IOS_TOUCH, { type: phase, x, y }));
+      const action = phase === "begin" ? "down" : phase === "move" ? "move" : "up";
+      send(JSON.stringify({ type: "touch", action, x, y }));
     },
     touch(phase, x, y) {
       if (ios) return send(tagged(IOS_TOUCH, { type: phase, ...raw(x, y) }));

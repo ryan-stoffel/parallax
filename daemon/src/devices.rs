@@ -214,15 +214,22 @@ impl Devices {
         })
     }
 
-    /// `device/chrome`: a simulator's artwork from the host's Xcode, or none.
+    /// `device/chrome`: a simulator's artwork from the host's Xcode, an emulator's from its Android
+    /// Studio, or none.
     pub(crate) async fn chrome(
         &self,
         target: DeviceTarget,
     ) -> Result<DeviceChromeResult, ErrorObject> {
-        let chrome = match (target.platform, &self.tools().ios) {
-            (DevicePlatform::Ios, Ok(ios)) => self
+        let tools = self.tools();
+        let chrome = match (target.platform, &tools.ios, &tools.android) {
+            (DevicePlatform::Ios, Ok(ios), _) => self
                 .chromes
-                .get(&ios.xcrun, &target.device_id)
+                .ios(&ios.xcrun, &target.device_id)
+                .await
+                .map_err(failed)?,
+            (DevicePlatform::Android, _, Ok(android)) => self
+                .chromes
+                .android(&android.adb, android.sdk_root(), &target.device_id)
                 .await
                 .map_err(failed)?,
             _ => None,

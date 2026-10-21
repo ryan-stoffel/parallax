@@ -388,9 +388,7 @@ function Viewer({
   const [box, setBox] = useState({ width: 0, height: 0 });
   const streaming = shown && !booting && hub.installed;
   const chromeKey = `${hostId}/${device.id}`;
-  const [chrome, setChrome] = useState(() =>
-    ios ? chromes.get(chromeKey) : (null as DeviceChrome | null),
-  );
+  const [chrome, setChrome] = useState(() => chromes.get(chromeKey));
   useEffect(() => {
     if (chrome !== undefined) return;
     void window.parallax
@@ -573,6 +571,35 @@ function Viewer({
     );
   }
 
+  // One piece of the device's artwork. The bezel casts the device's shadow; a side button pops out
+  // under the pointer as in Simulator; what's drawn over the screen lets touches through.
+  const art = (layer: DeviceChrome["layers"][number]) => (
+    <img
+      key={layer.name}
+      alt=""
+      draggable={false}
+      src={layer.image}
+      title={layer.name === "power" ? "Lock" : undefined}
+      onClick={layer.name === "power" ? () => press("power") : undefined}
+      style={
+        {
+          left: layer.rect.x * k,
+          top: layer.rect.y * k,
+          width: layer.rect.width * k,
+          height: layer.rect.height * k,
+          "--pop": `${(layer.hoverX ?? 0) * k}px`,
+        } as React.CSSProperties
+      }
+      className={
+        layer.above
+          ? "pointer-events-none absolute select-none"
+          : layer.name === "bezel" || layer.name === "back"
+            ? "pointer-events-none absolute drop-shadow-[0_22px_40px_rgb(0_0_0/0.35)]"
+            : "absolute transition-transform duration-150 ease-out select-none hover:translate-x-(--pop)"
+      }
+    />
+  );
+
   // The device takes keys while focused: typing, and pasting as typing.
   const keyboard = {
     tabIndex: 0,
@@ -647,30 +674,7 @@ function Viewer({
               }}
               className="absolute outline-none transition-transform duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)]"
             >
-              {chrome.layers.map((layer) => (
-                <img
-                  key={layer.name}
-                  alt=""
-                  draggable={false}
-                  src={`data:image/png;base64,${layer.png}`}
-                  title={layer.name === "power" ? "Lock" : undefined}
-                  onClick={layer.name === "power" ? () => press("power") : undefined}
-                  style={
-                    {
-                      left: layer.rect.x * k,
-                      top: layer.rect.y * k,
-                      width: layer.rect.width * k,
-                      height: layer.rect.height * k,
-                      "--pop": `${(layer.hoverX ?? 0) * k}px`,
-                    } as React.CSSProperties
-                  }
-                  className={
-                    layer.name === "bezel"
-                      ? "pointer-events-none absolute drop-shadow-[0_22px_40px_rgb(0_0_0/0.35)]"
-                      : "absolute transition-transform duration-150 ease-out select-none hover:translate-x-(--pop)"
-                  }
-                />
-              ))}
+              {chrome.layers.filter((layer) => !layer.above).map(art)}
               <div
                 className="absolute touch-none overflow-hidden bg-black select-none"
                 style={{
@@ -678,8 +682,9 @@ function Viewer({
                   top: chrome.screen.y * k,
                   width: chrome.screen.width * k,
                   height: chrome.screen.height * k,
-                  maskImage: `url(data:image/png;base64,${chrome.mask})`,
-                  maskSize: "100% 100%",
+                  ...(chrome.mask
+                    ? { maskImage: `url(${chrome.mask})`, maskSize: "100% 100%" }
+                    : { borderRadius: (chrome.cornerRadius ?? 0) * k }),
                 }}
                 onPointerDown={touchRaw("begin")}
                 onPointerMove={touchRaw("move")}
@@ -699,6 +704,7 @@ function Viewer({
                   </div>
                 )}
               </div>
+              {chrome.layers.filter((layer) => layer.above).map(art)}
             </div>
           </div>
         ) : chrome === undefined ? null : (

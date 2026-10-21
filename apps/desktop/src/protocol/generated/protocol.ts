@@ -4705,8 +4705,8 @@ export type DeviceScreenshotResult = {
 };
 
 /**
- * Result of `device/chrome`: the device as Xcode's Simulator draws it, from the host's Xcode, in
- * points. Absent for a device Xcode has no artwork for, such as an Android emulator.
+ * Result of `device/chrome`: the device as Xcode's Simulator or Android Studio's emulator draws
+ * it, from the host's own Xcode or Android Studio.
  */
 export type DeviceChromeResult = {
 	/**
@@ -4716,7 +4716,8 @@ export type DeviceChromeResult = {
 };
 
 /**
- * A device's Simulator artwork: its bezel and buttons around its screen, in points, portrait.
+ * A device's artwork: its bezel and buttons around its screen, in the artwork's own units (points
+ * for a simulator, pixels for an emulator), in its natural orientation.
  */
 export type DeviceChrome = {
 	/**
@@ -4732,11 +4733,15 @@ export type DeviceChrome = {
 	 */
 	screen: DeviceRect,
 	/**
-	 * The screen's shape, a PNG in base64 whose alpha masks it.
+	 * The screen's shape, an image data URL whose alpha masks it.
 	 */
-	mask: string,
+	mask?: string,
 	/**
-	 * The bezel and buttons, in drawing order.
+	 * The radius of the screen's corners, when no mask or layer shapes them.
+	 */
+	cornerRadius?: number,
+	/**
+	 * The bezel, buttons, and overlays, in drawing order.
 	 */
 	layers: Array<DeviceChromeLayer>,
 };
@@ -4750,13 +4755,17 @@ export type DeviceChromeLayer = {
 	 */
 	name: string,
 	/**
-	 * A PNG in base64.
+	 * The image, as a data URL.
 	 */
-	png: string,
+	image: string,
 	/**
 	 * Where it's drawn.
 	 */
 	rect: DeviceRect,
+	/**
+	 * Whether it's drawn over the screen, as an emulator's camera cutout is.
+	 */
+	above?: boolean,
 	/**
 	 * How far a button moves out while the pointer is over it, as Simulator shows it.
 	 */

@@ -1,5 +1,6 @@
-//! A simulator's artwork as Xcode's Simulator draws it (PLX-886), read from the host's own Xcode:
-//! nothing of Apple's ships with Parallax.
+//! A device's artwork as Xcode's Simulator or Android Studio's emulator draws it (PLX-886), read
+//! from the host's own Xcode or Android Studio: no artwork ships with Parallax. An emulator's is
+//! in [`studio`]; a simulator's is here:
 //!
 //! - The simulator's device type (`simctl list devices --json`) names its `.simdevicetype`
 //!   bundle, whose `profile.plist` names its `DeviceKit` chrome and its screen's mask, and whose
@@ -20,6 +21,8 @@ use serde_json::Value;
 
 use crate::mcp::device as tools;
 
+mod studio;
+
 /// Where Xcode keeps device types and chrome: the shared folders, then Xcode's own.
 const DEVICE_TYPES: &[&str] = &[
     "/Library/Developer/CoreSimulator/Profiles/DeviceTypes",
@@ -36,17 +39,18 @@ pub(crate) struct Chromes(tokio::sync::Mutex<HashMap<String, Option<DeviceChrome
 
 impl Chromes {
     /// Simulator `udid`'s artwork, or `None` when Xcode has none for it.
-    pub(crate) async fn get(
+    pub(crate) async fn ios(
         &self,
         xcrun: &Path,
         udid: &str,
     ) -> Result<Option<DeviceChrome>, String> {
         let kind = device_type(xcrun, udid).await?;
         let mut cache = self.0.lock().await;
+        let kind = format!("ios:{kind}");
         if let Some(known) = cache.get(&kind) {
             return Ok(known.clone());
         }
-        let chrome = match bundle(&kind) {
+        let chrome = match bundle(&kind["ios:".len()..]) {
             Some(bundle) => read(&bundle).await?,
             None => None,
         };
@@ -221,7 +225,7 @@ async fn read(bundle: &Path) -> Result<Option<DeviceChrome>, String> {
             let pdf = resources.join(format!("{mask}.pdf"));
             let out = temp.path().join("mask.png");
             // Only its edge matters, and it's drawn at about a point a pixel, so 2x is plenty.
-            rasterize(&pdf, &out, scale.min(2.0)).await?.0
+            png_url(&rasterize(&pdf, &out, scale.min(2.0)).await?.0)
         }
         None => return Ok(None),
     };
@@ -230,7 +234,8 @@ async fn read(bundle: &Path) -> Result<Option<DeviceChrome>, String> {
     let (under, over) = buttons(&json.inputs, width, pad.top, &png).await?;
     let bezel = DeviceChromeLayer {
         name: "bezel".to_owned(),
-        png: bezel,
+        image: png_url(&bezel),
+        above: false,
         rect: DeviceRect {
             x: pad.left,
             y: pad.top,
@@ -244,7 +249,8 @@ async fn read(bundle: &Path) -> Result<Option<DeviceChrome>, String> {
         width,
         height,
         screen,
-        mask,
+        mask: Some(mask),
+        corner_radius: None,
         layers,
     }))
 }
@@ -276,7 +282,8 @@ where
             .map(|rollover| rollover.x - input.offsets.normal.x);
         let layer = DeviceChromeLayer {
             name: input.name.clone(),
-            png: image,
+            image: png_url(&image),
+            above: false,
             rect: DeviceRect {
                 x,
                 y: top + input.offsets.normal.y,
@@ -318,6 +325,11 @@ async fn rasterize(pdf: &Path, out: &Path, scale: f64) -> Result<(String, (f64, 
     let png =
         std::fs::read(out).map_err(|error| format!("could not read {}: {error}", out.display()))?;
     Ok((BASE64.encode(&png), size))
+}
+
+/// A base64 PNG as a data URL.
+fn png_url(base64: &str) -> String {
+    format!("data:image/png;base64,{base64}")
 }
 
 /// `sips -g pixelWidth -g pixelHeight`'s width and height.
