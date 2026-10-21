@@ -26,7 +26,8 @@ const clampSide = (n: number) => Math.min(4096, Math.max(200, Math.round(n)));
  * A browser page as a window in the panel, as on a monitor (PLX-888): laid out at `size`, scaled
  * down to fit the area, centered with blank space around it. Its bottom-right corner drags to a
  * new size, and double-clicks back to the fitted one; the size under it can be typed too.
- * `children` draws the page at the scale it's given. `onArea` hears the space the page has.
+ * `children` draws the page at the scale it's given. `onArea` hears the room the page has, 0 by 0
+ * while hidden.
  */
 export function PageFrame({
   size,
@@ -56,11 +57,16 @@ export function PageFrame({
   useEffect(() => {
     const el = area.current;
     if (!el) return;
-    // The content box, inside the padding that keeps the pill and corner clear of the panel's edges.
+    // The page's room: the content box, inside the padding that keeps the pill and corner clear
+    // of the panel's edges, less the size fields. A hidden view has none, and keeps its last room,
+    // so its window, and a webview in it, stay as they were.
     const observer = new ResizeObserver(([entry]) => {
       const box = entry!.contentRect;
-      const next = { width: Math.round(box.width), height: Math.round(box.height) };
-      setRoom(next);
+      const next = {
+        width: Math.round(box.width),
+        height: Math.max(0, Math.round(box.height) - FIELDS),
+      };
+      if (next.width > 0 && next.height > 0) setRoom(next);
       latest.current?.(next);
     });
     observer.observe(el);
@@ -72,17 +78,14 @@ export function PageFrame({
   // The size fields' text while the user edits them.
   const [draft, setDraft] = useState<{ width: string; height: string }>();
   const shown = drag?.size ?? size;
-  // The window fits above the size fields, which sit just under it.
-  const scale = size
-    ? Math.max(0, Math.min(1, room.width / size.width, (room.height - FIELDS) / size.height))
-    : 1;
+  const scale = size ? Math.min(1, room.width / size.width, room.height / size.height) : 1;
 
   return (
     <div
       ref={area}
       className="flex min-h-0 flex-1 flex-col items-center justify-center px-3 pt-5 pb-1"
     >
-      {size && room.width > 0 && (
+      {size && (
         <div
           style={{ width: size.width * scale, height: size.height * scale }}
           className={`group relative shrink-0 rounded-md bg-background shadow-lg ring-1 ring-border ${className}`}
@@ -138,55 +141,57 @@ export function PageFrame({
           </div>
         </div>
       )}
-      <form
-        aria-label="Page size"
-        style={{ height: FIELDS }}
-        className="flex shrink-0 items-center justify-center gap-1.5 text-[12px] text-muted-foreground"
-        onSubmit={(e) => {
-          e.preventDefault();
-          const [width, height] = [Number(draft?.width), Number(draft?.height)];
-          if (Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0)
-            onResize({ width: clampSide(width), height: clampSide(height) });
-          setDraft(undefined);
-        }}
-      >
-        {(["width", "height"] as const).map((side, i) => (
-          <label key={side} className="flex items-center gap-1.5">
-            {i > 0 && <span>×</span>}
-            <input
-              aria-label={`Page ${side}`}
-              inputMode="numeric"
-              value={draft?.[side] ?? String(shown?.[side] ?? "")}
-              // The first keystroke starts a draft from the page's size, so the other field keeps it.
-              onChange={(e) =>
-                setDraft((d) => ({
-                  ...(d ?? {
-                    width: String(size?.width ?? ""),
-                    height: String(size?.height ?? ""),
-                  }),
-                  [side]: e.target.value,
-                }))
-              }
-              // A form with two fields and no submit button doesn't submit on Enter by itself.
-              onKeyDown={(e) => e.key === "Enter" && e.currentTarget.form?.requestSubmit()}
-              onBlur={(e) => {
-                if (!e.currentTarget.form?.contains(e.relatedTarget)) setDraft(undefined);
-              }}
-              className="w-11 rounded bg-transparent px-1 py-0.5 text-center text-foreground tabular-nums hover:bg-hover focus-visible:bg-selected focus-visible:outline-2 focus-visible:outline-ring"
-            />
-          </label>
-        ))}
-        {size && <span className="tabular-nums">· {Math.round(scale * 100)}%</span>}
-        {fixed && (
-          <button
-            type="button"
-            onClick={onFit}
-            className="ml-1 rounded px-1.5 py-0.5 text-foreground hover:bg-hover"
-          >
-            Fit
-          </button>
-        )}
-      </form>
+      {size && (
+        <form
+          aria-label="Page size"
+          style={{ height: FIELDS }}
+          className="flex shrink-0 items-center justify-center gap-1.5 text-[12px] text-muted-foreground"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const [width, height] = [Number(draft?.width), Number(draft?.height)];
+            if (Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0)
+              onResize({ width: clampSide(width), height: clampSide(height) });
+            setDraft(undefined);
+          }}
+        >
+          {(["width", "height"] as const).map((side, i) => (
+            <label key={side} className="flex items-center gap-1.5">
+              {i > 0 && <span>×</span>}
+              <input
+                aria-label={`Page ${side}`}
+                inputMode="numeric"
+                value={draft?.[side] ?? String(shown?.[side] ?? "")}
+                // The first keystroke starts a draft from the page's size, so the other field keeps it.
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...(d ?? {
+                      width: String(size?.width ?? ""),
+                      height: String(size?.height ?? ""),
+                    }),
+                    [side]: e.target.value,
+                  }))
+                }
+                // A form with two fields and no submit button doesn't submit on Enter by itself.
+                onKeyDown={(e) => e.key === "Enter" && e.currentTarget.form?.requestSubmit()}
+                onBlur={(e) => {
+                  if (!e.currentTarget.form?.contains(e.relatedTarget)) setDraft(undefined);
+                }}
+                className="w-11 rounded bg-transparent px-1 py-0.5 text-center text-foreground tabular-nums hover:bg-hover focus-visible:bg-selected focus-visible:outline-2 focus-visible:outline-ring"
+              />
+            </label>
+          ))}
+          {size && <span className="tabular-nums">· {Math.round(scale * 100)}%</span>}
+          {fixed && (
+            <button
+              type="button"
+              onClick={onFit}
+              className="ml-1 rounded px-1.5 py-0.5 text-foreground hover:bg-hover"
+            >
+              Fit
+            </button>
+          )}
+        </form>
+      )}
     </div>
   );
 }

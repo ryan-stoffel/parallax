@@ -446,7 +446,8 @@ function Tab({
           fixed={!!fixed}
           onResize={setFixed}
           onFit={() => setFixed(undefined)}
-          onArea={setArea}
+          // A hidden tab keeps the room it had, so its page doesn't lay out again.
+          onArea={(room) => room.width > 0 && room.height > 0 && setArea(room)}
         >
           {(scale) => (
             <>
