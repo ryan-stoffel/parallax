@@ -99,7 +99,7 @@ function screenUv(geometry: BufferGeometry, width: number, height: number) {
 
 /**
  * A Pixel 9, after Google's measurements (152.8 × 72.0 × 8.5 mm, a 6.3" 1080 × 2424 screen): a
- * satin aluminum frame, a matte glass back, and the camera bar's pill with two lenses and a flash.
+ * satin aluminum frame, a frosted glass back, and the camera bar's pill with two lenses and a flash.
  * Its screen is `aspect` wide for its height.
  */
 function pixel(texture: Texture, aspect: number) {
@@ -124,24 +124,25 @@ function pixel(texture: Texture, aspect: number) {
     clearcoat: 1,
     clearcoatRoughness: 0.02,
   });
+  // Obsidian's frosted glass: near black, with a soft sheen rather than a mirror.
   const back = new MeshPhysicalMaterial({
-    color: 0x1d1f22,
-    metalness: 0.2,
-    roughness: 0.55,
-    clearcoat: 0.25,
-    clearcoatRoughness: 0.5,
+    color: 0x0b0c0e,
+    metalness: 0,
+    roughness: 0.62,
+    specularIntensity: 0.35,
   });
   const bar = new MeshPhysicalMaterial({
-    color: 0x34363b,
+    color: 0x141518,
     metalness: 1,
-    roughness: 0.2,
+    roughness: 0.28,
     clearcoat: 0.5,
   });
   const lens = new MeshPhysicalMaterial({
-    color: 0x020305,
-    metalness: 0.4,
-    roughness: 0.05,
+    color: 0x000000,
+    metalness: 0,
+    roughness: 0.02,
     clearcoat: 1,
+    clearcoatRoughness: 0.02,
   });
   const bevel = 0.9 * mm;
   const body = new Mesh(
@@ -290,7 +291,8 @@ export function createDevice3d(options: {
   root.add(orientation);
   scene.add(root);
   let screen: Mesh | undefined;
-  let size = { width: 1, height: 1 };
+  // The model's box, centered, in its own axes.
+  let extent: Box3 | undefined;
   let viewport = { width: 0, height: 0 };
   let disposed = false;
   let pending = 0;
@@ -303,19 +305,44 @@ export function createDevice3d(options: {
   const invalidate = () => {
     if (!pending && !disposed) pending = requestAnimationFrame(render);
   };
+  // Inset from the canvas as the flat view's artwork is, in CSS pixels: sides, top, and bottom.
+  const inset = { side: 24, top: 24, bottom: 16 };
+  const corner = new Vector3();
+  // Framed as close as the turned device fits: each corner of its box, at (x, y, z) from its center,
+  // fits when the camera is at least z + |x| / across and z + |y| / down away, those the tangents of
+  // half the view inside the inset.
   const fit = () => {
-    if (!viewport.width || !viewport.height) return;
+    if (!viewport.width || !viewport.height || !extent) return;
     camera.aspect = viewport.width / viewport.height;
-    // Framed facing front, with room to turn, at the size the flat view shows it.
-    const half = (FOV * Math.PI) / 360;
-    const roll = Math.abs(Math.sin(orientation.rotation.z));
-    const across = size.width * (1 - roll) + size.height * roll;
-    const down = size.height * (1 - roll) + size.width * roll;
-    const distance = Math.max(
-      down / 2 / Math.tan(half),
-      across / 2 / (Math.tan(half) * camera.aspect),
+    const tan = Math.tan((FOV * Math.PI) / 360);
+    const down = (tan * (viewport.height - inset.top - inset.bottom)) / viewport.height;
+    const across = (tan * camera.aspect * (viewport.width - inset.side * 2)) / viewport.width;
+    root.updateMatrixWorld(true);
+    let distance = 0;
+    for (let i = 0; i < 8; i++) {
+      corner
+        .set(
+          i & 1 ? extent.max.x : extent.min.x,
+          i & 2 ? extent.max.y : extent.min.y,
+          i & 4 ? extent.max.z : extent.min.z,
+        )
+        .applyMatrix4(orientation.matrixWorld);
+      distance = Math.max(
+        distance,
+        corner.z + Math.abs(corner.x) / across,
+        corner.z + Math.abs(corner.y) / down,
+      );
+    }
+    // The flat view centers the device a few pixels lower than the canvas's middle.
+    camera.setViewOffset(
+      viewport.width,
+      viewport.height,
+      0,
+      (inset.bottom - inset.top) / 2,
+      viewport.width,
+      viewport.height,
     );
-    camera.position.set(0, 0, distance * 1.02);
+    camera.position.set(0, 0, distance);
     camera.lookAt(0, 0, 0);
     camera.updateProjectionMatrix();
   };
@@ -335,9 +362,10 @@ export function createDevice3d(options: {
     screen = found;
     // Centered on its middle, front to back, so it turns about its own center.
     const whole = new Box3().setFromObject(model);
-    model.position.z -= (whole.max.z + whole.min.z) / 2;
+    const shift = -(whole.max.z + whole.min.z) / 2;
+    model.position.z += shift;
+    extent = whole.translate(new Vector3(0, 0, shift));
     orientation.add(model);
-    size = { width: whole.max.x - whole.min.x, height: whole.max.y - whole.min.y };
     fit();
     invalidate();
   };
@@ -364,11 +392,8 @@ export function createDevice3d(options: {
     ready,
     setPose(pitch, yaw, roll) {
       root.rotation.set((pitch * Math.PI) / 180, (yaw * Math.PI) / 180, 0, "XYZ");
-      const turned = (-roll * Math.PI) / 180;
-      if (orientation.rotation.z !== turned) {
-        orientation.rotation.z = turned;
-        fit();
-      }
+      orientation.rotation.z = (-roll * Math.PI) / 180;
+      fit();
       invalidate();
     },
     frame() {

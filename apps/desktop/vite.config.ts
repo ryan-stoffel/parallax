@@ -16,7 +16,8 @@ import type { PackUserConfig } from "vite-plus/pack";
 // folder (PLX-834). blob: is those, and the images and videos an agent presented (PLX-785), made
 // from bytes plxd read.
 // Open VSX, and the host its downloads redirect to, is where Settings > Appearance searches for
-// and downloads color themes, with their icons.
+// and downloads color themes, with their icons. connect-src blob: is the textures in the Device
+// panel's 3D models, which three.js decodes by fetching blob: URLs it makes (PLX-886).
 const csp = (dev: boolean) =>
   [
     "default-src 'self'",
@@ -26,7 +27,7 @@ const csp = (dev: boolean) =>
     "font-src 'self' data:",
     // crx: is the side panel browser's extension icons (Extensions.tsx).
     "img-src 'self' data: blob: crx: https://github.com https://*.githubusercontent.com https://open-vsx.org https://openvsx.eclipsecontent.org",
-    "connect-src 'self' https://open-vsx.org https://openvsx.eclipsecontent.org",
+    "connect-src 'self' blob: https://open-vsx.org https://openvsx.eclipsecontent.org",
     // html_render pages (PLX-639), which main serves with a policy of their own, and browser
     // recordings. plx-file: is presented videos, which main streams from their host (PLX-836).
     "frame-src plx-render:",
