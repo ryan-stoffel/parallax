@@ -35,7 +35,7 @@ test("an agent opening a device shows the Device view", async () => {
   // The fake device isn't on this host, so the view lists what is. A cold Mac runner's first
   // simctl listing can take a while.
   // Or, on a host that can run none, what it's missing.
-  const missing = panel.getByText(/^Needs /).first();
+  const missing = panel.getByText(/needs a Mac|Get Android Studio/).first();
   await expect(panel.getByRole("list", { name: "Devices" }).or(missing)).toBeVisible({
     timeout: 60_000,
   });
