@@ -1,6 +1,6 @@
 // The Device panel's 3D view (PLX-886): the device as a lit model in three.js, its screen the live
-// stream. iPhones and iPads are Apple's own models of each, from its AR product pages
-// (assets/devices/NOTICE.md); Android phones are a Pixel 9 built here to its measurements.
+// stream. iPhones and iPads are Apple's own models of each, from its AR product pages, and Pixels
+// Google's, from its Store's 3D views (assets/devices/NOTICE.md).
 // The screen and framing follow T3 Code's phone viewer (MIT, T3 Tools Inc.): a model's screen is
 // one `device-screen` mesh, 2.2 units tall, centered and facing forward.
 
@@ -8,24 +8,18 @@ import {
   ACESFilmicToneMapping,
   Box3,
   CanvasTexture,
-  CircleGeometry,
-  CylinderGeometry,
   DirectionalLight,
-  ExtrudeGeometry,
   Float32BufferAttribute,
   Group,
   LinearFilter,
   Mesh,
   MeshBasicMaterial,
-  MeshPhysicalMaterial,
   PMREMGenerator,
   PerspectiveCamera,
   Plane,
   Raycaster,
   SRGBColorSpace,
   Scene,
-  Shape,
-  ShapeGeometry,
   Vector2,
   Vector3,
   WebGLRenderer,
@@ -90,20 +84,19 @@ export function appleModel(name: string): string | undefined {
   return models[`./assets/devices/${id}.glb`];
 }
 
-/** A rounded rectangle centered on the origin. */
-function rounded(width: number, height: number, radius: number) {
-  const shape = new Shape();
-  const [x, y, r] = [-width / 2, -height / 2, Math.min(radius, width / 2, height / 2)];
-  shape.moveTo(x + r, y);
-  shape.lineTo(x + width - r, y);
-  shape.absarc(x + width - r, y + r, r, -Math.PI / 2, 0, false);
-  shape.lineTo(x + width, y + height - r);
-  shape.absarc(x + width - r, y + height - r, r, 0, Math.PI / 2, false);
-  shape.lineTo(x + r, y + height);
-  shape.absarc(x + r, y + height - r, r, Math.PI / 2, Math.PI, false);
-  shape.lineTo(x, y + r);
-  shape.absarc(x + r, y + r, r, Math.PI, Math.PI * 1.5, false);
-  return shape;
+/**
+ * Google's model of an Android phone, by its name, such as "Pixel 9 Pro" or an AVD's "Pixel_9a":
+ * its own Pixel's, or for another phone, the Pixel 9's. The stream fills the model's screen, so a
+ * phone whose screen, `aspect` wide for its height, isn't a Pixel's shape, or a foldable or tablet,
+ * gets none and turns as its flat artwork.
+ */
+export function pixelModel(name: string, aspect: number): string | undefined {
+  const n = name.toLowerCase().replaceAll("_", " ");
+  if (/fold|tablet/.test(n) || Math.abs(aspect - 1080 / 2424) > 0.02) return undefined;
+  // A Pro XL is its Pro's design, larger.
+  const pixel = /pixel (\d+a?)( pro)?/.exec(n);
+  const own = pixel && models[`./assets/devices/pixel-${pixel[1]}${pixel[2] ? "-pro" : ""}.glb`];
+  return own ?? models["./assets/devices/pixel-9.glb"];
 }
 
 /**
@@ -124,157 +117,6 @@ function screenUv(geometry: BufferGeometry) {
     );
   }
   geometry.setAttribute("uv", uv);
-}
-
-/**
- * A Pixel 9, after Google's measurements (152.8 × 72.0 × 8.5 mm, and a 1080 × 2424 screen at
- * 422 ppi, so 145.9 mm tall in bezels about 3.5 mm): a satin aluminum frame, a frosted glass back,
- * and the camera bar's pill with two lenses and a flash. Its screen is `aspect` wide for its height.
- */
-function pixel(texture: Texture, aspect: number) {
-  const mm = SCREEN_HEIGHT / 145.9;
-  const screenWidth = SCREEN_HEIGHT * aspect;
-  const width = 72 * mm;
-  const height = 152.8 * mm;
-  const depth = 8.5 * mm;
-  const radius = 11.5 * mm;
-  const group = new Group();
-  const frame = new MeshPhysicalMaterial({
-    color: 0x2c2e32,
-    metalness: 1,
-    roughness: 0.34,
-    clearcoat: 0.3,
-    clearcoatRoughness: 0.4,
-  });
-  const glass = new MeshPhysicalMaterial({
-    color: 0x050506,
-    metalness: 0,
-    roughness: 0.04,
-    clearcoat: 1,
-    clearcoatRoughness: 0.02,
-  });
-  // Obsidian's frosted glass: near black, with a soft sheen rather than a mirror.
-  const back = new MeshPhysicalMaterial({
-    color: 0x0b0c0e,
-    metalness: 0,
-    roughness: 0.62,
-    specularIntensity: 0.35,
-  });
-  const bar = new MeshPhysicalMaterial({
-    color: 0x141518,
-    metalness: 1,
-    roughness: 0.28,
-    clearcoat: 0.5,
-  });
-  const lens = new MeshPhysicalMaterial({
-    color: 0x000000,
-    metalness: 0,
-    roughness: 0.02,
-    clearcoat: 1,
-    clearcoatRoughness: 0.02,
-  });
-  const bevel = 0.9 * mm;
-  const body = new Mesh(
-    new ExtrudeGeometry(rounded(width - bevel * 2, height - bevel * 2, radius - bevel), {
-      depth: depth - bevel * 2,
-      bevelEnabled: true,
-      bevelSize: bevel,
-      bevelThickness: bevel,
-      bevelSegments: 8,
-      curveSegments: 48,
-    }),
-    frame,
-  );
-  body.position.z = -depth + bevel;
-  group.add(body);
-  const face = new Mesh(
-    new ShapeGeometry(rounded(width - 0.6 * mm, height - 0.6 * mm, radius - 0.4 * mm), 48),
-    glass,
-  );
-  face.position.z = 0.001;
-  group.add(face);
-  const screenGeometry = new ShapeGeometry(
-    rounded(screenWidth, SCREEN_HEIGHT, radius - 3.5 * mm),
-    32,
-  );
-  screenUv(screenGeometry);
-  const screen = new Mesh(
-    screenGeometry,
-    new MeshBasicMaterial({ map: texture, toneMapped: false }),
-  );
-  screen.name = "device-screen";
-  screen.position.z = 0.002;
-  group.add(screen);
-  // The front camera's hole, which the stream shows the screen behind.
-  const hole = new Mesh(new CircleGeometry(1.6 * mm, 32), glass);
-  hole.position.set(0, SCREEN_HEIGHT / 2 - 5.2 * mm, 0.003);
-  group.add(hole);
-  const plate = new Mesh(
-    new ShapeGeometry(rounded(width - 0.6 * mm, height - 0.6 * mm, radius - 0.4 * mm), 48),
-    back,
-  );
-  plate.rotation.y = Math.PI;
-  plate.position.z = -depth - 0.001;
-  group.add(plate);
-  // The camera bar: a raised pill across the top of the back, lenses on its left, flash on its right.
-  const pillWidth = 55 * mm;
-  const pillHeight = 17 * mm;
-  const pill = new Mesh(
-    new ExtrudeGeometry(rounded(pillWidth, pillHeight, pillHeight / 2), {
-      depth: 1.6 * mm,
-      bevelEnabled: true,
-      bevelSize: 0.8 * mm,
-      bevelThickness: 0.8 * mm,
-      bevelSegments: 6,
-      curveSegments: 48,
-    }),
-    bar,
-  );
-  const pillY = height / 2 - 21 * mm;
-  pill.rotation.y = Math.PI;
-  pill.position.set(0, pillY, -depth);
-  group.add(pill);
-  const pillBack = -depth - 2.6 * mm;
-  for (const x of [-14 * mm, -1 * mm]) {
-    const ring = new Mesh(new CylinderGeometry(5.6 * mm, 5.6 * mm, 0.6 * mm, 48), bar);
-    ring.rotation.x = Math.PI / 2;
-    // Seen from the back, its left is the device's right.
-    ring.position.set(-x, pillY, pillBack - 0.3 * mm);
-    group.add(ring);
-    const glassDisc = new Mesh(new CircleGeometry(4.6 * mm, 48), lens);
-    glassDisc.rotation.y = Math.PI;
-    glassDisc.position.set(-x, pillY, pillBack - 0.61 * mm);
-    group.add(glassDisc);
-  }
-  const flash = new Mesh(
-    new CircleGeometry(2 * mm, 32),
-    new MeshBasicMaterial({ color: 0xe9e2d0 }),
-  );
-  flash.rotation.y = Math.PI;
-  flash.position.set(-15 * mm, pillY, pillBack - 0.05 * mm);
-  group.add(flash);
-  // Power above the volume rocker, on the right: pills 2.4 mm wide, standing 0.55 mm off the frame.
-  for (const [y, length] of [
-    [32 * mm, 13 * mm],
-    [6 * mm, 26 * mm],
-  ] as const) {
-    const button = new Mesh(
-      new ExtrudeGeometry(rounded(2.4 * mm, length, 1.2 * mm), {
-        depth: 0.5 * mm,
-        bevelEnabled: true,
-        bevelSize: 0.25 * mm,
-        bevelThickness: 0.25 * mm,
-        bevelSegments: 4,
-        curveSegments: 16,
-      }),
-      frame,
-    );
-    // Turned to face right: its width runs front to back, and it stands out along x.
-    button.rotation.y = Math.PI / 2;
-    button.position.set(width / 2 - 0.2 * mm, y, -depth / 2);
-    group.add(button);
-  }
-  return group;
 }
 
 /** Releases every geometry, material, and texture under `root` but `keep`. */
@@ -434,11 +276,10 @@ export function createDevice3d(options: {
     invalidate();
   };
   const ready = (async () => {
-    if (options.platform === "android") {
-      install(pixel(texture, options.aspect));
-      return;
-    }
-    const url = appleModel(options.name);
+    const url =
+      options.platform === "android"
+        ? pixelModel(options.name, options.aspect)
+        : appleModel(options.name);
     if (!url) throw new Error("There's no model of this device.");
     const response = await fetch(url);
     if (!response.ok) throw new Error(`The device model didn't load (${response.status}).`);

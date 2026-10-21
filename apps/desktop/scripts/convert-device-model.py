@@ -1,5 +1,5 @@
-# Converts one device in Apple's AR file to a Device view model (PLX-886), after T3 Code's
-# scripts/convert-device-model.py (MIT, T3 Tools Inc.). With Blender 4.5 or later:
+# Converts one device in Apple's AR file, or Google's GLB, to a Device view model (PLX-886),
+# after T3 Code's scripts/convert-device-model.py (MIT, T3 Tools Inc.). With Blender 4.5 or later:
 #   blender --background --python convert-device-model.py -- \
 #     <source.usdz> <out.glb> <body node or -> <screen node>[!]
 #   npx @gltf-transform/cli@4.2.1 optimize <out.glb> <tmp.glb> --compress false --simplify false \
@@ -21,7 +21,10 @@ body_name = args[2] if len(args) > 2 and args[2] != "-" else None
 screen_name = args[3].rstrip("!")
 flip = args[3].endswith("!")
 bpy.ops.wm.read_factory_settings(use_empty=True)
-bpy.ops.wm.usd_import(filepath=source, import_materials=True)
+if source.endswith(".glb"):
+    bpy.ops.import_scene.gltf(filepath=source)
+else:
+    bpy.ops.wm.usd_import(filepath=source, import_materials=True)
 
 
 def visible(o):

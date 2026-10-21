@@ -13,8 +13,6 @@ import {
   RotateCw,
   Rotate3d,
   BookOpen,
-  Smartphone,
-  Tablet,
   TriangleAlert,
   Triangle,
 } from "lucide-react";
@@ -921,7 +919,7 @@ function Viewer({
   const turn: Turn = { pitch: orbit.pitch, yaw: orbit.yaw, roll };
   const turned = orbit.pitch !== 0 || orbit.yaw !== 0;
 
-  // An Android phone's model is built to its screen's shape, so it's rebuilt if that changes.
+  // An Android phone's model depends on its screen's shape, so it's chosen again if that changes.
   const pixelAspect = ios ? 0 : short / long;
   useEffect(() => {
     if (!want3d || !gl || !canvas) return;
@@ -1226,6 +1224,7 @@ function Viewer({
     </button>
   );
   const menuId = useId();
+  const foldMenuId = useId();
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -1386,23 +1385,44 @@ function Viewer({
                 setFacing(next);
                 stream.current?.orient(next);
               })}
-              {screen?.fold &&
-                (
-                  [
-                    ["closed", "Closed", <Smartphone />, screen.fold.angle === 0],
-                    [
-                      "book",
-                      "Book",
-                      <BookOpen />,
-                      screen.fold.angle > 0 && screen.fold.angle < 180,
-                    ],
-                    ["open", "Open", <Tablet />, screen.fold.angle === 180],
-                  ] as const
-                ).map(([pose, label, icon, pressed]) => (
-                  <span key={pose} className="contents">
-                    {control(label, icon, () => stream.current?.fold(pose), !ready, pressed)}
-                  </span>
-                ))}
+              {screen?.fold && (
+                <>
+                  <button
+                    type="button"
+                    aria-label="Fold"
+                    title="Fold"
+                    disabled={!ready}
+                    popoverTarget={foldMenuId}
+                    className="grid size-8 place-items-center rounded-full text-muted-foreground transition-[color,background-color,transform] duration-100 hover:bg-hover hover:text-foreground active:scale-90 disabled:opacity-35 [&_svg]:size-4"
+                  >
+                    <BookOpen />
+                  </button>
+                  <Menu id={foldMenuId} label="Fold" align="center" className="mb-2 w-36 p-1">
+                    {(
+                      [
+                        ["closed", "Closed", screen.fold.angle === 0],
+                        ["book", "Book", screen.fold.angle > 0 && screen.fold.angle < 180],
+                        ["open", "Open", screen.fold.angle === 180],
+                      ] as const
+                    ).map(([pose, label, current]) => (
+                      <button
+                        key={pose}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={current}
+                        className={menuItem}
+                        onClick={() => {
+                          document.getElementById(foldMenuId)?.hidePopover();
+                          stream.current?.fold(pose);
+                        }}
+                      >
+                        <span className="flex-1">{label}</span>
+                        {current && <Check aria-hidden />}
+                      </button>
+                    ))}
+                  </Menu>
+                </>
+              )}
             </>
           ) : (
             <>

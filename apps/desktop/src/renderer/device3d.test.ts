@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
-import { appleModel } from "./device3d";
+import { appleModel, pixelModel } from "./device3d";
 
 test("each iOS device gets Apple's model of it, and one Apple has none of gets none", () => {
   for (const [name, file] of [
@@ -17,4 +17,18 @@ test("each iOS device gets Apple's model of it, and one Apple has none of gets n
   for (const none of ["iPhone 11 Pro Max", "iPad Pro 11-inch (M5)", "iPhone Xs", "Ryan's iPhone"]) {
     expect(appleModel(none)).toBeUndefined();
   }
+});
+
+test("each Pixel gets Google's model of it, another phone a Pixel's shape the Pixel 9's", () => {
+  const pixel = 1080 / 2424;
+  for (const [name, file] of [
+    ["Pixel 9", "pixel-9"],
+    ["Pixel_9a", "pixel-9a"],
+    ["Pixel 10 Pro XL", "pixel-10-pro"],
+    ["Medium Phone", "pixel-9"],
+  ]) {
+    expect(pixelModel(name!, pixel)).toBe(`/src/renderer/assets/devices/${file}.glb`);
+  }
+  expect(pixelModel("Pixel 9 Pro Fold", pixel)).toBeUndefined();
+  expect(pixelModel("Small Phone", 720 / 1280)).toBeUndefined();
 });

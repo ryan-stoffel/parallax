@@ -1,8 +1,9 @@
 # Device models
 
 The 3D models the Device view shows iPhones and iPads in (PLX-886) are Apple Inc.'s, from the AR
-files on its product pages. No open-source or redistribution license has been established for
-them; Parallax ships them knowing that.
+files on its product pages, and those it shows Pixels in are Google LLC's, from the Google Store's
+"Explore in 3D" views. No open-source or redistribution license has been established for them;
+Parallax ships them knowing that.
 
 `scripts/convert-device-model.py`, after T3 Code's (https://github.com/pingdotgg/t3code, MIT),
 made each one with Blender 5.2 and glTF-Transform 4.2.1 from its source below: it keeps the
@@ -18,7 +19,22 @@ back glass and camera plateau, which T3's conversion left metallic and rough, an
 are set to white glass (not metallic, roughness 0.38, clearcoat 0.6), and its logo to polished metal.
 
 A device with no model here, such as an 11-inch iPad or a Pro Max Apple only made the Pro's file
-for, turns as its flat artwork. Android phones have no such files; `device3d.ts` builds a Pixel 9.
+for, turns as its flat artwork.
+
+The Pixels are the same script's work from Google's files, after decoding their Draco meshes with
+glTF-Transform and keeping their darkest color (`KHR_materials_variants`); the Pixel 10 Pro's
+meshes are also simplified (`simplify --error 0.0001`). Another Android phone whose screen is a
+Pixel's shape turns as the Pixel 9; a foldable, a tablet, or a phone of another shape turns as its
+flat artwork. Google's Pixel 8 and 8 Pro files bake their screens into their bodies' textures, so
+they have no screen to show the stream on.
+
+| File               | Google's source                                                        | Color    | Screen               |
+| ------------------ | ---------------------------------------------------------------------- | -------- | -------------------- |
+| `pixel-9.glb`      | https://interactivedemo.withgoogle.com/pixel-9-3d/models/D003.glb      | Licorice | `TK4_Display_Active` |
+| `pixel-9-pro.glb`  | https://interactivedemo.withgoogle.com/pixel-9-pro-3d/models/D002.glb  | Licorice | `CM4_Display_Active` |
+| `pixel-9a.glb`     | https://interactivedemo.withgoogle.com/pixel-9a-3d/models/D006.glb     | Obsidian | `Display`            |
+| `pixel-10.glb`     | https://interactivedemo.withgoogle.com/pixel-10-3d/models/D009.glb     | Obsidian | `Display`            |
+| `pixel-10-pro.glb` | https://interactivedemo.withgoogle.com/pixel-10-pro-3d/models/D008.glb | Obsidian | `Display`            |
 
 | File                    | Apple's source                                                                                                                                           | Body              | Screen                |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | --------------------- |
