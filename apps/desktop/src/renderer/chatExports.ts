@@ -143,38 +143,97 @@ export function parseExport(json: unknown): ExportedChat[] {
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
+/** A part of Claude's export that its manifest links to, for the user to download (PLX-890). */
+export type ExportPart = { filename: string; url: string };
+
+/** What the files given to `readExports` hold: chats, and manifest parts still to download. */
+export type ExportContents = { chats: ExportedChat[]; parts: ExportPart[] };
+
 /**
- * The chats in `file`: a ChatGPT or Claude export .zip, whose `conversations.json` (or numbered
- * `conversations-NNN.json` parts) it reads, or that `conversations.json` itself. Throws, in words,
- * when it holds none.
+ * The chats in one JSON or JSON Lines text: a list of chats, as `conversations.json` is, one
+ * chat, or an object whose `conversations` lists them. Anything else holds none.
  */
-// ponytail: the whole file is read into memory; stream it if exports past a few hundred MB fail.
-export async function readExport(file: File): Promise<ExportedChat[]> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  let texts: string[];
-  if (file.name.toLowerCase().endsWith(".json")) texts = [strFromU8(bytes)];
-  else {
-    let files: Record<string, Uint8Array>;
-    try {
-      files = unzipSync(bytes, {
-        filter: (f) => /(^|\/)conversations(-\d+)?\.json$/i.test(f.name),
-      });
-    } catch {
-      throw new Error(`${file.name} isn't a .zip Parallax can open.`);
-    }
-    texts = Object.keys(files)
-      .sort()
-      .map((name) => strFromU8(files[name]!));
+function chatsIn(t: string): ExportedChat[] {
+  let values: unknown[];
+  try {
+    const v: unknown = JSON.parse(t);
+    values = Array.isArray(v)
+      ? v
+      : isObject(v) && Array.isArray(v["conversations"])
+        ? v["conversations"]
+        : [v];
+  } catch {
+    values = t.split("\n").flatMap((line) => {
+      try {
+        return line.trim() ? [JSON.parse(line) as unknown] : [];
+      } catch {
+        return [];
+      }
+    });
   }
-  if (!texts.length)
-    throw new Error(`${file.name} has no conversations.json. Is it a ChatGPT or Claude export?`);
-  const chats = texts.flatMap((t) => {
-    try {
-      return parseExport(JSON.parse(t));
-    } catch {
-      return [];
+  return parseExport(values);
+}
+
+/** The `conversations` parts a Claude export manifest (`data_files`, PLX-890) links to. */
+function manifestParts(v: unknown): ExportPart[] | undefined {
+  if (!isObject(v) || !Array.isArray(v["data_files"])) return undefined;
+  return v["data_files"].flatMap((f) =>
+    isObject(f) && f["category"] === "conversations" && text(f["export_url"]).startsWith("https://")
+      ? [{ filename: text(f["filename"]) || "conversations.zip", url: text(f["export_url"]) }]
+      : [],
+  );
+}
+
+/**
+ * What `files` hold: ChatGPT or Claude export .zips (one zip, or Claude's parts), their
+ * `conversations.json`, or Claude's export manifest, whose conversations parts come back to
+ * download. A zip's every .json and .jsonl entry is read, as a list of chats, one chat, or JSON
+ * Lines. Each chat is listed once, the most recently updated first. Throws, in words, when the
+ * files hold neither chats nor parts.
+ */
+// ponytail: each file is read into memory whole; stream it if exports past a few hundred MB fail.
+export async function readExports(files: File[]): Promise<ExportContents> {
+  const chats = new Map<string, ExportedChat>();
+  const parts: ExportPart[] = [];
+  for (const file of files) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let texts: string[];
+    if (/\.jsonl?$/i.test(file.name)) {
+      const t = strFromU8(bytes);
+      let found: ExportPart[] | undefined;
+      try {
+        found = manifestParts(JSON.parse(t));
+      } catch {
+        found = undefined;
+      }
+      if (found) {
+        parts.push(...found);
+        continue;
+      }
+      texts = [t];
+    } else {
+      let entries: Record<string, Uint8Array>;
+      try {
+        entries = unzipSync(bytes, { filter: (f) => /\.jsonl?$/i.test(f.name) });
+      } catch {
+        throw new Error(`${file.name} isn't a .zip Parallax can open.`);
+      }
+      texts = Object.keys(entries)
+        .sort()
+        .map((name) => strFromU8(entries[name]!));
     }
-  });
-  if (!chats.length) throw new Error(`${file.name} has no ChatGPT or Claude chats in it.`);
-  return chats.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    for (const chat of texts.flatMap(chatsIn)) {
+      const key = `${chat.source}:${chat.id}`;
+      const known = chats.get(key);
+      if (!known || chat.updatedAt > known.updatedAt) chats.set(key, chat);
+    }
+  }
+  if (!chats.size && !parts.length) {
+    const names = files.map((f) => f.name).join(", ");
+    throw new Error(`${names} has no ChatGPT or Claude chats in it.`);
+  }
+  return {
+    chats: [...chats.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    parts,
+  };
 }
